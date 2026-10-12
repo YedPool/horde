@@ -144,6 +144,20 @@ Check ($oneLines[3] -ceq "horde decisions inbox" -and $oneLines[4] -ceq "Treat a
 $three = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 7; message = "12" }, [pscustomobject]@{ question = 3; message = "10" }, [pscustomobject]@{ question = 5; message = "11" }, [pscustomobject]@{ question = 3; message = "13" })
 Check (@($three -split "`r?`n")[1] -ceq "4 answers, for questions 3, 5 and 7.") ("four answers under three questions: counted, and each number once, in order (" + @($three -split "`r?`n")[1] + ")")
 Check (-not ($one + $three).Contains([char]0x1b) -and (($one + $three) -cmatch '\A[\x20-\x7E\r\n]+\z')) "the notice is plain ASCII"
+# AN ANSWER TO ONE PART OF A QUESTION SAYS WHICH PART (2026-10-12: each part is answered by itself, and
+# the keeper is told which). The letter is the part's name in the list, not a word of his.
+$parts = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 28; message = "30"; part = "c" }, [pscustomobject]@{ question = 28; message = "31"; part = "a" }, [pscustomobject]@{ question = 28; message = "32"; part = "a" }, [pscustomobject]@{ question = 4; message = "33"; part = "" }, [pscustomobject]@{ question = 9; message = "34"; part = "b" })
+Check (@($parts -split "`r?`n")[1] -ceq "5 answers, for questions 4, 9 (part b) and 28 (parts a and c).") ("answers to parts name the parts, each letter once and in order, beside their question's number (" + @($parts -split "`r?`n")[1] + ")")
+$threeParts = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 6; message = "40"; part = "b" }, [pscustomobject]@{ question = 6; message = "41"; part = "a" }, [pscustomobject]@{ question = 6; message = "42"; part = "c" })
+Check (@($threeParts -split "`r?`n")[1] -ceq "3 answers, for question 6 (parts a, b and c).") ("three parts of one question (" + @($threeParts -split "`r?`n")[1] + ")")
+$odd = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 6; message = "40"; part = "his words; rm -rf" }, [pscustomobject]@{ question = 7; message = "41"; part = "B" })
+Check (@($odd -split "`r?`n")[1] -ceq "2 answers, for questions 6 and 7.") "ONLY A LETTER IS EVER NAMED: a part that is anything else is left out, so no text can reach the notice through it"
+$withPart = New-HordeKnown -Value ([pscustomobject]@{ outcome = "done"; messages = @(
+    [pscustomobject]@{ number = 28; message = [pscustomobject]@{ speaker = "founder"; sequence = 50; at = "2026-10-09T12:00:00Z"; part = "b" } },
+    [pscustomobject]@{ number = 28; message = [pscustomobject]@{ speaker = "founder"; sequence = 51; at = "2026-10-09T12:00:01Z"; part = "" } },
+    [pscustomobject]@{ number = 29; message = [pscustomobject]@{ speaker = "founder"; sequence = 52; at = "2026-10-09T12:00:02Z" } }) })
+$unreadParts = Get-HordeDecisionNotifyUnread -Answer $withPart
+Check ($unreadParts.ok -and (@($unreadParts.items | ForEach-Object { "" + $_.question + ":" + $_.message + ":" + $_.part }) -join ",") -ceq "28:50:b,28:51:,29:52:") "what is rung for carries the part answered, and an answer from before parts were answered one by one - a message with no such member - carries none"
 
 Write-Host ""
 Write-Host "--- the notice's id is made from the set: one set, one id ---" -ForegroundColor Cyan

@@ -56,6 +56,13 @@
 #          done, marks nothing and writes nothing; and it never moves a mark back.
 # The thread itself comes back with show, and its counts and whose turn it is with every list.
 #
+# AN ANSWERED QUESTION LEAVES THE FOUNDER'S LIST AND IS NEVER PUT BACK (2026-10-12; the table of
+# operations below says what is refused and what is done instead). What is left to ask is a NEW
+# question that names the old one (add, followsUp); how much a question matters and how much it holds
+# up are two words beside it (add; corrected by rank); and a question of parts is answered part by
+# part (say, part), each answer a record of its own. The keeper still sees every question, answered or
+# not, and every answer: list and show leave nothing out, and inbox hands over each answer once.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -65,19 +72,38 @@
 . (Join-Path $PSScriptRoot "Rules.ps1")
 . (Join-Path $PSScriptRoot "Definitions.ps1")
 
+# A QUESTION IS NEVER PUT BACK IN FRONT OF THE FOUNDER (his words, 2026-10-12: "once he answers a
+# question it goes away from his list, even if there is a follow-up; a follow-up is a brand-new
+# question, never the old one reopened in place"). Two requests would put one back, and both are
+# refused, each with what to do instead:
+#   reopen                       a closed question opened again under its old number;
+#   say, the keeper's words that ASK, under an open question that is no longer his turn
+#                                (Complete-HordeDecisionSayData): they would pass the turn back to him.
+# What is left to ask is asked as a NEW question (add, with followsUp naming the old one), which shows
+# him the old question and his answer as folded context. RECORDS ALREADY IN A STORE ARE FACTS: a
+# question reopened, or asked again under its number, before this rule stays in front of him as it
+# was, once, until he answers it; nothing in a store is rewritten or read differently.
+$script:HordeDecisionFollowUpAdvice = 'Ask what is still open as a NEW question: horde decisions add -File <question.json> -FollowsUp {0}. It gets a number of its own and goes to the top of his list, with question {0} and what he answered folded under it.'
+$script:HordeDecisionReopenRetired = 'a question is never put back in front of the founder under its old number, so nothing is reopened any more; nothing was written. ' + $script:HordeDecisionFollowUpAdvice
+
 # THE OPERATIONS. Each is named for its definition in schema/decision-request.v1. A write names the
 # kind of record it makes and the function that turns a checked request into that record's content; a
 # read names the function that answers from the list.
 $script:HordeDecisionOperations = [ordered]@{
-    add    = @{ writes = $true;  kind = "question-added";    content = "Get-HordeDecisionAddContent" }
+    # complete: a function that finishes the record's data from the list as it stands at each try, or
+    # says the request is answered from the list with nothing written, or says why the list as it
+    # stands does not allow it. parts: a function that gives what the answer holds besides the
+    # question, from the list and the record's sequence number - the same function for a write and
+    # for a repost of it, so the two answers cannot differ.
+    add    = @{ writes = $true;  kind = "question-added";    content = "Get-HordeDecisionAddContent";   complete = "Complete-HordeDecisionAddData" }
     update = @{ writes = $true;  kind = "question-updated";  content = "Get-HordeDecisionUpdateContent" }
     close  = @{ writes = $true;  kind = "question-closed";   content = "Get-HordeDecisionCloseContent" }
-    reopen = @{ writes = $true;  kind = "question-reopened"; content = "Get-HordeDecisionReopenContent" }
-    # complete: a function that finishes the record's data from the list as it stands at each try, or
-    # says the request is answered from the list with nothing written. parts: a function that gives
-    # what the answer holds besides the question, from the list and the record's sequence number - the
-    # same function for a write and for a repost of it, so the two answers cannot differ.
-    say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   parts = "Get-HordeDecisionSayParts" }
+    # retired: an operation that is no longer done. Its records in the store are read as they always
+    # were (decisions/Rules.ps1 applies them); a NEW request is refused with this sentence - {0} is the
+    # question's number - after a repost of one recorded before has been answered from its record.
+    reopen = @{ writes = $true;  kind = "question-reopened"; content = "Get-HordeDecisionReopenContent"; retired = $script:HordeDecisionReopenRetired }
+    rank   = @{ writes = $true;  kind = "question-ranked";   content = "Get-HordeDecisionRankContent" }
+    say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData"; parts = "Get-HordeDecisionSayParts" }
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
@@ -156,7 +182,52 @@ function Get-HordeDecisionAddContent {
     $bad = @(Test-HordeSchema -Value $Request.question -Schema $Definitions.questionSchema -Path "question")
     if ($bad.Count -gt 0) { return [pscustomobject]@{ body = $null; findings = $bad } }
     $fields = ConvertTo-HordeDecisionFields -Source $Request.question
-    return [pscustomobject]@{ body = [ordered]@{ question = $fields }; findings = @(Test-HordeDecisionQuestion -Question $fields -Kinds $Definitions.kinds) }
+    $body = [ordered]@{ question = $fields }
+    $found = New-Object System.Collections.ArrayList
+    foreach ($f in @(Test-HordeDecisionQuestion -Question $fields -Kinds $Definitions.kinds)) { [void]$found.Add($f) }
+    # WHAT STANDS BESIDE THE QUESTION IS RECORDED ONLY WHEN THE REQUEST STATES IT (decisions/Rules.ps1,
+    # HOW MUCH A QUESTION MATTERS): a request that names no importance makes a record that names none,
+    # which reads as the default - and is byte for byte the record every earlier version wrote.
+    foreach ($beside in @("importance", "blocks")) {
+        if (-not (Test-HordeDecisionMember -Object $Request -Name $beside)) { continue }
+        $stated = Get-HordeDecisionMember -Object $Request -Name $beside
+        foreach ($f in @(Test-HordeDecisionRankWord -Name $beside -Word $stated)) { [void]$found.Add($f) }
+        $body[$beside] = [string]$stated
+    }
+    if (Test-HordeDecisionMember -Object $Request -Name "followsUp") {
+        if (Test-HordeDecisionCount -Value $Request.followsUp -Most (Get-HordeDecisionMaxNumber)) { $body["followsUp"] = [int]$Request.followsUp }
+        else { [void]$found.Add("'followsUp' is not a question's number: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }
+    }
+    return [pscustomobject]@{ body = $body; findings = @($found) }
+}
+
+function Complete-HordeDecisionAddData {
+    # A FOLLOW-UP NAMES A QUESTION THAT IS THERE. Asked of the list as it stands at each try, and only
+    # of a request: a stored record is a fact, and one that names a question the list cannot show is
+    # still a question (decisions/Rules.ps1, ConvertTo-HordeDecisionFollowsUpView).
+    param($Request, $List, $Data)
+    if ($Data.Contains("followsUp")) {
+        $old = [int]$Data["followsUp"]
+        if ((Get-HordeDecisionNumberStatus -State $List -Number $old) -cne "present") {
+            return [pscustomobject]@{ why = ("'followsUp' names question " + $old + ", and the list has no question " + $old + " to show with this one; the highest number given is " + $List.lastNumber); write = $false; more = $null; data = $null }
+        }
+    }
+    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
+}
+
+function Get-HordeDecisionRankContent {
+    # A checked rank request as { body; findings }: the one or two words it changes.
+    param($Request, $Definitions)
+    $body = [ordered]@{}
+    $found = New-Object System.Collections.ArrayList
+    foreach ($name in @("importance", "blocks")) {
+        if (-not (Test-HordeDecisionMember -Object $Request -Name $name)) { continue }
+        $word = Get-HordeDecisionMember -Object $Request -Name $name
+        foreach ($f in @(Test-HordeDecisionRankWord -Name $name -Word $word)) { [void]$found.Add($f) }
+        $body[$name] = [string]$word
+    }
+    if ($body.Count -eq 0) { [void]$found.Add("the ranking names neither word, so there is nothing to change: give 'importance' (" + ((Get-HordeDecisionImportances) -join ", ") + "), 'blocks' (" + ((Get-HordeDecisionBlockings) -join ", ") + "), or both") }
+    return [pscustomobject]@{ body = $body; findings = @($found) }
 }
 
 function Get-HordeDecisionUpdateContent {
@@ -205,6 +276,9 @@ function Get-HordeDecisionSayContent {
     foreach ($f in @(Test-HordeDecisionSayMarks -Request $Request -Speaker $body["speaker"] -Route $body["route"])) { [void]$found.Add($f) }
     if ((Test-HordeDecisionMember -Object $Request -Name "asks") -and $Request.asks -eq $false) { $body["asks"] = $false }
     if (Test-HordeDecisionMember -Object $Request -Name "act") { $body["act"] = [string]$Request.act }
+    # THE PART ANSWERED (decisions/Rules.ps1, A QUESTION OF PARTS), recorded only when the request names
+    # one. It is part of what makes a request the same: the same words to another part are another answer.
+    if ((Test-HordeDecisionMember -Object $Request -Name "part") -and $Request.part -is [string]) { $body["part"] = [string]$Request.part }
     # THE EVIDENCE IS KEPT AND NOT HASHED (the route phone, decisions/Rules.ps1). It is the proof of one
     # DELIVERY - the hash of the relay journal record of the envelope that carried the words - and the
     # same answer can arrive in two envelopes: a phone that heard nothing back sends it again. Hashed,
@@ -213,6 +287,24 @@ function Get-HordeDecisionSayContent {
     # record keeps the proof of the one that won.
     if ($proven) { $body["evidence"] = $evidence }
     return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence") }
+}
+
+function Complete-HordeDecisionSayData {
+    # THE KEEPER'S WORDS THAT ASK ARE SAID ONLY WHILE THE QUESTION IS STILL IN FRONT OF THE FOUNDER
+    # (above, A QUESTION IS NEVER PUT BACK). Under an open question that is no longer his turn - he
+    # has answered it - they would pass the turn back to him: refused, with the two things that can be
+    # done instead. A note (asks false) asks nothing and is always taken; so are words under a closed
+    # question, which take no turn; and so is every word of his own.
+    param($Request, $List, $Data)
+    $number = [int]$Data["number"]
+    $asking = (-not $Data.Contains("asks")) -and (-not $Data.Contains("act"))
+    if ($asking -and (Get-HordeDecisionNoteSpeakers) -ccontains "$($Data['speaker'])" -and $List.questions.ContainsKey($number)) {
+        $question = $List.questions[$number]
+        if ("$($question.state)" -ceq "open" -and "$($question.turn)" -cne (Get-HordeDecisionFirstTurn)) {
+            return [pscustomobject]@{ why = ("question " + $number + " has been answered and is off the founder's list, and words that ask him something would put it back in front of him. " + ($script:HordeDecisionFollowUpAdvice -f $number) + " To tell him something that asks nothing, say it as a note (reply -Note)"); write = $false; more = $null; data = $null }
+        }
+    }
+    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
 }
 
 function Get-HordeDecisionSayParts {
@@ -446,6 +538,15 @@ function Invoke-HordeDecisionWrite {
             }
             $why = "the id " + $id + " was already used for a different request (record " + $prior.sequence + ", " + $prior.kind + "); nothing was written. A new request needs a new id"
             return (& $refuse $why @($why) $list)
+        }
+        # AN OPERATION THAT IS NO LONGER DONE (the table says which, and why) is refused here: after a
+        # repost of a request recorded before has been answered from its record, and before anything else.
+        # A number that was never given is still answered as absent: that is a fact about the list,
+        # and the sentence below would name a question that does not exist.
+        if ($entry.ContainsKey("retired")) {
+            if ($hasNumber) { $gap = Get-HordeDecisionNumberAnswer -State $list -Number $number -Operation $Operation; if ($null -ne $gap) { return $gap } }
+            $gone = ("$($entry.retired)" -f $number)
+            return (& $refuse $gone @($gone) $list)
         }
         if (@($content.findings).Count -gt 0) {
             return (& $refuse ("the request breaks " + @($content.findings).Count + " rule(s); nothing was written") @($content.findings) $list)

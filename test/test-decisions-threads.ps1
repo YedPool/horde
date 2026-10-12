@@ -63,7 +63,22 @@ function Say {
     if ($Wording -gt 0) { $request["wordingVersion"] = $Wording }
     return (Invoke-Op $Store "say" $request)
 }
-function Reply { param([string]$Store, [int]$Number, [string]$Text) return (Say -Store $Store -Number $Number -Text $Text -Speaker "warchief" -Route "command") }
+function Reply {
+    # The warchief's words, by command. -Note: they tell the founder something and ask him nothing.
+    param([string]$Store, [int]$Number, [string]$Text, [switch]$Note)
+    $request = @{ id = (New-Id); actor = "warchief"; number = $Number; speaker = "warchief"; route = "command"; text = $Text }
+    if ($Note) { $request["asks"] = $false }
+    return (Invoke-Op $Store "say" $request)
+}
+function Add-Stored {
+    # A record put into a store of this suite AS A FILE, the way an earlier version of Horde left it
+    # there: for what the operations no longer write and must still read. Returns its sequence number.
+    param([string]$Store, [string]$Kind, $Data, [string]$Actor = "warchief")
+    $seq = @(Get-ChildItem -LiteralPath $Store -File -Filter "*.json").Count + 1
+    $envelope = [ordered]@{ schemaVersion = 1; sequence = $seq; id = (New-Id); kind = $Kind; at = "2026-10-06T12:00:00.0000000Z"; actor = $Actor; requestHash = ("0" * 64); data = $Data }
+    [System.IO.File]::WriteAllText((Join-Path $Store ($seq.ToString("D10") + ".json")), (ConvertTo-Json -InputObject $envelope -Compress -Depth 12), $utf8)
+    return $seq
+}
 function Inbox { param([string]$Store, [string]$Actor = "warchief") return (Invoke-Op $Store "inbox" @{ actor = $Actor }) }
 function Mark {
     # Mark as read, for the warchief unless -Actor says otherwise, up to record -UpTo.
@@ -118,12 +133,14 @@ Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "one record was wr
 $rec = Read-Record $s 2
 Check ($rec.kind -ceq "message-said" -and $rec.actor -ceq "warchief" -and $rec.data.speaker -ceq "founder" -and $rec.data.route -ceq "chat-recorded" -and $rec.data.text -ceq "Yes, play it." -and $rec.data.number -eq 1) "the record holds who spoke, by what route, the words and the question"
 Check ((@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "number,route,speaker,text") "and nothing else: no turn, no flag, no 'read' - and no wording, because none was stated and none is guessed"
-$a = Reply $s 1 "It plays from the next build."
+# A note: he has answered, so the question is off his list, and only words that ask him nothing are
+# taken under it (the section "an answered question is never put back in front of him", below).
+$a = Reply $s 1 "It plays from the next build." -Note
 Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).speaker -ceq "warchief" -and (Get-Said $a).routeShown -ceq "by command" -and $a.value.sequence -eq 3) "the warchief's reply is recorded as its own words, by command"
 $t = Get-Thread $s 1
 Check ($t.count -eq 2 -and (Get-Texts $t) -ceq "Yes, play it. | It plays from the next build.") ("show hands back the thread: both messages, in order (" + (Get-Texts $t) + ")")
 $listed = Invoke-Op $s "list" @{}
-Check ((Get-Outcome $listed) -ceq "done" -and $listed.value.questions[0].thread.count -eq 2 -and $listed.value.questions[0].thread.turn -ceq "founder" -and $null -eq $listed.value.questions[0].thread.PSObject.Properties["messages"]) "list hands back the counts and whose turn it is, and not the messages"
+Check ((Get-Outcome $listed) -ceq "done" -and $listed.value.questions[0].thread.count -eq 2 -and $listed.value.questions[0].thread.turn -ceq "warchief" -and $null -eq $listed.value.questions[0].thread.PSObject.Properties["messages"]) "list hands back the counts and whose turn it is, and not the messages"
 # The founder typing in his own window is another caller sending the same request with other labels.
 $a = Say $s 1 "Typed by me." -Route "window" -Actor "founder" -Wording 1
 Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).routeShown -ceq "typed in the window" -and (Get-Said $a).recordedBy -ceq "founder" -and (Read-Record $s 4).actor -ceq "founder") "words typed in the window are recorded by the founder's own caller, under their own route"
@@ -260,7 +277,7 @@ $null = Add-Q $s "Should the closing sound play when the assistant closes?"
 $null = Add-Q $s "Which languages besides English should the test talker speak?"
 $null = Say $s 1 "one, under the first"          # record 3
 $null = Say $s 2 "two, under the second"         # record 4
-$null = Reply $s 1 "the warchief's own reply"    # record 5
+$null = Reply $s 1 "the warchief's own reply" -Note   # record 5
 $null = Say $s 1 "three, under the first again"  # record 6
 $read = Inbox $s
 Check ((Get-InboxLine $read) -ceq "3@1,4@2,6@1 upTo=6") ("the inbox holds the founder's three messages, from both questions, oldest first, and not the warchief's own reply; upTo names the last of them (" + (Get-InboxLine $read) + ")")
@@ -315,7 +332,7 @@ Check ((Test-Refused (Mark $s 4 -Actor "goblin") "'goblin' is not a role that ma
 Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; id = (New-Id); upTo = 1e30 }) "'upTo' is not a record's sequence number") -and (Get-Count $s) -eq $before) "a record number no record can have is refused, not thrown on"
 Check ((Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4") "CONTROL: none of the refusals marked anything"
 # A mark may name a record that is not a message: everything said up to it is read.
-$null = Reply $s 1 "a reply, record 6"   # record 6
+$null = Reply $s 1 "a reply, record 6" -Note   # record 6
 $upToReply = Mark $s 6
 Check ((Get-MarkLine $upToReply) -ceq "done upTo=6 marked=1" -and (Get-InboxLine (Inbox $s)) -ceq " upTo=0") ("marking up to a later record that is not the founder's marks what he said before it (" + (Get-MarkLine $upToReply) + ")")
 
@@ -376,13 +393,48 @@ $turns = New-Object System.Collections.ArrayList
 $null = Add-Q $s;                                                    [void]$turns.Add((Get-Turn $s))   # asked
 $null = Say $s 1 "which one do you mean?";                            [void]$turns.Add((Get-Turn $s))   # he speaks
 $null = Mark $s (Inbox $s).value.upTo;                               [void]$turns.Add((Get-Turn $s))   # it reads and marks: not a turn
-$null = Reply $s 1 "the short one";                                  [void]$turns.Add((Get-Turn $s))   # it replies
+$asked = Reply $s 1 "the short one, or the long one?";               [void]$turns.Add((Get-Turn $s))   # it asks him again: REFUSED, nothing changes
+$null = Reply $s 1 "the short one" -Note;                            [void]$turns.Add((Get-Turn $s))   # it tells him, asking nothing: still its own turn
 $null = Say $s 1 "then yes";                                         [void]$turns.Add((Get-Turn $s))   # he speaks
 $null = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." };       [void]$turns.Add((Get-Turn $s))   # it closes instead of replying
 $null = Say $s 1 "thank you";                                        [void]$turns.Add((Get-Turn $s))   # he speaks under a closed question
-$null = Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; reason = "it came back" }; [void]$turns.Add((Get-Turn $s))   # asked again
-Check (($turns -join " ") -ceq "founder/0/0 warchief/1/1 warchief/1/0 founder/2/0 warchief/3/1 nobody/3/1 nobody/4/2 founder/4/2") ("turn, messages and unread after each step of an exchange: " + ($turns -join " "))
-Check ((Show $s 1).value.question.thread.turnShown -ceq "the founder") "and the turn is told to a person in words"
+$reopened = Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; reason = "it came back" }; [void]$turns.Add((Get-Turn $s))   # asked again: REFUSED too
+Check (($turns -join " ") -ceq "founder/0/0 warchief/1/1 warchief/1/0 warchief/1/0 warchief/2/0 warchief/3/1 nobody/3/1 nobody/4/2 nobody/4/2") ("turn, messages and unread after each step of an exchange: " + ($turns -join " "))
+Check ((Show $s 1).value.question.thread.turnShown -ceq "nobody" -and (Show (New-TestStore) 1).state -ceq "absent") "and the turn is told to a person in words"
+
+Write-Host ""
+Write-Host "--- an answered question is never put back in front of him ---" -ForegroundColor Cyan
+# THE FOUNDER'S RULE, 2026-10-12: once he answers a question it goes away from his list, even if there
+# is a follow-up; a follow-up is a brand-new question, never the old one reopened in place. The two
+# requests of the exchange above that would have put question 1 back were refused, each saying what
+# to do instead, and each writing nothing.
+Check ((Test-Refused $asked "question 1 has been answered and is off the founder's list") -and (Test-Refused $asked "horde decisions add -File <question.json> -FollowsUp 1") -and (Test-Refused $asked "say it as a note (reply -Note)") -and -not (Test-Echo $asked "the short one, or the long one?")) "THE KEEPER'S WORDS THAT ASK, under a question he has answered, are refused: the refusal names the follow-up and the note, and does not repeat the words"
+Check ((Test-Refused $reopened "nothing is reopened any more") -and (Test-Refused $reopened "-FollowsUp 1")) "and so is reopening it"
+$s = New-TestStore
+$null = Add-Q $s
+$before = Reply $s 1 "Take the question to mean the first build only."
+Check ((Get-Outcome $before) -ceq "done" -and (Get-Turn $s) -ceq "founder/1/0") "BEFORE HE HAS ANSWERED the keeper may still say something that asks: the question is in front of him already, and stays there"
+$null = Say $s 1 "yes"
+$count = Get-Count $s
+$after = Reply $s 1 "And for the second build?"
+Check ((Get-Outcome $after) -ceq "refused" -and (Get-Count $s) -eq $count -and (Get-Turn $s) -ceq "warchief/2/1") ("once he has, the same kind of reply is refused and nothing is written (" + (Get-Outcome $after) + ")")
+$id = New-Id
+$note = Invoke-Op $s "say" @{ id = $id; actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "Done as you said."; asks = $false }
+Check ((Get-Outcome $note) -ceq "done" -and (Get-Turn $s) -ceq "warchief/3/1") "a note is taken, and leaves the question where it is: off his list"
+# A FOLLOW-UP IS A NEW QUESTION: it has its own number, it is his turn, and it carries the old question
+# and what he answered as context - worked out from the list, so it is the answer as it stands.
+$follow = Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; followsUp = 1; question = @{ title = "Should the closing sound play in the second build as well?"; kind = "yes-no"; whatItIs = "A follow-up."; group = "voice"; askedBy = "orc-b" } }
+Check ((Get-Outcome $follow) -ceq "done" -and $follow.value.number -eq 2 -and $follow.value.question.thread.turn -ceq "founder" -and $follow.value.question.followsUp.number -eq 1 -and $follow.value.question.followsUp.title -ceq "Should the closing sound play when the assistant closes?" -and $follow.value.question.followsUp.answer -ceq "yes" -and $follow.value.question.followsUp.answerCut -eq $false) "THE FOLLOW-UP is question 2, the founder's turn, and shows question 1 and his answer to it"
+Check ((Get-Turn $s) -ceq "warchief/3/1" -and (Show $s 1).value.question.state -ceq "open") "and question 1 is as it was: answered, the keeper's, and not reopened"
+# RECORDS ALREADY IN A STORE ARE FACTS. A reply that asks, written under an answered question before
+# this rule, still gives him the turn - once, until he answers - exactly as it did the day it was written.
+$old = New-TestStore
+$null = Add-Q $old
+$null = Say $old 1 "which one do you mean?"
+$null = Add-Stored $old "message-said" ([ordered]@{ number = 1; speaker = "warchief"; route = "command"; text = "the short one" })
+Check ((Get-Turn $old) -ceq "founder/2/1" -and (Get-Texts (Get-Thread $old 1)) -ceq "which one do you mean? | the short one") ("AN ASKING REPLY ALREADY IN THE STORE still puts the question in front of him, as it did (" + (Get-Turn $old) + ")")
+$null = Say $old 1 "then yes"
+Check ((Get-Turn $old) -ceq "warchief/3/2" -and (Get-Outcome (Reply $old 1 "and the long one?")) -ceq "refused") "until he answers it: then it is off his list, and stays off"
 
 Write-Host ""
 Write-Host "--- a note asks nothing, an act passes no turn, an edit says it replaces ---" -ForegroundColor Cyan
@@ -392,28 +444,73 @@ function SayMarked { param([string]$Store, [hashtable]$More, [string]$Speaker = 
 $turns = New-Object System.Collections.ArrayList
 $null = SayMarked $s @{} -Text "yes";                                                                  [void]$turns.Add((Get-Turn $s))   # he answers
 $null = SayMarked $s @{ asks = $false } -Speaker "warchief" -Route "command" -Actor "warchief" -Text "noted, working on it"; [void]$turns.Add((Get-Turn $s))   # a note
-$null = SayMarked $s @{ asks = $true } -Speaker "warchief" -Route "command" -Actor "warchief" -Text "which build?";     [void]$turns.Add((Get-Turn $s))   # a reply that asks
+$null = SayMarked $s @{ asks = $true } -Speaker "warchief" -Route "command" -Actor "warchief" -Text "which build?";     [void]$turns.Add((Get-Turn $s))   # a reply that asks: refused (above)
 $null = SayMarked $s @{ act = "park" } -Text "parked";                                                  [void]$turns.Add((Get-Turn $s))   # he parks it
 $null = SayMarked $s @{ act = "unpark" } -Text "unparked";                                              [void]$turns.Add((Get-Turn $s))   # and brings it back
-Check (($turns -join " ") -ceq "warchief/1/1 warchief/2/1 founder/3/1 founder/4/2 founder/5/3") ("A NOTE KEEPS THE TURN THE KEEPER'S; a reply that asks gives it to him; his park and unpark pass no turn: " + ($turns -join " "))
+Check (($turns -join " ") -ceq "warchief/1/1 warchief/2/1 warchief/2/1 warchief/3/2 warchief/4/3") ("A NOTE KEEPS THE TURN THE KEEPER'S; a reply that asks is refused and changes nothing; his park and unpark pass no turn: " + ($turns -join " "))
 $msgs = @((Show $s 1).value.question.thread.messages)
-Check ((@($msgs | ForEach-Object { "" + $_.asks + ":" + $_.act }) -join " ") -ceq "True: False: True: True:park True:unpark") "each message says whether it asks and what act it records, and a record that says neither asks and records none"
+Check ((@($msgs | ForEach-Object { "" + $_.asks + ":" + $_.act }) -join " ") -ceq "True: False: True:park True:unpark") "each message says whether it asks and what act it records, and a record that says neither asks and records none"
 $edit = SayMarked $s @{} -Text "yes, the short build"
 $msgs = @((Show $s 1).value.question.thread.messages)
-Check ((Get-Outcome $edit) -ceq "done" -and $msgs[5].replaces -eq $false -and $msgs[0].replaces -eq $false) "his words after the keeper's question replace nothing"
+Check ((Get-Outcome $edit) -ceq "done" -and $msgs[4].replaces -eq $false -and $msgs[0].replaces -eq $false) "his words after the keeper's words replace nothing"
 $again = SayMarked $s @{} -Text "yes, the long build after all"
 $msgs = @((Show $s 1).value.question.thread.messages)
-Check ($msgs[6].replaces -eq $true -and $msgs[6].speaker -ceq "founder") "HIS WORDS STRAIGHT AFTER HIS OWN replace them, and the message says so"
+Check ($msgs[5].replaces -eq $true -and $msgs[5].speaker -ceq "founder") "HIS WORDS STRAIGHT AFTER HIS OWN replace them, and the message says so"
 $parkThenEdit = SayMarked $s @{ act = "park" } -Text "parked"
 $afterPark = SayMarked $s @{} -Text "yes, final"
 $msgs = @((Show $s 1).value.question.thread.messages)
-Check ($msgs[8].replaces -eq $true) "an act between them is left aside: words after his park still replace his answer before it"
+Check ($msgs[7].replaces -eq $true) "an act between them is left aside: words after his park still replace his answer before it"
 Check (Test-Refused (SayMarked $s @{ asks = $false } -Text "a founder note") "can be a note") "a note from the founder is refused: only the keeper's words can ask nothing"
 Check (Test-Refused (SayMarked $s @{ act = "park" } -Speaker "warchief" -Route "command" -Actor "warchief") "only for the founder's words typed in the window") "an act by the keeper is refused"
 Check (Test-Refused (SayMarked $s @{ act = "archive" }) "act") "an act that is not park or unpark is refused"
 Check (Test-Refused (SayMarked $s @{ asks = "no" } -Speaker "warchief" -Route "command" -Actor "warchief") "asks") "asks that is not true or false is refused"
 $inbox = Inbox $s
 Check (@($inbox.value.messages | Where-Object { $_.message.act -ceq "park" }).Count -eq 2) "his acts reach the keeper's inbox like his words: the keeper sees that he parked it"
+
+Write-Host ""
+Write-Host "--- a question of parts: each part is answered by a record of its own ---" -ForegroundColor Cyan
+# THE FOUNDER, 2026-10-12: sub-questions each send by themselves; the parent question leaves his list
+# when all its parts are answered; the keeper is told which part was answered.
+$s = New-TestStore
+$partsQuestion = @{ title = "Three follow-ups to settle about the new wording, one by one."; kind = "parts"; whatItIs = "Follow-ups."; group = "voice"; askedBy = "orc-b"; parts = @("(a) The sentence when she cannot zoom: approve, or reword.", "(b) Should the button say Video too?", "(c) Should page turns be refused?") }
+$null = Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; question = $partsQuestion }
+function SayPart { param([string]$Store, [string]$Part, [string]$Text, [string]$Id = "", [string]$Route = "window", [string]$Actor = "founder", [int]$Wording = 1, [hashtable]$More = @{}) if ($Id -eq "") { $Id = New-Id }; $r = @{ id = $Id; actor = $Actor; number = 1; speaker = "founder"; route = $Route; text = $Text; part = $Part }; if ($Wording -gt 0) { $r["wordingVersion"] = $Wording }; foreach ($k in $More.Keys) { $r[$k] = $More[$k] }; return (Invoke-Op $Store "say" $r) }
+function Get-PartsOf { param([string]$Store) $l = Invoke-Op $Store "list" @{ state = "all" }; if ((Get-Outcome $l) -cne "done") { return (Get-Outcome $l) }; $t = $l.value.questions[0].thread; if ($null -eq $t.PSObject.Properties["parts"]) { return ("(none) " + $t.turn) }; return ((@($t.parts | ForEach-Object { $_.letter + ":" + $(if ($_.answered) { "y" } else { "n" }) }) -join ",") + " " + $t.turn) }
+Check ((Get-PartsOf $s) -ceq "a:n,b:n,c:n founder") "a list says of a question of parts which are answered: none yet, and it is his turn"
+$idB = New-Id
+$b = SayPart $s "b" "No, keep Live View." -Id $idB
+Check ((Get-Outcome $b) -ceq "done" -and $b.value.sequence -eq 2 -and (Get-Said $b).text -ceq "No, keep Live View." -and $b.value.message.part -ceq "b" -and $b.value.message.partWords -ceq "Should the button say Video too?" -and (Read-Record $s 2).data.part -ceq "b") ("ONE PART, ANSWERED BY ITSELF: a record of its own that names the part, handed back with the part's own words (" + (Get-Outcome $b) + ")")
+Check ((Get-PartsOf $s) -ceq "a:n,b:y,c:n founder" -and $b.value.question.thread.turn -ceq "founder") "that part is answered, the others are not, and the question is STILL HIS: it has not left his list"
+$again = SayPart $s "b" "No, keep Live View." -Id $idB
+Check ((Get-Outcome $again) -ceq "replayed" -and $again.value.sequence -eq 2 -and $again.value.message.part -ceq "b" -and (Get-Count $s) -eq 2) "IDEMPOTENT: the same part's answer sent again under its id is that one record, answered again, part and all"
+$elsewhere = SayPart $s "c" "No, keep Live View." -Id $idB
+Check ((Test-Refused $elsewhere "was already used for a different request") -and (Get-Count $s) -eq 2 -and (Get-PartsOf $s) -ceq "a:n,b:y,c:n founder") "the same words under the same id to ANOTHER part are a different request: refused, and part (c) is not answered by it"
+$whole = Invoke-Op $s "say" @{ id = $idB; actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "No, keep Live View."; wordingVersion = 1 }
+Check ((Test-Refused $whole "was already used for a different request") -and (Get-PartsOf $s) -ceq "a:n,b:y,c:n founder") "and so are the same words under that id to the whole question: an answer to a part is never taken for an answer to all of it"
+$inbox = Inbox $s
+Check ((Get-InboxLine $inbox) -ceq "2@1 upTo=2" -and $inbox.value.messages[0].message.part -ceq "b" -and $inbox.value.messages[0].message.partWords -ceq "Should the button say Video too?") "THE KEEPER'S INBOX says which part was answered: its letter and its words, with his"
+# The keeper may still say something that asks while a part is left: the question is in front of him.
+$ask = Reply $s 1 "For (a): the long sentence or the short one?"
+Check ((Get-Outcome $ask) -ceq "done" -and (Get-PartsOf $s) -ceq "a:n,b:y,c:n founder") "while a part is left the keeper's words that ask are taken, and the answered part stays answered"
+$a = SayPart $s "a" "Approve the short one."
+$c = SayPart $s "c" "Yes, refuse them." -Route "phone" -More @{ evidence = ("ab" * 32) }
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Outcome $c) -ceq "done" -and (Get-PartsOf $s) -ceq "a:y,b:y,c:y warchief" -and $c.value.question.thread.turn -ceq "warchief" -and $c.value.message.routeShown -ceq "answered on the founder's phone") ("WITH THE LAST PART ANSWERED - here from his phone - the question is the keeper's turn: off his list (" + (Get-PartsOf $s) + ")")
+Check ((Get-Outcome (Reply $s 1 "And one more thing?")) -ceq "refused" -and (Get-Outcome (Reply $s 1 "All three done as you said." -Note)) -ceq "done") "and then, like any answered question, it takes a note and refuses words that ask"
+$edit = SayPart $s "b" "Yes after all, say Video."
+Check ((Get-Outcome $edit) -ceq "done" -and (Get-Said $edit).text -ceq "Yes after all, say Video." -and (Get-PartsOf $s) -ceq "a:y,b:y,c:y warchief") "he may still answer a part again: it is kept, and brings nothing back to his list"
+$filesWere = Get-Files $s
+Check ((Test-Refused (SayPart $s "d" "x") "it answers part (d) of question 1, which has no such part; its parts are: (a), (b), (c)") -and (Test-Refused (Invoke-Op $s "say" @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "x"; wordingVersion = 1; part = "B" }) "request.part") -and (Test-Refused (Invoke-Op $s "say" @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "x"; part = "a"; asks = $false }) "only the words of the founder answer a part of a question") -and (Test-Refused (SayPart $s "a" "parked" -More @{ act = "park" }) "an act answers no part of a question") -and (Get-Files $s) -ceq $filesWere) "a part the question does not have, a part that is not a lower-case letter, a part named by the keeper, and a part with an act are each refused, and nothing is written"
+$other = New-TestStore
+$null = Add-Q $other
+Check ((Test-Refused (SayPart $other "a" "x") "which is not a question of parts that are answered one by one") -and (Get-Count $other) -eq 1) "and so is a part of a question that has none"
+# Recorded from chat by the keeper: the founder's words to one part, as he said them there.
+$chat = New-TestStore
+$null = Invoke-Op $chat "add" @{ id = (New-Id); actor = "warchief"; question = $partsQuestion }
+$fromChat = SayPart $chat "a" "Approve." -Route "chat-recorded" -Actor "warchief" -Wording 0
+Check ((Get-Outcome $fromChat) -ceq "done" -and $fromChat.value.message.part -ceq "a" -and $fromChat.value.message.routeShown -ceq "recorded by the warchief from chat" -and (Get-PartsOf $chat) -ceq "a:y,b:n,c:n founder") "words the keeper recorded from chat may answer one part too"
+# A WHOLE ANSWER, as every surface sent before parts were answered one by one: still an answer to all of it.
+$joined = Invoke-Op $chat "say" @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "(a) x`n(b) y`n(c) z"; wordingVersion = 1 }
+Check ((Get-Outcome $joined) -ceq "done" -and $joined.value.message.part -eq "" -and $joined.value.question.thread.turn -ceq "warchief") "an answer that names no part - what an earlier window or phone sends for all the parts at once - passes the turn as it always did"
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-threads-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

@@ -263,7 +263,7 @@ Check ($unknownFlag.code -eq 2 -and $unknownFlag.out -like "*usage: horde decisi
 Check ((Get-Files) -ceq "0000000001.json") "none of these wrote anything"
 
 Write-Host ""
-Write-Host "--- update, close with a file, and reopen ---" -ForegroundColor Cyan
+Write-Host "--- update, close with a file; reopen is refused, and a follow-up is asked instead ---" -ForegroundColor Cyan
 $changeFile = Write-Json "change.json" '{"recommendation":"yes, a short tone","title":"Should a short closing sound play when the assistant closes unanswered?"}'
 $upd = Invoke-Decisions @("update", "1", "-File", $changeFile)
 Check ($upd.code -eq 0 -and $upd.out -like "*Changed question 1: Should a short closing sound play when the assistant closes unanswered?*" -and $upd.out -like "*changed title, recommendation (now wording 2)*") "update changes the fields the file names and says which, and that the wording is now 2"
@@ -277,8 +277,17 @@ Check ($late.code -eq 1 -and $late.out -like "*question 1 is closed, and only an
 $closed = Invoke-Decisions @("show", "1", "-Json")
 $j = Get-JsonLine $closed
 Check ($null -ne $j -and $j.value.question.state -ceq "closed" -and [string]::Equals($j.value.question.outcome, ("Built: a short tone plays." + "`r`n" + "Shipped in the next test build. " + $hebrew), [System.StringComparison]::Ordinal)) "the outcome is stored whole: both lines, their line break and the Hebrew, exactly"
+# A QUESTION IS NEVER PUT BACK IN FRONT OF THE FOUNDER (2026-10-12): reopen exits 1 and says what to
+# type instead; that command, typed, asks a NEW question that names the old one.
 $reopen = Invoke-Decisions @("reopen", "1", "-Reason", "the tone was too quiet")
-Check ($reopen.code -eq 0 -and $reopen.out -like "*Reopened question 1:*" -and (Get-Files) -ceq "0000000001.json,0000000002.json,0000000003.json,0000000004.json") "reopen opens question 1 again under its number; four records for the four accepted commands"
+Check ($reopen.code -eq 1 -and $reopen.out -like "*Refused: a question is never put back in front of the founder under its old number*" -and $reopen.out -like "*horde decisions add -File <question.json> -FollowsUp 1.*" -and (Get-Files) -ceq "0000000001.json,0000000002.json,0000000003.json") "reopen exits 1, writes nothing, and its refusal is the command to type instead, with the question's number in it"
+$followFile = Write-Json "follow.json" '{"title":"Should the closing tone be louder than the one that shipped?","kind":"yes-no","whatItIs":"The tone that shipped was too quiet on the test devices.","group":"voice","askedBy":"orc-b"}'
+$follow = Invoke-Decisions @("add", "-File", $followFile, "-FollowsUp", "1", "-Importance", "high", "-Blocks", "all")
+Check ($follow.code -eq 0 -and $follow.out -like "*Added question 2: Should the closing tone be louder than the one that shipped?*" -and $follow.out -like "*importance of its task: high; blocks: all.*" -and $follow.out -like "*follows up on question 1:*" -and (Get-Files) -ceq "0000000001.json,0000000002.json,0000000003.json,0000000004.json") "add -FollowsUp -Importance -Blocks asks the follow-up as question 2, says where it stands, and is the fourth record"
+$followed = Get-JsonLine (Invoke-Decisions @("show", "2", "-Json"))
+Check ($null -ne $followed -and $followed.value.question.importance -ceq "high" -and $followed.value.question.blocksShown -ceq "Blocks all work" -and $followed.value.question.followsUp.number -eq 1 -and $followed.value.question.followsUp.state -ceq "closed" -and $followed.value.question.followsUp.title -ceq "Should a short closing sound play when the assistant closes unanswered?") "as data, the follow-up carries the two words, their plain words, and the question it follows as it reads now"
+$stillClosed = Get-JsonLine (Invoke-Decisions @("show", "1", "-Json"))
+Check ($null -ne $stillClosed -and $stillClosed.value.question.state -ceq "closed") "and question 1 is still closed: nothing was reopened"
 
 Write-Host ""
 Write-Host "--- a damaged record is named where a person will see it ---" -ForegroundColor Cyan
@@ -324,7 +333,7 @@ $j = Get-JsonLine $answered
 Check ($answered.code -eq 0 -and $null -ne $j -and $j.value.outcome -ceq "done" -and $j.value.number -eq 1 -and $answered.out -cnotmatch '[^\x00-\x7F]') ("answer, from a file, exits 0 with one ASCII line of data saying done (exit " + $answered.code + ")")
 Check ($null -ne $j -and [string]::Equals($j.value.message.text, $said, [System.StringComparison]::Ordinal)) "the founder's Hebrew, with its direction marks, its line break and the spaces at both ends, is recorded character for character"
 Check ($null -ne $j -and $j.value.message.speaker -ceq "founder" -and $j.value.message.routeShown -ceq "recorded by the warchief from chat" -and $j.value.message.recordedBy -ceq "warchief") "as the founder's words, recorded by the warchief from chat"
-$replied = Invoke-Decisions @("reply", "1", "-Text", "It plays from the next build.") $talkEnv
+$replied = Invoke-Decisions @("reply", "1", "-Text", "It plays from the next build.", "-Note") $talkEnv
 Check ($replied.code -eq 0 -and $replied.out -like ("*Replied under question 1 (record 3): " + $talkTitle + "*")) "reply, with one line of text as an argument, says under which question and in which record"
 $long = ("word " * 19999) + "end!!"
 $answeredLong = Invoke-Decisions @("answer", "1", "-File", (Write-Json "long.txt" $long)) $talkEnv

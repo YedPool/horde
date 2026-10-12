@@ -79,15 +79,17 @@ Write-Host ""
 Write-Host "--- answer and reply: who speaks is the verb's ---" -ForegroundColor Cyan
 $store = New-Home
 $null = Add-Q
-$a = Run "answer" @{ Number = "1"; Text = "Yes, play it." }
-Check ($a.failure -eq "" -and @($a.lines).Count -eq 1 -and $a.lines[0] -ceq ("Kept the founder's words, recorded by the warchief from chat, under question 1 (record 2): " + $title)) ("answer says whose words it recorded, how, under which question and in which record (" + $a.failure + @($a.lines)[0] + ")")
+# The reply first, while the question is still in front of him: once he has answered, words that ask
+# are refused (the section "an answered question is never put back", below).
+$r = Run "reply" @{ Number = "1"; Text = "Take it to mean the first build." }
+Check ($r.failure -eq "" -and @($r.lines).Count -eq 1 -and $r.lines[0] -ceq ("Replied under question 1 (record 2): " + $title)) ("reply says under which question and in which record (" + $r.failure + @($r.lines)[0] + ")")
 $rec = Read-Record $store 2
-Check ($rec.kind -ceq "message-said" -and $rec.actor -ceq "warchief" -and $rec.data.speaker -ceq "founder" -and $rec.data.route -ceq "chat-recorded" -and $rec.data.text -ceq "Yes, play it.") "and the record is the founder's words, by the route 'recorded from chat', made by the warchief"
-$r = Run "reply" @{ Number = "1"; Text = "It plays from the next build." }
-Check ($r.failure -eq "" -and @($r.lines).Count -eq 1 -and $r.lines[0] -ceq ("Replied under question 1 (record 3): " + $title)) ("reply says under which question and in which record (" + $r.failure + @($r.lines)[0] + ")")
-$rec = Read-Record $store 3
 Check ($rec.data.speaker -ceq "warchief" -and $rec.data.route -ceq "command" -and $rec.actor -ceq "warchief") "and the record is the warchief's own words, by command"
 Check ($null -eq $rec.data.PSObject.Properties["asks"]) "a reply records no asks: words said to him ask him"
+$a = Run "answer" @{ Number = "1"; Text = "Yes, play it." }
+Check ($a.failure -eq "" -and @($a.lines).Count -eq 1 -and $a.lines[0] -ceq ("Kept the founder's words, recorded by the warchief from chat, under question 1 (record 3): " + $title)) ("answer says whose words it recorded, how, under which question and in which record (" + $a.failure + @($a.lines)[0] + ")")
+$rec = Read-Record $store 3
+Check ($rec.kind -ceq "message-said" -and $rec.actor -ceq "warchief" -and $rec.data.speaker -ceq "founder" -and $rec.data.route -ceq "chat-recorded" -and $rec.data.text -ceq "Yes, play it.") "and the record is the founder's words, by the route 'recorded from chat', made by the warchief"
 $id = [guid]::NewGuid().ToString("N")
 $once = Run "answer" @{ Number = "1"; Text = "Only once."; Id = $id }
 $twice = Run "answer" @{ Number = "1"; Text = "Only once."; Id = $id }
@@ -141,13 +143,13 @@ $listed = Run "list"
 Check (@($listed.lines | Where-Object { $_.Trim() -ceq "conversation: 1 message(s); 1 not yet read by the warchief; turn: the warchief" }).Count -eq 1) "list says of a question that has been spoken under: how many messages, how many unread, whose turn"
 Check (@($listed.lines | Where-Object { $_ -like "*conversation:*" }).Count -eq 1) "and says nothing of a question nobody has spoken under"
 $null = Run "inbox"
-$null = Run "reply" @{ Number = "1"; Text = "The short one." }
+$null = Run "reply" @{ Number = "1"; Text = "The short one."; Note = $true }
 $listed = Run "list"
-Check (@($listed.lines | Where-Object { $_.Trim() -ceq "conversation: 2 message(s); turn: the founder" }).Count -eq 1) "once read and replied to: two messages, nothing unread, and the founder's turn"
+Check (@($listed.lines | Where-Object { $_.Trim() -ceq "conversation: 2 message(s); turn: the warchief" }).Count -eq 1) "once read and replied to with a note: two messages, nothing unread, and still the keeper's turn"
 $shown = Run "show" @{ Number = "1" }
 $first = [array]::IndexOf(@($shown.lines), "      Which sound do you mean?")
 $second = [array]::IndexOf(@($shown.lines), "      The short one.")
-Check ($first -gt 0 -and $second -gt $first -and @($shown.lines)[$second - 1] -like "  the warchief, by command, 20* UTC (record 5, wording not stated)" -and -not (Test-Line $shown "    (not yet read by the warchief)")) "show prints the thread in order, the reply named as the warchief's by command, and nothing marked unread"
+Check ($first -gt 0 -and $second -gt $first -and @($shown.lines)[$second - 2] -like "  the warchief, by command, 20* UTC (record 5, wording not stated)" -and -not (Test-Line $shown "    (not yet read by the warchief)")) "show prints the thread in order, the reply named as the warchief's by command, and nothing marked unread"
 Check ((Test-Line $shown "History:") -and @($shown.lines | Where-Object { $_ -like "*(by warchief, record *" }).Count -eq 1) "the question's history is still one record: what was said is the conversation, not the history"
 
 Write-Host ""
@@ -159,7 +161,7 @@ $null = Add-Q
 $null = Add-Q "Which languages besides English should the test talker speak?"
 $null = Run "answer" @{ Number = "1"; Text = "Yes, play it." }           # record 3
 $null = Run "answer" @{ Number = "2"; Text = "Hebrew first." }           # record 4
-$null = Run "reply" @{ Number = "1"; Text = "It plays from the next build." }   # record 5
+$null = Run "reply" @{ Number = "1"; Text = "It plays from the next build."; Note = $true }   # record 5
 $peek = Run "inbox" @{ Peek = $true }
 Check ($peek.failure -eq "" -and $peek.lines[0] -ceq "2 message(s) not yet read, oldest first:" -and (Test-Line $peek ("Question 1: " + $title)) -and (Test-Line $peek "Question 2: Which languages besides English should the test talker speak?") -and (Test-Line $peek "      Yes, play it.") -and (Test-Line $peek "      Hebrew first.")) "inbox -Peek prints the founder's unread words, each under its question's number and plain-words title"
 Check ([array]::IndexOf(@($peek.lines), "      Yes, play it.") -lt [array]::IndexOf(@($peek.lines), "      Hebrew first.") -and @($peek.lines | Where-Object { $_ -like "*It plays from the next build*" }).Count -eq 0) "oldest first, and not the warchief's own reply"
@@ -229,7 +231,7 @@ $store = New-Home
 $null = Add-Q
 $null = Run "answer" @{ Number = "1"; Text = "Printed, and its marking refused." }   # record 2
 $usedId = [guid]::NewGuid().ToString("N")
-$takeId = { $null = Invoke-HordeDecision -Operation "say" -Request @{ id = $usedId; actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "took the id" } }
+$takeId = { $null = Invoke-HordeDecision -Operation "say" -Request @{ id = $usedId; actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "took the id"; asks = $false } }
 $box = Run "inbox" @{ Id = $usedId } $takeId
 Check ((Test-Line $box "      Printed, and its marking refused.") -and $box.failure -like "the messages above were NOT marked as read, and will be shown again:*already used for a different request*" -and @($box.then).Count -eq 0 -and (Get-Kinds $store) -ceq "added,said,said") ("a marking that is refused fails the command, says the messages were not marked, and gives the reason (" + $box.failure + ")")
 # A MARKING THAT FAILS says so, and says the messages will be shown again - which they are.
@@ -280,6 +282,72 @@ Check ((Run "answer" @{ Number = "1"; Text = "a"; Wording = "two" }).failure -li
 Check ((Run "answer" @{ Number = "1"; File = (Join-Path $script:work "no-such-file.txt") }).failure -like "THREW: the file of words*was not found") "a file of words that is not there is refused by name"
 Check ((Run "inbox" @{ Id = "not-an-id" }).failure -like "THREW: -Id is 32 lowercase hex digits*") "an -Id that is not one is refused for inbox as for every verb that writes"
 Check ((Get-Kinds $store) -ceq "added") "CONTROL: none of these wrote anything"
+
+Write-Host ""
+Write-Host "--- an answered question is never put back: what the keeper is told, and what it still sees ---" -ForegroundColor Cyan
+$store = New-Home
+$null = Add-Q
+$null = Add-Q "Which languages besides English should the test talker speak?"
+$null = Run "answer" @{ Number = "1"; Text = "Yes, play it.`nBut only once." -replace "`n", " " }
+$kindsWere = Get-Kinds $store
+$asked = Run "reply" @{ Number = "1"; Text = "And in the second build?" }
+Check ($asked.failure -like "nothing was written: question 1 has been answered and is off the founder's list*" -and (Get-Kinds $store) -ceq $kindsWere) "A REPLY THAT ASKS, under a question he has answered, fails the command and writes nothing"
+Check ((Test-Line $asked "Refused: nothing was written: question 1 has been answered and is off the founder's list, and words that ask him something would put it back in front of him. Ask what is still open as a NEW question: horde decisions add -File <question.json> -FollowsUp 1. It gets a number of its own and goes to the top of his list, with question 1 and what he answered folded under it. To tell him something that asks nothing, say it as a note (reply -Note)") -and @($asked.lines | Where-Object { $_ -like "*And in the second build*" }).Count -eq 0) "and its lines say, in plain words, the two things to do instead - a follow-up question, or a note - without repeating the words"
+$gone = Run "reopen" @{ Number = "1"; Reason = "it came back" }
+Check ($gone.failure -like "a question is never put back in front of the founder under its old number*" -and @($gone.lines | Where-Object { $_ -like "*horde decisions add -File <question.json> -FollowsUp 1.*" }).Count -ge 1 -and (Get-Kinds $store) -ceq $kindsWere) "REOPEN fails the command too, with the same advice and the question's own number in it"
+# THE KEEPER STILL SEES IT, AND HIS ANSWER: the question is off HIS list, not off the keeper's.
+$listed = Run "list"
+Check ($listed.failure -eq "" -and (Test-Trimmed $listed ("1. " + $title)) -and (Test-Trimmed $listed "answered, and off his list: Yes, play it. But only once.") -and @($listed.lines | Where-Object { $_ -like "*answered, and off his list*" }).Count -eq 1) "list still shows the answered question, and under it what he answered; the question he has not answered says no such thing"
+$long = Run "answer" @{ Number = "2"; File = (Write-Words "two-lines.txt" ("Hebrew first." + "`n" + "Then the rest, later.")) }
+$listed = Run "list"
+Check ($long.failure -eq "" -and (Test-Trimmed $listed "answered, and off his list: Hebrew first. [...]")) "an answer of more than a line is shown by its first line, marked as cut: show prints it whole"
+$asJson = Run "list" @{ Json = $true }
+$parsed = $null; try { $parsed = (@($asJson.lines)[0] | ConvertFrom-Json) } catch { }
+Check ($null -ne $parsed -and @($parsed.value.questions).Count -eq 2 -and $null -eq $parsed.value.questions[0].thread.PSObject.Properties["messages"]) "list -Json is the list as it always was: the counts, and not the messages"
+# A FOLLOW-UP, AND THE TWO WORDS BESIDE A QUESTION.
+$file = Write-Words "follow.json" '{"title":"Should the closing sound play in the second build as well?","kind":"yes-no","whatItIs":"A follow-up.","group":"voice","askedBy":"orc-b"}'
+$followed = Run "add" @{ File = $file; FollowsUp = "1"; Importance = "HIGH"; Blocks = "all" }
+Check ($followed.failure -eq "" -and $followed.lines[0] -ceq "Added question 3: Should the closing sound play in the second build as well?" -and (Test-Line $followed "  importance of its task: high; blocks: all. Change either with: horde decisions rank 3 -Importance <high, normal or low> -Blocks <all, part or none>") -and (Test-Line $followed "  follows up on question 1: he sees that question and his answer folded under this one")) ("add -FollowsUp -Importance -Blocks adds question 3 and says back where it stands (" + $followed.failure + ")")
+$rec = Read-Record $store 5
+Check ($rec.kind -ceq "question-added" -and $rec.data.importance -ceq "high" -and $rec.data.blocks -ceq "all" -and $rec.data.followsUp -eq 1 -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "blocks,followsUp,importance,number,question") "the record holds the two words, in lower case whatever case they were typed in, and the number it follows"
+$plain = Add-Q "Is a question added with neither word told what it reads as?"
+$rec = Read-Record $store 6
+Check ($plain.failure -eq "" -and (Test-Line $plain "  importance of its task: normal; blocks: part. Change either with: horde decisions rank 4 -Importance <high, normal or low> -Blocks <all, part or none>") -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "number,question") "A QUESTION ADDED WITH NEITHER WORD is told what it reads as and how to change it, and its record states neither: it is the record every earlier version wrote"
+$shown = Run "show" @{ Number = "3" }
+Check ((Test-Line $shown "Importance of its task: high (Important)") -and (Test-Line $shown "Blocks: all (Blocks all work)") -and (Test-Line $shown ("Follows up on question 1 (open): " + $title)) -and (Test-Line $shown "  He answered:") -and (Test-Line $shown "    Yes, play it. But only once.")) "show says how much the question matters and holds up, in the list's own plain words, and the question it follows with what he answered"
+$shown4 = Run "show" @{ Number = "4" }
+Check ((Test-Line $shown4 "Importance of its task: normal") -and (Test-Line $shown4 "Blocks: part") -and @($shown4.lines | Where-Object { $_ -like "Follows up*" }).Count -eq 0) "a question with the defaults says them plainly, and one that follows nothing says nothing of following"
+$listed = Run "list"
+Check ((Test-Trimmed $listed "Important; Blocks all work") -and (Test-Trimmed $listed ("follows up on question 1: " + $title)) -and @($listed.lines | Where-Object { $_.Trim() -ceq "Important; Blocks all work" }).Count -eq 1) "list marks the one question that stands out, and says which question a follow-up follows"
+Check ((Run "add" @{ File = $file; Importance = "urgent" }).failure -like "the request is not what 'add' takes*" -and (Run "add" @{ File = $file; FollowsUp = "99" }).failure -like "*'followsUp' names question 99, and the list has no question 99*" -and (Run "add" @{ File = $file; FollowsUp = "one" }).failure -like "THREW: -FollowsUp is the number of the earlier question*") "a word that is none of the list's, a follow-up of a question that is not there, and a follow-up that is not a number are each refused, and nothing is added"
+Check ((Get-Kinds $store) -ceq "added,added,said,said,added,added") ("CONTROL: none of the refusals wrote a record (" + (Get-Kinds $store) + ")")
+# RANK: the keeper's correction.
+$ranked = Run "rank" @{ Number = "4"; Importance = "low"; Blocks = "None" }
+Check ($ranked.failure -eq "" -and $ranked.lines[0] -ceq "Ranked question 4: Is a question added with neither word told what it reads as?" -and (Test-Line $ranked "  ranked: importance low, blocks none") -and (Read-Record $store 7).kind -ceq "question-ranked" -and (Read-Record $store 7).data.blocks -ceq "none") ("rank says what it changed, and writes one record of its own (" + $ranked.failure + ")")
+$same = Run "rank" @{ Number = "4"; Importance = "low" }
+Check ($same.failure -like "nothing was written: it changes nothing: question 4 already has that importance and that blocking*") "a ranking that changes nothing is refused as that"
+Check ((Run "rank" @{ Number = "4" }).failure -like "THREW: decisions rank needs -Importance, -Blocks, or both*" -and (Run "rank" @{ Importance = "low" }).failure -like "THREW: decisions rank needs the question's number*" -and (Run "rank" @{ Number = "4"; Blocks = "some" }).failure -like "the request is not what 'rank' takes*" -and (Run "rank" @{ Number = "4"; Text = "x" }).failure -like "THREW: -Text does not belong to decisions rank*") "rank with no word, no number, a word that is none of the list's, or another verb's flag is refused"
+Check ((Run "show" @{ Number = "4" }).lines -ccontains "Importance of its task: low (Can wait)" -and (Get-Kinds $store) -ceq "added,added,said,said,added,added,ranked") "and the question reads as ranked, with one ranking record in the store"
+$null = Run "reply" @{ Number = "1"; Text = "Done as you said."; Note = $true }
+Check ((Test-Trimmed (Run "list") "answered, and off his list: Yes, play it. But only once.")) "a note of the keeper's, said after his answer, is never shown as what he answered"
+
+Write-Host ""
+Write-Host "--- a part answered: the keeper is told which ---" -ForegroundColor Cyan
+$store = New-Home
+$partsFile = Write-Words "parts.json" '{"title":"Three follow-ups to settle about the new wording, one by one.","kind":"parts","whatItIs":"Follow-ups.","parts":["(a) The sentence when she cannot zoom: approve, or reword.","(b) Should the button say Video too?","(c) Should page turns be refused?"],"group":"voice","askedBy":"orc-b"}'
+$null = Run "add" @{ File = $partsFile }
+$b = Run "answer" @{ Number = "1"; Text = "No, keep Live View."; Part = "B" }
+Check ($b.failure -eq "" -and (Read-Record $store 2).data.part -ceq "b" -and (Read-Record $store 2).data.text -ceq "No, keep Live View.") ("answer -Part records which part his words answer, the letter in lower case (" + $b.failure + ")")
+$peek = Run "inbox" @{ Peek = $true }
+Check ((Test-Line $peek "    (answers part (b): Should the button say Video too?)") -and (Test-Line $peek "      No, keep Live View.")) "THE INBOX SAYS WHICH PART WAS ANSWERED, by its letter and its own words, above his words"
+$listed = Run "list"
+Check ((Test-Trimmed $listed "conversation: 1 message(s); 1 not yet read by the warchief; parts answered: (b) of 3; turn: the founder") -and @($listed.lines | Where-Object { $_ -like "*answered, and off his list*" }).Count -eq 0) "list says which parts are answered, and that it is still his turn: the question is not off his list while a part is left"
+$null = Run "answer" @{ Number = "1"; Text = "Approve."; Part = "a" }
+$null = Run "answer" @{ Number = "1"; Text = "Yes, refuse them."; Part = "c" }
+$listed = Run "list"
+Check ((Test-Trimmed $listed "conversation: 3 message(s); 3 not yet read by the warchief; parts answered: (a), (b), (c) of 3; turn: the warchief") -and (Test-Trimmed $listed "answered, and off his list: (a) Approve.; (b) No, keep Live View.; (c) Yes, refuse them.")) "with the last part answered it is the keeper's turn, and list shows his answer to each part, in the parts' order"
+Check ((Run "answer" @{ Number = "1"; Text = "x"; Part = "d" }).failure -like "*it answers part (d) of question 1, which has no such part; its parts are: (a), (b), (c)*" -and (Run "answer" @{ Number = "1"; Text = "x"; Part = "ab" }).failure -like "THREW: -Part is the letter of the part answered*" -and (Run "reply" @{ Number = "1"; Text = "x"; Part = "a" }).failure -like "THREW: -Part does not belong to decisions reply*") "a part the question does not have, a part that is not a letter, and a part on the keeper's own reply are refused"
+Check ((Get-Kinds $store) -ceq "added,said,said,said") "CONTROL: three answers, three records"
 
 } finally {
     $env:HORDE_HOME = $keepHome

@@ -72,5 +72,21 @@
         @{ Name = "loop-ignores-the-settings-label"
            Find = '-QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel'
            Replace = '-QuietSeconds $v.quietSeconds' }
+        # --- a part answered (2026-10-12) ---
+        @{ Name = "the-notice-does-not-say-which-part"
+           Find = '        elseif ($letters.Count -eq 1) { "" + $number + " (part " + $letters[0] + ")" }'
+           Replace = '        elseif ($letters.Count -eq 1) { "" + $number }' }
+        @{ Name = "the-notice-names-only-the-first-of-several-parts"
+           Find = '        else { "" + $number + " (parts " + (($letters[0..($letters.Count - 2)]) -join ", ") + " and " + $letters[$letters.Count - 1] + ")" }'
+           Replace = '        else { "" + $number + " (part " + $letters[0] + ")" }' }
+        @{ Name = "anything-called-a-part-reaches-the-notice"
+           Find = """`$(`$_.part)"" -cmatch '\A[a-z]\z' } | ForEach-Object"
+           Replace = "`$true } | ForEach-Object" }
+        @{ Name = "a-part-is-named-for-another-question"
+           Find = '        $letters = @($Items | Where-Object { [int]$_.question -eq $number -and'
+           Replace = '        $letters = @($Items | Where-Object {' }
+        @{ Name = "what-is-rung-for-carries-no-part"
+           Find = 'part = $(if ($null -ne $_.message.PSObject.Properties["part"]) { "$($_.message.part)" } else { "" }) } })'
+           Replace = 'part = "" } })' }
     )
 }

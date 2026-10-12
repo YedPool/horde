@@ -15,7 +15,10 @@
       "properties": {
         "id": {"$ref": "#/definitions/id"},
         "actor": {"$ref": "#/definitions/actor"},
-        "question": {"type": "object", "description": "The new question, schema/decision-question.v1."}
+        "question": {"type": "object", "description": "The new question, schema/decision-question.v1."},
+        "importance": {"type": "string", "enum": ["high", "normal", "low"], "description": "How much the task the question belongs to matters overall. Left out, the question reads as normal."},
+        "blocks": {"type": "string", "enum": ["all", "part", "none"], "description": "How much of that task's work stands still until the question is answered. Left out, the question reads as part."},
+        "followsUp": {"$ref": "#/definitions/number"}
       }
     },
     "update": {
@@ -49,6 +52,19 @@
         "actor": {"$ref": "#/definitions/actor"},
         "number": {"$ref": "#/definitions/number"},
         "reason": {"type": "string", "description": "Why it is open again, on one line."}
+      }
+    },
+    "rank": {
+      "type": "object",
+      "description": "Correct how much an open question matters, or how much it holds up: one record of its own, never an edit of the question. At least one of the two words; a ranking that changes nothing is refused as that.",
+      "required": ["id", "actor", "number"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "importance": {"type": "string", "enum": ["high", "normal", "low"]},
+        "blocks": {"type": "string", "enum": ["all", "part", "none"]}
       }
     },
     "list": {
@@ -88,7 +104,8 @@
         "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at. Absent means NOT STATED, and is recorded as that: nothing is guessed. Words typed in the window always state it (the routes of decisions/Rules.ps1 say which routes must)."},
         "asks": {"type": "boolean", "description": "For the keeper's words only: false when they tell the founder something and ask him nothing (a note), so that the turn stays the keeper's. Absent means true: words said to him ask him."},
         "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "For the founder's words typed in the window only: the words record an act of his - park (set the question aside) or unpark (bring it back). The turn does not pass."},
-        "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "For the route phone only, and always there: the SHA-256, in lower-case hex, of the relay journal record that proved the words came from the founder's passkey. The proof itself is kept in relay's own journal and never here. It is not part of what makes a request the same: the same words sent again under the same id with another delivery's proof are the first record answered again (decisions/Operations.ps1)."}
+        "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "For the route phone only, and always there: the SHA-256, in lower-case hex, of the relay journal record that proved the words came from the founder's passkey. The proof itself is kept in relay's own journal and never here. It is not part of what makes a request the same: the same words sent again under the same id with another delivery's proof are the first record answered again (decisions/Operations.ps1)."},
+        "part": {"type": "string", "pattern": "^[a-z]$", "description": "The words answer one part of a question of parts: that part's letter. Only the founder's words answer a part. Left out, the words are said to the whole question."}
       }
     },
     "inbox": {

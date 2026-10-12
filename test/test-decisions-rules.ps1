@@ -73,7 +73,7 @@ $viewFields = @($defs.resultSchema.definitions.view.properties.PSObject.Properti
 Check (@($tableFields | Where-Object { $viewFields -cnotcontains $_ }).Count -eq 0) "and a question as shown (decision-result.v1) carries every one of them"
 $kindNames = @(Get-HordeDecisionEventKinds)
 $defNames = @($defs.eventSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened,message-said,messages-read") "the event kinds are the four that change a question, and the two of the conversation under it"
+Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened,question-ranked,message-said,messages-read") "the event kinds are the five that change a question, and the two of the conversation under it"
 Check (((Get-HordeDecisionSpeakers) -join ",") -ceq "founder,warchief" -and ((Get-HordeDecisionRoutes) -join ",") -ceq "window,chat-recorded,command,phone" -and ((Get-HordeDecisionReaders) -join ",") -ceq "warchief") "who speaks, by what routes, and who has an inbox are the rules' closed lists"
 Check (@($kindNames | Where-Object { @("question", "list") -cnotcontains (Get-HordeDecisionKindAbout -Kind $_) }).Count -eq 0 -and (Get-HordeDecisionKindAbout -Kind "messages-read") -ceq "list" -and (Get-HordeDecisionKindAbout -Kind "message-said") -ceq "question" -and (Get-HordeDecisionKindAbout -Kind "no-such-kind") -ceq "") "every kind says what it is about: one question, or the whole list"
 Check (((Get-HordeDecisionKindActors -Kind "question-closed").roles -join ",") -ceq "warchief" -and ((Get-HordeDecisionKindActors -Kind "message-said").roles -join ",") -ceq "founder,warchief" -and ((Get-HordeDecisionKindActors -Kind "messages-read").roles -join ",") -ceq "founder,warchief") "a question's own records are written by its keepers, and what is said under it by its speakers"
@@ -801,6 +801,177 @@ foreach ($case in @(
 $st = Get-Fold ($good + @((New-Said 3 99 -Text "to no question"), (New-Read 4 2)))
 Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no question 99*" -and (Get-Unread (Get-Thread $st 1)) -eq 0 -and $st.ids.Count -eq 4) "a message to a question that does not exist is reported and changes nothing, and a read mark after it still applies: it needs no question number"
 Check ($st.ids[([long]4).ToString("x32")].number -eq 0 -and $st.ids[([long]2).ToString("x32")].number -eq 1) "the list knows a message's record by the question it is under, and a read mark's as being about no one question"
+
+Write-Host ""
+Write-Host "--- how much a question matters, and how much it holds up: two words beside it ---" -ForegroundColor Cyan
+# THE FOUNDER, 2026-10-12: an order-by for his list - date, overall task importance, how much the
+# question blocks its task - with the two importance words set when a question is added, and sensible
+# defaults for the questions already there.
+function New-Ranked { param([long]$Seq, [int]$Number, [hashtable]$Words) $data = [ordered]@{ number = $Number }; foreach ($k in @("importance", "blocks")) { if ($Words.ContainsKey($k)) { $data[$k] = $Words[$k] } }; return (New-Record -Seq $Seq -Kind "question-ranked" -Data $data) }
+function New-AddedWith {
+    # A question-added record that states words beside the question (-Beside), or parts (-Parts).
+    param([long]$Seq, [int]$Number, [hashtable]$Beside = @{}, [string[]]$Parts = @(), [string]$Title = "")
+    if ($Title -eq "") { $Title = "Is question number $Number asked in plain words here?" }
+    $over = @{ title = $Title }
+    if ($Parts.Count -gt 0) { $over["kind"] = "parts"; $over["parts"] = $Parts }
+    $data = [ordered]@{ number = $Number; question = (ConvertTo-HordeDecisionFields -Source (New-Question $over)) }
+    foreach ($k in @($Beside.Keys)) { $data[$k] = $Beside[$k] }
+    return (New-Record -Seq $Seq -Kind "question-added" -Data $data)
+}
+function Get-View { param($State, [int]$Number = 1, [switch]$Messages) try { return (ConvertTo-HordeDecisionView -Question $State.questions[$Number] -State $State -Messages:$Messages) } catch { return [pscustomobject]@{ importance = ("THREW: " + $_.Exception.Message); importanceShown = "THREW"; blocks = "THREW"; blocksShown = "THREW"; thread = [pscustomobject]@{ turn = "THREW"; count = -1 } } } }
+function Get-Rank { param($State, [int]$Number = 1) $v = Get-View $State $Number; return ("" + $v.importance + "[" + $v.importanceShown + "] " + $v.blocks + "[" + $v.blocksShown + "]") }
+Check (((Get-HordeDecisionImportances) -join ",") -ceq "high,normal,low" -and ((Get-HordeDecisionBlockings) -join ",") -ceq "all,part,none") "the importances and the blockings are the rules' closed lists, each in the order it sorts in"
+Check ((Get-HordeDecisionDefaultImportance) -ceq "normal" -and (Get-HordeDecisionDefaultBlocks) -ceq "part" -and (Get-HordeDecisionImportances) -ccontains (Get-HordeDecisionDefaultImportance) -and (Get-HordeDecisionBlockings) -ccontains (Get-HordeDecisionDefaultBlocks)) "the defaults are normal and part, and each is a word of its list"
+Check ((Get-HordeDecisionRankShown -Name "importance" -Word "high") -ceq "Important" -and (Get-HordeDecisionRankShown -Name "blocks" -Word "all") -ceq "Blocks all work" -and (Get-HordeDecisionRankShown -Name "importance" -Word "low") -ceq "Can wait" -and (Get-HordeDecisionRankShown -Name "blocks" -Word "none") -ceq "Blocks nothing") "each word that stands out has its few plain words"
+Check ((Get-HordeDecisionRankShown -Name "importance" -Word "normal") -eq "" -and (Get-HordeDecisionRankShown -Name "blocks" -Word "part") -eq "") "THE DEFAULT IS SAID BY SAYING NOTHING: a question nobody ranked carries no mark that would be a guess"
+Check ((Get-HordeDecisionRankShown -Name "importance" -Word "urgent") -ceq "urgent" -and (Get-HordeDecisionRankShown -Name "blocks" -Word "all") -cne (Get-HordeDecisionRankShown -Name "importance" -Word "all")) "a word this version does not list is shown as it is, and each word is looked up in its own list"
+foreach ($bad in @("urgent", "High", "", " high", 5, $null, $true)) {
+    Check (@(Test-HordeDecisionRankWord -Name "importance" -Word $bad).Count -eq 1 -and "$(@(Test-HordeDecisionRankWord -Name 'importance' -Word $bad)[0])" -ceq "'importance' is one of: high, normal, low") ("an importance of '" + $bad + "' is refused by naming the words there are, and is not said back")
+}
+Check (@(Test-HordeDecisionRankWord -Name "blocks" -Word "high").Count -eq 1 -and "$(@(Test-HordeDecisionRankWord -Name 'blocks' -Word 'high')[0])" -ceq "'blocks' is one of: all, part, none" -and @(Test-HordeDecisionRankWord -Name "importance" -Word "all").Count -eq 1) "a word of the other list is refused too"
+Check (@(Get-HordeDecisionImportances | Where-Object { @(Test-HordeDecisionRankWord -Name "importance" -Word $_).Count -ne 0 }).Count -eq 0 -and @(Get-HordeDecisionBlockings | Where-Object { @(Test-HordeDecisionRankWord -Name "blocks" -Word $_).Count -ne 0 }).Count -eq 0) "CONTROL: every word of each list is taken"
+# AN OLD RECORD - one that states neither word, as every record written before they existed - reads as
+# the defaults; and it is still the record it was: nothing about it is unreadable.
+$st = Get-Fold @((New-Added 1 1))
+Check ((Get-Rank $st) -ceq "normal[] part[]" -and $st.unreadable.Count -eq 0 -and $null -eq (Get-View $st).PSObject.Properties["followsUp"]) ("A QUESTION ADDED BEFORE THE WORDS EXISTED reads as normal and part, with no mark and no follow-up (" + (Get-Rank $st) + ")")
+$st = Get-Fold @((New-AddedWith 1 1 @{ importance = "high"; blocks = "all" }), (New-AddedWith 2 2 @{ blocks = "none" }), (New-AddedWith 3 3 @{ importance = "low" }))
+Check ((Get-Rank $st 1) -ceq "high[Important] all[Blocks all work]" -and (Get-Rank $st 2) -ceq "normal[] none[Blocks nothing]" -and (Get-Rank $st 3) -ceq "low[Can wait] part[]" -and $st.unreadable.Count -eq 0) "a record states either word, or both, and the other reads as its default"
+# A LABEL A LATER VERSION WROTE is read and shown by its name: the question is never lost to it.
+$st = Get-Fold @((New-AddedWith 1 1 @{ importance = "urgent"; blocks = "everything" }))
+Check ((Get-Rank $st) -ceq "urgent[urgent] everything[everything]" -and $st.unreadable.Count -eq 0 -and (Get-Numbers $st) -ceq "1") "a word of a later version is a label like any other: the question is read, and the word shown as it is"
+foreach ($case in @(
+    @{ what = "an importance that is not a label"; beside = @{ importance = "Very High" } }
+    @{ what = "a blocking that is a number"; beside = @{ blocks = 3 } }
+    @{ what = "a follow-up of question 0"; beside = @{ followsUp = 0 } }
+    @{ what = "a follow-up that is text"; beside = @{ followsUp = "1" } }
+    @{ what = "a member no question-added record has"; beside = @{ urgency = "high" } }
+)) {
+    $st = Get-Fold @((New-Added 1 1), (New-AddedWith 2 2 $case.beside), (New-Added 3 3))
+    Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].sequence -eq 2 -and $st.unreadable[0].reason -like "*is not what a question-added record holds*" -and (Get-Numbers $st) -ceq "1,3") ($case.what + " makes the record unreadable by name, and the questions around it keep their numbers")
+}
+# RANKING: the keeper's correction, a record of its own.
+$st = Get-Fold @((New-AddedWith 1 1 @{ importance = "low" }), (New-Ranked 2 1 @{ importance = "high"; blocks = "all" }))
+Check ((Get-Rank $st) -ceq "high[Important] all[Blocks all work]" -and (@($st.questions[1].history | ForEach-Object { $_.note }) -join "|") -ceq "added|ranked: importance high, blocks all" -and $st.ignored.Count -eq 0) "a ranking changes the words from its record on, and the history says what changed"
+Check ($st.questions[1].wordingVersion -eq 1 -and (Get-View $st).thread.turn -ceq "founder" -and $st.questions[1].title -clike "Is question number 1*") "it moves no wording and no turn, and no word of the question"
+$st = Get-Fold @((New-AddedWith 1 1 @{ importance = "low" }), (New-Ranked 2 1 @{ blocks = "none" }))
+Check ((Get-Rank $st) -ceq "low[Can wait] none[Blocks nothing]" -and $st.questions[1].history[1].note -ceq "ranked: blocks none") "a ranking that names one word leaves the other as it was"
+$st = Get-Fold @((New-AddedWith 1 1 @{ importance = "high" }), (New-Ranked 2 1 @{ importance = "high" }), (New-Ranked 3 1 @{ importance = "high"; blocks = "all" }))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 2 -and $st.ignored[0].reason -like "*it changes nothing: question 1 already has that importance and that blocking*" -and $st.questions[1].history[1].note -ceq "ranked: blocks all") "a ranking that changes nothing is reported and changes nothing; one that changes one of its two words says only that one"
+$st = Get-Fold @((New-Added 1 1), (New-Ranked 2 1 @{}))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*it changes nothing*" -and $st.questions[1].history.Count -eq 1) "a ranking record that names neither word changes nothing"
+$st = Get-Fold @((New-Added 1 1), (New-Closed 2 1), (New-Ranked 3 1 @{ importance = "high" }))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*question 1 is closed, and only an open question is ranked*" -and (Get-Rank $st) -ceq "normal[] part[]") "a closed question is not ranked: nobody is reading a list it is not in"
+$st = Get-Fold @((New-Added 1 1), (New-Ranked 2 9 @{ importance = "high" }))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no question 9*") "nor is a question that is not there"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-ranked" ([ordered]@{ number = 1; importance = "high"; title = "sneaked in" })), (New-Added 3 3))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*is not what a question-ranked record holds*" -and (Get-Numbers $st) -ceq "1,3" -and (Get-Rank $st) -ceq "normal[] part[]") "a ranking record with a member no ranking has is unreadable by name"
+Check ((Get-HordeDecisionKindAbout -Kind "question-ranked") -ceq "question" -and ((Get-HordeDecisionKindActors -Kind "question-ranked").roles -join ",") -ceq "warchief") "a ranking is about one question, and its keepers write it"
+
+Write-Host ""
+Write-Host "--- a question of parts is answered part by part ---" -ForegroundColor Cyan
+# THE FOUNDER, 2026-10-12: sub-questions (1a, 1b, 1c) each send by themselves; the parent question
+# leaves the list when all its parts are answered.
+function Get-Letters { param([hashtable]$Over) $found = "THREW"; try { $found = (@(Get-HordeDecisionParts -Question (ConvertTo-HordeDecisionFields -Source (New-Question $Over)) | ForEach-Object { $_.letter + "=" + $_.words }) -join "|") } catch { $found = "THREW: " + $_.Exception.Message }; return $found }
+# THE SAME CASES decisions/page/list.js's partsOf is held to (test/e2e/e2e-decisions-answering-parts.ps1):
+# the two read one question's parts by one rule.
+Check ((Get-Letters @{ kind = "parts"; parts = @("(a) The first thing.", "(b) The second thing.", "(c)   The third.") }) -ceq "a=The first thing.|b=The second thing.|c=The third.") "parts written '(a) words' are known by their letters, and their words are what follows the mark"
+Check ((Get-Letters @{ kind = "parts"; parts = @("The first thing.", "The second thing.") }) -ceq "a=The first thing.|b=The second thing.") "a part not written so takes the next letter of the alphabet, by its place"
+Check ((Get-Letters @{ kind = "parts"; parts = @("(c) Third first.", "Second place.", "(a) First last.") }) -ceq "c=Third first.|b=Second place.|a=First last.") "a marked part keeps its own letter wherever it stands, and an unmarked one the letter of its place"
+Check ((Get-Letters @{ kind = "parts"; parts = @("(a) One.", "(a) One again.") }) -eq "" -and (Get-Letters @{ kind = "parts"; parts = @("(b) Marked b.", "Unmarked, second place.") }) -eq "") "PARTS THAT CANNOT BE TOLD APART - a letter twice, written or by place - are not answered one by one"
+Check ((Get-Letters @{ kind = "parts"; parts = @("(a) Only one.") }) -eq "" -and (Get-Letters @{ kind = "yes-no"; parts = @("(a) One.", "(b) Two.") }) -eq "" -and (Get-Letters @{ kind = "choice"; options = @("(a) One.", "(b) Two.") }) -eq "") "one part is no parts, and neither are the parts of a question that is not of the kind parts, nor options"
+Check ((Get-Letters @{ kind = "parts"; parts = @(1..27 | ForEach-Object { "Part number $_ of many." }) }) -eq "" -and (Get-Letters @{ kind = "parts"; parts = @(1..26 | ForEach-Object { "Part number $_ of many." }) }) -clike "a=Part number 1 of many.|*|z=Part number 26 of many.") "there are twenty-six letters: a twenty-seventh unmarked part leaves none answerable one by one"
+Check ((Get-Letters @{ kind = "parts"; parts = @("(A) Capital.", "(1) Digit.") }) -ceq "a=(A) Capital.|b=(1) Digit.") "only a lower-case letter in brackets is a mark: anything else is the part's own words"
+
+function New-PartSaid { param([long]$Seq, [int]$Number, [string]$Part, [string]$Text = "Yes.", $Wording = 1, [string]$Speaker = "founder", [string]$Route = "window", [string]$Actor = "founder") $r = New-Said -Seq $Seq -Number $Number -Speaker $Speaker -Route $Route -Text $Text -Wording $Wording -Actor $Actor; Add-Member -InputObject $r.data.data -NotePropertyName part -NotePropertyValue $Part; return $r }
+function Get-PartsLine { param($State, [int]$Number = 1) $t = Get-Thread $State $Number; if ($null -eq $t.PSObject.Properties["parts"]) { return ("(none) " + $t.turn) }; return ((@($t.parts | ForEach-Object { $_.letter + ":" + $(if ($_.answered) { "y" } else { "n" }) }) -join ",") + " " + $t.turn) }
+$three = @("(a) The first thing to settle.", "(b) The second thing to settle.", "(c) The third thing to settle.")
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three))
+Check ((Get-PartsLine $st) -ceq "a:n,b:n,c:n founder") "a question of three parts says of each that it is not answered, and it is the founder's turn"
+Check ((Get-PartsLine (Get-Fold @((New-Added 1 1)))) -ceq "(none) founder") "CONTROL: a question with no parts says nothing of parts"
+$steps = @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "b" -Text "second"), (New-PartSaid 3 1 "a" -Text "first"), (New-PartSaid 4 1 "c" -Text "third"))
+$lines = New-Object System.Collections.ArrayList
+for ($i = 1; $i -le $steps.Count; $i++) { [void]$lines.Add((Get-PartsLine (Get-Fold @($steps[0..($i - 1)])))) }
+Check (($lines -join " / ") -ceq "a:n,b:n,c:n founder / a:n,b:y,c:n founder / a:y,b:y,c:n founder / a:y,b:y,c:y warchief") ("EACH PART IS ANSWERED BY ITS OWN RECORD, in any order, and the turn passes when the LAST one is: " + ($lines -join " / "))
+$st = Get-Fold $steps
+$t = Get-Thread $st 1
+Check ($t.count -eq 3 -and (@($t.messages | ForEach-Object { $_.part + "=" + $_.text + "[" + $_.partWords + "]" }) -join "|") -ceq "b=second[The second thing to settle.]|a=first[The first thing to settle.]|c=third[The third thing to settle.]" -and $st.ignored.Count -eq 0 -and $st.unreadable.Count -eq 0) "each message says which part it answers, by its letter and the part's own words"
+Check ((@($t.messages | ForEach-Object { $_.replaces }) -join ",") -ceq "False,False,False") "his answers to three different parts replace nothing: each stands"
+Check ((Get-Thread (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "plain"))) 1).messages[0].part -eq "" -and (Get-Thread (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "plain"))) 1).messages[0].partWords -eq "") "CONTROL: words said to a whole question name no part"
+# AN ANSWER TO A PART REPLACES ONLY AN EARLIER ANSWER TO THAT PART.
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), (New-PartSaid 3 1 "b" -Text "second"), (New-PartSaid 4 1 "a" -Text "first, again"), (New-PartSaid 5 1 "b" -Text "second, again"))
+Check ((@((Get-Thread $st 1).messages | ForEach-Object { $_.replaces }) -join ",") -ceq "False,False,True,True" -and (Get-PartsLine $st) -ceq "a:y,b:y,c:n founder") "a second answer to part (a) replaces the first to (a), stepping over his answer to (b) in between; and answering a part twice answers no other part"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), (New-Reply 3 1 -Text "which first?"), (New-PartSaid 4 1 "a" -Text "the short first"))
+Check ((@((Get-Thread $st 1).messages | ForEach-Object { $_.replaces }) -join ",") -ceq "False,False,False") "the other speaker's words end the search, as they always did: an answer to (a) after the keeper spoke replaces nothing"
+# A WHOLE ANSWER TO A QUESTION OF PARTS - one that names no part, as every answer did before parts
+# were answered one by one, and as words recorded from chat do - passes the turn as it always did.
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), (New-Said 3 1 -Text "(a) x`n(b) y`n(c) z"))
+Check ((Get-PartsLine $st) -ceq "a:y,b:n,c:n warchief" -and (Get-Thread $st 1).messages[1].replaces -eq $true) ("an answer that names no part is an answer to the whole question: the turn passes (" + (Get-PartsLine $st) + ")")
+# A PART THE QUESTION DOES NOT HAVE.
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "d"), (New-PartSaid 3 1 "a"))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 2 -and $st.ignored[0].reason -like "*it answers part (d) of question 1, which has no such part; its parts are: (a), (b), (c)*" -and (Get-Thread $st 1).count -eq 1) "an answer to a part the question does not have does not apply, and says which parts there are"
+$st = Get-Fold @((New-Added 1 1), (New-PartSaid 2 1 "a"))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*which is not a question of parts that are answered one by one*" -and (Get-Thread $st 1).count -eq 0) "nor does an answer to a part of a question that has none"
+# ... EXCEPT WORDS SAID TO AN EARLIER WORDING THAT HAD IT: he answered what was in front of him, and a
+# message is kept, always. It is flagged like any other said to an earlier wording, and answers no
+# part of the question as it now reads.
+$reworded = New-Record -Seq 3 -Kind "question-updated" -Data ([ordered]@{ number = 1; changes = @{ parts = @("(a) The first thing to settle.", "(b) The second thing to settle.") } })
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), $reworded, (New-PartSaid 4 1 "c" -Text "third, said to the old wording" -Wording 1))
+$late = (Get-Thread $st 1).messages[1]
+Check ($st.ignored.Count -eq 0 -and $late.text -ceq "third, said to the old wording" -and $late.part -ceq "c" -and $late.partWords -eq "" -and $late.saidToEarlierWording -eq $true -and (Get-PartsLine $st) -ceq "a:y,b:n founder") ("AN ANSWER TO A PART THE QUESTION HAS SINCE LOST, said to the wording that had it, is KEPT and flagged, and answers nothing of the question as it reads now (" + (Get-PartsLine $st) + ")")
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), $(New-Record -Seq 2 -Kind "question-updated" -Data ([ordered]@{ number = 1; changes = @{ parts = @("(a) The first thing to settle.", "(b) The second thing to settle.") } })), (New-PartSaid 3 1 "c" -Wording 2), (New-PartSaid 4 1 "c" -Wording $null))
+Check ($st.ignored.Count -eq 2 -and (Get-Thread $st 1).count -eq 0) "but said to the wording as it reads now, or to no stated wording, there is no such part: it does not apply"
+# THE PART'S WORDS ARE THOSE OF THE MOMENT: a later rewording does not change what he is shown to have answered.
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), $(New-Record -Seq 3 -Kind "question-updated" -Data ([ordered]@{ number = 1; changes = @{ parts = @("(a) The first thing, reworded.", "(b) The second thing to settle.", "(c) The third thing to settle.") } })))
+Check ((Get-Thread $st 1).messages[0].partWords -ceq "The first thing to settle." -and (Get-PartsLine $st) -ceq "a:y,b:n,c:n founder") "the words of the part are kept as they read when he answered it"
+# A PART ANSWERED UNDER A CLOSED QUESTION, AND BY SOMEONE WHO IS NOT ASKED.
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-Closed 2 1), (New-PartSaid 3 1 "a"))
+Check ((Get-Thread $st 1).messages[0].arrivedAfterClosing -eq $true -and (Get-PartsLine $st) -ceq "a:n,b:n,c:n nobody") "an answer to a part that arrives after closing is kept and flagged, and answers nothing"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts @("(a) One thing.", "(b) Another thing.")), (New-PartSaid 2 1 "a" -Speaker "warchief" -Route "command" -Actor "warchief"), (New-PartSaid 3 1 "b" -Speaker "warchief" -Route "command" -Actor "warchief"))
+Check ((Get-PartsLine $st) -ceq "a:n,b:n founder") "a stored record in which the keeper names a part answers no part: only the one who is asked answers"
+foreach ($case in @(
+    @{ what = "a part that is two letters"; part = "ab" }
+    @{ what = "a part that is a capital"; part = "A" }
+    @{ what = "a part that is a digit"; part = "1" }
+    @{ what = "an empty part"; part = "" }
+)) {
+    $st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 $case.part), (New-PartSaid 3 1 "a"))
+    Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*is not what a message-said record holds*" -and (Get-PartsLine $st) -ceq "a:y,b:n,c:n founder") ($case.what + " makes the record unreadable by name, and the answer after it still counts")
+}
+function Get-Marks { param([hashtable]$Request, [string]$Speaker = "founder", [string]$Route = "window") $found = @(); try { $found = @(Test-HordeDecisionSayMarks -Request ([pscustomobject]$Request) -Speaker $Speaker -Route $Route) } catch { $found = @("THREW: " + $_.Exception.Message) }; return ,$found }
+Check ((Get-Marks @{ part = "b" }).Count -eq 0 -and (Get-Marks @{ part = "b" } -Route "phone").Count -eq 0 -and (Get-Marks @{ part = "b" } -Route "chat-recorded").Count -eq 0 -and (Get-Marks @{}).Count -eq 0) "the founder's words may answer a part, by whatever route they arrive"
+Check ((Test-Says (Get-Marks @{ part = "b" } -Speaker "warchief" -Route "command") "only the words of the founder answer a part of a question")) "the keeper's words answer no part"
+Check ((Test-Says (Get-Marks @{ part = "b"; act = "park" }) "an act answers no part of a question")) "an act answers no part"
+foreach ($bad in @("B", "ab", "", "1", 2)) { Check ((Test-Says (Get-Marks @{ part = $bad }) "'part' is one lower-case letter")) ("a part of '" + $bad + "' is refused as not a letter, and is not said back") }
+
+Write-Host ""
+Write-Host "--- a follow-up shows the question it follows, and what he answered ---" -ForegroundColor Cyan
+function Get-Follows { param($State, [int]$Number) $v = Get-View $State $Number; if ($null -eq $v.PSObject.Properties["followsUp"]) { return "(none)" }; $f = $v.followsUp; return ("" + $f.number + "|" + $f.state + "|" + $f.title + "|" + $f.answer + "|" + $f.answerCut + "|" + $f.outcome) }
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes, the short one."), (New-AddedWith 3 2 @{ followsUp = 1 }))
+Check ((Get-Follows $st 2) -ceq "1|open|Is question number 1 asked in plain words here?|Yes, the short one.|False|" -and (Get-Follows $st 1) -ceq "(none)") ("A FOLLOW-UP carries the earlier question's number, its words and what he answered (" + (Get-Follows $st 2) + ")")
+Check ((Get-Numbers $st) -ceq "1,2" -and (Get-View $st 2).thread.turn -ceq "founder" -and (Get-View $st 1).thread.turn -ceq "warchief" -and $st.questions[1].state -ceq "open") "it is a question of its own, the founder's turn, and the earlier one is as it was: answered, and not reopened"
+# WORKED OUT AT THE MOMENT OF SHOWING: what he says under the old question later is what the follow-up shows.
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes."), (New-AddedWith 3 2 @{ followsUp = 1 }), (New-Said 4 1 -Text "No, wait."), (New-Closed 5 1))
+Check ((Get-Follows $st 2) -ceq "1|closed|Is question number 1 asked in plain words here?|No, wait.|False|Done.") "the context is never a copy: his later words under the old question, and its closing, show in it"
+$st = Get-Fold @((New-Added 1 1), (New-Reply 2 1 -Text "the keeper's words are not his answer"), (New-AddedWith 3 2 @{ followsUp = 1 }))
+Check ((Get-Follows $st 2) -ceq "1|open|Is question number 1 asked in plain words here?||False|") "a question he never answered shows no answer: the keeper's words are not his"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "c" -Text "third"), (New-PartSaid 3 1 "a" -Text "first"), (New-PartSaid 4 1 "a" -Text "first, again"), (New-Said 5 1 -Route "window" -Actor "founder" -Text "parked" -Wording 1), (New-AddedWith 6 2 @{ followsUp = 1 }))
+$st.questions[1].thread[3].act = "park"
+Check ((Get-HordeDecisionAnswerText -Question $st.questions[1]) -ceq "(a) first, again`n(c) third") "answered part by part, his answer is a line for each part answered - its last answer - in the parts' order; an act is not words"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-Said 2 1 -Text "all three: yes"), (New-PartSaid 3 1 "b" -Text "except b"))
+Check ((Get-HordeDecisionAnswerText -Question $st.questions[1]) -ceq "all three: yes`n(b) except b") "words to the whole question and a part answered after them are both his answer"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "b" -Text "b first"), (New-Said 3 1 -Text "all three: no"))
+Check ((Get-HordeDecisionAnswerText -Question $st.questions[1]) -ceq "all three: no") "and words to the whole question, said after the parts, stand for all of them"
+$long = "x" * 2001
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text $long), (New-AddedWith 3 2 @{ followsUp = 1 }), (New-Added 4 3), (New-Said 5 3 -Text ("y" * 2000)), (New-AddedWith 6 4 @{ followsUp = 3 }))
+Check ((Get-View $st 2).followsUp.answer.Length -eq 2000 -and (Get-View $st 2).followsUp.answerCut -eq $true -and (Get-View $st 4).followsUp.answer.Length -eq 2000 -and (Get-View $st 4).followsUp.answerCut -eq $false) "an answer longer than 2,000 characters is carried cut, and SAYS it is cut; one of exactly 2,000 is whole"
+# A FOLLOW-UP OF A QUESTION THE LIST CANNOT SHOW is still a question, and makes nothing up.
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-AddedWith 3 3 @{ followsUp = 2 }), (New-AddedWith 4 4 @{ followsUp = 9 }))
+Check ((Get-Numbers $st) -ceq "1,3,4" -and (Get-Follows $st 3) -ceq "2|unreadable|||False|" -and (Get-Follows $st 4) -ceq "9|absent|||False|") ("a follow-up of a question whose record cannot be read, or that was never asked, is shown, naming the number and nothing more (" + (Get-Follows $st 3) + " ; " + (Get-Follows $st 4) + ")")
+$found = @(Test-HordeSchema -Value (Get-View $st 3 -Messages) -Schema $defs.resultSchema.definitions.view -Root $defs.resultSchema)
+Check ($found.Count -eq 0) ("a follow-up as shown matches decision-result.v1's view" + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
+$st = Get-Fold @((New-AddedWith 1 1 @{ importance = "high"; blocks = "all" } -Parts $three), (New-PartSaid 2 1 "a"))
+$found = @(Test-HordeSchema -Value (Get-View $st 1 -Messages) -Schema $defs.resultSchema.definitions.view -Root $defs.resultSchema)
+Check ($found.Count -eq 0 -and (Get-View $st 1 -Messages).thread.messages[0].part -ceq "a") ("and so does a ranked question of parts with a part answered" + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
 
 Write-Host ""
 Write-Host "--- a question as shown ---" -ForegroundColor Cyan
