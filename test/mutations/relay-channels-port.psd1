@@ -51,5 +51,8 @@
         @{ Name = "failed-tick-not-reported"
            Find = '                if ($null -ne $got[0].PSObject.Properties["failed"] -and $got[0].failed -eq $true) { $failed = $true }'
            Replace = '' }
+        @{ Name = "tick-asks-for-a-turn-and-is-not-heard"
+           Find = 'if ($null -ne $ask -and $ask.Value -is [int] -and $ask.Value -gt 0 -and ($again -eq 0 -or $ask.Value -lt $again)) { $again = [int]$ask.Value }'
+           Replace = 'if ($false) { $again = [int]$ask.Value }' }
     )
 }

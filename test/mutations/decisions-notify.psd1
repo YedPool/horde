@@ -128,5 +128,21 @@
         @{ Name = "messenger-reason-said-twice"
            Find = ' -and -not $wake.Contains("$($note.Value)")) { $said = $said + "; " + $note.Value }'
            Replace = ') { $said = $said + "; " + $note.Value }' }
+        # --- one turn of the bell, for the relay runner (the founder's bug of 2026-10-12)
+        @{ Name = "turn-rings-beside-a-running-notify"
+           Find = 'if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }'
+           Replace = 'if ($false) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }' }
+        @{ Name = "turn-reads-the-inbox-every-time"
+           Find = 'if (-not $due) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "turn-never-asks-to-be-turned-again"
+           Find = 'if ($null -ne $last.wakeAt) { $again = [int][Math]::Max(200,'
+           Replace = 'if ($false) { $again = [int][Math]::Max(200,' }
+        @{ Name = "turn-says-its-line-every-time"
+           Find = 'if ($Line -cne "" -and $Line -cne "$($Memory[''said''])") { $said = $Line }'
+           Replace = 'if ($Line -cne "") { $said = $Line }' }
+        @{ Name = "turn-rings-on-refused-settings"
+           Find = 'if ($settings.state -ceq "refused") { return (& $answer "refused"'
+           Replace = 'if ($false) { return (& $answer "refused"' }
     )
 }

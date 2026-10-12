@@ -488,6 +488,64 @@ $u = Get-HordeDecisionNotifyUnread -Answer $odd
 Check ($u.ok -and @($u.items).Count -eq 3 -and $u.items[0].signedBy -ceq "" -and $u.items[1].signedBy -ceq $keyA -and $u.items[2].route -ceq "" -and $u.items[2].evidence -ceq "" -and $u.items[2].signedBy -ceq "") "an inbox message's signedBy is read only when it is text, and a message from before the member reads as holding none"
 
 Write-Host ""
+Write-Host "--- one turn of the bell, for the relay runner: the same pass, and one bell a home ---" -ForegroundColor Cyan
+# The founder's bug of 2026-10-12: an answer from his phone with the decisions window closed was written
+# to the store by the relay runner and rang for nobody, because notify ran only beside the window. The
+# runner now turns the bell itself, through Invoke-HordeDecisionNotifyTurn - this suite's pass, no other.
+$mem = @{}
+function Turn { return (Invoke-HordeDecisionNotifyTurn -Memory $mem -HordeHome $hordeHome -Clock $clock -Seat $seat) }
+$script:now = [datetime]::UtcNow
+$before = $script:posts.Count
+$toldBefore = @(Told).Count
+$t = Turn
+Check ($t.outcome -ceq "nothing" -and $t.said -ceq "" -and $t.againMs -eq 0 -and $script:posts.Count -eq $before) ("with nothing untold a turn rings nothing, says nothing and asks for no turn (" + $t.outcome + ")")
+[void](Say-Founder -Number 3 -Text "from the phone, with the window closed")
+$t = Turn
+Check ($t.outcome -ceq "waiting" -and $t.said -ceq "" -and $script:posts.Count -eq $before) ("a new answer is in its quiet period: nothing rung, and no line for a log (" + $t.outcome + ")")
+Check ($t.againMs -gt 0 -and $t.againMs -le 30000) ("and the turn asks to be turned again when the quiet period ends, not a watch later (" + $t.againMs + " ms)")
+$script:inboxReads = 0
+$countingInbox = { $script:inboxReads++; return (Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief" }) }
+$t = Invoke-HordeDecisionNotifyTurn -Memory $mem -HordeHome $hordeHome -Clock $clock -Seat $seat -Inbox $countingInbox
+Check ($t.outcome -ceq "idle" -and $script:inboxReads -eq 0 -and $t.againMs -gt 0 -and $t.againMs -le 30000) ("a turn with the store unchanged and the time not come does not read the inbox, and still says when (" + $t.outcome + ", " + $script:inboxReads + " reads, " + $t.againMs + " ms)")
+# 60 s on: past the quiet period whichever clock stamped the answer, the store's or this suite's.
+$script:now = $script:now.AddSeconds(60)
+$t = Invoke-HordeDecisionNotifyTurn -Memory $mem -HordeHome $hordeHome -Clock $clock -Seat $seat -Inbox $countingInbox
+Check ($t.outcome -ceq "rang" -and $script:inboxReads -ge 1 -and $script:posts.Count -eq ($before + 1) -and "$($script:posts[-1].body)".Contains("1 answer, for question 3.")) ("once the time has come the turn reads, and rings once (" + $t.outcome + ")")
+Check ($t.said -clike "rang for 1 answer, on question 3, through messenger doorbell (accepted)*" -and $t.againMs -eq 0) ("and it says the pass's own line, once (" + $t.said + ")")
+Check (@(Told)[-1] -eq 3 -and @(Told).Count -eq ($toldBefore + 1)) "the set is in the told record the loop reads too"
+$t = Turn
+Check ($script:posts.Count -eq ($before + 1) -and $t.said -ceq "") "the next turn rings nothing more"
+# ONE BELL A HOME: while a notify loop holds the home's bell (the window is open), a turn stands aside.
+$bellName = "Local\" + (Get-HordeDecisionNotifyName -HordeHome $hordeHome)
+$gate = New-Object System.Threading.ManualResetEvent($false)
+$got = New-Object System.Threading.ManualResetEvent($false)
+$holder = [powershell]::Create()
+[void]$holder.AddScript('param($Name, $Gate, $Got) $m = New-Object System.Threading.Mutex($false, $Name); [void]$m.WaitOne(); [void]$Got.Set(); [void]$Gate.WaitOne(); $m.ReleaseMutex(); $m.Dispose()').AddArgument($bellName).AddArgument($gate).AddArgument($got)
+$holding = $holder.BeginInvoke()
+try {
+    Check ($got.WaitOne(15000)) "CONTROL: another thread holds the home's bell, as a running notify loop does"
+    [void](Say-Founder -Number 3 -Text "while the window's notify runs")
+    $script:now = $script:now.AddMinutes(5)
+    $t = Turn
+    Check ($t.outcome -ceq "elsewhere" -and $t.said -ceq "" -and $script:posts.Count -eq ($before + 1)) ("a turn beside a running notify rings nothing: that one rings (" + $t.outcome + ")")
+} finally { [void]$gate.Set(); $holder.EndInvoke($holding); $holder.Dispose() }
+$t = Turn
+Check ($t.outcome -ceq "rang" -and $script:posts.Count -eq ($before + 2)) ("and once nobody holds it, the next turn rings for what waits (" + $t.outcome + ")")
+# A REFUSED SETTINGS FILE: said once, not on every turn, and nothing rung from guessed settings.
+$notifySettingsPath = (Get-HordeDecisionNotifySettings -HordeHome $hordeHome).path
+[void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $notifySettingsPath))
+[System.IO.File]::WriteAllText($notifySettingsPath, "{ not json")
+[void](Say-Founder -Number 3 -Text "while the settings are broken")
+$script:now = $script:now.AddMinutes(5)
+$t = Turn
+$t2 = Turn
+Remove-Item -LiteralPath $notifySettingsPath -Force
+Check ($t.outcome -ceq "refused" -and $t.said -clike "*not rung for*settings file is refused*" -and $script:posts.Count -eq ($before + 2)) ("with its settings file refused the turn rings nothing and says why (" + $t.said + ")")
+Check ($t2.outcome -ceq "refused" -and $t2.said -ceq "") "and says it once, not on every turn"
+$t = Turn
+Check ($t.outcome -ceq "rang" -and $script:posts.Count -eq ($before + 3)) "with the file mended the answer that waited is rung for"
+
+Write-Host ""
 Write-Host "--- no seat, a record that cannot be read, two messengers: pending or refused, never a guess ---" -ForegroundColor Cyan
 [void](Say-Founder -Number 8 -Text "eight")
 $script:now = [datetime]::UtcNow.AddMinutes(70)
