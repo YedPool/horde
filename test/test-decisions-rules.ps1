@@ -918,6 +918,11 @@ $reworded = New-Record -Seq 3 -Kind "question-updated" -Data ([ordered]@{ number
 $st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), $reworded, (New-PartSaid 4 1 "c" -Text "third, said to the old wording" -Wording 1))
 $late = (Get-Thread $st 1).messages[1]
 Check ($st.ignored.Count -eq 0 -and $late.text -ceq "third, said to the old wording" -and $late.part -ceq "c" -and $late.partWords -eq "" -and $late.saidToEarlierWording -eq $true -and (Get-PartsLine $st) -ceq "a:y,b:n founder") ("AN ANSWER TO A PART THE QUESTION HAS SINCE LOST, said to the wording that had it, is KEPT and flagged, and answers nothing of the question as it reads now (" + (Get-PartsLine $st) + ")")
+# And should the part come back in a later wording, it is a part nobody has answered: the words he
+# said to the old one were kept as words, and were never counted as its answer.
+$back = New-Record -Seq 5 -Kind "question-updated" -Data ([ordered]@{ number = 1; changes = @{ parts = $three } })
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), $reworded, (New-PartSaid 4 1 "c" -Text "third, said to the old wording" -Wording 1), $back)
+Check ((Get-PartsLine $st) -ceq "a:y,b:n,c:n founder" -and (Get-Thread $st 1).count -eq 2) ("a part the question lost and got back is not answered by words said to the wording before it was lost (" + (Get-PartsLine $st) + ")")
 $st = Get-Fold @((New-AddedWith 1 1 -Parts $three), $(New-Record -Seq 2 -Kind "question-updated" -Data ([ordered]@{ number = 1; changes = @{ parts = @("(a) The first thing to settle.", "(b) The second thing to settle.") } })), (New-PartSaid 3 1 "c" -Wording 2), (New-PartSaid 4 1 "c" -Wording $null))
 Check ($st.ignored.Count -eq 2 -and (Get-Thread $st 1).count -eq 0) "but said to the wording as it reads now, or to no stated wording, there is no such part: it does not apply"
 # THE PART'S WORDS ARE THOSE OF THE MOMENT: a later rewording does not change what he is shown to have answered.
