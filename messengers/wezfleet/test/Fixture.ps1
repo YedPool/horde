@@ -9,6 +9,12 @@
 # -Spaced puts the folder under a name with a space in it, so a test can see an argument with a space
 # arrive as one argument.
 #
+# -TakesVerified makes the fake the wezfleet that declares -FromVerified (its feature/from-verified): the
+# one line param() of the copy becomes param([string]$Verb0 = "", [string]$Verb1 = "", [string]$FromVerified
+# = ""): the two verbs first, as wezfleet.ps1 declares its positional Command and Target first, because a
+# parameter declared without them would take "mail" by position. Without it the fake is main at 1122461,
+# which refuses the argument as PowerShell does.
+#
 # HORDE_HOME IS MOVED TOO: the messenger writes each body into a folder under Horde's home, so New points
 # HORDE_HOME at a fresh temp folder and Remove puts the old value back - no case ever writes the real
 # ~\.horde. The folder the messenger is pointed at holds the marker files of a wezfleet checkout
@@ -16,7 +22,7 @@
 param([Parameter(Mandatory = $true)][string]$Root)
 return [pscustomobject]@{
     New = {
-        param([switch]$Spaced)
+        param([switch]$Spaced, [switch]$TakesVerified)
         $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
         $leaf = "horde-wfm-" + [guid]::NewGuid().ToString("N").Substring(0, 12)
         if ($Spaced) { $leaf = $leaf + " spaced" }
@@ -28,6 +34,14 @@ return [pscustomobject]@{
         # where no variable of this file survives.
         $fakeSource = Join-Path (Get-HordeMessenger -Name "wezfleet").folder "test\FakeWezfleet.ps1"
         Copy-Item -LiteralPath $fakeSource -Destination (Join-Path $dir "wezfleet.ps1")
+        if ($TakesVerified) {
+            $fakePath = Join-Path $dir "wezfleet.ps1"
+            $fakeLines = [System.IO.File]::ReadAllLines($fakePath)
+            $at = @(for ($i = 0; $i -lt $fakeLines.Count; $i++) { if ($fakeLines[$i] -ceq "param()") { $i } })
+            if ($at.Count -ne 1) { throw ("the fake has " + $at.Count + " lines param(), not one, so -TakesVerified cannot declare -FromVerified") }
+            $fakeLines[$at[0]] = 'param([string]$Verb0 = "", [string]$Verb1 = "", [string]$FromVerified = "")'
+            [System.IO.File]::WriteAllLines($fakePath, $fakeLines, [System.Text.Encoding]::ASCII)
+        }
         foreach ($marker in @("lib\Mail.ps1", "lib\MailPost.ps1", "commands\mail.ps1")) {
             $mp = Join-Path $dir $marker
             [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $mp))
