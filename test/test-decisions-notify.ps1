@@ -11,6 +11,14 @@
 #     one post per set, a messageId made from the set (a retry after a crash is the same message), no
 #     answer text in the notice, nothing recorded for a post that was not accepted, a back-off.
 #   - NO MESSENGER: pending, said plainly, nothing recorded, and rung once one appears.
+#   - THE FOUNDER, VERIFIED - OR ONLY HIS LABEL: the notice says from.verified only for a set in which
+#     every answer's record names, by the route phone and with its evidence, one passkey that the trust
+#     store holds as trusted when the notice is made. Attacked with: an answer typed in the window, a
+#     window record forged to hold a signedBy, a phone record with its evidence taken away, a record
+#     written before records named the passkey, a passkey revoked after the answer, a key the store holds
+#     as a machine's, a key it never held, a store that cannot say, two passkeys in one set, a mixed
+#     set, and key ids in every wrong spelling. The trust store here is a stand-in handed to the pass;
+#     the real one, with a real passkey and a real revocation, is test/test-relay-channels.ps1's.
 #   - THE LOOP: one per home; asked to stop, it still rings for an answer in its quiet period.
 # The CLI's notify verb is test/test-decisions-cli.ps1's; the window starting notify is
 # test/e2e/e2e-decisions-notify.ps1's.
@@ -55,6 +63,9 @@ $seat = { if ($script:seatSays -ceq "known") { return (New-HordeKnown -Value ([p
 $script:posts = New-Object System.Collections.ArrayList
 $script:taken = @{}
 $script:postSays = "accepted"
+# What the stand-in adds to an accepted post's answer, as a messenger that could not show a verified
+# sender does (messengers/wezfleet: "posted without the verified label: ...").
+$script:postNote = ""
 $stubPost = {
     param($Message)
     [void]$script:posts.Add($Message)
@@ -62,7 +73,7 @@ $stubPost = {
     if ($script:postSays -ceq "unknown") { return (New-HordeUnknown -Reason "the stand-in could not tell") }
     $id = "$($Message.messageId)"
     if (-not $script:taken.ContainsKey($id)) { $script:taken[$id] = $Message }
-    $reason = ""; if ($script:postSays -ceq "held") { $reason = "the stand-in held it" }
+    $reason = ""; if ($script:postSays -ceq "held") { $reason = "the stand-in held it" } elseif ($script:postNote -ne "") { $reason = $script:postNote }
     return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = $script:postSays; at = [datetime]::UtcNow; reason = $reason }) -ObservedAt ([datetime]::UtcNow))
 }
 $stubStatus = { param($MessageId) return (New-HordeAbsent -Note "the stand-in keeps no status") }
@@ -82,6 +93,29 @@ function Say-Warchief { param([int]$Number, [string]$Text)
 function Mark-Read { param([long]$UpTo)
     $a = Invoke-HordeDecision -Operation "mark-read" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; upTo = $UpTo }
     if ($a.state -cne "known" -or $a.value.outcome -cne "done") { throw ("mark-read failed: " + $a.reason) } }
+function Say-Phone { param([int]$Number, [string]$Text, [string]$SignedBy = "")
+    # The founder's answer from his phone, as the relay's decisions channel records it: the route phone,
+    # the hash of a journal record, and - unless -SignedBy is empty, a record from before 2026-10-12 -
+    # the key id of the passkey that signed.
+    $script:n++
+    $request = @{ id = [guid]::NewGuid().ToString("N"); actor = "founder"; number = $Number; speaker = "founder"; route = "phone"; text = $Text; wordingVersion = 1; evidence = ("{0:x64}" -f [long]$script:n) }
+    if ($SignedBy -ne "") { $request["signedBy"] = $SignedBy }
+    $a = Invoke-HordeDecision -Operation "say" -Request $request
+    if ($a.state -cne "known" -or $a.value.outcome -cne "done") { throw ("the founder's phone answer under " + $Number + " was not saved: " + $a.reason + " " + (@($a.value.findings) -join "; ")) }
+    return [long]$a.value.sequence }
+function Edit-Record { param([long]$Sequence, [string]$Find, [string]$Replace)
+    # One record of this suite's store rewritten by hand, as nothing in Horde does: true when it changed.
+    $path = Join-Path (Get-HordeDecisionStoreRoot) ($Sequence.ToString("D10") + ".json")
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    $text = [System.IO.File]::ReadAllText($path, $enc)
+    $new = $text.Replace($Find, $Replace)
+    [System.IO.File]::WriteAllText($path, $new, $enc)
+    return [bool]($new -cne $text) }
+function Get-Verified { param($Message) $p = $Message.from.PSObject.Properties["verified"]; if ($null -eq $p) { return $null }; return $p.Value }
+function Test-Verified { param($Message, [string]$KeyId)
+    $v = Get-Verified $Message
+    if ($null -eq $v) { return $false }
+    return [bool]((@($v.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "by,keyId,kind" -and $v.kind -ceq "founder" -and $v.by -ceq "passkey" -and $v.keyId -ceq $KeyId) }
 # A pass, as the loop makes one: the stand-in seat, this suite's clock, the real store and the real port.
 function Pass { param($Tracker) return (Invoke-HordeDecisionNotifyPass -Tracker $Tracker -Clock $clock -Seat $seat) }
 $recordPath = Get-HordeDecisionNotifyRecordPath -HordeHome $hordeHome
@@ -314,6 +348,143 @@ Check ("$($script:posts[-1].from.label)" -ceq "B12") ("a notify started with a p
 Check ($p.outcome -ceq "rang" -and @($script:posts | Where-Object { "$($_.messageId)" -ceq $sevenId }).Count -eq 2 -and @($script:taken.Keys | Where-Object { $_ -ceq $sevenId }).Count -eq 1) "the record lost it, so it is posted again - with the same id, which the messenger keeps as one message"
 
 Write-Host ""
+Write-Host "--- the founder, verified: only for answers his passkey signed, by a passkey trusted now ---" -ForegroundColor Cyan
+# THE STAND-IN TRUST STORE: key id -> what relay's store answers for it now, and every key it was asked for.
+$keyA = "0a" * 16; $keyB = "0b" * 16; $keyM = "0c" * 16; $keyNever = "0d" * 16
+$passkey = { return (New-HordeKnown -Value ([pscustomobject]@{ proof = "webauthn" })) }
+$script:trust = @{ $keyA = (& $passkey); $keyB = (& $passkey); $keyM = (New-HordeKnown -Value ([pscustomobject]@{ proof = "es256" })) }
+$script:asked = New-Object System.Collections.ArrayList
+$trustBook = { param([string]$KeyId) [void]$script:asked.Add($KeyId); if ($script:trust.ContainsKey($KeyId)) { return $script:trust[$KeyId] }; return (New-HordeAbsent -Note ("no trusted sender has the key " + $KeyId)) }
+function PassT { param($Tracker) return (Invoke-HordeDecisionNotifyPass -Tracker $Tracker -Clock $clock -Seat $seat -Trust $trustBook) }
+$script:now = [datetime]::UtcNow.AddMinutes(61)
+$plain = "rang for 1 answer, on question {0}, through messenger doorbell (accepted)"
+
+$sp = Say-Phone -Number 1 -Text "answered on the phone" -SignedBy $keyA
+$inboxItem = @((Get-HordeDecisionNotifyUnread -Answer (Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief" })).items | Where-Object { $_.message -ceq ("" + $sp) })
+Check ($inboxItem.Count -eq 1 -and $inboxItem[0].route -ceq "phone" -and $inboxItem[0].signedBy -ceq $keyA -and $inboxItem[0].evidence -cmatch '\A[0-9a-f]{64}\z') "CONTROL: an unread phone answer is read with its route, its evidence and the passkey its record names"
+$before = $script:posts.Count
+$p = PassT $tracker
+$m = $script:posts[-1]
+Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq ($before + 1) -and (Test-Verified $m $keyA)) ("a phone answer signed by a trusted passkey: the notice is from the founder, verified, by passkey, naming that key id and no more (" + $p.said + ")")
+Check ("$($m.from.label)" -ceq "F" -and "$($m.from.sessionId)" -ceq "horde-decisions-notify" -and @("$($m.body)" -split "`r?`n")[0] -ceq "FOUNDER ANSWER from the decisions window") "it still wears the label, and the rest of the notice is what it was"
+Check ($p.said -ceq (($plain -f 1) + "; as the founder, verified by his passkey " + $keyA)) ("and the line says so, with the key id (" + $p.said + ")")
+Check ($script:asked.Count -eq 1 -and $script:asked[0] -ceq $keyA) "the trust store was asked once, for the key the record names"
+Check (((Told) | Select-Object -Last 1) -eq 1) "and the answer is told, as any other"
+
+[void](Say-Founder -Number 2 -Text "typed in the window")
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and "$($script:posts[-1].from.label)" -ceq "F") "an answer typed in the window: by label only, exactly as before - no passkey signed it"
+Check ($p.said -ceq ($plain -f 2) -and $script:asked.Count -eq 1) ("its line is the line it always was, and the trust store was not even asked (" + $p.said + ")")
+
+[void](Say-Phone -Number 3 -Text "phone" -SignedBy $keyA)
+[void](Say-Founder -Number 3 -Text "and typed")
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1])) "a set of one phone answer and one typed in the window: by label only - a notice never says verified over an answer nobody verified"
+Check ($p.said -like "rang for 2 answers, on question 3, *; by label only: *typed in the window*") ("and the line says why (" + $p.said + ")")
+
+[void](Say-Phone -Number 4 -Text "an old phone answer")
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like "*; by label only: *written before*") ("a phone record written before records named the passkey: by label only, and the line says why (" + $p.said + ")")
+
+$sw = Say-Founder -Number 5 -Text "typed, then forged"
+Check (Edit-Record -Sequence $sw -Find '"route":"window"' -Replace ('"route":"window","signedBy":"' + $keyA + '"')) "CONTROL: a window record is rewritten by hand to hold a trusted passkey's key id"
+$forged = @((Get-HordeDecisionNotifyUnread -Answer (Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief" })).items | Where-Object { $_.message -ceq ("" + $sw) })
+Check ($forged.Count -eq 1 -and $forged[0].route -ceq "window" -and $forged[0].signedBy -ceq $keyA) "CONTROL: the store reads it, a fact, and the inbox hands the forged member on"
+$askedBefore = $script:asked.Count
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $script:asked.Count -eq $askedBefore) "a signedBy forged onto a window record makes nobody verified: the route decides, and the trust store is not asked"
+Check ($p.said -like "*; by label only: *typed in the window*") ("and the line says a record named a passkey it may not name (" + $p.said + ")")
+
+$se = Say-Phone -Number 6 -Text "its evidence will go" -SignedBy $keyA
+Check (Edit-Record -Sequence $se -Find (',"evidence":"' + ("{0:x64}" -f [long]$script:n) + '"') -Replace '') "CONTROL: a phone record is rewritten by hand to hold no evidence"
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like "*; by label only: *no evidence*") ("a phone record that names a passkey but holds no evidence of the proof: by label only (" + $p.said + ")")
+
+[void](Say-Phone -Number 7 -Text "signed, and then the phone was lost" -SignedBy $keyB)
+$script:trust[$keyB] = New-HordeAbsent -Note ("the key " + $keyB + " was revoked at 2026-10-12T09:00:00Z: phone lost")
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1])) "a passkey revoked after it signed the answer: by label only - trust is asked when the notice is made"
+Check ($p.said -like ("*; by label only: the passkey that signed is not trusted now: *" + $keyB + " was revoked*phone lost*")) ("and the line gives the trust store's reason (" + $p.said + ")")
+[void](Say-Phone -Number 7 -Text "from the phone he still has" -SignedBy $keyA)
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and (Test-Verified $script:posts[-1] $keyA)) "CONTROL: the next answer, by the passkey still trusted, is verified again"
+[void](Say-Phone -Number 7 -Text "signed while B was not trusted" -SignedBy $keyB)
+$script:trust[$keyB] = & $passkey
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and (Test-Verified $script:posts[-1] $keyB)) "and nothing of an earlier answer is remembered: a key trusted when the notice is made is named"
+
+[void](Say-Phone -Number 1 -Text "signed by a machine's key" -SignedBy $keyM)
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like "*; by label only: *machine's*") ("a key the store trusts as a machine's is not the founder's passkey: by label only (" + $p.said + ")")
+[void](Say-Phone -Number 1 -Text "signed by a key nobody enrolled" -SignedBy $keyNever)
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like ("*; by label only: *not trusted now*" + $keyNever + "*")) ("a key the trust store never held: by label only (" + $p.said + ")")
+[void](Say-Phone -Number 1 -Text "while the store cannot be read" -SignedBy $keyA)
+$script:trust[$keyA] = New-HordeUnknown -Reason "the trust store is damaged; no sender is trusted until it is repaired"
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like "*; by label only: the trust store could not say*damaged*") ("a trust store that cannot say: by label only, never a guess - and the notice still goes (" + $p.said + ")")
+$script:trust[$keyA] = & $passkey
+[void](Say-Phone -Number 1 -Text "one passkey" -SignedBy $keyA)
+[void](Say-Phone -Number 2 -Text "and another" -SignedBy $keyB)
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like ("*; by label only: *2 passkeys*" + $keyA + "*" + $keyB + "*")) ("two passkeys in one set: by label only - a notice names one, and does not pick (" + $p.said + ")")
+[void](Say-Phone -Number 1 -Text "one passkey, twice" -SignedBy $keyA)
+[void](Say-Phone -Number 2 -Text "the same one" -SignedBy $keyA)
+$p = PassT $tracker
+Check ($p.outcome -ceq "rang" -and (Test-Verified $script:posts[-1] $keyA) -and $p.said -like "rang for 2 answers, on questions 1 and 2, *; as the founder, verified by his passkey*") "CONTROL: two answers by one trusted passkey are one verified notice"
+
+[void](Say-Phone -Number 1 -Text "to a messenger that cannot show it" -SignedBy $keyA)
+$script:postNote = "posted without the verified label: the wezfleet it runs does not declare -FromVerified"
+$p = PassT $tracker
+$script:postNote = ""
+Check ($p.outcome -ceq "rang" -and (Test-Verified $script:posts[-1] $keyA) -and $p.said -like "*; as the founder, verified by his passkey*; posted without the verified label: *") ("what the messenger says of a verified sender it could not show is in the line (" + $p.said + ")")
+
+# WITHOUT A STAND-IN the pass asks relay's own trust store of this home - which holds nobody.
+[void](Say-Phone -Number 1 -Text "asked of the real store of an empty home" -SignedBy $keyA)
+$p = Pass $tracker
+Check ($p.outcome -ceq "rang" -and $null -eq (Get-Verified $script:posts[-1]) -and $p.said -like "*; by label only: *") ("left to itself, the pass asks the trust store under the home, where nobody is trusted: by label only (" + $p.said + ")")
+
+# THE RULE BY ITSELF, with a trust store that says yes to every key: only the record's shape can stop it.
+$yes = { param([string]$KeyId) [void]$script:asked.Add($KeyId); return (& $passkey) }
+$proofHex = "ab" * 32
+$item = { param([string]$Route, [string]$Evidence, [string]$SignedBy, [int]$Question = 1, [string]$Message = "90") return [pscustomobject]@{ question = $Question; message = $Message; at = "2026-10-12T09:00:00Z"; route = $Route; evidence = $Evidence; signedBy = $SignedBy } }
+$good = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" $proofHex $keyA)) -Trust $yes
+Check ($null -ne $good.verified -and $good.verified.keyId -ceq $keyA -and $good.why -ceq "" -and $good.claimed) "CONTROL: a phone item with its evidence and a key id, and a store that says yes: verified"
+$askedBefore = $script:asked.Count
+foreach ($bad in @(("A" * 32), ("a" * 31), ("a" * 33), ("0a" * 16 + "`n"), ("g" * 32), ("0a" * 32), "F", "founder", ("founder:passkey:" + $keyA))) {
+    $got = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" $proofHex $bad)) -Trust $yes
+    Check ($null -eq $got.verified -and $got.claimed -and $got.why -like "*not a key id*") ("a key id spelled wrong names nobody ('" + $bad.Trim() + "', " + $bad.Length + " characters)")
+}
+foreach ($route in @("window", "chat-recorded", "command", "")) {
+    $got = Get-HordeDecisionNotifyVerified -Items @((& $item $route $proofHex $keyA)) -Trust $yes
+    Check ($null -eq $got.verified -and $got.claimed) ("by the route '" + $route + "' nobody is verified, whatever the item holds")
+}
+$got = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" "" $keyA)) -Trust $yes
+Check ($null -eq $got.verified -and $got.claimed) "a phone item with no evidence: nobody"
+$got = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" $proofHex $keyA 1 "90"), (& $item "window" "" "" 2 "91")) -Trust $yes
+Check ($null -eq $got.verified -and $got.why -like "*question 2 (record 91)*") ("one unsigned answer in the set: nobody, and the reason names it (" + $got.why + ")")
+Check ($script:asked.Count -eq $askedBefore) "and for none of those was the trust store asked: a key that is not named by the rules is never looked up"
+$got = Get-HordeDecisionNotifyVerified -Items @((& $item "window" "" "")) -Trust $yes
+Check ($null -eq $got.verified -and -not $got.claimed) "a window item that holds neither member: nobody, and nothing was claimed, so nothing is said"
+$got = Get-HordeDecisionNotifyVerified -Items @() -Trust $yes
+Check ($null -eq $got.verified -and -not $got.claimed) "no items: nobody"
+$got = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" $proofHex $keyA)) -Trust { param([string]$KeyId) throw "the stand-in store fell over" }
+Check ($null -eq $got.verified -and $got.why -like "*could not say*fell over*") ("a trust store that throws: nobody, with its words (" + $got.why + ")")
+$got = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" $proofHex $keyA)) -Trust { param([string]$KeyId) return $null }
+Check ($null -eq $got.verified -and $got.why -like "*could not say*") "a trust store that answers nothing: nobody"
+# Made by hand: New-HordeKnown refuses a value of nothing, and this is the answer a broken store could still give.
+$got = $null
+try { $got = Get-HordeDecisionNotifyVerified -Items @((& $item "phone" $proofHex $keyA)) -Trust { param([string]$KeyId) return [pscustomobject]@{ state = "known"; value = $null; reason = "" } } } catch { $got = [pscustomobject]@{ verified = "THREW: " + $_.Exception.Message } }
+Check ($null -eq $got.verified) ("a trust store that says known and hands no sender: nobody, and no throw (" + $got.verified + ")")
+# What the inbox hands on is taken as text only: a member that is not text is no key id.
+$odd = New-HordeKnown -Value ([pscustomobject]@{ outcome = "done"; messages = @(
+    [pscustomobject]@{ number = 1; message = [pscustomobject]@{ speaker = "founder"; sequence = 50; at = "2026-10-12T09:00:00Z"; route = "phone"; evidence = $proofHex; signedBy = @($keyA) } },
+    [pscustomobject]@{ number = 1; message = [pscustomobject]@{ speaker = "founder"; sequence = 51; at = "2026-10-12T09:00:01Z"; route = "phone"; evidence = $proofHex; signedBy = $keyA } },
+    [pscustomobject]@{ number = 1; message = [pscustomobject]@{ speaker = "founder"; sequence = 52; at = "2026-10-12T09:00:02Z" } }) })
+$u = Get-HordeDecisionNotifyUnread -Answer $odd
+Check ($u.ok -and @($u.items).Count -eq 3 -and $u.items[0].signedBy -ceq "" -and $u.items[1].signedBy -ceq $keyA -and $u.items[2].route -ceq "" -and $u.items[2].evidence -ceq "" -and $u.items[2].signedBy -ceq "") "an inbox message's signedBy is read only when it is text, and a message from before the member reads as holding none"
+
+Write-Host ""
 Write-Host "--- no seat, a record that cannot be read, two messengers: pending or refused, never a guess ---" -ForegroundColor Cyan
 [void](Say-Founder -Number 8 -Text "eight")
 $script:now = [datetime]::UtcNow.AddMinutes(70)
@@ -373,4 +544,4 @@ finally {
     $env:WEZFLEET_ROOT = $keepFleet
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
-Complete-HordeSuite -Success "notify rings once per set, through the port, never with his words, and never claims what it did not send"
+Complete-HordeSuite -Success "notify rings once per set, through the port, never with his words, never claims what it did not send, and says the founder is verified only for answers a passkey trusted now signed"

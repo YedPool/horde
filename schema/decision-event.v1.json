@@ -81,7 +81,8 @@
         "asks": {"type": "boolean", "description": "False when the keeper's words ask the founder nothing (a note): the turn does not pass to him. Absent means true."},
         "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "The founder's words record an act of his: park or unpark. The turn does not pass."},
         "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them. Only the hash: the envelope and its passkey signature are kept in relay's own journal (relay/Journal.ps1)."},
-        "part": {"type": "string", "pattern": "^[a-z]$", "description": "The words answer ONE PART of a question of parts: that part's letter. Each part is answered by a record of its own, and the question is the other speaker's turn once every part has one. Absent means the words are said to the whole question."}
+        "part": {"type": "string", "pattern": "^[a-z]$", "description": "The words answer ONE PART of a question of parts: that part's letter. Each part is answered by a record of its own, and the question is the other speaker's turn once every part has one. Absent means the words are said to the whole question."},
+        "signedBy": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "Words answered on the founder's phone: the key id of the passkey the relay channel verified the answer's envelope against, written once by that channel. Absent in every record written before 2026-10-12 and for every other route: such a record names no passkey, and nothing is put in its place."}
       }
     },
     "messages-read": {

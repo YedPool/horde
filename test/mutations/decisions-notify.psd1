@@ -86,7 +86,56 @@
            Find = '        $letters = @($Items | Where-Object { [int]$_.question -eq $number -and'
            Replace = '        $letters = @($Items | Where-Object {' }
         @{ Name = "what-is-rung-for-carries-no-part"
-           Find = 'part = $(if ($null -ne $_.message.PSObject.Properties["part"]) { "$($_.message.part)" } else { "" }) } })'
-           Replace = 'part = "" } })' }
+           Find = 'signedBy = $held["signedBy"]; part = $held["part"] }'
+           Replace = 'signedBy = $held["signedBy"]; part = "" }' }
+        # --- the founder, verified - or only his label (2026-10-12)
+        @{ Name = "verified-never-put-on-the-notice"
+           Find = 'if ($null -ne $who.verified) { $from | Add-Member'
+           Replace = 'if ($false) { $from | Add-Member' }
+        @{ Name = "one-unsigned-answer-does-not-stop-it"
+           Find = 'if ($signer.keyId -ceq "") { return (& $no ('
+           Replace = 'if ($signer.keyId -ceq "") { continue }; if ($false) { return (& $no (' }
+        @{ Name = "two-passkeys-and-the-first-is-named"
+           Find = 'if ($keys.Count -ne 1) {'
+           Replace = 'if ($keys.Count -lt 1) {' }
+        @{ Name = "trust-store-never-asked"
+           Find = 'try { $trusted = & $Trust $keyId } catch'
+           Replace = 'try { $trusted = New-HordeKnown -Value ([pscustomobject]@{ proof = "webauthn" }) } catch' }
+        @{ Name = "left-to-itself-every-key-is-trusted"
+           Find = 'return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ proof = "webauthn" })) } }' }
+        @{ Name = "a-store-that-cannot-say-is-believed"
+           Find = 'if ($null -eq $trusted -or @("known", "absent") -cnotcontains "$($trusted.state)") {'
+           Replace = 'if ($null -eq $trusted) {' }
+        @{ Name = "revoked-key-not-told-apart"
+           Find = 'if ($trusted.state -ceq "absent") { return (& $no ('
+           Replace = 'if ($false) { return (& $no (' }
+        @{ Name = "machine-key-named-as-the-founder"
+           Find = 'if ($null -eq $trusted.value -or "$($trusted.value.proof)" -cne "webauthn") {'
+           Replace = 'if ($null -eq $trusted.value) {' }
+        @{ Name = "known-with-no-sender-named-as-the-founder"
+           Find = 'if ($null -eq $trusted.value -or "$($trusted.value.proof)" -cne "webauthn") {'
+           Replace = 'if ($null -ne $trusted.value -and "$($trusted.value.proof)" -cne "webauthn") {' }
+        @{ Name = "label-only-reason-not-said"
+           Find = 'elseif ($who.claimed) { $said = $said + "; by label only: " + $who.why }'
+           Replace = '' }
+        @{ Name = "window-answers-say-a-reason"
+           Find = 'elseif ($who.claimed) { $said = $said + "; by label only: " + $who.why }'
+           Replace = 'else { $said = $said + "; by label only: " + $who.why }' }
+        @{ Name = "verified-not-said-in-the-line"
+           Find = '$said = $said + "; as the founder, verified by his passkey " + $who.verified.keyId'
+           Replace = '$said = $said' }
+        @{ Name = "messenger-note-dropped"
+           Find = 'if ($null -ne $note -and "$($note.Value)" -ne "") { $said = $said + "; " + $note.Value }'
+           Replace = '' }
+        @{ Name = "signedBy-that-is-not-text-is-read"
+           Find = '$(if ($null -ne $p -and $p.Value -is [string]) { $p.Value } else { "" })'
+           Replace = '$(if ($null -ne $p) { "$($p.Value)" } else { "" })' }
+        @{ Name = "route-not-read-from-the-record"
+           Find = 'route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]'
+           Replace = 'route = "phone"; evidence = $held["evidence"]; signedBy = $held["signedBy"]' }
+        @{ Name = "evidence-not-read-from-the-record"
+           Find = 'route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]'
+           Replace = 'route = $held["route"]; evidence = ("0" * 64); signedBy = $held["signedBy"]' }
     )
 }

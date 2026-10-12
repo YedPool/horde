@@ -38,7 +38,7 @@
            Find = '    if ((Test-HordeDecisionMember -Object $Request -Name "part") -and $Request.part -is [string]) { $body["part"] = [string]$Request.part }'
            Replace = '' }
         @{ Name = "the-part-is-not-part-of-what-makes-a-request-the-same"
-           Find = '    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence") }'
-           Replace = '    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "part") }' }
+           Find = '    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy") }'
+           Replace = '    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy", "part") }' }
     )
 }

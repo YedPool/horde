@@ -16,8 +16,8 @@
            Replace = '-EvidenceStated $false -Evidence ""' }
         # The first answer wins: a second delivery of the same answer is replayed, not refused.
         @{ Name = "evidence-hashed-so-a-redelivery-is-refused"
-           Find = 'return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence") }'
-           Replace = 'return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @() }' }
+           Find = 'return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy") }'
+           Replace = 'return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("signedBy") }' }
         @{ Name = "unhashed-members-ignored"
            Find = 'foreach ($k in @($content.body.Keys)) { if ($unhashed -cnotcontains $k) { $sameness[$k] = $content.body[$k] } }'
            Replace = 'foreach ($k in @($content.body.Keys)) { $sameness[$k] = $content.body[$k] }' }
@@ -25,5 +25,16 @@
         @{ Name = "schema-before-secrets"
            Find = '    $secrets = @(Find-HordeDecisionSecrets -Value $plain)'
            Replace = '    $secrets = @()' }
+        # --- who signed (signedBy, 2026-10-12) ---
+        @{ Name = "signedBy-never-stored"
+           Find = '    if ($signed) { $body["signedBy"] = $signedBy }'
+           Replace = '' }
+        @{ Name = "signedBy-never-told-to-the-rules"
+           Find = '-SignedByStated ([bool]$signed) -SignedBy $signedBy'
+           Replace = '-SignedByStated $false -SignedBy ""' }
+        # An answer recorded before records named the passkey, handed over again after, is replayed.
+        @{ Name = "signedBy-hashed-so-a-resumed-answer-is-refused"
+           Find = 'return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy") }'
+           Replace = 'return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence") }' }
     )
 }

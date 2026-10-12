@@ -263,7 +263,9 @@ function Get-HordeDecisionSayContent {
     $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"
     $proven = Test-HordeDecisionMember -Object $Request -Name "evidence"
     $evidence = $(if ($proven) { [string]$Request.evidence } else { "" })
-    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated ([bool]$proven) -Evidence $evidence)) { [void]$found.Add($f) }
+    $signed = Test-HordeDecisionMember -Object $Request -Name "signedBy"
+    $signedBy = $(if ($signed) { [string]$Request.signedBy } else { "" })
+    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated ([bool]$proven) -Evidence $evidence -SignedByStated ([bool]$signed) -SignedBy $signedBy)) { [void]$found.Add($f) }
     if ($stated) {
         if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }
         else { [void]$found.Add("'wordingVersion' is not a wording a question can have: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }
@@ -286,7 +288,12 @@ function Get-HordeDecisionSayContent {
     # the first record answered again, with the first delivery's proof. The first answer wins, and the
     # record keeps the proof of the one that won.
     if ($proven) { $body["evidence"] = $evidence }
-    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence") }
+    # WHO SIGNED IS KEPT AND NOT HASHED EITHER (signedBy, decisions/Rules.ps1). The relay channel makes the
+    # request's id from the sender's key id, so one id never comes with two of them; and an answer
+    # recorded before records named the passkey, handed over again after, must be that first record
+    # answered again - which names none - never "the id used for a different request".
+    if ($signed) { $body["signedBy"] = $signedBy }
+    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy") }
 }
 
 function Complete-HordeDecisionSayData {

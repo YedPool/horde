@@ -493,8 +493,8 @@ Check ((Get-InboxLine $inbox) -ceq "2@1 upTo=2" -and $inbox.value.messages[0].me
 $ask = Reply $s 1 "For (a): the long sentence or the short one?"
 Check ((Get-Outcome $ask) -ceq "done" -and (Get-PartsOf $s) -ceq "a:n,b:y,c:n founder") "while a part is left the keeper's words that ask are taken, and the answered part stays answered"
 $a = SayPart $s "a" "Approve the short one."
-$c = SayPart $s "c" "Yes, refuse them." -Route "phone" -More @{ evidence = ("ab" * 32) }
-Check ((Get-Outcome $a) -ceq "done" -and (Get-Outcome $c) -ceq "done" -and (Get-PartsOf $s) -ceq "a:y,b:y,c:y warchief" -and $c.value.question.thread.turn -ceq "warchief" -and $c.value.message.routeShown -ceq "answered on the founder's phone") ("WITH THE LAST PART ANSWERED - here from his phone - the question is the keeper's turn: off his list (" + (Get-PartsOf $s) + ")")
+$c = SayPart $s "c" "Yes, refuse them." -Route "phone" -More @{ evidence = ("ab" * 32); signedBy = ("c" * 32) }
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Outcome $c) -ceq "done" -and (Get-PartsOf $s) -ceq "a:y,b:y,c:y warchief" -and $c.value.question.thread.turn -ceq "warchief" -and $c.value.message.routeShown -ceq "answered on the founder's phone" -and $c.value.message.signedBy -ceq ("c" * 32) -and (Read-Record $s 6).data.part -ceq "c" -and (Read-Record $s 6).data.signedBy -ceq ("c" * 32)) ("WITH THE LAST PART ANSWERED - here from his phone, its record naming the passkey that signed like any phone answer's - the question is the keeper's turn: off his list (" + (Get-PartsOf $s) + ")")
 Check ((Get-Outcome (Reply $s 1 "And one more thing?")) -ceq "refused" -and (Get-Outcome (Reply $s 1 "All three done as you said." -Note)) -ceq "done") "and then, like any answered question, it takes a note and refuses words that ask"
 $edit = SayPart $s "b" "Yes after all, say Video."
 Check ((Get-Outcome $edit) -ceq "done" -and (Get-Said $edit).text -ceq "Yes after all, say Video." -and (Get-PartsOf $s) -ceq "a:y,b:y,c:y warchief") "he may still answer a part again: it is kept, and brings nothing back to his list"

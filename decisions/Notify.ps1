@@ -32,6 +32,24 @@
 # nothing is recorded, and it is tried again after a back-off (30 s, doubling, at most 5 min). Nothing
 # is lost: the answers stay unread in the store, and the next try, or the next start, finds them.
 #
+# THE FOUNDER, VERIFIED - OR ONLY HIS LABEL (2026-10-12). An answer given on his phone was signed by his
+# passkey, and the relay's decisions channel wrote that passkey's key id into the answer's record when it
+# verified the signature (signedBy, decisions/Rules.ps1). For a set of such answers the notice says so,
+# as from.verified = { kind founder; by passkey; keyId } (messengers/Port.ps1, A VERIFIED SENDER), which
+# a messenger shows as it can. The key id comes from the record and from nothing else, and the claim is
+# made only when ALL of this holds (Get-HordeDecisionNotifyVerified):
+#   - EVERY answer of the set names its passkey by the rules (Get-HordeDecisionSigner: the route phone,
+#     its evidence, a key id). One answer typed in the window, or one record written before records named
+#     the passkey, and the whole notice is by label only: a notice is one message, and it never says
+#     "verified" over an answer nobody verified.
+#   - they name ONE passkey: from.verified names one, and a notice does not pick among two.
+#   - THAT PASSKEY IS TRUSTED NOW, asked of relay's trust store as the notice is made
+#     (Find-HordeRelayTrustedSender): a passkey revoked since the answer - a lost phone - is not named, and
+#     neither is a key the store holds as a machine's, nor any key while the store cannot be read.
+# Otherwise the notice goes exactly as before, wearing the label (fromLabel) and no more. When a record
+# named a passkey or held evidence and the notice still went by label, the line says why; a set typed in
+# the window says nothing, because nothing was withheld. The told record is unchanged by this.
+#
 # THE TOLD RECORD, <HordeHome>\decisions\notify-told.json, never inside the store:
 #   { "schemaVersion": 1, "rung": [ { "question": 14, "message": "57", "at": "<UTC>", "notice": "<uuid>" } ] }
 # message is the record's sequence number as text. An entry is added ONLY after the messenger accepted
@@ -62,6 +80,9 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "messengers\Port.ps1")
+# relay's trust store, read only: whether the passkey a record names is trusted now (header, THE FOUNDER,
+# VERIFIED). Loading it costs about 250 ms (measured 2026-10-12, PowerShell 5.1).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Trust.ps1")
 # Every messenger, at script level, as a messenger must be loaded; one already registered in this
 # session (this file loaded twice) is not loaded again, because a second registration is refused.
 foreach ($notifyMessengerFile in @(Get-HordeMessengerFiles)) {
@@ -245,12 +266,42 @@ function Get-HordeDecisionNotifyMessageId {
 
 function Get-HordeDecisionNotifyUnread {
     # The founder's messages the warchief has not read, from an inbox answer: { ok; reason; items },
-    # each item { question; message; at; part } - part the letter of the one part answered, or "". The inbox only reads (decisions/Operations.ps1).
+    # each item { question; message; at; route; evidence; signedBy; part } - route, evidence and signedBy as the message's
+    # record holds them, "" where it holds none; part the letter of the one part answered, or "". The inbox only reads (decisions/Operations.ps1).
     param($Answer)
     if ($null -eq $Answer -or "$($Answer.state)" -cne "known") { return [pscustomobject]@{ ok = $false; reason = $(if ($null -ne $Answer) { "$($Answer.reason)" } else { "no answer" }); items = @() } }
     if ("$($Answer.value.outcome)" -cne "done") { return [pscustomobject]@{ ok = $false; reason = "$($Answer.value.reason)"; items = @() } }
-    $items = @($Answer.value.messages | Where-Object { $null -ne $_ -and "$($_.message.speaker)" -ceq $script:HordeDecisionNotifySpeaker } | ForEach-Object { [pscustomobject]@{ question = [int]$_.number; message = "" + [long]$_.message.sequence; at = "$($_.message.at)"; part = $(if ($null -ne $_.message.PSObject.Properties["part"]) { "$($_.message.part)" } else { "" }) } })
+    $items = @($Answer.value.messages | Where-Object { $null -ne $_ -and "$($_.message.speaker)" -ceq $script:HordeDecisionNotifySpeaker } | ForEach-Object {
+        $held = @{}
+        foreach ($name in @("route", "evidence", "signedBy", "part")) { $p = $_.message.PSObject.Properties[$name]; $held[$name] = $(if ($null -ne $p -and $p.Value -is [string]) { $p.Value } else { "" }) }
+        [pscustomobject]@{ question = [int]$_.number; message = "" + [long]$_.message.sequence; at = "$($_.message.at)"; route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]; part = $held["part"] }
+    })
     return [pscustomobject]@{ ok = $true; reason = ""; items = $items }
+}
+
+function Get-HordeDecisionNotifyVerified {
+    # Whether the notice for -Items may say it is from the founder, verified (header, THE FOUNDER,
+    # VERIFIED): { verified; why; claimed }. verified is from.verified, or $null with why in words.
+    # claimed says a record of the set named a passkey or held evidence, so a $null is worth a line.
+    # -Trust answers, for a key id, relay's trust store's tristate for it now. Never throws.
+    param([object[]]$Items = @(), [Parameter(Mandatory = $true)][scriptblock]$Trust)
+    $claimed = (@($Items | Where-Object { "$($_.signedBy)" -ne "" -or "$($_.evidence)" -ne "" }).Count -gt 0)
+    $no = { param([string]$Why) return [pscustomobject]@{ verified = $null; why = $Why; claimed = $claimed } }
+    if (@($Items).Count -eq 0) { return (& $no "there is no answer in the set") }
+    $keys = New-Object System.Collections.ArrayList
+    foreach ($i in @($Items)) {
+        $signer = Get-HordeDecisionSigner -Route "$($i.route)" -Evidence "$($i.evidence)" -SignedBy "$($i.signedBy)"
+        if ($signer.keyId -ceq "") { return (& $no ("the founder's words under question " + $i.question + " (record " + $i.message + ") are not named as verified: " + $signer.why)) }
+        if ($keys -cnotcontains $signer.keyId) { [void]$keys.Add($signer.keyId) }
+    }
+    if ($keys.Count -ne 1) { return (& $no ("the answers of this set were signed by " + $keys.Count + " passkeys (" + ($keys -join ", ") + "), and a notice names one")) }
+    $keyId = [string]$keys[0]
+    $trusted = $null
+    try { $trusted = & $Trust $keyId } catch { $trusted = New-HordeUnknown -Reason $_.Exception.Message }
+    if ($null -eq $trusted -or @("known", "absent") -cnotcontains "$($trusted.state)") { return (& $no ("the trust store could not say whether the passkey " + $keyId + " is trusted now" + $(if ($null -ne $trusted) { " (" + $trusted.reason + ")" } else { "" }))) }
+    if ($trusted.state -ceq "absent") { return (& $no ("the passkey that signed is not trusted now: " + $trusted.reason)) }
+    if ($null -eq $trusted.value -or "$($trusted.value.proof)" -cne "webauthn") { return (& $no ("the key " + $keyId + " is trusted as a machine's, not as a passkey of the founder's")) }
+    return [pscustomobject]@{ verified = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = $keyId }; why = ""; claimed = $claimed }
 }
 
 function New-HordeDecisionNotifyTracker {
@@ -292,12 +343,13 @@ function Invoke-HordeDecisionNotifyPass {
     # ONE PASS: read the told record and the inbox, and ring for the set if it is due. Returns
     # { outcome; said; wakeAt; pending }: outcome nothing, waiting, reread, rang, pending or refused;
     # said the one plain line for it; wakeAt when to pass again ($null: no reason to); pending how many
-    # answers wait untold. -Clock, -Inbox and -Seat are for a test that hands in its own.
-    param([Parameter(Mandatory = $true)]$Tracker, [scriptblock]$Clock = $null, [scriptblock]$Inbox = $null, [scriptblock]$Seat = $null, [string]$HordeHome = "")
+    # answers wait untold. -Clock, -Inbox, -Seat and -Trust are for a test that hands in its own.
+    param([Parameter(Mandatory = $true)]$Tracker, [scriptblock]$Clock = $null, [scriptblock]$Inbox = $null, [scriptblock]$Seat = $null, [string]$HordeHome = "", [scriptblock]$Trust = $null)
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     if ($null -eq $Inbox) { $Inbox = { return (Invoke-HordeDecision -Operation "inbox" -Request @{ actor = $script:HordeDecisionNotifyReader }) } }
     if ($null -eq $Seat) { $Seat = { return (Get-HordeRoleSeat -Role $script:HordeDecisionNotifyReader) } }
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
+    if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }
     $result = { param([string]$Outcome, [string]$Said, $WakeAt, [int]$Pending) return [pscustomobject]@{ outcome = $Outcome; said = $Said; wakeAt = $WakeAt; pending = $Pending } }
     $path = Get-HordeDecisionNotifyRecordPath -HordeHome $HordeHome
     $record = Read-HordeDecisionNotifyRecord -Path $path
@@ -341,13 +393,24 @@ function Invoke-HordeDecisionNotifyPass {
         $deviceId = ""
         try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { $problem = "this machine's device id could not be had: " + $_.Exception.Message }
         if ($problem -eq "") {
-            $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $sessionId; from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionNotifyFrom; label = $Tracker.fromLabel }; body = (Format-HordeDecisionNotifyNotice -Items $pending); ttlSeconds = $script:HordeDecisionNotifyTtlSeconds }
+            $from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionNotifyFrom; label = $Tracker.fromLabel }
+            # The founder, verified, or only his label (header): asked as the notice is made, never kept.
+            $who = Get-HordeDecisionNotifyVerified -Items $pending -Trust $Trust
+            if ($null -ne $who.verified) { $from | Add-Member -NotePropertyName "verified" -NotePropertyValue $who.verified }
+            $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $sessionId; from = $from; body = (Format-HordeDecisionNotifyNotice -Items $pending); ttlSeconds = $script:HordeDecisionNotifyTtlSeconds }
             $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
             if ($posted.state -ceq "known" -and $script:HordeDecisionNotifyStages -ccontains "$($posted.value.stage)") {
                 $stamp = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")
                 $entries = @(@($record.entries) + @($pending | ForEach-Object { [pscustomobject]@{ question = [int]$_.question; message = $_.message; at = $stamp; notice = $noticeId } }))
                 $Tracker.problem = ""; $Tracker.retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; $Tracker.nextAttemptAt = [datetime]::MinValue
                 $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + ")"
+                if ($null -ne $who.verified) {
+                    $said = $said + "; as the founder, verified by his passkey " + $who.verified.keyId
+                    # What the messenger says of it: one that cannot show a verified sender posts by label.
+                    $note = $posted.value.PSObject.Properties["reason"]
+                    if ($null -ne $note -and "$($note.Value)" -ne "") { $said = $said + "; " + $note.Value }
+                }
+                elseif ($who.claimed) { $said = $said + "; by label only: " + $who.why }
                 # The record after the post: a crash or a failed write between the two leaves the set
                 # untold, and the next pass posts the same notice, which the messenger keeps as one.
                 try { Write-HordeDecisionNotifyRecord -Path $path -Entries $entries }

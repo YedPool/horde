@@ -164,10 +164,18 @@ $script:HordeDecisionRoutes = [ordered]@{
     # only the hash, so this module never stores a signature, and never judges one - it cannot read the
     # journal, and is not the place that decides who signed. A route with no evidence member carries
     # none.
+    # signedBy (2026-10-12): the key id of the passkey the relay channel verified the answer's envelope
+    # against, written ONCE, here, by the caller that checked the signature - so that whoever tells the
+    # warchief of the answer (decisions/Notify.ps1) names that passkey from the record and from nothing
+    # else. Only a route that carries evidence may carry it; it is optional there, because records
+    # written before it are facts too, and they name no passkey. It is the caller's word, like the
+    # evidence: this module checks its spelling and its route, never who signed.
     "phone"         = @{ speakers = @("founder");  actors = @("founder");  shown = "answered on the founder's phone";    statesWording = $true; evidence = $true }
 }
 # THE EVIDENCE'S ONE SPELLING: a SHA-256 in lower-case hex. Never the proof, which is relay's to keep.
 $script:HordeDecisionEvidencePattern = '\A[0-9a-f]{64}\z'
+# THE SIGNING KEY'S ONE SPELLING: a relay key id, 32 lower-case hex (relay/Bytes.ps1).
+$script:HordeDecisionSignedByPattern = '\A[0-9a-f]{32}\z'
 
 # THE FIELDS OF A QUESTION, in the order they are stored and shown. type: text, list (of texts) or
 # flag. oneLine: a line break is refused. wording: a change to it is a new wording, because it is what
@@ -331,6 +339,23 @@ function Get-HordeDecisionSpeakerShown {
     $entry = $script:HordeDecisionSpeakers[$Speaker]
     if ($null -eq $entry) { return $Speaker }
     return "$($entry.shown)"
+}
+
+function Get-HordeDecisionSigner {
+    # The passkey a message's record names as the one that signed it: { keyId; why }. keyId is "" when
+    # the record names none that may be repeated, and why says so in words. THE ONE PLACE THAT READS A
+    # RECORD'S signedBy FOR A CLAIM: it counts only on a route that carries evidence (the route phone),
+    # beside evidence spelled as evidence, and spelled as a key id - so a record by any other route that
+    # holds the member, however it came to, names nobody. It says what the record says, never whether
+    # that passkey is trusted: that is relay's trust store's to answer, and the asker's to ask.
+    param([string]$Route, [string]$Evidence = "", [string]$SignedBy = "")
+    $none = { param([string]$Why) return [pscustomobject]@{ keyId = ""; why = $Why } }
+    $entry = $script:HordeDecisionRoutes[$Route]
+    if ($null -eq $entry -or -not ($entry.ContainsKey("evidence") -and [bool]$entry.evidence)) { return (& $none ("they were " + (Get-HordeDecisionRouteShown -Route $Route) + ", and no passkey signs words by that route")) }
+    if ($Evidence -cnotmatch $script:HordeDecisionEvidencePattern) { return (& $none "their record holds no evidence of the proof") }
+    if ($SignedBy -ceq "") { return (& $none "their record names no passkey: it was written before records did") }
+    if ($SignedBy -cnotmatch $script:HordeDecisionSignedByPattern) { return (& $none "what their record names as the passkey is not a key id") }
+    return [pscustomobject]@{ keyId = $SignedBy; why = "" }
 }
 
 function Get-HordeDecisionRouteShown {
@@ -669,7 +694,8 @@ function Test-HordeDecisionSaying {
     # Secrets are not looked for here: Find-HordeDecisionSecrets runs over the whole request first.
     # -EvidenceStated says whether the request carries evidence at all, and -Evidence what it is: a
     # [string] cannot hold "not given" (CONTRIBUTING 12), and "given, but empty" is a wrong value.
-    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text, [bool]$WordingStated = $true, [bool]$EvidenceStated = $false, [string]$Evidence = "")
+    # -SignedByStated and -SignedBy likewise, for the key id of the passkey that signed (the route phone).
+    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text, [bool]$WordingStated = $true, [bool]$EvidenceStated = $false, [string]$Evidence = "", [bool]$SignedByStated = $false, [string]$SignedBy = "")
     $out = New-Object System.Collections.ArrayList
     $speakerKnown = $script:HordeDecisionSpeakers.Contains($Speaker)
     $routeEntry = $script:HordeDecisionRoutes[$Route]
@@ -682,10 +708,12 @@ function Test-HordeDecisionSaying {
         $needsEvidence = ($routeEntry.ContainsKey("evidence") -and [bool]$routeEntry.evidence)
         if ($needsEvidence -and -not $EvidenceStated) { [void]$out.Add("words " + $routeEntry.shown + " always carry the hash of the proof that they came from the speaker ('evidence'), and these do not") }
         if (-not $needsEvidence -and $EvidenceStated) { [void]$out.Add("words " + $routeEntry.shown + " carry no 'evidence': only words answered on the founder's phone do") }
+        if (-not $needsEvidence -and $SignedByStated) { [void]$out.Add("words " + $routeEntry.shown + " carry no 'signedBy': no passkey signed them, and only words answered on the founder's phone name one") }
     }
     # Its spelling, whatever the route: the request's schema says the same, and this is what a caller
     # that reaches the rules without it is held to.
     if ($EvidenceStated -and $Evidence -cnotmatch $script:HordeDecisionEvidencePattern) { [void]$out.Add("'evidence' is not a SHA-256 in lower-case hex: 64 of 0-9 and a-f") }
+    if ($SignedByStated -and $SignedBy -cnotmatch $script:HordeDecisionSignedByPattern) { [void]$out.Add("'signedBy' is not a key id: 32 of 0-9 and a-f, in lower case") }
     if ($Text.Trim().Length -eq 0) { [void]$out.Add("'text' is blank: nothing was said") }
     if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("'text' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionMaxTextChars + ". It is refused whole, never cut") }
     $notWords = Get-HordeDecisionCharProblem -Text $Text -Said
@@ -969,6 +997,9 @@ function Step-HordeDecisionSaid {
         # The part answered ("" for none), and that part's words as they read at this record's place.
         part = $part
         partWords = $partWords
+        # The key id of the passkey that signed (the route phone), as the record holds it; "" when it
+        # names none - every record written before 2026-10-12, and every other route's.
+        signedBy = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "signedBy") { [string]$Ev.data.signedBy } else { "" })
     })
     $last = $question.thread[$question.thread.Count - 1]
     # AN EDIT (the owner, 2026-10-07): words of the same speaker straight after their own last
@@ -1175,6 +1206,7 @@ function ConvertTo-HordeDecisionMessageView {
         evidence = "$($Message.evidence)"
         part = "$($Message.part)"
         partWords = "$($Message.partWords)"
+        signedBy = "$($Message.signedBy)"
     }
 }
 
