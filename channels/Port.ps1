@@ -12,7 +12,7 @@
 #             trusted; this only narrows it;
 #   Accept    param($Context, $Item) -> { outcome; reason }: one opened envelope, handed over once it
 #             is verified, journaled and opened. $Item is { from; channel; kind; seq; key; evidence;
-#             body (bytes) }. outcome is "done" (acted on), "refused" (never will be: say why) or
+#             ts; body (bytes) } - ts the envelope's own time, in milliseconds, as its sender signed it. outcome is "done" (acted on), "refused" (never will be: say why) or
 #             "retry" (not now: the same record is handed over again later, from the journal).
 #             AN ACCEPT MUST BE IDEMPOTENT BY THE RECORD: after a crash between its act and the done
 #             mark the same item comes again (relay/Journal.ps1, FINISHED AND UNFINISHED);
@@ -358,7 +358,7 @@ function Invoke-HordeRelayChannelRecord {
     # The senders trusted NOW: a device revoked since the record was made opens nothing.
     $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind
     if (-not $opened.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("not opened: " + $opened.reason) } }
-    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; body = [byte[]]$opened.value }
+    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; ts = [long]$r.value.header.ts; body = [byte[]]$opened.value }
     $got = $null
     try { $got = & $Channel.accept $Context $item }
     catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message) } }

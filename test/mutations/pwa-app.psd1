@@ -8,6 +8,21 @@
     Suite  = "surfaces\pwa\test\test-pwa-browser.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "no-time-on-a-message"
+           Find = 'if (stamp) who.appendChild(stamp);'
+           Replace = '' }
+        @{ Name = "no-day-divider"
+           Find = 'for (const it of withDays(v.items)) {'
+           Replace = 'for (const it of v.items) {' }
+        @{ Name = "touch-does-not-open-the-exact-time"
+           Find = 'if (openStamps.has(key)) openStamps.delete(key); else openStamps.add(key);'
+           Replace = '' }
+        @{ Name = "exact-time-not-the-title"
+           Find = 't.title = exact;'
+           Replace = 't.title = short;' }
+        @{ Name = "open-time-lost-on-redraw"
+           Find = 't.setAttribute("aria-label", exact); show();'
+           Replace = 't.setAttribute("aria-label", exact); t.textContent = short;' }
         @{ Name = "why-left-after-the-tick"
            Find = '$("announceWhy").hidden = $("wroteCode").checked;'
            Replace = '' }

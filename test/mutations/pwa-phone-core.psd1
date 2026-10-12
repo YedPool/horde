@@ -6,6 +6,9 @@
     Target = "surfaces\pwa\page\phone-core.js"
     Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
     Mutations = @(
+        @{ Name = "sent-line-time-not-the-signed-one"
+           Find = 's.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });'
+           Replace = 's.chat.sent.push({ messageId, text, at: now() + 1, session: s.chat.session });' }
         @{ Name = "recovery-session-answers"
            Find = 'if (s.mode !== "passkey") throw fail("Read only:'
            Replace = 'if (false) throw fail("Read only:' }

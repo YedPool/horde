@@ -41,6 +41,11 @@
 // THE WAY BETWEEN DECISIONS AND CHAT stays on screen (the bar is sticky, app.css), and the phone's Back
 // goes back between them: each switch is a history entry, and going back to one shows that view again.
 //
+// EVERY MESSAGE IN THE CHAT SAYS WHEN IT WAS SAID (the founder asked, 2026-10-12): the short local time
+// beside who said it, the day on a line of its own where it changes, the exact time on a tap. The times
+// are the turn's own and the line's signed one (relay/js/protocol.js, chatTimeline); what carries none
+// shows none.
+//
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value).
 import { createPhone } from "./phone-core.js";
 import { createBridge, deferredBridge } from "../surface/bridge.js";
@@ -49,6 +54,7 @@ import { accountFromConfig } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
+import { clockTime, exactTime, withDays } from "../relay/protocol.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
@@ -234,6 +240,28 @@ $("tabDecisions").addEventListener("click", () => pickPane("decisions"));
 $("tabChat").addEventListener("click", () => pickPane("chat"));
 window.addEventListener("popstate", (e) => { const p = e.state && e.state.hordePane; pickPane(p === "chat" ? "chat" : "decisions", true); });
 try { history.replaceState({ hordePane: "decisions" }, ""); } catch (e) { /* as above */ }
+// WHEN IT WAS SAID, beside who said it: the short local time, and the exact one as its title and on a
+// tap (a phone has no pointer to rest on it), tapped again for the short one. Nothing for a thing with
+// no time: an old envelope that carries none is shown without, never with a guess.
+// A stamp opened stays open while the log is drawn again (every refresh draws it anew): the keys of the
+// open ones are kept here, and dropped when the horde locks.
+const openStamps = new Set();
+function timeStamp(ms, before, key) {
+  const short = clockTime(ms);
+  if (!short) return null;
+  const exact = before + exactTime(ms);
+  const t = document.createElement("button");
+  t.type = "button";
+  t.className = "stamp";
+  const show = () => { t.textContent = openStamps.has(key) ? exact : short; };
+  t.title = exact;
+  t.setAttribute("aria-label", exact); show();
+  t.addEventListener("click", () => {
+    if (openStamps.has(key)) openStamps.delete(key); else openStamps.add(key);
+    show();
+  });
+  return t;
+}
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
 function drawChat(rec) {
   if ($("chat").hidden || !rec) return;
@@ -242,13 +270,19 @@ function drawChat(rec) {
   const log = $("chatLog");
   const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
   clearChat();
-  for (const it of v.items) {
+  for (const it of withDays(v.items)) {
+    // The day, on a line of its own, wherever it changes.
+    if (it.kind === "day") { const day = document.createElement("div"); day.className = "chat-day"; day.textContent = it.label; log.appendChild(day); continue; }
     const box = document.createElement("div");
     const who = document.createElement("div");
     const text = document.createElement("div");
     box.className = "chat-item " + (it.kind === "line" ? "founder" : it.role);
     who.className = "chat-who";
-    who.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    const name = document.createElement("span");
+    name.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    who.appendChild(name);
+    const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", "chat/" + (it.kind === "line" ? "line/" + it.messageId : "turn/" + it.id));
+    if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
     text.textContent = it.text;
     box.appendChild(who);
@@ -490,7 +524,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

@@ -10,6 +10,15 @@
         @{ Name = "any-trusted-sender-speaks"
            Find = '-Name "chat" -Kinds @("line") -Senders "founder"'
            Replace = '-Name "chat" -Kinds @("line") -Senders "horde"' }
+        @{ Name = "receipt-time-is-the-machines"
+           Find = 'if ($null -ne $signedAt -and [long]$signedAt.Value -gt 0) { $sentAt = [long]$signedAt.Value }'
+           Replace = '$sentAt = [long]([datetime]::UtcNow - (New-Object datetime -ArgumentList 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc))).TotalMilliseconds' }
+        @{ Name = "receipt-carries-no-time"
+           Find = '-Session $Session -Text $line.text -SentAt $sentAt'
+           Replace = '-Session $Session -Text $line.text' }
+        @{ Name = "receipt-time-written-when-there-is-none"
+           Find = '$(if ($SentAt -gt 0) { '',"sentAt":'' + $SentAt } else { '''' })'
+           Replace = '('',"sentAt":'' + $SentAt)' }
         @{ Name = "machine-not-checked"
            Find = 'if ($line.machine -cne $Context.signKeyId) {'
            Replace = 'if ($false) {' }
