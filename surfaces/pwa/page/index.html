@@ -33,6 +33,7 @@
 <link rel="stylesheet" href="../list/list.css">
 </head>
 <body>
+<header id="bar">
 <div id="top">
   <div id="tabs" role="tablist" aria-label="Hordes"></div>
   <span class="grow"></span>
@@ -40,10 +41,16 @@
   <button type="button" id="accountBtn" aria-label="Your account" hidden>Account</button>
   <button type="button" id="addBtn" aria-label="Pair with a machine">+</button>
 </div>
-<div id="notice" hidden></div>
 <div id="viewTabs" role="tablist" aria-label="Views" hidden>
   <button type="button" id="tabDecisions" role="tab" aria-selected="true">Decisions</button>
   <button type="button" id="tabChat" role="tab" aria-selected="false">Chat</button>
+</div>
+</header>
+<div id="notice" hidden></div>
+<div id="announceBox" hidden>
+  <p id="announceWords" class="hint"></p>
+  <div class="row"><button type="button" id="announceNow" class="primary">Announce this phone</button></div>
+  <p id="announceNowStatus" class="status" role="alert" hidden></p>
 </div>
 
 <section id="signInView" hidden>
@@ -97,6 +104,8 @@
   <div class="row"><button type="button" id="resendResponse" hidden>Send again</button> <button type="button" id="copyResponse">Copy</button> <button type="button" id="shareResponse" hidden>Share</button></div>
   <label class="check"><input type="checkbox" id="wroteCode"> I have written the recovery code down</label>
   <div class="row"><button type="button" id="announceBtn" class="primary" disabled>I confirmed it at the machine: announce this phone</button></div>
+  <p id="announceWhy" class="hint">The announce button opens once the box above is ticked: write the recovery code down first.</p>
+  <p id="announceStatus" class="status" role="alert" hidden></p>
 </section>
 
 <section id="lockedView" hidden>

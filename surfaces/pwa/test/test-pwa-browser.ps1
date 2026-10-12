@@ -9,8 +9,11 @@
 # CSS pixels, a common Android width), with touch.
 #   1. the app loads under its strict policy with no error; it pairs with a Chrome passkey that the
 #      machine enrolls, the two fingerprints agree, and the passkey is confirmed;
-#   2. it announces its key; a run sends the snapshot; the question is drawn by the window's own
-#      document (list.js);
+#   2. it announces its key - the button says why it is shut until the recovery code is written down, a
+#      relay that refuses and a passkey that does not sign are each said beside it, and the horde's own
+#      view offers "Announce this phone" until the machine answers (the founder's first live use,
+#      2026-10-11); a run sends the snapshot; the question is drawn by the window's own document
+#      (list.js);
 #   3. Shift+Enter and the row's New line add lines and send nothing; the answer typed and sent with a
 #      real Enter lands once, his words exactly, signed by Chrome's WebAuthn;
 #   4. at phone width nothing scrolls sideways and the answering row stands on the screen;
@@ -23,7 +26,9 @@
 #  10. the chat tab: the Thrall's turns (a synthetic fleet, test/lib/ChatFleet.ps1) are drawn; Shift+Enter
 #      and the New line key add lines and send nothing; a real Enter sends a line signed by Chrome's
 #      WebAuthn, which a run posts to the Thrall once, and its receipt shows; at phone width nothing
-#      scrolls sideways and the composer stands at the foot; a lock takes the chat off the page.
+#      scrolls sideways and the composer stands at the foot; with the page scrolled to its end the other
+#      view's tab is still on the screen and a touch opens it, both ways, and the phone's Back goes back
+#      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 
@@ -154,12 +159,27 @@ try {
 
     Write-Host ""
     Write-Host "--- 2. the key is announced, and the window's document draws the question ---" -ForegroundColor Cyan
+    $why = Invoke-Browser @{ cmd = "announceWhy" }
+    Check ($why.ok -and $why.value.before.disabled -and $why.value.before.why -and $why.value.before.words.Contains("recovery code") -and -not $why.value.after.disabled -and -not $why.value.after.why) ("while the recovery-code box is not ticked the announce button is shut and says why; ticked, it opens and the reason goes (" + $(if ($why.ok) { $why.value.before.words } else { $why.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "relayFail"; on = $true }
+    $f1 = Invoke-Browser @{ cmd = "announceTry" }
+    $null = Invoke-Browser @{ cmd = "relayFail"; on = $false }
+    Check ($f1.ok -and $f1.value.status.Contains("The relay did not take it") -and -not $f1.value.status.Contains("a stand-in") -and $f1.value.paired -and $f1.value.recovery) ("an announcement the relay refuses says so beside its button, in the app's words, and the pairing screen stays with its code (" + $(if ($f1.ok) { $f1.value.status } else { $f1.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "passkeyRefusesOnce" }
+    $f2 = Invoke-Browser @{ cmd = "announceTry" }
+    Check ($f2.ok -and $f2.value.status.Contains("did not sign the announcement") -and $f2.value.paired) ("an announcement the passkey does not sign says so beside its button (" + $(if ($f2.ok) { $f2.value.status } else { $f2.reason }) + ")")
     $ann = Invoke-Browser @{ cmd = "announce" }
     Check ($ann.ok -and $ann.value.enabledAfterTick -and $ann.value.doc -and $ann.value.recoveryCleared) ("the announce key opens only once the code is written down; after it the list shows and the code leaves the screen (" + $(if ($ann.ok) { $ann.value.notice } else { $ann.reason }) + ")")
+    $box = Invoke-Browser @{ cmd = "announceBox" }
+    Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet")) ("until the machine answers, the horde's own view says so and offers Announce this phone (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
+    $again = Invoke-Browser @{ cmd = "announceNow"; mailbox = $mailbox }
+    Check ($again.ok -and $again.value.put -and $again.value.status.StartsWith("Announced.")) ("and its button announces the phone again, from that view (" + $(if ($again.ok) { $again.value.status } else { $again.reason }) + ")")
     $run = Invoke-Run -Turns 2
     Check ($run.code -eq 0 -and $run.out.Contains("is now in the trust store") -and $run.out.Contains("snapshot of 1 open question(s)")) ("a run takes the app's key and sends the snapshot (exit " + $run.code + ")")
     $seen = Invoke-Browser @{ cmd = "waitText"; text = $title }
     Check ($seen.ok -and $seen.value.found) "the question appears in the app, drawn by list.js, without a reload"
+    $box = Invoke-Browser @{ cmd = "announceBox" }
+    Check ($box.ok -and -not $box.value.shown) "and once it has, the offer to announce goes"
     $shot1 = Save-Shot "phone-list"
 
     Write-Host ""
@@ -259,6 +279,13 @@ try {
     $shot = Invoke-Browser @{ cmd = "chatShot"; path = (Join-Path $work "phone-chat.png") }
     Check ($shot.ok -and $shot.value.scrollWidth -le $shot.value.innerWidth -and [math]::Abs($shot.value.composeBottom - $shot.value.innerHeight) -le 1) "at phone width nothing scrolls sideways, and the composer stands at the foot of the screen"
     if ($env:HORDE_PWA_SHOTS -and (Test-Path -LiteralPath $env:HORDE_PWA_SHOTS -PathType Container)) { Copy-Item -LiteralPath (Join-Path $work "phone-chat.png") -Destination (Join-Path $env:HORDE_PWA_SHOTS "phone-chat.png") -Force }
+    $toDoc = Invoke-Browser @{ cmd = "navTouch"; to = "decisions" }
+    Check ($toDoc.ok -and $toDoc.value.scrolled -gt 0 -and $toDoc.value.inView -and $toDoc.value.opened) ("with the chat scrolled to its end, the Decisions tab is still on the screen, and a touch on it opens the questions (" + $(if ($toDoc.ok) { ConvertTo-Json $toDoc.value -Compress } else { $toDoc.reason }) + ")")
+    $toChat = Invoke-Browser @{ cmd = "navTouch"; to = "chat" }
+    Check ($toChat.ok -and $toChat.value.scrolled -gt 0 -and $toChat.value.inView -and $toChat.value.opened) ("with the questions scrolled to their end, the Chat tab is still on the screen, and a touch on it opens the chat (" + $(if ($toChat.ok) { ConvertTo-Json $toChat.value -Compress } else { $toChat.reason }) + ")")
+    $b1 = Invoke-Browser @{ cmd = "back" }
+    $b2 = Invoke-Browser @{ cmd = "back" }
+    Check ($b1.ok -and $b1.value.doc -and -not $b1.value.chat -and $b2.ok -and $b2.value.chat -and -not $b2.value.doc) ("the phone's Back goes back to the questions, and Back again to the chat (" + $(if ($b1.ok) { ConvertTo-Json $b1.value -Compress } else { $b1.reason }) + " " + $(if ($b2.ok) { ConvertTo-Json $b2.value -Compress } else { $b2.reason }) + ")")
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
     Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"

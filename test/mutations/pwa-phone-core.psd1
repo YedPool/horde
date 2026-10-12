@@ -66,5 +66,21 @@
         @{ Name = "refused-registration-pairs-anyway"
            Find = 'if (reg.state !== "known") { diagnostics.push(relaySaid(reg.reason)); throw'
            Replace = 'if (false) { diagnostics.push(relaySaid(reg.reason)); throw' }
+        # --- the announcement the founder's first live use never sent (2026-10-11)
+        @{ Name = "heard-before-any-snapshot"
+           Find = 'heard: Number.isSafeInteger(e.lastSnapshotSeq) && e.lastSnapshotSeq >= 0'
+           Replace = 'heard: true' }
+        @{ Name = "heard-from-the-unset-seq"
+           Find = '&& e.lastSnapshotSeq >= 0'
+           Replace = '&& e.lastSnapshotSeq >= -1' }
+        @{ Name = "passkey-refusal-in-the-browser-words"
+           Find = 'catch (x) { throw fail(passkeyDidNotSign(x), "passkey"); }'
+           Replace = 'catch (x) { throw x; }' }
+        @{ Name = "passkey-error-name-dropped"
+           Find = 'return PASSKEY_DID_NOT_SIGN + (name && name !== "Error" ? " (" + name + ")" : "");'
+           Replace = 'return PASSKEY_DID_NOT_SIGN;' }
+        @{ Name = "passkey-error-message-shown"
+           Find = 'const name = x && typeof x.name === "string" && /^[A-Za-z]{1,40}$/.test(x.name) ? x.name : "";'
+           Replace = 'const name = x ? x.name + ": " + x.message : "";' }
     )
 }

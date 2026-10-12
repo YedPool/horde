@@ -31,6 +31,16 @@
 // from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
 // why. The log, like the list, is taken off the page when the horde locks.
 //
+// THE ANNOUNCEMENT MUST NOT GO MISSING UNSEEN (the founder's first live use, 2026-10-11: he paired, the
+// announcement never went, and why was nowhere on the screen). The pairing screen says why its announce
+// button is shut; a failed announcement says why beside its button, in the phone's own words; and the
+// horde's own view, while the machine has sent this phone nothing (the horde not heard from:
+// phone-core.js), offers "Announce this phone" - not only the small link on the locked screen. Every
+// announcement still waits for the founder's tap and his passkey; none is sent by itself.
+//
+// THE WAY BETWEEN DECISIONS AND CHAT stays on screen (the bar is sticky, app.css), and the phone's Back
+// goes back between them: each switch is a history entry, and going back to one shows that view again.
+//
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value).
 import { createPhone } from "./phone-core.js";
 import { createBridge, deferredBridge } from "../surface/bridge.js";
@@ -85,6 +95,8 @@ function show(view) {
   for (const v of VIEWS) $(v).hidden = v !== view;
   $("keys").hidden = view !== "doc";
   $("viewTabs").hidden = view !== "doc" && view !== "chat";
+  // Shown again by render() for an unlocked horde the machine has not answered yet.
+  $("announceBox").hidden = true;
 }
 // Which view of an unlocked horde is up: its questions, or its chat.
 let pane = "decisions";
@@ -103,7 +115,7 @@ function docOf(id) {
   box.className = "horde-list";
   $("lists").appendChild(box);
   const doc = window.HordeDecisionsDocument.mount(box, {
-    topInset: () => $("top").getBoundingClientRect().bottom,
+    topInset: () => $("bar").getBoundingClientRect().bottom,
     onChange: showCounts,
     storage: memoryStorage(),
     say: (number, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId }),
@@ -160,6 +172,7 @@ function render(h, rec) {
   const d = docOf(h.id);
   d.box.hidden = false;
   show(pane === "chat" ? "chat" : "doc");
+  showAnnounceBox(h, rec);
   if (pane === "chat") bridge.request("chat").then(drawChat);
   const banners = {
     recovery: "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer.",
@@ -174,6 +187,33 @@ function render(h, rec) {
 }
 
 bridge.on("list-changed", (rec) => { const h = hordes.find((x) => x.id === current); if (h) render(h, rec); });
+
+// --- announcing, from the horde's own view ---
+
+// The hordes a snapshot was drawn for in this page: heard from, even before the summary is read again.
+const heard = new Set();
+function showAnnounceBox(h, rec) {
+  if (rec && rec.state === "known") heard.add(h.id);
+  const waiting = !h.heard && !heard.has(h.id);
+  $("announceBox").hidden = !waiting;
+  if (!waiting) return;
+  $("announceWords").textContent = h.announced
+    ? "The machine has not answered this phone yet. Its runner sends the questions when it next turns; if none come, announce this phone again."
+    : "This phone has not been announced to the machine yet, so the machine sends it nothing. Once you have typed its number at the machine, announce it.";
+}
+// What went wrong with an announcement, beside the button that sent it ("" hides it).
+function announceSaid(el, words) { $(el).textContent = words || ""; $(el).hidden = !words; }
+$("announceNow").addEventListener("click", async () => {
+  say("action", "");
+  announceSaid("announceNowStatus", "");
+  $("announceNow").disabled = true;
+  try {
+    await bridge.request("announce", { id: current });
+    announceSaid("announceNowStatus", "Announced. The questions appear here once the machine's runner turns.");
+    await loadHordes();
+    await pick(current);
+  } catch (e) { announceSaid("announceNowStatus", messageOf(e)); } finally { $("announceNow").disabled = false; }
+});
 bridge.on("chat-changed", (rec) => drawChat(rec));
 
 // --- the chat ---
@@ -182,7 +222,9 @@ const CHAT_BANNERS = {
   recovery: "Read only: unlocked with the recovery code, which cannot sign a line. Lock and unlock with the passkey to write to the Thrall.",
   "read-only": "Read only: this passkey gives no PRF, so no line is ever sent from this phone for this horde."
 };
-function pickPane(which) {
+function pickPane(which, fromHistory = false) {
+  // A switch is a history entry, so the phone's Back goes to the other view; Back itself is not one.
+  if (!fromHistory && which !== pane) { try { history.pushState({ hordePane: which }, ""); } catch (e) { /* a page with no history keeps working */ } }
   pane = which;
   $("tabDecisions").setAttribute("aria-selected", which === "decisions" ? "true" : "false");
   $("tabChat").setAttribute("aria-selected", which === "chat" ? "true" : "false");
@@ -190,6 +232,8 @@ function pickPane(which) {
 }
 $("tabDecisions").addEventListener("click", () => pickPane("decisions"));
 $("tabChat").addEventListener("click", () => pickPane("chat"));
+window.addEventListener("popstate", (e) => { const p = e.state && e.state.hordePane; pickPane(p === "chat" ? "chat" : "decisions", true); });
+try { history.replaceState({ hordePane: "decisions" }, ""); } catch (e) { /* as above */ }
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
 function drawChat(rec) {
   if ($("chat").hidden || !rec) return;
@@ -302,6 +346,8 @@ $("pairBtn").addEventListener("click", async () => {
     showRelayed(paired.relayed);
     $("wroteCode").checked = false;
     $("announceBtn").disabled = true;
+    $("announceWhy").hidden = false;
+    announceSaid("announceStatus", "");
     show("pairedView");
     await loadHordes();
   } catch (e) { say("action", messageOf(e)); } finally { $("pairBtn").disabled = false; }
@@ -317,9 +363,11 @@ $("resendResponse").addEventListener("click", async () => {
 });
 $("copyResponse").addEventListener("click", () => { if (navigator.clipboard) navigator.clipboard.writeText($("responseText").value).catch(() => say("action", "Could not copy: select the text and copy it.")); });
 $("shareResponse").addEventListener("click", () => { navigator.share({ text: $("responseText").value }).catch(() => {}); });
-$("wroteCode").addEventListener("change", () => { $("announceBtn").disabled = !$("wroteCode").checked; });
+// The button is shut until the box is ticked, and says so while it is (announceWhy).
+$("wroteCode").addEventListener("change", () => { $("announceBtn").disabled = !$("wroteCode").checked; $("announceWhy").hidden = $("wroteCode").checked; });
 $("announceBtn").addEventListener("click", async () => {
   say("action", "");
+  announceSaid("announceStatus", "");
   try {
     await bridge.request("announce", { id: paired.id });
     // The recovery code leaves the screen for good.
@@ -330,7 +378,7 @@ $("announceBtn").addEventListener("click", async () => {
     paired = null;
     await loadHordes();
     await pick(id);
-  } catch (e) { say("action", messageOf(e)); }
+  } catch (e) { announceSaid("announceStatus", messageOf(e)); }
 });
 
 // --- the account ---

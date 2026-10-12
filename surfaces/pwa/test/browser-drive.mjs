@@ -78,12 +78,14 @@ on("Log.entryAdded", (p) => { if (p.entry.level === "error" || /Content Security
 
 // The binding: the page's relay operations, carried to the local relay's folders.
 const relay = folderTransport(relayRoot);
+// The relayFail command: every put refused, as a relay that will not take one (the announcement's failure).
+let failPuts = false;
 on("Runtime.bindingCalled", async (p) => {
   if (p.name !== "hordeRelayBinding") return;
   let answer;
   try {
     const c = JSON.parse(p.payload);
-    if (c.op === "put") answer = await relay.put(c.mailbox, c.key, c.text);
+    if (c.op === "put") answer = failPuts ? { state: "unknown", value: null, reason: "the relay is down (a stand-in)" } : await relay.put(c.mailbox, c.key, c.text);
     else if (c.op === "get") answer = await relay.get(c.mailbox, c.since, c.max);
     else if (c.op === "watch") answer = await relay.watch(c.mailbox, c.since, c.max, Math.min(c.timeoutMs, 3000));
     else if (c.op === "ack") answer = await relay.ack(c.mailbox, c.through);
@@ -149,12 +151,68 @@ const commands = {
     const ok = await until(shown("pairedView") + " || (" + notice + ").length > 0", 30000);
     return await evaluate("({ paired: " + shown("pairedView") + ", fingerprint: document.getElementById('fingerprint').textContent, response: document.getElementById('responseText').value, recoveryCode: document.getElementById('recoveryCode').textContent, notice: " + notice + ", waited: " + JSON.stringify(!!ok) + " })");
   },
-  async announce() {
+  // THE ANNOUNCEMENT (the founder's first live use, 2026-10-11): why its button is shut, before and after
+  // the box is ticked; then the box is left ticked.
+  async announceWhy() {
+    const read = "({ why: " + shown("announceWhy") + ", words: document.getElementById('announceWhy').textContent, disabled: document.getElementById('announceBtn').disabled })";
+    const before = await evaluate(read);
     await evaluate("document.getElementById('wroteCode').click()", true);
+    return { before, after: await evaluate(read) };
+  },
+  // One tap on the pairing screen's announce button that is expected to fail: what the screen then says.
+  async announceTry() {
+    const was = await evaluate("document.getElementById('announceStatus').textContent");
+    await evaluate("document.getElementById('announceStatus').textContent = ''; document.getElementById('announceBtn').click()", true);
+    await until(shown("announceStatus") + " && document.getElementById('announceStatus').textContent.length > 0 || " + shown("doc"), 30000);
+    return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
+  },
+  async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
+  // The next passkey prompt refused, as Chrome refuses one the founder cancels (a NotAllowedError), once.
+  // In the page and not by the virtual authenticator: told that user verification fails and then that it
+  // succeeds again, Chrome's virtual authenticator kept refusing every prompt after (measured 2026-10-11).
+  async passkeyRefusesOnce() {
+    await evaluate("(() => { const c = navigator.credentials; const real = c.get; c.get = function () { c.get = real; return Promise.reject(new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError')); }; })()");
+    return { armed: true };
+  },
+  // The horde's own view while the machine has not answered: its offer to announce again.
+  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, status: " + shown("announceNowStatus") + " ? document.getElementById('announceNowStatus').textContent : '' })"); },
+  async announceNow(c) {
+    const before = headOf(c.mailbox);
+    await evaluate("document.getElementById('announceNow').click()", true);
+    await until(shown("announceNowStatus"), 30000);
+    const end = Date.now() + 10000;
+    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
+    return { put: headOf(c.mailbox) > before, status: await evaluate("document.getElementById('announceNowStatus').textContent") };
+  },
+  // THE WAY BETWEEN THE VIEWS: with the page made long and scrolled to its end (as a long chat is), the
+  // other view's tab is still on the screen, and a real touch at its centre opens that view.
+  async navTouch(c) {
+    const tab = c.to === "chat" ? "tabChat" : "tabDecisions";
+    await evaluate("document.getElementById('chatLog').style.minHeight = '4000px'; document.getElementById('lists').style.minHeight = '4000px'; window.scrollTo(0, document.documentElement.scrollHeight)");
+    await sleep(300);
+    const r = await evaluate("(() => { const b = document.getElementById('" + tab + "').getBoundingClientRect(); return { top: b.top, bottom: b.bottom, x: b.left + b.width / 2, y: b.top + b.height / 2, scrolled: window.scrollY, h: window.innerHeight }; })()");
+    const inView = r.top >= 0 && r.bottom <= r.h && r.bottom > r.top;
+    if (inView) {
+      await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: r.x, y: r.y }] });
+      await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    }
+    const opened = !!(await until(shown(c.to === "chat" ? "chat" : "doc"), 10000));
+    await evaluate("document.getElementById('chatLog').style.minHeight = ''; document.getElementById('lists').style.minHeight = ''");
+    return { inView, opened, scrolled: r.scrolled, top: r.top, bottom: r.bottom };
+  },
+  // The phone's Back: which view is up after it.
+  async back() {
+    await evaluate("history.back()");
+    await sleep(800);
+    return await evaluate("({ chat: " + shown("chat") + ", doc: " + shown("doc") + " })");
+  },
+  async announce() {
+    const ticked = await evaluate("document.getElementById('wroteCode').checked");
+    if (!ticked) await evaluate("document.getElementById('wroteCode').click()", true);
     const enabled = await evaluate("!document.getElementById('announceBtn').disabled");
     await evaluate("document.getElementById('announceBtn').click()", true);
-    await until(shown("doc") + " || (" + notice + ").length > 0", 30000);
-    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + ", recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
+    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
+    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
   async waitText(c) { const found = await until(listed + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(listed) }; },
   async answer(c) {

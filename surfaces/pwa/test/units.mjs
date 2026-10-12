@@ -729,5 +729,44 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   }
 }
 
+// --- the announcement the founder's first live use never sent (2026-10-11) ---
+{
+  // Whether the machine has answered this phone yet: false until a snapshot is drawn, so the app can offer
+  // "Announce this phone" in the horde's own view, not only on the locked screen.
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const app = newApp(t);
+  const paired = await app.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const h0 = (await app.phone.hordes())[0];
+  check(h0.announced === false && h0.heard === false, "a phone just paired is neither announced nor heard from", JSON.stringify(h0));
+  await app.phone.announce(paired.id);
+  const h1 = (await app.phone.hordes())[0];
+  check(h1.announced === true && h1.heard === false, "announced, it is not heard from until the machine sends a snapshot", JSON.stringify(h1));
+  const phoneKey = await phoneKeyOf(t, m);
+  await app.phone.refresh(paired.id);
+  check((await app.phone.hordes())[0].heard === false, "a refresh that finds no snapshot does not make it heard");
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")]);
+  await app.phone.refresh(paired.id);
+  check((await app.phone.hordes())[0].heard === true, "a snapshot drawn makes it heard, and the store keeps it");
+
+  // A passkey that does not sign the announcement (cancelled, timed out): the founder is told so in the
+  // phone's own words, the browser's error name kept and its message not; nothing is sent.
+  const t2 = R.memoryTransport();
+  const m2 = await newMachine("work");
+  const base = softAuthenticator({ origin, prf: true });
+  let refuse = true;
+  const auth = { create: (a) => base.create(a), get: async (a) => { if (refuse) { const e = new Error("The operation either timed out or was not allowed. See: https://example.invalid/phish"); e.name = "NotAllowedError"; throw e; } return base.get(a); } };
+  const app2 = newApp(t2, { authenticator: auth });
+  const p2 = await app2.phone.pair({ offerText: offerText(m2), label: "Founder phone" });
+  let err = null;
+  try { await app2.phone.announce(p2.id); } catch (e) { err = e; }
+  const words = err ? err.message : "";
+  check(err !== null && err.code === "passkey" && words.indexOf("did not sign") >= 0 && words.indexOf("NotAllowedError") >= 0 && words.indexOf("example.invalid") < 0, "a passkey that does not sign the announcement is said in the phone's words, with the browser's error name only", words);
+  check((await t2.get(m2.mailbox, 0, 256)).value.items.length === 0 && (await app2.phone.hordes())[0].announced === false, "and nothing is sent, and the horde is still not announced");
+  refuse = false;
+  await app2.phone.announce(p2.id);
+  check((await app2.phone.hordes())[0].announced === true && (await phoneKeyOf(t2, m2)) !== null, "announced again once the passkey signs, it goes");
+}
+
 process.stdout.write("[DONE] " + failures + "\n");
 process.exit(0);
