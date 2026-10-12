@@ -119,6 +119,8 @@ function docOf(id) {
     onChange: showCounts,
     storage: memoryStorage(),
     say: (number, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId }),
+    // One part's answer: the same request with the part's letter, signed and sent by itself.
+    sayPart: (number, letter, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId, part: letter }),
     act: (number, what, wording, answerId) => bridge.request("act", { number, act: what, wording, id: answerId })
   });
   docs[id] = { box, doc, kinds: false };

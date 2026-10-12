@@ -27,8 +27,34 @@
            Find = 'if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry";'
            Replace = 'if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "refused";' }
         @{ Name = "extra-member-taken"
-           Find = 'if ((@($names | Sort-Object) -join ",") -cne (@($script:HordeDecisionsChannelAnswerMembers | Sort-Object) -join ",")) {'
+           Find = 'if ((@($names | Sort-Object) -join ",") -cne (@($members | Sort-Object) -join ",")) {'
            Replace = 'if ($false) {' }
+        # --- in: one part's answer, version 2 (2026-10-12) ---
+        @{ Name = "a-version-1-answer-must-name-a-part"
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @("part"); "2" = @("part") }' }
+        @{ Name = "a-version-2-answer-is-not-read"
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @() }' }
+        @{ Name = "a-version-2-answer-need-name-no-part"
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @() }' }
+        @{ Name = "the-part-is-not-handed-to-the-list"
+           Find = '    if ($r.value.part -cne "") { $request["part"] = $r.value.part }'
+           Replace = '' }
+        @{ Name = "a-part-of-any-spelling-is-handed-on"
+           Find = "        if (`$a.part -isnot [string] -or `$a.part -cnotmatch '\A[a-z]\z') {"
+           Replace = "        if (`$false) {" }
+        @{ Name = "the-turn-does-not-say-which-part"
+           Find = '$(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" })'
+           Replace = '""' }
+        # --- out: what the snapshot says of answers ---
+        @{ Name = "the-snapshot-does-not-say-which-answers-are-read"
+           Find = "+ ',`"answers`":' + `$script:HordeDecisionsChannelAnswerHighest + '}'"
+           Replace = "+ '}'" }
+        @{ Name = "the-snapshot-claims-a-version-this-machine-does-not-read"
+           Find = '$script:HordeDecisionsChannelAnswerHighest = 2'
+           Replace = '$script:HordeDecisionsChannelAnswerHighest = 3' }
         # --- out: the snapshot ---
         @{ Name = "secret-sent-to-the-phone"
            Find = '        if (@(Find-HordeDecisionSecrets -Value $q).Count -gt 0) {'

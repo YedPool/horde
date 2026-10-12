@@ -4,7 +4,8 @@
 # OUT (the Tick). When the decisions store or the set of phone keys has changed since the last look,
 # the open questions are read through decisions/Operations.ps1 - list, state open, WITH MESSAGES: every
 # field of each question (its text, its context, the recommendation, its parts, its options, its
-# references), its wording, and its whole conversation with the warchief's replies and whose turn it
+# references), how much it matters and how much it blocks (importance, blocks and their plain words),
+# the question it follows up with what he answered there, its wording, and its whole conversation with the warchief's replies and whose turn it
 # is, which is what the founder needs to answer from the phone (review of 48bc492, item 9). It is
 # sealed to every TRUSTED phone identity key of the horde (relay/Trust.ps1, Find-HordeRelayPhoneKeys)
 # and put into the horde's phone mailbox, <horde>/phone - and only when the snapshot itself differs
@@ -40,6 +41,14 @@
 #   {"v":1,"answerId":"<32 hex>","machine":"<32 hex>","snapshot":"<replay key>","number":<question>,
 #    "wordingVersion":<wording on screen>,"text":"..."}
 # read strictly - no member repeated, none missing, none added.
+#   - AN ANSWER TO ONE PART OF A QUESTION IS VERSION 2: the same members and, last, "part": the letter
+#     of the part the words answer (the founder, 2026-10-12: each part sends by itself). It goes into
+#     the list as its own record naming that part (decisions/Rules.ps1, A QUESTION OF PARTS). Version 1
+#     is read as it always was - a phone that does not know parts sends it for all the parts at once -
+#     and each version is held to exactly its own members: a part in a version 1 body, or none in a
+#     version 2, is refused. THE SNAPSHOT SAYS WHICH VERSIONS THIS MACHINE READS ("answers":2, the
+#     highest), so that a phone sends a part as version 2 only to a machine that takes it, and to an
+#     earlier machine - whose snapshot says nothing - as the words "(b) ..." in version 1.
 #   - AN ANSWER IS FOR ONE MACHINE (review of 48bc492, finding 2): question 1 of one machine is not
 #     question 1 of another, and one envelope may be sealed to several. machine is the key id of the
 #     machine whose snapshot the founder answered, and snapshot the replay key of that snapshot's
@@ -75,6 +84,11 @@
 
 $script:HordeDecisionsChannelFolder = $PSScriptRoot
 $script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snapshot", "number", "wordingVersion", "text")
+# THE ANSWER'S VERSIONS, each with the one member it adds to those above (header, IN). The highest is
+# what a snapshot tells the phone this machine reads. Keyed by the version AS TEXT: an ordered table
+# asked for a whole number answers by position, not by key.
+$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }
+$script:HordeDecisionsChannelAnswerHighest = 2
 $script:HordeDecisionsChannelIdDomain = "horde-relay/decisions/v1 answer id"
 
 function Get-HordeDecisionsChannelAnswerId {
@@ -88,8 +102,9 @@ function Get-HordeDecisionsChannelAnswerId {
 
 function Read-HordeDecisionsChannelAnswer {
     # The phone's answer body, read strictly: { ok; reason; value } with value { answerId; machine;
-    # snapshot; number; wordingVersion; text }. Never throws for the body: it was signed by the founder's
-    # passkey, but the PWA that wrote it is code, and code has bugs.
+    # snapshot; number; wordingVersion; text; part } - part the letter of the one part answered (a
+    # version 2 body), or "" for an answer to the whole question (version 1). Never throws for the body:
+    # it was signed by the founder's passkey, but the PWA that wrote it is code, and code has bugs.
     param([AllowEmptyCollection()][byte[]]$Body)
     $fail = [pscustomobject]@{ ok = $false; reason = ""; value = $null }
     $strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
@@ -100,15 +115,25 @@ function Read-HordeDecisionsChannelAnswer {
     try { $a = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the answer is not JSON"; return $fail }
     if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the answer is not a JSON object"; return $fail }
     $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
-    if ((@($names | Sort-Object) -join ",") -cne (@($script:HordeDecisionsChannelAnswerMembers | Sort-Object) -join ",")) { $fail.reason = ("the answer's members are " + ($names -join ", ") + ", not " + ($script:HordeDecisionsChannelAnswerMembers -join ", ")); return $fail }
-    if (-not ($a.v -is [int] -or $a.v -is [long]) -or $a.v -ne 1) { $fail.reason = "the answer is not version 1"; return $fail }
+    # THE VERSION FIRST, THEN EXACTLY THAT VERSION'S MEMBERS (header, IN): a version this machine does not
+    # read is refused by its number, and a member that belongs to another version is refused as added.
+    $version = 0
+    if ($null -ne $a.PSObject.Properties["v"] -and ($a.v -is [int] -or $a.v -is [long]) -and $script:HordeDecisionsChannelAnswerVersions.Contains("" + $a.v)) { $version = [int]$a.v }
+    if ($version -eq 0) { $fail.reason = ("the answer is not a version this machine reads (" + (@($script:HordeDecisionsChannelAnswerVersions.Keys) -join ", ") + ")"); return $fail }
+    $members = @($script:HordeDecisionsChannelAnswerMembers) + @($script:HordeDecisionsChannelAnswerVersions["" + $version])
+    if ((@($names | Sort-Object) -join ",") -cne (@($members | Sort-Object) -join ",")) { $fail.reason = ("the answer's members are " + ($names -join ", ") + ", not " + ($members -join ", ")); return $fail }
     if ($a.answerId -isnot [string] -or $a.answerId -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = "the answer's answerId is not 32 lower-case hex"; return $fail }
     if ($a.machine -isnot [string] -or $a.machine -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = "the answer's machine is not a key id"; return $fail }
     if ($a.snapshot -isnot [string] -or $a.snapshot.Length -gt 160) { $fail.reason = "the answer's snapshot is not an envelope's replay key"; return $fail }
     if (-not (Test-HordeDecisionCount -Value $a.number -Most (Get-HordeDecisionMaxNumber))) { $fail.reason = "the answer's number is not a question number"; return $fail }
     if (-not (Test-HordeDecisionCount -Value $a.wordingVersion -Most (Get-HordeDecisionMaxNumber))) { $fail.reason = "the answer's wordingVersion is not a wording"; return $fail }
     if ($a.text -isnot [string]) { $fail.reason = "the answer's text is not text"; return $fail }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ answerId = $a.answerId; machine = $a.machine; snapshot = $a.snapshot; number = [int]$a.number; wordingVersion = [int]$a.wordingVersion; text = [string]$a.text } }
+    $part = ""
+    if ($version -ge 2) {
+        if ($a.part -isnot [string] -or $a.part -cnotmatch '\A[a-z]\z') { $fail.reason = "the answer's part is not one lower-case letter"; return $fail }
+        $part = [string]$a.part
+    }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ answerId = $a.answerId; machine = $a.machine; snapshot = $a.snapshot; number = [int]$a.number; wordingVersion = [int]$a.wordingVersion; text = [string]$a.text; part = $part } }
 }
 
 function Invoke-HordeDecisionsChannelAccept {
@@ -130,11 +155,14 @@ function Invoke-HordeDecisionsChannelAccept {
         # keeps it, and notify names the founder as verified from the record alone (decisions/Notify.ps1).
         signedBy = $Item.from
     }
+    # THE PART ANSWERED goes on as the request's own member: the list keeps it as the record of that
+    # part, signed and proven like any phone answer (the evidence and signedBy above are every answer's).
+    if ($r.value.part -cne "") { $request["part"] = $r.value.part }
     $a = Invoke-HordeDecision -Operation "say" -Request $request -Root $Context.decisionsRoot
     if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take it now: " + $a.reason) } }
     if ($a.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + $a.reason) } }
     if ($a.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + (@($a.value.findings) -join "; ")) } }
-    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $r.value.number + ": the founder's answer is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
+    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $r.value.number + $(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" }) + ": the founder's answer is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
 }
 
 function Get-HordeDecisionsChannelFingerprint {
@@ -175,7 +203,9 @@ function New-HordeDecisionsChannelPages {
         $text = ConvertTo-HordeDecisionsChannelQuestion -Question $q
         [void]$shown.Add([pscustomobject]@{ number = [int]$q.number; text = $text; bytes = $utf8.GetByteCount($text) })
     }
-    $tail = ',"counts":' + (ConvertTo-Json -InputObject $List.counts -Compress) + ',"unreadable":' + @($List.unreadable).Count + ',"notUnderstood":' + @($List.notUnderstood).Count + '}'
+    # "answers": the highest version of answer this machine reads (header, IN). A member a phone that
+    # does not know it leaves alone; a phone that does sends a part's answer as that version.
+    $tail = ',"counts":' + (ConvertTo-Json -InputObject $List.counts -Compress) + ',"unreadable":' + @($List.unreadable).Count + ',"notUnderstood":' + @($List.notUnderstood).Count + ',"answers":' + $script:HordeDecisionsChannelAnswerHighest + '}'
     # The frame of a page with no question: everything but the questions, the withheld ones counted at
     # their largest (every question withheld, each with the longest reason), and the page numbers at
     # nine digits. A question fits a page when its bytes and the frame are within the budget.

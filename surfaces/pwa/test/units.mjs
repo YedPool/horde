@@ -65,12 +65,14 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
   const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, m.sign.privateKey, P.signedBytes(ht, rt, ctText)));
   return { text: '{"header":' + ht + ',"recipients":' + rt + ',"ct":"' + ctText + '","sig":{"alg":"ES256","value":"' + P.b64u(sig) + '"}}', key: P.replayKey(h), header: h };
 }
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)) } = {}) {
+// answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
+// says nothing of them, as every machine's did before a part could be answered by itself.
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld: [], counts: { open: questions.length }, unreadable: 0, notUnderstood: 0 })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld: [], counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }) })));
   }
   return out;
 }
@@ -443,6 +445,82 @@ async function pairedApp(transport, m, opts = {}) {
   check(R.transportFromConfig({ transport: "nope" }, {}) === null && R.transportFromConfig({ transport: "memory" }, {}) !== null, "a config's transport is one of the known names, or none");
   const unbound = R.createRelayClient(R.bindingTransport({}, "hordeRelayBinding"));
   check((await unbound.get("work/phone", 0, 1)).reason.indexOf("not bound") >= 0, "the test transport with no host behind it answers unknown");
+}
+
+// --- 6b. one part of a question, answered by itself (the founder, 2026-10-12) ---
+{
+  const partsQuestion = (number, extra = {}) => question(number, "Three things, one by one?", { kind: "parts", parts: ["(a) First?", "(b) Second?", "(c) Third?"], ...extra });
+  const lastAnswer = async (t, m) => { const items = (await t.get(m.mailbox, 0, 256)).value.items; return machineOpens(m, items[items.length - 1].text); };
+  // A machine that says it reads version 2 answers is sent the part as a member of the answer.
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const sent = await sendSnapshot(t, m, [a.phoneKey], [partsQuestion(4)], { answers: 2 });
+  await a.phone.refresh(a.paired.id);
+  const id = P.hex(P.randomBytes(16));
+  await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "No, keep it.", answerId: id, part: "b" });
+  const ans = await lastAnswer(t, m);
+  check(ans.body.v === 2 && ans.body.part === "b" && ans.body.text === "No, keep it." && ans.body.number === 4 && ans.body.answerId === id && ans.body.snapshot === sent[0].key && ans.sig.alg === "webauthn.get", "A PART'S ANSWER, to a machine that reads them, is a version 2 answer naming the part - the words untouched - signed by the passkey like any answer", JSON.stringify(ans.body));
+  check(Object.keys(ans.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text,part", "with exactly the members channels/decisions reads for version 2, in order");
+  const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "To all of it.", answerId: P.hex(P.randomBytes(16)) });
+  const whole = await lastAnswer(t, m);
+  check(whole.body.v === 1 && !("part" in whole.body) && whole.body.text === "To all of it." && Object.keys(whole.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "an answer to the whole question is version 1 with no part, to that machine too: what every machine reads");
+  for (const bad of ["B", "ab", "1", " "]) {
+    const count = (await t.get(m.mailbox, 0, 256)).value.items.length;
+    const why = await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "x", answerId: P.hex(P.randomBytes(16)), part: bad }));
+    check(why.indexOf("not one of the question's parts") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === count, "a part of '" + bad + "' is refused in this phone's own words, and nothing is sent", why);
+  }
+  check(before >= 1, "CONTROL: the mailbox held the part's answer before the whole one");
+  // An earlier machine - its snapshot says nothing of answers - is sent the words with the letter before them.
+  const t0 = R.memoryTransport();
+  const old = await newMachine("work");
+  const a0 = await pairedApp(t0, old);
+  await sendSnapshot(t0, old, [a0.phoneKey], [partsQuestion(4)]);
+  await a0.phone.refresh(a0.paired.id);
+  await a0.phone.answer(a0.paired.id, { number: 4, wordingVersion: 1, text: "No, keep it.", answerId: P.hex(P.randomBytes(16)), part: "b" });
+  const fallback = await lastAnswer(t0, old);
+  check(fallback.body.v === 1 && !("part" in fallback.body) && fallback.body.text === "(b) No, keep it." && Object.keys(fallback.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "TO A MACHINE THAT DOES NOT SAY IT READS PARTS the same answer is version 1, the part's letter before the words: an answer it keeps, and its window reads into that part", JSON.stringify(fallback.body));
+  // What a snapshot says of answers, read with care.
+  for (const [said, want] of [[2, 2], [5, 5], [1, 1], [undefined, 1], [0, 1], [-2, 1], [1.5, 1], ["2", 1], [null, 1], [true, 1]]) {
+    const tx = R.memoryTransport();
+    const mx = await newMachine("work");
+    const ax = await pairedApp(tx, mx);
+    await sendSnapshot(tx, mx, [ax.phoneKey], [partsQuestion(4)], said === undefined ? {} : { answers: said });
+    await ax.phone.refresh(ax.paired.id);
+    await ax.phone.answer(ax.paired.id, { number: 4, wordingVersion: 1, text: "x", answerId: P.hex(P.randomBytes(16)), part: "a" });
+    const got = await lastAnswer(tx, mx);
+    check(got.body.v === (want >= 2 ? 2 : 1), "a snapshot whose answers is " + JSON.stringify(said) + " is answered with version " + (want >= 2 ? 2 : 1) + ": only a whole number from 2 up says the machine reads a part", JSON.stringify(got.body));
+  }
+  // The protocol's own body.
+  const base = { answerId: id, machine: m.keyId, snapshot: m.keyId + "/decisions/1/" + "0".repeat(24), number: 4, wordingVersion: 1, text: "x" };
+  check(JSON.parse(P.fromUtf8(P.answerBody({ ...base, part: "c" }))).v === 2 && JSON.parse(P.fromUtf8(P.answerBody(base))).v === 1 && JSON.parse(P.fromUtf8(P.answerBody({ ...base, part: "" }))).v === 1, "the answer body is version 2 with a part and version 1 with none, or with an empty one");
+  for (const bad of ["C", "cc", "3", "-"]) check((await throwsAsync(async () => P.answerBody({ ...base, part: bad }))).indexOf("a part is one lower-case letter") >= 0, "the protocol makes no body for a part of '" + bad + "'");
+  // THE SNAPSHOT'S NEW FIELDS REACH THE DOCUMENT AS THE MACHINE SENT THEM, and a snapshot without them
+  // - an earlier machine's - is read as it always was.
+  const t2 = R.memoryTransport();
+  const m2 = await newMachine("work");
+  const a2 = await pairedApp(t2, m2);
+  await sendSnapshot(t2, m2, [a2.phoneKey], [
+    partsQuestion(7, { importance: "high", importanceShown: "Important", blocks: "all", blocksShown: "Blocks all work", addedAt: "2026-10-12T09:00:00.0000000Z", followsUp: { number: 3, state: "open", title: "Earlier?", answer: "Yes.", answerCut: false, outcome: "" }, thread: { count: 1, turn: "founder", parts: [{ letter: "a", answered: true }, { letter: "b", answered: false }, { letter: "c", answered: false }], messages: [{ sequence: 9, speaker: "founder", text: "first", part: "a", partWords: "First?" }] } }),
+    question(8, "An old one?")
+  ], { answers: 2 });
+  const view = await a2.phone.refresh(a2.paired.id);
+  const q7 = view.questions.find((x) => x.number === 7);
+  const q8 = view.questions.find((x) => x.number === 8);
+  check(q7.importance === "high" && q7.blocksShown === "Blocks all work" && q7.followsUp.number === 3 && q7.followsUp.answer === "Yes." && q7.thread.messages[0].part === "a" && q7.thread.parts.length === 3, "how much a question matters and blocks, the question it follows, and which parts are answered reach the document as the machine sent them");
+  check(q8.importance === undefined && q8.blocks === undefined && q8.followsUp === undefined && q8.title === "An old one?", "and a question from a machine that sends none of them is the question it always was: nothing is made up for it");
+  const bridge = createBridge(a2.phone, { loadKinds: async () => ({}) });
+  await bridge.request("pick", { id: a2.paired.id });
+  const saidPart = await bridge.request("say", { number: 7, text: "second", wording: 1, id: P.hex(P.randomBytes(16)), part: "b" });
+  const viaBridge = await lastAnswer(t2, m2);
+  check(saidPart.ok === true && saidPart.sequence === 10 && viaBridge.body.v === 2 && viaBridge.body.part === "b" && viaBridge.body.text === "second", "THE BRIDGE'S say hands the part on: the document's answer to part (b) is sent as part (b)", JSON.stringify(viaBridge.body));
+  const saidWhole = await bridge.request("say", { number: 7, text: "all of it", wording: 1, id: P.hex(P.randomBytes(16)) });
+  const wholeVia = await lastAnswer(t2, m2);
+  check(saidWhole.ok === true && wholeVia.body.v === 1 && !("part" in wholeVia.body), "and with no part it is the answer to the whole question it always was");
+  const oddPart = await bridge.request("say", { number: 7, text: "x", wording: 1, id: P.hex(P.randomBytes(16)), part: 7 });
+  const oddVia = await lastAnswer(t2, m2);
+  check(oddPart.ok === true && oddVia.body.v === 1 && oddVia.body.text === "x", "a part that is not text is no part: the words go as an answer to the whole question, never as a part the page did not name");
 }
 
 // --- 10. the bridge ---

@@ -174,12 +174,19 @@ function Get-PhoneMail {
 function Get-Answer {
     # An answer envelope from the world's phone, made from the machine's newest snapshot unless -Machine
     # or -Snapshot say otherwise.
-    param($World, [string]$AnswerId = "", [string]$Text = "Yes, play it.", [int]$Number = 1, $Phone = $null, [object[]]$To = $null, [string]$Machine = "", [string]$Snapshot = "")
+    param($World, [string]$AnswerId = "", [string]$Text = "Yes, play it.", [int]$Number = 1, $Phone = $null, [object[]]$To = $null, [string]$Machine = "", [string]$Snapshot = "", [string]$Part = "")
     if ($null -eq $Phone) { $Phone = $World.phone }
     if ($null -eq $To) { $To = $World.agree }
     if ($Machine -ceq "") { $Machine = $World.id.sign.keyId }
     if ($Snapshot -ceq "") { $Snapshot = Get-SentKey -World $World }
-    return (New-HordeTestPhoneEnvelope -Phone $Phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $AnswerId -Text $Text -Number $Number -Machine $Machine -Snapshot $Snapshot) -To $To)
+    return (New-HordeTestPhoneEnvelope -Phone $Phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $AnswerId -Text $Text -Number $Number -Machine $Machine -Snapshot $Snapshot -Part $Part) -To $To)
+}
+function Get-RawAnswer {
+    # An answer envelope whose body is exactly -Json, for a body no honest phone makes. {machine} and
+    # {snapshot} in it are this world's machine and its newest snapshot.
+    param($World, [string]$Json)
+    $body = $Json.Replace("{machine}", $World.id.sign.keyId).Replace("{snapshot}", (Get-SentKey -World $World))
+    return (New-HordeTestPhoneEnvelope -Phone $World.phone -Kind "answer" -Channel "decisions" -Body ($utf8.GetBytes($body)) -To $World.agree)
 }
 function Has { param($Turn, [string]$Text) return [bool]($Turn.text.Contains($Text)) }
 function Invoke-Tick {
@@ -792,6 +799,82 @@ try {
         Check ($inReads -le 1 -and $openReads -le 2 -and @(Get-Said $W2.store).Count -eq 5) ("five answers in one batch read the trust store once to judge and once a channel to open (" + $inReads + ", " + $openReads + ")")
     }
     Remove-Item Function:\Remove-HordeRelayRetiredAgreeKeys
+
+    if ($script:canDecide) {
+    Write-Host ""
+    Write-Host "--- the founder's rules of 2026-10-12, on the phone: what the snapshot carries, and a part answered by itself ---" -ForegroundColor Cyan
+    # A question of parts that matters and blocks, following up the world's first question, which is
+    # answered here at the machine first.
+    $P = New-World
+    Use-World $P
+    $null = Invoke-HordeDecision -Operation "say" -Root $P.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "founder"; route = "chat-recorded"; text = "Yes, a short chime." }
+    $partsAdded = Invoke-HordeDecision -Operation "add" -Root $P.store -Request @{ id = (New-Id); actor = "warchief"; importance = "high"; blocks = "all"; followsUp = 1; question = @{ title = "Three follow-ups to settle about the closing chime, one by one."; kind = "parts"; whatItIs = "Follow-ups."; parts = @("(a) Which chime of the three?", "(b) Should it play on every close?", "(c) How loud should it be?"); group = "voice"; askedBy = "orc-b" } }
+    $tick = @(Invoke-Tick $P)
+    $mail = @(Get-PhoneMail $P)
+    $snap = Open-HordeTestPhoneEnvelope -Phone $P.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $P.id.sign.public
+    $q2 = $(if ($snap.ok) { @($snap.body.questions | Where-Object { $_.number -eq 2 })[0] } else { $null })
+    Check ($partsAdded.state -ceq "known" -and $partsAdded.value.outcome -ceq "done" -and $snap.ok -and $null -ne $q2) ("CONTROL: the question of parts is added and the phone opens the snapshot that holds it (" + (@($tick) -join " | ") + ")")
+    Check ((Get-Member2 $snap.body "answers") -eq 2 -and $snap.body.v -eq 1) "THE SNAPSHOT SAYS WHICH ANSWERS THIS MACHINE READS - up to version 2, a part by itself - and is still a version 1 snapshot, which a phone that knows nothing of it reads as it always did"
+    Check ((Get-Member2 $q2 "importance") -ceq "high" -and (Get-Member2 $q2 "importanceShown") -ceq "Important" -and (Get-Member2 $q2 "blocks") -ceq "all" -and (Get-Member2 $q2 "blocksShown") -ceq "Blocks all work") "THE SNAPSHOT CARRIES how much the question matters and how much it blocks, each with its plain words"
+    $fu = Get-Member2 $q2 "followsUp"
+    Check ($null -ne $fu -and $fu.number -eq 1 -and $fu.title -ceq "Should the closing sound play when the assistant closes?" -and $fu.answer -ceq "Yes, a short chime." -and $fu.answerCut -eq $false) "and the question it follows up, with what he answered there"
+    Check ((@(@(Get-Member2 (Get-Member2 $q2 "thread") "parts") | ForEach-Object { $_.letter + ":" + $_.answered }) -join ",") -ceq "a:False,b:False,c:False") "and, for a question of parts, which of them are answered: none yet"
+    $q1 = @($snap.body.questions | Where-Object { $_.number -eq 1 })[0]
+    Check ($null -ne $q1 -and (Get-Member2 $q1 "importance") -ceq "normal" -and (Get-Member2 $q1 "blocks") -ceq "part" -and (Get-Member2 $q1 "importanceShown") -eq "" -and $null -eq (Get-Member2 $q1 "followsUp") -and $q1.thread.turn -ceq "warchief") "a question asked with neither word reads as normal and part, with no plain words; and the one he has answered is in the snapshot as the keeper's turn, for the phone to keep out of his list"
+    # ONE PART, ANSWERED BY ITSELF: a version 2 answer.
+    $idB = New-Id
+    $b = Get-Answer $P -AnswerId $idB -Number 2 -Part "b" -Text "No, only when she closes it herself."
+    [void](Send-ToMachine $P $b.text)
+    $t = Invoke-Turn $P
+    $said = @(Get-Said $P.store | Where-Object { $_.data.number -eq 2 })
+    Check ((Has $t "done") -and (Has $t "question 2 part (b)") -and $said.Count -eq 1 -and (Get-Member2 $said[0].data "part") -ceq "b" -and $said[0].data.text -ceq "No, only when she closes it herself." -and $said[0].data.route -ceq "phone" -and $said[0].actor -ceq "founder") ("A PART ANSWERED ON THE PHONE lands as its own record, naming the part, by the route phone (" + $t.text + ")")
+    Check ((Get-Member2 $said[0].data "signedBy") -ceq $P.phone.keyId -and "$(Get-Member2 $said[0].data 'evidence')" -cmatch '\A[0-9a-f]{64}\z') "and it carries what every phone answer carries: the passkey that signed it, and the hash of the proof"
+    $shown = Invoke-HordeDecision -Operation "show" -Root $P.store -Request @{ number = 2 }
+    Check ($shown.value.question.thread.turn -ceq "founder" -and (@($shown.value.question.thread.parts | ForEach-Object { $_.letter + ":" + $_.answered }) -join ",") -ceq "a:False,b:True,c:False" -and $shown.value.question.thread.messages[0].partWords -ceq "Should it play on every close?") "the list says part (b) is answered, the other two are not, and the question is still his"
+    [void](Send-ToMachine $P (Get-Answer $P -AnswerId $idB -Number 2 -Part "b" -Text "No, only when she closes it herself.").text)
+    $t = Invoke-Turn $P
+    Check ((Has $t "done") -and (Has $t "replayed") -and @(Get-Said $P.store | Where-Object { $_.data.number -eq 2 }).Count -eq 1) ("THE SAME PART'S ANSWER SENT AGAIN, in a new envelope, is the first record answered again: one record (" + $t.text + ")")
+    [void](Send-ToMachine $P (Get-Answer $P -AnswerId $idB -Number 2 -Part "c" -Text "No, only when she closes it herself.").text)
+    $t = Invoke-Turn $P
+    Check ((Has $t "refused") -and (Has $t "already used for a different request") -and @(Get-Said $P.store | Where-Object { $_.data.number -eq 2 }).Count -eq 1) "the same answerId and words for ANOTHER part is a different answer under a used id: refused, and part (c) is not answered by it"
+    $tick = @(Invoke-Tick $P)
+    $mail = @(Get-PhoneMail $P)
+    $snap2 = Open-HordeTestPhoneEnvelope -Phone $P.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $P.id.sign.public
+    $q2 = $(if ($snap2.ok) { @($snap2.body.questions | Where-Object { $_.number -eq 2 })[0] } else { $null })
+    $m2 = @(@(Get-Member2 (Get-Member2 $q2 "thread") "messages") | Where-Object { $null -ne $_ })
+    Check ($m2.Count -eq 1 -and (Get-Member2 $m2[0] "part") -ceq "b" -and (@($q2.thread.parts | ForEach-Object { $_.letter + ":" + $_.answered }) -join ",") -ceq "a:False,b:True,c:False") "THE NEXT SNAPSHOT SHOWS THE PART ANSWERED: the message names its part, and the question says which parts are done"
+    foreach ($letter in @("a", "c")) { [void](Send-ToMachine $P (Get-Answer $P -Number 2 -Part $letter -Text ("the answer to " + $letter)).text) }
+    $t = Invoke-Turn $P
+    $shown = Invoke-HordeDecision -Operation "show" -Root $P.store -Request @{ number = 2 }
+    Check ($shown.value.question.thread.turn -ceq "warchief" -and @(Get-Said $P.store | Where-Object { $_.data.number -eq 2 }).Count -eq 3) ("with the last two parts answered, each by its own envelope, the question is the keeper's turn: off his list (" + $t.text + ")")
+    # EACH VERSION IS HELD TO EXACTLY ITS OWN MEMBERS, and what this machine does not read is refused by name.
+    $count = @(Get-Said $P.store).Count
+    foreach ($case in @(
+        @{ what = "a version 1 body that names a part"; json = '{"v":1,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"a"}'; says = "the answer's members are" }
+        @{ what = "a version 2 body that names no part"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x"}'; says = "the answer's members are" }
+        @{ what = "a part that is a capital letter"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"A"}'; says = "the answer's part is not one lower-case letter" }
+        @{ what = "a part that is two letters"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"ab"}'; says = "the answer's part is not one lower-case letter" }
+        @{ what = "a part that is a number"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":1}'; says = "the answer's part is not one lower-case letter" }
+        @{ what = "a version this machine does not read"; json = '{"v":3,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"a","more":true}'; says = "the answer is not a version this machine reads (1, 2)" }
+        @{ what = "a version that is text"; json = '{"v":"2","answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"a"}'; says = "the answer is not a version this machine reads" }
+        @{ what = "a part the question does not have"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"d"}'; says = "it answers part (d) of question 2, which has no such part" }
+        @{ what = "a part of a question that has none"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":1,"wordingVersion":1,"text":"x","part":"a"}'; says = "which is not a question of parts that are answered one by one" }
+    )) {
+        [void](Send-ToMachine $P (Get-RawAnswer $P $case.json).text)
+        $t = Invoke-Turn $P
+        Check ((Has $t "refused") -and (Has $t $case.says) -and @(Get-Said $P.store).Count -eq $count) ($case.what + " is refused, says why, and nothing lands (" + $t.text + ")")
+    }
+    # A PHONE THAT KNOWS NOTHING OF PARTS answers all of them in one version 1 message, as it always did.
+    $O = New-World
+    Use-World $O
+    $null = Invoke-HordeDecision -Operation "add" -Root $O.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Two things to settle about the chime, by an earlier phone."; kind = "parts"; whatItIs = "Follow-ups."; parts = @("(a) Which chime?", "(b) How loud?"); group = "voice"; askedBy = "orc-b" } }
+    $null = Invoke-Tick $O
+    [void](Send-ToMachine $O (Get-Answer $O -Number 2 -Text ("(a) the second" + "`n" + "(b) quiet")).text)
+    $t = Invoke-Turn $O
+    $shown = Invoke-HordeDecision -Operation "show" -Root $O.store -Request @{ number = 2 }
+    $old = @(Get-Said $O.store | Where-Object { $_.data.number -eq 2 })
+    Check ((Has $t "done") -and $old.Count -eq 1 -and $null -eq (Get-Member2 $old[0].data "part") -and $shown.value.question.thread.turn -ceq "warchief") ("AN EARLIER PHONE'S ANSWER TO ALL THE PARTS AT ONCE - version 1, no part - is still taken, as an answer to the whole question (" + $t.text + ")")
+    }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome

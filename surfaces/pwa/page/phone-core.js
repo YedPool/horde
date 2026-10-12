@@ -393,7 +393,11 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // The founder's answer to one question of the snapshot on screen, signed with the passkey (user
     // verification) and put into the machine's mailbox. answerId is the page's id for these words: the
     // same words sent again carry it, and the machine stores them once. { key, seq }.
-    async answer(id, { number, wordingVersion, text, answerId }) {
+    // part: the letter of the ONE PART of the question the words answer, or "" for the whole question.
+    // A machine whose snapshot says it reads version 2 answers is sent the part as a member of the
+    // answer; an earlier machine is sent the words with the letter before them, "(b) ...", as an
+    // answer of the version it reads - which it keeps, and its window reads back into that part.
+    async answer(id, { number, wordingVersion, text, answerId, part = "" }) {
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
@@ -405,7 +409,11 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       // What is signed is the question on screen (review of a8b732d, finding 5): a wording the page did
       // not show is refused before the passkey is asked.
       if (Number(q.question.wordingVersion) !== wordingVersion) throw fail("question " + number + " is shown in wording " + q.question.wordingVersion + ", not " + wordingVersion + ": the answer was not sent. Read it again and answer.");
-      const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text });
+      if (part !== "" && !/^[a-z]$/.test(part)) throw fail("the part answered is not one of the question's parts: the answer was not sent.");
+      const takesParts = Number(v.answers) >= 2;
+      // To a machine that does not read a part's answer, the part's letter goes before the words.
+      const words = (part !== "" && !takesParts) ? "(" + part + ") " + text : text;
+      const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "" });
       const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Press Enter to try again; the same words are never saved twice."); }

@@ -90,5 +90,21 @@
         @{ Name = "offer-label-unchecked"
            Find = 'if (!validLabel(o.label)) return no('
            Replace = 'if (false) return no(' }
+        # --- one part's answer (2026-10-12) ---
+        @{ Name = "a-part-of-any-spelling-is-written-into-the-body"
+           Find = '  if (part !== "" && !/^[a-z]$/.test(part)) throw new Error("a part is one lower-case letter");'
+           Replace = '' }
+        @{ Name = "a-parts-answer-says-it-is-version-1"
+           Find = '  if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part }));'
+           Replace = '  if (part !== "") return utf8(JSON.stringify({ v: 1, answerId, machine, snapshot, number, wordingVersion, text, part }));' }
+        @{ Name = "a-parts-answer-leaves-the-part-out"
+           Find = '  if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part }));'
+           Replace = '  if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text }));' }
+        @{ Name = "what-a-snapshot-says-of-answers-is-believed-as-it-is"
+           Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };'
+           Replace = '      answers: first.answers };' }
+        @{ Name = "every-machine-is-taken-to-read-parts"
+           Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };'
+           Replace = '      answers: 2 };' }
     )
 }
