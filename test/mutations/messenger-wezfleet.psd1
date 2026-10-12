@@ -195,5 +195,34 @@
         @{ Name = "spaced-argument-unquoted"
            Find = 'if ($a -ne "" -and $a -notmatch ''[\s"]'') { [void]$parts.Add($a); continue }'
            Replace = '[void]$parts.Add($a); continue' }
+        # A VERIFIED SENDER (the founder's line the relay verified): passed as -FromVerified only to a
+        # fleet command whose param block declares it, read by the parser; else posted unlabelled, said so.
+        @{ Name = "verified-never-passed"
+           Find = 'if ($verified -ne "") { $argv += @("-FromVerified", $verified) }'
+           Replace = '' }
+        @{ Name = "verified-passed-without-probe"
+           Find = 'if ($unlabelled -ne "") { $verified = "" }'
+           Replace = '' }
+        @{ Name = "verified-probe-by-text-search"
+           Find = 'if ($declared -contains $name) { return "" }'
+           Replace = 'if ([System.IO.File]::ReadAllText($Path).Contains("-" + $name)) { return "" }' }
+        @{ Name = "verified-probe-counts-inner-functions"
+           Find = 'if ($null -ne $ast.ParamBlock) { $declared = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) }'
+           Replace = '$declared = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParameterAst] }, $true) | ForEach-Object { $_.Name.VariablePath.UserPath })' }
+        @{ Name = "verified-probe-parse-errors-ignored"
+           Find = 'if (@($errors).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "verified-unchecked"
+           Find = 'if ($vf.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "verified-without-label-passed"
+           Find = 'if ($label -eq "") { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "unlabelled-unsaid"
+           Find = 'if ($unlabelled -ne "" -and $ans.state -ceq "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "dictionary-from-label-lost"
+           Find = '$fl = Get-HordeMessengerMember $from.value "label"'
+           Replace = '$fl = $(if ($from.value -is [System.Collections.IDictionary]) { [pscustomobject]@{ has = $false; value = $null } } else { Get-HordeMessengerMember $from.value "label" })' }
     )
 }

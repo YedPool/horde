@@ -9,7 +9,8 @@
 # WHAT IT KEEPS, all under its own folder and nowhere else:
 #   argv.log    one JSON line per run: the arguments it received, as separate elements, the path of the
 #               program that ran it, and its pid
-#   store\<id>.json   one record per message id: { id; to; stage; body; fromLabel; fromSessionId }
+#   store\<id>.json   one record per message id: { id; to; stage; body; fromLabel; fromSessionId; and
+#               fromVerified when it took one }
 #   typed.log   one JSON line per text "typed" into a session: { id; text } - the fake target. Only a wake
 #               notice is ever written here, built the way wezfleet's Get-WfWakeNotice builds it
 #   grandchild.pid  the pid of the grandchild it started, when mode asks for one (grandchildSeconds)
@@ -37,10 +38,23 @@
 # UUIDs. A repost of an id reports the record (already-posted), its "to" being the mailbox the record is
 # in NOW, which a compact may have moved. -Kind, which wezfleet main's command line now declares for tell
 # (its pull request 76), is accepted and ignored here as it is there: mail post never reads it.
+#
+# -FromVerified (wezfleet's feature/from-verified, the founder's verified sender): this script plays BOTH
+# wezfleets. As copied, its param block below is empty and it plays main at 1122461, which declares no
+# such argument: PowerShell refuses the call before the script runs, printing nothing on stdout, the
+# host's words on stderr, exit 1 (measured 2026-10-11 against a clone of main). The fixture's
+# -TakesVerified rewrites the one line param() to declare it (after two verbs), and then it plays the
+# wezfleet that takes it: founder:passkey:<32 lower-case hex> or bad-from, kept on the record as
+# fromVerified. Either way argv.log shows what it was handed.
 param()
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $argvList = @($args | ForEach-Object { "$_" })
+# A DECLARED -FromVerified is bound, not in $args, and so are the two verbs declared before it (the
+# fixture's -TakesVerified); all are put back on the log, in order, so a test sees what it was handed.
+$declaredVerified = $PSBoundParameters.ContainsKey("FromVerified")
+if ($PSBoundParameters.ContainsKey("Verb0")) { $argvList = @([string]$PSBoundParameters["Verb0"], [string]$PSBoundParameters["Verb1"]) + $argvList }
+if ($declaredVerified) { $argvList += @("-FromVerified", [string]$PSBoundParameters["FromVerified"]) }
 $selfPath = (Get-Process -Id $PID).Path
 [System.IO.File]::AppendAllText((Join-Path $root "argv.log"), ((@{ argv = $argvList; program = $selfPath; pid = $PID } | ConvertTo-Json -Compress -Depth 4) + "`n"), [System.Text.Encoding]::ASCII)
 
@@ -73,6 +87,12 @@ $modePath = Join-Path $root "mode.json"
 if (Test-Path -LiteralPath $modePath) { $mode = [System.IO.File]::ReadAllText($modePath) | ConvertFrom-Json }
 
 if ($argvList.Count -lt 2 -or $argvList[0] -cne "mail") { [Console]::Out.WriteLine("fake wezfleet: only mail is played"); exit 1 }
+# AN UNDECLARED -FromVerified IS REFUSED THE WAY POWERSHELL REFUSES IT for main's advanced script: nothing
+# on stdout, the host's words on stderr, exit 1.
+if (-not $declaredVerified -and $argvList -ccontains "-FromVerified") {
+    [Console]::Error.Write("wezfleet.ps1 : A parameter cannot be found that matches parameter name 'FromVerified'.")
+    exit 1
+}
 $act = $argvList[1]
 $m = $null
 if (Test-Mode $mode $act) { $m = $mode.$act }
@@ -104,6 +124,14 @@ if ($act -ceq "post") {
     $file = Get-FakeArg "-MessageFile"
     $fromLabel = Get-FakeArg "-FromLabel"
     $fromSid = Get-FakeArg "-FromSessionId"
+    $fromVerified = Get-FakeArg "-FromVerified"
+    $verifiedRec = $null
+    if ($argvList -ccontains "-FromVerified" -and $fromVerified -ne "") {
+        $vm = [regex]::Match($fromVerified, '\A(founder):(passkey):([0-9a-f]{32})\z')
+        if (-not $vm.Success) { Write-FakeAnswer -Exit 2 -Id $id -To $to -Stage "refused" -Woken $false -Reason "bad-from" -Detail "-FromVerified must be founder:passkey:<key id>, the key id 32 lower-case hex, or be left out" }
+        if ($fromLabel -eq "") { Write-FakeAnswer -Exit 2 -Id $id -To $to -Stage "refused" -Woken $false -Reason "bad-from" -Detail "-FromVerified needs -FromLabel: a verified sender still gives the name it is known by" }
+        $verifiedRec = [ordered]@{ kind = $vm.Groups[1].Value; by = $vm.Groups[2].Value; keyId = $vm.Groups[3].Value }
+    }
     if (Test-Mode $m "internal") { Write-FakeAnswer -Exit 1 -Id $id -To $to -Stage "error" -Woken $false -Reason "internal-error" -Detail "unexpected error: simulated fault" }
     if ($id -cnotmatch '\A[0-9a-f]{32}\z') { Write-FakeAnswer -Exit 2 -Id $id -To $to -Stage "refused" -Woken $false -Reason "bad-id" -Detail "the id must be 32 lowercase hex characters (a UUID without dashes)" }
     if ($to -cnotmatch $uuid) { Write-FakeAnswer -Exit 2 -Id $id -To $to -Stage "refused" -Woken $false -Reason "bad-to" -Detail "-To must be a session id: a lower-case UUID" }
@@ -129,6 +157,7 @@ if ($act -ceq "post") {
     $stage = "queued"
     if (Test-Mode $m "stage") { $stage = [string]$m.stage }
     $rec = [ordered]@{ id = $id; to = $to; stage = $stage; body = $body; fromLabel = $fromLabel; fromSessionId = $fromSid }
+    if ($null -ne $verifiedRec) { $rec["fromVerified"] = $verifiedRec }
     [System.IO.File]::WriteAllText($recPath, ($rec | ConvertTo-Json -Compress -Depth 4), [System.Text.Encoding]::UTF8)
     if (Test-Mode $m "stalePane") { Write-FakeAnswer -Exit 4 -Id $id -To $to -Stage $stage -Woken $false -Reason "stale-session" -Detail ("not woken, nothing typed: pane 7 now belongs to session 99999999-0000-4000-8000-000000000000, seen there more recently than " + $to + ". The mail is queued under the id it was posted to") }
     $woken = $false; $reason = "no-registry-record"; $detail = "no registry record for this session on this machine, so no pane can be verified; the mail waits for its next turn boundary"

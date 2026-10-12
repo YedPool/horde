@@ -5,7 +5,8 @@
 # Stop hook hands it over at a turn boundary and acks it only once its id is in that session's
 # transcript (TAKEN); an idle target gets one short wake notice carrying only the id. Its PR #65 added the
 # two commands this messenger runs, so that a program that is not a session can use that path:
-#   mail post -To <session uuid> -Id <32 hex> -MessageFile <path> [-FromLabel l] [-FromSessionId uuid] -Json
+#   mail post -To <session uuid> -Id <32 hex> -MessageFile <path> [-FromLabel l] [-FromSessionId uuid]
+#             [-FromVerified founder:passkey:<32 hex>] -Json
 #   mail status -Id <32 hex> -Json
 # THE CONTRACT is wezfleet main's (read at 1122461 on 2026-10-09: its lib/MailPost.ps1, THE CONTRACT, as
 # its pull request 70 made it; 72 to 76 left mail post and status as they were). Each prints ONE line of
@@ -51,6 +52,30 @@
 # target that is not a session UUID is held, bad-to; a sender whose session id is not one is named by its
 # hub label alone (-FromSessionId is never passed a non-UUID); a sender label that is not a hub label, or
 # a sender with neither, is held, bad-from.
+#
+# A VERIFIED SENDER (the founder's first live use, 2026-10-11: his phone's lines reached his Thrall as
+# "the sender calls itself: F (not verified)", though the relay had verified each one). A message's
+# from.verified (messengers/Port.ps1, A VERIFIED SENDER: kind founder, by passkey, a 32-hex key id) is
+# passed as -FromVerified founder:passkey:<key id>, which wezfleet's feature/from-verified declares and
+# shows as "MESSAGE FROM THE FOUNDER, VERIFIED BY HORDE'S RELAY". It is this node's word that it checked
+# the signature, nothing more: any program running as this user can call wezfleet with the same claim.
+# Held here, before any process starts, unless it holds the port's rule (a direct call skips the port).
+# ONLY TO A WEZFLEET THAT DECLARES IT. wezfleet main at 1122461 does not, and its wezfleet.ps1 is an
+# advanced script, so PowerShell refuses the undeclared argument before the script runs: nothing on
+# stdout, exit 1 (measured 2026-10-11 against a clone of main) - every founder line would be unknown and
+# the chat channel would hold it. So each post that carries a verified sender first asks whether the
+# script it is about to run declares -FromVerified in its own param block, read by PowerShell's own
+# parser (Test-HordeWezfleetMessengerTakesVerified), and passes it only then; otherwise the line is posted
+# as before, by label, unlabelled, and the answer's reason says so. WHY THE PARSER, and not the help or a
+# version marker: the refusal this avoids IS PowerShell binding against that param block, so the probe
+# asks exactly the question that fails; it runs nothing (no second process per post, no deadline, no
+# output to read); it is not fooled by the word in a comment, a string or a function inside the script,
+# as a text search would be; and wezfleet's own test-cli-surface.ps1 reads its param block the same way.
+# The help is prose generated from a table and may be reworded; wezfleet has no version marker, and one
+# would be a second thing to keep in step with the param block it stands for. Read on every such post,
+# like the folder: installing a newer wezfleet takes effect without a restart. A wezfleet replaced
+# between the probe and the start is a window of milliseconds: old to new posts unlabelled once, new to
+# old is unknown once and retried.
 #
 # THE ONE START SITE (plan R21 slice 3b, merge condition 2). Start-HordeWezfleetMessengerProcess starts the
 # fixed PowerShell from the system folder, named once in one expression, on wezfleet.ps1 in the
@@ -124,6 +149,8 @@ $script:HordeWezfleetMessengerDetailChars = 600
 # wezfleet's session id (its -To and -FromSessionId), and Horde's hub label (its -FromLabel).
 $script:HordeWezfleetMessengerSessionPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 $script:HordeWezfleetMessengerLabelPattern = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'
+# The argument a wezfleet that shows a verified sender declares (A VERIFIED SENDER, in the header).
+$script:HordeWezfleetMessengerVerifiedParameter = "FromVerified"
 # A reason code: lower-case words of letters and digits, the first starting with a letter, joined by
 # dashes (woken, already-posted, stale-session, invalid-utf8, ...). A sentence is not one. Digits are
 # allowed because wezfleet main's closed list has invalid-utf8, which letters alone read as prose
@@ -270,6 +297,25 @@ function Clear-HordeWezfleetMessengerOutgoing {
     $n = 0
     foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force)) { Remove-Item -LiteralPath $f.FullName -Force; $n++ }
     return $n
+}
+
+function Test-HordeWezfleetMessengerTakesVerified {
+    # Why the fleet's script at -Path cannot be handed -FromVerified, or "" when it can: its own param
+    # block declares it, read by PowerShell's parser and never run (the header, A VERIFIED SENDER).
+    # Compared ignoring case, as PowerShell binds a parameter name.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $name = $script:HordeWezfleetMessengerVerifiedParameter
+    $tokens = $null
+    $errors = $null
+    $ast = $null
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return ("its wezfleet.ps1 is not there, so -" + $name + " is not passed") }
+    try { $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors) }
+    catch { return ("its wezfleet.ps1 could not be read for -" + $name + ": " + (ConvertTo-HordeWezfleetMessengerLine $_.Exception.Message)) }
+    if (@($errors).Count -gt 0) { return ("its wezfleet.ps1 does not parse, so -" + $name + " is not passed") }
+    $declared = @()
+    if ($null -ne $ast.ParamBlock) { $declared = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) }
+    if ($declared -contains $name) { return "" }
+    return ("the wezfleet it runs does not declare -" + $name + " (wezfleet main before feature/from-verified)")
 }
 
 function ConvertTo-HordeWezfleetMessengerCommandLine {
@@ -510,9 +556,11 @@ function Send-HordeWezfleetMessengerPost {
     if ($to -cnotmatch $script:HordeWezfleetMessengerSessionPattern) {
         return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason ("bad-to: the target '" + (ConvertTo-HordeWezfleetMessengerLine $to) + "' is not a lower-case session UUID, the only target wezfleet can deliver to; nothing was started"))
     }
-    $fromSid = [string]$Message.from.sessionId
-    $fl = $Message.from.PSObject.Properties["label"]
-    $label = $(if ($null -ne $fl -and $null -ne $fl.Value) { [string]$fl.Value } else { "" })
+    # from read by member, as the port reads it: an object or a dictionary (messengers/Port.ps1).
+    $from = Get-HordeMessengerMember $Message "from"
+    $fromSid = [string](Get-HordeMessengerMember $from.value "sessionId").value
+    $fl = Get-HordeMessengerMember $from.value "label"
+    $label = $(if ($fl.has -and $null -ne $fl.value) { [string]$fl.value } else { "" })
     if ($label -ne "" -and $label -cnotmatch $script:HordeWezfleetMessengerLabelPattern) {
         return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason ("bad-from: the sender label '" + (ConvertTo-HordeWezfleetMessengerLine $label) + "' is not a hub label; nothing was started"))
     }
@@ -520,8 +568,24 @@ function Send-HordeWezfleetMessengerPost {
     if (-not $sidOk -and $label -eq "") {
         return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason "bad-from: the sender has neither a session UUID nor a hub label, so wezfleet could not say who wrote it; nothing was started")
     }
+    # A VERIFIED SENDER (the header): held unless it holds the port's rule, and it needs a label, as
+    # wezfleet's -FromVerified does.
+    $verified = ""
+    $fv = Get-HordeMessengerMember $from.value "verified"
+    if ($fv.has) {
+        $vf = @(Test-HordeMessengerVerified $fv.value)
+        if ($vf.Count -gt 0) { return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason ("bad-from: " + (ConvertTo-HordeWezfleetMessengerLine ($vf -join "; ")) + "; nothing was started")) }
+        if ($label -eq "") { return (New-HordeWezfleetMessengerHeld -MessageId $id -Reason "bad-from: a verified sender needs a hub label for wezfleet to show beside it; nothing was started") }
+        $verified = (Get-HordeMessengerMember $fv.value "kind").value + ":" + (Get-HordeMessengerMember $fv.value "by").value + ":" + (Get-HordeMessengerMember $fv.value "keyId").value
+    }
     $where = Get-HordeWezfleetMessengerScriptPath
     if (-not $where.ok) { return (New-HordeUnknown -Reason $where.reason) }
+    # ONLY TO A WEZFLEET THAT DECLARES IT; otherwise the line goes unlabelled, and the answer says why.
+    $unlabelled = ""
+    if ($verified -ne "") {
+        $unlabelled = Test-HordeWezfleetMessengerTakesVerified -Path $where.path
+        if ($unlabelled -ne "") { $verified = "" }
+    }
     $file = Join-Path (Get-HordeWezfleetMessengerOutgoing) ([guid]::NewGuid().ToString("N") + ".txt")
     try {
         [System.IO.File]::WriteAllText($file, [string]$Message.body, (New-Object System.Text.UTF8Encoding($false)))
@@ -529,9 +593,15 @@ function Send-HordeWezfleetMessengerPost {
         if ($label -ne "") { $argv += @("-FromLabel", $label) }
         # A sender whose session id wezfleet cannot hold is named by its label alone.
         if ($sidOk) { $argv += @("-FromSessionId", $fromSid) }
+        if ($verified -ne "") { $argv += @("-FromVerified", $verified) }
         $argv += @("-Json")
         $run = Start-HordeWezfleetMessengerProcess -Argv $argv
-        return (Read-HordeWezfleetMessengerAnswer -Run $run -Command "post" -MessageId $id -To $to)
+        $ans = Read-HordeWezfleetMessengerAnswer -Run $run -Command "post" -MessageId $id -To $to
+        if ($unlabelled -ne "" -and $ans.state -ceq "known") {
+            $note = "posted without the verified label: " + $unlabelled
+            $ans.value.reason = $(if ("$($ans.value.reason)" -ne "") { $ans.value.reason + "; " + $note } else { $note })
+        }
+        return $ans
     } finally {
         if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
     }

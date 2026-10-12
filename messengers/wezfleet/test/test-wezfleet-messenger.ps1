@@ -57,8 +57,8 @@ function Why {
 function Show-Answer { param($A) if ($A.state -ceq "known") { return ($A.value.stage + ": " + (Why $A)) } return ($A.state + ": " + $A.reason) }
 function With-Fake {
     # Run Block with a fresh fake, and always remove it.
-    param([scriptblock]$Block, [switch]$Spaced)
-    $st = & $fx.New -Spaced:$Spaced
+    param([scriptblock]$Block, [switch]$Spaced, [switch]$TakesVerified)
+    $st = & $fx.New -Spaced:$Spaced -TakesVerified:$TakesVerified
     try { & $Block $st } finally { & $fx.Remove $st }
 }
 function Line {
@@ -179,18 +179,104 @@ With-Fake {
     $argv = @(@(& $fx.Runs $st)[0].argv)
     Check (-not ($argv -ccontains "-FromLabel")) "a sender with no label sends no -FromLabel, never an empty one"
 }
-# A VERIFIED SENDER IS NOT PASSED ON YET: wezfleet main (1122461) declares no argument for it, and one it
-# does not declare would make every post fail (the header, WHO WEZFLEET CAN NAME). The post goes as
-# before, by label; the founder's verified line waits on wezfleet taking it.
+# A VERIFIED SENDER (from.verified, the founder's line the relay verified) IS PASSED AS -FromVerified ONLY
+# TO A WEZFLEET THAT DECLARES IT (the header, A VERIFIED SENDER). wezfleet main at 1122461 declares no such
+# argument, and PowerShell refuses an undeclared one before the script runs - every founder line would
+# come back unknown and the chat channel would hold it. So against main's shape the line still goes, by
+# label, unlabelled, and the answer says why; against a wezfleet that takes it, it goes with the claim.
+function Add-Verified { param($Msg, [string]$KeyId = ("ab" * 16)) $Msg.from | Add-Member -NotePropertyName verified -NotePropertyValue ([pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = $KeyId }); return $Msg }
+function Get-Pair { param($Argv, [string]$Name) $all = @($Argv | Where-Object { $null -ne $_ }); for ($i = 0; $i -lt $all.Count - 1; $i++) { if ("$($all[$i])" -ceq $Name) { return "$($all[$i + 1])" } } return $null }
+function Get-FakeRecord { param($St, [string]$MessageId) $p = Join-Path (Join-Path $St.dir "store") ((N $MessageId) + ".json"); if (-not (Test-Path -LiteralPath $p)) { return $null } return ([System.IO.File]::ReadAllText($p) | ConvertFrom-Json) }
 With-Fake {
     param($st)
-    $msg = New-Msg
-    $msg.from | Add-Member -NotePropertyName verified -NotePropertyValue ([pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = ("ab" * 16) })
+    $msg = Add-Verified (New-Msg)
     $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
     $runs = @(& $fx.Runs $st)
     $argv = $(if ($runs.Count -gt 0) { @($runs[0].argv) } else { @() })
-    Check ($a.state -ceq "known" -and $runs.Count -eq 1 -and ($argv -ccontains "-FromLabel") -and @($argv | Where-Object { "$_" -like "*verif*" -or "$_" -ceq ("ab" * 16) }).Count -eq 0) ("a verified sender posts as before, by its label, with nothing wezfleet does not take (" + ($argv -join " ") + ")")
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and $runs.Count -eq 1 -and ($argv -ccontains "-FromLabel") -and -not ($argv -ccontains "-FromVerified")) ("to a wezfleet that does not declare -FromVerified, a verified sender posts as before, by its label, and is accepted (" + ($argv -join " ") + "; " + (Show-Answer $a) + ")")
+    Check ((& $fx.Observe $st $msg.messageId).records -eq 1) "and the line is on the fake's disk: nothing was held"
+    Check ((Why $a).Contains("without the verified label") -and (Why $a).Contains("-FromVerified")) ("and the answer says it went without the verified label, and why (" + (Why $a) + ")")
 }
+With-Fake -TakesVerified {
+    param($st)
+    $msg = Add-Verified (New-Msg) -KeyId ("0123456789abcdef" * 2)
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $runs = @(& $fx.Runs $st)
+    $argv = $(if ($runs.Count -gt 0) { @($runs[0].argv) } else { @() })
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and (Get-Pair $argv "-FromVerified") -ceq ("founder:passkey:" + ("0123456789abcdef" * 2))) ("to a wezfleet that declares it, a verified sender is passed as -FromVerified founder:passkey:<key id> (" + ($argv -join " ") + "; " + (Show-Answer $a) + ")")
+    Check ((Get-Pair $argv "-FromLabel") -ceq "M") "beside its label"
+    $rec = Get-FakeRecord $st $msg.messageId
+    Check ($null -ne $rec -and $null -ne $rec.PSObject.Properties["fromVerified"] -and "$($rec.fromVerified.keyId)" -ceq ("0123456789abcdef" * 2) -and "$($rec.fromVerified.kind)" -ceq "founder" -and "$($rec.fromVerified.by)" -ceq "passkey") "and the fake's own record holds it, as the wezfleet that takes it keeps it"
+    Check (-not (Why $a).Contains("without the verified label")) ("and the answer carries no note (" + (Why $a) + ")")
+}
+With-Fake -TakesVerified {
+    param($st)
+    $msg = New-Msg
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $argv = @(@(& $fx.Runs $st)[0].argv)
+    Check ($a.state -ceq "known" -and -not ($argv -ccontains "-FromVerified")) ("CONTROL: a sender that is not verified is never passed -FromVerified, even to a wezfleet that takes it (" + ($argv -join " ") + ")")
+    Check (-not (Why $a).Contains("verified")) "and its answer says nothing about a label"
+}
+With-Fake -TakesVerified {
+    param($st)
+    # A DICTIONARY from and verified, which the port accepts as well as objects.
+    $msg = New-Msg
+    $msg.from = @{ deviceId = $msg.from.deviceId; sessionId = $msg.from.sessionId; label = "M"; verified = @{ kind = "founder"; by = "passkey"; keyId = ("cd" * 16) } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $runs = @(& $fx.Runs $st)
+    $argv = $(if ($runs.Count -gt 0) { @($runs[0].argv) } else { @() })
+    Check ($a.state -ceq "known" -and (Get-Pair $argv "-FromVerified") -ceq ("founder:passkey:" + ("cd" * 16)) -and (Get-Pair $argv "-FromLabel") -ceq "M") ("a sender given as a dictionary, verified as one, is passed the same way (" + ($argv -join " ") + ")")
+}
+# THE MESSENGER HOLDS THE PORT'S RULE AGAIN, before any process starts: called without the port, a
+# malformed claim is held, bad-from - never passed on, and never dropped so the line reads unverified
+# while the caller believes it was labelled.
+With-Fake -TakesVerified {
+    param($st)
+    foreach ($bad in @(
+            @{ what = "another kind"; v = [pscustomobject]@{ kind = "thrall"; by = "passkey"; keyId = ("ab" * 16) } },
+            @{ what = "another means"; v = [pscustomobject]@{ kind = "founder"; by = "password"; keyId = ("ab" * 16) } },
+            @{ what = "a short key id"; v = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = "ab" } },
+            @{ what = "an upper-case key id"; v = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = ("AB" * 16) } },
+            @{ what = "a key id with a colon"; v = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = ("ab" * 15 + ":x") } },
+            @{ what = "no key id"; v = [pscustomobject]@{ kind = "founder"; by = "passkey" } },
+            @{ what = "a string"; v = ("founder:passkey:" + ("ab" * 16)) })) {
+        $msg = New-Msg
+        $msg.from | Add-Member -NotePropertyName verified -NotePropertyValue $bad.v
+        $before = @(& $fx.Runs $st).Count
+        $a = Send-HordeWezfleetMessengerPost -Message $msg
+        Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and "$($a.value.reason)".StartsWith("bad-from") -and @(& $fx.Runs $st).Count -eq $before) ("a verified sender with " + $bad.what + ", handed to the messenger directly, is held bad-from and nothing starts (" + (Show-Answer $a) + ")")
+    }
+    # A VERIFIED SENDER WITHOUT A LABEL: wezfleet's -FromVerified needs -FromLabel, so it is held here.
+    $msg = Add-Verified (New-Msg)
+    $msg.from.PSObject.Properties.Remove("label")
+    $before = @(& $fx.Runs $st).Count
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("bad-from") -and @(& $fx.Runs $st).Count -eq $before) ("a verified sender with no label is held bad-from and nothing starts (" + (Show-Answer $a) + ")")
+}
+
+# THE PROBE (the header, A VERIFIED SENDER): does the script declare -FromVerified in its own param block?
+# Read by PowerShell's parser, never run, so a comment or a string naming it, or a function inside the
+# script declaring it, is not the script taking it.
+$probeDir = Join-Path $tempRoot ("horde-wfm-probe-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+[void](New-Item -ItemType Directory -Path $probeDir)
+try {
+    $probes = @(
+        @{ what = "a param block declaring it"; text = "param([string]`$To = `"`", [string]`$FromVerified = `"`")`r`n"; takes = $true },
+        @{ what = "an advanced param block declaring it, in another case"; text = "param([Parameter(Position = 0)][string]`$Command = `"`",`r`n    [string]`$fromverified = `"`")`r`n"; takes = $true },
+        @{ what = "main's shape: a param block without it, and the word in a comment and a string"; text = "# -FromVerified is not declared here`r`nparam([string]`$FromLabel = `"`")`r`n`$x = `"-FromVerified`"`r`n"; takes = $false },
+        @{ what = "only a function inside the script declaring it"; text = "param([string]`$FromLabel = `"`")`r`nfunction f { param([string]`$FromVerified) }`r`n"; takes = $false },
+        @{ what = "no param block at all"; text = "Write-Output 1`r`n"; takes = $false },
+        @{ what = "a script that does not parse"; text = "param([string]`$FromVerified = `"`"`r`n{ {`r`n"; takes = $false })
+    foreach ($p in $probes) {
+        $f = Join-Path $probeDir ([guid]::NewGuid().ToString("N") + ".ps1")
+        [System.IO.File]::WriteAllText($f, $p.text, [System.Text.Encoding]::ASCII)
+        $why = Test-HordeWezfleetMessengerTakesVerified -Path $f
+        if ($p.takes) { Check ($why -ceq "") ("the probe finds -FromVerified in " + $p.what + " (" + $why + ")") }
+        else { Check ($why -ne "" -and $why.Contains("-FromVerified")) ("the probe does not take " + $p.what + " as declaring it (" + $why + ")") }
+    }
+    $why = Test-HordeWezfleetMessengerTakesVerified -Path (Join-Path $probeDir "missing.ps1")
+    Check ($why.Contains("not there")) ("the probe of a script that is not there says so, and nothing is passed (" + $why + ")")
+} finally { Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue }
 With-Fake {
     param($st)
     $msg = New-Msg
