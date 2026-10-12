@@ -62,9 +62,14 @@ $stubPost = {
     if ($script:postSays -ceq "unknown") { return (New-HordeUnknown -Reason "the stand-in could not tell") }
     $id = "$($Message.messageId)"
     if (-not $script:taken.ContainsKey($id)) { $script:taken[$id] = $Message }
-    $reason = ""; if ($script:postSays -ceq "held") { $reason = "the stand-in held it" }
-    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = $script:postSays; at = [datetime]::UtcNow; reason = $reason }) -ObservedAt ([datetime]::UtcNow))
+    $reason = $script:postWhy; if ($script:postSays -ceq "held") { $reason = "the stand-in held it" }
+    $said = [ordered]@{ messageId = $id; stage = $script:postSays; at = [datetime]::UtcNow; reason = $reason }
+    if ($null -ne $script:postWoken) { $said["woken"] = $script:postWoken }
+    return (New-HordeKnown -Value ([pscustomobject]$said) -ObservedAt ([datetime]::UtcNow))
 }
+# What the stand-in says of its knock: $null says nothing; true or false is its woken, with its reason.
+$script:postWoken = $null
+$script:postWhy = ""
 $stubStatus = { param($MessageId) return (New-HordeAbsent -Note "the stand-in keeps no status") }
 
 $script:n = 0
@@ -229,13 +234,20 @@ Write-Host "--- two answers close together are one set; a later answer rings onc
 $script:now = [datetime]::UtcNow.AddMinutes(10)
 [void](Say-Founder -Number 2 -Text "yes")
 [void](Say-Founder -Number 3 -Text "no")
+# WOKEN, OR ONLY QUEUED (the founder's bug of 2026-10-12): the bell says whether the warchief was woken
+# for the notice or only has it in its mailbox, in the messenger's own words.
+$script:postWoken = $true; $script:postWhy = "woken"
 $p = Pass $tracker
 Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq 2 -and "$($script:posts[1].body)".Contains("2 answers, for questions 2 and 3.")) ("one post for both (" + $p.said + ")")
+Check ($p.said -clike "rang for 2 answers*through messenger doorbell (accepted; woken)") ("and the line says the warchief was woken (" + $p.said + ")")
 [void](Say-Founder -Number 2 -Text "and one more thing")
 $script:now = [datetime]::UtcNow.AddMinutes(20)
+$script:postWoken = $false; $script:postWhy = "send-refused: not woken (occupied)"
 $p = Pass $tracker
 Check ($p.outcome -ceq "rang" -and $script:posts.Count -eq 3 -and "$($script:posts[2].body)".Contains("1 answer, for question 2.")) "a new answer under a question already told rings once more, for itself"
-Check (((Told) -join ",") -ceq "1,2,3,2") "and the record holds every message told"
+Check ($p.said -clike "rang for 1 answer*through messenger doorbell (accepted; queued, NOT woken: send-refused: not woken (occupied))") ("a notice in the mailbox of a warchief nobody woke says queued, NOT woken, and why (" + $p.said + ")")
+Check (((Told) -join ",") -ceq "1,2,3,2") "and the record holds every message told: in the mailbox is told, woken or not"
+$script:postWoken = $null; $script:postWhy = ""
 
 Write-Host ""
 Write-Host "--- what does not ring: the warchief's own words, and answers he has read ---" -ForegroundColor Cyan

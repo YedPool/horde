@@ -72,5 +72,9 @@
         @{ Name = "loop-ignores-the-settings-label"
            Find = '-QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel'
            Replace = '-QuietSeconds $v.quietSeconds' }
+        # --- woken, or only queued (the founder's bug of 2026-10-12)
+        @{ Name = "bell-does-not-say-whether-woken"
+           Find = '$posted.value.stage + $wake + ")"'
+           Replace = '$posted.value.stage + ")"' }
     )
 }

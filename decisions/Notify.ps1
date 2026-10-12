@@ -339,7 +339,12 @@ function Invoke-HordeDecisionNotifyPass {
                 $stamp = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")
                 $entries = @(@($record.entries) + @($pending | ForEach-Object { [pscustomobject]@{ question = [int]$_.question; message = $_.message; at = $stamp; notice = $noticeId } }))
                 $Tracker.problem = ""; $Tracker.retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; $Tracker.nextAttemptAt = [datetime]::MinValue
-                $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + ")"
+                # WOKEN, OR ONLY QUEUED: the messenger's own word on its knock (messengers/Port.ps1, THE
+                # WAKE WORD). The set is told either way - the notice is in the mailbox - and the line
+                # says whether the warchief was woken for it or reads it at its next turn.
+                $wake = Format-HordeMessengerWake -Answer $posted
+                if ($wake -cne "") { $wake = "; " + $wake }
+                $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + $wake + ")"
                 # The record after the post: a crash or a failed write between the two leaves the set
                 # untold, and the next pass posts the same notice, which the messenger keeps as one.
                 try { Write-HordeDecisionNotifyRecord -Path $path -Entries $entries }
