@@ -435,6 +435,11 @@ $null = Add-Stored $old "message-said" ([ordered]@{ number = 1; speaker = "warch
 Check ((Get-Turn $old) -ceq "founder/2/1" -and (Get-Texts (Get-Thread $old 1)) -ceq "which one do you mean? | the short one") ("AN ASKING REPLY ALREADY IN THE STORE still puts the question in front of him, as it did (" + (Get-Turn $old) + ")")
 $null = Say $old 1 "then yes"
 Check ((Get-Turn $old) -ceq "warchief/3/2" -and (Get-Outcome (Reply $old 1 "and the long one?")) -ceq "refused") "until he answers it: then it is off his list, and stays off"
+# UNDER A CLOSED QUESTION nothing is anybody's turn and nothing is in front of him: the keeper's words
+# are kept there as they always were, flagged as having arrived after closing, whether or not they ask.
+$null = Invoke-Op $old "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." }
+$afterClose = Reply $old 1 "Was that what you meant?"
+Check ((Get-Outcome $afterClose) -ceq "done" -and (Get-Said $afterClose).arrivedAfterClosing -eq $true -and (Get-Turn $old) -ceq "nobody/4/2") ("the keeper's words under a CLOSED question are kept, flagged, and put nothing in front of him (" + (Get-Outcome $afterClose) + ")")
 
 Write-Host ""
 Write-Host "--- a note asks nothing, an act passes no turn, an edit says it replaces ---" -ForegroundColor Cyan
