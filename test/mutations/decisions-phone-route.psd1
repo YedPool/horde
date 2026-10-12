@@ -36,5 +36,39 @@
         @{ Name = "evidence-shown-from-nothing"
            Find = '        evidence = "$($Message.evidence)"'
            Replace = '        evidence = ""' }
+        # --- who signed (signedBy, 2026-10-12) ---
+        @{ Name = "signedBy-on-another-route-not-refused"
+           Find = 'if (-not $needsEvidence -and $SignedByStated) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "signedBy-in-any-spelling-taken-by-the-rules"
+           Find = 'if ($SignedByStated -and $SignedBy -cnotmatch $script:HordeDecisionSignedByPattern) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "signedBy-pattern-takes-upper-case"
+           Find = '$script:HordeDecisionSignedByPattern = ''\A[0-9a-f]{32}\z'''
+           Replace = '$script:HordeDecisionSignedByPattern = ''\A[0-9a-fA-F]{32}\z''' }
+        @{ Name = "signedBy-pattern-not-anchored-at-the-end"
+           Find = '$script:HordeDecisionSignedByPattern = ''\A[0-9a-f]{32}\z'''
+           Replace = '$script:HordeDecisionSignedByPattern = ''\A[0-9a-f]{32}''' }
+        @{ Name = "signedBy-kept-off-the-message"
+           Find = 'signedBy = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "signedBy") { [string]$Ev.data.signedBy } else { "" })'
+           Replace = 'signedBy = ""' }
+        @{ Name = "signedBy-shown-from-nothing"
+           Find = '        signedBy = "$($Message.signedBy)"'
+           Replace = '        signedBy = ""' }
+        @{ Name = "signer-named-on-any-route"
+           Find = 'if ($null -eq $entry -or -not ($entry.ContainsKey("evidence") -and [bool]$entry.evidence)) { return (& $none'
+           Replace = 'if ($false) { return (& $none' }
+        @{ Name = "signer-named-on-an-unknown-route"
+           Find = 'if ($null -eq $entry -or -not ($entry.ContainsKey("evidence") -and [bool]$entry.evidence)) { return (& $none'
+           Replace = 'if ($null -ne $entry -and -not ($entry.ContainsKey("evidence") -and [bool]$entry.evidence)) { return (& $none' }
+        @{ Name = "signer-named-without-evidence"
+           Find = 'if ($Evidence -cnotmatch $script:HordeDecisionEvidencePattern) { return (& $none'
+           Replace = 'if ($false) { return (& $none' }
+        @{ Name = "signer-key-id-in-any-spelling"
+           Find = 'if ($SignedBy -cnotmatch $script:HordeDecisionSignedByPattern) { return (& $none'
+           Replace = 'if ($SignedBy -ceq "") { return (& $none' }
+        @{ Name = "old-record-not-told-apart"
+           Find = 'if ($SignedBy -ceq "") { return (& $none "their record names no passkey: it was written before records did") }'
+           Replace = '' }
     )
 }

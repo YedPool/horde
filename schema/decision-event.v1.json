@@ -66,7 +66,8 @@
         "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at (the view's wordingVersion), WHEN THE SPEAKER STATED IT. Absent means not stated: the session writing down what was said in chat does not know what was on the speaker's screen, and nothing is guessed in its place. Words are an answer to a stated wording and to no other."},
         "asks": {"type": "boolean", "description": "False when the keeper's words ask the founder nothing (a note): the turn does not pass to him. Absent means true."},
         "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "The founder's words record an act of his: park or unpark. The turn does not pass."},
-        "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them. Only the hash: the envelope and its passkey signature are kept in relay's own journal (relay/Journal.ps1)."}
+        "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them. Only the hash: the envelope and its passkey signature are kept in relay's own journal (relay/Journal.ps1)."},
+        "signedBy": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "Words answered on the founder's phone: the key id of the passkey the relay channel verified the answer's envelope against, written once by that channel. Absent in every record written before 2026-10-12 and for every other route: such a record names no passkey, and nothing is put in its place."}
       }
     },
     "messages-read": {
