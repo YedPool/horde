@@ -49,7 +49,14 @@
 #     would need every snapshot this machine ever sent kept somewhere.
 #   - It is then put into the decisions list as the founder's words by the route phone
 #     (decisions/Rules.ps1), with the record's evidence: the hash of the relay journal record that proved
-#     them. The request's id is derived from the sender and the answerId:
+#     them, and signedBy: the key id of the passkey the envelope's signature was verified against - the
+#     envelope's sender, which the port's gate checked before this Accept ran, never anything the
+#     answer's own text says. It is written once, here, so that whoever tells the warchief of the answer
+#     can name the founder as verified from the record alone (decisions/Notify.ps1). A READER OLDER THAN
+#     THE MEMBER (before 2026-10-12) finds such a record unreadable, as its schema admits no member it
+#     does not list (measured 2026-10-12 with the tree of PR #180: show and inbox left the answer out and
+#     counted it unreadable): every checkout that reads the list is moved first, the relay's runner last.
+#     The request's id is derived from the sender and the answerId:
 #       id = the first 16 bytes of SHA-256("horde-relay/decisions/v1 answer id" LF <sender key id> LF <answerId>)
 #     so the same answer handed over again - a record resumed after a crash, or the phone sending it
 #     again in a new envelope because it heard nothing back - is the first record answered again
@@ -118,6 +125,10 @@ function Invoke-HordeDecisionsChannelAccept {
     $request = @{
         id = (Get-HordeDecisionsChannelAnswerId -From $Item.from -AnswerId $r.value.answerId); actor = "founder"; number = $r.value.number
         speaker = "founder"; route = "phone"; text = $r.value.text; wordingVersion = $r.value.wordingVersion; evidence = $Item.evidence
+        # WHO SIGNED, WRITTEN ONCE: the key id the relay verified this envelope's passkey signature against
+        # (channels/Port.ps1's gate; senders founder, so a passkey's and never a machine's). The record
+        # keeps it, and notify names the founder as verified from the record alone (decisions/Notify.ps1).
+        signedBy = $Item.from
     }
     $a = Invoke-HordeDecision -Operation "say" -Request $request -Root $Context.decisionsRoot
     if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take it now: " + $a.reason) } }

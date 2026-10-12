@@ -11,7 +11,7 @@
     Mutations = @(
         # --- say ---
         @{ Name = "words-not-held-to-the-rules-of-saying"
-           Find = 'foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated ([bool]$proven) -Evidence $evidence)) { [void]$found.Add($f) }'
+           Find = 'foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated ([bool]$proven) -Evidence $evidence -SignedByStated ([bool]$signed) -SignedBy $signedBy)) { [void]$found.Add($f) }'
            Replace = '' }
         @{ Name = "who-records-is-not-asked"
            Find = '-Actor ([string]$Request.actor) -Text $body["text"]'
