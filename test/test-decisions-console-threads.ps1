@@ -337,7 +337,7 @@ $store = New-Home
 $partsFile = Write-Words "parts.json" '{"title":"Three follow-ups to settle about the new wording, one by one.","kind":"parts","whatItIs":"Follow-ups.","parts":["(a) The sentence when she cannot zoom: approve, or reword.","(b) Should the button say Video too?","(c) Should page turns be refused?"],"group":"voice","askedBy":"orc-b"}'
 $null = Run "add" @{ File = $partsFile }
 $b = Run "answer" @{ Number = "1"; Text = "No, keep Live View."; Part = "B" }
-Check ($b.failure -eq "" -and (Read-Record $store 2).data.part -ceq "b" -and (Read-Record $store 2).data.text -ceq "No, keep Live View.") ("answer -Part records which part his words answer, the letter in lower case (" + $b.failure + ")")
+Check ($b.failure -eq "" -and (@((Read-Record $store 2).data.PSObject.Properties | Where-Object { $_.Name -ceq "part" } | ForEach-Object { $_.Value }) -join ",") -ceq "b" -and (Read-Record $store 2).data.text -ceq "No, keep Live View.") ("answer -Part records which part his words answer, the letter in lower case (" + $b.failure + ")")
 $peek = Run "inbox" @{ Peek = $true }
 Check ((Test-Line $peek "    (answers part (b): Should the button say Video too?)") -and (Test-Line $peek "      No, keep Live View.")) "THE INBOX SAYS WHICH PART WAS ANSWERED, by its letter and its own words, above his words"
 $listed = Run "list"
