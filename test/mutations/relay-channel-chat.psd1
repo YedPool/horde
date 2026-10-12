@@ -112,5 +112,12 @@
         @{ Name = "damaged-state-started-over"
            Find = 'try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }'
            Replace = 'try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeKnown -Value $empty) }' }
+        # --- the sender named as verified (the founder's first live use, 2026-10-11)
+        @{ Name = "line-not-said-verified"
+           Find = '; verified = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = $Item.from } }'
+           Replace = ' }' }
+        @{ Name = "line-verified-by-another-key"
+           Find = 'keyId = $Item.from } }'
+           Replace = 'keyId = ("0" * 32) } }' }
     )
 }

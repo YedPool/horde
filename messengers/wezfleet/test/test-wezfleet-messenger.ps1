@@ -179,6 +179,18 @@ With-Fake {
     $argv = @(@(& $fx.Runs $st)[0].argv)
     Check (-not ($argv -ccontains "-FromLabel")) "a sender with no label sends no -FromLabel, never an empty one"
 }
+# A VERIFIED SENDER IS NOT PASSED ON YET: wezfleet main (1122461) declares no argument for it, and one it
+# does not declare would make every post fail (the header, WHO WEZFLEET CAN NAME). The post goes as
+# before, by label; the founder's verified line waits on wezfleet taking it.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $msg.from | Add-Member -NotePropertyName verified -NotePropertyValue ([pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = ("ab" * 16) })
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $runs = @(& $fx.Runs $st)
+    $argv = $(if ($runs.Count -gt 0) { @($runs[0].argv) } else { @() })
+    Check ($a.state -ceq "known" -and $runs.Count -eq 1 -and ($argv -ccontains "-FromLabel") -and @($argv | Where-Object { "$_" -like "*verif*" -or "$_" -ceq ("ab" * 16) }).Count -eq 0) ("a verified sender posts as before, by its label, with nothing wezfleet does not take (" + ($argv -join " ") + ")")
+}
 With-Fake {
     param($st)
     $msg = New-Msg
