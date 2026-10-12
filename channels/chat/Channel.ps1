@@ -71,6 +71,9 @@
 #   - TOO LONG is counted in characters (lineChars, at most 21,000: three UTF-8 bytes a character at
 #     the most) and, whatever the setting, in the UTF-8 bytes of the whole body against the messenger
 #     port's cap (64 KiB): a line no messenger may take is refused, never retried.
+#   - THE SENDER IS NAMED AS VERIFIED (the founder's first live use, 2026-10-11): from.verified says the
+#     founder, by the passkey whose key id signed the line, so a messenger that can show it does not
+#     present a real founder line as an unknown sender's claim (messengers/Port.ps1, A VERIFIED SENDER).
 #   - THE BODY THE THRALL GETS is one header line naming the phone's message id - "FOUNDER LINE from the
 #     phone (line <messageId>)" - then a blank line, then his words exactly.
 #   - A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN, and only a real one does (PR 9's open question
@@ -698,7 +701,10 @@ function Invoke-HordeChatChannelAccept {
     try { $deviceId = Get-HordeDeviceId -HomeRoot (Get-HordeChatChannelHome $Context) } catch { return (& $answer "retry" "held" "not-now" ("this machine's device id could not be had: " + $_.Exception.Message) $line.session) }
     $message = [pscustomobject]@{
         messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId -Text $line.text); sessionId = $src.value.session
-        from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeChatChannelFrom; label = $set.fromLabel }
+        # VERIFIED: this Accept runs only for a line the relay verified as signed by a passkey the trust
+        # store holds as the founder's (senders founder, channels/Port.ps1's gate), so it says so, by that
+        # passkey's key id (messengers/Port.ps1, A VERIFIED SENDER).
+        from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeChatChannelFrom; label = $set.fromLabel; verified = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = $Item.from } }
         body = (Get-HordeChatChannelThrallBody -MessageId $line.messageId -Text $line.text); ttlSeconds = [int]$set.ttlSeconds
     }
     $posted = Send-HordeMessengerMessage -Messenger $messenger.value -Message $message

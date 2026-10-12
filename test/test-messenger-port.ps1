@@ -112,6 +112,13 @@ $m = New-Msg; $m.PSObject.Properties.Remove("label")
 Check (@(Test-HordeMessengerMessage -Message $m).Count -eq 0) "CONTROL: label is optional"
 $m = New-Msg; $m.from.PSObject.Properties.Remove("label")
 Check (@(Test-HordeMessengerMessage -Message $m).Count -eq 0) "CONTROL: from.label is optional"
+# A VERIFIED SENDER (the founder's first live use, 2026-10-11): a line whose signature the relay checked
+# against the founder's trusted passkey says so, so the receiver need not show it as an unknown sender.
+function New-Verified { param([string]$Kind = "founder", [string]$By = "passkey", $KeyId = ("ab" * 16)) return [pscustomobject]@{ kind = $Kind; by = $By; keyId = $KeyId } }
+$m = New-Msg; $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified)
+Check (@(Test-HordeMessengerMessage -Message $m).Count -eq 0) "a sender verified as the founder by a passkey's key id is valid"
+$m = New-Msg; $m.from | Add-Member -NotePropertyName verified -NotePropertyValue @{ kind = "founder"; by = "passkey"; keyId = ("cd" * 16) }
+Check (@(Test-HordeMessengerMessage -Message $m).Count -eq 0) "and so is the same as a dictionary"
 $week = New-Msg; $week.ttlSeconds = 604800
 Check (@(Test-HordeMessengerMessage -Message $week).Count -eq 0) "CONTROL: a ttl of exactly 7 days is valid"
 $contractTtl = & { . (Join-Path $root "remote\Contract.ps1"); $script:HordeMailTtlMaxSeconds }
@@ -131,6 +138,14 @@ $cases = @(
     @{ change = { param($m) $m.from.deviceId = "laptop" }; like = "from.deviceId"; what = "a sender device that is not a device id" },
     @{ change = { param($m) $m.from.sessionId = "CON" }; like = "from.sessionId"; what = "a sender session id that is a DOS device name" },
     @{ change = { param($m) $m.from | Add-Member -NotePropertyName pane -NotePropertyValue 4 }; like = "from.pane"; what = "a sender with a member outside the list" },
+    @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue "founder" }; like = "from.verified"; what = "a verified sender that is not an object" },
+    @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified -Kind "M") }; like = "from.verified.kind"; what = "a verified sender of a kind outside the list" },
+    @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified -By "label") }; like = "from.verified.by"; what = "a sender verified by a means outside the list" },
+    @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified -KeyId ("AB" * 16)) }; like = "from.verified.keyId"; what = "a verifying key id in upper case" },
+    @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified -KeyId ("ab" * 16 + "`n")) }; like = "from.verified.keyId"; what = "a verifying key id with a line break after it" },
+    @{ change = { param($m) $m.from | Add-Member -NotePropertyName verified -NotePropertyValue (New-Verified -KeyId @("ab" * 16)) }; like = "from.verified.keyId"; what = "a verifying key id that is a one-element list" },
+    @{ change = { param($m) $v = New-Verified; $v.PSObject.Properties.Remove("keyId"); $m.from | Add-Member -NotePropertyName verified -NotePropertyValue $v }; like = "from.verified.keyId"; what = "a verified sender with no key id" },
+    @{ change = { param($m) $v = New-Verified; $v | Add-Member -NotePropertyName label -NotePropertyValue "F"; $m.from | Add-Member -NotePropertyName verified -NotePropertyValue $v }; like = "from.verified.label"; what = "a verified sender with a member outside the list" },
     @{ change = { param($m) $m.body = " `r`n " }; like = "body is blank"; what = "a blank body" },
     @{ change = { param($m) $m.body = ("x" * 65537) }; like = "65536"; what = "a body one byte over 64 KiB" },
     @{ change = { param($m) $m.body = (("x" * 65535) + [string][char]0x00E9) }; like = "65536"; what = "a body over 64 KiB only in UTF-8 bytes, not in characters" },

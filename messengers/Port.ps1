@@ -52,9 +52,18 @@
 # (idempotent.post). The port's own known value leaves reason out when it is empty, because
 # schema/link-verbs.v1's delivery.reason requires text.
 #
-# THE MESSAGE: { messageId; sessionId; label (optional); from { deviceId; sessionId; label (optional) };
-# body; ttlSeconds }, the shape of session.deliver's arguments (schema/link-verbs.v1), with the same
-# patterns, read from that schema so there is one definition of each, and the same ttl ceiling.
+# THE MESSAGE: { messageId; sessionId; label (optional); from { deviceId; sessionId; label (optional);
+# verified (optional) }; body; ttlSeconds }, the shape of session.deliver's arguments
+# (schema/link-verbs.v1), with the same patterns, read from that schema so there is one definition of
+# each, and the same ttl ceiling.
+#
+# A VERIFIED SENDER (the founder's first live use, 2026-10-11: his phone's lines reached his Thrall as
+# "the sender calls itself: F (not verified)"). from.verified = { kind; by; keyId } says this node
+# checked who sent it before handing it over: kind founder, by passkey - the relay verified the line's
+# signature against a passkey the trust store holds as the founder's (channels/chat) - and keyId that
+# passkey's key id (32 lower-case hex). Closed: no other kind, means or member. It is this node's word,
+# never a sender's: session.deliver's from (schema/link-verbs.v1) has no such member, so nothing that came
+# over a link can carry it here. A messenger shows it as it can; one that cannot simply posts by label.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -67,7 +76,12 @@ $script:HordeMessengerCapabilityNames = @("body.untyped", "idempotent.post", "re
 $script:HordeNodeMessengerRequires = @("body.untyped", "idempotent.post", "receipt.receiver")
 $script:HordeMessengerStages = @("accepted", "handed-over", "seen", "expired", "held")
 $script:HordeMessengerMembers = @("messageId", "sessionId", "label", "from", "body", "ttlSeconds")
-$script:HordeMessengerFromMembers = @("deviceId", "sessionId", "label")
+$script:HordeMessengerFromMembers = @("deviceId", "sessionId", "label", "verified")
+# A VERIFIED SENDER's members and their closed values (the header).
+$script:HordeMessengerVerifiedMembers = @("kind", "by", "keyId")
+$script:HordeMessengerVerifiedKinds = @("founder")
+$script:HordeMessengerVerifiedBy = @("passkey")
+$script:HordeMessengerVerifiedKeyIdPattern = '\A[0-9a-f]{32}\z'
 # The most a body may take, in UTF-8 bytes: the link's textBytes (schema/link-frame.v1), 64 KiB.
 $script:HordeMessengerBodyBytes = 65536
 # The longest a message may wait: remote/Contract.ps1's $script:HordeMailTtlMaxSeconds, 7 days, the
@@ -236,6 +250,23 @@ function Get-HordeMessengerMemberNames {
     return @($Object.PSObject.Properties | ForEach-Object { $_.Name })
 }
 
+function Test-HordeMessengerVerified {
+    # Findings for a message's from.verified (A VERIFIED SENDER, in the header); none when it holds.
+    param($Verified)
+    if ($null -eq $Verified -or -not ($Verified -is [System.Management.Automation.PSCustomObject] -or $Verified -is [System.Collections.IDictionary])) { return @("from.verified is not an object: it is { kind; by; keyId }") }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($n in @(Get-HordeMessengerMemberNames $Verified)) {
+        if ($script:HordeMessengerVerifiedMembers -cnotcontains $n) { [void]$out.Add("the message has 'from.verified." + $n + "', which is not a member of a verified sender") }
+    }
+    $k = Get-HordeMessengerMember $Verified "kind"
+    if (-not $k.has -or $k.value -isnot [string] -or $script:HordeMessengerVerifiedKinds -cnotcontains $k.value) { [void]$out.Add("from.verified.kind is not one of " + ($script:HordeMessengerVerifiedKinds -join ", ")) }
+    $b = Get-HordeMessengerMember $Verified "by"
+    if (-not $b.has -or $b.value -isnot [string] -or $script:HordeMessengerVerifiedBy -cnotcontains $b.value) { [void]$out.Add("from.verified.by is not one of " + ($script:HordeMessengerVerifiedBy -join ", ")) }
+    $i = Get-HordeMessengerMember $Verified "keyId"
+    if (-not $i.has -or -not (Test-HordeMessengerText $i.value $script:HordeMessengerVerifiedKeyIdPattern)) { [void]$out.Add("from.verified.keyId is not a key id: 32 lower-case hex") }
+    return @($out)
+}
+
 function Test-HordeMessengerMessage {
     # Findings for one message, each naming the member it is about. None means it may be handed to a
     # messenger.
@@ -265,6 +296,8 @@ function Test-HordeMessengerMessage {
         if (-not $fs.has -or -not (Test-HordeMessengerText $fs.value $p.session)) { [void]$out.Add("from.sessionId is not a session id") }
         $fl = Get-HordeMessengerMember $from.value "label"
         if ($fl.has -and -not (Test-HordeMessengerText $fl.value $p.label)) { [void]$out.Add("from.label is not a hub label") }
+        $fv = Get-HordeMessengerMember $from.value "verified"
+        if ($fv.has) { foreach ($x in @(Test-HordeMessengerVerified $fv.value)) { [void]$out.Add($x) } }
     }
     $body = Get-HordeMessengerMember $Message "body"
     if (-not $body.has -or $body.value -isnot [string] -or "$($body.value)".Trim() -eq "") { [void]$out.Add("body is blank: there is nothing to deliver") }

@@ -354,6 +354,11 @@ try {
     $msg = $(if ($recs.Count -eq 1) { $recs[0].message } else { $null })
     Check ($null -ne $msg -and $msg.sessionId -ceq (Get-ThrallSession $I) -and $msg.body -ceq ("FOUNDER LINE from the phone (line " + $mid + ")`n`n" + $words)) "to the Thrall's session, his words exactly under one header naming the phone's message id"
     Check ($null -ne $msg -and $msg.messageId -ceq (Get-HordeChatChannelMessageId -From $I.phone.keyId -MessageId $mid -Text $words) -and $msg.from.label -ceq "F" -and $msg.from.sessionId -ceq "horde-relay-chat") "its id is derived from the sender and the phone's message id; it is from the founder's label"
+    # VERIFIED (the founder's first live use, 2026-10-11: his lines read "the sender calls itself: F (not
+    # verified)"): the relay checked the line's signature against his trusted passkey, and says so, by
+    # that passkey's key id, so the messenger can name him as verified.
+    $vf = $(if ($null -ne $msg) { $msg.from.PSObject.Properties["verified"] } else { $null })
+    Check ($null -ne $vf -and $vf.Value.kind -ceq "founder" -and $vf.Value.by -ceq "passkey" -and $vf.Value.keyId -ceq $I.phone.keyId) ("and it says the sender was verified: the founder, by the passkey that signed it (" + $(if ($null -ne $vf) { ConvertTo-Json $vf.Value -Compress } else { "no verified member" }) + ")")
     $rc = @(Get-Receipts @(Get-NewMail $I))
     Check ($rc.Count -eq 1 -and $rc[0].messageId -ceq $mid -and $rc[0].status -ceq "accepted" -and $rc[0].code -ceq "queued" -and $rc[0].text -ceq $words -and $rc[0].session -ceq (Get-ThrallSession $I)) ("a receipt comes back: accepted, queued, with his words (" + $(if ($rc.Count) { $rc[0].status + "/" + $rc[0].code } else { "none" }) + ")")
 

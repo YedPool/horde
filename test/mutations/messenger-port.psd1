@@ -93,5 +93,27 @@
         @{ Name = "status-skips-registration"
            Find = 'if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger ''" + (Get-HordeMessengerLabel $Messenger) + "'' is not registered through Register-HordeMessenger, so its status was not asked")) }'
            Replace = '' }
+        # --- a verified sender (the founder's first live use, 2026-10-11)
+        @{ Name = "verified-member-not-allowed"
+           Find = '@("deviceId", "sessionId", "label", "verified")'
+           Replace = '@("deviceId", "sessionId", "label")' }
+        @{ Name = "verified-not-checked"
+           Find = 'if ($fv.has) { foreach ($x in @(Test-HordeMessengerVerified $fv.value)) { [void]$out.Add($x) } }'
+           Replace = '$null = $fv' }
+        @{ Name = "verified-extra-member-allowed"
+           Find = 'if ($script:HordeMessengerVerifiedMembers -cnotcontains $n)'
+           Replace = 'if ($false)' }
+        @{ Name = "verified-any-kind"
+           Find = '$script:HordeMessengerVerifiedKinds -cnotcontains $k.value'
+           Replace = '$false' }
+        @{ Name = "verified-by-any-means"
+           Find = '$script:HordeMessengerVerifiedBy -cnotcontains $b.value'
+           Replace = '$false' }
+        @{ Name = "verified-key-id-unchecked"
+           Find = 'if (-not $i.has -or -not (Test-HordeMessengerText $i.value $script:HordeMessengerVerifiedKeyIdPattern))'
+           Replace = 'if (-not $i.has)' }
+        @{ Name = "verified-key-id-any-case"
+           Find = '$script:HordeMessengerVerifiedKeyIdPattern = ''\A[0-9a-f]{32}\z'''
+           Replace = '$script:HordeMessengerVerifiedKeyIdPattern = ''\A[0-9a-fA-F]{32}\z''' }
     )
 }
