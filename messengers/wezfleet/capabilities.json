@@ -16,7 +16,7 @@
     },
     "wake": {
       "support": "yes",
-      "evidence": "Run against the fake only: exactly one wake per message, one line, no control characters, none of the body (test-messenger-conformance.ps1, 2026-10-06). Read, not run: wezfleet main 1122461 types its one-line notice carrying only the id, and only into a registry-verified pane whose current occupant is the target (lib/MailPost.ps1, Invoke-WfMailWake). No real wake into a real pane has been measured: the isolated probe of 2026-10-09 had no registry record, so main answered no-registry-record and typed nothing."
+      "evidence": "Run against the fake only: exactly one wake per message, one line, no control characters, none of the body (test-messenger-conformance.ps1, 2026-10-06). Read, not run: wezfleet main 1122461 types its one-line notice carrying only the id, and only into a registry-verified pane whose current occupant is the target (lib/MailPost.ps1, Invoke-WfMailWake). The isolated probe of 2026-10-09 had no registry record, so main answered no-registry-record and typed nothing. Read from wezfleet's own records of real posts on 2026-10-12 (its mail records and delivery log, wezfleet f795a89): posts made by a process a pane started woke their target (notifiedAt stamped, outcome delivered) or were refused by an input box holding unsent text (outcome occupied, as a tell is); posts made by the relay runner, a hidden process no pane started, were never woken (pane-unverified: the terminal did not answer, for want of the terminal's socket in its environment), which wezfleet's fix/mail-post-wake mends. Each post's answer now says which happened (woken), and the conformance suite holds that word to what the fake target saw."
     }
   }
 }

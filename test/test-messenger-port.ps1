@@ -241,6 +241,48 @@ $a = Get-HordeMessengerStatus -Messenger $scripted -MessageId "0e000000-0000-400
 Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") "a stage that moved backward (seen, then accepted) is passed through as the adapter said it, not corrected by the port"
 
 Write-Host ""
+Write-Host "--- the wake word: woken or only queued, a post's, and only from a messenger that offers wake ---" -ForegroundColor Cyan
+# The founder's bug of 2026-10-12: his phone's lines were in his Thrall's mailbox in seconds, every
+# caller said the messenger "took it", and the Thrall slept on. A messenger that offers wake now says, on
+# each post, whether its knock landed, and the port carries exactly that.
+$script:wakeValue = $null
+$script:wakeStatus = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "" } }
+$wakes = Reg "fixture-wakes" -Post { param($m) New-HordeKnown -Value (& $script:wakeValue $m.messageId) -ObservedAt ([datetime]::UtcNow) } -Status { param($id) New-HordeKnown -Value (& $script:wakeStatus $id) -ObservedAt ([datetime]::UtcNow) }
+Check (Test-HordeMessengerCapability -Messenger $wakes -Capability "wake") "CONTROL: the fixture offers wake"
+$script:wakeValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "woken"; woken = $true } }
+$a = Send-HordeMessengerMessage -Messenger $wakes -Message (New-Msg)
+Check ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["woken"] -and $a.value.woken -is [bool] -and $a.value.woken) "a post that woke its target says woken, true"
+Check ((Format-HordeMessengerWake -Answer $a) -ceq "woken") ("and the words for it are 'woken' (" + (Format-HordeMessengerWake -Answer $a) + ")")
+$script:wakeValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "send-refused: not woken (occupied)"; woken = $false } }
+$a = Send-HordeMessengerMessage -Messenger $wakes -Message (New-Msg)
+Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and $null -ne $a.value.PSObject.Properties["woken"] -and $a.value.woken -is [bool] -and -not $a.value.woken) "a post that is in the mailbox with nobody woken is accepted, and says woken, false"
+Check ((Format-HordeMessengerWake -Answer $a) -ceq "queued, NOT woken: send-refused: not woken (occupied)") ("and the words say queued, NOT woken, and why (" + (Format-HordeMessengerWake -Answer $a) + ")")
+$script:wakeValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = ""; woken = $false } }
+$a = Send-HordeMessengerMessage -Messenger $wakes -Message (New-Msg)
+Check ((Format-HordeMessengerWake -Answer $a) -ceq "queued, NOT woken") "with no reason given, the words are queued, NOT woken, and nothing invented after them"
+$script:wakeValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "already-posted" } }
+$a = Send-HordeMessengerMessage -Messenger $wakes -Message (New-Msg)
+Check ($a.state -ceq "known" -and $null -eq $a.value.PSObject.Properties["woken"]) "a post that does not say (a repost knocks nobody again) carries no woken"
+Check ((Format-HordeMessengerWake -Answer $a) -ceq "") "and there are no words for it: nothing is claimed either way"
+foreach ($notBool in @("yes", 1, "false")) {
+    $script:wakeNot = $notBool
+    $script:wakeValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = ""; woken = $script:wakeNot } }
+    $a = Send-HordeMessengerMessage -Messenger $wakes -Message (New-Msg)
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("woken that is not true or false")) ("woken that is not true or false is unknown, never read as either (" + $notBool + ": " + $a.reason + ")")
+}
+# A CLAIM TO HAVE WOKEN, FROM A MESSENGER THAT DECLARES NO WAKE, IS NOT CARRIED: only yes counts.
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = ""; woken = $true } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check (-not (Test-HordeMessengerCapability -Messenger $scripted -Capability "wake") -and $a.state -ceq "known" -and $null -eq $a.value.PSObject.Properties["woken"]) "a messenger that declares no wake cannot say it woke anyone: the answer is read, without woken"
+Check ((Format-HordeMessengerWake -Answer $a) -ceq "") "and no words are made for it"
+# A STATUS NEVER CARRIES IT: the knock belongs to the post.
+$script:wakeStatus = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = ""; woken = $true } }
+$a = Get-HordeMessengerStatus -Messenger $wakes -MessageId "0e000000-0000-4000-8000-000000000001"
+Check ($a.state -ceq "known" -and $null -eq $a.value.PSObject.Properties["woken"]) "a status carries no woken, even from a messenger that offers wake"
+Check ((Format-HordeMessengerWake -Answer (New-HordeUnknown -Reason "could not say")) -ceq "" -and (Format-HordeMessengerWake -Answer $null) -ceq "" -and (Format-HordeMessengerWake -Answer "woken") -ceq "") "an answer that is not known, or not an answer, has no wake words"
+[void]$script:HordeMessengers.Remove("fixture-wakes")
+
+Write-Host ""
 Write-Host "--- only a registered messenger is called ---" -ForegroundColor Cyan
 
 $script:fakeCalled = 0

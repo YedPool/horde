@@ -224,5 +224,18 @@
         @{ Name = "dictionary-from-label-lost"
            Find = '$fl = Get-HordeMessengerMember $from.value "label"'
            Replace = '$fl = $(if ($from.value -is [System.Collections.IDictionary]) { [pscustomobject]@{ has = $false; value = $null } } else { Get-HordeMessengerMember $from.value "label" })' }
+        # --- woken, or only queued (the founder's bug of 2026-10-12)
+        @{ Name = "woken-claimed-against-the-code"
+           Find = '$value["woken"] = ($j.woken -eq $true -and $code -ceq "woken") }'
+           Replace = '$value["woken"] = ($j.woken -eq $true) }' }
+        @{ Name = "woken-from-the-code-alone"
+           Find = '($j.woken -eq $true -and $code -ceq "woken") }'
+           Replace = '($code -ceq "woken") }' }
+        @{ Name = "repost-says-the-target-sleeps"
+           Find = ' -and $code -cne "already-posted") { $value["woken"]'
+           Replace = ') { $value["woken"]' }
+        @{ Name = "held-says-woken-or-not"
+           Find = '-and [int]$Run.exit -eq 0 -and $code -cne "already-posted"'
+           Replace = '-and $code -cne "already-posted"' }
     )
 }

@@ -226,7 +226,10 @@ function Invoke-HordeRelayRun {
                 foreach ($l in @(Get-HordeRelayRunLines -Report $r1.value)) { $null = & $Say $l }
                 $ticks = Invoke-HordeRelayChannelTicks -Context $ctx
                 foreach ($l in @($ticks.lines)) { $null = & $Say $l }
-                $in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $watchMs
+                # A channel that asked to be turned again sooner (the decisions bell, at the end of a
+                # quiet period) is: this watch waits no longer than it asked. A put still ends it at once.
+                $turnWatch = Get-HordeRelayRunTurnWatchMs -WatchMs $watchMs -AgainMs $ticks.againMs
+                $in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $turnWatch
                 if ($in.state -cne "known") { $failed = "the mailbox could not be read: " + $in.reason }
                 else {
                     foreach ($l in @($in.value.refused)) { $null = & $Say ("refused " + $l) }
@@ -259,6 +262,14 @@ function Invoke-HordeRelayRun {
     }
     $null = & $Say ("stopped after " + $turns + " turn(s): " + $stoppedBy)
     return [pscustomobject]@{ turns = $turns; failures = $failures; stoppedBy = $stoppedBy }
+}
+
+function Get-HordeRelayRunTurnWatchMs {
+    # How long this turn's watch waits: the run's watch, or the channels' againMs when that is sooner.
+    # 0 or less from the channels means nobody asked.
+    param([Parameter(Mandatory = $true)][int]$WatchMs, $AgainMs = 0)
+    if ($AgainMs -is [int] -and $AgainMs -gt 0 -and $AgainMs -lt $WatchMs) { return [int]$AgainMs }
+    return $WatchMs
 }
 
 function Get-HordeRelayRunLines {

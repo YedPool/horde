@@ -68,8 +68,13 @@ $postBlock = {
     if ($script:postFails) { throw "the test messenger cannot take it now" }
     $id = "$($Message.messageId)"
     if (-not $script:posts.ContainsKey($id)) { $script:posts[$id] = @{ message = $Message; by = $null } }
-    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "" }))
+    $said = [ordered]@{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = $script:postWhy }
+    if ($null -ne $script:postWoken) { $said["woken"] = $script:postWoken }
+    return (New-HordeKnown -Value ([pscustomobject]$said))
 }
+# What a test messenger says of its knock: $null says nothing, as before; true or false is its woken.
+$script:postWoken = $null
+$script:postWhy = ""
 $statusBlock = { param([string]$MessageId) return (New-HordeAbsent -Note "not kept") }
 function Register-TestMessenger {
     param([string]$Name)
@@ -188,7 +193,7 @@ function Get-Line {
 }
 function Has { param($Turn, [string]$Text) return [bool]($Turn.text.Contains($Text)) }
 function Get-Records { return @($script:posts.Values) }
-function Reset-Posts { $script:posts = @{}; $script:postCalls = 0; $script:postFails = $false }
+function Reset-Posts { $script:posts = @{}; $script:postCalls = 0; $script:postFails = $false; $script:postWoken = $null; $script:postWhy = "" }
 
 try {
     Write-Host ""
@@ -600,6 +605,36 @@ try {
     [System.IO.File]::WriteAllText($hD, '{"schemaVersion": 1, "settings": {"lineChars": 60000}}', $utf8)
     $sD = Get-HordeModuleSettings -Declaration (Get-HordeChatChannelSettingsDeclaration) -HordeHome $D4.home
     Check ($sD.state -ceq "refused") "a lineChars no message could carry is refused by the settings"
+
+    Write-Host ""
+    Write-Host "--- WAKE. the line says whether the Thrall was woken, or only has it in its mailbox ---" -ForegroundColor Cyan
+    # The founder's bug of 2026-10-12: his phone's lines reached this machine in seconds and every one
+    # read "accepted (queued) - messenger ... took it for the Thrall", while the Thrall slept until its
+    # next turn. In the mailbox is not woken, and the line now says which, in the messenger's own words.
+    $K = New-World
+    $null = Invoke-Tick $K; $null = Get-NewMail $K
+    Reset-Posts; Remove-TestMessengers; $null = Register-TestMessenger "chat-wakes"
+    $script:postWoken = $true; $script:postWhy = "woken"
+    [void](Send-ToMachine $K (Get-Line $K -Text "are you there?").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "accepted (queued)") -and (Has $turn "took it for the Thrall; woken") -and -not (Has $turn "NOT woken")) ("a line whose knock landed says woken (" + $turn.text + ")")
+    $script:postWoken = $false; $script:postWhy = "send-refused: not woken (occupied)"
+    [void](Send-ToMachine $K (Get-Line $K -Text "and now?").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "accepted (queued)") -and (Has $turn "took it for the Thrall; queued, NOT woken: send-refused: not woken (occupied)")) ("a line in the mailbox of a Thrall nobody woke says queued, NOT woken, and why (" + $turn.text + ")")
+    $rcK = @(Get-Receipts @(Get-NewMail $K))
+    Check (@(Get-Records).Count -eq 2 -and @($rcK | Where-Object { $_.status -ceq "accepted" -and $_.code -ceq "queued" }).Count -eq 2) "both are posted once, and the phone is told accepted, queued, for each: the code list is unchanged"
+    $script:postWoken = $null; $script:postWhy = ""
+    [void](Send-ToMachine $K (Get-Line $K -Text "a third").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "took it for the Thrall") -and -not (Has $turn "woken")) ("a messenger that does not say leaves the line as it was: nothing is claimed either way (" + $turn.text + ")")
+    # ONLY A MESSENGER THAT OFFERS WAKE IS BELIEVED: one that only sees, saying it woke the Thrall, is not.
+    Reset-Posts; Remove-TestMessengers; $null = Register-TestMessenger "chat-sees"
+    $script:postWoken = $true; $script:postWhy = "woken"
+    [void](Send-ToMachine $K (Get-Line $K -Text "a fourth").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "took it for the Thrall") -and -not (Has $turn "; woken")) ("a messenger that declares no wake cannot make the line say woken (" + $turn.text + ")")
+    Reset-Posts
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin

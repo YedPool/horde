@@ -716,8 +716,12 @@ function Invoke-HordeChatChannelAccept {
         $mine.durable.lines = @(@($mine.durable.lines) + @($mark) | Select-Object -Last $script:HordeChatChannelLinesKept)
         try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable } catch { }
     }
+    # WOKEN, OR ONLY QUEUED: the messenger's own word on its knock, said in the line (messengers/Port.ps1,
+    # THE WAKE WORD). A line in the mailbox of a Thrall nobody woke is read only at its next turn.
+    $wake = Format-HordeMessengerWake -Answer $posted
+    if ($wake -cne "") { $wake = "; " + $wake }
     switch ("$($posted.value.stage)") {
-        "accepted" { return (& $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall") $line.session) }
+        "accepted" { return (& $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall" + $wake) $line.session) }
         "held" { return (& $answer "done" "held" "not-delivered" ("messenger " + $messenger.value.name + " holds it, not delivered") $line.session) }
         "expired" { return (& $answer "done" "held" "expired" ("messenger " + $messenger.value.name + " gave it up undelivered") $line.session) }
         default { return (& $answer "done" "accepted" "delivered" ("messenger " + $messenger.value.name + " handed it to the Thrall (" + $posted.value.stage + ")") $line.session) }

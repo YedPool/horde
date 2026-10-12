@@ -52,6 +52,18 @@
 # (idempotent.post). The port's own known value leaves reason out when it is empty, because
 # schema/link-verbs.v1's delivery.reason requires text.
 #
+# THE WAKE WORD (the founder's bug of 2026-10-12: his phone's lines and answers were in his Thrall's
+# mailbox within seconds, every caller said "took it", and the Thrall slept on, because a mailbox is not
+# a doorbell and nobody said which had happened). A messenger that offers wake says, on each POST, whether
+# its knock landed: the known value's woken, true or false. true: the target was woken for this message.
+# false: the message is in the mailbox and the target was NOT woken - its reason says why (its box held
+# somebody's unsent text, no pane of its own was found), and it is read at the target's next turn. Left
+# out: the messenger did not say - a repost that knocks nobody again, a stage that needs no knock. The
+# port passes it on only from a messenger whose wake is "yes" - a claim to have woken, from one that
+# declares no wake, is not carried - and only as true or false: anything else there is unknown. A status
+# never carries it: the knock belongs to the post. Format-HordeMessengerWake gives the words every caller
+# prints, so the decisions doorbell and the chat channel say the same thing of the same answer.
+#
 # THE MESSAGE: { messageId; sessionId; label (optional); from { deviceId; sessionId; label (optional);
 # verified (optional) }; body; ttlSeconds }, the shape of session.deliver's arguments
 # (schema/link-verbs.v1), with the same patterns, read from that schema so there is one definition of
@@ -314,7 +326,7 @@ function ConvertFrom-HordeMessengerAnswer {
     # The adapter's answer, checked: a tristate answer whose known value has a stage of the list and a
     # time. Anything else is unknown with the reason. -AllowAbsent is for Status, where absent means
     # "never took it"; a post that answers absent has said nothing about the message it was handed.
-    param($Answer, [string]$MessageId, [string]$What, [string]$Messenger, [switch]$AllowAbsent)
+    param($Answer, [string]$MessageId, [string]$What, [string]$Messenger, [switch]$AllowAbsent, [switch]$TakeWoken)
     if (-not (Test-HordeAnswer $Answer)) { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " with something that is not an answer")) }
     if ($Answer.state -ceq "unknown") { return $Answer }
     if ($Answer.state -ceq "absent") {
@@ -342,7 +354,28 @@ function ConvertFrom-HordeMessengerAnswer {
     $value = [ordered]@{ messageId = $MessageId; stage = [string]$stage.value; at = ([datetime]$at.value).ToUniversalTime() }
     # Left out when empty: link-verbs' delivery.reason requires text (review of #102, finding 5).
     if ($why.Trim() -ne "") { $value["reason"] = $why }
+    # THE WAKE WORD (header): true or false or nothing, and carried only when -TakeWoken says this is a
+    # post by a messenger that offers wake.
+    $woken = Get-HordeMessengerMember $v "woken"
+    if ($woken.has -and $null -ne $woken.value) {
+        if ($woken.value -isnot [bool]) { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " with woken that is not true or false")) }
+        if ($TakeWoken) { $value["woken"] = [bool]$woken.value }
+    }
     return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $Answer.observedAt)
+}
+
+function Format-HordeMessengerWake {
+    # What a post's answer says of the wake (THE WAKE WORD, in the header), in the words every caller
+    # prints: "woken"; "queued, NOT woken", with the messenger's reason after it when it gave one; or ""
+    # when the answer is not known or the messenger did not say.
+    param($Answer)
+    if ($null -eq $Answer -or -not (Test-HordeAnswer $Answer) -or $Answer.state -cne "known") { return "" }
+    $woken = Get-HordeMessengerMember $Answer.value "woken"
+    if (-not $woken.has -or $woken.value -isnot [bool]) { return "" }
+    if ($woken.value) { return "woken" }
+    $why = Get-HordeMessengerMember $Answer.value "reason"
+    if ($why.has -and "$($why.value)".Trim() -ne "") { return ("queued, NOT woken: " + $why.value) }
+    return "queued, NOT woken"
 }
 
 function Test-HordeMessengerRegistered {
@@ -374,7 +407,7 @@ function Send-HordeMessengerMessage {
     $id = "$((Get-HordeMessengerMember $Message 'messageId').value)"
     try { $a = & $Messenger.post $Message }
     catch { return (New-HordeUnknown -Reason ("messenger '" + $Messenger.name + "' failed to post " + $id) -ErrorRecord $_) }
-    return (ConvertFrom-HordeMessengerAnswer -Answer $a -MessageId $id -What "a post" -Messenger $Messenger.name)
+    return (ConvertFrom-HordeMessengerAnswer -Answer $a -MessageId $id -What "a post" -Messenger $Messenger.name -TakeWoken:(Test-HordeMessengerCapability -Messenger $Messenger -Capability "wake"))
 }
 
 function Get-HordeMessengerStatus {
