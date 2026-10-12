@@ -13,6 +13,13 @@
         @{ Name = "evidence-not-the-records"
            Find = 'wordingVersion = $r.value.wordingVersion; evidence = $Item.evidence'
            Replace = 'wordingVersion = $r.value.wordingVersion; evidence = ("0" * 64)' }
+        # Who signed, written once from the verified envelope (2026-10-12).
+        @{ Name = "signer-not-written-in-the-record"
+           Find = '        signedBy = $Item.from'
+           Replace = '' }
+        @{ Name = "signer-taken-from-the-answers-own-text"
+           Find = '        signedBy = $Item.from'
+           Replace = '        signedBy = $r.value.machine' }
         @{ Name = "answer-recorded-as-the-window"
            Find = 'speaker = "founder"; route = "phone"; text = $r.value.text'
            Replace = 'speaker = "founder"; route = "window"; text = $r.value.text' }

@@ -36,6 +36,9 @@ $fleetPin = Enter-HordeTestEmptyFleet
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
 . (Join-Path $root "cli\RelayRun.ps1")
+# The doorbell for the founder's answers: what it says of a phone answer's signer is checked here, where
+# the answer, its journal record and the trust store are all real.
+. (Join-Path $root "decisions\Notify.ps1")
 . (Join-Path $root "test\lib\RelayPhone.ps1")
 . (Join-Path $root "test\lib\HostileRelay.ps1")
 Set-StrictMode -Version Latest
@@ -548,6 +551,44 @@ try {
     [void](Revoke-HordeRelayTrust -HordeHome $W.home -Subject "device" -Id $W.phone.deviceId -Reason "phone lost")
     $after = Invoke-HordeRelayUnfinished -Context $W.ctx
     Check (@($after.value.refused).Count -eq 1 -and (@($after.value.refused)[0]).Contains("not opened") -and @(Get-Said $W.store).Count -eq 2) "a record journaled before its passkey was revoked is not opened after: the senders are the ones trusted now"
+
+    Write-Host ""
+    Write-Host "--- a phone answer's record names the passkey that signed it, and notify says verified only while that passkey is trusted ---" -ForegroundColor Cyan
+    if ($script:canDecide) {
+    $W = New-World
+    $e = Get-Answer $W -Text "From the phone."
+    [void](Send-ToMachine $W $e.text)
+    $t = Invoke-Turn $W
+    $said = @(Get-Said $W.store)
+    Check ((Has $t "done") -and $said.Count -eq 1 -and (Get-Member2 $said[0].data "signedBy") -ceq $W.phone.keyId -and $e.header.from -ceq $W.phone.keyId) ("the answer's record names the key id of the passkey its envelope was verified against (" + (Get-Member2 $said[0].data "signedBy") + ")")
+    Check ((Get-Member2 $said[0].data "signedBy") -cne $W.id.sign.keyId -and (Get-Member2 $said[0].data "signedBy") -cmatch '\A[0-9a-f]{32}\z') "a key id, and the phone's, not this machine's"
+    # Notify over that store, with the home's REAL trust store; only the messenger and the seat are
+    # stand-ins, so nothing leaves the process. The registry is put back whatever happens.
+    $keepMessengers = $script:HordeMessengers
+    $script:HordeMessengers = @{}
+    $script:notifyPosts = New-Object System.Collections.ArrayList
+    try {
+        $null = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\decisions-notify\doorbell") `
+            -Post { param($Message) [void]$script:notifyPosts.Add($Message); return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Message.messageId)"; stage = "accepted"; at = [datetime]::UtcNow; reason = "" }) -ObservedAt ([datetime]::UtcNow)) } `
+            -Status { param($MessageId) return (New-HordeAbsent -Note "the stand-in keeps no status") }
+        $notifySeat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = "warchief-session-1"; pane = "3"; instance = "t1" })) }
+        $notifyClock = { return [datetime]::UtcNow.AddSeconds(5) }
+        Use-World $W
+        $tracker = New-HordeDecisionNotifyTracker -QuietSeconds 0
+        $p = Invoke-HordeDecisionNotifyPass -Tracker $tracker -Clock $notifyClock -Seat $notifySeat -HordeHome $W.home
+        $v = $(if ($script:notifyPosts.Count -eq 1) { Get-Member2 $script:notifyPosts[0].from "verified" } else { $null })
+        Check ($p.outcome -ceq "rang" -and $null -ne $v -and $v.kind -ceq "founder" -and $v.by -ceq "passkey" -and $v.keyId -ceq $W.phone.keyId) ("notify tells the warchief of it as the founder, verified by that passkey - read from the record, asked of the trust store (" + $p.said + ")")
+        Check ($p.said.Contains("; as the founder, verified by his passkey " + $W.phone.keyId)) "and its line says so"
+        $e2 = Get-Answer $W -Text "Sent before the phone was lost."
+        [void](Send-ToMachine $W $e2.text)
+        $t2 = Invoke-Turn $W
+        Check ((Has $t2 "done") -and @(Get-Said $W.store).Count -eq 2) ("CONTROL: a second answer by the same passkey lands while it is trusted (" + $t2.text + ")")
+        [void](Revoke-HordeRelayTrust -HordeHome $W.home -Subject "device" -Id $W.phone.deviceId -Reason "phone lost")
+        $p = Invoke-HordeDecisionNotifyPass -Tracker $tracker -Clock $notifyClock -Seat $notifySeat -HordeHome $W.home
+        Check ($p.outcome -ceq "rang" -and $script:notifyPosts.Count -eq 2 -and $null -eq (Get-Member2 $script:notifyPosts[1].from "verified") -and "$($script:notifyPosts[1].from.label)" -ceq "F") ("once the passkey is revoked, the notice for an answer it signed goes by label only (" + $p.said + ")")
+        Check ($p.said.Contains("; by label only: the passkey that signed is not trusted now: ") -and $p.said.Contains("revoked") -and $p.said.Contains("phone lost")) "and its line gives the revocation as the reason"
+    } finally { $script:HordeMessengers = $keepMessengers }
+    }
 
     Write-Host ""
     Write-Host "--- a relay that lies cannot make an answer land twice, or out of order ---" -ForegroundColor Cyan

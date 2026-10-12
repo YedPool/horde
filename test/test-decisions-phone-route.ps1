@@ -16,6 +16,11 @@
 #     refused;
 #   - A STORED RECORD IS A FACT: its evidence reads back verbatim, a damaged one is unreadable, and the
 #     view shows it.
+#   - WHO SIGNED (signedBy, 2026-10-12): the key id of the passkey the relay channel verified the answer
+#     against is kept once, in the record, on the route phone only - refused on every other route and in
+#     every other spelling - and Get-HordeDecisionSigner, the one reader of it for a claim, names a
+#     passkey only for a phone record with its evidence and a key id: never for a record written before
+#     the member, and never for a record by another route that holds it anyway.
 #
 # EVERY STORE IS A FOLDER THIS SUITE MADE under %TEMP% and removes (CONTRIBUTING 9), named in each call
 # with -Root. The real store under the user profile is listed before and after, and must not have changed.
@@ -67,12 +72,14 @@ function Add-Q { param([string]$Store) return (Invoke-Op $Store "add" @{ id = (N
 function Phone {
     # The founder's answer from his phone, as the relay channel sends it, unless the parameters say
     # otherwise. -Evidence "-" leaves the evidence out; -Wording 0 leaves the wording out.
-    param([string]$Store, [string]$Text = "Yes, play it.", [string]$Evidence = "", [int]$Wording = 1, [string]$Speaker = "founder", [string]$Actor = "founder", [string]$Route = "phone", [string]$Id = "", [int]$Number = 1)
+    # -SignedBy names the passkey that signed; without it the request names none, as before 2026-10-12.
+    param([string]$Store, [string]$Text = "Yes, play it.", [string]$Evidence = "", [int]$Wording = 1, [string]$Speaker = "founder", [string]$Actor = "founder", [string]$Route = "phone", [string]$Id = "", [int]$Number = 1, [string]$SignedBy = "")
     if ($Id -eq "") { $Id = New-Id }
     if ($Evidence -eq "") { $Evidence = New-Evidence }
     $request = @{ id = $Id; actor = $Actor; number = $Number; speaker = $Speaker; route = $Route; text = $Text }
     if ($Evidence -ne "-") { $request["evidence"] = $Evidence }
     if ($Wording -gt 0) { $request["wordingVersion"] = $Wording }
+    if ($SignedBy -ne "") { $request["signedBy"] = $SignedBy }
     return (Invoke-Op $Store "say" $request)
 }
 function Get-Outcome { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; return "$($Answer.value.outcome)" }
@@ -192,6 +199,89 @@ try {
     [System.IO.File]::WriteAllText($p2, [regex]::Replace($t2, ',"evidence":"[0-9a-f]{64}"', ''), $utf8)
     $l2 = Invoke-Op $s2 "show" @{ number = 1 }
     Check ((Get-Outcome $l2) -ceq "done" -and @($l2.value.unreadable).Count -eq 0 -and $l2.value.question.thread.count -eq 1 -and (Get-Member (@($l2.value.question.thread.messages) | Select-Object -First 1) "evidence") -ceq "") "a stored phone record without evidence is still read - stored records are facts - and shows no evidence rather than inventing one"
+    Write-Host ""
+    Write-Host "--- who signed: the passkey's key id, kept once in the record, on the route phone only ---" -ForegroundColor Cyan
+    $s = New-TestStore
+    $null = Add-Q $s
+    $key = "0123456789abcdef0123456789abcdef"
+    $proof = New-Evidence -Of "signed delivery"
+    $a = Phone $s -Evidence $proof -SignedBy $key
+    $m = Get-Said $a
+    Check ((Get-Outcome $a) -ceq "done" -and (Get-Member $m "signedBy") -ceq $key) ("a phone answer that names the passkey that signed it is written, and hands the key id back (" + (Get-Outcome $a) + ")")
+    $rec = Read-Record $s 2
+    Check ((Get-Member $rec.data "signedBy") -ceq $key -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "evidence,number,route,signedBy,speaker,text,wordingVersion") "the record holds it, once, beside the evidence, and nothing else is new"
+    Check ((Get-Member (@((Get-Thread $s).messages) | Select-Object -First 1) "signedBy") -ceq $key) "and show hands it back with the message"
+    $plainPhone = Phone $s
+    Check ((Get-Outcome $plainPhone) -ceq "done" -and (Get-Member (Get-Said $plainPhone) "signedBy") -ceq "" -and (Get-Member (Read-Record $s 3).data "signedBy") -ceq "(no signedBy)") "CONTROL: a phone answer that names no passkey is still written - a caller from before the member - and its record holds none"
+    $before = Get-Count $s
+    $w = Invoke-Op $s "say" @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "typed"; wordingVersion = 1; signedBy = $key }
+    Check (Test-Refused $w "carry no 'signedBy'") "signedBy on words typed in the window is refused: no passkey signed them"
+    $c = Invoke-Op $s "say" @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "founder"; route = "chat-recorded"; text = "heard"; signedBy = $key }
+    Check (Test-Refused $c "carry no 'signedBy'") "and so is signedBy on words written down from chat"
+    $k = Invoke-Op $s "say" @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "said"; signedBy = $key }
+    Check (Test-Refused $k "carry no 'signedBy'") "and on the warchief's own words by command"
+    foreach ($bad in @(("A" * 32), ("a" * 31), ("a" * 33), ("g" * 32), ("a" * 64), " ")) {
+        $b = Phone $s -SignedBy $bad
+        Check ((Get-Outcome $b) -ceq "refused") ("signedBy '" + $bad + "' is not a key id, and is refused (" + (Get-Outcome $b) + ")")
+    }
+    Check ((Get-Count $s) -eq $before) "nothing of those was written"
+    # The rule's own words, when a caller reaches it without the schema.
+    Check (@(Test-HordeDecisionSaying -Speaker "founder" -Route "phone" -Actor "founder" -Text "x" -EvidenceStated $true -Evidence $proof -SignedByStated $true -SignedBy ("A" * 32) | Where-Object { "$_".Contains("'signedBy' is not a key id") }).Count -eq 1) "the rules refuse a signedBy that is not 32 lower-case hex in their own words"
+    Check (@(Test-HordeDecisionSaying -Speaker "founder" -Route "phone" -Actor "founder" -Text "x" -EvidenceStated $true -Evidence $proof -SignedByStated $true -SignedBy $key).Count -eq 0) "CONTROL: and take one that is"
+    # It is not part of what makes a request the same: the first answer wins, with what it named.
+    $s = New-TestStore
+    $null = Add-Q $s
+    $id = New-Id
+    $old = Phone $s -Id $id
+    $again = Phone $s -Id $id -SignedBy $key
+    Check ((Get-Outcome $old) -ceq "done" -and (Get-Outcome $again) -ceq "replayed" -and $again.value.sequence -eq $old.value.sequence -and (Get-Member (Get-Said $again) "signedBy") -ceq "" -and (Get-Count $s) -eq 2) ("an answer recorded naming no passkey, handed over again naming one, is the first record answered again - and still names none (" + (Get-Outcome $again) + ")")
+    # A stored record is a fact: one written before the member reads as it always did.
+    $s = New-TestStore
+    $null = Add-Q $s
+    $null = Phone $s -SignedBy $key
+    $path = Join-Path $s "0000000002.json"
+    $text = [System.IO.File]::ReadAllText($path, $utf8)
+    Check ($text.Contains(',"signedBy":"' + $key + '"')) "CONTROL: the record spells its signedBy where this suite will change it"
+    [System.IO.File]::WriteAllText($path, $text.Replace(',"signedBy":"' + $key + '"', ''), $utf8)
+    $l = Invoke-Op $s "show" @{ number = 1 }
+    Check ((Get-Outcome $l) -ceq "done" -and @($l.value.unreadable).Count -eq 0 -and $l.value.question.thread.count -eq 1 -and (Get-Member (@($l.value.question.thread.messages) | Select-Object -First 1) "signedBy") -ceq "") "a phone record written before records named the passkey is read as it always was, and names none"
+    [System.IO.File]::WriteAllText($path, $text.Replace($key, $key.ToUpperInvariant()), $utf8)
+    $l = Invoke-Op $s "show" @{ number = 1 }
+    Check ((Get-Outcome $l) -ceq "done" -and @($l.value.unreadable).Count -eq 1 -and $l.value.question.thread.count -eq 0) "a record whose signedBy is not a key id is unreadable: its words are not shown, signed or not"
+    # A record by another route that holds the member anyway - written by hand, or by a later version:
+    # it is read, a fact, and shows what it holds; but it NAMES NOBODY (Get-HordeDecisionSigner).
+    $s = New-TestStore
+    $null = Add-Q $s
+    $null = Invoke-Op $s "say" @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "typed"; wordingVersion = 1 }
+    $path = Join-Path $s "0000000002.json"
+    $text = [System.IO.File]::ReadAllText($path, $utf8)
+    $forged = $text.Replace('"route":"window"', '"route":"window","signedBy":"' + $key + '"')
+    Check ($forged -cne $text) "CONTROL: the window record spells its route where this suite forges beside it"
+    [System.IO.File]::WriteAllText($path, $forged, $utf8)
+    $l = Invoke-Op $s "show" @{ number = 1 }
+    $fm = $(if ((Get-Outcome $l) -ceq "done" -and $l.value.question.thread.count -eq 1) { @($l.value.question.thread.messages)[0] } else { [pscustomobject]@{ route = "(unread)"; evidence = "(unread)"; signedBy = "(unread)" } })
+    Check ($fm.route -ceq "window" -and $fm.signedBy -ceq $key) "a window record forged to hold a signedBy is read as the fact it is"
+    $who = Get-HordeDecisionSigner -Route $fm.route -Evidence $fm.evidence -SignedBy $fm.signedBy
+    Check ($who.keyId -ceq "" -and $who.why.Contains("typed in the window")) ("but it names no passkey: no passkey signs words by that route (" + $who.why + ")")
+    Write-Host ""
+    Write-Host "--- Get-HordeDecisionSigner: a passkey is named only for a phone record with its evidence and a key id ---" -ForegroundColor Cyan
+    $ok = Get-HordeDecisionSigner -Route "phone" -Evidence $proof -SignedBy $key
+    Check ($ok.keyId -ceq $key -and $ok.why -ceq "") "the route phone, its evidence and a key id: that passkey is named"
+    foreach ($route in @("window", "chat-recorded", "command", "no-such-route", "")) {
+        $nobody = Get-HordeDecisionSigner -Route $route -Evidence $proof -SignedBy $key
+        Check ($nobody.keyId -ceq "" -and $nobody.why -cne "") ("by the route '" + $route + "' nobody is named, whatever the record holds (" + $nobody.why + ")")
+    }
+    $nobody = Get-HordeDecisionSigner -Route "phone" -Evidence "" -SignedBy $key
+    Check ($nobody.keyId -ceq "" -and $nobody.why.Contains("no evidence")) "a phone record with no evidence names nobody"
+    $nobody = Get-HordeDecisionSigner -Route "phone" -Evidence ("A" * 64) -SignedBy $key
+    Check ($nobody.keyId -ceq "" -and $nobody.why.Contains("no evidence")) "nor one whose evidence is not spelled as evidence"
+    $nobody = Get-HordeDecisionSigner -Route "phone" -Evidence $proof -SignedBy ""
+    Check ($nobody.keyId -ceq "" -and $nobody.why.Contains("written before")) "a phone record written before the member names nobody, and says that is why"
+    foreach ($bad in @(("A" * 32), ("a" * 31), ("a" * 33), ("a" * 32 + "`n"), ("g" * 32), "founder", $proof)) {
+        $nobody = Get-HordeDecisionSigner -Route "phone" -Evidence $proof -SignedBy $bad
+        Check ($nobody.keyId -ceq "" -and $nobody.why.Contains("not a key id")) ("a signedBy that is not a key id names nobody ('" + $bad.Trim() + "', " + $bad.Length + " characters)")
+    }
+
     Write-Host ""
     Write-Host "--- list with messages: the window's view, for a reader that is not the window ---" -ForegroundColor Cyan
     # The relay's snapshot (channels/decisions) reads the open questions with their conversation through
