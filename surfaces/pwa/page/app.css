@@ -12,9 +12,9 @@
    frame (app.js) sets them as the variables below, as frame.js does in the window.
    THE KEYS STAND OVER THE KEYBOARD: fixed to the bottom of the visual viewport, which app.js keeps in
    --kb (how much of the layout the soft keyboard covers), so the row is not hidden under it. */
-:root { --bg: #ffffff; --ink: #16181c; --muted: #68707c; --faint: #6e7682; --hint: #6e7682; --line: #e3e6ea; --accent: #1f5fae; --dim: #6e7682; --bar: #b4bac2; --warn: #a4331f; --font: system-ui, sans-serif; --text-px: 16px; --line-px: 24px; --small-px: 14px; --small-line-px: 20px; --kb: 0px; --keys-h: 52px; }
+:root { --bg: #ffffff; --ink: #16181c; --muted: #68707c; --faint: #6e7682; --hint: #6e7682; --line: #e3e6ea; --accent: #1f5fae; --dim: #6e7682; --bar: #b4bac2; --warn: #a4331f; --ok: #1a7f37; --font: system-ui, sans-serif; --text-px: 16px; --line-px: 24px; --small-px: 14px; --small-line-px: 20px; --kb: 0px; --keys-h: 52px; }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #17191d; --ink: #e9ebee; --muted: #9aa2ad; --faint: #7c838e; --hint: #858c97; --line: #2c3037; --accent: #8ab8f5; --dim: #7c838e; --bar: #555c66; --warn: #f0907c; }
+  :root { --bg: #17191d; --ink: #e9ebee; --muted: #9aa2ad; --faint: #7c838e; --hint: #858c97; --line: #2c3037; --accent: #8ab8f5; --dim: #7c838e; --bar: #555c66; --warn: #f0907c; --ok: #6fd08c; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -66,6 +66,12 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 /* The document's question row hangs its number in a 54 pixel margin made for a desk window; on a
    phone the margin is kept (the number must not move) and the field always goes under the question,
    which list.js does by itself when the line is narrow. */
+
+/* What is pressed with a finger is at least 44 pixels tall: the order's words, the word a question
+   folds to once answered, a folded part, and the line that unfolds the question a follow-up follows. */
+.hd-order { line-height: 44px; }
+.hd-order-btn, .hd-answered, .hd-follow-btn { min-height: 44px; }
+.hd-partdone { line-height: 44px; }
 
 #keys { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 6; display: flex; gap: 6px; padding: 4px 6px; padding-bottom: calc(4px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
 #keys button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0 2px; font-size: var(--small-px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
