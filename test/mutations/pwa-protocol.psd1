@@ -85,8 +85,8 @@
            Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
            Replace = 'if (false) return' }
         @{ Name = "chat-receipt-words-not-shown"
-           Find = 'text: r.text, at: had && had.at ? had.at : r.ts'
-           Replace = 'text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts' }
+           Find = 'messageId: r.messageId, text: r.text, at: had'
+           Replace = 'messageId: r.messageId, text: had ? had.text : r.text, at: had' }
         @{ Name = "chat-founder-turn-shown-twice"
            Find = 'if (t.role === "founder") {'
            Replace = 'if (false) {' }
