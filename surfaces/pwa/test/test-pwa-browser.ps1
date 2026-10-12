@@ -28,7 +28,12 @@
 #      WebAuthn, which a run posts to the Thrall once, and its receipt shows; at phone width nothing
 #      scrolls sideways and the composer stands at the foot; with the page scrolled to its end the other
 #      view's tab is still on the screen and a touch opens it, both ways, and the phone's Back goes back
-#      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page.
+#      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page;
+#  11. the progress tab (the founder asked for it, 2026-10-12): a changelog under the suite's home is sent by
+#      a run and drawn oldest to newest in the order written, each entry with its time, bold title, labelled
+#      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
+#      down moves his place, Jump to newest marks nothing, a reload opens at his place, Mark all read; the
+#      tab is reached by touch from the other views, and a lock takes the log off the page.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 
@@ -296,6 +301,66 @@ try {
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
     Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
+
+    Write-Host ""
+    Write-Host "--- 11. the progress tab: the log in the order written, his place kept, the newest always within reach ---" -ForegroundColor Cyan
+    # A changelog of the suite's own, in the shape the fleet's is, where a run with no progressFile set
+    # looks for it: under the suite's home.
+    $logFile = Join-Path $hh "progress\changelog.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $logFile) -Force | Out-Null
+    $kinds = @("started", "progress", "merged", "blocked", "waiting", "decision", "result", "done", "note")
+    $logLines = @(1..40 | ForEach-Object {
+        $extra = $(if ($_ -eq 1) { ',"lane":"F","task":"T-0096"' } else { '' })
+        '{"v":1,"id":"20261012T' + ('{0:d2}' -f (10 + ($_ % 10))) + '0000Z-' + ('{0:d2}' -f $_) + '","ts":"2026-10-12T' + ('{0:d2}' -f (10 + ($_ % 10))) + ':00:00Z","kind":"' + $kinds[($_ - 1) % 9] + '","area":"' + $(if ($_ % 2) { "Form fill" } else { "Ask Orah voice" }) + '"' + $extra + ',"title":"Progress entry ' + $_ + '","text":"Asked: do thing ' + $_ + '.\nHappened: it was done.\nMeans: one less to do.\nNext: thing ' + ($_ + 1) + '."}'
+    })
+    $logLines += '{"v":1,"id":"20261012T200000Z-41","ts":"2026-10-12T20:00:00Z","kind":"note","area":"Form fill","title":"Not quite","text":"Means: entry 2 was only half done.","corrects":"20261012T120000Z-02"}'
+    [System.IO.File]::WriteAllText($logFile, (($logLines | ForEach-Object { $_ + "`n" }) -join ""), $utf8)
+    $run = Invoke-Run -Turns 1
+    Check ($run.code -eq 0 -and $run.out.Contains("41 progress entries in ")) ("a run reads the changelog under its own home and sends its 41 entries (exit " + $run.code + ")")
+    $pt = Invoke-Browser @{ cmd = "progressTab" }
+    Check ($pt.ok -and $pt.value.shown -and -not $pt.value.doc -and -not $pt.value.chat -and -not $pt.value.keys -and $pt.value.selected -ceq "true") "a third tab, Progress, beside Decisions and Chat, shows the log, and the other views and the answering row go"
+    $pw = Invoke-Browser @{ cmd = "progressWait"; text = "Progress entry 40" }
+    $ids = @(); if ($pw.ok) { $ids = @($pw.value.ids) }
+    Check ($pw.ok -and $pw.value.found -and $pw.value.items -eq 41 -and $ids[0].EndsWith("-01") -and $ids[39].EndsWith("-40") -and $ids[40].EndsWith("-41")) ("the entries are drawn oldest to newest in the order they were written, though their times are not in order (" + $(if ($pw.ok) { "" + $pw.value.items } else { $pw.reason }) + ")")
+    Check ($pw.ok -and (@($pw.value.firstChips) -join "|") -ceq "Form fill|Started|Lane F|T-0096") ("an entry's chips: the area's plain name first, its kind in a plain word, and the lane and task when it names them (" + $(if ($pw.ok) { @($pw.value.firstChips) -join "|" } else { "" }) + ")")
+    Check ($pw.ok -and $pw.value.firstTime -cmatch '\A[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}\z' -and $pw.value.firstTitle -ceq "Progress entry 1" -and $pw.value.titleWeight -ge 600) ("with its day and time, and its title in bold (" + $(if ($pw.ok) { $pw.value.firstTime } else { "" }) + ")")
+    Check ($pw.ok -and (@($pw.value.firstLabels) -join "|") -ceq "Asked: |Happened: |Means: |Next: " -and @($pw.value.firstParagraphs).Count -eq 4 -and $pw.value.firstParagraphs[1] -ceq "Happened: it was done.") "its text is four short paragraphs, each label in bold"
+    Check ($pw.ok -and @($pw.value.corrections).Count -eq 1 -and $pw.value.corrections[0] -ceq "20261012T120000Z-02 <- Not quite" -and @($pw.value.notes) -ccontains "This corrects: Progress entry 2") ("a correction is shown on the entry it corrects, and in its own place says what it corrects (" + $(if ($pw.ok) { @($pw.value.corrections) -join "; " } else { "" }) + ")")
+    $null = Save-Shot "phone-progress"
+    $unread0 = $(if ($pw.ok -and $pw.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
+    Check ($pw.ok -and $unread0 -gt 20 -and $unread0 -lt 41 -and $pw.value.count -ceq ("" + $unread0 + " new") -and $null -eq $pw.value.mark -and $pw.value.scrollY -eq 0) ("never read before, it opens at its start; what stands on the screen is read, and the tab and the foot count the rest (" + $(if ($pw.ok) { $pw.value.tab } else { "" }) + ")")
+    Check ($pw.ok -and [math]::Abs($pw.value.footBottom - $pw.value.innerHeight) -le 1 -and $pw.value.newestInView -and $pw.value.scrollWidth -le $pw.value.innerWidth) "at phone width nothing scrolls sideways, and Jump to newest stands at the foot of the screen"
+    $ro = Invoke-Browser @{ cmd = "progressReadOn"; screens = 5 }
+    $unread1 = $(if ($ro.ok -and $ro.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
+    Check ($ro.ok -and $unread1 -gt 8 -and $unread1 -lt $unread0 -and $ro.value.newestInView) ("as he reads down, his place moves on with him - " + $unread0 + " new, then " + $unread1 + " - and Jump to newest is still on the screen")
+    $jump = Invoke-Browser @{ cmd = "progressTouch"; which = "newest" }
+    Check ($jump.ok -and $jump.value.atEnd -and @($jump.value.onScreen) -ccontains $ids[40] -and $jump.value.tab -ceq ("Progress (" + $unread1 + ")")) ("a touch on Jump to newest lands on the newest entry, and marks nothing read: the entries jumped past are still new (" + $(if ($jump.ok) { $jump.value.tab } else { $jump.reason }) + ")")
+    $firstUnread = $ids[41 - $unread1]
+    $null = Invoke-Browser @{ cmd = "reload" }
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $null = Invoke-Browser @{ cmd = "progressTab" }
+    $again = Invoke-Browser @{ cmd = "progressWait"; text = "Progress entry 40" }
+    Check ($again.ok -and $null -ne $again.value.mark -and $again.value.mark.before -ceq $firstUnread -and $again.value.mark.top -ge 0 -and $again.value.mark.top -le 40 -and @($again.value.onScreen) -ccontains $firstUnread) ("after a reload the log opens at his place: a line where the new entries begin, at the top of the screen, the first new entry under it (" + $(if ($again.ok -and $null -ne $again.value.mark) { $again.value.mark.before } else { "no line" }) + ")")
+    $unread2 = $(if ($again.ok -and $again.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
+    Check ($unread2 -gt 0 -and $unread2 -le $unread1) ("with the count of what is still new (" + $unread2 + " of " + $unread1 + ")")
+    $allRead = Invoke-Browser @{ cmd = "progressTouch"; which = "all" }
+    Check ($allRead.ok -and $allRead.value.tab -ceq "Progress" -and $allRead.value.count -ceq "All read") ("a touch on Mark all read leaves nothing new (" + $(if ($allRead.ok) { $allRead.value.tab + "; " + $allRead.value.count } else { $allRead.reason }) + ")")
+    $pdump = Invoke-Browser @{ cmd = "dump" }
+    Check ($pdump.ok -and $pdump.value.Contains('"progressRead":{"id":"20261012T200000Z-41","n":41}') -and -not $pdump.value.Contains("Progress entry") -and -not $pdump.value.Contains("Not quite") -and -not $pdump.value.Contains("Ask Orah")) "Chrome keeps his place - an entry's id and line number - and no word of the log"
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261012T210000Z-42","ts":"2026-10-12T21:00:00Z","kind":"done","area":"Whole fleet","title":"Written while he was reading","text":"Happened: one more."}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $live = Invoke-Browser @{ cmd = "progressWait"; text = "Written while he was reading" }
+    Check ($live.ok -and $live.value.found -and $live.value.items -eq 42) "an entry written meanwhile appears at the end without a reload"
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
+    $toProgress = Invoke-Browser @{ cmd = "navTouch"; to = "progress" }
+    $backFrom = Invoke-Browser @{ cmd = "back" }
+    Check ($toProgress.ok -and $toProgress.value.inView -and $toProgress.value.opened -and $backFrom.ok -and $backFrom.value.doc -and -not $backFrom.value.progress) ("with the questions scrolled to their end the Progress tab is still on the screen and a touch opens it; the phone's Back goes back to the questions (" + $(if ($toProgress.ok) { ConvertTo-Json $toProgress.value -Compress } else { $toProgress.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "progressTab" }
+    $lk = Invoke-Browser @{ cmd = "lock" }
+    $ps = Invoke-Browser @{ cmd = "progressState" }
+    Check ($lk.ok -and $lk.value.locked -and $ps.ok -and $ps.value.items -eq 0 -and $ps.value.tab -ceq "Progress") "a lock takes the log off the page, not only out of sight"
     $null = Invoke-Browser @{ cmd = "unlock" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }

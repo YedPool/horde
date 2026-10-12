@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   surfaces/pwa/page/index.html - the founder's phone app: every horde's open questions, answered with
-  a passkey, and its chat with the horde's Thrall, each line signed with the passkey. Served as app/index.html of the site New-HordePwaSite assembles (surfaces/pwa/Site.ps1),
+  a passkey, its chat with the horde's Thrall, each line signed with the passkey, and the fleet's progress log to read. Served as app/index.html of the site New-HordePwaSite assembles (surfaces/pwa/Site.ps1),
   beside the mounts it names by relative address: ../list/ (the decisions document, unchanged),
   ../relay/ (the protocol the test phone runs too) and ../surface/bridge-messages.json.
 
@@ -44,6 +44,7 @@
 <div id="viewTabs" role="tablist" aria-label="Views" hidden>
   <button type="button" id="tabDecisions" role="tab" aria-selected="true">Decisions</button>
   <button type="button" id="tabChat" role="tab" aria-selected="false">Chat</button>
+  <button type="button" id="tabProgress" role="tab" aria-selected="false">Progress</button>
 </div>
 </header>
 <div id="notice" hidden></div>
@@ -142,6 +143,17 @@
       <button type="button" id="chatNewline" aria-label="New line">New line</button>
       <button type="button" id="chatSend" class="primary" aria-label="Send to the Thrall">Send</button>
     </div>
+  </div>
+</div>
+
+<div id="progress" hidden>
+  <div id="progressNote" class="status" role="status" hidden></div>
+  <div id="progressLog" aria-live="polite"></div>
+  <div id="progressEmpty" class="hint" hidden>No progress has come from the machine yet. Entries appear here once the machine trusts this phone, its runner turns, and something is written to its progress log.</div>
+  <div id="progressFoot">
+    <span id="progressCount" role="status"></span>
+    <button type="button" id="progressAllRead" aria-label="Mark all read">Mark all read</button>
+    <button type="button" id="progressNewest" class="primary" aria-label="Jump to newest">Jump to newest</button>
   </div>
 </div>
 

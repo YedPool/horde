@@ -4,7 +4,7 @@
 //
 // THE SPECIFICATION IS THE POWERSHELL. Each section names the machine-side file whose strings it
 // copies: relay/Envelope.ps1, relay/Hpke.ps1, relay/Pairing.ps1, relay/Trust.ps1 and
-// channels/decisions/Channel.ps1 and channels/chat/Channel.ps1. A string here that differs from its twin there is a bug here; the
+// channels/decisions/Channel.ps1, channels/chat/Channel.ps1 and channels/progress/Channel.ps1. A string here that differs from its twin there is a bug here; the
 // end-to-end suites (test/test-relay-phone-e2e.ps1, surfaces/pwa/test/test-pwa-phone-e2e.ps1) put
 // what this file makes through the real machine code.
 //
@@ -676,4 +676,132 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
   for (const l of lines.values()) items.push({ ...l, order: l.order === undefined ? Number.MAX_SAFE_INTEGER : l.order });
   items.sort((a, b) => (a.at - b.at) || (a.order - b.order));
   return items;
+}
+
+// --- the progress channel (channels/progress/Channel.ps1) ---
+
+// THE FLEET'S PROGRESS LOG, machine to phone only: entries of the changelog the machine follows, in the
+// order they were WRITTEN (each carries its line number, n) - an entry's time is when the thing
+// happened, so a later line may carry an earlier time, and the phone never reorders by it. The phone
+// sends nothing on this channel.
+// A kind's word on the screen. A kind this phone does not know is a note: the entry is still shown.
+export const PROGRESS_KINDS = { decision: "Decision", result: "Result", merged: "Merged", blocked: "Blocked", waiting: "Waiting", started: "Started", progress: "Progress", done: "Done", note: "Note" };
+// What a notice says is a code from this list, and the ONE sentence the phone shows for it: never words
+// of the machine's or the relay's.
+export const PROGRESS_WORDS = {
+  "file-replaced": "The progress log at the machine was replaced or cut short, so the machine stopped following it. Nothing was sent again. It needs a look at the machine.",
+  following: "The progress log at the machine is as it was again, and is being followed.",
+  "lines-skipped": "line(s) of the progress log could not be read at the machine and were left out."
+};
+// The labels a text's lines may open with, in their order; a line with none of them is plain words.
+export const PROGRESS_LABELS = ["Asked", "Happened", "Means", "Next"];
+const ENTRY_ID = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
+const PLAIN = /^[^\x00-\x1f\x7f-\x9f]*$/;
+const PROGRESS_LIMITS = { title: 100, text: 2000, area: 60, lane: 32, task: 64 };
+
+function progressHead(bodyBytes, kind, horde, machine) {
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return { error: "the progress body is not JSON" }; }
+  if (!b || b.v !== 1 || b.kind !== kind) return { error: "not a version 1 " + kind };
+  if (b.horde !== horde || b.machine !== machine) return { error: "the progress body names another horde or machine" };
+  return { body: b };
+}
+const label = (v, most) => (typeof v === "string" && v.length <= most && PLAIN.test(v) ? v : "");
+
+// An entries body, read: { ok, reason, value } with value { backfill, entries, dropped }. Each entry is
+// { id, n, at, kind, title, text, area, lane, task, corrects } - at its time in milliseconds, kind one of
+// PROGRESS_KINDS' (a word off the list is "note"), the labels "" when it carries none. An entry that
+// does not hold together is dropped, and counted in value.dropped.
+export function readProgressEntries(bodyBytes, horde, machine) {
+  const h = progressHead(bodyBytes, "progress-entries", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (typeof b.backfill !== "boolean" || !Array.isArray(b.entries)) return { ok: false, reason: "the entries body has no entries list", value: null };
+  const entries = [];
+  let dropped = 0;
+  for (const e of b.entries) {
+    const ok = e && typeof e.id === "string" && ENTRY_ID.test(e.id) && Number.isSafeInteger(e.n) && e.n >= 1 && timeOf(e.ts) > 0 &&
+      typeof e.title === "string" && e.title.trim() !== "" && e.title.length <= PROGRESS_LIMITS.title && PLAIN.test(e.title) &&
+      typeof e.text === "string" && e.text.length <= PROGRESS_LIMITS.text && (e.corrects === undefined || (typeof e.corrects === "string" && ENTRY_ID.test(e.corrects)));
+    if (!ok) { dropped++; continue; }
+    entries.push({ id: e.id, n: e.n, at: timeOf(e.ts), kind: Object.prototype.hasOwnProperty.call(PROGRESS_KINDS, e.kind) ? e.kind : "note", title: e.title, text: e.text,
+      area: label(e.area, PROGRESS_LIMITS.area), lane: label(e.lane, PROGRESS_LIMITS.lane), task: label(e.task, PROGRESS_LIMITS.task), corrects: e.corrects || "" });
+  }
+  return { ok: true, reason: "", value: { backfill: b.backfill, entries, dropped } };
+}
+
+// A notice body, read: { ok, reason, value } with value { code, count }. A code off the list is refused:
+// the phone never shows a word it did not choose.
+export function readProgressNotice(bodyBytes, horde, machine) {
+  const h = progressHead(bodyBytes, "progress-notice", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (!Object.prototype.hasOwnProperty.call(PROGRESS_WORDS, b.code)) return { ok: false, reason: "the notice's code is not one this phone knows", value: null };
+  return { ok: true, reason: "", value: { code: b.code, count: Number.isSafeInteger(b.count) && b.count > 0 ? b.count : 0 } };
+}
+
+// A text as its paragraphs: one for each line that holds words, { label, text } - label one of
+// PROGRESS_LABELS when the line opens with it and a colon, else "" and the line as it stands.
+export function progressParagraphs(text) {
+  const out = [];
+  for (const line of String(text).split("\n")) {
+    if (!line.trim()) continue;
+    const at = line.indexOf(":");
+    const name = at > 0 ? line.slice(0, at) : "";
+    if (PROGRESS_LABELS.indexOf(name) >= 0) out.push({ label: name, text: line.slice(at + 1).trim() });
+    else out.push({ label: "", text: line });
+  }
+  return out;
+}
+
+// A reading position as the store keeps it, read: { id, n } - the last entry read and its line number -
+// or null for anything else, so a damaged record is no position and never a wrong one.
+export function progressPosition(value) {
+  if (!value || typeof value !== "object" || typeof value.id !== "string" || !ENTRY_ID.test(value.id) || !Number.isSafeInteger(value.n) || value.n < 1) return null;
+  return { id: value.id, n: value.n };
+}
+
+// "12 Oct 14:05": the day and the time, for a log whose entries are not in the order of their times.
+export function dayTime(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? p.day + " " + MONTHS[p.month] + " " + two(p.hour) + ":" + two(p.minute) : ""; }
+
+// The log as the phone shows it, from what it holds in memory:
+//   entries   every entry read (repeats included), each with seq (its envelope's)
+//   notices   every notice read, each with seq
+//   position  the reading position (progressPosition's), or null
+// -> { items, unread, readIndex, newest, stopped, skipped }. items are the entries OLDEST TO NEWEST BY
+// THE ORDER THEY WERE WRITTEN (n; never by time), each once by id - the first that came stands - as
+// { id, n, said, kind, kindWord, title, text, paragraphs, area, lane, task, corrects, correctsTitle,
+// corrections }. A CORRECTION (an entry that names another in corrects) is an entry of the log in its
+// own place, and is ALSO shown on the entry it corrects: that entry's corrections lists it. corrects
+// that names an entry this phone does not hold, or itself, attaches to nothing; correctsTitle is then "".
+// readIndex is the place of the position among the items - by its id, or, when that entry is no longer
+// held, the last one written at or before it - and -1 for none; unread how many items come after it.
+// stopped: the newest word on the file is that the machine stopped following it; skipped: how many
+// lines the machine said it left out.
+export function progressLog({ entries = [], notices = [], position = null }) {
+  const byId = new Map();
+  for (const e of entries) { const had = byId.get(e.id); if (!had || e.seq < had.seq) byId.set(e.id, e); }
+  const ordered = [...byId.values()].sort((a, b) => (a.n - b.n) || (a.seq - b.seq));
+  const items = ordered.map((e) => ({ id: e.id, n: e.n, said: e.at, kind: e.kind, kindWord: PROGRESS_KINDS[e.kind], title: e.title, text: e.text, paragraphs: progressParagraphs(e.text),
+    area: e.area, lane: e.lane, task: e.task, corrects: e.corrects, correctsTitle: "", corrections: [] }));
+  const at = new Map(items.map((it) => [it.id, it]));
+  for (const it of items) {
+    const target = it.corrects && it.corrects !== it.id ? at.get(it.corrects) : null;
+    if (!target) continue;
+    it.correctsTitle = target.title;
+    target.corrections.push({ id: it.id, said: it.said, title: it.title, paragraphs: it.paragraphs });
+  }
+  const pos = progressPosition(position);
+  let readIndex = -1;
+  if (pos) {
+    readIndex = items.findIndex((it) => it.id === pos.id);
+    if (readIndex < 0) for (let i = 0; i < items.length && items[i].n <= pos.n; i++) readIndex = i;
+  }
+  let stopped = false, stopSeq = -1, skipped = 0;
+  for (const n of notices) {
+    if (n.code === "lines-skipped") skipped += n.count;
+    else if (n.seq > stopSeq) { stopSeq = n.seq; stopped = n.code === "file-replaced"; }
+  }
+  const last = items.length ? items[items.length - 1] : null;
+  return { items, unread: items.length - 1 - readIndex, readIndex, newest: last ? { id: last.id, n: last.n } : null, stopped, skipped };
 }
