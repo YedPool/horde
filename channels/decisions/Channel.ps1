@@ -32,6 +32,17 @@
 #     journal first (its seq is spent) and kept in the channel's memory until the relay takes it; a
 #     relay that will not take it is asked again, with the SAME envelope, on the next turn - no new
 #     snapshot is made while one is waiting - and the tick says it failed, so the runner backs off.
+#   - THE SNAPSHOT BEFORE IS DEAD WEIGHT THE MOMENT THIS ONE IS WHOLE IN THE MAILBOX, AND ONLY THEN
+#     (2026-10-13). The phone shows the newest complete snapshot and nothing of an older one; nobody
+#     acks the phone's mailbox, so every snapshot ever sent stayed in it until the relay's retention,
+#     and the hosted relay refuses every put once a mailbox holds 2,000 envelopes. So the put of a
+#     snapshot's LAST page says to keep, of this machine's decisions envelopes, from the snapshot's
+#     FIRST page on (channels/Port.ps1, WHAT GOES TO THE PHONE IS TRIMMED BY ITS SENDER): everything
+#     this machine sent on the channel before it goes. It rides on the last page and on no other,
+#     because pages are put in order and each is put only once the one before was taken: while any
+#     page is still waiting, the snapshot before is the newest whole one there is, and it stays. A
+#     PHONE PAIRED LATER LOSES NOTHING by it: what was sent before its key was trusted was never
+#     sealed to it.
 #   - THE LAST SNAPSHOT SENT is remembered in the run's context, as its hash, and so is what is waiting
 #     to be put; the context's hourly reopen keeps both (channels/Port.ps1, Update-HordeRelayRunContext).
 #     A new run sends one snapshot at its first look whatever the last run sent: the phone shows the
@@ -280,7 +291,10 @@ function Send-HordeDecisionsChannelPending {
     param($Context, $Mine)
     while ($Mine.pending.Count -gt 0) {
         $p = $Mine.pending[0]
-        $put = Send-HordeRelayChannelSaved -Context $Context -Saved $p -Mailbox $p.mailbox
+        # The last page of a snapshot carries what to keep from (the header); every other page, nothing.
+        $from = [long]0
+        if ($null -ne $p.PSObject.Properties["keepFrom"]) { $from = [long]$p.keepFrom }
+        $put = Send-HordeRelayChannelSaved -Context $Context -Saved $p -Mailbox $p.mailbox -KeepFrom $from
         if ($put.state -cne "known") { return $put.reason }
         $Mine.pending.RemoveAt(0)
     }
@@ -348,13 +362,21 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
     $recipients = @($keys | ForEach-Object { , ([byte[]]$_.public) })
     $keysSent = New-Object System.Collections.ArrayList
+    $firstSeq = [long]0
+    $lastPage = $null
     foreach ($body in @($pages.bodies)) {
         $saved = Save-HordeRelayChannelEnvelope -Context $Context -Channel "decisions" -Kind "snapshot" -Body ([byte[]]$body) -Recipients $recipients
         if ($saved.state -cne "known") { return [pscustomobject]@{ lines = @("no snapshot: " + $saved.reason); failed = $true } }
         $saved.value | Add-Member -NotePropertyName "mailbox" -NotePropertyValue $mailbox
         [void]$mine.pending.Add($saved.value)
         [void]$keysSent.Add($saved.value.key)
+        if ($firstSeq -eq 0) { $firstSeq = [long]$saved.value.seq }
+        $lastPage = $saved.value
     }
+    # THE LAST PAGE, AND ONLY ONCE EVERY PAGE IS RECORDED, is told what to keep from: this snapshot's
+    # first page (the header, THE SNAPSHOT BEFORE IS DEAD WEIGHT). A snapshot whose pages could not all
+    # be recorded returned above, with no page of it saying anything.
+    if ($null -ne $lastPage) { $lastPage | Add-Member -NotePropertyName "keepFrom" -NotePropertyValue $firstSeq }
     # Every page is recorded: this snapshot is the one sent, whatever the relay does next.
     $mine.sent = $pages.hash
     $mine.fingerprint = $print

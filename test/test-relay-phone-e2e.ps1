@@ -100,6 +100,16 @@ function Get-PhoneMail {
     if ($r.state -cne "known") { return @() }
     return @($r.value.items | ForEach-Object { $_.text })
 }
+function Get-PhoneHead {
+    # The relay's number for the newest item in the phone's mailbox, 0 for none. NOT HOW MANY IT HOLDS: a
+    # machine deletes its older snapshots from that mailbox when a newer one is whole there
+    # (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM), so a new snapshot shows as a higher number, and
+    # the count stays where it was.
+    param($Connection)
+    $r = Receive-HordeRelayItems -Connection $Connection -Mailbox "work/phone" -Since 0
+    if ($r.state -cne "known" -or @($r.value.items).Count -eq 0) { return [long]0 }
+    return [long](@($r.value.items | ForEach-Object { $_.seq }) | Measure-Object -Maximum).Maximum
+}
 function Open-Latest {
     # The phone opens the newest snapshot in its mailbox.
     param($Connection)
@@ -250,21 +260,25 @@ try {
     try {
         # A run sends one snapshot at its first look: once that is in the phone's mailbox the run's own
         # Tick is done, and what follows it is the watch.
-        $hadBefore = @(Get-PhoneMail $c.value).Count
+        $hadBefore = Get-PhoneHead $c.value
         $waited = [System.Diagnostics.Stopwatch]::StartNew()
-        while (@(Get-PhoneMail $c.value).Count -le $hadBefore -and $waited.ElapsedMilliseconds -lt 90000) { Start-Sleep -Milliseconds 100 }
-        $hadUp = @(Get-PhoneMail $c.value).Count
+        while ((Get-PhoneHead $c.value) -le $hadBefore -and $waited.ElapsedMilliseconds -lt 90000) { Start-Sleep -Milliseconds 100 }
+        $hadUp = Get-PhoneHead $c.value
         Check ($hadUp -gt $hadBefore -and -not $liveRun.HasExited) ("CONTROL: the run is up and has made its first look (" + $waited.ElapsedMilliseconds + " ms)")
         Start-Sleep -Milliseconds 3000
         $reply = "Written while the watch was open."
         $wrote = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = $reply; asks = $false }
         $waited.Restart()
-        while (@(Get-PhoneMail $c.value).Count -le $hadUp -and $waited.ElapsedMilliseconds -lt 60000) { Start-Sleep -Milliseconds 100 }
+        while ((Get-PhoneHead $c.value) -le $hadUp -and $waited.ElapsedMilliseconds -lt 60000) { Start-Sleep -Milliseconds 100 }
         $took = $waited.ElapsedMilliseconds
-        Check ($wrote.state -ceq "known" -and $wrote.value.outcome -ceq "done" -and @(Get-PhoneMail $c.value).Count -gt $hadUp -and $took -lt 8000) ("the warchief's reply, written three seconds into a 30 s watch, is in the phone's mailbox " + $took + " ms later - while the watch is still open, not when it ends")
+        Check ($wrote.state -ceq "known" -and $wrote.value.outcome -ceq "done" -and (Get-PhoneHead $c.value) -gt $hadUp -and $took -lt 8000) ("the warchief's reply, written three seconds into a 30 s watch, is in the phone's mailbox " + $took + " ms later - while the watch is still open, not when it ends")
         $o = Open-Latest $c.value
         $shown = $(if ($o.ok) { @(@($o.body.questions | Where-Object { $_.number -eq 1 }) | ForEach-Object { @($_.thread.messages) } | ForEach-Object { $_.text }) } else { @() })
         Check ($o.ok -and $shown -ccontains $reply) ("and the phone opens it: the reply is under the question (" + (@($shown | Select-Object -Last 1) -join "") + ")")
+        # THE MAILBOX DID NOT GROW FOR IT (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM): through the real
+        # command and the disk relay, the snapshots this machine sent before that one are gone from it.
+        $heldSnapshots = @(@((Receive-HordeRelayItems -Connection $c.value -Mailbox "work/phone" -Since 0).value.items) | Where-Object { $_.key -clike "*/decisions/*" })
+        Check ($heldSnapshots.Count -eq 1 -and $heldSnapshots[0].seq -eq (Get-PhoneHead $c.value)) ("and it is the only snapshot the mailbox holds: every one this machine sent before it was deleted when it was taken (" + $heldSnapshots.Count + " held)")
         $waited.Restart()
         $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
         $ended = $liveRun.WaitForExit(20000)

@@ -345,7 +345,7 @@ try {
     $tick = @(Invoke-Tick $W)
     $mail = @(Get-PhoneMail $W)
     $o2 = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
-    Check ($mail.Count -eq 2 -and $o2.ok -and $o2.body.questions[0].thread.count -eq 1 -and $o2.body.questions[0].thread.turn -ceq "founder") "a change the window would show sends a new snapshot: the warchief's reply, and the turn is the founder's"
+    Check ($mail.Count -eq 1 -and $o2.ok -and $o2.body.questions[0].thread.count -eq 1 -and $o2.body.questions[0].thread.turn -ceq "founder") "a change the window would show sends a new snapshot: the warchief's reply, and the turn is the founder's - and the snapshot before it is gone from the mailbox, which holds the new one alone"
     # WHAT THE FOUNDER NEEDS TO ANSWER FROM THE PHONE (review of 48bc492, item 9): the question's whole
     # text and context, and the conversation under it with the warchief's replies - the window's view.
     $q1 = $(if ($o2.ok) { $o2.body.questions[0] } else { $null })
@@ -362,7 +362,7 @@ try {
     $upTo = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json").Count
     $null = Invoke-HordeDecision -Operation "mark-read" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; upTo = $upTo }
     $tick = @(Invoke-Tick $W)
-    Check ($mailBefore -eq 3 -and @(Get-PhoneMail $W).Count -eq $mailBefore) ("a change that shows nothing new (the warchief's read mark) sends nothing: the snapshot is the same (" + $mailBefore + ")")
+    Check ($mailBefore -eq 1 -and @(Get-PhoneMail $W).Count -eq $mailBefore) ("a change that shows nothing new (the warchief's read mark) sends nothing: the snapshot is the same (" + $mailBefore + ")")
     $token = "ghp_" + ("Ab3" * 10)
     $plantSeq = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json").Count + 1
     $plantFile = Join-Path $W.store ($plantSeq.ToString("D10") + ".json")
@@ -388,7 +388,10 @@ try {
     foreach ($i in 1..3) { $null = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = ("Long question number " + $i + " for paging"); kind = "yes-no"; whatItIs = $long; group = "voice"; askedBy = "orc-b" } } }
     $huge = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "A question too large for any page"; kind = "yes-no"; whatItIs = $long; group = "voice"; askedBy = "orc-b" } }
     foreach ($i in 1..3) { $null = Invoke-HordeDecision -Operation "say" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = [int]$huge.value.number; speaker = "warchief"; route = "command"; text = $long } }
-    $before = @(Get-PhoneMail $W).Count
+    # The snapshot before this one is deleted from the mailbox when this one's last page is taken
+    # (channels/decisions, THE SNAPSHOT BEFORE IS DEAD WEIGHT), so what the mailbox then holds is exactly
+    # this snapshot's pages: none is skipped.
+    $before = 0
     $tick = @(Invoke-Tick $W)
     $mail = @(Get-PhoneMail $W)
     $pages = @($mail | Select-Object -Skip $before | ForEach-Object { Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $_ -MachineSignPublic $W.id.sign.public })
