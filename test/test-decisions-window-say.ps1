@@ -74,7 +74,8 @@ $big = Say 2 ("a" * ($most + 1))
 Check ($big.ok -eq $false -and $big.reason -clike ("*'text' is " + ($most + 1) + " characters long; the most is " + $most + "*never cut*") -and @(Get-Thread 2).Count -eq 0) "words one character longer than a text may be are refused with the rule's sentence, and nothing is stored"
 $bridge = New-HordeDecisionWindowBridge
 Check ([long]$bridge.requests["say"].args["text"].most -eq $most -and (@($bridge.requests["say"].args.Keys | Sort-Object) -join ",") -ceq "id,number,text,wording") "the bridge's own bound on the words is that same number, read from the rules and written nowhere else; say takes number, text, wording and id"
-Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,act,hand-back") "say is the seventh request of the closed list, and with act (his park or unpark, the same operation) the only ones that write"
+Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,say-part,act,hand-back") "say is the seventh request of the closed list, and with say-part (one part's answer) and act (his park or unpark), each the same operation, the only ones that write"
+
 
 Write-Host ""
 Write-Host "--- wrong types, and a question that is not there ---" -ForegroundColor Cyan
@@ -160,6 +161,29 @@ foreach ($bad in @(@{ text = "not json {"; says = "*could not be read as JSON*" 
 }
 $state = New-HordeDecisionWindowState -ToldPath $told
 Check ($state.toldPath -ceq $told -and @($state.told.Keys).Count -eq 0 -and $state.says -eq 0 -and $state.saysRefused -eq 0) "the window's state starts with nothing told and nothing said"
+
+Write-Host ""
+Write-Host "--- one part's answer: say, with the part's letter ---" -ForegroundColor Cyan
+# THE FOUNDER, 2026-10-12: each part of a question of parts sends by itself. The page asks say-part,
+# which is say and the letter of the part; the handler hands the letter on, and the operation's rules
+# say whether the question has that part.
+Check ((@($bridge.requests["say-part"].args.Keys | Sort-Object) -join ",") -ceq "id,number,part,text,wording" -and [long]$bridge.requests["say-part"].args["part"].most -eq 1 -and [long]$bridge.requests["say-part"].args["text"].most -eq $most -and "$($bridge.requests['say-part'].args['part'].type)" -ceq "string") "say-part takes what say takes and the part: one character of text, no more; its words are held to the same bound"
+Check ([object]::ReferenceEquals($bridge.requests["say"].run, $bridge.requests["say-part"].run)) "and it is handled by the very block that handles say: an answer to a part is stored, counted and answered as any other"
+$partsAdded = Invoke-HordeDecision -Operation "add" -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Two things to settle about step four, one by one."; kind = "parts"; whatItIs = "Follow-ups."; parts = @("(a) Should it start on Monday?", "(b) Who should be told?"); group = "The study"; askedBy = "Orc B" } }
+$pn = [int]$partsAdded.value.number
+$partId = New-Id
+$partSaid = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "Tell Orc C first."; wording = 1; id = $partId; part = "b" }
+$pt = @(Get-Thread $pn)
+Check ($partSaid.ok -eq $true -and $pt.Count -eq 1 -and $pt[0].part -ceq "b" -and $pt[0].partWords -ceq "Who should be told?" -and $pt[0].text -ceq "Tell Orc C first." -and $pt[0].route -ceq "window") ("THE PART IS HANDED ON: the store holds his words as the answer to part (b), typed in the window (" + $partSaid.ok + ")")
+Check ((Invoke-HordeDecision -Operation "show" -Request @{ number = $pn }).value.question.thread.turn -ceq "founder") "and with part (a) still to answer, the question is still his"
+$partAgain = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "Tell Orc C first."; wording = 1; id = $partId; part = "b" }
+Check ($partAgain.ok -eq $true -and $partAgain.replayed -eq $true -and @(Get-Thread $pn).Count -eq 1) "the same part's answer sent again under its id is that one record"
+$wrongPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "x"; wording = 1; id = (New-Id); part = "c" }
+Check ($wrongPart.ok -eq $false -and $wrongPart.reason -clike "Not saved:*it answers part (c) of question*which has no such part; its parts are: (a), (b)*" -and @(Get-Thread $pn).Count -eq 1) ("a part the question does not have is refused in the rule's sentence, and nothing is stored (" + $wrongPart.reason + ")")
+$noPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "to all of it"; wording = 1; id = (New-Id); part = "" } -Invoke { param($Request) $script:sentPart = $Request; return (New-HordeUnknown -Reason "not asked") }
+Check (-not $script:sentPart.Contains("part") -and @($script:sentPart.Keys).Count -eq 7) "an empty part is no part: the operation is asked for an answer to the whole question, as say asks"
+$withPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "x"; wording = 1; id = (New-Id); part = "a" } -Invoke { param($Request) $script:sentPart = $Request; return (New-HordeUnknown -Reason "not asked") }
+Check ($script:sentPart["part"] -ceq "a" -and @($script:sentPart.Keys).Count -eq 8 -and $script:sentPart.route -ceq "window" -and $script:sentPart.speaker -ceq "founder") "with a part, the operation is asked for the same and the part: nothing else is added"
 
 } finally {
     $env:HORDE_HOME = $keepHome; $env:WEZFLEET_ROOT = $keepFleet

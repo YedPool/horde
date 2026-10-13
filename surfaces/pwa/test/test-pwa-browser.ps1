@@ -219,8 +219,11 @@ try {
     Check ($re.ok -and $re.value.locked -and $re.value.controlled) "after a reload the page is the worker's, and the horde is locked"
     $un = Invoke-Browser @{ cmd = "unlock" }
     Check ($un.ok -and $un.value.doc) ("Chrome's passkey, by PRF, unlocks it (" + $(if ($un.ok) { $un.value.notice } else { $un.reason }) + ")")
-    $again = Invoke-Browser @{ cmd = "waitText"; text = $title }
-    Check ($again.ok -and $again.value.found -and $again.value.text.Contains("short chime")) ("and the question shows again, his answer under it (" + $(if ($again.ok) { ($again.value.text -replace '\s+', ' ') } else { $again.reason }) + ")")
+    # HE HAS ANSWERED IT, so it is not in his list (2026-10-12): it stands under the folded "With Thrall",
+    # with his answer, and the list itself shows the order line and that heading only.
+    $again = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
+    Check ($again.ok -and $again.value.found -and $again.value.text.Contains("short chime") -and $again.value.shown.Contains("With Thrall (1)") -and -not $again.value.shown.Contains($title)) ("and the question he answered is there again, out of his list under the folded With Thrall, his answer with it (" + $(if ($again.ok) { ($again.value.shown -replace '\s+', ' ') } else { $again.reason }) + ")")
+    Check ($again.ok -and $again.value.shown.Contains("Order by") -and $again.value.shown.Contains("Task importance") -and $again.value.shown.Contains("Blocking")) "the line where he chooses the order is on the phone too: Date, Task importance, Blocking"
     $null = Invoke-Browser @{ cmd = "serve"; on = $false }
     $off = Invoke-Browser @{ cmd = "reload" }
     Check ($off.ok -and $off.value.locked) "with the site's server down the app still starts, from the worker's cache"
@@ -233,11 +236,16 @@ try {
 
     Write-Host ""
     Write-Host "--- 7. the recovery code reads, and never answers ---" -ForegroundColor Cyan
+    # A second question first: the one he answered is out of his list, and has no field to type in.
+    $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
+    Check ($q2.state -ceq "known" -and $q2.value.outcome -ceq "done") "CONTROL: a second question is asked"
+    $run = Invoke-Run -Turns 1
     $null = Invoke-Browser @{ cmd = "unlock" }
+    $seen2 = Invoke-Browser @{ cmd = "waitText"; text = "Which chime of the three?" }
     $null = Invoke-Browser @{ cmd = "lock" }
     $rc = Invoke-Browser @{ cmd = "recover"; code = $(if ($paired.ok) { $paired.value.recoveryCode } else { "" }) }
     Check ($rc.ok -and $rc.value.doc -and $rc.value.mode.Contains("Read only")) ("the recovery code unlocks the horde, said to be read only (" + $(if ($rc.ok) { $rc.value.notice } else { $rc.reason }) + ")")
-    $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox }
+    $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox; question = "Which chime of the three?" }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
     $lk = Invoke-Browser @{ cmd = "lock" }
     Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
@@ -245,9 +253,6 @@ try {
 
     Write-Host ""
     Write-Host "--- 8. the row's Send key, by touch ---" -ForegroundColor Cyan
-    $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
-    Check ($q2.state -ceq "known" -and $q2.value.outcome -ceq "done") "CONTROL: a second question is asked"
-    $run = Invoke-Run -Turns 1
     $seen2 = Invoke-Browser @{ cmd = "waitText"; text = "Which chime of the three?" }
     $null = Save-Shot "phone-two-questions"
     $touch = Invoke-Browser @{ cmd = "answer"; text = "The second one."; via = "touch"; mailbox = $mailbox; question = "Which chime of the three?" }
@@ -260,7 +265,7 @@ try {
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
     Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
-    $null = Invoke-Browser @{ cmd = "waitText"; text = $title }
+    $null = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
     $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
     $sh = Invoke-Browser @{ cmd = "show" }
     Check ($sh.ok -and $sh.value.docHiddenAtOnce) "shown again, the list is hidden in the same moment, before the lock check runs"

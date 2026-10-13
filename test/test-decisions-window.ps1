@@ -123,7 +123,7 @@ Write-Host "--- the closed list: six requests, three events ---" -ForegroundColo
 for ($n = 1; $n -le 3; $n++) { Add-Question $n }
 $state = New-HordeDecisionWindowState -ReportPath (Join-Path $work "report.json") -Settings $defaults -Findings @("a finding of the suite's") -View (ConvertTo-HordeDecisionWindowView -Unfold "2,3" -Orc "B")
 $script:HordeDecisionWindow = $state
-Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,act,hand-back") ("the page may ask for nine things: say and act write (test/test-decisions-window-say.ps1 holds say; act is his park or unpark), the last hands the keyboard back (" + (@($state.bridge.requests.Keys) -join ",") + ")")
+Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,say-part,act,hand-back") ("the page may ask for ten things: say, say-part and act write (test/test-decisions-window-say.ps1 holds say; act is his park or unpark), the last hands the keyboard back (" + (@($state.bridge.requests.Keys) -join ",") + ")")
 # ESCAPE: hand-back. Standing free, the follow port is NOT asked; followed, it is, and what it said is handed on and counted.
 $script:handAsked = 0
 $handState = New-HordeDecisionWindowState -Settings $defaults
