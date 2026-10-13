@@ -105,6 +105,7 @@ $script:HordeDecisionEventKinds = [ordered]@{
     "question-updated"  = @{ data = "question-updated";  words = "changes";  apply = "Step-HordeDecisionUpdated";  about = "question"; actors = "keepers";  counts = @{} }
     "question-closed"   = @{ data = "question-closed";   words = "";         apply = "Step-HordeDecisionClosed";   about = "question"; actors = "keepers";  counts = @{} }
     "question-reopened" = @{ data = "question-reopened"; words = "";         apply = "Step-HordeDecisionReopened"; about = "question"; actors = "keepers";  counts = @{} }
+    "question-ranked"   = @{ data = "question-ranked";   words = "";         apply = "Step-HordeDecisionRanked";   about = "question"; actors = "keepers";  counts = @{} }
     "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number" } }
     "messages-read"     = @{ data = "messages-read";     words = "";         apply = "Step-HordeDecisionRead";     about = "list";     actors = "speakers"; counts = @{ upTo = "sequence" } }
 }
@@ -199,6 +200,44 @@ $script:HordeDecisionFields = [ordered]@{
 # The fields a new question must fill. whatItIs and yesMeans are "one of the two", checked on its own.
 $script:HordeDecisionRequiredFields = @("title", "kind", "group", "askedBy")
 
+# HOW MUCH A QUESTION MATTERS, AND HOW MUCH IT HOLDS UP (the founder, 2026-10-12: an order-by for his
+# list - by date, by how important the task is, by how much the question blocks it). Two words beside a
+# question, never among its fields: they say nothing a person reads before answering, so they are no
+# wording, and changing one is its own record (question-ranked), never an update.
+#   importance  how much the TASK the question belongs to matters overall.
+#   blocks      how much of that task's work stands still until he answers.
+# EACH TABLE IS IN ITS ORDER: the first word sorts first. shown: the few plain words a way of showing
+# puts beside the question; "" for the default, which is said by saying nothing - every question asked
+# before these words existed reads as the default, and a mark on all of them would be a guess shown as
+# a fact. THE WORDS ARE CLOSED LISTS FOR A REQUEST AND LABELS FOR A RECORD (as an actor and a route
+# are): a word a later version wrote is read, shown by its name, and sorts as the default.
+# decisions/page/list.js sorts by the same words in the same order; test/test-decisions-rules.ps1
+# holds the two tables to each other.
+$script:HordeDecisionImportances = [ordered]@{
+    high   = @{ shown = "Important" }
+    normal = @{ shown = "" }
+    low    = @{ shown = "Can wait" }
+}
+$script:HordeDecisionDefaultImportance = "normal"
+$script:HordeDecisionBlockings = [ordered]@{
+    all  = @{ shown = "Blocks all work" }
+    part = @{ shown = "" }
+    none = @{ shown = "Blocks nothing" }
+}
+$script:HordeDecisionDefaultBlocks = "part"
+# A QUESTION OF PARTS IS ANSWERED PART BY PART (the founder, 2026-10-12: each part sends by itself). A
+# part is known by its letter: the keeper writes each as "(a) words", and a part not written so takes
+# the next letter of the alphabet. decisions/page/list.js (partsOf) reads the same parts by the same
+# rule, and the rules suite holds the two to the same cases. A question whose parts cannot be told
+# apart - a letter twice, or more parts than letters - has no parts to answer one by one.
+$script:HordeDecisionPartsKind = "parts"
+$script:HordeDecisionPartMark = '\A\s*\(([a-z])\)\s*'
+$script:HordeDecisionPartPattern = '\A[a-z]\z'
+# THE MOST OF AN EARLIER ANSWER A FOLLOW-UP CARRIES. A follow-up shows the question it follows and what
+# he answered, as context; the whole of both stays under the old question's own number. 2,000
+# characters is some thirty lines on a phone: more than a reminder needs, and far inside a snapshot page.
+$script:HordeDecisionFollowsUpAnswerChars = 2000
+
 # LIMITS. A text longer than the first is refused whole, with the count, never cut: 500,000 characters
 # is five times the 100,000-character text the decisions design (2026-10-06, section 6) requires to be stored whole, and keeps a record
 # under the 2,097,152 characters Windows PowerShell 5.1's ConvertFrom-Json will read back.
@@ -271,6 +310,8 @@ function Get-HordeDecisionEventKinds { return @($script:HordeDecisionEventKinds.
 function Get-HordeDecisionSpeakers { return @($script:HordeDecisionSpeakers.Keys) }
 function Get-HordeDecisionReaders { return @($script:HordeDecisionSpeakers.Keys | Where-Object { [bool]$script:HordeDecisionSpeakers[$_].reads }) }
 function Get-HordeDecisionRoutes { return @($script:HordeDecisionRoutes.Keys) }
+function Get-HordeDecisionFirstTurn { return $script:HordeDecisionFirstTurn }
+function Get-HordeDecisionNoteSpeakers { return @($script:HordeDecisionNoteSpeakers) }
 
 function Get-HordeDecisionKindAbout {
     # What an event kind is about: "question" (its data names one by number) or "list". "" for a kind
@@ -327,6 +368,54 @@ function Get-HordeDecisionStates { return @($script:HordeDecisionStates) }
 function Get-HordeDecisionActors { return @($script:HordeDecisionActors) }
 function Get-HordeDecisionFieldNames { return @($script:HordeDecisionFields.Keys) }
 function Get-HordeDecisionMaxNumber { return $script:HordeDecisionMaxNumber }
+function Get-HordeDecisionImportances { return @($script:HordeDecisionImportances.Keys) }
+function Get-HordeDecisionBlockings { return @($script:HordeDecisionBlockings.Keys) }
+function Get-HordeDecisionDefaultImportance { return $script:HordeDecisionDefaultImportance }
+function Get-HordeDecisionDefaultBlocks { return $script:HordeDecisionDefaultBlocks }
+
+function Get-HordeDecisionRankShown {
+    # The plain words for one rank word, as a way of showing puts them beside a question: "" for the
+    # default, and for a word this version does not list (a later version wrote it) the word itself.
+    param([Parameter(Mandatory = $true)][ValidateSet("importance", "blocks")][string]$Name, [string]$Word)
+    $table = $script:HordeDecisionImportances
+    if ($Name -ceq "blocks") { $table = $script:HordeDecisionBlockings }
+    $entry = $table[$Word]
+    if ($null -eq $entry) { return $Word }
+    return "$($entry.shown)"
+}
+
+function Test-HordeDecisionRankWord {
+    # Findings for one rank word of a request: empty when it is a word of its closed list.
+    param([Parameter(Mandatory = $true)][ValidateSet("importance", "blocks")][string]$Name, $Word)
+    $words = @($script:HordeDecisionImportances.Keys)
+    if ($Name -ceq "blocks") { $words = @($script:HordeDecisionBlockings.Keys) }
+    if ($Word -is [string] -and $words -ccontains $Word) { return @() }
+    return @("'" + $Name + "' is one of: " + ($words -join ", "))
+}
+
+function Get-HordeDecisionParts {
+    # The parts of a question that are answered one by one, in order, each { letter; words }; none for
+    # a question that is not of parts, or whose parts cannot be told apart (above).
+    param($Question)
+    if ("$(Get-HordeDecisionMember -Object $Question -Name 'kind')" -cne $script:HordeDecisionPartsKind) { return @() }
+    $held = Get-HordeDecisionMember -Object $Question -Name "parts"
+    $items = @($held)
+    if ($items.Count -lt 2) { return @() }
+    $out = New-Object System.Collections.ArrayList
+    $seen = @{}
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $text = [string]$items[$i]
+        $mark = [regex]::Match($text, $script:HordeDecisionPartMark)
+        $letter = ""
+        $words = $text
+        if ($mark.Success) { $letter = $mark.Groups[1].Value; $words = $text.Substring($mark.Length) }
+        elseif ($i -lt 26) { $letter = [string][char](97 + $i) }
+        if ($letter -eq "" -or $seen.ContainsKey($letter)) { return @() }
+        $seen[$letter] = $true
+        [void]$out.Add([pscustomobject]@{ letter = $letter; words = $words })
+    }
+    return @($out.ToArray())
+}
 
 function Test-HordeDecisionCount {
     # Is a value a whole number from 1 to -Most? Compared as a Double and NEVER CAST FIRST: 1e30 is an
@@ -697,6 +786,16 @@ function Step-HordeDecisionAdded {
     $question["wordingVersion"] = 1
     $question["outcome"] = ""
     $question["reopenReason"] = ""
+    # The two rank words, as the record states them; a record that states none - every one written
+    # before they existed - reads as the default (above). followsUp: the earlier question this one
+    # follows, by its number, or 0 for none. partsAnswered: letter -> the record that answered it.
+    $question["importance"] = $script:HordeDecisionDefaultImportance
+    $question["blocks"] = $script:HordeDecisionDefaultBlocks
+    if (Test-HordeDecisionMember -Object $Ev.data -Name "importance") { $question["importance"] = [string]$Ev.data.importance }
+    if (Test-HordeDecisionMember -Object $Ev.data -Name "blocks") { $question["blocks"] = [string]$Ev.data.blocks }
+    $question["followsUp"] = 0
+    if (Test-HordeDecisionMember -Object $Ev.data -Name "followsUp") { $question["followsUp"] = [int]$Ev.data.followsUp }
+    $question["partsAnswered"] = (New-Object System.Collections.Specialized.OrderedDictionary)
     $question["addedAt"] = "$($Ev.at)"
     $question["updatedAt"] = "$($Ev.at)"
     $question["closedAt"] = ""
@@ -777,6 +876,29 @@ function Step-HordeDecisionReopened {
     return ""
 }
 
+function Step-HordeDecisionRanked {
+    # The keeper corrects how much a question matters or how much it holds up (above, HOW MUCH A
+    # QUESTION MATTERS). Its own record, never an edit of the question's: the words the question was
+    # added with stay in its record, and the history says when they changed. It moves no wording and
+    # no turn. A ranking that changes nothing does not apply, so the same one sent under two ids is one.
+    param($State, $Ev)
+    $target = Get-HordeDecisionTarget -State $State -Ev $Ev
+    if ($null -eq $target.question) { return $target.why }
+    $question = $target.question
+    if ($question.state -cne "open") { return ("question " + $question.number + " is " + $question.state + ", and only an open question is ranked: nobody is reading a list it is not in") }
+    $changed = New-Object System.Collections.ArrayList
+    foreach ($name in @("importance", "blocks")) {
+        if (-not (Test-HordeDecisionMember -Object $Ev.data -Name $name)) { continue }
+        $word = [string](Get-HordeDecisionMember -Object $Ev.data -Name $name)
+        if ("$($question[$name])" -ceq $word) { continue }
+        $question[$name] = $word
+        [void]$changed.Add($name + " " + $word)
+    }
+    if ($changed.Count -eq 0) { return ("it changes nothing: question " + $question.number + " already has that importance and that blocking") }
+    Add-HordeDecisionHistory -Question $question -Ev $Ev -Note ("ranked: " + ($changed -join ", "))
+    return ""
+}
+
 function Test-HordeDecisionEnvelope {
     # Findings for a parsed record's ENVELOPE alone: that it matches schema/decision-event.v1 and its
     # sequence number is one a record can have. Nothing is asked of its kind or its data. Empty means
@@ -806,6 +928,14 @@ function Test-HordeDecisionSayMarks {
         if ($script:HordeDecisionActs -cnotcontains [string]$Request.act) { [void]$found.Add("'act' is one of: " + ($script:HordeDecisionActs -join ", ")) }
         elseif ($Speaker -cne $script:HordeDecisionFirstTurn -or $script:HordeDecisionActRoutes -cnotcontains $Route) { [void]$found.Add("an act is recorded only for the founder's words typed in the window") }
     }
+    # A PART (above, A QUESTION OF PARTS): the answer to one part of the question, by its letter. Only
+    # the one the question is asked of answers a part, and an act answers nothing. Whether the question
+    # HAS that part is asked where the question is known (Step-HordeDecisionSaid).
+    if (Test-HordeDecisionMember -Object $Request -Name "part") {
+        if ($Request.part -isnot [string] -or $Request.part -cnotmatch $script:HordeDecisionPartPattern) { [void]$found.Add("'part' is one lower-case letter, the letter of the part answered, as in: b") }
+        elseif ($Speaker -cne $script:HordeDecisionFirstTurn) { [void]$found.Add("only the words of " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " answer a part of a question") }
+        elseif (Test-HordeDecisionMember -Object $Request -Name "act") { [void]$found.Add("an act answers no part of a question: give 'part' or 'act', not both") }
+    }
     return @($found)
 }
 
@@ -830,6 +960,26 @@ function Step-HordeDecisionSaid {
         return ("it says it was said to wording " + $seen + " of question " + $question.number + ", which has only reached wording " + $question.wordingVersion + ": nobody can have been looking at a wording that was not written yet")
     }
     $speaker = "$($Ev.data.speaker)"
+    # THE PART ANSWERED, when the record names one: it must be a part the question has at this record's
+    # place. Its words are kept beside the message as they read at that moment, so that whoever reads
+    # the answer later sees what was answered even after the parts were reworded.
+    # ONE CASE IS KEPT ALL THE SAME (header, A MESSAGE IS KEPT, ALWAYS): words said to an EARLIER wording
+    # that had the part, when the question has since been reworded without it. He answered what was in
+    # front of him; the message is kept, flagged as said to an earlier wording like any other, and
+    # counts for no part of the question as it now reads.
+    $part = ""
+    $partWords = ""
+    $partStands = $false
+    if (Test-HordeDecisionMember -Object $Ev.data -Name "part") {
+        $part = [string]$Ev.data.part
+        $parts = @(Get-HordeDecisionParts -Question $question)
+        $mine = @($parts | Where-Object { $_.letter -ceq $part }) | Select-Object -First 1
+        if ($null -ne $mine) { $partWords = [string]$mine.words; $partStands = $true }
+        elseif (-not ($stated -and $seen -lt [int]$question.wordingVersion)) {
+            if ($parts.Count -eq 0) { return ("it answers part (" + $part + ") of question " + $question.number + ", which is not a question of parts that are answered one by one") }
+            return ("it answers part (" + $part + ") of question " + $question.number + ", which has no such part; its parts are: " + (@($parts | ForEach-Object { "(" + $_.letter + ")" }) -join ", "))
+        }
+    }
     [void]$question.thread.Add([pscustomobject]@{
         sequence = [long]$Ev.sequence; at = "$($Ev.at)"; speaker = $speaker; route = "$($Ev.data.route)"; recordedBy = "$($Ev.actor)"
         # Exactly what the record holds: never trimmed, never re-wrapped.
@@ -844,6 +994,9 @@ function Step-HordeDecisionSaid {
         # The hash of the proof (the route phone), as the record holds it; "" when it holds none. A stored
         # record is a fact: one by the route phone without evidence is read, and shows none.
         evidence = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "evidence") { [string]$Ev.data.evidence } else { "" })
+        # The part answered ("" for none), and that part's words as they read at this record's place.
+        part = $part
+        partWords = $partWords
         # The key id of the passkey that signed (the route phone), as the record holds it; "" when it
         # names none - every record written before 2026-10-12, and every other route's.
         signedBy = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "signedBy") { [string]$Ev.data.signedBy } else { "" })
@@ -851,19 +1004,33 @@ function Step-HordeDecisionSaid {
     $last = $question.thread[$question.thread.Count - 1]
     # AN EDIT (the owner, 2026-10-07): words of the same speaker straight after their own last
     # words under the question - acts left aside - replace them. Worked out here, at the record's place.
+    # THE ANSWER TO A PART REPLACES ONLY AN EARLIER ANSWER TO THAT PART: his answers to the other parts,
+    # said in between, are stepped over, and the other speaker's words end the search as they always did.
     $replaces = $false
     if ($last.act -eq "") {
         for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
             $before = $question.thread[$i]
             if ("$($before.act)" -ne "") { continue }
-            $replaces = ("$($before.speaker)" -ceq $speaker)
+            if ("$($before.speaker)" -cne $speaker) { break }
+            if ($part -ne "" -and "$($before.part)" -ne "" -and "$($before.part)" -cne $part) { continue }
+            $replaces = $true
             break
         }
     }
     Add-Member -InputObject $last -NotePropertyName replaces -NotePropertyValue ([bool]$replaces)
     # The turn passes only under an open question, only for a speaker this version lists, and not on
     # words that ask nothing (a note) or that record an act.
-    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }
+    # AN ANSWER TO ONE PART PASSES THE TURN ONLY WHEN IT IS THE LAST PART LEFT (the founder, 2026-10-12:
+    # the question leaves his list when all its parts are answered). An answer that names no part is
+    # an answer to the whole question, as it always was.
+    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") {
+        $passes = $true
+        if ($part -ne "" -and $speaker -ceq $script:HordeDecisionFirstTurn) {
+            if ($partStands) { $question.partsAnswered[$part] = [long]$Ev.sequence }
+            $passes = ($partStands -and @(Get-HordeDecisionParts -Question $question | Where-Object { -not $question.partsAnswered.Contains("$($_.letter)") }).Count -eq 0)
+        }
+        if ($passes) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }
+    }
     return ""
 }
 
@@ -1037,6 +1204,8 @@ function ConvertTo-HordeDecisionMessageView {
         act = "$($Message.act)"
         replaces = [bool]$Message.replaces
         evidence = "$($Message.evidence)"
+        part = "$($Message.part)"
+        partWords = "$($Message.partWords)"
         signedBy = "$($Message.signedBy)"
     }
 }
@@ -1055,8 +1224,51 @@ function ConvertTo-HordeDecisionThreadView {
     $turnShown = $turn
     if ($turn -cne $script:HordeDecisionNoTurn) { $turnShown = Get-HordeDecisionSpeakerShown -Speaker $turn }
     $thread = [ordered]@{ count = $views.Count; turn = $turn; turnShown = $turnShown; unread = @($unread) }
+    # A QUESTION OF PARTS says which of them he has answered, so that a list shows how far he is
+    # without the messages. A question with no parts to answer one by one says nothing here.
+    $parts = @(Get-HordeDecisionParts -Question $Question)
+    if ($parts.Count -gt 0) { $thread["parts"] = @($parts | ForEach-Object { [pscustomobject]@{ letter = "$($_.letter)"; answered = [bool]$Question.partsAnswered.Contains("$($_.letter)") } }) }
     if ($Messages) { $thread["messages"] = $views }
     return [pscustomobject]$thread
+}
+
+function Get-HordeDecisionAnswerText {
+    # What the founder answered under a question, as one text, or "" when he has not: his last words
+    # to the whole question, and - when he answered part by part since - a line for each part answered,
+    # "(a) words", in the parts' order. His acts (park, unpark) are not words.
+    param($Question)
+    $whole = $null
+    $byPart = @{}
+    foreach ($message in $Question.thread) {
+        if ("$($message.speaker)" -cne $script:HordeDecisionFirstTurn -or "$($message.act)" -ne "") { continue }
+        if ("$($message.part)" -ne "") { $byPart["$($message.part)"] = $message }
+        else { $whole = $message; $byPart = @{} }
+    }
+    if ($byPart.Count -eq 0) { if ($null -eq $whole) { return "" }; return [string]$whole.text }
+    $lines = New-Object System.Collections.ArrayList
+    if ($null -ne $whole) { [void]$lines.Add([string]$whole.text) }
+    foreach ($letter in @($byPart.Keys | Sort-Object)) { [void]$lines.Add("(" + $letter + ") " + [string]$byPart[$letter].text) }
+    return ($lines -join "`n")
+}
+
+function ConvertTo-HordeDecisionFollowsUpView {
+    # THE QUESTION A FOLLOW-UP FOLLOWS, as the context shown folded under the new one (the founder,
+    # 2026-10-12: a follow-up is a brand-new question, never the old one reopened): its number, its
+    # words, and what he answered - cut at a stated length, and saying that it was cut, because the
+    # whole of it stays under the old question's own number. Worked out at the moment of showing, from
+    # the list, so it is never a second copy that could go stale. A number the list cannot show - its
+    # record unreadable - is still named, with nothing made up for it.
+    param($State, [int]$Number)
+    $out = [ordered]@{ number = $Number; state = (Get-HordeDecisionNumberStatus -State $State -Number $Number); title = ""; answer = ""; answerCut = $false; outcome = "" }
+    if (-not $State.questions.ContainsKey($Number)) { return [pscustomobject]$out }
+    $old = $State.questions[$Number]
+    $out["state"] = "$($old.state)"
+    $out["title"] = "$($old.title)"
+    $out["outcome"] = "$($old.outcome)"
+    $answer = Get-HordeDecisionAnswerText -Question $old
+    if ($answer.Length -gt $script:HordeDecisionFollowsUpAnswerChars) { $answer = $answer.Substring(0, $script:HordeDecisionFollowsUpAnswerChars); $out["answerCut"] = $true }
+    $out["answer"] = $answer
+    return [pscustomobject]$out
 }
 
 function ConvertTo-HordeDecisionView {
@@ -1072,6 +1284,13 @@ function ConvertTo-HordeDecisionView {
         else { $view[$name] = "$($Question[$name])" }
     }
     foreach ($name in @("outcome", "reopenReason", "addedAt", "updatedAt", "closedAt")) { $view[$name] = "$($Question[$name])" }
+    # The two rank words and the few plain words for each (above, HOW MUCH A QUESTION MATTERS), handed
+    # out so that every way of showing says "Blocks all work" in the same words.
+    $view["importance"] = "$($Question.importance)"
+    $view["importanceShown"] = (Get-HordeDecisionRankShown -Name "importance" -Word "$($Question.importance)")
+    $view["blocks"] = "$($Question.blocks)"
+    $view["blocksShown"] = (Get-HordeDecisionRankShown -Name "blocks" -Word "$($Question.blocks)")
+    if ([int]$Question.followsUp -ge 1) { $view["followsUp"] = (ConvertTo-HordeDecisionFollowsUpView -State $State -Number ([int]$Question.followsUp)) }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view

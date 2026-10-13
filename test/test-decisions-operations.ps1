@@ -68,6 +68,19 @@ function Get-NotUnderstood { param($Answer) if ($Answer.state -cne "known") { re
 function Get-Outcome { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; return "$($Answer.value.outcome)" }
 function Test-Refused { param($Answer, [string]$Text) return ($Answer.state -ceq "known" -and $Answer.value.outcome -ceq "refused" -and @($Answer.value.findings | Where-Object { "$_".Contains($Text) }).Count -gt 0) }
 function Get-Files { param([string]$Store) if (-not (Test-Path -LiteralPath $Store)) { return "" }; return (@(Get-ChildItem -LiteralPath $Store -File | Sort-Object Name | ForEach-Object { $_.Name }) -join ",") }
+function Add-Stored {
+    # A record put into a store of this suite AS A FILE, the way an earlier version of Horde left it
+    # there: for what the operations no longer write and must still read (a reopening). Returns the
+    # record's sequence number. -Hash is the request hash it carries; the zeros of a record whose
+    # request nobody will send again, unless a check hands in the real one.
+    param([string]$Store, [string]$Kind, $Data, [string]$Id = "", [string]$Hash = "")
+    if ($Id -eq "") { $Id = New-Id }
+    if ($Hash -eq "") { $Hash = "0" * 64 }
+    $seq = @(Get-ChildItem -LiteralPath $Store -File -Filter "*.json").Count + 1
+    $envelope = [ordered]@{ schemaVersion = 1; sequence = $seq; id = $Id; kind = $Kind; at = "2026-10-06T12:00:00.0000000Z"; actor = "warchief"; requestHash = $Hash; data = $Data }
+    [System.IO.File]::WriteAllText((Join-Path $Store ($seq.ToString("D10") + ".json")), (ConvertTo-Json -InputObject $envelope -Compress -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
+    return $seq
+}
 function Get-Listed { param([string]$Store, [string]$State = "all") $a = Invoke-Op $Store "list" @{ state = $State }; if ($a.state -cne "known") { return ("list " + $a.state + ": " + $a.reason) }; return (@($a.value.questions | ForEach-Object { "" + $_.number + ":" + $_.state }) -join ",") }
 
 try {
@@ -96,8 +109,8 @@ Check (Throws { Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits" 
 Write-Host ""
 Write-Host "--- the operations, as a caller may list them ---" -ForegroundColor Cyan
 $ops = @(Get-HordeDecisionOperations)
-Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,mark-read,list,show,kinds,inbox") "the operations are add, update, close and reopen, say and mark-read, and list, show, kinds and inbox"
-Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,mark-read") "and six of them write (the conversation's two are test/test-decisions-threads.ps1's)"
+Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,rank,say,mark-read,list,show,kinds,inbox") "the operations are add, update, close, reopen and rank, say and mark-read, and list, show, kinds and inbox"
+Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,rank,say,mark-read") "and seven of them write (the conversation's two are test/test-decisions-threads.ps1's)"
 $reqDefs = @($defs.requestSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
 Check (@($ops | Where-Object { $reqDefs -cnotcontains $_.name }).Count -eq 0) "each has its request definition in schema/decision-request.v1"
 
@@ -225,7 +238,7 @@ Check ((Get-Outcome $a) -ceq "done" -and $a.value.question.kind -ceq "choice" -a
 Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json,0000000003.json,0000000004.json") "exactly the four accepted requests are on disk: the refused ones left nothing"
 
 Write-Host ""
-Write-Host "--- close and reopen: the number stays, and is never reused ---" -ForegroundColor Cyan
+Write-Host "--- close: the number stays, and is never reused; and nothing is reopened any more ---" -ForegroundColor Cyan
 $s = New-TestStore
 foreach ($i in 1..3) { $null = Add-Q $s @{ title = "Is question number $i of this test asked in plain words?" } }
 $a = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 2; outcome = "Built and merged.`nShips in the next build." }
@@ -237,17 +250,93 @@ $late = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 2; 
 Check (Test-Refused $late "only an open question can be changed") "a change to the closed question is refused, and told to reopen it first"
 Check ($late.state -ceq "known" -and @($late.value.ignored).Count -eq 0 -and @($late.value.unreadable).Count -eq 0) "and the refusal does not list the record it did not write among the store's records"
 Check (Test-Refused (Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 2; outcome = "Again." }) "already closed") "closing it again is refused"
-Check (Test-Refused (Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; reason = "why not" }) "only a closed question can be reopened") "reopening an open question is refused"
+Check (Test-Refused (Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; reason = "why not" }) "nothing is reopened any more") "reopening an open question is refused"
 Check (Test-Refused (Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "   " }) "'outcome' is blank") "a close with a blank outcome is refused"
-Check (Test-Refused (Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 2; reason = "line one`nline two" }) "'reason' must be one line") "a reopening reason of two lines is refused"
+# A QUESTION IS NEVER PUT BACK IN FRONT OF THE FOUNDER (2026-10-12): the closed one is not reopened
+# either. The refusal is a fact with a reason - known, refused - and the reason says what to do instead,
+# with the question's own number in it.
+$filesWere = Get-Files $s
 $a = Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 2; reason = "the fix did not hold" }
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 2 -and $a.value.question.state -ceq "open" -and $a.value.question.outcome -eq "" -and $a.value.question.reopenReason -ceq "the fix did not hold") "question 2 is reopened as question 2, open, with the reason"
+Check ((Test-Refused $a "never put back in front of the founder") -and (Test-Refused $a "horde decisions add -File <question.json> -FollowsUp 2") -and (Test-Refused $a "question 2 and what he answered folded under it")) "REOPEN IS REFUSED for a closed question too, and the refusal tells the keeper to add a follow-up that names question 2"
+Check ((Get-Files $s) -ceq $filesWere -and (Get-Listed $s "all") -ceq "1:open,2:closed,3:open,4:open") "and it wrote nothing: question 2 is still closed"
+# A RECORD ALREADY IN THE STORE IS A FACT. A reopening an earlier version wrote is read as it always
+# was: the question is open again, once, under its old number, with the reason.
+$reason = "the fix did not hold"
+$reopenId = New-Id
+$reopenHash = Get-HordeDecisionHash -Value ([ordered]@{ operation = "reopen"; actor = "warchief"; number = [long]2; body = [ordered]@{ reason = $reason } })
+$null = Add-Stored $s "question-reopened" ([ordered]@{ number = 2; reason = $reason }) -Id $reopenId -Hash $reopenHash
+$a = Invoke-Op $s "show" @{ number = 2 }
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.question.state -ceq "open" -and $a.value.question.outcome -eq "" -and $a.value.question.reopenReason -ceq "the fix did not hold" -and $a.value.question.thread.turn -ceq "founder") "A REOPENING ALREADY IN THE STORE still reads as it did: question 2 is open as question 2, with the reason, and it is the founder's turn"
 Check ((Get-Listed $s "all") -ceq "1:open,2:open,3:open,4:open") "and every question still has the number it was given"
+# The very request that made that record, sent again under its id, is answered from the record -
+# a repost is answered before anything is judged - and still writes nothing.
+$again = Invoke-Op $s "reopen" @{ id = $reopenId; actor = "warchief"; number = 2; reason = $reason }
+Check ((Get-Outcome $again) -ceq "replayed" -and $again.value.sequence -eq 6 -and (Get-Files $s) -ceq ((1..6 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) ("a reopening recorded before, sent again under its own id, is replayed from its record and not refused (" + (Get-Outcome $again) + ")")
+Check (Test-Refused (Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 2; reason = "line one`nline two" }) "nothing is reopened any more") "and a new reopening is refused whatever its reason looks like: there is nothing to put right in it"
 $a = Add-Q $s @{ title = "Is the question added after a reopen given a new number?" }
 Check ($a.state -ceq "known" -and $a.value.number -eq 5) "the next question is 5"
 $show = Invoke-Op $s "show" @{ number = 2 }
 Check ((Get-Outcome $show) -ceq "done" -and (@($show.value.question.history | ForEach-Object { $_.note }) -join ",") -ceq "added,closed,reopened" -and $show.value.question.title -ceq "Is question number 2 of this test asked in plain words?") "show 2 gives the same question with its whole history"
-Check ((Get-Files $s) -ceq ((1..7 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "CONTROL: seven records for seven accepted requests, and none for the five refused"
+Check ((Get-Files $s) -ceq ((1..7 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "CONTROL: seven records - six accepted requests and the reopening put there as a file - and none for the refused or the replayed"
+
+Write-Host ""
+Write-Host "--- how much a question matters, and how much it holds up: stated at add, corrected by rank ---" -ForegroundColor Cyan
+$r = New-TestStore
+$plain = Add-Q $r @{ title = "Is a question added with neither word the record it always was?" }
+$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000001.json")) | ConvertFrom-Json
+Check ((Get-Outcome $plain) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $plain.value.question.importance -ceq "normal" -and $plain.value.question.blocks -ceq "part" -and $plain.value.question.importanceShown -eq "" -and $plain.value.question.blocksShown -eq "") "A QUESTION ADDED WITH NEITHER WORD writes the record every earlier version wrote - a number and the question, nothing else - and reads as normal and part"
+$marked = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; importance = "high"; blocks = "all"; question = (New-Question @{ title = "Is a question added with both words given them back?" }) }
+$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000002.json")) | ConvertFrom-Json
+Check ((Get-Outcome $marked) -ceq "done" -and (@($rec.data.PSObject.Properties | Where-Object { @("importance", "blocks") -ccontains $_.Name } | ForEach-Object { $_.Name + "=" + $_.Value } | Sort-Object) -join ",") -ceq "blocks=all,importance=high" -and $marked.value.question.importance -ceq "high" -and $marked.value.question.importanceShown -ceq "Important" -and $marked.value.question.blocksShown -ceq "Blocks all work") "add with both words records them, and the answer hands them back with their plain words"
+$half = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; blocks = "none"; question = (New-Question @{ title = "Is a question added with one word given the other's default?" }) }
+$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000003.json")) | ConvertFrom-Json
+Check ((Get-Outcome $half) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "blocks,number,question" -and $half.value.question.importance -ceq "normal" -and $half.value.question.blocks -ceq "none") "add with one word records that one only: the other is not written down as if it had been said"
+$filesWere = Get-Files $r
+foreach ($bad in @(
+    @{ what = "an importance that is no word of the list"; req = @{ importance = "urgent" }; says = "request.importance is 'urgent', not one of: high, normal, low" }
+    @{ what = "an importance in capitals"; req = @{ importance = "HIGH" }; says = "not one of: high, normal, low" }
+    @{ what = "a blocking that is no word of the list"; req = @{ blocks = "some" }; says = "request.blocks is 'some', not one of: all, part, none" }
+    @{ what = "a blocking that is a number"; req = @{ blocks = 2 }; says = "request.blocks" }
+    @{ what = "a follow-up of question 0"; req = @{ followsUp = 0 }; says = "request.followsUp" }
+    @{ what = "a follow-up that is text"; req = @{ followsUp = "1" }; says = "request.followsUp" }
+    @{ what = "a member add does not take"; req = @{ urgency = "high" }; says = "request has 'urgency'" }
+)) {
+    $request = @{ id = (New-Id); actor = "warchief"; question = (New-Question @{ title = "Is a question with a wrong word beside it refused whole?" }) }
+    foreach ($k in @($bad.req.Keys)) { $request[$k] = $bad.req[$k] }
+    Check ((Test-Refused (Invoke-Op $r "add" $request) $bad.says) -and (Get-Files $r) -ceq $filesWere) ($bad.what + " is refused by name, and no question is added")
+}
+$a = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; followsUp = 1e30; question = (New-Question) }
+Check ((Test-Refused $a "'followsUp' is not a question's number") -and (Get-Files $r) -ceq $filesWere) ("a follow-up of a number no question can have is refused, not thrown on (" + (Get-Outcome $a) + ")")
+$a = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; followsUp = 4; question = (New-Question) }
+Check ((Test-Refused $a "'followsUp' names question 4, and the list has no question 4 to show with this one; the highest number given is 3") -and (Get-Files $r) -ceq $filesWere) "A FOLLOW-UP OF A QUESTION THAT IS NOT THERE is refused - a question cannot follow itself or one not yet asked - and nothing is added"
+# THE WORDS ARE PART OF WHAT MAKES A REQUEST THE SAME: one id, the same question, another importance is
+# another request, and is refused as that.
+$id = New-Id
+$first = Invoke-Op $r "add" @{ id = $id; actor = "warchief"; importance = "low"; followsUp = 2; question = (New-Question @{ title = "Is the same add sent twice one question, whatever stands beside it?" }) }
+$again = Invoke-Op $r "add" @{ id = $id; actor = "warchief"; importance = "low"; followsUp = 2; question = (New-Question @{ title = "Is the same add sent twice one question, whatever stands beside it?" }) }
+$other = Invoke-Op $r "add" @{ id = $id; actor = "warchief"; importance = "high"; followsUp = 2; question = (New-Question @{ title = "Is the same add sent twice one question, whatever stands beside it?" }) }
+$bare = Invoke-Op $r "add" @{ id = $id; actor = "warchief"; question = (New-Question @{ title = "Is the same add sent twice one question, whatever stands beside it?" }) }
+Check ((Get-Outcome $first) -ceq "done" -and $first.value.number -eq 4 -and (Get-Outcome $again) -ceq "replayed" -and $again.value.number -eq 4 -and $again.value.question.followsUp.number -eq 2 -and $again.value.question.importance -ceq "low") "the same add, words and all, sent again under its id is one question, answered again as it was"
+Check ((Test-Refused $other "was already used for a different request") -and (Test-Refused $bare "was already used for a different request") -and (Get-Listed $r) -ceq "1:open,2:open,3:open,4:open") "the same id with another importance, or with none, is a different request: refused, and nothing added"
+# RANK.
+$filesWere = Get-Files $r
+$id = New-Id
+$up = Invoke-Op $r "rank" @{ id = $id; actor = "warchief"; number = 1; importance = "high"; blocks = "all" }
+Check ((Get-Outcome $up) -ceq "done" -and $up.value.number -eq 1 -and $up.value.sequence -eq 5 -and $up.value.question.importance -ceq "high" -and $up.value.question.blocks -ceq "all" -and (@($up.value.question.history | ForEach-Object { $_.note }) -join "|") -ceq "added|ranked: importance high, blocks all") ("rank changes the two words of question 1 in one record of its own, and the history says so (" + (Get-Outcome $up) + ")")
+$rec = [System.IO.File]::ReadAllText((Join-Path $r "0000000005.json")) | ConvertFrom-Json
+Check ($rec.kind -ceq "question-ranked" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "blocks,importance,number" -and ([System.IO.File]::ReadAllText((Join-Path $r "0000000001.json")) | ConvertFrom-Json).data.PSObject.Properties["importance"] -eq $null) "THE QUESTION'S OWN RECORD IS NEVER EDITED: the ranking is record 5, and record 1 still states no word"
+$replay = Invoke-Op $r "rank" @{ id = $id; actor = "warchief"; number = 1; importance = "high"; blocks = "all" }
+Check ((Get-Outcome $replay) -ceq "replayed" -and $replay.value.sequence -eq 5 -and (Get-Files $r) -ceq ($filesWere + ",0000000005.json")) "the same ranking sent again under its id is answered from its record, and writes nothing"
+$filesWere = Get-Files $r
+Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; importance = "high" }) "it changes nothing: question 1 already has that importance and that blocking") -and (Get-Files $r) -ceq $filesWere) "a ranking that changes nothing, under a new id, is refused as that"
+Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1 }) "the ranking names neither word") -and (Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; importance = "urgent" }) "request.importance is 'urgent'") -and (Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; blocks = "all"; title = "x" }) "request has 'title'") -and (Get-Files $r) -ceq $filesWere) "a ranking that names neither word, a word that is none of the list's, or a field of the question is refused"
+Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "founder"; number = 1; blocks = "none" }) "'founder' is not a role that may change the list") -and (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 99; blocks = "none" }).state -ceq "absent" -and (Get-Files $r) -ceq $filesWere) "only the keeper ranks, and a question that is not there is absent"
+$null = Invoke-Op $r "close" @{ id = (New-Id); actor = "warchief"; number = 3; outcome = "Done." }
+Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 3; importance = "high" }) "question 3 is closed, and only an open question is ranked") -and (Get-Listed $r) -ceq "1:open,2:open,3:closed,4:open") "a closed question is not ranked"
+$down = Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; blocks = "part" }
+Check ((Get-Outcome $down) -ceq "done" -and $down.value.question.importance -ceq "high" -and $down.value.question.blocks -ceq "part" -and $down.value.question.blocksShown -eq "" -and $down.value.question.wordingVersion -eq 1) "a ranking that names one word leaves the other, and moves no wording"
+$listed = Invoke-Op $r "list" @{ state = "all" }
+Check ((@($listed.value.questions | ForEach-Object { "" + $_.number + ":" + $_.importance + "/" + $_.blocks }) -join ",") -ceq "1:high/part,2:high/all,3:normal/none,4:low/part" -and $listed.value.questions[3].followsUp.number -eq 2 -and $null -eq $listed.value.questions[0].PSObject.Properties["followsUp"]) "every question of a list carries its two words, and a follow-up the question it follows"
 
 Write-Host ""
 Write-Host "--- a number that was never given ---" -ForegroundColor Cyan

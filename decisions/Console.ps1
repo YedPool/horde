@@ -63,17 +63,22 @@
 # IN A USAGE, a bar stands between two verbs and for nothing else: alternatives inside one verb are
 # written in words.
 $script:HordeDecisionCommandVerbs = [ordered]@{
-    add    = @{ number = $false; flags = @("File", "Id", "Json");                   usage = "add -File <question.json> [-Id <32 hex>] [-Json]" }
+    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "FollowsUp", "Id", "Json"); usage = "add -File <question.json> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-FollowsUp <question>] [-Id <32 hex>] [-Json]" }
     update = @{ number = $true;  flags = @("File", "Id", "Json");                   usage = "update <number> -File <changes.json> [-Id <32 hex>] [-Json]" }
     close  = @{ number = $true;  flags = @("OutcomeFile", "Outcome", "Id", "Json"); usage = "close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json]" }
+    # reopen IS KEPT AS A VERB SO THAT IT CAN SAY WHY IT IS REFUSED, and what to type instead
+    # (decisions/Operations.ps1, A QUESTION IS NEVER PUT BACK): taken out, the command line would
+    # answer only that there is no such verb.
     reopen = @{ number = $true;  flags = @("Reason", "Id", "Json");                 usage = "reopen <number> -Reason <one line> [-Id <32 hex>] [-Json]" }
+    # rank: correct the two words that stand beside a question, the ones add takes.
+    rank   = @{ number = $true;  flags = @("Importance", "Blocks", "Id", "Json");   usage = "rank <number> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-Id <32 hex>] [-Json]" }
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
     # THE CONVERSATION UNDER A QUESTION. answer: the session that keeps the list writes down what the
     # founder said in chat, in his words - stored as recorded from chat, never as typed by him.
     # reply: that session speaks. inbox: what the founder has said that it has not read.
-    answer = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
+    answer = @{ number = $true;  flags = @("Text", "File", "Part", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Part <letter>] [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
     reply  = @{ number = $true;  flags = @("Text", "File", "Note", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Note] [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
     # then: the operation a verb asks for once its lines are out. Every operation is a verb's own, or a verb's "then".
     inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]"; then = "mark-read" }
@@ -203,6 +208,13 @@ function Format-HordeDecisionMessage {
     $has = { param([string]$Name) return ($null -ne $Message.PSObject.Properties[$Name]) }
     if ((& $has "replaces") -and $Message.replaces -and "$($Message.speaker)" -ceq "founder") { [void]$lines.Add($Indent + "  (replaces his earlier answer)") }
     if ((& $has "asks") -and $Message.asks -eq $false) { [void]$lines.Add($Indent + "  (a note: it asks him nothing, and the turn stayed the keeper's)") }
+    # THE PART ANSWERED, by its letter and its words as they read when he answered: the keeper is told
+    # which part these words are for, and does not have to work it out from them.
+    if ((& $has "part") -and "$($Message.part)" -ne "") {
+        $partLine = "  (answers part (" + $Message.part + ")"
+        if ((& $has "partWords") -and "$($Message.partWords)".Trim() -ne "") { $partLine = $partLine + ": " + (Get-HordeDecisionFirstLine -Text "$($Message.partWords)") }
+        [void]$lines.Add($Indent + $partLine + ")")
+    }
     if ((& $has "act") -and "$($Message.act)" -ne "") { [void]$lines.Add($Indent + "  (" + $(if ("$($Message.act)" -ceq "park") { "he set the question aside: parked" } else { "he brought the question back: unparked" }) + ")") }
     if ($Message.saidToEarlierWording) {
         $now = ""
@@ -218,6 +230,12 @@ function Format-HordeDecisionThreadSummary {
     param($Thread)
     $phrase = "" + $Thread.count + " message(s)"
     foreach ($u in @($Thread.unread)) { if ($u.count -gt 0) { $phrase = $phrase + "; " + $u.count + " not yet read by " + $u.readerShown } }
+    # A question of parts: which of them he has answered, by letter.
+    if ($null -ne $Thread.PSObject.Properties["parts"]) {
+        $all = @($Thread.parts)
+        $done = @($all | Where-Object { $_.answered } | ForEach-Object { "(" + $_.letter + ")" })
+        $phrase = $phrase + "; parts answered: " + $(if ($done.Count -eq 0) { "none" } else { $done -join ", " }) + " of " + $all.Count
+    }
     return ($phrase + "; turn: " + $Thread.turnShown)
 }
 
@@ -276,6 +294,38 @@ function Format-HordeDecisionProblems {
     return @($lines)
 }
 
+function Get-HordeDecisionRankWords {
+    # The few plain words that stand beside a question for how much it matters and how much it holds
+    # up, as the operations hand them out (importanceShown, blocksShown): joined, or "" when both are
+    # the default. Read with care: an answer from an earlier version has neither member.
+    param($Question)
+    $words = @()
+    foreach ($name in @("importanceShown", "blocksShown")) {
+        if ($null -ne $Question.PSObject.Properties[$name] -and "$($Question.$name)".Trim() -ne "") { $words += "$($Question.$name)" }
+    }
+    return ($words -join "; ")
+}
+
+function Get-HordeDecisionAnsweredLine {
+    # For the keeper's list: what the founder answered under an open question that is no longer his
+    # turn, as one line - the first line of his last words, or of each part's - or "" when he has
+    # not, or the answer carries no messages. THE QUESTION IS OFF HIS LIST, AND STILL ON THE KEEPER'S.
+    param($Question)
+    if ("$($Question.state)" -cne "open" -or "$($Question.thread.turn)" -ceq (Get-HordeDecisionFirstTurn)) { return "" }
+    if ($null -eq $Question.thread.PSObject.Properties["messages"]) { return "" }
+    $mine = @($Question.thread.messages | Where-Object { "$($_.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($_.act)" -eq "" })
+    if ($mine.Count -eq 0) { return "" }
+    $last = $mine[$mine.Count - 1]
+    $said = Get-HordeDecisionFirstLine -Text ([string]$last.text)
+    if ($null -ne $last.PSObject.Properties["part"] -and "$($last.part)" -ne "") {
+        # Part by part: each part's last answer, in the parts' order.
+        $byPart = [ordered]@{}
+        foreach ($m in $mine) { if ($null -ne $m.PSObject.Properties["part"] -and "$($m.part)" -ne "") { $byPart["$($m.part)"] = $m } }
+        $said = (@($byPart.Keys | Sort-Object | ForEach-Object { "(" + $_ + ") " + (Get-HordeDecisionFirstLine -Text ([string]$byPart[$_].text)) }) -join "; ")
+    }
+    return ("answered, and off his list: " + $said)
+}
+
 function Format-HordeDecisionList {
     # A list result as lines: a count, then the questions under their groups, in number order.
     param($Value, $Kinds, [string]$Showing)
@@ -302,10 +352,15 @@ function Format-HordeDecisionList {
             if (@($q.waiting).Count -gt 0) { $meta = $meta + "waiting: " + (@($q.waiting) -join ", ") } else { $meta = $meta + "nobody is waiting" }
             if ($q.needsSecret) { $meta = $meta + "; needs a secret" }
             [void]$lines.Add($pad + $meta)
+            $rank = Get-HordeDecisionRankWords -Question $q
+            if ($rank -ne "") { [void]$lines.Add($pad + $rank) }
+            if ($null -ne $q.PSObject.Properties["followsUp"]) { [void]$lines.Add($pad + "follows up on question " + $q.followsUp.number + $(if ("$($q.followsUp.title)" -ne "") { ": " + (Get-HordeDecisionFirstLine -Text "$($q.followsUp.title)") } else { "" })) }
             if ("$($q.recommendation)".Trim() -ne "") { [void]$lines.Add($pad + "recommended: " + (Get-HordeDecisionFirstLine -Text $q.recommendation)) }
             # A question nobody has spoken under says nothing here: it is the founder's turn, as for
             # every question just asked.
             if ($q.thread.count -gt 0) { [void]$lines.Add($pad + "conversation: " + (Format-HordeDecisionThreadSummary -Thread $q.thread)) }
+            $answered = Get-HordeDecisionAnsweredLine -Question $q
+            if ($answered -ne "") { [void]$lines.Add($pad + $answered) }
             if ($q.state -cne "open") {
                 $done = $q.state
                 if ("$($q.closedAt)" -ne "") { $done = $done + " " + (Format-HordeDecisionTime -At $q.closedAt) }
@@ -349,6 +404,21 @@ function Format-HordeDecisionQuestion {
     if ("$($q.groupNote)".Trim() -ne "") { Add-HordeDecisionTextBlock -Lines $lines -Heading "About this group:" -Text $q.groupNote }
     [void]$lines.Add("Asked by: " + $q.askedBy)
     if (@($q.waiting).Count -gt 0) { [void]$lines.Add("Waiting on this: " + (@($q.waiting) -join ", ")) } else { [void]$lines.Add("Waiting on this: nobody") }
+    # The two words beside the question, each with what it means in plain words when it has any.
+    if ($null -ne $q.PSObject.Properties["importance"]) {
+        [void]$lines.Add("Importance of its task: " + $q.importance + $(if ("$($q.importanceShown)" -ne "") { " (" + $q.importanceShown + ")" } else { "" }))
+        [void]$lines.Add("Blocks: " + $q.blocks + $(if ("$($q.blocksShown)" -ne "") { " (" + $q.blocksShown + ")" } else { "" }))
+    }
+    if ($null -ne $q.PSObject.Properties["followsUp"]) {
+        $old = $q.followsUp
+        if ("$($old.title)" -eq "") { [void]$lines.Add("Follows up on question " + $old.number + ", which cannot be shown (" + $old.state + ")") }
+        else {
+            [void]$lines.Add("Follows up on question " + $old.number + " (" + $old.state + "): " + $old.title)
+            if ("$($old.answer)" -ne "") { Add-HordeDecisionTextBlock -Lines $lines -Heading ("  He answered" + $(if ($old.answerCut) { " (the start of it; the whole is under question " + $old.number + ")" } else { "" }) + ":") -Text ("  " + ("$($old.answer)" -replace "\r?\n", "`n  ")) }
+            else { [void]$lines.Add("  He had not answered it.") }
+            if ("$($old.outcome)".Trim() -ne "") { [void]$lines.Add("  It was closed with: " + (Get-HordeDecisionFirstLine -Text "$($old.outcome)")) }
+        }
+    }
     if (@($q.files).Count -gt 0) { [void]$lines.Add("Files:"); foreach ($f in @($q.files)) { [void]$lines.Add("  " + $f) } }
     if (@($q.references).Count -gt 0) { [void]$lines.Add("References: " + (@($q.references) -join ", ")) }
     if ($q.needsSecret) { [void]$lines.Add("Needs a secret: yes. Never write the secret into this list or into an answer; give it outside.") }
@@ -407,9 +477,15 @@ function Format-HordeDecisionAnswer {
         if ($value.message.saidToEarlierWording) { [void]$lines.Add("  NOTE: they were said to wording " + $value.message.wordingVersion + ", and the question is now at wording " + $value.question.wordingVersion + ". They are kept, and marked as said to an earlier wording.") }
     }
     else {
-        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question " }
+        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question " }
         [void]$lines.Add($done[$Verb] + $value.number + ": " + $value.question.title)
-        if ($Verb -ceq "update") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
+        if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
+        if ($Verb -ceq "add") {
+            # WHERE IT STANDS IN HIS LIST, said back so that a keeper who gave neither word sees what
+            # the question reads as, and how to change it.
+            [void]$lines.Add("  importance of its task: " + $value.question.importance + "; blocks: " + $value.question.blocks + ". Change either with: horde decisions rank " + $value.number + " -Importance <high, normal or low> -Blocks <all, part or none>")
+            if ($null -ne $value.question.PSObject.Properties["followsUp"]) { [void]$lines.Add("  follows up on question " + $value.question.followsUp.number + ": he sees that question and his answer folded under this one") }
+        }
     }
     foreach ($l in @(Format-HordeDecisionProblems -Value $value)) { [void]$lines.Add($l) }
     return @($lines)
@@ -510,6 +586,14 @@ function Invoke-HordeDecisionCommand {
         "add" {
             if (-not $have.ContainsKey("File")) { throw ("decisions add needs -File <question.json>: the question as a JSON file. Long text is never taken from the command line" + $usageNote) }
             $request["question"] = Read-HordeDecisionJsonFile -Path "$($have['File'])" -What "the question file"
+            if ($have.ContainsKey("FollowsUp")) {
+                $followsText = "$($have['FollowsUp'])"
+                if ($followsText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("-FollowsUp is the number of the earlier question this one follows up on, as in: -FollowsUp 7" + $usageNote) }
+                $request["followsUp"] = [int]$followsText
+            }
+        }
+        "rank" {
+            if (-not $have.ContainsKey("Importance") -and -not $have.ContainsKey("Blocks")) { throw ("decisions rank needs -Importance, -Blocks, or both: the word to change" + $usageNote) }
         }
         "update" {
             if (-not $have.ContainsKey("File")) { throw ("decisions update needs -File <changes.json>: a JSON file holding only the fields to change" + $usageNote) }
@@ -524,7 +608,13 @@ function Invoke-HordeDecisionCommand {
             if (-not $have.ContainsKey("Reason")) { throw ("decisions reopen needs -Reason <one line>: why the question is open again" + $usageNote) }
             $request["reason"] = "$($have['Reason'])"
         }
-        "list" { if ($have.ContainsKey("State")) { $showing = "$($have['State'])"; $request["state"] = $showing } }
+        "list" {
+            if ($have.ContainsKey("State")) { $showing = "$($have['State'])"; $request["state"] = $showing }
+            # WITH EACH CONVERSATION, in plain text: the keeper's list says what he answered under a
+            # question that has left his own (Get-HordeDecisionAnsweredLine). -Json stays the list
+            # as it always was: a script that wants the messages asks show.
+            if (-not ($have.ContainsKey("Json") -and [bool]$have["Json"])) { $request["messages"] = $true }
+        }
         "inbox" { $request["actor"] = $script:HordeDecisionCommandActor }
         "mark-read" {
             if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }
@@ -532,6 +622,11 @@ function Invoke-HordeDecisionCommand {
             if ($upToText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-UpTo is a record's number, as in: -UpTo 12" + $usageNote) }
             $request["upTo"] = [long]$upToText
         }
+    }
+    # THE TWO WORDS BESIDE A QUESTION (add and rank), handed on as typed in lower case: which words
+    # there are is the operations' to say, and a word that is none of them is refused there, by name.
+    foreach ($rankFlag in @("Importance", "Blocks")) {
+        if ($spec.flags -contains $rankFlag -and $have.ContainsKey($rankFlag)) { $request[$rankFlag.ToLowerInvariant()] = "$($have[$rankFlag])".ToLowerInvariant() }
     }
     if ($spec.ContainsKey("says")) {
         # THE WORDS: one line as an argument, or anything longer from a file, exactly as the file holds
@@ -549,6 +644,12 @@ function Invoke-HordeDecisionCommand {
         $request["text"] = $words
         # -Note: the words tell him something and ask him nothing (decisions/Rules.ps1).
         if ($have.ContainsKey("Note") -and [bool]$have["Note"]) { $request["asks"] = $false }
+        # -Part: the words answer one part of a question of parts, by its letter (decisions/Rules.ps1).
+        if ($have.ContainsKey("Part")) {
+            $partLetter = "$($have['Part'])".ToLowerInvariant()
+            if ($partLetter -cnotmatch '\A[a-z]\z') { throw ("-Part is the letter of the part answered, as in: -Part b" + $usageNote) }
+            $request["part"] = $partLetter
+        }
         if ($have.ContainsKey("Wording")) {
             $wording = "$($have['Wording'])"
             if ($wording -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("-Wording is the number of the wording the speaker was looking at, as in: -Wording 2" + $usageNote) }

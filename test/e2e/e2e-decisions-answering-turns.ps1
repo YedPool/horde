@@ -114,9 +114,13 @@ Write-Host "=== a note leaves it there; a reply that asks brings it back with th
 $note = Horde @("reply", "1", "-Text", "Noted, I am on it.", "-Note")
 $r = Wait-Report { param($x) (Get-Done $x 1).r -ceq "Noted, I am on it." }
 Check ($note.code -eq 0 -and (Get-Done $r 1).k -ceq "thrall" -and $null -eq (Get-Line $r 1)) "A NOTE (reply -Note) ASKS HIM NOTHING: question 1 stays With Thrall, the note shown under his answer"
+# The real command no longer asks again under an answered question (2026-10-12); a store may hold such a
+# reply from before, and the window still brings the question back for it: the record is put there as a file.
 $ask = Horde @("reply", "1", "-Text", "Which build should it go to?")
+Check ($ask.code -eq 1 -and $ask.out -like "*question 1 has been answered and is off the founder's list*") "the real command refuses a reply that asks under the question he answered"
+$null = Add-HordeProbeStoredRecord -Store (Join-Path $hordeHome "store\decisions") -Kind "message-said" -Data ([ordered]@{ number = 1; speaker = "warchief"; route = "command"; text = "Which build should it go to?" })
 $r = Wait-Report { param($x) $null -ne (Get-Line $x 1) }
-Check ($ask.code -eq 0 -and (Get-Line $r 1).z -ceq "main" -and ((@((Get-Line $r 1).th)) -join " | ") -clike "*Thrall: Which build should it go to?" -and (Get-Line $r 1).a -ceq "" -and $null -eq (Get-Done $r 1)) "A REPLY THAT ASKS brings it back to the list by itself, the reply shown, his field empty"
+Check ((Get-Line $r 1).z -ceq "main" -and ((@((Get-Line $r 1).th)) -join " | ") -clike "*Thrall: Which build should it go to?" -and (Get-Line $r 1).a -ceq "" -and $null -eq (Get-Done $r 1)) "A REPLY THAT ASKS, ALREADY IN THE STORE, brings it back to the list by itself, the reply shown, his field empty"
 Check ($r.drawn.top -ceq "14 to answer") ("and the top line counts it again (" + $r.drawn.top + ")")
 
 Write-Host ""

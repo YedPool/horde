@@ -126,9 +126,9 @@ Check ($q[0].thread.messages[0].told -eq $true -and $q[1].thread.messages[0].tol
 Check ((ConvertTo-HordeSurfaceJson -Value $record).Length -gt 100) "and the record can be handed to a page whole"
 $record = Add-HordeDecisionWindowThreads -Record (Get-HordeDecisionWindowRecord -Operation "list" -Request @{ state = "all" }) -Cache $cache -Told @{} -Show $counting
 Check ($script:shows -eq 3 -and @($record.value.questions)[0].thread.messages[0].told -eq $false) "read again with nothing changed, no thread is asked for again; and told follows the file, both ways"
-$null = Invoke-HordeDecision -Operation "say" -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "Which Friday?" }
+$null = Invoke-HordeDecision -Operation "say" -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "This Friday it is."; asks = $false }
 $record = Add-HordeDecisionWindowThreads -Record (Get-HordeDecisionWindowRecord -Operation "list" -Request @{ state = "all" }) -Cache $cache -Told @{} -Show $counting
-Check ($script:shows -eq 4 -and @(@($record.value.questions)[0].thread.messages).Count -eq 2 -and @($record.value.questions)[0].thread.turn -ceq "founder") "after a reply, only that question's thread is asked for again, and it is the founder's turn"
+Check ($script:shows -eq 4 -and @(@($record.value.questions)[0].thread.messages).Count -eq 2 -and @($record.value.questions)[0].thread.turn -ceq "warchief") "after the keeper's note, only that question's thread is asked for again, and it is still the keeper's turn"
 $null = Invoke-HordeDecision -Operation "mark-read" -Request @{ id = (New-Id); actor = "warchief"; upTo = [long]$late.sequence }
 $record = Add-HordeDecisionWindowThreads -Record (Get-HordeDecisionWindowRecord -Operation "list" -Request @{ state = "all" }) -Cache $cache -Told @{} -Show $counting
 Check (@(@($record.value.questions)[0].thread.messages[0].unreadBy).Count -eq 0) "and once the keeper of the list has read up to a message, nobody is left who has not read it"
