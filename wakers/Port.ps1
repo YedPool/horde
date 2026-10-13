@@ -59,13 +59,16 @@
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
 $script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")
 # What the production path requires: every one. A waker without all four is never picked there.
 $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")
-# In the order the watcher serves them when more qualify than one pass may nudge (core/Wake.ps1).
-$script:HordeWakerRoles = @("warchief", "orc", "goblin", "unknown")
+# Horde's roles as core/Roles.ps1 lists them (core\roles.json), then unknown for a session whose role
+# nobody recorded: one list of roles, not a copy (review of PR #207). It is also the order the watcher
+# serves them in when more qualify than one pass may nudge (core/Wake.ps1).
+$script:HordeWakerRoles = @(@((Get-HordeRoleTable).native) + "unknown")
 $script:HordeWakerWords = @("yes", "no", "unknown")
 # nothing: asked to nudge, the waker found the session had no unread mail by then - it was taken between
 # the state read and the nudge - and rang nobody. It is not a failure, and the watcher counts no attempt

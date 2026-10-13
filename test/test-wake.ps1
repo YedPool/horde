@@ -9,11 +9,7 @@
 #     was woken and still has its mail is asked again.
 #   - A RESTORE OF EVERYTHING is ten sessions with unread mail: one nudge a pass, the warchief first,
 #     and nobody asked twice before everybody was asked once.
-#   - SHADOW rings nobody and posts nothing.
-#   - THE RESTORE SOURCE, on a replay of a real timeline: twelve sessions restarted inside 150 s. Orcs
-#     are told to resume at once; a subsession, or a session of no known role, never is - an orc mails
-#     the ones it still needs; and the warchief is told at 300 s when nothing moved - each mail under
-#     an id that never changes.
+#   - SHADOW rings nobody.
 #   - AN ADAPTER THAT THROWS OR ANSWERS RUBBISH is unknown, and never a nudge.
 # The files (journal, heartbeat, ledger) are written under a home this suite made and removes.
 
@@ -199,143 +195,14 @@ Write-Host "--- shadow: what it would do is journaled, and none of it is done --
 
 Start-Case
 foreach ($n in 1..10) { Seat $n }
-$script:posts = 0
-$restored = @(1..5 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 10)); lastChangeAt = (At ($_ * 10 + 2)) } })
-$posted = @{}
 $kinds = New-Object System.Collections.ArrayList
 for ($i = 0; $i -lt 40; $i++) {
-    $now = At (400 + $i * 3)
-    $r = Invoke-HordeWakePass -Waker $memory -Now $now -Settings $settings -Ledger $script:ledger -Shadow -RestoreSessions $restored -Post { param($m) $script:posts++; New-HordeKnown -Value $true } -Posted $posted
-    $script:ledger = $r.ledger; $posted = $r.posted
+    $r = Pass (400 + $i * 3) -Shadow
     foreach ($e in @($r.entries)) { [void]$kinds.Add($e.kind) }
 }
 Check ((Rang) -eq 0) "forty shadow passes over ten pending sessions send zero nudges"
-Check ($script:posts -eq 0) "and post zero mails, with a restore found and a poster in hand"
-Check (@($kinds | Where-Object { $_ -notlike "would-*" }).Count -eq 0 -and @($kinds | Where-Object { $_ -ceq "would-nudge" }).Count -ge 10 -and @($kinds | Where-Object { $_ -ceq "would-post" }).Count -eq 5 -and @($kinds | Where-Object { $_ -ceq "would-stall" }).Count -eq 1) ("every journal line says would: would-nudge for each session, would-post once for each of the five restored orcs, would-stall once (" + (@($kinds | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
+Check (@($kinds | Where-Object { $_ -cne "would-nudge" }).Count -eq 0 -and $kinds.Count -ge 10) ("every journal line says would-nudge, at least one for each session (" + $kinds.Count + ")")
 Check ($script:ledger.Count -eq 10 -and @($script:ledger.Values | Where-Object { $_.lastOutcome -cne "would-nudge" }).Count -eq 0) "a would-nudge still counts as an attempt, so the journal keeps a live run's rhythm"
-
-Write-Host ""
-Write-Host "--- the restore source: a replay of twelve sessions restarted inside 150 s ---" -ForegroundColor Cyan
-
-# One warchief (1), three orcs (2 to 4), eight goblins (5 to 12: 5 to 7 under orc 2, 8 to 10 under orc 3,
-# 11 and 12 under orc 4). Each started 13 s after the last, and wrote its status once, 4 s after starting.
-function New-Restored {
-    param([hashtable]$MovedAfter = @{})
-    $out = @()
-    for ($n = 1; $n -le 12; $n++) {
-        $role = "goblin"; $parent = ""
-        if ($n -eq 1) { $role = "warchief" } elseif ($n -le 4) { $role = "orc"; $parent = Sid 1 }
-        elseif ($n -le 7) { $parent = Sid 2 } elseif ($n -le 10) { $parent = Sid 3 } else { $parent = Sid 4 }
-        $start = At (($n - 1) * 13)
-        $change = $start.AddSeconds(4)
-        if ($MovedAfter.ContainsKey($n)) { $change = $start.AddSeconds($MovedAfter[$n]) }
-        $out += [pscustomobject]@{ id = (Sid $n); role = $role; parent = $parent; startedAt = $start; lastChangeAt = $change }
-    }
-    return $out
-}
-$end = 143
-$fleet = New-Restored
-$f = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 10)) -Settings $settings
-Check ($f.state -ceq "known") "twelve sessions that started inside 150 s are a restore"
-Check ($f.state -ceq "known" -and $f.value.windowStart -eq $t0 -and $f.value.windowEnd -eq (At $end) -and @($f.value.members).Count -eq 12 -and @($f.value.notMoved).Count -eq 12) "its window runs from the first start to the last, with all twelve as members and none moved"
-Check ($f.state -ceq "known" -and $f.value.restoreId -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') "its id is a lowercase uuid"
-$again = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 250)) -Settings $settings
-Check ($again.state -ceq "known" -and $again.value.restoreId -ceq $f.value.restoreId) "and the same id on a later pass"
-$shifted = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddMinutes(7); lastChangeAt = $_.lastChangeAt.AddMinutes(7) } })
-$f7 = Get-HordeRestoreFinding -Sessions $shifted -Now (At 2000) -Settings $settings
-Check ($f7.state -ceq "known" -and $f7.value.restoreId -cne $f.value.restoreId) "a restore that began in another minute has another id"
-
-$plan = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 10)) -Settings $settings)
-$orcs = @(2, 3, 4 | ForEach-Object { Sid $_ })
-Check ((@($plan | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",") -and @($plan | Where-Object { $_.kind -cne "resume" }).Count -eq 0) "all three orcs are told to resume at once, and nobody else"
-Check (@($plan | Where-Object { $_.body -cne $settings.resumeText }).Count -eq 0 -and $settings.resumeText.StartsWith("START OR RESTORE. Every session on this machine was started or restored together") -and $settings.resumeText.EndsWith("mail the subsessions you still need: they are not woken unless you ask.")) "each with the resume text, which covers a start as well as a restore and tells an orc its subsessions are not woken unless it asks"
-$unroled = @($fleet | ForEach-Object { if ($_.id -ceq (Sid 12)) { [pscustomobject]@{ id = $_.id; role = "unknown"; parent = $_.parent; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt } } else { $_ } })
-foreach ($after in @(0, 180, 600)) {
-    $planAt = @(Get-HordeResumePlan -Finding $f -Now (At ($end + $after)) -Settings $settings | Where-Object { $_.kind -ceq "resume" })
-    Check ((@($planAt | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",")) ("" + $after + " s after the last start, with no orc moved, the orcs are told and no goblin is")
-    $planAt = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions $unroled -Now (At ($end + $after)) -Settings $settings) -Now (At ($end + $after)) -Settings $settings | Where-Object { $_.kind -ceq "resume" })
-    Check ($planAt.Count -eq 3 -and @($planAt | Where-Object { $_.to -ceq (Sid 12) }).Count -eq 0) ("" + $after + " s after it, a session of no known role is not told either")
-}
-$oneMoved = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 90 }) -Now (At ($end + 100)) -Settings $settings
-$planMoved = @(Get-HordeResumePlan -Finding $oneMoved -Now (At ($end + 100)) -Settings $settings)
-Check ((@($planMoved | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) "once an orc has moved it is not told again - and its goblins are still not told: it mails the ones it needs"
-$planMoved600 = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 90 }) -Now (At ($end + 600)) -Settings $settings) -Now (At ($end + 600)) -Settings $settings)
-Check ((@($planMoved600 | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) "nor are they at 600 s"
-Check (@($oneMoved.value.notMoved).Count -eq 11 -and @($oneMoved.value.members | Where-Object { $_.moved }).Count -eq 1) "a member has moved when its status changed at least movedSeconds after it started"
-$barely = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 59 }) -Now (At ($end + 100)) -Settings $settings
-Check (@($barely.value.notMoved).Count -eq 12) "and has not at 59 s"
-$plan180 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 180)) -Settings $settings)
-Check ($plan180.Count -eq 3 -and @($plan180 | Where-Object { $_.to -ceq (Sid 1) }).Count -eq 0) "and the warchief is never told to resume"
-
-$plan299 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 299)) -Settings $settings)
-Check (@($plan299 | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "there is no stall notice 299 s after the last start"
-$plan300 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 300)) -Settings $settings)
-$stall = @($plan300 | Where-Object { $_.kind -ceq "stall" })
-Check ($stall.Count -eq 1 -and $stall[0].to -ceq (Sid 1) -and $stall[0].body -ceq $settings.stallText) "at 300 s, with nothing moved, the warchief is told the restore has stalled"
-$planLate = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 7 = 200 }) -Now (At ($end + 400)) -Settings $settings) -Now (At ($end + 400)) -Settings $settings)
-Check (@($planLate | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "and it is not, at any time, once one member has moved"
-$noChief = Get-HordeRestoreFinding -Sessions @($fleet | Where-Object { $_.role -cne "warchief" }) -Now (At ($end + 300)) -Settings $settings
-$stallNobody = @(@(Get-HordeResumePlan -Finding $noChief -Now (At ($end + 300)) -Settings $settings) | Where-Object { $_.kind -ceq "stall" })
-Check ($stallNobody.Count -eq 1 -and $stallNobody[0].to -ceq "") "with no warchief among the restored sessions the stall notice is addressed to nobody, and says so"
-
-$ids1 = (@($plan300 | Sort-Object to | ForEach-Object { $_.to + "=" + $_.messageId }) -join ";")
-$ids2 = (@(Get-HordeResumePlan -Finding $again -Now (At ($end + 300)) -Settings $settings | Sort-Object to | ForEach-Object { $_.to + "=" + $_.messageId }) -join ";")
-Check ($ids1 -ceq $ids2 -and $plan300.Count -eq 4) "a plan made again names every mail by the same messageId: three orcs and the stall notice"
-Check (@($plan300 | ForEach-Object { $_.messageId } | Sort-Object -Unique).Count -eq 4 -and @($plan300 | Where-Object { $_.messageId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' }).Count -eq 0) "each mail has an id of its own, a lowercase uuid"
-$orcId = @($plan | Where-Object { $_.to -ceq (Sid 2) })[0].messageId
-Check (@($plan300 | Where-Object { $_.to -ceq (Sid 2) })[0].messageId -ceq $orcId) "and an orc's resume mail has the id at 300 s that it had at 10 s"
-
-Write-Host ""
-Write-Host "--- the restore source in a pass: posted once, retried when the post could not say ---" -ForegroundColor Cyan
-
-Start-Case
-$script:mails = New-Object System.Collections.ArrayList
-$script:postWorks = $true
-$poster = { param($m) [void]$script:mails.Add($m); if ($script:postWorks) { New-HordeKnown -Value $true } else { New-HordeUnknown -Reason "the mailbox is locked" } }
-$r = Invoke-HordeWakePass -Waker $null -Now (At ($end + 10)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted @{}
-Check ($script:mails.Count -eq 3 -and (Kinds $r) -ceq "post,post,post" -and @($r.entries | Where-Object { $_.outcome -cne "posted" -or $_.messageId -eq "" }).Count -eq 0) "with no waker at all the restore half still runs: three resume mails are posted, each journaled with its messageId"
-$r2 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 13)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r.posted
-Check ($script:mails.Count -eq 3 -and @($r2.entries).Count -eq 0) "the next pass posts none of them again"
-$r180 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 180)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r2.posted
-Check ($script:mails.Count -eq 3 -and @($r180.entries).Count -eq 0) "nor, at 180 s, anything to a goblin"
-$script:postWorks = $false
-$script:mails.Clear()
-$r3 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 10)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted @{}
-Check ($script:mails.Count -eq 3 -and @($r3.entries | Where-Object { $_.outcome -ceq "unknown" -and $_.reason -ceq "the mailbox is locked" }).Count -eq 3 -and $r3.posted.Count -eq 0) "a post that could not say is journaled unknown with its reason, and is not marked posted"
-$script:postWorks = $true
-$r4 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 13)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r3.posted
-$sameIds = ((@($script:mails[0..2] | ForEach-Object { $_.messageId } | Sort-Object) -join ",") -ceq (@($script:mails[3..5] | ForEach-Object { $_.messageId } | Sort-Object) -join ","))
-Check ($script:mails.Count -eq 6 -and $r4.posted.Count -eq 3 -and $sameIds) "so the next pass tries those three again, under the same ids"
-$r5 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 300)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post { param($m) throw "the poster fell over" } -Posted $r4.posted
-Check ((Kinds $r5) -ceq "stall" -and $r5.entries[0].outcome -ceq "unknown" -and "$($r5.entries[0].reason)".Contains("fell over")) "a poster that throws is an unknown outcome, never a throw of the pass"
-$r6 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 300)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Posted $r4.posted
-Check ((Kinds $r6) -ceq "stall" -and $r6.entries[0].outcome -ceq "unposted") "and a live pass given nothing to post through says the mail was not posted"
-$r7 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 10)) -Settings $settings -Ledger @{}
-Check (@($r7.entries).Count -eq 0) "a pass given no sessions leaves the restore half out"
-
-Write-Host ""
-Write-Host "--- no restore: a quiet night, one restarted session, too few, too small a share ---" -ForegroundColor Cyan
-
-$quiet = @(1..10 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "goblin"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 3)) } })
-$f = Get-HordeRestoreFinding -Sessions $quiet -Now $t0 -Settings $settings
-Check ($f.state -ceq "absent" -and "$($f.reason)" -ne "") "a quiet night, with start times hours apart, is no restore, and the answer says why"
-Check (@(Get-HordeResumePlan -Finding $f -Now $t0 -Settings $settings).Count -eq 0) "and nothing is planned for it"
-$oneBack = @($quiet | ForEach-Object { $_ })
-$oneBack[4] = [pscustomobject]@{ id = (Sid 5); role = "goblin"; parent = ""; startedAt = (At -30); lastChangeAt = (At -28) }
-Check ((Get-HordeRestoreFinding -Sessions $oneBack -Now $t0 -Settings $settings).state -ceq "absent") "one restarted session among ten is no restore"
-$two = @(1, 2 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -5)); lastChangeAt = (At ($_ * -5 + 1)) } })
-Check ((Get-HordeRestoreFinding -Sessions $two -Now $t0 -Settings $settings).state -ceq "absent") "two sessions that started together are fewer than a restore takes"
-$twoOfThree = @($two) + [pscustomobject]@{ id = (Sid 3); role = "orc"; parent = ""; startedAt = (At -90000); lastChangeAt = (At -80000) }
-Check ((Get-HordeRestoreFinding -Sessions $twoOfThree -Now $t0 -Settings $settings).state -ceq "absent") "two of three together is a large share and still fewer than a restore takes"
-function New-Mixed { param([int]$Together) return @(1..10 | ForEach-Object { if ($_ -le $Together) { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At (-100 + $_)); lastChangeAt = (At (-98 + $_)) } } else { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 900)) } } }) }
-Check ((Get-HordeRestoreFinding -Sessions (New-Mixed 5) -Now $t0 -Settings $settings).state -ceq "absent") "five of ten together is under the share a restore takes"
-$six = Get-HordeRestoreFinding -Sessions (New-Mixed 6) -Now $t0 -Settings $settings
-Check ($six.state -ceq "known" -and @($six.value.members).Count -eq 6) "six of ten together is a restore, of those six"
-$wide = @(1..4 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 300)); lastChangeAt = (At ($_ * 300 + 1)) } })
-$w = Get-HordeRestoreFinding -Sessions $wide -Now (At 2000) -Settings $settings
-Check ($w.state -ceq "known" -and @($w.value.members).Count -eq 3 -and $w.value.windowStart -eq (At 300)) "the window is restoreWindowSeconds long: of four sessions 300 s apart, three fall in one"
-Check ((Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 86401)) -Settings $settings).state -ceq "absent") "a restore more than a day old is history"
-Check ((Get-HordeRestoreFinding -Sessions @() -Now $t0 -Settings $settings).state -ceq "absent") "no sessions at all is no restore"
 
 Write-Host ""
 Write-Host "--- an adapter that throws or answers rubbish is unknown, and never a nudge ---" -ForegroundColor Cyan
@@ -408,68 +275,18 @@ Check ((Get-HordeWakeStaleSeconds) -eq 120) "a heartbeat is stale after 120 s"
 $keep = @{}
 $keep[(Sid 1)] = [pscustomobject]@{ attempts = 4; lastAttemptAt = (At 200); lastOutcome = "busy" }
 $keep[(Sid 2)] = [pscustomobject]@{ attempts = 1; lastAttemptAt = (At 3); lastOutcome = "would-nudge" }
-Save-HordeWakeLedger -Ledger $keep -Posted @{ "0d000000-0000-4000-8000-000000000001" = $true }
+Save-HordeWakeLedger -Ledger $keep
 $back = Read-HordeWakeLedger
-Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 2 -and $back.value.ledger[(Sid 1)].attempts -eq 4 -and $back.value.ledger[(Sid 1)].lastAttemptAt -eq (At 200) -and $back.value.ledger[(Sid 1)].lastOutcome -ceq "busy" -and $back.value.posted.ContainsKey("0d000000-0000-4000-8000-000000000001")) "a saved ledger reads back: each session's attempts, time and outcome, and the mails already posted"
+Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 2 -and $back.value.ledger[(Sid 1)].attempts -eq 4 -and $back.value.ledger[(Sid 1)].lastAttemptAt -eq (At 200) -and $back.value.ledger[(Sid 1)].lastOutcome -ceq "busy") "a saved ledger reads back: each session's attempts, time and outcome"
 Start-Case; Seat -Change @{ Outcome = "busy"; OutcomeReason = "busy" }
 $script:ledger = $back.value.ledger
 $r = Pass 300
 Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".Contains("back-off")) "so a watcher that was restarted keeps the back-off it had"
-Save-HordeWakeLedger -Ledger @{} -Posted @{}
+Save-HordeWakeLedger -Ledger @{}
 $back = Read-HordeWakeLedger
-Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 0 -and $back.value.posted.Count -eq 0) "an empty ledger saves and reads back empty"
-[System.IO.File]::WriteAllText((Join-Path $wakeDir "ledger.json"), '{"schemaVersion":1,"sessions":[{"id":"x"}],"posted":[]}')
+Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 0) "an empty ledger saves and reads back empty"
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "ledger.json"), '{"schemaVersion":1,"sessions":[{"id":"x"}]}')
 Check ((Read-HordeWakeLedger).state -ceq "unknown") "a saved ledger with a broken entry is unknown, never half a ledger"
-
-Write-Host ""
-Write-Host "--- the running sessions, from the two stores handed in ---" -ForegroundColor Cyan
-
-function New-Record {
-    param($StartedAt, $StatusAt, [string]$Agent = "agent-one")
-    $fields = @{}
-    $fields["agent"] = New-HordeKnown -Value $Agent
-    $fields["startedAt"] = $(if ($null -ne $StartedAt) { New-HordeKnown -Value $StartedAt } else { New-HordeUnknown -Reason "the agent writes no start" })
-    $fields["liveStatus"] = $(if ($null -ne $StatusAt) { New-HordeKnown -Value "idle" -ObservedAt $StatusAt } else { New-HordeUnknown -Reason "the process is gone" })
-    return [pscustomobject]@{ fields = $fields }
-}
-function New-Listing {
-    param([hashtable]$Records, $Whole = (New-HordeKnown -Value $true), $WholeOne = (New-HordeKnown -Value $true))
-    $complete = [ordered]@{ "agent-one" = $WholeOne; "agent-two" = $Whole }
-    return [pscustomobject]@{ records = $Records; complete = $complete }
-}
-function New-Registry {
-    param([hashtable]$Records, $Whole = (New-HordeKnown -Value $true))
-    $held = @{}
-    foreach ($k in $Records.Keys) { $held[$k] = [pscustomobject]@{ id = $k; record = [pscustomobject]$Records[$k] } }
-    return [pscustomobject]@{ records = $held; complete = $Whole }
-}
-$records = @{}
-$records[(Sid 1)] = New-Record (At 0) (At 4)
-$records[(Sid 2)] = New-Record (At 13) (At 80)
-$records[(Sid 3)] = New-Record (At 26) $null
-$records[(Sid 4)] = New-Record $null (At 30)
-$records[(Sid 5)] = New-Record (At 39) (At 41) "agent-two"
-$registry = New-Registry @{ (Sid 1) = @{ role = "master" }; (Sid 2) = @{ role = "orchestrator"; parent = (Sid 1) }; (Sid 5) = @{ parent = (Sid 2); role = "" } }
-$a = Get-HordeRestoreSessions -Identity (New-Listing $records) -Registry $registry
-Check ($a.state -ceq "known" -and @($a.leftOut).Count -eq 0) "with every listing whole nothing is left out"
-$got = @()
-if ($a.state -ceq "known") { $got = @($a.value | Sort-Object id) }
-Check ($a.state -ceq "known" -and (@($got | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2, 5 | ForEach-Object { Sid $_ }) -join ",")) "only a session whose start and live status are both known is a running session"
-Check ($got.Count -eq 3 -and $got[0].role -ceq "warchief" -and $got[1].role -ceq "orc" -and $got[1].parent -ceq (Sid 1) -and $got[0].parent -ceq "") "role and parent come from the registry record, the stored role names read as Horde's"
-Check ($got.Count -eq 3 -and $got[2].role -ceq "unknown" -and $got[2].parent -ceq (Sid 2)) "a record with no role is unknown, never guessed"
-Check ($got.Count -eq 3 -and $got[1].startedAt -eq (At 13) -and $got[1].lastChangeAt -eq (At 80)) "startedAt is the session's own, and lastChangeAt is when its live status was written"
-$a = Get-HordeRestoreSessions -Identity (New-Listing $records -Whole (New-HordeUnknown -Reason "one control file could not be read")) -Registry $registry
-$got = @()
-if ($a.state -ceq "known") { $got = @($a.value | Sort-Object id) }
-Check ($a.state -ceq "known" -and (@($got | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2 | ForEach-Object { Sid $_ }) -join ",")) "with one agent's listing whole and the other's not, the answer is known, with the whole one's sessions and none of the other's"
-Check ($a.state -ceq "known" -and @($a.leftOut).Count -eq 1 -and $a.leftOut[0].agent -ceq "agent-two" -and $a.leftOut[0].reason -ceq "one control file could not be read") "and it names the agent it left out, and why"
-Check ((Get-HordeRestoreFinding -Sessions $a.value -Now (At 100) -Settings (Get-HordeWakeSettings -Overrides @{ restoreMinSessions = 2 })).state -ceq "known") "its value is still the plain list the restore finding takes"
-$a = Get-HordeRestoreSessions -Identity (New-Listing $records -Whole (New-HordeUnknown -Reason "one control file could not be read") -WholeOne (New-HordeUnknown -Reason "there is no control directory")) -Registry $registry
-Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("agent-one: there is no control directory") -and "$($a.reason)".Contains("agent-two: one control file could not be read")) "with no agent's listing whole the answer is unknown, naming each and why"
-$a = Get-HordeRestoreSessions -Identity (New-Listing $records) -Registry (New-Registry @{} -Whole (New-HordeUnknown -Reason "there is no registry"))
-Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("registry")) "and so is a registry that is not whole"
-$a = Get-HordeRestoreSessions -Identity (New-Listing @{}) -Registry (New-Registry @{})
-Check ($a.state -ceq "known" -and @($a.value).Count -eq 0) "an empty fleet is a known empty list"
 
 } finally {
     Reset-HordeMemoryWaker

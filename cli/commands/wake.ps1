@@ -17,6 +17,7 @@ $HordeCommand = @{
         # it registers (wakers/Port.ps1, Get-HordeWakerFiles).
         $root = Get-HordeRoot
         . (Join-Path $root "core\Wake.ps1")
+        . (Join-Path $root "core\RestoreSource.ps1")
         foreach ($w in @(Get-HordeWakerFiles)) { . $w }
 
         if ($Verb -eq "status") {
@@ -44,12 +45,17 @@ $HordeCommand = @{
         $waker = $null
         if ($picked.state -ceq "known") { $waker = $picked.value; Write-Output ("wake: shadow run through the waker '" + $waker.name + "'") }
         else { Write-Output ("wake: no waker is installed, so no session is watched for unread mail; the restore source still runs (" + $picked.reason + ")") }
+        $restoreSettings = Get-HordeRestoreSettings
         $ledger = @{}
         $posted = @{}
         $saved = Read-HordeWakeLedger
-        if ($saved.state -ceq "known") { $ledger = $saved.value.ledger; $posted = $saved.value.posted }
+        if ($saved.state -ceq "known") { $ledger = $saved.value.ledger }
         elseif ($saved.state -ceq "unknown") { Write-Output ("wake: starting from an empty ledger - " + $saved.reason) }
-        # THE RESTORE SOURCE IS READ EVERY 30 s, NOT EVERY PASS: it reads the process table, and a
+        $savedRestore = Read-HordeRestoreState
+        if ($savedRestore.state -ceq "known") { $posted = $savedRestore.value.posted }
+        elseif ($savedRestore.state -ceq "unknown") { Write-Output ("wake: starting with no mail marked posted - " + $savedRestore.reason) }
+        # THE RESTORE SOURCE RUNS EVERY 30 s, BESIDE THE WAKE PASS, NOT IN IT (core/RestoreSource.ps1: it
+        # is a sender, and the watcher only wakes). Not every pass: it reads the process table, and a
         # restore is measured in minutes (the first resume is due at once, the stall notice at 300 s).
         $restoreEvery = 30
         $restoreAt = [datetime]::MinValue
@@ -59,26 +65,28 @@ $HordeCommand = @{
         while ($true) {
             $pass++
             $now = [datetime]::UtcNow
-            $sessions = $null
+            $sourceEntries = @()
             if (($now - $restoreAt).TotalSeconds -ge $restoreEvery) {
                 $restoreAt = $now
                 $read = Get-HordeRestoreSessions
                 if ($read.state -ceq "known") {
-                    $sessions = @($read.value)
+                    $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $now -Settings $restoreSettings -Shadow -Posted $posted
+                    $sourceEntries = @($sourced.entries)
+                    if ($sourceEntries.Count -gt 0) { Save-HordeRestoreState -Posted $sourced.posted }
+                    $posted = $sourced.posted
                     $notes = @($read.leftOut | ForEach-Object { [pscustomobject]@{ id = ("restore:" + $_.agent); reason = ("the restore source left out the " + $_.agent + " sessions, whose listing is not whole: " + $_.reason) } })
                 } else { $notes = @([pscustomobject]@{ id = "restore"; reason = ("the restore source could not read the sessions: " + $read.reason) }) }
             }
             # What the restore source could not read is carried between its readings and offered every
             # pass, so it is journaled once when it starts and not again every 30 s while it lasts.
             $extra = @($notes | ForEach-Object { New-HordeWakeEntry -At $now -Kind "skip-unknown" -Id $_.id -Outcome "unknown" -Reason $_.reason })
-            $result = Invoke-HordeWakePass -Waker $waker -Now $now -Settings $settings -Ledger $ledger -Shadow -RestoreSessions $sessions -Posted $posted
-            $fresh = Select-HordeWakeNewEntries -Entries (@($result.entries) + $extra) -Unknown $unknown
+            $result = Invoke-HordeWakePass -Waker $waker -Now $now -Settings $settings -Ledger $ledger -Shadow
+            $fresh = Select-HordeWakeNewEntries -Entries (@($result.entries) + $sourceEntries + $extra) -Unknown $unknown
             $unknown = $fresh.unknown
             $changed = (@($fresh.entries).Count -gt 0 -or $result.ledger.Count -ne $ledger.Count)
             $ledger = $result.ledger
-            $posted = $result.posted
             $null = Write-HordeWakeJournal -Entries $fresh.entries
-            if ($changed) { Save-HordeWakeLedger -Ledger $ledger -Posted $posted }
+            if ($changed) { Save-HordeWakeLedger -Ledger $ledger }
             Write-HordeWakeHeartbeat -At $now -ProcessId $PID -Pass $pass -Shadow
             foreach ($e in @($fresh.entries)) { Write-Output ("wake: " + $e.kind + " " + $e.id + " " + $e.outcome + " - " + $e.reason) }
             if ($Once) { Write-Output ("wake: pass " + $pass + " done, " + @($fresh.entries).Count + " journal line(s), shadow"); return }
