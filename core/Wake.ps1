@@ -61,14 +61,12 @@ function Get-HordeWakeSettings {
         restoreWindowSeconds = 600
         # A restored session has "moved" once its status changed this long after it started.
         movedSeconds = 60
-        # A subsession is told to resume once its parent has moved, or after this long.
-        goblinDelaySeconds = 180
         # With no session moved this long after the last one started, the warchief is told.
         stallSeconds = 300
         # A restore older than this is history: nothing is planned for it any more.
         restoreMaxAgeSeconds = 86400
-        resumeText = "RESUME. Every session on this machine was restored and you have not taken a turn since. Background agents and shell commands from before the restore did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and nudge the subsessions you still need."
-        stallText = "STALLED RESTORE. Every session on this machine was restored and none has taken a turn since. Each was told to resume. Check the sessions you still need."
+        resumeText = "START OR RESTORE. Every session on this machine was started or restored together and you have not taken a turn since. Background agents and shell commands from before did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and mail the subsessions you still need: they are not woken unless you ask."
+        stallText = "STALLED START OR RESTORE. Every session on this machine was started or restored together and none has taken a turn since. Each orc was told to resume. Check the sessions you still need."
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a wake setting") }
@@ -248,10 +246,15 @@ function Get-HordeResumePlan {
     # -Finding is Get-HordeRestoreFinding's answer; anything but known plans nothing.
     #   - EVERY ORC THAT HAS NOT MOVED, AT ONCE: an orc owns work and is the one that knows what of it
     #     was in flight.
-    #   - A SUBSESSION THAT HAS NOT MOVED, ONLY ONCE ITS PARENT HAS, or after goblinDelaySeconds from the
-    #     window's end: its orc decides which of its subsessions it still needs, and one resumed first
-    #     would restart work its orc is about to cancel. A session whose role nobody recorded is held
-    #     the same way; the warchief is not mailed to resume - it is the one told when nothing moves.
+    #   - NOBODY ELSE, EVER. A subsession, and a session whose role nobody recorded, is never mailed by
+    #     the restore source - not when its parent has moved, and not after a delay (the first version
+    #     released them after 180 s). Measured 2026-10-13 on a live fleet: the ten sessions a shadow pass
+    #     would have resumed were mostly idle subsessions with nothing in flight, and waking those costs
+    #     memory and tokens for nothing. An orc knows which of its subsessions it still needs and mails
+    #     those itself; that mail is unread mail, which the wake rules above already knock for. The
+    #     warchief is not mailed to resume either - it is the one told when nothing moves.
+    #   - A START OF THE WHOLE FLEET LOOKS THE SAME AND IS HANDLED THE SAME: every session started inside
+    #     one window and none has taken a turn. The resume text says "started or restored" for that.
     #   - THE STALL NOTICE, for the warchief, when stallSeconds have passed since the window's end and
     #     NO member has moved. to is "" when no member is the warchief.
     # THE IDS ARE MADE FROM THE RESTORE AND THE SESSION, so a pass that plans the same mail again -
@@ -264,11 +267,8 @@ function Get-HordeResumePlan {
     foreach ($m in @($f.members)) { if ($m.moved) { $movedIds[$m.id] = $true } }
     $plan = New-Object System.Collections.ArrayList
     foreach ($m in @($f.members)) {
-        if ($m.moved -or $m.role -ceq "warchief") { continue }
-        $due = ($m.role -ceq "orc")
-        if (-not $due) { $due = ($m.parent -cne "" -and $movedIds.ContainsKey($m.parent)) }
-        if (-not $due) { $due = ($sinceEnd -ge $Settings.goblinDelaySeconds) }
-        if (-not $due) { continue }
+        if ($m.moved) { continue }
+        if ($m.role -cne "orc") { continue }
         [void]$plan.Add([pscustomobject]@{ kind = "resume"; to = $m.id; messageId = (ConvertTo-HordeWakeUuid -Text ("horde-wake-resume`n" + $f.restoreId + "`n" + $m.id.ToLowerInvariant())); body = "$($Settings.resumeText)" })
     }
     if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {
