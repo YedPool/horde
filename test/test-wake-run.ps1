@@ -116,6 +116,17 @@ $ret = New-Object System.Collections.ArrayList
 foreach ($n in 0..399) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$ret.Add($e.kind + ":" + $e.id + "@" + ($n * 3)) } }
 Check ((@($ret) -join ",") -ceq ("never-nudged:" + (Sid 2) + "@0") -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and $run.ledger.Count -eq 0) ("twenty minutes of live ticks over a retired session with unread mail journal one line - never-nudged - and nudge, count, give up on and tell of nobody (" + (@($ret) -join ",") + ")")
 
+# THE SESSION A WATCHER HOLDS AS ITS OWN IS IN ITS HEARTBEAT, and has one line to say it by.
+$h = New-Home
+Reset-HordeMemoryWaker
+$run = New-HordeWakeRun -Live -Self (Sid 9) -HordeHome $h
+$null = Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h
+Check ((Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).value.self -ceq (Sid 9)) "a tick's heartbeat says which session the watcher holds as its own"
+$run = New-HordeWakeRun -Self "" -HordeHome $h
+$null = Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h
+Check ((Read-HordeWakeHeartbeat -Mode "shadow" -HordeHome $h).value.self -is [string] -and (Read-HordeWakeHeartbeat -Mode "shadow" -HordeHome $h).value.self -ceq "") "and says none for a watcher that holds none"
+Check ((Get-HordeWakeSelfLine -Self (Sid 9)).StartsWith("this watcher holds session " + (Sid 9) + " as its own") -and (Get-HordeWakeSelfLine -Self (Sid 9)).Contains("never nudges it") -and (Get-HordeWakeSelfLine).StartsWith("this watcher holds no session as its own")) "the line names the session, and that it is never nudged; or says there is none"
+
 # A THROW INSIDE THE PASS, AFTER THE NUDGE: the tick still keeps and saves the attempt, and the next tick
 # does not nudge the session again.
 $h = New-Home

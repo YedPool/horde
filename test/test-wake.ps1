@@ -1256,6 +1256,11 @@ $beat = Read-HordeWakeHeartbeat -Mode "live"
 Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0 -and (Read-HordeWakeHeartbeat -Shadow).value.pass -eq 7) "a live one is a file of its own, written whole with no temporary file left, and the shadow one is as it was"
 $null = Write-HordeWakeJournal -Entries @($entries[1]) -Shadow
 Check (@(Read-HordeWakeJournalTail -Mode "live" -Count 100).Count -eq 14 -and @(Read-HordeWakeJournalTail -Count 100 -Shadow).Count -eq 1) "the journal is per mode too: a shadow line goes to the shadow journal and the live one is as it was"
+Check ($null -eq $beat.value.self) "a heartbeat written without saying which session the watcher holds as its own reads back as not saying"
+Write-HordeWakeHeartbeat -Mode "live" -At (At 9) -ProcessId 4242 -Pass 9 -Self (Sid 5)
+Check ((Read-HordeWakeHeartbeat -Mode "live").value.self -ceq (Sid 5)) "one that says reads back with the session"
+Write-HordeWakeHeartbeat -Mode "live" -At (At 9) -ProcessId 4242 -Pass 10 -Self ""
+Check ((Read-HordeWakeHeartbeat -Mode "live").value.self -is [string] -and (Read-HordeWakeHeartbeat -Mode "live").value.self -ceq "") "and one that says NONE reads back as none: that is something said, and not the same as not saying"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), "{ not json")
 Check ((Read-HordeWakeHeartbeat -Mode "live").state -ceq "unknown") "a heartbeat that cannot be read is unknown, not absent"
 Check ((Get-HordeWakeStaleSeconds) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 3) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 40) -eq 120) "a heartbeat is stale after 120 s, for any tick up to 40 s"

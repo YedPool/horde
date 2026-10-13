@@ -9,6 +9,12 @@
     Suite  = "test\e2e\e2e-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-banner-does-not-say-which-session-is-the-watchers-own"
+           Find = 'Write-Output ("wake: " + (Get-HordeWakeSelfLine -Self "$($run.self)"))'
+           Replace = '' }
+        @{ Name = "status-does-not-say-which-session-is-the-watchers-own"
+           Find = 'if ($own -is [string]) { Write-Output ($shown + ": " + (Get-HordeWakeSelfLine -Self $own)) }'
+           Replace = '' }
         @{ Name = "a-proof-given-as-false-is-an-ordinary-failure"
            Find = '{ throw (New-HordeUsageError "a proof run is -Proof'
            Replace = '{ throw ([string]"a proof run is -Proof' }

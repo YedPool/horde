@@ -189,6 +189,15 @@ function Get-HordeWakeRunPick {
     return (Resolve-HordeProductionWaker -AllowUnverified)
 }
 
+function Get-HordeWakeSelfLine {
+    # WHICH SESSION A WATCHER HOLDS AS ITS OWN, in one line, for the run's banner and for `wake status`.
+    # It is taken from what the session it was started from says of itself (core/Identity.ps1), it is
+    # never nudged, and none of that was ever shown: said here so that it is seen.
+    param([string]$Self = "")
+    if ($Self -cne "") { return ("this watcher holds session " + $Self + " as its own - the session it was started from - and never nudges it") }
+    return "this watcher holds no session as its own: it was not started from inside one, so no session is left out for being it"
+}
+
 function Get-HordeWakeSilenceMark {
     # One line that changes exactly when what is SAVED of the silence changes: whether, since when, and
     # how many probes it has had.
@@ -409,7 +418,7 @@ function Invoke-HordeWakeTick {
         }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
-    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome }
+    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }
     foreach ($f in @($failed)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $f.id -Outcome "unknown" -Reason $f.reason)) }
     $fresh = Select-HordeWakeNewEntries -Entries $entries.ToArray() -Unknown $Run.unknown

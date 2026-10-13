@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-heartbeat-does-not-say-the-watchers-own-session"
+           Find = ' -Self "$(Get-HordeWakeEntryValue $Run "self")" }'
+           Replace = ' }' }
+        @{ Name = "the-line-names-no-session"
+           Find = 'if ($Self -cne "") { return ("this watcher holds session " + $Self + " as its own'
+           Replace = 'if ($false) { return ("this watcher holds session " + $Self + " as its own' }
         @{ Name = "the-tick-does-not-tell-the-pass-how-many-probes"
            Find = '-SilentProbes $silentProbes'
            Replace = '-SilentProbes 0' }

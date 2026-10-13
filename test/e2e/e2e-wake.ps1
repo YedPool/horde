@@ -302,6 +302,22 @@ Check ($third.code -eq 0 -and $third.out -like "*pass 1 done*") "and the lock a 
 Check (@(Read-Journal $pinnedHome "journal-shadow.jsonl" | Where-Object { @("nudge", "post", "stall", "would-nudge") -ccontains $_.kind }).Count -eq 0) "nothing was nudged, or would have been: there was no fleet"
 Check (@(Get-ChildItem -LiteralPath $fleetPin.path -Recurse -File).Count -eq 0) "nothing was written into the fleet's folder"
 
+Write-Host ""
+Write-Host "=== which session a watcher holds as its own is said: in the run's banner, and by status ===" -ForegroundColor Cyan
+# The command is started as it is everywhere here, and inherits this scenario's own environment: so
+# whichever is true of this scenario - it was started from inside a session, or from none - is true
+# of the watcher, and core/Identity.ps1 says which. (Both lines, and that a heartbeat carries either,
+# are held where a run can be handed its session: test/test-wake-run.ps1.)
+. (Join-Path $root "core\Identity.ps1")
+$me = Get-HordeSelfSessionId
+$expect = $(if ($me.state -ceq "known") { "this watcher holds session " + $me.value + " as its own" } else { "this watcher holds no session as its own" })
+$selfHome = Join-Path $script:work "home-self"
+New-Item -ItemType Directory -Path $selfHome | Out-Null
+$held = Invoke-Wake $selfHome @("run", "-Once")
+Check ($held.code -eq 0 -and $held.out -like ("*wake: " + $expect + "*") -and $held.out.IndexOf("wake: " + $expect) -lt $held.out.IndexOf("pass 1 done")) ("a run says, with its banner and before its first pass, which session it holds as its own (" + $expect + ")")
+$heldStatus = Invoke-Wake $selfHome @("status")
+Check ($heldStatus.code -eq 0 -and $heldStatus.out -like ("*SHADOW: " + $expect + "*") -and $heldStatus.out -notlike "*LIVE: this watcher*" -and $heldStatus.out -notlike "*PROOF: this watcher*") "status says it of the watcher that ran, from its heartbeat, and says nothing of the kind for a mode that never ran"
+
 Check ((Get-RealWakeListing) -ceq $realBefore) "the real home's wake folder is as it was"
 
 } finally {

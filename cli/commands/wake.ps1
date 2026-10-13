@@ -80,6 +80,9 @@ $HordeCommand = @{
                     $how = "fresh"
                     if ($age -gt $limit) { $how = "STALE (over " + $limit + " s): this watcher is not running" }
                     Write-Output ($shown + ": heartbeat " + $age + " s ago, " + $how + " (pass " + $beat.value.pass + ", pid " + $beat.value.pid + ")")
+                    # WHICH SESSION THAT WATCHER HOLDS AS ITS OWN, when its heartbeat says.
+                    $own = $beat.value.self
+                    if ($own -is [string]) { Write-Output ($shown + ": " + (Get-HordeWakeSelfLine -Self $own)) }
                 }
                 $tail = @(Read-HordeWakeJournalTail -Count 10 -Mode $word)
                 if ($tail.Count -eq 0) { Write-Output ($shown + ": journal empty") }
@@ -112,6 +115,8 @@ $HordeCommand = @{
         try {
             Write-Output ("wake: " + $plan.banner)
             $run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target
+            # Said with the banner, before anything is nudged or refused.
+            Write-Output ("wake: " + (Get-HordeWakeSelfLine -Self "$($run.self)"))
             # A RUN THAT MAY NOT START (core/WakeRun.ps1: a run that sends, over a ledger that cannot
             # be read) is refused here, before its first tick.
             if ("$($run.refused)" -cne "") { throw ("the " + $plan.mode + " wake run has not started: " + $run.refused) }
