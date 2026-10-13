@@ -563,12 +563,38 @@ Check ((Test-Held $r "usage limit until 2026-10-12T08:10:00Z") -and $script:ledg
 $rung = 0; foreach ($s in 1..199) { $null = Pass ($s * 3); $rung += (Rang) }
 Check ($rung -eq 0 -and $script:ledger.Count -eq 0) "for the ten minutes of the limit - two hundred passes - it is never nudged and never counted"
 $r = Pass 600
-Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $r.limited.Count -eq 0) "at the time the limit ends it is nudged, as its first attempt"
-# 2. THE LIMIT IS OVER: the waker still says limited, with a time that has passed. Normal rules.
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 0 -and $r.limited.Count -eq 0) "at the time the limit ends it is knocked for, once and uncounted"
+# 2. THE LIMIT IS OVER: the waker still says limited, with a time that has passed. ONE knock, uncounted;
+#    then the normal rules.
 Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At -10) }
 $r = Pass 0
-Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $null -eq (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt") -and $r.limited.Count -eq 0) "a limit whose time has passed is over, whatever the waker still says: the session is nudged under the normal rules, and the nudge counts"
-Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "no"; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, open with no time, and none when its time has come, or when the waker says not limited"
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "freeFor") -eq (At -10) -and $r.limited.Count -eq 0) "a session whose limit is over - the waker still says limited, with a time that has passed - is knocked for once, and that knock is NOT counted"
+$r = Pass 3
+Check ((Test-Held2 $r "back-off") -and (Rang) -eq 1) "it is not knocked for again at once: the first step of the back-off runs from the free knock"
+$r = Pass 6
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 2 -and $script:ledger[(Sid 1)].attempts -eq 1) "its next knock is an ordinary attempt, counted as the first"
+foreach ($s in @(30, 80, 250, 600, 1000, 1400, 1800, 2200)) { $null = Pass $s }
+Check ((Rang) -eq 7 -and $script:ledger[(Sid 1)].attempts -eq 6 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("and from there the normal rules hold: six counted attempts and it is given up on - seven knocks in all, one of them free (" + (Rang) + ")")
+# A SESSION ALREADY AT ITS CAP WHEN ITS LIMIT ENDS: the free knock is what it is owed.
+Start-Case; Seat 1
+$null = Pass 0 -Using $capOne
+Check ((Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true -and (Rang) -eq 1) "CONTROL: a session nudged to its cap - one, here - is given up on"
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At 100) }
+$r = Pass 50 -Using $capOne
+Check ((Rang) -eq 1) "CONTROL: while its limit lasts it is not knocked for"
+$r = Pass 100 -Using $capOne
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 2 -and $script:ledger[(Sid 1)].attempts -eq 1) "at the moment its limit ends it is knocked for once, cap or no cap: the knocks it had could not have been answered"
+$r = Pass 500 -Using $capOne
+Check ((Rang) -eq 2 -and "$((Decided $r).reason)".StartsWith("gave up")) "and then its cap holds again: one free knock, not a new budget"
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At 900) }
+$null = Pass 600 -Using $capOne
+$r = Pass 900 -Using $capOne
+Check ((Rang) -eq 3) "another limit, ending at another time, has a free knock of its own"
+Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "over" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "no"; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, over when its time has come, open with no time, and none when the waker says not limited"
+$hf = Join-Path $pinned.home ("free-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hf | Out-Null
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60) -FreeFor (At -10)) } -HordeHome $hf
+$rf = Read-HordeWakeLedger -HordeHome $hf
+Check ($rf.state -ceq "known" -and (Get-HordeWakeEntryValue $rf.value.ledger[(Sid 1)] "freeFor") -eq (At -10)) "which limit's free knock a session has had is saved with the ledger: a restart does not hand it another"
 # 3. NO KNOWN END, RELEASED BY THE HOUR: one knock an hour, never counted.
 Start-Case; Seat 1 @{ Limited = "yes" }
 $r = Pass 0

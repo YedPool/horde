@@ -6,6 +6,27 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-limit-that-is-over-is-plain-not-limited"
+           Find = 'if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "over"; text = ""; until = $until } }'
+           Replace = 'if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "none"; text = "" } }' }
+        @{ Name = "the-free-knock-is-held-by-the-cap"
+           Find = '$free = ($limit.kind -ceq "over" -and -not ($freeFor -is [datetime] -and $freeFor -eq $limit.until))'
+           Replace = '$free = $false' }
+        @{ Name = "every-knock-under-a-past-limit-is-free"
+           Find = '$free = ($limit.kind -ceq "over" -and -not ($freeFor -is [datetime] -and $freeFor -eq $limit.until))'
+           Replace = '$free = ($limit.kind -ceq "over")' }
+        @{ Name = "the-free-knock-is-counted"
+           Find = 'if ($limitNow.kind -ceq "over" -and -not ($wasFree -is [datetime] -and $wasFree -eq $limitNow.until)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "no-wait-after-the-free-knock"
+           Find = 'if ($freeFor -is [datetime] -and $steps -lt 1) { $steps = 1 }'
+           Replace = '' }
+        @{ Name = "the-free-knock-is-not-saved"
+           Find = 'if ($freeFor -is [datetime]) { $row["freeFor"] = ConvertTo-HordeWakeTimeText $freeFor }'
+           Replace = '' }
+        @{ Name = "a-counted-attempt-forgets-the-free-knock"
+           Find = '-Probes 0 -FreeFor (Get-HordeWakeEntryValue $had "freeFor")'
+           Replace = '-Probes 0' }
         @{ Name = "a-limited-session-is-knocked-for-without-end"
            Find = '-and $knocks -ge [int]$Settings.maxLimitProbesPerMail) { return'
            Replace = '-and $false) { return' }
@@ -82,8 +103,8 @@
            Find = '-CanLook:($CanLook -and -not $looked) -Silent:$Silent -Moves $Moves'
            Replace = '-CanLook:($CanLook -and -not $looked) -Silent:$Silent' }
         @{ Name = "a-limit-is-said-of-a-session-that-cannot-be-reached"
-           Find = 'if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and $limit.kind -cne "none") {'
-           Replace = 'if ($a.value.unreadCount -gt 0 -and $limit.kind -cne "none") {' }
+           Find = 'if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {'
+           Replace = 'if ($a.value.unreadCount -gt 0 -and @("until", "open") -ccontains $limit.kind) {' }
         @{ Name = "the-evidence-window-is-five-minutes"
            Find = 'movingEvidenceSeconds = 600'
            Replace = 'movingEvidenceSeconds = 300' }
@@ -118,7 +139,7 @@
            Find = 'if ($limit.kind -ceq "until") { return [pscustomobject]@{ action = "wait"; reason = $limit.text } }'
            Replace = '' }
         @{ Name = "a-limit-that-is-over-still-holds"
-           Find = 'if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "none"; text = "" } }'
+           Find = 'if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "over"; text = ""; until = $until } }'
            Replace = '' }
         @{ Name = "a-limit-ends-a-moment-late"
            Find = 'if ($until -is [datetime] -and $until -le $Now) { return'
@@ -205,8 +226,8 @@
            Find = 'if ($last -is [datetime] -and ($Now - $last).TotalSeconds -lt $longest) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "a-probe-is-still-held-by-the-cap"
-           Find = 'if (-not $probe -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail)'
-           Replace = 'if ($null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail)' }
+           Find = 'if (-not $probe -and -not $free -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail)'
+           Replace = 'if (-not $free -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail)' }
         @{ Name = "found-silent-the-attempts-are-kept"
            Find = '$next["$id"] = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $e.lastAttemptAt'
            Replace = '$next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt' }
@@ -339,7 +360,7 @@
            Find = 'if ($rang.value.outcome -ceq "killed") { $kind = "nudge-killed" }'
            Replace = '' }
         @{ Name = "no-cap-on-nudges-for-one-mail"
-           Find = 'if (-not $probe -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail) { return'
+           Find = 'if (-not $probe -and -not $free -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "cap-of-seven"
            Find = 'maxNudgesPerMail = 6'

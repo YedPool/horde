@@ -137,11 +137,15 @@ function New-HordeWakeLedgerRow {
     # PROBE).
     # probes is how many uncounted knocks a session LIMITED WITH NO KNOWN END has had for this mail
     # (Get-HordeWakeHold); it is taken from -Carry, the entry this one replaces, unless -Probes says.
-    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false, $ProbeAt = $null, $Carry = $null, [int]$Probes = -1)
+    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false, $ProbeAt = $null, $Carry = $null, [int]$Probes = -1, $FreeFor = $null)
     $row = [ordered]@{ attempts = $Attempts; lastAttemptAt = $LastAttemptAt; lastOutcome = $LastOutcome }
     $probed = $Probes
     if ($probed -lt 0) { $probed = 0; $was = Get-HordeWakeEntryValue $Carry "probes"; if ($was -is [int] -or $was -is [long]) { $probed = [int]$was } }
     if ($probed -gt 0) { $row["probes"] = $probed }
+    # freeFor is the limit - the time it ended - whose one free knock this session has had; carried too.
+    $free = $FreeFor
+    if ($free -isnot [datetime]) { $free = Get-HordeWakeEntryValue $Carry "freeFor" }
+    if ($free -is [datetime]) { $row["freeFor"] = $free }
     if ($ProbeAt -is [datetime]) { $row["probeAt"] = $ProbeAt }
     if ($NothingAt -is [datetime]) { $row["nothingAt"] = $NothingAt }
     if ($MailAt -is [datetime]) { $row["mailAt"] = $MailAt }
@@ -162,10 +166,11 @@ function Get-HordeWakeNothingAt {
 
 function Get-HordeWakeLimit {
     # A session's usage limit as the watcher reads it at -Now: { kind; text }.
-    #   none   it is not limited, or its waker has no way to tell at all - or THE LIMIT IS OVER: the waker still says
-    #          limited and the time it gives has passed. The fleet's command keeps a past reset in
-    #          its row, so the comparison with now is made here, and a limit that is over is the same
-    #          case as a restore: the session is knocked for under the normal rules, in its fair turn
+    #   none   it is not limited, or its waker has no way to tell at all
+    #   over   THE LIMIT IS OVER: the waker still says limited and the time it gives has passed. The
+    #          fleet's command keeps a past reset in its row, so the comparison with now is made
+    #          here. The session is knocked for ONCE, uncounted, in its fair turn, and under the
+    #          normal rules from its next attempt on
     #   until  limited, and the limit ends at a known time still ahead: it is not nudged at all
     #   open   limited, and nobody knows until when - the waker gave no time (one it could not read,
     #          a clock-change hour, a dated weekly reset): Get-HordeWakeHold, LIMITED WITH NO KNOWN END
@@ -213,7 +218,9 @@ function Get-HordeWakeLimit {
     }
     if ($word -cne "yes") { return [pscustomobject]@{ kind = "none"; text = "" } }
     $until = Get-HordeWakeEntryValue $State "limitedUntil"
-    if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "none"; text = "" } }
+    # THE LIMIT IS OVER: kind over, with the time it ended. Not "none": a session whose limit has just
+    # ended is owed ONE knock that costs it nothing (Get-HordeWakeHold, A LIMIT THAT IS OVER).
+    if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "over"; text = ""; until = $until } }
     if ($until -is [datetime]) { return [pscustomobject]@{ kind = "until"; text = ("usage limit until " + $until.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)) } }
     return [pscustomobject]@{ kind = "open"; text = "usage limit, end unknown" }
 }
@@ -289,6 +296,15 @@ function Get-HordeWakeHold {
     # THE CAP (Update-HordeWakeGaveUp says why): after maxNudgesPerMail nudges for this one mail, nothing
     # more is tried for it. A session that takes the mail, or whose oldest unread mail becomes another,
     # starts again from nothing (Get-HordeWakeLedgerEntry).
+    # A LIMIT THAT IS OVER (Get-HordeWakeLimit, over). It was treated as plain "not limited": every nudge
+    # counted, and a session that had been knocked for through its limit - by a waker that did not
+    # say, or before the limit showed - was already at its cap, or reached it at once, and was given
+    # up on at the moment it could first answer (safety review of PR 220). So the FIRST knock after a
+    # limit ends is free: it ignores the cap and the back-off, and is not counted
+    # (Update-HordeWakeLedger records which limit it was for, freeFor). From the next attempt the
+    # normal rules hold, the first step of the back-off counted from that free knock.
+    $freeFor = Get-HordeWakeEntryValue $Entry "freeFor"
+    $free = ($limit.kind -ceq "over" -and -not ($freeFor -is [datetime] -and $freeFor -eq $limit.until))
     $probe = ($Silent -or $limit.kind -ceq "open")
     # A PASS CUT DOWN TO ONE SESSION SENDS NO PROBE (-NoProbe; Invoke-HordeWakePass sets it with -Only).
     # A probe is sent on a timer read from the ledger - an hour since the last, five minutes in a
@@ -321,9 +337,12 @@ function Get-HordeWakeHold {
         if ($last -isnot [datetime] -and $null -ne $Entry -and $limit.kind -cne "open") { $last = $Entry.lastAttemptAt }
         if ($last -is [datetime] -and ($Now - $last).TotalSeconds -lt $longest) { return [pscustomobject]@{ action = "wait"; reason = ($why + ": it is asked only every " + $longest + " s, and no attempt is counted; " + [int][System.Math]::Ceiling($longest - ($Now - $last).TotalSeconds) + " s left") } }
     }
-    if (-not $probe -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail) { return [pscustomobject]@{ action = "wait"; reason = ("gave up after " + $Entry.attempts + " nudges for this mail; nothing more is tried until it is taken or another mail becomes the oldest") } }
-    if (-not $probe -and $null -ne $Entry) {
-        $wait = Get-HordeWakeBackoffSeconds -Attempts $Entry.attempts -Settings $Settings
+    if (-not $probe -and -not $free -and $null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail) { return [pscustomobject]@{ action = "wait"; reason = ("gave up after " + $Entry.attempts + " nudges for this mail; nothing more is tried until it is taken or another mail becomes the oldest") } }
+    if (-not $probe -and -not $free -and $null -ne $Entry) {
+        # After a free knock the wait is at least the first step, though no attempt was counted for it.
+        $steps = [int]$Entry.attempts
+        if ($freeFor -is [datetime] -and $steps -lt 1) { $steps = 1 }
+        $wait = Get-HordeWakeBackoffSeconds -Attempts $steps -Settings $Settings
         $since = ($Now - $Entry.lastAttemptAt).TotalSeconds
         if ($since -lt $wait) { return [pscustomobject]@{ action = "wait"; reason = ("back-off: " + [int][System.Math]::Ceiling($wait - $since) + " s left of " + $wait + " after attempt " + $Entry.attempts) } }
     }
@@ -446,6 +465,15 @@ function Update-HordeWakeLedger {
             $next[$id] = $probed
             continue
         }
+        # THE ONE FREE KNOCK AFTER A LIMIT ENDED (Get-HordeWakeHold): not counted, and marked with the limit
+        # it was for, so a second knock under the same past limit is an ordinary attempt.
+        $wasFree = Get-HordeWakeEntryValue $had "freeFor"
+        if ($limitNow.kind -ceq "over" -and -not ($wasFree -is [datetime] -and $wasFree -eq $limitNow.until)) {
+            $kept = 0
+            if ($null -ne $had) { $kept = [int]$had.attempts }
+            $next[$id] = New-HordeWakeLedgerRow -Attempts $kept -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true -and $kept -ge [int]$Settings.maxNudgesPerMail) -Probes 0 -FreeFor $limitNow.until
+            continue
+        }
         $before = 0
         if ($null -ne $had) { $before = [int]$had.attempts }
         $count = $before + 1
@@ -455,7 +483,7 @@ function Update-HordeWakeLedger {
         # counted, and must not swallow the line the cap on attempts would say later.
         # And the knocks it had while limited are not carried into a counted attempt: the limit is over.
         $stood = ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true -and [int]$had.attempts -ge [int]$Settings.maxNudgesPerMail)
-        $next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp $stood -Probes 0
+        $next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp $stood -Probes 0 -FreeFor (Get-HordeWakeEntryValue $had "freeFor")
     }
     # FIRST SEEN LIMITED WITH NO KNOWN END: stamped now, as the entry's probeAt, which is what its hour
     # is counted from (Get-HordeWakeHold). An entry it already has keeps its count.
@@ -852,7 +880,7 @@ function Invoke-HordeWakePass {
                 elseif ($a.value.unreadCount -gt 0 -and "$($t.retired)" -cne "no") { $held[$t.id] = "it could not be told whether this session is retired, and it has " + $a.value.unreadCount + " unread: it is not nudged while that is so" }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Moves $Moves
-                if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and $limit.kind -cne "none") {
+                if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {
                     $limited[$t.id] = $limit.text
                     if ($limit.kind -ceq "open") { [void]$open.Add($t.id) }
                 }
@@ -906,6 +934,8 @@ function Save-HordeWakeLedger {
             if ($probeAt -is [datetime]) { $row["probeAt"] = ConvertTo-HordeWakeTimeText $probeAt }
             $knocks = Get-HordeWakeEntryValue $Ledger[$id] "probes"
             if (($knocks -is [int] -or $knocks -is [long]) -and $knocks -gt 0) { $row["probes"] = [int]$knocks }
+            $freeFor = Get-HordeWakeEntryValue $Ledger[$id] "freeFor"
+            if ($freeFor -is [datetime]) { $row["freeFor"] = ConvertTo-HordeWakeTimeText $freeFor }
             [void]$sessions.Add($row)
         }
     }
@@ -934,6 +964,7 @@ function Read-HordeWakeLedger {
             if ($null -ne $row.PSObject.Properties["gaveUp"] -and $row.gaveUp -eq $true) { $entry["gaveUp"] = $true }
             if ($null -ne $row.PSObject.Properties["probeAt"]) { $probeAt = ConvertFrom-HordeWakeTimeText $row.probeAt; if ($null -ne $probeAt) { $entry["probeAt"] = $probeAt } }
             if ($null -ne $row.PSObject.Properties["probes"]) { $entry["probes"] = [int]$row.probes }
+            if ($null -ne $row.PSObject.Properties["freeFor"]) { $freeFor = ConvertFrom-HordeWakeTimeText $row.freeFor; if ($null -ne $freeFor) { $entry["freeFor"] = $freeFor } }
             $ledger["$($row.id)"] = [pscustomobject]$entry
         }
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }
