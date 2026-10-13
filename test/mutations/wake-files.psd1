@@ -8,6 +8,9 @@
         @{ Name = "unknown-journaled-every-pass"
            Find = '-and "$($Unknown["$($e.id)"])" -ceq "$($e.reason)") { continue }'
            Replace = '-and $false) { continue }' }
+        @{ Name = "elapsed-time-not-journaled"
+           Find = 'if ($null -ne $e.PSObject.Properties["elapsedMs"]) { $row["elapsedMs"] = [long]$e.elapsedMs }'
+           Replace = '' }
         @{ Name = "stale-fixed-whatever-the-tick"
            Find = 'return [int][System.Math]::Max($script:HordeWakeStaleSeconds, 3 * $TickSeconds)'
            Replace = 'return [int]$script:HordeWakeStaleSeconds' }

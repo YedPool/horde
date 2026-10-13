@@ -60,7 +60,8 @@
 #   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn },
 #            and unreadableCount when the waker can count mail it could not read, or unknown
-#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
+#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, and elapsedMs when it timed the
+#            nudge, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
 # and, when it has a use for them, two more:
 #   Confirm  param([string]$Id)  -> a state, as State answers it, READ AS FULLY AS THE WAKER CAN. For a
@@ -447,5 +448,11 @@ function Send-HordeWakeNudge {
     if ($reason.has -and $null -ne $reason.value) { $why = "$($reason.value)" }
     if ($why -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a reason holding a line break")) }
     if ($script:HordeWakerReasonOutcomes -ccontains $outcome.value -and $why.Trim() -eq "") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " " + $outcome.value + " without saying why")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = $rangAt }) -ObservedAt $a.observedAt)
+    $value = [ordered]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = $rangAt }
+    # elapsedMs IS OPTIONAL: how long the nudge took, by the waker's own measure, as a whole number of
+    # milliseconds. Carried when it is one; anything else there is left out, never a reason to refuse an
+    # outcome that is otherwise sound.
+    $took = Get-HordeWakerMember $v "elapsedMs"
+    if ($took.has -and ($took.value -is [int] -or $took.value -is [long]) -and $took.value -ge 0) { $value["elapsedMs"] = [long]$took.value }
+    return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $a.observedAt)
 }

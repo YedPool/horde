@@ -116,6 +116,9 @@
         @{ Name = "nothing-is-not-an-outcome"
            Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")'
            Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "killed")' }
+        @{ Name = "elapsed-time-not-carried"
+           Find = '-and $took.value -ge 0) { $value["elapsedMs"] = [long]$took.value }'
+           Replace = '-and $false) { $value["elapsedMs"] = [long]$took.value }' }
         @{ Name = "killed-is-not-an-outcome"
            Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")'
            Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")' }

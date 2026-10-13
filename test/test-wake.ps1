@@ -332,6 +332,15 @@ Check ((Decided $r).action -ceq "nudge" -and (Rang 1) -eq 1) "and is at 300 s"
 $after = Update-HordeWakeLedger -Ledger @{ (Sid 1) = [pscustomobject]@{ attempts = 7; lastAttemptAt = (At 0); lastOutcome = "busy" } } -Decisions @([pscustomobject]@{ id = (Sid 1); action = "nudge"; reason = "" }) -Outcomes @{ (Sid 1) = "killed" } -States @{} -Now (At 9) -Settings $settings
 Check ($after[(Sid 1)].attempts -eq 8) "a session already past every step is counted one more, never set back"
 
+# HOW LONG A REAL NUDGE TOOK is journaled when the waker timed it.
+$timed = New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken" -ElapsedMs 2150
+$untimed = New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken"
+Check ($timed.elapsedMs -eq 2150 -and $null -eq $untimed.PSObject.Properties["elapsedMs"] -and $null -eq (New-HordeWakeEntry -At $t0 -Kind "nudge" -ElapsedMs "soon").PSObject.Properties["elapsedMs"]) "a journal line carries elapsedMs when it is given a whole number, and not otherwise"
+$null = Write-HordeWakeJournal -Entries @($timed, $untimed)
+$written = @(Read-HordeWakeJournalTail -Count 2 | ForEach-Object { $_ | ConvertFrom-Json })
+Check ($written[0].elapsedMs -eq 2150 -and $null -eq $written[1].PSObject.Properties["elapsedMs"]) "and it is written to the journal with the line"
+Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
+
 Write-Host ""
 Write-Host "--- the look comes last: a session's box is read only when it is about to be nudged ---" -ForegroundColor Cyan
 

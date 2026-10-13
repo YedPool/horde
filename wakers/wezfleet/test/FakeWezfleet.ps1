@@ -24,8 +24,10 @@
 #                                                      absent; detail }; exit 2 for a missing -To or a
 #                                                      timeout that is not a whole number above 0
 #   mail nudge -To <id> -BudgetSeconds <n> -Json       exit 0 { outcome; reason; target; pane; instance; detail }:
-#       refused      (reason budget-too-small) the budget is under 10 s: it does not start typing with
-#                    too little time to finish, and NOTHING IS TYPED. No -BudgetSeconds is no limit
+#       refused      (reason budget-too-small) under 30 s of the budget is left: it does not start typing
+#                    with too little time to finish, and NOTHING IS TYPED. No -BudgetSeconds is no limit;
+#                    one that is not a whole number from 1 to 300 is exit 2, bad-budget
+#     every answer carries elapsedMs, a whole number of milliseconds since this script began
 #       unreachable  no such session, or its row says it cannot be reached
 #       refused      it has no unread mail: there is nothing to nudge for
 #       busy         its box is not empty, it is mid-turn, or it is not idle - and NOTHING IS TYPED
@@ -33,6 +35,7 @@
 #     exit 2 for an empty -To
 param()
 $ErrorActionPreference = "Stop"
+$fakeClock = [System.Diagnostics.Stopwatch]::StartNew()
 $root = $PSScriptRoot
 $argvList = @($args | ForEach-Object { "$_" })
 [System.IO.File]::AppendAllText((Join-Path $root "argv.log"), ((@{ argv = $argvList; pid = $PID } | ConvertTo-Json -Compress -Depth 4) + "`n"), [System.Text.Encoding]::ASCII)
@@ -98,13 +101,14 @@ if ($form -ceq "pane") {
 # nudge
 if ($to -eq "") { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-to"; target = ""; pane = ""; instance = ""; detail = "an empty -To" }) }
 $row = @(@($rows) | Where-Object { $null -ne $_ -and $_.id -ceq $to }) | Select-Object -First 1
-function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail }) }
+function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }
 # THE BUDGET, before anything is typed: with too little of it left, typing is not begun.
 $budget = 0
-if (($argvList -ccontains "-BudgetSeconds") -and (-not [int]::TryParse((Get-FakeArg "-BudgetSeconds"), [ref]$budget) -or $budget -lt 1)) { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-budget"; target = $to; pane = ""; instance = ""; detail = "a budget is a whole number of seconds above 0" }) }
-if (($argvList -ccontains "-BudgetSeconds") -and $budget -lt 10) { Write-FakeNudge "refused" "budget-too-small" ("" + $budget + " s is too little to type and send in") }
+if (($argvList -ccontains "-BudgetSeconds") -and (-not [int]::TryParse((Get-FakeArg "-BudgetSeconds"), [ref]$budget) -or $budget -lt 1 -or $budget -gt 300)) { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-budget"; target = $to; pane = ""; instance = ""; detail = "a budget is a whole number of seconds from 1 to 300"; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
+# What is left of the budget, counted from this script's own start, against the 30 s typing may take.
+if (($argvList -ccontains "-BudgetSeconds") -and ($budget - $fakeClock.Elapsed.TotalSeconds) -lt 30) { Write-FakeNudge "refused" "budget-too-small" ("less than 30 s of the " + $budget + " s budget is left, too little to type and send in") }
 # THE GUARD, at the moment of typing: the pane as it is now.
 if ($row.boxEmpty -cne "yes") { Write-FakeNudge "busy" "box-not-empty" "the input box holds unsent text" }
 if ($row.midTurn -cne "no" -or $row.idle -cne "yes") { Write-FakeNudge "busy" "not-idle" "the session is in a turn" }

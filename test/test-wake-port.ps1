@@ -297,6 +297,12 @@ foreach ($case in @(
     $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like)) ("nudge: " + $case.what + " is unknown, saying so")
 }
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = 1234 }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.elapsedMs -eq 1234) "nudge: elapsedMs is carried when the waker timed the nudge"
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = "soon" }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["elapsedMs"]) "nudge: an elapsedMs that is no whole number is left out, and the outcome stands"
 $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "killed"; reason = "nudge-killed: stopped part-way" }) }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and $a.value.reason -ceq "nudge-killed: stopped part-way") "nudge: killed - the waker stopped its own nudge part-way - is carried with its reason"

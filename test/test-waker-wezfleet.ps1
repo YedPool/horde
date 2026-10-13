@@ -309,8 +309,9 @@ $state = & $fx.New
 & $fx.SetRow $state (New-Row 4 @{ reachable = "no" })
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 $o = & $fx.Observe $state (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $o.nudges -eq 1 -and (Get-Count $state ("mail nudge -To " + (Sid 1) + " -BudgetSeconds 30 -Json")) -eq 1) "woken is woken: the fleet typed its one line, having been asked with the session's id and a budget of 30 s, and nothing else"
-& $fx.Deadlines $state 10 5 9
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $o.nudges -eq 1 -and (Get-Count $state ("mail nudge -To " + (Sid 1) + " -BudgetSeconds 60 -Json")) -eq 1) "woken is woken: the fleet typed its one line, having been asked with the session's id and a budget of 60 s, and nothing else"
+Check ($null -ne $a.value.PSObject.Properties["elapsedMs"] -and $a.value.elapsedMs -ge 0) "and its answer carries how long the fleet's command says the nudge took"
+& $fx.Deadlines $state 10 5 29
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)".StartsWith("budget-too-small") -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "a nudge the fleet's command refuses to START - too little of its budget left - is the port's nothing, with the reason, and nothing more was typed"
 & $fx.Deadlines $state
@@ -318,10 +319,11 @@ Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.val
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".StartsWith("tool-too-old: ") -and "$($a.value.reason)".Contains("BudgetSeconds")) "a fleet command too old to know -BudgetSeconds is unreachable, with a reason that says it is too old"
 Check ((Get-Count $state "mail nudge*") -eq (Get-Count $state "mail nudge -To * -BudgetSeconds * -Json") -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "and it is never asked again without the budget: every nudge ever asked for carried one"
-& $fx.SetMode $state @{ nudge = @{ exit = 2; stdout = '{"outcome":"unreachable","reason":"bad-arguments","target":"","pane":"","instance":"","detail":"unknown argument"}' } }
-$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".StartsWith("tool-too-old: ") -and "$($a.value.reason)".Contains("bad-arguments")) "exit 2 - the command refusing its arguments - says the same, with the command's own reason"
 & $fx.SetMode $state $null
+& $fx.Deadlines $state 10 5 301
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".StartsWith("bad-budget: ") -and -not "$($a.value.reason)".Contains("tool-too-old") -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "a budget the command refuses - exit 2, bad-budget - is unreachable with the command's own code, and is not called an old tool"
+& $fx.Deadlines $state
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 2)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)".StartsWith("box-not-empty") -and (& $fx.Observe $state (Sid 2)).nudges -eq 0) "busy is busy, with the fleet's reason code first: a box that is not empty, and nothing typed"
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 3)

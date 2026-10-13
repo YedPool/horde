@@ -19,10 +19,13 @@ $script:HordeWakeStaleSeconds = 120
 $script:HordeWakeJournalMaxBytes = 4194304
 
 function New-HordeWakeEntry {
-    # One journal line: { at; kind; id; outcome; reason }, and messageId for a mail.
-    param([datetime]$At, [string]$Kind, [string]$Id = "", [string]$Outcome = "", [string]$Reason = "", [string]$MessageId = "")
+    # One journal line: { at; kind; id; outcome; reason }, messageId for a mail, and elapsedMs for a real
+    # nudge whose waker timed it - so how long a nudge really takes on this machine can be read from the
+    # journal, which is what its budget is set against.
+    param([datetime]$At, [string]$Kind, [string]$Id = "", [string]$Outcome = "", [string]$Reason = "", [string]$MessageId = "", $ElapsedMs = $null)
     $e = [ordered]@{ at = $At; kind = $Kind; id = $Id; outcome = $Outcome; reason = $Reason }
     if ($MessageId -ne "") { $e["messageId"] = $MessageId }
+    if ($ElapsedMs -is [int] -or $ElapsedMs -is [long]) { $e["elapsedMs"] = [long]$ElapsedMs }
     return [pscustomobject]$e
 }
 
@@ -132,6 +135,7 @@ function Write-HordeWakeJournal {
         if ($null -eq $e) { continue }
         $row = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $e.at); kind = "$($e.kind)"; id = "$($e.id)"; outcome = "$($e.outcome)"; reason = "$($e.reason)" }
         if ($null -ne $e.PSObject.Properties["messageId"]) { $row["messageId"] = "$($e.messageId)" }
+        if ($null -ne $e.PSObject.Properties["elapsedMs"]) { $row["elapsedMs"] = [long]$e.elapsedMs }
         [void]$lines.Add((ConvertTo-Json -InputObject $row -Compress))
     }
     if ($lines.Count -eq 0) { return 0 }

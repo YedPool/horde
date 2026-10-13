@@ -411,7 +411,7 @@ function Invoke-HordeWakePass {
                     # A NUDGE THE WAKER HAD TO KILL IS ITS OWN KIND OF LINE, so nobody reads it as one more nudge.
                     $kind = "nudge"
                     if ($rang.value.outcome -ceq "killed") { $kind = "nudge-killed" }
-                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason))
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason -ElapsedMs (Get-HordeWakeEntryValue $rang.value "elapsedMs")))
                 }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }

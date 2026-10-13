@@ -122,9 +122,12 @@
         @{ Name = "old-tool-not-said-to-be-old"
            Find = 'if ($run.ok) { $why = $tooOld + $why }'
            Replace = '' }
-        @{ Name = "exit-2-not-said-to-be-an-old-tool"
-           Find = 'if ([int]$run.exit -eq 2) { return'
-           Replace = 'if ($false) { return' }
+        @{ Name = "nudge-budget-of-thirty"
+           Find = 'paneFlag = 5; nudgeBudget = 60 }'
+           Replace = 'paneFlag = 5; nudgeBudget = 30 }' }
+        @{ Name = "elapsed-time-dropped"
+           Find = '-and $took.Value -ge 0) { $answer["elapsedMs"] = [long]$took.Value }'
+           Replace = '-and $false) { $answer["elapsedMs"] = [long]$took.Value }' }
         @{ Name = "outcome-with-no-reason-left-blank"
            Find = 'if ($why -eq "" -and $mapped -cne "woken") { $why = "the fleet answered " + $outcome.Value }'
            Replace = '' }
