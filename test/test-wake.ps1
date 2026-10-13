@@ -578,6 +578,54 @@ Check ($r.held.Count -eq 0) "nor that of the watcher's own session"
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- mail handed over and never acknowledged comes back to the same count: the cap holds ---" -ForegroundColor Cyan
+
+function HandOver {
+    # The watcher's own loop over ONE session whose side hands its mail over after every nudge and never
+    # acknowledges it: a pass every 3 s for -Seconds. On the pass of a nudge the mail is handed over
+    # (nothing unread, one handed over, stamped then), and 600 s after that stamp it is unread again -
+    # the same mail, under its own time - which is what the fleet's command does with a hand-over
+    # nobody acknowledged. -AckAt plays the session acknowledging the mail at that second, and
+    # -NewMailAt a new mail arriving at that one. Returns when (s) each nudge was typed, the gave-up
+    # lines, and whether the session had a ledger entry on the pass of the acknowledgement.
+    param([int]$Seconds, $AckAt = $null, $NewMailAt = $null)
+    Start-Case
+    $mail = (At -60); $handedAt = $null; $acked = $null; $entryAtAck = $null
+    Seat 1 @{ OldestUnreadAt = $mail }
+    $nudges = New-Object System.Collections.ArrayList
+    $gave = New-Object System.Collections.ArrayList
+    for ($t = 0; $t -le $Seconds; $t += 3) {
+        if ($null -ne $AckAt -and $t -eq $AckAt) { $acked = (At $t); $handedAt = $null; $mail = $null; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = $acked } }
+        if ($null -ne $NewMailAt -and $t -eq $NewMailAt) { $mail = (At $t); $handedAt = $null; Seat 1 @{ OldestUnreadAt = $mail; LastAckedAt = $acked } }
+        elseif ($null -ne $handedAt -and ($t - $handedAt) -ge 600) { $handedAt = $null; Seat 1 @{ OldestUnreadAt = $mail; LastAckedAt = $acked } }
+        $r = Pass $t
+        if ($null -ne $AckAt -and $t -eq $AckAt) { $entryAtAck = $script:ledger.ContainsKey((Sid 1)) }
+        foreach ($e in @($r.entries)) {
+            if ($e.kind -ceq "gave-up") { [void]$gave.Add($e) }
+            if ($e.kind -cne "nudge") { continue }
+            [void]$nudges.Add($t)
+            $handedAt = $t
+            Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = 1; OldestHandedOverAt = (At $t); LastAckedAt = $acked }
+        }
+    }
+    return [pscustomobject]@{ nudges = $nudges.ToArray(); gave = $gave.ToArray(); entryAtAck = $entryAtAck }
+}
+# THE SEQUENCE THE REVIEW OF PR 234 FOLLOWED THROUGH: nudge; the hook hands the mail over; nothing unread,
+# so the entry was dropped as "mail taken"; no acknowledgement; ten minutes on the mail is unread again,
+# to a session with no entry - a fresh budget - and it is nudged again. Six an hour, for ever.
+$held = HandOver -Seconds 300
+Check (($held.nudges -join ",") -ceq "0" -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "mailAt") -eq (At -60)) "five minutes into a hand-over nobody acknowledged, the nudge it followed is still counted: the entry stands, for the mail it was sent for"
+$four = HandOver -Seconds 14400
+Check (($four.nudges -join ",") -ceq "0,600,1200,1800,2400,3000" -and (Rang 1) -eq 6) ("each time the mail comes back unread it is nudged for under the SAME count: six nudges, one per hand-over, and no seventh in four hours (" + ($four.nudges -join ",") + ")")
+Check ($four.gave.Count -eq 1 -and $four.gave[0].id -ceq (Sid 1) -and "$($four.gave[0].reason)".StartsWith("6 nudges for its mail unread since 2026-10-12T07:59:00Z")) ("and it is given up on, once, at the sixth (" + $four.gave.Count + " gave-up lines)")
+Check ($script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 6 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "what was given up on is still held at the end, through every hand-over since"
+# CONTROL: an acknowledgement is what clears it, and a new mail is then knocked for from nothing.
+$ack = HandOver -Seconds 3600 -AckAt 900 -NewMailAt 1002
+Check ($ack.entryAtAck -eq $false) "CONTROL: the session acknowledges the mail - nothing unread, nothing handed over - and its entry is dropped on that pass"
+Check (($ack.nudges -join ",") -ceq "0,600,1005,1605,2205,2805,3405" -and $ack.gave.Count -eq 0 -and $script:ledger[(Sid 1)].attempts -eq 5 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "mailAt") -eq (At 1002)) ("CONTROL: a NEW mail after it has a budget of its own: nudged at once and counted from one, the two nudges of the mail before not held against it (" + ($ack.nudges -join ",") + ")")
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
 
 Start-Case; Seat 1 @{ Retired = "yes" }

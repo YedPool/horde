@@ -546,7 +546,8 @@ function Update-HordeWakeLedger {
     # AN ATTEMPT COUNTS WHATEVER IT CAME TO: woken too, because "woken" is the waker's word and the
     # mail is what proves it - a session that was woken and still has unread mail next pass is asked
     # again after its back-off (a missed wake heals). MAIL TAKEN RESETS IT: a session known to have no
-    # unread mail leaves the ledger, so its next message is knocked for at once.
+    # unread mail, and none handed over to it and not yet acknowledged (below, NOTHING UNREAD IS "MAIL
+    # TAKEN" ONLY WHEN...), leaves the ledger, so its next message is knocked for at once.
     # "nothing" IS NOT AN ATTEMPT: the waker found the mail already taken and rang nobody, so nothing was
     # tried and nothing failed. It does not advance the back-off and is never counted against the session.
     # BUT IT MUST NOT HOLD THE SLOT. The first version left the ledger untouched for it, and the review of
@@ -638,8 +639,22 @@ function Update-HordeWakeLedger {
         }
     }
     foreach ($id in @($next.Keys)) {
+        # NOTHING UNREAD IS "MAIL TAKEN" ONLY WHEN NOTHING IS HANDED OVER EITHER. Mail handed over to a session
+        # is out of unreadCount and is not acknowledged; the fleet's command counts it unread again when
+        # its hold runs out. "Nothing unread" alone was read as taken, and the entry dropped: nudge, the
+        # hook hands the mail over, the entry goes, nobody acknowledges, ten minutes on the mail is
+        # unread again to a session with no entry - a fresh budget - and it is nudged again. Six nudges
+        # an hour for one session, never capped and never given up on (review of PR 234). So the entry
+        # stands while anything is handed over, and goes when the state shows nothing unread AND
+        # nothing handed over - which is how an acknowledgement shows here.
+        # HOW THE ENTRY KNOWS ITS MAIL AGAIN: by mailAt, as always. That is the mail's own time, and the
+        # command reports a hand-over that ran out under that same time (oldestUnreadAt), so the entry
+        # for it applies again, count and all (Get-HordeWakeLedgerEntry; no oldest unread, as during the
+        # hand-over, is no other mail). oldestHandedOverAt is NOT used to know it by: it is when the
+        # hook handed the mail over, a new time at every hand-over, and no time of the mail's.
+        # A waker that cannot say what was handed over (the port's $null) is read as none, as before.
         $taken = $false
-        if ($null -ne $States -and $States.ContainsKey($id)) { $a = $States[$id]; $taken = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -le 0) }
+        if ($null -ne $States -and $States.ContainsKey($id)) { $a = $States[$id]; $taken = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -eq 0) }
         $old = (($Now - $next[$id].lastAttemptAt).TotalSeconds -gt $script:HordeWakeLedgerKeepSeconds)
         # A SESSION GIVEN UP ON IS FORGOTTEN ONLY ON EVIDENCE, NEVER BY AGE ALONE AND NEVER FOR WHAT A PASS
         # DID NOT READ. Entries were dropped after a day whatever they said, so a session that never

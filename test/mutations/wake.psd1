@@ -6,6 +6,9 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "mail-handed-over-is-read-as-mail-taken"
+           Find = '$a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -eq 0) }'
+           Replace = '$a.value.unreadCount -le 0) }' }
         @{ Name = "the-attempt-is-not-recorded-before-the-waker-is-asked"
            Find = '$nextLedger = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State'
            Replace = '$null = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State' }
