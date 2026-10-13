@@ -179,6 +179,25 @@ $moved = New-Object System.Collections.ArrayList
 foreach ($n in 301..310) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $tenMinutes -HordeHome $h)) { [void]$moved.Add($e.kind + ":" + $e.id) } }
 Check (@($moved | Where-Object { $_ -ceq "fleet-moving:" }).Count -eq 1 -and $moved[0] -ceq "fleet-moving:" -and $run.silence.silent -eq $false) ("when one session takes its mail the tick says fleet-moving, once (" + (@($moved) -join ",") + ")")
 Check (@($moved | Where-Object { $_ -ceq ("nudge:" + (Sid 1)) }).Count -ge 1 -and @($moved | Where-Object { $_ -ceq ("nudge:" + (Sid 3)) }).Count -ge 1 -and @($run.ledger.Values | Where-Object { $_.attempts -ge 1 }).Count -eq 2) "and the two that still have mail are knocked for at once, as ordinary attempts counted from nothing: nobody is left unwoken when the fleet comes back"
+# THE PROBES OF A SILENCE ARE COUNTED ACROSS A RESTART: the cap is for the whole silence.
+$h = New-Home
+Reset-HordeMemoryWaker
+foreach ($n in 1..3) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) }
+$twoProbes = Get-HordeWakeSettings -Overrides @{ maxSilentProbes = 2 }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$kinds = New-Object System.Collections.ArrayList
+foreach ($n in 0..400) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $twoProbes -HordeHome $h)) { [void]$kinds.Add($e.kind) } }
+$typedSilent = @(Get-HordeMemoryWakerNudges).Count
+Check ($run.silence.silent -eq $true -and $run.silence.probes -eq 2 -and @($kinds | Where-Object { $_ -ceq "silent-probes-ended" }).Count -eq 1 -and ([System.IO.File]::ReadAllText((Join-Path $h "wake\silence-live.json")) | ConvertFrom-Json).probes -eq 2) "twenty minutes of live ticks at a cap of two: the silence has had its two probes, the journal says once that they ended, and the count is in the saved file"
+$again = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($again.silence.silent -eq $true -and $again.silence.probes -eq 2) "a watcher started again reads the count back"
+foreach ($n in 401..2400) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $again -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $twoProbes -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges).Count -eq $typedSilent) ("and in the hundred minutes after it types nothing: a restart is not a fresh allowance of probes (" + (@(Get-HordeMemoryWakerNudges).Count - $typedSilent) + " more)")
+[System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), '{"schemaVersion":1,"silent":true,"quietSince":"2026-10-12T08:00:00.0000000Z"}')
+Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).value.seen.probes -eq 0) "a file saved before probes were counted reads as none sent"
+[System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), '{"schemaVersion":1,"silent":true,"quietSince":"2026-10-12T08:00:00.0000000Z","probes":"many"}')
+Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).state -ceq "unknown") "and one whose count is no count is not read"
+
 # A WATCHER RESTARTED IN A FLEET THAT WAS NOT SILENT counts its quiet from nothing: an old quietSince, read
 # back with none of the nudges it was counted from, must not make three woken answers a silent fleet.
 $h = New-Home

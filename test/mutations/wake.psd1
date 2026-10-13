@@ -6,6 +6,39 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "silent-probes-are-never-capped"
+           Find = 'if ($SilentProbes -ge [int]$Settings.maxSilentProbes) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "silent-probes-are-not-stretched"
+           Find = 'for ($i = 1; $i -lt $Probes -and $wait -lt $most; $i++) { $wait = $wait * [System.Math]::Max(1.0, [double]$Settings.silentProbeStretch) }'
+           Replace = '' }
+        @{ Name = "the-stretch-has-no-ceiling"
+           Find = '    return [int][System.Math]::Min($wait, $most)'
+           Replace = '    return [int]$wait' }
+        @{ Name = "a-ceiling-below-the-first-step-shortens-the-wait"
+           Find = '$most = [System.Math]::Max([double]$first, [double]$Settings.silentProbeMaxSeconds)'
+           Replace = '$most = [double]$Settings.silentProbeMaxSeconds' }
+        @{ Name = "a-stretch-below-one-shortens-the-wait"
+           Find = '$wait = $wait * [System.Math]::Max(1.0, [double]$Settings.silentProbeStretch) }'
+           Replace = '$wait = $wait * [double]$Settings.silentProbeStretch }' }
+        @{ Name = "the-silences-probes-are-not-counted"
+           Find = '$next.probes = $sent + @($Entries | Where-Object'
+           Replace = '$next.probes = 0 + @($Entries | Where-Object' }
+        @{ Name = "the-end-of-the-probes-is-said-every-pass"
+           Find = 'if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add('
+           Replace = 'if ($next.probes -ge $most) { [void]$out.Add(' }
+        @{ Name = "the-end-of-the-probes-is-never-said"
+           Find = 'if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "the-count-of-probes-is-not-saved"
+           Find = 'quietSince = $since; probes = $sent }'
+           Replace = 'quietSince = $since; probes = 0 }' }
+        @{ Name = "a-count-of-probes-that-is-none-is-read"
+           Find = 'if (-not ($pp.Value -is [int] -or $pp.Value -is [long]) -or $pp.Value -lt 0 -or $pp.Value -gt 1000000) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "the-pass-is-not-told-the-count"
+           Find = '$longest = Get-HordeWakeSilentProbeSeconds -Probes $SilentProbes -Settings $Settings'
+           Replace = '$longest = Get-HordeWakeSilentProbeSeconds -Probes 0 -Settings $Settings' }
         @{ Name = "an-old-quiet-is-read-back-with-no-history"
            Find = 'if (-not [bool]$j.silent) { $since = $null }'
            Replace = '' }
@@ -286,11 +319,14 @@
            Find = 'if ($before.silent -eq $true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"'
            Replace = 'if ($true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"' }
         @{ Name = "the-quiet-is-not-counted-anew-after-movement"
-           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow }'
-           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $before.quietSince; nudges = @($before.nudges); acks = $acksNow }' }
+           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0 }'
+           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $before.quietSince; nudges = @($before.nudges); acks = $acksNow; probes = 0 }' }
+        @{ Name = "the-count-of-probes-outlives-the-silence"
+           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0 }'
+           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = $before.probes }' }
         @{ Name = "silent-found-again-every-pass"
-           Find = 'if ($next.silent) { return [pscustomobject]@{ seen = $next; entries = @(); silent = $true; declared = $false;'
-           Replace = 'if ($false) { return [pscustomobject]@{ seen = $next; entries = @(); silent = $true; declared = $false;' }
+           Find = '    if ($next.silent) {'
+           Replace = '    if ($false) {' }
         @{ Name = "a-killed-nudge-is-not-seen"
            Find = 'if ($null -eq $e -or @("nudge", "nudge-killed") -cnotcontains "$($e.kind)") { continue }'
            Replace = 'if ($null -eq $e -or @("nudge") -cnotcontains "$($e.kind)") { continue }' }

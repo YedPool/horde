@@ -190,7 +190,8 @@ function Get-HordeWakeRunPick {
 }
 
 function Get-HordeWakeSilenceMark {
-    # One line that changes exactly when what is SAVED of the silence changes: whether, and since when.
+    # One line that changes exactly when what is SAVED of the silence changes: whether, since when, and
+    # how many probes it has had.
     # The tick saves on a change of it, not on every pass.
     param($Seen)
     if ($null -eq $Seen) { return "" }
@@ -200,7 +201,7 @@ function Get-HordeWakeSilenceMark {
     # Nothing to say - not silent, no quiet begun - is the same as nothing seen:
     # no file is written for it.
     if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "") { return "" }
-    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since)
+    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + "$(Get-HordeWakeEntryValue $Seen "probes")")
 }
 
 function Get-HordeWakeRunMode {
@@ -307,7 +308,10 @@ function Invoke-HordeWakeTick {
             $only = "$(Get-HordeWakeEntryValue $Run "target")"
             if ($only -ceq "") { throw "a proof run was made without the one session it may nudge, so it nudged nobody" }
         }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")"
+        $silentProbes = 0
+        $sentSoFar = Get-HordeWakeEntryValue $Run.silence "probes"
+        if ($sentSoFar -is [int] -or $sentSoFar -is [long]) { $silentProbes = [int]$sentSoFar }
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be

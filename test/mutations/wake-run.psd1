@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-tick-does-not-tell-the-pass-how-many-probes"
+           Find = '-SilentProbes $silentProbes'
+           Replace = '-SilentProbes 0' }
+        @{ Name = "a-change-in-the-count-of-probes-is-not-saved"
+           Find = ' + "|" + "$(Get-HordeWakeEntryValue $Seen "probes")")'
+           Replace = ')' }
         @{ Name = "a-run-that-sends-starts-over-a-silence-it-cannot-read"
            Find = 'if ($run.live) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet'
            Replace = 'if ($false) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet' }
@@ -30,8 +36,8 @@
            Find = 'else { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }'
            Replace = 'else { }' }
         @{ Name = "the-end-of-a-silence-is-not-saved"
-           Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since)'
-           Replace = 'return ("" + $since)' }
+           Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|"'
+           Replace = 'return ("" + $since + "|"' }
         @{ Name = "the-watchers-own-session-does-not-reach-the-pass"
            Find = '-Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")"'
            Replace = '-Only $only' }
