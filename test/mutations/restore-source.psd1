@@ -29,8 +29,14 @@
            Find = 'if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-status-change-is-a-move"
-           Find = '$moved = (($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)'
-           Replace = '$moved = (($_.lastChangeAt - $_.startedAt).TotalSeconds -gt 0)' }
+           Find = '-or ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)'
+           Replace = '-or ($_.lastChangeAt - $_.startedAt).TotalSeconds -gt 0)' }
+        @{ Name = "status-not-read-so-a-first-turn-is-not-moved"
+           Find = '$resting = ("$($_.status)" -ceq "idle" -and'
+           Replace = '$resting = ($true -and' }
+        @{ Name = "status-word-not-carried"
+           Find = 'lastChangeAt = $status.observedAt; status = "$($status.value)" })'
+           Replace = 'lastChangeAt = $status.observedAt; status = "idle" })' }
         @{ Name = "restore-id-follows-the-clock"
            Find = '$minute.ToString("yyyy-MM-ddTHH:mm", [System.Globalization.CultureInfo]::InvariantCulture))'
            Replace = '$Now.ToString("yyyy-MM-ddTHH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture))' }

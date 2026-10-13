@@ -35,7 +35,7 @@ function Get-HordeRestoreSettings {
         restoreMinSessions = 3
         restoreShare = 0.6
         restoreWindowSeconds = 600
-        # A restored session has "moved" once its status changed this long after it started.
+        # A restored session that is idle has "moved" once its status changed this long after it started.
         movedSeconds = 60
         # With no session moved this long after the last one started, the warchief is told.
         stallSeconds = 300
@@ -65,11 +65,16 @@ function Get-HordeRestoreFinding {
     # or more that start after it can make a later window the fullest and so give the restore a new id.
     # The resume mail is then posted once more to a session that still has not moved.
     #
-    # A member has MOVED when its last status change is at least movedSeconds after its start: the
+    # A MEMBER HAS NOT MOVED ONLY WHEN IT IS IDLE NOW AND ITS LAST STATUS CHANGE IS LESS THAN movedSeconds
+    # AFTER ITS START. The first version read the time alone, and the review of PR #207 found the hole:
+    # a session in a long FIRST turn changed its status seconds after it started and has not changed it
+    # since, so it read as not moved and would have been mailed RESUME in the middle of its work. A
+    # session that is busy or waiting now is in a turn, and that is moving. A status that is not known is
+    # never "not moved" either: unknown means no mail. The time rule that remains, for an idle session: the
     # first status a restored session writes is its start, and one that never took a turn never
     # writes another.
     param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings))
-    $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.lastChangeAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
+    $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
     if ($all.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("" + $all.Count + " sessions are running, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
     $best = @()
     for ($i = 0; $i -lt $all.Count; $i++) {
@@ -84,8 +89,9 @@ function Get-HordeRestoreFinding {
     $windowEnd = $best[$best.Count - 1].startedAt
     if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) { return (New-HordeAbsent -Note ("the sessions were restored more than " + $Settings.restoreMaxAgeSeconds + " s ago, which is history")) }
     $members = @($best | ForEach-Object {
-            $moved = (($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)
-            [pscustomobject]@{ id = "$($_.id)"; role = "$($_.role)"; parent = "$($_.parent)"; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; moved = $moved }
+            $resting = ("$($_.status)" -ceq "idle" -and $_.lastChangeAt -is [datetime])
+            $moved = (-not $resting -or ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)
+            [pscustomobject]@{ id = "$($_.id)"; role = "$($_.role)"; parent = "$($_.parent)"; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; status = "$($_.status)"; moved = $moved }
         })
     $minute = New-Object System.DateTime($windowStart.Year, $windowStart.Month, $windowStart.Day, $windowStart.Hour, $windowStart.Minute, 0, [System.DateTimeKind]::Utc)
     $restoreId = ConvertTo-HordeTextUuid -Text ("horde-wake-restore`n" + $minute.ToString("yyyy-MM-ddTHH:mm", [System.Globalization.CultureInfo]::InvariantCulture))
@@ -171,7 +177,9 @@ function Invoke-HordeRestoreSourcePass {
 
 function Get-HordeRestoreSessions {
     # The running sessions, for Get-HordeRestoreFinding: known, a list of { id; role; parent; startedAt;
-    # lastChangeAt } (and leftOut, below), or unknown with the reason. startedAt is the session's own (core/Identity.ps1);
+    # lastChangeAt; status } (and leftOut, below), or unknown with the reason. status is the session's
+    # live status word as its agent wrote it (idle, busy, waiting): whether a session has moved since a
+    # restore cannot be told from a time alone (Get-HordeRestoreFinding). startedAt is the session's own (core/Identity.ps1);
     # lastChangeAt is when its live status was last written; role and parent are its registry record's
     # (role "unknown" and parent "" where the record says neither - never guessed, core/Roles.ps1).
     #
@@ -219,7 +227,7 @@ function Get-HordeRestoreSessions {
             $held = Get-HordeStoredField -Record $record -Name "parent"
             if ("$($held.state)" -ceq "known") { $parent = "$($held.value)" }
         }
-        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt })
+        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt; status = "$($status.value)" })
     }
     $answer = New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow)
     Add-Member -InputObject $answer -MemberType NoteProperty -Name "leftOut" -Value $leftOut.ToArray()
