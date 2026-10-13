@@ -9,7 +9,8 @@
 #     journals what it could not read, and leaves a heartbeat;
 #   - status then shows a fresh heartbeat and the journal's lines, and a heartbeat left by a watcher
 #     that died is called stale;
-#   - run -Shadow, left looping, keeps beating until it is stopped.
+#   - run -Shadow, left looping, keeps beating until it is stopped; while it runs a second run on the
+#     same home is refused, and once it is killed - its lock file left behind - the next one starts.
 # Every step is the shipped horde.ps1 run as its own process (test/lib/Cli.ps1).
 #
 # NOTHING REAL IS READ OR WRITTEN, and no terminal is involved. HORDE_HOME is a folder this scenario
@@ -69,6 +70,8 @@ Check ($live.code -ne 0 -and $live.out -like "*needs -Shadow*" -and $live.out -l
 Check (-not (Test-Path -LiteralPath $wakeDir)) "and it wrote nothing: no journal, no heartbeat"
 $typo = Invoke-Wake @("run", "-Shadwo")
 Check ($typo.code -eq 2 -and $typo.out -like "*usage: horde wake run*") "a mistyped flag exits 2 with the usage"
+$slow = Invoke-Wake @("run", "-Shadow", "-Once", "-TickSeconds", "301")
+Check ($slow.code -eq 2 -and -not (Test-Path -LiteralPath $wakeDir)) "a tick longer than 300 s is refused at the command line"
 $wrongVerb = Invoke-Wake @("status", "-Shadow")
 Check ($wrongVerb.code -eq 1 -and $wrongVerb.out -like "*belongs to wake run*") "a flag of run given to status is refused, not ignored"
 $help = Invoke-HordeCliProcess -Root $root -HordeArgs @("--help") -Env $cliEnv
@@ -83,7 +86,8 @@ Check ($once.out -like "*pass 1 done*") "and that its one pass is done"
 $beatPath = Join-Path $wakeDir "heartbeat.json"
 $beat = $null
 if (Test-Path -LiteralPath $beatPath -PathType Leaf) { $beat = [System.IO.File]::ReadAllText($beatPath) | ConvertFrom-Json }
-Check ($null -ne $beat -and $beat.pass -eq 1 -and $beat.shadow -eq $true -and $beat.pid -gt 0) "it left a heartbeat: pass 1, shadow, and its process"
+Check ($null -ne $beat -and $beat.pass -eq 1 -and $beat.shadow -eq $true -and $beat.pid -gt 0 -and $beat.tickSeconds -eq 3) "it left a heartbeat: pass 1, shadow, its process and its tick"
+Check ((Test-Path -LiteralPath (Join-Path $wakeDir "ledger.json")) -eq $false -and (Test-Path -LiteralPath (Join-Path $wakeDir "restore.json")) -eq $false) "and it wrote no live state: neither ledger.json nor restore.json"
 $lines = @(Read-Journal)
 Check ($lines.Count -ge 1 -and @($lines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "restore" }).Count -eq 1) "the restore source ran with no waker: the journal says it could not read the sessions of this scenario's empty profile"
 Check (@($lines | Where-Object { @("nudge", "post", "stall") -ccontains $_.kind }).Count -eq 0) "and no line of the journal is a nudge, a post or a stall notice: shadow did nothing"
@@ -95,9 +99,12 @@ $status = Invoke-Wake @("status")
 Check ($status.code -eq 0 -and $status.out -like "*heartbeat: * s ago, fresh*" -and $status.out -like "*pass 1*" -and $status.out -like "*shadow true*") "status shows a fresh heartbeat, its pass, and that it was shadow"
 Check ($status.out -like "*journal: the last*line(s)*" -and $status.out -like "*skip-unknown*") "and the journal's last lines"
 $old = [datetime]::UtcNow.AddSeconds(-600).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
-[System.IO.File]::WriteAllText($beatPath, ('{"at":"' + $old + '","pid":1,"pass":40,"shadow":true}'), $utf8)
+[System.IO.File]::WriteAllText($beatPath, ('{"at":"' + $old + '","pid":1,"pass":40,"shadow":true,"tickSeconds":3}'), $utf8)
 $status = Invoke-Wake @("status")
-Check ($status.code -eq 0 -and $status.out -like "*STALE*" -and $status.out -like "*not running*") "a heartbeat ten minutes old is called stale: the watcher is not running"
+Check ($status.code -eq 0 -and $status.out -like "*STALE*" -and $status.out -like "*not running*") "a heartbeat ten minutes old, from a watcher that beat every 3 s, is called stale: the watcher is not running"
+[System.IO.File]::WriteAllText($beatPath, ('{"at":"' + $old + '","pid":1,"pass":40,"shadow":true,"tickSeconds":300}'), $utf8)
+$status = Invoke-Wake @("status")
+Check ($status.code -eq 0 -and $status.out -like "*fresh*" -and $status.out -notlike "*STALE*") "the same heartbeat from a watcher that beats every 300 s is fresh: stale is three of its ticks"
 
 Write-Host ""
 Write-Host "=== left running, it keeps beating until it is stopped ===" -ForegroundColor Cyan
@@ -112,10 +119,16 @@ do {
 } while (($pass -lt 3 -or $pass -ge 40) -and (Get-Date) -lt $deadline)
 Check ($pass -ge 3 -and $pass -lt 40) ("its heartbeat moves on, pass after pass (" + $pass + ")")
 Check (-not $run.p.HasExited) "and it is still running: it does not stop by itself"
+$second = Invoke-Wake @("run", "-Shadow", "-Once")
+Check ($second.code -eq 1 -and $second.out -like "*already running*" -and $second.out -notlike "*pass 1 done*") "a second run on the same home is refused at once, saying one is running"
 Check (@(Read-Journal | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "restore" }).Count -eq 2) "an unknown that lasts is journaled once for the run, not once a pass"
 Stop-HordeCliRun $run
 $null = $run.p.WaitForExit(10000)
 Check ($run.p.HasExited) "stopped, it is gone"
+# It was KILLED, so it released nothing itself: its lock file is still there.
+Check (Test-Path -LiteralPath (Join-Path $wakeDir "run-shadow.lock") -PathType Leaf) "CONTROL: the killed run left its lock file behind"
+$third = Invoke-Wake @("run", "-Shadow", "-Once")
+Check ($third.code -eq 0 -and $third.out -like "*pass 1 done*") "and the lock a dead run left blocks nobody: the next run starts"
 Check (@(Read-Journal | Where-Object { @("nudge", "post", "stall") -ccontains $_.kind }).Count -eq 0) "and still no line of the journal is a nudge, a post or a stall notice"
 
 Check ((Get-RealWakeListing) -ceq $realBefore) "the real home's wake folder is as it was"

@@ -17,6 +17,10 @@
     "reach.unseen": {
       "support": "yes",
       "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "nudge.guarded": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
     }
   }
 }

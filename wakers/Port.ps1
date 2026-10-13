@@ -35,22 +35,34 @@
 #   state.box           it can read whether a session's input box is empty
 #   state.turn          it can read whether a session is in the middle of a turn
 #   reach.unseen        it can nudge a session that has not taken a turn since a restore
-# The production path (Resolve-HordeProductionWaker) requires all four. The in-process test waker
+#   nudge.guarded       the nudge itself looks again, and rings only a session that still has an empty
+#                       input box and is not mid-turn (below)
+# The production path (Resolve-HordeProductionWaker) requires all five. The in-process test waker
 # declines reach.unseen, so no production path can pick it.
+#
+# THE NUDGE GUARDS ITSELF, BECAUSE THE STATE THE WATCHER READ IS OLD BY THEN. The watcher reads a state,
+# decides, and asks for a nudge; between the read and the keystroke a person can begin to type, or the
+# session can begin a turn. The watcher cannot close that gap from where it stands - only the adapter is
+# next to the session when the line is typed - so the contract puts the last look there (review of
+# PR #207): a waker that offers nudge.guarded checks the box and the turn itself, at the moment it
+# would type, and when the box is not empty or a turn is under way it types nothing and answers busy,
+# with the reason. The watcher's own reading of the state stays: it is what keeps a nudge from being
+# asked for at all, and what an unknown stops.
 #
 # THE PORT NEVER GUESSES AND NEVER THROWS FOR THE FAR END. Only a waker registered through
 # Register-HordeWaker is called: a look-alike object is refused. An adapter that throws, answers with
 # something that is not a core/tristate answer, answers about another session than the one asked about,
-# uses a word outside the lists, reports unread mail with no time for the oldest, or lists one session
-# twice, comes back unknown with the reason. A caller reads the answer's state and never has to catch.
+# uses a word outside the lists, reports unread mail with no time for the oldest, gives a time with no
+# zone or a count that is no count, or lists one session twice, comes back unknown with the reason. A caller reads the answer's state and never has to catch.
 #
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
 #   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn }, or unknown
-#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown
+#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
+#            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
-# 0 or more; oldestUnreadAt is a [datetime], required when unreadCount is above 0. outcome is woken, busy,
+# 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
 # required unless the outcome is woken; at is a [datetime]. A session the waker does not know is unknown,
 # with the reason - never a state of zeros.
@@ -59,13 +71,16 @@
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
-$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")
-# What the production path requires: every one. A waker without all four is never picked there.
-$script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")
-# In the order the watcher serves them when more qualify than one pass may nudge (core/Wake.ps1).
-$script:HordeWakerRoles = @("warchief", "orc", "goblin", "unknown")
+$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
+# What the production path requires: every one. A waker without all five is never picked there.
+$script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
+# Horde's roles as core/Roles.ps1 lists them (core\roles.json), then unknown for a session whose role
+# nobody recorded: one list of roles, not a copy (review of PR #207). It is also the order the watcher
+# serves them in when more qualify than one pass may nudge (core/Wake.ps1).
+$script:HordeWakerRoles = @(@((Get-HordeRoleTable).native) + "unknown")
 $script:HordeWakerWords = @("yes", "no", "unknown")
 # nothing: asked to nudge, the waker found the session had no unread mail by then - it was taken between
 # the state read and the nudge - and rang nobody. It is not a failure, and the watcher counts no attempt
@@ -182,8 +197,8 @@ function Resolve-HordeWaker {
 
 function Resolve-HordeProductionWaker {
     # THE ONE way the watcher picks the waker it rings through: the one loaded waker that offers all
-    # four capabilities, so the in-process test waker, which declines one, is never chosen.
-    #   known    exactly one loaded waker offers all four
+    # five capabilities, so the in-process test waker, which declines one, is never chosen.
+    #   known    exactly one loaded waker offers all five
     #   absent   none does; the note says, for each loaded waker, the first capability it lacks
     #   unknown  two or more do - one is never chosen over another (core/SessionSeat.ps1 holds the same
     #            rule for two holders of a role)
@@ -224,6 +239,17 @@ function Get-HordeWakerMember {
     $p = $Object.PSObject.Properties[$Name]
     if ($null -eq $p) { return [pscustomobject]@{ has = $false; value = $null } }
     return [pscustomobject]@{ has = $true; value = $p.Value }
+}
+
+function ConvertTo-HordeWakerUtc {
+    # An adapter's time as UTC, or $null when it cannot be placed. A [datetime] whose kind is Unspecified
+    # carries no zone, and ToUniversalTime() silently reads it as LOCAL time: the first version did that
+    # (review of PR #207), so a mail's age was wrong by this machine's offset from UTC - hours - and
+    # "younger than 3 s" or "old enough" was decided on a guess. core/WakeFiles.ps1 refuses the same
+    # thing in text (ConvertFrom-HordeWakeTimeText); a time with no zone is not a time here either.
+    param($Value)
+    if ($Value -isnot [datetime] -or $Value.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }
+    return $Value.ToUniversalTime()
 }
 
 function Test-HordeWakerRecord {
@@ -318,9 +344,13 @@ function Get-HordeWakeState {
     if (-not $count.has -or -not ($count.value -is [int] -or $count.value -is [long]) -or $count.value -lt 0) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadCount that is not a whole number, 0 or more")) }
     $oldest = Get-HordeWakerMember $v "oldestUnreadAt"
     $oldestAt = $null
+    # A COUNT THAT DOES NOT FIT IS REFUSED, NOT CAST: [int] of a long past 2,147,483,647 throws, and the
+    # port never throws for the far end (review of PR #207).
+    if ($count.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadCount of " + $count.value + ", which is no count of mail")) }
     if ($count.value -gt 0) {
         if (-not $oldest.has -or $oldest.value -isnot [datetime]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' says " + $Id + " has unread mail and gives no time for the oldest")) }
-        $oldestAt = ([datetime]$oldest.value).ToUniversalTime()
+        $oldestAt = ConvertTo-HordeWakerUtc $oldest.value
+        if ($null -eq $oldestAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' gave the oldest unread mail of " + $Id + " a time with no zone, which cannot be placed")) }
     }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
@@ -356,10 +386,12 @@ function Send-HordeWakeNudge {
     if (-not $outcome.has -or $outcome.value -isnot [string] -or $script:HordeWakerOutcomes -cnotcontains $outcome.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with an outcome that is not one of " + ($script:HordeWakerOutcomes -join ", "))) }
     $at = Get-HordeWakerMember $v "at"
     if (-not $at.has -or $at.value -isnot [datetime]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a time that is not a time")) }
+    $rangAt = ConvertTo-HordeWakerUtc $at.value
+    if ($null -eq $rangAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a time with no zone, which cannot be placed")) }
     $reason = Get-HordeWakerMember $v "reason"
     $why = ""
     if ($reason.has -and $null -ne $reason.value) { $why = "$($reason.value)" }
     if ($why -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a reason holding a line break")) }
     if ($script:HordeWakerReasonOutcomes -ccontains $outcome.value -and $why.Trim() -eq "") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " " + $outcome.value + " without saying why")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = ([datetime]$at.value).ToUniversalTime() }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = $rangAt }) -ObservedAt $a.observedAt)
 }

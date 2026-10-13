@@ -17,6 +17,10 @@
     "reach.unseen": {
       "support": "declined",
       "evidence": "An in-process table for tests: there is no session, so nothing was ever restored and nothing can be reached. Declined so that Resolve-HordeProductionWaker, which requires reach.unseen, never picks it (test/test-wake-port.ps1)."
+    },
+    "nudge.guarded": {
+      "support": "yes",
+      "evidence": "The nudge reads the session's box and turn as they are when it is asked, and answers busy without recording a line when the box is not empty or a turn is under way. test/test-waker-conformance.ps1 seats each case and observes no nudge and no typed text."
     }
   }
 }

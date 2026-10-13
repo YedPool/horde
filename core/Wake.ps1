@@ -1,4 +1,4 @@
-# core/Wake - the wake watcher's rules: who is nudged, when, in what order, and what a restore needs.
+# core/Wake - the wake watcher's rules: who is nudged, when and in what order.
 #
 # WHY (wakers/Port.ps1 has the whole account). Posting a message and waking its receiver were one act,
 # done once, by whoever posted; a knock that landed on a busy session was lost and nobody knocked again,
@@ -16,30 +16,34 @@
 # box, is not mid-turn, and its back-off has run out - and "I could not tell" for any of them is wait,
 # with the reason. Nothing here reads unknown as yes, or as no.
 #
-# PURE WHERE IT DECIDES. Get-HordeWakeDecisions, Update-HordeWakeLedger, Get-HordeRestoreFinding and
-# Get-HordeResumePlan read no clock, no file and no port: everything is a parameter and the time is
-# always -Now, so a test replays a real timeline second by second. Invoke-HordeWakePass is one pass
-# over a waker and does no file I/O either. The file helpers are at the bottom, apart, and only the
-# command's loop calls them.
+# IT ONLY WAKES. It posts no mail and knows nothing of restores: the mail a restore needs is posted by
+# a sender of its own (core/RestoreSource.ps1), and is unread mail like any other to these rules.
+#
+# PURE WHERE IT DECIDES. Get-HordeWakeDecisions and Update-HordeWakeLedger read no clock, no file and no
+# port: everything is a parameter and the time is always -Now, so a test replays a real timeline second
+# by second. Invoke-HordeWakePass is one pass over a waker and does no file I/O either. The ledger's
+# file helpers are at the bottom, apart, and only the command's loop calls them.
+#
+# THE FIRST CORE FILE TO LOAD A PORT THAT LIVES BESIDE ITS ADAPTERS (wakers/Port.ps1). The other ports
+# core calls are core files themselves (core/HostPort.ps1, core/FirewallPort.ps1); the families that came
+# later keep theirs beside their adapters, and until now only modules outside core loaded those. The pass
+# below calls the port's three reads, and a core file loads what it calls (tools/CoreLoad.ps1), so it is
+# loaded here. It names no waker: which one is passed in, and the caller loads the adapters.
 #
 # EVERY TIME IS UTC. The port converts what an adapter gives it; a caller passes -Now as UTC.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 
+
 . (Join-Path $PSScriptRoot "Tristate.ps1")
-. (Join-Path $PSScriptRoot "Home.ps1")
-. (Join-Path $PSScriptRoot "FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
-. (Join-Path $PSScriptRoot "Identity.ps1")
-. (Join-Path $PSScriptRoot "WezfleetState.ps1")
-# The port the pass reads and rings through. It names no waker; the caller loads those.
+. (Join-Path $PSScriptRoot "WakeFiles.ps1")
+# The port the pass reads and rings through (the header says why it is loaded from here).
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "wakers\Port.ps1")
 
 # How long a ledger entry is kept for a session nothing has said anything about: a day. A session that
 # is gone leaves the targets, so nothing would ever report its mail taken and drop its entry.
 $script:HordeWakeLedgerKeepSeconds = 86400
-# After how long with no heartbeat the watcher is called stale: 40 passes at the default tick of 3 s.
-$script:HordeWakeStaleSeconds = 120
 
 function Get-HordeWakeSettings {
     # The watcher's settings, with -Overrides laid over the defaults (a test's, or the command's). A
@@ -54,21 +58,6 @@ function Get-HordeWakeSettings {
         # At most this many nudges in one pass over the whole fleet, so a restore of everything is a
         # queue and never a burst of typing into every session at once.
         maxNudgesPerPass = 1
-        # A restore: at least this many sessions, and at least this share of all of them, started
-        # inside one window of this many seconds.
-        restoreMinSessions = 3
-        restoreShare = 0.6
-        restoreWindowSeconds = 600
-        # A restored session has "moved" once its status changed this long after it started.
-        movedSeconds = 60
-        # A subsession is told to resume once its parent has moved, or after this long.
-        goblinDelaySeconds = 180
-        # With no session moved this long after the last one started, the warchief is told.
-        stallSeconds = 300
-        # A restore older than this is history: nothing is planned for it any more.
-        restoreMaxAgeSeconds = 86400
-        resumeText = "RESUME. Every session on this machine was restored and you have not taken a turn since. Background agents and shell commands from before the restore did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and nudge the subsessions you still need."
-        stallText = "STALLED RESTORE. Every session on this machine was restored and none has taken a turn since. Each was told to resume. Check the sessions you still need."
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a wake setting") }
@@ -94,6 +83,17 @@ function Get-HordeWakeLedgerEntry {
     return $Ledger[$Id]
 }
 
+function Get-HordeWakeNothingAt {
+    # When a session's waker last answered "nothing" in the run of nothings it is in now, or $null when
+    # it is in none. Looked up, never dereferenced: an entry made before the hold existed has no such
+    # member, and under strict mode reading one that is not there is an error.
+    param($Entry)
+    if ($null -eq $Entry) { return $null }
+    $p = $Entry.PSObject.Properties["nothingAt"]
+    if ($null -eq $p -or $p.Value -isnot [datetime]) { return $null }
+    return $p.Value
+}
+
 function Get-HordeWakeHold {
     # Why one session is not nudged now, as { action; reason }: skip (nothing to wake it for), wait
     # (something to wake it for, and a condition that does not hold), or ready (every condition holds;
@@ -113,6 +113,13 @@ function Get-HordeWakeHold {
     if ("$($s.boxEmpty)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("boxEmpty is " + $s.boxEmpty) } }
     $age = ($Now - $s.oldestUnreadAt).TotalSeconds
     if ($age -lt $Settings.minUnreadSeconds) { return [pscustomobject]@{ action = "wait"; reason = ("its oldest unread mail is younger than " + $Settings.minUnreadSeconds + " s") } }
+    # THE HOLD AFTER "nothing" (Update-HordeWakeLedger says why): out of the ready set for the first
+    # step of the back-off, and never longer - it does not grow, because nothing failed.
+    $nothingAt = Get-HordeWakeNothingAt $Entry
+    if ($null -ne $nothingAt) {
+        $rest = Get-HordeWakeBackoffSeconds -Attempts 1 -Settings $Settings
+        if (($Now - $nothingAt).TotalSeconds -lt $rest) { return [pscustomobject]@{ action = "wait"; reason = ("held " + $rest + " s: its waker found no unread mail to nudge for, while its state still shows some") } }
+    }
     if ($null -ne $Entry) {
         $wait = Get-HordeWakeBackoffSeconds -Attempts $Entry.attempts -Settings $Settings
         $since = ($Now - $Entry.lastAttemptAt).TotalSeconds
@@ -126,7 +133,8 @@ function Get-HordeWakeDecisions {
     #   -Targets  the port's list (Get-HordeWakeTargets' value)
     #   -States   session id -> the port's state ANSWER for it (known or unknown; missing is unknown)
     #   -Ledger   session id -> { attempts; lastAttemptAt; lastOutcome }
-    # WHO GOES FIRST when more are ready than one pass may nudge: the session asked the fewest times,
+    # WHO GOES FIRST when more are ready than one pass may nudge: a session whose waker last answered
+    # "nothing" goes behind every other (Update-HordeWakeLedger); then the session asked the fewest times,
     # then by role (warchief, orc, goblin, unknown), then the oldest unread mail. Fewest attempts first
     # is what makes a restore of everything a fair queue: without it the warchief's second knock, due
     # 5 s after its first, would go ahead of nine sessions nobody had knocked on yet. The rest get wait
@@ -141,16 +149,17 @@ function Get-HordeWakeDecisions {
         if ($null -ne $States -and $States.ContainsKey($id)) { $answer = $States[$id] }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id
         $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings
-        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
+        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
         if ($hold.action -ceq "ready") {
             if ($null -ne $entry) { $row.attempts = [int]$entry.attempts }
+            if ($null -ne (Get-HordeWakeNothingAt $entry)) { $row.nothing = 1 }
             $at = [System.Array]::IndexOf($roles, "$($t.role)")
             if ($at -ge 0) { $row.rank = $at }
             $row.oldest = $answer.value.oldestUnreadAt
         }
         [void]$rows.Add($row)
     }
-    $ready = @($rows | Where-Object { $_.action -ceq "ready" } | Sort-Object -Property attempts, rank, oldest, id)
+    $ready = @($rows | Where-Object { $_.action -ceq "ready" } | Sort-Object -Property nothing, attempts, rank, oldest, id)
     $allowed = [int]$Settings.maxNudgesPerPass
     for ($i = 0; $i -lt $ready.Count; $i++) {
         if ($i -lt $allowed) { $ready[$i].action = "nudge"; $ready[$i].reason = "unread mail, idle, empty box" }
@@ -171,6 +180,12 @@ function Update-HordeWakeLedger {
     # unread mail leaves the ledger, so its next message is knocked for at once.
     # "nothing" IS NOT AN ATTEMPT: the waker found the mail already taken and rang nobody, so nothing was
     # tried and nothing failed. It does not advance the back-off and is never counted against the session.
+    # BUT IT MUST NOT HOLD THE SLOT. The first version left the ledger untouched for it, and the review of
+    # PR #207 followed that through: a session whose waker answers nothing while its state still shows
+    # unread mail keeps 0 attempts, sorts first, takes the one nudge a pass allows on every pass, starves
+    # the fleet and journals every 3 s. So a nothing is recorded as a HOLD, nothingAt, beside the attempts
+    # it leaves alone: the session is out of the ready set for the first step of the back-off, and goes
+    # behind every other ready session after that. A real attempt, or the mail being taken, ends the hold.
     param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now)
     $next = @{}
     if ($null -ne $Ledger) { foreach ($k in @($Ledger.Keys)) { $next["$k"] = $Ledger[$k] } }
@@ -178,7 +193,12 @@ function Update-HordeWakeLedger {
         if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }
         $id = "$($d.id)"
         if ($null -eq $Outcomes -or -not $Outcomes.ContainsKey($id)) { continue }
-        if ("$($Outcomes[$id])" -ceq "nothing") { continue }
+        if ("$($Outcomes[$id])" -ceq "nothing") {
+            $kept = [pscustomobject]@{ attempts = 0; lastAttemptAt = $Now; lastOutcome = "nothing"; nothingAt = $Now }
+            if ($next.ContainsKey($id)) { $kept = [pscustomobject]@{ attempts = [int]$next[$id].attempts; lastAttemptAt = $next[$id].lastAttemptAt; lastOutcome = "$($next[$id].lastOutcome)"; nothingAt = $Now } }
+            $next[$id] = $kept
+            continue
+        }
         $before = 0
         if ($next.ContainsKey($id)) { $before = [int]$next[$id].attempts }
         $next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }
@@ -192,120 +212,18 @@ function Update-HordeWakeLedger {
     return $next
 }
 
-function ConvertTo-HordeWakeUuid {
-    # A lowercase uuid made from text: its SHA-256, the first 32 hex digits, grouped. The recipe of the
-    # decisions doorbell's notice id (decisions/Notify.ps1), copied so core does not load decisions.
-    param([Parameter(Mandatory = $true)][string]$Text)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { $hex = -join ($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text)) | ForEach-Object { $_.ToString("x2") }) } finally { $sha.Dispose() }
-    return ($hex.Substring(0, 8) + "-" + $hex.Substring(8, 4) + "-" + $hex.Substring(12, 4) + "-" + $hex.Substring(16, 4) + "-" + $hex.Substring(20, 12))
-}
-
-function Get-HordeRestoreFinding {
-    # Was every session restored? -Sessions is the fleet as it runs now, each { id; role; parent;
-    # startedAt; lastChangeAt }. known { restoreId; windowStart; windowEnd; members; notMoved } when at
-    # least restoreMinSessions of them, and at least restoreShare of all of them, started inside one
-    # window of restoreWindowSeconds; absent, saying why, when not. Sessions do not start together by
-    # chance: a quiet fleet's start times are hours apart, and one restarted session is one session.
-    #
-    # THE WINDOW is the one holding the most sessions, the earliest on a tie. windowStart is its first
-    # start and windowEnd its last. restoreId is made from windowStart cut to the minute, so every pass
-    # over the same restore - and a watcher restarted in the middle of it - names it the same way.
-    # KNOWN LIMIT: a session that starts later, inside the window's length, joins the same restore; two
-    # or more that start after it can make a later window the fullest and so give the restore a new id.
-    # The resume mail is then posted once more to a session that still has not moved.
-    #
-    # A member has MOVED when its last status change is at least movedSeconds after its start: the
-    # first status a restored session writes is its start, and one that never took a turn never
-    # writes another.
-    param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
-    $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.lastChangeAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
-    if ($all.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("" + $all.Count + " sessions are running, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
-    $best = @()
-    for ($i = 0; $i -lt $all.Count; $i++) {
-        $from = $all[$i].startedAt
-        $until = $from.AddSeconds($Settings.restoreWindowSeconds)
-        $inside = @($all | Where-Object { $_.startedAt -ge $from -and $_.startedAt -le $until })
-        if ($inside.Count -gt $best.Count) { $best = $inside }
-    }
-    if ($best.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("at most " + $best.Count + " sessions started within " + $Settings.restoreWindowSeconds + " s of each other, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
-    if (($best.Count / $all.Count) -lt $Settings.restoreShare) { return (New-HordeAbsent -Note ("" + $best.Count + " of " + $all.Count + " sessions started within " + $Settings.restoreWindowSeconds + " s of each other, under the share of " + $Settings.restoreShare + " a restore takes")) }
-    $windowStart = $best[0].startedAt
-    $windowEnd = $best[$best.Count - 1].startedAt
-    if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) { return (New-HordeAbsent -Note ("the sessions were restored more than " + $Settings.restoreMaxAgeSeconds + " s ago, which is history")) }
-    $members = @($best | ForEach-Object {
-            $moved = (($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)
-            [pscustomobject]@{ id = "$($_.id)"; role = "$($_.role)"; parent = "$($_.parent)"; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; moved = $moved }
-        })
-    $minute = New-Object System.DateTime($windowStart.Year, $windowStart.Month, $windowStart.Day, $windowStart.Hour, $windowStart.Minute, 0, [System.DateTimeKind]::Utc)
-    $restoreId = ConvertTo-HordeWakeUuid -Text ("horde-wake-restore`n" + $minute.ToString("yyyy-MM-ddTHH:mm", [System.Globalization.CultureInfo]::InvariantCulture))
-    $notMoved = @($members | Where-Object { -not $_.moved } | ForEach-Object { $_.id })
-    return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved }) -ObservedAt $Now)
-}
-
-function Get-HordeResumePlan {
-    # The mails this pass should post for a restore, each { kind (resume or stall); to; messageId; body }.
-    # -Finding is Get-HordeRestoreFinding's answer; anything but known plans nothing.
-    #   - EVERY ORC THAT HAS NOT MOVED, AT ONCE: an orc owns work and is the one that knows what of it
-    #     was in flight.
-    #   - A SUBSESSION THAT HAS NOT MOVED, ONLY ONCE ITS PARENT HAS, or after goblinDelaySeconds from the
-    #     window's end: its orc decides which of its subsessions it still needs, and one resumed first
-    #     would restart work its orc is about to cancel. A session whose role nobody recorded is held
-    #     the same way; the warchief is not mailed to resume - it is the one told when nothing moves.
-    #   - THE STALL NOTICE, for the warchief, when stallSeconds have passed since the window's end and
-    #     NO member has moved. to is "" when no member is the warchief.
-    # THE IDS ARE MADE FROM THE RESTORE AND THE SESSION, so a pass that plans the same mail again -
-    # every pass does, until the session moves - names the same message, and a post of it is idempotent.
-    param($Finding, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
-    if ($null -eq $Finding -or "$($Finding.state)" -cne "known") { return @() }
-    $f = $Finding.value
-    $sinceEnd = ($Now - $f.windowEnd).TotalSeconds
-    $movedIds = @{}
-    foreach ($m in @($f.members)) { if ($m.moved) { $movedIds[$m.id] = $true } }
-    $plan = New-Object System.Collections.ArrayList
-    foreach ($m in @($f.members)) {
-        if ($m.moved -or $m.role -ceq "warchief") { continue }
-        $due = ($m.role -ceq "orc")
-        if (-not $due) { $due = ($m.parent -cne "" -and $movedIds.ContainsKey($m.parent)) }
-        if (-not $due) { $due = ($sinceEnd -ge $Settings.goblinDelaySeconds) }
-        if (-not $due) { continue }
-        [void]$plan.Add([pscustomobject]@{ kind = "resume"; to = $m.id; messageId = (ConvertTo-HordeWakeUuid -Text ("horde-wake-resume`n" + $f.restoreId + "`n" + $m.id.ToLowerInvariant())); body = "$($Settings.resumeText)" })
-    }
-    if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {
-        $chief = @($f.members | Where-Object { $_.role -ceq "warchief" }) | Select-Object -First 1
-        $to = ""
-        if ($null -ne $chief) { $to = $chief.id }
-        [void]$plan.Add([pscustomobject]@{ kind = "stall"; to = $to; messageId = (ConvertTo-HordeWakeUuid -Text ("horde-wake-stall`n" + $f.restoreId)); body = "$($Settings.stallText)" })
-    }
-    return $plan.ToArray()
-}
-
-function New-HordeWakeEntry {
-    # One journal line: { at; kind; id; outcome; reason }, and messageId for a mail.
-    param([datetime]$At, [string]$Kind, [string]$Id = "", [string]$Outcome = "", [string]$Reason = "", [string]$MessageId = "")
-    $e = [ordered]@{ at = $At; kind = $Kind; id = $Id; outcome = $Outcome; reason = $Reason }
-    if ($MessageId -ne "") { $e["messageId"] = $MessageId }
-    return [pscustomobject]$e
-}
-
 function Invoke-HordeWakePass {
     # ONE PASS. Reads the targets and each one's state through the port, decides, and acts; returns
-    # { ledger; entries; posted; decisions }. It reads no clock and no file: the loop passes -Now and
-    # keeps what comes back.
-    #   -Waker            a registered waker, or $null when none is installed: then nobody is nudged,
-    #                     and the restore half below still runs
+    # { ledger; entries; decisions }. It reads no clock and no file: the loop passes -Now and keeps what
+    # comes back.
+    #   -Waker            a registered waker, or $null when none is installed: then nobody is nudged
     #   -Ledger           session id -> { attempts; lastAttemptAt; lastOutcome }, from the last pass
-    #   -Shadow           JOURNAL WHAT IT WOULD DO, AND DO NONE OF IT: no nudge is sent and no mail is
-    #                     posted. A would-nudge still counts as an attempt in the ledger, so the journal
-    #                     shows the rhythm a live run would have had instead of a line every pass.
-    #   -RestoreSessions  the running sessions (Get-HordeRestoreSessions' value), or $null to leave the
-    #                     restore half out of this pass
-    #   -Post             param($Mail) -> a tristate answer, known when the mail was taken; $Mail is
-    #                     { kind; to; messageId; body }. Never called in shadow.
-    #   -Posted           messageId -> $true for the mails already posted, from the last pass
-    # THE ENTRIES are the journal lines, kinds: nudge, would-nudge, post, would-post, stall, would-stall
-    # and skip-unknown (a listing or a state the port could not give; id is "" for the listing).
-    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow, $RestoreSessions = $null, [scriptblock]$Post = $null, $Posted = @{})
+    #   -Shadow           JOURNAL WHAT IT WOULD DO, AND DO NONE OF IT: no nudge is sent. A would-nudge
+    #                     still counts as an attempt in the ledger, so the journal shows the rhythm a
+    #                     live run would have had instead of a line every pass.
+    # THE ENTRIES are the journal lines, kinds: nudge, would-nudge and skip-unknown (a listing or a state
+    # the port could not give; id is "" for the listing).
+    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow)
     $entries = New-Object System.Collections.ArrayList
     $nextLedger = $Ledger
     $decisions = @()
@@ -327,242 +245,60 @@ function Invoke-HordeWakePass {
                 # SHADOW: the nudge is journaled and counted, and nothing is asked of the waker.
                 if ($Shadow) { $outcomes[$d.id] = "would-nudge"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-nudge" -Id $d.id -Outcome "would-nudge" -Reason $d.reason)); continue }
                 $rang = Send-HordeWakeNudge -Waker $Waker -Id $d.id
-                if ($rang.state -ceq "known") { $outcomes[$d.id] = $rang.value.outcome; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason)) }
+                if ($rang.state -ceq "known") {
+                    $outcomes[$d.id] = $rang.value.outcome
+                    # A RUN OF NOTHINGS IS JOURNALED ONCE, when it starts: the ledger's hold says one is under way.
+                    if ($rang.value.outcome -ceq "nothing" -and $null -ne (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $d.id))) { continue }
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason))
+                }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }
             $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now
         }
     }
-    $nextPosted = @{}
-    if ($null -ne $Posted) { foreach ($k in @($Posted.Keys)) { $nextPosted["$k"] = $true } }
-    if ($null -ne $RestoreSessions) {
-        $finding = Get-HordeRestoreFinding -Sessions $RestoreSessions -Now $Now -Settings $Settings
-        foreach ($mail in @(Get-HordeResumePlan -Finding $finding -Now $Now -Settings $Settings)) {
-            if ($nextPosted.ContainsKey($mail.messageId)) { continue }
-            $kind = "post"
-            if ($mail.kind -ceq "stall") { $kind = "stall" }
-            # SHADOW: the mail is journaled once and marked, and nothing is handed to the poster.
-            if ($Shadow) { $nextPosted[$mail.messageId] = $true; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind ("would-" + $kind) -Id $mail.to -Outcome ("would-" + $kind) -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId)); continue }
-            if ($mail.to -ceq "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Outcome "unposted" -Reason "no restored session is the warchief, so nobody can be told" -MessageId $mail.messageId)); continue }
-            if ($null -eq $Post) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "unposted" -Reason "the pass was given nothing to post through" -MessageId $mail.messageId)); continue }
-            $took = $null
-            try { $took = & $Post $mail } catch { $took = New-HordeUnknown -Reason "the post failed" -ErrorRecord $_ }
-            if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
-                $nextPosted[$mail.messageId] = $true
-                [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "posted" -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId))
-            } else {
-                $why = "the post answered with something that is not an answer"
-                if (Test-HordeAnswer $took) { $why = "$($took.reason)" }
-                [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "unknown" -Reason $why -MessageId $mail.messageId))
-            }
-        }
-    }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); posted = $nextPosted; decisions = $decisions }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions }
 }
 
-function Select-HordeWakeNewEntries {
-    # The entries worth a journal line, given what the last pass could not read. A skip-unknown is
-    # written when it starts, or when its reason changes, and not on every pass while it lasts: at a
-    # tick of 3 s one unreadable session would otherwise write 28,800 lines a day. Returns
-    # { entries; unknown }, unknown being this pass's table (id -> reason) to hand to the next call.
-    param($Entries, $Unknown = @{})
-    $keep = New-Object System.Collections.ArrayList
-    $now = @{}
-    foreach ($e in @($Entries)) {
-        if ($null -eq $e) { continue }
-        if ("$($e.kind)" -cne "skip-unknown") { [void]$keep.Add($e); continue }
-        $now["$($e.id)"] = "$($e.reason)"
-        if ($null -ne $Unknown -and $Unknown.ContainsKey("$($e.id)") -and "$($Unknown["$($e.id)"])" -ceq "$($e.reason)") { continue }
-        [void]$keep.Add($e)
-    }
-    return [pscustomobject]@{ entries = $keep.ToArray(); unknown = $now }
-}
-
-function Get-HordeRestoreSessions {
-    # The running sessions, for Get-HordeRestoreFinding: known, a list of { id; role; parent; startedAt;
-    # lastChangeAt } (and leftOut, below), or unknown with the reason. startedAt is the session's own (core/Identity.ps1);
-    # lastChangeAt is when its live status was last written; role and parent are its registry record's
-    # (role "unknown" and parent "" where the record says neither - never guessed, core/Roles.ps1).
-    #
-    # Both times are UTC as core/Identity.ps1 gives them (it reads epoch milliseconds), so neither is converted.
-    # ONLY A SESSION SEEN ALIVE COUNTS: one whose start and live status are both known. A control file
-    # left by a process that is gone has an unknown status and is not a running session.
-    # AN AGENT WHOSE LISTING IS NOT WHOLE IS LEFT OUT, AND SAID SO; ONLY WHEN NONE IS WHOLE IS THE ANSWER
-    # UNKNOWN. The first version made any one listing that was not whole the whole answer's unknown.
-    # Measured 2026-10-13 on a machine that runs one agent program: it has no control directory for the
-    # other, that listing is never whole, and the restore source never worked. So sessions are taken from
-    # the agents whose listing is whole; a session under an agent whose listing is not is left out, since
-    # part of a listing is not a count; and the known answer carries leftOut, a list of { agent; reason },
-    # beside its value - which stays the plain list Get-HordeRestoreFinding takes - for the caller to
-    # journal. The registry must be whole, as before: every session's role and parent come from it.
-    # BOTH SOURCES ARE PARAMETERS, so a test hands in its own and never reads this machine.
-    param($Identity = $null, $Registry = $null)
-    try {
-        if ($null -eq $Identity) { $Identity = Get-HordeIdentity }
-        if ($null -eq $Registry) { $Registry = Read-HordeRegistry -Root (Get-HordeWezfleetRoot) }
-    } catch { return (New-HordeUnknown -Reason "the sessions could not be read" -ErrorRecord $_) }
-    $whole = @{}
-    $leftOut = New-Object System.Collections.ArrayList
-    foreach ($agent in @($Identity.complete.Keys)) {
-        $listed = $Identity.complete[$agent]
-        if ("$($listed.state)" -ceq "known") { $whole["$agent"] = $true }
-        else { [void]$leftOut.Add([pscustomobject]@{ agent = "$agent"; reason = "$($listed.reason)" }) }
-    }
-    if ($whole.Count -eq 0) { return (New-HordeUnknown -Reason ("no agent's listing of sessions is whole: " + (@($leftOut | ForEach-Object { $_.agent + ": " + $_.reason }) -join "; "))) }
-    if ("$($Registry.complete.state)" -cne "known") { return (New-HordeUnknown -Reason ("the session registry is not whole: " + $Registry.complete.reason)) }
-    $out = New-Object System.Collections.ArrayList
-    foreach ($id in @($Identity.records.Keys)) {
-        $fields = $Identity.records[$id].fields
-        $started = $fields["startedAt"]
-        $status = $fields["liveStatus"]
-        $of = $fields["agent"]
-        if ("$($of.state)" -cne "known" -or -not $whole.ContainsKey("$($of.value)")) { continue }
-        if ("$($started.state)" -cne "known" -or $started.value -isnot [datetime]) { continue }
-        if ("$($status.state)" -cne "known" -or $status.observedAt -isnot [datetime]) { continue }
-        $role = "unknown"
-        $parent = ""
-        if ($Registry.records.ContainsKey($id)) {
-            $record = $Registry.records[$id].record
-            $read = Read-HordeRecordRole -Record $record
-            if ("$($read.role.state)" -ceq "known") { $role = "$($read.role.value)" }
-            $held = Get-HordeStoredField -Record $record -Name "parent"
-            if ("$($held.state)" -ceq "known") { $parent = "$($held.value)" }
-        }
-        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt })
-    }
-    $answer = New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow)
-    Add-Member -InputObject $answer -MemberType NoteProperty -Name "leftOut" -Value $leftOut.ToArray()
-    return $answer
-}
-
-# ---- the files: <home>\wake\journal.jsonl, heartbeat.json and ledger.json ----
+# ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----
 # Kept apart from everything above, which reads and writes none. Only the command's loop calls these.
 
-function Get-HordeWakeFolder {
-    param([string]$HordeHome = (Get-HordeHome))
-    return (Join-Path $HordeHome "wake")
-}
-
-function Get-HordeWakeStaleSeconds {
-    return $script:HordeWakeStaleSeconds
-}
-
-function ConvertTo-HordeWakeTimeText {
-    # A UTC time as text that reads back as the same instant.
-    param([datetime]$At)
-    return $At.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
-}
-
-function ConvertFrom-HordeWakeTimeText {
-    # The time ConvertTo-HordeWakeTimeText wrote, as UTC, or $null when it is not one. Text with no
-    # zone is not a time here: it cannot be placed (core/Tristate.ps1).
-    param($Text)
-    if ($Text -is [datetime]) { return $Text.ToUniversalTime() }
-    $parsed = [datetime]::MinValue
-    if ($Text -isnot [string] -or -not [datetime]::TryParse($Text, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $null }
-    if ($parsed.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }
-    return $parsed.ToUniversalTime()
-}
-
-function Write-HordeWakeFile {
-    # Replace one file under the wake folder whole: written beside it, then renamed over it in one step
-    # (core/FileAtomic.ps1), so a reader sees the old file or the new one and never half of either.
-    param([string]$Path, [string]$Text)
-    $dir = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $temp = $Path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
-    [System.IO.File]::WriteAllText($temp, $Text, (New-Object System.Text.UTF8Encoding($false)))
-    try { Move-HordeFileAtomic -From $temp -To $Path }
-    catch { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue; throw }
-}
-
-function Write-HordeWakeJournal {
-    # Append each entry to journal.jsonl as one line of JSON. Returns how many lines it wrote.
-    param($Entries, [string]$HordeHome = (Get-HordeHome))
-    $lines = New-Object System.Collections.ArrayList
-    foreach ($e in @($Entries)) {
-        if ($null -eq $e) { continue }
-        $row = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $e.at); kind = "$($e.kind)"; id = "$($e.id)"; outcome = "$($e.outcome)"; reason = "$($e.reason)" }
-        if ($null -ne $e.PSObject.Properties["messageId"]) { $row["messageId"] = "$($e.messageId)" }
-        [void]$lines.Add((ConvertTo-Json -InputObject $row -Compress))
-    }
-    if ($lines.Count -eq 0) { return 0 }
-    $dir = Get-HordeWakeFolder -HordeHome $HordeHome
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    [System.IO.File]::AppendAllText((Join-Path $dir "journal.jsonl"), (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
-    return $lines.Count
-}
-
-function Read-HordeWakeJournalTail {
-    # The journal's last -Count lines, as they were written; none when there is no journal.
-    param([int]$Count = 10, [string]$HordeHome = (Get-HordeHome))
-    $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "journal.jsonl"
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return @() }
-    $lines = @((Read-HordeSharedText -Path $path) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-    if ($lines.Count -le $Count) { return $lines }
-    return @($lines[($lines.Count - $Count)..($lines.Count - 1)])
-}
-
-function Write-HordeWakeHeartbeat {
-    # heartbeat.json, replaced whole every pass: { at; pid; pass; shadow }. It is how anything else
-    # tells a watcher that is running from one that is not.
-    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    $beat = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At); pid = $ProcessId; pass = $Pass; shadow = [bool]$Shadow }
-    Write-HordeWakeFile -Path (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "heartbeat.json") -Text (ConvertTo-Json -InputObject $beat -Compress)
-}
-
-function Read-HordeWakeHeartbeat {
-    # The last heartbeat: known { at; pid; pass; shadow }, absent when the watcher never ran here, or
-    # unknown when the file cannot be read as one.
-    param([string]$HordeHome = (Get-HordeHome))
-    $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "heartbeat.json"
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "the wake watcher has never run in this home: there is no heartbeat") }
-    try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
-    catch { return (New-HordeUnknown -Reason "the heartbeat could not be read" -ErrorRecord $_) }
-    $at = $null
-    if ($null -ne $j -and $null -ne $j.PSObject.Properties["at"]) { $at = ConvertFrom-HordeWakeTimeText $j.at }
-    if ($null -eq $at) { return (New-HordeUnknown -Reason "the heartbeat holds no time") }
-    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false }
-    foreach ($n in @("pid", "pass", "shadow")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
-    return (New-HordeKnown -Value ([pscustomobject]$beat) -ObservedAt $at)
-}
-
 function Save-HordeWakeLedger {
-    # ledger.json, replaced whole: the back-off of every session being asked, and the mails already
-    # posted, so a watcher that is restarted neither knocks at once on a session it had been told to
-    # leave for five minutes nor posts a resume mail a second time.
-    param($Ledger, $Posted = @{}, [string]$HordeHome = (Get-HordeHome))
+    # ledger.json, replaced whole: the back-off of every session being asked, so a watcher that is
+    # restarted does not knock at once on a session it had been told to leave for five minutes.
+    # -Shadow names the shadow run's own file (core/WakeFiles.ps1, Get-HordeWakeStateFile).
+    param($Ledger, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
     $sessions = New-Object System.Collections.ArrayList
     if ($null -ne $Ledger) {
         foreach ($id in @($Ledger.Keys | Sort-Object)) {
-            [void]$sessions.Add([ordered]@{ id = "$id"; attempts = [int]$Ledger[$id].attempts; lastAttemptAt = (ConvertTo-HordeWakeTimeText $Ledger[$id].lastAttemptAt); lastOutcome = "$($Ledger[$id].lastOutcome)" })
+            $row = [ordered]@{ id = "$id"; attempts = [int]$Ledger[$id].attempts; lastAttemptAt = (ConvertTo-HordeWakeTimeText $Ledger[$id].lastAttemptAt); lastOutcome = "$($Ledger[$id].lastOutcome)" }
+            $heldAt = Get-HordeWakeNothingAt $Ledger[$id]
+            if ($null -ne $heldAt) { $row["nothingAt"] = ConvertTo-HordeWakeTimeText $heldAt }
+            [void]$sessions.Add($row)
         }
     }
-    $ids = @()
-    if ($null -ne $Posted) { $ids = @($Posted.Keys | Sort-Object | ForEach-Object { "$_" }) }
-    $doc = [ordered]@{ schemaVersion = 1; sessions = $sessions.ToArray(); posted = $ids }
-    Write-HordeWakeFile -Path (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "ledger.json") -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+    $doc = [ordered]@{ schemaVersion = 1; sessions = $sessions.ToArray() }
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
 
 function Read-HordeWakeLedger {
-    # What Save-HordeWakeLedger wrote: known { ledger; posted }, absent when there is none, or unknown
+    # What Save-HordeWakeLedger wrote: known { ledger }, absent when there is none, or unknown
     # when it cannot be read - the caller then starts from an empty ledger and says so.
-    param([string]$HordeHome = (Get-HordeHome))
-    $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "ledger.json"
+    param([switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no ledger was saved in this home") }
     try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason "the saved ledger could not be read" -ErrorRecord $_) }
-    if ($null -eq $j -or $null -eq $j.PSObject.Properties["sessions"] -or $null -eq $j.PSObject.Properties["posted"]) { return (New-HordeUnknown -Reason "the saved ledger is not a ledger") }
+    if ($null -eq $j -or $null -eq $j.PSObject.Properties["sessions"]) { return (New-HordeUnknown -Reason "the saved ledger is not a ledger") }
     $ledger = @{}
     try {
         foreach ($row in @($j.sessions)) {
             if ($null -eq $row) { continue }
             $at = ConvertFrom-HordeWakeTimeText $row.lastAttemptAt
             if ($null -eq $at -or "$($row.id)" -eq "") { return (New-HordeUnknown -Reason "the saved ledger holds an entry with no session or no time") }
-            $ledger["$($row.id)"] = [pscustomobject]@{ attempts = [int]$row.attempts; lastAttemptAt = $at; lastOutcome = "$($row.lastOutcome)" }
+            $entry = [ordered]@{ attempts = [int]$row.attempts; lastAttemptAt = $at; lastOutcome = "$($row.lastOutcome)" }
+            if ($null -ne $row.PSObject.Properties["nothingAt"]) { $heldAt = ConvertFrom-HordeWakeTimeText $row.nothingAt; if ($null -ne $heldAt) { $entry["nothingAt"] = $heldAt } }
+            $ledger["$($row.id)"] = [pscustomobject]$entry
         }
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }
-    $posted = @{}
-    foreach ($id in @($j.posted)) { if ($null -ne $id -and "$id" -ne "") { $posted["$id"] = $true } }
-    return (New-HordeKnown -Value ([pscustomobject]@{ ledger = $ledger; posted = $posted }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ ledger = $ledger }))
 }

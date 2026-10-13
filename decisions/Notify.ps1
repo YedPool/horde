@@ -79,6 +79,8 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Device.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
+# The id recipe, shared with every sender that names a message by what it is about.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\TextUuid.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "messengers\Port.ps1")
 # relay's trust store, read only: whether the passkey a record names is trusted now (header, THE FOUNDER,
 # VERIFIED). Loading it costs about 250 ms (measured 2026-10-12, PowerShell 5.1).
@@ -248,12 +250,10 @@ function Format-HordeDecisionNotifyNotice {
 
 function Get-HordeDecisionNotifyMessageId {
     # The notice's id, made from the set (header, idempotent.post): the home and the messages' record
-    # numbers, in any order, hashed and written as a lowercase uuid.
+    # numbers, in any order, hashed and written as a lowercase uuid (core/TextUuid.ps1).
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string[]]$Ids)
     $key = "horde-decisions-notify`n" + [System.IO.Path]::GetFullPath($HordeHome).TrimEnd('\').ToLowerInvariant() + "`n" + ((@($Ids | Sort-Object { [long]$_ }) | ForEach-Object { "$_" }) -join ",")
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { $hex = -join ($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($key)) | ForEach-Object { $_.ToString("x2") }) } finally { $sha.Dispose() }
-    return ($hex.Substring(0, 8) + "-" + $hex.Substring(8, 4) + "-" + $hex.Substring(12, 4) + "-" + $hex.Substring(16, 4) + "-" + $hex.Substring(20, 12))
+    return (ConvertTo-HordeTextUuid -Text $key)
 }
 
 function Get-HordeDecisionNotifyUnread {

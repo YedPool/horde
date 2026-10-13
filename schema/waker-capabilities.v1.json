@@ -11,13 +11,14 @@
     "waker": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under wakers/." },
     "capabilities": {
       "type": "object",
-      "required": ["nudge.pointer-only", "state.box", "state.turn", "reach.unseen"],
+      "required": ["nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded"],
       "additionalProperties": false,
       "properties": {
         "nudge.pointer-only": { "$ref": "#/definitions/capability", "description": "The nudge types one fixed pointer line - the same line whatever the mail says - and never any part of a message body, so no body can sit unsent in an input box or be cut at a newline." },
         "state.box": { "$ref": "#/definitions/capability", "description": "It can read whether a session's input box is empty. A waker without it may only answer boxEmpty unknown, and the watcher never nudges on unknown." },
         "state.turn": { "$ref": "#/definitions/capability", "description": "It can read whether a session is in the middle of a turn. A waker without it may only answer midTurn unknown." },
-        "reach.unseen": { "$ref": "#/definitions/capability", "description": "It can nudge a session that has not taken a turn since every session was restored, which is when no session's own side is running to be handed anything." }
+        "reach.unseen": { "$ref": "#/definitions/capability", "description": "It can nudge a session that has not taken a turn since every session was restored, which is when no session's own side is running to be handed anything." },
+        "nudge.guarded": { "$ref": "#/definitions/capability", "description": "The nudge itself looks at the session at the moment it would type, and types nothing - answering busy, with the reason - when the input box is not empty or a turn is under way. The state the watcher decided on is seconds old by then, and only the adapter is next to the session when the line is typed." }
       }
     }
   },
