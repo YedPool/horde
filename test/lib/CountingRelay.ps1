@@ -27,7 +27,7 @@
 #     wait         one slice of an open watch waited on
 #     watch-close  an open watch let go of
 #     watch-end    a blocking watch returned
-# Each entry is { n; op; request; mailbox; at } - at the moment it was made (UTC), so a suite can say how
+# Each entry is { n; op; request; mailbox; at; keepFrom } - at the moment it was made (UTC), so a suite can say how
 # long after something a put was made.
 #
 # WHAT A SUITE CAN MAKE HAPPEN DURING A WATCH. Set-HordeCountingRelayHook hands over a block that is run
@@ -50,6 +50,12 @@
 # slices can be taken away: a relay that never had it. Set-HordeCountingRelayPutsLeft -Puts <n> lets n
 # more puts through and refuses every one after them (still counted), until it is set to -1: how a
 # snapshot of several pages is left with only some of them at the relay.
+# Set-HordeCountingRelayCap -Items <n> gives every mailbox THE HOSTED RELAY'S OWN CAP RULE, not a blanket
+# refusal: a put that would leave more than n items is refused with 507 - counted after what that put's
+# own trim would delete, a put with no trim getting no such credit, a duplicate always taken, and a
+# refused put trimming nothing. 0 is no cap. Set-HordeCountingRelayFullFor -Channels names the channels
+# whose envelopes are refused with 507 while every other's are taken: a mailbox that is full for a large
+# envelope and not for a small one. A put's log entry also says what it asked to keep from (keepFrom).
 # Set-HordeCountingRelayTextChars makes it hold shorter texts, so that a channel that pages its body
 # makes several pages of a little; Reset puts back the declared limit.
 #
@@ -71,6 +77,9 @@ $script:HordeCountingRelayStreamKeyPattern = '\A([0-9a-f]{32}/[a-z][a-z0-9-]{0,3
 $script:HordeCountingRelayTrimBlock = $null
 # How many more puts are let through before every one is refused; -1 is no such limit.
 $script:HordeCountingRelayPutsLeft = -1
+# The most items a mailbox holds, 0 for no cap; and the channels refused as full whatever it holds.
+$script:HordeCountingRelayCap = 0
+$script:HordeCountingRelayFullFor = @()
 $script:HordeCountingRelayDeclaredTextChars = 0
 $script:HordeCountingRelayLog = New-Object System.Collections.ArrayList
 $script:HordeCountingRelayHook = $null
@@ -91,12 +100,24 @@ function Reset-HordeCountingRelay {
     Set-HordeCountingRelaySlices -On $true
     Set-HordeCountingRelayTrim -On $true
     $script:HordeCountingRelayPutsLeft = -1
+    $script:HordeCountingRelayCap = 0
+    $script:HordeCountingRelayFullFor = @()
     if ($script:HordeCountingRelayDeclaredTextChars -gt 0) { (Get-HordeRelay -Name "counting").limits.maxTextChars = $script:HordeCountingRelayDeclaredTextChars }
 }
 
 function Set-HordeCountingRelayPutsLeft {
     param([Parameter(Mandatory = $true)][int]$Puts)
     $script:HordeCountingRelayPutsLeft = $Puts
+}
+
+function Set-HordeCountingRelayCap {
+    param([Parameter(Mandatory = $true)][int]$Items)
+    $script:HordeCountingRelayCap = $Items
+}
+
+function Set-HordeCountingRelayFullFor {
+    param([AllowEmptyCollection()][string[]]$Channels = @())
+    $script:HordeCountingRelayFullFor = @($Channels)
 }
 
 function Set-HordeCountingRelayTextChars {
@@ -128,7 +149,7 @@ function Add-HordeCountingRelayItem {
     # The put, honest, and with -KeepFrom over 0 the sender's trim after it: known { seq; duplicate },
     # and trimmed when a trim was asked and the fault no-trim is off.
     param([string]$Mailbox, [string]$Key, [string]$Text, [long]$KeepFrom = 0)
-    Add-HordeCountingRelayEntry -Op "put" -Mailbox $Mailbox
+    Add-HordeCountingRelayEntry -Op "put" -Mailbox $Mailbox -KeepFrom $KeepFrom
     if ($script:HordeCountingRelayFaults -ccontains "refuse-put") { return (New-HordeUnknown -Reason "put refused by the counting relay, on purpose") }
     if ($script:HordeCountingRelayPutsLeft -eq 0) { return (New-HordeUnknown -Reason "put refused by the counting relay: no more puts are let through, on purpose") }
     if ($script:HordeCountingRelayPutsLeft -gt 0) { $script:HordeCountingRelayPutsLeft-- }
@@ -144,18 +165,35 @@ function Add-HordeCountingRelayItem {
     }
     if (-not $script:HordeCountingRelayStore.ContainsKey($Mailbox)) { $script:HordeCountingRelayStore[$Mailbox] = New-Object System.Collections.ArrayList; $script:HordeCountingRelayHead[$Mailbox] = [long]0 }
     $list = $script:HordeCountingRelayStore[$Mailbox]
+    $named = [regex]::Match($Key, $script:HordeCountingRelayStreamKeyPattern)
+    if ($named.Success -and $script:HordeCountingRelayFullFor -ccontains $named.Groups[1].Value.Split([char]'/')[1]) {
+        $forIt = New-HordeUnknown -Reason "the counting relay answered the put with 507: this mailbox holds its most for this channel's envelopes, on purpose"
+        $forIt | Add-Member -NotePropertyName status -NotePropertyValue 507
+        return $forIt
+    }
     $seq = [long]0
     $duplicate = $false
     foreach ($i in $list) { if ($i.key -ceq $Key) { $seq = $i.seq; $duplicate = $true } }
+    # What this put's own trim would delete: found first, deleted last, as the hosted relay does.
+    $trims = ($KeepFrom -gt 0 -and $script:HordeCountingRelayFaults -cnotcontains "no-trim")
+    $older = @()
+    if ($trims) {
+        $stream = $named.Groups[1].Value
+        $older = @($list | Where-Object { $m = [regex]::Match($_.key, $script:HordeCountingRelayStreamKeyPattern); $m.Success -and $m.Groups[1].Value -ceq $stream -and [long]$m.Groups[2].Value -lt $KeepFrom })
+    }
     if (-not $duplicate) {
+        # THE CAP, as the hosted relay keeps it: what the trim frees counts first, and a refused put trims nothing.
+        if ($script:HordeCountingRelayCap -gt 0 -and ($list.Count - $older.Count + 1) -gt $script:HordeCountingRelayCap) {
+            $capped = New-HordeUnknown -Reason ("the counting relay answered the put with 507: this mailbox holds " + $list.Count + " envelopes, its most")
+            $capped | Add-Member -NotePropertyName status -NotePropertyValue 507
+            return $capped
+        }
         $seq = [long]$script:HordeCountingRelayHead[$Mailbox] + 1
         $script:HordeCountingRelayHead[$Mailbox] = $seq
         [void]$list.Add([pscustomobject]@{ seq = $seq; key = $Key; text = $Text })
     }
     $out = [pscustomobject]@{ seq = $seq; duplicate = $duplicate }
-    if ($KeepFrom -gt 0 -and $script:HordeCountingRelayFaults -cnotcontains "no-trim") {
-        $stream = [regex]::Match($Key, $script:HordeCountingRelayStreamKeyPattern).Groups[1].Value
-        $older = @($list | Where-Object { $m = [regex]::Match($_.key, $script:HordeCountingRelayStreamKeyPattern); $m.Success -and $m.Groups[1].Value -ceq $stream -and [long]$m.Groups[2].Value -lt $KeepFrom })
+    if ($trims) {
         foreach ($o in $older) { $list.Remove($o) }
         $out | Add-Member -NotePropertyName trimmed -NotePropertyValue ([long]$older.Count)
     }
@@ -197,8 +235,8 @@ function Set-HordeCountingRelaySlices {
 }
 
 function Add-HordeCountingRelayEntry {
-    param([string]$Op, [string]$Mailbox = "")
-    [void]$script:HordeCountingRelayLog.Add([pscustomobject]@{ n = $script:HordeCountingRelayLog.Count + 1; op = $Op; request = ($script:HordeCountingRelayRequests -ccontains $Op); mailbox = $Mailbox; at = [datetime]::UtcNow })
+    param([string]$Op, [string]$Mailbox = "", [long]$KeepFrom = 0)
+    [void]$script:HordeCountingRelayLog.Add([pscustomobject]@{ n = $script:HordeCountingRelayLog.Count + 1; op = $Op; request = ($script:HordeCountingRelayRequests -ccontains $Op); mailbox = $Mailbox; at = [datetime]::UtcNow; keepFrom = $KeepFrom })
 }
 
 function Get-HordeCountingRelayAfter {
