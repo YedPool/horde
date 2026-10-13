@@ -2,8 +2,8 @@
 
 Mesh v1, set up 2026-10-13 on the founder's ruling: "Yes set up the always on PC to be an extension of
 our horde under you as thrall". Same procedure and the same doors as first-live-link-ov615.md; this file
-records what differs and what is proven so far. STATUS: enrolled and serving on both sides; the link is
-NOT yet up, and the session round trip is UNPROVEN (section 5).
+records what differs and what is proven so far. STATUS: the dialled link is up and heard, and a spawn
+is carried and answered; the spawn itself waits on a console sign-in with WezTerm open on the node.
 
 ## The machines (measured 2026-10-13)
 
@@ -39,22 +39,32 @@ Two snags worth keeping: over ssh, $env:USERDOMAIN is WORKGROUP, so a task princ
 PowerShell here-string sent by EncodedCommand lost its doubled backslashes; write it with ConvertTo-Json
 and parse it back.
 
+## Proven 2026-10-13 ~03:35Z
+
+| # | Where | What | Result |
+|---|-------|------|--------|
+| 9 | hub, ADMIN | the founder ran the listener script: Wi-Fi set Private; task "Horde hub listener" (RunLevel Highest) running `horde listen -Address 192.168.1.179 -Port 2222`; rule 'Horde listen b18a795f-...' Domain+Private, remote 192.168.1.182 | 192.168.1.179:2222 LISTENING; node's Test-NetConnection to it True |
+| 10 | node | one-link dial | first try: ssh auth worked, then "the far end closed the link; no frame" |
+| 11 | hub | serve-task.log said why: "refused a client: process 66180 runs at integrity -1, below this node's 8192; run the hub and node at the same integrity level" | the OV615 section 4 UNPROVEN item, now MEASURED: the elevated listener's attach cannot reach a non-elevated hub serve |
+| 12 | hub | FIX: task "Horde hub serve" set to RunLevel Highest (Set-ScheduledTask, accepted without a prompt), restarted | - |
+| 13 | node | one-link dial again | "served 1 link(s)", DONE=0 |
+| 14 | hub | `horde nodes` | `DESKTOP-TJQJGTM (32c5d8f3-...): heard at 2026-10-13T03:32:12Z, 0 session(s) ... [dialled, enrolled until 20271013, from 192.168.1.182]` |
+| 15 | hub | `horde session spawn -Node 32c5d8f3-... -Label W -Run 20261013-033500-alwayson -Profile claude -Repo github.com/YedPool/horde -Prompt "Reply with the machine name." -Permission bypass -TimeoutSeconds 300` | carried over the link and answered by the node: `REFUSED session.spawn request fd676b91-...: this node cannot name its own terminal: no terminal of this user is running with a socket` |
+| 16 | hub | `horde session status -RequestId fd676b91-...` | the same REFUSED line, read from the hub's record |
+
+Rule learnt: when `horde listen` runs elevated, `horde hub serve -Listen` must run elevated too. (Run ids
+must match `YYYYMMDD-HHMMSS-name`; `20261013-0335-x` is refused by the hub before anything is sent.)
+
 ## Waiting on the founder
 
-1. ADMIN, laptop, once: the one-line script RUN-AS-ADMIN-horde-hub-listener.ps1 (kept with the fleet's
-   briefs). It sets the home Wi-Fi to Private and registers an elevated logon task running
-   `horde listen -Address 192.168.1.179 -Port 2222`, which makes the one firewall rule admitting only
-   192.168.1.182.
+1. DONE 2026-10-13: the elevated listener script (row 9).
 2. The always-on PC: sign in at its console (TeamViewer) and leave a WezTerm window open; the node task
    starts at that sign-in, and the node starts each session in that window.
 
 ## Still to prove (sections 4 to 6 of first-live-link-ov615.md, unchanged)
 
-- `horde nodes` lists DESKTOP-TJQJGTM as dialled and heard.
 - `horde session spawn -Node 32c5d8f3-... -Profile claude -Repo github.com/YedPool/horde -Prompt "Reply with the machine name." -Permission bypass -TimeoutSeconds 300`,
   then `horde session status -RequestId <rid>`, then `horde session close -SessionId <sid>`.
-- The UNPROVEN item from OV615 section 4 applies unchanged: the elevated listener's attach writing to the
-  non-elevated hub serve's pipe.
 - Revoke, once proven: `horde hub revoke -Device 32c5d8f3-...`.
 
 Risk to record: both addresses are DHCP. If either changes, the dial string, the listen address and the
