@@ -318,8 +318,8 @@ Write-Host "--- the deny list: a name that holds a word of it, from both sides, 
 $plainNote = New-Dummy (Join-Path $docs "plain-note.md")
 Check (Test-Allowed @("share", $plainNote, "-Title", "A plain note")) "CONTROL: as that user, an ordinary file is shared"
 # Two names here, one line each way: every word, at every place in a name, is test/test-files-deny.ps1's.
-foreach ($named in @("api-key.txt", "prod.env.txt")) {
-    $namedFile = New-Dummy (Join-Path $docs $named)
+foreach ($named in @("api-key.txt", "auth.json")) {
+    $namedFile = New-Dummy (Join-Path $docs $named) $(if ($named -like "*.json") { '{"dummy":1}' } else { "dummy words, and no secret" })
     Check (Test-Denied @("share", $namedFile, "-Title", "Named like a secret") ("its name, '" + $named + "', holds '*share it again with -Force")) ($named + " is refused, naming the file and the word, and the line says -Force shares it")
     Check (Test-Allowed @("share", $namedFile, "-Title", "Named like a secret, and none", "-Force")) "with -Force it is shared"
 }
@@ -339,19 +339,37 @@ Check (Test-Denied @("share", $inSecrets4, "-Title", "A client file", "-Force") 
 Check (Test-Denied @("share", (New-Dummy (Join-Path $script:work "a-copy\.horde-secrets\client.md")), "-Title", "A copy", "-Force") "is under a .horde-secrets folder") "a folder of that name anywhere on the way to the file is refused, -Force or not"
 $inSsh4 = New-Dummy (Join-Path $profile4 ".ssh\notes.txt")
 Check (Test-Denied @("share", $inSsh4, "-Title", "From .ssh") "is under the folder the user's SSH keys are kept in") "a file under .ssh in the profile is refused as that"
-Check (Test-Allowed @("share", $inSsh4, "-Title", "From .ssh, and no secret", "-Force")) "with -Force it is shared"
+Check (Test-Denied @("share", $inSsh4, "-Title", "From .ssh, and no secret", "-Force") ("is under the folder the user's SSH keys are kept in*" + $neverSaid)) "with -Force it is refused all the same, and the line says -Force does not change that"
 Check ($harnessFolders.Count -ge 1) ("CONTROL: the adapters declare " + $harnessFolders.Count + " folders in the profile, and " + $harnessVariables.Count + " variables that move a store")
 $nth = 0
 foreach ($harnessFolder in $harnessFolders) {
     $nth++
     $inHarness = New-Dummy (Join-Path (Join-Path $profile4 $harnessFolder) "projects\notes.md")
     Check (Test-Denied @("share", $inHarness, "-Title", "From a harness") "is under a folder an agent harness keeps its own files in") ("a file under harness folder " + $nth + " of the profile is refused as a harness's own folder")
-    if ($nth -eq 1) { Check (Test-Allowed @("share", $inHarness, "-Title", "From a harness, and no secret", "-Force")) "with -Force it is shared" }
+    if ($nth -eq 1) {
+        Check (Test-Allowed @("share", $inHarness, "-Title", "From a harness, and no secret", "-Force")) "with -Force it is shared: the place is lifted"
+        $signInThere = New-Dummy (Join-Path (Join-Path $profile4 $harnessFolder) "auth.json") '{"dummy":1}'
+        Check (Test-Denied @("share", $signInThere, "-Title", "Named like a sign-in", "-Force") "its name, 'auth.json', holds 'auth', as a file of secrets is named, and it is under a folder an agent harness keeps its own files in*-Force shares other files from such a folder, and never one that is named so") "but a file NAMED as a secret in that folder is refused even with -Force, and the line says it is the name, in that place"
+    }
 }
 if ($harnessVariables.Count -gt 0) {
     $inMoved = New-Dummy (Join-Path $movedStore "notes.md")
     Check (Test-Denied @("share", $inMoved, "-Title", "From a moved store") "is under a folder an agent harness keeps its own files in") "a file under the folder a harness's variable moves its store to is refused the same"
 } else { Write-Host "  [SKIP] NO ADAPTER DECLARES A VARIABLE THAT MOVES ITS STORE, so a moved store was not tested through the command." -ForegroundColor Yellow }
+
+Write-Host ""
+Write-Host "--- what a text file holds: a private key never, a token unless -Force ---" -ForegroundColor Cyan
+# Assembled from pieces at run time, as test/test-secrets.ps1 does; neither was ever a credential.
+# Every kind and every way of writing one is test/test-files-deny.ps1's.
+$keyLine4 = "-----BEGIN RSA PRIV" + "ATE KEY-----"
+$holdsKey = New-Dummy (Join-Path $docs "a-report.md") ("# A report`n`n" + $keyLine4 + "`nMIIEow" + "IBAAKCAQEAx9Qm`n")
+Check (Test-Denied @("share", $holdsKey, "-Title", "A report", "-Force") "what it holds looks like a private key*A file that holds one is never shared, and -Force does not change that") "a Markdown file holding a private key's first line is refused even with -Force, and the line says so"
+$token4 = "gh" + "p_" + ("Ab1" * 12)
+$holdsToken = New-Dummy (Join-Path $docs "a-note.md") ("The value is " + $token4 + " and more words.")
+$before = Get-Store4Names
+$r = Invoke-Deny -Arguments @("share", $holdsToken, "-Title", "A note")
+Check ($r.code -eq 1 -and $r.out -like "*not shared: what it holds looks like an access token, by its shape*share it again with -Force*" -and -not $r.out.Contains("Ab1Ab1") -and (Get-Store4Names) -ceq $before) "a Markdown file holding a token of a known shape is refused, the line names the kind and repeats nothing of what was found"
+Check (Test-Allowed @("share", $holdsToken, "-Title", "A note, and no secret", "-Force")) "with -Force it is shared"
 
 Write-Host ""
 Write-Host "--- the deny list judges where the file really is: a junction, and a subst drive ---" -ForegroundColor Cyan
