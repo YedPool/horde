@@ -128,6 +128,105 @@ function Read-ClaudeCodeMode {
     return (Read-ClaudeCodeModeText -Text $text -SessionId $SessionId)
 }
 
+# THE TURN RECEIPT (issue #214). A line the host typed is taken only once the transcript holds a NEW
+# user turn whose text is that line: a "type":"user" entry for this session id, not one of the
+# harness's own (isMeta), whose message text - a string, or its text blocks joined - equals the line
+# after trimming. Equal, not "contains": a tool result or a later turn that quotes the line is not it.
+# New means after the mark taken before typing: the transcript's size then, or 0 when it did not
+# exist yet (a session's file can appear only with its first user line: cli/NodeAct.ps1, the no-op
+# line). A file shorter than its mark is read from its start: it is not the one the mark measured.
+function Get-ClaudeCodeTurnMark {
+    # Before a line is typed: known { size } (0 when there is no transcript yet), unknown when which
+    # transcript is this session's cannot be told.
+    param([Parameter(Mandatory = $true)][string]$ConfigDir, [Parameter(Mandatory = $true)][string]$SessionId)
+    $t = Find-ClaudeCodeTranscript -ConfigDir $ConfigDir -SessionId $SessionId
+    if ($t.state -eq "absent") { return (New-HordeKnown -Value ([pscustomobject]@{ size = [long]0 })) }
+    if ($t.state -ne "known") { return $t }
+    try { return (New-HordeKnown -Value ([pscustomobject]@{ size = [long](Get-Item -LiteralPath $t.value -Force).Length })) }
+    catch { return (New-HordeUnknown -Reason ("the transcript's size could not be read: " + $_.Exception.Message)) }
+}
+
+function Read-ClaudeCodeTextFrom {
+    # The text of -Path from byte -Offset on, opened with sharing (core/ReadShared.ps1). An offset past
+    # the end reads the whole file (see above).
+    param([Parameter(Mandatory = $true)][string]$Path, [long]$Offset = 0)
+    $stream = Open-HordeSharedStream -Path $Path
+    try {
+        if ($Offset -gt $stream.Length) { $Offset = 0 }
+        [void]$stream.Seek($Offset, [System.IO.SeekOrigin]::Begin)
+        $reader = New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false)))
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
+function Test-ClaudeCodeTurnText {
+    # Does transcript text hold a user turn of -SessionId whose text is -Line? A row that is not whole
+    # JSON yet (the harness may be mid-write) is passed over, and read again on the next look.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [Parameter(Mandatory = $true)][string]$SessionId, [Parameter(Mandatory = $true)][string]$Line)
+    $want = $Line.Trim()
+    foreach ($row in ($Text -split "`n")) {
+        if ($row -cnotmatch '"type"\s*:\s*"user"') { continue }
+        $doc = $null
+        try { $doc = $row | ConvertFrom-Json } catch { continue }
+        if ($null -eq $doc -or "" + $doc.type -cne "user" -or "" + $doc.sessionId -cne $SessionId) { continue }
+        if ($null -ne $doc.PSObject.Properties["isMeta"] -and $doc.isMeta -eq $true) { continue }
+        if ($null -eq $doc.PSObject.Properties["message"] -or $null -eq $doc.message) { continue }
+        $c = $doc.message.content
+        $said = ""
+        if ($c -is [string]) { $said = $c }
+        else { $said = (@(@($c) | Where-Object { $null -ne $_ -and "" + $_.type -ceq "text" -and $_.text -is [string] } | ForEach-Object { $_.text }) -join "") }
+        if ($said.Trim() -ceq $want) { return $true }
+    }
+    return $false
+}
+
+function Test-ClaudeCodeTurnSeen {
+    # After a line is typed: known $true once a new user turn holds it, known $false while none does.
+    param([Parameter(Mandatory = $true)][string]$ConfigDir, [Parameter(Mandatory = $true)][string]$SessionId, $Mark, [Parameter(Mandatory = $true)][string]$Line)
+    if ($null -eq $Mark -or $null -eq $Mark.PSObject.Properties["size"]) { return (New-HordeUnknown -Reason "no transcript mark was taken before the line was typed, so a new turn cannot be told from an old one") }
+    $t = Find-ClaudeCodeTranscript -ConfigDir $ConfigDir -SessionId $SessionId
+    if ($t.state -eq "absent") { return (New-HordeKnown -Value $false) }
+    if ($t.state -ne "known") { return $t }
+    $text = $null
+    try { $text = Read-ClaudeCodeTextFrom -Path $t.value -Offset ([long]$Mark.size) } catch { return (New-HordeUnknown -Reason ("the transcript could not be read: " + $_.Exception.Message)) }
+    return (New-HordeKnown -Value (Test-ClaudeCodeTurnText -Text $text -SessionId $SessionId -Line $Line))
+}
+
+# THE INPUT BOX ON SCREEN. MEASURED 2026-09-15 in an isolated terminal: the box is the lowest pair of
+# rule rows (U+2500) whose first row inside starts with the prompt glyph U+276F; typed text follows the
+# glyph and wraps onto the rows below at any column, even inside a word. So the rows are joined, the
+# glyph dropped, and ALL whitespace removed from both sides before they are compared. NOT measured:
+# whether a later version draws it differently. A screen with no such box is unknown, never empty, so
+# no Enter is pressed into a dialog or a screen nobody can read (a dialog takes Enter as its answer).
+$script:ClaudeCodeBoxRule = [char]0x2500
+$script:ClaudeCodePromptGlyph = [char]0x276F
+
+function Test-ClaudeCodeRuleRow {
+    # Is a screen row a rule: at least 8 characters, all U+2500 once trimmed?
+    param([AllowEmptyString()][string]$Row)
+    $t = ("" + $Row).Trim()
+    if ($t.Length -lt 8) { return $false }
+    return ($t.Trim($script:ClaudeCodeBoxRule).Length -eq 0)
+}
+
+function Test-ClaudeCodeInputHolds {
+    # Does the lowest input box on -Screen hold exactly -Line, unsent? An answer (see above).
+    param([AllowEmptyCollection()][string[]]$Screen = @(), [Parameter(Mandatory = $true)][string]$Line)
+    $rows = @(@($Screen) | ForEach-Object { ("" + $_) -split "`n" } | ForEach-Object { $_.TrimEnd("`r") })
+    $rules = @()
+    for ($i = 0; $i -lt $rows.Count; $i++) { if (Test-ClaudeCodeRuleRow -Row $rows[$i]) { $rules += $i } }
+    for ($k = $rules.Count - 1; $k -ge 1; $k--) {
+        $top = $rules[$k - 1]; $bottom = $rules[$k]
+        if ($bottom -le $top + 1) { continue }
+        $first = $rows[$top + 1].TrimStart()
+        if ($first.Length -eq 0 -or $first[0] -ne $script:ClaudeCodePromptGlyph) { continue }
+        $body = $first.Substring(1)
+        for ($j = $top + 2; $j -lt $bottom; $j++) { $body += $rows[$j] }
+        return (New-HordeKnown -Value ([bool](($body -replace '\s', '') -ceq ($Line -replace '\s', ''))))
+    }
+    return (New-HordeUnknown -Reason "no input box of this harness can be read on the pane's screen")
+}
+
 function Find-ClaudeCodeSession {
     # The started process as the harness records it, from its control file: known { pid; procStart;
     # name; remoteControl }, absent before the file exists. remoteControl is an answer: known true
@@ -171,4 +270,7 @@ Register-HordeLaunchAdapter -Name "claude-code" -Program $script:ClaudeCodeProgr
     -Preconditions { param($n) Get-ClaudeCodeVerifiedPreconditions -Names $n } `
     -Identify { param($id, $view) Find-ClaudeCodeSession -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id } `
     -ReadMode { param($id, $view) Read-ClaudeCodeMode -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id } `
-    -CloseText $script:ClaudeCodeCloseText
+    -CloseText $script:ClaudeCodeCloseText `
+    -TurnMark { param($id, $view) Get-ClaudeCodeTurnMark -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id } `
+    -TurnSeen { param($id, $view, $mark, $line) Test-ClaudeCodeTurnSeen -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id -Mark $mark -Line $line } `
+    -InputHolds { param($screen, $line) Test-ClaudeCodeInputHolds -Screen $screen -Line $line }

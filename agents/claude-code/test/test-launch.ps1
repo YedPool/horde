@@ -115,4 +115,92 @@ Check ($i.state -eq "known" -and $i.value.pid -eq 4242) "the registered Identify
 Check (@(& $ad.preconditions @("folder-trusted")).Count -eq 0) "a precondition this file cannot check is never reported as verified"
 Check ((@($ad.closeText) -join "|") -ceq ("/exit|" + "`r")) "a session is ended by typing /exit and then Enter"
 
-Complete-HordeSuite -Success "the argv is the flags agent.json promises, and the mode, process and Remote Control state are read back exactly"
+Write-Host ""
+Write-Host "--- the turn receipt: a typed line is taken only once a NEW user turn holds it (issue #214) ---" -ForegroundColor Cyan
+# A harness folder of the test's own, under TEMP: the user's own harness folder is never read.
+$tw = Join-Path $env:TEMP ("horde-turns-" + [guid]::NewGuid().ToString("N"))
+$tcfg = Join-Path $tw "config"
+$tsid = "12121212-1111-4222-8333-444444444444"
+$tdir = Join-Path $tcfg "projects\C--fixture-turns"
+$tfile = Join-Path $tdir ($tsid + ".jsonl")
+$typed = "Reply with OK only."
+function Add-Row { param([string]$Row) [System.IO.File]::AppendAllText($tfile, $Row + "`n", (New-Object System.Text.UTF8Encoding($false))) }
+function UserRow { param([string]$Text, [string]$Session = $tsid, [string]$Extra = "") return ('{"type":"user","sessionId":"' + $Session + '"' + $Extra + ',"message":{"role":"user","content":' + (ConvertTo-Json $Text -Compress) + '}}') }
+function Seen { param($Mark, [string]$Line = $typed) return (Test-ClaudeCodeTurnSeen -ConfigDir $tcfg -SessionId $tsid -Mark $Mark -Line $Line) }
+try {
+    New-Item -ItemType Directory -Path $tdir -Force | Out-Null
+    $mk = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    Check ($mk.state -eq "known" -and $mk.value.size -eq 0) "before the transcript exists the mark is size 0, an answer and not a refusal"
+    $sn = Seen $mk.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $false) "no transcript yet: no turn, known"
+    Add-Row ('{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"' + $tsid + '"}')
+    $sn = Seen $mk.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $false) "a permission-mode line written at start is no turn: the readback that let issue 214 through"
+    Add-Row (UserRow $typed)
+    $sn = Seen $mk.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $true) "CONTROL: a user turn holding exactly the typed line is seen"
+    $mk2 = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    Check ($mk2.state -eq "known" -and $mk2.value.size -eq (Get-Item -LiteralPath $tfile).Length) "the mark is the transcript's size in bytes"
+    $sn = Seen $mk2.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $false) "a turn already there BEFORE the mark is never taken for the line typed after it"
+    Add-Row (UserRow $typed -Extra ',"isMeta":true')
+    Add-Row (UserRow $typed -Session "34343434-1111-4222-8333-444444444444")
+    Add-Row (UserRow ($typed + " And more."))
+    Add-Row ('{"type":"user","sessionId":"' + $tsid + '","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"Reply with OK only."}]}}')
+    Add-Row ('{"type":"assistant","sessionId":"' + $tsid + '","message":{"role":"assistant","content":[{"type":"text","text":"Reply with OK only."}]}}')
+    $sn = Seen $mk2.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $false) "the harness's own line (isMeta), another session's turn, a turn that only holds the line, a tool result and the model's reply are none of them the turn"
+    # A row still being written: no line end yet.
+    [System.IO.File]::AppendAllText($tfile, ('{"type":"user","sessionId":"' + $tsid + '","message":{"role":"user","content":[{"type":"text","text":"Reply with OK on'), (New-Object System.Text.UTF8Encoding($false)))
+    $sn = Seen $mk2.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $false) "a row still being written is passed over, not a failure"
+    Add-Row ('ly."}]}}')
+    $sn = Seen $mk2.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $true) "once whole, a turn whose text blocks join to the line is seen"
+    $big = [pscustomobject]@{ size = [long]((Get-Item -LiteralPath $tfile).Length + 100000) }
+    $sn = Seen $big
+    Check ($sn.state -eq "known" -and $sn.value -eq $true) "a transcript shorter than its mark is read from its start: it is not the file the mark measured"
+    $sn = Seen $null
+    Check ($sn.state -eq "unknown") "no mark: unknown, never a guess"
+    New-Item -ItemType Directory -Path (Join-Path $tcfg "projects\C--fixture-other") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $tcfg ("projects\C--fixture-other\" + $tsid + ".jsonl")), "")
+    $mk3 = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    Check ($mk3.state -eq "unknown") "two transcripts with the session's id: the mark is unknown, so nothing is proven"
+    Remove-Item -LiteralPath (Join-Path $tcfg "projects\C--fixture-other") -Recurse -Force
+    $tad = (Get-HordeLaunchAdapter -Name "claude-code").value
+    $tview = @{ CLAUDE_CONFIG_DIR = $tcfg; USERPROFILE = "C:\nobody" }
+    $pm = & $tad.turnMark $tsid $tview
+    Add-Row (UserRow "Read C:\h\node\spawned\x\prompt.txt and do what it says.")
+    $ps = & $tad.turnSeen $tsid $tview $pm.value "Read C:\h\node\spawned\x\prompt.txt and do what it says."
+    Check ($pm.state -eq "known" -and $ps.state -eq "known" -and $ps.value -eq $true) "through the port, from the folder the harness's environment names: marked, typed, seen"
+} finally {
+    if ((Split-Path -Leaf $tw) -match '^horde-turns-[0-9a-f]{32}$') { Remove-Item -LiteralPath $tw -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
+Write-Host "--- the input box on the pane's screen: does it still hold the typed line (issue #214)? ---" -ForegroundColor Cyan
+$rule = ([string][char]0x2500) * 40
+$glyph = [string][char]0x276F
+$long = "Read C:\h\node\spawned\12121212-1111-4222-8333-444444444444\prompt.txt and do what it says."
+$hb = Test-ClaudeCodeInputHolds -Screen @("Welcome", "", $rule, ($glyph + " " + $typed), $rule, "  ? for shortcuts") -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $true) "CONTROL: a box holding exactly the typed line holds it"
+$hb = Test-ClaudeCodeInputHolds -Screen @($rule, ($glyph + " " + $long.Substring(0, 30)), ("  " + $long.Substring(30, 31)), ("  " + $long.Substring(61)), $rule) -Line $long
+Check ($hb.state -eq "known" -and $hb.value -eq $true) "a long line wrapped over three rows, even inside a word, still holds it"
+$hb = Test-ClaudeCodeInputHolds -Screen @(($glyph + " " + $typed), "", "OK", "", $rule, ($glyph + " "), $rule, "  ? for shortcuts") -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "an empty box does not hold it, though the line shows above as a sent turn"
+$hb = Test-ClaudeCodeInputHolds -Screen @($rule, ($glyph + " " + $typed + "Read C:\x and do what it says."), $rule) -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "a box holding the line and more does not hold exactly it: an Enter would send the rest too"
+$hb = Test-ClaudeCodeInputHolds -Screen @($rule, ($glyph + " something a person typed"), $rule) -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "a box holding other text does not hold it"
+$hb = Test-ClaudeCodeInputHolds -Screen @("Do you trust the files in this folder?", "", (" " + $glyph + " 1. Yes, proceed"), "   2. No, exit") -Line $typed
+Check ($hb.state -eq "unknown") "a dialog is no box: unknown, so no Enter answers it"
+$hb = Test-ClaudeCodeInputHolds -Screen @($rule, ($glyph + " " + $typed), $rule, "OK", $rule, ($glyph + " "), $rule) -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "the LOWEST box is the input box: an earlier one still on the screen holding the line is not"
+$hb = Test-ClaudeCodeInputHolds -Screen @($rule, $typed, $rule) -Line $typed
+Check ($hb.state -eq "unknown") "two rules around text with no prompt glyph are no input box"
+$hb = Test-ClaudeCodeInputHolds -Screen @() -Line $typed
+Check ($hb.state -eq "unknown") "an empty screen is unknown, never an empty box"
+$hb = & $tad.inputHolds ([string[]]@($rule, ($glyph + " " + $typed), $rule)) $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $true) "through the port the same"
+
+Complete-HordeSuite -Success "the argv is the flags agent.json promises, the mode, process and Remote Control state are read back exactly, and a typed line is taken only as a new turn"

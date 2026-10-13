@@ -56,5 +56,36 @@
         @{ Name = "add-dir-dropped"
            Find = '        $argv.Add("--add-dir"); $argv.Add("" + $dir)'
            Replace = '' }
+        # Issue #214: the turn receipt and the input box.
+        @{ Name = "turn-contains-not-equals"
+           Find = '        if ($said.Trim() -ceq $want) { return $true }'
+           Replace = '        if ($said.Contains($want)) { return $true }' }
+        @{ Name = "meta-line-is-a-turn"
+           Find = '        if ($null -ne $doc.PSObject.Properties["isMeta"] -and $doc.isMeta -eq $true) { continue }'
+           Replace = '' }
+        @{ Name = "other-session-turn-counts"
+           Find = ' -or "" + $doc.sessionId -cne $SessionId) { continue }'
+           Replace = ') { continue }' }
+        @{ Name = "turn-before-the-mark-counts"
+           Find = '-Offset ([long]$Mark.size)'
+           Replace = '-Offset 0' }
+        @{ Name = "shrunk-transcript-not-reread"
+           Find = '        if ($Offset -gt $stream.Length) { $Offset = 0 }'
+           Replace = '' }
+        @{ Name = "no-transcript-no-mark"
+           Find = '    if ($t.state -eq "absent") { return (New-HordeKnown -Value ([pscustomobject]@{ size = [long]0 })) }'
+           Replace = '' }
+        @{ Name = "box-wrap-not-joined"
+           Find = '        return (New-HordeKnown -Value ([bool](($body -replace ''\s'', '''') -ceq ($Line -replace ''\s'', ''''))))'
+           Replace = '        return (New-HordeKnown -Value ([bool]($body.Trim() -ceq $Line.Trim())))' }
+        @{ Name = "box-not-the-lowest"
+           Find = '    for ($k = $rules.Count - 1; $k -ge 1; $k--) {'
+           Replace = '    for ($k = 1; $k -lt $rules.Count; $k++) {' }
+        @{ Name = "box-without-glyph"
+           Find = '        if ($first.Length -eq 0 -or $first[0] -ne $script:ClaudeCodePromptGlyph) { continue }'
+           Replace = '        if ($first.Length -eq 0) { continue }' }
+        @{ Name = "no-box-as-empty"
+           Find = '    return (New-HordeUnknown -Reason "no input box of this harness can be read on the pane''s screen")'
+           Replace = '    return (New-HordeKnown -Value $false)' }
     )
 }
