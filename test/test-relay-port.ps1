@@ -521,7 +521,10 @@ $streamKey = $sender + "/decisions/12/" + ("ab" * 12)
 $named = Read-HordeRelayStreamKey -Key $streamKey
 Check ($null -ne $named -and $named.stream -ceq ($sender + "/decisions/") -and $named.seq -eq 12) "an envelope's replay key names its stream - sender, channel and the slash after them - and its seq in it"
 Check ((Read-HordeRelayStreamKey -Key ($sender + "/decisions/9007199254740991/" + ("ab" * 12))).seq -eq 9007199254740991) "the largest seq there is, 2^53-1, is still a seq"
-foreach ($notOne in @("sha256-" + ("a" * 64), ($sender + "/decisions/012/" + ("ab" * 12)), ($sender + "/decisions/0/" + ("ab" * 12)), ($sender + "/Decisions/12/" + ("ab" * 12)), ($sender.Substring(1) + "/decisions/12/" + ("ab" * 12)), ($sender + "/decisions/12/" + ("ab" * 11)), ($sender + "/decisions/12/" + ("ab" * 12) + "/x"), ($sender + "/decisions/99999999999999999/" + ("ab" * 12)), ($sender + "/decisions/9007199254740992/" + ("ab" * 12)))) {
+# Each element in its own brackets: a comma binds before a plus, and without them this is ONE long string.
+$notStreamKeys = @(("sha256-" + ("a" * 64)), ($sender + "/decisions/012/" + ("ab" * 12)), ($sender + "/decisions/0/" + ("ab" * 12)), ($sender + "/Decisions/12/" + ("ab" * 12)), ($sender.Substring(1) + "/decisions/12/" + ("ab" * 12)), ($sender + "/decisions/12/" + ("ab" * 11)), ($sender + "/decisions/12/" + ("ab" * 12) + "/x"), ($sender + "/decisions/99999999999999999/" + ("ab" * 12)), ($sender + "/decisions/9007199254740992/" + ("ab" * 12)))
+Check ($notStreamKeys.Count -eq 9) ("CONTROL: nine keys that are each not quite a stream key are tried, one by one (" + $notStreamKeys.Count + ")")
+foreach ($notOne in $notStreamKeys) {
     Check ($null -eq (Read-HordeRelayStreamKey -Key $notOne)) ("a key that is not exactly one names no stream: " + $notOne)
 }
 Check ((Test-HordeRelaySenderTrim $trimming) -and -not (Test-HordeRelaySenderTrim "a string") -and -not (Test-HordeRelaySenderTrim $null)) "whether a relay trims is asked of a connection the port made: yes for one whose relay handed over the put for it"
