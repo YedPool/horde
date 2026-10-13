@@ -128,5 +128,12 @@
         @{ Name = "line-verified-by-another-key"
            Find = 'keyId = $Item.from } }'
            Replace = 'keyId = ("0" * 32) } }' }
+        # --- woken, or only queued (the founder's bug of 2026-10-12)
+        @{ Name = "line-does-not-say-whether-woken"
+           Find = '" took it for the Thrall" + $wake)'
+           Replace = '" took it for the Thrall")' }
+        @{ Name = "line-wake-word-never-asked"
+           Find = '$wake = Format-HordeMessengerWake -Answer $posted'
+           Replace = '$wake = ""' }
     )
 }

@@ -72,6 +72,10 @@
         @{ Name = "loop-ignores-the-settings-label"
            Find = '-QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel'
            Replace = '-QuietSeconds $v.quietSeconds' }
+        # --- woken, or only queued (the founder's bug of 2026-10-12)
+        @{ Name = "bell-does-not-say-whether-woken"
+           Find = '$posted.value.stage + $wake + ")"'
+           Replace = '$posted.value.stage + ")"' }
         # --- the founder, verified - or only his label (2026-10-12)
         @{ Name = "verified-never-put-on-the-notice"
            Find = 'if ($null -ne $who.verified) { $from | Add-Member'
@@ -110,7 +114,7 @@
            Find = '$said = $said + "; as the founder, verified by his passkey " + $who.verified.keyId'
            Replace = '$said = $said' }
         @{ Name = "messenger-note-dropped"
-           Find = 'if ($null -ne $note -and "$($note.Value)" -ne "") { $said = $said + "; " + $note.Value }'
+           Find = 'if ($null -ne $note -and "$($note.Value)" -ne "" -and -not $wake.Contains("$($note.Value)")) { $said = $said + "; " + $note.Value }'
            Replace = '' }
         @{ Name = "signedBy-that-is-not-text-is-read"
            Find = '$(if ($null -ne $p -and $p.Value -is [string]) { $p.Value } else { "" })'
@@ -121,5 +125,24 @@
         @{ Name = "evidence-not-read-from-the-record"
            Find = 'route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]'
            Replace = 'route = $held["route"]; evidence = ("0" * 64); signedBy = $held["signedBy"]' }
+        @{ Name = "messenger-reason-said-twice"
+           Find = ' -and -not $wake.Contains("$($note.Value)")) { $said = $said + "; " + $note.Value }'
+           Replace = ') { $said = $said + "; " + $note.Value }' }
+        # --- one turn of the bell, for the relay runner (the founder's bug of 2026-10-12)
+        @{ Name = "turn-rings-beside-a-running-notify"
+           Find = 'if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }'
+           Replace = 'if ($false) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }' }
+        @{ Name = "turn-reads-the-inbox-every-time"
+           Find = 'if (-not $due) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "turn-never-asks-to-be-turned-again"
+           Find = 'if ($null -ne $last.wakeAt) { $again = [int][Math]::Max(200,'
+           Replace = 'if ($false) { $again = [int][Math]::Max(200,' }
+        @{ Name = "turn-says-its-line-every-time"
+           Find = 'if ($Line -cne "" -and $Line -cne "$($Memory[''said''])") { $said = $Line }'
+           Replace = 'if ($Line -cne "") { $said = $Line }' }
+        @{ Name = "turn-rings-on-refused-settings"
+           Find = 'if ($settings.state -ceq "refused") { return (& $answer "refused"'
+           Replace = 'if ($false) { return (& $answer "refused"' }
     )
 }

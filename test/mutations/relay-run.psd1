@@ -55,5 +55,12 @@
         @{ Name = "two-runs-share-a-home"
            Find = '([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::None)'
            Replace = '([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::ReadWrite)' }
+        # --- a watch waits no longer than a channel asked (the decisions bell, 2026-10-12)
+        @{ Name = "watch-ignores-what-a-channel-asked"
+           Find = '$in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $turnWatch'
+           Replace = '$in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $watchMs' }
+        @{ Name = "a-channel-can-lengthen-a-watch"
+           Find = '-and $AgainMs -gt 0 -and $AgainMs -lt $WatchMs) { return [int]$AgainMs }'
+           Replace = '-and $AgainMs -gt 0) { return [int]$AgainMs }' }
     )
 }
