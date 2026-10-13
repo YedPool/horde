@@ -14,7 +14,12 @@
 #    a read after it. And, of a relay that hands the port a watch in slices (relays/Port.ps1): the
 #    watch stays open across slices and across a put, a read and an ack made between them; a put into
 #    the watched mailbox from another runspace ends a waiting slice within a second; and a watch
-#    nothing fills runs out by itself.
+#    nothing fills runs out by itself. And, of a relay that hands the port a put that trims its
+#    sender's stream (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM): the put is kept and exactly the
+#    older items of its own stream go - never another channel's of that sender, another sender's, or
+#    an item whose key names no stream; a duplicate still trims; no number is reused, not even when the
+#    newest item is the one trimmed; and the relay itself, the port bypassed, refuses a trim from past
+#    the key's own seq, or with a key that names no stream, and stores nothing.
 # II. EACH CAPABILITY OF THE CLOSED LIST: a "yes" must be DEMONSTRATED by the case below, or the suite
 #    fails; any other word must make a caller that requires it refuse the relay, by name. durable is
 #    shown across a fresh runspace (no state of this one survives into it), and realtime by a put from a
@@ -335,6 +340,53 @@ foreach ($name in $relayNames) {
             }
             $rawTook = $sw.ElapsedMilliseconds
             Check ($rawEnded -and @($raw.value.items).Count -eq 0 -and $rawTook -ge ($short - 100) -and $rawTook -lt ($short + 3000)) ("[" + $name + "] and by the relay itself when the port is bypassed: asked slice after slice, it says its " + $short + " ms watch has ended, in about that time (" + $rawSlices + " slices, " + $rawTook + " ms)")
+        }
+
+        # A SENDER TRIMS ITS OWN STREAM, of a relay that hands the port the put for it (relays/Port.ps1).
+        if (-not (Test-HordeRelaySenderTrim $c)) { Write-Host ("  [" + $name + "] does not trim a sender's stream: a put that asks is made as any other") -ForegroundColor DarkGray }
+        else {
+            $mbT = "conf/trim"
+            $one = "a1" * 16
+            $two = "b2" * 16
+            # A stream key as an envelope's replay key is written: sender, channel, seq, a 24-hex nonce.
+            $keyOf = { param([string]$Sender, [string]$Channel, [int]$Seq) return ($Sender + "/" + $Channel + "/" + $Seq + "/" + ("0" * 20) + $Seq.ToString("0000")) }
+            $putT = { param([string]$Sender, [string]$Channel, [int]$Seq, [long]$KeepFrom = 0) return (Send-HordeRelayItem -Connection $c -Mailbox $mbT -Text ($Sender.Substring(0, 2) + "-" + $Channel + "-" + $Seq) -Key (& $keyOf $Sender $Channel $Seq) -KeepFrom $KeepFrom) }
+            foreach ($i in 1..5) { $null = & $putT $one "decisions" $i }
+            foreach ($i in 1..2) { $null = & $putT $one "chat" $i }
+            foreach ($i in 1..2) { $null = & $putT $two "decisions" $i }
+            $null = Send-HordeRelayItem -Connection $c -Mailbox $mbT -Text "keyed-by-its-hash"
+            $t6 = & $putT $one "decisions" 6 4
+            $a = Receive-HordeRelayItems -Connection $c -Mailbox $mbT -Since 0
+            Check ($t6.state -ceq "known" -and $t6.value.seq -eq 11 -and $t6.value.duplicate -eq $false -and $t6.value.trimmed -eq 3) ("[" + $name + "] a put that says to keep from seq 4 of its stream is taken as item 11, and says it trimmed the 3 before that (" + $t6.reason + ")")
+            Check ((Texts $a) -ceq "a1-decisions-4,a1-decisions-5,a1-chat-1,a1-chat-2,b2-decisions-1,b2-decisions-2,keyed-by-its-hash,a1-decisions-6") ("[" + $name + "] exactly the older items of that stream are gone: the sender's other channel, the other sender's same channel and the item whose key names no stream are all still there (" + (Texts $a) + ")")
+            $dup = & $putT $one "decisions" 6 6
+            $a = Receive-HordeRelayItems -Connection $c -Mailbox $mbT -Since 0
+            Check ($dup.state -ceq "known" -and $dup.value.duplicate -eq $true -and $dup.value.seq -eq 11 -and $dup.value.trimmed -eq 2 -and (Texts $a) -ceq "a1-chat-1,a1-chat-2,b2-decisions-1,b2-decisions-2,keyed-by-its-hash,a1-decisions-6") ("[" + $name + "] the same put made again, now keeping from its own seq, is a duplicate that still trims: the two left before it go, and it stays (" + (Texts $a) + ")")
+            $none = & $putT $one "decisions" 6 6
+            Check ($none.state -ceq "known" -and $none.value.trimmed -eq 0) ("[" + $name + "] and once more, with nothing older left, it trims 0")
+            $since = Receive-HordeRelayItems -Connection $c -Mailbox $mbT -Since 5
+            Check ((Seqs $since) -ceq "6,7,8,9,10,11") ("[" + $name + "] a reader whose cursor is where trimmed items were reads on from it, and is handed what is left (" + (Seqs $since) + ")")
+            # NO NUMBER IS REUSED, EVEN WHEN THE NEWEST ITEM IS THE ONE TRIMMED: seq 8 of the stream is put
+            # before seq 7 (a put made again out of order can be), so 7 holds the mailbox's highest number
+            # when a duplicate of 8 trims it.
+            $p8 = & $putT $one "decisions" 8
+            $p7 = & $putT $one "decisions" 7
+            $d8 = & $putT $one "decisions" 8 8
+            $next = Send-HordeRelayItem -Connection $c -Mailbox $mbT -Text "after-the-newest-was-trimmed"
+            Check ($p8.value.seq -eq 12 -and $p7.value.seq -eq 13 -and $d8.value.duplicate -eq $true -and $d8.value.trimmed -eq 2 -and $next.state -ceq "known" -and $next.value.seq -eq 14) ("[" + $name + "] when the item trimmed is the newest in the mailbox (13), the next put is still numbered after it (" + $next.value.seq + "): no number is reused")
+            $acked = Confirm-HordeRelayItems -Connection $c -Mailbox $mbT -Through 9
+            $a = Receive-HordeRelayItems -Connection $c -Mailbox $mbT -Since 0
+            Check ($acked.state -ceq "known" -and (Texts $a) -ceq "keyed-by-its-hash,a1-decisions-8,after-the-newest-was-trimmed") ("[" + $name + "] an ack after a trim still deletes through its seq: the trim did not move the ack's own floor (" + (Texts $a) + ")")
+            # THE PORT REFUSES A TRIM THAT COULD DELETE ITS OWN PUT, AND SO DOES THE RELAY ITSELF.
+            $past = Send-HordeRelayItem -Connection $c -Mailbox $mbT -Text "past-its-own-seq" -Key (& $keyOf $one "decisions" 9) -KeepFrom 10
+            $keyless = Send-HordeRelayItem -Connection $c -Mailbox $mbT -Text "names-no-stream" -Key "plain-key" -KeepFrom 1
+            Check ($past.state -ceq "unknown" -and $keyless.state -ceq "unknown") ("[" + $name + "] the port refuses a trim from past the key's own seq, and one whose key names no stream")
+            $rawPast = & $r.putKeeping $c.state $mbT (& $keyOf $one "decisions" 9) "past-its-own-seq" ([long]10)
+            $rawKeyless = & $r.putKeeping $c.state $mbT "plain-key" "names-no-stream" ([long]1)
+            $a = Receive-HordeRelayItems -Connection $c -Mailbox $mbT -Since 0
+            Check (-not ((Test-HordeAnswer $rawPast) -and $rawPast.state -ceq "known") -and -not ((Test-HordeAnswer $rawKeyless) -and $rawKeyless.state -ceq "known") -and (Texts $a) -ceq "keyed-by-its-hash,a1-decisions-8,after-the-newest-was-trimmed") ("[" + $name + "] and by the relay itself when the port is bypassed: both are refused, nothing is stored and nothing trimmed (" + (Texts $a) + ")")
+            $plain = & $putT $two "decisions" 3
+            Check ($plain.state -ceq "known" -and $plain.value.trimmed -eq -1) ("[" + $name + "] a put that asks for no trim says none was made")
         }
 
         $k = Confirm-HordeRelayItems -Connection $c -Mailbox "conf/ordering" -Through 6
