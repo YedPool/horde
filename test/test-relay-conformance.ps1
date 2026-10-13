@@ -315,6 +315,26 @@ foreach ($name in $relayNames) {
             Check ($last.state -ceq "known" -and $last.value.ended -eq $true -and @($last.value.items).Count -eq 0 -and $slices -ge 3 -and $tookAll -ge ($short - 100) -and $tookAll -lt ($short + 3000)) ("[" + $name + "] a watch in slices that nothing fills runs out by itself after its " + $short + " ms, empty (" + $slices + " slices, " + $tookAll + " ms)")
             $after = Send-HordeRelayItem -Connection $c -Mailbox "conf/slices-empty" -Text "after-the-watch"
             Check ($after.state -ceq "known" -and $after.value.seq -eq 1) ("[" + $name + "] and the relay is none the worse for it: the next put is taken")
+            # AND THE RELAY ITSELF ENDS ITS WATCH when the watch's time is up - asked past the port, whose
+            # own clock would end it whatever the relay said. A relay that counted the watch's time from
+            # each slice's start, never reaching it, passed every check above through the port (a
+            # mutation run of the disk relay, 2026-10-13); the port's header asks it of the relay too.
+            $rawOpen = & $r.watchOpen $c.state "conf/slices-raw" ([long]0) ([int][Math]::Min(8, $lim.maxBatch)) ([int]$short)
+            $rawSlices = 0
+            $rawEnded = $false
+            $raw = $null
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            if ((Test-HordeAnswer $rawOpen) -and $rawOpen.state -ceq "known") {
+                try {
+                    do {
+                        $rawSlices++
+                        $raw = & $r.watchWait $c.state $rawOpen.value 250
+                        $rawEnded = ((Test-HordeAnswer $raw) -and $raw.state -ceq "known" -and $raw.value.ended -eq $true)
+                    } while (-not $rawEnded -and (Test-HordeAnswer $raw) -and $raw.state -ceq "known" -and $rawSlices -lt 40)
+                } finally { $null = & $r.watchClose $c.state $rawOpen.value }
+            }
+            $rawTook = $sw.ElapsedMilliseconds
+            Check ($rawEnded -and @($raw.value.items).Count -eq 0 -and $rawTook -ge ($short - 100) -and $rawTook -lt ($short + 3000)) ("[" + $name + "] and by the relay itself when the port is bypassed: asked slice after slice, it says its " + $short + " ms watch has ended, in about that time (" + $rawSlices + " slices, " + $rawTook + " ms)")
         }
 
         $k = Confirm-HordeRelayItems -Connection $c -Mailbox "conf/ordering" -Through 6
