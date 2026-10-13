@@ -177,7 +177,7 @@ foreach ($n in 0..201) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke
 Check ($run.silence.silent -eq $true -and (Test-Path -LiteralPath (Join-Path $h "wake\silence-live.json"))) "CONTROL: the fleet is found silent, and that is saved"
 $asksBefore = @(Get-HordeMemoryWakerAsks).Count
 $again = New-HordeWakeRun -Live -Self "" -HordeHome $h
-Check ($again.silence.silent -eq $true -and $again.silence.quietSince -eq (At 0) -and @($again.ledger.Values | Where-Object { $_.attempts -ne 0 }).Count -eq 0) "a watcher started again reads back that the fleet is silent, since when, and the ledger whose attempts were forgiven"
+Check ($null -ne $again.silence -and $again.silence.silent -eq $true -and $again.silence.quietSince -eq (At 0) -and @($again.ledger.Values | Where-Object { $_.attempts -ne 0 }).Count -eq 0) "a watcher started again reads back that the fleet is silent, since when, and the ledger whose attempts were forgiven"
 $after = New-Object System.Collections.ArrayList
 foreach ($n in 202..420) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $again -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $tenMinutes -HordeHome $h)) { [void]$after.Add($e.kind) } }
 $asksAfter = @(Get-HordeMemoryWakerAsks).Count - $asksBefore

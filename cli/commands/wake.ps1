@@ -9,7 +9,7 @@ $HordeCommand = @{
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "status")][string]$Verb,
             [Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode = "shadow",
             [Parameter(ParameterSetName = "watch", DontShow = $true)][ValidateScript({ $false })][object]$Mod,
-            [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,
+            [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,
             [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' })][string]$Target = "",
             [Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-target")][Parameter(ParameterSetName = "target-no-proof")][switch]$Once,
             [Parameter(ParameterSetName = "watch")][ValidateRange(1, 300)][int]$TickSeconds = 3
@@ -26,10 +26,10 @@ $HordeCommand = @{
         # ("Target:"), and a horde started with its input open waited there for ever (found
         # 2026-10-13: the scenario hung on "wake run -Proof -Once"). So the incomplete forms are each
         # made AMBIGUOUS instead, which PowerShell refuses at once and never asks about: -Proof alone
-        # fits proof-alone and three other sets, -Proof -Once fits proof and proof-no-target, -Proof
+        # fits proof, proof-no-once and proof-no-target, -Proof -Once fits proof and proof-no-target, -Proof
         # -Target fits proof and proof-no-once, -Target -Once fits proof and target-no-proof - and
         # none of those is the default set, so none is chosen. Only all three together fit exactly
-        # one set. The four extra sets exist for nothing else, and the body below still refuses
+        # one set. The three extra sets exist for nothing else, and the body below still refuses
         # anything but all three. THAT IS WHY
         # PROOF IS A SWITCH AND NOT A THIRD VALUE OF -Mode: a rule between two parameters' VALUES can
         # only be checked in the body, where a refusal is an ordinary failure (cli/Runner.ps1), and

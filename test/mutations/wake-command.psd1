@@ -13,11 +13,8 @@
            Find = 'if ("$($run.refused)" -cne "") { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "a-proof-with-no-target-binds"
-           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
-           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][switch]$Proof,' }
-        @{ Name = "a-proof-alone-binds"
-           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
-           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,' }
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
+           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][switch]$Proof,' }
         @{ Name = "a-proof-that-would-loop-binds"
            Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",'
            Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
@@ -31,7 +28,7 @@
            Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",'
            Replace = '[Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
         @{ Name = "a-missing-part-of-a-proof-is-asked-for"
-           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
            Replace = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Proof,' }
         @{ Name = "proof-is-a-mode-word-again"
            Find = '[Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode'

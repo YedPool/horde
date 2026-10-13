@@ -31,7 +31,7 @@
            Replace = '-Kind "held" -Outcome "held"' }
         @{ Name = "a-given-own-session-is-ignored"
            Find = 'if ($PSBoundParameters.ContainsKey("Self")) { $own = $Self }'
-           Replace = '' }
+           Replace = 'if ($false) { $own = $Self }' }
         @{ Name = "a-proof-run-reads-a-ledger-of-its-own"
            Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome'
            Replace = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome' }

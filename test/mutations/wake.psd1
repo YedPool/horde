@@ -99,7 +99,7 @@
         @{ Name = "a-session-given-up-on-is-forgotten-after-a-day"
            Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
            Replace = 'if ($taken -or $old) { $next.Remove($id) }' }
-        @{ Name = "a-given-up-entry-of-a-session-that-is-gone-is-kept-for-ever"
+        @{ Name = "a-given-up-entry-of-a-session-that-cannot-be-read-is-kept-for-ever"
            Find = '$stands = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -gt 0 -and'
            Replace = '$stands = ($true -or' }
         @{ Name = "a-pass-sends-unless-told-not-to"

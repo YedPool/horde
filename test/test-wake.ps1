@@ -427,6 +427,12 @@ Reset-HordeMemoryWaker
 $p = Pass 86500 -Using $capOne
 Check ($script:ledger.Count -eq 0) "the entry of a session that is gone from the fleet still ages out after a day: it is not kept for ever"
 Start-Case; Seat 1
+$null = Pass 0 -Using $capOne
+Set-HordeMemoryWakerFault -Call "state" -Kind "throw"
+$p = Pass 86500 -Using $capOne
+Check ($script:ledger.Count -eq 0) "and so does the entry of a session whose state can no longer be read: it stands only while that mail is KNOWN to be still its oldest unread"
+Set-HordeMemoryWakerFault -Call "state" -Kind ""
+Start-Case; Seat 1
 $null = Pass 0
 $p = Pass 86500
 Check ((Rang) -eq 2) "CONTROL: an ordinary entry, of a session not given up on, is dropped after a day as before"
@@ -474,6 +480,7 @@ Check ((Rang) -eq 0) "-Send:`$false is shadow"
 $r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Send
 Check ((Rang) -eq 1 -and (Kinds $r) -ceq "nudge") "CONTROL: asked to send, it sends"
 $hd = Join-Path $pinned.home ("default-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hd | Out-Null
+Check ((Get-HordeWakeSendWord -Mode "proof") -ceq "live" -and (Get-HordeWakeSendWord -Mode "live") -ceq "live" -and (Get-HordeWakeSendWord -Mode "shadow") -ceq "shadow" -and (Get-HordeWakeSendWord) -ceq "shadow") "the runs that send - proof and live - share one word for their lock and their ledger; shadow, and a caller that names no mode, have shadow's"
 Check ((Get-HordeWakeModeWord) -ceq "shadow" -and (Get-HordeWakeModeWord -Shadow) -ceq "shadow" -and (Get-HordeWakeModeWord -Mode "live") -ceq "live" -and (Get-HordeWakeModeWord -Mode "proof") -ceq "proof") "a mode's files are the shadow run's when no mode is named: the sending run's are asked for by name"
 Check ((Split-Path -Leaf (Get-HordeWakeStateFile -Name "ledger" -HordeHome $hd)) -ceq "ledger-shadow.json" -and (Split-Path -Leaf (Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -HordeHome $hd)) -ceq "journal-shadow.jsonl") "so a state file and a journal named with no mode are the shadow ones"
 Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 1 -LastAttemptAt $t0 -LastOutcome "would-nudge") } -HordeHome $hd
