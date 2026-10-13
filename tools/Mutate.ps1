@@ -122,7 +122,11 @@ if ($Changed) {
         # The spec's own result line is relayed indented, so the one line starting "mutations: " is
         # the total below - the line a gate reads.
         foreach ($l in $lines) { if ($l -match '^mutations: ') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l } }
-        $m = [regex]::Match((@($lines | Where-Object { $_ -match '^mutations: ' }) | Select-Object -Last 1), '^mutations: (\d+), as expected: (\d+), not: (\d+)')
+        # A SPEC RUN CAN END WITH NO RESULT LINE AT ALL: when its CLOSING baseline fails it says so and
+        # exits 2 without one. Select-Object then hands back nothing, and [regex]::Match throws on a
+        # null input - which ended the whole round with a .NET error instead of the report below. So
+        # the line is made a string first: no line reads as no match, and the spec counts as not run.
+        $m = [regex]::Match("$(@($lines | Where-Object { $_ -match '^mutations: ' }) | Select-Object -Last 1)", '^mutations: (\d+), as expected: (\d+), not: (\d+)')
         if ($m.Success) { $sum += [int]$m.Groups[1].Value; $okSum += [int]$m.Groups[2].Value; $notSum += [int]$m.Groups[3].Value }
         elseif ($code -eq 0) { $code = 2 }
         if ($code -ne 0 -and $code -ne 1) { $code = 2 }

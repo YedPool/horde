@@ -324,6 +324,45 @@ function Read-ClaudeCodeConversation {
     return (New-HordeKnown -Value ([pscustomobject]@{ turns = @($turns.ToArray()); position = $pos; more = $more; reset = $reset; anomalies = @($anomalies.ToArray()) }))
 }
 
+function Get-ClaudeCodeRecordText {
+    # A text field of a session's record, as an answer: absent when the record has none (the registry
+    # writes "" for none, core/WezfleetState.ps1's Get-HordeStoredField), unknown when what it holds is
+    # not text. Whether text is a label, or a session id, is the port's to judge, for every adapter.
+    param($Record, [string]$Name)
+    $held = Get-HordeStoredField -Record $Record -Name $Name -What "the session's record"
+    if ($held.state -ceq "known" -and $held.value -isnot [string]) { return (New-HordeUnknown -Reason ("the session's record holds a " + $Name + " that is not text")) }
+    return $held
+}
+
+function Get-ClaudeCodeSessionRecord {
+    # The port's Describe (conversations/Port.ps1, A SESSION DESCRIBED BY ITS ID): what the registry
+    # record of -Session says of its role, label and parent, retired or not - a file a session sent
+    # before it ended is still that session's. The registry is read as FINDING THE THRALL reads it, and
+    # again on every call.
+    #   - THE RECORD IS THERE AND WAS READ: known, whatever else in the registry could not be read. One
+    #     damaged record of another session does not take the label from every session (Finding the
+    #     Thrall needs every record, because any of them may be the Thrall's; this needs one).
+    #   - IT IS THERE AND COULD NOT BE READ: unknown.
+    #   - IT IS NOT THERE: absent when every record was read, and unknown when one could not be - a
+    #     record filed under another name may be this session's only copy (Read-HordeRegistry).
+    # The id is matched exactly, by case too, as Find-ClaudeCodeThrall matches one.
+    # WHICH HORDE (header): the registry names none, so this answers for the fleet root it reads.
+    param([string]$Root, [string]$Session)
+    $registry = Read-HordeRegistry -Root $Root
+    if ($registry.unreadable.Contains($Session)) { return (New-HordeUnknown -Reason "the session's record is there and could not be read") }
+    $whole = ($registry.complete.state -ceq "known")
+    $entry = $null
+    if ($registry.records.ContainsKey($Session)) { $entry = $registry.records[$Session] }
+    if ($null -eq $entry -or "$($entry.id)" -cne $Session) {
+        if (-not $whole) { return (New-HordeUnknown -Reason ("no session record of that id was read, and the session records could not all be read, so it may be one of those: " + $registry.complete.reason)) }
+        return (New-HordeAbsent -Note "no session record of that id")
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ session = "$($entry.id)"
+        role = (Read-HordeRecordRole -Record $entry.record -Table (Get-HordeRoleTable)).role
+        label = (Get-ClaudeCodeRecordText -Record $entry.record -Name "label")
+        parent = (Get-ClaudeCodeRecordText -Record $entry.record -Name "parent") }))
+}
+
 $null = Register-HordeConversationAdapter -Folder $PSScriptRoot -Locate {
     param($Request)
     $root = ""
@@ -335,4 +374,10 @@ $null = Register-HordeConversationAdapter -Folder $PSScriptRoot -Locate {
 } -Read {
     param($Source, [string]$Position, [int]$MaxTurns, [long]$MaxBytes)
     return (Read-ClaudeCodeConversation -Source $Source -Position $Position -MaxTurns $MaxTurns -MaxBytes $MaxBytes)
+} -Describe {
+    param($Request)
+    $from = ""
+    if ($null -ne $Request.options -and $Request.options.Contains("registryRoot")) { $from = "" + $Request.options["registryRoot"] }
+    if ($from -eq "") { $from = Get-HordeWezfleetRoot }
+    return (Get-ClaudeCodeSessionRecord -Root $from -Session ("" + $Request.session))
 }

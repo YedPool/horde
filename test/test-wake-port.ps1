@@ -62,7 +62,7 @@ $firstGood = Get-HordeWaker -Name "fixture-good"
 Check (Throws { Reg "fixture-good" -Targets { "replaced" } } "already registered") "registering a name a second time is refused"
 Check ([object]::ReferenceEquals((Get-HordeWaker -Name "fixture-good"), $firstGood)) "and the first registration still stands"
 Check (@(@(Get-HordeWakerFiles) | Where-Object { "$_" -like "*\memory\Waker.ps1" }).Count -eq 1) "Get-HordeWakerFiles finds the memory waker's Waker.ps1"
-Check ((@(Get-HordeWakerRoles) -join ",") -ceq "warchief,orc,goblin,unknown") "the roles are listed in the order the watcher serves them"
+Check ((@(Get-HordeWakerRoles) -join ",") -ceq "warchief,orc,warg,unknown") "the roles are listed in the order the watcher serves them"
 
 Write-Host ""
 Write-Host "--- only 'yes' is having a capability; the production path requires all five, and never chooses ---" -ForegroundColor Cyan

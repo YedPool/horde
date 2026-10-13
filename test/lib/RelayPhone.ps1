@@ -117,10 +117,13 @@ function New-HordeTestPhoneKeyBody {
 function New-HordeTestPhoneAnswerBody {
     # The decisions channel's answer body (channels/decisions/Channel.ps1): -Machine is the key id of the
     # machine whose snapshot the founder answered, -Snapshot the replay key of that snapshot's envelope.
+    # -Part: the answer is to that one part of the question, and the body is version 2.
     param([string]$AnswerId = "", [int]$Number = 1, [int]$Wording = 1, [string]$Text = "Yes, play it.",
-        [string]$Machine = ("0" * 32), [string]$Snapshot = (("0" * 32) + "/decisions/1/" + ("0" * 24)))
+        [string]$Machine = ("0" * 32), [string]$Snapshot = (("0" * 32) + "/decisions/1/" + ("0" * 24)), [string]$Part = "")
     if ($AnswerId -ceq "") { $AnswerId = [guid]::NewGuid().ToString("N") }
-    $t = ConvertTo-Json -InputObject ([ordered]@{ v = 1; answerId = $AnswerId; machine = $Machine; snapshot = $Snapshot; number = $Number; wordingVersion = $Wording; text = $Text }) -Compress
+    $members = [ordered]@{ v = 1; answerId = $AnswerId; machine = $Machine; snapshot = $Snapshot; number = $Number; wordingVersion = $Wording; text = $Text }
+    if ($Part -cne "") { $members["v"] = 2; $members["part"] = $Part }
+    $t = ConvertTo-Json -InputObject $members -Compress
     return ,($script:HordeTestPhoneUtf8.GetBytes($t))
 }
 

@@ -24,6 +24,11 @@
         @{ Name = "spec-result-relayed-unindented"
            Find = 'if ($l -match ''^mutations: '') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l }'
            Replace = 'Write-Host $l' }
+        # The spec run that prints no result line: its closing baseline failed. Without the string
+        # around it, the missing line is a null and [regex]::Match throws on it.
+        @{ Name = "missing-result-line-crashes-the-round"
+           Find = '[regex]::Match("$(@($lines | Where-Object { $_ -match ''^mutations: '' }) | Select-Object -Last 1)", '
+           Replace = '[regex]::Match((@($lines | Where-Object { $_ -match ''^mutations: '' }) | Select-Object -Last 1), ' }
         @{ Name = "changed-spec-not-reselected"
            Find = 'specChanged = $diff.changed.ContainsKey($relKey) }'
            Replace = 'specChanged = $false }' }

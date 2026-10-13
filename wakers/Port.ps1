@@ -82,7 +82,7 @@
 #            reading of the fleet throws that reading away here, and nowhere else by the clock: the
 #            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
 #            two passes and never repeated inside one, however slow the fleet was to answer.
-# role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
+# role is warchief, orc, warg or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable, nothing (the mail was taken before the nudge, so nobody was rung) or killed (the waker
 # stopped its own nudge part-way, and the box may hold text); reason is one line and

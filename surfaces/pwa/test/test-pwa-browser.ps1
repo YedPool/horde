@@ -219,8 +219,11 @@ try {
     Check ($re.ok -and $re.value.locked -and $re.value.controlled) "after a reload the page is the worker's, and the horde is locked"
     $un = Invoke-Browser @{ cmd = "unlock" }
     Check ($un.ok -and $un.value.doc) ("Chrome's passkey, by PRF, unlocks it (" + $(if ($un.ok) { $un.value.notice } else { $un.reason }) + ")")
-    $again = Invoke-Browser @{ cmd = "waitText"; text = $title }
-    Check ($again.ok -and $again.value.found -and $again.value.text.Contains("short chime")) ("and the question shows again, his answer under it (" + $(if ($again.ok) { ($again.value.text -replace '\s+', ' ') } else { $again.reason }) + ")")
+    # HE HAS ANSWERED IT, so it is not in his list (2026-10-12): it stands under the folded "With Thrall",
+    # with his answer, and the list itself shows the order line and that heading only.
+    $again = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
+    Check ($again.ok -and $again.value.found -and $again.value.text.Contains("short chime") -and $again.value.shown.Contains("With Thrall (1)") -and -not $again.value.shown.Contains($title)) ("and the question he answered is there again, out of his list under the folded With Thrall, his answer with it (" + $(if ($again.ok) { ($again.value.shown -replace '\s+', ' ') } else { $again.reason }) + ")")
+    Check ($again.ok -and $again.value.shown.Contains("Order by") -and $again.value.shown.Contains("Task importance") -and $again.value.shown.Contains("Blocking")) "the line where he chooses the order is on the phone too: Date, Task importance, Blocking"
     $null = Invoke-Browser @{ cmd = "serve"; on = $false }
     $off = Invoke-Browser @{ cmd = "reload" }
     Check ($off.ok -and $off.value.locked) "with the site's server down the app still starts, from the worker's cache"
@@ -233,11 +236,16 @@ try {
 
     Write-Host ""
     Write-Host "--- 7. the recovery code reads, and never answers ---" -ForegroundColor Cyan
+    # A second question first: the one he answered is out of his list, and has no field to type in.
+    $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
+    Check ($q2.state -ceq "known" -and $q2.value.outcome -ceq "done") "CONTROL: a second question is asked"
+    $run = Invoke-Run -Turns 1
     $null = Invoke-Browser @{ cmd = "unlock" }
+    $seen2 = Invoke-Browser @{ cmd = "waitText"; text = "Which chime of the three?" }
     $null = Invoke-Browser @{ cmd = "lock" }
     $rc = Invoke-Browser @{ cmd = "recover"; code = $(if ($paired.ok) { $paired.value.recoveryCode } else { "" }) }
     Check ($rc.ok -and $rc.value.doc -and $rc.value.mode.Contains("Read only")) ("the recovery code unlocks the horde, said to be read only (" + $(if ($rc.ok) { $rc.value.notice } else { $rc.reason }) + ")")
-    $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox }
+    $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox; question = "Which chime of the three?" }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
     $lk = Invoke-Browser @{ cmd = "lock" }
     Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
@@ -245,9 +253,6 @@ try {
 
     Write-Host ""
     Write-Host "--- 8. the row's Send key, by touch ---" -ForegroundColor Cyan
-    $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
-    Check ($q2.state -ceq "known" -and $q2.value.outcome -ceq "done") "CONTROL: a second question is asked"
-    $run = Invoke-Run -Turns 1
     $seen2 = Invoke-Browser @{ cmd = "waitText"; text = "Which chime of the three?" }
     $null = Save-Shot "phone-two-questions"
     $touch = Invoke-Browser @{ cmd = "answer"; text = "The second one."; via = "touch"; mailbox = $mailbox; question = "Which chime of the three?" }
@@ -256,11 +261,45 @@ try {
     Check ($seen2.ok -and $seen2.value.found -and $touch.ok -and $touch.value.put -and $said.Count -eq 2 -and @($said | Where-Object { $_.data.text -ceq "The second one." }).Count -eq 1) ("a touch on Send sends the answer in the field with the caret, and it lands (" + $said.Count + " records; seen " + $(if ($seen2.ok) { $seen2.value.found } else { $seen2.reason }) + "; touch " + $(if ($touch.ok) { ConvertTo-Json $touch.value -Compress } else { $touch.reason }) + ")")
 
     Write-Host ""
+    Write-Host "--- 8b. a question of parts: each part is signed and sent by itself, and the question stays until the last ---" -ForegroundColor Cyan
+    # THE FOUNDER, 2026-10-12: sub-questions each send by themselves; the question leaves the list when
+    # all its parts are answered. Before the phone sent a part as a part, it sent "(b) words", the store
+    # kept that as an answer to the WHOLE question, and the question left his phone after one part.
+    $partsTitle = "Two things to settle about the chime, one by one."
+    $q3 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = $partsTitle; kind = "parts"; whatItIs = "Follow-ups."; parts = @("(a) Which of the three chimes?", "(b) How loud should it be?"); group = "voice"; askedBy = "orc-b" } }
+    $n3 = $(if ($q3.state -ceq "known") { [int]$q3.value.number } else { 0 })
+    $run = Invoke-Run -Turns 1
+    $seen3 = Invoke-Browser @{ cmd = "waitText"; text = $partsTitle }
+    Check ($q3.state -ceq "known" -and $q3.value.outcome -ceq "done" -and $seen3.ok -and $seen3.value.found) "CONTROL: a question of two parts is asked, and the app shows it"
+    $pa = Invoke-Browser @{ cmd = "answerPart"; question = $partsTitle; part = 0; text = "The second chime."; mailbox = $mailbox }
+    # Two turns, as for the first answer above: one takes the answer in, the next sends the snapshot that holds it.
+    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 1
+    $saidParts = @(Get-Said | Where-Object { $_.data.number -eq $n3 })
+    Check ($pa.ok -and $pa.value.put -and $saidParts.Count -eq 1 -and $saidParts[0].data.PSObject.Properties["part"] -and $saidParts[0].data.part -ceq "a" -and $saidParts[0].data.text -ceq "The second chime." -and $saidParts[0].data.route -ceq "phone") ("A PART ANSWERED IN THE APP is signed and sent by itself, and lands as the record of THAT PART - his words untouched, no letter put before them (" + $(if ($saidParts.Count) { ConvertTo-Json $saidParts[0].data -Compress } else { "no record; " + $(if ($pa.ok) { ConvertTo-Json $pa.value -Compress } else { $pa.reason }) }) + ")")
+    Check ($pa.ok -and $pa.value.focusPart -eq 1) "and the caret went on to part (b)"
+    $shown3 = Invoke-HordeDecision -Operation "show" -Root $store -Request @{ number = $n3 }
+    Check ($shown3.value.question.thread.turn -ceq "founder" -and (@($shown3.value.question.thread.parts | ForEach-Object { $_.letter + ":" + $_.answered }) -join ",") -ceq "a:True,b:False") "the list says part (a) is answered, part (b) is not, and the question is still his"
+    Start-Sleep -Seconds 6
+    $still = Invoke-Browser @{ cmd = "parts"; question = $partsTitle }
+    Check ($still.ok -and $null -ne $still.value -and (@($still.value.folded) -join ",") -ceq "True,False" -and $still.value.marks[0] -ceq "Answered") ("THE QUESTION IS STILL IN HIS LIST ON THE PHONE after the snapshot that holds part (a): that part folded to Answered, part (b) open (" + $(if ($still.ok) { ConvertTo-Json $still.value -Compress } else { $still.reason }) + ")")
+    $pb = Invoke-Browser @{ cmd = "answerPart"; question = $partsTitle; part = 1; text = "Quiet."; mailbox = $mailbox }
+    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 1
+    $saidParts = @(Get-Said | Where-Object { $_.data.number -eq $n3 })
+    $shown3 = Invoke-HordeDecision -Operation "show" -Root $store -Request @{ number = $n3 }
+    Check ($pb.ok -and $pb.value.put -and $saidParts.Count -eq 2 -and $saidParts[1].data.part -ceq "b" -and $saidParts[1].data.text -ceq "Quiet." -and $shown3.value.question.thread.turn -ceq "warchief") ("part (b), sent by itself, is the second record, and with it the question is the keeper's turn (" + $saidParts.Count + " record(s))")
+    $goneParts = $null
+    for ($i = 0; $i -lt 40; $i++) { $goneParts = Invoke-Browser @{ cmd = "parts"; question = $partsTitle }; if ($goneParts.ok -and $null -eq $goneParts.value) { break }; Start-Sleep -Milliseconds 500 }
+    $folded3 = Invoke-Browser @{ cmd = "waitText"; text = $partsTitle; folded = $true }
+    Check ($goneParts.ok -and $null -eq $goneParts.value -and $folded3.ok -and $folded3.value.found -and -not $folded3.value.shown.Contains($partsTitle)) "AND THEN, all its parts answered, it leaves his list on the phone for the folded With Thrall"
+
+    Write-Host ""
     Write-Host "--- 9. hidden, it locks itself; shown again, nothing opened shows first ---" -ForegroundColor Cyan
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
     Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
-    $null = Invoke-Browser @{ cmd = "waitText"; text = $title }
+    $null = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
     $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
     $sh = Invoke-Browser @{ cmd = "show" }
     Check ($sh.ok -and $sh.value.docHiddenAtOnce) "shown again, the list is hidden in the same moment, before the lock check runs"
@@ -361,6 +400,11 @@ try {
     $lk = Invoke-Browser @{ cmd = "lock" }
     $ps = Invoke-Browser @{ cmd = "progressState" }
     Check ($lk.ok -and $lk.value.locked -and $ps.ok -and $ps.value.items -eq 0 -and $ps.value.tab -ceq "Progress") "a lock takes the log off the page, not only out of sight"
+    # AT ONCE, AND BY THE LOCK ITSELF. The check above is also met by the redraw that follows the
+    # bridge's answer, so it could not tell whether the lock emptied the log or only the answer did -
+    # and a lock whose answer never comes must still leave no word on the page.
+    Check ($lk.ok -and $lk.value.logBefore -gt 0) ("CONTROL: the log held entries when the lock was touched (" + $(if ($lk.ok) { $lk.value.logBefore } else { $lk.reason }) + ")")
+    Check ($lk.ok -and $lk.value.logAtOnce -eq 0) ("and it is gone in the same moment as the touch, before the bridge has answered (" + $(if ($lk.ok) { "" + $lk.value.logAtOnce + " left" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }

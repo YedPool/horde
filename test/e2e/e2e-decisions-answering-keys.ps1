@@ -119,10 +119,13 @@ $keepHome = $env:HORDE_HOME
 try {
     $env:HORDE_HOME = $hordeHome
     . (Join-Path $root "decisions\Operations.ps1")
+    # Stamped a minute apart with question 1 the LATEST: the list is newest first (2026-10-12), so
+    # they stand in the order of their numbers, which is how this scenario walks them.
+    $when = [datetime]::SpecifyKind([datetime]"2026-01-01T09:00:00", [System.DateTimeKind]::Utc)
     for ($n = 1; $n -le 10; $n++) {
         $question = [ordered]@{ title = ("Should step " + $n + " of the plan go ahead as it is written?"); kind = "yes-no"; whatItIs = ("Step " + $n + " is ready and waits only for a yes."); group = "Unblocks work now"; askedBy = ("Orc " + [string][char](65 + ($n % 4))) }
         if ($n -ne 4) { $question["recommendation"] = @("yes.", "no, not in this pass", "yes, as it is written and no further")[$n % 3] }
-        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question }
+        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question } -Now $when.AddMinutes(30 - $n)
         if ($added.state -cne "known" -or $added.value.outcome -cne "done" -or $added.value.number -ne $n) { throw ("question " + $n + " was not added: " + $added.state + " " + $added.reason) }
     }
 } finally { $env:HORDE_HOME = $keepHome }
@@ -190,8 +193,11 @@ Write-Host "=== the right arrow fills the suggestion; Shift+Tab goes back one ==
 $rec6 = "$((Get-Shown -Number 6).recommendation)"
 $r = Send-Probe -Keys @((Key "ArrowRight"))
 Check ($r.drawn.answer.focus -ceq "6" -and (Get-Line $r 6).a -ceq $rec6 -and $rec6 -ne "" -and @(Get-Said 6).Count -eq 0) "a real right arrow in an empty field fills the suggestion in and the caret stays"
+# Question 5 was answered a moment ago and leaves the list: once it has folded or gone, going back
+# passes over it to the nearest question still to answer, question 4.
+$null = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 30 -Until { param($x) $l = @($x.drawn.lines | Where-Object { $_.n -ceq "5" })[0]; $null -eq $l -or "$($l.ad)" -ceq "Answered" }
 $r = Send-Probe -Keys @((Key "Tab" -Shift))
-Check ($r.drawn.answer.focus -ceq "5" -and (Get-Line $r 6).a -ceq $rec6 -and (Get-Line $r 6).m -ceq "draft" -and @(Get-Said 6).Count -eq 0) "a real Shift+Tab goes back to question 5's field, and what stood in question 6 stays as a draft"
+Check ($r.drawn.answer.focus -ceq "4" -and (Get-Line $r 6).a -ceq $rec6 -and (Get-Line $r 6).m -ceq "draft" -and @(Get-Said 6).Count -eq 0) ("a real Shift+Tab goes back to the nearest question still to answer, and what stood in question 6 stays as a draft (caret " + $r.drawn.answer.focus + ")")
 
 Write-Host ""
 Write-Host "=== Ctrl+Enter on an empty field: the suggestion is the answer ===" -ForegroundColor Cyan
@@ -199,7 +205,7 @@ $rec7 = "$((Get-Shown -Number 7).recommendation)"
 $r = Send-Probe -Steps @((Step "focus" -Q 7))
 $r = Send-Probe -Keys @((Key "Enter" -Ctrl)) -Steps @((Step "settle"))
 $said7 = @(Get-Said 7)
-Check ($said7.Count -eq 1 -and $said7[0].text -ceq $rec7 -and $rec7 -ne "" -and $r.drawn.answer.focus -ceq "8" -and (Get-Line $r 7).m -ceq "saved") ("a real Ctrl+Enter stored the recommendation's own text as his answer to question 7 and moved to question 8 (" + $rec7 + ")")
+Check ($said7.Count -eq 1 -and $said7[0].text -ceq $rec7 -and $rec7 -ne "" -and $r.drawn.answer.focus -ceq "8") ("a real Ctrl+Enter stored the recommendation's own text as his answer to question 7 and moved to question 8 (" + $rec7 + ")")
 
 Write-Host ""
 Write-Host "=== F2 and Ctrl+Space: the context, in place ===" -ForegroundColor Cyan
@@ -232,7 +238,7 @@ Write-Host ""
 Write-Host "=== one character is not sent on a Tab; a save shows at once, and the same Enter made again does nothing ===" -ForegroundColor Cyan
 $r = Send-Probe -Steps @((Step "focus" -Q 4))
 $r = Send-Probe -Keys @((Key "Tab")) -Steps @((Step "settle"))
-Check ($r.drawn.answer.focus -ceq "5" -and (Get-Line $r 4).a -ceq "x" -and (Get-Line $r 4).m -ceq "draft" -and @(Get-Said 4).Count -eq 0) "A REAL TAB ON A FIELD HOLDING ONE CHARACTER moves on and sends nothing: the 'x' stays in question 4 as a draft"
+Check ($r.drawn.answer.focus -ceq "6" -and (Get-Line $r 4).a -ceq "x" -and (Get-Line $r 4).m -ceq "draft" -and @(Get-Said 4).Count -eq 0) ("A REAL TAB ON A FIELD HOLDING ONE CHARACTER moves on - to question 6, the next still to answer: question 5 is answered and gone - and sends nothing: the 'x' stays in question 4 as a draft (caret " + $r.drawn.answer.focus + ")")
 $r = Send-Probe -Steps @((Step "focus" -Q 8))
 $script:probeN++
 $script:pressed += (Get-KeyPresses -Keys @((Typed "eight"), (Key "Enter")))
@@ -241,7 +247,7 @@ $wantAck = $script:probeN
 $atOnce = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 40 -Until { param($x) $null -ne $x.drawn -and $x.drawn.answer.probe -eq $wantAck }
 Check ($atOnce.drawn.answer.focus -ceq "9" -and @("saving", "saved") -ccontains (Get-Line $atOnce 8).m -and (Get-Line $atOnce 8).a -ceq "eight") ("THE ENTER SHOWS AT ONCE: in the first report after it the caret is in question 9 and question 8 says '" + (Get-Line $atOnce 8).m + "'")
 $r = Send-Probe -Keys @((Key "Enter")) -Steps @((Step "settle"))
-Check ($r.drawn.answer.focus -ceq "9" -and @(Get-Said 8).Count -eq 1 -and @(Get-Said 9).Count -eq 0 -and (Get-Line $r 8).m -ceq "saved") ("AN ENTER MADE AGAIN within seconds of a save, on the empty field it moved to, does nothing: the caret stays in question 9 and question 8 holds one message (caret in " + $r.drawn.answer.focus + ")")
+Check ($r.drawn.answer.focus -ceq "9" -and @(Get-Said 8).Count -eq 1 -and @(Get-Said 9).Count -eq 0) ("AN ENTER MADE AGAIN within seconds of a save, on the empty field it moved to, does nothing: the caret stays in question 9 and question 8 holds one message (caret in " + $r.drawn.answer.focus + ")")
 Start-Sleep -Milliseconds 3200
 $r = Send-Probe -Keys @((Key "Enter")) -Steps @((Step "settle"))
 Check ($r.drawn.answer.focus -ceq "10" -and @(Get-Said 9).Count -eq 0) "CONTROL: an Enter on that empty field after those seconds moves on, saving nothing"

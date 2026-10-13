@@ -24,6 +24,16 @@
 #   bad-role, empty-text, bad-turn-id, duplicate-turn-id, bad-time, bad-group-id, not-an-object,
 #   no-time, overfill, bad-position, long-position, bad-more, bad-reset, no-turns, secret-anomaly,
 #   rotate-always (a rotation even on a read from the start, where there is nothing to have rewritten)
+#   describe-throw (with a secret in the message), describe-garbage, describe-unknown (with a secret in
+#   the reason), describe-other-session (asked about one session, it answers about another),
+#   describe-bad-label, describe-label-not-text, describe-label-look-alike (an object with a state and
+#   a value that is not an answer), describe-no-label (the member left out), describe-label-unknown (with
+#   a secret in its reason), describe-bad-role, describe-bad-parent, describe-parent-not-text
+#
+# THE SESSIONS OF A HORDE (the port's A SESSION DESCRIBED BY ITS ID). Each horde keeps its sessions by
+# id - Set-HordeMemoryConversationMember enlists or rewrites one, with a role, a label and a parent, ""
+# meaning none - and the session holding the Thrall's conversation is one of them without being
+# enlisted: the warchief, with no label and no parent.
 #
 # Requires conversations/Port.ps1 to be loaded first.
 
@@ -40,7 +50,7 @@ function Get-HordeMemoryConversationHorde {
     # The horde's entry in a store, made on first use with a new session.
     param($Store, [string]$Fleet)
     if (-not $Store.hordes.ContainsKey($Fleet)) {
-        $Store.hordes[$Fleet] = [pscustomobject]@{ session = ("mem-" + [guid]::NewGuid().ToString("N").Substring(0, 12)); generation = 1; turns = (New-Object System.Collections.ArrayList); lie = ""; next = 1; past = @{} }
+        $Store.hordes[$Fleet] = [pscustomobject]@{ session = ("mem-" + [guid]::NewGuid().ToString("N").Substring(0, 12)); generation = 1; turns = (New-Object System.Collections.ArrayList); lie = ""; next = 1; past = @{}; members = @{} }
     }
     return $Store.hordes[$Fleet]
 }
@@ -72,6 +82,17 @@ function Reset-HordeMemoryConversationHistory {
     $h = Get-HordeMemoryConversationHorde -Store $Store -Fleet $Fleet
     $h.generation++
     $h.turns.Clear()
+}
+
+function Set-HordeMemoryConversationMember {
+    # Enlist a session of the horde, or rewrite the one of that id: its role, label and parent, each ""
+    # for none. Returns its id.
+    param($Store, [string]$Fleet, [string]$Session = "", [string]$Role = "", [string]$Label = "", [string]$Parent = "")
+    $h = Get-HordeMemoryConversationHorde -Store $Store -Fleet $Fleet
+    $sid = $Session
+    if ($sid -eq "") { $sid = "mem-" + [guid]::NewGuid().ToString("N").Substring(0, 12) }
+    $h.members[$sid] = [pscustomobject]@{ role = $Role; label = $Label; parent = $Parent }
+    return $sid
 }
 
 function Set-HordeMemoryConversationLie {
@@ -146,6 +167,39 @@ $null = Register-HordeConversationAdapter -Folder $script:HordeMemoryConversatio
         "rotate-always" { $value.reset = "rotated" }
         "no-turns" { $value.Remove("turns") }
         "secret-anomaly" { $value.anomalies = @("saw token=" + "q8Wv3Lm9Zr4 on the way") }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]$value))
+} -Describe {
+    param($Request)
+    $store = $null
+    if ($null -ne $Request.options -and $Request.options -is [System.Collections.IDictionary] -and $Request.options.Contains("memory")) { $store = $Request.options["memory"] }
+    if ($null -eq $store -or -not $store.hordes.ContainsKey($Request.fleet)) { return (New-HordeAbsent -Note "no memory conversation for this horde") }
+    $h = $store.hordes[$Request.fleet]
+    switch ($h.lie) {
+        "describe-throw" { throw ("the memory source failed with password=" + "hunter2longer in its message") }
+        "describe-garbage" { return "not an answer" }
+        "describe-unknown" { return (New-HordeUnknown -Reason ("the memory source saw token=" + "q8Wv3Lm9Zr4 and does not know")) }
+    }
+    $asked = "" + $Request.session
+    $m = $null
+    # A hashtable finds a key whatever its case; an id is matched exactly.
+    if (@($h.members.Keys) -ccontains $asked) { $m = $h.members[$asked] }
+    elseif ($asked -ceq $h.session) { $m = [pscustomobject]@{ role = "warchief"; label = ""; parent = "" } }
+    if ($null -eq $m) { return (New-HordeAbsent -Note "no such session of this horde") }
+    $value = [ordered]@{ session = $asked }
+    foreach ($k in @("role", "label", "parent")) {
+        if ($m.$k -eq "") { $value[$k] = New-HordeAbsent -Note ("no " + $k) } else { $value[$k] = New-HordeKnown -Value $m.$k }
+    }
+    switch ($h.lie) {
+        "describe-other-session" { $value.session = "mem-someone-else" }
+        "describe-bad-label" { $value.label = New-HordeKnown -Value ("<b>Thrall</b> password=" + "hunter2longer") }
+        "describe-label-not-text" { $value.label = New-HordeKnown -Value 7 }
+        "describe-label-look-alike" { $value.label = [pscustomobject]@{ state = "known"; value = "E3" } }
+        "describe-label-unknown" { $value.label = New-HordeUnknown -Reason ("damaged near token=" + "q8Wv3Lm9Zr4 in the record") }
+        "describe-parent-not-text" { $value.parent = New-HordeKnown -Value 12 }
+        "describe-no-label" { $value.Remove("label") }
+        "describe-bad-role" { $value.role = New-HordeKnown -Value "emperor" }
+        "describe-bad-parent" { $value.parent = New-HordeKnown -Value "has spaces in it" }
     }
     return (New-HordeKnown -Value ([pscustomobject]$value))
 }

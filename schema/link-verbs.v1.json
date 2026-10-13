@@ -51,7 +51,7 @@
     "time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", "x-horde-cap": "nameBytes" },
     "session-id": { "type": "string", "pattern": "^(?![A-Za-z]:)(?!([Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9])([.:]|$))(?!.*\\.\\.)(?!.*[.:]$)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "x-horde-cap": "nameBytes", "description": "The agent's own session id. Not assumed to be a UUID (engines K1). A node may name a file by it, so it is never a drive (C:..), never holds .., never ends in . or : (Windows drops a final dot, and a colon there opens a stream), and is never a DOS device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, in any case, alone or before a dot or colon). Review of PR #40, 2026-10-01." },
     "label": { "type": "string", "pattern": "^[A-Z]{1,2}([1-9][0-9]{0,3})?$", "x-horde-cap": "nameBytes", "description": "As schema/session-record.v1. Allocated only by the hub, before a request leaves." },
-    "role": { "type": "string", "enum": ["warchief", "orc", "goblin"] },
+    "role": { "type": "string", "enum": ["warchief", "orc", "warg"] },
     "run-id": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$", "x-horde-cap": "nameBytes" },
     "token": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "x-horde-cap": "nameBytes", "description": "A name the node offers or knows (a profile, a model id, a host name, a harness). Never a path: no slash, no backslash, no colon." },
     "repo-id": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(/(?!([Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9])(\\.|/|$))(?![^/]*\\.(/|$))[A-Za-z0-9._-]+){1,4}$", "x-horde-cap": "nameBytes", "description": "A repository's normalised origin, host then owner then name. The node looks it up in its own registered clones (its L1); it is never opened as a path. Even so it cannot spell one: the host is dot-separated labels, and no segment ends in a dot (which refuses . and .. too) or is a DOS device name (review of PR #40: github.com/../.. passed)." },
@@ -304,7 +304,7 @@
     },
     "handoff": {
       "type": "object", "required": ["handoffId", "sessionId", "writtenAt", "document"], "additionalProperties": false,
-      "description": "A goblin's handoff, distilled on the node. Transcripts, tool output and exploratory notes stay on the node and may be NAMED in the document, never sent (design section 10).",
+      "description": "A warg's handoff, distilled on the node. Transcripts, tool output and exploratory notes stay on the node and may be NAMED in the document, never sent (design section 10).",
       "properties": {
         "handoffId": { "$ref": "#/definitions/uuid" },
         "sessionId": { "$ref": "#/definitions/session-id" },

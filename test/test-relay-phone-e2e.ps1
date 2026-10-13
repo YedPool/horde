@@ -203,6 +203,28 @@ try {
     Check ((@($lines) -join " ").Contains("a replay")) "the copies after the first are refused by the journal as replays"
 
     Write-Host ""
+    Write-Host "--- 5b. one part of a question, answered from the phone by itself ---" -ForegroundColor Cyan
+    # The founder, 2026-10-12: each part sends by itself. The machine's snapshot says it reads version 2
+    # answers; the phone's answer names the part; the runner stores it as that part's own record.
+    $pq = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Two things to settle about the chime, one by one."; kind = "parts"; whatItIs = "Follow-ups."; parts = @("(a) Which of the three chimes?", "(b) How loud should it be?"); group = "voice"; askedBy = "orc-b" } }
+    $pn = $(if ($pq.state -ceq "known") { [int]$pq.value.number } else { 0 })
+    $run = Invoke-Run -Turns 1
+    $po = Open-Latest $c.value
+    $pqSnap = $(if ($po.ok) { @($po.body.questions | Where-Object { $_.number -eq $pn })[0] } else { $null })
+    Check ($po.ok -and $null -ne $pqSnap -and $po.body.answers -eq 2 -and $po.body.v -eq 1) ("the snapshot that carries the question of parts says the machine reads version 2 answers, and is still a version 1 snapshot (" + $po.reason + ")")
+    $partAns = Invoke-Phone "answer" @{ number = $pn; wordingVersion = 1; text = "Quiet."; part = "b"; machine = "$($po.body.machine)"; snapshot = "$($po.key)" }
+    [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $partAns.envelope -Key $partAns.key)
+    $run = Invoke-Run -Turns 1
+    $partSaid = @(Get-Said | Where-Object { $_.data.number -eq $pn })
+    Check ($run.code -eq 0 -and $run.out.Contains("question " + $pn + " part (b)") -and $partSaid.Count -eq 1 -and $null -ne $partSaid[0].data.PSObject.Properties["part"] -and $partSaid[0].data.part -ceq "b" -and $partSaid[0].data.text -ceq "Quiet." -and "$($partSaid[0].data.evidence)" -cmatch '\A[0-9a-f]{64}\z' -and $null -ne $partSaid[0].data.PSObject.Properties["signedBy"]) ("the runner stores the phone's answer as the record of part (b): his words, the part, the proof and the passkey that signed (" + $partSaid.Count + " record(s))")
+    $pshow = Invoke-HordeDecision -Operation "show" -Root $store -Request @{ number = $pn }
+    Check ($pshow.value.question.thread.turn -ceq "founder" -and (@($pshow.value.question.thread.parts | ForEach-Object { $_.letter + ":" + $_.answered }) -join ",") -ceq "a:False,b:True") "and the question is still his: part (a) is not answered"
+    $again = Invoke-Phone "answer" @{ number = $pn; wordingVersion = 1; text = "Quiet."; part = "b"; answerId = $partAns.answerId; machine = "$($po.body.machine)"; snapshot = "$($po.key)" }
+    [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $again.envelope -Key $again.key)
+    $run = Invoke-Run -Turns 1
+    Check ($run.out.Contains("(replayed)") -and @(Get-Said | Where-Object { $_.data.number -eq $pn }).Count -eq 1) "the same part's answer resent in a new envelope is the first record answered again: one record"
+
+    Write-Host ""
     Write-Host "--- 6. one run per home: a second refuses; the first stops when asked ---" -ForegroundColor Cyan
     # Review of 3d837f0: two runs on one home were let race on its state; now the second refuses. The stop
     # file still obeys every run started before it (review of 48bc492, finding 4).

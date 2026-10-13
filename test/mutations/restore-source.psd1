@@ -145,10 +145,10 @@
         @{ Name = "orcs-not-told"
            Find = 'if ($m.role -cne "orc") { continue }'
            Replace = 'if ($m.role -ceq "orc") { continue }' }
-        @{ Name = "goblin-mailed"
+        @{ Name = "warg-mailed"
            Find = 'if ($m.role -cne "orc") { continue }'
-           Replace = 'if ($m.role -cne "orc" -and $m.role -cne "goblin") { continue }' }
-        @{ Name = "goblin-mailed-once-its-orc-moved"
+           Replace = 'if ($m.role -cne "orc" -and $m.role -cne "warg") { continue }' }
+        @{ Name = "warg-mailed-once-its-orc-moved"
            Find = 'if ($m.role -cne "orc") { continue }'
            Replace = 'if ($m.role -cne "orc" -and -not $movedIds.ContainsKey($m.parent)) { continue }' }
         @{ Name = "everyone-but-the-warchief-mailed"
@@ -177,6 +177,6 @@
            Replace = 'if ($leftOut.Count -gt 0) { return' }
         @{ Name = "role-guessed-from-nothing"
            Find = '$role = "unknown"'
-           Replace = '$role = "goblin"' }
+           Replace = '$role = "warg"' }
     )
 }

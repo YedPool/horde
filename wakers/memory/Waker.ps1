@@ -55,7 +55,7 @@ function Set-HordeMemoryWakerSession {
     param(
         [Parameter(Mandatory = $true)][string]$Id,
         [string]$Label = "",
-        [string]$Role = "goblin",
+        [string]$Role = "warg",
         [string]$Parent = "",
         [string]$Reachable = "yes",
         [int]$UnreadCount = 0,

@@ -33,7 +33,7 @@ sources:
 - disposition: test
 - where: test/test-roles.ps1 :: "a native horde role reads as itself"
 
-### L-003 An absent role is unknown, never goblin, because every roleless record that mattered was a lost master or orchestrator
+### L-003 An absent role is unknown, never warg, because every roleless record that mattered was a lost master or orchestrator
 - source: YedPool/wezfleet f37dee4 "came up with NO ROLE AT ALL"; 17c5d42 and planning/BUG-2026-09-15-registry-record-wipe.md:3-4 (A, an orchestrator, lost its role)
 - disposition: test
 - where: test/test-roles.ps1 :: "a record with no role reads as unknown"

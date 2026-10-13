@@ -15,9 +15,12 @@
 # None of the four knows another. A later way of showing the list - a file for a phone, a view across
 # a link - is another surface under the same bridge, and nothing here but the choice of surface moves.
 #
-# WHAT THE PAGE MAY ASK is the closed list below, nine requests, and nothing else (surfaces/Port.ps1
+# WHAT THE PAGE MAY ASK is the closed list below, ten requests, and nothing else (surfaces/Port.ps1
 # checks every message before a handler sees it): setup, kinds, list, fleet, attachment, report, say,
-# act, hand-back.
+# say-part, act, hand-back. say-part is say for the answer to ONE PART of a question of parts (the
+# page sends each part by itself: decisions/page/list.js): the same words and the part's letter. It
+# is a request of its own because a request takes exactly the arguments it declares, and say's are
+# the four it always took.
 # kinds and list are the decisions operations of those names, called through decisions/Operations.ps1's
 # one entry point: THIS FILE READS NO RECORD OF THE STORE.
 #
@@ -326,6 +329,10 @@ function Invoke-HordeDecisionWindowSay {
     # His act (the request act): handed on as it came; the operation's rules say what may be.
     $actWord = & $get "act"
     if ($actWord -is [string] -and $actWord -ne "") { $request["act"] = $actWord }
+    # The part his words answer (a question of parts is answered part by part: decisions/page/list.js):
+    # handed on as it came, like the act; the operation's rules say whether the question has it.
+    $partLetter = & $get "part"
+    if ($partLetter -is [string] -and $partLetter -ne "") { $request["part"] = $partLetter }
     $answer = $null
     try { $answer = & $Invoke $request } catch { return (& $no ("Not saved: the list could not be asked: " + $_.Exception.Message)) }
     if ($null -eq $answer) { return (& $no "Not saved: the list gave no answer.") }
@@ -474,6 +481,17 @@ function New-HordeDecisionWindowBridge {
     # Get-HordeSurfaceSettings, read once by the caller.
     param($SurfaceSettings = $null)
     $most = [long]$script:HordeDecisionWindowReportBounds.chars
+    # WHAT SAY AND SAY-PART BOTH DO with the words the page sent: one block, so that an answer to a part
+    # is stored, counted and answered exactly as an answer to a whole question is.
+    $saying = { param($Arguments, $State, $Window)
+        # With a helper: taken, and its outcome pushed as the event said, by the page's own id.
+        if ($null -ne $State.helper) { Add-HordeDecisionWindowJob -State $State -Kind "say" -Value $Arguments; return [pscustomobject]@{ taken = $true; id = "" + $Arguments["id"] } }
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $said = Invoke-HordeDecisionWindowSay -Arguments $Arguments
+        Add-HordeDecisionWindowBusy -State $State -What "say" -Ms $clock.Elapsed.TotalMilliseconds
+        if ($said.ok) { $State.says = [int]$State.says + 1; $State.dirtyAt = [datetime]::UtcNow } else { $State.saysRefused = [int]$State.saysRefused + 1 }
+        $State.reportDue = $true
+        return $said }
     return (New-HordeSurfaceBridge -Settings $SurfaceSettings -Events @("list-changed", "fleet-changed", "attachment-changed", "probe", "said") -Requests ([ordered]@{
         # What the page needs before it draws a letter: the letters themselves, the bounds of its
         # report, what to show first, and what was wrong in the settings files.
@@ -528,15 +546,13 @@ function New-HordeDecisionWindowBridge {
         # text; one message of the bridge may be less, and a longer one is refused there unread.
         "say" = @{
             args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; text = @{ type = "string"; most = $script:HordeDecisionMaxTextChars }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 } }
-            run = { param($Arguments, $State, $Window)
-                # With a helper: taken, and its outcome pushed as the event said, by the page's own id.
-                if ($null -ne $State.helper) { Add-HordeDecisionWindowJob -State $State -Kind "say" -Value $Arguments; return [pscustomobject]@{ taken = $true; id = "" + $Arguments["id"] } }
-                $clock = [System.Diagnostics.Stopwatch]::StartNew()
-                $said = Invoke-HordeDecisionWindowSay -Arguments $Arguments
-                Add-HordeDecisionWindowBusy -State $State -What "say" -Ms $clock.Elapsed.TotalMilliseconds
-                if ($said.ok) { $State.says = [int]$State.says + 1; $State.dirtyAt = [datetime]::UtcNow } else { $State.saysRefused = [int]$State.saysRefused + 1 }
-                $State.reportDue = $true
-                return $said }
+            run = $saying
+        }
+        # ONE PART'S ANSWER (header): say, with the letter of the part the words answer. Whether the
+        # question has that part is the operation's to say, like everything else about the words.
+        "say-part" = @{
+            args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; text = @{ type = "string"; most = $script:HordeDecisionMaxTextChars }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 }; part = @{ type = "string"; most = 1 } }
+            run = $saying
         }
         # HIS ACT: Ctrl+B parks a question, and in the Parked fold brings it back. It is the
         # operation say with act park or unpark and a few words saying so (decisions/Rules.ps1), so

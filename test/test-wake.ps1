@@ -172,15 +172,15 @@ Check ($script:ledger[(Sid 1)].attempts -eq 0) "it is still no attempt: nothing 
 $held = Pass 58
 Check ((Decided $held 1).action -ceq "wait" -and "$((Decided $held 1).reason)".Contains("held")) "while it is held it waits, and says it is held"
 # Two others turn up while it is ready again: one never asked, one asked once and past its back-off.
-Seat 2 @{ Role = "goblin" }
-Seat 3 @{ Role = "goblin" }
+Seat 2 @{ Role = "warg" }
+Seat 3 @{ Role = "warg" }
 $script:ledger[(Sid 3)] = [pscustomobject]@{ attempts = 1; lastAttemptAt = (At 0); lastOutcome = "busy" }
 $r = Pass 63
 Check ((Decided $r 2).action -ceq "nudge" -and (Decided $r 1).reason -ceq "rate limit") "a session never asked goes ahead of it, warchief or not"
 $r = Pass 66
 Check ((Decided $r 3).action -ceq "nudge" -and (Decided $r 1).reason -ceq "rate limit") "and so does one asked before: it is behind every other ready session, so it starves nobody"
-Seat 2 @{ Role = "goblin"; UnreadCount = 0; OldestUnreadAt = $null }
-Seat 3 @{ Role = "goblin"; UnreadCount = 0; OldestUnreadAt = $null }
+Seat 2 @{ Role = "warg"; UnreadCount = 0; OldestUnreadAt = $null }
+Seat 3 @{ Role = "warg"; UnreadCount = 0; OldestUnreadAt = $null }
 Seat 1 @{ Role = "warchief" }
 $r = Pass 69
 Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "woken" -and $null -eq (Get-HordeWakeNothingAt $script:ledger[(Sid 1)]) -and $script:ledger[(Sid 1)].attempts -eq 1) "a real attempt ends the hold, and counts as the first"
@@ -205,15 +205,15 @@ Write-Host "--- ten sessions all pending (a restore of everything): one a pass, 
 
 Start-Case
 # Seated in an order that is NOT the order they must be served in.
-Seat 5 @{ Role = "goblin"; OldestUnreadAt = (At -50) }
-Seat 6 @{ Role = "goblin"; OldestUnreadAt = (At -90) }
+Seat 5 @{ Role = "warg"; OldestUnreadAt = (At -50) }
+Seat 6 @{ Role = "warg"; OldestUnreadAt = (At -90) }
 Seat 2 @{ Role = "orc"; OldestUnreadAt = (At -30) }
 Seat 9 @{ Role = "unknown"; OldestUnreadAt = (At -500) }
 Seat 1 @{ Role = "warchief"; OldestUnreadAt = (At -10) }
 Seat 3 @{ Role = "orc"; OldestUnreadAt = (At -40) }
-Seat 7 @{ Role = "goblin"; OldestUnreadAt = (At -70) }
+Seat 7 @{ Role = "warg"; OldestUnreadAt = (At -70) }
 Seat 4 @{ Role = "orc"; OldestUnreadAt = (At -20) }
-Seat 8 @{ Role = "goblin"; OldestUnreadAt = (At -60) }
+Seat 8 @{ Role = "warg"; OldestUnreadAt = (At -60) }
 Seat 10 @{ Role = "unknown"; OldestUnreadAt = (At -400) }
 $first = Pass 0
 Check (@($first.decisions | Where-Object { $_.action -ceq "nudge" }).Count -eq 1 -and @($first.decisions | Where-Object { $_.action -ceq "wait" -and $_.reason -ceq "rate limit" }).Count -eq 9) "in one pass one session is nudged and the other nine wait for the rate limit"
@@ -221,7 +221,7 @@ for ($i = 1; $i -lt 10; $i++) { $null = Pass ($i * 3) }
 $order = @(Get-HordeMemoryWakerNudges | ForEach-Object { $_.id })
 $want = @(1, 3, 2, 4, 6, 7, 8, 5, 9, 10 | ForEach-Object { Sid $_ })
 Check ($order[0] -ceq (Sid 1)) "the warchief is nudged first"
-Check (($order -join ",") -ceq ($want -join ",")) "then the orcs, then the goblins, then the sessions of no known role - within a role, the oldest unread mail first"
+Check (($order -join ",") -ceq ($want -join ",")) "then the orcs, then the wargs, then the sessions of no known role - within a role, the oldest unread mail first"
 Check ($order.Count -eq 10 -and @($order | Sort-Object -Unique).Count -eq 10) "after ten passes every session was nudged exactly once"
 for ($i = 10; $i -lt 20; $i++) { $null = Pass ($i * 3) }
 $order = @(Get-HordeMemoryWakerNudges | ForEach-Object { $_.id })

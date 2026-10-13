@@ -19,8 +19,8 @@
            Expect = "survives"
            Reason = "a heading's key is the group's name after the word group: or state:, so a group named __proto__ is not the bare key that an ordinary object trips on, and the scenario's two such groups are drawn whole either way (run 2026-10-07). The map with no prototype is the second layer, kept so that the guard does not rest on how a key happens to be spelt; what the fault looked like - such a group's questions drawn under another heading - is the mutant below." }
         @{ Name = "a-group-named-like-a-built-in-member-loses-its-heading"
-           Find = 'var h = head("group:" + textOf(q.group), "group", textOf(q.group) || "No group");'
-           Replace = 'var h = head("group:" + (textOf(q.group) === "__proto__" ? "constructor" : textOf(q.group)), "group", textOf(q.group) || "No group");' }
+           Find = 'run = head("group:" + name + (runs[name] > 1 ? "#" + runs[name] : ""), "group", name || "No group");'
+           Replace = 'run = head("group:" + (name === "__proto__" ? "constructor" : name) + (runs[name] > 1 ? "#" + runs[name] : ""), "group", name || "No group");' }
         @{ Name = "a-redraw-folds-what-was-unfolded"
            Find = 'questions = record.value.questions;'
            Replace = 'questions = record.value.questions; unfolded = Object.create(null);' }

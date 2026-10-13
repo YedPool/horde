@@ -20,5 +20,6 @@ return [pscustomobject]@{
         Reset-HordeMemoryConversationHistory -Store $State.store -Fleet $State.fleet
         foreach ($t in @($Turns)) { Add-HordeMemoryConversationTurn -Store $State.store -Fleet $State.fleet -Role $t.role -Text $t.text }
     }
+    Enlist = { param($State, $Member) return (Set-HordeMemoryConversationMember -Store $State.store -Fleet $State.fleet -Session $Member.session -Role $Member.role -Label $Member.label -Parent $Member.parent) }
     Remove = { param($State) $State.store.hordes.Clear() }
 }

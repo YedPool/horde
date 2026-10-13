@@ -126,6 +126,8 @@ async function load(url) {
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
 const listed = "(document.getElementById('lists').innerText + ' ' + Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join(' '))";
+// Everything the lists hold, shown or folded away.
+const everything = "document.getElementById('lists').textContent";
 // What a locked page still holds of the lists: their boxes, and the words standing in any field.
 const leftovers = "({ boxes: document.querySelectorAll('#lists .horde-list').length, fields: Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join('|') })";
 const shown = (id) => "(document.getElementById('" + id + "') && !document.getElementById('" + id + "').hidden)";
@@ -264,7 +266,10 @@ const commands = {
     await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
     return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
-  async waitText(c) { const found = await until(listed + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(listed) }; },
+  // folded: the words are looked for in everything the lists hold, what stands under a folded heading
+  // included (an answered question is out of his list, under the folded "With Thrall"); without it,
+  // only in what is shown.
+  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);
@@ -280,6 +285,25 @@ const commands = {
     const end = Date.now() + 30000;
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
     return { put: headOf(c.mailbox) > before, head: headOf(c.mailbox) };
+  },
+  // ONE PART of a question of parts, answered by itself: the caret into that part's field (c.part,
+  // from 0), the words put in, and a real Enter. { put, head, focusPart }: whether an envelope reached
+  // the machine's mailbox, and which part's field has the caret afterwards (-1 for none).
+  async answerPart(c) {
+    const before = headOf(c.mailbox);
+    const row = "Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(c.question || "") + ") >= 0)";
+    await evaluate(row + ".querySelectorAll('textarea.hd-partfield')[" + Number(c.part) + "].focus()", true);
+    await cdp("Input.insertText", { text: c.text });
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    const end = Date.now() + 30000;
+    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
+    const focusPart = await evaluate("(function () { var r = " + row + "; return r ? Array.from(r.querySelectorAll('textarea.hd-partfield')).indexOf(document.activeElement) : -1; }())");
+    return { put: headOf(c.mailbox) > before, head: headOf(c.mailbox), focusPart };
+  },
+  // What a question of parts shows of each part: { marks, folded } as drawn, or null when it is not in the list shown.
+  async parts(c) {
+    return evaluate("(function () { var r = Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-group:not(.folded) .hd-qrow')).find((x) => x.textContent.indexOf(" + JSON.stringify(c.question || "") + ") >= 0); if (!r) { return null; } var rows = Array.from(r.querySelectorAll('.hd-part')); return { marks: rows.map((p) => p.querySelector('.hd-partmark').textContent), folded: rows.map((p) => p.classList.contains('answered')) }; }())");
   },
   async newline(c) {
     // Shift+Enter, pressed as real keys, then the answering row's New line pressed by touch: two lines added, nothing sent.
@@ -311,7 +335,15 @@ const commands = {
     await until(shown("doc") + " || (" + notice + ") !== " + JSON.stringify(was), 30000);
     return await evaluate("({ doc: " + shown("doc") + ", mode: document.getElementById('mode').hidden ? '' : document.getElementById('mode').textContent, notice: " + notice + " })");
   },
-  async lock() { await evaluate("document.getElementById('lockBtn').click()", true); return { locked: !!(await until(shown("lockedView"), 10000)), ...(await evaluate(leftovers)) }; },
+  // THE PROGRESS LOG IS COUNTED IN THE SAME TURN AS THE TOUCH, before and after it. Two places in the
+  // page empty the log: the lock itself, at once, and the redraw that follows when the bridge answers
+  // that the horde is locked. Counted only once the locked screen was up, the second hid the loss of
+  // the first (mutant progress-left-on-a-locked-page survived, 2026-10-13). Nothing the bridge says
+  // can be drawn before this expression returns, so logAtOnce is the lock's own doing.
+  async lock() {
+    const at = await evaluate("(() => { const n = () => document.querySelectorAll('#progressLog .progress-item').length; const before = n(); document.getElementById('lockBtn').click(); return { logBefore: before, logAtOnce: n() }; })()", true);
+    return { locked: !!(await until(shown("lockedView"), 10000)), ...(await evaluate(leftovers)), ...at };
+  },
   // The page told it is hidden (as a phone's screen going off or the app switched away does), then
   // left so for ms: what is still on it.
   async hide(c) {

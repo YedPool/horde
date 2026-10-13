@@ -26,5 +26,12 @@
         @{ Name = "chat-send-ignores-the-page-id"
            Find = 'const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();'
            Replace = 'const id = newLineId();' }
+        # --- one part's answer (2026-10-12) ---
+        @{ Name = "the-bridge-drops-the-part"
+           Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });'
+           Replace = 'answerId: String(a.id), part: "" });' }
+        @{ Name = "the-bridge-hands-on-a-part-that-is-not-text"
+           Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });'
+           Replace = 'answerId: String(a.id), part: a.part === undefined ? "" : String(a.part) });' }
     )
 }
