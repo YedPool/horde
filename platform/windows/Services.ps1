@@ -1,5 +1,5 @@
 # platform/windows/Services.ps1 - the Windows adapter for core/ServiceHostPort.ps1: is the person at
-# the machine, and start a process that outlives the pass that started it.
+# the machine, start a process that outlives the pass that started it, and ask a window to close.
 #
 # IDLE IS THE TIME SINCE THE LAST KEY OR MOUSE INPUT (user32 GetLastInputInfo against GetTickCount).
 #   - IT IS A FACT OF ONE LOGON SESSION. Windows keeps the last input per session, so a process that
@@ -45,6 +45,16 @@
 # THE CONSOLE WINDOW of a started powershell.exe is hidden by its own -WindowStyle Hidden, which shows
 # for a moment as it starts. A start is rare, so that is accepted; passing a hidden show-state in the
 # start-up information instead would also hide the first window the service itself opens.
+#
+# A WINDOW IS ASKED TO CLOSE, NOT CLOSED: WM_CLOSE is posted to it, which is what clicking its close
+# button sends, so the program that owns it closes it the way it always does - saving what it saves,
+# letting go of what it holds - and then ends by itself. The script this replaces did the same to the
+# decisions window. TWO THINGS ARE CHECKED FIRST, in this order, and nothing is sent unless both hold:
+# the handle IS a window now (IsWindow), and that window belongs to the process named
+# (GetWindowThreadProcessId). A handle read from a file is a number Windows gives out again: the
+# window it named when the file was written may be gone, and the number may be another program's
+# window today. Posting does not wait: whether the window then closes is the supervisor's to see, by
+# the process ending, and it ends the process itself when the wait it was given runs out.
 #
 # NEVER RUN BY A SUITE AGAINST A REAL SERVICE. The suites drive the port through a stand-in adapter;
 # of this file they run the pure builders (the command text, the quoting) and, once, a start of a
@@ -164,12 +174,48 @@ function Start-HordeWindowsService {
     } catch { return (New-HordeUnknown -Reason ("process " + $processId + " was created and had ended before it could be looked at")) }
 }
 
+function Get-HordeWindowsCloseSource { return @"
+using System;
+using System.Runtime.InteropServices;
+public static class HordeWindowsCloseV1 {
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
+    // 0: asked (WM_CLOSE, 0x0010, was posted). 1: the handle is not a window. 2: it is a window of
+    // another process. Negative: the post failed, and the number is the Win32 error, negated.
+    public static int AskToClose(long handle, uint processId) {
+        var window = new IntPtr(handle);
+        if (!IsWindow(window)) { return 1; }
+        uint owner;
+        GetWindowThreadProcessId(window, out owner);
+        if (owner != processId) { return 2; }
+        if (!PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero)) { int e = Marshal.GetLastWin32Error(); return e == 0 ? -1 : -e; }
+        return 0;
+    }
+}
+"@ }
+
+function Close-HordeWindowsServiceWindow {
+    # The port's CloseWindow (header): known "asked"; absent when the handle is no window, or is
+    # another process's - nothing was sent; unknown when the post itself failed.
+    param([Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Handle)
+    try {
+        if (-not ("HordeWindowsCloseV1" -as [type])) { Add-Type -TypeDefinition (Get-HordeWindowsCloseSource) }
+        $result = [HordeWindowsCloseV1]::AskToClose($Handle, [uint32]$ProcessId)
+        if ($result -eq 0) { return (New-HordeKnown -Value "asked") }
+        if ($result -eq 1) { return (New-HordeAbsent -Note ("there is no window " + $Handle + " any more; nothing was sent")) }
+        if ($result -eq 2) { return (New-HordeAbsent -Note ("window " + $Handle + " is not a window of process " + $ProcessId + "; nothing was sent")) }
+        return (New-HordeUnknown -Reason ("Windows would not take the close message for window " + $Handle + " (error " + (0 - $result) + ")"))
+    } catch { return (New-HordeUnknown -Reason "the window could not be asked to close" -ErrorRecord $_) }
+}
+
 function Register-HordeWindowsServiceHost {
     $blocks = @{
         Name        = "windows"
         Applies     = { [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT }
         IdleSeconds = { Get-HordeWindowsIdleSeconds }
         Start       = { param($Launch) Start-HordeWindowsService -Launch $Launch }
+        CloseWindow = { param($ProcessId, $Handle) Close-HordeWindowsServiceWindow -ProcessId $ProcessId -Handle $Handle }
     }
     Register-HordeServiceHost @blocks
 }
