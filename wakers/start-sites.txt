@@ -8,6 +8,7 @@
 wakers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1") | a loader line: core's answers
 wakers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1") | the port's loader line: core's schema reader
 wakers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1") | the port's loader line: the one list of roles
+wakers/Port.ps1 | Get-HordeWakerSource | call | & $Waker.source | the port calls the source of a waker Register-HordeWaker made, and no other
 wakers/Port.ps1 | Start-HordeWakePass | call | & $Waker.begin | the port calls the begin of a waker Register-HordeWaker made, and no other
 wakers/Port.ps1 | Get-HordeWakeTargets | call | & $Waker.targets | the port calls the targets of a waker Register-HordeWaker made, and no other
 wakers/Port.ps1 | Get-HordeWakeState | call | & $Waker.confirm $Id | the port calls the confirm of a waker Register-HordeWaker made, and no other
@@ -18,8 +19,10 @@ wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of th
 wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its reads as script blocks, which only the port's calls above run
 wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its reads as script blocks, which only the port's calls above run
 wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its reads as script blocks, which only the port's calls above run
+wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its reads as script blocks, which only the port's calls above run
 wakers/wezfleet/Waker.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1") | the waker's loader line: Horde's home, where its settings are read from
 wakers/wezfleet/Waker.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1") | the waker's loader line: the settings file where a person names the fleet's folder
+wakers/wezfleet/Waker.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\PathText.ps1") | the waker's loader line: core's lower-casing by the 26 letters alone, for the extension and the folder a shim names
 wakers/wezfleet/Waker.ps1 | Get-HordeWezfleetWakerDescendants | command | Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -OperationTimeoutSec $script:HordeWezfleetWakerSnapshotSeconds -ErrorAction Stop | a read of the process table, which starts nothing: it finds the processes the started command started, so a deadline stops the whole tree; it has a time limit of its own
 wakers/wezfleet/Waker.ps1 | Get-HordeWezfleetWakerFleetAnswer | starter | Start-HordeWezfleetWakerProcess -Argv @("mail", "state", "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.fleet | form A's one call of the start: mail state, its arguments fixed here
 wakers/wezfleet/Waker.ps1 | Read-HordeWezfleetWakerPane | starter | Start-HordeWezfleetWakerProcess -Argv @("mail", "state", "-To", $Id, "-TimeoutSeconds", ("" + $flag), "-Json") -DeadlineSeconds (3 * $flag) | form B's one call of the start: mail state for one session, its arguments fixed here but the session and the seconds

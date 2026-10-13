@@ -3,24 +3,34 @@ $HordeCommand = @{
     group   = "wake"
     sustained = $true
     usage   = "wake run [-Mode shadow|live] [-Once] [-TickSeconds <n>] | wake run -Proof -Target <session id> -Once | wake status"
-    summary = "run: the wake watcher - every pass it re-reads which sessions have unread mail and are idle with an empty input box, and after every session was started or restored together which orcs have not taken a turn since. SHADOW unless -Mode live is given (real nudges, through a waker whose every capability is verified). -Proof -Target <session id> -Once is a proof run: one pass that may type into the ONE session named and no other, to verify a waker: it writes what it would do to its journal and nudges and posts nothing. With -Live it sends real nudges through the installed waker; the restore source still only journals. status: for each mode, how long ago the watcher last ran, whether that is stale, and its last 10 journal lines"
+    summary = "run: the wake watcher - every pass it re-reads which sessions have unread mail and are idle with an empty input box, and after every session was started or restored together which orcs have not taken a turn since. Three forms. wake run (or -Mode shadow) is SHADOW: it journals what it would do, and nudges and posts nothing. wake run -Mode live sends real nudges, one a pass, for as long as it runs - only through a waker whose every capability is verified and whose program is named in its settings. wake run -Proof -Target <session id> -Once is a proof run: ONE pass that may type one line into the ONE session named and no other, to verify a waker; all three are required. In every form the restore source and the tells to the warchief only journal what they would send. status: for shadow, proof and live, how long ago each last ran, whether that is stale, and its last 10 journal lines"
     run     = {
         [CmdletBinding(DefaultParameterSetName = "watch")] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "status")][string]$Verb,
             [Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode = "shadow",
             [Parameter(ParameterSetName = "watch", DontShow = $true)][ValidateScript({ $false })][object]$Mod,
-            [Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Proof,
-            [Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' })][string]$Target,
-            [Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Once,
+            [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,
+            [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' })][string]$Target = "",
+            [Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-target")][Parameter(ParameterSetName = "target-no-proof")][switch]$Once,
             [Parameter(ParameterSetName = "watch")][ValidateRange(1, 300)][int]$TickSeconds = 3
         )
         # A PROOF RUN IS A COMMAND LINE OF ITS OWN: -Proof -Target <session id> -Once, ALL THREE, AND
         # NOTHING OF A WATCH. It types into a real session, so which one is never left to the run: the
         # first version of proof nudged whichever session the fair order served first, and that is the
-        # warchief (review of PR #220). The three are one parameter set, each mandatory in it, and
-        # -Mode and -TickSeconds belong to the other: so a proof with no target, a target with no
-        # proof, a proof that would loop, and a target given to a shadow or a live run are each refused
-        # when the arguments are bound - a usage error, exit 2 - before this body runs. THAT IS WHY
+        # warchief (review of PR #220). The three are one parameter set, "proof", and -Mode and
+        # -TickSeconds belong to the other: so a proof with no target, a target with no proof, a
+        # proof that would loop, and a target given to a shadow or a live run are each refused when
+        # the arguments are bound - a usage error, exit 2 - before this body runs.
+        # NONE OF THE THREE IS DECLARED MANDATORY, AND THAT IS ON PURPOSE. They were, at first: and a
+        # missing mandatory parameter is not refused by PowerShell when it can ask - it PROMPTS
+        # ("Target:"), and a horde started with its input open waited there for ever (found
+        # 2026-10-13: the scenario hung on "wake run -Proof -Once"). So the incomplete forms are each
+        # made AMBIGUOUS instead, which PowerShell refuses at once and never asks about: -Proof alone
+        # fits proof, proof-no-once and proof-no-target, -Proof -Once fits proof and proof-no-target, -Proof
+        # -Target fits proof and proof-no-once, -Target -Once fits proof and target-no-proof - and
+        # none of those is the default set, so none is chosen. Only all three together fit exactly
+        # one set. The three extra sets exist for nothing else, and the body below still refuses
+        # anything but all three. THAT IS WHY
         # PROOF IS A SWITCH AND NOT A THIRD VALUE OF -Mode: a rule between two parameters' VALUES can
         # only be checked in the body, where a refusal is an ordinary failure (cli/Runner.ps1), and
         # "-Mode proof" alone would have bound. -Target is a session id written out in full, a
@@ -76,22 +86,27 @@ $HordeCommand = @{
         # WHICH RUN THIS IS: a proof when -Proof was given (and then -Target and -Once were too, or the
         # arguments would not have bound), else the watch's mode. Not written back into $Mode: that
         # is the parameter, and its validation would refuse the word.
+        if ($PSCmdlet.ParameterSetName -cne "watch" -and -not ($PSCmdlet.ParameterSetName -ceq "proof" -and $Proof -and $Once -and $Target -cne "")) { throw "a proof run is -Proof -Target <session id> -Once, all three; this is not one, and nothing was run" }
         $chosen = $Mode
         $aim = ""
         if ($Proof) { $chosen = "proof"; $aim = $Target }
         $plan = Get-HordeWakeRunPlan -Mode $chosen -Once:$Once -Target $aim -Picked (Get-HordeWakeRunPick -Mode $chosen)
         if (-not $plan.ok) { throw $plan.reason }
         $waker = $plan.waker
-        # ONE WATCHER A HOME AND A MODE (core/WakeFiles.ps1, Enter-HordeWakeLock): held until this command ends.
+        # ONE WATCHER A HOME FOR SHADOW, AND ONE FOR THE RUNS THAT SEND - a proof run and a live run hold
+        # the same lock (core/WakeFiles.ps1, Enter-HordeWakeLock): held until this command ends.
         # Only "another run holds it" is said as that; any other failure to take the lock is said as
         # what it is, so nobody is sent looking for a second watcher when the disk is full.
         $lock = $null
         try { $lock = Enter-HordeWakeLock -Mode $plan.mode -ProcessId $PID }
         catch { throw ("the wake run could not take its lock, so it has not started: " + $_.Exception.Message) }
-        if ($null -eq $lock) { throw ("a " + $plan.mode + " wake run is already running in this home; this one has not started") }
+        if ($null -eq $lock) { throw ("a " + $(if ($plan.mode -ceq "shadow") { "shadow" } else { "live or proof" }) + " wake run is already running in this home; this one has not started") }
         try {
             Write-Output ("wake: " + $plan.banner)
             $run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target
+            # A RUN THAT MAY NOT START (core/WakeRun.ps1: a run that sends, over a ledger that cannot
+            # be read) is refused here, before its first tick.
+            if ("$($run.refused)" -cne "") { throw ("the " + $plan.mode + " wake run has not started: " + $run.refused) }
             foreach ($line in @($run.said)) { Write-Output ("wake: " + $line) }
             $modeWord = $(if ($plan.mode -ceq "shadow") { "shadow" } else { $plan.mode.ToUpperInvariant() })
             while ($true) {

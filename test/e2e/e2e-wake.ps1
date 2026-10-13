@@ -130,6 +130,21 @@ Check (@($asked | Where-Object { $_ -clike "mail nudge*" }).Count -eq 0 -and @($
 Check (@($asked | Where-Object { $_ -clike ("mail state -To " + $idle + " *") }).Count -eq 1 -and @($asked | Where-Object { $_ -clike ("mail state -To " + $busy + " *") }).Count -eq 0) "a pane was read for the one candidate, and not for the session that is not idle"
 $names = @(Get-ChildItem -LiteralPath $wakeDir | ForEach-Object { $_.Name } | Sort-Object)
 Check (($names -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")
+# CALLED FROM INSIDE A SESSION THAT SETS DEFAULTS FOR PARAMETERS BY NAME, the run is still shadow: horde is
+# started here by -Command, in a PowerShell whose $PSDefaultParameterValues says every -Mode is live.
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "powershell.exe"
+$psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"`$PSDefaultParameterValues = @{ '*:Mode' = 'live'; '*:Once' = `$true }; & '" + (Join-Path $root "horde.ps1") + "' wake run -Once; exit `$LASTEXITCODE`""
+$psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+$psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+foreach ($k in @{ HORDE_HOME = $fleetHome; WEZFLEET_ROOT = $fleetPin.path; USERPROFILE = $fakeProfile }.GetEnumerator()) { $psi.EnvironmentVariables[$k.Key] = $k.Value }
+$inside = [System.Diagnostics.Process]::Start($psi)
+$insideOut = $inside.StandardOutput.ReadToEndAsync(); $insideErr = $inside.StandardError.ReadToEndAsync()
+$insideEnded = $inside.WaitForExit(180000)
+if (-not $insideEnded) { try { $inside.Kill() } catch { } }
+$insideSaid = $(if ($insideEnded) { "$($insideOut.Result)" + "$($insideErr.Result)" } else { "(did not end)" })
+Check ($insideEnded -and $insideSaid -like "*wake: SHADOW*" -and $insideSaid -notlike "*-Mode live*" -and $insideSaid -notlike "*wake: LIVE*" -and @(Read-FakeLog "typed.log").Count -eq 0) ("called from a PowerShell whose `$PSDefaultParameterValues makes every -Mode live, wake run is still a SHADOW run: a command is given what was typed, not what a session defaults (" + ($insideSaid -split "`r?`n")[0] + ")")
+$inside.Dispose()
 $explicit = Invoke-Wake $fleetHome @("run", "-Mode", "shadow", "-Once")
 Check ($explicit.code -eq 0 -and $explicit.out -like "*wake: SHADOW*" -and @(Read-FakeLog "typed.log").Count -eq 0) "-Mode shadow, the explicit form, is the same shadow run"
 
@@ -146,15 +161,41 @@ Write-Host "=== -Proof -Target <session id> -Once: one pass, one named session, 
 $typedBefore = @(Read-FakeLog "typed.log").Count
 # ONE SESSION, NAMED: every proof command line that does not name a whole session id is a usage error,
 # and so is a target given to a mode that has none. Nothing runs and nothing is typed.
-foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", "A", "-Once"), @("-Proof", "-Target", $idle.Substring(0, 8), "-Once"), @("-Proof", "-Target", $idle.ToUpperInvariant(), "-Once"), @("-Proof", "-Target", "-Once"), @("-Proof", "-Target", $idle), @("-Mode", "shadow", "-Target", $idle, "-Once"), @("-Mode", "live", "-Target", $idle, "-Once"), @("-Mode", "live", "-Proof", "-Target", $idle, "-Once"), @("-Mode", "proof", "-Target", $idle, "-Once"), @("-Proof", "-Target", $idle, "-Once", "-TickSeconds", "3"), @("-Target", $idle, "-Once"), @("-Proof", "-Target", ($idle + "," + $busy), "-Once"))) {
+foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", "A", "-Once"), @("-Proof", "-Target", $idle.Substring(0, 8), "-Once"), @("-Proof", "-Target", $idle.ToUpperInvariant(), "-Once"), @("-Proof", "-Target", "-Once"), @("-Proof", "-Target", $idle), @("-Mode", "shadow", "-Target", $idle, "-Once"), @("-Mode", "live", "-Target", $idle, "-Once"), @("-Mode", "live", "-Proof", "-Target", $idle, "-Once"), @("-Mode", "proof", "-Target", $idle, "-Once"), @("-Proof", "-Target", $idle, "-Once", "-TickSeconds", "3"), @("-Target", $idle, "-Once"), @("-Target", $idle), @("-Proof"), @("-Proof", "-Target", ($idle + "," + $busy), "-Once"))) {
     $r = Invoke-Wake $fleetHome (@("run") + $bad)
     Check ($r.code -eq 2 -and $r.out -like "*usage: horde wake run*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and -not (Test-Path -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json"))) ("run " + ($bad -join " ") + " is a usage error: exit 2, the usage, nothing run and nothing typed")
+}
+# ...AND NONE OF THEM IS A QUESTION. A missing mandatory parameter makes PowerShell ASK when it can, and a
+# horde started with its input open would wait there for ever. So the same incomplete forms, with the
+# input held OPEN and never written, must end by themselves, as a usage error.
+foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", $idle), @("-Proof"), @("-Target", $idle, "-Once"))) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" wake run " + ($bad -join " ")
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    foreach ($k in @{ HORDE_HOME = $fleetHome; WEZFLEET_ROOT = $fleetPin.path; USERPROFILE = $fakeProfile }.GetEnumerator()) { $psi.EnvironmentVariables[$k.Key] = $k.Value }
+    $asked = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $asked.StandardOutput.ReadToEndAsync(); $errTask = $asked.StandardError.ReadToEndAsync()
+    $ended = $asked.WaitForExit(120000)
+    if (-not $ended) { try { $asked.Kill() } catch { } }
+    $code = $(if ($ended) { $asked.ExitCode } else { -1 })
+    $said = $(if ($ended) { "$($outTask.Result)" + "$($errTask.Result)" } else { "" })
+    Check ($ended -and $code -eq 2 -and $said -like "*usage: horde wake run*" -and $said -notlike "*Supply values*") ("run " + ($bad -join " ") + ", with its input held open, ends by itself as a usage error: it does not ask for what is missing (ended " + $ended + ", exit " + $code + ")")
+    $asked.Dispose()
 }
 $stranger = "0a000000-0000-4000-8000-000000000099"
 $astray = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $stranger, "-Once")
 Check ($astray.code -eq 1 -and $astray.out -like "*proof-target-absent*" -and $astray.out -like "*nudged nobody*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) ("a proof run aimed at a session the fleet does not list nudges nobody - not the idle session that is ready - says so, and exits 1" + $(if ($astray.code -ne 1) { ": " + $astray.out } else { "" }))
 $aside = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $busy, "-Once")
 Check ($aside.code -eq 0 -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) "a proof run aimed at the busy session types nothing - and does not type into the idle one instead"
+Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
+# A LEDGER THAT CANNOT BE READ: the proof does not start, and types nothing. Mended (removed), it runs.
+$proofLedger = Join-Path $wakeDir "ledger-live.json"
+[System.IO.File]::WriteAllText($proofLedger, "{ not json", $utf8)
+$refusedRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
+Check ($refusedRun.code -eq 1 -and $refusedRun.out -like "*has not started*cannot be read*ledger-live.json*" -and $refusedRun.out -notlike "*pass 1 done*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and [System.IO.File]::ReadAllText($proofLedger) -ceq "{ not json") ("a proof run over a ledger file that cannot be read does not start: exit 1, the file named and left as it was, nothing typed" + $(if ($refusedRun.code -ne 1) { ": " + $refusedRun.out } else { "" }))
+Remove-Item -LiteralPath $proofLedger -Force
 Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
 $proofRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
 Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
@@ -182,6 +223,24 @@ $status = Invoke-Wake $fleetHome @("status")
 Check ($status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -notmatch "LIVE: heartbeat \d+ s ago, STALE") "the same heartbeat from a watcher that beats every 300 s is fresh: stale is three of its ticks"
 
 Write-Host ""
+Write-Host "=== a fleet command only FOUND ON PATH: shadow reads through it and says so; a run that sends is refused ===" -ForegroundColor Cyan
+# A home with no settings at all, and this scenario's fake checkout first on PATH: the waker finds the
+# command by looking, as a shell typing wezfleet would. Nobody named it.
+$pathHome = Join-Path $script:work "home-path-only"
+New-Item -ItemType Directory -Path $pathHome -Force | Out-Null
+$pathEnv = @{ HORDE_HOME = $pathHome; USERPROFILE = $fakeProfile; PATH = ($checkout + ";" + $env:PATH) }
+$typedPath = @(Read-FakeLog "typed.log").Count
+$nudgesPath = @(Read-FakeLog "argv.log" | Where-Object { "$(@($_.argv) -join ' ')" -like "mail nudge*" }).Count
+$shadowPath = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "run", "-Once") -Env $pathEnv
+Check ($shadowPath.code -eq 0 -and $shadowPath.out -like "*wake: SHADOW*through the waker 'wezfleet'*" -and $shadowPath.out -like "*NOT NAMED IN A SETTING*found from the wezfleet command on PATH*" -and $shadowPath.out -like "*would-nudge*") ("a shadow run reads the fleet through a command found on PATH, and its banner says nobody named it" + $(if ($shadowPath.code -ne 0) { ": " + $shadowPath.out } else { "" }))
+$proofPath = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "run", "-Proof", "-Target", $idle, "-Once") -Env $pathEnv
+Check ($proofPath.code -eq 1 -and $proofPath.out -like "*is refused*was not named in a setting*found from the wezfleet command on PATH*" -and $proofPath.out -notlike "*wake: PROOF*") ("a proof run through it is refused, exit 1, saying where the command was found" + $(if ($proofPath.code -ne 1) { ": " + $proofPath.out } else { "" }))
+$livePath = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "run", "-Mode", "live", "-Once") -Env $pathEnv
+Check ($livePath.code -eq 1 -and $livePath.out -notlike "*wake: LIVE*") "and so is a live run"
+Check (@(Read-FakeLog "typed.log").Count -eq $typedPath -and @(Read-FakeLog "argv.log" | Where-Object { "$(@($_.argv) -join ' ')" -like "mail nudge*" }).Count -eq $nudgesPath) "nothing was typed and no nudge was asked for by any of the three"
+Check (@(Get-ChildItem -LiteralPath (Join-Path $pathHome "wake") | Where-Object { $_.Name -like "*-proof*" -or $_.Name -like "*-live*" }).Count -eq 0) "and the refused runs wrote no file: no lock, no heartbeat, no ledger"
+
+Write-Host ""
 Write-Host "=== a home pinned to no fleet: it says what it could not read, once, and keeps beating ===" -ForegroundColor Cyan
 $pinnedWake = Join-Path $pinnedHome "wake"
 $beatPath = Join-Path $pinnedWake "heartbeat-shadow.json"
@@ -201,7 +260,7 @@ Check ($second.code -eq 1 -and $second.out -like "*shadow wake run is already ru
 # A RUN IN ANOTHER MODE IS NOT THE SAME RUN: the lock is per mode. (No fleet here: its one pass can
 # reach nobody.)
 $beside = Invoke-Wake $pinnedHome @("run", "-Proof", "-Target", "0a000000-0000-4000-8000-000000000001", "-Once")
-Check ($beside.code -eq 1 -and $beside.out -like "*pass 1 done*PROOF*" -and $beside.out -like "*nudged nobody*" -and $beside.out -notlike "*already running*" -and (Test-Path -LiteralPath (Join-Path $pinnedWake "run-proof.lock") -PathType Leaf) -and -not $run.p.HasExited) "a proof run beside the running shadow one is not refused: each mode has a lock of its own. (It finds no fleet, so it says it nudged nobody.)"
+Check ($beside.code -eq 1 -and $beside.out -like "*pass 1 done*PROOF*" -and $beside.out -like "*nudged nobody*" -and $beside.out -notlike "*already running*" -and (Test-Path -LiteralPath (Join-Path $pinnedWake "run-live.lock") -PathType Leaf) -and -not $run.p.HasExited) "a proof run beside the running SHADOW one is not refused: shadow has a lock of its own, and the runs that send share the other. (It finds no fleet, so it says it nudged nobody.)"
 $pinnedLines = @(Read-Journal $pinnedHome "journal-shadow.jsonl")
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "" -and "$($_.reason)" -like "*not a wezfleet checkout*" }).Count -eq 1) "with no fleet to read, the journal says once that the targets are unknown, and why - not once a pass"
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "restore" }).Count -eq 1) "and once that the restore source could not read the sessions of this scenario's empty profile"

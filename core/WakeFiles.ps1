@@ -53,13 +53,30 @@ function Get-HordeWakeFolder {
 }
 
 function Get-HordeWakeModeWord {
-    # The word a mode's files carry: the mode itself when -Mode names one, else shadow with -Shadow and
-    # live without. A word that is no mode is refused: a file named for a mode that does not exist is a
-    # file nothing would ever read back.
+    # The word a mode's files carry: the mode itself when -Mode names one, and SHADOW WHEN NOTHING IS
+    # SAID. It was live when nothing was said - a caller that left a word out read and wrote the files
+    # of the run that sends (safety review of PR 220). Every level now defaults to shadow, and a caller
+    # that means the sending run's files says so: -Mode "live". -Shadow is still taken, and says what
+    # the default says. A word that is no mode is refused: a file named for a mode that does not exist
+    # is a file nothing would ever read back.
     param([string]$Mode = "", [switch]$Shadow)
-    if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }
+    if ($Mode -ceq "") { return "shadow" }
     if (@("shadow", "proof", "live") -cnotcontains $Mode) { throw ("'" + $Mode + "' is not a mode of the wake run: shadow, proof or live") }
     return $Mode
+}
+
+function Get-HordeWakeSendWord {
+    # The word of the files that the runs which SEND share: shadow for a shadow run, and live for a live
+    # run AND for a proof run. ONE LOCK AND ONE LEDGER FOR THE MODES THAT SEND: each had its own, so a
+    # proof run could start beside a running live watcher, with a ledger of its own - a second budget
+    # of nudges for the same session, and two processes typing at once (safety review of PR 220). A
+    # nudge is a nudge whichever run sent it: both count it in ledger-live.json, and run-live.lock
+    # lets only one of them run. What a proof run keeps for itself is what is only about that run: its
+    # journal and its heartbeat, so a proof pass neither hides in a live journal nor makes a live
+    # watcher look alive.
+    param([string]$Mode = "")
+    if ((Get-HordeWakeModeWord -Mode $Mode) -ceq "shadow") { return "shadow" }
+    return "live"
 }
 
 function Get-HordeWakeStateFile {
@@ -233,7 +250,8 @@ function Enter-HordeWakeLock {
     param([switch]$Shadow, [string]$Mode = "", [int]$ProcessId = 0, [string]$HordeHome = (Get-HordeHome))
     $dir = Get-HordeWakeFolder -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $leaf = "run-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".lock"
+    # ONE LOCK FOR THE RUNS THAT SEND (Get-HordeWakeSendWord): a proof run and a live run hold the same one.
+    $leaf = "run-" + (Get-HordeWakeSendWord -Mode (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow)) + ".lock"
     try { $held = New-Object System.IO.FileStream((Join-Path $dir $leaf), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }
     catch [System.IO.IOException] {
         if (Test-HordeWakeSharingViolation $_.Exception) { return $null }

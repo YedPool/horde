@@ -20,7 +20,10 @@ function Get-HordeReservedLabels {
     # Every label that is not a session's to wear, with whose it is.
     #   RS  the restore source (core/RestoreSource.ps1, the setting fromLabel)
     #   WW  the wake watcher's tell sender (core/WakeTell.ps1, the setting fromLabel)
-    return @("RS", "WW")
+    #   SV  reserved by the fleet's own mail for a sender that is no session (the fleet tool reserves
+    #       RS, WW and SV together, as of its main 5b281ed, 2026-10-13); listed here so that Horde never
+    #       gives it to a session either, and the wake watcher never nudges one that wears it
+    return @("RS", "WW", "SV")
 }
 
 function Test-HordeLabelReserved {

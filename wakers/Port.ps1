@@ -75,13 +75,17 @@
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, and elapsedMs when it timed the
 #            nudge, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
-# and, when it has a use for them, two more:
+# and, when it has a use for them, three more:
 #   Confirm  param([string]$Id)  -> a state, as State answers it, READ AS FULLY AS THE WAKER CAN. For a
 #            waker whose State is cheap - one reading of the whole fleet, with the box and the turn
 #            unknown because they cost a look at the session itself - Confirm is that look. The watcher
 #            asks for it only for a session it is about to nudge (Get-HordeWakeState -Full), so a pass
 #            pays for a look per nudge, not per session. A waker whose State already says everything
 #            registers none, and -Full is then State.
+#   Source   param()             -> known { fixed; how }: where the program this waker runs comes from.
+#            fixed is true when a person NAMED the place in a setting, false when the waker found it
+#            by looking (on PATH); how is one line saying which. A waker that runs no program of
+#            anybody's registers none (Get-HordeWakerSource).
 #   Begin    param()             a pass begins. A waker that answers a pass's many questions from one
 #            reading of the fleet throws that reading away here, and nowhere else by the clock: the
 #            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
@@ -168,6 +172,7 @@ function Register-HordeWaker {
         [Parameter(Mandatory = $true)][scriptblock]$Nudge,
         [scriptblock]$Begin = $null,
         [scriptblock]$Confirm = $null,
+        [scriptblock]$Source = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -183,7 +188,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -346,6 +351,30 @@ function ConvertFrom-HordeWakerAnswer {
     if ($Answer.state -ceq "unknown") { return [pscustomobject]@{ ok = $false; answer = $Answer } }
     if ($Answer.state -ceq "absent") { return [pscustomobject]@{ ok = $false; answer = (New-HordeUnknown -Reason ("waker '" + $Waker + "' answered " + $What + " absent, which says nothing of what it was asked")) } }
     return [pscustomobject]@{ ok = $true; answer = $Answer }
+}
+
+function Get-HordeWakerSource {
+    # WHERE THE PROGRAM THIS WAKER RUNS COMES FROM, and whether a person named it (ADAPTER CONTRACT,
+    # Source): known { fixed; how }, absent for a waker that runs no program of anybody's (it registered
+    # no Source), or unknown with the reason - one that cannot say where its program is, answers with
+    # something else, or throws. fixed is true only when the place was NAMED in a setting; a program
+    # found by looking for it - on PATH - is not fixed: whatever is first on PATH that day is what would
+    # be run. The port only carries it: that a run which sends refuses a program nobody named is the
+    # watcher's rule (core/WakeRun.ps1, Get-HordeWakeRunPlan).
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so where its program comes from was not asked")) }
+    if ($null -eq $Waker.source) { return (New-HordeAbsent -Note ("waker '" + $Waker.name + "' runs no program whose place has to be named")) }
+    try { $a = & $Waker.source }
+    catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to say where its program comes from") -ErrorRecord $_) }
+    $first = ConvertFrom-HordeWakerAnswer -Answer $a -What "where its program comes from" -Waker $Waker.name
+    if (-not $first.ok) { return $first.answer }
+    $v = $a.value
+    if (-not (Test-HordeWakerRecord $v)) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered where its program comes from with something that is not an object")) }
+    $fixed = Get-HordeWakerMember $v "fixed"
+    if (-not $fixed.has -or $fixed.value -isnot [bool]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered where its program comes from without saying, true or false, whether the place was named")) }
+    $how = Get-HordeWakerMember $v "how"
+    if (-not $how.has -or $how.value -isnot [string] -or $how.value.Trim() -eq "" -or $how.value -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered where its program comes from without one line saying how it was found")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ fixed = [bool]$fixed.value; how = [string]$how.value }) -ObservedAt $a.observedAt)
 }
 
 function Test-HordeWakerConfirms {

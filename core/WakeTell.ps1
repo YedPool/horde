@@ -87,6 +87,16 @@ function Get-HordeWakeTellMessageId {
     return (ConvertTo-HordeTextUuid -Text ("horde-wake-tell`n" + $Condition.kind + "`n" + ("$($Condition.subject)").ToLowerInvariant() + "`n" + $Condition.instance))
 }
 
+function Get-HordeWakeTellClass {
+    # Which of the two budgets a told mark counts against: fleet or session. A mark saved before the
+    # classes existed says neither, and is a session's.
+    param($Mark)
+    if ($null -eq $Mark) { return "session" }
+    $p = $Mark.PSObject.Properties["class"]
+    if ($null -ne $p -and "$($p.Value)" -ceq "fleet") { return "fleet" }
+    return "session"
+}
+
 function Invoke-HordeWakeTellPass {
     # ONE PASS of the tell sender: for each condition not yet handled, tell the warchief - or journal that
     # it would, or that it was suppressed. Returns { entries; told }. It reads no clock and no file.
@@ -107,33 +117,42 @@ function Invoke-HordeWakeTellPass {
             if ($null -ne $was -and $was.at -is [datetime] -and ($Now - $was.at).TotalSeconds -le $Settings.keepSeconds) { $next["$k"] = $was }
         }
     }
-    foreach ($c in @($Conditions)) {
+    # A NOTICE ABOUT THE WHOLE FLEET IS NEVER CROWDED OUT BY NOTICES ABOUT SESSIONS. With six sessions or
+    # more given up on, their six tells used up the hour, and the ONE tell that explained them all -
+    # the fleet is silent, the fleet cannot be read - was the one suppressed (safety review of PR
+    # 220). So the two are counted apart: a fleet's notice (no session is its subject) is sent first
+    # and counts only against other fleet notices; a session's counts only against other sessions'.
+    # Each class has maxTellsPerHour, and there are two kinds of fleet notice, each once per instance.
+    $ordered = @(@($Conditions | Where-Object { $null -ne $_ -and "$($_.subject)" -ceq "" }) + @($Conditions | Where-Object { $null -ne $_ -and "$($_.subject)" -cne "" }))
+    foreach ($c in $ordered) {
         if ($null -eq $c) { continue }
         $id = Get-HordeWakeTellMessageId -Condition $c
+        $class = "session"
+        if ("$($c.subject)" -ceq "") { $class = "fleet" }
         if ($next.ContainsKey($id)) {
             # HANDLED ALREADY, unless it is a post that could not say and its retry is due.
             if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }
         }
         $body = "$($Settings.prefix)" + $c.text
-        $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 }).Count
+        $sentLately = @($next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and ($Now - $_.at).TotalSeconds -lt 3600 -and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count
         if ($sentLately -ge [int]$Settings.maxTellsPerHour) {
-            $next[$id] = [pscustomobject]@{ at = $Now; state = "suppressed" }
+            $next[$id] = [pscustomobject]@{ at = $Now; state = "suppressed"; class = $class }
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell-suppressed" -Id $c.subject -Outcome "suppressed" -Reason ($c.kind + ": over " + $Settings.maxTellsPerHour + " tells in an hour, so this one is only here: " + $c.text) -MessageId $id))
             continue
         }
         # SHADOW: the tell is journaled once and marked, and nothing is handed to the poster.
-        if ($Shadow) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell" }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-tell" -Id $c.subject -Outcome "would-tell" -Reason ($c.kind + ": " + $c.text) -MessageId $id)); continue }
-        if ($Warchief -ceq "") { $next[$id] = [pscustomobject]@{ at = $Now; state = "unposted" }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "unposted" -Reason ($c.kind + ": no one session is the warchief, so nobody can be told: " + $c.text) -MessageId $id)); continue }
-        if ($null -eq $Post) { $next[$id] = [pscustomobject]@{ at = $Now; state = "unposted" }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "unposted" -Reason ($c.kind + ": the pass was given nothing to post through: " + $c.text) -MessageId $id)); continue }
+        if ($Shadow) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell"; class = $class }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-tell" -Id $c.subject -Outcome "would-tell" -Reason ($c.kind + ": " + $c.text) -MessageId $id)); continue }
+        if ($Warchief -ceq "") { $next[$id] = [pscustomobject]@{ at = $Now; state = "unposted"; class = $class }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "unposted" -Reason ($c.kind + ": no one session is the warchief, so nobody can be told: " + $c.text) -MessageId $id)); continue }
+        if ($null -eq $Post) { $next[$id] = [pscustomobject]@{ at = $Now; state = "unposted"; class = $class }; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "unposted" -Reason ($c.kind + ": the pass was given nothing to post through: " + $c.text) -MessageId $id)); continue }
         $took = $null
         try { $took = & $Post ([pscustomobject]@{ kind = $c.kind; to = $Warchief; messageId = $id; body = $body }) } catch { $took = New-HordeUnknown -Reason "the post failed" -ErrorRecord $_ }
         if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
-            $next[$id] = [pscustomobject]@{ at = $Now; state = "told" }
+            $next[$id] = [pscustomobject]@{ at = $Now; state = "told"; class = $class }
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "posted" -Reason ($c.kind + ": " + $c.text) -MessageId $id))
         } else {
             $why = "the post answered with something that is not an answer"
             if (Test-HordeAnswer $took) { $why = "$($took.reason)" }
-            $next[$id] = [pscustomobject]@{ at = $Now; state = "failed" }
+            $next[$id] = [pscustomobject]@{ at = $Now; state = "failed"; class = $class }
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "tell" -Id $c.subject -Outcome "unknown" -Reason ($c.kind + ": " + $why) -MessageId $id))
         }
     }
@@ -156,7 +175,7 @@ function Save-HordeWakeTellState {
     # never read by a live one as told.
     param($Told = @{}, [string]$Name = "tells", [string]$Mode = "", [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
     $rows = @()
-    if ($null -ne $Told) { $rows = @($Told.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; at = (ConvertTo-HordeWakeTimeText $Told[$_].at); state = "$($Told[$_].state)" } }) }
+    if ($null -ne $Told) { $rows = @($Told.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; at = (ConvertTo-HordeWakeTimeText $Told[$_].at); state = "$($Told[$_].state)"; class = (Get-HordeWakeTellClass $Told[$_]) } }) }
     $doc = [ordered]@{ schemaVersion = 1; told = $rows }
     Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
@@ -176,7 +195,7 @@ function Read-HordeWakeTellState {
             if ($null -eq $row) { continue }
             $at = ConvertFrom-HordeWakeTimeText $row.at
             if ($null -eq $at -or "$($row.id)" -eq "") { return (New-HordeUnknown -Reason "the saved tells hold one with no id or no time") }
-            $told["$($row.id)"] = [pscustomobject]@{ at = $at; state = "$($row.state)" }
+            $told["$($row.id)"] = [pscustomobject]@{ at = $at; state = "$($row.state)"; class = (Get-HordeWakeTellClass $row) }
         }
     } catch { return (New-HordeUnknown -Reason "the saved tells hold one that is not one" -ErrorRecord $_) }
     return (New-HordeKnown -Value ([pscustomobject]@{ told = $told }))
