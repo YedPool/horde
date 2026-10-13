@@ -8,6 +8,42 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-waker-that-says-nothing-of-betweenturns-reads-as-no"
+           Find = '        $between = "unknown"'
+           Replace = '        $between = "no"' }
+        @{ Name = "a-waker-that-cannot-tell-may-say-between-turns"
+           Find = 'if ($bt.has -and $null -ne $bt.value -and "$($bt.value)" -cne "no") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-betweenturns-outside-the-three-words-accepted"
+           Find = 'if ($bt.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $bt.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "acked-left-out-reads-as-known"
+           Find = '    $acked = "unknown"'
+           Replace = '    $acked = "known"' }
+        @{ Name = "an-acked-outside-its-two-words-accepted"
+           Find = 'if ($ak.value -isnot [string] -or @("known", "unknown") -cnotcontains $ak.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-time-beside-acked-unknown-is-carried"
+           Find = 'if ($acked -ceq "known" -and $la.has -and $null -ne $la.value) {'
+           Replace = 'if ($la.has -and $null -ne $la.value) {' }
+        @{ Name = "a-lastackedat-with-no-zone-accepted"
+           Find = 'if ($null -eq $lastAcked) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "a-handed-over-count-that-is-no-count-accepted"
+           Find = 'if (-not ($ho.value -is [int] -or $ho.value -is [long]) -or $ho.value -lt 0 -or $ho.value -gt [int]::MaxValue) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "an-oldest-handed-over-with-no-zone-accepted"
+           Find = 'if ($null -eq $handedAt) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "betweenturns-is-not-carried"
+           Find = 'betweenTurns = $between; acked = $acked;'
+           Replace = 'betweenTurns = "no"; acked = $acked;' }
+        @{ Name = "when-it-last-acknowledged-is-not-carried"
+           Find = 'acked = $acked; lastAckedAt = $lastAcked;'
+           Replace = 'acked = $acked; lastAckedAt = $null;' }
+        @{ Name = "what-was-handed-over-is-not-carried"
+           Find = 'handedOverCount = $handed; oldestHandedOverAt = $handedAt })'
+           Replace = 'handedOverCount = $null; oldestHandedOverAt = $handedAt })' }
         @{ Name = "a-source-that-does-not-say-fixed-is-accepted"
            Find = 'if (-not $fixed.has -or $fixed.value -isnot [bool]) { return'
            Replace = 'if ($false) { return' }

@@ -38,7 +38,9 @@ function New-Row {
     # -Change laid over it. A member set to "(none)" is left out of the row altogether.
     param([int]$N = 1, [hashtable]$Change = @{})
     $r = [ordered]@{ id = (Sid $N); label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0
-        oldestUnreadAt = "2026-10-12T07:00:00.0000000Z"; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null }
+        oldestUnreadAt = "2026-10-12T07:00:00.0000000Z"; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null
+        # ...and what the command says since its main 5224296, in the shapes its real output has (read 2026-10-13).
+        handedOverCount = 0; oldestHandedOverAt = $null; acked = "known"; lastAckedAt = $null; betweenTurns = "no" }
     foreach ($k in $Change.Keys) { if ("$($Change[$k])" -ceq "(none)") { $r.Remove($k) } else { $r[$k] = $Change[$k] } }
     return $r
 }
@@ -190,6 +192,52 @@ Check ((ConvertTo-HordeWezfleetWakerLine "found from the wezfleet command on PAT
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and "$($a.value.reason)".StartsWith("nudge-killed: ") -and "$($a.value.reason)".Contains("box may now hold")) ("a nudge stopped for printing more than a megabyte is killed, not unreachable: nobody knows it typed nothing (" + $a.value.outcome + ")")
 & $fx.SetMode $state $null
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- rows of the newer command and of the older one are both read: what an older row lacks is unknown, never an error ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+$older = @{ betweenTurns = "(none)"; acked = "(none)"; lastAckedAt = "(none)"; handedOverCount = "(none)"; oldestHandedOverAt = "(none)"; limited = "(none)"; limitedUntil = "(none)" }
+# THE NEWER SHAPE: each member is carried as the port's.
+& $fx.SetRow $state (New-Row 1 @{ betweenTurns = "yes"; acked = "known"; lastAckedAt = "2026-10-12T07:55:00.0000000Z"; handedOverCount = 2; oldestHandedOverAt = "2026-10-12T07:58:00Z" })
+& $fx.Clock $state $t0
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.betweenTurns -ceq "yes" -and $a.value.acked -ceq "known" -and $a.value.lastAckedAt -eq (New-Object System.DateTime(2026, 10, 12, 7, 55, 0, [System.DateTimeKind]::Utc)) -and $a.value.handedOverCount -eq 2 -and $a.value.oldestHandedOverAt -eq (New-Object System.DateTime(2026, 10, 12, 7, 58, 0, [System.DateTimeKind]::Utc))) "a row of the newer command: betweenTurns, what was last acknowledged and what was handed over are each carried"
+foreach ($word in @("no", "unknown")) {
+    & $fx.SetRow $state (New-Row 1 @{ betweenTurns = $word })
+    Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).value.betweenTurns -ceq $word) ("betweenTurns " + $word + " is carried as " + $word)
+}
+& $fx.SetRow $state (New-Row 1 @{ acked = "unknown"; lastAckedAt = "2026-10-12T07:55:00Z" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.acked -ceq "unknown" -and $null -eq $a.value.lastAckedAt) "acked unknown: the time beside it is not read - what could not be read is not evidence"
+& $fx.SetRow $state (New-Row 1 @{ acked = "known"; lastAckedAt = "2026-10-12 07:55" })
+Check ($null -eq (Get-HordeWakeState -Waker $w -Id (Sid 1)).value.lastAckedAt) "a lastAckedAt that names no zone cannot be placed, and is no time"
+& $fx.SetRow $state (New-Row 1 @{ handedOverCount = 0; oldestHandedOverAt = "2026-10-12T07:58:00Z" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.value.handedOverCount -eq 0 -and $null -eq $a.value.oldestHandedOverAt) "nothing handed over is a known 0, with no oldest"
+# THE OLDER SHAPE: the command installed before those members. Every one reads as unknown; the row is a row.
+& $fx.SetRow $state (New-Row 1 $older)
+& $fx.SetRow $state (New-Row 2)
+$listing = Get-HordeWakeTargets -Waker $w
+Check ($listing.state -ceq "known" -and @($listing.value).Count -eq 2) "a fleet with a row of the older command beside one of the newer is listed whole: the older row does not blank the listing"
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.betweenTurns -ceq "unknown" -and $a.value.acked -ceq "unknown" -and $null -eq $a.value.lastAckedAt -and $null -eq $a.value.handedOverCount -and $null -eq $a.value.oldestHandedOverAt -and $a.value.limited -ceq "unknown") "the older row's state is known, and each thing it does not say is unknown: never no, never 0, never 'never acknowledged'"
+$full = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
+Check ($full.state -ceq "known" -and $full.value.boxEmpty -ceq "yes" -and $full.value.betweenTurns -ceq "unknown") "and so through the per-session reading of it"
+# A MEMBER THAT IS THERE AND OF THE WRONG KIND is a row this waker does not read (rule 5).
+foreach ($case in @(
+        @{ what = "betweenTurns that is none of the three words"; change = @{ betweenTurns = "maybe" } },
+        @{ what = "acked that is neither known nor unknown"; change = @{ acked = "yes" } },
+        @{ what = "lastAckedAt that is a number"; change = @{ lastAckedAt = 5 } },
+        @{ what = "handedOverCount below 0"; change = @{ handedOverCount = -1 } },
+        @{ what = "handedOverCount that is text"; change = @{ handedOverCount = "2" } },
+        @{ what = "oldestHandedOverAt that is a number"; change = @{ handedOverCount = 1; oldestHandedOverAt = 7 } })) {
+    & $fx.SetRow $state (New-Row 1 $case.change)
+    Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).state -ceq "unknown") ("a row with " + $case.what + " is not read: it is not taken for one that does not say")
+}
+$newest = @(& $fx.Runs $state)
+Check ($newest.Count -gt 0 -and @($newest | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0) "every reading above went through the fake started as the fleet's command is: a process of its own"
 & $fx.Remove $state; $state = $null
 
 Write-Host ""

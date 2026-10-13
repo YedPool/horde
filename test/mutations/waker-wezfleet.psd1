@@ -6,6 +6,39 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "an-older-rows-betweenturns-reads-as-no"
+           Find = '    $between = "unknown"'
+           Replace = '    $between = "no"' }
+        @{ Name = "an-older-rows-acked-reads-as-known"
+           Find = '    $acked = "unknown"'
+           Replace = '    $acked = "known"' }
+        @{ Name = "a-time-beside-acked-unknown-is-read"
+           Find = 'if ($acked -ceq "known" -and $null -ne $p) { $lastAcked = ConvertTo-HordeWezfleetWakerTime $p.Value }'
+           Replace = 'if ($null -ne $p) { $lastAcked = ConvertTo-HordeWezfleetWakerTime $p.Value }' }
+        @{ Name = "an-older-rows-handed-over-count-reads-as-none"
+           Find = '    $handed = $null'
+           Replace = '    $handed = 0' }
+        @{ Name = "a-betweenturns-that-is-no-word-is-accepted"
+           Find = 'if ($names -ccontains "betweenTurns" -and ($Row.betweenTurns -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.betweenTurns)) { return "a row''s betweenTurns is not yes, no or unknown" }'
+           Replace = '' }
+        @{ Name = "an-acked-that-is-no-word-is-accepted"
+           Find = 'if ($names -ccontains "acked" -and ($Row.acked -isnot [string] -or @("known", "unknown") -cnotcontains $Row.acked)) { return "a row''s acked is not known or unknown" }'
+           Replace = '' }
+        @{ Name = "a-handed-over-count-that-is-no-count-is-accepted"
+           Find = '(($Row.handedOverCount -is [int] -or $Row.handedOverCount -is [long]) -and $Row.handedOverCount -ge 0)) { return'
+           Replace = '($false)) { return' }
+        @{ Name = "betweenturns-is-not-carried"
+           Find = 'betweenTurns = $later.betweenTurns; acked = $later.acked;'
+           Replace = 'betweenTurns = "no"; acked = $later.acked;' }
+        @{ Name = "what-was-acknowledged-is-not-carried"
+           Find = 'acked = $later.acked; lastAckedAt = $later.lastAckedAt;'
+           Replace = 'acked = $later.acked; lastAckedAt = $null;' }
+        @{ Name = "what-was-handed-over-is-not-carried"
+           Find = 'handedOverCount = $later.handedOverCount;'
+           Replace = 'handedOverCount = $null;' }
+        @{ Name = "a-time-with-no-zone-is-read-as-local"
+           Find = 'if ([datetime]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { return $parsed.ToUniversalTime() }'
+           Replace = 'if ([datetime]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $parsed.ToUniversalTime() }' }
         @{ Name = "the-commands-paths-are-kept-in-a-reason"
            Find = 'if ($Tool) { $clean = [regex]::Replace('
            Replace = 'if ($false) { $clean = [regex]::Replace(' }

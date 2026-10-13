@@ -78,7 +78,7 @@ foreach ($marker in @("lib\Mail.ps1", "commands\mail.ps1")) {
 }
 $idle = "0a000000-0000-4000-8000-000000000001"; $busy = "0a000000-0000-4000-8000-000000000002"; $typing = "0a000000-0000-4000-8000-000000000003"
 $old = [datetime]::UtcNow.AddMinutes(-10).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
-function New-Row { param([string]$Id, [string]$Idle = "yes", [string]$Box = "yes", [string]$Turn = "no") return [ordered]@{ id = $Id; label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0; oldestUnreadAt = $old; idle = $Idle; boxEmpty = $Box; midTurn = $Turn; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null } }
+function New-Row { param([string]$Id, [string]$Idle = "yes", [string]$Box = "yes", [string]$Turn = "no") return [ordered]@{ id = $Id; label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0; oldestUnreadAt = $old; idle = $Idle; boxEmpty = $Box; midTurn = $Turn; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null; handedOverCount = 0; oldestHandedOverAt = $null; acked = "known"; lastAckedAt = $null; betweenTurns = "no" } }
 $rows = @((New-Row $idle), (New-Row $busy -Idle "no" -Turn "yes"), (New-Row $typing -Box "no"))
 [System.IO.File]::WriteAllText((Join-Path $checkout "fleet.json"), ("[" + ((@($rows | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 4 })) -join ",") + "]"), $utf8)
 New-Item -ItemType Directory -Path (Join-Path $fleetHome "settings") -Force | Out-Null
