@@ -35,7 +35,12 @@ try {
     Check (@(Get-ChildItem -LiteralPath (Join-Path $work "sub")).Count -eq 1) "nothing is left beside it: the temporary file became the heartbeat"
     Write-HordeHeartbeat -Path $path -At $t0.AddSeconds(5) -ProcessId 4242 -ProcessStartedAt $born -TickSeconds 97 -Pass 8
     Check ((Read-HordeHeartbeat -Path $path).value.pass -eq 8) "a second beat replaces the first"
-    Check (Throws { Write-HordeHeartbeat -Path "relative\beat.json" -At $t0 -ProcessId 1 -TickSeconds 1 } "absolute path") "a relative path is refused: where it would land depends on the current folder"
+    # From inside the suite's own folder: were the refusal ever broken (its mutant is), the file would
+    # land there and be removed with it, not in whatever folder the suite was started from.
+    # The PROCESS's current folder, which is what .NET resolves a relative path against.
+    $wasIn = [System.IO.Directory]::GetCurrentDirectory()
+    [System.IO.Directory]::SetCurrentDirectory($work)
+    try { Check (Throws { Write-HordeHeartbeat -Path "relative\beat.json" -At $t0 -ProcessId 1 -TickSeconds 1 } "absolute path") "a relative path is refused: where it would land depends on the current folder" } finally { [System.IO.Directory]::SetCurrentDirectory($wasIn) }
 
     Write-Host ""
     Write-Host "--- absent, unknown and known are told apart ---" -ForegroundColor Cyan
