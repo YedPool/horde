@@ -1205,8 +1205,10 @@ function Get-HordeSessionRuns {
 function Get-HordeLiveSignal {
     # Which of live signals 1 to 4 (the header's SCOPE) makes a session current, or "" when none does.
     # Signal 5 needs the session's pane, so Complete-HordeProjection judges it.
-    param($C, [string]$Id)
-    if ($C.identity.records.ContainsKey($Id)) { return "a control file names it" }
+    # -NotItsControlFile asks whether any OTHER signal holds, for a session whose control file is proven
+    # stale (Test-HordeSessionProvenEnded).
+    param($C, [string]$Id, [switch]$NotItsControlFile)
+    if (-not $NotItsControlFile -and $C.identity.records.ContainsKey($Id)) { return "a control file names it" }
     if (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0) { return "two control files name it" }
     if ($C.paneVerdicts.bySession.ContainsKey($Id)) { return "a guarded pane-sessions file names it" }
     if ($C.procIndex.resumes.ContainsKey($Id)) { return "a process resumes it" }
@@ -1354,6 +1356,48 @@ function Complete-HordeProjection {
         host = [pscustomobject]@{ name = $C.hostName; instance = $C.host.instance }
         sessions = $sessions; handles = $handles; faults = $faults; complete = $complete; inputs = $C; scope = $Scope
     }
+}
+
+# -------------------------------------------------------------------- the sessions a node serves
+
+function Test-HordeSessionProvenEnded {
+    # Is this projected session's end PROVEN, with nothing else saying it is live? Only then may a node
+    # leave it out of what it serves (Remove-HordeEndedSessions). Proven means its control file's process
+    # check is gone (the pid is not running) or reused (the pid runs with another start time): core/
+    # identity's kinds, never words in a reason. uncheckable, no-table, unchecked (a file with no pid) and
+    # a duplicate are not proof, so those sessions stay, their live fields unknown with the reason.
+    # And no other live signal may hold: a process resuming it, a guarded pane-sessions file, a registry
+    # record not retired or unreadable, an open run, or a stored handle live now (its pane known).
+    param($C, $Session)
+    $id = "$($Session.sessionId)"
+    if (-not $C.identity.records.ContainsKey($id)) { return $false }
+    if (@("gone", "reused") -cnotcontains "$($C.identity.records[$id].processCheck)") { return $false }
+    # A process whose command line cannot be read may be resuming this very session.
+    if (@($C.procIndex.unreadPids).Count -gt 0) { return $false }
+    if ($Session.fields["pane"].answer.state -eq "known") { return $false }
+    return ((Get-HordeLiveSignal -C $C -Id $id -NotItsControlFile) -eq "")
+}
+
+function Remove-HordeEndedSessions {
+    # The projection without the sessions whose end is proven (Test-HordeSessionProvenEnded): what a node
+    # serves as its inventory. WHY (2026-10-13, the always-on node): a session whose process is ended
+    # rather than exiting - its pane closed by hand, or ended by the host after a refused spawn - leaves
+    # its control file behind, and the whole projection keeps a session any store names. On a node whose
+    # only store is those control files, every such session was listed, and the hub counted it as one of
+    # the node's sessions: "2 session(s)" where none ran. The read model itself is unchanged (-Scope All
+    # still holds every session, and the current scope's signal 4 still counts a control file, running or
+    # not); this is the node's serving rule. A copy: the projection given is not modified. A kept session
+    # is carried exactly as the projection has it; the handles, faults and store completeness are the
+    # projection's, unchanged. A handle row names only sessions whose pane is known, and those are kept.
+    param([Parameter(Mandatory = $true)]$Projection)
+    $C = $Projection.inputs
+    $kept = @($Projection.sessions | Where-Object { -not (Test-HordeSessionProvenEnded -C $C -Session $_) })
+    $out = [pscustomobject]@{
+        PSTypeName = "Horde.Projection"; observedAt = $Projection.observedAt; host = $Projection.host
+        sessions = $kept; handles = $Projection.handles; faults = $Projection.faults; complete = $Projection.complete; inputs = $C
+    }
+    if ($null -ne $Projection.PSObject.Properties["scope"]) { $out | Add-Member -NotePropertyName scope -NotePropertyValue $Projection.scope }
+    return $out
 }
 
 # ------------------------------------------------------------------------------- the document
