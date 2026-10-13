@@ -248,7 +248,7 @@ Check ($t1.record.sha256 -ceq $t2.record.sha256 -and @(Get-ChildItem -LiteralPat
 # -Root names the store folder itself, whatever the home is.
 $elsewhere = Join-Path $script:work "a-store-elsewhere"
 $e1 = Add-HordeFilesShare -Path $twin -Title "Kept elsewhere" -HordeHome $h2 -Root $elsewhere -Asking $sessA
-Check ($e1.outcome -ceq "shared" -and $e1.record.version -eq 1 -and (Get-Names $elsewhere) -ceq (@(($e1.record.fileId + ".000001.json"), ($e1.record.sha256 + ".bytes")) -join ",") -and @(Get-ChildItem -LiteralPath (Get-StoreOf $h2) -Filter "*.json").Count -eq 2) "a share given -Root keeps its record and bytes in that folder, and nothing more in the home's store"
+Check ($e1.outcome -ceq "shared" -and $e1.record.version -eq 1 -and (Get-Names $elsewhere) -ceq ((@(($e1.record.fileId + ".000001.json"), ($e1.record.sha256 + ".bytes")) | Sort-Object) -join ",") -and @(Get-ChildItem -LiteralPath (Get-StoreOf $h2) -Filter "*.json").Count -eq 2) "a share given -Root keeps its record and bytes in that folder, and nothing more in the home's store"
 Check (@((Get-HordeFilesList -HordeHome $h2 -Root $elsewhere).rows).Count -eq 1 -and @((Get-HordeFilesList -HordeHome $h2).rows).Count -eq 2) "and the list given -Root reads that folder"
 # The bytes file of that name with another length is damage, and nothing is built on it.
 $h3 = New-TestHome
