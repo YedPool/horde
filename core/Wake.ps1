@@ -60,6 +60,9 @@ function Get-HordeWakeSettings {
         maxNudgesPerPass = 1
         # At most this many nudges for ONE unread mail of one session (Update-HordeWakeGaveUp).
         maxNudgesPerMail = 6
+        # After this many readings of the fleet failed in a row, the failure is called permanent
+        # (Update-HordeWakeFleetRead).
+        maxFleetReadFailures = 10
         # At most this many full readings of a session - a look at its box and its turn - in one pass
         # (Invoke-HordeWakePass, THE LOOK COMES LAST). Each can take a pane's whole time-out.
         maxConfirmsPerPass = 3
@@ -311,6 +314,45 @@ function Update-HordeWakeGaveUp {
     return [pscustomobject]@{ ledger = $next; entries = $entries.ToArray(); sessions = $sessions.ToArray() }
 }
 
+function Update-HordeWakeFleetRead {
+    # WHEN A FLEET THAT CANNOT BE READ STOPS BEING A HICCUP: { seen; entries; quiet; condition }.
+    #   -Seen     { failures; since; told }, from the last pass, or $null
+    #   -Listing  this pass's answer to "which sessions are there" (the port's Get-HordeWakeTargets)
+    # A failing read was backed off and never capped (review of PR #211): a registry that cannot be read
+    # until a person mends a file was retried for ever, with one journal line at the start and nothing
+    # to tell anybody it had become the state of things. So after maxFleetReadFailures readings failed
+    # IN A ROW the failure is PERMANENT: one entry of kind fleet-read-failing, one condition for the
+    # warchief to be told (core/WakeTell.ps1), and then quiet - the journal's line for each unreadable
+    # pass is dropped while it lasts - until a reading works, which is one entry of kind recovered.
+    # THE COUNT IS THE WAKER'S WHEN IT GIVES ONE (the unknown's failures, wakers/Port.ps1): a waker that
+    # backs its readings off makes far fewer readings than the watcher makes passes. Otherwise it is the
+    # passes in a row on which the listing was unknown. The waker's own back-off is what spaces the
+    # retries; by the count that makes a failure permanent it is long since at its longest step.
+    param($Seen = $null, $Listing = $null, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
+    $before = [pscustomobject]@{ failures = 0; since = $null; told = $false }
+    if ($null -ne $Seen) { $before = $Seen }
+    $entries = New-Object System.Collections.ArrayList
+    if ($null -eq $Listing) { return [pscustomobject]@{ seen = $before; entries = @(); quiet = $false; condition = $null } }
+    if ("$($Listing.state)" -ceq "known") {
+        if ($before.told -eq $true) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "recovered" -Outcome "recovered" -Reason ("the fleet can be read again, after " + $before.failures + " readings in a row had failed"))) }
+        return [pscustomobject]@{ seen = [pscustomobject]@{ failures = 0; since = $null; told = $false }; entries = $entries.ToArray(); quiet = $false; condition = $null }
+    }
+    $count = [int]$before.failures + 1
+    $given = Get-HordeWakeEntryValue $Listing "failures"
+    if ($given -is [int] -or $given -is [long]) { $count = [int]$given }
+    $since = $before.since
+    if ($since -isnot [datetime]) { $since = $Now }
+    $told = ($before.told -eq $true)
+    $condition = $null
+    if (-not $told -and $count -ge [int]$Settings.maxFleetReadFailures) {
+        $told = $true
+        $what = ("" + $count + " readings of the fleet in a row have failed, the first at " + $since.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) + ": " + $Listing.reason)
+        [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "fleet-read-failing" -Outcome "permanent" -Reason ($what + ". No session can be woken while this lasts. It is tried again at the waker's longest back-off, and nothing more is said until it works")))
+        $condition = [pscustomobject]@{ kind = "fleet-read-failing"; subject = ""; instance = $since.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture); text = ($what + ". No session can be woken by the watcher while this lasts.") }
+    }
+    return [pscustomobject]@{ seen = [pscustomobject]@{ failures = $count; since = $since; told = $told }; entries = $entries.ToArray(); quiet = $told; condition = $condition }
+}
+
 function Update-HordeWakeBadMail {
     # WHAT A MAILBOX WITH RECORDS NOBODY CAN READ IS TOLD ABOUT, AND WHEN: { seen; entries }.
     #   -Seen        session id -> { passes; told }, from the last pass
@@ -363,6 +405,7 @@ function Invoke-HordeWakePass {
     $decisions = @()
     $unreadable = @{}
     $gaveUp = @()
+    $listing = $null
     if ($null -ne $Waker) {
         # A PASS BEGINS: the waker is told, so what it read of the fleet for the last pass is not reused
         # for this one and is read once for all of this one's questions (wakers/Port.ps1, Begin).
@@ -423,7 +466,7 @@ function Invoke-HordeWakePass {
             foreach ($e in @($gave.entries)) { [void]$entries.Add($e) }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----

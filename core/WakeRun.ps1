@@ -49,7 +49,7 @@ function New-HordeWakeRun {
     # is never changed afterwards (the header). said is what the caller should print once: a saved
     # file that could not be read is started from empty, and says so.
     param([switch]$Live, [string]$HordeHome = (Get-HordeHome))
-    $run = [pscustomobject]@{ live = [bool]$Live; ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ live = [bool]$Live; ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Shadow:(-not $run.live) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
@@ -141,7 +141,15 @@ function Invoke-HordeWakeTick {
     # THE WAKE PASS, in the run's mode: this is the one call whose mode differs between the two.
     try {
         $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow
-        foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
+        # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
+        # in a row - said once - and then the line for each unreadable pass is dropped until it works.
+        $fleetRead = Update-HordeWakeFleetRead -Seen $Run.fleetRead -Listing $result.listing -Now $Now -Settings $Settings
+        $Run.fleetRead = $fleetRead.seen
+        foreach ($e in @($result.entries)) {
+            if ($fleetRead.quiet -and $e.kind -ceq "skip-unknown" -and "$($e.id)" -ceq "") { continue }
+            [void]$entries.Add($e)
+        }
+        foreach ($e in @($fleetRead.entries)) { [void]$entries.Add($e) }
         # MAIL NOBODY CAN READ, said once when it lasts two passes (core/Wake.ps1, Update-HordeWakeBadMail).
         $bad = Update-HordeWakeBadMail -Seen $Run.badMail -Unreadable $result.unreadable -Now $Now
         $Run.badMail = $bad.seen

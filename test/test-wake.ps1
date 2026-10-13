@@ -381,6 +381,38 @@ Check ($d[0].action -ceq "look") "with one, it is look: everything else holds, g
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- a fleet that cannot be read: a hiccup at first, permanent after ten failures in a row, said once ---" -ForegroundColor Cyan
+
+$bad = New-HordeUnknown -Reason "records-unreadable: the registry is not JSON"
+$fr = $null
+$said = New-Object System.Collections.ArrayList
+foreach ($n in 1..9) { $step = Update-HordeWakeFleetRead -Seen $fr -Listing $bad -Now (At ($n * 3)) -Settings $settings; $fr = $step.seen; foreach ($e in @($step.entries)) { [void]$said.Add($e) } }
+Check ($said.Count -eq 0 -and $fr.failures -eq 9 -and $fr.told -eq $false -and $fr.since -eq (At 3) -and $step.quiet -eq $false -and $null -eq $step.condition) "nine failed readings in a row are not yet permanent: nothing is said, and the journal's own line for each stands"
+$step = Update-HordeWakeFleetRead -Seen $fr -Listing $bad -Now (At 30) -Settings $settings; $fr = $step.seen
+Check (@($step.entries).Count -eq 1 -and $step.entries[0].kind -ceq "fleet-read-failing" -and $step.entries[0].outcome -ceq "permanent" -and $step.entries[0].id -ceq "" -and "$($step.entries[0].reason)".StartsWith("10 readings of the fleet in a row have failed, the first at 2026-10-12T08:00:03Z: records-unreadable")) "the tenth makes it permanent: one line saying how many, since when and why"
+Check ($step.quiet -eq $true -and $null -ne $step.condition -and $step.condition.kind -ceq "fleet-read-failing" -and $step.condition.subject -ceq "" -and $step.condition.instance -ceq "2026-10-12T08:00:03.0000000Z") "with a condition for the warchief to be told, named by when the failing began, and quiet from then on"
+$more = 0; foreach ($n in 11..40) { $step = Update-HordeWakeFleetRead -Seen $fr -Listing $bad -Now (At ($n * 3)) -Settings $settings; $fr = $step.seen; $more += @($step.entries).Count; if ($null -ne $step.condition -or -not $step.quiet) { $more += 100 } }
+Check ($more -eq 0) "thirty more failures say nothing more, raise no second condition, and stay quiet"
+$step = Update-HordeWakeFleetRead -Seen $fr -Listing (New-HordeKnown -Value @()) -Now (At 200) -Settings $settings
+Check (@($step.entries).Count -eq 1 -and $step.entries[0].kind -ceq "recovered" -and "$($step.entries[0].reason)".Contains("after 40 readings") -and $step.seen.failures -eq 0 -and $step.seen.told -eq $false -and $step.quiet -eq $false) "the reading that works says recovered, once, and the count starts over"
+$step = Update-HordeWakeFleetRead -Seen (Update-HordeWakeFleetRead -Seen $null -Listing $bad -Now (At 0) -Settings $settings).seen -Listing (New-HordeKnown -Value @()) -Now (At 3) -Settings $settings
+Check (@($step.entries).Count -eq 0) "a hiccup that mends says nothing: recovered is only for what had been called permanent"
+# THE WAKER'S OWN COUNT, when it gives one: its readings, not the watcher's passes.
+$counted = New-HordeUnknown -Reason "registry-absent"; Add-Member -InputObject $counted -MemberType NoteProperty -Name "failures" -Value 3
+$fr = $null; $lines = 0
+foreach ($n in 1..40) { $step = Update-HordeWakeFleetRead -Seen $fr -Listing $counted -Now (At ($n * 3)) -Settings $settings; $fr = $step.seen; $lines += @($step.entries).Count }
+Check ($lines -eq 0 -and $fr.failures -eq 3) "forty passes over a waker that says three of its readings have failed are three failures, not forty: a waker that backs off reads far less often than the watcher passes"
+$counted.failures = 10
+$step = Update-HordeWakeFleetRead -Seen $fr -Listing $counted -Now (At 200) -Settings $settings
+Check (@($step.entries).Count -eq 1 -and $step.entries[0].kind -ceq "fleet-read-failing") "and when the waker's own count reaches ten, that is permanent"
+Check ((Update-HordeWakeFleetRead -Seen $null -Listing $null -Now $t0 -Settings $settings).quiet -eq $false) "with no waker there is no reading, and nothing to say of it"
+Start-Case; Seat
+Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+$r = Pass 0
+Check ($null -ne $r.listing -and $r.listing.state -ceq "unknown") "the pass hands on what the listing answered, for the tick to count"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- mail nobody can read: said once, when it lasts two passes, and never a reason not to nudge ---" -ForegroundColor Cyan
 
 Start-Case; Seat -Change @{ UnreadableCount = 1 }

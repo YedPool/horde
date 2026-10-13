@@ -56,6 +56,12 @@
         @{ Name = "bad-mail-forgotten-between-ticks"
            Find = '$Run.badMail = $bad.seen'
            Replace = '$Run.badMail = @{}' }
+        @{ Name = "unreadable-passes-journaled-after-permanent"
+           Find = 'if ($fleetRead.quiet -and $e.kind -ceq "skip-unknown" -and "$($e.id)" -ceq "") { continue }'
+           Replace = '' }
+        @{ Name = "fleet-read-count-forgotten-between-ticks"
+           Find = '$Run.fleetRead = $fleetRead.seen'
+           Replace = '$Run.fleetRead = $null' }
         @{ Name = "restore-source-every-tick"
            Find = 'if (($Now - $Run.restoreAt).TotalSeconds -ge $script:HordeWakeRestoreEverySeconds) {'
            Replace = 'if ($true) {' }

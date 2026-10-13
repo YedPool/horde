@@ -176,14 +176,15 @@ Set-Answer $state "fleet" 1 '{"at":"2026-10-12T08:00:00Z","sessions":null,"reaso
 & $fx.Clock $state $t0
 $first = Get-HordeWakeTargets -Waker $w
 Check ($first.state -ceq "unknown" -and "$($first.reason)".StartsWith("records-unreadable: ") -and "$($first.reason)".Contains("exit 1") -and "$($first.reason)".Contains("x.json is not JSON")) "a non-zero exit is unknown, the fleet's reason code first, then its exit and its detail"
+Check ($first.failures -eq 1) "and the answer says it is the first failure in a row"
 $calls = Get-Count $state "mail state -Json"
 $same = @()
 foreach ($s in @(1, 3, 4.9)) { & $fx.Clock $state $t0.AddSeconds($s); $same += (Get-HordeWakeTargets -Waker $w).reason; $same += (Get-HordeWakeState -Waker $w -Id (Sid 1)).reason }
 Check ((Get-Count $state "mail state -Json") -eq $calls) "for the next 5 s the fleet is not asked again, however often the watcher asks"
 Check (@($same | Where-Object { $_ -cne $first.reason }).Count -eq 0 -and $same.Count -eq 6) "and every answer meanwhile is the same unknown in the same words, so the journal says it once"
 & $fx.Clock $state $t0.AddSeconds(5)
-$null = Get-HordeWakeTargets -Waker $w
-Check ((Get-Count $state "mail state -Json") -eq ($calls + 1)) "at 5 s it is asked again"
+$second = Get-HordeWakeTargets -Waker $w
+Check ((Get-Count $state "mail state -Json") -eq ($calls + 1) -and $second.failures -eq 2) "at 5 s it is asked again, and that is the second failure in a row: the count is of its readings, not of how often it was asked"
 & $fx.Clock $state $t0.AddSeconds(19.9)
 $null = Get-HordeWakeTargets -Waker $w
 Check ((Get-Count $state "mail state -Json") -eq ($calls + 1)) "after the second failure it waits 15 s: not asked at 19.9 s"

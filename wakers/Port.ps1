@@ -57,7 +57,11 @@
 #
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
-#   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown
+#   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown.
+#            An unknown may carry failures, a whole number: how many readings in a row have failed. A
+#            waker that backs its readings off knows that count and the watcher cannot - its passes are
+#            not the waker's readings - and the watcher uses it to tell a hiccup from a fleet that
+#            cannot be read at all (core/Wake.ps1, Update-HordeWakeFleetRead).
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn },
 #            and unreadableCount when the waker can count mail it could not read, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, and elapsedMs when it timed the

@@ -70,6 +70,18 @@ $none = { $a = New-HordeKnown -Value @(); Add-Member -InputObject $a -MemberType
 $said = @(); foreach ($s in @(0, 3, 6, 9)) { $said += , @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind }) }
 Check (@($said[0]).Count -eq 0 -and (@($said[1]) -join ",") -ceq "bad-mail" -and @($said[2]).Count -eq 0 -and @($said[3]).Count -eq 0) "a session whose mailbox holds records nobody can read is journaled bad-mail once, on the second tick that shows it, and not again"
 
+# A FLEET THAT CANNOT BE READ: the tick says it once as unknown, once as permanent, and once as recovered.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+$run = New-HordeWakeRun -HordeHome $h
+$seenKinds = New-Object System.Collections.ArrayList
+foreach ($n in 0..29) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$seenKinds.Add($e.kind + "@" + $n) } }
+Check ((@($seenKinds) -join ",") -ceq "skip-unknown@0,fleet-read-failing@9") ("thirty ticks over a fleet that cannot be read journal two lines: unknown on the first, permanent on the tenth, and nothing after (" + (@($seenKinds) -join ",") + ")")
+Set-HordeMemoryWakerFault -Call "targets" -Kind ""
+$back = @(Invoke-HordeWakeTick -Run $run -Now (At 100) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind })
+Check (($back -join ",") -ceq "recovered") "the tick on which it can be read again says recovered"
+
 Write-Host ""
 Write-Host "--- a tick never throws: what fails is journaled once, and the next tick runs ---" -ForegroundColor Cyan
 

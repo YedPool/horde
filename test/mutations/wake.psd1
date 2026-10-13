@@ -141,6 +141,27 @@
         @{ Name = "who-was-given-up-on-not-handed-on"
            Find = '$gaveUp = @($gave.sessions)'
            Replace = '$gaveUp = @()' }
+        @{ Name = "a-failing-fleet-read-is-never-permanent"
+           Find = 'if (-not $told -and $count -ge [int]$Settings.maxFleetReadFailures) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "permanent-said-every-pass"
+           Find = 'if (-not $told -and $count -ge [int]$Settings.maxFleetReadFailures) {'
+           Replace = 'if ($count -ge [int]$Settings.maxFleetReadFailures) {' }
+        @{ Name = "permanent-after-eleven"
+           Find = 'maxFleetReadFailures = 10'
+           Replace = 'maxFleetReadFailures = 11' }
+        @{ Name = "the-wakers-own-count-ignored"
+           Find = 'if ($given -is [int] -or $given -is [long]) { $count = [int]$given }'
+           Replace = '' }
+        @{ Name = "recovered-said-for-a-hiccup"
+           Find = 'if ($before.told -eq $true) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "recovered"'
+           Replace = 'if ($before.failures -gt 0) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "recovered"' }
+        @{ Name = "failures-not-forgotten-when-it-works"
+           Find = 'return [pscustomobject]@{ seen = [pscustomobject]@{ failures = 0; since = $null; told = $false }; entries = $entries.ToArray(); quiet = $false; condition = $null }'
+           Replace = 'return [pscustomobject]@{ seen = $before; entries = $entries.ToArray(); quiet = $false; condition = $null }' }
+        @{ Name = "listing-not-handed-on"
+           Find = 'gaveUp = $gaveUp; listing = $listing }'
+           Replace = 'gaveUp = $gaveUp; listing = $null }' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
            Replace = '' }

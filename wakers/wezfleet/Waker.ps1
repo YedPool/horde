@@ -42,7 +42,9 @@
 #   3. A FAILURE CAN BE PERMANENT (records-unreadable is, until a person mends the file). The answer is
 #      unknown with the fleet's reason code, and the fleet is not asked again on every pass: after
 #      consecutive failures the next read waits 5, 15, 45, 135, then 300 s, and until then the same
-#      unknown is answered, in the same words, so the journal says it once (core/WakeFiles.ps1).
+#      unknown is answered, in the same words, so the journal says it once (core/WakeFiles.ps1). The
+#      count of failures in a row goes with the answer, and after ten the watcher calls it permanent:
+#      one line, one mail to the warchief, and silence until a read works (core/Wake.ps1).
 #   4. EVERY CALL RUNS UNDER THIS ADAPTER'S OWN DEADLINE: form A 10 s, form B three times the
 #      -TimeoutSeconds it passes (5, so 15 s), form C three times the budget it passes (60, so 180 s).
 #      Past it the child and everything it started are stopped and the answer is unknown with the
@@ -558,7 +560,14 @@ function Read-HordeWezfleetWakerState {
 function Get-HordeWezfleetWakerTargets {
     # The port's Targets: form A's rows that are not retired, or that have unread mail (the header).
     $fleet = Read-HordeWezfleetWakerFleet
-    if (-not $fleet.ok) { return (New-HordeUnknown -Reason $fleet.reason) }
+    if (-not $fleet.ok) {
+        # HOW MANY READS IN A ROW HAVE FAILED goes with the unknown (wakers/Port.ps1, Targets): this waker
+        # backs its reads off, so only it knows, and the watcher needs it to say when a failure has
+        # stopped being a hiccup. After the fifth the read is already retried only every 300 s.
+        $unknown = New-HordeUnknown -Reason $fleet.reason
+        Add-Member -InputObject $unknown -MemberType NoteProperty -Name "failures" -Value ([int]$script:HordeWezfleetWakerFleetFailures.count)
+        return $unknown
+    }
     $list = New-Object System.Collections.ArrayList
     foreach ($row in @($fleet.rows.Values)) {
         $hasMail = ($null -ne $row.unreadCount -and $row.unreadCount -gt 0)

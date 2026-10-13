@@ -54,6 +54,9 @@
         @{ Name = "rule-3-failing-read-repeated-every-call"
            Find = 'if ($fail.count -gt 0 -and $now -lt $fail.nextAt) { return [pscustomobject]@{ ok = $false; rows = $null; reason = $fail.reason } }'
            Replace = '' }
+        @{ Name = "rule-3-failures-in-a-row-not-said"
+           Find = '-Name "failures" -Value ([int]$script:HordeWezfleetWakerFleetFailures.count)'
+           Replace = '-Name "failures" -Value 0' }
         @{ Name = "rule-3-back-off-never-grows"
            Find = 'return [int]$steps[[System.Math]::Min($Failures, $steps.Count) - 1]'
            Replace = 'return [int]$steps[0]' }
