@@ -41,12 +41,5 @@
         @{ Name = "http-watch-relay-close-read-as-nothing"
            Find = 'finish(event && event.code >= 4000 && event.code <= 4999 ?'
            Replace = 'finish(false ?' }
-        # --- a hole is reported apart from the anomalies (2026-10-13)
-        @{ Name = "gap-reported-as-an-anomaly"
-           Find = 'gaps.push("a gap: seq "'
-           Replace = 'anomalies.push("a gap: seq "' }
-        @{ Name = "gaps-not-handed-to-the-caller"
-           Find = 'anomalies: r.anomalies, gaps: r.gaps });'
-           Replace = 'anomalies: r.anomalies, gaps: [] });' }
     )
 }

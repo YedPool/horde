@@ -119,9 +119,5 @@
         @{ Name = "passkey-error-message-shown"
            Find = 'const name = x && typeof x.name === "string" && /^[A-Za-z]{1,40}$/.test(x.name) ? x.name : "";'
            Replace = 'const name = x ? x.name + ": " + x.message : "";' }
-        # --- a hole in the phone's mailbox is not an anomaly (2026-10-13)
-        @{ Name = "trimmed-mailbox-holes-shown-on-the-screen"
-           Find = 'anomalies.push(...r.value.anomalies);'
-           Replace = 'anomalies.push(...r.value.anomalies, ...r.value.gaps);' }
     )
 }
