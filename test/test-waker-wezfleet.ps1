@@ -93,6 +93,24 @@ Check ((Get-Count $state "mail state -Json") -eq ($before + 1)) "a state asked a
 $null = Get-HordeWakeTargets -Waker $w
 Check ((Get-Count $state "mail state -Json") -eq ($before + 2)) "three seconds on is the next pass: the fleet is asked again"
 & $fx.Clock $state $null
+# A PASS BEGINS: the watcher says so, and the fleet is read again whatever the clock says.
+& $fx.Forget $state
+$before = Get-Count $state "mail state -Json"
+$null = Get-HordeWakeTargets -Waker $w
+$null = Get-HordeWakeState -Waker $w -Id (Sid 2)
+Start-HordeWakePass -Waker $w
+$null = Get-HordeWakeTargets -Waker $w
+$null = Get-HordeWakeState -Waker $w -Id (Sid 2)
+Check ((Get-Count $state "mail state -Json") -eq ($before + 2)) "told a pass begins, the waker reads the fleet again at once - one call for each pass, two for two"
+# A FLEET SLOWER THAN THE ANSWER'S LIFE: 3 s to answer, a life of 2 s. Stamped when the call was made,
+# the answer was already expired when it arrived, and every state of the pass asked again.
+& $fx.SetMode $state @{ fleet = @{ hangSeconds = 3 } }
+Start-HordeWakePass -Waker $w
+$before = Get-Count $state "mail state -Json"
+$null = Get-HordeWakeTargets -Waker $w
+foreach ($n in 2, 3, 4) { $null = Get-HordeWakeState -Waker $w -Id (Sid $n) }
+Check ((Get-Count $state "mail state -Json") -eq ($before + 1)) "a fleet that takes 3 s to answer is still asked once for the whole pass: the answer's life is counted from when it arrived"
+& $fx.SetMode $state $null
 & $fx.Remove $state; $state = $null
 
 Write-Host ""

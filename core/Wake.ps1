@@ -263,6 +263,9 @@ function Invoke-HordeWakePass {
     $decisions = @()
     $unreadable = @{}
     if ($null -ne $Waker) {
+        # A PASS BEGINS: the waker is told, so what it read of the fleet for the last pass is not reused
+        # for this one and is read once for all of this one's questions (wakers/Port.ps1, Begin).
+        Start-HordeWakePass -Waker $Waker
         $listing = Get-HordeWakeTargets -Waker $Waker
         if ($listing.state -cne "known") {
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Outcome "unknown" -Reason ("the targets are unknown: " + $listing.reason)))

@@ -73,6 +73,7 @@ Start-Case; Seat
 $r = Pass
 $d = Decided $r
 Check ($d.action -ceq "nudge" -and (Rang 1) -eq 1) "an idle session with an empty box and old unread mail is nudged"
+Check ((Get-HordeMemoryWakerBegins) -eq 1) "the pass told the waker once that a pass begins"
 Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].id -ceq (Sid 1) -and $r.entries[0].outcome -ceq "woken" -and $r.entries[0].at -eq $t0) "and the pass journals one nudge, its session, its outcome and its time"
 
 Start-Case; Seat -Change @{ MidTurn = "yes" }

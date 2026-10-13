@@ -10,6 +10,6 @@
 # 2026-10-13 when wakers/ became a port family, and test/test-host-names.ps1 checks it.
 #
 # path | mentions | why this file may name the waker
-test/test-wake.ps1 | 12 | the watcher's suite drives the memory waker through its test helpers: it says what each session is, moves its clock, makes a call fail and reads what was rung
-test/test-wake-port.ps1 | 12 | the port suite reads the memory waker's own record of its nudges to show which outcomes ring and which do not
+test/test-wake-port.ps1 | 13 | the port suite reads the memory waker's own record of its nudges to show which outcomes ring and which do not
 test/test-wake-run.ps1 | 23 | the tick's suite seats sessions in the memory waker and reads what it was asked for, to show a shadow tick asks for nothing and a live one for exactly the decided nudges
+test/test-wake.ps1 | 13 | the watcher's suite drives the memory waker through its test helpers: it says what each session is, moves its clock, makes a call fail and reads what was rung

@@ -17,6 +17,7 @@
 $script:HordeMemoryWakerSessions = [ordered]@{}
 $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
+$script:HordeMemoryWakerBegins = 0
 $script:HordeMemoryWakerFaults = @{}
 $script:HordeMemoryWakerClock = $null
 # THE ONE LINE A NUDGE TYPES: fixed, the same for every session and every mail, and no part of a body.
@@ -27,6 +28,7 @@ function Reset-HordeMemoryWaker {
     $script:HordeMemoryWakerSessions = [ordered]@{}
     $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
     $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
+    $script:HordeMemoryWakerBegins = 0
     $script:HordeMemoryWakerFaults = @{}
     $script:HordeMemoryWakerClock = $null
 }
@@ -87,6 +89,11 @@ function Get-HordeMemoryWakerAsks {
     return @($script:HordeMemoryWakerAsks | ForEach-Object { "$_" })
 }
 
+function Get-HordeMemoryWakerBegins {
+    # How many times this waker was told a pass begins, since the last reset.
+    return $script:HordeMemoryWakerBegins
+}
+
 function Invoke-HordeMemoryWakerFault {
     # Throws when -Call is set to throw; returns $true when it is set to answer rubbish.
     param([string]$Call)
@@ -127,4 +134,5 @@ $null = Register-HordeWaker -Name "memory" `
         # it did not ring, so nothing was typed for them.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }
         return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }) -ObservedAt $at)
-    }
+    } `
+    -Begin { $script:HordeMemoryWakerBegins++ }

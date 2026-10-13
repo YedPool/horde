@@ -139,7 +139,7 @@ $starts = @($sites | Where-Object { $_.kind -ceq "method" -and $_.text -clike "*
 Check ($starts.Count -eq 1) ("exactly one process start in the family (" + $starts.Count + ")")
 $setup = @($sites | Where-Object { $_.kind -ceq "type" -and $_.text -clike "*ProcessStartInfo]::new(*" })
 Check ($setup.Count -eq 1 -and $setup[0].text.Contains('[System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"')) "and the program it starts is named once, as the fixed PowerShell in the system folder"
-Check ((@($sites | Where-Object { $_.kind -ceq "call" }).Count -eq 3)) "CONTROL: the port's three calls of a registered waker are seen as sites"
+Check ((@($sites | Where-Object { $_.kind -ceq "call" }).Count -eq 4)) "CONTROL: the port's calls of a registered waker are seen as sites"
 Check ((@($sites | Where-Object { $_.kind -ceq "starter" }).Count -eq 3)) "the start has three callers, one for each form of the fleet's command"
 $tree = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-startsites-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
 try {

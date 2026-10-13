@@ -33,6 +33,12 @@
         @{ Name = "one-answer-kept-for-ever"
            Find = '($now - $kept.at).TotalSeconds -lt $script:HordeWezfleetWakerFleetLifeSeconds) { return $kept.answer }'
            Replace = '$true) { return $kept.answer }' }
+        @{ Name = "answer-stamped-when-the-call-was-made"
+           Find = '$script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = (Get-HordeWezfleetWakerTime); answer = $answer }'
+           Replace = '$script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = $now; answer = $answer }' }
+        @{ Name = "a-pass-beginning-keeps-the-last-reading"
+           Find = '-Begin { Clear-HordeWezfleetWakerPass }'
+           Replace = '-Begin { }' }
         @{ Name = "rule-1-a-row-with-a-reason-distrusted"
            Find = 'if ($Row.mail -cne "known") {'
            Replace = 'if ($Row.mail -cne "known" -or "$($Row.reason)" -cne "") {' }

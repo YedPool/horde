@@ -101,8 +101,8 @@ $script:HordeWezfleetWakerDetailChars = 300
 $script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudge = 20 }
 # RULE 3, the wait after each consecutive failure of a read.
 $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
-# How long one form A answer serves: a pass asks for the targets and then each session's state within
-# moments, and all of them are answered from one call. The next pass, a tick later, asks again.
+# How long one form A answer serves a caller that never says a pass begins, counted from its arrival.
+# The watcher does say (the port's Begin), and for it an answer serves exactly one pass.
 $script:HordeWezfleetWakerFleetLifeSeconds = 2
 $script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "goblin" }
 $script:HordeWezfleetWakerWords = @("yes", "no", "unknown")
@@ -425,6 +425,12 @@ function Read-HordeWezfleetWakerFleet {
     # FORM A, ONCE A PASS: { ok; rows; reason }, rows keyed by session id. One answer serves every call
     # made within its short life; a failing read is not repeated until its back-off has run out, and
     # answers in the same words meanwhile (rule 3).
+    # THE ANSWER IS KEPT FOR THE PASS, AND STAMPED WHEN IT ARRIVES. It was stamped when the call was
+    # MADE (review of PR #211): a fleet that took longer than the answer's 2 s life to reply left an
+    # answer already expired, so every state of that pass asked again - N + 1 process starts a pass on
+    # exactly the machine too slow to bear them. Two things now: the watcher says when a pass begins
+    # (the port's Begin, Clear-HordeWezfleetWakerPass), and that alone ends a kept answer's use by the
+    # watcher; and for a caller that never says so, the life is counted from the answer's arrival.
     $now = Get-HordeWezfleetWakerTime
     $kept = $script:HordeWezfleetWakerFleet
     if ($null -ne $kept -and ($now - $kept.at).TotalSeconds -ge 0 -and ($now - $kept.at).TotalSeconds -lt $script:HordeWezfleetWakerFleetLifeSeconds) { return $kept.answer }
@@ -436,8 +442,14 @@ function Read-HordeWezfleetWakerFleet {
         $count = [int]$fail.count + 1
         $script:HordeWezfleetWakerFleetFailures = @{ count = $count; nextAt = $now.AddSeconds((Get-HordeWezfleetWakerWait -Failures $count)); reason = $answer.reason }
     }
-    $script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = $now; answer = $answer }
+    $script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = (Get-HordeWezfleetWakerTime); answer = $answer }
     return $answer
+}
+
+function Clear-HordeWezfleetWakerPass {
+    # A pass begins: the last pass's reading of the fleet is not this one's. What was counted of
+    # failures is kept - a back-off runs across passes, which is its whole point.
+    $script:HordeWezfleetWakerFleet = $null
 }
 
 function Get-HordeWezfleetWakerFleetAnswer {
@@ -590,4 +602,5 @@ function Send-HordeWezfleetWakerNudge {
 $null = Register-HordeWaker -Name "wezfleet" `
     -Targets { Get-HordeWezfleetWakerTargets } `
     -State { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id } `
-    -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id }
+    -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
+    -Begin { Clear-HordeWezfleetWakerPass }

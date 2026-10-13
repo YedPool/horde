@@ -90,6 +90,9 @@
         @{ Name = "unreadable-count-not-handed-on"
            Find = '$states[$t.id].value.unreadableCount -gt 0) { $unreadable[$t.id] ='
            Replace = '$false) { $unreadable[$t.id] =' }
+        @{ Name = "waker-not-told-a-pass-begins"
+           Find = 'Start-HordeWakePass -Waker $Waker'
+           Replace = '$null = 0' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -lt $allowed) {'
            Replace = 'if ($true) {' }

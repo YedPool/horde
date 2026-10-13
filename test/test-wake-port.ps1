@@ -35,8 +35,9 @@ function Reg {
     param([string]$Name,
           [scriptblock]$Targets = { $script:calls++; New-HordeKnown -Value @() },
           [scriptblock]$State = { param($id) $script:calls++; New-HordeUnknown -Reason "the fixture knows no session" },
-          [scriptblock]$Nudge = { param($id) $script:calls++; New-HordeUnknown -Reason "the fixture rings nobody" })
-    return (Register-HordeWaker -Name $Name -Folder (Join-Path $fx $Name) -Targets $Targets -State $State -Nudge $Nudge)
+          [scriptblock]$Nudge = { param($id) $script:calls++; New-HordeUnknown -Reason "the fixture rings nobody" },
+          [scriptblock]$Begin = $null)
+    return (Register-HordeWaker -Name $Name -Folder (Join-Path $fx $Name) -Targets $Targets -State $State -Nudge $Nudge -Begin $Begin)
 }
 
 Write-Host ""
@@ -139,6 +140,17 @@ Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.
 Set-HordeMemoryWakerSession -Id $sid -Outcome "nothing" -OutcomeReason "its mail was taken before the nudge"
 $a = Send-HordeWakeNudge -Waker $memory -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and $a.value.reason -ceq "its mail was taken before the nudge" -and @(Get-HordeMemoryWakerNudges -Id $sid).Count -eq 1) "nothing - the mail was taken before the nudge - is carried with its reason, and nobody was rung for it"
+
+Start-HordeWakePass -Waker $memory
+Start-HordeWakePass -Waker $memory
+Check ((Get-HordeMemoryWakerBegins) -eq 2) "a waker that registered a Begin is told each time a pass begins"
+$said = "returned"
+try { Start-HordeWakePass -Waker $good; Start-HordeWakePass -Waker $null; Start-HordeWakePass -Waker ([pscustomobject]@{ PSTypeName = "Horde.Waker"; name = "fixture-good"; begin = { throw "a look-alike was called" } }) } catch { $said = "threw: " + $_.Exception.Message }
+Check ($said -ceq "returned") "a waker with no Begin, no waker at all and a look-alike are told nothing, and none of them is a throw"
+$thrower = Reg "fixture-second-begin" -Begin { throw "the fleet fell over" }
+$said = "returned"
+try { Start-HordeWakePass -Waker $thrower } catch { $said = "threw" }
+Check ($said -ceq "returned") "a Begin that throws is not a throw of the port"
 
 Write-Host ""
 Write-Host "--- an adapter's bad answer is unknown with the reason, never passed on and never a throw ---" -ForegroundColor Cyan

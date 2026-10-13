@@ -62,6 +62,11 @@
 #            and unreadableCount when the waker can count mail it could not read, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
+# and, when it has a use for it, one more:
+#   Begin    param()             a pass begins. A waker that answers a pass's many questions from one
+#            reading of the fleet throws that reading away here, and nowhere else by the clock: the
+#            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
+#            two passes and never repeated inside one, however slow the fleet was to answer.
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
@@ -136,6 +141,7 @@ function Register-HordeWaker {
         [Parameter(Mandatory = $true)][scriptblock]$Targets,
         [Parameter(Mandatory = $true)][scriptblock]$State,
         [Parameter(Mandatory = $true)][scriptblock]$Nudge,
+        [scriptblock]$Begin = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -151,7 +157,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -289,6 +295,16 @@ function ConvertFrom-HordeWakerAnswer {
     if ($Answer.state -ceq "unknown") { return [pscustomobject]@{ ok = $false; answer = $Answer } }
     if ($Answer.state -ceq "absent") { return [pscustomobject]@{ ok = $false; answer = (New-HordeUnknown -Reason ("waker '" + $Waker + "' answered " + $What + " absent, which says nothing of what it was asked")) } }
     return [pscustomobject]@{ ok = $true; answer = $Answer }
+}
+
+function Start-HordeWakePass {
+    # Tell -Waker a pass begins (ADAPTER CONTRACT, Begin). Returns nothing, and never throws for the far
+    # end: a waker with no Begin has nothing to be told, and one whose Begin throws has only failed to
+    # forget, which its next reading answers for.
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return }
+    if ($null -eq $Waker.begin) { return }
+    try { $null = & $Waker.begin } catch { }
 }
 
 function Get-HordeWakeTargets {
