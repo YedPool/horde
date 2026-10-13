@@ -12,14 +12,15 @@
 #                                     variable moved it; .horde-secrets in the user's profile; and
 #                                     any folder named .horde or .horde-secrets anywhere on the way
 #                                     to the file;
-#   unless the caller gives -Force    .ssh in the user's profile; and every folder an agent harness
-#                                     keeps its own files in.
+#                                     .ssh in the user's profile;
+#   unless the caller gives -Force    every folder an agent harness keeps its own files in.
 #   WHICH FOLDERS ARE A HARNESS'S is each adapter's to say and is read as data
 #   (agents/<name>/stores.json, through core/MetricsStore.ps1's Get-HordeAgentStoreRoots): its
 #   folder in the profile, and the folder a variable of its own moves its store to. No harness is
 #   named here (CONTRIBUTING 14), and a new one is covered the day its folder declares its stores.
 #   An adapter that does not say makes the answer unknown, and that is a refusal: a harness nobody
-#   described is not left open.
+#   described is not left open. So does an agents folder that is not there at all: core answers
+#   that with an empty list, which here would deny nothing and say nothing.
 #   EVERY PLACE IS WORKED OUT TWICE, AND BOTH ANSWERS ARE REFUSED. The review of this list
 #   (2026-10-13) set USERPROFILE to an empty folder and shared, with no -Force, a file in the real
 #   .ssh, a harness's real sign-in file and the real home's settings; and with HORDE_HOME set
@@ -32,8 +33,30 @@
 #   .horde-secrets, .ssh, and every harness's folder. The configured home is beside them, and a
 #   harness's folder that its own variable moved is beside its usual one, which is still refused.
 #
-# THE NAMES. A file whose NAME holds one of the words credential, secret, token, key, password or
-# .env is refused unless the caller gives -Force.
+# THE NAMES. A file whose NAME holds one of the list's words is refused unless the caller gives
+# -Force. EACH WORD SAYS WHICH OF TWO WAYS IT IS LOOKED FOR (the list has one entry a word):
+#   anywhere   the letters, wherever they stand in the name: credential, secret, token, key,
+#              password, passwd, .env. So htpasswd.txt and MySecretNotes.md are refused.
+#   word       only as a whole word of the name. The name is cut into words at every character
+#              that is not a letter or digit of ASCII and where a small letter meets a capital
+#              (Get-HordeFilesNameWords), and the entry must be one of them, or one of them with a
+#              single s after it: auth.json, oauth_creds.json, cookies.json and oauthCreds.json
+#              are refused; author-notes.md, credits.md, privateer.txt and cookiecutter.md are
+#              not. An entry of several words (service-account, id_rsa) is those words standing
+#              together in order, whatever is between them: serviceAccount.json, id-rsa.txt.
+#              THESE WORDS ARE SHORT, and anywhere in a name they would refuse ordinary files
+#              (the review's decision, 2026-10-13: "auth" is in author, "cred" in credits, "pem"
+#              in template).
+#   WHAT THE WORD WAY MISSES: a word run into another with no capital between them (authfile.json,
+#   AUTHFile.json), and digits count as letters (auth2.json is the word auth2).
+#   env IS A WORD AS WELL AS .env ANYWHERE: env.json was shared, because the name has no dot
+#   before the letters; as a word it is refused, and so is test-env.md.
+#   A PUBLIC KEY (id_rsa.pub) is refused by its name like the private one beside it. Accepted: no
+#   type of key file is shared in any case, and -Force is there for a copy saved as text.
+# ONE MORE, BY NAME AND FOLDER TOGETHER: a file named exactly config.json in a folder named
+# exactly .aws, .azure, .kube or .docker, on the final path, is a cloud tool's sign-in and is
+# refused the same way. (The other file such a folder keeps, credentials, holds a word of the
+# list and is refused wherever it is.)
 #   - THE FILE'S OWN NAME ONLY, extension included; not the folders it is in. A folder is a place,
 #     and the places are above. KNOWN COST: an innocently named file in a folder called "secrets"
 #     is shared. Judging every folder's name was weighed and left out: a session's own working
@@ -53,8 +76,19 @@
 #     product) costs its owner a -Force. The other words have no such list: tokenizer.md and
 #     secretary.txt are refused, and -Force shares them.
 #
-# -Force IS THE CALLER SAYING "this file holds no secret". It lifts the names, .ssh and the
-# harness folders. It is never honoured for the Horde home or .horde-secrets, and the refusal says so.
+# -Force IS THE CALLER SAYING "this file holds no secret". It lifts the names and the harness
+# folders, and the shapes of a token in a text. It is never honoured for the Horde home,
+# .horde-secrets, .ssh or a private key in a text, and the refusal says so.
+#   INSIDE A HARNESS'S FOLDER -Force LIFTS THE PLACE AND NEVER THE NAME (the review's decision,
+#   2026-10-13). What sessions said to a harness is there, and a founder may well want one of
+#   those shared; the harness's sign-in is there too, under a name like the ones above. So with
+#   -Force a transcript is shared from there and a file named as a secret never is, and the
+#   refusal says which of the two rules refused.
+#
+# WHAT A TEXT FILE HOLDS IS LOOKED AT TOO, before its bytes are kept
+# (Get-HordeFilesContentRefusal): a private key's first line is refused whatever the caller
+# says, and a token of a known shape unless the caller gives -Force. A picture and a PDF are not
+# looked into.
 #
 # EVERY RULE JUDGES THE FINAL PATH OF THE OPEN HANDLE, never the path that was written
 # (files/Path.ps1): a link, a junction, a subst drive, an 8.3 short name or the long-path prefix
@@ -86,22 +120,88 @@ function Get-HordeFilesDenyList {
         homeFolder = ".horde"
         secretsFolder = ".horde-secrets"
         sshFolder = ".ssh"
-        words = @("credential", "secret", "token", "key", "password", ".env")
+        words = @(
+            @{ word = "credential"; how = "anywhere" }, @{ word = "secret"; how = "anywhere" }, @{ word = "token"; how = "anywhere" },
+            @{ word = "key"; how = "anywhere" }, @{ word = "password"; how = "anywhere" }, @{ word = "passwd"; how = "anywhere" },
+            @{ word = ".env"; how = "anywhere" },
+            @{ word = "auth"; how = "word" }, @{ word = "oauth"; how = "word" }, @{ word = "cred"; how = "word" },
+            @{ word = "private"; how = "word" }, @{ word = "wallet"; how = "word" }, @{ word = "cookie"; how = "word" },
+            @{ word = "recovery"; how = "word" }, @{ word = "env"; how = "word" }, @{ word = "service-account"; how = "word" },
+            @{ word = "id_rsa"; how = "word" }, @{ word = "id_dsa"; how = "word" }, @{ word = "id_ecdsa"; how = "word" }, @{ word = "id_ed25519"; how = "word" },
+            @{ word = "pem"; how = "word" }, @{ word = "pfx"; how = "word" }, @{ word = "p12"; how = "word" }, @{ word = "ppk"; how = "word" },
+            @{ word = "kdbx"; how = "word" }, @{ word = "jks"; how = "word" }, @{ word = "netrc"; how = "word" }, @{ word = "npmrc"; how = "word" },
+            @{ word = "pypirc"; how = "word" }, @{ word = "tfstate"; how = "word" }
+        )
         ordinary = @{ key = @("keyboard", "keybind", "keymap", "keynote", "keyword", "keyframe", "keystroke", "keypad", "hotkey", "monkey", "donkey", "turkey", "hockey", "jockey", "whiskey") }
+        # A file of exactly one of these names, in a folder of exactly one of these names, is a
+        # cloud tool's sign-in: its name alone says nothing (config.json is anybody's). The other
+        # name such a folder keeps, credentials, is refused wherever it is by the word above.
+        signInFolders = @(".aws", ".azure", ".kube", ".docker")
+        signInNames = @("config.json")
+        # WHAT A TEXT FILE MAY NOT HOLD, by the names core/Secrets.ps1 gives its kinds: only the
+        # kinds that know a credential by its SHAPE (Get-HordeFilesContentRefusal says why only
+        # those). never is refused whatever the caller says; lifted is what -Force lifts.
+        shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }
     }
 }
 
+function Get-HordeFilesNameWords {
+    # The words of a file name, in order and in lower case: the name cut at every character that
+    # is not one of A to Z, a to z or 0 to 9 - a dot, a dash, an underscore, a blank, and any
+    # letter outside ASCII, which so ends a word and never hides one - and where a small letter
+    # is followed by a capital (oauthCreds is oauth and creds). The header says what this misses.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    $found = New-Object System.Collections.ArrayList
+    $word = New-Object System.Text.StringBuilder
+    $afterSmall = $false
+    foreach ($character in $Name.ToCharArray()) {
+        $code = [int]$character
+        $capital = ($code -ge 65 -and $code -le 90)
+        $small = ($code -ge 97 -and $code -le 122)
+        if (-not ($capital -or $small -or ($code -ge 48 -and $code -le 57))) {
+            if ($word.Length -gt 0) { [void]$found.Add($word.ToString()); [void]$word.Clear() }
+            $afterSmall = $false
+            continue
+        }
+        if ($capital -and $afterSmall -and $word.Length -gt 0) { [void]$found.Add($word.ToString()); [void]$word.Clear() }
+        if ($capital) { $code += 32 }
+        [void]$word.Append([char]$code)
+        $afterSmall = $small
+    }
+    if ($word.Length -gt 0) { [void]$found.Add($word.ToString()) }
+    return @($found.ToArray())
+}
+
 function Get-HordeFilesDenyWord {
-    # The word of the list that the file name -Name holds, or "" when it holds none.
+    # The word of the list that the file name -Name holds, or "" when it holds none. The words
+    # are tried in the list's order, each in its own way (the header has the two ways).
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
     $list = Get-HordeFilesDenyList
     $lowered = ConvertTo-HordeAsciiLower -Text $Name
-    foreach ($word in $list.words) {
-        $rest = $lowered
-        # An ordinary word leaves a bar, which no file name holds, so what stood on its two sides
-        # never joins into the word.
-        foreach ($plain in @($list.ordinary[$word])) { if ("$plain" -ne "") { $rest = $rest.Replace($plain, "|") } }
-        if ($rest.Contains($word)) { return $word }
+    $nameWords = @(Get-HordeFilesNameWords -Name $Name)
+    foreach ($entry in $list.words) {
+        $word = "" + $entry.word
+        if ($entry.how -ceq "anywhere") {
+            $rest = $lowered
+            # An ordinary word leaves a bar, which no file name holds, so what stood on its two
+            # sides never joins into the word.
+            foreach ($plain in @($list.ordinary[$word])) { if ("$plain" -ne "") { $rest = $rest.Replace($plain, "|") } }
+            if ($rest.Contains($word)) { return $word }
+            continue
+        }
+        # AS WHOLE WORDS: the entry's own words (service-account is two), standing together and
+        # in order among the name's. The last may have one s after it: cookies, creds.
+        $wanted = @(Get-HordeFilesNameWords -Name $word)
+        for ($at = 0; $at + $wanted.Count -le $nameWords.Count; $at++) {
+            $fits = $true
+            for ($part = 0; $part -lt $wanted.Count; $part++) {
+                $have = $nameWords[$at + $part]
+                $same = [string]::Equals($have, $wanted[$part], [System.StringComparison]::Ordinal)
+                if (-not $same -and $part -eq ($wanted.Count - 1)) { $same = [string]::Equals($have, ($wanted[$part] + "s"), [System.StringComparison]::Ordinal) }
+                if (-not $same) { $fits = $false; break }
+            }
+            if ($fits) { return $word }
+        }
     }
     return ""
 }
@@ -155,14 +255,22 @@ function Get-HordeFilesDenyPlaces {
         if ($profileDir -eq "") { continue }
         [void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false })
         [void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })
-        [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $true })
+        [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false })
     }
     # THE HARNESSES, ASKED TWICE: under the profile the variable names, with wherever a harness's
     # own variable moved its store, and then under the system's profile.
     $unknown = ""
     $from = @{}
     if ($RepoRoot -ne "") { $from = @{ Root = $RepoRoot } }
+    # NO agents FOLDER IS NOT "NO HARNESSES" (the header says why): it is asked here, of the same
+    # folder core reads, before core answers with a list that is empty.
+    $shipped = $RepoRoot
+    if ($shipped -eq "") { $shipped = Split-Path -Parent $PSScriptRoot }
+    $agentsFolder = Join-Path $shipped "agents"
+    $agentsThere = [System.IO.Directory]::Exists($agentsFolder)
+    if (-not $agentsThere) { $unknown = "there is no folder '" + $agentsFolder + "', where each harness says which folders are its own" }
     foreach ($under in @("", $profiles.system)) {
+        if (-not $agentsThere) { break }
         $stores = $null
         if ($under -eq "") { $stores = Get-HordeAgentStoreRoots @from } else { $stores = Get-HordeAgentStoreRoots @from -ProfileRoot $under }
         if ($stores.state -cne "known") { $unknown = "" + $stores.reason }
@@ -201,6 +309,28 @@ function Resolve-HordeFilesDenyPlace {
     return [pscustomobject]@{ paths = @($known.ToArray()); unknown = $false }
 }
 
+function Get-HordeFilesNameRefusal {
+    # Why the NAME of the file at -FinalPath is one a file of secrets has, as the start of a
+    # sentence, or "" when it is not: a word of the list in the file's own name, or a cloud
+    # tool's sign-in by its name and its folder's together. -Parts is the path cut at its
+    # separators, as Get-HordeFilesDenyRefusal cut it.
+    param([Parameter(Mandatory = $true)][string[]]$Parts)
+    $list = Get-HordeFilesDenyList
+    $leaf = $Parts[$Parts.Count - 1]
+    $word = Get-HordeFilesDenyWord -Name $leaf
+    if ($word -ne "") { return ("its name, '" + $leaf + "', holds '" + $word + "', as a file of secrets is named") }
+    if ($Parts.Count -ge 3) {
+        $folderOfIt = ConvertTo-HordeAsciiLower -Text $Parts[$Parts.Count - 2]
+        $nameOfIt = ConvertTo-HordeAsciiLower -Text $leaf
+        $inSignInFolder = $false
+        foreach ($listed in $list.signInFolders) { if ([string]::Equals($folderOfIt, $listed, [System.StringComparison]::Ordinal)) { $inSignInFolder = $true } }
+        if ($inSignInFolder) {
+            foreach ($listed in $list.signInNames) { if ([string]::Equals($nameOfIt, $listed, [System.StringComparison]::Ordinal)) { return ("its name, '" + $leaf + "', in a folder named '" + $Parts[$Parts.Count - 2] + "', is what a cloud tool calls the file it keeps its sign-in in") } }
+        }
+    }
+    return ""
+}
+
 function Get-HordeFilesDenyRefusal {
     # Why the file whose open handle's path is -FinalPath is not shared, or "" when the list has
     # nothing against it. The header has every rule. What -Force never lifts is judged first, so
@@ -217,6 +347,9 @@ function Get-HordeFilesDenyRefusal {
     # name, and what is between are the folders.
     $parts = @($FinalPath -split '\\')
     if ($found.unknownNever -ne "") { return ($found.unknownNever + ", so whether '" + $FinalPath + "' is in " + $what.home + " or among the user's own keys cannot be told" + $never) }
+    # The harness folder the file is in, as it is written; and, when that cannot be told, why not.
+    $harness = ""
+    $harnessDoubt = ""
     foreach ($lifted in @($false, $true)) {
         if ($lifted) {
             # BETWEEN THE TWO ROUNDS: the two folder names that are refused wherever they stand - a
@@ -227,20 +360,36 @@ function Get-HordeFilesDenyRefusal {
                 if ([string]::Equals($folderName, $list.secretsFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.secrets + $never) }
                 if ([string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.homeNamed + $never) }
             }
-            if ($Force) { return "" }
-            if ($found.unknown -ne "") { return ("which folders the agent harnesses keep their own files in is not known (" + $found.unknown + "), so whether '" + $FinalPath + "' is in one cannot be told" + $insist) }
+            if ($found.unknown -ne "") { $harnessDoubt = "which folders the agent harnesses keep their own files in is not known (" + $found.unknown + "), so whether '" + $FinalPath + "' is in one cannot be told" }
         }
         foreach ($place in @($found.places | Where-Object { $_.force -eq $lifted })) {
             $where = Resolve-HordeFilesDenyPlace -Path $place.path
-            $ending = $never; if ($lifted) { $ending = $insist }
-            if ($where.unknown) { return ("where " + $what[$place.kind] + " ('" + $place.path + "') really is could not be told, so whether '" + $FinalPath + "' is in it cannot be told either" + $ending) }
+            if ($where.unknown) {
+                $untold = "where " + $what[$place.kind] + " ('" + $place.path + "') really is could not be told, so whether '" + $FinalPath + "' is in it cannot be told either"
+                if (-not $lifted) { return ($untold + $never) }
+                if ($harnessDoubt -eq "") { $harnessDoubt = $untold }
+                continue
+            }
             foreach ($folder in @($where.paths)) {
-                if (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $ending) }
+                if (-not (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder)) { continue }
+                if (-not $lifted) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $never) }
+                if ($harness -eq "") { $harness = "" + $place.path }
             }
         }
     }
-    $leaf = $parts[$parts.Count - 1]
-    $word = Get-HordeFilesDenyWord -Name $leaf
-    if ($word -ne "") { return ("its name, '" + $leaf + "', holds '" + $word + "', as a file of secrets is named, so it is not shared" + $insist) }
+    # WHAT -Force LIFTS: the harness folders, and the name. The place is said first, so that
+    # without -Force a file in a harness's folder is refused for the folder, whatever its name.
+    $named = Get-HordeFilesNameRefusal -Parts $parts
+    if (-not $Force) {
+        if ($harness -ne "") { return ("'" + $FinalPath + "' is under " + $what.agent + " ('" + $harness + "')" + $insist) }
+        if ($harnessDoubt -ne "") { return ($harnessDoubt + $insist) }
+        if ($named -ne "") { return ($named + ", so it is not shared" + $insist) }
+        return ""
+    }
+    # WITH -Force THE PLACE IS LIFTED AND THE NAME, INSIDE A HARNESS'S FOLDER, IS NOT (the header
+    # says why). A folder that cannot be told to be no harness's is held to the same: -Force must
+    # not share a harness's sign-in because nobody could say where the harness keeps it.
+    if ($named -ne "" -and $harness -ne "") { return ($named + ", and it is under " + $what.agent + " ('" + $harness + "'). -Force shares other files from such a folder, and never one that is named so") }
+    if ($named -ne "" -and $harnessDoubt -ne "") { return ($named + ", and " + $harnessDoubt + ". -Force never shares a file that is named so from a harness's folder, so it is not shared from here either") }
     return ""
 }

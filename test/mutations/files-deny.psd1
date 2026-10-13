@@ -8,24 +8,164 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         # --- the list itself ---
-        @{ Name = "credential-off-the-list"
-           Find = 'words = @("credential", "secret", "token", "key", "password", ".env")'
-           Replace = 'words = @("secret", "token", "key", "password", ".env")' }
-        @{ Name = "secret-off-the-list"
-           Find = 'words = @("credential", "secret", "token", "key", "password", ".env")'
-           Replace = 'words = @("credential", "token", "key", "password", ".env")' }
-        @{ Name = "token-off-the-list"
-           Find = 'words = @("credential", "secret", "token", "key", "password", ".env")'
-           Replace = 'words = @("credential", "secret", "key", "password", ".env")' }
-        @{ Name = "key-off-the-list"
-           Find = 'words = @("credential", "secret", "token", "key", "password", ".env")'
-           Replace = 'words = @("credential", "secret", "token", "password", ".env")' }
-        @{ Name = "password-off-the-list"
-           Find = 'words = @("credential", "secret", "token", "key", "password", ".env")'
-           Replace = 'words = @("credential", "secret", "token", "key", ".env")' }
-        @{ Name = "env-off-the-list"
-           Find = 'words = @("credential", "secret", "token", "key", "password", ".env")'
-           Replace = 'words = @("credential", "secret", "token", "key", "password")' }
+        @{ Name = "word-credential-off-the-list"
+           Find = '@{ word = "credential"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-secret-off-the-list"
+           Find = '@{ word = "secret"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-token-off-the-list"
+           Find = '@{ word = "token"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-key-off-the-list"
+           Find = '@{ word = "key"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-password-off-the-list"
+           Find = '@{ word = "password"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-passwd-off-the-list"
+           Find = '@{ word = "passwd"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-dot-env-off-the-list"
+           Find = '@{ word = ".env"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-auth-off-the-list"
+           Find = '@{ word = "auth"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-oauth-off-the-list"
+           Find = '@{ word = "oauth"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-cred-off-the-list"
+           Find = '@{ word = "cred"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-private-off-the-list"
+           Find = '@{ word = "private"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-wallet-off-the-list"
+           Find = '@{ word = "wallet"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-cookie-off-the-list"
+           Find = '@{ word = "cookie"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-recovery-off-the-list"
+           Find = '@{ word = "recovery"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-env-off-the-list"
+           Find = '@{ word = "env"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-service-account-off-the-list"
+           Find = '@{ word = "service-account"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-id-rsa-off-the-list"
+           Find = '@{ word = "id_rsa"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-id-dsa-off-the-list"
+           Find = '@{ word = "id_dsa"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-id-ecdsa-off-the-list"
+           Find = '@{ word = "id_ecdsa"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-id-ed25519-off-the-list"
+           Find = '@{ word = "id_ed25519"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-pem-off-the-list"
+           Find = '@{ word = "pem"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-pfx-off-the-list"
+           Find = '@{ word = "pfx"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-p12-off-the-list"
+           Find = '@{ word = "p12"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-ppk-off-the-list"
+           Find = '@{ word = "ppk"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-kdbx-off-the-list"
+           Find = '@{ word = "kdbx"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-jks-off-the-list"
+           Find = '@{ word = "jks"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-netrc-off-the-list"
+           Find = '@{ word = "netrc"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-npmrc-off-the-list"
+           Find = '@{ word = "npmrc"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-pypirc-off-the-list"
+           Find = '@{ word = "pypirc"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-tfstate-off-the-list"
+           Find = '@{ word = "tfstate"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        # --- the two ways a word is looked for, and how a name is cut into words ---
+        @{ Name = "short-words-looked-for-anywhere"
+           Find = 'if ($entry.how -ceq "anywhere") {'
+           Replace = 'if ($true) {' }
+        @{ Name = "long-words-looked-for-as-whole-words"
+           Find = 'if ($entry.how -ceq "anywhere") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "no-s-after-a-short-word"
+           Find = 'if (-not $same -and $part -eq ($wanted.Count - 1)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "an-s-after-any-word-of-an-entry"
+           Find = 'if (-not $same -and $part -eq ($wanted.Count - 1)) {'
+           Replace = 'if (-not $same) {' }
+        @{ Name = "any-ending-after-a-short-word"
+           Find = '$same = [string]::Equals($have, ($wanted[$part] + "s"), [System.StringComparison]::Ordinal)'
+           Replace = '$same = $have.StartsWith($wanted[$part], [System.StringComparison]::Ordinal)' }
+        @{ Name = "words-of-an-entry-need-not-be-different-words"
+           Find = '$have = $nameWords[$at + $part]'
+           Replace = '$have = $nameWords[$at]' }
+        @{ Name = "name-not-cut-where-a-small-letter-meets-a-capital"
+           Find = 'if ($capital -and $afterSmall -and $word.Length -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "name-cut-at-every-capital"
+           Find = 'if ($capital -and $afterSmall -and $word.Length -gt 0) {'
+           Replace = 'if ($capital -and $word.Length -gt 0) {' }
+        @{ Name = "a-digit-ends-a-word"
+           Find = 'if (-not ($capital -or $small -or ($code -ge 48 -and $code -le 57))) {'
+           Replace = 'if (-not ($capital -or $small)) {' }
+        @{ Name = "a-letter-outside-ascii-joins-two-words"
+           Find = 'if (-not ($capital -or $small -or ($code -ge 48 -and $code -le 57))) {'
+           Replace = 'if (-not ($capital -or $small -or $code -gt 127 -or ($code -ge 48 -and $code -le 57))) {' }
+        @{ Name = "words-of-a-name-keep-their-case"
+           Find = 'if ($capital) { $code += 32 }'
+           Replace = '' }
+        @{ Name = "last-word-of-a-name-lost"
+           Find = '    if ($word.Length -gt 0) { [void]$found.Add($word.ToString()) }'
+           Replace = '' }
+        # --- a cloud tool's sign-in: the name and the folder together ---
+        @{ Name = "sign-in-folder-aws-off-the-list"
+           Find = 'signInFolders = @(".aws", ".azure", ".kube", ".docker")'
+           Replace = 'signInFolders = @(".zzzzzz", ".azure", ".kube", ".docker")' }
+        @{ Name = "sign-in-folder-azure-off-the-list"
+           Find = 'signInFolders = @(".aws", ".azure", ".kube", ".docker")'
+           Replace = 'signInFolders = @(".aws", ".zzzzzz", ".kube", ".docker")' }
+        @{ Name = "sign-in-folder-kube-off-the-list"
+           Find = 'signInFolders = @(".aws", ".azure", ".kube", ".docker")'
+           Replace = 'signInFolders = @(".aws", ".azure", ".zzzzzz", ".docker")' }
+        @{ Name = "sign-in-folder-docker-off-the-list"
+           Find = 'signInFolders = @(".aws", ".azure", ".kube", ".docker")'
+           Replace = 'signInFolders = @(".aws", ".azure", ".kube", ".zzzzzz")' }
+        @{ Name = "sign-in-name-off-the-list"
+           Find = 'signInNames = @("config.json")'
+           Replace = 'signInNames = @("zzzzzz.json")' }
+        @{ Name = "sign-in-name-refused-in-every-folder"
+           Find = 'if ($inSignInFolder) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "sign-in-name-never-refused"
+           Find = 'if ($inSignInFolder) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "sign-in-folder-is-the-one-above"
+           Find = '$folderOfIt = ConvertTo-HordeAsciiLower -Text $Parts[$Parts.Count - 2]'
+           Replace = '$folderOfIt = ConvertTo-HordeAsciiLower -Text $Parts[$Parts.Count - 3]' }
+        @{ Name = "sign-in-folder-compared-with-its-case"
+           Find = '$folderOfIt = ConvertTo-HordeAsciiLower -Text $Parts[$Parts.Count - 2]'
+           Replace = '$folderOfIt = $Parts[$Parts.Count - 2]' }
+        @{ Name = "sign-in-name-compared-with-its-case"
+           Find = '$nameOfIt = ConvertTo-HordeAsciiLower -Text $leaf'
+           Replace = '$nameOfIt = $leaf' }
         @{ Name = "secrets-folder-under-another-name"
            Find = 'secretsFolder = ".horde-secrets"'
            Replace = 'secretsFolder = ".horde-secret"' }
@@ -89,9 +229,9 @@
         @{ Name = "force-lifts-the-secrets-folder-of-the-profile"
            Find = 'path = (Join-Path $profileDir $list.secretsFolder); force = $false'
            Replace = 'path = (Join-Path $profileDir $list.secretsFolder); force = $true' }
-        @{ Name = "force-does-not-lift-ssh"
-           Find = 'path = (Join-Path $profileDir $list.sshFolder); force = $true'
-           Replace = 'path = (Join-Path $profileDir $list.sshFolder); force = $false' }
+        @{ Name = "force-lifts-ssh"
+           Find = 'path = (Join-Path $profileDir $list.sshFolder); force = $false'
+           Replace = 'path = (Join-Path $profileDir $list.sshFolder); force = $true' }
         @{ Name = "force-does-not-lift-a-harness-folder"
            Find = 'kind = "agent"; path = ("" + $storeRoot); force = $true'
            Replace = 'kind = "agent"; path = ("" + $storeRoot); force = $false' }
@@ -105,7 +245,7 @@
            Find = '[void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })'
            Replace = '' }
         @{ Name = "no-place-for-the-profiles-ssh"
-           Find = '[void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $true })'
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false })'
            Replace = '' }
         @{ Name = "harness-folders-not-places"
            Find = '[void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true })'
@@ -188,21 +328,12 @@
            Find = 'catch { return [pscustomobject]@{ paths = @(); unknown = $true } }'
            Replace = 'catch { return [pscustomobject]@{ paths = @(); unknown = $false } }' }
         # --- the refusal ---
-        @{ Name = "force-lifts-nothing"
-           Find = 'if ($Force) { return "" }'
-           Replace = '' }
         @{ Name = "force-lifts-everything"
            Find = '    foreach ($lifted in @($false, $true)) {'
            Replace = '    if ($Force) { return "" }; foreach ($lifted in @($false, $true)) {' }
         @{ Name = "what-force-lifts-judged-as-what-it-never-lifts"
            Find = 'Where-Object { $_.force -eq $lifted }'
            Replace = 'Where-Object { $true }' }
-        @{ Name = "liftable-refusal-says-force-does-not-change-it"
-           Find = '$ending = $never; if ($lifted) { $ending = $insist }'
-           Replace = '$ending = $never' }
-        @{ Name = "never-lifted-refusal-says-force-shares-it"
-           Find = '$ending = $never; if ($lifted) { $ending = $insist }'
-           Replace = '$ending = $insist' }
         @{ Name = "secrets-folder-anywhere-on-the-way-not-looked-for"
            Find = 'for ($at = 1; $at -lt ($parts.Count - 1); $at++) {'
            Replace = 'for ($at = 1; $at -lt 0; $at++) {' }
@@ -212,20 +343,56 @@
         @{ Name = "secrets-folder-anywhere-not-refused"
            Find = 'if ([string]::Equals($folderName, $list.secretsFolder, [System.StringComparison]::Ordinal)) { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "force-lifts-nothing"
+           Find = '    if (-not $Force) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "force-lifts-a-name-inside-a-harness-folder"
+           Find = 'if ($named -ne "" -and $harness -ne "") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "force-shares-nothing-from-a-harness-folder"
+           Find = 'if ($named -ne "" -and $harness -ne "") { return'
+           Replace = 'if ($harness -ne "") { return' }
+        @{ Name = "force-lifts-a-name-where-the-harness-folders-are-not-known"
+           Find = 'if ($named -ne "" -and $harnessDoubt -ne "") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "force-shares-nothing-where-the-harness-folders-are-not-known"
+           Find = 'if ($named -ne "" -and $harnessDoubt -ne "") { return'
+           Replace = 'if ($harnessDoubt -ne "") { return' }
+        @{ Name = "file-in-a-harness-folder-refused-for-its-name-first"
+           Find = 'if ($harness -ne "") { return ("''" + $FinalPath'
+           Replace = 'if ($false) { return ("''" + $FinalPath' }
+        @{ Name = "harness-folder-refusal-says-force-does-not-change-it"
+           Find = '(''" + $harness + "'')" + $insist) }'
+           Replace = '(''" + $harness + "'')" + $never) }' }
+        @{ Name = "never-lifted-place-says-force-shares-it"
+           Find = '(''" + $place.path + "'')" + $never) }'
+           Replace = '(''" + $place.path + "'')" + $insist) }' }
+        @{ Name = "never-lifted-place-that-cannot-be-asked-says-force-shares-it"
+           Find = 'if (-not $lifted) { return ($untold + $never) }'
+           Replace = 'if (-not $lifted) { return ($untold + $insist) }' }
+        @{ Name = "never-lifted-place-that-cannot-be-asked-not-refused"
+           Find = 'if (-not $lifted) { return ($untold + $never) }'
+           Replace = '' }
         @{ Name = "harness-that-does-not-say-not-refused"
-           Find = 'if ($found.unknown -ne "") { return'
-           Replace = 'if ($false) { return' }
-        @{ Name = "place-that-cannot-be-asked-not-refused"
-           Find = 'if ($where.unknown) { return'
-           Replace = 'if ($false) { return' }
+           Find = 'if ($found.unknown -ne "") { $harnessDoubt ='
+           Replace = 'if ($false) { $harnessDoubt =' }
+        @{ Name = "unknown-harnesses-refused-without-the-reason"
+           Find = 'if ($harnessDoubt -ne "") { return ($harnessDoubt + $insist) }'
+           Replace = 'if ($harnessDoubt -ne "") { return ("" + $insist) }' }
         @{ Name = "file-in-a-place-not-refused"
-           Find = 'if (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder) { return'
-           Replace = 'if ($false) { return' }
+           Find = 'if (-not (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder)) { continue }'
+           Replace = 'if ($true) { continue }' }
+        @{ Name = "every-file-is-in-every-place"
+           Find = 'if (-not (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder)) { continue }'
+           Replace = '' }
+        @{ Name = "folders-judged-as-names"
+           Find = '$leaf = $Parts[$Parts.Count - 1]'
+           Replace = '$leaf = ($Parts -join "\")' }
+        @{ Name = "missing-agents-folder-is-no-harnesses"
+           Find = 'if (-not $agentsThere) { $unknown ='
+           Replace = 'if ($false) { $unknown =' }
         @{ Name = "name-not-judged"
            Find = 'if ($word -ne "") { return'
            Replace = 'if ($false) { return' }
-        @{ Name = "folders-judged-as-names"
-           Find = '$leaf = $parts[$parts.Count - 1]'
-           Replace = '$leaf = $FinalPath' }
     )
 }

@@ -127,7 +127,12 @@ $inAgent = "is under a folder an agent harness keeps its own files in"
 Write-Host ""
 Write-Host "--- the list: one place, six words, and what -Force may lift ---" -ForegroundColor Cyan
 $list = Get-HordeFilesDenyList
-Check ((@($list.words) -join ",") -ceq "credential,secret,token,key,password,.env") ("the words are the six that were asked for (" + (@($list.words) -join ",") + ")")
+$anywhereWords = (@($list.words | Where-Object { $_.how -ceq "anywhere" } | ForEach-Object { $_.word }) -join ",")
+$wholeWords = (@($list.words | Where-Object { $_.how -ceq "word" } | ForEach-Object { $_.word }) -join ",")
+Check ($anywhereWords -ceq "credential,secret,token,key,password,passwd,.env") ("the words looked for anywhere in a name are the six first asked for, and passwd (" + $anywhereWords + ")")
+Check ($wholeWords -ceq "auth,oauth,cred,private,wallet,cookie,recovery,env,service-account,id_rsa,id_dsa,id_ecdsa,id_ed25519,pem,pfx,p12,ppk,kdbx,jks,netrc,npmrc,pypirc,tfstate") ("the short words, looked for only as whole words, are these (" + $wholeWords + ")")
+Check (@($list.words | Where-Object { $_.how -cne "anywhere" -and $_.how -cne "word" }).Count -eq 0 -and @($list.words).Count -eq 30) "every word says which of the two ways it is looked for, and there are 30"
+Check ((@($list.signInFolders) -join ",") -ceq ".aws,.azure,.kube,.docker" -and (@($list.signInNames) -join ",") -ceq "config.json") "a cloud tool's sign-in is config.json in one of four folders"
 Check ($list.secretsFolder -ceq ".horde-secrets" -and $list.sshFolder -ceq ".ssh" -and $list.homeFolder -ceq ".horde") "the three folders of the profile are .horde, .horde-secrets and .ssh"
 $wasHome = $env:HORDE_HOME; $env:HORDE_HOME = ""
 $defaultHome = Get-HordeHome
@@ -137,7 +142,7 @@ Check (@($list.ordinary.Keys).Count -eq 1 -and @($list.ordinary["key"]).Count -e
 $h = New-TestHome
 $found = Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repo
 $kinds = (@($found.places | ForEach-Object { $_.kind + ":" + $_.force }) -join ",")
-Check ($found.unknown -eq "" -and $found.unknownNever -eq "" -and $kinds -ceq "home:False,home:False,secrets:False,ssh:True,home:False,secrets:False,ssh:True,agent:True,agent:True,agent:True,agent:True,agent:True") ("the places: the home that was named; then under the profile the variable names and again under the one the system names, .horde and .horde-secrets, which -Force never lifts, and .ssh; then each harness's folders, each named once (" + $kinds + ")")
+Check ($found.unknown -eq "" -and $found.unknownNever -eq "" -and $kinds -ceq "home:False,home:False,secrets:False,ssh:False,home:False,secrets:False,ssh:False,agent:True,agent:True,agent:True,agent:True,agent:True") ("the places: the home that was named; then under the profile the variable names and again under the one the system names, .horde, .horde-secrets and .ssh, which -Force never lifts; then each harness's folders, which it does, each named once (" + $kinds + ")")
 $placePaths = @($found.places | ForEach-Object { $_.path })
 Check ($placePaths[0] -ceq $h -and $placePaths -ccontains (Join-Path $profileDir ".horde") -and $placePaths -ccontains (Join-Path $profileDir ".horde-secrets") -and $placePaths -ccontains (Join-Path $profileDir ".ssh")) "the home is the one the caller named, and the three folders are in the profile the variable names"
 Check ($placePaths -ccontains (Join-Path $script:osProfile ".horde") -and $placePaths -ccontains (Join-Path $script:osProfile ".horde-secrets") -and $placePaths -ccontains (Join-Path $script:osProfile ".ssh")) "and in the profile the operating system names, which is another folder here"
@@ -157,20 +162,89 @@ Check ((Get-HordeFilesDenyProfiles).variable -ceq $profileDir -and (Get-HordeFil
 Write-Host ""
 Write-Host "--- a name: each word at the start, in the middle and at the end, in any case of A to Z ---" -ForegroundColor Cyan
 $refusedNames = [ordered]@{
-    "credential" = @("credentials.json", "my-credential-notes.md", "aws.credential", "CREDENTIALS.TXT", "GoogleCredentials.json")
+    "credential" = @("credentials.json", "my-credential-notes.md", "aws.credential", "CREDENTIALS.TXT", "GoogleCredentials.json", ".git-credentials", "credentials")
     "secret" = @("secret.md", "top-secret-plan.md", "client_secret", "Secrets.json", "MySecretNotes.md", "secretary.txt")
     "token" = @("token.txt", "my-token-list.md", "access_token", "TOKENS.json", "refreshToken.json", "tokenizer.md")
-    "key" = @("key.md", "api-key.txt", "id_rsa.key.txt", "keys.json", "KEY.MD", "mykey.txt", "keyed.md", "ApiKey.json", "private-key-notes.md", "x.key", "apikeys.txt", "key2.json", "monkey-api-key.txt", "keyboard.key.md", "turkeykey.md")
+    "key" = @("key.md", "api-key.txt", "id_rsa.key.txt", "keys.json", "KEY.MD", "mykey.txt", "keyed.md", "ApiKey.json", "private-key-notes.md", "x.key", "apikeys.txt", "key2.json", "monkey-api-key.txt", "keyboard.key.md", "turkeykey.md", "release.keystore", "private-key.md")
     "password" = @("password.txt", "my-passwords-old.md", "wifi_password", "PASSWORDS.md", "PassWord.txt", "passwordless.md")
+    "passwd" = @("passwd.txt", "htpasswd.txt", ".htpasswd", "PASSWD.md", "etc-passwd-copy.txt")
     ".env" = @(".env", ".env.local", "prod.env", "prod.env.txt", ".ENV.json", ".envrc", "notes.environment.md")
+    # THE SHORT WORDS, each only as a whole word of the name: alone, with one s, between other
+    # words, in capitals, and where a small letter meets a capital.
+    "auth" = @("auth.json", "AUTH.md", "my-auth-notes.txt", "auths.json", "harnessAuth.json", "auth_backup.txt", "x.auth")
+    "oauth" = @("oauth_creds.json", "oauth.json", "google-oauth-client.json", "oauthCreds.json", "OAUTH.txt")
+    "cred" = @("creds.md", "cred.txt", "my_creds.json", "awsCreds.json", "CREDS.TXT")
+    "private" = @("private.pem.txt", "private.md", "PRIVATE-notes.txt", "my.private.json")
+    "wallet" = @("wallet.json", "wallets.md", "my-wallet.txt", "WALLET.json")
+    "cookie" = @("cookies.json", "cookie.txt", "session-cookies.txt", "browserCookies.json")
+    "recovery" = @("recovery-codes.txt", "2fa-recovery.md", "RECOVERY.txt")
+    "env" = @("env.json", "test-env.md", "ENV.txt", "envs.json", "prodEnv.json")
+    "service-account" = @("service-account.json", "service_account.json", "serviceAccount.json", "gcp-service-accounts.md", "service account.txt", "SERVICE.ACCOUNT.json")
+    "id_rsa" = @("id_rsa.txt", "id_rsa", "id_rsa.pub", "id-rsa.md", "ID_RSA.TXT", "idRsa.txt", "my_id_rsa_copy.txt")
+    "id_dsa" = @("id_dsa.txt", "id_dsa.pub")
+    "id_ecdsa" = @("id_ecdsa.txt", "id_ecdsa.pub")
+    "id_ed25519" = @("id_ed25519", "id_ed25519.pub", "id_ed25519.txt", "ID-ED25519.md")
+    "pem" = @("cert.pem", "server.pem.txt", "PEM.md", "chain_pem.txt")
+    "pfx" = @("cert.pfx", "cert.pfx.txt")
+    "p12" = @("store.p12", "apple-p12-notes.md")
+    "ppk" = @("putty.ppk", "server.ppk.txt")
+    "kdbx" = @("vault.kdbx", "vault.kdbx.md")
+    "jks" = @("app.jks", "release.jks.txt")
+    "netrc" = @(".netrc", "_netrc", "netrc.txt")
+    "npmrc" = @(".npmrc", "npmrc.md")
+    "pypirc" = @(".pypirc", "pypirc.txt")
+    "tfstate" = @("terraform.tfstate", "terraform.tfstate.backup", "prod.tfstate.json")
 }
+Check (@($refusedNames.Keys).Count -eq @($list.words).Count -and @($list.words | Where-Object { -not $refusedNames.Contains($_.word) }).Count -eq 0) ("every word of the list has names here that only it refuses (" + @($refusedNames.Keys).Count + " of " + @($list.words).Count + ")")
+# THE TWELVE NAMES THE REVIEW OF 2026-10-13 MEASURED BEING SHARED: each is refused now.
+$reviewed = @("auth.json", "oauth_creds.json", "creds.md", "service-account.json", "id_rsa.txt", "private.pem.txt", "passwd.txt", "htpasswd.txt", "env.json", "wallet.json", "cookies.json", "recovery-codes.txt")
+$stillPassing = @($reviewed | Where-Object { (Get-HordeFilesDenyWord -Name $_) -ceq "" })
+Check ($reviewed.Count -eq 12 -and $stillPassing.Count -eq 0) ("the twelve names the review measured passing are each refused" + $(if ($stillPassing.Count) { " (STILL PASSING: " + ($stillPassing -join ", ") + ")" } else { "" }))
 foreach ($word in $refusedNames.Keys) {
     $missed = @($refusedNames[$word] | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne $word })
     Check ($missed.Count -eq 0) ("'" + $word + "' is found in all " + @($refusedNames[$word]).Count + " names that hold it: " + (@($refusedNames[$word]) -join ", ") + $(if ($missed.Count) { " (MISSED: " + ($missed -join ", ") + ")" } else { "" }))
 }
-$plainNames = @("report.md", "notes.txt", "chart.png", "a", "", "ke y.md", "k-e-y.md", "tok.en.md", "pass-word.md", "secre.t", "env.md", "x.en.v", "credentia.md", "passwor.d")
+$plainNames = @("report.md", "notes.txt", "chart.png", "a", "", "ke y.md", "k-e-y.md", "tok.en.md", "pass-word.md", "secre.t", "environment.md", "x.en.v", "credentia.md", "passwor.d")
 $caught = @($plainNames | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
 Check ($caught.Count -eq 0) ("CONTROL: " + $plainNames.Count + " names that hold no word of the list, a word cut short and a word broken by a character among them, are let by" + $(if ($caught.Count) { " (CAUGHT: " + ($caught -join ", ") + ")" } else { "" }))
+# A SHORT WORD INSIDE A LONGER ONE IS NOT THE WORD: the five names the review said must pass, and
+# for every short word a name that only holds its letters.
+$holdTheLetters = @("author-notes.md", "template.html", "credits.md", "privateer.txt", "cookiecutter.md",
+    "authentication-design.html", "authorization-matrix.md", "unauthorized.md", "oauthenticity.md", "incredible.md", "credo.txt", "privately.md", "walletless.md", "cookiebar.png",
+    "recoveryless.md", "envelope.md", "environment-setup.md", "serviceaccounting.md", "pemmican.md", "tempemail.md", "ppkg.md", "jksdf.md", "netrcx.md")
+$caught = @($holdTheLetters | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
+Check ($caught.Count -eq 0) ("CONTROL: " + $holdTheLetters.Count + " names that hold a short word's letters inside a longer word are let by" + $(if ($caught.Count) { " (CAUGHT: " + ($caught -join ", ") + ")" } else { "" }))
+# THE WORDS OF AN ENTRY STAND TOGETHER, IN ORDER, AND ONLY THE LAST MAY TAKE AN s.
+$notTheRun = @("account-service.md", "service-desk-account.md", "rsa-id.txt", "id-notes-rsa.md", "services-account.md", "ids-rsa.md", "id.md", "rsa.md", "service.md", "account.md", "authss.md", "cookiess.md")
+$caught = @($notTheRun | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
+Check ($caught.Count -eq 0) ("CONTROL: an entry of two words is those two, together and in that order, and one s is one s (" + $notTheRun.Count + " names let by)" + $(if ($caught.Count) { " (CAUGHT: " + ($caught -join ", ") + ")" } else { "" }))
+Check (((Get-HordeFilesNameWords -Name "oauthCreds.OLD_v2 final-COPY.json") -join ",") -ceq "oauth,creds,old,v2,final,copy,json") ("a name is cut at what is no letter or digit and where a small letter meets a capital, and its words are in lower case (" + ((Get-HordeFilesNameWords -Name "oauthCreds.OLD_v2 final-COPY.json") -join ",") + ")")
+Check (@(Get-HordeFilesNameWords -Name "").Count -eq 0 -and @(Get-HordeFilesNameWords -Name "...--__").Count -eq 0) "a name with no letter or digit has no words"
+Check ((Get-HordeFilesDenyWord -Name ("auth" + [char]0xE9 + "x.json")) -ceq "auth" -and (Get-HordeFilesDenyWord -Name ([char]0x05D0 + "cred" + [char]0x05D0 + ".md")) -ceq "cred") "a letter outside ASCII ends a word and never hides one: a short word beside such a letter is still the word"
+# KNOWN LIMITS of the whole-word way, pinned so that changing them is a decision.
+Check ((Get-HordeFilesDenyWord -Name "authfile.json") -ceq "" -and (Get-HordeFilesDenyWord -Name "AUTHFile.json") -ceq "" -and (Get-HordeFilesDenyWord -Name "auth2.json") -ceq "") "KNOWN LIMIT: a short word run into another with no capital between them, or with a digit after it, is not found"
+
+Write-Host ""
+Write-Host "--- sixty ordinary names: how many the words refuse, and which word ---" -ForegroundColor Cyan
+# MEASURED, NOT TUNED (the review asked for the count). These are names a session would give a file
+# it shares, written down before the rule was run on them: eight are the review's own examples.
+# The count is pinned so that a change to the words shows what it costs in ordinary names.
+$ordinaryNames = @("author-notes.md", "authentication-design.html", "credits.md", "private-beta-plan.md", "template.html", "problem-report.md", "recovery-plan.md", "cookie-banner.png",
+    "README.md", "handoff-20261013-094438.md", "report.html", "summary.md", "architecture-overview.md", "meeting-notes.txt", "release-notes.md", "CHANGELOG.md",
+    "test-results.json", "coverage-report.html", "screenshot-2026-10-13.png", "design-review.pdf", "api-reference.md", "keyboard-shortcuts.md", "key-findings.md", "monkey-patch-notes.md",
+    "keynote-outline.md", "tokenizer-comparison.md", "token-budget-analysis.md", "password-reset-flow.md", "migration-plan.md", "bug-review.md", "environment-setup.md", "deployment-checklist.md",
+    "error-log.txt", "metrics-dashboard.html", "cost-model.md", "config-example.json", "package.json", "schema.json", "diagram.png", "logo.webp",
+    "invoice.pdf", "user-guide.pdf", "interview-questions.md", "roadmap-2027.md", "benchmark-results.json", "login-page-mockup.png", "session-transcript-summary.md", "secrets-management-proposal.md",
+    "authorization-matrix.md", "oauth-flow-diagram.png", "auth-flow.md", "cookiecutter-template.md", "disaster-recovery-runbook.md", "index.html", "notes.txt", "todo.md",
+    "comparison-table.md", "sprint-retro.md", "timeline.gif", "onboarding.md", "faq.md", "data-export.json", "style-guide.md", "credit-card-form-mockup.png")
+$byWord = @{}
+foreach ($ordinaryName in $ordinaryNames) { $fired = Get-HordeFilesDenyWord -Name $ordinaryName; if ($fired -cne "") { if (-not $byWord.ContainsKey($fired)) { $byWord[$fired] = New-Object System.Collections.ArrayList }; [void]$byWord[$fired].Add($ordinaryName) } }
+$tally = (@($byWord.Keys | Sort-Object | ForEach-Object { $_ + "=" + $byWord[$_].Count + " (" + ($byWord[$_] -join ", ") + ")" }) -join "; ")
+$refusedOrdinary = 0; foreach ($firedWord in $byWord.Keys) { $refusedOrdinary += $byWord[$firedWord].Count }
+Write-Host ("  [MEASURED] of " + $ordinaryNames.Count + " ordinary names, " + $refusedOrdinary + " are refused: " + $tally) -ForegroundColor Yellow
+Check ($ordinaryNames.Count -eq 64 -and @($ordinaryNames | Select-Object -Unique).Count -eq 64) "the sample is 64 different names"
+Check (@($byWord.Keys | Where-Object { $byWord[$_].Count -gt 2 }).Count -eq 0) ("no word refuses more than two of them (" + $tally + ")")
+Check ($refusedOrdinary -eq 11) ("and 11 of the 64 are refused, each of which -Force shares (" + $refusedOrdinary + ")")
 foreach ($plain in @($list.ordinary["key"])) {
     $alone = @(($plain + ".md"), ($plain.ToUpperInvariant() + "s.png"), ("my-" + $plain + "-notes.txt"))
     $wrong = @($alone | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
@@ -188,7 +262,7 @@ Write-Host ""
 Write-Host "--- a name, through a share: refused, shared with -Force, and only the file's own name counts ---" -ForegroundColor Cyan
 $h = New-TestHome
 $docs = Join-Path $script:real "docs"
-foreach ($named in @("api-key.txt", "Passwords.md", "my-token.json", "client_secret.txt", "credentials.md", "prod.env.txt")) {
+foreach ($named in @("api-key.txt", "Passwords.md", "my-token.json", "client_secret.txt", "credentials.md", "prod.env.txt", "auth.json", "id_rsa.txt", "serviceAccount.json", "cookies.txt")) {
     $text = "dummy words, and no secret"; if ($named -like "*.json") { $text = '{"dummy":1}' }
     $file = New-File (Join-Path $docs $named) $text
     $word = Get-HordeFilesDenyWord -Name $named
@@ -198,6 +272,21 @@ foreach ($named in @("api-key.txt", "Passwords.md", "my-token.json", "client_sec
 }
 Check (Test-Shared $h (New-File (Join-Path $docs "keyboard.md"))) "CONTROL: keyboard.md is shared with no -Force"
 Check (Test-Shared $h (New-File (Join-Path $docs "monkey.txt"))) "CONTROL: and so is monkey.txt"
+Check (Test-Shared $h (New-File (Join-Path $docs "author-notes.md"))) "CONTROL: and author-notes.md, which only holds the letters of a short word"
+# A CLOUD TOOL'S SIGN-IN, by its name and its folder's together, on the final path.
+$cloud = Join-Path $script:real "cloud"
+foreach ($signInFolder in @(".aws", ".azure", ".kube", ".docker")) {
+    $signIn = New-File (Join-Path $cloud ($signInFolder + "\config.json")) '{"dummy":1}'
+    Check (Test-Refused $h $signIn ("its name, 'config.json', in a folder named '" + $signInFolder + "', is what a cloud tool calls the file it keeps its sign-in in")) ("config.json in a folder named " + $signInFolder + " is refused, and the reason names both")
+    Check (Test-Refused $h $signIn $insist) "and says that -Force shares it"
+}
+Check (Test-Shared $h (Join-Path $cloud ".aws\config.json") -Force) "with -Force it is shared"
+Check (Test-Refused $h (New-File (Join-Path $cloud "upper\.AWS\Config.JSON") '{"dummy":1}') "in a folder named '.AWS'") "in any case of the letters of both names"
+Check (Test-Shared $h (New-File (Join-Path $cloud "aws\config.json") '{"dummy":1}')) "CONTROL: config.json in a folder named aws, with no dot, is shared"
+Check (Test-Shared $h (New-File (Join-Path $cloud ".aws\deeper\config.json") '{"dummy":1}')) "CONTROL: and one deeper under .aws, in a folder of another name: the folder the file is IN is the one that counts"
+Check (Test-Shared $h (New-File (Join-Path $cloud ".aws\notes.md"))) "CONTROL: another file in such a folder is shared"
+Check (Test-Shared $h (New-File (Join-Path $cloud ".aws2\config.json") '{"dummy":1}')) "CONTROL: and so is config.json in a folder whose name only begins like one"
+Check ((Get-HordeFilesNameRefusal -Parts @("C:", ".aws", "credentials")) -like "*holds 'credential'*" -and (Get-HordeFilesNameRefusal -Parts @("C:", "config.json")) -eq "" -and (Get-HordeFilesNameRefusal -Parts @("C:", ".aws", "config.json")) -ne "") "the other file such a folder keeps, credentials, is refused by the word; and a file at the root of a drive is in no folder"
 Check (Test-Shared $h (New-File (Join-Path $script:real "secrets\token-store\passwords\report.md"))) "a file with an innocent name in folders named secrets, token-store and passwords is shared: a folder is a place, and only the listed places are refused (the header of files/Deny.ps1 says why)"
 
 Write-Host ""
@@ -225,8 +314,8 @@ Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\.horde-secrets-o
 Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\.horde-secrets.md")) -Force) "CONTROL: and a FILE whose name begins so is a file, not a folder on the way: -Force, which never lifts the folder, shares it"
 $inSshFile = New-File (Join-Path $profileDir ".ssh\notes.txt")
 Check (Test-Refused $h $inSshFile $inSsh) "a file under .ssh in the profile is refused as that"
-Check (Test-Refused $h $inSshFile $insist -NotLike "does not change") "and the reason says -Force shares it"
-Check (Test-Shared $h $inSshFile -Force) "with -Force it is shared"
+Check (Test-Refused $h $inSshFile $never -NotLike "share it again") "and the reason says -Force does not change that"
+Check (Test-Refused $h $inSshFile $inSsh -Force) "with -Force it is refused all the same: .ssh is the third place -Force never lifts"
 Check (Test-Refused $h (New-File (Join-Path $profileDir ".ssh\deep\er\notes.md")) $inSsh) "and so is a file deeper under it"
 Check (Test-Shared $h (New-File (Join-Path $profileDir ".ssh2\notes.txt"))) "CONTROL: a folder whose name only begins with .ssh is shared from"
 Check (Test-Shared $h (New-File (Join-Path $profileDir "notes-beside-ssh.txt"))) "CONTROL: and a file beside it, in the profile, is shared"
@@ -235,8 +324,19 @@ foreach ($agentFolder in @((Join-Path $profileDir ".harness-x"), (Join-Path $pro
     $inAgentFile = New-File (Join-Path $agentFolder "projects\notes.md")
     Check (Test-Refused $h $inAgentFile $inAgent) ("a file under a harness's own folder (" + (Split-Path -Leaf $agentFolder) + ") is refused as that")
     Check (Test-Refused $h $inAgentFile ("('" + $agentFolder + "')")) "and the reason names the folder, which is the harness's own data"
-    Check (Test-Shared $h $inAgentFile -Force) "with -Force it is shared"
+    Check (Test-Refused $h $inAgentFile $insist -NotLike "does not change") "and says that -Force shares it"
+    Check (Test-Shared $h $inAgentFile -Force) "with -Force it is shared: the place is lifted"
+    # INSIDE A HARNESS'S FOLDER -Force LIFTS THE PLACE AND NEVER THE NAME, and the reason says which.
+    foreach ($signInName in @("auth.json", ".credentials.json", "api-key.txt")) {
+        $text = "dummy words, and no secret"; if ($signInName -like "*.json") { $text = '{"dummy":1}' }
+        $inAgentNamed = New-File (Join-Path $agentFolder $signInName) $text
+        $word = Get-HordeFilesDenyWord -Name $signInName
+        Check (Test-Refused $h $inAgentNamed $inAgent -NotLike "holds '") ($signInName + " in that folder, with no -Force, is refused for the PLACE")
+        Check (Test-Refused $h $inAgentNamed ("its name, '" + $signInName + "', holds '" + $word + "', as a file of secrets is named, and it is under a folder an agent harness keeps its own files in") -Force) "with -Force it is refused for its NAME, in that place"
+        Check (Test-Refused $h $inAgentNamed ("('" + $agentFolder + "'). -Force shares other files from such a folder, and never one that is named so") -NotLike "share it again" -Force) "and the reason says -Force shares other files from there and never this one"
+    }
 }
+Check (Test-Shared $h (New-File (Join-Path $docs "elsewhere\auth.json") '{"dummy":1}') -Force) "CONTROL: outside every harness's folder, -Force shares a file of the same name"
 Check (Test-Shared $h (New-File (Join-Path $profileDir ".harness-xy\notes.md"))) "CONTROL: a folder whose name only begins with a harness's is shared from"
 # WHAT -Force NEVER LIFTS IS JUDGED FIRST: a file in the home whose name holds a word is refused as the home.
 Check (Test-Refused $h (New-File (Join-Path $h "settings\api-key.txt")) $inHome -NotLike "holds 'key'") "a file in the home with a word in its name is refused for the home, not for the name"
@@ -352,7 +452,20 @@ Check (Test-Refused $h $plainDoc "which folders the agent harnesses keep their o
 Check (Test-Refused $h $plainDoc $insist -Repo $repoGap) "the reason says -Force shares it"
 Check (Test-Shared $h $plainDoc -Force -Repo $repoGap) "and with -Force it is: the harness folders are what -Force lifts"
 Check (Test-Refused $h $inSettings $inHome -Force -Repo $repoGap) "the home is still refused then, -Force or not"
+$namedDoc = New-File (Join-Path $docs "gap\auth.json") '{"dummy":1}'
+Check (Test-Refused $h $namedDoc "is not known" -Force -Repo $repoGap) "but a file NAMED as a secret is not shared then, even with -Force: it cannot be told that it is not in a harness's folder, where such a name is never lifted"
+Check (Test-Refused $h $namedDoc "-Force never shares a file that is named so from a harness's folder" -NotLike "share it again" -Force -Repo $repoGap) "and the reason says so"
+Check (Test-Shared $h $namedDoc -Force) "CONTROL: with every harness described, -Force shares that file"
 Check (Test-Shared $h $plainDoc) "CONTROL: with every harness described, the same file is shared with no -Force"
+# NO agents FOLDER AT ALL is not "no harnesses": core answers it with an empty list.
+$repoBare = Join-Path $script:real "repo-with-no-agents"
+New-Item -ItemType Directory -Path $repoBare | Out-Null
+Check ((Get-HordeAgentStoreRoots -Root $repoBare).state -ceq "known" -and @((Get-HordeAgentStoreRoots -Root $repoBare).value).Count -eq 0) "CONTROL: asked of a folder with no agents folder in it, core answers a known list that is empty"
+Check (Test-Refused $h $plainDoc ("there is no folder '" + (Join-Path $repoBare "agents") + "'") -Repo $repoBare) "with no agents folder, an ordinary file is refused: which folders are a harness's is not known"
+Check (Test-Refused $h $plainDoc $insist -Repo $repoBare) "the reason says -Force shares it"
+Check (Test-Shared $h $plainDoc -Force -Repo $repoBare) "and with -Force it is"
+Check (Test-Refused $h $namedDoc "is not known" -Force -Repo $repoBare) "and a file named as a secret is not, -Force or not"
+Check ((Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repoBare).unknown -like "there is no folder*" -and @((Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repoBare).places | Where-Object { $_.kind -ceq "agent" }).Count -eq 0) "the places then hold no harness folder, and say why"
 
 Write-Host ""
 Write-Host "--- every rule judges the open handle's own path: a place reached another way is still the place ---" -ForegroundColor Cyan
@@ -367,7 +480,11 @@ New-Item -ItemType Directory -Path $links | Out-Null
 # refused AS THE PLACE shows the list read where the handle really is, not what was written.
 Check (New-FileLink (Join-Path $links "innocent.txt") $sshFile) "CONTROL: a symbolic link outside .ssh was made to the file inside it"
 Check (Test-Refused $h (Join-Path $links "innocent.txt") $inSsh -NotLike "is a link") "a link outside .ssh to a file inside it is refused as .ssh"
-Check (Test-Refused $h (Join-Path $links "innocent.txt") "is a link" -Force) "and with -Force it is still not shared: the list is lifted, and a link is never followed"
+Check (Test-Refused $h (Join-Path $links "innocent.txt") $inSsh -NotLike "is a link" -Force) "and with -Force it is refused as .ssh all the same"
+$agentTarget = New-File (Join-Path $profileDir ".harness-x\projects\linked-notes.md")
+Check (New-FileLink (Join-Path $links "innocent.md") $agentTarget) "CONTROL: a symbolic link outside a harness's folder was made to a file inside it"
+Check (Test-Refused $h (Join-Path $links "innocent.md") $inAgent -NotLike "is a link") "a link outside a harness's folder to a file inside it is refused as that folder"
+Check (Test-Refused $h (Join-Path $links "innocent.md") "is a link" -Force) "and with -Force it is still not shared: the place is lifted, and a link is never followed"
 Check (New-FileLink (Join-Path $links "innocent.json") $homeFile) "CONTROL: a symbolic link outside the home was made to a file inside it"
 Check (Test-Refused $h (Join-Path $links "innocent.json") $inHome -Force) "a link outside the home to a file inside it is refused as the home, -Force or not"
 Check (New-FolderLink (Join-Path $links "folder-link") $sshFolder) "CONTROL: a symbolic link to the .ssh folder was made"
@@ -418,7 +535,9 @@ Check $substMade ("CONTROL: subst made " + $substLetter + ": over .ssh (if this 
 Check $bySubst "by a subst drive over .ssh, where the written path names no folder, the file is refused as .ssh"
 Check $bySubstHome "and by a subst drive over a folder of the home, as the home, -Force or not"
 Check ((Get-Target $substLetter) -eq "") "the subst drive is gone again"
-Check (Test-Shared $h $sshFile -Force) "CONTROL: after all those refusals the .ssh file is still one -Force shares, so they were the list's and not a broken file"
+$sshCopy = Join-Path $docs "a-copy-of-the-ssh-notes.txt"
+[System.IO.File]::Copy($sshFile, $sshCopy)
+Check (Test-Shared $h $sshCopy) "CONTROL: after all those refusals the .ssh file can still be read, and a copy of it outside .ssh is shared: they were the list's refusals and not a broken file"
 # WHAT THE HANDLE DOES NOT SAY, pinned so that it is known: a second name (a hard link) outside .ssh
 # for a file inside it. The handle's path is the name that was opened, and nothing marks the file.
 $hardLink = Join-Path $links "second-name.txt"
