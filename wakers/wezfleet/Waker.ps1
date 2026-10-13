@@ -112,7 +112,10 @@ $script:HordeWezfleetWakerDrainMs = 500
 # The most a command may print before it is stopped. Form A is one row a session: 200 sessions of
 # 1,000 bytes are far below this.
 $script:HordeWezfleetWakerMaxBytes = 1048576
-$script:HordeWezfleetWakerDetailChars = 300
+# The most of the fleet's own words kept in a reason. A reason goes into the journal and, for a fleet
+# that cannot be read, into a mail to the warchief: 120 characters say what happened; 300 carried a
+# good part of whatever the command had printed (safety review of PR 220).
+$script:HordeWezfleetWakerDetailChars = 120
 # RULE 4, the deadlines: form A, the -TimeoutSeconds form B passes (its own deadline is three times
 # that), and form C.
 # The budget a nudge is given, in one place: the table below and the function that resets it both read it.
@@ -396,7 +399,7 @@ function Start-HordeWezfleetWakerProcess {
         $n = $read.Result
         if ($n -eq 0) { break }
         $got.Write($buf, 0, $n)
-        if ($got.Length -gt $script:HordeWezfleetWakerMaxBytes) { return [pscustomobject]@{ ok = $false; exit = -1; stdout = ""; stderr = ""; reason = ("the fleet's command printed more than " + $script:HordeWezfleetWakerMaxBytes + " bytes; " + (Stop-HordeWezfleetWakerProcess -Process $p)); timedOut = $false } }
+        if ($got.Length -gt $script:HordeWezfleetWakerMaxBytes) { return [pscustomobject]@{ ok = $false; exit = -1; stdout = ""; stderr = ""; reason = ("the fleet's command printed more than " + $script:HordeWezfleetWakerMaxBytes + " bytes; " + (Stop-HordeWezfleetWakerProcess -Process $p)); timedOut = $false; stopped = $true } }
     }
     $left = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalMilliseconds)
     if (-not $p.WaitForExit($left)) { return [pscustomobject]@{ ok = $false; exit = -1; stdout = ""; stderr = ""; reason = ("timed-out: the fleet's command did not exit within " + $DeadlineSeconds + " s; " + (Stop-HordeWezfleetWakerProcess -Process $p)); timedOut = $true } }
@@ -408,9 +411,13 @@ function Start-HordeWezfleetWakerProcess {
 function ConvertTo-HordeWezfleetWakerLine {
     # One line of another program's text, fit for a reason: its first line, every character outside
     # printable ASCII made '?', at most -Max characters.
-    param([string]$Text, [int]$Max = 200)
+    # -Tool is for what the FLEET'S COMMAND printed, which this waker did not write and cannot vouch
+    # for: every path in it is cut down to its last name, so a reason says "x.json is not JSON" and
+    # not where on this machine a person keeps what - a reason is journaled, and may be mailed.
+    param([string]$Text, [int]$Max = 200, [switch]$Tool)
     $first = @("$Text" -split "`r?`n" | Where-Object { $_.Trim() -ne "" }) | Select-Object -First 1
     $clean = ("$first" -replace '[^\x20-\x7E]', '?').Trim()
+    if ($Tool) { $clean = [regex]::Replace($clean, '(?:[A-Za-z]:|\\\\[^\\/\s"<>|]+)?(?:[\\/][^\\/\s"<>|:*?]+){2,}|[A-Za-z]:[\\/][^\\/\s"<>|:*?]+', { param($m) return ($m.Value -split '[\\/]')[-1] }) }
     if ($clean.Length -gt $Max) { $clean = $clean.Substring(0, $Max) }
     return $clean
 }
@@ -424,12 +431,12 @@ function Read-HordeWezfleetWakerJson {
     $said = $What + " exit " + $Run.exit
     $lines = @("$($Run.stdout)" -split "`r?`n" | Where-Object { $_.Trim() -ne "" })
     if ($lines.Count -ne 1) {
-        $detail = ConvertTo-HordeWezfleetWakerLine ("$($Run.stdout)" + "`n" + "$($Run.stderr)")
+        $detail = ConvertTo-HordeWezfleetWakerLine ("$($Run.stdout)" + "`n" + "$($Run.stderr)") -Max $script:HordeWezfleetWakerDetailChars -Tool
         return [pscustomobject]@{ ok = $false; json = $null; reason = ($said + " printed " + $lines.Count + " lines, not one line of JSON" + $(if ($detail) { ": " + $detail } else { "" })) }
     }
     $j = $null
     try { $j = $lines[0] | ConvertFrom-Json } catch { $j = $null }
-    if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ ok = $false; json = $null; reason = ($said + " printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0])) } }
+    if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ ok = $false; json = $null; reason = ($said + " printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0] -Max $script:HordeWezfleetWakerDetailChars -Tool)) } }
     return [pscustomobject]@{ ok = $true; json = $j; reason = "" }
 }
 
@@ -442,7 +449,7 @@ function Get-HordeWezfleetWakerFailure {
     if ($null -ne $p -and $p.Value -is [string] -and $p.Value -cmatch $script:HordeWezfleetWakerCodePattern) { $code = $p.Value }
     $detail = ""
     $d = $Json.PSObject.Properties["detail"]
-    if ($null -ne $d -and $d.Value -is [string]) { $detail = ConvertTo-HordeWezfleetWakerLine $d.Value -Max $script:HordeWezfleetWakerDetailChars }
+    if ($null -ne $d -and $d.Value -is [string]) { $detail = ConvertTo-HordeWezfleetWakerLine $d.Value -Max $script:HordeWezfleetWakerDetailChars -Tool }
     if ($code -eq "") { return ($Said + " without a reason code this waker reads" + $(if ($detail -ne "") { ": " + $detail } else { "" })) }
     return ($code + ": " + $Said + $(if ($detail -ne "") { ": " + $detail } else { "" }))
 }
@@ -734,6 +741,11 @@ function Send-HordeWezfleetWakerNudge {
     $at = Get-HordeWezfleetWakerTime
     $budget = [int]$script:HordeWezfleetWakerDeadlines.nudgeBudget
     $run = Start-HordeWezfleetWakerProcess -Argv @("mail", "nudge", "-To", $Id, "-BudgetSeconds", ("" + $budget), "-Json") -DeadlineSeconds (3 * $budget)
+    # A NUDGE STOPPED FOR PRINTING TOO MUCH WAS STOPPED PART-WAY TOO. It was answered unreachable, which
+    # says nothing was typed - and nobody knows that of a command killed in the middle (safety review
+    # of PR 220). It is killed, like one that ran past its time: the box may hold the unsent line.
+    $cut = $run.PSObject.Properties["stopped"]
+    if ($null -ne $cut -and $cut.Value -eq $true) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed"; reason = ("nudge-killed: the nudge printed more than " + $script:HordeWezfleetWakerMaxBytes + " bytes and was stopped part-way; its box may now hold the unsent line"); at = (Get-HordeWezfleetWakerTime) }) -ObservedAt (Get-HordeWezfleetWakerTime)) }
     if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed"; reason = ("nudge-killed: the nudge ran past " + (3 * $budget) + " s, three times its budget, and was stopped; its box may now hold the unsent line. " + $run.reason); at = $at }) -ObservedAt $at) }
     $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet mail nudge"
     $tooOld = "tool-too-old: the fleet's command did not take mail nudge -BudgetSeconds as this waker asks it, so it may be older than the nudge budget, and it is not asked without one: "
@@ -756,7 +768,7 @@ function Send-HordeWezfleetWakerNudge {
     if ($null -ne $rp -and $rp.Value -is [string]) { $code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 80 }
     $detail = ""
     $dp = $j.PSObject.Properties["detail"]
-    if ($null -ne $dp -and $dp.Value -is [string]) { $detail = ConvertTo-HordeWezfleetWakerLine $dp.Value -Max $script:HordeWezfleetWakerDetailChars }
+    if ($null -ne $dp -and $dp.Value -is [string]) { $detail = ConvertTo-HordeWezfleetWakerLine $dp.Value -Max $script:HordeWezfleetWakerDetailChars -Tool }
     $why = $code
     if ($detail -ne "") { $why = $(if ($why -ne "") { $why + ": " + $detail } else { $detail }) }
     $mapped = $script:HordeWezfleetWakerOutcomes[$outcome.Value]

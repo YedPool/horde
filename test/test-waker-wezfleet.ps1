@@ -168,6 +168,31 @@ Check ($shape.Count -eq 3) "and its command line is -NoProfile -NonInteractive .
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- what the fleet's command printed is cut short and cleaned before it is a reason ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+$long = "the registry at C:\Users\somebody\Documents\private notes\fleet\registry\sessions\x.json is not JSON, nor is \\server\share\deep\folder\y.json, and here is a great deal more of what the command had to say about it: " + ("lorem ipsum dolor sit amet " * 20)
+Set-Answer $state "fleet" 1 (([ordered]@{ at = "2026-10-12T08:00:00Z"; sessions = $null; reason = "records-unreadable"; detail = $long } | ConvertTo-Json -Compress))
+& $fx.Clock $state $t0
+$a = Get-HordeWakeTargets -Waker $w
+Check ($a.state -ceq "unknown" -and "$($a.reason)".StartsWith("records-unreadable: ") -and "$($a.reason)".Contains("x.json is not JSON")) "CONTROL: a failing read still says the fleet's code and what was wrong, by the file's own name"
+Check (-not "$($a.reason)".Contains("somebody") -and -not "$($a.reason)".Contains("C:\") -and -not "$($a.reason)".Contains("\\server") -and -not "$($a.reason)".Contains("Documents")) ("no path of the command's output is in the reason: only each file's last name (" + $a.reason + ")")
+Check ("$($a.reason)".Length -le 220 -and -not "$($a.reason)".Contains("lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem")) ("and at most 120 characters of the command's own words are kept (" + "$($a.reason)".Length + " in all)")
+& $fx.SetMode $state @{ fleet = @{ exit = 0; stdout = ("usage: wezfleet <command>  see C:\Users\somebody\AppData\Local\thing\help.txt " + ("x" * 500)) } }
+& $fx.Forget $state
+& $fx.Clock $state $t0.AddSeconds(400)
+$a = Get-HordeWakeTargets -Waker $w
+Check ($a.state -ceq "unknown" -and -not "$($a.reason)".Contains("somebody") -and "$($a.reason)".Contains("help.txt") -and "$($a.reason)".Length -le 260) ("output that is not JSON at all is cleaned the same way (" + "$($a.reason)".Length + " characters)")
+Check ((ConvertTo-HordeWezfleetWakerLine "found from the wezfleet command on PATH, C:\tools\bin\wezfleet.cmd") -ceq "found from the wezfleet command on PATH, C:\tools\bin\wezfleet.cmd" -and (ConvertTo-HordeWezfleetWakerLine "a/b and 3/4 done, see C:\a\b\c.txt" -Tool) -ceq "a/b and 3/4 done, see c.txt") "what this waker says itself keeps its paths - a person must be told which folder - and a word with one slash in it is no path"
+# A NUDGE THAT PRINTS WITHOUT END is stopped part-way: killed, never "unreachable".
+& $fx.SetMode $state @{ nudge = @{ exit = 0; stdout = ("y" * 1100000) } }
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and "$($a.value.reason)".StartsWith("nudge-killed: ") -and "$($a.value.reason)".Contains("box may now hold")) ("a nudge stopped for printing more than a megabyte is killed, not unreachable: nobody knows it typed nothing (" + $a.value.outcome + ")")
+& $fx.SetMode $state $null
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- retired: true is yes, and false is no only for a row the fleet had a record for ---" -ForegroundColor Cyan
 
 $state = & $fx.New

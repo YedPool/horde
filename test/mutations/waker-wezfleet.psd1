@@ -6,6 +6,21 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-commands-paths-are-kept-in-a-reason"
+           Find = 'if ($Tool) { $clean = [regex]::Replace('
+           Replace = 'if ($false) { $clean = [regex]::Replace(' }
+        @{ Name = "three-hundred-characters-of-the-commands-words"
+           Find = '$script:HordeWezfleetWakerDetailChars = 120'
+           Replace = '$script:HordeWezfleetWakerDetailChars = 300' }
+        @{ Name = "a-failing-reads-detail-is-not-cleaned"
+           Find = '{ $detail = ConvertTo-HordeWezfleetWakerLine $d.Value -Max $script:HordeWezfleetWakerDetailChars -Tool }'
+           Replace = '{ $detail = ConvertTo-HordeWezfleetWakerLine $d.Value -Max $script:HordeWezfleetWakerDetailChars }' }
+        @{ Name = "output-that-is-not-json-is-not-cleaned"
+           Find = 'printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0] -Max $script:HordeWezfleetWakerDetailChars -Tool)'
+           Replace = 'printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0])' }
+        @{ Name = "a-nudge-cut-for-printing-too-much-is-unreachable"
+           Find = 'if ($null -ne $cut -and $cut.Value -eq $true) { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "a-command-found-on-path-is-called-named"
            Find = 'fixed = [bool]$choice.fixed; how ='
            Replace = 'fixed = $true; how =' }
