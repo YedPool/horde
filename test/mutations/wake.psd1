@@ -141,7 +141,7 @@
            Replace = '-and $false) { continue }' }
         @{ Name = "dead-session-counted-as-running"
            Find = 'if ("$($status.state)" -cne "known" -or $status.observedAt -isnot [datetime]) { continue }'
-           Replace = 'if ("$($status.state)" -cne "known" -and $status.observedAt -isnot [datetime]) { continue }' }
+           Replace = 'if ($false) { continue }' }
         @{ Name = "partial-listing-read-as-the-fleet"
            Find = 'if ("$($whole.state)" -cne "known") { return'
            Replace = 'if ($false) { return' }

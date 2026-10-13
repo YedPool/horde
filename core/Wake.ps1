@@ -381,6 +381,7 @@ function Get-HordeRestoreSessions {
     # lastChangeAt is when its live status was last written; role and parent are its registry record's
     # (role "unknown" and parent "" where the record says neither - never guessed, core/Roles.ps1).
     #
+    # Both times are UTC as core/Identity.ps1 gives them (it reads epoch milliseconds), so neither is converted.
     # ONLY A SESSION SEEN ALIVE COUNTS: one whose start and live status are both known. A control file
     # left by a process that is gone has an unknown status and is not a running session.
     # A LISTING THAT IS NOT WHOLE IS UNKNOWN, not a shorter fleet: the share of sessions that restarted
@@ -412,7 +413,7 @@ function Get-HordeRestoreSessions {
             $held = Get-HordeStoredField -Record $record -Name "parent"
             if ("$($held.state)" -ceq "known") { $parent = "$($held.value)" }
         }
-        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value.ToUniversalTime(); lastChangeAt = $status.observedAt.ToUniversalTime() })
+        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt })
     }
     return (New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow))
 }
