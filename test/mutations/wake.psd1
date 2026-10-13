@@ -78,6 +78,18 @@
         @{ Name = "shadow-ledger-written-where-live-reads"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -HordeHome $HordeHome) -Text' }
+        @{ Name = "bad-mail-said-on-the-first-sighting"
+           Find = 'if ($passes -ge 2 -and -not $told) {'
+           Replace = 'if ($passes -ge 1 -and -not $told) {' }
+        @{ Name = "bad-mail-said-every-pass"
+           Find = 'if ($passes -ge 2 -and -not $told) {'
+           Replace = 'if ($passes -ge 2) {' }
+        @{ Name = "bad-mail-never-forgotten"
+           Find = 'if ($count -le 0) { continue }'
+           Replace = '' }
+        @{ Name = "unreadable-count-not-handed-on"
+           Find = '$states[$t.id].value.unreadableCount -gt 0) { $unreadable[$t.id] ='
+           Replace = '$false) { $unreadable[$t.id] =' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -lt $allowed) {'
            Replace = 'if ($true) {' }

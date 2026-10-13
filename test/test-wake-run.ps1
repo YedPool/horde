@@ -61,6 +61,15 @@ Check ($script:reads -eq 2) ("the restore source ran beside the wake pass every 
 $again = New-HordeWakeShadowRun -HordeHome $h
 Check ($again.ledger.Count -eq 6 -and $again.posted.Count -eq 7 -and @($again.restores).Count -eq 1) "a run that starts again reads back the shadow run's ledger, what it would have posted, and the restore it found"
 
+# MAIL NOBODY CAN READ: the tick journals bad-mail once, on the second tick that shows it.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 0 -UnreadableCount 3
+$run = New-HordeWakeShadowRun -HordeHome $h
+$none = { $a = New-HordeKnown -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
+$said = @(); foreach ($s in @(0, 3, 6, 9)) { $said += , @(Invoke-HordeWakeShadowTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind }) }
+Check (@($said[0]).Count -eq 0 -and (@($said[1]) -join ",") -ceq "bad-mail" -and @($said[2]).Count -eq 0 -and @($said[3]).Count -eq 0) "a session whose mailbox holds records nobody can read is journaled bad-mail once, on the second tick that shows it, and not again"
+
 Write-Host ""
 Write-Host "--- a tick never throws: what fails is journaled once, and the next tick runs ---" -ForegroundColor Cyan
 

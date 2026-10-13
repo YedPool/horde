@@ -25,6 +25,9 @@
         @{ Name = "shadow-run-reads-the-live-restore-state"
            Find = '$savedRestore = Read-HordeRestoreState -Shadow -HordeHome $HordeHome'
            Replace = '$savedRestore = Read-HordeRestoreState -HordeHome $HordeHome' }
+        @{ Name = "bad-mail-forgotten-between-ticks"
+           Find = '$Run.badMail = $bad.seen'
+           Replace = '$Run.badMail = @{}' }
         @{ Name = "restore-source-every-tick"
            Find = 'if (($Now - $Run.restoreAt).TotalSeconds -ge $script:HordeWakeRestoreEverySeconds) {'
            Replace = 'if ($true) {' }

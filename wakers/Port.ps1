@@ -58,7 +58,8 @@
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
 #   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown
-#   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn }, or unknown
+#   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn },
+#            and unreadableCount when the waker can count mail it could not read, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
@@ -324,8 +325,8 @@ function Get-HordeWakeTargets {
 }
 
 function Get-HordeWakeState {
-    # One session's state as -Waker sees it: known { id; unreadCount; oldestUnreadAt; idle; boxEmpty;
-    # midTurn }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
+    # One session's state as -Waker sees it: known { id; unreadCount; unreadableCount; oldestUnreadAt;
+    # idle; boxEmpty; midTurn }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
     param($Waker, [string]$Id)
     if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so the state was not asked")) }
     if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("'" + $Id + "' is not a session id, so waker '" + $Waker.name + "' was not asked")) }
@@ -352,6 +353,17 @@ function Get-HordeWakeState {
         $oldestAt = ConvertTo-HordeWakerUtc $oldest.value
         if ($null -eq $oldestAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' gave the oldest unread mail of " + $Id + " a time with no zone, which cannot be placed")) }
     }
+    # unreadableCount IS OPTIONAL: how many records of the session's mail could not be read at all. A
+    # waker that does not report it leaves it out, and that is 0. One that reports it gives a whole
+    # number, 0 or more; null there is "I could not count", which is not a count (the same rule as
+    # unreadCount). The port only carries it: what a mailbox with bad records needs is the watcher's to
+    # say (core/Wake.ps1, bad-mail), and it never stops the good mail beside it from being knocked for.
+    $unreadable = 0
+    $bad = Get-HordeWakerMember $v "unreadableCount"
+    if ($bad.has) {
+        if (-not ($bad.value -is [int] -or $bad.value -is [long]) -or $bad.value -lt 0 -or $bad.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadableCount that is not a whole number, 0 or more")) }
+        $unreadable = [int]$bad.value
+    }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
         $m = Get-HordeWakerMember $v $n
@@ -363,7 +375,7 @@ function Get-HordeWakeState {
     # nudge typed into somebody's text.
     if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
     if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"] }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"] }) -ObservedAt $a.observedAt)
 }
 
 function Send-HordeWakeNudge {

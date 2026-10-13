@@ -83,6 +83,12 @@
         @{ Name = "time-with-no-zone-read-as-local"
            Find = 'if ($Value -isnot [datetime] -or $Value.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }'
            Replace = 'if ($Value -isnot [datetime]) { return $null }' }
+        @{ Name = "unreadable-count-not-checked"
+           Find = 'if (-not ($bad.value -is [int] -or $bad.value -is [long]) -or $bad.value -lt 0 -or $bad.value -gt [int]::MaxValue) { return'
+           Replace = 'if ($bad.value -isnot [int]) { $bad.value = 0 }; if ($false) { return' }
+        @{ Name = "unreadable-count-dropped"
+           Find = 'unreadableCount = $unreadable; oldestUnreadAt'
+           Replace = 'unreadableCount = 0; oldestUnreadAt' }
         @{ Name = "state-word-not-checked"
            Find = '$m.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $m.value) { return'
            Replace = '$m.value -isnot [string]) { return' }

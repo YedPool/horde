@@ -58,10 +58,11 @@ function Set-HordeMemoryWakerSession {
         [string]$BoxEmpty = "yes",
         [string]$MidTurn = "no",
         [string]$Outcome = "woken",
-        [string]$OutcomeReason = ""
+        [string]$OutcomeReason = "",
+        $UnreadableCount = $null
     )
     $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; unreadCount = $UnreadCount;
-        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason }
+        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount }
 }
 
 function Set-HordeMemoryWakerFault {
@@ -106,7 +107,10 @@ $null = Register-HordeWaker -Name "memory" `
         if (Invoke-HordeMemoryWakerFault "state") { return @{ idle = "yes"; boxEmpty = "yes" } }
         if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { return (New-HordeUnknown -Reason ("the memory waker has no session " + $Id)) }
         $s = $script:HordeMemoryWakerSessions[$Id]
-        return (New-HordeKnown -Value ([pscustomobject]@{ id = $s.id; unreadCount = $s.unreadCount; oldestUnreadAt = $s.oldestUnreadAt; idle = $s.idle; boxEmpty = $s.boxEmpty; midTurn = $s.midTurn }) -ObservedAt (Get-HordeMemoryWakerTime))
+        $value = [ordered]@{ id = $s.id; unreadCount = $s.unreadCount; oldestUnreadAt = $s.oldestUnreadAt; idle = $s.idle; boxEmpty = $s.boxEmpty; midTurn = $s.midTurn }
+        # Reported only when a test said so: left out, the port reads it as none.
+        if ($null -ne $s.unreadableCount) { $value["unreadableCount"] = $s.unreadableCount }
+        return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt (Get-HordeMemoryWakerTime))
     } `
     -Nudge {
         param([string]$Id)

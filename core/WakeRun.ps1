@@ -27,11 +27,11 @@ $script:HordeWakeRestoreEverySeconds = 30
 
 function New-HordeWakeShadowRun {
     # What a shadow run carries from tick to tick, read from the shadow run's own files (core/WakeFiles.ps1,
-    # Get-HordeWakeStateFile): { ledger; posted; restores; unknown; notes; restoreAt; pass; said }. said is
+    # Get-HordeWakeStateFile): { ledger; posted; restores; unknown; notes; badMail; restoreAt; pass; said }. said is
     # what the caller should print once: a saved file that could not be read is started from empty, and
     # says so.
     param([string]$HordeHome = (Get-HordeHome))
-    $run = [pscustomobject]@{ ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Shadow -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
@@ -92,6 +92,10 @@ function Invoke-HordeWakeShadowTick {
     try {
         $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow
         foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
+        # MAIL NOBODY CAN READ, said once when it lasts two passes (core/Wake.ps1, Update-HordeWakeBadMail).
+        $bad = Update-HordeWakeBadMail -Seen $Run.badMail -Unreadable $result.unreadable -Now $Now
+        $Run.badMail = $bad.seen
+        foreach ($e in @($bad.entries)) { [void]$entries.Add($e) }
         $changed = (@($result.entries).Count -gt 0 -or $result.ledger.Count -ne $Run.ledger.Count)
         $Run.ledger = $result.ledger
         if ($changed) { Save-HordeWakeLedger -Ledger $Run.ledger -Shadow -HordeHome $HordeHome }
