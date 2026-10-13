@@ -66,6 +66,21 @@
         @{ Name = "silent-probes-are-never-capped"
            Find = 'if ($SilentProbes -ge [int]$Settings.maxSilentProbes) {'
            Replace = 'if ($false) {' }
+        @{ Name = "after-the-cap-the-slow-probe-is-never-sent"
+           Find = 'if ($lastSlow -is [datetime] -and ($Now - $lastSlow).TotalSeconds -lt $slow) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "after-the-cap-the-slow-probe-does-not-wait"
+           Find = 'if ($lastSlow -is [datetime] -and ($Now - $lastSlow).TotalSeconds -lt $slow) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-slow-probe-ignores-the-silences-own-time"
+           Find = 'if ($SilentProbeAt -is [datetime] -and $SilentProbeAt -le $Now -and ($lastSlow -isnot [datetime] -or $SilentProbeAt -gt $lastSlow)) { $lastSlow = $SilentProbeAt }'
+           Replace = '' }
+        @{ Name = "the-end-of-the-stretched-probes-is-not-told"
+           Find = '$condition = [pscustomobject]@{ kind = "silent-probes-ended"'
+           Replace = '$null = [pscustomobject]@{ kind = "silent-probes-ended"' }
+        @{ Name = "the-time-of-the-last-probe-is-not-kept"
+           Find = 'if ($probedNow -gt 0) { $lastProbe = $Now }'
+           Replace = '' }
         @{ Name = "silent-probes-are-not-stretched"
            Find = 'for ($i = 1; $i -lt $Probes -and $wait -lt $most; $i++) { $wait = $wait * [System.Math]::Max(1.0, [double]$Settings.silentProbeStretch) }'
            Replace = '' }

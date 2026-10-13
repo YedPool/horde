@@ -1101,7 +1101,7 @@ function Long {
         if ($null -ne $AckAt -and $t -eq $AckAt) { Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -LastAckedAt (At ($t - 1)) }
         Set-HordeMemoryWakerClock (At $t)
         $sent = 0; if ($null -ne $seen) { $sent = [int]$seen.probes }
-        $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $t) -Settings $Using -Ledger $ledger -Silent:$silent -SilentProbes $sent
+        $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $t) -Settings $Using -Ledger $ledger -Silent:$silent -SilentProbes $sent -SilentProbeAt (Get-HordeWakeEntryValue $seen "probeAt")
         $typed = @($r.entries | Where-Object { $_.kind -ceq "nudge" }).Count
         if ($silent) { for ($k = 0; $k -lt $typed; $k++) { [void]$probes.Add($t) } } else { $normal += $typed }
         $sil = Update-HordeWakeSilence -Seen $seen -Entries $r.entries -Acks $r.acks -Now (At $t) -Settings $Using
@@ -1117,10 +1117,11 @@ function Long {
     return [pscustomobject]@{ probes = $probes.ToArray(); said = $said.ToArray(); told = $told.ToArray(); seen = $seen; normal = $normal; typed = $typedAll }
 }
 $day = Long -Hours 24 -Using $shippedNow
-$gaps = @(for ($i = 1; $i -lt $day.probes.Count; $i++) { $day.probes[$i] - $day.probes[$i - 1] })
-Check ($day.probes.Count -eq 12 -and $day.seen.probes -eq 12 -and $day.seen.silent -eq $true) ("TWENTY-FOUR HOURS of a fleet that never acknowledges mail: twelve probes are typed in all, not the 288 of one every five minutes (" + $day.probes.Count + ")")
-Check (($gaps -join ",") -ceq "300,600,1200,2400,3600,3600,3600,3600,3600,3600,3600") ("and they are stretched: 5, 10, 20, 40 minutes apart, then an hour (" + ($gaps -join ",") + ")")
-Check ($day.probes.Count -gt 0 -and ($day.probes[$day.probes.Count - 1] - $day.probes[0]) -le 30000 -and $day.typed -eq ($day.normal + 12)) ("the last is typed within nine hours of the first, and nothing at all is typed in the fifteen hours after it (" + $day.typed + " lines in the day)")
+$gaps = @(for ($i = 1; $i -lt [System.Math]::Min(12, $day.probes.Count); $i++) { $day.probes[$i] - $day.probes[$i - 1] })
+$slowGaps = @(for ($i = 12; $i -lt $day.probes.Count; $i++) { $day.probes[$i] - $day.probes[$i - 1] })
+Check ($day.probes.Count -eq 14 -and $day.seen.probes -eq 14 -and $day.seen.silent -eq $true) ("TWENTY-FOUR HOURS of a fleet that never acknowledges mail: fourteen probes are typed in all - the twelve stretched ones and two very slow ones - not the 288 of one every five minutes (" + $day.probes.Count + ")")
+Check (($gaps -join ",") -ceq "300,600,1200,2400,3600,3600,3600,3600,3600,3600,3600") ("and the first twelve are stretched: 5, 10, 20, 40 minutes apart, then an hour (" + ($gaps -join ",") + ")")
+Check ($day.probes.Count -ge 12 -and ($day.probes[11] - $day.probes[0]) -le 30000 -and ($slowGaps -join ",") -ceq "21600,21600" -and $day.typed -eq ($day.normal + $day.probes.Count)) ("the twelfth is typed within nine hours of the first, and after it nothing but one probe every six hours (" + ($slowGaps -join ",") + "; " + $day.typed + " lines in the day)")
 Check (@($day.said | Where-Object { $_ -clike "silent-probes-ended@*" }).Count -eq 1 -and @($day.said | Where-Object { $_ -clike "fleet-silent@*" }).Count -eq 1) ("the journal says once that the fleet was found silent and once that its probes have ended (" + ($day.said -join ",") + ")")
 # AFTER THE TWELFTH, THE WARCHIEF IS TOLD AND ONE VERY SLOW PROBE GOES ON (review of PR 234): twelve probes,
 # the notice once, then exactly one probe every six hours for two days, and an acknowledgement ends it.
@@ -1143,11 +1144,23 @@ $c1 = Update-HordeWakeSilence -Seen ([pscustomobject]@{ silent = $true; quietSin
 $c2 = Update-HordeWakeSilence -Seen $c1.seen -Entries @((Knock 2)) -Acks @{ (Sid 1) = $null } -Now (At 9000) -Settings $shippedNow
 $c3 = Update-HordeWakeSilence -Seen $c2.seen -Entries @() -Acks @{ (Sid 1) = $null } -Now (At 9030) -Settings $shippedNow
 Check ($c1.seen.probes -eq 11 -and @($c1.entries).Count -eq 0 -and $c2.seen.probes -eq 12 -and @($c2.entries).Count -eq 1 -and $c2.entries[0].kind -ceq "silent-probes-ended" -and @($c3.entries).Count -eq 0 -and $c3.seen.probes -eq 12) "the eleventh probe is counted and nothing said; the twelfth is the last, said once; the pass after says nothing more"
+Check ($c1.seen.probeAt -eq (At 5000) -and $c2.seen.probeAt -eq (At 9000) -and $c3.seen.probeAt -eq (At 9000)) "the silence keeps when its last probe was sent, and a pass with no probe leaves that time as it was: the six hours of the slow probe run from it"
+Check ($null -ne $c2.condition -and $c2.condition.kind -ceq "silent-probes-ended" -and $c2.condition.subject -ceq "" -and $null -eq $c1.condition -and $null -eq $c3.condition) "the pass that sends the last stretched probe makes the notice for the warchief, about the fleet; the passes either side make none"
 $c4 = Update-HordeWakeSilence -Seen $null -Entries @((Knock 1)) -Acks @{ (Sid 1) = $null } -Now (At 0) -Settings $shippedNow
 Check ($c4.seen.probes -eq 0) "a nudge in a fleet that is not silent is no probe"
 Start-Case; Seat 1; Seat 2; Seat 3
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $shippedNow -Ledger @{} -Silent -SilentProbes 12 -SilentProbeAt (At -21599)
+Check ((Rang) -eq 0 -and @($r.decisions | Where-Object { "$($_.reason)".StartsWith("the fleet is silent: 12 probes went unanswered, and now one session of the fleet is asked every 21600 s; 1 s are left") }).Count -eq 3) "a pass told the silence has had its twelve, the last a second short of six hours ago, types nothing, and each session's decision says why"
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $shippedNow -Ledger @{} -Silent -SilentProbes 12 -SilentProbeAt (At -21600)
+Check ((Rang) -eq 1 -and @($r.decisions | Where-Object { $_.action -ceq "nudge" }).Count -eq 1) "six hours after the last probe, ONE session of the fleet is probed: the very slow probe"
+Reset-HordeMemoryWaker; Seat 1; Seat 2; Seat 3
+$late = @{}; $late[(Sid 2)] = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At -10) -LastOutcome "woken" -MailAt (At -60) -ProbeAt (At -10)
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $shippedNow -Ledger $late -Silent -SilentProbes 13 -SilentProbeAt (At -30000)
+Check ((Rang) -eq 0) "a later probe in the ledger than the silence says counts too: the six hours run from whichever is later"
+Reset-HordeMemoryWaker; Seat 1; Seat 2; Seat 3
 $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $shippedNow -Ledger @{} -Silent -SilentProbes 12
-Check ((Rang) -eq 0 -and @($r.decisions | Where-Object { "$($_.reason)".StartsWith("the fleet is silent: 12 probes went unanswered and no more are sent") }).Count -eq 3) "a pass told the silence has had its twelve types nothing, and each session's decision says why"
+Check ((Rang) -eq 1) "with no time of a last probe known anywhere - a silence saved before the time was kept - one probe is sent, not none for ever"
+Reset-HordeMemoryWaker; Seat 1; Seat 2; Seat 3
 $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $shippedNow -Ledger @{} -Silent -SilentProbes 11
 Check ((Rang) -eq 1) "CONTROL: told eleven, it sends the twelfth"
 Reset-HordeMemoryWaker

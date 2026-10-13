@@ -320,7 +320,7 @@ function Invoke-HordeWakeTick {
         $silentProbes = 0
         $sentSoFar = Get-HordeWakeEntryValue $Run.silence "probes"
         if ($sentSoFar -is [int] -or $sentSoFar -is [long]) { $silentProbes = [int]$sentSoFar }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt")
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be
