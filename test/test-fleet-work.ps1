@@ -156,6 +156,10 @@ foreach ($k in @(@("send", $sendLine), @("mail", $mailLine), @("restart", $resta
 Check ((Read-Line $sendLine).event.values.ranMs -eq 20410) "the send read is the line's: how long the send ran"
 $minimalSend = Edit-Line $sendLine { param($e) $e.values.PSObject.Properties.Remove("wokenMs"); $e.values.PSObject.Properties.Remove("mailId"); $e.values.PSObject.Properties.Remove("queuedMs"); $e.values.route = "keys"; $e.values.outcome = "delivered" }
 Check (Test-Reads (Read-Line $minimalSend)) "a send by keystrokes, with no mail id and no step times, reads"
+# The send command also says when it knocked on nobody because the receiver's own hook had already
+# handed the mail over (wezfleet pull request 96): its own word, so the record is true.
+Check (Test-Reads (Read-Line (Edit-Line $sendLine { param($e) $e.values.PSObject.Properties.Remove("wokenMs"); $e.values.outcome = "handed-over" }))) "a send whose mail the receiver's hook had already handed over, so nobody was knocked on, reads"
+Check (-not (Test-Reads (Read-Line (Edit-Line $sendLine { param($e) $e.values.outcome = "handed over" })))) "CONTROL: an outcome that is not one of the listed words does not read"
 Check (Test-Reads (Read-Line (Edit-Line $mailLine { param($e) $e.values.PSObject.Properties.Remove("answers"); $e.values.messageKind = "unmarked" }))) "a mail that answers nothing, and whose kind was not given, reads"
 Check (Test-Reads (Read-Line (Edit-Line $mailLine { param($e) $e.values.mailId = ("ab" * 16); $e.values.answers = ("cd" * 16) }))) "CONTROL: a 32-hex mail id (a posted one) reads too"
 # attacked: each with a control above that the same field with an ordinary value is kept
