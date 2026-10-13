@@ -6,33 +6,69 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-row-that-does-not-say-reads-as-not-limited"
+           Find = '        $word = "unknown"'
+           Replace = '        $word = "no"' }
+        @{ Name = "limited-no-is-read-as-unknown"
+           Find = 'if ($null -ne $p -and $p.Value -ceq "no") { $word = "no" }'
+           Replace = '' }
+        @{ Name = "limited-yes-is-read-as-no"
+           Find = 'return [pscustomobject]@{ limited = "yes"; limitedUntil = $until }'
+           Replace = 'return [pscustomobject]@{ limited = "no"; limitedUntil = $until }' }
+        @{ Name = "retired-true-read-as-no"
+           Find = 'if ($Row.retired -eq $true) { return "yes" }'
+           Replace = '' }
+        @{ Name = "an-unreadable-record-reads-as-not-retired"
+           Find = 'if (@($said) -ccontains "record-unreadable") { return "unknown" }'
+           Replace = '' }
+        @{ Name = "a-row-with-nothing-of-a-record-reads-as-not-retired"
+           Find = 'if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }'
+           Replace = '' }
+        @{ Name = "a-row-with-no-label-alone-is-unknown"
+           Find = 'if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }'
+           Replace = 'if ("$($Row.label)" -ceq "") { return "unknown" }' }
+        @{ Name = "the-listing-says-nobody-is-retired"
+           Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })'
+           Replace = 'reachable = $row.reachable; retired = "no" })' }
+        @{ Name = "a-reset-with-no-zone-is-read-as-local"
+           Find = '[ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }'
+           Replace = '[ref]$parsed)) { $until = $parsed.ToUniversalTime() }' }
+        @{ Name = "a-limited-that-is-no-word-accepted"
+           Find = 'if ($names -ccontains "limited" -and ($Row.limited -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.limited)) { return "a row''s limited is not yes, no or unknown" }'
+           Replace = '' }
+        @{ Name = "a-limitedUntil-that-is-no-time-accepted"
+           Find = 'if ($names -ccontains "limitedUntil" -and $null -ne $Row.limitedUntil -and $Row.limitedUntil -isnot [string] -and $Row.limitedUntil -isnot [datetime]) { return "a row''s limitedUntil is neither a time nor null" }'
+           Replace = '' }
         @{ Name = "retired-session-with-no-mail-is-a-target"
            Find = 'if ($row.retired -and -not $hasMail) { continue }'
            Replace = '' }
         @{ Name = "retired-session-with-mail-dropped"
            Find = 'if ($row.retired -and -not $hasMail) { continue }'
            Replace = 'if ($row.retired) { continue }' }
-        @{ Name = "unknown-role-guessed-a-goblin"
+        @{ Name = "unknown-role-guessed-a-warg"
            Find = 'is [string]) { return $script:HordeWezfleetWakerRoles[$Word] }'
-           Replace = 'is [string]) { return $script:HordeWezfleetWakerRoles[$Word] }; if ($true) { return "goblin" }' }
+           Replace = 'is [string]) { return $script:HordeWezfleetWakerRoles[$Word] }; if ($true) { return "warg" }' }
         @{ Name = "master-read-as-an-orc"
-           Find = '$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "goblin" }'
-           Replace = '$script:HordeWezfleetWakerRoles = @{ "master" = "orc"; "orchestrator" = "orc"; "session" = "goblin" }' }
+           Find = '$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "warg" }'
+           Replace = '$script:HordeWezfleetWakerRoles = @{ "master" = "orc"; "orchestrator" = "orc"; "session" = "warg" }' }
         @{ Name = "every-state-reads-a-pane"
-           Find = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")'
-           Replace = '$candidate = $true' }
-        @{ Name = "no-state-reads-a-pane"
-           Find = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")'
-           Replace = '$candidate = $false' }
-        @{ Name = "pane-read-for-a-session-that-is-not-idle"
-           Find = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")'
-           Replace = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes")' }
+           Find = '    if ($Full) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "the-full-reading-reads-no-pane"
+           Find = '    if ($Full) {'
+           Replace = '    if ($false) {' }
         @{ Name = "fleet-asked-on-every-call"
            Find = '($now - $kept.at).TotalSeconds -lt $script:HordeWezfleetWakerFleetLifeSeconds) { return $kept.answer }'
            Replace = '$false) { return $kept.answer }' }
         @{ Name = "one-answer-kept-for-ever"
            Find = '($now - $kept.at).TotalSeconds -lt $script:HordeWezfleetWakerFleetLifeSeconds) { return $kept.answer }'
            Replace = '$true) { return $kept.answer }' }
+        @{ Name = "answer-stamped-when-the-call-was-made"
+           Find = '$script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = (Get-HordeWezfleetWakerTime); answer = $answer }'
+           Replace = '$script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = $now; answer = $answer }' }
+        @{ Name = "a-pass-beginning-keeps-the-last-reading"
+           Find = '-Begin { Clear-HordeWezfleetWakerPass }'
+           Replace = '-Begin { }' }
         @{ Name = "rule-1-a-row-with-a-reason-distrusted"
            Find = 'if ($Row.mail -cne "known") {'
            Replace = 'if ($Row.mail -cne "known" -or "$($Row.reason)" -cne "") {' }
@@ -51,6 +87,9 @@
         @{ Name = "rule-3-failing-read-repeated-every-call"
            Find = 'if ($fail.count -gt 0 -and $now -lt $fail.nextAt) { return [pscustomobject]@{ ok = $false; rows = $null; reason = $fail.reason } }'
            Replace = '' }
+        @{ Name = "rule-3-failures-in-a-row-not-said"
+           Find = '-Name "failures" -Value ([int]$script:HordeWezfleetWakerFleetFailures.count)'
+           Replace = '-Name "failures" -Value 0' }
         @{ Name = "rule-3-back-off-never-grows"
            Find = 'return [int]$steps[[System.Math]::Min($Failures, $steps.Count) - 1]'
            Replace = 'return [int]$steps[0]' }
@@ -72,6 +111,14 @@
         @{ Name = "rule-4-timeout-not-named"
            Find = 'reason = ("timed-out: the fleet''s command did not answer within "'
            Replace = 'reason = ("the fleet''s command did not answer within "' }
+        @{ Name = "snapshot-with-no-time-limit"
+           Find = 'CreationDate -OperationTimeoutSec $script:HordeWezfleetWakerSnapshotSeconds -ErrorAction Stop'
+           Replace = 'CreationDate -ErrorAction Stop'
+           Expect = "survives"
+           Reason = "no suite can make the real process table slow; the limit is the cmdlet's own parameter, and the case it guards is played by Set-HordeWezfleetWakerSnapshotFault" }
+        @{ Name = "no-list-said-as-no-descendants"
+           Find = 'if (-not $listed) { $also ='
+           Replace = 'if ($false) { $also =' }
         @{ Name = "rule-5-two-lines-read-as-one"
            Find = 'if ($lines.Count -ne 1) {'
            Replace = 'if ($lines.Count -lt 1) {' }
@@ -97,8 +144,26 @@
            Find = '-and $target.Value -cne "" -and $target.Value -cne $Id) { return (New-HordeUnknown'
            Replace = '-and $false) { return (New-HordeUnknown' }
         @{ Name = "failed-nudge-read-as-woken"
-           Find = 'if (-not $read.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $read.reason; at = $at })'
-           Replace = 'if (-not $read.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "woken"; reason = $read.reason; at = $at })' }
+           Find = 'return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $why; at = $at }) -ObservedAt $at)'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "woken"; reason = $why; at = $at }) -ObservedAt $at)' }
+        @{ Name = "nudge-sent-without-its-budget"
+           Find = '@("mail", "nudge", "-To", $Id, "-BudgetSeconds", ("" + $budget), "-Json")'
+           Replace = '@("mail", "nudge", "-To", $Id, "-Json")' }
+        @{ Name = "nudge-killed-at-its-budget"
+           Find = '("" + $budget), "-Json") -DeadlineSeconds (3 * $budget)'
+           Replace = '("" + $budget), "-Json") -DeadlineSeconds $budget' }
+        @{ Name = "killed-nudge-read-as-unreachable"
+           Find = 'if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed";'
+           Replace = 'if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable";' }
+        @{ Name = "old-tool-not-said-to-be-old"
+           Find = 'if ($run.ok) { $why = $tooOld + $why }'
+           Replace = '' }
+        @{ Name = "nudge-budget-of-thirty"
+           Find = '$script:HordeWezfleetWakerNudgeBudget = 60'
+           Replace = '$script:HordeWezfleetWakerNudgeBudget = 30' }
+        @{ Name = "elapsed-time-dropped"
+           Find = '-and $took.Value -ge 0) { $answer["elapsedMs"] = [long]$took.Value }'
+           Replace = '-and $false) { $answer["elapsedMs"] = [long]$took.Value }' }
         @{ Name = "outcome-with-no-reason-left-blank"
            Find = 'if ($why -eq "" -and $mapped -cne "woken") { $why = "the fleet answered " + $outcome.Value }'
            Replace = '' }

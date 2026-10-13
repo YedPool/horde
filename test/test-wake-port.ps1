@@ -35,8 +35,9 @@ function Reg {
     param([string]$Name,
           [scriptblock]$Targets = { $script:calls++; New-HordeKnown -Value @() },
           [scriptblock]$State = { param($id) $script:calls++; New-HordeUnknown -Reason "the fixture knows no session" },
-          [scriptblock]$Nudge = { param($id) $script:calls++; New-HordeUnknown -Reason "the fixture rings nobody" })
-    return (Register-HordeWaker -Name $Name -Folder (Join-Path $fx $Name) -Targets $Targets -State $State -Nudge $Nudge)
+          [scriptblock]$Nudge = { param($id) $script:calls++; New-HordeUnknown -Reason "the fixture rings nobody" },
+          [scriptblock]$Begin = $null)
+    return (Register-HordeWaker -Name $Name -Folder (Join-Path $fx $Name) -Targets $Targets -State $State -Nudge $Nudge -Begin $Begin)
 }
 
 Write-Host ""
@@ -71,7 +72,8 @@ Check (Test-HordeWakerCapability -Waker $good -Capability "state.box") "yes is h
 Check (-not (Test-HordeWakerCapability -Waker $memory -Capability "reach.unseen")) "declined is not having it"
 $blind = Reg "fixture-blind" -State { param($id) New-HordeKnown -Value ([pscustomobject]@{ id = $id; unreadCount = 0; oldestUnreadAt = $null; idle = "yes"; boxEmpty = $script:blindBox; midTurn = $script:blindTurn }) }
 Check (-not (Test-HordeWakerCapability -Waker $blind -Capability "state.box")) "no is not having it"
-Check (-not (Test-HordeWakerCapability -Waker $blind -Capability "state.turn")) "unverified is not having it"
+Check (-not (Test-HordeWakerCapability -Waker $blind -Capability "state.turn")) "declined is not having it, here either"
+Check (-not (Test-HordeWakerClaims -Waker $blind -Capability "state.box") -and -not (Test-HordeWakerClaims -Waker $blind -Capability "state.turn") -and (Test-HordeWakerClaims -Waker $good -Capability "state.box")) "no and declined are not claims; yes is"
 Check (Throws { Test-HordeWakerCapability -Waker $good -Capability "teleport" } "not a waker capability") "asking about a capability outside the list is an error"
 $r = Resolve-HordeWaker -Name "memory" -Require @("reach.unseen")
 Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains("reach.unseen") -and "$($r.reason)".Contains("declined")) "a caller that requires what the memory waker declines is refused, with the waker's own word for it"
@@ -84,9 +86,33 @@ $unguarded = Reg "fixture-unguarded"
 $p = Resolve-HordeProductionWaker
 Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "a waker whose nudge does not guard itself is not one the production path can pick: still the one"
 Check ((Resolve-HordeWaker -Name "fixture-unguarded" -Require @("nudge.guarded")).state -ceq "unknown") "and a caller that requires nudge.guarded of it is refused"
+# UNVERIFIED: a claim not yet shown. Never picked for a live run; picked, when asked for, only if no
+# waker offers all five.
+$script:claimTurn = "no"
+$claimed = Reg "fixture-unverified" -State { param($id) New-HordeKnown -Value ([pscustomobject]@{ id = $id; unreadCount = 0; oldestUnreadAt = $null; idle = "yes"; boxEmpty = "yes"; midTurn = $script:claimTurn }) }
+Check (-not (Test-HordeWakerCapability -Waker $claimed -Capability "state.turn") -and (Test-HordeWakerClaims -Waker $claimed -Capability "state.turn")) "unverified is not having it, and it is claiming it"
+Check ((@(Get-HordeWakerUnverified -Waker $claimed) -join ",") -ceq "state.turn,nudge.guarded" -and @(Get-HordeWakerUnverified -Waker $good).Count -eq 0 -and @(Get-HordeWakerUnverified -Waker $memory).Count -eq 0) "a waker's unverified capabilities are named, in the port's order; declined is not one of them"
+$a = Get-HordeWakeState -Waker $claimed -Id "0a000000-0000-4000-8000-000000000001"
+Check ($a.state -ceq "known" -and $a.value.midTurn -ceq "no") "a waker that claims state.turn, unverified, may answer about the turn"
+Check ((Resolve-HordeWaker -Name "fixture-unverified" -Require @("state.turn")).state -ceq "unknown") "a caller that requires the capability of it is still refused"
+$p = Resolve-HordeProductionWaker -AllowUnverified
+Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "with a waker that offers all five loaded, it is the one picked, allowed or not: unverified is never preferred"
 $second = Reg "fixture-second"
 $p = Resolve-HordeProductionWaker
 Check ($p.state -ceq "unknown" -and "$($p.reason)".Contains("never chosen")) "with two that could be picked the production path is unknown: one is never chosen over another"
+Check ((Resolve-HordeProductionWaker -AllowUnverified).state -ceq "unknown") "and allowing unverified does not choose between them either"
+# With only wakers that do not offer all five: the memory waker, which declines one, and those that claim.
+$kept = @{}; foreach ($k in @($script:HordeWakers.Keys)) { $kept[$k] = $script:HordeWakers[$k] }
+try {
+    foreach ($k in @("fixture-good", "fixture-second", "fixture-unguarded")) { $script:HordeWakers.Remove($k) }
+    $p = Resolve-HordeProductionWaker
+    Check ($p.state -ceq "absent" -and "$($p.reason)".Contains("fixture-unverified: does not offer state.turn (it says unverified)")) "with no waker that offers all five the production path finds none, and says the unverified one's word for what it lacks"
+    $p = Resolve-HordeProductionWaker -AllowUnverified
+    Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $claimed)) "allowed, it picks the one that claims all five - never the memory waker, which declines one, nor one that says no"
+    $script:HordeWakers["fixture-unguarded"] = $kept["fixture-unguarded"]
+    $p = Resolve-HordeProductionWaker -AllowUnverified
+    Check ($p.state -ceq "unknown" -and "$($p.reason)".Contains("never chosen")) "two that claim all five - the other has an unverified guard - are unknown: one is never chosen over another"
+} finally { $script:HordeWakers.Clear(); foreach ($k in @($kept.Keys)) { $script:HordeWakers[$k] = $kept[$k] } }
 
 Write-Host ""
 Write-Host "--- only a waker registered through the port is called ---" -ForegroundColor Cyan
@@ -140,6 +166,28 @@ Set-HordeMemoryWakerSession -Id $sid -Outcome "nothing" -OutcomeReason "its mail
 $a = Send-HordeWakeNudge -Waker $memory -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and $a.value.reason -ceq "its mail was taken before the nudge" -and @(Get-HordeMemoryWakerNudges -Id $sid).Count -eq 1) "nothing - the mail was taken before the nudge - is carried with its reason, and nobody was rung for it"
 
+Start-HordeWakePass -Waker $memory
+Start-HordeWakePass -Waker $memory
+Check ((Get-HordeMemoryWakerBegins) -eq 2) "a waker that registered a Begin is told each time a pass begins"
+$said = "returned"
+try { Start-HordeWakePass -Waker $good; Start-HordeWakePass -Waker $null; Start-HordeWakePass -Waker ([pscustomobject]@{ PSTypeName = "Horde.Waker"; name = "fixture-good"; begin = { throw "a look-alike was called" } }) } catch { $said = "threw: " + $_.Exception.Message }
+Check ($said -ceq "returned") "a waker with no Begin, no waker at all and a look-alike are told nothing, and none of them is a throw"
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id $sid -UnreadCount 1 -OldestUnreadAt $t0 -BoxEmpty "no"
+Set-HordeMemoryWakerCheap $true
+$cheap = Get-HordeWakeState -Waker $memory -Id $sid
+$whole = Get-HordeWakeState -Waker $memory -Id $sid -Full
+Check ($cheap.state -ceq "known" -and $cheap.value.boxEmpty -ceq "unknown" -and $whole.state -ceq "known" -and $whole.value.boxEmpty -ceq "no" -and (@(Get-HordeMemoryWakerLooks) -join ",") -ceq $sid) "-Full is the waker's Confirm, where it registered one: its state said the box unknown, and the full reading says it"
+Check ((Test-HordeWakerConfirms $memory) -and -not (Test-HordeWakerConfirms $good) -and -not (Test-HordeWakerConfirms $null)) "a waker says whether it has a fuller reading than its state; one that registered none, and no waker, have none"
+$script:calls = 0
+$null = Get-HordeWakeState -Waker $good -Id $sid -Full
+Check ($script:calls -eq 1) "for a waker with no Confirm, -Full is its state"
+Reset-HordeMemoryWaker
+$thrower = Reg "fixture-second-begin" -Begin { throw "the fleet fell over" }
+$said = "returned"
+try { Start-HordeWakePass -Waker $thrower } catch { $said = "threw" }
+Check ($said -ceq "returned") "a Begin that throws is not a throw of the port"
+
 Write-Host ""
 Write-Host "--- an adapter's bad answer is unknown with the reason, never passed on and never a throw ---" -ForegroundColor Cyan
 
@@ -147,12 +195,26 @@ $script:targetsAnswer = $null
 $script:stateAnswer = $null
 $script:nudgeAnswer = $null
 $scripted = Reg "fixture-scripted" -Targets { & $script:targetsAnswer } -State { param($id) & $script:stateAnswer $id } -Nudge { param($id) & $script:nudgeAnswer $id }
-function New-Target { param([hashtable]$Change = @{}) $t = @{ id = $sid; label = "A"; role = "orc"; parent = ""; reachable = "yes" }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $t.Remove($k) } else { $t[$k] = $Change[$k] } }; return [pscustomobject]$t }
+function New-Target { param([hashtable]$Change = @{}) $t = @{ id = $sid; label = "A"; role = "orc"; parent = ""; reachable = "yes"; retired = "no" }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $t.Remove($k) } else { $t[$k] = $Change[$k] } }; return [pscustomobject]$t }
 function New-State { param([hashtable]$Change = @{}) $s = @{ id = $sid; unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no" }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $s.Remove($k) } else { $s[$k] = $Change[$k] } }; return [pscustomobject]$s }
 function New-Rang { param([hashtable]$Change = @{}) $n = @{ id = $sid; outcome = "woken"; reason = ""; at = $t0 }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $n.Remove($k) } else { $n[$k] = $Change[$k] } }; return [pscustomobject]$n }
 
 $script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
 Check ((Get-HordeWakeTargets -Waker $scripted).state -ceq "known") "CONTROL: the scripted waker's good listing is known"
+# retired is carried, and required: a listing that leaves it out is no listing.
+foreach ($word in @("yes", "no", "unknown")) {
+    $script:retiredWord = $word
+    $script:targetsAnswer = { New-HordeKnown -Value @((New-Target @{ retired = $script:retiredWord })) }
+    $got = Get-HordeWakeTargets -Waker $scripted
+    Check ($got.state -ceq "known" -and @($got.value)[0].retired -ceq $word) ("targets: retired " + $word + " is carried")
+}
+foreach ($bad in @($null, $true, "maybe", "")) {
+    $script:retiredWord = $bad
+    $script:targetsAnswer = { New-HordeKnown -Value @((New-Target @{ retired = $script:retiredWord })) }
+    $got = Get-HordeWakeTargets -Waker $scripted
+    Check ($got.state -ceq "unknown" -and "$($got.reason)".Contains("retired")) ("targets: a retired that is '" + $bad + "' - left out, a boolean, a word outside the list - makes the listing unknown: never read as not retired")
+}
+$script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
 foreach ($case in @(
         @{ what = "a listing that throws"; block = { throw "the far end fell over" }; like = "fell over" },
         @{ what = "a listing that is not an answer"; block = { @((New-Target)) }; like = "not an answer" },
@@ -243,6 +305,58 @@ $script:stateAnswer = { param($id) $s = New-State; Add-Member -InputObject $s -M
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unreadableCount")) "state: an unreadableCount of null is 'I could not count', which is unknown and never 0"
 
+# limited and limitedUntil: three-valued like every other fact, and unknown is never read as no.
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "unknown" -and $null -eq $a.value.limitedUntil) "state: a waker that claims state.limit and says nothing of the limit has not said: unknown, never not limited"
+foreach ($word in @("yes", "no", "unknown")) {
+    $script:limitWord = $word
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $script:limitWord }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "known" -and $a.value.limited -ceq $word -and $null -eq $a.value.limitedUntil) ("state: limited " + $word + " is carried")
+}
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes"; limitedUntil = $t0.AddHours(1) }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $a.value.limitedUntil -eq $t0.AddHours(1) -and $a.value.limitedUntil.Kind -eq [System.DateTimeKind]::Utc) "state: limited yes and the time it ends are carried, the time as UTC"
+foreach ($word in @("no", "unknown")) {
+    $script:limitWord = $word
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $script:limitWord; limitedUntil = $t0.AddHours(1) }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "known" -and $a.value.limited -ceq $word -and $null -eq $a.value.limitedUntil) ("state: a time beside limited " + $word + " is not read")
+}
+foreach ($bad in @($true, $false, "maybe", 1)) {
+    $script:limitWord = $bad
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $script:limitWord }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limited")) ("state: a limited of '" + $bad + "' - a boolean, a word outside the list - is unknown")
+}
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes"; limitedUntil = (New-Object System.DateTime(2026, 10, 12, 9, 0, 0)) }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limitedUntil")) "state: a limitedUntil with no zone cannot be placed, and is unknown"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes"; limitedUntil = "soon" }) }
+Check ((Get-HordeWakeState -Waker $scripted -Id $sid).state -ceq "unknown") "state: and so is one that is no time"
+# A WAKER THAT DOES NOT CLAIM state.limit cannot tell at all, and for it alone the answer is no.
+$script:noLimit = $null
+$deaf = Register-HordeWaker -Name "fixture-no-limit" -Folder (Join-Path $fx "fixture-no-limit") -Targets { New-HordeKnown -Value @() } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" } -State {
+    param($id)
+    $v = [ordered]@{ id = $id; unreadCount = 0; oldestUnreadAt = $null; idle = "yes"; boxEmpty = "yes"; midTurn = "no" }
+    if ($null -ne $script:noLimit) { $v["limited"] = $script:noLimit }
+    New-HordeKnown -Value ([pscustomobject]$v)
+}
+Check (-not (Test-HordeWakerClaims -Waker $deaf -Capability "state.limit") -and (Test-HordeWakerClaims -Waker $scripted -Capability "state.limit")) "CONTROL: one waker says it cannot tell a usage limit at all, and one says it can"
+$a = Get-HordeWakeState -Waker $deaf -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "no") "state: a waker that does not offer state.limit and says nothing of the limit is read as not limited - the one case where saying nothing is no"
+$script:noLimit = "no"
+Check ((Get-HordeWakeState -Waker $deaf -Id $sid).value.limited -ceq "no") "state: and it may say no"
+foreach ($word in @("yes", "unknown")) {
+    $script:noLimit = $word
+    $a = Get-HordeWakeState -Waker $deaf -Id $sid
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("state.limit")) ("state: one that does not offer state.limit and still says limited " + $word + " is unknown: what it cannot read, it cannot claim")
+}
+$script:noLimit = $null
+# It is not one of the five a live run requires: a harness with no usage limit can still be the waker.
+Check ((Resolve-HordeWaker -Name "fixture-no-limit" -Require @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")).state -ceq "known" -and (Resolve-HordeWaker -Name "fixture-no-limit" -Require @("state.limit")).state -ceq "unknown") "state.limit is not one of the five a live run requires, and a caller that requires it of this waker is refused"
+
 $script:blindBox = "unknown"; $script:blindTurn = "unknown"
 Check ((Get-HordeWakeState -Waker $blind -Id $sid).state -ceq "known") "state: a waker that cannot read the box or the turn may say unknown of both"
 $script:blindBox = "yes"; $script:blindTurn = "unknown"
@@ -268,11 +382,21 @@ foreach ($case in @(
         @{ what = "busy with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy" }) }; like = "without saying why" },
         @{ what = "unreachable with a blank reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "unreachable"; reason = "  " }) }; like = "without saying why" },
         @{ what = "nothing with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "nothing" }) }; like = "without saying why" },
+        @{ what = "killed with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "killed" }) }; like = "without saying why" },
         @{ what = "a reason of two lines"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy"; reason = "one`ntwo" }) }; like = "line break" })) {
     $script:nudgeAnswer = $case.block
     $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like)) ("nudge: " + $case.what + " is unknown, saying so")
 }
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = 1234 }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["elapsedMs"] -and $a.value.elapsedMs -eq 1234) "nudge: elapsedMs is carried when the waker timed the nudge"
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = "soon" }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["elapsedMs"]) "nudge: an elapsedMs that is no whole number is left out, and the outcome stands"
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "killed"; reason = "nudge-killed: stopped part-way" }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and $a.value.reason -ceq "nudge-killed: stopped part-way") "nudge: killed - the waker stopped its own nudge part-way - is carried with its reason"
 $script:nudgeAnswer = { param($id) New-HordeUnknown -Reason "the terminal did not answer" }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)" -ceq "the terminal did not answer") "nudge: an adapter's own unknown is passed on with its reason"

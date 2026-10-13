@@ -112,6 +112,9 @@ $cliHome = Join-Path $env:TEMP ("horde-hub-acts-" + [guid]::NewGuid().ToString("
 $cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("session", "spawn", "-Label", "E", "-Run", "20261005-120000-act", "-Profile", "alpha", "-Repo", "github.com/example/app", "-Prompt", "x") -Env @{ HORDE_HOME = $cliHome }
 Check ($cr.code -ne 0 -and ("" + $cr.out + $cr.err) -like "*needs -Node*" -and -not (Test-Path -LiteralPath (Join-Path $cliHome "hub\acts"))) ("horde session spawn with no -Node is refused before anything is written (exit " + $cr.code + ")")
 
+$cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("session", "spawn", "-Node", "11111111-2222-4333-8444-555555555555", "-Label", "RS", "-Run", "20261005-120000-act", "-Profile", "alpha", "-Repo", "github.com/example/app", "-Prompt", "x") -Env @{ HORDE_HOME = $cliHome }
+Check ($cr.code -ne 0 -and ("" + $cr.out) -like "*the label RS is reserved*" -and -not (Test-Path -LiteralPath (Join-Path $cliHome "hub\acts"))) ("horde session spawn with a reserved label is refused where the hub hands the label out, before anything is written (exit " + $cr.code + ")")
+
 Write-Host ""
 Write-Host "--- a node that cannot be reached leaves the request unknown ---" -ForegroundColor Cyan
 $gone = Invoke-HordeHubAct -Entry ([pscustomobject]@{ deviceId = $device; endpoint = "11111111-2222-4333-8444-555555555555"; transport = (Get-HordeTransport -Name "memory"); transportError = "" }) -Hub $hub -Contract $contract -Verb "session.spawn" -Arguments $spawnArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime) -TimeoutMs 3000

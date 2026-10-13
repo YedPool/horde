@@ -29,14 +29,21 @@
 # watcher: a waker that cannot see the input box says unknown, and the session is left alone. That one
 # rule is what stops a nudge being typed into somebody's half-written text.
 #
-# CAPABILITIES ARE CLAIMS, AND ONLY "yes" COUNTS (unverified, declined and no all read as "does not have
-# it"):
+# CAPABILITIES ARE CLAIMS, AND ONLY "yes" COUNTS for a live run (unverified, declined and no all read as
+# "does not have it"). UNVERIFIED IS A CLAIM NOBODY HAS YET SHOWN AGAINST THE REAL THING: the adapter
+# does it, and says in its evidence what is still to be run. Such a waker may be READ through by a run
+# that nudges nobody, and rung through by the one run whose purpose is to show the claim
+# (Resolve-HordeProductionWaker -AllowUnverified; core/WakeRun.ps1 says which runs those are) - and by
+# no other. declined and no are never either.
 #   nudge.pointer-only  the nudge types one fixed pointer line and never any part of a message body
 #   state.box           it can read whether a session's input box is empty
 #   state.turn          it can read whether a session is in the middle of a turn
 #   reach.unseen        it can nudge a session that has not taken a turn since a restore
 #   nudge.guarded       the nudge itself looks again, and rings only a session that still has an empty
 #                       input box and is not mid-turn (below)
+#   state.limit         it can tell whether a session is under a usage limit, and so cannot answer a
+#                       knock. Not one of the five the production path requires: a waker for a harness
+#                       that has no such thing declares no, and its sessions are read as not limited
 # The production path (Resolve-HordeProductionWaker) requires all five. The in-process test waker
 # declines reach.unseen, so no production path can pick it.
 #
@@ -57,14 +64,32 @@
 #
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
-#   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown
+#   Targets  param()             -> known: a list of { id; label; role; parent; reachable; retired }, or
+#            unknown. reachable and retired are each yes, no or unknown.
+#            An unknown may carry failures, a whole number: how many readings in a row have failed. A
+#            waker that backs its readings off knows that count and the watcher cannot - its passes are
+#            not the waker's readings - and the watcher uses it to tell a hiccup from a fleet that
+#            cannot be read at all (core/Wake.ps1, Update-HordeWakeFleetRead).
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn },
 #            and unreadableCount when the waker can count mail it could not read, or unknown
-#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
+#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, and elapsedMs when it timed the
+#            nudge, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
+# and, when it has a use for them, two more:
+#   Confirm  param([string]$Id)  -> a state, as State answers it, READ AS FULLY AS THE WAKER CAN. For a
+#            waker whose State is cheap - one reading of the whole fleet, with the box and the turn
+#            unknown because they cost a look at the session itself - Confirm is that look. The watcher
+#            asks for it only for a session it is about to nudge (Get-HordeWakeState -Full), so a pass
+#            pays for a look per nudge, not per session. A waker whose State already says everything
+#            registers none, and -Full is then State.
+#   Begin    param()             a pass begins. A waker that answers a pass's many questions from one
+#            reading of the fleet throws that reading away here, and nowhere else by the clock: the
+#            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
+#            two passes and never repeated inside one, however slow the fleet was to answer.
 # role is warchief, orc, warg or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
-# unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
+# unreachable, nothing (the mail was taken before the nudge, so nobody was rung) or killed (the waker
+# stopped its own nudge part-way, and the box may hold text); reason is one line and
 # required unless the outcome is woken; at is a [datetime]. A session the waker does not know is unknown,
 # with the reason - never a state of zeros.
 #
@@ -75,7 +100,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
-$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
+$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded", "state.limit")
 # What the production path requires: every one. A waker without all five is never picked there.
 $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
 # Horde's roles as core/Roles.ps1 lists them (core\roles.json), then unknown for a session whose role
@@ -86,9 +111,14 @@ $script:HordeWakerWords = @("yes", "no", "unknown")
 # nothing: asked to nudge, the waker found the session had no unread mail by then - it was taken between
 # the state read and the nudge - and rang nobody. It is not a failure, and the watcher counts no attempt
 # for it (core/Wake.ps1).
-$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")
+# killed: the waker had to stop its own nudge part-way - it hung past the waker's last deadline. NOBODY
+# KNOWS WHAT THE SESSION'S BOX HOLDS NOW: the stop may have fallen between the line being typed and its
+# being sent, and text left in a box is a box that is never empty, so that session would never be woken
+# again. It is the one outcome that may have made things worse, and the watcher treats it as that: its
+# own loud journal line, and the longest back-off (core/Wake.ps1).
+$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")
 # The outcomes that must say why: woken needs no account, and the others have no other.
-$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing")
+$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing", "killed")
 $script:HordeWakerTargetMembers = @("id", "label", "role", "parent", "reachable")
 $script:HordeWakerSessionPattern = $null
 
@@ -136,6 +166,8 @@ function Register-HordeWaker {
         [Parameter(Mandatory = $true)][scriptblock]$Targets,
         [Parameter(Mandatory = $true)][scriptblock]$State,
         [Parameter(Mandatory = $true)][scriptblock]$Nudge,
+        [scriptblock]$Begin = $null,
+        [scriptblock]$Confirm = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -151,7 +183,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -181,6 +213,21 @@ function Test-HordeWakerCapability {
     return ((Get-HordeWakerSupport -Waker $Waker -Capability $Capability) -ceq "yes")
 }
 
+function Test-HordeWakerClaims {
+    # True for "yes" and for "unverified": the waker says it does this, shown or not yet. What an
+    # answer may SAY rests on this - a waker that claims to read the box may answer about the box -
+    # while what a live run may DO rests on Test-HordeWakerCapability.
+    param([Parameter(Mandatory = $true)]$Waker, [Parameter(Mandatory = $true)][string]$Capability)
+    return (@("yes", "unverified") -ccontains (Get-HordeWakerSupport -Waker $Waker -Capability $Capability))
+}
+
+function Get-HordeWakerUnverified {
+    # The capabilities a waker declares unverified, in the port's own order: what a banner names, and
+    # what a live run is refused for.
+    param([Parameter(Mandatory = $true)]$Waker)
+    return @($script:HordeWakerCapabilityNames | Where-Object { (Get-HordeWakerSupport -Waker $Waker -Capability $_) -ceq "unverified" })
+}
+
 function Resolve-HordeWaker {
     # A waker by name that has every capability in -Require, as a tristate answer. -Require is mandatory
     # so a caller states what it needs; @() means nothing.
@@ -203,15 +250,25 @@ function Resolve-HordeProductionWaker {
     #   absent   none does; the note says, for each loaded waker, the first capability it lacks
     #   unknown  two or more do - one is never chosen over another (core/SessionSeat.ps1 holds the same
     #            rule for two holders of a role)
+    # -AllowUnverified is for a run that nudges nobody, or whose purpose is to show the claims: when NO
+    # loaded waker offers all five, the one that CLAIMS all five - each yes or unverified - is picked,
+    # and two of those are unknown as two are. A waker that offers all five is always preferred, and
+    # one that declines or lacks a capability is never picked either way. The caller reads which
+    # capabilities are unverified from the waker (Get-HordeWakerUnverified) and says so.
+    param([switch]$AllowUnverified)
     $able = New-Object System.Collections.ArrayList
+    $claims = New-Object System.Collections.ArrayList
     $lacks = New-Object System.Collections.ArrayList
     foreach ($name in @(Get-HordeWakerNames)) {
         $w = $script:HordeWakers[$name]
         $missing = @($script:HordeProductionWakerRequires | Where-Object { -not (Test-HordeWakerCapability -Waker $w -Capability $_) }) | Select-Object -First 1
+        if ($null -ne $missing -and @($script:HordeProductionWakerRequires | Where-Object { -not (Test-HordeWakerClaims -Waker $w -Capability $_) }).Count -eq 0) { [void]$claims.Add($w) }
         if ($null -eq $missing) { [void]$able.Add($w) } else { [void]$lacks.Add($name + ": does not offer " + $missing + " (it says " + (Get-HordeWakerSupport -Waker $w -Capability $missing) + ")") }
     }
     if ($able.Count -eq 1) { return (New-HordeKnown -Value $able[0]) }
     if ($able.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $able.Count + " wakers each offer every capability (" + (@($able | ForEach-Object { $_.name }) -join ", ") + "); one is never chosen over another")) }
+    if ($AllowUnverified -and $claims.Count -eq 1) { return (New-HordeKnown -Value $claims[0]) }
+    if ($AllowUnverified -and $claims.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $claims.Count + " wakers each claim every capability, unverified (" + (@($claims | ForEach-Object { $_.name }) -join ", ") + "); one is never chosen over another")) }
     $loaded = "no waker is loaded"
     if ($lacks.Count -gt 0) { $loaded = $lacks -join "; " }
     return (New-HordeAbsent -Note ("no loaded waker offers " + ($script:HordeProductionWakerRequires -join ", ") + ": " + $loaded))
@@ -291,8 +348,26 @@ function ConvertFrom-HordeWakerAnswer {
     return [pscustomobject]@{ ok = $true; answer = $Answer }
 }
 
+function Test-HordeWakerConfirms {
+    # Does this waker have a fuller reading than its State (ADAPTER CONTRACT, Confirm)? The watcher asks,
+    # so that an unknown box is something to look into for such a waker and something to wait on for one
+    # that has already said all it can.
+    param($Waker)
+    return ((Test-HordeWakerRegistered $Waker) -and $null -ne $Waker.confirm)
+}
+
+function Start-HordeWakePass {
+    # Tell -Waker a pass begins (ADAPTER CONTRACT, Begin). Returns nothing, and never throws for the far
+    # end: a waker with no Begin has nothing to be told, and one whose Begin throws has only failed to
+    # forget, which its next reading answers for.
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return }
+    if ($null -eq $Waker.begin) { return }
+    try { $null = & $Waker.begin } catch { }
+}
+
 function Get-HordeWakeTargets {
-    # The sessions -Waker can see, as a known list of { id; label; role; parent; reachable }, or unknown
+    # The sessions -Waker can see, as a known list of { id; label; role; parent; reachable; retired }, or unknown
     # with the reason. A tristate answer, never a throw for the far end. One bad entry makes the whole
     # listing unknown: a listing is complete or it says why not (core/Identity.ps1's first rule).
     param($Waker)
@@ -319,18 +394,29 @@ function Get-HordeWakeTargets {
         if (-not $parent.has -or $parent.value -isnot [string] -or ($parent.value -cne "" -and -not (Test-HordeWakerSessionId $parent.value))) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with a parent that is neither a session id nor empty")) }
         $reach = Get-HordeWakerMember $t "reachable"
         if (-not $reach.has -or $reach.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $reach.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with reachable that is not one of " + ($script:HordeWakerWords -join ", "))) }
-        [void]$out.Add([pscustomobject]@{ id = [string]$id.value; label = [string]$label.value; role = [string]$role.value; parent = [string]$parent.value; reachable = [string]$reach.value })
+        # retired: has the session been retired - told its work is over, its seat given up? yes, no or
+        # unknown, REQUIRED, like reachable: a waker that left it out would be read as "not retired", and
+        # a retired session would be typed into. The port only carries it; that a retired session is
+        # never nudged, and one that may be is held, is the watcher's rule (core/Wake.ps1, Get-HordeWakeHold).
+        $retired = Get-HordeWakerMember $t "retired"
+        if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with retired that is not one of " + ($script:HordeWakerWords -join ", "))) }
+        [void]$out.Add([pscustomobject]@{ id = [string]$id.value; label = [string]$label.value; role = [string]$role.value; parent = [string]$parent.value; reachable = [string]$reach.value; retired = [string]$retired.value })
     }
     return (New-HordeKnown -Value $out.ToArray() -ObservedAt $a.observedAt)
 }
 
 function Get-HordeWakeState {
     # One session's state as -Waker sees it: known { id; unreadCount; unreadableCount; oldestUnreadAt;
-    # idle; boxEmpty; midTurn }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
-    param($Waker, [string]$Id)
+    # idle; boxEmpty; midTurn; limited; limitedUntil }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
+    # -Full asks for the waker's fullest reading (ADAPTER CONTRACT, Confirm): the look at the session
+    # itself that says what is in its box and whether it is in a turn. Held to the same checks.
+    param($Waker, [string]$Id, [switch]$Full)
     if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so the state was not asked")) }
     if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("'" + $Id + "' is not a session id, so waker '" + $Waker.name + "' was not asked")) }
-    try { $a = & $Waker.state $Id }
+    try {
+        if ($Full -and $null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }
+        else { $a = & $Waker.state $Id }
+    }
     catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to read the state of " + $Id) -ErrorRecord $_) }
     $first = ConvertFrom-HordeWakerAnswer -Answer $a -What ("the state of " + $Id) -Waker $Waker.name
     if (-not $first.ok) { return $first.answer }
@@ -364,6 +450,35 @@ function Get-HordeWakeState {
         if (-not ($bad.value -is [int] -or $bad.value -is [long]) -or $bad.value -lt 0 -or $bad.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadableCount that is not a whole number, 0 or more")) }
         $unreadable = [int]$bad.value
     }
+    # limited AND limitedUntil: is the session under a usage limit - its last turn ended in one - so that
+    # it cannot answer a knock until the limit resets? limited is yes, no or unknown, LIKE EVERY OTHER
+    # FACT HERE, and UNKNOWN IS NEVER READ AS NO: it was first carried as true or false, and a waker
+    # that could not tell - a row with no such member, a transcript it could not read - was read as
+    # "not limited", so the session was nudged and its nudges counted (safety review of PR 220).
+    #   A waker that claims state.limit and leaves limited out has not said: unknown.
+    #   A WAKER THAT DOES NOT CLAIM state.limit CANNOT TELL AT ALL, and for it alone the answer is no:
+    #   there is nothing to wait for from a harness that has no way to say. It may leave limited out
+    #   or say no; anything else from it is a claim it says it cannot make, and the state is unknown.
+    # limitedUntil is a time with a zone, read only beside limited yes; with none, nobody knows until
+    # when. The port only carries them: what a limited session is owed is the watcher's to say
+    # (core/Wake.ps1, Get-HordeWakeLimit).
+    $limited = "no"
+    $limitedUntil = $null
+    $lim = Get-HordeWakerMember $v "limited"
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.limit")) {
+        if ($lim.has -and $null -ne $lim.value -and "$($lim.value)" -cne "no") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.limit and still answered limited " + $lim.value + " for " + $Id)) }
+    } else {
+        $limited = "unknown"
+        if ($lim.has -and $null -ne $lim.value) {
+            if ($lim.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $lim.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limited that is not one of " + ($script:HordeWakerWords -join ", "))) }
+            $limited = [string]$lim.value
+        }
+    }
+    $until = Get-HordeWakerMember $v "limitedUntil"
+    if ($limited -ceq "yes" -and $until.has -and $null -ne $until.value) {
+        $limitedUntil = ConvertTo-HordeWakerUtc $until.value
+        if ($null -eq $limitedUntil) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limitedUntil that is not a time with a zone")) }
+    }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
         $m = Get-HordeWakerMember $v $n
@@ -373,9 +488,9 @@ function Get-HordeWakeState {
     # WHAT IT CANNOT READ, IT CANNOT CLAIM: a waker that does not offer state.box may only say unknown
     # of the box, and likewise state.turn of the turn. Its yes would be a guess, and a guess here is a
     # nudge typed into somebody's text.
-    if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
-    if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"] }) -ObservedAt $a.observedAt)
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil }) -ObservedAt $a.observedAt)
 }
 
 function Send-HordeWakeNudge {
@@ -405,5 +520,11 @@ function Send-HordeWakeNudge {
     if ($reason.has -and $null -ne $reason.value) { $why = "$($reason.value)" }
     if ($why -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a reason holding a line break")) }
     if ($script:HordeWakerReasonOutcomes -ccontains $outcome.value -and $why.Trim() -eq "") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " " + $outcome.value + " without saying why")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = $rangAt }) -ObservedAt $a.observedAt)
+    $value = [ordered]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = $rangAt }
+    # elapsedMs IS OPTIONAL: how long the nudge took, by the waker's own measure, as a whole number of
+    # milliseconds. Carried when it is one; anything else there is left out, never a reason to refuse an
+    # outcome that is otherwise sound.
+    $took = Get-HordeWakerMember $v "elapsedMs"
+    if ($took.has -and ($took.value -is [int] -or $took.value -is [long]) -and $took.value -ge 0) { $value["elapsedMs"] = [long]$took.value }
+    return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $a.observedAt)
 }

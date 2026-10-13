@@ -50,7 +50,7 @@ function New-Seat {
     $script:seq++
     $s = @{
         id = ("0a000000-0000-4000-8000-" + $script:seq.ToString("000000000000")); label = "A"; role = "orc"; parent = ""
-        unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; unseen = $false
+        unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; unseen = $false; limited = "no"
         # Two lines: a body cut at a newline, or typed, would show its first line.
         body = ("conformance body " + [guid]::NewGuid().ToString("N") + "`nsecond line " + [guid]::NewGuid().ToString("N"))
     }
@@ -89,8 +89,9 @@ $cases = [ordered]@{
         param($W, $Fx, $State)
         $empty = New-Seat; $full = New-Seat @{ boxEmpty = "no" }
         & $Fx.Seat $State $empty; & $Fx.Seat $State $full
-        $a1 = Get-HordeWakeState -Waker $W -Id $empty.id
-        $a2 = Get-HordeWakeState -Waker $W -Id $full.id
+        # THE FULL READING: a waker whose state is cheap says the box only when it is asked to look.
+        $a1 = Get-HordeWakeState -Waker $W -Id $empty.id -Full
+        $a2 = Get-HordeWakeState -Waker $W -Id $full.id -Full
         # BOTH ANSWERS: a waker that always said yes would pass a check that seated only an empty box.
         return ($a1.state -ceq "known" -and $a1.value.boxEmpty -ceq "yes" -and $a2.state -ceq "known" -and $a2.value.boxEmpty -ceq "no")
     }
@@ -101,9 +102,20 @@ $cases = [ordered]@{
         # pane unread and answer unknown there (the wezfleet waker does, to read no pane it need not).
         $resting = New-Seat; $working = New-Seat @{ midTurn = "yes" }
         & $Fx.Seat $State $resting; & $Fx.Seat $State $working
-        $a1 = Get-HordeWakeState -Waker $W -Id $resting.id
-        $a2 = Get-HordeWakeState -Waker $W -Id $working.id
+        $a1 = Get-HordeWakeState -Waker $W -Id $resting.id -Full
+        $a2 = Get-HordeWakeState -Waker $W -Id $working.id -Full
         return ($a1.state -ceq "known" -and $a1.value.midTurn -ceq "no" -and $a2.state -ceq "known" -and $a2.value.midTurn -ceq "yes")
+    }
+    "state.limit" = {
+        param($W, $Fx, $State)
+        # ALL THREE ANSWERS: a waker that always said no would pass a check that seated only a working
+        # session, and one that turned "could not tell" into no is the defect this capability names.
+        $working = New-Seat; $limited = New-Seat @{ limited = "yes" }; $unread = New-Seat @{ limited = "unknown" }
+        & $Fx.Seat $State $working; & $Fx.Seat $State $limited; & $Fx.Seat $State $unread
+        $a1 = Get-HordeWakeState -Waker $W -Id $working.id
+        $a2 = Get-HordeWakeState -Waker $W -Id $limited.id
+        $a3 = Get-HordeWakeState -Waker $W -Id $unread.id
+        return ($a1.state -ceq "known" -and $a1.value.limited -ceq "no" -and $a2.state -ceq "known" -and $a2.value.limited -ceq "yes" -and $a3.state -ceq "known" -and $a3.value.limited -ceq "unknown")
     }
     "reach.unseen" = {
         param($W, $Fx, $State)
@@ -153,17 +165,26 @@ try {
             $support = Get-HordeWakerSupport -Waker $w -Capability $cap
             $state = & $fx.New
             try {
-                if ($support -ceq "yes") {
+                # A CLAIM IS SHOWN, VERIFIED OR NOT: unverified means not yet shown against the real thing,
+                # never not shown at all. Its case runs against the waker's fixture like a yes.
+                if ($support -ceq "yes" -or $support -ceq "unverified") {
                     $shown = & $cases[$cap] $w $fx $state
-                    Check ($shown -eq $true) ("[" + $name + "] " + $cap + " is yes, and the case shows it")
-                } else {
+                    Check ($shown -eq $true) ("[" + $name + "] " + $cap + " is " + $support + ", and the case shows it")
+                }
+                if ($support -cne "yes") {
                     $lacksOne = $true
                     $r = Resolve-HordeWaker -Name $name -Require @($cap)
                     Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains($cap)) ("[" + $name + "] " + $cap + " is " + $support + ", and a caller that requires it is refused, naming it")
-                    if ($mustBeUnknown.ContainsKey($cap)) {
+                    if ($support -cne "unverified" -and $cap -ceq "state.limit") {
                         $s = New-Seat
                         & $fx.Seat $state $s
                         $a = Get-HordeWakeState -Waker $w -Id $s.id
+                        Check ($a.state -ceq "unknown" -or ($a.state -ceq "known" -and "$($a.value.limited)" -ceq "no")) ("[" + $name + "] and it never answers limited yes or unknown, which it cannot tell")
+                    }
+                    if ($support -cne "unverified" -and $mustBeUnknown.ContainsKey($cap)) {
+                        $s = New-Seat
+                        & $fx.Seat $state $s
+                        $a = Get-HordeWakeState -Waker $w -Id $s.id -Full
                         # Unknown as a whole, or known with that one word unknown: never a yes or a no.
                         $honest = ($a.state -ceq "unknown" -or ($a.state -ceq "known" -and "$($a.value.($mustBeUnknown[$cap]))" -ceq "unknown"))
                         Check $honest ("[" + $name + "] and it never answers yes or no for " + $mustBeUnknown[$cap] + ", which it cannot read")
@@ -183,6 +204,7 @@ try {
             $a = Get-HordeWakeTargets -Waker $w
             $mine = @()
             if ($a.state -ceq "known") { $mine = @(@($a.value) | Where-Object { $_.id -ceq $s.id }) }
+            Check ($mine.Count -eq 1 -and @("yes", "no", "unknown") -ccontains "$($mine[0].retired)" -and "$($mine[0].retired)" -ceq "no") ("[" + $name + "] and it says whether that session is retired: a session seated as working is not")
             Check ($mine.Count -eq 1 -and $mine[0].role -ceq "warg" -and $mine[0].parent -ceq $s.parent) ("[" + $name + "] a session it was given is among its targets, once, with its role and parent")
             $a = Get-HordeWakeState -Waker $w -Id $s.id
             Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.oldestUnreadAt -eq $t0) ("[" + $name + "] its unread mail is counted, with the time of the oldest")

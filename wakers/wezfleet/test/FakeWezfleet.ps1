@@ -9,7 +9,8 @@
 # WHAT IT KEEPS, all under its own folder and nowhere else:
 #   fleet.json  the sessions, as a test wrote them: a list of rows with every member a row has, their
 #               boxEmpty and midTurn being what the PANE holds (form A hides them, as the real one does)
-#   argv.log    one JSON line per run: the arguments it received, as separate elements, and its pid
+#   argv.log    one JSON line per run: the arguments it received, as separate elements, its pid, the
+#               program running it and that process's command line
 #   typed.log   one JSON line per text "typed" into a session: { id; text } - the fake target. Only the
 #               pointer line is ever written here, the same line whatever the session's mail says
 #   mode.json   optional, per form (fleet | pane | nudge): { exit; stdout; stderr; hangSeconds }. stdout
@@ -23,17 +24,29 @@
 #   mail state -To <id> -TimeoutSeconds <n> -Json      exit 0 { at; session: row }; exit 3 { at; to; reason:
 #                                                      absent; detail }; exit 2 for a missing -To or a
 #                                                      timeout that is not a whole number above 0
-#   mail nudge -To <id> -Json                          exit 0 { outcome; reason; target; pane; instance; detail }:
+#   mail nudge -To <id> -BudgetSeconds <n> -Json       exit 0 { outcome; reason; target; pane; instance; detail }:
+#       refused      (reason budget-too-small) under 30 s of the budget is left: it does not start typing
+#                    with too little time to finish, and NOTHING IS TYPED. No -BudgetSeconds is no limit;
+#                    one that is not a whole number from 35 to 300 is exit 2, bad-budget. mode.json's
+#                    nudge.slowStartSeconds is counted as time this script took to start, without
+#                    waiting it out
+#     every answer carries elapsedMs, a whole number of milliseconds since this script began
 #       unreachable  no such session, or its row says it cannot be reached
-#       refused      it has no unread mail: there is nothing to nudge for
+#       refused      it has no unread mail: there is nothing to nudge for; or (reason retired) the
+#                    session is retired - and NOTHING IS TYPED
 #       busy         its box is not empty, it is mid-turn, or it is not idle - and NOTHING IS TYPED
 #       woken        the pointer line is "typed": one line appended to typed.log
 #     exit 2 for an empty -To
 param()
 $ErrorActionPreference = "Stop"
+$fakeClock = [System.Diagnostics.Stopwatch]::StartNew()
 $root = $PSScriptRoot
 $argvList = @($args | ForEach-Object { "$_" })
-[System.IO.File]::AppendAllText((Join-Path $root "argv.log"), ((@{ argv = $argvList; pid = $PID } | ConvertTo-Json -Compress -Depth 4) + "`n"), [System.Text.Encoding]::ASCII)
+# HOW IT WAS STARTED is logged with what it was handed: the program running it, its pid, and that
+# process's whole command line. A script called in-process from a test would show the test's own pid
+# and command line here; started as the adapter starts the fleet's command, it shows a process of its
+# own, the system PowerShell, with -File and this script.
+[System.IO.File]::AppendAllText((Join-Path $root "argv.log"), ((@{ argv = $argvList; pid = $PID; program = (Get-Process -Id $PID).Path; commandLine = @([System.Environment]::GetCommandLineArgs()) } | ConvertTo-Json -Compress -Depth 4) + "`n"), [System.Text.Encoding]::ASCII)
 
 function Get-FakeArg {
     param([string]$Name)
@@ -96,9 +109,17 @@ if ($form -ceq "pane") {
 # nudge
 if ($to -eq "") { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-to"; target = ""; pane = ""; instance = ""; detail = "an empty -To" }) }
 $row = @(@($rows) | Where-Object { $null -ne $_ -and $_.id -ceq $to }) | Select-Object -First 1
-function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail }) }
+function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
+if ($row.retired -eq $true) { Write-FakeNudge "refused" "retired" "the session is retired; nothing is typed into a retired session" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }
+# THE BUDGET, before anything is typed: with too little of it left, typing is not begun.
+$budget = 0
+if (($argvList -ccontains "-BudgetSeconds") -and (-not [int]::TryParse((Get-FakeArg "-BudgetSeconds"), [ref]$budget) -or $budget -lt 35 -or $budget -gt 300)) { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-budget"; target = $to; pane = ""; instance = ""; detail = "a budget is a whole number of seconds from 35 to 300"; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
+# What is left of the budget, counted from this script's own start, against the 30 s typing may take.
+$slowStart = 0
+if (Test-Mode $m "slowStartSeconds") { $slowStart = [int]$m.slowStartSeconds }
+if (($argvList -ccontains "-BudgetSeconds") -and ($budget - $slowStart - $fakeClock.Elapsed.TotalSeconds) -lt 30) { Write-FakeNudge "refused" "budget-too-small" ("less than 30 s of the " + $budget + " s budget is left, too little to type and send in") }
 # THE GUARD, at the moment of typing: the pane as it is now.
 if ($row.boxEmpty -cne "yes") { Write-FakeNudge "busy" "box-not-empty" "the input box holds unsent text" }
 if ($row.midTurn -cne "no" -or $row.idle -cne "yes") { Write-FakeNudge "busy" "not-idle" "the session is in a turn" }
