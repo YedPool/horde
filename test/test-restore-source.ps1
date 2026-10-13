@@ -102,19 +102,44 @@ $planMoved = @(Get-HordeResumePlan -Finding $oneMoved -Now (At ($end + 100)) -Se
 Check ((@($planMoved | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) "once an orc has moved it is not told again - and its goblins are still not told: it mails the ones it needs"
 $planMoved600 = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 90 }) -Now (At ($end + 600)) -Settings $settings) -Now (At ($end + 600)) -Settings $settings)
 Check ((@($planMoved600 | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) "nor are they at 600 s"
-Check (@($oneMoved.value.notMoved).Count -eq 11 -and @($oneMoved.value.members | Where-Object { $_.moved }).Count -eq 1) "a member has moved when its status changed at least movedSeconds after it started"
+Check (@($oneMoved.value.notMoved).Count -eq 11 -and @($oneMoved.value.members | Where-Object { $_.moved -ceq "yes" }).Count -eq 1 -and @($oneMoved.value.members | Where-Object { $_.moved -ceq "no" }).Count -eq 11) "a member has moved when its status changed at least movedSeconds after it started"
 foreach ($word in @("busy", "waiting")) {
     $inTurn = Get-HordeRestoreFinding -Sessions (New-Restored -Status @{ 2 = $word }) -Now (At ($end + 100)) -Settings $settings
     $planTurn = @(Get-HordeResumePlan -Finding $inTurn -Now (At ($end + 100)) -Settings $settings)
-    Check (@($inTurn.value.notMoved).Count -eq 11 -and (@($planTurn | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) ("an orc that is " + $word + " now, its status last changed 4 s after it started, is in its first turn: it has moved and is not told to resume")
+    Check (@($inTurn.value.notMoved).Count -eq 11 -and (@($planTurn | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) ("an orc that is " + $word + " now, its status last changed 4 s after it started, is not known to be unmoved: it is not told to resume")
 }
 $untold = Get-HordeRestoreFinding -Sessions (New-Restored -Status @{ 2 = "unknown"; 3 = "" }) -Now (At ($end + 100)) -Settings $settings
 $planUntold = @(Get-HordeResumePlan -Finding $untold -Now (At ($end + 100)) -Settings $settings)
 Check (@($untold.value.notMoved).Count -eq 10 -and $planUntold.Count -eq 1 -and $planUntold[0].to -ceq (Sid 4)) "an orc whose status is not known is never 'not moved': unknown means no mail"
 $planUntold300 = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -Status @{ 7 = "busy" }) -Now (At ($end + 300)) -Settings $settings) -Now (At ($end + 300)) -Settings $settings)
 Check (@($planUntold300 | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "and one session in a turn is something moving: there is no stall notice"
-$barely = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 59 }) -Now (At ($end + 100)) -Settings $settings
-Check (@($barely.value.notMoved).Count -eq 12) "and has not at 59 s"
+$barely = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 29 }) -Now (At ($end + 100)) -Settings $settings
+$just = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 30 }) -Now (At ($end + 100)) -Settings $settings
+Check (@($barely.value.notMoved).Count -eq 12 -and @($just.value.notMoved).Count -eq 11 -and (Get-HordeRestoreSettings).movedSeconds -eq 30) "movedSeconds is 30: a status changed 29 s after the start is not a move, and one at 30 s is"
+$quick = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 11 }) -Now (At ($end + 100)) -Settings $settings
+Check (@($quick.value.notMoved | Where-Object { $_ -ceq (Sid 2) }).Count -eq 1) "the limit that remains: an idle orc whose status changed 11 s after its start - as it does for one that never took a turn - reads as not moved"
+
+# THREE ANSWERS. Each row: the status now, how long after its start it last changed, and what moved is.
+foreach ($case in @(
+        @{ status = "busy"; after = 4; moved = "yes"; what = "busy now, whenever that began" },
+        @{ status = "idle"; after = 90; moved = "yes"; what = "idle, its status changed long after its start: it took a turn and came back" },
+        @{ status = "waiting"; after = 90; moved = "yes"; what = "waiting, since long after its start: it took a turn and asked something" },
+        @{ status = "idle"; after = 4; moved = "no"; what = "idle, its status as old as its start" },
+        @{ status = "waiting"; after = 4; moved = "neither"; what = "waiting since it started: stuck on a prompt it met at once" },
+        @{ status = "ended"; after = 4; moved = "neither"; what = "ended" },
+        @{ status = "ended"; after = 90; moved = "neither"; what = "ended, long after its start" },
+        @{ status = "unknown"; after = 90; moved = "neither"; what = "a status that is not known" },
+        @{ status = ""; after = 4; moved = "neither"; what = "no status at all" })) {
+    $one = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = $case.after } -Status @{ 2 = $case.status }) -Now (At ($end + 300)) -Settings $settings
+    $got = @($one.value.members | Where-Object { $_.id -ceq (Sid 2) })[0].moved
+    $planOne = @(Get-HordeResumePlan -Finding $one -Now (At ($end + 300)) -Settings $settings)
+    $mailed = (@($planOne | Where-Object { $_.kind -ceq "resume" -and $_.to -ceq (Sid 2) }).Count -eq 1)
+    $stalled = (@($planOne | Where-Object { $_.kind -ceq "stall" }).Count -eq 1)
+    Check ($got -ceq $case.moved -and $mailed -eq ($case.moved -ceq "no") -and $stalled -eq ($case.moved -cne "yes")) ("an orc that is " + $case.what + ": moved is " + $case.moved + " (got " + $got + "); it is mailed only when no, and the stall notice is suppressed only when yes")
+}
+$dead = Get-HordeRestoreFinding -Sessions (New-Restored -Status @{ 1 = "ended"; 2 = "waiting"; 3 = "ended"; 4 = "unknown"; 5 = "ended"; 6 = "ended"; 7 = "ended"; 8 = "ended"; 9 = "ended"; 10 = "ended"; 11 = "ended"; 12 = "ended" }) -Now (At ($end + 300)) -Settings $settings
+$planDead = @(Get-HordeResumePlan -Finding $dead -Now (At ($end + 300)) -Settings $settings)
+Check ((Kinds ([pscustomobject]@{ entries = $planDead })) -ceq "stall" -and @($dead.value.notMoved).Count -eq 0) "a fleet where every session ended or is stuck waiting is a dead fleet: nobody is mailed to resume, and the warchief IS told"
 $plan180 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 180)) -Settings $settings)
 Check ($plan180.Count -eq 3 -and @($plan180 | Where-Object { $_.to -ceq (Sid 1) }).Count -eq 0) "and the warchief is never told to resume"
 

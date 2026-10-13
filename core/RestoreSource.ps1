@@ -67,8 +67,9 @@ function Get-HordeRestoreSettings {
         # that was brought back from one that was just spawned; 60 s is far outside clock jitter and far
         # inside the hours that lie between a session's first life and its restore.
         earlierLifeSeconds = 60
-        # A restored session that is idle has "moved" once its status changed this long after it started.
-        movedSeconds = 60
+        # A restored session has "moved" once its status changed this long after it started
+        # (Get-HordeRestoreFinding, THREE ANSWERS, says where 30 comes from and what it cannot see).
+        movedSeconds = 30
         # With no session moved this long after the last one started, the warchief is told.
         stallSeconds = 300
         # A restore older than this is history: nothing is planned for it any more.
@@ -120,14 +121,27 @@ function Get-HordeRestoreFinding {
     # one IS that restore and keeps its id, whoever has left or joined since. The answer's anchor is what
     # to save: the id, with the window widened to cover both. The function stays pure: it reads no file.
     #
-    # A MEMBER HAS NOT MOVED ONLY WHEN IT IS IDLE NOW AND ITS LAST STATUS CHANGE IS LESS THAN movedSeconds
-    # AFTER ITS START. The first version read the time alone, and the review of PR #207 found the hole:
-    # a session in a long FIRST turn changed its status seconds after it started and has not changed it
-    # since, so it read as not moved and would have been mailed RESUME in the middle of its work. A
-    # session that is busy or waiting now is in a turn, and that is moving. A status that is not known is
-    # never "not moved" either: unknown means no mail. The time rule that remains, for an idle session: the
-    # first status a restored session writes is its start, and one that never took a turn never
-    # writes another.
+    # THREE ANSWERS TO "HAS IT MOVED", each member's moved being yes, no or neither:
+    #   yes      it is busy now, or its status last changed at least movedSeconds after it started
+    #   no       it is idle now and its status last changed less than movedSeconds after it started
+    #   neither  it has ended, its status is not known, or it is waiting and that status is as old as
+    #            its start
+    # ONLY yes SUPPRESSES THE STALL NOTICE, AND ONLY A no ORC IS MAILED. The first version read the time
+    # alone, and the review of PR #207 found a session in a long FIRST turn read as not moved. The second
+    # called everything that was not idle moved, and the review of PR #208 found the other side: one
+    # session that had ended, or one stuck waiting on a prompt it met as it started, counted as "something
+    # moved" and silenced the stall notice for a fleet that was dead. So what is neither proves nothing
+    # either way: it is not mailed, because nobody knows it has not moved, and it does not speak for
+    # the fleet, because nobody knows it has.
+    # WHY 30 s, AND WHAT IT CANNOT SEE. A session's control file gives one time, that of its last status
+    # change, so "took a turn and came back to idle" can only be told from "never took one" by how long
+    # after the start that change was. Measured 2026-10-12 on ten sessions that had not taken a turn
+    # since a restore: last change minus start was 0.3 to 11 s. 30 s is well clear of that, and half of
+    # the 60 s this began with, which read an orc whose first turn ended inside a minute as not moved.
+    # THE LIMIT THAT REMAINS: a first turn that ends within 30 s of the start still reads as no, and that
+    # orc is sent the one resume line, which is harmless to a session that has in fact moved. No cheap
+    # and sound second signal of a turn was found: the registry's lastSeen is rewritten by the start hook,
+    # so it says nothing of a turn, and reading a transcript is neither cheap nor this module's to do.
     param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), $Known = @())
     $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
     $lived = @($all | Where-Object { $_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds })
@@ -145,8 +159,11 @@ function Get-HordeRestoreFinding {
     $windowEnd = $best[$best.Count - 1].startedAt
     if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) { return (New-HordeAbsent -Note ("the sessions were restored more than " + $Settings.restoreMaxAgeSeconds + " s ago, which is history")) }
     $members = @($best | ForEach-Object {
-            $resting = ("$($_.status)" -ceq "idle" -and $_.lastChangeAt -is [datetime])
-            $moved = (-not $resting -or ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)
+            $late = ($_.lastChangeAt -is [datetime] -and ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)
+            $moved = "neither"
+            if ("$($_.status)" -ceq "busy") { $moved = "yes" }
+            elseif ("$($_.status)" -ceq "idle" -and $_.lastChangeAt -is [datetime]) { $moved = $(if ($late) { "yes" } else { "no" }) }
+            elseif ("$($_.status)" -ceq "waiting" -and $late) { $moved = "yes" }
             [pscustomobject]@{ id = "$($_.id)"; role = "$($_.role)"; parent = "$($_.parent)"; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; status = "$($_.status)"; moved = $moved }
         })
     $minute = New-Object System.DateTime($windowStart.Year, $windowStart.Month, $windowStart.Day, $windowStart.Hour, $windowStart.Minute, 0, [System.DateTimeKind]::Utc)
@@ -159,14 +176,14 @@ function Get-HordeRestoreFinding {
         $until = $windowEnd; if ($same.windowEnd -gt $until) { $until = $same.windowEnd }
         $anchor = [pscustomobject]@{ restoreId = $restoreId; windowStart = $from; windowEnd = $until }
     }
-    $notMoved = @($members | Where-Object { -not $_.moved } | ForEach-Object { $_.id })
+    $notMoved = @($members | Where-Object { $_.moved -ceq "no" } | ForEach-Object { $_.id })
     return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved; anchor = $anchor }) -ObservedAt $Now)
 }
 
 function Get-HordeResumePlan {
     # The mails this pass should post for a restore, each { kind (resume or stall); to; messageId; body }.
     # -Finding is Get-HordeRestoreFinding's answer; anything but known plans nothing.
-    #   - EVERY ORC THAT HAS NOT MOVED, AT ONCE: an orc owns work and is the one that knows what of it
+    #   - EVERY ORC THAT HAS NOT MOVED (moved no), AT ONCE: an orc owns work and is the one that knows what of it
     #     was in flight.
     #   - NOBODY ELSE, EVER. A subsession, and a session whose role nobody recorded, is never mailed by
     #     the restore source - not when its parent has moved, and not after a delay (the first version
@@ -178,7 +195,8 @@ function Get-HordeResumePlan {
     #   - A START OF THE WHOLE FLEET LOOKS THE SAME AND IS HANDLED THE SAME: every session started inside
     #     one window and none has taken a turn. The resume text says "started or restored" for that.
     #   - THE STALL NOTICE, for the warchief, when stallSeconds have passed since the window's end and
-    #     NO member has moved. to is "" when no member is the warchief.
+    #     NO member has moved (moved yes; a member that is neither does not count as one that has). to
+    #     is "" when no member is the warchief.
     # THE IDS ARE MADE FROM THE RESTORE AND THE SESSION, so a pass that plans the same mail again -
     # every pass does, until the session moves - names the same message, and a post of it is idempotent.
     param($Finding, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings))
@@ -186,10 +204,10 @@ function Get-HordeResumePlan {
     $f = $Finding.value
     $sinceEnd = ($Now - $f.windowEnd).TotalSeconds
     $movedIds = @{}
-    foreach ($m in @($f.members)) { if ($m.moved) { $movedIds[$m.id] = $true } }
+    foreach ($m in @($f.members)) { if ($m.moved -ceq "yes") { $movedIds[$m.id] = $true } }
     $plan = New-Object System.Collections.ArrayList
     foreach ($m in @($f.members)) {
-        if ($m.moved) { continue }
+        if ($m.moved -cne "no") { continue }
         if ($m.role -cne "orc") { continue }
         [void]$plan.Add([pscustomobject]@{ kind = "resume"; to = $m.id; messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-resume`n" + $f.restoreId + "`n" + $m.id.ToLowerInvariant())); body = "$($Settings.resumeText)" })
     }
