@@ -21,7 +21,7 @@
            Find = '$hash = Get-HordeLocalRelayHash -Key $Key'
            Replace = '$hash = Get-HordeLocalRelayHash -Key $Text' }
         @{ Name = "seq-reused-after-trim"
-           Find = '$head = $floor'
+           Find = '$head = [Math]::Max($floor, $top)'
            Replace = '$head = [long]0' }
         @{ Name = "head-ignores-items"
            Find = 'if ($sorted.Count -gt 0 -and $sorted[$sorted.Count - 1].seq -gt $head) {'
