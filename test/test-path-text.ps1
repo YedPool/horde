@@ -8,14 +8,17 @@
 #     capital outside A to Z that some runtime's table lowers is left as it is;
 #   - a network path is refused in every spelling, with the reason, and NOT ONE of the hosts named
 #     is looked up: the answer comes from the text;
-#   - a network drive is refused by its type, behind the long-path prefix and in small letters too,
-#     and asking the type looks nobody up;
+#   - a network drive is refused by its type, behind the long-path prefix and in small letters too.
+#     THE TYPE IS ANSWERED BY THIS SUITE, not by a drive it makes: a drive letter is seen by every
+#     process of the user, and a suite must not change what other processes see. One real letter
+#     is made, in the one place marked below, over a folder of this machine's own drive;
 #   - what is not a network path is not refused: a local drive, the long-path prefix, the device
 #     form, a relative path, a letter no drive has;
 #   - what the function cannot see, it is shown not to see, so that a caller knows to ask twice:
 #     a PowerShell drive over a share, and the spelling PowerShell's resolver takes for a local path.
 #
-# Nothing here is written to a disk, and no host that exists is named.
+# Nothing here is written to a disk, and no host that exists is named. The PowerShell drive made at
+# the end is this process's own: it is no drive letter of the system's, and no other process sees it.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -126,7 +129,6 @@ Check (Test-NetworkPath ("\\?\UNC\localhost\" + $system + "$\folder\x.md")) "and
 
 Write-Host ""
 Write-Host "--- what is not a network path is not refused ---" -ForegroundColor Cyan
-Check ((New-Object System.IO.DriveInfo($system)).DriveType -eq [System.IO.DriveType]::Fixed) ("CONTROL: the system drive " + $system + ": is a fixed drive of this machine")
 Check (Test-NotRefused ($system + ":\folder\x.md")) "a path on one of this machine's own drives"
 Check (Test-NotRefused (($system + ":\folder\x.md").ToLowerInvariant())) "the same with its letter in small"
 Check (Test-NotRefused ("\\?\" + $system + ":\folder\x.md")) "the same behind the long-path prefix (\\?\C:\...): two separators and a question mark are not a server"
@@ -144,37 +146,85 @@ Check (Test-NotRefused "folder\\server\share\x.md") "two separators that are not
 Check (Test-NotRefused "") "nothing at all is not a network path, and does not throw"
 
 Write-Host ""
-Write-Host "--- a network drive is known by its type, and asking the type looks nobody up ---" -ForegroundColor Cyan
-if (-not ([System.Management.Automation.PSTypeName]"HordeTest.DosDevice").Type) {
-    Add-Type -Namespace HordeTest -Name DosDevice -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool DefineDosDevice(int dwFlags, string lpDeviceName, string lpTargetPath); [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax);'
+Write-Host "--- a network drive is known by its type: the question is answered here, and no drive is made ---" -ForegroundColor Cyan
+# A SUITE MUST NOT CHANGE WHAT OTHER PROCESSES OF THE USER SEE. A drive letter is seen by every
+# process of the user while it exists, and until 2026-10-13 this suite made one aimed at a host that
+# does not exist: while it stood, a fresh powershell of any other session printed "Attempting to
+# perform the InitializeDefaultDrives operation on the 'FileSystem' provider failed" (measured that
+# day: 7 of 8 starts, each taking 1.4 s where 0.2 is usual). So the one function that asks a drive's
+# type is REPLACED here by one that answers from a table of this suite's, and counts who asked. It
+# is called exactly as the real one is: one -Letter, a text back. The real one is kept, and asked
+# of real drives further down.
+$script:realDriveType = ${function:Get-HordeDriveLetterType}
+$script:driveTypes = @{}
+$script:driveAsked = New-Object System.Collections.ArrayList
+function Get-HordeDriveLetterType {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    [void]$script:driveAsked.Add($Letter)
+    $known = "" + $script:driveTypes[$Letter.ToUpperInvariant()]
+    if ($known -ceq "") { return "NoRootDirectory" }
+    if ($known -ceq "cannot be asked") { return "" }
+    return $known
 }
-function Test-DosDevice { param([string]$Letter) return ([HordeTest.DosDevice]::QueryDosDevice($Letter + ":", (New-Object System.Text.StringBuilder 1024), 1024) -gt 0) }
-function Get-FreeLetter {
-    # A drive letter that names nothing: no drive, no device, and no PowerShell drive.
-    foreach ($candidate in "RSTUVWQPONMLKJ".ToCharArray()) { if (-not (Test-DosDevice ("" + $candidate)) -and $null -eq (Get-PSDrive -Name ("" + $candidate) -ErrorAction SilentlyContinue)) { return ("" + $candidate) } }
-    return ""
-}
-$noLetter = Get-FreeLetter
-Check ($noLetter -ne "" -and (Test-NotRefused ($noLetter + ":\x.md"))) ("a letter no drive has (" + $noLetter + ":) is not thereby a network drive: it is not refused here")
-# A NETWORK DRIVE: a drive letter aimed at a host that does not exist, which connects to nothing.
-$netLetter = Get-FreeLetter
-$netHost = New-NoHost
-$netTarget = "\??\UNC\" + $netHost + "\share"
-$netMade = [HordeTest.DosDevice]::DefineDosDevice(1, $netLetter + ":", $netTarget)
-try {
-    Check ($netLetter -ne "" -and $netMade -and (New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network) ("CONTROL: the drive letter " + $netLetter + ": was aimed at a share, and its type is Network (if this fails, a network drive was NOT tested)")
-    Check ((Get-Said ($netLetter + ":\x.md")) -ceq ("'" + $netLetter + ":\x.md' is on a network drive (" + $netLetter + ":), and " + $sharedOnly)) "a path on a network drive is refused by the drive's type, in the words it has always used, naming the drive"
-    Check ((Get-Said ("\\?\" + $netLetter + ":\x.md")) -like ("*is on a network drive (" + $netLetter + ":)*")) "and behind the long-path prefix"
-    Check ((Get-Said ($netLetter + ":x.md")) -like ("*is on a network drive (" + $netLetter + ":)*")) "and named from wherever that drive stands"
-    Check ((Get-Said (($netLetter + ":\x.md").ToLowerInvariant())) -clike ("*is on a network drive (" + $netLetter.ToLowerInvariant() + ":)*")) "and with its letter in small, which the reason gives as it was written"
-    $cacheNow = Get-LookedUp
-    if ($canSee) { Check (-not $cacheNow.Contains($netHost)) "and the drive's host was not looked up: asking a drive's type asks nobody" }
-    $null = [System.IO.File]::Exists($netLetter + ":\x.md")
-    if ($canSee) { Check ((Get-LookedUp).Contains($netHost)) "CONTROL: asked whether a file on that drive exists, the host IS looked up - that is what the question comes before" }
-} finally { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $netLetter + ":", $netTarget) }
-Check (-not (Test-DosDevice $netLetter)) "the network drive letter is gone again"
-Check (Test-NotRefused ($system + ":\folder\x.md")) "CONTROL: after all that, a path on a local drive is still not refused"
+$script:driveTypes = @{ "R" = "Network"; "S" = "Fixed"; "T" = "Removable"; "U" = "CDRom"; "V" = "Ram"; "W" = "Unknown"; "X" = "cannot be asked" }
+Check ((Get-Said "R:\x.md") -ceq ("'R:\x.md' is on a network drive (R:), and " + $sharedOnly)) "a path on a drive whose type is Network is refused, in the words it has always used, naming the drive"
+Check ((Get-Said "\\?\R:\x.md") -like "*is on a network drive (R:)*") "and behind the long-path prefix"
+Check ((Get-Said "R:x.md") -like "*is on a network drive (R:)*") "and named from wherever that drive stands"
+Check ((Get-Said "r:\x.md") -clike "*is on a network drive (r:)*") "and with its letter in small, which the reason gives as it was written"
+Check ((Get-Said "R:") -like "*is on a network drive (R:)*") "and the drive named alone"
+Check ((@($script:driveAsked) -join ",") -ceq "R,R,R,r,R") ("the type was asked once for each of those five, of that path's own letter as it was written (" + (@($script:driveAsked) -join ",") + ")")
+foreach ($other in @("S", "T", "U", "V", "W")) { Check (Test-NotRefused ($other + ":\x.md")) ("a drive whose type is " + $script:driveTypes[$other] + " is not a network drive: it is not refused") }
+Check (Test-NotRefused "Q:\x.md") "a letter no drive has (its type is NoRootDirectory) is not thereby a network drive: it is not refused here"
+Check (Test-NotRefused "X:\x.md") "nor is a letter whose type cannot be asked: it goes on, and the open handle's own path decides"
+$script:driveAsked.Clear()
+$null = Get-Said "\\server\share\x.md"; $null = Get-Said "folder\x.md"; $null = Get-Said "\\?\UNC\server\share\x.md"; $null = Get-Said ""
+Check ($script:driveAsked.Count -eq 0) "a path with no drive letter, and a network path known from its text, ask no drive its type"
+# A TYPE THAT ONLY LOOKS LIKE THE WORD is not the type.
+$script:driveTypes = @{ "R" = "network"; "S" = "Network "; "T" = "NetworkDrive" }
+Check ((Test-NotRefused "R:\x.md") -and (Test-NotRefused "S:\x.md") -and (Test-NotRefused "T:\x.md")) "the type is compared exactly: only Network, as Windows writes it, is a network drive"
+Set-Item -Path function:Get-HordeDriveLetterType -Value $script:realDriveType
+# THE REAL QUESTION, of drives that are really there and of letters nobody made.
+Check ((Get-HordeDriveLetterType -Letter $system) -ceq "Fixed") ("CONTROL: the real question says the system drive " + $system + ": is a fixed drive of this machine")
+Check ((Get-HordeDriveLetterType -Letter $system.ToLowerInvariant()) -ceq "Fixed") "and so with its letter in small"
+$nothingThere = @("QRSTUVWXYZPONMLKJ".ToCharArray() | ForEach-Object { "" + $_ } | Where-Object { -not [System.IO.Directory]::Exists($_ + ":\") -and $null -eq (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) -and @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1) }) -cnotcontains $_ })
+Check ($nothingThere.Count -ge 1 -and (Get-HordeDriveLetterType -Letter $nothingThere[0]) -ceq "NoRootDirectory") "a letter that names nothing is of the type NoRootDirectory"
+Check ((Get-HordeDriveLetterType -Letter "1") -ceq "" -and (Get-HordeDriveLetterType -Letter "??") -ceq "") "what is no drive letter cannot be asked, and that is an empty answer, never an error"
+Check (Test-NotRefused ($system + ":\folder\x.md")) "CONTROL: with the real question back, a path on a local drive is not refused"
 
+Write-Host ""
+Write-Host "--- THE ONE PLACE a real drive letter is made: over a folder of this machine's own drive ---" -ForegroundColor Cyan
+# ===================================================================================================
+# THIS IS THE ONLY PLACE IN ANY SUITE WHERE A DRIVE LETTER IS DEFINED (test/lib/SuiteFiles.ps1,
+# Get-HordeDriveLetterMakers, fails test/test-suite.ps1 for any other). It is aimed at a folder that
+# EXISTS on this machine's own drive - never at a host, never at another letter, never at a folder
+# that is not there - so that every other process of the user can reach it for the moment it stands
+# (measured 2026-10-13: a fresh powershell started while such a letter stood printed nothing and took
+# no longer). It stands for three questions and one open, and is removed in the finally.
+# WHAT IT IS FOR: everything above answers the type question itself, and so proves nothing about what
+# Windows says of a letter that is not a volume. This asks Windows once.
+# ===================================================================================================
+$oneLetter = ""
+if ($nothingThere.Count -ge 1) { $oneLetter = $nothingThere[0] }
+$oneFolder = ("" + $env:SystemRoot).TrimEnd('\')
+$oneMade = $false; $oneType = "?"; $oneSaid = "?"; $oneOpened = "?"; $oneFile = ""
+# files/Path.ps1 asks an open handle where it really is; it loads core/PathText.ps1 again, unchanged.
+. (Join-Path $root "files\Path.ps1")
+foreach ($there in @("explorer.exe", "notepad.exe", "win.ini")) { if ($oneFile -eq "" -and [System.IO.File]::Exists((Join-Path $oneFolder $there))) { $oneFile = $there } }
+if ($oneLetter -ne "" -and [System.IO.Directory]::Exists($oneFolder)) {
+    $null = & subst.exe ($oneLetter + ":") $oneFolder
+    try {
+        $oneMade = ($LASTEXITCODE -eq 0 -and [System.IO.Directory]::Exists($oneLetter + ":\"))
+        $oneType = Get-HordeDriveLetterType -Letter $oneLetter
+        $oneSaid = Get-Said ($oneLetter + ":\x.md")
+        $through = Open-HordeFilesSource -Path ($oneLetter + ":\" + $oneFile)
+        if ($through.ok) { $through.stream.Dispose(); $oneOpened = $through.path } else { $oneOpened = "not opened: " + $through.reason }
+    } finally { $null = & subst.exe ($oneLetter + ":") /D }
+}
+Check $oneMade ("CONTROL: a letter (" + $oneLetter + ":) was made over a folder of this machine's own drive that exists (if this fails, the real question was NOT asked of such a letter)")
+Check ($oneType -ceq "Fixed") ("the real question says a letter that stands for a folder of a fixed drive is itself Fixed (" + $oneType + ")")
+Check ($oneSaid -ceq "") "and a path on it is not refused: it is on this machine's own drive"
+Check ($oneFile -ne "" -and [string]::Equals($oneOpened, (Join-Path $oneFolder $oneFile), [System.StringComparison]::OrdinalIgnoreCase)) ("a file opened THROUGH that letter has the folder's own path as its open handle's path, with no letter of the alias in it: the one fact of Windows' that the files store's ids rest on, and which no other suite can show without a letter (" + $oneFile + ")")
+Check ($oneLetter -ne "" -and -not [System.IO.Directory]::Exists($oneLetter + ":\") -and (Get-HordeDriveLetterType -Letter $oneLetter) -ceq "NoRootDirectory") "that letter is gone again"
 Write-Host ""
 Write-Host "--- what the text does not show: why a caller asks before it resolves a path AND after ---" -ForegroundColor Cyan
 # The function resolves nothing. These two are not its failures; they are what a caller must know.
@@ -192,7 +242,7 @@ try {
 } finally { Pop-Location }
 # AND THE OTHER WAY ROUND: a PowerShell drive over a share is a network path only once resolved. The
 # drive is made here, which looks its host up, so only the answers are checked.
-$psLetter = Get-FreeLetter
+$psLetter = $nothingThere[0]
 $psHost = New-NoHost
 $null = New-PSDrive -Name $psLetter -PSProvider FileSystem -Root ("\\" + $psHost + "\share") -Scope Script
 try {
