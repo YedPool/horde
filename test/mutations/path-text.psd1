@@ -1,4 +1,4 @@
-# Mutations of core/PathText.ps1: the fold of A to Z, the network question, and what a drive letter
+# Mutations of core/PathText.ps1: the fold of A to Z, the network question, and what a drive letter
 # stands for. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\path-text.psd1
 # Each folds a character it must not, hands the fold to the runtime's case table, lets a network
@@ -105,8 +105,29 @@
            Find = 'if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ('
            Replace = 'if ((Get-HordeNetworkPathRefusal -Path ($first + ":\")) -ne "") { return (' }
         @{ Name = "letter-that-stands-for-itself-is-this-questions"
-           Find = 'if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) { return "" }'
-           Replace = '' }
+           Find = 'if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "letter-straight-over-a-share-not-refused"
+           Find = 'if ($target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)'') { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "every-letter-that-stands-for-no-other-is-over-a-share"
+           Find = 'if ($target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)'') { return ('
+           Replace = 'if ($true) { return (' }
+        @{ Name = "share-target-seen-only-in-capitals"
+           Find = '$target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)'''
+           Replace = '$target -cmatch ''\A\\\?\?\\UNC(?:\\|\z)''' }
+        @{ Name = "share-target-is-any-name-that-begins-so"
+           Find = '$target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)'''
+           Replace = '$target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc]''' }
+        @{ Name = "share-target-with-nothing-after-it-missed"
+           Find = '$target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)'''
+           Replace = '$target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc]\\''' }
+        @{ Name = "share-target-need-not-have-the-device-prefix"
+           Find = '$target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)'''
+           Replace = '$target -cmatch ''[Uu][Nn][Cc](?:\\|\z)''' }
+        @{ Name = "share-refusal-speaks-of-sharing"
+           Find = 'that stands for a network share, and " + $ownDrives)'
+           Replace = 'that stands for a network share, and only a file on one of this machine''s own drives is shared")' }
         @{ Name = "refusal-does-not-name-the-network-drive"
            Find = 'that stands for a network drive (" + $last + ":), and "'
            Replace = 'that stands for a network drive, and "' }

@@ -56,7 +56,7 @@ $env:HORDE_TEST_HARNESS_Y_HOME = ""
 $repo = Join-Path $script:real "repo"
 New-Item -ItemType Directory -Path (Join-Path $repo "agents\harness-x") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $repo "agents\harness-y") | Out-Null
-[System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "env": "HORDE_TEST_HARNESS_X_HOME" } ] }')
+[System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "profile": ".harness-x.json" }, { "env": "HORDE_TEST_HARNESS_X_HOME" } ] }')
 [System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-y\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-y" }, { "env": "HORDE_TEST_HARNESS_Y_HOME" } ] }')
 $script:n = 0
 $sess = New-HordeKnown -Value "deny-session"
@@ -142,7 +142,7 @@ Check (@($list.ordinary.Keys).Count -eq 1 -and @($list.ordinary["key"]).Count -e
 $h = New-TestHome
 $found = Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repo
 $kinds = (@($found.places | ForEach-Object { $_.kind + ":" + $_.force }) -join ",")
-Check ($found.unknown -eq "" -and $found.unknownNever -eq "" -and $kinds -ceq "home:False,home:False,secrets:False,ssh:False,home:False,secrets:False,ssh:False,agent:True,agent:True,agent:True,agent:True,agent:True") ("the places: the home that was named; then under the profile the variable names and again under the one the system names, .horde, .horde-secrets and .ssh, which -Force never lifts; then each harness's folders, which it does, each named once (" + $kinds + ")")
+Check ($found.unknown -eq "" -and $found.unknownNever -eq "" -and $kinds -ceq "home:False,home:False,secrets:False,ssh:False,home:False,secrets:False,ssh:False,agent:True,agent:True,agent:True,agent:True,agent:True,agent:True,agent:True") ("the places: the home that was named; then under the profile the variable names and again under the one the system names, .horde, .horde-secrets and .ssh, which -Force never lifts; then each harness's folders, which it does, each named once (" + $kinds + ")")
 $placePaths = @($found.places | ForEach-Object { $_.path })
 Check ($placePaths[0] -ceq $h -and $placePaths -ccontains (Join-Path $profileDir ".horde") -and $placePaths -ccontains (Join-Path $profileDir ".horde-secrets") -and $placePaths -ccontains (Join-Path $profileDir ".ssh")) "the home is the one the caller named, and the three folders are in the profile the variable names"
 Check ($placePaths -ccontains (Join-Path $script:osProfile ".horde") -and $placePaths -ccontains (Join-Path $script:osProfile ".horde-secrets") -and $placePaths -ccontains (Join-Path $script:osProfile ".ssh")) "and in the profile the operating system names, which is another folder here"
@@ -338,6 +338,16 @@ foreach ($agentFolder in @((Join-Path $profileDir ".harness-x"), (Join-Path $pro
 }
 Check (Test-Shared $h (New-File (Join-Path $docs "elsewhere\auth.json") '{"dummy":1}') -Force) "CONTROL: outside every harness's folder, -Force shares a file of the same name"
 Check (Test-Shared $h (New-File (Join-Path $profileDir ".harness-xy\notes.md"))) "CONTROL: a folder whose name only begins with a harness's is shared from"
+# A HARNESS'S OWN FILE BESIDE ITS FOLDER, in the profile itself: a root its stores.json declares, and
+# a place like the folder is, in the variable's profile and in the system's.
+foreach ($besideIn in @($profileDir, $script:osProfile)) {
+    $beside = New-File (Join-Path $besideIn ".harness-x.json") '{"dummy":1}'
+    Check (Test-Refused $h $beside $inAgent) ("a harness's own file beside its folder (" + (Split-Path -Leaf $besideIn) + "\.harness-x.json) is refused as the harness's")
+    Check (Test-Refused $h $beside ("('" + $beside + "')")) "and the reason names it"
+}
+Check (Test-Shared $h (New-File (Join-Path $profileDir ".harness-x.json.md"))) "CONTROL: a file whose name only begins with that file's is an ordinary file"
+$shippedFileRoots = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | ForEach-Object { Join-Path $_.FullName "stores.json" } | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { @(([System.IO.File]::ReadAllText($_) | ConvertFrom-Json).roots) } | Where-Object { $null -ne $_.PSObject.Properties["profile"] -and ("" + $_.profile) -like "*.json" })
+Check ($shippedFileRoots.Count -ge 1 -and @($shippedFileRoots | Where-Object { @($realRepo.places | ForEach-Object { $_.path }) -cnotcontains (Join-Path $script:osProfile ("" + $_.profile)) }).Count -eq 0) ("the shipped adapters declare " + $shippedFileRoots.Count + " such file, and it is a place under the system's profile")
 # WHAT -Force NEVER LIFTS IS JUDGED FIRST: a file in the home whose name holds a word is refused as the home.
 Check (Test-Refused $h (New-File (Join-Path $h "settings\api-key.txt")) $inHome -NotLike "holds 'key'") "a file in the home with a word in its name is refused for the home, not for the name"
 Check (Test-Refused $h (New-File (Join-Path $profileDir ".ssh\api-key.txt")) $inSsh -NotLike "holds 'key'") "and one in .ssh for .ssh"
@@ -654,7 +664,7 @@ try {
     $viaShare = Test-Refused $h ($overLetter + ":\x.md") ("is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder")
     $viaShareChain = Test-Refused $h ($overOver.ToLowerInvariant() + ":\x.md") "that stands for a network drive"
     $ownNet = Get-HordeDriveAliasRefusal -Path ($netLetter + ":\x.md")
-    $viaShareNet = Test-Refused $h ($netLetter + ":\x.md") ("is on a network drive (" + $netLetter + ":)")
+    $viaShareNet = Test-Refused $h ($netLetter + ":\x.md") ("is on a drive (" + $netLetter + ":) that stands for a network share, and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives")
     $placeOnNet = Resolve-HordeFilesDenyPlace -Path ($netLetter + ":\home")
     $placeOnAlias = Resolve-HordeFilesDenyPlace -Path ($overLetter + ":\home")
     $seenAfter = (Get-LookedUp).Contains($netHost)
@@ -677,10 +687,10 @@ Check ($said -like ("'" + $overLetter + ":\x.md' is on a drive (" + $overLetter 
 Check $saidPrefix "and behind the long-path prefix"
 Check $saidRelative "and named from wherever that drive stands"
 Check ($chain -like ("*is on a drive (" + $overOver + ":) that stands for a network drive (" + $netLetter + ":)*")) "a letter that stands for a letter that stands for a network drive is refused too: the chain is followed to its end"
-Check ($ownNet -eq "") "a network drive itself is not this question's: the network question refuses it"
+Check ($ownNet -like ("*is on a drive (" + $netLetter + ":) that stands for a network share*")) "a letter defined straight over a share is refused by the same question: the table says what it stands for"
 Check $viaShare "through a share, it is refused with that reason, and the share adds its own sentence: what to do about it"
 Check $viaShareChain "and so is the chain, with its letter in small"
-Check $viaShareNet "CONTROL: a share from the network drive itself is still refused by the network question, with its own reason"
+Check $viaShareNet "and a share from that letter is refused with that reason, and the share's own sentence after it"
 Check ($null -ne $placeOnNet -and -not $placeOnNet.unknown -and @($placeOnNet.paths).Count -eq 0) "a folder of the list that is on a network drive is never opened: it holds no file of this machine's drives"
 Check ($null -ne $placeOnAlias -and -not $placeOnAlias.unknown -and @($placeOnAlias.paths).Count -eq 0) "nor is one on a letter that stands for a network drive"
 if ($canSee) { Check (-not $seenAfter) "and through all of those the host was NOT looked up: the system's table of names was read, and nobody was asked" }
@@ -843,4 +853,4 @@ if ((Split-Path -Leaf $script:work) -match '\Ahorde-files-deny-test-[0-9a-f]{32}
 }
 Check (-not (Test-Path -LiteralPath $script:work)) "the suite's temp folder is removed"
 
-Complete-HordeSuite -Success "a share refuses the places and the names secrets are kept under by the open handle's own path, -Force lifts what it may and never the Horde home or .horde-secrets, and a drive letter that stands for a network drive is refused before its host is looked up"
+Complete-HordeSuite -Success "a share refuses the places and the names secrets are kept under by the open handle's own path, -Force lifts what it may and never the Horde home, .horde-secrets, .ssh or a private key in a text, a variable the caller sets moves no place away, and a drive letter that stands for a network drive is refused before its host is looked up"

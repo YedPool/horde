@@ -73,8 +73,11 @@
 #   that last letter only. It refuses a letter whose chain ends at a network drive, and a chain
 #   that does not end within eight letters (a ring), since where that is cannot be told.
 #   WHAT IT DOES NOT SEE:
-#   - A network drive itself (a letter that stands for no other letter). It answers "" and the
-#     network question refuses it; that question is safe for such a letter.
+#   - A network drive whose target in the table is not written as a share (a drive the system
+#     mapped has a redirector's device there). It answers "" and the network question refuses
+#     it by its type; that question is safe for such a letter. A letter DEFINED straight over a
+#     share (\??\UNC\host\share) is refused here, since the review of 2026-10-13: the table has
+#     already said what it is.
 #   - A volume mount point, a junction or a symbolic link that leads to the network from a folder
 #     of a local drive. Those are not drive letters; only an open handle's final path shows them.
 #   - A PowerShell drive (New-PSDrive), which is not in the system's table. It shows once the path
@@ -146,7 +149,7 @@ function Get-HordeDriveAliasRefusal {
     # Why -Path is on a drive letter that STANDS FOR a network drive, or "" when nothing says it is.
     # ASKED BEFORE THE NETWORK QUESTION, and nothing is opened: the header has the measurement, and
     # what this does not see. A letter that stands for no other letter is the network question's,
-    # and this answers "".
+    # and this answers "" - unless the table says it stands straight for a share.
     param([AllowEmptyString()][string]$Path)
     if ($Path -cnotmatch '\A(?:\\\\\?\\)?([A-Za-z]):') { return "" }
     $first = $Matches[1]
@@ -161,7 +164,13 @@ function Get-HordeDriveAliasRefusal {
         $last = $Matches[1]
     }
     if (-not $ended) { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for another drive letter, and that for another, without end: where it really is cannot be told, and " + $ownDrives) }
-    if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) { return "" }
+    if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) {
+        # A LETTER DEFINED STRAIGHT OVER A SHARE says so in the table itself: its target is the
+        # device prefix and then UNC. The network question refuses such a letter too, by its type;
+        # this refuses it from what was already read, and does not lean on the type being right.
+        if ($target -cmatch '\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)') { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network share, and " + $ownDrives) }
+        return ""
+    }
     if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network drive (" + $last + ":), and " + $ownDrives) }
     return ""
 }

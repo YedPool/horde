@@ -1038,12 +1038,12 @@ $netTarget = "\??\UNC\" + $netHost + "\share"
 $netMade = [HordeTest.DosDevice]::DefineDosDevice(1, $netLetter + ":", $netTarget)
 try {
     Check ($netLetter -ne "" -and $netMade -and (New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network) ("CONTROL: the drive letter " + $netLetter + ": was aimed at a share, and its type is Network (if this fails, a network drive was NOT tested)")
-    Check (Test-Refused $h ($netLetter + ":\x.md") ("is on a network drive (" + $netLetter + ":)")) "a file on a network drive is refused by the drive's type"
-    Check (Test-Refused $h ("\\?\" + $netLetter + ":\x.md") "is on a network drive") "and behind the long-path prefix"
-    Check (Test-Refused $h ($netLetter + ":x.md") "is on a network drive") "and named from wherever that drive stands"
-    Check (Test-Refused $h (($netLetter + ":\x.md").ToLowerInvariant()) "is on a network drive") "and with its letter in small"
+    Check (Test-Refused $h ($netLetter + ":\x.md") ("is on a drive (" + $netLetter + ":) that stands for a network share")) "a file on a drive letter aimed at a share is refused from the system's table of names, before its type is even asked"
+    Check (Test-Refused $h ("\\?\" + $netLetter + ":\x.md") "that stands for a network share") "and behind the long-path prefix"
+    Check (Test-Refused $h ($netLetter + ":x.md") "that stands for a network share") "and named from wherever that drive stands"
+    Check (Test-Refused $h (($netLetter + ":\x.md").ToLowerInvariant()) "that stands for a network share") "and with its letter in small"
     $cacheNow = Get-LookedUp
-    if ($canSee) { Check (-not $cacheNow.Contains($netHost)) "and the drive's host was not looked up: asking a drive's type asks nobody, and nothing resolved or looked at the path" }
+    if ($canSee) { Check (-not $cacheNow.Contains($netHost)) "and the drive's host was not looked up: the system's table was read, and nothing resolved or looked at the path" }
     $null = [System.IO.File]::Exists($netLetter + ":\x.md")
     if ($canSee) { Check ((Get-LookedUp).Contains($netHost)) "CONTROL: asked whether a file on that drive exists, the host IS looked up - that is what the refusal came before" }
 } finally { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $netLetter + ":", $netTarget) }

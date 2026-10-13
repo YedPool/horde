@@ -266,11 +266,32 @@ Check ($saidPrefix -like ("*is on a drive (" + $overLetter + ":) that stands for
 Check ($saidRelative -like ("*is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":)*")) "and named from wherever that drive stands"
 Check ($saidSmall -clike ("*is on a drive (" + $overLetter.ToLowerInvariant() + ":) that stands for a network drive (" + $netLetter + ":)*")) "and with its letter in small, which the reason gives as it was written"
 Check ($saidChain -like ("*is on a drive (" + $overOver + ":) that stands for a network drive (" + $netLetter + ":)*")) "a letter that stands for a letter that stands for a network drive is refused too: the chain is followed to its end"
-Check ($saidNet -ceq "") "a network drive itself stands for no other letter: this question answers nothing, and the network question refuses it"
+Check ($saidNet -ceq ("'" + $netLetter + ":\x.md' is on a drive (" + $netLetter + ":) that stands for a network share, and " + $ownDrives)) "a letter defined straight over a share is refused by this question too: the table says what it stands for"
 if ($canSee) { Check (-not $seenAfter) "and through all six questions the host was NOT looked up: the system's table was read, and nobody was asked" }
 if ($canSee) { Check ($typeOver -cne "Network" -and $networkSaysOfOver -ceq "" -and $controlSeen) ("CONTROL: the network question, asked of that letter, refuses nothing (its type is " + $typeOver + ", not Network) and the host IS looked up - which is why this question is asked first") }
 else { Write-Skip "WHETHER THE DRIVE-LETTER QUESTION LOOKED A HOST UP COULD NOT BE SEEN on this machine; its answers were still checked." }
 Check (-not (Test-DosDevice $netLetter) -and -not (Test-DosDevice $overLetter) -and -not (Test-DosDevice $overOver)) "all three drive letters are gone again"
+# A LETTER STRAIGHT OVER A SHARE, in the ways the table can hold it, and what only looks like one.
+# Nothing is asked of any of these but what they stand for, so no host is looked up.
+$straightHost = New-NoHost
+$straight = [ordered]@{}
+foreach ($written in @(("\??\UNC\" + $straightHost + "\share"), ("\??\unc\" + $straightHost + "\share"), ("\??\Unc\" + $straightHost + "\share\deeper"), "\??\UNC")) {
+    $null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[0] + ":", $written)
+    try { $straight[$written] = @((Get-Stands $free[0]), (Get-AliasSaid ($free[0] + ":\x.md")), (Get-AliasSaid ("\\?\" + $free[0] + ":\x.md"))) } finally { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $free[0] + ":", $written) }
+}
+foreach ($written in $straight.Keys) {
+    Check ($straight[$written][0] -ceq $written) ("CONTROL: the letter was defined over " + $written)
+    Check ($straight[$written][1] -ceq ("'" + $free[0] + ":\x.md' is on a drive (" + $free[0] + ":) that stands for a network share, and " + $ownDrives)) "and a path on it is refused: it stands for a network share"
+    Check ($straight[$written][2] -like ("*is on a drive (" + $free[0] + ":) that stands for a network share*")) "behind the long-path prefix too"
+}
+if ($canSee) { Check (-not (Get-LookedUp).Contains($straightHost)) "and the host was NOT looked up: only the table was read" }
+$looksLike = [ordered]@{}
+foreach ($written in @("\??\UNCLE\share", ("\??\" + $system + ":\UNC\share"), "\Device\UNC\share")) {
+    $null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[0] + ":", $written)
+    try { $looksLike[$written] = @((Get-Stands $free[0]), (Get-AliasSaid ($free[0] + ":\x.md"))) } finally { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $free[0] + ":", $written) }
+}
+foreach ($written in $looksLike.Keys) { Check ($looksLike[$written][0] -ceq $written -and $looksLike[$written][1] -notlike "*network share*") ("CONTROL: a letter over " + $written + " does not stand for a share, and this rule does not say it does") }
+Check (-not (Test-DosDevice $free[0])) "that letter is gone again"
 # A RING: two letters that stand for each other never end, and are refused.
 $ring = "?"
 $null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[0] + ":", "\??\" + $free[1] + ":")
