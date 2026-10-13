@@ -11,8 +11,9 @@
 #     and nobody asked twice before everybody was asked once.
 #   - SHADOW rings nobody and posts nothing.
 #   - THE RESTORE SOURCE, on a replay of a real timeline: twelve sessions restarted inside 150 s. Orcs
-#     are told to resume at once, their subsessions when their orc has moved or after 180 s, and the
-#     warchief is told at 300 s when nothing moved - each mail under an id that never changes.
+#     are told to resume at once; a subsession, or a session of no known role, never is - an orc mails
+#     the ones it still needs; and the warchief is told at 300 s when nothing moved - each mail under
+#     an id that never changes.
 #   - AN ADAPTER THAT THROWS OR ANSWERS RUBBISH is unknown, and never a nudge.
 # The files (journal, heartbeat, ledger) are written under a home this suite made and removes.
 
@@ -247,17 +248,24 @@ Check ($f7.state -ceq "known" -and $f7.value.restoreId -cne $f.value.restoreId) 
 $plan = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 10)) -Settings $settings)
 $orcs = @(2, 3, 4 | ForEach-Object { Sid $_ })
 Check ((@($plan | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",") -and @($plan | Where-Object { $_.kind -cne "resume" }).Count -eq 0) "all three orcs are told to resume at once, and nobody else"
-Check (@($plan | Where-Object { $_.body -cne $settings.resumeText }).Count -eq 0 -and $settings.resumeText.StartsWith("RESUME. Every session on this machine was restored")) "each with the resume text"
-$plan179 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 179)) -Settings $settings)
-Check ($plan179.Count -eq 3) "the goblins are still held 179 s after the last start, while no orc has moved"
+Check (@($plan | Where-Object { $_.body -cne $settings.resumeText }).Count -eq 0 -and $settings.resumeText.StartsWith("START OR RESTORE. Every session on this machine was started or restored together") -and $settings.resumeText.EndsWith("mail the subsessions you still need: they are not woken unless you ask.")) "each with the resume text, which covers a start as well as a restore and tells an orc its subsessions are not woken unless it asks"
+$unroled = @($fleet | ForEach-Object { if ($_.id -ceq (Sid 12)) { [pscustomobject]@{ id = $_.id; role = "unknown"; parent = $_.parent; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt } } else { $_ } })
+foreach ($after in @(0, 180, 600)) {
+    $planAt = @(Get-HordeResumePlan -Finding $f -Now (At ($end + $after)) -Settings $settings | Where-Object { $_.kind -ceq "resume" })
+    Check ((@($planAt | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",")) ("" + $after + " s after the last start, with no orc moved, the orcs are told and no goblin is")
+    $planAt = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions $unroled -Now (At ($end + $after)) -Settings $settings) -Now (At ($end + $after)) -Settings $settings | Where-Object { $_.kind -ceq "resume" })
+    Check ($planAt.Count -eq 3 -and @($planAt | Where-Object { $_.to -ceq (Sid 12) }).Count -eq 0) ("" + $after + " s after it, a session of no known role is not told either")
+}
 $oneMoved = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 90 }) -Now (At ($end + 100)) -Settings $settings
 $planMoved = @(Get-HordeResumePlan -Finding $oneMoved -Now (At ($end + 100)) -Settings $settings)
-Check ((@($planMoved | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4, 5, 6, 7 | ForEach-Object { Sid $_ }) -join ",")) "once an orc has moved, its own goblins are told - not that orc again, and not the goblins of an orc still asleep"
+Check ((@($planMoved | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) "once an orc has moved it is not told again - and its goblins are still not told: it mails the ones it needs"
+$planMoved600 = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 90 }) -Now (At ($end + 600)) -Settings $settings) -Now (At ($end + 600)) -Settings $settings)
+Check ((@($planMoved600 | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(3, 4 | ForEach-Object { Sid $_ }) -join ",")) "nor are they at 600 s"
 Check (@($oneMoved.value.notMoved).Count -eq 11 -and @($oneMoved.value.members | Where-Object { $_.moved }).Count -eq 1) "a member has moved when its status changed at least movedSeconds after it started"
 $barely = Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 2 = 59 }) -Now (At ($end + 100)) -Settings $settings
 Check (@($barely.value.notMoved).Count -eq 12) "and has not at 59 s"
 $plan180 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 180)) -Settings $settings)
-Check ($plan180.Count -eq 11 -and @($plan180 | Where-Object { $_.to -ceq (Sid 1) }).Count -eq 0) "at 180 s every goblin is told too, whether or not its orc has moved - and the warchief is never told to resume"
+Check ($plan180.Count -eq 3 -and @($plan180 | Where-Object { $_.to -ceq (Sid 1) }).Count -eq 0) "and the warchief is never told to resume"
 
 $plan299 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 299)) -Settings $settings)
 Check (@($plan299 | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "there is no stall notice 299 s after the last start"
@@ -272,8 +280,8 @@ Check ($stallNobody.Count -eq 1 -and $stallNobody[0].to -ceq "") "with no warchi
 
 $ids1 = (@($plan300 | Sort-Object to | ForEach-Object { $_.to + "=" + $_.messageId }) -join ";")
 $ids2 = (@(Get-HordeResumePlan -Finding $again -Now (At ($end + 300)) -Settings $settings | Sort-Object to | ForEach-Object { $_.to + "=" + $_.messageId }) -join ";")
-Check ($ids1 -ceq $ids2 -and $plan300.Count -eq 12) "a plan made again names every mail by the same messageId"
-Check (@($plan300 | ForEach-Object { $_.messageId } | Sort-Object -Unique).Count -eq 12 -and @($plan300 | Where-Object { $_.messageId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' }).Count -eq 0) "each mail has an id of its own, a lowercase uuid"
+Check ($ids1 -ceq $ids2 -and $plan300.Count -eq 4) "a plan made again names every mail by the same messageId: three orcs and the stall notice"
+Check (@($plan300 | ForEach-Object { $_.messageId } | Sort-Object -Unique).Count -eq 4 -and @($plan300 | Where-Object { $_.messageId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' }).Count -eq 0) "each mail has an id of its own, a lowercase uuid"
 $orcId = @($plan | Where-Object { $_.to -ceq (Sid 2) })[0].messageId
 Check (@($plan300 | Where-Object { $_.to -ceq (Sid 2) })[0].messageId -ceq $orcId) "and an orc's resume mail has the id at 300 s that it had at 10 s"
 
@@ -288,12 +296,16 @@ $r = Invoke-HordeWakePass -Waker $null -Now (At ($end + 10)) -Settings $settings
 Check ($script:mails.Count -eq 3 -and (Kinds $r) -ceq "post,post,post" -and @($r.entries | Where-Object { $_.outcome -cne "posted" -or $_.messageId -eq "" }).Count -eq 0) "with no waker at all the restore half still runs: three resume mails are posted, each journaled with its messageId"
 $r2 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 13)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r.posted
 Check ($script:mails.Count -eq 3 -and @($r2.entries).Count -eq 0) "the next pass posts none of them again"
+$r180 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 180)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r2.posted
+Check ($script:mails.Count -eq 3 -and @($r180.entries).Count -eq 0) "nor, at 180 s, anything to a goblin"
 $script:postWorks = $false
-$r3 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 180)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r2.posted
-Check ($script:mails.Count -eq 11 -and @($r3.entries | Where-Object { $_.outcome -ceq "unknown" -and $_.reason -ceq "the mailbox is locked" }).Count -eq 8 -and $r3.posted.Count -eq 3) "a post that could not say is journaled unknown with its reason, and is not marked posted"
+$script:mails.Clear()
+$r3 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 10)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted @{}
+Check ($script:mails.Count -eq 3 -and @($r3.entries | Where-Object { $_.outcome -ceq "unknown" -and $_.reason -ceq "the mailbox is locked" }).Count -eq 3 -and $r3.posted.Count -eq 0) "a post that could not say is journaled unknown with its reason, and is not marked posted"
 $script:postWorks = $true
-$r4 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 183)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r3.posted
-Check ($script:mails.Count -eq 19 -and $r4.posted.Count -eq 11) "so the next pass tries those eight again, under the same ids"
+$r4 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 13)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post $poster -Posted $r3.posted
+$sameIds = ((@($script:mails[0..2] | ForEach-Object { $_.messageId } | Sort-Object) -join ",") -ceq (@($script:mails[3..5] | ForEach-Object { $_.messageId } | Sort-Object) -join ","))
+Check ($script:mails.Count -eq 6 -and $r4.posted.Count -eq 3 -and $sameIds) "so the next pass tries those three again, under the same ids"
 $r5 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 300)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Post { param($m) throw "the poster fell over" } -Posted $r4.posted
 Check ((Kinds $r5) -ceq "stall" -and $r5.entries[0].outcome -ceq "unknown" -and "$($r5.entries[0].reason)".Contains("fell over")) "a poster that throws is an unknown outcome, never a throw of the pass"
 $r6 = Invoke-HordeWakePass -Waker $null -Now (At ($end + 300)) -Settings $settings -Ledger @{} -RestoreSessions $fleet -Posted $r4.posted

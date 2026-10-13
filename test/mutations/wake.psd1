@@ -115,24 +115,24 @@
         @{ Name = "message-id-same-for-every-session"
            Find = '+ $f.restoreId + "`n" + $m.id.ToLowerInvariant()'
            Replace = '+ $f.restoreId' }
-        @{ Name = "orcs-held"
-           Find = '$due = ($m.role -ceq "orc")'
-           Replace = '$due = $false' }
-        @{ Name = "goblins-not-held"
-           Find = 'if (-not $due) { $due = ($sinceEnd -ge $Settings.goblinDelaySeconds) }'
-           Replace = 'if (-not $due) { $due = $true }' }
-        @{ Name = "goblins-never-released-by-time"
-           Find = 'if (-not $due) { $due = ($sinceEnd -ge $Settings.goblinDelaySeconds) }'
-           Replace = '' }
-        @{ Name = "moved-parent-ignored"
-           Find = 'if (-not $due) { $due = ($m.parent -cne "" -and $movedIds.ContainsKey($m.parent)) }'
-           Replace = '' }
-        @{ Name = "warchief-told-to-resume"
-           Find = 'if ($m.moved -or $m.role -ceq "warchief") { continue }'
-           Replace = 'if ($m.moved) { continue }' }
-        @{ Name = "moved-session-told-to-resume"
-           Find = 'if ($m.moved -or $m.role -ceq "warchief") { continue }'
+        @{ Name = "orcs-not-told"
+           Find = 'if ($m.role -cne "orc") { continue }'
+           Replace = 'if ($m.role -ceq "orc") { continue }' }
+        @{ Name = "goblin-mailed"
+           Find = 'if ($m.role -cne "orc") { continue }'
+           Replace = 'if ($m.role -cne "orc" -and $m.role -cne "goblin") { continue }' }
+        @{ Name = "goblin-mailed-once-its-orc-moved"
+           Find = 'if ($m.role -cne "orc") { continue }'
+           Replace = 'if ($m.role -cne "orc" -and -not $movedIds.ContainsKey($m.parent)) { continue }' }
+        @{ Name = "everyone-but-the-warchief-mailed"
+           Find = 'if ($m.role -cne "orc") { continue }'
            Replace = 'if ($m.role -ceq "warchief") { continue }' }
+        @{ Name = "unknown-role-mailed"
+           Find = 'if ($m.role -cne "orc") { continue }'
+           Replace = 'if ($m.role -cne "orc" -and $m.role -cne "unknown") { continue }' }
+        @{ Name = "moved-session-told-to-resume"
+           Find = 'if ($m.moved) { continue }'
+           Replace = '' }
         @{ Name = "stall-notice-early"
            Find = 'if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {'
            Replace = 'if ($movedIds.Count -eq 0) {' }
