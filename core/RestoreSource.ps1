@@ -352,7 +352,7 @@ function Get-HordeRestoreSessions {
 # Kept apart from everything above, which reads and writes none. Only the command's loop calls these.
 
 function Save-HordeRestoreState {
-    # restore.json, replaced whole: the ids of the mails already posted and the restores already found,
+    # The restore state file, replaced whole: the ids of the mails already posted and the restores already found,
     # so a source that is restarted neither posts a resume mail a second time nor gives a restore it
     # had already named a new id. -Shadow names the shadow run's own file (core/WakeFiles.ps1,
     # Get-HordeWakeStateFile): a mail a shadow run only would have posted is never marked posted where

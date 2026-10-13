@@ -292,11 +292,11 @@ $pruned = Invoke-HordeRestoreSourcePass -Sessions @() -Now $t0 -Settings $settin
 Check ($pruned.posted.Count -eq 2 -and -not $pruned.posted.ContainsKey("0d000000-0000-4000-8000-000000000003") -and $pruned.posted["0d000000-0000-4000-8000-000000000005"] -eq $t0) "a posted id older than a restore can be is dropped; one with no time is stamped now and kept"
 Check (@($pruned.known).Count -eq 1 -and $pruned.known[0].restoreId -ceq $recent.restoreId) "and so is a saved restore whose window ended longer ago than that"
 Check ($back.state -ceq "known" -and @($back.value.known).Count -eq 1 -and $back.value.known[0].restoreId -ceq $f.value.restoreId -and $back.value.known[0].windowStart -eq $f.value.windowStart -and $back.value.known[0].windowEnd -eq $f.value.windowEnd) "and so do the restores already found, with their ids and windows"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved posted mail with no id is unknown"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved restore with no window is unknown, never half a state"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), "{ not json")
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), "{ not json")
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved state that cannot be read is unknown, not absent"
 
 Write-Host ""
