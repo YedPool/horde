@@ -7,6 +7,18 @@
     Suite  = "test\test-wake-tell.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-fleet-notice-counts-against-the-sessions-budget"
+           Find = '-and "$(Get-HordeWakeTellClass $_)" -ceq $class }).Count'
+           Replace = '}).Count' }
+        @{ Name = "a-fleet-notice-waits-its-turn-in-the-list"
+           Find = '$ordered = @(@($Conditions | Where-Object { $null -ne $_ -and "$($_.subject)" -ceq "" }) + @($Conditions | Where-Object { $null -ne $_ -and "$($_.subject)" -cne "" }))'
+           Replace = '$ordered = @($Conditions)' }
+        @{ Name = "every-tell-is-a-fleet-notice"
+           Find = 'if ("$($c.subject)" -ceq "") { $class = "fleet" }'
+           Replace = '$class = "fleet"' }
+        @{ Name = "the-class-of-a-tell-is-not-saved"
+           Find = 'state = "$($Told[$_].state)"; class = (Get-HordeWakeTellClass $Told[$_]) } })'
+           Replace = 'state = "$($Told[$_].state)" } })' }
         @{ Name = "told-again-every-pass"
            Find = 'if ($next[$id].state -cne "failed" -or ($Now - $next[$id].at).TotalSeconds -lt $Settings.retrySeconds) { continue }'
            Replace = '' }
@@ -23,14 +35,14 @@
            Find = 'maxTellsPerHour = 6'
            Replace = 'maxTellsPerHour = 7' }
         @{ Name = "rate-limit-never-forgets-an-hour"
-           Find = '-and ($Now - $_.at).TotalSeconds -lt 3600 }).Count'
-           Replace = '}).Count' }
+           Find = '-and ($Now - $_.at).TotalSeconds -lt 3600 -and'
+           Replace = '-and' }
         @{ Name = "suppressed-tells-count-against-the-limit"
            Find = '$next.Values | Where-Object { ($_.state -ceq "told" -or $_.state -ceq "would-tell") -and'
            Replace = '$next.Values | Where-Object { $true -and' }
         @{ Name = "shadow-tells"
-           Find = 'if ($Shadow) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell" };'
-           Replace = 'if ($false) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell" };' }
+           Find = 'if ($Shadow) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell"; class = $class };'
+           Replace = 'if ($false) { $next[$id] = [pscustomobject]@{ at = $Now; state = "would-tell"; class = $class };' }
         @{ Name = "text-does-not-say-it-is-automated"
            Find = '$body = "$($Settings.prefix)" + $c.text'
            Replace = '$body = $c.text' }

@@ -73,6 +73,26 @@ try {
     $hour = Invoke-HordeWakeTellPass -Conditions @((Cond 21)) -Warchief $chief -Now (At 3601) -Settings $settings -Post $taking -Told $half.told
     Check ((Kinds $hour) -ceq "tell:posted" -and $script:mails.Count -eq 7) "an hour after the six were told the next is told: the limit is by the hour, and only what was told counts against it - not what was suppressed"
 
+    # A NOTICE ABOUT THE WHOLE FLEET is never crowded out by notices about sessions.
+    $script:mails.Clear()
+    $silent = New-HordeWakeTellCondition -Kind "fleet-silent" -Subject "" -Instance "2026-10-12T08:00:00Z" -Text "the fleet is silent"
+    $dark = New-HordeWakeTellCondition -Kind "fleet-read-failing" -Subject "" -Instance "2026-10-12T08:00:00Z" -Text "the fleet cannot be read"
+    $six = Invoke-HordeWakeTellPass -Conditions @(1..6 | ForEach-Object { Cond $_ }) -Warchief $chief -Now (At 0) -Settings $settings -Post $taking
+    Check ($script:mails.Count -eq 6) "CONTROL: six sessions given up on are six tells, and the hour's budget for sessions is spent"
+    $then = Invoke-HordeWakeTellPass -Conditions @((Cond 7), $silent) -Warchief $chief -Now (At 60) -Settings $settings -Post $taking -Told $six.told
+    Check ((@($then.entries | Where-Object { $_.kind -ceq "tell" -and $_.outcome -ceq "posted" -and $_.id -ceq "" }).Count -eq 1) -and (@($then.entries | Where-Object { $_.kind -ceq "tell-suppressed" -and $_.id -ceq (Sid 7) }).Count -eq 1) -and $script:mails.Count -eq 7 -and "$($script:mails[6].body)".Contains("the fleet is silent")) "a minute later the fleet's one notice IS told, though a seventh session's is suppressed: the notice that explains the others is never the one crowded out"
+    Check ($then.entries[0].id -ceq "" -and $then.entries[0].kind -ceq "tell") "and it is sent first, whatever order the conditions came in"
+    $more = Invoke-HordeWakeTellPass -Conditions @($dark) -Warchief $chief -Now (At 120) -Settings $settings -Post $taking -Told $then.told
+    Check ((Kinds $more) -ceq "tell:posted") "a second kind of fleet notice in the same hour is told too"
+    $script:mails.Clear()
+    $fleetOnly = Invoke-HordeWakeTellPass -Conditions @(1..8 | ForEach-Object { New-HordeWakeTellCondition -Kind "fleet-silent" -Subject "" -Instance ("instance-" + $_) -Text "silent again" }) -Warchief $chief -Now (At 0) -Settings $settings -Post $taking
+    $afterFleet = Invoke-HordeWakeTellPass -Conditions @((Cond 1)) -Warchief $chief -Now (At 30) -Settings $settings -Post $taking -Told $fleetOnly.told
+    Check ($script:mails.Count -eq 7 -and @($fleetOnly.entries | Where-Object { $_.kind -ceq "tell-suppressed" }).Count -eq 2 -and (Kinds $afterFleet) -ceq "tell:posted") "fleet notices have a limit of their own - six an hour - and do not use up the sessions' either: a flapping fleet cannot bury the warchief or silence a session's tell"
+    $hc = Join-Path $pinned.home ("class-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hc | Out-Null
+    Save-HordeWakeTellState -Told $then.told -Mode "shadow" -HordeHome $hc
+    $classes = @((Read-HordeWakeTellState -Mode "shadow" -HordeHome $hc).value.told.Values | ForEach-Object { Get-HordeWakeTellClass $_ } | Group-Object | ForEach-Object { $_.Name + "=" + $_.Count } | Sort-Object)
+    Check (($classes -join ",") -ceq "fleet=1,session=7") ("which budget each tell counted against is saved with it (" + ($classes -join ",") + ")")
+
     Write-Host ""
     Write-Host "--- shadow, nobody to tell, and a post that fails ---" -ForegroundColor Cyan
 

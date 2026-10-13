@@ -8,6 +8,15 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-source-that-does-not-say-fixed-is-accepted"
+           Find = 'if (-not $fixed.has -or $fixed.value -isnot [bool]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-source-with-no-how-is-accepted"
+           Find = 'if (-not $how.has -or $how.value -isnot [string] -or $how.value.Trim() -eq "" -or $how.value -cmatch "[`r`n]") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-source-that-says-found-is-carried-as-named"
+           Find = 'fixed = [bool]$fixed.value; how = [string]$how.value })'
+           Replace = 'fixed = $true; how = [string]$how.value })' }
         @{ Name = "a-waker-that-says-nothing-of-the-limit-reads-as-not-limited"
            Find = '        $limited = "unknown"'
            Replace = '        $limited = "no"' }

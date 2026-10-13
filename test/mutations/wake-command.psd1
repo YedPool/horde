@@ -9,18 +9,27 @@
     Suite  = "test\e2e\e2e-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "a-proof-needs-no-target"
-           Find = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target,'
-           Replace = '[Parameter(ParameterSetName = "proof")][string]$Target = "0a000000-0000-4000-8000-000000000001",' }
+        @{ Name = "a-refused-run-is-started-by-the-command"
+           Find = 'if ("$($run.refused)" -cne "") { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "a-proof-with-no-target-binds"
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
+           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][switch]$Proof,' }
+        @{ Name = "a-proof-that-would-loop-binds"
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",'
+           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
+        @{ Name = "a-target-with-no-proof-binds"
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",'
+           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
         @{ Name = "a-target-in-another-casing-or-a-part-of-one-is-taken"
-           Find = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target,'
-           Replace = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][string]$Target,' }
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",'
+           Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][string]$Target = "",' }
         @{ Name = "a-target-may-be-given-to-a-watch"
-           Find = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target,'
-           Replace = '[ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
-        @{ Name = "a-proof-may-loop"
-           Find = '[Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Once,'
-           Replace = '[switch]$Once,' }
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",'
+           Replace = '[Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
+        @{ Name = "a-missing-part-of-a-proof-is-asked-for"
+           Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
+           Replace = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Proof,' }
         @{ Name = "proof-is-a-mode-word-again"
            Find = '[Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode'
            Replace = '[Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live", "proof")][ValidateScript({ @("shadow", "live", "proof") -ccontains $_ })][string]$Mode' }
