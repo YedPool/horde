@@ -25,7 +25,7 @@
 #
 # THE MAPPING onto the port (wakers/Port.ps1):
 #   Targets  form A's rows that are not retired, or that have unread mail. role master is warchief,
-#            orchestrator is orc, session is goblin, anything else unknown (core/Roles.ps1's table,
+#            orchestrator is orc, session is warg, anything else unknown (core/Roles.ps1's table,
 #            read here from the row's own word); reachable as the row says.
 #   State    from form A's answer of THIS pass, with boxEmpty and midTurn unknown: no pane is read.
 #   Confirm  form B, for the one session the watcher is about to nudge: its box and its turn. So a pass
@@ -111,7 +111,7 @@ $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
 # How long one form A answer serves a caller that never says a pass begins, counted from its arrival.
 # The watcher does say (the port's Begin), and for it an answer serves exactly one pass.
 $script:HordeWezfleetWakerFleetLifeSeconds = 2
-$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "goblin" }
+$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "warg" }
 $script:HordeWezfleetWakerWords = @("yes", "no", "unknown")
 $script:HordeWezfleetWakerOutcomes = @{ "woken" = "woken"; "busy" = "busy"; "unreachable" = "unreachable"; "refused" = "nothing" }
 $script:HordeWezfleetWakerCodePattern = '\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z'

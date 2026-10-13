@@ -52,7 +52,7 @@ return [pscustomobject]@{
     # nudge could take it from.
     Seat = {
         param($State, $Session)
-        $words = @{ "warchief" = "master"; "orc" = "orchestrator"; "goblin" = "session" }
+        $words = @{ "warchief" = "master"; "orc" = "orchestrator"; "warg" = "session" }
         $role = "unknown"
         if ($words.ContainsKey("$($Session.role)")) { $role = $words["$($Session.role)"] }
         $oldest = $null

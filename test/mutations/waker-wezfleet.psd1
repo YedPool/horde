@@ -27,12 +27,12 @@
         @{ Name = "retired-session-with-mail-dropped"
            Find = 'if ($row.retired -and -not $hasMail) { continue }'
            Replace = 'if ($row.retired) { continue }' }
-        @{ Name = "unknown-role-guessed-a-goblin"
+        @{ Name = "unknown-role-guessed-a-warg"
            Find = 'is [string]) { return $script:HordeWezfleetWakerRoles[$Word] }'
-           Replace = 'is [string]) { return $script:HordeWezfleetWakerRoles[$Word] }; if ($true) { return "goblin" }' }
+           Replace = 'is [string]) { return $script:HordeWezfleetWakerRoles[$Word] }; if ($true) { return "warg" }' }
         @{ Name = "master-read-as-an-orc"
-           Find = '$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "goblin" }'
-           Replace = '$script:HordeWezfleetWakerRoles = @{ "master" = "orc"; "orchestrator" = "orc"; "session" = "goblin" }' }
+           Find = '$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "warg" }'
+           Replace = '$script:HordeWezfleetWakerRoles = @{ "master" = "orc"; "orchestrator" = "orc"; "session" = "warg" }' }
         @{ Name = "every-state-reads-a-pane"
            Find = '    if ($Full) {'
            Replace = '    if ($true) {' }

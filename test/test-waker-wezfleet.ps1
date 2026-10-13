@@ -69,7 +69,7 @@ $state = & $fx.New
 $a = Get-HordeWakeTargets -Waker $w
 $list = @(); if ($a.state -ceq "known") { $list = @($a.value | Sort-Object id) }
 Check ($a.state -ceq "known" -and (@($list | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2, 3, 4, 6 | ForEach-Object { Sid $_ }) -join ",")) "the targets are the fleet's rows that are not retired, and a retired one that still has unread mail - not a retired one with none"
-Check ($list.Count -eq 5 -and $list[0].role -ceq "warchief" -and $list[1].role -ceq "orc" -and $list[2].role -ceq "goblin" -and $list[3].role -ceq "unknown") "master is warchief, orchestrator is orc, session is goblin, and a word it does not know is unknown"
+Check ($list.Count -eq 5 -and $list[0].role -ceq "warchief" -and $list[1].role -ceq "orc" -and $list[2].role -ceq "warg" -and $list[3].role -ceq "unknown") "master is warchief, orchestrator is orc, session is warg, and a word it does not know is unknown"
 Check ($list.Count -eq 5 -and $list[0].label -ceq "M" -and $list[1].parent -ceq (Sid 1) -and $list[2].reachable -ceq "no" -and $list[4].reachable -ceq "unknown") "label, parent and reachable are carried as the fleet said them"
 $s1 = Get-HordeWakeState -Waker $w -Id (Sid 1)
 $s1full = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full

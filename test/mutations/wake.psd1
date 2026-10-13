@@ -63,9 +63,9 @@
         @{ Name = "two-sessions-are-a-fleet"
            Find = 'fleetSilentSessions = 3'
            Replace = 'fleetSilentSessions = 2' }
-        @{ Name = "silent-after-five-minutes"
-           Find = 'fleetSilentMinutes = 10'
-           Replace = 'fleetSilentMinutes = 5' }
+        @{ Name = "silence-found-only-after-the-cap-is-spent"
+           Find = 'fleetSilentMinutes = 5'
+           Replace = 'fleetSilentMinutes = 10' }
         @{ Name = "silent-without-waiting"
            Find = 'if ($quietSince -is [datetime] -and ($Now - $quietSince).TotalSeconds -ge $window -and $who.Count'
            Replace = 'if ($quietSince -is [datetime] -and $who.Count' }

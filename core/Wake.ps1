@@ -69,7 +69,14 @@ function Get-HordeWakeSettings {
         # THE FLEET IS SILENT when, for this many minutes, every nudge was answered woken and no
         # session took any mail - and at least fleetSilentSessions sessions were nudged in them
         # (Update-HordeWakeSilence).
-        fleetSilentMinutes = 10
+        # FIVE MINUTES, BECAUSE THE SILENCE MUST BE FOUND BEFORE THE CAP IS SPENT: a session asked as
+        # fast as the back-off allows is nudged at 0, 5, 20, 65, 200 and 500 s, and the sixth is the
+        # one after which it is given up on. At ten minutes the silence was found at 600 s, after a
+        # lone fast session had already been given up on at 500 (review of PR #220); at five it is
+        # found at 300 s, after the fifth nudge and before the sixth. test/test-wake.ps1 holds that
+        # order at these defaults, so changing this, the back-off or the cap so as to swap it fails.
+        # Where a waker SAYS a session is limited, that fact is used and this inference is not needed.
+        fleetSilentMinutes = 5
         fleetSilentSessions = 3
         # A session limited with no known end is knocked for once after this long, uncounted
         # (Get-HordeWakeHold, LIMITED WITH NO KNOWN END).

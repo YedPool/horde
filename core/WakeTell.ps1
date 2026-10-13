@@ -7,7 +7,7 @@
 #   fleet-read-failing  a reading of the fleet that has failed so many times in a row that it is permanent
 #   bad-mail            a session whose mailbox holds records nobody can read, seen on two passes running
 #   nudge-killed        a nudge the waker had to stop part-way, which may have left text in a session's box
-#   fleet-silent        every nudge answered woken for ten minutes and no session took any mail: a
+#   fleet-silent        every nudge answered woken for five minutes and no session took any mail: a
 #                       fleet that cannot answer (core/Wake.ps1, Update-HordeWakeSilence)
 #
 # A SENDER, NOT PART OF THE WATCHER'S RULES, exactly as the restore source is (core/RestoreSource.ps1):

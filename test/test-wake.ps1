@@ -485,6 +485,9 @@ Check ($readBack.state -ceq "known" -and $readBack.value.ledger.ContainsKey((Sid
 Write-Host ""
 Write-Host "--- a silent fleet: woken by everybody, taken by nobody, is a fleet that cannot answer ---" -ForegroundColor Cyan
 
+# THE TIMELINES BELOW ARE WRITTEN FOR A WINDOW OF TEN MINUTES, set here: they are about what counts as
+# silence, not about how long the window is. The default, and why it is five, has its own section.
+$ten = Get-HordeWakeSettings -Overrides @{ fleetSilentMinutes = 10 }
 function Knock { param([int]$N, [string]$Outcome = "woken", [string]$Kind = "nudge") return (New-HordeWakeEntry -At $t0 -Kind $Kind -Id (Sid $N) -Outcome $Outcome) }
 function Walk {
     # Passes every 30 s from -From to -To, one knock on each, round the sessions in -Who; returns
@@ -494,7 +497,7 @@ function Walk {
     $last = $null
     $i = 0
     for ($s = $From; $s -le $To; $s += 30) {
-        $last = Update-HordeWakeSilence -Seen $Seen -Entries @((Knock $Who[$i % $Who.Count])) -Mail $Mail -Now (At $s) -Settings $settings
+        $last = Update-HordeWakeSilence -Seen $Seen -Entries @((Knock $Who[$i % $Who.Count])) -Mail $Mail -Now (At $s) -Settings $ten
         $Seen = $last.seen; $i++
         foreach ($e in @($last.entries)) { [void]$all.Add($e) }
     }
@@ -503,40 +506,40 @@ function Walk {
 $unread = @{ (Sid 1) = (At -60); (Sid 2) = (At -60); (Sid 3) = (At -60) }
 $w = Walk -Seen $null -From 0 -To 570
 Check (@($w.entries).Count -eq 0 -and $w.last.silent -eq $false -and $w.last.declared -eq $false -and $w.seen.quietSince -eq (At 0)) "nine and a half minutes of nudges all answered woken, and no mail taken, is not yet a silent fleet"
-$d = Update-HordeWakeSilence -Seen $w.seen -Entries @() -Mail $unread -Now (At 600) -Settings $settings
+$d = Update-HordeWakeSilence -Seen $w.seen -Entries @() -Mail $unread -Now (At 600) -Settings $ten
 Check ($d.silent -and $d.declared -and @($d.entries).Count -eq 1 -and $d.entries[0].kind -ceq "fleet-silent" -and $d.entries[0].id -ceq "" -and "$($d.entries[0].reason)".StartsWith("for 10 minutes every nudge - 19, to 3 sessions - was answered woken, and no session took its mail")) "at ten minutes it is: one line, saying how many nudges, to how many sessions"
 Check ($null -ne $d.condition -and $d.condition.kind -ceq "fleet-silent" -and $d.condition.instance -ceq "2026-10-12T08:00:00.0000000Z" -and $d.moved -eq $false) "with a condition for the warchief, named by when the quiet began"
-$e = Update-HordeWakeSilence -Seen $d.seen -Entries @((Knock 1)) -Mail $unread -Now (At 900) -Settings $settings
+$e = Update-HordeWakeSilence -Seen $d.seen -Entries @((Knock 1)) -Mail $unread -Now (At 900) -Settings $ten
 Check ($e.silent -and -not $e.declared -and @($e.entries).Count -eq 0 -and $null -eq $e.condition) "while it lasts nothing more is said, and it is found silent once"
 $grown = @{ (Sid 1) = (At -60); (Sid 2) = (At -60); (Sid 3) = (At -60); (Sid 4) = (At 890) }
-$f = Update-HordeWakeSilence -Seen $e.seen -Entries @() -Mail $grown -Now (At 903) -Settings $settings
+$f = Update-HordeWakeSilence -Seen $e.seen -Entries @() -Mail $grown -Now (At 903) -Settings $ten
 Check ($f.silent -and -not $f.moved) "mail ARRIVING for a session is not a session answering: the fleet is still silent"
 $partial = @{ (Sid 1) = (At -60) }
-$g = Update-HordeWakeSilence -Seen $f.seen -Entries @() -Mail $partial -Now (At 906) -Settings $settings
+$g = Update-HordeWakeSilence -Seen $f.seen -Entries @() -Mail $partial -Now (At 906) -Settings $ten
 Check ($g.silent -and -not $g.moved -and $g.seen.mail.ContainsKey((Sid 2))) "nor is a pass that could not read a session: what it held is remembered"
 $took = @{ (Sid 1) = (At -60); (Sid 2) = $null; (Sid 3) = (At -60); (Sid 4) = (At 890) }
-$m = Update-HordeWakeSilence -Seen $g.seen -Entries @() -Mail $took -Now (At 909) -Settings $settings
+$m = Update-HordeWakeSilence -Seen $g.seen -Entries @() -Mail $took -Now (At 909) -Settings $ten
 Check (-not $m.silent -and $m.moved -and @($m.entries).Count -eq 1 -and $m.entries[0].kind -ceq "fleet-moving" -and $null -eq $m.seen.quietSince -and @($m.seen.nudges).Count -eq 0) "a session that takes its mail ends it: one fleet-moving line, and the count of quiet starts over"
 $next = @{ (Sid 1) = (At 950); (Sid 3) = (At -60); (Sid 4) = (At 890) }
-$m2 = Update-HordeWakeSilence -Seen $m.seen -Entries @() -Mail $next -Now (At 960) -Settings $settings
+$m2 = Update-HordeWakeSilence -Seen $m.seen -Entries @() -Mail $next -Now (At 960) -Settings $ten
 Check ($m2.moved -and @($m2.entries).Count -eq 0) "a session whose oldest unread mail became another took the first: that is movement too, and said only when the fleet had been called silent"
 # What is NOT a silent fleet.
 $two = Walk -Seen $null -From 0 -To 900 -Who @(1, 2)
 Check (@($two.entries).Count -eq 0 -and -not $two.last.silent) "two sessions that do not answer are two sessions: it takes three for a fleet"
 $busy = Walk -Seen $null -From 0 -To 300
-$b = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "busy")) -Mail $unread -Now (At 330) -Settings $settings
+$b = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "busy")) -Mail $unread -Now (At 330) -Settings $ten
 $after = Walk -Seen $b.seen -From 360 -To 900
 Check (@($after.entries).Count -eq 0 -and -not $after.last.silent) "one nudge answered busy is a session at work: with it in the last ten minutes the fleet is not silent"
 $later = Walk -Seen $after.seen -From 930 -To 960
 Check (@($later.entries | Where-Object { $_.kind -ceq "fleet-silent" }).Count -eq 1) "ten minutes after that busy answer, with only woken since, it is"
-$k = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "killed" "nudge-killed")) -Mail $unread -Now (At 330) -Settings $settings
+$k = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "killed" "nudge-killed")) -Mail $unread -Now (At 330) -Settings $ten
 Check (-not (Walk -Seen $k.seen -From 360 -To 900).last.silent) "a nudge that had to be killed is not a woken either"
 $mid = Walk -Seen $null -From 0 -To 300
-$mv = Update-HordeWakeSilence -Seen $mid.seen -Entries @() -Mail $took -Now (At 310) -Settings $settings
+$mv = Update-HordeWakeSilence -Seen $mid.seen -Entries @() -Mail $took -Now (At 310) -Settings $ten
 $rest = Walk -Seen $mv.seen -From 330 -To 900
 Check ($mv.moved -and @($mv.entries).Count -eq 0 -and -not $rest.last.silent) "mail taken half-way starts the ten minutes over: at ten minutes from the first nudge the fleet is not silent"
 Check ((Walk -Seen $rest.seen -From 930 -To 930).last.silent) "and at ten minutes from the first nudge after it, it is"
-$none = Update-HordeWakeSilence -Seen $null -Entries @() -Mail @{} -Now (At 0) -Settings $settings
+$none = Update-HordeWakeSilence -Seen $null -Entries @() -Mail @{} -Now (At 0) -Settings $ten
 Check (-not $none.silent -and -not $none.moved -and (Walk -Seen $none.seen -From 3600 -To 3600).last.silent -eq $false) "a watcher that has nudged nobody has no quiet to count from"
 # WHILE THE FLEET IS SILENT every nudge is a probe: the longest step, and never counted.
 Start-Case; Seat 1; Seat 2; Seat 3
@@ -557,6 +560,46 @@ Start-Case; Seat 1
 $null = Pass 0 -Using $one
 $script:ledger = Reset-HordeWakeLedgerAttempts -Ledger $script:ledger
 Check ((Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -ne $true -and $script:ledger[(Sid 1)].attempts -eq 0) "and a session already given up on is given its attempts back"
+
+Write-Host ""
+Write-Host "--- at the defaults, a silent fleet is found BEFORE anybody is given up on ---" -ForegroundColor Cyan
+
+function Drive {
+    # The watcher's own loop, as core/WakeRun.ps1 runs it, over sessions that answer woken and never take
+    # their mail: a pass every 3 s for -Seconds, session n's mail arriving at -Arrive[n-1]. Returns when
+    # the fleet was first found silent and when a session was first given up on (seconds, or $null).
+    param([int[]]$Arrive, $Using, [int]$Seconds = 1200)
+    Reset-HordeMemoryWaker
+    $ledger = @{}; $seen = $null; $silent = $false; $silentAt = $null; $gaveUpAt = $null; $seated = @{}
+    for ($t = 0; $t -le $Seconds; $t += 3) {
+        for ($n = 1; $n -le $Arrive.Count; $n++) { if (-not $seated.ContainsKey($n) -and $t -ge $Arrive[$n - 1]) { $seated[$n] = $true; Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At ($Arrive[$n - 1] - 60)) } }
+        Set-HordeMemoryWakerClock (At $t)
+        $r = Invoke-HordeWakePass -Waker $memory -Now (At $t) -Settings $Using -Ledger $ledger -Silent:$silent
+        $sil = Update-HordeWakeSilence -Seen $seen -Entries $r.entries -Mail $r.mail -Now (At $t) -Settings $Using
+        $ledger = $r.ledger
+        if ($sil.declared) { $ledger = Reset-HordeWakeLedgerAttempts -Ledger $ledger }
+        if ($sil.moved) { $ledger = Set-HordeWakeLedgerProbesDue -Ledger $ledger }
+        $seen = $sil.seen; $silent = $sil.silent
+        if ($null -eq $gaveUpAt -and @($r.entries | Where-Object { $_.kind -ceq "gave-up" }).Count -gt 0) { $gaveUpAt = $t }
+        if ($null -eq $silentAt -and @($sil.entries | Where-Object { $_.kind -ceq "fleet-silent" }).Count -gt 0) { $silentAt = $t }
+    }
+    Reset-HordeMemoryWaker
+    return [pscustomobject]@{ silentAt = $silentAt; gaveUpAt = $gaveUpAt }
+}
+# THE DEFAULTS, AS SHIPPED - not this suite's $settings, in case a case above ever changes them - and
+# the same with the silence switched off, to see when the cap alone would have given up.
+$shipped = Get-HordeWakeSettings
+$deaf = Get-HordeWakeSettings -Overrides @{ fleetSilentMinutes = 1000000 }
+foreach ($case in @(
+        @{ what = "one session asked as fast as the back-off allows, two more with mail a little later"; arrive = @(0, 100, 100) },
+        @{ what = "three sessions with mail from the start"; arrive = @(0, 0, 0) })) {
+    $with = Drive -Arrive $case.arrive -Using $shipped
+    $without = Drive -Arrive $case.arrive -Using $deaf
+    $said = "silent at " + $with.silentAt + " s, gave up at " + $with.gaveUpAt + " s; with the silence off, gave up at " + $without.gaveUpAt + " s"
+    Check ($null -ne $without.gaveUpAt -and $null -eq $without.silentAt) ("CONTROL, " + $case.what + ": with the silence off the cap does give up on a session (" + $said + ")")
+    Check ($null -ne $with.silentAt -and $null -ne $without.gaveUpAt -and $with.silentAt -lt $without.gaveUpAt) ($case.what + ": at the defaults the fleet is found silent strictly before the cap would have given up on anybody (" + $said + ")")
+    Check ($null -ne $with.silentAt -and $null -eq $with.gaveUpAt) ($case.what + ": and so nobody is given up on at all, in twenty minutes of a fleet that cannot answer")
+}
 
 Write-Host ""
 Write-Host "--- a fleet that cannot be read: a hiccup at first, permanent after ten failures in a row, said once ---" -ForegroundColor Cyan
