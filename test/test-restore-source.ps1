@@ -29,7 +29,9 @@ $pinned = Enter-HordeTestPinnedHome -Root $root
 # The in-process test messenger, and no other: what the poster posts through below, handed to it.
 . (Join-Path $root "messengers\memory\Messenger.ps1")
 
-$settings = Get-HordeRestoreSettings
+# THE SETTLE TIME IS SET TO 0 FOR THE TIMELINES BELOW, which are about who is mailed and under which id,
+# and say "at once" for it. The settle time itself, at its default, has a section of its own.
+$settings = Get-HordeRestoreSettings -Overrides @{ restoreSettleSeconds = 0 }
 $t0 = New-Object System.DateTime(2026, 10, 12, 8, 0, 0, [System.DateTimeKind]::Utc)
 
 function At { param([double]$Seconds) return $t0.AddSeconds($Seconds) }
@@ -230,6 +232,43 @@ $two = @(1, 2 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc";
 Check ((Get-HordeRestoreFinding -Sessions $two -Now $t0 -Settings $settings).state -ceq "absent") "two sessions that started together are fewer than a restore takes"
 $twoOfThree = @($two) + [pscustomobject]@{ id = (Sid 3); role = "orc"; parent = ""; startedAt = (At -90000); lastChangeAt = (At -80000); status = "idle"; firstSeenAt = ((At -90000)).AddHours(-1) }
 Check ((Get-HordeRestoreFinding -Sessions $twoOfThree -Now $t0 -Settings $settings).state -ceq "absent") "two of three together is a large share and still fewer than a restore takes"
+
+Write-Host ""
+Write-Host "--- the settle time: nobody is mailed for two minutes, so a person restarting sessions by hand can reach them ---" -ForegroundColor Cyan
+
+$byDefault = Get-HordeRestoreSettings
+Check ($byDefault.restoreSettleSeconds -eq 120 -and $byDefault.stallSeconds -eq 300) "the settle time is 120 s by default, and the stall notice's 300 s is as it was"
+# THE HAND RESTART: five long-lived sessions, three of them restarted by hand inside ten minutes.
+function New-ByHand {
+    param([hashtable]$MovedAfter = @{})
+    $rows = @()
+    foreach ($n in 1..5) {
+        $start = At (-90000 - $n * 7200)
+        $change = $start.AddSeconds(900)
+        if ($n -le 3) { $start = At ($n * 200); $change = $start.AddSeconds(3); if ($MovedAfter.ContainsKey($n)) { $change = $start.AddSeconds($MovedAfter[$n]) } }
+        $rows += [pscustomobject]@{ id = (Sid $n); role = "orc"; parent = ""; startedAt = $start; lastChangeAt = $change; status = "idle"; firstSeenAt = (At -200000) }
+    }
+    return $rows
+}
+$handEnd = 600
+$hand = Get-HordeRestoreFinding -Sessions (New-ByHand) -Now (At ($handEnd + 10)) -Settings $byDefault
+Check ($hand.state -ceq "known" -and @($hand.value.members).Count -eq 3 -and $hand.value.windowEnd -eq (At $handEnd)) "three long-lived sessions of five, restarted by hand within ten minutes, ARE a restore by the numbers"
+foreach ($after in @(0, 10, 119)) {
+    Check (@(Get-HordeResumePlan -Finding $hand -Now (At ($handEnd + $after)) -Settings $byDefault).Count -eq 0) ("" + $after + " s after the last of them started, nobody is mailed: the settle time has not passed")
+}
+$handLater = Get-HordeRestoreFinding -Sessions (New-ByHand) -Now (At ($handEnd + 120)) -Settings $byDefault
+$planHand = @(Get-HordeResumePlan -Finding $handLater -Now (At ($handEnd + 120)) -Settings $byDefault)
+Check ((@($planHand | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq (@(1, 2, 3 | ForEach-Object { Sid $_ }) -join ",") -and @($planHand | Where-Object { $_.kind -cne "resume" }).Count -eq 0) "at 120 s the orcs nobody came back to are mailed"
+$typedTo = Get-HordeRestoreFinding -Sessions (New-ByHand -MovedAfter @{ 1 = 420; 2 = 250; 3 = 45 }) -Now (At ($handEnd + 120)) -Settings $byDefault
+Check (@(Get-HordeResumePlan -Finding $typedTo -Now (At ($handEnd + 120)) -Settings $byDefault).Count -eq 0 -and @($typedTo.value.notMoved).Count -eq 0) "when the person typed to each of them inside the settle time, they read as moved and nobody is mailed, then or later"
+$oneLeft = Get-HordeRestoreFinding -Sessions (New-ByHand -MovedAfter @{ 1 = 420; 3 = 45 }) -Now (At ($handEnd + 130)) -Settings $byDefault
+$planOneLeft = @(Get-HordeResumePlan -Finding $oneLeft -Now (At ($handEnd + 130)) -Settings $byDefault)
+Check ($planOneLeft.Count -eq 1 -and $planOneLeft[0].to -ceq (Sid 2)) "and when one was left untouched, that one alone is mailed once the time is up"
+$quietHand = Get-HordeRestoreFinding -Sessions (New-ByHand) -Now (At ($handEnd + 300)) -Settings $byDefault
+Check (@(Get-HordeResumePlan -Finding $quietHand -Now (At ($handEnd + 299)) -Settings $byDefault | Where-Object { $_.kind -ceq "stall" }).Count -eq 0 -and @(Get-HordeResumePlan -Finding $quietHand -Now (At ($handEnd + 300)) -Settings $byDefault | Where-Object { $_.kind -ceq "stall" }).Count -eq 1) "the stall notice keeps its own time: not at 299 s, at 300 s, whatever the settle time is"
+$longSettle = Get-HordeRestoreSettings -Overrides @{ restoreSettleSeconds = 900 }
+$planLong = @(Get-HordeResumePlan -Finding $quietHand -Now (At ($handEnd + 300)) -Settings $longSettle)
+Check ((Kinds ([pscustomobject]@{ entries = $planLong })) -ceq "stall") "a settle time longer than the stall time holds back the resume mails and not the stall notice"
 
 Write-Host ""
 Write-Host "--- only a session with an earlier life can have been restored ---" -ForegroundColor Cyan

@@ -112,6 +112,12 @@
         @{ Name = "moved-session-told-to-resume"
            Find = 'if ($m.moved -cne "no") { continue }'
            Replace = '' }
+        @{ Name = "no-settle-time"
+           Find = 'if ($sinceEnd -lt $Settings.restoreSettleSeconds) { continue }'
+           Replace = '' }
+        @{ Name = "settle-time-of-a-minute"
+           Find = 'restoreSettleSeconds = 120'
+           Replace = 'restoreSettleSeconds = 60' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }

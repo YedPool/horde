@@ -70,6 +70,9 @@ function Get-HordeRestoreSettings {
         # A restored session has "moved" once its status changed this long after it started
         # (Get-HordeRestoreFinding, THREE ANSWERS, says where 30 comes from and what it cannot see).
         movedSeconds = 30
+        # No resume mail is planned until this long after the last session of the restore started
+        # (Get-HordeResumePlan, THE SETTLE TIME).
+        restoreSettleSeconds = 120
         # With no session moved this long after the last one started, the warchief is told.
         stallSeconds = 300
         # A restore older than this is history: nothing is planned for it any more.
@@ -225,8 +228,16 @@ function Test-HordeRestoreSame {
 function Get-HordeResumePlan {
     # The mails this pass should post for a restore, each { kind (resume or stall); to; messageId; body }.
     # -Finding is Get-HordeRestoreFinding's answer; anything but known plans nothing.
-    #   - EVERY ORC THAT HAS NOT MOVED (moved no), AT ONCE: an orc owns work and is the one that knows what of it
-    #     was in flight.
+    #   - EVERY ORC THAT HAS NOT MOVED (moved no), ONCE THE SETTLE TIME HAS PASSED: an orc owns work and
+    #     is the one that knows what of it was in flight.
+    #   - THE SETTLE TIME: nothing is mailed to resume until restoreSettleSeconds after the window's end.
+    #     The review of PR #208 raised a case nothing decided: a person restarts three long-lived
+    #     sessions by hand within ten minutes, out of five. By the numbers that IS a restore - three
+    #     sessions with an earlier life, 3 of 5, in one window - and it stays one: no count can tell a
+    #     hand from a crash. What differs is that the person is there, and about to type to each. So the
+    #     source waits two minutes before it mails anybody: a session its person talks to in that time
+    #     reads as moved and is sent nothing, and an orc nobody came back to is mailed once the time is up.
+    #     The stall notice does not wait on it: its time is stallSeconds, as before.
     #   - NOBODY ELSE, EVER. A subsession, and a session whose role nobody recorded, is never mailed by
     #     the restore source - not when its parent has moved, and not after a delay (the first version
     #     released them after 180 s). Measured 2026-10-13 on a live fleet: the ten sessions a shadow pass
@@ -249,6 +260,7 @@ function Get-HordeResumePlan {
     foreach ($m in @($f.members)) { if ($m.moved -ceq "yes") { $movedIds[$m.id] = $true } }
     $plan = New-Object System.Collections.ArrayList
     foreach ($m in @($f.members)) {
+        if ($sinceEnd -lt $Settings.restoreSettleSeconds) { continue }
         if ($m.moved -cne "no") { continue }
         if ($m.role -cne "orc") { continue }
         [void]$plan.Add([pscustomobject]@{ kind = "resume"; to = $m.id; messageId = (ConvertTo-HordeTextUuid -Text ("horde-wake-resume`n" + $f.restoreId + "`n" + $m.id.ToLowerInvariant())); body = "$($Settings.resumeText)" })
