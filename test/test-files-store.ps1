@@ -116,7 +116,12 @@ function Get-Hmac {
     $mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)
     try { return ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text))).Replace("-", "").ToLowerInvariant()) } finally { $mac.Dispose() }
 }
-function Write-Skip { param([string]$What) Write-Host ("  [SKIP] " + $What) -ForegroundColor Yellow }
+function Get-AsciiLowered {
+    # -Text with A to Z made a to z and nothing else touched: this suite's own, written another way
+    # than the code's (a pattern over the 26 letters, matched with their case), to check it against.
+    param([string]$Text)
+    return [regex]::Replace($Text, '[A-Z]', { param($found) [string][char]([int][char]$found.Value + 32) })
+}function Write-Skip { param([string]$What) Write-Host ("  [SKIP] " + $What) -ForegroundColor Yellow }
 
 $png = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
 $jpeg = [byte[]]@(0xFF, 0xD8, 0xFF, 0xE0)
@@ -677,7 +682,7 @@ $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.Security
 Check ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]) -eq $me) "the key file's owner is the current user"
 Check ($acl.AreAccessRulesProtected) "it inherits nothing from its folder"
 Check ($rules.Count -eq 1 -and $rules[0].IdentityReference -eq $me -and $rules[0].AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $rules[0].FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]::FullControl -and -not $rules[0].IsInherited) ("its access list is one entry: the current user, allowed (" + $acl.GetSecurityDescriptorSddlForm("Access") + ")")
-$idText = "horde-files-id.v1`nsession:session-a`n" + $keyDocReal.ToLowerInvariant()
+$idText = "horde-files-id.v1`nsession:session-a`n" + (Get-AsciiLowered $keyDocReal)
 Check ($k1.record.fileId -ceq (Get-Hmac -Key $keyBytes -Text $idText).Substring(0, 32)) "the file id is HMAC-SHA-256, under that key, of the session and the file's path: worked out again here, it is the same"
 Check ($k1.record.fileId -cne (Get-HordeFilesHex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($idText))).Substring(0, 32)) "CONTROL: and it is NOT the plain SHA-256 of them, which anyone holding the record could try paths against"
 $k2 = Invoke-Share -TestHome $h -Path $keyDoc
@@ -802,6 +807,35 @@ Set-Item -Path function:Test-HordeFilesStoreHasRecord -Value $script:realHasReco
 Check ($lateKey.ok -and [System.BitConverter]::ToString($lateKey.key) -ceq [System.BitConverter]::ToString([System.IO.File]::ReadAllBytes((Get-HordeFilesKeyPath -HordeHome $hLate)))) "a key another first share made between this share's two looks is the key it uses: it is not refused as missing"
 $twoKeys = @((Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "s" }) -FullPath "C:\x\a.md" -Key $anyKey), (Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "s" }) -FullPath "C:\x\a.md" -Key ([byte[]](2..33))), (Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "s" }) -FullPath "C:\X\A.MD" -Key $anyKey))
 Check ($twoKeys[0] -cne $twoKeys[1] -and $twoKeys[0] -ceq $twoKeys[2] -and $twoKeys[0] -cmatch '\A[0-9a-f]{32}\z') "one session and path under two keys are two ids; under one key, in any case, one id of 32 hex digits"
+Write-Host ""
+Write-Host "--- the path in a file id: A to Z folded by the code's own hand, every other character as it is ---" -ForegroundColor Cyan
+# AN ID IS PERMANENT, so what goes into it may not depend on the runtime's case table. Measured
+# 2026-10-13 on one machine: ToLowerInvariant leaves U+1E9E, U+2126 and U+A7AE as they are under
+# Windows PowerShell 5.1 and changes all three under PowerShell 7.6 (to U+00DF, U+03C9, U+026A).
+$printable = -join (32..126 | ForEach-Object { [char]$_ })
+Check ((Get-HordeFilesAsciiLower -Text $printable) -ceq ' !"#$%&''()*+,-./0123456789:;<=>?@abcdefghijklmnopqrstuvwxyz[\]^_`abcdefghijklmnopqrstuvwxyz{|}~') "of the 95 printable ASCII characters, exactly the 26 capitals are changed: @ before A and [ after Z are as they were"
+Check ((Get-HordeFilesAsciiLower -Text "") -ceq "") "nothing folded is nothing"
+# Capitals outside A to Z, each with a lower case in some runtime's table: the three of the review,
+# then E acute, I with a dot, the Kelvin sign (whose lower case is the ASCII k), a full-width A,
+# and a Greek and a Cyrillic capital.
+$capitals = @(0x1E9E, 0x2126, 0xA7AE, 0x00C9, 0x0130, 0x212A, 0xFF21, 0x0391, 0x0410)
+$kept = @(foreach ($code in $capitals) { [int][char](Get-HordeFilesAsciiLower -Text ([string][char]$code)) })
+Check (($kept -join ",") -ceq ($capitals -join ",")) ("a capital that is not one of A to Z is left as it is: " + (($kept | ForEach-Object { "U+{0:X4}" -f $_ }) -join " "))
+$idSession = [ordered]@{ known = $true; id = "s" }
+$oddFolder = "" + [char]0x1E9E + [char]0x2126 + [char]0xA7AE + [char]0x00C9
+$pinned = Get-HordeFilesId -Session $idSession -FullPath ("C:\Dir\" + $oddFolder + "\FILE Z.md") -Key $anyKey
+# THE PIN. Worked out once, outside this code and with no fold at all: HMAC-SHA-256 under the key
+# 1 to 32 of "horde-files-id.v1", "session:s" and c:\dir\<those four characters>\file z.md, each
+# on a line of its own. A change to what goes into an id, in any runtime, makes this another number.
+Check ($pinned -ceq "94a3e0ff96bf036b03a8068086f339a2") ("the id of a fixed key, session and path is the number it has always been (" + $pinned + ")")
+Check ((Get-HordeFilesId -Session $idSession -FullPath ("c:\DIR\" + $oddFolder + "\file z.MD") -Key $anyKey) -ceq $pinned) "and the same path with its A to Z in another case is the same file"
+# E acute is the one of the four that Windows PowerShell 5.1's own table changes, so it is the one
+# that can see that table come back in the runtime this suite is run under.
+foreach ($pair in @(@(0x1E9E, 0x00DF), @(0x2126, 0x03C9), @(0xA7AE, 0x026A), @(0x00C9, 0x00E9))) {
+    $asWritten = Get-HordeFilesId -Session $idSession -FullPath ("C:\x\" + [char]$pair[0] + ".md") -Key $anyKey
+    $asATableLowersIt = Get-HordeFilesId -Session $idSession -FullPath ("C:\x\" + [char]$pair[1] + ".md") -Key $anyKey
+    Check ($asWritten -cne $asATableLowersIt) ("a path holding U+{0:X4} is not the file of the path holding U+{1:X4}, which a case table makes of it" -f $pair[0], $pair[1])
+}
 
 Write-Host ""
 Write-Host "--- one file has one id, however it is named: the path is the open handle's ---" -ForegroundColor Cyan

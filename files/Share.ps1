@@ -165,17 +165,37 @@ function Get-HordeFilesHex {
     try { return ([System.BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace("-", "").ToLowerInvariant()) } finally { $sha.Dispose() }
 }
 
+function Get-HordeFilesAsciiLower {
+    # -Text with the 26 letters A to Z made a to z, and EVERY OTHER CHARACTER AS IT IS. Written out
+    # here, with no case table of the runtime's: a table differs between runtimes and changes with
+    # them. Measured 2026-10-13 on one machine, ToLowerInvariant of U+1E9E, U+2126 and U+A7AE: each
+    # is left as it is by Windows PowerShell 5.1 and changed by PowerShell 7.6, so one path had one
+    # file id under the first and another under the second (review of the files store).
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $folded = New-Object System.Text.StringBuilder $Text.Length
+    foreach ($character in $Text.ToCharArray()) {
+        $code = [int]$character
+        if ($code -ge 65 -and $code -le 90) { $code += 32 }
+        [void]$folded.Append([char]$code)
+    }
+    return $folded.ToString()
+}
+
 function Get-HordeFilesId {
     # The id of the file a session shares from a path: the header says why it is a digest, and why a
-    # keyed one. -FullPath is the open handle's own path (files/Path.ps1), compared as Windows
-    # compares it, without case. -Key is this machine's (files/Key.ps1). The first line of the text
-    # makes this digest this file's own.
+    # keyed one. -FullPath is the open handle's own path (files/Path.ps1). -Key is this machine's
+    # (files/Key.ps1). The first line of the text makes this digest this file's own.
+    # WHAT GOES IN NEVER DEPENDS ON THE RUNTIME: an id is permanent, so the same path must give the
+    # same bytes under every runtime and after every update of one. Only A to Z are folded
+    # (Get-HordeFilesAsciiLower), so that a drive letter or a folder written in another case is no
+    # other file; the handle's path already has every name as the disk holds it, in any alphabet.
+    # KNOWN COST: a file renamed to another case of a letter outside A to Z is another file.
     param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$FullPath, [Parameter(Mandatory = $true)][byte[]]$Key)
     $who = "no-session"
     if ($Session.known) { $who = "session:" + $Session.id }
-    $text = "horde-files-id.v1`n" + $who + "`n" + $FullPath.ToLowerInvariant()
+    $text = "horde-files-id.v1`n" + $who + "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)
     $mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)
-    try { return ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", "").ToLowerInvariant().Substring(0, 32)) } finally { $mac.Dispose() }
+    try { return ((Get-HordeFilesAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32)) } finally { $mac.Dispose() }
 }
 
 function Add-HordeFilesShare {

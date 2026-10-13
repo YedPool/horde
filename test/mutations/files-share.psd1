@@ -112,8 +112,8 @@
            Find = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)'
            Replace = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, ([byte[]](1..32)))' }
         @{ Name = "id-in-capitals"
-           Find = '.Replace("-", "").ToLowerInvariant().Substring(0, 32)) } finally { $mac.Dispose() }'
-           Replace = '.Replace("-", "").Substring(0, 32)) } finally { $mac.Dispose() }' }
+           Find = 'return ((Get-HordeFilesAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32))'
+           Replace = 'return (([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", "")).Substring(0, 32))' }
         # --- a file whose versions are used up ---
         @{ Name = "used-up-file-keeps-its-bytes-before-it-is-refused"
            Find = 'if ((Get-HordeFilesStoreLastVersion -Root $store -FileId $fileId) -ge $lastVersion) { return (& $refuse $usedUp) }'
@@ -187,11 +187,34 @@
            Find = '$sha = [System.Security.Cryptography.SHA256]::Create()'
            Replace = '$sha = [System.Security.Cryptography.SHA384]::Create()' }
         @{ Name = "path-case-makes-another-file"
-           Find = '+ "`n" + $FullPath.ToLowerInvariant()'
+           Find = '+ "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)'
            Replace = '+ "`n" + $FullPath' }
         @{ Name = "every-path-is-one-file"
-           Find = '+ "`n" + $FullPath.ToLowerInvariant()'
+           Find = '+ "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)'
            Replace = '' }
+        # The path is folded by the code's own hand, A to Z and nothing else: an id is permanent, and
+        # a runtime's case table is not. The first of these is the defect the review found.
+        @{ Name = "path-folded-by-the-runtimes-case-table-again"
+           Find = '+ "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)'
+           Replace = '+ "`n" + $FullPath.ToLowerInvariant()' }
+        @{ Name = "own-fold-hands-over-to-the-runtimes-case-table"
+           Find = '    return $folded.ToString()'
+           Replace = '    return $Text.ToLowerInvariant()' }
+        @{ Name = "capital-a-not-folded"
+           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
+           Replace = 'if ($code -ge 66 -and $code -le 90) { $code += 32 }' }
+        @{ Name = "capital-z-not-folded"
+           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
+           Replace = 'if ($code -ge 65 -and $code -le 89) { $code += 32 }' }
+        @{ Name = "character-before-a-folded"
+           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
+           Replace = 'if ($code -ge 64 -and $code -le 90) { $code += 32 }' }
+        @{ Name = "characters-after-z-folded"
+           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
+           Replace = 'if ($code -ge 65 -and $code -le 96) { $code += 32 }' }
+        @{ Name = "every-capital-letter-of-every-alphabet-folded"
+           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
+           Replace = 'if ([char]::IsUpper($character)) { $code = [int][char]::ToLowerInvariant($character) }' }
         @{ Name = "every-session-is-one-sharer"
            Find = 'if ($Session.known) { $who = "session:" + $Session.id }'
            Replace = 'if ($Session.known) { $who = "session:" }' }
