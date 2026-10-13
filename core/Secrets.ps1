@@ -76,6 +76,30 @@ $script:HordeSecretRunBits = 4.0
 $script:HordeSecretSlashRunPattern = '(?<![A-Za-z0-9+/=_.-])[A-Za-z0-9+/]{40,}(?![A-Za-z0-9+/_.-])'
 $script:HordeSecretSlashRunBits = 4.35
 $script:HordeSecretRunKind = "a long random-looking string, as a key or token is"
+# A SECRET UNDER ITS OWN NAME, LOOKED FOR ONLY WHEN A CALLER NAMES THIS KIND (review of the files deny
+# list, 2026-10-13). It is not in the list above, so no caller that names no kind looks for it, and
+# the redact mode does not know it: test/test-secrets.ps1 pins both. Why it exists: measured that
+# day, a client file as an identity provider issues it ({"client_secret":"..."}) fired no kind a
+# share asks for, and client_secret=VALUE fired none at all, because the word boundary of the
+# name=value kind above does not break at an underscore. That kind is left as it is: other callers
+# rely on it.
+#   THE NAME is one of six, in any case of A to Z, and is the WHOLE name: a letter, a digit or an
+#   underscore on either side makes it another name (my_api_key_name, DB_PASSWORD are not found).
+#   TWO SPELLINGS. As a member: the name in quotes of either kind, a colon with any white space
+#   round it, line breaks too, and the value in quotes. As name=value: an equals sign with blanks or
+#   tabs round it and never a line break - an empty value must not take the next line's first word
+#   for its own - and the value bare or in quotes. A name with no quotes before a colon is NOT
+#   looked for: "password: required" is what a page that explains a setting says.
+#   THE VALUE is 8 or more characters with no white space in it. A number, null, true or an object
+#   is no value here: a schema that describes the member is not the secret.
+#   A PLACEHOLDER IS NOT A VALUE: one holding an angle bracket, a dollar sign, an open brace or
+#   three dots, or one of the words your, xxx, example, changeme, redacted in any case, anywhere in
+#   it. So a shell line that reads the value from a variable is not found, and neither is a real
+#   secret that happens to hold one of those: the cost of not refusing every page of documentation.
+$script:HordeSecretNamedKind = "a secret written under a name such as client_secret or password"
+$script:HordeSecretNamedNames = 'client_secret|private_key|refresh_token|access_token|api_key|password'
+$script:HordeSecretNamedPattern = '(?<q>["''])(?<name>(?i:' + $script:HordeSecretNamedNames + '))\k<q>\s*:\s*(?<v>["''])(?<value>(?:\\.|(?!\k<v>)[^\\\s]){8,})\k<v>|(?<![A-Za-z0-9_])(?<name>(?i:' + $script:HordeSecretNamedNames + '))[ \t]*=[ \t]*(?:(?<w>["''])(?<value>(?:(?!\k<w>)\S){8,})\k<w>|(?<value>[^\s"''=]\S{7,}))'
+$script:HordeSecretNamedPlaceholder = '[<>${]|\.\.\.|(?i:your|xxx|example|changeme|redacted)'
 # THE MARKER a hidden secret leaves. Its own characters match no pattern above (test/test-secrets.ps1
 # redacts a redacted text and requires no change), so redacting twice is redacting once.
 $script:HordeSecretMark = "<redacted>"
@@ -108,6 +132,18 @@ function Test-HordeSecretSlashRun {
     return ($Piece.Contains("/") -and $Piece -cmatch '[A-Z]' -and $Piece -cmatch '[a-z]' -and $Piece -cmatch '[0-9]' -and (Get-HordeTextBits -Text $Piece) -ge $script:HordeSecretSlashRunBits)
 }
 
+function Test-HordeSecretNamed {
+    # Does this text hold a secret under one of the six names (the header of that kind has the
+    # rule)? Every match is looked at until one has a value that is no placeholder. The fold is
+    # the invariant one, so a machine's language does not change which names are found.
+    param([string]$Text)
+    $invariant = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    foreach ($m in [regex]::Matches($Text, $script:HordeSecretNamedPattern, $invariant)) {
+        if (-not [regex]::IsMatch($m.Groups["value"].Value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }
+    }
+    return $false
+}
+
 function Find-HordeSecretKind {
     # What kind of secret a text looks like it holds, as words for a finding, or "" for none.
     # -Kinds NAMES WHICH KINDS ARE LOOKED FOR, by the words this function answers with; left out,
@@ -115,15 +151,18 @@ function Find-HordeSecretKind {
     # list, 2026-10-13). A caller that judges whole FILES asks only for the kinds that know a
     # credential by its shape: the two long-run looks below fire on ordinary reports. A name that
     # is no kind THROWS: misspelt, it would look for nothing and answer "no secret".
+    # ONE KIND IS LOOKED FOR ONLY WHEN IT IS NAMED, and so never by "every kind": a secret under
+    # its own name ($script:HordeSecretNamedKind says why).
     param([string]$Text, [string[]]$Kinds = @())
     $asked = @($Kinds)
     foreach ($kindName in $asked) {
-        if (@($script:HordeSecretKinds.Keys) -cnotcontains $kindName -and $kindName -cne $script:HordeSecretRunKind) { throw ("'" + $kindName + "' is not a kind of secret core/Secrets.ps1 looks for") }
+        if (@($script:HordeSecretKinds.Keys) -cnotcontains $kindName -and $kindName -cne $script:HordeSecretRunKind -and $kindName -cne $script:HordeSecretNamedKind) { throw ("'" + $kindName + "' is not a kind of secret core/Secrets.ps1 looks for") }
     }
     foreach ($name in $script:HordeSecretKinds.Keys) {
         if ($asked.Count -gt 0 -and $asked -cnotcontains $name) { continue }
         if ([regex]::IsMatch($Text, $script:HordeSecretKinds[$name])) { return $name }
     }
+    if ($asked -ccontains $script:HordeSecretNamedKind -and (Test-HordeSecretNamed -Text $Text)) { return $script:HordeSecretNamedKind }
     if ($asked.Count -gt 0 -and $asked -cnotcontains $script:HordeSecretRunKind) { return "" }
     foreach ($m in [regex]::Matches($Text, $script:HordeSecretRunPattern)) {
         if (Test-HordeSecretRun -Run $m.Value) { return $script:HordeSecretRunKind }

@@ -161,4 +161,102 @@ $allKinds = @("a private key", "an access token", "a signed web token", "a beare
 $differ = @($all | Where-Object { (Find-HordeSecretKind -Text $_ -Kinds $allKinds) -cne (Find-HordeSecretKind -Text $_) })
 Check ($differ.Count -eq 0) ("asked for all eleven kinds by name, every planted and ordinary text answers as it does asked for none (" + $differ.Count + " of " + $all.Count + " differ)")
 
+Write-Host ""
+Write-Host "--- a secret under its own name: found only when that kind is named, and every other caller is as before ---" -ForegroundColor Cyan
+# THE ONE KIND THAT IS LOOKED FOR ONLY WHEN A CALLER NAMES IT (review of the files deny list,
+# 2026-10-13). Two things are held here: that no caller who names no kind, and no caller who names
+# other kinds, finds anything it did not find before; and the rule itself, attacked from both
+# sides. Every name and every value is assembled from pieces, and no value was ever a credential.
+$namedKind = "a secret written under a name such as client_secret or password"
+$made = "Ab3dEf6h" + "Ij9kLm2n"
+$six = @(("client_" + "secret"), ("private_" + "key"), ("refresh_" + "token"), ("access_" + "token"), ("api_" + "key"), ("pass" + "word"))
+function Test-Named { param([string]$Text) return ((Get-KindOrThrew -Text $Text -Kinds @($namedKind)) -ceq $namedKind) }
+function Get-Member { param([string]$Name, [string]$Value) return ('{"' + $Name + '":"' + $Value + '"}') }
+$defaultKinds = (@($script:HordeSecretKinds.Keys) -join " | ")
+Check ($defaultKinds -ceq "a private key | an access token | a signed web token | a bearer token | a password or key written as name=value | a password written after a colon | a password written in a sentence | a password inside an address | a webhook address | an authorization value") ("THE DEFAULT SET IS WHAT IT WAS: the ten kinds every caller is answered from, in their order (" + @($script:HordeSecretKinds.Keys).Count + ")")
+Check (@($script:HordeSecretKinds.Keys) -cnotcontains $namedKind -and $allKinds -cnotcontains $namedKind -and $allKinds.Count -eq 11) "and the new kind is none of them, nor one of the eleven that 'every kind' means"
+$onlyNamed = @((Get-Member $six[0] $made), ($six[0] + "=" + $made), ("{'" + $six[2] + "': '" + $made + "'}"))
+foreach ($text in $onlyNamed) {
+    Check (Test-Named $text) ("asked for by its name, a " + $text.Length + "-character text holding a secret under its own name answers that kind")
+    Check ((Find-HordeSecretKind -Text $text) -ceq "" -and (Find-HordeSecretKind -Text $text -Kinds @()) -ceq "") "and the same text, asked with no kind named or an empty list, answers NOTHING, as it did before the kind was added"
+    Check ((Find-HordeSecretKind -Text $text -Kinds $allKinds) -ceq "" -and (Find-HordeSecretKind -Text $text -Kinds @("an access token", "a private key")) -ceq "") "nor does a caller who names other kinds find it, all eleven of them or two"
+    $kept = Protect-HordeSecretText -Text $text
+    Check ($kept.text -ceq $text -and $kept.count -eq 0) "and the redact mode does not know the kind: the text comes back whole, count 0"
+}
+Check ((Find-HordeSecretKind -Text ("see " + $planted["an access token"][0] + " and " + (Get-Member $six[4] $made)) -Kinds @($namedKind, "an access token")) -ceq "an access token") "of the new kind and a listed one, both asked for and both held, the listed one answers first"
+$differ = @($all | Where-Object { (Find-HordeSecretKind -Text $_ -Kinds ($allKinds + @($namedKind))) -cne (Find-HordeSecretKind -Text $_) -and (Find-HordeSecretKind -Text $_) -cne "" })
+Check ($differ.Count -eq 0) ("every planted text that held a kind before still answers that kind when the new one is asked for beside the eleven (" + $differ.Count + " differ)")
+$missed = @($six | Where-Object { -not (Test-Named (Get-Member $_ $made)) })
+Check ($six.Count -eq 6 -and $missed.Count -eq 0) ("each of the six names is found as a JSON member" + $(if ($missed.Count) { " (MISSED: " + ($missed -join ", ") + ")" } else { "" }))
+$missed = @($six | Where-Object { -not (Test-Named ("setting " + $_ + "=" + $made + " in the file")) })
+Check ($missed.Count -eq 0) ("and each as name=value" + $(if ($missed.Count) { " (MISSED: " + ($missed -join ", ") + ")" } else { "" }))
+$nl = "`r`n"
+$kelvin = "api_" + [char]0x212A + "ey"
+$attacks = @(
+    # --- the member with a colon ---
+    @{ found = $true; what = "the member name in capitals"; text = (Get-Member $six[4].ToUpperInvariant() $made) },
+    @{ found = $true; what = "the member name in mixed case"; text = (Get-Member ("Client_" + "Secret") $made) },
+    @{ found = $true; what = "blanks round the colon"; text = ('{"' + $six[4] + '" : "' + $made + '"}') },
+    @{ found = $true; what = "line breaks round the colon, as a file written out over several lines has"; text = ('{' + $nl + '    "' + $six[4] + '"' + $nl + '    :' + $nl + '    "' + $made + '"' + $nl + '}') },
+    @{ found = $true; what = "single quotes round the name and the value"; text = ("{'" + $six[4] + "': '" + $made + "'}") },
+    @{ found = $true; what = "the name in double quotes and the value in single"; text = ('{"' + $six[4] + '": ' + "'" + $made + "'}") },
+    @{ found = $true; what = "the name nested deep"; text = ('{"a":{"b":[{"c":{"d":{"' + $six[2] + '":"' + $made + '"}}}]}}') },
+    @{ found = $true; what = "a value with escaped quotes inside"; text = ('{"' + $six[5] + '":"Ab3d\"Ef6h\"Ij9k"}') },
+    @{ found = $true; what = "a value of exactly 8 characters"; text = (Get-Member $six[5] "Ab3dEf6h") },
+    @{ found = $true; what = "a placeholder first and a real value after it: every match is looked at"; text = ('{"' + $six[5] + '":"<paste-it-here>","' + $six[4] + '":"' + $made + '"}') },
+    @{ found = $false; what = "a value of 7 characters"; text = (Get-Member $six[5] "Ab3dEf6") },
+    @{ found = $false; what = "an empty value"; text = (Get-Member $six[5] "") },
+    @{ found = $false; what = "a value that holds white space"; text = (Get-Member $six[5] "correct horse battery staple") },
+    @{ found = $false; what = "the name as a VALUE and not as a name"; text = ('{"kind":"' + $six[0] + '","grant_type":"' + $six[2] + '","next":"' + $made + '"}') },
+    @{ found = $false; what = "a value that is a number"; text = ('{"' + $six[5] + '":1234567890123}') },
+    @{ found = $false; what = "a value that is null"; text = ('{"' + $six[3] + '":null}') },
+    @{ found = $false; what = "a value that is true"; text = ('{"' + $six[4] + '":true}') },
+    @{ found = $false; what = "a value that is an OBJECT, as a schema describes the member"; text = ('{"properties":{"' + $six[0] + '":{"type":"string","description":"whatever-the-provider-issued"}}}') },
+    @{ found = $false; what = "KNOWN LIMIT: a value that is a list holding the secret"; text = ('{"' + $six[3] + '":["' + $made + '"]}') },
+    @{ found = $false; what = "the name at the end of a longer member name"; text = (Get-Member ("my_" + $six[4]) $made) },
+    @{ found = $false; what = "the name at the start of a longer member name"; text = (Get-Member ($six[4] + "_id") $made) },
+    @{ found = $false; what = "a look-alike letter in the name (U+212A for k)"; text = (Get-Member $kelvin $made) },
+    @{ found = $false; what = "KNOWN LIMIT: the name with no quotes before a colon, as YAML writes it"; text = ($six[5] + ": " + $made) },
+    @{ found = $false; what = "KNOWN LIMIT: JSON written inside a JSON string, its quotes escaped"; text = ('{"body":"{\"' + $six[5] + '\":\"' + $made + '\"}"}') },
+    # --- each placeholder form, in a member ---
+    @{ found = $false; what = "a placeholder in angle brackets"; text = (Get-Member $six[4] "<paste-it-here>") },
+    @{ found = $false; what = "a placeholder that only closes an angle bracket"; text = (Get-Member $six[4] "paste-it-here>") },
+    @{ found = $false; what = "a placeholder with a dollar sign"; text = (Get-Member $six[4] '$THE_VALUE_HERE') },
+    @{ found = $false; what = "a placeholder in braces"; text = (Get-Member $six[4] "{{the_value_here}}") },
+    @{ found = $false; what = "a placeholder with three dots"; text = (Get-Member $six[4] "Ab3dEf6h...Ij9k") },
+    @{ found = $false; what = "a placeholder holding the word your"; text = (Get-Member $six[4] "put-YOUR-value-here") },
+    @{ found = $false; what = "a placeholder that is all x"; text = (Get-Member $six[4] "xxxxxxxxxxxx") },
+    @{ found = $false; what = "a placeholder that is all X"; text = (Get-Member $six[4] "XXXXXXXXXXXX") },
+    @{ found = $false; what = "a placeholder holding the word example"; text = (Get-Member $six[4] "an-Example-value") },
+    @{ found = $false; what = "a placeholder holding the word changeme"; text = (Get-Member $six[4] "ChangeMe-please") },
+    @{ found = $false; what = "a placeholder holding the word redacted"; text = (Get-Member $six[4] "[REDACTED]-value") },
+    @{ found = $false; what = "a placeholder word with real text round it: the word anywhere in the value makes it one"; text = (Get-Member $six[4] ("Ab3dEf6h-CHANGEME-" + "Ij9kLm2n")) },
+    # --- name=value ---
+    @{ found = $true; what = "name=value in capitals"; text = ($six[4].ToUpperInvariant() + "=" + $made) },
+    @{ found = $true; what = "blanks round the equals sign"; text = ($six[4] + " = " + $made) },
+    @{ found = $true; what = "a tab before the value"; text = ($six[4] + "=`t" + $made) },
+    @{ found = $true; what = "double quotes round the value"; text = ($six[4] + ' = "' + $made + '"') },
+    @{ found = $true; what = "single quotes round the value"; text = ($six[4] + "='" + $made + "'") },
+    @{ found = $true; what = "export in front"; text = ("export " + $six[4].ToUpperInvariant() + "=" + $made) },
+    @{ found = $true; what = "the name in an address, after a question mark"; text = ("https://example.org/callback?" + $six[3] + "=" + $made + "&state=1") },
+    @{ found = $true; what = "the name after a dot, as a properties file writes it"; text = ("db." + $six[5] + "=" + $made) },
+    @{ found = $true; what = "the name after two dashes, as a command line writes it"; text = ("tool --" + $six[5] + "=" + $made) },
+    @{ found = $true; what = "a bare value of exactly 8 characters"; text = ($six[5] + "=Ab3dEf6h") },
+    @{ found = $true; what = "KNOWN COST: code that gives the name a value from an expression"; text = ($six[5] + ' = os.environ["THE_NAME_OF_IT"]') },
+    @{ found = $false; what = "a bare value of 7 characters"; text = ($six[5] + "=Ab3dEf6 and more words") },
+    @{ found = $false; what = "a quoted value of 7 characters"; text = ($six[5] + '="Ab3dEf6"') },
+    @{ found = $false; what = "a quoted value that holds a blank"; text = ($six[5] + ' = "two words here"') },
+    @{ found = $false; what = "the name as part of a longer name"; text = ("my_" + $six[4] + "_name=" + $made) },
+    @{ found = $false; what = "KNOWN LIMIT: the name at the end of a longer name"; text = ("DB_" + $six[5].ToUpperInvariant() + "=" + $made) },
+    @{ found = $false; what = "the name at the start of a longer name"; text = ($six[5] + "_hash=" + $made) },
+    @{ found = $false; what = "KNOWN LIMIT: the name written without its underscore"; text = ("apikey=" + $made) },
+    @{ found = $false; what = "a shell line that reads the value from a variable"; text = ($six[5] + '=$DB_PASS_VALUE') },
+    @{ found = $false; what = "a shell line that reads it from a variable in braces and quotes"; text = ($six[4] + '="${THE_KEY_VALUE}"') },
+    @{ found = $false; what = "a shell line that reads it from a command"; text = ($six[5] + '=$(cat /run/the-file-it-is-in)') },
+    @{ found = $false; what = "an empty value with another setting on the next line: the value never comes from the next line"; text = ($six[4] + "=" + $nl + "another_setting=" + $made) },
+    @{ found = $false; what = "a comparison with two equals signs"; text = ("if (" + $six[4] + "==" + $made + ")") },
+    @{ found = $false; what = "a placeholder in angle brackets after the equals sign"; text = ($six[4] + "=<paste-it-here>") },
+    @{ found = $false; what = "a placeholder holding the word your after the equals sign"; text = ("export " + $six[4].ToUpperInvariant() + "=your-value-goes-here") })
+foreach ($a in $attacks) { Check ((Test-Named $a.text) -eq $a.found) ($(if ($a.found) { "FOUND: " } else { "not found: " }) + $a.what) }
+Check (@($attacks | Where-Object { $_.found }).Count -ge 20 -and @($attacks | Where-Object { -not $_.found }).Count -ge 35) ("the rule was attacked from both sides: " + @($attacks | Where-Object { $_.found }).Count + " texts that must be found and " + @($attacks | Where-Object { -not $_.found }).Count + " that must not")
 Complete-HordeSuite -Success "every secret shape is found and hidden whole, near misses stay, and decisions reads the one list"
