@@ -30,6 +30,7 @@ function Get-HordeCommandGroups {
         relay = "the founder's phone, through the relay"
         wake = "waking the sessions that have mail"
         services = "long-lived pieces kept running and current"
+        files = "files shared for the founder to read"
     }
 }
 
