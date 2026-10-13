@@ -34,9 +34,11 @@ Write-Host "--- the alias table ---" -ForegroundColor Cyan
 
 Check ((RoleOf (Resolve-HordeRole -Raw "master" -Table $table)) -eq "warchief" -and
        (RoleOf (Resolve-HordeRole -Raw "orchestrator" -Table $table)) -eq "orc" -and
-       (RoleOf (Resolve-HordeRole -Raw "session" -Table $table)) -eq "goblin") "each wezfleet role reads as its horde role"
+       (RoleOf (Resolve-HordeRole -Raw "session" -Table $table)) -eq "warg") "each wezfleet role reads as its horde role"
 Check ((RoleOf (Resolve-HordeRole -Raw "warchief" -Table $table)) -eq "warchief" -and
-       (RoleOf (Resolve-HordeRole -Raw "goblin" -Table $table)) -eq "goblin") "a native horde role reads as itself"
+       (RoleOf (Resolve-HordeRole -Raw "warg" -Table $table)) -eq "warg") "a native horde role reads as itself"
+$old = Resolve-HordeRole -Raw "goblin" -Table $table
+Check ((RoleOf $old) -eq "warg" -and $old.raw -eq "goblin" -and $old.field -eq "present" -and $table.native -notcontains "goblin") "a role stored before the goblin-to-warg rename reads as warg, keeps its raw word, and is not native"
 Check ((RoleOf (Resolve-HordeRole -Raw "MASTER" -Table $table)) -eq "warchief" -and
        (RoleOf (Resolve-HordeRole -Raw "Orchestrator" -Table $table)) -eq "orc") "role matching ignores case as wezfleet does"
 $padded = Resolve-HordeRole -Raw " master" -Table $table
@@ -151,7 +153,7 @@ try {
     # wezfleet skips a record whose claudeSessionId disagrees with its file name (lib/Registry.ps1:122).
     # Horde skips it too, but says so: a silently dropped record is how a master goes missing.
     Check (@($read.mismatched | Where-Object { $_ -like "*wrong-name.json" }).Count -eq 1) "a record whose id does not match its file name is listed, not silently skipped"
-    Check ($byId["n1"].role.state -eq "unknown" -and $byId["n1"].field -eq "missing") "and a record with no role reads as unknown, not goblin"
+    Check ($byId["n1"].role.state -eq "unknown" -and $byId["n1"].field -eq "missing") "and a record with no role reads as unknown, not warg"
     $c7 = @($read.claims | Where-Object { $_.pane -eq "7" })[0]
     $c8 = @($read.claims | Where-Object { $_.pane -eq "8" })[0]
     Check ((RoleOf $c7) -eq "warchief" -and $c8.field -eq "empty") "a claim role is read through the same alias table"
@@ -159,7 +161,7 @@ try {
     # wezfleet was a lost master or orchestrator), so no role count over this store is known.
     $wcHole = Get-HordeRoleCount -Read $read -Role "warchief"
     Check ($wcHole.answer.state -eq "unknown" -and $wcHole.answer.reason -like "*n1*") "a live session whose role is unknown makes the role count unknown, naming it"
-    Check ((Get-HordeRoleCount -Read $read -Role "goblin").answer.state -eq "unknown") "and that holds for every role, not only warchief"
+    Check ((Get-HordeRoleCount -Read $read -Role "warg").answer.state -eq "unknown") "and that holds for every role, not only warchief"
     # The exact count is unknown, but a floor is not: m1 is a master whatever n1 turns out to be. On
     # the live store 9 of the 16 live records have no role, so the exact count will almost always be
     # unknown there, and the floor is what a caller can use (ledger L-003).

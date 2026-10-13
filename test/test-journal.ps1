@@ -35,7 +35,7 @@ function New-Id { return [guid]::NewGuid().ToString() }
 function Names { param([string]$Dir) return @(Get-ChildItem -LiteralPath $Dir -Force | ForEach-Object { $_.Name } | Sort-Object) }
 function Bytes { param([string]$Path) return [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes($Path)) }
 $utcNow = [datetime]::UtcNow
-$spawnArgs = @{ label = "g-7"; role = "goblin"; prompt = @{ text = "hello" } }
+$spawnArgs = @{ label = "g-7"; role = "warg"; prompt = @{ text = "hello" } }
 
 try {
 
@@ -119,7 +119,7 @@ Check ($again.state -ceq "done") "with the recorded state"
 Check ($again.result.state -ceq "known" -and "$((Get-HordeValue $again.result).sessionId)" -ceq "s-1") "and the recorded result, as a tristate answer"
 Check ((@(Names $j) -join ",") -ceq (@($before) -join ",")) "and writes no file"
 Check (@(Names $j).Count -eq 3) "the journal holds the marker, the record and the outcome, nothing else"
-$replay2 = Open-HordeJournalEntry -Root $j -Id $id -Verb "session.spawn" -Arguments ('{"role":"goblin","prompt":{"text":"hello"},"label":"g-7"}' | ConvertFrom-Json) -IssuedAt $utcNow
+$replay2 = Open-HordeJournalEntry -Root $j -Id $id -Verb "session.spawn" -Arguments ('{"role":"warg","prompt":{"text":"hello"},"label":"g-7"}' | ConvertFrom-Json) -IssuedAt $utcNow
 Check ($replay2.decision -ceq "replay") "the same arguments decoded from JSON in another key order replay too"
 
 Write-Host ""
@@ -127,7 +127,7 @@ Write-Host "--- the same id with other arguments is refused, and changes nothing
 
 $recPath = Join-Path $j ($id + ".json")
 $recBytes = Bytes $recPath
-$reuse = Open-HordeJournalEntry -Root $j -Id $id -Verb "session.spawn" -Arguments @{ label = "g-8"; role = "goblin"; prompt = @{ text = "hello" } } -IssuedAt $utcNow
+$reuse = Open-HordeJournalEntry -Root $j -Id $id -Verb "session.spawn" -Arguments @{ label = "g-8"; role = "warg"; prompt = @{ text = "hello" } } -IssuedAt $utcNow
 Check ($reuse.decision -ceq "refuse") "the same id with another argument is refused"
 Check ("$($reuse.reason)" -like "*reused*") "as a reused id"
 Check ((Bytes $recPath) -ceq $recBytes) "and the record is unchanged"

@@ -120,7 +120,7 @@ sources:
 - disposition: dropped
 - reason: the forced flag existed only to let typed delivery follow a pane; Horde neither types nor follows panes by number.
 
-### L-020 Crossing into another orc's goblin warns and names the orc, never refuses
+### L-020 Crossing into another orc's warg warns and names the orc, never refuses
 - source: YedPool/wezfleet lib/Hierarchy.ps1:149-159; commands/tell.ps1:106-111, :119-122; test_debug/test-hierarchy.ps1:93-100; 4eba288; 10b1782
 - disposition: test
 - where: test/test-target.ps1 :: "a target inside another orc warns and names that orc"

@@ -254,7 +254,7 @@ Write-Host "--- who may speak, by what route, and who may record whose words ---
 $s = New-TestStore
 $null = Add-Q $s
 $before = Get-Count $s
-Check (Test-Refused (Say $s 1 "hello" -Actor "goblin") "'goblin' is not a role that may speak under a question") "a role outside the speakers is refused, with the list"
+Check (Test-Refused (Say $s 1 "hello" -Actor "warg") "'warg' is not a role that may speak under a question") "a role outside the speakers is refused, with the list"
 Check (Test-Refused (Say $s 1 "hello" -Speaker "orc") "'speaker' is 'orc', which is not someone who speaks") "a speaker outside the list is refused"
 Check (Test-Refused (Say $s 1 "hello" -Route "telepathy") "'route' is 'telepathy', which is not a way words arrive") "a route outside the list is refused"
 Check (Test-Refused (Say $s 1 "hello" -Speaker "warchief" -Route "chat-recorded") "are never the warchief's") "the warchief cannot record its own words as the founder's chat"
@@ -286,7 +286,7 @@ Check ((Get-Count $s) -eq 6 -and (Get-InboxLine (Inbox $s)) -ceq "3@1,4@2,6@1 up
 Check ($null -eq $read.value.PSObject.Properties["marked"] -and $null -eq $read.value.PSObject.Properties["sequence"]) "an inbox answer says nothing of marking: it has no way to mark"
 $before = Get-Count $s
 Check ((Test-Refused (Invoke-Op $s "inbox" @{ actor = "warchief"; mark = $true; id = (New-Id) }) "request has 'mark'") -and (Get-Count $s) -eq $before -and (Get-InboxLine (Inbox $s)) -ceq "3@1,4@2,6@1 upTo=6") "READING AND MARKING ARE TWO OPERATIONS: an inbox asked to mark is refused as not what inbox takes, and marks nothing"
-Check ((Test-Refused (Inbox $s -Actor "founder") "'founder' has no inbox; the roles that have one are: warchief") -and (Test-Refused (Inbox $s -Actor "goblin") "'goblin' has no inbox")) "a role with no inbox is told so"
+Check ((Test-Refused (Inbox $s -Actor "founder") "'founder' has no inbox; the roles that have one are: warchief") -and (Test-Refused (Inbox $s -Actor "warg") "'warg' has no inbox")) "a role with no inbox is told so"
 
 Write-Host ""
 Write-Host "--- mark-read: up to a given record, as one record of its own, and idempotent ---" -ForegroundColor Cyan
@@ -328,7 +328,7 @@ Check ((Get-Outcome $future) -ceq "refused" -and (Test-Refused $future "not befo
 Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; upTo = 4 }) "request has no 'id'") -and (Get-Count $s) -eq $before) "marking without an id is refused: it writes, and the id is what makes sending it twice one marking"
 Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; id = (New-Id) }) "request has no 'upTo'") -and (Get-Count $s) -eq $before) "marking with no record named is refused: there is no 'mark everything'"
 Check ((Test-Refused (Mark $s 4 -Actor "founder") "'founder' has no inbox; the roles that have one are: warchief") -and (Get-Count $s) -eq $before) "a speaker with no inbox cannot mark"
-Check ((Test-Refused (Mark $s 4 -Actor "goblin") "'goblin' is not a role that may speak under a question, or mark what was said there as read") -and (Get-Count $s) -eq $before) "and a role that does not speak cannot either"
+Check ((Test-Refused (Mark $s 4 -Actor "warg") "'warg' is not a role that may speak under a question, or mark what was said there as read") -and (Get-Count $s) -eq $before) "and a role that does not speak cannot either"
 Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; id = (New-Id); upTo = 1e30 }) "'upTo' is not a record's sequence number") -and (Get-Count $s) -eq $before) "a record number no record can have is refused, not thrown on"
 Check ((Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4") "CONTROL: none of the refusals marked anything"
 # A mark may name a record that is not a message: everything said up to it is read.

@@ -8,7 +8,7 @@
 #
 # THE FIXTURE, in short (ids aaaaaaaa-0000-4000-8000-0000000000NN). Every value is synthetic, and
 # write times the view depends on are in times.json, because git does not keep them:
-#   01 warchief, handle 10    02 orc under 01, handle 11    03 goblin in run alpha, handle 12
+#   01 warchief, handle 10    02 orc under 01, handle 11    03 warg in run alpha, handle 12
 #   04 stopped, handle 13 gone  05 retired, handle 14         06 running, record retired
 #   07 08 09 all claim handle 16 (08 is shaped like the stray 11111111-... record)
 #   10 no record, pane-sessions file 17 and a claim for 17    11 holds 18; 12's file hijacks 18
@@ -671,7 +671,7 @@ if (Section "cardinality" "cardinality checks") {
     $roleless = New-Fleet "roleless"
     EditReg $roleless 4 { param($r) $r.PSObject.Properties.Remove("role") }
     $prl = Project $roleless
-    Check ((St (Ans $prl 4 "role")) -eq "unknown" -and (FSt (Fault $prl "two-warchiefs")) -eq "unknown") "a live record with no role is unknown, never goblin, and makes the count unknown"
+    Check ((St (Ans $prl 4 "role")) -eq "unknown" -and (FSt (Fault $prl "two-warchiefs")) -eq "unknown") "a live record with no role is unknown, never warg, and makes the count unknown"
     $oc = Fault $p "orc-not-under-warchief"
     Check ((FSt $oc) -eq "true" -and (Subjects $oc) -contains (Sid 25) -and -not ((Subjects $oc) -contains (Sid 2))) "an orc under another parent is reported"
     $pmiss = Fault $p "parent-missing"; $pret = Fault $p "parent-retired"

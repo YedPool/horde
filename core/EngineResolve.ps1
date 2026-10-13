@@ -68,7 +68,7 @@ function Read-HordeRoleRequirementsFile {
     $t = [System.Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
     $req = Get-HordeAgentProp $t "requires"
     $names = @($Vocabulary | ForEach-Object { $_.name })
-    $roles = @("warchief", "orc", "goblin")
+    $roles = @("warchief", "orc", "warg")
     $problems = @()
     foreach ($role in $roles) {
         $list = Get-HordeAgentProp $req $role

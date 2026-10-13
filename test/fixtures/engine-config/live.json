@@ -3,6 +3,6 @@
   "revision": 3,
   "rules": [
     { "id": "live-1", "match": { "parent": "11111111-2222-4333-8444-555555555555" }, "set": { "model": "small", "provider": "provider-c" }, "writtenBy": "cli", "until": "run-closed" },
-    { "id": "live-2", "match": { "role": "goblin" }, "set": { "harness": "harness-b" }, "writtenBy": "tuner", "until": "2026-10-09T00:00:00Z" }
+    { "id": "live-2", "match": { "role": "warg" }, "set": { "harness": "harness-b" }, "writtenBy": "tuner", "until": "2026-10-09T00:00:00Z" }
   ]
 }

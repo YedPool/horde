@@ -115,7 +115,7 @@ Test-Finding "two profiles of one name" { param($d) $d.L1.profiles = @($d.L1.pro
 Test-Finding "two rules of one id in one layer" { param($d) $d.L1.rules = @($d.L1.rules) + @($d.L1.rules[0]) } "duplicate-name" "user-default"
 Test-Finding "a profile naming a provider nobody defined" { param($d) (Get-Profile $d.L1 "gamma").provider = "provider-z" } "undefined-provider" "provider-z"
 Test-Finding "an alias entry naming a provider nobody defined" { param($d) $d.L1.aliases[1].map[0].provider = "provider-z" } "undefined-provider" "provider-z"
-Test-Finding "a rule setting a profile nobody defined" { param($d) (Get-Rule $d.L1 "goblins-gamma").set.profile = "delta" } "undefined-profile" "delta"
+Test-Finding "a rule setting a profile nobody defined" { param($d) (Get-Rule $d.L1 "wargs-gamma").set.profile = "delta" } "undefined-profile" "delta"
 Test-Finding "a profile naming a harness with no descriptor" { param($d) (Get-Profile $d.L1 "gamma").harness = "harness-z" } "undefined-harness" "harness-z"
 Test-Finding "a rule setting a provider nobody defined" { param($d) (Get-Rule $d.L4 "live-1").set.provider = "provider-z" } "undefined-provider" "provider-z"
 Test-Finding "an alias with two entries for one provider" { param($d) $d.L1.aliases[0].map = @($d.L1.aliases[0].map) + @([pscustomobject]@{ provider = "provider-a"; model = "model-a-other" }) } "alias-provider-twice" "big"
@@ -183,7 +183,7 @@ $shapes = [ordered]@{
 $plants = [ordered]@{
     "set.model (allowlisted provider)" = { param($d, $v) $r = Get-Rule $d.L4 "live-1"; $r.set.model = $v }
     "set.model alone"                  = { param($d, $v) (Get-Rule $d.L1 "one-session").set.model = $v }
-    "set.profile"                      = { param($d, $v) (Get-Rule $d.L1 "goblins-gamma").set.profile = $v }
+    "set.profile"                      = { param($d, $v) (Get-Rule $d.L1 "wargs-gamma").set.profile = $v }
     "set.harness"                      = { param($d, $v) Add-Prop (Get-Rule $d.L1 "user-default").set "harness" $v }
     "set.provider"                     = { param($d, $v) Add-Prop (Get-Rule $d.L1 "user-default").set "provider" $v }
     "a set key"                        = { param($d, $v) Add-Prop (Get-Rule $d.L1 "user-default").set $v "x" }

@@ -8,7 +8,7 @@
         # --- who may write is the rules' list ---
         @{ Name = "another-actor-may-write"
            Find = '$script:HordeDecisionActors = @("warchief")'
-           Replace = '$script:HordeDecisionActors = @("warchief", "goblin")' }
+           Replace = '$script:HordeDecisionActors = @("warchief", "warg")' }
         # --- a secret written as a field's name ---
         @{ Name = "secret-as-a-field-name-not-seen"
            Find = 'if ($nameKind -ne "") {'

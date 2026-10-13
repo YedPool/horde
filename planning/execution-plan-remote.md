@@ -335,7 +335,7 @@ C. The node and the hub, read path (PROJ)
       act verbs, R20's alerts); registry entries written by `horde hub enroll` (R17); and `device` in
       the local session view's schema (`schema/session-view.v1`, step 2.3), which R13a's rows carry
       but the local projection does not yet.
-14. **R14. `handoff.get`, and context purity.** A goblin's handoff comes back as a distilled document,
+14. **R14. `handoff.get`, and context purity.** A warg's handoff comes back as a distilled document,
     capped at 64 KiB, the cap declared as data on the verb in R1 and enforced on the node by R2's
     `Test-HordeProtocolLimits`, since the schema checker has no byte keyword; transcripts, tool output and exploratory notes stay on the node, on disk, and
     are named in the handoff, never sent. There is no file-transfer verb and no `evidence.get` in v1.
@@ -461,16 +461,16 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
 E. Acting over the link
 
 18. **R18. Containment: the anchor holds the job, the node daemon never does** (SPAWN; after lifecycle
-    step 22). A kill-on-close job ends when its last handle closes, so a daemon holding goblins' job
-    handles would kill every goblin on each upgrade or restart, and remote makes those routine. The
-    handle is held only by the per-goblin anchor the lifecycle plan builds (its 2.2 and steps 21 and
+    step 22). A kill-on-close job ends when its last handle closes, so a daemon holding wargs' job
+    handles would kill every warg on each upgrade or restart, and remote makes those routine. The
+    handle is held only by the per-warg anchor the lifecycle plan builds (its 2.2 and steps 21 and
     22). The node daemon asks the host to start the anchor and never creates, opens-and-keeps or
     duplicates a job handle; it queries through `core/Contain.ps1`, which closes the handle in the same
     call (the job-handle lifetime test of lifecycle step 11). Tests, in the isolated host instance only:
-    restarting `node serve` mid-goblin leaves the goblin and a grandchild alive, checked by pid and
+    restarting `node serve` mid-warg leaves the warg and a grandchild alive, checked by pid and
     procStart; **control:** a test-only daemon variant that keeps a duplicated handle kills them on
     restart, so the test can see the failure; a static tripwire finds no job-handle call outside
-    `platform/windows/` and the anchor. A goblin is never a child of an ssh session: the spawn path
+    `platform/windows/` and the anchor. A warg is never a child of an ssh session: the spawn path
     from R19 runs in `node serve`, in the user's session.
 19. **R19. Act verbs** (SPAWN; after step 3.8, R10, R18 and lifecycle steps 24 to 28).
     `session.spawn`, `session.resume`, `session.close`, `session.park`, `session.route`,
@@ -671,7 +671,7 @@ E. Acting over the link
       second messenger behind the same port, and the hub picks per target what that target supports.
       Ledger note above (wezfleet `tell`'s duplicate guard) still applies when slice 5 replaces `tell`.
 22. **R22. Fleet adoption (D11)** (SPAWN and INSTALL; after R16 to R19 and overlay O1). A real second
-    Windows device, enrolled, runs one real goblin through a working day, shadowed against the same
+    Windows device, enrolled, runs one real warg through a working day, shadowed against the same
     work done locally. The PR records who used it, for what, how long, and what broke.
 
 F. The overlay repository (separate; not built here)

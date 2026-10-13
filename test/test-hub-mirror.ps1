@@ -30,7 +30,7 @@ function Known { param($Value, [string]$At) return [pscustomobject][ordered]@{ s
 function Unknown { param([string]$Why) return [pscustomobject][ordered]@{ state = "unknown"; reason = $Why } }
 function Summary {
     # One session-summary as a node sends it (link-verbs v1), every field known at -At unless named.
-    param([string]$Id, [string]$Agent = "harness-a", [string]$At = (T 0), [string]$Role = "goblin", [int]$Pad = 0)
+    param([string]$Id, [string]$Agent = "harness-a", [string]$At = (T 0), [string]$Role = "warg", [int]$Pad = 0)
     $agentAnswer = Known $Agent $At
     if ($Agent -eq "") { $agentAnswer = Unknown "the node could not say which harness" }
     $ns = [pscustomobject][ordered]@{ device = $devA; space = "windows" }
@@ -81,7 +81,7 @@ $rows = @(Get-HordeMirrorRows -Mirror $m -Now (At 5))
 Check ($rows.Count -eq 2 -and @($rows | Where-Object { $_.presence.state -ceq "known" -and $_.presence.value -eq $true }).Count -eq 2) "CONTROL: while the node is heard, both sessions are known present"
 Check (@($rows | Where-Object { $_.device -ceq $devA -and $_.deviceName -ceq "box-a" }).Count -eq 2) "every row carries its device"
 $r1 = (Row $rows $s1)[0]
-Check ($r1.fields["role"].state -ceq "known" -and $r1.fields["role"].value -ceq "goblin" -and $r1.fields["fleetSessionId"].state -ceq "unknown" -and $r1.fields["fleetSessionId"].reason -ceq "no fleet record") "fields carry the node's answers: a known value, and an unknown with the node's reason"
+Check ($r1.fields["role"].state -ceq "known" -and $r1.fields["role"].value -ceq "warg" -and $r1.fields["fleetSessionId"].state -ceq "unknown" -and $r1.fields["fleetSessionId"].reason -ceq "no fleet record") "fields carry the node's answers: a known value, and an unknown with the node's reason"
 Check ($null -eq $r1.lastKnown -and "$($r1.ns.device)" -ceq $devA) "a current row has no last-known copy, and keeps the namespace its pid was read in"
 $lost = Set-HordeNodeMirrorLost -Mirror $m -At (At 20) -Reason "could not open a link: no node is listening"
 $lost = Set-HordeNodeMirrorLost -Mirror $lost -At (At 40) -Reason "could not open a link: still nothing"
@@ -93,7 +93,7 @@ Check (@($rows | Where-Object { $_.presence.state -ceq "absent" }).Count -eq 0) 
 Check ($rows[0].presence.reason -clike "*still nothing") "T stays the first failure while the reason is the latest try"
 $allUnknown = @($rows | ForEach-Object { $row = $_; @($script:HordeMirrorFields | Where-Object { $row.fields[$_].state -cne "unknown" -or $row.fields[$_].reason -cnotlike $want }) }).Count -eq 0
 Check $allUnknown "every field of every session is unknown with the same reason, never the stale value as current"
-Check ($null -ne $rows[0].lastKnown -and "$($rows[0].lastKnown.role.value)" -ceq "goblin") "and the last-known session is kept beside it, for a reader"
+Check ($null -ne $rows[0].lastKnown -and "$($rows[0].lastKnown.role.value)" -ceq "warg") "and the last-known session is kept beside it, for a reader"
 $na = Get-HordeMirrorNodeAnswer -Mirror $lost -Now (At 45)
 Check ($na.state -ceq "unknown" -and $na.reason -clike $want) "the node itself is unknown with the same reason"
 
