@@ -19,6 +19,7 @@ $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerBegins = 0
 $script:HordeMemoryWakerLooks = New-Object System.Collections.ArrayList
+$script:HordeMemoryWakerReads = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerCheap = $false
 $script:HordeMemoryWakerFaults = @{}
 $script:HordeMemoryWakerClock = $null
@@ -32,9 +33,16 @@ function Reset-HordeMemoryWaker {
     $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
     $script:HordeMemoryWakerBegins = 0
     $script:HordeMemoryWakerLooks = New-Object System.Collections.ArrayList
+    $script:HordeMemoryWakerReads = New-Object System.Collections.ArrayList
     $script:HordeMemoryWakerCheap = $false
     $script:HordeMemoryWakerFaults = @{}
     $script:HordeMemoryWakerClock = $null
+}
+
+function Get-HordeMemoryWakerReads {
+    # The sessions whose state this waker was asked for since the last reset, in order, looks included:
+    # how a test sees that a session was never so much as read.
+    return @($script:HordeMemoryWakerReads | ForEach-Object { "$_" })
 }
 
 function Set-HordeMemoryWakerClock {
@@ -111,6 +119,7 @@ function Get-HordeMemoryWakerLooks {
 function Get-HordeMemoryWakerState {
     # One session's state as an answer; -Full is the full reading, which a cheap waker's State is not.
     param([string]$Id, [switch]$Full)
+    [void]$script:HordeMemoryWakerReads.Add($Id)
     if (Invoke-HordeMemoryWakerFault "state") { return @{ idle = "yes"; boxEmpty = "yes" } }
     if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { return (New-HordeUnknown -Reason ("the memory waker has no session " + $Id)) }
     $s = $script:HordeMemoryWakerSessions[$Id]

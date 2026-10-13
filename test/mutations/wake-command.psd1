@@ -9,12 +9,33 @@
     Suite  = "test\e2e\e2e-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-proof-needs-no-target"
+           Find = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target,'
+           Replace = '[Parameter(ParameterSetName = "proof")][string]$Target = "0a000000-0000-4000-8000-000000000001",' }
+        @{ Name = "a-target-in-another-casing-or-a-part-of-one-is-taken"
+           Find = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target,'
+           Replace = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][string]$Target,' }
+        @{ Name = "a-target-may-be-given-to-a-watch"
+           Find = '[Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target,'
+           Replace = '[ValidateScript({ $_ -cmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'' })][string]$Target = "",' }
+        @{ Name = "a-proof-may-loop"
+           Find = '[Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Once,'
+           Replace = '[switch]$Once,' }
+        @{ Name = "proof-is-a-mode-word-again"
+           Find = '[Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode'
+           Replace = '[Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live", "proof")][ValidateScript({ @("shadow", "live", "proof") -ccontains $_ })][string]$Mode' }
+        @{ Name = "a-proof-is-aimed-at-another-session-than-the-one-named"
+           Find = 'if ($Proof) { $chosen = "proof"; $aim = $Target }'
+           Replace = 'if ($Proof) { $chosen = "proof"; $aim = "0a000000-0000-4000-8000-000000000001" }' }
+        @{ Name = "the-proofs-target-does-not-reach-the-run"
+           Find = '$run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target'
+           Replace = '$run = New-HordeWakeRun -Mode $plan.mode' }
+        @{ Name = "a-proof-that-found-nobody-exits-0"
+           Find = '.Count -gt 0) { throw ("the proof run nudged nobody'
+           Replace = '.Count -lt 0) { throw ("the proof run nudged nobody' }
         @{ Name = "mode-value-in-any-casing"
-           Find = '[ValidateSet("shadow", "proof", "live")][ValidateScript({ @("shadow", "proof", "live") -ccontains $_ })][string]$Mode'
-           Replace = '[ValidateSet("shadow", "proof", "live")][string]$Mode' }
-        @{ Name = "proof-run-not-told-it-is-once"
-           Find = '$plan = Get-HordeWakeRunPlan -Mode $Mode -Once:$Once -Picked (Get-HordeWakeRunPick -Mode $Mode)'
-           Replace = '$plan = Get-HordeWakeRunPlan -Mode $Mode -Once -Picked (Get-HordeWakeRunPick -Mode $Mode)' }
+           Find = '[ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode'
+           Replace = '[ValidateSet("shadow", "live")][string]$Mode' }
         @{ Name = "proof-run-takes-the-live-lock"
            Find = '$lock = Enter-HordeWakeLock -Mode $plan.mode -ProcessId $PID'
            Replace = '$lock = Enter-HordeWakeLock -Mode "shadow" -ProcessId $PID' }
@@ -22,13 +43,13 @@
            Find = '[string]$Mode = "shadow",'
            Replace = '[string]$Mode = "live",' }
         @{ Name = "live-is-never-live"
-           Find = '$plan = Get-HordeWakeRunPlan -Mode $Mode -Once:$Once -Picked (Get-HordeWakeRunPick -Mode $Mode)'
-           Replace = '$plan = Get-HordeWakeRunPlan -Mode "shadow" -Once:$Once -Picked (Get-HordeWakeRunPick -Mode $Mode)' }
+           Find = '$plan = Get-HordeWakeRunPlan -Mode $chosen -Once:$Once -Target $aim -Picked (Get-HordeWakeRunPick -Mode $chosen)'
+           Replace = '$plan = Get-HordeWakeRunPlan -Mode "shadow" -Once:$Once -Target "" -Picked (Get-HordeWakeRunPick -Mode $chosen)' }
         @{ Name = "the-run-is-made-live-whatever-the-plan"
-           Find = '$run = New-HordeWakeRun -Mode $plan.mode'
-           Replace = '$run = New-HordeWakeRun -Mode "live"' }
+           Find = '$run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target'
+           Replace = '$run = New-HordeWakeRun -Mode "live" -Target $plan.target' }
         @{ Name = "a-prefix-of-the-mode-parameters-name-selects-a-mode"
-           Find = '[Parameter(DontShow = $true)][ValidateScript({ $false })][object]$Mod,'
+           Find = '[Parameter(ParameterSetName = "watch", DontShow = $true)][ValidateScript({ $false })][object]$Mod,'
            Replace = '' }
         @{ Name = "second-run-not-refused"
            Find = 'if ($null -eq $lock) { throw'

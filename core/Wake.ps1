@@ -621,7 +621,13 @@ function Invoke-HordeWakePass {
     #   -Silent           the fleet is silent (Update-HordeWakeSilence): every nudge of this pass is a probe
     # mail is session id -> its oldest unread mail's time, or $null, for the sessions whose state was
     # read; limited is session id -> its usage limit's text, for those with unread mail that are limited.
-    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow, [switch]$Silent)
+    #   -Only             ONE SESSION, AND NO OTHER: the pass is cut down to this id before any state is
+    #                     read, so no other session can be looked at, decided on or nudged by it. It is
+    #                     how a proof run is kept to the one session a person chose to have typed into
+    #                     (core/WakeRun.ps1, PROOF). A session that is not in the listing - or a listing
+    #                     that cannot be read - is one entry of kind proof-target-absent, and nobody is
+    #                     nudged: the pass never falls back to "whoever is ready".
+    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow, [switch]$Silent, [string]$Only = "")
     $mail = @{}
     $limited = @{}
     $entries = New-Object System.Collections.ArrayList
@@ -638,12 +644,21 @@ function Invoke-HordeWakePass {
         $listing = Get-HordeWakeTargets -Waker $Waker
         if ($listing.state -cne "known") {
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Outcome "unknown" -Reason ("the targets are unknown: " + $listing.reason)))
+            if ($Only -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the fleet's listing could not be read, so the one session this pass may nudge was not found: nobody is nudged")) }
         } else {
             $targets = @($listing.value)
             # WHO THE WARCHIEF IS, for whoever must tell it something (core/WakeTell.ps1): the one target
             # with that role. Two, or none, is nobody: one is never chosen over another.
             $chiefs = @($targets | Where-Object { $_.role -ceq "warchief" })
             if ($chiefs.Count -eq 1) { $warchief = $chiefs[0].id }
+            # ONE SESSION, AND NO OTHER (-Only), cut here: before the first state is read.
+            if ($Only -cne "") {
+                $targets = @($targets | Where-Object { $_.id -ceq $Only })
+                if ($targets.Count -ne 1) {
+                    $targets = @()
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the one session this pass may nudge is not in the fleet's listing: nobody is nudged"))
+                }
+            }
             $states = @{}
             foreach ($t in $targets) {
                 $states[$t.id] = Get-HordeWakeState -Waker $Waker -Id $t.id

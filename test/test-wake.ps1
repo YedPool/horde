@@ -409,6 +409,35 @@ Check ($d[0].action -ceq "look") "with one, it is look: everything else holds, g
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- one session, and no other: a pass cut down to the session it was given ---" -ForegroundColor Cyan
+
+Start-Case
+Seat 1 @{ Role = "warchief"; OldestUnreadAt = (At -600) }; Seat 2 @{ OldestUnreadAt = (At -300) }; Seat 3 @{ Role = "warg" }
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 3)
+Check ((@(Get-HordeMemoryWakerNudges | ForEach-Object { $_.id }) -join ",") -ceq (Sid 3) -and (@(Get-HordeMemoryWakerAsks) -join ",") -ceq (Sid 3)) "of three ready sessions, a pass given the one the fair order serves last nudges that one and no other"
+Check ((@(Get-HordeMemoryWakerReads | Sort-Object -Unique) -join ",") -ceq (Sid 3) -and @($r.decisions).Count -eq 1 -and $r.decisions[0].id -ceq (Sid 3) -and $r.ledger.Count -eq 1) "the other two were never read and never decided on: the pass was cut down before the first state was read"
+Check ($r.warchief -ceq (Sid 1)) "who the warchief is is still known, from the listing alone"
+Start-Case
+Seat 1 @{ Role = "warchief" }; Seat 2
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 9)
+Check ((Rang) -eq 0 -and @(Get-HordeMemoryWakerReads).Count -eq 0 -and @($r.decisions).Count -eq 0 -and (Kinds $r) -ceq "proof-target-absent" -and $r.entries[0].id -ceq (Sid 9)) "a pass given a session the fleet does not list nudges nobody and reads nobody: it never falls back to whoever is ready"
+foreach ($near in @(((Sid 1).Substring(0, 8)), ((Sid 1).ToUpperInvariant()), "A")) {
+    Start-Case; Seat 1 @{ Role = "warchief"; Label = "A" }
+    Set-HordeMemoryWakerClock $t0
+    $r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only $near
+    Check ((Rang) -eq 0 -and (Kinds $r) -ceq "proof-target-absent") ("'" + $near + "' - a part of the id, its other casing, the session's label - is not the session: nobody is nudged")
+}
+Start-Case; Seat 1
+Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1)
+Check ((Kinds $r) -ceq "skip-unknown,proof-target-absent" -and (Rang) -eq 0) "with a listing that cannot be read, the pass says its one session was not found"
+Start-Case; Seat 1; Seat 2
+Check ((Rang) -eq 0 -and @((Pass 0).decisions).Count -eq 2) "CONTROL: a pass given no one session is a pass over them all"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- a usage limit: a session that cannot answer is not knocked for, and no attempt is spent on it ---" -ForegroundColor Cyan
 
 # 1. THE LIMIT ENDS AT A KNOWN TIME STILL AHEAD: no knock, no attempt, until then.

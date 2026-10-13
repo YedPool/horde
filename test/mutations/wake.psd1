@@ -6,6 +6,18 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-pass-given-one-session-runs-over-them-all"
+           Find = 'if ($Only -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the fleet'
+           Replace = 'if ($false) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the fleet' }
+        @{ Name = "the-one-session-is-whoever-is-first"
+           Find = '$targets = @($targets | Where-Object { $_.id -ceq $Only })'
+           Replace = '$targets = @($targets | Select-Object -First 1)' }
+        @{ Name = "the-one-session-matched-in-any-casing"
+           Find = '$targets = @($targets | Where-Object { $_.id -ceq $Only })'
+           Replace = '$targets = @($targets | Where-Object { $_.id -eq $Only })' }
+        @{ Name = "the-pass-is-not-cut-to-its-one-session"
+           Find = '$targets = @($targets | Where-Object { $_.id -ceq $Only })'
+           Replace = '$targets = @($targets | Where-Object { $_.id -ceq $Only }); if ($targets.Count -eq 1) { $targets = @($listing.value) }' }
         @{ Name = "a-session-limited-until-later-is-nudged"
            Find = 'if ($limit.kind -ceq "until") { return [pscustomobject]@{ action = "wait"; reason = $limit.text } }'
            Replace = '' }

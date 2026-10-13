@@ -8,6 +8,27 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-proof-run-forgets-its-one-session"
+           Find = '-Shadow:$shadow -Silent:$silentNow -Only $only'
+           Replace = '-Shadow:$shadow -Silent:$silentNow' }
+        @{ Name = "a-proof-run-with-no-session-runs-over-the-fleet"
+           Find = 'if ($only -ceq "") { throw "a proof run was made without'
+           Replace = 'if ($false) { throw "a proof run was made without' }
+        @{ Name = "a-proof-plan-needs-no-target"
+           Find = 'if ($Mode -ceq "proof" -and $Target -ceq "") { return (& $no'
+           Replace = 'if ($false) { return (& $no' }
+        @{ Name = "a-target-of-any-word-is-taken"
+           Find = 'if ($Mode -ceq "proof" -and ($Target -cnotmatch $script:HordeWakeProofTargetPattern -or'
+           Replace = 'if ($false -and ($Target -cnotmatch $script:HordeWakeProofTargetPattern -or' }
+        @{ Name = "a-target-in-another-casing-is-taken"
+           Find = 'if ($Mode -ceq "proof" -and ($Target -cnotmatch $script:HordeWakeProofTargetPattern -or'
+           Replace = 'if ($Mode -ceq "proof" -and ($Target -notmatch $script:HordeWakeProofTargetPattern -or' }
+        @{ Name = "a-shadow-or-live-run-takes-a-target"
+           Find = 'if ($Mode -cne "proof" -and $Target -cne "") { return (& $no'
+           Replace = 'if ($false) { return (& $no' }
+        @{ Name = "a-missing-target-is-no-usage-error"
+           Find = 'It never picks one itself" $true) }'
+           Replace = 'It never picks one itself" $false) }' }
         @{ Name = "the-quiet-is-forgotten-between-ticks"
            Find = '$Run.silence = $silence.seen'
            Replace = '$Run.silence = $null' }
@@ -30,11 +51,11 @@
            Find = 'if (-not $Once) { return (& $no "wake run -Mode proof makes one pass'
            Replace = 'if ($false) { return (& $no "wake run -Mode proof makes one pass' }
         @{ Name = "proof-sends-nothing"
-           Find = 'mode = "proof"; live = $true; waker = $waker;'
-           Replace = 'mode = "proof"; live = $false; waker = $waker;' }
+           Find = 'mode = "proof"; target = $Target; live = $true; waker = $waker;'
+           Replace = 'mode = "proof"; target = $Target; live = $false; waker = $waker;' }
         @{ Name = "proof-banner-does-not-say-proof"
-           Find = 'banner = ("PROOF - PROOF - PROOF - ONE PASS OF REAL NUDGES'
-           Replace = 'banner = ("ONE PASS OF REAL NUDGES' }
+           Find = 'banner = ("PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE'
+           Replace = 'banner = ("ONE PASS, AND AT MOST ONE REAL NUDGE' }
         @{ Name = "proof-banner-silent-about-what-it-shows"
            Find = 'if ($unverified.Count -gt 0) { $shows = '
            Replace = 'if ($false) { $shows = ' }

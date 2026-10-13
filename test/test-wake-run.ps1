@@ -316,14 +316,61 @@ Check (-not "$((Get-HordeWakeRunPlan -Picked $one).banner)".Contains("UNVERIFIED
 $p = Get-HordeWakeRunPlan -Mode "live" -Picked (New-HordeKnown -Value $claimed)
 Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("unverified") -and "$($p.reason)".Contains("state.turn, nudge.guarded")) "a live run through it is refused, naming what is unverified"
 # PROOF: one pass of real nudges, the only run that rings through unverified capabilities.
-$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked (New-HordeKnown -Value $claimed)
-Check ($p.ok -and $p.mode -ceq "proof" -and $p.live -eq $true -and [object]::ReferenceEquals($p.waker, $claimed) -and "$($p.banner)".StartsWith("PROOF - PROOF - PROOF - ONE PASS OF REAL NUDGES") -and "$($p.banner)".Contains("UNVERIFIED") -and "$($p.banner)".Contains("state.turn, nudge.guarded")) "a proof run with -Once rings through a waker whose capabilities are unverified: its banner says PROOF, loudly, and names what it is there to show"
-$p = Get-HordeWakeRunPlan -Mode "proof" -Picked (New-HordeKnown -Value $claimed)
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Target (Sid 3) -Picked (New-HordeKnown -Value $claimed)
+Check ($p.ok -and $p.mode -ceq "proof" -and $p.target -ceq (Sid 3) -and $p.live -eq $true -and [object]::ReferenceEquals($p.waker, $claimed) -and "$($p.banner)".StartsWith("PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + (Sid 3) + " AND NO OTHER") -and "$($p.banner)".Contains("UNVERIFIED") -and "$($p.banner)".Contains("state.turn, nudge.guarded")) "a proof run with -Once rings through a waker whose capabilities are unverified: its banner says PROOF, loudly, and names what it is there to show"
+$p = Get-HordeWakeRunPlan -Mode "proof" -Target (Sid 3) -Picked (New-HordeKnown -Value $claimed)
 Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("add -Once")) "a proof run without -Once is refused: it is never a loop"
-$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked $none5
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Target (Sid 3) -Picked $none5
 Check ($p.ok -eq $false -and "$($p.reason)".Contains("needs an installed waker")) "and so is one with no waker to ring through"
-$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked $one
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Target (Sid 3) -Picked $one
 Check ($p.ok -and $p.mode -ceq "proof" -and -not "$($p.banner)".Contains("UNVERIFIED")) "a proof run through a waker with nothing unverified runs, and names none"
+# A PROOF RUN HAS ONE SESSION, NAMED BY THE PERSON: no target, or one that is no whole session id, is a
+# mistake in the command line; and a target is nothing a shadow or a live run has.
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked $one
+Check ($p.ok -eq $false -and $p.usage -eq $true -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("needs -Target")) "a proof run with no -Target is refused as a usage error: it never picks a session itself"
+foreach ($bad in @("A", "M", "0a000000", "0a000000-0000-4000-8000", ((Sid 3).ToUpperInvariant()), ((Sid 3) + " "), ((Sid 3) + "`n"), "*", ((Sid 3) + "," + (Sid 2)))) {
+    $p = Get-HordeWakeRunPlan -Mode "proof" -Once -Target $bad -Picked $one
+    Check ($p.ok -eq $false -and $p.usage -eq $true -and $p.live -eq $false -and $p.target -ceq "") ("a -Target of '" + $bad.Trim() + "' - a label, a part of an id, another casing, two ids - is refused: a session id written out in full, or nothing")
+}
+foreach ($word in @("shadow", "live")) {
+    $p = Get-HordeWakeRunPlan -Mode $word -Once -Target (Sid 3) -Picked $one
+    Check ($p.ok -eq $false -and $p.usage -eq $true -and $p.live -eq $false) ("-Target with -Mode " + $word + " is refused as a usage error: only a proof run has one session")
+}
+Check ((Get-HordeWakeRunPlan -Mode "live" -Picked $one).usage -eq $false -and (Get-HordeWakeRunPlan -Mode "live" -Picked $none5).usage -eq $false) "a refusal that is no mistake in the command line - no waker - is not called one"
+# THE PASS OF A PROOF RUN: three sessions are ready, the warchief among them, and the person named the
+# one the fair order serves LAST.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 1 -OldestUnreadAt (At -600)
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -300)
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "warg" -UnreadCount 1 -OldestUnreadAt (At -60)
+Set-HordeMemoryWakerClock (At 0)
+$aimed = New-HordeWakeRun -Mode "proof" -Target (Sid 3) -HordeHome $h
+$did = @(Invoke-HordeWakeTick -Run $aimed -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.id })
+Check ((@(Get-HordeMemoryWakerNudges | ForEach-Object { $_.id }) -join ",") -ceq (Sid 3) -and (@(Get-HordeMemoryWakerAsks) -join ",") -ceq (Sid 3) -and ($did -join ",") -ceq ("nudge:" + (Sid 3))) ("of three ready sessions a proof run nudges exactly one, the one it was aimed at - not the warchief, which the fair order serves first (" + ($did -join ",") + ")")
+Check ((@(Get-HordeMemoryWakerReads | Sort-Object -Unique) -join ",") -ceq (Sid 3)) ("and no other session's state was so much as read (" + (@(Get-HordeMemoryWakerReads) -join ",") + ")")
+# A TARGET THAT IS NOT IN THE FLEET: nobody is nudged - the pass never falls back to who is ready.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 1 -OldestUnreadAt (At -600)
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -300)
+$astray = New-HordeWakeRun -Mode "proof" -Target (Sid 9) -HordeHome $h
+$did = @(Invoke-HordeWakeTick -Run $astray -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 0 -and @(Get-HordeMemoryWakerReads).Count -eq 0 -and @($did | Where-Object { $_.kind -ceq "proof-target-absent" -and $_.id -ceq (Sid 9) -and "$($_.reason)".Contains("not in the fleet's listing") }).Count -eq 1) "a proof run aimed at a session the fleet does not list nudges nobody, reads nobody, and says so in one line"
+# A PROOF RUN WITH NO TARGET AT ALL - made by a caller that skipped the plan - nudges nobody.
+$h = New-Home
+$blindProof = New-HordeWakeRun -Mode "proof" -HordeHome $h
+$did = @(Invoke-HordeWakeTick -Run $blindProof -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 0 -and @(Get-HordeMemoryWakerReads).Count -eq 0 -and @($did | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "pass" -and "$($_.reason)".Contains("without the one session") }).Count -eq 1) "a proof run made with no target never runs the pass over the fleet: nobody is read, nobody is nudged"
+Check ((New-HordeWakeRun -Mode "live" -Target (Sid 3) -HordeHome $h).target -ceq "" -and (New-HordeWakeRun -Target (Sid 3) -HordeHome $h).target -ceq "") "and a target is kept for a proof run only"
+# THE FLEET CANNOT BE READ: the proof's session was not found, and that is said.
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+$h = New-Home
+$dark = New-HordeWakeRun -Mode "proof" -Target (Sid 3) -HordeHome $h
+$did = @(Invoke-HordeWakeTick -Run $dark -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind })
+Check (($did -join ",") -ceq "skip-unknown,proof-target-absent") ("a proof run over a fleet that cannot be read says so, and that its session was not found (" + ($did -join ",") + ")")
+Reset-HordeMemoryWaker
 foreach ($word in @("LIVE", "Live", "liv", "l", "", "both")) {
     $p = Get-HordeWakeRunPlan -Mode $word -Once -Picked $one
     Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker) ("the mode '" + $word + "' is no mode: refused, never taken for the nearest one")
@@ -339,7 +386,7 @@ $h = New-Home
 Reset-HordeMemoryWaker
 Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
 Set-HordeMemoryWakerClock (At 0)
-$proof = New-HordeWakeRun -Mode "proof" -HordeHome $h
+$proof = New-HordeWakeRun -Mode "proof" -Target (Sid 1) -HordeHome $h
 $proved = @(Invoke-HordeWakeTick -Run $proof -Now (At 0) -Waker $memory -ReadSessions $readRestored -TickSeconds 3 -ProcessId 4545 -HordeHome $h | ForEach-Object { $_.kind })
 Check ($proof.mode -ceq "proof" -and $proof.live -eq $true -and @(Get-HordeMemoryWakerNudges).Count -eq 1 -and @($proved | Where-Object { $_ -ceq "nudge" }).Count -eq 1) "a proof run's tick sends the real nudge"
 Check (@($proved | Where-Object { $_ -ceq "post" -or $_ -ceq "stall" -or $_ -ceq "tell" }).Count -eq 0 -and @($proved | Where-Object { $_ -ceq "would-post" }).Count -gt 0) "and posts nothing: the senders are shadow in a proof run"

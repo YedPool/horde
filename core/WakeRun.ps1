@@ -16,7 +16,10 @@
 #           It may read through a waker whose capabilities are unverified, and names them.
 #   LIVE    sends the nudges the wake pass decided, through the waker it was handed, for as long as it
 #           runs. Only through a waker whose every capability is yes.
-#   PROOF   sends real nudges for ONE PASS and ends: the run a person makes, watching, to show against
+#   PROOF   (ONE SESSION, NAMED: New-HordeWakeRun -Target. The first version nudged whichever session
+#           was first in the fair order, and the fair order puts the warchief first - so the pane most
+#           likely to be typed into was the master's, in the middle of its work: review of PR #220.)
+#           sends real nudges for ONE PASS and ends: the run a person makes, watching, to show against
 #           the real thing what a waker so far only claims. It alone rings through unverified
 #           capabilities, and it is refused as a loop - a proof nobody is watching is a live run
 #           through a waker nobody has verified.
@@ -52,6 +55,11 @@
 # what turns on, and nothing else has to: with it $true, a live run hands both senders their posters
 # (Send-HordeRestoreMail, Send-HordeWakeTell) and keeps their marks in its own live files.
 $script:HordeWakeSendersPost = $false
+# What a proof run's -Target must be before anything is read: a session id as every session of a fleet
+# carries one, a lower-case UUID, whole. It is only the first gate - a label or a part of an id cannot
+# pass it - and the second is the one that counts: the pass nudges a session only if this is, character
+# for character, the id of ONE session in the fleet's listing (core/Wake.ps1, -Only).
+$script:HordeWakeProofTargetPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 # How often a tick runs the restore source.
 $script:HordeWakeRestoreEverySeconds = 30
 
@@ -61,9 +69,12 @@ function New-HordeWakeRun {
     # older word for the live mode) SAYS OTHERWISE, and neither member is changed afterwards (the
     # header). live says whether real nudges are sent: true for live and for proof. said is what the caller should print once: a saved
     # file that could not be read is started from empty, and says so.
-    param([switch]$Live, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    # -Target is the one session a proof run may nudge; it is kept for a proof run only.
+    param([switch]$Live, [string]$Mode = "", [string]$Target = "", [string]$HordeHome = (Get-HordeHome))
     $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:(-not $Live)
-    $run = [pscustomobject]@{ mode = $word; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $aim = ""
+    if ($word -ceq "proof") { $aim = $Target }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
@@ -96,9 +107,15 @@ function Get-HordeWakeRunPlan {
     #        with unverified capabilities it reads, and names each one.
     # THE BANNER SAYS THE MODE FIRST, IN CAPITALS: which of the three is running is the one thing a
     # person starting it must not be able to misread.
-    param([string]$Mode = "shadow", [switch]$Once, [Parameter(Mandatory = $true)]$Picked)
-    $no = { param($why) [pscustomobject]@{ ok = $false; mode = $Mode; live = $false; waker = $null; banner = ""; reason = $why } }
-    if (@("shadow", "proof", "live") -cnotcontains $Mode) { return (& $no ("'" + $Mode + "' is not a mode of the wake run: shadow, proof or live, written exactly so")) }
+    #   -Target  the ONE session a proof run may nudge: required for proof, a session id written out in
+    #            full, and refused for shadow and live, which have no such thing. usage is true on a
+    #            refusal that is a mistake in the command line, for the command to exit as one.
+    param([string]$Mode = "shadow", [switch]$Once, [string]$Target = "", [Parameter(Mandatory = $true)]$Picked)
+    $no = { param($why, [bool]$usage = $false) [pscustomobject]@{ ok = $false; usage = $usage; mode = $Mode; live = $false; target = ""; waker = $null; banner = ""; reason = $why } }
+    if (@("shadow", "proof", "live") -cnotcontains $Mode) { return (& $no ("'" + $Mode + "' is not a mode of the wake run: shadow, proof or live, written exactly so") $true) }
+    if ($Mode -cne "proof" -and $Target -cne "") { return (& $no ("-Target belongs to wake run -Mode proof: a " + $Mode + " run has no one session") $true) }
+    if ($Mode -ceq "proof" -and $Target -ceq "") { return (& $no "wake run -Mode proof needs -Target <session id>: the ONE session it may type into. It never picks one itself" $true) }
+    if ($Mode -ceq "proof" -and ($Target -cnotmatch $script:HordeWakeProofTargetPattern -or $Target -cmatch "[`r`n]")) { return (& $no ("-Target '" + $Target + "' is not a session id written out in full (a lower-case UUID): not a label, and not a part of an id") $true) }
     $waker = $null
     if ((Test-HordeAnswer $Picked) -and $Picked.state -ceq "known") { $waker = $Picked.value }
     $why = "the answer about the installed waker is not one"
@@ -108,18 +125,18 @@ function Get-HordeWakeRunPlan {
     if ($Mode -ceq "shadow") {
         $note = ""
         if ($unverified.Count -gt 0) { $note = ". UNVERIFIED, so nothing this run journals is proof of them: " + ($unverified -join ", ") }
-        if ($null -ne $waker) { return [pscustomobject]@{ ok = $true; mode = "shadow"; live = $false; waker = $waker; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted; what would be is journaled. Reading state through the waker '" + $waker.name + "'" + $note) } }
-        return [pscustomobject]@{ ok = $true; mode = "shadow"; live = $false; waker = $null; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted. No waker is installed, so no session is watched for unread mail; the restore source still runs (" + $why + ")") }
+        if ($null -ne $waker) { return [pscustomobject]@{ ok = $true; usage = $false; mode = "shadow"; target = ""; live = $false; waker = $waker; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted; what would be is journaled. Reading state through the waker '" + $waker.name + "'" + $note) } }
+        return [pscustomobject]@{ ok = $true; usage = $false; mode = "shadow"; target = ""; live = $false; waker = $null; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted. No waker is installed, so no session is watched for unread mail; the restore source still runs (" + $why + ")") }
     }
     if ($null -eq $waker) { return (& $no ("wake run -Mode " + $Mode + " needs an installed waker to send its nudges through, and there is none: " + $why)) }
     if ($Mode -ceq "proof") {
         if (-not $Once) { return (& $no "wake run -Mode proof makes one pass and ends: add -Once. A proof left running is a live run through a waker nobody has verified") }
         $shows = "every capability of this waker is already yes"
         if ($unverified.Count -gt 0) { $shows = "UNVERIFIED, and what this pass is here to show: " + ($unverified -join ", ") }
-        return [pscustomobject]@{ ok = $true; mode = "proof"; live = $true; waker = $waker; reason = ""; banner = ("PROOF - PROOF - PROOF - ONE PASS OF REAL NUDGES through the waker '" + $waker.name + "', then it ends. WATCH THE SESSIONS: " + $shows + ". Nothing is posted: the restore source and the tells stay shadow") }
+        return [pscustomobject]@{ ok = $true; usage = $false; mode = "proof"; target = $Target; live = $true; waker = $waker; reason = ""; banner = ("PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $Target + " AND NO OTHER, through the waker '" + $waker.name + "', then it ends. WATCH THAT SESSION: " + $shows + ". Nothing is posted: the restore source and the tells stay shadow") }
     }
     if ($unverified.Count -gt 0) { return (& $no ("wake run -Mode live is refused: the waker '" + $waker.name + "' says these are unverified - " + ($unverified -join ", ") + " - and a live run rings only through a waker whose every capability is yes. Show them first, in a proof run (-Mode proof -Once); its capabilities.json says what is still to be run")) }
-    return [pscustomobject]@{ ok = $true; mode = "live"; live = $true; waker = $waker; reason = ""; banner = ("LIVE - REAL NUDGES are sent through the waker '" + $waker.name + "'. The restore source stays shadow: it journals what it would post and posts nothing") }
+    return [pscustomobject]@{ ok = $true; usage = $false; mode = "live"; target = ""; live = $true; waker = $waker; reason = ""; banner = ("LIVE - REAL NUDGES are sent through the waker '" + $waker.name + "'. The restore source stays shadow: it journals what it would post and posts nothing") }
 }
 
 function Get-HordeWakeRunPick {
@@ -225,7 +242,14 @@ function Invoke-HordeWakeTick {
         # A SILENT FLEET (core/Wake.ps1, Update-HordeWakeSilence) is asked by probes only, from the pass
         # after the one that found it so.
         $silentNow = ($null -ne $Run.silence -and $Run.silence.silent -eq $true)
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow
+        # A PROOF RUN'S ONE SESSION (the header). Without one it nudges nobody: it never runs the pass
+        # over the whole fleet.
+        $only = ""
+        if ($mode -ceq "proof") {
+            $only = "$(Get-HordeWakeEntryValue $Run "target")"
+            if ($only -ceq "") { throw "a proof run was made without the one session it may nudge, so it nudged nobody" }
+        }
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow -Only $only
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
         # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).
