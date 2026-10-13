@@ -34,5 +34,8 @@
         @{ Name = "unavailable-scheduler-used"
            Find = '        if ($ok) { return (New-HordeKnown -Value $s) }'
            Replace = '        return (New-HordeKnown -Value $s)' }
+        @{ Name = "with-person-not-carried"
+           Find = 'withPerson = [bool]$WithPerson }'
+           Replace = 'withPerson = $false }' }
     )
 }

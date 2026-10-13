@@ -72,6 +72,13 @@ function New-HordeScheduledJob {
     # The job, as data. It runs -Script with -Arguments and -Environment as the current user, every
     # -EveryMinutes, at low priority, stopped after -TimeLimitMinutes, never two at once, and not at
     # all when -Disabled. -HordeHome is the home it serves, written into its marker.
+    #
+    # -WithPerson: THE JOB RUNS IN THE PERSON'S OWN LOGON SESSION, AND ONLY WHILE THEY ARE LOGGED ON.
+    # A job is otherwise run where nobody sees it, logged on or not, which is right for work on files.
+    # The supervisor of services (core/Services.ps1) cannot run there: a window it opens must be on
+    # the person's desktop, whether the person is idle is a fact of their session alone
+    # (core/ServiceHostPort.ps1), and what it starts must be able to open the keys of their logon.
+    # How a scheduler runs a job there without a window flashing every minute is the scheduler's.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [string]$Folder = "Horde",
@@ -82,7 +89,8 @@ function New-HordeScheduledJob {
         [string]$Description = "",
         [int]$EveryMinutes = 30,
         [int]$TimeLimitMinutes = 20,
-        [switch]$Disabled
+        [switch]$Disabled,
+        [switch]$WithPerson
     )
     Assert-HordeJobName -Name $Name -Folder $Folder
     if ($EveryMinutes -lt 1 -or $TimeLimitMinutes -lt 1 -or $TimeLimitMinutes -gt $EveryMinutes) { throw "a job runs at least every minute, and stops before its next run" }
@@ -94,7 +102,7 @@ function New-HordeScheduledJob {
     foreach ($a in @($Arguments)) { if ("$a".Length -gt 0 -and $dashes -contains "$a"[0]) { throw ("a job argument cannot start with '-': '" + $a + "'") } }
     foreach ($v in @(@($Script, $HordeHome) + @($Arguments) + @($Environment.Values))) { if ("$v" -match "[`r`n]") { throw "a job's script, arguments and environment cannot hold a line break" } }
     $text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome
-    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled }
+    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson }
 }
 
 function Read-HordeJobMarker {

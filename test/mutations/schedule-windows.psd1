@@ -38,5 +38,14 @@
         @{ Name = "home-quoted-into-the-command"
            Find = '[void]$sb.Append(''[System.Environment]::SetEnvironmentVariable('''''' + $k + '''''', (& $d '''''' + (ConvertTo-HordeBase64Text "$($Job.environment[$k])") + ''''''), ''''Process''''); '')'
            Replace = '[void]$sb.Append(''$env:'' + $k + '' = '''''' + "$($Job.environment[$k])" + ''''''; '')' }
+        @{ Name = "with-person-job-runs-unseen"
+           Find = '{ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited }'
+           Replace = '{ }' }
+        @{ Name = "with-person-job-flashes-a-window"
+           Find = '{ return [pscustomobject]@{ program = "conhost.exe"; arguments = ("--headless powershell.exe " + $shellArguments) } }'
+           Replace = '{ }' }
+        @{ Name = "every-job-with-the-person"
+           Find = 'if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { $principal ='
+           Replace = 'if ($true) { $principal =' }
     )
 }
