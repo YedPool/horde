@@ -65,10 +65,12 @@ function Set-HordeMemoryWakerSession {
         [string]$MidTurn = "no",
         [string]$Outcome = "woken",
         [string]$OutcomeReason = "",
-        $UnreadableCount = $null
+        $UnreadableCount = $null,
+        $Limited = $null,
+        $LimitedUntil = $null
     )
     $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; unreadCount = $UnreadCount;
-        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount }
+        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil }
 }
 
 function Set-HordeMemoryWakerFault {
@@ -116,6 +118,8 @@ function Get-HordeMemoryWakerState {
     if ($script:HordeMemoryWakerCheap -and -not $Full) { $value["boxEmpty"] = "unknown"; $value["midTurn"] = "unknown" }
     # Reported only when a test said so: left out, the port reads it as none.
     if ($null -ne $s.unreadableCount) { $value["unreadableCount"] = $s.unreadableCount }
+    if ($null -ne $s.limited) { $value["limited"] = $s.limited }
+    if ($null -ne $s.limitedUntil) { $value["limitedUntil"] = $s.limitedUntil }
     return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt (Get-HordeMemoryWakerTime))
 }
 

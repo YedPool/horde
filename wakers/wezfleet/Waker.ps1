@@ -13,6 +13,7 @@
 #       elapsedMs }, outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an
 #       empty -To or a bad budget. It does not START typing when less than 30 s of its budget is left,
 #       and answers refused, budget-too-small, for that.
+# (A row may also carry limited and limitedUntil - Get-HordeWezfleetWakerLimit.)
 # A row is { id; label; role; parent; retired; reachable; mail; unreadCount; unreadableCount;
 # oldestUnreadAt; idle; boxEmpty; midTurn; reason; reasons }. In form A boxEmpty and midTurn are always
 # unknown: reading them means reading a pane, which is form B's.
@@ -434,6 +435,10 @@ function Test-HordeWezfleetWakerRow {
         if ($null -ne $v -and -not (($v -is [int] -or $v -is [long]) -and $v -ge 0)) { return ("a row's " + $k + " is neither a whole number, 0 or more, nor null") }
     }
     if ($null -ne $Row.oldestUnreadAt -and $Row.oldestUnreadAt -isnot [string] -and $Row.oldestUnreadAt -isnot [datetime]) { return "a row's oldestUnreadAt is neither a time nor null" }
+    # limited AND limitedUntil ARE READ WHEN A ROW HAS THEM, and a row of a command too old to say
+    # either is still a row (Get-HordeWezfleetWakerLimit).
+    if ($names -ccontains "limited" -and ($Row.limited -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.limited)) { return "a row's limited is not yes, no or unknown" }
+    if ($names -ccontains "limitedUntil" -and $null -ne $Row.limitedUntil -and $Row.limitedUntil -isnot [string] -and $Row.limitedUntil -isnot [datetime]) { return "a row's limitedUntil is neither a time nor null" }
     foreach ($k in @("reachable", "idle", "boxEmpty", "midTurn")) { if ($script:HordeWezfleetWakerWords -cnotcontains $Row.$k) { return ("a row's " + $k + " is '" + (ConvertTo-HordeWezfleetWakerLine $Row.$k -Max 40) + "', not yes, no or unknown") } }
     return ""
 }
@@ -536,6 +541,36 @@ function ConvertTo-HordeWezfleetWakerRole {
     return "unknown"
 }
 
+function Get-HordeWezfleetWakerLimit {
+    # A row's usage limit, as the port's two members: { limited; limitedUntil }.
+    # A session whose last turn ended in a usage-limit error cannot answer a knock until the limit
+    # resets (measured 2026-10-13, 04:36 to 05:55 UTC: every session of the account was stopped for
+    # about 80 minutes, every knock in that window was typed and nobody could answer). The fleet's
+    # command says so in each row: limited (yes, no, unknown) and limitedUntil (a time, or null).
+    #   no row member (a command too old to say), limited no   -> not limited
+    #   limited unknown                                        -> NOT limited: waking is never held
+    #                                                             back on a guess
+    #   limited yes, with a limitedUntil that can be placed    -> limited, until then. The command keeps
+    #                                                             a reset that has passed in the row,
+    #                                                             still saying yes: whether the time is
+    #                                                             ahead or over is the watcher's to say,
+    #                                                             with the pass's clock (core/Wake.ps1)
+    #   limited yes, limitedUntil null or not a time           -> limited, and nobody knows until when
+    param([Parameter(Mandatory = $true)]$Row)
+    $p = $Row.PSObject.Properties["limited"]
+    if ($null -eq $p -or $p.Value -cne "yes") { return [pscustomobject]@{ limited = $false; limitedUntil = $null } }
+    $until = $null
+    $u = $Row.PSObject.Properties["limitedUntil"]
+    if ($null -ne $u) {
+        if ($u.Value -is [datetime]) { if ($u.Value.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $u.Value.ToUniversalTime() } }
+        elseif ($u.Value -is [string]) {
+            $parsed = [datetime]::MinValue
+            if ([datetime]::TryParse($u.Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }
+        }
+    }
+    return [pscustomobject]@{ limited = $true; limitedUntil = $until }
+}
+
 function Read-HordeWezfleetWakerState {
     # A row as the port's state, or why it is none: { ok; value; reason }.
     #   RULE 1: reason and reasons are NOT read. A row with good mail and one corrupt record is a row
@@ -554,7 +589,8 @@ function Read-HordeWezfleetWakerState {
         }
         if ($null -eq $oldest) { return [pscustomobject]@{ ok = $false; value = $null; reason = ("the fleet says " + $Row.id + " has unread mail and gave no time for the oldest that can be placed") } }
     }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn } }
+    $limit = Get-HordeWezfleetWakerLimit -Row $Row
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil } }
 }
 
 function Get-HordeWezfleetWakerTargets {

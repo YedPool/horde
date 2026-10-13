@@ -8,6 +8,21 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "limited-not-carried"
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
+           Replace = 'midTurn = $words["midTurn"]; limited = $false; limitedUntil = $limitedUntil })' }
+        @{ Name = "the-end-of-a-limit-not-carried"
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
+           Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null })' }
+        @{ Name = "a-limited-of-any-kind-accepted"
+           Find = 'if ($lim.value -isnot [bool]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-limit-ending-at-a-time-with-no-zone-accepted"
+           Find = 'if ($null -eq $limitedUntil) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "an-end-read-beside-not-limited"
+           Find = 'if ($limited -and $until.has -and $null -ne $until.value) {'
+           Replace = 'if ($until.has -and $null -ne $until.value) {' }
         @{ Name = "invalid-capabilities-registered"
            Find = 'if ($findings.Count -gt 0) { throw ("waker ''" + (Split-Path -Leaf $from) + "'' refused: "'
            Replace = 'if ($false) { throw ("waker ''" + (Split-Path -Leaf $from) + "'' refused: "' }

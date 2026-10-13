@@ -397,7 +397,7 @@ function Get-HordeWakeTargets {
 
 function Get-HordeWakeState {
     # One session's state as -Waker sees it: known { id; unreadCount; unreadableCount; oldestUnreadAt;
-    # idle; boxEmpty; midTurn }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
+    # idle; boxEmpty; midTurn; limited; limitedUntil }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
     # -Full asks for the waker's fullest reading (ADAPTER CONTRACT, Confirm): the look at the session
     # itself that says what is in its box and whether it is in a turn. Held to the same checks.
     param($Waker, [string]$Id, [switch]$Full)
@@ -440,6 +440,24 @@ function Get-HordeWakeState {
         if (-not ($bad.value -is [int] -or $bad.value -is [long]) -or $bad.value -lt 0 -or $bad.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadableCount that is not a whole number, 0 or more")) }
         $unreadable = [int]$bad.value
     }
+    # limited AND limitedUntil ARE OPTIONAL: the session's last turn ended in a usage-limit error, so it
+    # cannot answer a knock until the limit resets - at limitedUntil when the waker knows when, and at
+    # a time nobody knows when it gives none. A waker that cannot tell leaves both out, and that is
+    # not limited. limited is true or false; limitedUntil is a time with a zone, read only beside a
+    # limited that is true. The port only carries them: what a limited session is owed is the
+    # watcher's to say (core/Wake.ps1, Get-HordeWakeLimit).
+    $limited = $false
+    $limitedUntil = $null
+    $lim = Get-HordeWakerMember $v "limited"
+    if ($lim.has) {
+        if ($lim.value -isnot [bool]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limited that is not true or false")) }
+        $limited = [bool]$lim.value
+    }
+    $until = Get-HordeWakerMember $v "limitedUntil"
+    if ($limited -and $until.has -and $null -ne $until.value) {
+        $limitedUntil = ConvertTo-HordeWakerUtc $until.value
+        if ($null -eq $limitedUntil) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limitedUntil that is not a time with a zone")) }
+    }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
         $m = Get-HordeWakerMember $v $n
@@ -451,7 +469,7 @@ function Get-HordeWakeState {
     # nudge typed into somebody's text.
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"] }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil }) -ObservedAt $a.observedAt)
 }
 
 function Send-HordeWakeNudge {

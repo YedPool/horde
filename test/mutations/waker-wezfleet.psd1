@@ -6,6 +6,21 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "limited-unknown-holds-waking-back"
+           Find = 'if ($null -eq $p -or $p.Value -cne "yes") { return'
+           Replace = 'if ($null -eq $p -or $p.Value -ceq "no") { return' }
+        @{ Name = "a-rows-limit-is-never-read"
+           Find = 'if ($null -eq $p -or $p.Value -cne "yes") { return'
+           Replace = 'if ($true) { return' }
+        @{ Name = "a-reset-with-no-zone-is-read-as-local"
+           Find = '[ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }'
+           Replace = '[ref]$parsed)) { $until = $parsed.ToUniversalTime() }' }
+        @{ Name = "a-limited-that-is-no-word-accepted"
+           Find = 'if ($names -ccontains "limited" -and ($Row.limited -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.limited)) { return "a row''s limited is not yes, no or unknown" }'
+           Replace = '' }
+        @{ Name = "a-limitedUntil-that-is-no-time-accepted"
+           Find = 'if ($names -ccontains "limitedUntil" -and $null -ne $Row.limitedUntil -and $Row.limitedUntil -isnot [string] -and $Row.limitedUntil -isnot [datetime]) { return "a row''s limitedUntil is neither a time nor null" }'
+           Replace = '' }
         @{ Name = "retired-session-with-no-mail-is-a-target"
            Find = 'if ($row.retired -and -not $hasMail) { continue }'
            Replace = '' }

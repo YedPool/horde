@@ -8,6 +8,24 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-quiet-is-forgotten-between-ticks"
+           Find = '$Run.silence = $silence.seen'
+           Replace = '$Run.silence = $null' }
+        @{ Name = "a-silent-fleet-is-nudged-as-ever"
+           Find = '-Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow'
+           Replace = '-Ledger $Run.ledger -Shadow:$shadow' }
+        @{ Name = "found-silent-nothing-is-forgiven"
+           Find = 'if ($silence.declared) { $ledgerNow = Reset-HordeWakeLedgerAttempts -Ledger $ledgerNow }'
+           Replace = '' }
+        @{ Name = "movement-releases-nobody"
+           Find = 'if ($silence.moved) { $ledgerNow = Set-HordeWakeLedgerProbesDue -Ledger $ledgerNow }'
+           Replace = '' }
+        @{ Name = "a-limit-is-journaled-every-tick"
+           Find = '$Run.limited = $limitedNow.seen'
+           Replace = '$Run.limited = @{}' }
+        @{ Name = "nobody-told-of-a-silent-fleet"
+           Find = 'if ($null -ne $silence.condition) { [void]$conditions.Add('
+           Replace = 'if ($false) { [void]$conditions.Add(' }
         @{ Name = "proof-as-a-loop"
            Find = 'if (-not $Once) { return (& $no "wake run -Mode proof makes one pass'
            Replace = 'if ($false) { return (& $no "wake run -Mode proof makes one pass' }

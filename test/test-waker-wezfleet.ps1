@@ -146,6 +146,39 @@ Check ($pass.unreadable[(Sid 1)] -eq 1) "and the pass hands the unreadable count
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- a usage limit is read from the row when the row says it ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+# A USAGE LIMIT, as the fleet's rows say it. A row of a command too old to say is a row all the same.
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) "a row with no limited member - a command too old to say - is not limited"
+foreach ($word in @("no", "unknown")) {
+    & $fx.SetRow $state (New-Row 1 @{ limited = $word; limitedUntil = "2026-10-13T05:55:00Z" })
+    $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+    Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) ("limited " + $word + " is not limited: waking is never held back on a guess")
+}
+& $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2031-01-01T05:55:00Z" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $a.value.limitedUntil -eq (New-Object System.DateTime(2031, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "limited yes with a time is limited until then"
+& $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2020-01-01T05:55:00Z" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $a.value.limitedUntil -eq (New-Object System.DateTime(2020, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "a reset that has passed is carried as the fleet gave it - still yes, with the past time: whether it is over is the watcher's to say, with the pass's clock"
+foreach ($until in @($null, "next Tuesday", "2026-10-13 05:55")) {
+    & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = $until })
+    $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+    Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $null -eq $a.value.limitedUntil) ("limited yes with a limitedUntil of '" + $until + "' - none, or one that cannot be placed - is limited, and nobody knows until when")
+}
+& $fx.SetRow $state (New-Row 1 @{ limited = "yes" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $null -eq $a.value.limitedUntil) "and so is limited yes with no limitedUntil member at all"
+& $fx.SetRow $state (New-Row 1 @{ limited = "maybe" })
+Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).state -ceq "unknown") "a limited that is none of the three words is a row this waker does not read"
+& $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = 5 })
+Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).state -ceq "unknown") "and so is a limitedUntil that is neither a time nor null"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- rule 2: a count that is null is unknown, never 0 ---" -ForegroundColor Cyan
 
 $state = & $fx.New

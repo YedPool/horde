@@ -63,7 +63,7 @@ function New-HordeWakeRun {
     # file that could not be read is started from empty, and says so.
     param([switch]$Live, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:(-not $Live)
-    $run = [pscustomobject]@{ mode = $word; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
@@ -222,7 +222,10 @@ function Invoke-HordeWakeTick {
     foreach ($n in @($Run.notes)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $n.id -Outcome "unknown" -Reason $n.reason)) }
     # THE WAKE PASS, in the run's mode: this is the one call whose mode differs between the two.
     try {
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow
+        # A SILENT FLEET (core/Wake.ps1, Update-HordeWakeSilence) is asked by probes only, from the pass
+        # after the one that found it so.
+        $silentNow = ($null -ne $Run.silence -and $Run.silence.silent -eq $true)
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row - said once - and then the line for each unreadable pass is dropped until it works.
         $fleetRead = Update-HordeWakeFleetRead -Seen $Run.fleetRead -Listing $result.listing -Now $Now -Settings $Settings
@@ -232,6 +235,16 @@ function Invoke-HordeWakeTick {
             [void]$entries.Add($e)
         }
         foreach ($e in @($fleetRead.entries)) { [void]$entries.Add($e) }
+        # A USAGE LIMIT is said once per session per limit; and a fleet in which nobody answers is found.
+        $limitedNow = Update-HordeWakeLimited -Seen $Run.limited -Limited $result.limited -Known @($result.mail.Keys) -Now $Now
+        $Run.limited = $limitedNow.seen
+        foreach ($e in @($limitedNow.entries)) { [void]$entries.Add($e) }
+        $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Mail $result.mail -Now $Now -Settings $Settings
+        $Run.silence = $silence.seen
+        foreach ($e in @($silence.entries)) { [void]$entries.Add($e) }
+        $ledgerNow = $result.ledger
+        if ($silence.declared) { $ledgerNow = Reset-HordeWakeLedgerAttempts -Ledger $ledgerNow }
+        if ($silence.moved) { $ledgerNow = Set-HordeWakeLedgerProbesDue -Ledger $ledgerNow }
         # MAIL NOBODY CAN READ, said once when it lasts two passes (core/Wake.ps1, Update-HordeWakeBadMail).
         $bad = Update-HordeWakeBadMail -Seen $Run.badMail -Unreadable $result.unreadable -Now $Now
         $Run.badMail = $bad.seen
@@ -249,6 +262,7 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($bad.entries)) {
             [void]$conditions.Add((New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)))
         }
+        if ($null -ne $silence.condition) { [void]$conditions.Add((New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text)) }
         if ($null -ne $fleetRead.condition) { [void]$conditions.Add((New-HordeWakeTellCondition -Kind $fleetRead.condition.kind -Subject $fleetRead.condition.subject -Instance $fleetRead.condition.instance -Text $fleetRead.condition.text)) }
         # WHO THE WARCHIEF IS IS REMEMBERED from the last pass that could say: the pass on which the fleet
         # cannot be read is the one that most needs somebody told, and it is the one that cannot say who.
@@ -263,8 +277,8 @@ function Invoke-HordeWakeTick {
             $place = Get-HordeWakeSenderFile -Run $Run -Stem "tells"
             Save-HordeWakeTellState -Told $Run.told -Name $place.name -Mode $place.mode -HordeHome $HordeHome
         }
-        $changed = (@($result.entries).Count -gt 0 -or $result.ledger.Count -ne $Run.ledger.Count)
-        $Run.ledger = $result.ledger
+        $changed = (@($result.entries).Count -gt 0 -or $ledgerNow.Count -ne $Run.ledger.Count -or $silence.declared -or $silence.moved)
+        $Run.ledger = $ledgerNow
         if ($changed) { Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.

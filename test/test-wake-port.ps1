@@ -291,6 +291,28 @@ $script:stateAnswer = { param($id) $s = New-State; Add-Member -InputObject $s -M
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unreadableCount")) "state: an unreadableCount of null is 'I could not count', which is unknown and never 0"
 
+# limited and limitedUntil: optional, carried, and held to their kinds.
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) "state: a waker that says nothing of a usage limit is read as not limited"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true; limitedUntil = $t0.AddHours(1) }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $a.value.limitedUntil -eq $t0.AddHours(1) -and $a.value.limitedUntil.Kind -eq [System.DateTimeKind]::Utc) "state: limited and the time it ends are carried, the time as UTC"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $null -eq $a.value.limitedUntil) "state: limited with no time is limited, and nobody knows until when"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $false; limitedUntil = $t0.AddHours(1) }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) "state: a time beside a limited that is false is not read"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes" }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limited")) "state: a limited that is not true or false is unknown"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true; limitedUntil = (New-Object System.DateTime(2026, 10, 12, 9, 0, 0)) }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limitedUntil")) "state: a limitedUntil with no zone cannot be placed, and is unknown"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true; limitedUntil = "soon" }) }
+Check ((Get-HordeWakeState -Waker $scripted -Id $sid).state -ceq "unknown") "state: and so is one that is no time"
+
 $script:blindBox = "unknown"; $script:blindTurn = "unknown"
 Check ((Get-HordeWakeState -Waker $blind -Id $sid).state -ceq "known") "state: a waker that cannot read the box or the turn may say unknown of both"
 $script:blindBox = "yes"; $script:blindTurn = "unknown"

@@ -7,6 +7,8 @@
 #   fleet-read-failing  a reading of the fleet that has failed so many times in a row that it is permanent
 #   bad-mail            a session whose mailbox holds records nobody can read, seen on two passes running
 #   nudge-killed        a nudge the waker had to stop part-way, which may have left text in a session's box
+#   fleet-silent        every nudge answered woken for ten minutes and no session took any mail: a
+#                       fleet that cannot answer (core/Wake.ps1, Update-HordeWakeSilence)
 #
 # A SENDER, NOT PART OF THE WATCHER'S RULES, exactly as the restore source is (core/RestoreSource.ps1):
 # the rules decide and journal; this posts mail, and only mail. The tick hands it the conditions.
@@ -43,7 +45,7 @@
 
 # WHO A TELL IS FROM: this module, by a name of its own in place of a session id.
 $script:HordeWakeTellFrom = "horde-wake-watcher"
-$script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed")
+$script:HordeWakeTellKinds = @("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent")
 
 function Get-HordeWakeTellSettings {
     # The tell sender's settings, with -Overrides laid over the defaults. A name that is not a setting
