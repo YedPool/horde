@@ -8,9 +8,10 @@
 #        under that version must be that racer's.
 #   I-b. THE FIRST SHARE OF A HOME. Every round is a home with no key, and every racer's share of
 #        that round is its first: all of them find no key, and then make one, one after another in
-#        an order the worker stages (it says why). They must end with ONE key, and all be told the
-#        one file id it gives (files/Key.ps1). Race I, on a new home too, is the same thing left to
-#        the machine: there the four really are inside the making of the key at one moment.
+#        an order the worker stages (it says why, and why not by the clock). They must end with ONE
+#        key, and all be told the one file id it gives (files/Key.ps1). Race I, on a new home too,
+#        is the same thing left to the machine: there the four really are inside the making of the
+#        key at one moment.
 #   II.  ONE SET OF BYTES. Every racer shares a file of its own holding the same words, so all put the
 #        same bytes in the store at once. None may be refused or throw - which is what a racer that
 #        saw another's bytes half-written would do - and the bytes are kept once.
@@ -25,8 +26,10 @@
 #   - A BROKEN STORE: the same race against a copy of the store whose move-without-replace is replaced
 #     by a write that overwrites. There the harness must see one version told to two racers.
 # And race I-b has its own: the same race against a copy whose KEY is put in place by a copy that
-# replaces. There the harness must see racers told different ids for one path in at least half of
-# the rounds. The order is staged, so every round should split; the count is printed.
+# replaces. There the harness must see racers told different ids for one path in EVERY round: the
+# order is staged by the racers telling each other where they are, never by the clock, so a busy
+# machine makes the race slower and no round is left to chance. That the staging held in every
+# round is a check of its own, in the real race and in the control.
 # Race II has no control: a store that overwrites the same bytes with the same bytes loses nothing to
 # see. It is kept for what it can show, and says so here.
 #
@@ -56,7 +59,7 @@ function Start-Worker {
     $psi.FileName = "powershell.exe"
     $psi.Arguments = ("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + $worker + "`" -Mode " + $Mode + " -CodePath `"" + $Code + "`" -HordeHome `"" + (Join-Path $Dir "home") +
         "`" -Source `"" + $Source + "`" -GoFile `"" + (Join-Path $Dir "go.txt") + "`" -ReadyFile `"" + (Join-Path $Dir ("ready-" + $Racer)) + "`" -LogFile `"" + (Join-Path $Dir ("log-" + $Racer + ".txt")) +
-        "`" -Racer " + $Racer + " -Count " + $Count + " -TickMs " + $tickMs + " " + $Extra)
+        "`" -Racer " + $Racer + " -Racers " + $racers + " -Count " + $Count + " -TickMs " + $tickMs + " " + $Extra)
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -111,7 +114,12 @@ function Invoke-Race {
             [void]$told.Add([pscustomobject]@{ racer = $r; index = [int]$f[0]; outcome = $f[1]; fileId = $f[2]; version = [int]$f[3]; attempts = [int]$f[4]; sha256 = $f[5]; reason = $f[6]; title = ("racer " + $r + " share " + $f[0]) })
         }
     }
-    return [pscustomobject]@{ problems = @($problems); told = @($told); home = (Join-Path $dir "home"); store = (Join-Path $dir "home\store\files") }
+    # What the racers of a staged race told each other (race-worker.ps1): every share that was DONE
+    # in its turn, and every share for which the staging did not hold. Both are 0 in a race that
+    # stages nothing.
+    $staged = @(Get-ChildItem -LiteralPath $dir -Filter "stage-*-done-*" -File).Count
+    $stageFailed = @(Get-ChildItem -LiteralPath $dir -Filter "stage-*-failed-*" -File).Count
+    return [pscustomobject]@{ problems = @($problems); told = @($told); home = (Join-Path $dir "home"); store = (Join-Path $dir "home\store\files"); staged = $staged; stageFailed = $stageFailed }
 }
 
 function Get-RaceFacts {
@@ -288,8 +296,10 @@ Write-Host ""
 Write-Host ("--- I-b. THE FIRST SHARE of a home, raced: " + $racers + " processes, " + $perRacer + " rounds, each round a home with no key ---") -ForegroundColor Cyan
 $first = Invoke-Race -Name "first-share" -Mode "first-share" -Code $shareCode
 $ff = Get-FirstShareFacts $first
-Write-Host ("  real key: " + @($first.told).Count + " shares in " + $ff.rounds + " new homes; not shared " + @($ff.notShared).Count + "; rounds told two ids " + @($ff.split).Count + "; homes without exactly one key " + @($ff.badKeys).Count) -ForegroundColor DarkGray
+Write-Host ("  real key: " + @($first.told).Count + " shares in " + $ff.rounds + " new homes; not shared " + @($ff.notShared).Count + "; rounds told two ids " + @($ff.split).Count + "; homes without exactly one key " + @($ff.badKeys).Count + "; shares staged " + $first.staged + ", staging failed " + $first.stageFailed) -ForegroundColor DarkGray
 Check (@($first.problems).Count -eq 0) "every racer started, ran and exited cleanly"
+Check ($first.staged -eq $total -and $first.stageFailed -eq 0) ("THE ORDER WAS STAGED IN EVERY ROUND, and not by the clock: every racer had found no key before any made one, and they went on one at a time (" + $first.staged + " of " + $total + " shares staged, " + $first.stageFailed + " for which the staging did not hold)")
+Check ($race.staged -eq 0 -and $race.stageFailed -eq 0) "CONTROL: race I stages nothing - there the racers are left to the machine"
 foreach ($pr in @($first.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
 Check (@($first.told).Count -eq $total -and $ff.rounds -eq $perRacer -and @($ff.notShared).Count -eq 0) ("every first share was told 'shared': the racer that lost the key read the winner's, none refused, none threw (" + (@($first.told).Count - @($ff.notShared).Count) + " of " + $total + ")")
 foreach ($odd in @($ff.notShared | Select-Object -First 5)) { Write-Host ("         racer " + $odd.racer + " share " + $odd.index + ": " + $odd.outcome + " " + $odd.reason) -ForegroundColor Red }
@@ -308,12 +318,14 @@ Check (([regex]::Matches($src, [regex]::Escape($find))).Count -eq 1) "the contro
 [System.IO.File]::WriteAllText($keyCopy, $src.Replace($find, '[System.IO.File]::Copy($tmpPath, $Path, $true); $moved = "moved"'))
 $badFirst = Invoke-Race -Name "first-share-broken" -Mode "first-share" -Code (Join-Path $brokenKey "files\Share.ps1")
 $bff = Get-FirstShareFacts $badFirst
-Write-Host ("  replacing key: " + @($badFirst.told).Count + " shares; not shared " + @($bff.notShared).Count + "; rounds told two or more ids " + @($bff.split).Count) -ForegroundColor DarkGray
+Write-Host ("  replacing key: " + @($badFirst.told).Count + " shares; not shared " + @($bff.notShared).Count + "; rounds told two or more ids " + @($bff.split).Count + "; shares staged " + $badFirst.staged + ", staging failed " + $badFirst.stageFailed) -ForegroundColor DarkGray
 Check (@($badFirst.told).Count -eq $total) "the control's racers each wrote down what they were told"
-# Staged, so every round should split; half of them is asked for, because a machine busy enough to
-# hold three processes back 50 ms in one round is possible, and a round like that proves nothing either way.
-$needSplit = [int][System.Math]::Ceiling($perRacer / 2)
-Check (@($bff.split).Count -ge $needSplit) ("CONTROL: the race sees two keys when the code allows them: " + @($bff.split).Count + " of " + $perRacer + " rounds in which racers were told different ids for one path, and at least " + $needSplit + " are required (" + @($bff.notShared).Count + " share(s) failed outright on a key being replaced under them)")
+Check ($badFirst.staged -eq $total -and $badFirst.stageFailed -eq 0) ("the control's order was staged in every round too (" + $badFirst.staged + " of " + $total + " shares staged, " + $badFirst.stageFailed + " failed)")
+# EVERY ROUND, NOT HALF OF THEM. While the order was staged by the clock, half was asked for,
+# because a busy machine could hold a racer back past its turn; three runs of 2026-10-13 saw 0, 0
+# and 1 of 6. Staged by the racers themselves, the order holds whatever the load, so a round that
+# does not split is the control failing and never the machine.
+Check (@($bff.split).Count -eq $perRacer) ("CONTROL: the race sees two keys when the code allows them, in EVERY round: " + @($bff.split).Count + " of " + $perRacer + " rounds in which racers were told different ids for one path (" + @($bff.notShared).Count + " share(s) not shared)")
 
 Write-Host ""
 Write-Host ("--- II. " + $racers + " processes each share a file of their own holding the SAME bytes, " + $perRacer + " rounds ---") -ForegroundColor Cyan
