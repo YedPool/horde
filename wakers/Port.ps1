@@ -88,6 +88,12 @@
 #            fixed is true when a person NAMED the place in a setting, false when the waker found it
 #            by looking (on PATH); how is one line saying which. A waker that runs no program of
 #            anybody's registers none (Get-HordeWakerSource).
+#   Reserved param()             -> known { answered; labels | why }: the labels this waker's fleet
+#            reserves for senders that are no session, ASKED OF THE FLEET, not copied. answered is
+#            true with labels, the list; or false with why, one line, when the fleet could not be
+#            asked - its tool is older than the question, or cannot be found. An answer it could
+#            not read is unknown. Only a suite asks (Get-HordeWakerReservedLabels): it is how
+#            Horde's own copy of the list is held to the fleet's. A waker with no fleet registers none.
 #   Begin    param()             a pass begins. A waker that answers a pass's many questions from one
 #            reading of the fleet throws that reading away here, and nowhere else by the clock: the
 #            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
@@ -175,6 +181,7 @@ function Register-HordeWaker {
         [scriptblock]$Begin = $null,
         [scriptblock]$Confirm = $null,
         [scriptblock]$Source = $null,
+        [scriptblock]$Reserved = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -190,7 +197,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source; reserved = $Reserved }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -353,6 +360,38 @@ function ConvertFrom-HordeWakerAnswer {
     if ($Answer.state -ceq "unknown") { return [pscustomobject]@{ ok = $false; answer = $Answer } }
     if ($Answer.state -ceq "absent") { return [pscustomobject]@{ ok = $false; answer = (New-HordeUnknown -Reason ("waker '" + $Waker + "' answered " + $What + " absent, which says nothing of what it was asked")) } }
     return [pscustomobject]@{ ok = $true; answer = $Answer }
+}
+
+function Get-HordeWakerReservedLabels {
+    # THE LABELS THIS WAKER'S FLEET RESERVES, as the fleet itself says them (ADAPTER CONTRACT, Reserved):
+    # known { labels }, absent - with why - when there was nothing to ask or no way to ask it, or
+    # unknown when the waker answered something this cannot read, or threw.
+    # ABSENT IS "NOT COMPARED", NEVER "THE SAME": a caller that holds Horde's list to the fleet's
+    # (core/ReservedLabels.ps1) must say so and must not pass the comparison on it.
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so the labels its fleet reserves were not asked for")) }
+    if ($null -eq $Waker.reserved) { return (New-HordeAbsent -Note ("waker '" + $Waker.name + "' has no fleet whose reserved labels could be asked for")) }
+    try { $a = & $Waker.reserved }
+    catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to say which labels its fleet reserves") -ErrorRecord $_) }
+    $first = ConvertFrom-HordeWakerAnswer -Answer $a -What "which labels its fleet reserves" -Waker $Waker.name
+    if (-not $first.ok) { return $first.answer }
+    $v = $a.value
+    if (-not (Test-HordeWakerRecord $v)) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered which labels its fleet reserves with something that is not an object")) }
+    $answered = Get-HordeWakerMember $v "answered"
+    if (-not $answered.has -or $answered.value -isnot [bool]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered which labels its fleet reserves without saying, true or false, whether the fleet was asked")) }
+    if (-not $answered.value) {
+        $why = Get-HordeWakerMember $v "why"
+        if (-not $why.has -or $why.value -isnot [string] -or $why.value.Trim() -eq "" -or $why.value -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' said its fleet could not be asked which labels it reserves, without one line saying why")) }
+        return (New-HordeAbsent -Note ("waker '" + $Waker.name + "' could not ask its fleet which labels it reserves: " + $why.value))
+    }
+    $labels = Get-HordeWakerMember $v "labels"
+    if (-not $labels.has -or $null -eq $labels.value -or $labels.value -is [string] -or $labels.value -is [System.ValueType]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' said its fleet answered which labels it reserves, without the list")) }
+    $list = New-Object System.Collections.ArrayList
+    foreach ($l in @($labels.value)) {
+        if ($l -isnot [string] -or $l.Trim() -eq "" -or $l -cmatch "\s") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered which labels its fleet reserves with one that is not a label")) }
+        [void]$list.Add($l)
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ labels = $list.ToArray() }) -ObservedAt $a.observedAt)
 }
 
 function Get-HordeWakerSource {

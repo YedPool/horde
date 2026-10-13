@@ -768,6 +768,44 @@ function Get-HordeWezfleetWakerState {
     return (New-HordeKnown -Value $state.value -ObservedAt (Get-HordeWezfleetWakerTime))
 }
 
+function Get-HordeWezfleetWakerReservedLabels {
+    # THE FLEET'S OWN LIST OF RESERVED LABELS, asked of its command as everything is asked of it: a
+    # process of its own, the fixed PowerShell on the fleet's wezfleet.ps1, under the deadline of a
+    # whole-fleet read (rule 4). The port's Reserved (wakers/Port.ps1).
+    #   wezfleet labels reserved -Json   exit 0, one line:
+    #       { "schema": "wezfleet.labels.reserved", "version": 1, "labels": ["RS", "WW", "SV"] }
+    #   (read from the real command 2026-10-13, at its main after the verb was merged).
+    # THREE ANSWERS, AND THEY ARE NOT ALIKE:
+    #   answered, with the list - exit 0 and that shape;
+    #   NOT ASKED, with why - the command could not be run at all (no checkout to be found, it timed
+    #     out), or it ran and exited with anything but 0: a wezfleet from before the verb says the
+    #     command is unknown and exits non-zero. Nothing was learned, and that is said: it is never
+    #     an empty list, and never "the same as Horde's";
+    #   unknown - exit 0 and something else: the fleet answered and this waker cannot read it.
+    $run = Start-HordeWezfleetWakerProcess -Argv @("labels", "reserved", "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.fleet
+    $at = Get-HordeWezfleetWakerTime
+    if (-not $run.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ answered = $false; why = ("wezfleet labels reserved could not be run: " + (ConvertTo-HordeWezfleetWakerLine "$($run.reason)" -Max $script:HordeWezfleetWakerDetailChars -Tool)) }) -ObservedAt $at) }
+    if ([int]$run.exit -ne 0) {
+        $said = ConvertTo-HordeWezfleetWakerLine ("$($run.stderr)" + "`n" + "$($run.stdout)") -Max $script:HordeWezfleetWakerDetailChars -Tool
+        return (New-HordeKnown -Value ([pscustomobject]@{ answered = $false; why = ("wezfleet labels reserved exit " + $run.exit + ": this wezfleet does not answer it - one from before its list could be asked for" + $(if ($said -ne "") { " (" + $said + ")" } else { "" })) }) -ObservedAt $at)
+    }
+    $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet labels reserved"
+    if (-not $read.ok) { return (New-HordeUnknown -Reason $read.reason -ObservedAt $at) }
+    $j = $read.json
+    $schema = $j.PSObject.Properties["schema"]
+    $version = $j.PSObject.Properties["version"]
+    if ($null -eq $schema -or $schema.Value -isnot [string] -or $schema.Value -cne "wezfleet.labels.reserved" -or $null -eq $version -or -not ($version.Value -is [int] -or $version.Value -is [long]) -or $version.Value -ne 1) { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 answered in a schema or a version this waker does not read (it reads wezfleet.labels.reserved, version 1)" -ObservedAt $at) }
+    $p = $j.PSObject.Properties["labels"]
+    # ConvertFrom-Json gives a list of none as an empty list here; a string or a number is no list.
+    if ($null -eq $p -or $null -eq $p.Value -or $p.Value -is [string] -or $p.Value -is [System.ValueType]) { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 answered without a list of labels" -ObservedAt $at) }
+    $labels = New-Object System.Collections.ArrayList
+    foreach ($l in @($p.Value)) {
+        if ($l -isnot [string] -or $l.Trim() -eq "") { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 listed something that is not a label" -ObservedAt $at) }
+        [void]$labels.Add($l)
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = $labels.ToArray() }) -ObservedAt $at)
+}
+
 function Send-HordeWezfleetWakerNudge {
     # The port's Nudge: form C. Every way the call can fail to say what happened is unreachable with the
     # reason (rules 4 and 5) - nothing is known to have been typed, and the watcher backs off and asks
@@ -857,4 +895,5 @@ $null = Register-HordeWaker -Name "wezfleet" `
     -Confirm { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id -Full } `
     -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
     -Source { Get-HordeWezfleetWakerSource } `
+    -Reserved { Get-HordeWezfleetWakerReservedLabels } `
     -Begin { Clear-HordeWezfleetWakerPass }

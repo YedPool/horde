@@ -8,6 +8,24 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-fleet-that-could-not-be-asked-is-a-known-empty-list"
+           Find = 'return (New-HordeAbsent -Note ("waker ''" + $Waker.name + "'' could not ask its fleet which labels it reserves: " + $why.value))'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ labels = @() }))' }
+        @{ Name = "a-waker-with-no-fleet-reserves-nothing-known"
+           Find = 'if ($null -eq $Waker.reserved) { return (New-HordeAbsent -Note'
+           Replace = 'if ($null -eq $Waker.reserved) { return (New-HordeKnown -Value ([pscustomobject]@{ labels = @() })) }; if ($false) { return (New-HordeAbsent -Note' }
+        @{ Name = "an-answer-that-does-not-say-whether-it-asked-is-read"
+           Find = 'if (-not $answered.has -or $answered.value -isnot [bool]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-reserved-label-that-is-no-label-is-carried"
+           Find = 'if ($l -isnot [string] -or $l.Trim() -eq "" -or $l -cmatch "\s") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "reserved-labels-without-a-list-are-read"
+           Find = 'if (-not $labels.has -or $null -eq $labels.value -or $labels.value -is [string] -or $labels.value -is [System.ValueType]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "not-asked-without-a-why-is-absent"
+           Find = 'if (-not $why.has -or $why.value -isnot [string] -or $why.value.Trim() -eq "" -or $why.value -cmatch "[`r`n]") { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "the-rule-a-waker-names-is-not-carried"
            Find = 'if ($ruled.has -and $ruled.value -is [string] -and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] ='
            Replace = 'if ($false) { $value["rule"] =' }

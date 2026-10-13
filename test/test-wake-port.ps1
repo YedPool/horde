@@ -115,6 +115,40 @@ try {
 } finally { $script:HordeWakers.Clear(); foreach ($k in @($kept.Keys)) { $script:HordeWakers[$k] = $kept[$k] } }
 
 Write-Host ""
+Write-Host "--- which labels a waker's fleet reserves: the list, NOT ASKED, or unknown - three answers, never mixed ---" -ForegroundColor Cyan
+
+Check ((Get-HordeWakerReservedLabels -Waker $memory).state -ceq "absent" -and "$((Get-HordeWakerReservedLabels -Waker $memory).reason)".Contains("no fleet")) "a waker that registered no Reserved has no fleet to ask: absent, saying so"
+$script:reservedAnswer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = @("RS", "WW", "SV") }) }
+$reserving = Register-HordeWaker -Name "fixture-reserved" -Folder (Join-Path $fx "fixture-reserved") -Targets { New-HordeKnown -Value @() } -State { param($id) New-HordeUnknown -Reason "a fixture" } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" } -Reserved { & $script:reservedAnswer }
+$a = Get-HordeWakerReservedLabels -Waker $reserving
+Check ($a.state -ceq "known" -and (@($a.value.labels) -join ",") -ceq "RS,WW,SV") "a fleet that answered is known, with its list as it gave it"
+$script:reservedAnswer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = @() }) }
+$a = Get-HordeWakerReservedLabels -Waker $reserving
+Check ($a.state -ceq "known" -and @($a.value.labels).Count -eq 0) "a fleet that answered with no labels is a KNOWN empty list: that is an answer, and a comparison with it is made"
+$script:reservedAnswer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $false; why = "its tool is older than the question" }) }
+$a = Get-HordeWakerReservedLabels -Waker $reserving
+Check ($a.state -ceq "absent" -and "$($a.reason)".Contains("could not ask") -and "$($a.reason)".Contains("its tool is older than the question")) "a fleet that could not be asked is ABSENT, with why: never a known empty list, never known at all"
+foreach ($bad in @(
+        @{ what = "throws"; answer = { throw "boom" } },
+        @{ what = "answers with something that is no answer"; answer = { "RS" } },
+        @{ what = "does not say whether the fleet was asked"; answer = { New-HordeKnown -Value ([pscustomobject]@{ labels = @("RS") }) } },
+        @{ what = "says asked as a word, not true or false"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = "yes"; labels = @("RS") }) } },
+        @{ what = "says asked and gives no list"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true }) } },
+        @{ what = "gives one label as text, not a list"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = "RS" }) } },
+        @{ what = "lists a number"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = @("RS", 7) }) } },
+        @{ what = "lists a blank"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = @("RS", " ") }) } },
+        @{ what = "lists two words as one label"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = @("RS WW") }) } },
+        @{ what = "says not asked and does not say why"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $false }) } },
+        @{ what = "says not asked with a why of two lines"; answer = { New-HordeKnown -Value ([pscustomobject]@{ answered = $false; why = "one`ntwo" }) } },
+        @{ what = "answers absent itself"; answer = { New-HordeAbsent -Note "nothing" } })) {
+    $script:reservedAnswer = $bad.answer
+    $a = $null
+    try { $a = Get-HordeWakerReservedLabels -Waker $reserving } catch { $a = $null }
+    Check ($null -ne $a -and $a.state -ceq "unknown") ("a waker that " + $bad.what + " is unknown: not a list, and not 'could not ask'")
+}
+Check ((Get-HordeWakerReservedLabels -Waker ([pscustomobject]@{ name = "fixture-reserved"; reserved = { New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = @("RS") }) } })).state -ceq "unknown") "an object that was never registered is not asked"
+
+Write-Host ""
 Write-Host "--- where a waker's program comes from, and whether a person named it ---" -ForegroundColor Cyan
 
 Check ((Get-HordeWakerSource -Waker $memory).state -ceq "absent" -and (Get-HordeWakerSource -Waker $good).state -ceq "absent") "a waker that registered no Source runs no program whose place has to be named: absent"

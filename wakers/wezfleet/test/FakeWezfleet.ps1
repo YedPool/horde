@@ -40,6 +40,13 @@
 #                    mid-turn, the real command's word) - and NOTHING IS TYPED
 #       woken        the pointer line is "typed": one line appended to typed.log
 #     exit 2 for an empty -To
+#   labels reserved [-Json]                            exit 0. -Json: one line,
+#                                                      {"schema":"wezfleet.labels.reserved","version":1,"labels":["RS","WW","SV"]};
+#                                                      without it, one label a line. `labels` with
+#                                                      anything else, or nothing, is exit 2. COPIED
+#                                                      FROM THE REAL COMMAND'S OUTPUT (2026-10-13). A
+#                                                      wezfleet from before the verb is played by
+#                                                      mode.json's labels: a non-zero exit
 param()
 $ErrorActionPreference = "Stop"
 $fakeClock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -68,11 +75,12 @@ function Write-FakeAnswer {
 function Get-FakeNow { return [datetime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
 function Test-Mode { param($M, [string]$Name) return ($null -ne $M -and $null -ne $M.PSObject.Properties[$Name]) }
 
-if ($argvList.Count -lt 2 -or $argvList[0] -cne "mail" -or @("state", "nudge") -cnotcontains $argvList[1]) { [Console]::Out.WriteLine("fake wezfleet: only mail state and mail nudge are played"); exit 1 }
+$isLabels = ($argvList.Count -ge 1 -and $argvList[0] -ceq "labels")
+if (-not $isLabels -and ($argvList.Count -lt 2 -or $argvList[0] -cne "mail" -or @("state", "nudge") -cnotcontains $argvList[1])) { [Console]::Out.WriteLine("fake wezfleet: only mail state, mail nudge and labels reserved are played"); exit 1 }
 $to = Get-FakeArg "-To"
 $hasTo = ($argvList -ccontains "-To")
 $form = "fleet"
-if ($argvList[1] -ceq "nudge") { $form = "nudge" } elseif ($hasTo) { $form = "pane" }
+if ($isLabels) { $form = "labels" } elseif ($argvList[1] -ceq "nudge") { $form = "nudge" } elseif ($hasTo) { $form = "pane" }
 
 $mode = $null
 $modePath = Join-Path $root "mode.json"
@@ -84,6 +92,13 @@ if (Test-Mode $m "stdout") {
     [Console]::Out.Write([string]$m.stdout)
     if (Test-Mode $m "stderr") { [Console]::Error.Write([string]$m.stderr) }
     exit ([int]$m.exit)
+}
+
+if ($form -ceq "labels") {
+    if ($argvList.Count -lt 2 -or $argvList[1] -cne "reserved") { [Console]::Error.WriteLine("wezfleet labels: the one thing to ask for is: reserved (wezfleet labels reserved [-Json])"); exit 2 }
+    if ($argvList -ccontains "-Json") { [Console]::Out.WriteLine('{"schema":"wezfleet.labels.reserved","version":1,"labels":["RS","WW","SV"]}') }
+    else { foreach ($l in @("RS", "WW", "SV")) { [Console]::Out.WriteLine($l) } }
+    exit 0
 }
 
 $fleetPath = Join-Path $root "fleet.json"

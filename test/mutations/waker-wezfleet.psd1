@@ -6,6 +6,27 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-wezfleet-that-does-not-know-the-verb-reserves-nothing"
+           Find = 'answered = $false; why = ("wezfleet labels reserved exit " + $run.exit'
+           Replace = 'answered = $true; labels = @(); why = ("wezfleet labels reserved exit " + $run.exit' }
+        @{ Name = "a-fleet-command-that-cannot-be-run-reserves-nothing"
+           Find = 'answered = $false; why = ("wezfleet labels reserved could not be run: "'
+           Replace = 'answered = $true; labels = @(); why = ("wezfleet labels reserved could not be run: "' }
+        @{ Name = "a-non-zero-exit-is-read-for-its-list"
+           Find = '    $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet labels reserved"'
+           Replace = '    $run.exit = 0; $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet labels reserved"' }
+        @{ Name = "any-schema-is-read-as-the-reserved-labels"
+           Find = 'if ($null -eq $schema -or $schema.Value -isnot [string] -or $schema.Value -cne "wezfleet.labels.reserved" -or $null -eq $version'
+           Replace = 'if ($null -eq $version' }
+        @{ Name = "any-version-of-the-reserved-labels-is-read"
+           Find = '-or -not ($version.Value -is [int] -or $version.Value -is [long]) -or $version.Value -ne 1) { return'
+           Replace = ') { return' }
+        @{ Name = "a-label-that-is-no-text-is-listed"
+           Find = 'if ($l -isnot [string] -or $l.Trim() -eq "") { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 listed something that is not a label"'
+           Replace = 'if ($false) { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 listed something that is not a label"' }
+        @{ Name = "the-fleets-reserved-labels-are-not-asked-for"
+           Find = '    -Reserved { Get-HordeWezfleetWakerReservedLabels } `'
+           Replace = '' }
         @{ Name = "a-nudge-reason-never-seen-is-an-error"
            Find = 'if ($null -ne $rp -and $rp.Value -is [string]) { $code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 80 }'
            Replace = 'if ($null -ne $rp -and $rp.Value -is [string]) { if (@("", "woken", "mid-turn", "status-unreadable", "pointer-stale", "sender-busy", "box-not-empty", "no-unread-mail", "retired", "budget-too-small", "no-pane") -cnotcontains $rp.Value) { return (New-HordeUnknown -Reason "a reason this waker does not know") }; $code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 80 }' }

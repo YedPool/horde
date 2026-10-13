@@ -615,6 +615,61 @@ Check ($runs.Count -gt 0 -and @($runs | Where-Object { [int]$_.pid -eq $PID }).C
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- the fleet's own list of reserved labels: asked of its command, compared both ways, and 'could not ask' is never 'equal' ---" -ForegroundColor Cyan
+
+. (Join-Path $root "core\ReservedLabels.ps1")
+$state = & $fx.New
+$a = Get-HordeWakerReservedLabels -Waker $w
+$runs = @(& $fx.Runs $state)
+Check ($a.state -ceq "known" -and (@($a.value.labels) -join ",") -ceq "RS,WW,SV" -and (Get-Count $state "labels reserved -Json") -eq 1 -and @($runs | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0) ("the list is asked of the fleet's command - labels reserved -Json, in a process of its own - and read: RS, WW, SV (" + $(if ($a.state -ceq "known") { @($a.value.labels) -join "," } else { $a.reason }) + ")")
+$same = Compare-HordeReservedLabels -Theirs $a.value.labels
+Check ($same.equal -and @($same.onlyOurs).Count -eq 0 -and @($same.onlyTheirs).Count -eq 0) "and it is Horde's own list: neither has a label the other lacks"
+# A DIFFERENCE IN EITHER DIRECTION IS FOUND.
+foreach ($case in @(
+        @{ what = "the fleet lacks one Horde reserves"; list = '["RS","WW"]'; ours = "SV"; theirs = "" },
+        @{ what = "the fleet reserves one Horde does not"; list = '["RS","WW","SV","XX"]'; ours = ""; theirs = "XX" },
+        @{ what = "each has one the other lacks"; list = '["RS","WW","ZZ"]'; ours = "SV"; theirs = "ZZ" },
+        @{ what = "the fleet's is in another casing"; list = '["RS","WW","sv"]'; ours = "SV"; theirs = "sv" },
+        @{ what = "the fleet reserves none"; list = '[]'; ours = "RS,WW,SV"; theirs = "" })) {
+    Set-Answer $state "labels" 0 ('{"schema":"wezfleet.labels.reserved","version":1,"labels":' + $case.list + '}')
+    $a = Get-HordeWakerReservedLabels -Waker $w
+    $d = $(if ($a.state -ceq "known") { Compare-HordeReservedLabels -Theirs $a.value.labels } else { $null })
+    Check ($null -ne $d -and -not $d.equal -and (@($d.onlyOurs) -join ",") -ceq $case.ours -and (@($d.onlyTheirs) -join ",") -ceq $case.theirs) ("when " + $case.what + " the two are NOT equal, and the comparison names which labels and whose")
+}
+Set-Answer $state "labels" 0 '{"schema":"wezfleet.labels.reserved","version":1,"labels":["SV","RS","WW","RS"]}'
+Check ((Compare-HordeReservedLabels -Theirs (Get-HordeWakerReservedLabels -Waker $w).value.labels).equal) "CONTROL: the same labels in another order, one of them twice, are the same list"
+# COULD NOT ASK IS SAID, AND IS NEVER EQUAL.
+foreach ($case in @(
+        @{ what = "a wezfleet from before the verb, which calls the command unknown and exits 1"; exit = 1; out = ""; err = "wezfleet: unknown command 'labels'" },
+        @{ what = "one that exits 2 for it"; exit = 2; out = ""; err = "usage: wezfleet <command>" },
+        @{ what = "one that exits non-zero having printed the very list"; exit = 3; out = '{"schema":"wezfleet.labels.reserved","version":1,"labels":["RS","WW","SV"]}'; err = "" })) {
+    Set-Answer $state "labels" $case.exit $case.out $case.err
+    $a = Get-HordeWakerReservedLabels -Waker $w
+    Check ($a.state -ceq "absent" -and "$($a.reason)".Contains("could not ask") -and "$($a.reason)".Contains("exit " + $case.exit)) ($case.what + ": ABSENT - not asked, with the exit - and so not compared: never a list, never equal (" + $a.state + ")")
+}
+& $fx.SetMode $state $null
+Set-HordeWezfleetWakerRoot -Path (Join-Path $state.dir "no-checkout-here")
+$a = Get-HordeWakerReservedLabels -Waker $w
+Check ($a.state -ceq "absent" -and "$($a.reason)".Contains("could not be run")) ("a fleet command that cannot be found is absent too: not asked (" + $a.state + ": " + $a.reason + ")")
+Set-HordeWezfleetWakerRoot -Path $state.dir
+# IT ANSWERED, AND THIS WAKER CANNOT READ IT: unknown. Not a list, and not "could not ask".
+foreach ($case in @(
+        @{ what = "another schema"; out = '{"schema":"wezfleet.labels.other","version":1,"labels":["RS","WW","SV"]}' },
+        @{ what = "the schema in another casing"; out = '{"schema":"Wezfleet.Labels.Reserved","version":1,"labels":["RS","WW","SV"]}' },
+        @{ what = "a later version"; out = '{"schema":"wezfleet.labels.reserved","version":2,"labels":["RS","WW","SV"]}' },
+        @{ what = "no schema"; out = '{"labels":["RS","WW","SV"]}' },
+        @{ what = "no list"; out = '{"schema":"wezfleet.labels.reserved","version":1}' },
+        @{ what = "a label as text, not a list"; out = '{"schema":"wezfleet.labels.reserved","version":1,"labels":"RS"}' },
+        @{ what = "a number in the list"; out = '{"schema":"wezfleet.labels.reserved","version":1,"labels":["RS",7]}' },
+        @{ what = "the plain form, a label a line"; out = "RS`nWW`nSV" },
+        @{ what = "nothing at all"; out = "" })) {
+    Set-Answer $state "labels" 0 $case.out
+    $a = Get-HordeWakerReservedLabels -Waker $w
+    Check ($a.state -ceq "unknown") ("exit 0 with " + $case.what + " is unknown: the fleet answered, and it is not read as a list or as not asked (" + $a.state + ")")
+}
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- where the fleet is: the one setting the messenger reads, and the command on PATH, read not run ---" -ForegroundColor Cyan
 
 $state = & $fx.New

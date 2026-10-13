@@ -12,6 +12,6 @@
 # fixture and its folder and never name a function of it.
 #
 # path | mentions | why this file may name the waker
-test/mutations/waker-wezfleet.psd1 | 47 | a mutation spec quotes the code it changes
-test/test-waker-wezfleet.ps1 | 2 | a suite or spec of the wake watcher names the waker it drives
-wakers/start-sites.txt | 19 | the family's list of start sites names this waker's start function, its three callers, what it sets and its read of the process table, which is the point of the list
+test/mutations/waker-wezfleet.psd1 | 50 | a mutation spec quotes the code it changes
+test/test-waker-wezfleet.ps1 | 4 | a suite or spec of the wake watcher names the waker it drives
+wakers/start-sites.txt | 22 | the family's list of start sites names this waker's start function, its three callers, what it sets and its read of the process table, which is the point of the list

@@ -40,6 +40,7 @@ $fleetPin = Enter-HordeTestEmptyFleet
 $pinned = Enter-HordeTestPinnedHome -Root $root
 . (Join-Path $root "wakers\Port.ps1")
 foreach ($f in @(Get-HordeWakerFiles)) { . $f }
+. (Join-Path $root "core\ReservedLabels.ps1")
 
 $t0 = New-Object System.DateTime(2026, 10, 12, 8, 0, 0, [System.DateTimeKind]::Utc)
 $script:seq = 0
@@ -232,6 +233,22 @@ try {
             $a = Send-HordeWakeNudge -Waker $w -Id $never
             $o = & $fx.Observe $state $never
             Check (-not ($a.state -ceq "known" -and $a.value.outcome -ceq "woken") -and $o.nudges -eq 0 -and @($o.typed).Count -eq 0) ("[" + $name + "] a nudge of a session it does not know wakes nobody and types nothing")
+        } finally { & $fx.Remove $state }
+        # THE LABELS ITS FLEET RESERVES ARE THE LABELS HORDE RESERVES, BOTH WAYS. Horde's list is a copy
+        # (core\ReservedLabels.ps1 says of what), so the waker is asked for its fleet's own - through
+        # its fixture, as every case here is - and any label one has and the other lacks fails.
+        # A fleet that COULD NOT BE ASKED is said as NOT COMPARED and fails nothing: an older fleet
+        # tool, or a waker with no fleet. It is never counted as the same. One that answered
+        # something the waker could not read fails: that is not "could not ask".
+        $state = & $fx.New
+        try {
+            $theirs = Get-HordeWakerReservedLabels -Waker $w
+            if ($theirs.state -ceq "known") {
+                $d = Compare-HordeReservedLabels -Theirs $theirs.value.labels
+                Check ($d.equal) ("[" + $name + "] the labels its fleet reserves (" + (@($d.theirs) -join ", ") + ") are the labels Horde reserves (" + (@($d.ours) -join ", ") + "), both ways" + $(if (-not $d.equal) { ": only Horde's - " + (@($d.onlyOurs) -join ", ") + "; only the fleet's - " + (@($d.onlyTheirs) -join ", ") } else { "" }))
+            }
+            elseif ($theirs.state -ceq "absent") { Write-Host ("  [NOTE] [" + $name + "] reserved labels NOT COMPARED: " + $theirs.reason) -ForegroundColor Yellow }
+            else { Check $false ("[" + $name + "] its fleet answered which labels it reserves, and the answer could not be read - not compared, and not passed: " + $theirs.reason) }
         } finally { & $fx.Remove $state }
     }
 } finally {
