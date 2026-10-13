@@ -16,6 +16,11 @@
 #   - REDACTION IN CORE. The adapter hands over raw text with secrets in it; the port's turns hold none
 #     of it, and neither do its anomalies or its reasons. No adapter loads core/Secrets.ps1.
 #   - A NEW SESSION (the harness's clear) is a reset: the old cursor reads the new session from its start.
+#   - A SESSION DESCRIBED BY ITS ID. Known for one adapter that has it, unknown for none, for two, and for
+#     an adapter that throws, answers garbage or answers about another session. Inside a known answer a
+#     label, a role or a parent the adapter got wrong is unknown and never repeated: a table of labels
+#     just inside and just outside the shape, text where an answer belongs, a number for a parent. Only
+#     an adapter declaring sessionLookup yes is asked.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -53,7 +58,7 @@ try {
     Check (Throws { Register-HordeConversationAdapter -Folder $other -Locate {} -Read {} } "sits in the folder 'other'") "a conversation.json naming another vendor than its folder is refused"
     Check (Throws { Register-HordeConversationAdapter -Folder (Join-Path $root "test\fixtures\conversations\memory") -Locate {} -Read {} } "already registered") "a second registration of one vendor is refused; the first stands"
 } finally { if ([System.IO.Directory]::Exists($tmp)) { Remove-Item -LiteralPath $tmp -Recurse -Force } }
-Check ((@(Get-HordeConversationCapabilityNames) -join ",") -ceq "incremental,stableTurnIds,timestamps,roles,partialTurns,mutableHistory") "the closed list of capabilities, in order"
+Check ((@(Get-HordeConversationCapabilityNames) -join ",") -ceq "incremental,stableTurnIds,timestamps,roles,partialTurns,mutableHistory,sessionLookup") "the closed list of capabilities, in order"
 Check ((@(Get-HordeConversationHazardNames) -join ",") -ceq "partialTurns,mutableHistory") "two of them are hazards"
 
 Write-Host ""
@@ -267,4 +272,131 @@ $liar = Find-HordeConversationSource -Fleet "alpha" -Session $src.session -Requi
 Check ($liar.state -ceq "unknown" -and $liar.reason.Contains("located another one")) ("an adapter that answers with another session than the one asked for is not believed (" + $liar.reason + ")")
 Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie ""
 
-Complete-HordeSuite -Success "the port finds one Thrall, reads it bounded and redacted, and survives every lie"
+Write-Host ""
+Write-Host "--- a session described by its id ---" -ForegroundColor Cyan
+function Get-Mem { param($Store, [string]$Id, [string]$Fleet = "alpha") return (Get-HordeConversationSession -Fleet $Fleet -SessionId $Id -Options @{ memory = $Store }) }
+function Test-Clean {
+    # Is nothing an adapter handed over in this part of an answer? Read from the part itself: as JSON a
+    # "<" is written <, so a search of the JSON for such a text could never find it.
+    param($Part)
+    if ($null -ne $Part.value) { return $false }
+    foreach ($bad in @("Thrall", "hunter2longer", "q8Wv3Lm9Zr4", "emperor", "has spaces", "<b>")) { if ("$($Part.reason)".Contains($bad)) { return $false } }
+    return $true
+}
+$recordLabel = "$((Get-HordeSchema -Name 'session-record.v1').properties.label.pattern)"
+Check ($recordLabel.StartsWith("^") -and $recordLabel.EndsWith('$') -and $script:HordeConversationLabelPattern -ceq ('\A' + $recordLabel.Substring(1, $recordLabel.Length - 2) + '\z')) "the port's label shape is schema/session-record.v1's, anchored to the very end of the text"
+$store = New-HordeMemoryConversationStore
+$thrall = (Get-HordeMemoryConversationHorde -Store $store -Fleet "alpha").session
+$orc = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha" -Role "orc" -Label "E"
+$warg = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha" -Role "warg" -Label "E3" -Parent $orc
+$bare = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha"
+$d = Get-Mem $store $warg
+Check ($d.state -ceq "known" -and (@($d.value.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "vendor,session,fleet,label,role,parent") ("a session one adapter has is known: vendor, session, fleet, label, role, parent (" + $d.state + " " + $d.reason + ")")
+Check ($d.value.vendor -ceq "memory" -and $d.value.session -ceq $warg -and $d.value.fleet -ceq "alpha" -and $d.value.label.value -ceq "E3" -and $d.value.role.value -ceq "warg" -and $d.value.parent.value -ceq $orc) "with its label, its role, and its parent's session id"
+Check ((Test-HordeAnswer $d.value.label) -and (Test-HordeAnswer $d.value.role) -and (Test-HordeAnswer $d.value.parent)) "label, role and parent are each an answer of their own"
+$d = Get-Mem $store $bare
+Check ($d.state -ceq "known" -and $d.value.label.state -ceq "absent" -and $d.value.role.state -ceq "absent" -and $d.value.parent.state -ceq "absent") "a session with no label, role or parent is known, and each is said to be none"
+$d = Get-Mem $store $thrall
+Check ($d.state -ceq "known" -and $d.value.role.value -ceq "warchief") "the Thrall's session is a session like any other"
+$d = Get-Mem $store "mem-never-was"
+Check ($d.state -ceq "unknown" -and $d.reason -like "*no adapter has a record*mem-never-was*") ("an id no adapter has is unknown - never absent - and says so (" + $d.state + ": " + $d.reason + ")")
+$d = Get-Mem $store $warg -Fleet "beta"
+Check ($d.state -ceq "unknown") "a horde the adapter holds nothing for is unknown"
+$d = Get-Mem $store $warg.ToUpperInvariant()
+Check ($d.state -ceq "unknown") "an id is matched exactly: in another case it is another id"
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie "describe-throw"
+$d = Get-Mem $store "has spaces"
+Check ($d.state -ceq "unknown" -and $d.reason -like "*session id asked about*") ("an id that is not a session id is refused before any adapter is asked (" + $d.reason + ")")
+$d = Get-Mem $store ""
+Check ($d.state -ceq "unknown" -and $d.reason -like "*session id asked about*") "and so is an empty one"
+$d = Get-Mem $store $warg -Fleet "Not A Horde"
+Check ($d.state -ceq "unknown" -and $d.reason -like "*horde asked about*") "a horde name that is not one is refused before any adapter is asked"
+$d = Get-Mem $store $warg
+Check ($d.state -ceq "unknown" -and $d.reason -like "*memory*failed*" -and -not $d.reason.Contains("hunter2longer")) ("an adapter that throws: unknown, naming it, its message redacted (" + $d.reason + ")")
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie "describe-garbage"
+$d = Get-Mem $store $warg
+Check ($d.state -ceq "unknown" -and $d.reason -like "*memory*not an answer*") "an adapter that answers with something that is not an answer: unknown, naming it"
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie "describe-unknown"
+$d = Get-Mem $store $warg
+Check ($d.state -ceq "unknown" -and $d.reason -like "*memory*" -and -not $d.reason.Contains("q8Wv3Lm9Zr4")) "an adapter that cannot tell: unknown, naming it, its reason redacted"
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie "describe-other-session"
+$d = Get-Mem $store $warg
+Check ($d.state -ceq "unknown" -and $d.reason -like "*answered about another*") ("an adapter that answers about another session than the one asked about is not believed (" + $d.state + ")")
+
+# INSIDE A KNOWN ANSWER, EACH PART IS CHECKED ALONE: one bad part is unknown, and the others stand.
+$partLies = [ordered]@{
+    "describe-bad-label" = "label"; "describe-label-not-text" = "label"; "describe-label-look-alike" = "label"; "describe-no-label" = "label"; "describe-label-unknown" = "label"
+    "describe-bad-role" = "role"; "describe-bad-parent" = "parent"; "describe-parent-not-text" = "parent"
+}
+foreach ($lie in $partLies.Keys) {
+    Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie $lie
+    $d = Get-Mem $store $warg
+    $part = $partLies[$lie]
+    $others = @(@("label", "role", "parent") | Where-Object { $_ -cne $part } | Where-Object { $d.state -ceq "known" -and $d.value.$_.state -ceq "known" })
+    Check ($d.state -ceq "known" -and $d.value.$part.state -ceq "unknown" -and $others.Count -eq 2) ("an adapter that answers " + $lie + ": the session is known, its " + $part + " unknown, the other two kept")
+    Check ($d.state -ceq "known" -and (Test-Clean ($d.value.$part))) ("and what it handed over for " + $lie + " is neither the " + $part + "'s value nor in its reason")
+}
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie ""
+Check ((Get-Mem $store $warg).value.label.value -ceq "E3") "CONTROL: honest again, the label is back"
+Check (-not (Test-Clean (Get-Mem $store $warg).value.label) -and -not (Test-Clean (New-HordeUnknown -Reason "it said <b>Thrall</b>"))) "CONTROL: the check for handed-over text fails on a value, and on a reason that repeats one"
+
+# THE LABEL'S SHAPE, ATTACKED FROM BOTH SIDES. Anything outside it would be shown as a session's name.
+$lineEnd = "E3" + [char]10
+$accented = "" + [char]0xC9 + "3"
+foreach ($ok in @("M", "E", "AB", "E3", "A9999", "AB12")) {
+    $null = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha" -Session $bare -Label $ok
+    $d = Get-Mem $store $bare
+    Check ($d.state -ceq "known" -and $d.value.label.state -ceq "known" -and $d.value.label.value -ceq $ok) ("the label " + $ok + " is a label")
+}
+$n = 0
+foreach ($no in @("e3", "E0", "E03", "E10000", "ABC", "E 3", "E3 ", " E3", "3", "E-3", "E3x", $lineEnd, $accented, "E3<b>")) {
+    $n++
+    $null = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha" -Session $bare -Label $no
+    $d = Get-Mem $store $bare
+    Check ($d.state -ceq "known" -and $d.value.label.state -ceq "unknown" -and $null -eq $d.value.label.value -and -not $d.value.label.reason.Contains($no)) ("a label outside the shape (case " + $n + ", " + $no.Length + " characters) is unknown, and not handed on")
+}
+foreach ($pair in @(@("warchief", "known"), @("orc", "known"), @("warg", "known"), @("master", "unknown"), @("Orc", "unknown"), @("orc ", "unknown"))) {
+    $null = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha" -Session $bare -Role $pair[0]
+    $d = Get-Mem $store $bare
+    Check ($d.state -ceq "known" -and $d.value.role.state -ceq $pair[1]) ("the role '" + $pair[0] + "' from an adapter is " + $pair[1] + ": only core/roles.json's own names are a role")
+}
+
+# ONLY AN ADAPTER THAT DECLARES sessionLookup yes IS ASKED.
+$savedLookup = $mem.capabilities.capabilities.sessionLookup.support
+try {
+    $mem.capabilities.capabilities.sessionLookup.support = "unverified"
+    $d = Get-Mem $store $warg
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*memory*sessionLookup*unverified*") ("an adapter whose sessionLookup is unverified is not asked, and the reason names it (" + $d.reason + ")")
+    $d = Get-HordeConversationSession -Fleet "alpha" -SessionId $warg -Vendor "memory" -Options @{ memory = $store }
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*memory*sessionLookup*") "nor when the caller names it"
+} finally { $mem.capabilities.capabilities.sessionLookup.support = $savedLookup }
+$d = Get-HordeConversationSession -Fleet "alpha" -SessionId $warg -Vendor "nobody" -Options @{ memory = $store }
+Check ($d.state -ceq "unknown" -and $d.reason -like "*nobody*") "a vendor nobody registered is unknown"
+
+# TWO ADAPTERS: one that has no record of the session says nothing; two that each have one are never chosen between.
+$twin = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-conv-twin-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$twinDir = Join-Path $twin "twin"
+try {
+    [void][System.IO.Directory]::CreateDirectory($twinDir)
+    $tc = Get-Content -Raw (Join-Path $root "test\fixtures\conversations\memory\conversation.json") | ConvertFrom-Json
+    $tc.vendor = "twin"
+    [System.IO.File]::WriteAllText((Join-Path $twinDir "conversation.json"), ($tc | ConvertTo-Json -Depth 5))
+    $twinAdapter = Register-HordeConversationAdapter -Folder $twinDir -Locate { param($Request) return (New-HordeAbsent -Note "none") } -Read { param($Source, $Position, $MaxTurns, $MaxBytes) return (New-HordeUnknown -Reason "never read") } -Describe { param($Request) return (New-HordeAbsent -Note "no such session") }
+    $d = Get-Mem $store $warg
+    Check ($d.state -ceq "known" -and $d.value.vendor -ceq "memory") ("a second adapter with no record of the session says nothing: the first one's answer stands (" + $d.state + " " + $d.reason + ")")
+    $twinAdapter.describe = { param($Request) return (New-HordeKnown -Value ([pscustomobject]@{ session = $Request.session; role = (New-HordeKnown -Value "orc"); label = (New-HordeKnown -Value "Z"); parent = (New-HordeAbsent -Note "none") })) }
+    $d = Get-Mem $store $warg
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*2 adapters*memory*twin*") ("two adapters that each describe the session: unknown, naming both, never one chosen (" + $d.reason + ")")
+    $d = Get-HordeConversationSession -Fleet "alpha" -SessionId $warg -Vendor "memory" -Options @{ memory = $store }
+    Check ($d.state -ceq "known" -and $d.value.label.value -ceq "E3") "a caller that names the vendor asks only that adapter"
+    $twinAdapter.describe = $null
+    $d = Get-Mem $store $warg
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*twin*gave no Describe*") ("an adapter that declares sessionLookup yes and gave nothing to ask: unknown, in those words (" + $d.reason + ")")
+} finally {
+    [void]$script:HordeConversationAdapters.Remove("twin")
+    if ([System.IO.Directory]::Exists($twin)) { Remove-Item -LiteralPath $twin -Recurse -Force }
+}
+$null = Set-HordeMemoryConversationMember -Store $store -Fleet "alpha" -Session $warg -Role "warg" -Label "E9" -Parent $orc
+Check ((Get-Mem $store $warg).value.label.value -ceq "E9") "the records changed between two calls: the second call reads them again"
+
+Complete-HordeSuite -Success "the port finds one Thrall, reads it bounded and redacted, describes a session by its id, and survives every lie"

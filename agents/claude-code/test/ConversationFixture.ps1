@@ -65,5 +65,13 @@ return [pscustomobject]@{
         }
         Add-ClaudeCodeLines -Path $State.path -Lines @($lines)
     }
+    Enlist = {
+        # A session of the fleet beside the Thrall: its own record in the registry, as the fleet writes one.
+        param($State, $Member)
+        $sid = "" + $Member.session
+        if ($sid -eq "") { $sid = [guid]::NewGuid().ToString() }
+        $null = Set-ClaudeCodeRecord -Registry $State.registry -Session $sid -Role $Member.role -Label $Member.label -Parent $Member.parent
+        return $sid
+    }
     Remove = { param($State) Remove-ClaudeCodeRegistry -Registry $State.registry }
 }
