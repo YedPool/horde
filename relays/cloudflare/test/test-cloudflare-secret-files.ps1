@@ -127,8 +127,11 @@ try {
     # ON A DRIVE THAT IS NOT THERE, when this machine has such a letter: joining paths by asking the
     # system throws for one (SecretFiles.ps1), and a login on a drive not plugged in is still a login.
     $far = $(if ($noDrive.Count -eq 1) { "" + $noDrive[0] } else { "C" })
-    $own = Get-HordeCloudflareRelayLoginFiles -UserProfile ($far + ":\people\someone") -AppData ($far + ":\roaming") -XdgConfigHome ""
-    Check ($own.state -ceq "known" -and (@($own.value) -join "|") -ceq (@("X:\people\someone\.wrangler\config\default.toml", "X:\people\someone\.wrangler\config\default.enc", "X:\roaming\xdg.config\.wrangler\config\default.toml", "X:\roaming\xdg.config\.wrangler\config\default.enc") -join "|").Replace("X:", $far + ":")) "asked directly, with an environment handed to it - on a drive that need not exist - the four places are exactly: profile\.wrangler and <APPDATA>\xdg.config\.wrangler, each with config\default.toml and config\default.enc"
+    # A throw here is caught and made a failed check: tools\Mutate.ps1 counts a mutant caught only by a
+    # check that failed, never by a suite that fell over.
+    $own = $null
+    try { $own = Get-HordeCloudflareRelayLoginFiles -UserProfile ($far + ":\people\someone") -AppData ($far + ":\roaming") -XdgConfigHome "" } catch { $own = $null }
+    Check ($null -ne $own -and $own.state -ceq "known" -and(@($own.value) -join "|") -ceq (@("X:\people\someone\.wrangler\config\default.toml", "X:\people\someone\.wrangler\config\default.enc", "X:\roaming\xdg.config\.wrangler\config\default.toml", "X:\roaming\xdg.config\.wrangler\config\default.enc") -join "|").Replace("X:", $far + ":")) "asked directly, with an environment handed to it - on a drive that need not exist - the four places are exactly: profile\.wrangler and <APPDATA>\xdg.config\.wrangler, each with config\default.toml and config\default.enc"
 
     Write-Host ""
     Write-Host "--- 4. what it cannot tell is unknown, each for its own reason ---" -ForegroundColor Cyan
