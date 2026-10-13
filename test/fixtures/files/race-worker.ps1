@@ -7,8 +7,16 @@
 #
 # -Mode first-share: as same-path, but share number i goes to a home of its own, <HordeHome>-<i>,
 #   which nothing has used: every racer's share of a round is the FIRST share of that home, so all of
-#   them find no key there and make one at once. This is the race that shows whether two first
-#   shares can end with two keys.
+#   them find no key there. This is the race that shows whether two first shares can end with two keys.
+#   THE ORDER IS STAGED, NOT HOPED FOR. Left to the machine, the racers overlap or do not as its load
+#   decides (measured 2026-10-13, with other runs busy on the machine: in one run no racer overlapped
+#   another, and a broken key move went unseen). So each racer, having found no key and no record at
+#   the tick, WAITS before it makes its key: racer 0 for 50 ms, racer 1 for 85, and so on, 35 ms
+#   apart. Every racer has then decided to make a key, and they make them one after another: with a
+#   move that does not replace, the second is told the name is taken and reads the first one's key;
+#   with one that replaces, it reads its own. The wait is put where the real code asks the store
+#   whether it holds a record (Test-HordeFilesStoreHasRecord), whose REAL answer is worked out
+#   first and returned unchanged: only the moment is this worker's, never the answer.
 #
 # -Mode same-bytes: -Count times it first writes "round <i>" into its OWN file at -Source and then, on
 #   the tick, shares it. Every racer writes the same words, so all of them put the same bytes in the
@@ -47,6 +55,15 @@ $ErrorActionPreference = "Stop"
 $asking = New-HordeKnown -Value "race-session"
 # Everything slow is done before the clock starts, so start-up is not part of the race.
 $null = Get-HordeFilesSettings -HordeHome $HordeHome
+if ($Mode -cne "stall") {
+    # A WHOLE SHARE, ONCE, INTO A HOME NOBODY ELSE USES: the first share of a process compiles what it
+    # asks Windows with and loads the cryptography, about half a second, and a racer still doing that
+    # on the first tick is not in the race (measured 2026-10-13: of six staged rounds, the first was
+    # the one in which no racer met another).
+    $warmFile = $LogFile + ".warm.md"
+    [System.IO.File]::WriteAllText($warmFile, "warm")
+    $null = Add-HordeFilesShare -Path $warmFile -Title "warm" -HordeHome ($HordeHome + "-warm-" + $Racer) -Asking $asking
+}
 [System.IO.File]::WriteAllText($ReadyFile, "ready")
 
 if ($Mode -ceq "stall") {
@@ -68,6 +85,17 @@ if ($Mode -ceq "stall") {
     exit 0
 }
 
+if ($Mode -ceq "first-share") {
+    $script:realHasRecord = ${function:Test-HordeFilesStoreHasRecord}
+    $script:stageAt = [long]0
+    function Test-HordeFilesStoreHasRecord {
+        param([string]$Root)
+        $said = & $script:realHasRecord -Root $Root
+        while ([datetime]::UtcNow.Ticks -lt $script:stageAt) { }
+        return $said
+    }
+}
+
 $deadline = [datetime]::UtcNow.AddSeconds(300)
 while (-not (Test-Path -LiteralPath $GoFile)) {
     if ([datetime]::UtcNow -gt $deadline) { throw "no go file within 300 s" }
@@ -82,7 +110,7 @@ for ($i = 0; $i -lt $Count; $i++) {
     while ([datetime]::UtcNow.Ticks -lt $target) { }
     $line = ""
     $shareHome = $HordeHome
-    if ($Mode -ceq "first-share") { $shareHome = $HordeHome + "-" + $i }
+    if ($Mode -ceq "first-share") { $shareHome = $HordeHome + "-" + $i; $script:stageAt = $target + [long](50 + 35 * $Racer) * 10000 }
     try {
         $told = Add-HordeFilesShare -Path $Source -Title ("racer " + $Racer + " share " + $i) -HordeHome $shareHome -Asking $asking
         if ($told.outcome -ceq "shared") { $line = "" + $i + "|shared|" + $told.record.fileId + "|" + $told.record.version + "|" + $told.attempts + "|" + $told.record.sha256 + "|" }

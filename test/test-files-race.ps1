@@ -7,8 +7,10 @@
 #        for the same next version. Every share must be told a version of its own, and the record
 #        under that version must be that racer's.
 #   I-b. THE FIRST SHARE OF A HOME. Every round is a home with no key, and every racer's share of
-#        that round is its first: all of them find no key and make one at once. They must end with
-#        ONE key, and all be told the one file id it gives (files/Key.ps1).
+#        that round is its first: all of them find no key, and then make one, one after another in
+#        an order the worker stages (it says why). They must end with ONE key, and all be told the
+#        one file id it gives (files/Key.ps1). Race I, on a new home too, is the same thing left to
+#        the machine: there the four really are inside the making of the key at one moment.
 #   II.  ONE SET OF BYTES. Every racer shares a file of its own holding the same words, so all put the
 #        same bytes in the store at once. None may be refused or throw - which is what a racer that
 #        saw another's bytes half-written would do - and the bytes are kept once.
@@ -23,7 +25,8 @@
 #   - A BROKEN STORE: the same race against a copy of the store whose move-without-replace is replaced
 #     by a write that overwrites. There the harness must see one version told to two racers.
 # And race I-b has its own: the same race against a copy whose KEY is put in place by a copy that
-# replaces. There the harness must see racers of one round told different ids, or fail outright.
+# replaces. There the harness must see racers told different ids for one path in at least half of
+# the rounds. The order is staged, so every round should split; the count is printed.
 # Race II has no control: a store that overwrites the same bytes with the same bytes loses nothing to
 # see. It is kept for what it can show, and says so here.
 #
@@ -305,7 +308,10 @@ $badFirst = Invoke-Race -Name "first-share-broken" -Mode "first-share" -Code (Jo
 $bff = Get-FirstShareFacts $badFirst
 Write-Host ("  replacing key: " + @($badFirst.told).Count + " shares; not shared " + @($bff.notShared).Count + "; rounds told two or more ids " + @($bff.split).Count) -ForegroundColor DarkGray
 Check (@($badFirst.told).Count -eq $total) "the control's racers each wrote down what they were told"
-Check ((@($bff.split).Count + @($bff.notShared).Count) -gt 0) ("CONTROL: the race sees two keys when the code allows them: " + @($bff.split).Count + " round(s) in which racers were told different ids for one path, " + @($bff.notShared).Count + " share(s) that failed on a key being replaced under them")
+# Staged, so every round should split; half of them is asked for, because a machine busy enough to
+# hold three processes back 50 ms in one round is possible, and a round like that proves nothing either way.
+$needSplit = [int][System.Math]::Ceiling($perRacer / 2)
+Check (@($bff.split).Count -ge $needSplit) ("CONTROL: the race sees two keys when the code allows them: " + @($bff.split).Count + " of " + $perRacer + " rounds in which racers were told different ids for one path, and at least " + $needSplit + " are required (" + @($bff.notShared).Count + " share(s) failed outright on a key being replaced under them)")
 
 Write-Host ""
 Write-Host ("--- II. " + $racers + " processes each share a file of their own holding the SAME bytes, " + $perRacer + " rounds ---") -ForegroundColor Cyan
