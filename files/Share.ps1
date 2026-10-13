@@ -8,7 +8,7 @@
 #
 # A RECORD, one per version of one shared file (the store's <file id>.<version>.json):
 #   { schemaVersion: 1; fileId; version; title; type; size; sha256; time; session; editable }
-#   fileId    32 hex: a digest of the sharing session and the file's full path. See below.
+#   fileId    32 hex: a keyed digest of the sharing session and the file's one real path. See below.
 #   version   1, 2, ...: sharing the same path again from the same session is the next version.
 #   type      the media type, from the table below; size in bytes; sha256 of the bytes, which names
 #             them in the store; time in UTC, to the millisecond.
@@ -21,36 +21,59 @@
 #
 # THE FILE ID IS WORKED OUT, NOT GIVEN. Two shares of one path from one session, at one moment, in two
 # processes, must come to ONE file with two versions. An id looked up in the store and then written
-# would let both find nothing and both make a new file. A digest of (session, full path) needs no
+# would let both find nothing and both make a new file. A digest of (session, path) needs no
 # lookup: both reach the same id, both try for the same version name, and the store's move lets one
 # have it. Shares made outside any session have no session to tell apart, so the same path shared
 # again there is the next version of one file too.
+#   - THE DIGEST IS KEYED (HMAC-SHA-256) with a key only this machine has: files/Key.ps1 says why a
+#     plain digest gave the path away, and what happens when the key is gone.
+#   - THE PATH IS THE ONE THE OPEN HANDLE HAS, not the one that was written: files/Path.ps1. The
+#     long-path prefix, an 8.3 short name, a subst drive and a share of this machine's own drive all
+#     come to one path, so to one file. THE SAME HANDLE IS THEN READ, so the name that decides the
+#     type and the id is the name of the bytes that are kept.
+#   AN ID IS PERMANENT once its first record exists: what goes into it cannot change afterwards.
 #
 # WHAT IS REFUSED, each with its reason, and nothing is written for any of them:
 #   - a title that is empty, holds a control character, or is longer than the setting maxTitleChars;
-#   - a path that names no file, or names a folder;
+#   - a path that names no file, or names a folder; a path in the device form, one holding a name
+#     Windows keeps for a device, and one naming a stream inside a file (files/Path.ps1);
+#   - a file on a network share that cannot be proved to be a file on one of this machine's drives;
 #   - A LINK. The file, or any folder on the way to it, that is a link of any kind (a symbolic link, a
 #     junction, any reparse point): the bytes would come from somewhere the caller did not name. This
 #     is the store's own test (decisions/Store.ps1's rule: the entry's own attributes, and an entry
-#     that cannot be looked at is treated as a link). KNOWN COST: a sync folder's placeholders are
+#     that cannot be looked at is treated as a link). It is asked AFTER the file is open, of the path
+#     that was written and of the handle's own path. KNOWN COST: a sync folder's placeholders are
 #     reparse points too, so a file there is refused until it is copied to an ordinary folder; telling
-#     them apart needs the reparse tag, which is not read here. NOT CLOSED: a link swapped in between
-#     the check and the open is followed, as in decisions/Store.ps1's sweep.
+#     them apart needs the reparse tag, which is not read here.
+#     THE SWAP, AND WHAT IS LEFT OF IT. Until 2026-10-13 the path was checked, then opened by name,
+#     and the type and the id came from the written path: a link put in the file's place between
+#     the two had another file's bytes recorded under this file's name, type and id. Now the type,
+#     the first bytes, the text check and the id all come from the one open handle, so that cannot
+#     happen. WHAT IS LEFT: a link put in the file's place before the open and taken away again
+#     before the look that follows it is followed; the share is then OF the link's target - typed,
+#     checked and identified as that target, never as the file that was named.
 #   - a type that is not on the list: the extension is looked up in the table, and for a picture or a
 #     PDF the first bytes must be that format's own, so a .png that is not a PNG is refused. SVG is
 #     refused by name: it is a picture that can carry script.
-#   - a file larger than the setting maxFileBytes, or one that cannot be opened and read.
+#   - text that is not text (files/Text.ps1): a .md, .txt, .json or .html file must be strict UTF-8
+#     with no NUL, and a .json file must be exactly one JSON text;
+#   - a file larger than the setting maxFileBytes, or one that cannot be opened and read;
+#   - a share the machine's key cannot be read for, and a file whose versions are used up.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
 . (Join-Path $PSScriptRoot "Settings.ps1")
 . (Join-Path $PSScriptRoot "Store.ps1")
+. (Join-Path $PSScriptRoot "Key.ps1")
+. (Join-Path $PSScriptRoot "Path.ps1")
+. (Join-Path $PSScriptRoot "Text.ps1")
 # Which session is asking: the one definition, core's.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Identity.ps1")
 
 function Get-HordeFilesTypes {
     # THE ALLOWED TYPES: extension (lower case) to { type; magic }. magic is a pattern over the first
-    # twelve bytes written as upper-case hex, or "" for text, which has no signature to check.
+    # twelve bytes written as upper-case hex, or "" for text, which has no signature: text is held to
+    # files/Text.ps1's check instead.
     #   PNG  89 50 4E 47 0D 0A 1A 0A        JPEG  FF D8 FF        PDF  "%PDF-"
     #   GIF  "GIF87a" or "GIF89a"           WebP  "RIFF", four bytes of length, "WEBP"
     return [ordered]@{
@@ -104,26 +127,24 @@ function Find-HordeFilesLink {
 }
 
 function Read-HordeFilesSource {
-    # The bytes of the file to share: { ok; bytes; reason }. The length is asked before a byte is
-    # read, so a file over the cap costs nothing; and no more than that length is read, so a file
-    # that grows while it is read cannot pass the cap.
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][int]$MaxBytes)
-    $stream = $null
-    try { $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read) }
-    catch { return [pscustomobject]@{ ok = $false; bytes = $null; reason = ("it cannot be read: " + $_.Exception.GetBaseException().Message) } }
+    # The bytes of the open file to share: { ok; bytes; reason }. -Stream is the one handle
+    # files/Path.ps1 opened and asked its path of, so these are the bytes of the file that was typed
+    # and identified. The length is asked before a byte is read, so a file over the cap costs
+    # nothing; and no more than that length is read, so a file that grows while it is read cannot
+    # pass the cap.
+    param([Parameter(Mandatory = $true)]$Stream, [Parameter(Mandatory = $true)][int]$MaxBytes)
     try {
-        if ($stream.Length -gt $MaxBytes) { return [pscustomobject]@{ ok = $false; bytes = $null; reason = ("it is " + $stream.Length + " bytes; the largest file that is shared is " + $MaxBytes + " bytes (the setting maxFileBytes)") } }
-        $buffer = New-Object byte[] ([int]$stream.Length)
+        if ($Stream.Length -gt $MaxBytes) { return [pscustomobject]@{ ok = $false; bytes = $null; reason = ("it is " + $Stream.Length + " bytes; the largest file that is shared is " + $MaxBytes + " bytes (the setting maxFileBytes)") } }
+        $buffer = New-Object byte[] ([int]$Stream.Length)
         $have = 0
         while ($have -lt $buffer.Length) {
-            $got = $stream.Read($buffer, $have, $buffer.Length - $have)
+            $got = $Stream.Read($buffer, $have, $buffer.Length - $have)
             if ($got -le 0) { break }
             $have += $got
         }
         if ($have -ne $buffer.Length) { [Array]::Resize([ref]$buffer, $have) }
         return [pscustomobject]@{ ok = $true; bytes = $buffer; reason = "" }
     } catch { return [pscustomobject]@{ ok = $false; bytes = $null; reason = ("it could not be read to its end: " + $_.Exception.GetBaseException().Message) } }
-    finally { $stream.Dispose() }
 }
 
 function Get-HordeFilesSession {
@@ -145,19 +166,22 @@ function Get-HordeFilesHex {
 }
 
 function Get-HordeFilesId {
-    # The id of the file a session shares from a path: the header says why it is a digest. The path is
-    # compared as Windows compares it, without case. The first line makes this digest this file's own.
-    param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$FullPath)
+    # The id of the file a session shares from a path: the header says why it is a digest, and why a
+    # keyed one. -FullPath is the open handle's own path (files/Path.ps1), compared as Windows
+    # compares it, without case. -Key is this machine's (files/Key.ps1). The first line of the text
+    # makes this digest this file's own.
+    param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$FullPath, [Parameter(Mandatory = $true)][byte[]]$Key)
     $who = "no-session"
     if ($Session.known) { $who = "session:" + $Session.id }
     $text = "horde-files-id.v1`n" + $who + "`n" + $FullPath.ToLowerInvariant()
-    return (Get-HordeFilesHex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($text))).Substring(0, 32)
+    $mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)
+    try { return ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", "").ToLowerInvariant().Substring(0, 32)) } finally { $mac.Dispose() }
 }
 
 function Add-HordeFilesShare {
     # Share the file at -Path under -Title. Returns { outcome: shared | refused; reason; record; attempts }.
     #   shared   the bytes and the record are in the store; record is what was written.
-    #   refused  nothing was written; reason says why, in words a person can act on.
+    #   refused  nothing was written to the store; reason says why, in words a person can act on.
     # Throws only for what is not the caller's doing: a refused settings file, a store folder that
     # cannot be written, or a record whose flush could not be confirmed.
     # -Root, -Asking and -Now are for a caller that must not use the real store, session or clock.
@@ -174,22 +198,49 @@ function Add-HordeFilesShare {
     if ($name.Length -gt $settings.maxTitleChars) { return (& $refuse ("the title is " + $name.Length + " characters; the longest is " + $settings.maxTitleChars + " (the setting maxTitleChars)")) }
 
     if ($Path.Trim() -eq "") { return (& $refuse "no file was named") }
+    # FROM THE TEXT, BEFORE ANYTHING TOUCHES THE DISK: a device opens, and a stream cannot be told later.
+    $unfit = Get-HordeFilesPathRefusal -Path $Path
+    if ($unfit -ne "") { return (& $refuse $unfit) }
     $full = ""
     # A relative path is the caller's, from where the caller stands; nothing is expanded or searched.
     try { $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path) } catch { return (& $refuse ("'" + $Path + "' is not a path of a file")) }
     if ([System.IO.Directory]::Exists($full)) { return (& $refuse ("'" + $full + "' is a folder; one file is shared at a time")) }
     if (-not [System.IO.File]::Exists($full)) { return (& $refuse ("there is no file '" + $full + "'")) }
-    $link = Find-HordeFilesLink -Path $full
-    if ($link -ne "") { return (& $refuse ("'" + $link + "' is a link, so what would be shared is not what was named; a link is never followed")) }
-    $kind = Get-HordeFilesType -Path $full
-    if (-not $kind.ok) { return (& $refuse $kind.reason) }
-    $source = Read-HordeFilesSource -Path $full -MaxBytes $settings.maxFileBytes
+    # OPENED ONCE. Everything after this is asked of that one handle, or of the path it gives.
+    $opened = Open-HordeFilesSource -Path $full
+    if (-not $opened.ok) { return (& $refuse $opened.reason) }
+    $real = $opened.path
+    $kind = $null
+    $source = $null
+    try {
+        # The link test: of the path that was written, and then of the handle's own. The second is
+        # asked behind the long-path prefix: measured 2026-10-13, a path of 578 characters without
+        # it could not be looked at, and what cannot be looked at is treated as a link.
+        $link = Find-HordeFilesLink -Path $full
+        if ($link -eq "") { $link = Find-HordeFilesLink -Path ("\\?\" + $real) }
+        if ($link -ne "") { return (& $refuse ("'" + $link + "' is a link, so what would be shared is not what was named; a link is never followed")) }
+        $kind = Get-HordeFilesType -Path $real
+        if (-not $kind.ok) { return (& $refuse $kind.reason) }
+        $source = Read-HordeFilesSource -Stream $opened.stream -MaxBytes $settings.maxFileBytes
+    } finally { $opened.stream.Dispose() }
     if (-not $source.ok) { return (& $refuse $source.reason) }
     if (-not (Test-HordeFilesMagic -Magic $kind.magic -Bytes $source.bytes)) { return (& $refuse ("its name says " + $kind.type + ", but its first bytes are not that format's")) }
+    if ($kind.magic -eq "") {
+        $notText = Get-HordeFilesTextProblem -Bytes $source.bytes -Type $kind.type
+        if ($notText -ne "") { return (& $refuse $notText) }
+    }
 
+    # THE KEY, LAST OF ALL THAT CAN REFUSE THE FILE ITSELF: a first share that is refused makes no key.
+    $keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root $store -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs
+    if (-not $keyed.ok) { return (& $refuse $keyed.reason) }
     $session = Get-HordeFilesSession -Asking $Asking
-    $fileId = Get-HordeFilesId -Session $session -FullPath $full
+    $fileId = Get-HordeFilesId -Session $session -FullPath $real -Key $keyed.key
     $digest = Get-HordeFilesHex -Bytes $source.bytes
+    # A FILE WHOSE VERSIONS ARE USED UP is refused before its bytes are kept. A version is six digits
+    # of a record's name, and a stray record named for the last one made the next share throw.
+    $lastVersion = (Get-HordeFilesStoreFormat).maxVersion
+    $usedUp = "file " + $fileId + " already has version " + $lastVersion + ", the last a file can have; nothing more can be shared from this path"
+    if ((Get-HordeFilesStoreLastVersion -Root $store -FileId $fileId) -ge $lastVersion) { return (& $refuse $usedUp) }
     # THE BYTES FIRST, then the record: a record never names bytes that are not there. "exists" is the
     # same bytes already kept - checked by their length, the one thing a digest's name cannot hide
     # cheaply: a file of that name and another length is damage, never something to build a record on.
@@ -200,6 +251,8 @@ function Add-HordeFilesShare {
 
     for ($attempt = 1; $attempt -le $settings.versionTries; $attempt++) {
         $version = (Get-HordeFilesStoreLastVersion -Root $store -FileId $fileId) + 1
+        # Other shares took the last versions since the look above: still a refusal, never a throw.
+        if ($version -gt $lastVersion) { return (& $refuse $usedUp) }
         $record = [ordered]@{ schemaVersion = 1; fileId = $fileId; version = $version; title = $name; type = $kind.type; size = $source.bytes.Length; sha256 = $digest
             time = $Now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [System.Globalization.CultureInfo]::InvariantCulture); session = $session; editable = [bool]$Editable }
         $text = ConvertTo-Json -InputObject $record -Compress -Depth 4

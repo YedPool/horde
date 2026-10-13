@@ -2,9 +2,9 @@
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\files-store-race.psd1
 # test\test-files-race.ps1 must fail for each.
 #
-# Each run of the suite starts 16 powershell.exe processes (4 racers, three races, and four writers
+# Each run of the suite starts 26 powershell.exe processes (4 racers, five races, and six writers
 # stopped at a named step and killed); measured 2026-10-13 on a throttled machine, one run took about
-# 12 s.
+# 20 s.
 @{
     Target = "files\Store.ps1"
     Suite  = "test\test-files-race.ps1"

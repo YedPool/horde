@@ -5,6 +5,12 @@
 #   - a share is refused, with nothing written, for a missing file, a folder, a link (the file, or a
 #     folder on the way to it), a type not on the list, a picture or PDF whose first bytes are not
 #     its format's, an SVG, and a file one byte over the cap - while the cap itself passes;
+#   - text is text: every way bytes can fail to be UTF-8, a NUL, UTF-16 with and without its mark, a
+#     picture under each text name, and 50 texts a lenient parser calls JSON, are each refused;
+#   - a file id is made with a key only this machine has: it is made once, readable by the user
+#     alone, in no record; and a key that is gone or damaged refuses the share and is never remade;
+#   - one file has one id however it is named - the long-path prefix, its 8.3 short name, a subst
+#     drive, a share of this machine's own drive - and a device or a stream inside a file is refused;
 #   - the same path from the same session is the next version of the same file; the same bytes under
 #     two titles are kept once; a share made outside any session says so and names nobody;
 #   - a record that is damaged, a link, or not what its name says is listed as unreadable, never as
@@ -87,6 +93,30 @@ function Test-Refused {
     if ($r.outcome -cne "refused" -or $r.reason -notlike ("*" + $Like + "*") -or -not $same) { Write-Host ("         got: " + $r.outcome + " - " + $r.reason + $(if (-not $same) { " - AND THE STORE CHANGED" } else { "" })) -ForegroundColor Red }
     return ($r.outcome -ceq "refused" -and $r.reason -like ("*" + $Like + "*") -and $same)
 }
+
+function Get-Filled {
+    # -Length bytes of the letter a: text of any size. (Zero bytes are not text: a NUL is refused.)
+    param([int]$Length)
+    $out = New-Object byte[] $Length
+    for ($at = 0; $at -lt $Length; $at++) { $out[$at] = 0x61 }
+    return ,$out
+}
+function Get-RealPath {
+    # The path the open handle of a file gives: what a file id is made from. This suite's folder is
+    # under %TEMP%, which on some machines is written with an 8.3 short name.
+    param([string]$Path)
+    $o = Open-HordeFilesSource -Path $Path
+    if (-not $o.ok) { throw ("the suite could not open " + $Path + ": " + $o.reason) }
+    $o.stream.Dispose()
+    return $o.path
+}
+function Get-Hmac {
+    # HMAC-SHA-256 of -Text under -Key, as lower-case hex: this suite's own, not the code's.
+    param([byte[]]$Key, [string]$Text)
+    $mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)
+    try { return ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text))).Replace("-", "").ToLowerInvariant()) } finally { $mac.Dispose() }
+}
+function Write-Skip { param([string]$What) Write-Host ("  [SKIP] " + $What) -ForegroundColor Yellow }
 
 $png = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
 $jpeg = [byte[]]@(0xFF, 0xD8, 0xFF, 0xE0)
@@ -281,7 +311,8 @@ Check ($own.known -eq $false) "an answer that is not a known id is no session, w
 $fromCore = Get-HordeFilesSession
 $coreSays = Get-HordeSelfSessionId
 Check (($coreSays.state -ceq "known" -and $fromCore.known -and $fromCore.id -ceq $coreSays.value) -or ($coreSays.state -cne "known" -and -not $fromCore.known)) "asked nothing, the session is the one core names as asking, or none when core names none"
-Check ((Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "no-session" }) -FullPath "C:\x\a.md") -cne (Get-HordeFilesId -Session ([ordered]@{ known = $false; reason = "r" }) -FullPath "C:\x\a.md")) "a session that happens to be called 'no-session' does not share a file id with no session"
+$anyKey = [byte[]](1..32)
+Check ((Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "no-session" }) -FullPath "C:\x\a.md" -Key $anyKey) -cne (Get-HordeFilesId -Session ([ordered]@{ known = $false; reason = "r" }) -FullPath "C:\x\a.md" -Key $anyKey)) "a session that happens to be called 'no-session' does not share a file id with no session"
 
 Write-Host ""
 Write-Host "--- refusals: each with its reason, and nothing written ---" -ForegroundColor Cyan
@@ -327,15 +358,15 @@ Check ((Invoke-Share -TestHome $h -Path (New-Source -Name "empty.txt" -Bytes ([b
 Write-Host ""
 Write-Host "--- the cap: exactly the cap passes, one byte more is refused ---" -ForegroundColor Cyan
 $h = New-TestHome
-$atCap = New-Source -Name "at-cap.txt" -Bytes (New-Object byte[] 1048576)
-$overCap = New-Source -Name "over-cap.txt" -Bytes (New-Object byte[] 1048577)
+$atCap = New-Source -Name "at-cap.txt" -Bytes (Get-Filled 1048576)
+$overCap = New-Source -Name "over-cap.txt" -Bytes (Get-Filled 1048577)
 $big = Invoke-Share -TestHome $h -Path $atCap
 Check ($big.outcome -ceq "shared" -and $big.record.size -eq 1048576) "a file of exactly 1048576 bytes is shared under the default cap"
 Check (Test-Refused $h $overCap "1048577 bytes; the largest file that is shared is 1048576 bytes (the setting maxFileBytes)") "a file of 1048577 bytes is refused, with both numbers and the setting's name"
 [void][System.IO.Directory]::CreateDirectory((Join-Path $h "settings"))
 [System.IO.File]::WriteAllText((Join-Path $h "settings\files.json"), '{ "schemaVersion": 1, "settings": { "maxFileBytes": 100, "maxTitleChars": 5 } }')
-Check ((Invoke-Share -TestHome $h -Path (New-Source -Name "hundred.txt" -Bytes (New-Object byte[] 100)) -Title "Small").outcome -ceq "shared") "with the setting at 100, a file of 100 bytes is shared"
-Check (Test-Refused $h (New-Source -Name "hundred-one.txt" -Bytes (New-Object byte[] 101)) "101 bytes; the largest file that is shared is 100 bytes" -Title "Small") "and one of 101 bytes is refused: the cap is the setting, not a number in the code"
+Check ((Invoke-Share -TestHome $h -Path (New-Source -Name "hundred.txt" -Bytes (Get-Filled 100)) -Title "Small").outcome -ceq "shared") "with the setting at 100, a file of 100 bytes is shared"
+Check (Test-Refused $h (New-Source -Name "hundred-one.txt" -Bytes (Get-Filled 101)) "101 bytes; the largest file that is shared is 100 bytes" -Title "Small") "and one of 101 bytes is refused: the cap is the setting, not a number in the code"
 Check (Test-Refused $h $doc "the longest is 5" -Title "Longer") "the title's length is the setting too"
 
 Write-Host ""
@@ -460,9 +491,9 @@ $st = Get-StoreOf $h
 $vfile = New-Source -Name "versions.md" -Text "v"
 $v1 = Invoke-Share -TestHome $h -Path $vfile
 # Another share takes the next version between this share's look and its write: stood in for by a
-# look that answers one too few, twice.
+# look that answers one too few, three times: the look before the bytes are kept, and two tries.
 $script:realLast = ${function:Get-HordeFilesStoreLastVersion}
-$script:lies = 2
+$script:lies = 3
 function Get-HordeFilesStoreLastVersion { param([string]$Root, [string]$FileId) $real = & $script:realLast -Root $Root -FileId $FileId; if ($script:lies -gt 0) { $script:lies--; return ($real - 1) }; return $real }
 $v2 = Invoke-Share -TestHome $h -Path $vfile
 Check ($v2.outcome -ceq "shared" -and $v2.record.version -eq 2 -and $v2.attempts -eq 3) ("a share that twice finds its version taken takes the next at the third try (" + $v2.outcome + ", " + $v2.attempts + " tries)")
@@ -474,10 +505,466 @@ Set-Item -Path function:Get-HordeFilesStoreLastVersion -Value $script:realLast
 # What a share says when the store could not confirm a write.
 function Move-HordeFileNewDurable { param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null) $null = & $script:realMove -From $From -To $To -Open $Open; return "unconfirmed" }
 Check (Throws { Invoke-Share -TestHome (New-TestHome) -Path $vfile } "the file's bytes are in the store, but the system could not confirm") "a share whose bytes could not be confirmed on disk throws: it is never told 'shared'"
+# In a new home the moves are three: the key takes its name, then the bytes, then the record.
 $script:moves = 0
-function Move-HordeFileNewDurable { param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null) $script:moves++; $said = & $script:realMove -From $From -To $To -Open $Open; if ($script:moves -eq 2) { return "unconfirmed" }; return $said }
+function Move-HordeFileNewDurable { param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null) $script:moves++; $said = & $script:realMove -From $From -To $To -Open $Open; if ($script:moves -eq 3) { return "unconfirmed" }; return $said }
 Check (Throws { Invoke-Share -TestHome (New-TestHome) -Path $vfile } "has its name, but the system could not confirm") "nor is one whose record could not be confirmed"
 Set-Item -Path function:Move-HordeFileNewDurable -Value $script:realMove
+
+Write-Host ""
+Write-Host "--- a file's versions used up: a refusal, never a throw ---" -ForegroundColor Cyan
+$h = New-TestHome
+$st = Get-StoreOf $h
+$full = New-Source -Name "used-up.md" -Text "the first words"
+$fullFirst = Invoke-Share -TestHome $h -Path $full
+[System.IO.File]::WriteAllText((Join-Path $st ($fullFirst.record.fileId + ".999999.json")), "{}")
+# New words, so that a share which got as far as keeping bytes would be seen: the store must not change.
+[System.IO.File]::WriteAllText($full, "words nobody has shared yet")
+Check (Test-Refused $h $full "already has version 999999, the last a file can have") "with a stray record named for version 999999, the next share of that file is refused with the reason, and keeps no bytes"
+$otherFull = Invoke-Share -TestHome $h -Path (New-Source -Name "not-used-up.md" -Text "another file")
+Check ($otherFull.outcome -ceq "shared" -and $otherFull.record.version -eq 1) "CONTROL: another file in the same store is shared as before"
+# The last versions taken by other shares AFTER this share's first look: stood in for by a look that
+# is true once and then answers the last version.
+$h = New-TestHome
+$null = Invoke-Share -TestHome $h -Path $full
+$script:looks = 0
+function Get-HordeFilesStoreLastVersion { param([string]$Root, [string]$FileId) $script:looks++; if ($script:looks -eq 1) { return (& $script:realLast -Root $Root -FileId $FileId) }; return 999999 }
+$late = Get-Safely { Invoke-Share -TestHome $h -Path $full }
+Set-Item -Path function:Get-HordeFilesStoreLastVersion -Value $script:realLast
+Check ($late -isnot [string] -and $late.outcome -ceq "refused" -and $late.reason -like "*already has version 999999*") ("a share that finds the last version taken only when it comes to write is refused too, and does not throw (" + $(if ($late -is [string]) { $late } else { $late.outcome }) + ")")
+
+Write-Host ""
+Write-Host "--- text is text: strict UTF-8, and no NUL ---" -ForegroundColor Cyan
+$h = New-TestHome
+$notUtf8 = "is not UTF-8"
+$attacks = @(
+    @{ what = "a byte that is no UTF-8 at the START"; bytes = @(0xF8, 0x68, 0x69); like = $notUtf8 },
+    @{ what = "a byte that is no UTF-8 in the MIDDLE"; bytes = @(0x68, 0x80, 0x69); like = $notUtf8 },
+    @{ what = "a lead byte with nothing after it as the LAST byte"; bytes = @(0x68, 0x69, 0xC3); like = $notUtf8 },
+    @{ what = "a three-byte sequence cut short at the end"; bytes = @(0x68, 0xE2, 0x82); like = $notUtf8 },
+    @{ what = "a four-byte sequence cut short at the end"; bytes = @(0x68, 0xF0, 0x9F, 0x98); like = $notUtf8 },
+    @{ what = "an overlong two-byte form of NUL (C0 80)"; bytes = @(0x68, 0xC0, 0x80); like = $notUtf8 },
+    @{ what = "an overlong two-byte form of a letter (C1 A1)"; bytes = @(0xC1, 0xA1); like = $notUtf8 },
+    @{ what = "an overlong three-byte form of a slash (E0 80 AF)"; bytes = @(0xE0, 0x80, 0xAF); like = $notUtf8 },
+    @{ what = "an overlong four-byte form (F0 80 80 AF)"; bytes = @(0xF0, 0x80, 0x80, 0xAF); like = $notUtf8 },
+    @{ what = "a lone surrogate (ED A0 80)"; bytes = @(0x68, 0xED, 0xA0, 0x80, 0x69); like = $notUtf8 },
+    @{ what = "a surrogate pair written as two three-byte sequences"; bytes = @(0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80); like = $notUtf8 },
+    @{ what = "a character past U+10FFFF (F4 90 80 80)"; bytes = @(0xF4, 0x90, 0x80, 0x80); like = $notUtf8 },
+    @{ what = "a continuation byte with no lead"; bytes = @(0x68, 0xBF); like = $notUtf8 },
+    @{ what = "a NUL between two letters"; bytes = @(0x68, 0x00, 0x69); like = "holds a NUL byte (the first is byte 1)" },
+    @{ what = "a NUL as the last byte"; bytes = @(0x68, 0x69, 0x00); like = "holds a NUL byte (the first is byte 2)" },
+    @{ what = "UTF-16 little-endian with its mark"; bytes = @(0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00); like = "it is UTF-16" },
+    @{ what = "UTF-16 big-endian with its mark"; bytes = @(0xFE, 0xFF, 0x00, 0x68, 0x00, 0x69); like = "it is UTF-16" },
+    @{ what = "UTF-16 little-endian without a mark, Latin letters"; bytes = @(0x68, 0x00, 0x69, 0x00); like = "holds a NUL byte (the first is byte 1)" },
+    @{ what = "UTF-16 big-endian without a mark, Latin letters"; bytes = @(0x00, 0x68, 0x00, 0x69); like = "holds a NUL byte (the first is byte 0)" },
+    @{ what = "UTF-16 little-endian without a mark, two CJK characters"; bytes = @(0x2D, 0x4E, 0x87, 0x65); like = $notUtf8 },
+    @{ what = "a PNG's own first bytes and zeros"; bytes = (Get-Padded -Head $png -Length 64); like = "holds a NUL byte" },
+    @{ what = "a PNG's own first bytes and no NUL anywhere"; bytes = @(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xD9); like = $notUtf8 })
+$n = 0
+foreach ($a in $attacks) {
+    $n++
+    Check (Test-Refused $h (New-Source -Name ("attack-" + $n + ".txt") -Bytes ([byte[]]$a.bytes)) $a.like) ("a .txt file holding " + $a.what + " is refused")
+    # The rule itself, for both kinds of text: a .json file is held to the same bytes before its grammar.
+    Check ((Get-HordeFilesTextProblem -Bytes ([byte[]]$a.bytes) -Type "text/plain") -like ("*" + $a.like + "*") -and (Get-HordeFilesTextProblem -Bytes ([byte[]]$a.bytes) -Type "application/json") -like ("*" + $a.like + "*")) ("and the reason is the same whichever text type it is named as")
+}
+$realPng = Get-Padded -Head $png -Length 64
+$noNulBinary = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xD9)
+foreach ($ext in @(".txt", ".md", ".json", ".html", ".htm")) {
+    Check (Test-Refused $h (New-Source -Name ("picture-renamed" + $ext) -Bytes $realPng) "holds a NUL byte") ("a PNG renamed " + $ext + " is refused")
+    Check (Test-Refused $h (New-Source -Name ("binary-renamed" + $ext) -Bytes $noNulBinary) $notUtf8) ("and so is a binary file with no NUL in it, renamed " + $ext)
+}
+Check ((Invoke-Share -TestHome $h -Path (New-Source -Name "picture.png" -Bytes $realPng)).outcome -ceq "shared") "CONTROL: the same PNG under its own name is shared"
+# WHAT MUST STILL PASS: text as people write it.
+$everyWidth = [byte[]]@(0x68, 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80, 0x09, 0x0D, 0x0A, 0x7F, 0xEF, 0xBF, 0xBF)
+foreach ($ext in @(".txt", ".md", ".html", ".htm")) {
+    Check ((Invoke-Share -TestHome $h -Path (New-Source -Name ("every-width" + $ext) -Bytes $everyWidth)).outcome -ceq "shared") ("CONTROL: a " + $ext + " file with characters of one, two, three and four bytes, a tab, a line end and U+FFFF is shared")
+    Check ((Invoke-Share -TestHome $h -Path (New-Source -Name ("empty" + $ext) -Bytes ([byte[]]@()))).outcome -ceq "shared") ("an EMPTY " + $ext + " file is shared: no characters is valid text")
+}
+$withMark = [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes("# marked"))
+$marked = Invoke-Share -TestHome $h -Path (New-Source -Name "marked.md" -Bytes $withMark)
+Check ($marked.outcome -ceq "shared" -and $marked.record.size -eq $withMark.Length -and $marked.record.sha256 -ceq (Get-HordeFilesHex -Bytes $withMark)) "a file that starts with a UTF-8 byte order mark is shared, and the mark is kept: the size and the sha256 are the file's own"
+Check ([System.BitConverter]::ToString([System.IO.File]::ReadAllBytes((Join-Path (Get-StoreOf $h) (Get-HordeFilesBytesName -Sha256 $marked.record.sha256)))) -ceq [System.BitConverter]::ToString($withMark)) "the bytes stored are the bytes that were checked, mark included"
+Check ((Invoke-Share -TestHome $h -Path (New-Source -Name "only-a-mark.txt" -Bytes ([byte[]]@(0xEF, 0xBB, 0xBF)))).outcome -ceq "shared") "a text file that is only the mark is shared"
+Check ((Invoke-Share -TestHome $h -Path (New-Source -Name "utf16-or-utf8.txt" -Bytes ([byte[]]@(0x41, 0x41, 0x42, 0x42)))).outcome -ceq "shared") "KNOWN LIMIT, shown: UTF-16 without a mark whose bytes are valid UTF-8 with no NUL (U+4141 U+4242 is 'AABB') is that UTF-8 text, and is shared"
+Check ((Get-HordeFilesTextProblem -Bytes $everyWidth -Type "text/plain") -ceq "") "CONTROL: the rule has no complaint about that text"
+
+Write-Host ""
+Write-Host "--- a .json file is exactly one JSON text ---" -ForegroundColor Cyan
+$tab = [string][char]9
+$validJson = [ordered]@{
+    "an object" = '{"a":1,"b":[true,false,null],"c":"x"}'; "an empty object" = '{}'; "an empty array" = '[]'
+    "a string alone" = '"hello"'; "a number alone" = '42'; "a negative number with an exponent" = '-1.5e+10'; "zero" = '0'; "true alone" = 'true'; "null alone" = 'null'
+    "two keys that differ only by case" = '{"a":1,"A":2}'; "the same key twice" = '{"a":1,"a":2}'; "an empty key" = '{"":1}'
+    "white space around and inside" = (" `r`n" + $tab + "{ `"a`" : 1 }`r`n "); "every escape" = '"\" \\ \/ \b \f \n \r \t \u00e9 \u00E9"'
+    "a lone surrogate written as an escape" = '"\ud800"'; "a NUL written as an escape" = '"a\u0000b"'; "a four-byte character" = ('"' + [char]::ConvertFromUtf32(0x1F600) + '"')
+    "a number of thirty digits" = '123456789012345678901234567890'; "an exponent no double holds" = '1e400'; "minus zero" = '-0'; "a fraction" = '0.5'; "a capital E" = '1E5'; "zero with a fraction and exponent" = '0.0e-0'
+    "arrays nested 200 deep" = (('[' * 200) + (']' * 200)); "a key named __type" = '{"__type":"System.Object","a":1}'; "a DEL inside a string" = ('"' + [char]0x7F + '"')
+    "nested objects and arrays" = '{"a":{"b":[{"c":[]},{}]},"d":[[],[[]]]}'
+}
+$invalidJson = [ordered]@{
+    "nothing" = ''; "only white space" = "  `n "; "single quotes" = "{'a':1}"; "a key without quotes" = '{a:1}'; "a comma before }" = '{"a":1,}'; "a comma before ]" = '[1,]'
+    "a comma first" = '[,1]'; "two commas" = '[1,,2]'; "NaN" = 'NaN'; "Infinity" = 'Infinity'; "-Infinity" = '-Infinity'; "undefined" = 'undefined'
+    "a leading zero" = '01'; "a leading zero in an array" = '[01]'; "minus and a leading zero" = '-01'; "a point with no digit after" = '1.'; "a point first" = '.5'; "a plus sign" = '+1'; "hex" = '0x10'
+    "an exponent with no digit" = '1e'; "an exponent with only a sign" = '1e+'; "a minus alone" = '-'; "two minus signs" = '--1'
+    "a line comment" = "// c`n{}"; "a block comment" = '/* c */ {}'; "words after the value" = '{} x'; "two values" = '{}{}'; "two numbers" = '1 2'; "two values in an array with no comma" = '[1 2]'; "two strings" = '"a""b"'
+    "a raw tab inside a string" = ('"a' + $tab + 'b"'); "a raw line end inside a string" = "`"a`nb`""; "the escape \x" = '"\x41"'; "the escape \a" = '"\a"'; "a \u with two digits" = '"\u12"'; "a \u with a letter that is no hex" = '"\u12g4"'
+    "an object cut after its colon" = '{"a":'; "a string never closed" = '"abc'; "a string ending in a backslash" = '"abc\'; "an array never closed" = '[1,2'; "an object never closed" = '{"a":1'; "a } too many" = '{}}'; "[ closed by }" = '[}'; "{ closed by ]" = '{"a":1]'
+    "nul" = 'nul'; "True" = 'True'; "NULL" = 'NULL'; "truex" = 'truex'; "no colon" = '{"a" 1}'; "a comma for the colon" = '{"a",1}'; "an equals sign for the colon" = '{"a"=1}'; "a key with only its closing quote" = '{a":1}'; "a minus alone in an array" = '[-]'; "no value" = '{"a":}'; "a number as a key" = '{1:2}'; "a colon in an array" = '["a":1]'
+    "new Date" = 'new Date(1)'; "a value in brackets ()" = '(1)'; "a no-break space as white space" = ([char]0xA0 + '{}'); "a mark after the value" = ('{}' + [char]0xFEFF); "a vertical tab as white space" = ([char]0x0B + '1'); "a form feed as white space" = ([char]0x0C + '1')
+    "a ] alone" = ']'; "a comma alone" = ','; "a colon alone" = ':'
+}
+$wrongValid = @($validJson.Keys | Where-Object { (Get-HordeFilesTextProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($validJson[$_])) -Type "application/json") -cne "" })
+Check ($wrongValid.Count -eq 0) ("every one of " + $validJson.Count + " valid JSON texts passes the rule, among them what the platform's parsers wrongly refuse (" + ($wrongValid -join "; ") + ")")
+$wrongInvalid = @($invalidJson.Keys | Where-Object { (Get-HordeFilesTextProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($invalidJson[$_])) -Type "application/json") -notlike "its name says JSON, but it is not: *" })
+Check ($wrongInvalid.Count -eq 0) ("every one of " + $invalidJson.Count + " texts that are not JSON is refused by the rule, among them what the platform's parsers wrongly take (" + ($wrongInvalid -join "; ") + ")")
+$asText = @($invalidJson.Keys | Where-Object { (Get-HordeFilesTextProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($invalidJson[$_])) -Type "text/plain") -cne "" })
+Check ($asText.Count -eq 0) "CONTROL: named as plain text, every one of those passes: it is the JSON rule that refuses them"
+# Each of the broken texts on its own line, so that one let through is named.
+foreach ($k in $invalidJson.Keys) { Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($invalidJson[$k]))) -cne "") ("not JSON: " + $k) }
+foreach ($k in $validJson.Keys) { Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($validJson[$k]))) -ceq "") ("JSON: " + $k) }
+Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes('[1,]'))) -ceq "at byte 3, a value was expected") "the reason says where: [1,] is refused at byte 3"
+Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes(''))) -like "it holds no value*" -and (Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes('{"a":1'))) -like "it ends before*") "an empty text is said to hold no value, and a cut one to end too soon"
+$deep = [System.Text.Encoding]::ASCII.GetBytes((('[' * 100000) + (']' * 100000)))
+Check ((Get-Safely { Get-HordeFilesJsonProblem -Bytes $deep }) -ceq "") "arrays nested 100000 deep are JSON, and are answered: the check does not recurse"
+$deepCut = [System.Text.Encoding]::ASCII.GetBytes((('[' * 100000) + (']' * 99999)))
+Check ((Get-Safely { Get-HordeFilesJsonProblem -Bytes $deepCut }) -like "it ends before*") "and one bracket short of that is refused"
+# THROUGH A SHARE: the file, its name, and the same buffer.
+$jsonHome = New-TestHome
+Check ((Invoke-Share -TestHome $jsonHome -Path (New-Source -Name "good.json" -Text '{"a":[1,2,{"b":null}]}')).outcome -ceq "shared") "a .json file holding JSON is shared"
+Check ((Invoke-Share -TestHome $jsonHome -Path (New-Source -Name "scalar.json" -Text '"just a string"')).outcome -ceq "shared") "and one holding a single string: a value alone is a JSON text"
+foreach ($k in @("nothing", "only white space", "a comma before ]", "a leading zero", "two values", "single quotes", "NaN", "an object never closed", "a raw tab inside a string")) {
+    Check (Test-Refused $jsonHome (New-Source -Name "bad.json" -Text $invalidJson[$k]) "its name says JSON, but it is not") ("a .json file holding " + $k + " is refused")
+}
+Check ((Invoke-Share -TestHome $jsonHome -Path (New-Source -Name "not-json.txt" -Text '[1,]')).outcome -ceq "shared") "CONTROL: the same broken text named .txt is shared: only a .json name promises JSON"
+$markedJson = [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes('{"a":1}'))
+Check ((Invoke-Share -TestHome $jsonHome -Path (New-Source -Name "marked.json" -Bytes $markedJson)).outcome -ceq "shared") "a .json file that starts with a byte order mark is shared: the grammar starts after the mark"
+Check (Test-Refused $jsonHome (New-Source -Name "only-a-mark.json" -Bytes ([byte[]]@(0xEF, 0xBB, 0xBF))) "it holds no value") "a .json file that is only the mark is refused: it holds no value"
+Check (Test-Refused $jsonHome (New-Source -Name "two-marks.json" -Bytes ([byte[]](@(0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes('{}')))) "a value was expected") "and a second mark is not white space"
+Check (Test-Refused $jsonHome (New-Source -Name "empty.json" -Bytes ([byte[]]@())) "it holds no value") "an EMPTY .json file is refused, where an empty .txt is shared"
+# The cap and the text check together: exactly the cap, valid, is shared.
+$capJson = Get-Filled 1048576
+$capJson[0] = 0x22; $capJson[1048575] = 0x22
+$atCapJson = Invoke-Share -TestHome $jsonHome -Path (New-Source -Name "at-cap.json" -Bytes $capJson)
+Check ($atCapJson.outcome -ceq "shared" -and $atCapJson.record.size -eq 1048576) "a .json file of exactly 1048576 bytes that is one JSON string is shared"
+$capJson[1048575] = 0x61
+Check (Test-Refused $jsonHome (New-Source -Name "at-cap-cut.json" -Bytes $capJson) "a string is never closed") "and the same size with its closing quote gone is refused"
+
+Write-Host ""
+Write-Host "--- the key file ids are made with: made once, the user's alone, in no record ---" -ForegroundColor Cyan
+$h = New-TestHome
+$st = Get-StoreOf $h
+$keyPath = Get-HordeFilesKeyPath -HordeHome $h
+Check ($keyPath -ceq (Join-Path $h "keys\files-id.key")) "the key is kept at <home>\keys\files-id.key"
+Check (Test-Refused $h (Join-Path $script:work "sources\not-there.md") "there is no file") "a first share that is refused"
+Check (-not (Test-Path -LiteralPath $h)) "makes no key and no home"
+$keyDoc = New-Source -Name "keyed.md" -Text "# keyed"
+$keyDocReal = Get-RealPath $keyDoc
+$k1 = Invoke-Share -TestHome $h -Path $keyDoc
+$keyBytes = [byte[]]@()
+if ([System.IO.File]::Exists($keyPath)) { $keyBytes = [System.IO.File]::ReadAllBytes($keyPath) }
+Check ($k1.outcome -ceq "shared" -and $keyBytes.Length -eq 32) "the first share makes the key: 32 bytes"
+Check (@($keyBytes | Sort-Object -Unique).Count -ge 8) "which are not one byte repeated: they came from a generator"
+Check ((Get-Names (Split-Path -Parent $keyPath)) -ceq "files-id.key") "and it leaves no temporary file beside it"
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.IO.File]::GetAccessControl($keyPath)
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+Check ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]) -eq $me) "the key file's owner is the current user"
+Check ($acl.AreAccessRulesProtected) "it inherits nothing from its folder"
+Check ($rules.Count -eq 1 -and $rules[0].IdentityReference -eq $me -and $rules[0].AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $rules[0].FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]::FullControl -and -not $rules[0].IsInherited) ("its access list is one entry: the current user, allowed (" + $acl.GetSecurityDescriptorSddlForm("Access") + ")")
+$idText = "horde-files-id.v1`nsession:session-a`n" + $keyDocReal.ToLowerInvariant()
+Check ($k1.record.fileId -ceq (Get-Hmac -Key $keyBytes -Text $idText).Substring(0, 32)) "the file id is HMAC-SHA-256, under that key, of the session and the file's path: worked out again here, it is the same"
+Check ($k1.record.fileId -cne (Get-HordeFilesHex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($idText))).Substring(0, 32)) "CONTROL: and it is NOT the plain SHA-256 of them, which anyone holding the record could try paths against"
+$k2 = Invoke-Share -TestHome $h -Path $keyDoc
+Check ($k2.record.fileId -ceq $k1.record.fileId -and $k2.record.version -eq 2 -and [System.BitConverter]::ToString([System.IO.File]::ReadAllBytes($keyPath)) -ceq [System.BitConverter]::ToString($keyBytes)) "the next share uses the same key: the same id, version 2, and the key file is as it was"
+$hOther = New-TestHome
+$o1 = Invoke-Share -TestHome $hOther -Path $keyDoc
+$otherKey = [System.IO.File]::ReadAllBytes((Get-HordeFilesKeyPath -HordeHome $hOther))
+Check ([System.BitConverter]::ToString($otherKey) -cne [System.BitConverter]::ToString($keyBytes)) "another home makes another key"
+Check ($o1.outcome -ceq "shared" -and $o1.record.fileId -cne $k1.record.fileId) "so the SAME session sharing the SAME path there gets ANOTHER file id: an id says nothing without the key"
+$hCopy = New-TestHome
+[void][System.IO.Directory]::CreateDirectory((Split-Path -Parent (Get-HordeFilesKeyPath -HordeHome $hCopy)))
+[System.IO.File]::WriteAllBytes((Get-HordeFilesKeyPath -HordeHome $hCopy), $keyBytes)
+$c1 = Invoke-Share -TestHome $hCopy -Path $keyDoc
+Check ($c1.record.fileId -ceq $k1.record.fileId) "CONTROL: a home given the first home's key gets the first home's id: the key is the only thing that differed"
+# NOWHERE BUT ITS FILE. Every form a key could be written in, looked for in everything a share leaves and says.
+$keyForms = @([System.BitConverter]::ToString($keyBytes).Replace("-", "").ToLowerInvariant(), [System.BitConverter]::ToString($keyBytes).Replace("-", ""), [System.BitConverter]::ToString($keyBytes), [System.Convert]::ToBase64String($keyBytes), (($keyBytes | ForEach-Object { "$_" }) -join ","), (($keyBytes | ForEach-Object { "$_" }) -join " "))
+function Test-HoldsKey {
+    # Does -Bytes hold the key, raw or in any of the written forms?
+    param([byte[]]$Bytes)
+    $hex = [System.BitConverter]::ToString($Bytes)
+    if ($hex.Contains([System.BitConverter]::ToString($keyBytes))) { return $true }
+    $asText = [System.Text.Encoding]::UTF8.GetString($Bytes)
+    foreach ($form in $keyForms) { if ($asText.Contains($form)) { return $true } }
+    return $false
+}
+Check (Test-HoldsKey -Bytes ([System.IO.File]::ReadAllBytes($keyPath))) "CONTROL: the look finds the key in the key file itself"
+Check (Test-HoldsKey -Bytes ([System.Text.Encoding]::UTF8.GetBytes(("x" + [System.Convert]::ToBase64String($keyBytes) + "y")))) "CONTROL: and in a text that holds it as base64"
+$inStore = @(Get-ChildItem -LiteralPath $st -Force | Where-Object { Test-HoldsKey -Bytes ([System.IO.File]::ReadAllBytes($_.FullName)) })
+Check ($inStore.Count -eq 0 -and @(Get-ChildItem -LiteralPath $st -Force).Count -eq 3) "no record and no bytes file in the store holds the key (2 records and 1 bytes file read)"
+$said = (ConvertTo-Json -InputObject @($k1, $k2) -Depth 6 -Compress) + ((Format-HordeFilesList -List (Get-HordeFilesList -HordeHome $h)) -join "`n")
+Check (-not (Test-HoldsKey -Bytes ([System.Text.Encoding]::UTF8.GetBytes($said)))) "nor does what a share returns, nor the printed list"
+$pathPieces = @("keyed.md", "keyed", "sources", (Split-Path -Leaf $script:work))
+$recordsText = (@(Get-ChildItem -LiteralPath $st -Filter "*.json" | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n") + $said
+Check (@($pathPieces | Where-Object { $recordsText.Contains($_) }).Count -eq 0) "and no piece of the file's path - its name, its folder - is in a record, in what a share returns or in the list"
+
+Write-Host ""
+Write-Host "--- a key that is gone or damaged refuses the share, and is never made again ---" -ForegroundColor Cyan
+$reasons = New-Object System.Collections.ArrayList
+function Get-KeyState {
+    # What stands in the key's place, as text to compare: its bytes, "folder", "absent", or "held" when another process has it.
+    if ([System.IO.Directory]::Exists($keyPath)) { return "folder" }
+    if (-not [System.IO.File]::Exists($keyPath)) { return "absent" }
+    try { return [System.BitConverter]::ToString([System.IO.File]::ReadAllBytes($keyPath)) } catch { return "held" }
+}
+function Test-KeyRefusal {
+    # With the key file as it now is: is the share refused with -Like, the store unchanged, and the key file untouched?
+    param([string]$Like)
+    $was = Get-KeyState
+    $before = Get-Names $st
+    $r = [pscustomobject]@{ outcome = "threw"; reason = "" }
+    try { $r = Invoke-Share -TestHome $h -Path $keyDoc } catch { $r.reason = "$($_.Exception.Message)" }
+    [void]$reasons.Add("$($r.reason)")
+    $now = Get-KeyState
+    $ok = ($r.outcome -ceq "refused" -and $r.reason -like ("*" + $Like + "*") -and $r.reason -like "*files-id.key*" -and (Get-Names $st) -ceq $before -and $now -ceq $was)
+    if (-not $ok) { Write-Host ("         got: " + $r.outcome + " - " + $r.reason + " - key file " + $(if ($now -ceq $was) { "untouched" } else { "CHANGED" })) -ForegroundColor Red }
+    return $ok
+}
+[System.IO.File]::Delete($keyPath)
+Check (Test-KeyRefusal "is missing, and the store already holds shared files") "the key file DELETED between two shares: the next share is refused, naming the file, and NO new key is made"
+Check (-not [System.IO.File]::Exists($keyPath)) "the key file is still absent: a new key would have given the file a new id in silence"
+[System.IO.File]::WriteAllBytes($keyPath, [byte[]]@())
+Check (Test-KeyRefusal "it is 0 bytes") "an EMPTY key file refuses the share"
+[System.IO.File]::WriteAllBytes($keyPath, [byte[]]($keyBytes[0..30]))
+Check (Test-KeyRefusal "a key is 32 bytes, and it is 31 bytes") "a key file CUT SHORT by one byte refuses the share"
+[System.IO.File]::WriteAllBytes($keyPath, [byte[]]($keyBytes[0..0]))
+Check (Test-KeyRefusal "it is 1 bytes") "and one cut to a single byte"
+[System.IO.File]::WriteAllBytes($keyPath, [byte[]](@($keyBytes) + @(0x01)))
+Check (Test-KeyRefusal "it is longer") "a key file one byte too LONG refuses the share"
+[System.IO.File]::WriteAllBytes($keyPath, (New-Object byte[] 32))
+Check (Test-KeyRefusal "is all zero bytes") "a key file of 32 ZERO bytes refuses the share: that is a file never written through, not a key"
+[System.IO.File]::Delete($keyPath)
+[void][System.IO.Directory]::CreateDirectory($keyPath)
+Check (Test-KeyRefusal "is a folder, not a file") "a FOLDER in the key's place refuses the share"
+[System.IO.Directory]::Delete($keyPath)
+$keyElsewhere = Join-Path $script:work "a-whole-key-elsewhere.key"
+[System.IO.File]::WriteAllBytes($keyElsewhere, $keyBytes)
+Check (New-FileLink -Link $keyPath -Target $keyElsewhere) "a symbolic link to a whole key was put in the key's place"
+Check (Test-KeyRefusal "is a link") "and the share is refused: a key is never read through a link"
+[System.IO.File]::Delete($keyPath)
+[System.IO.File]::WriteAllBytes($keyPath, $keyBytes)
+# A key another process holds for itself: waited for, the number of tries a setting, then refused.
+[void][System.IO.Directory]::CreateDirectory((Join-Path $h "settings"))
+[System.IO.File]::WriteAllText((Join-Path $h "settings\files.json"), '{ "schemaVersion": 1, "settings": { "heldReadTries": 3, "heldReadWaitMs": 20 } }')
+$keyGrip = New-Object System.IO.FileStream($keyPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+try { Check (Test-KeyRefusal "is still held by another process after 60 ms") "a key file another process holds for itself refuses the share after the tries the settings give" } finally { $keyGrip.Dispose() }
+[System.IO.File]::Delete((Join-Path $h "settings\files.json"))
+$back = Invoke-Share -TestHome $h -Path $keyDoc
+Check ($back.outcome -ceq "shared" -and $back.record.fileId -ceq $k1.record.fileId -and $back.record.version -eq 3) "CONTROL: with the key back and let go, the same path is version 3 of the SAME file: nothing forked while it was refused"
+Check ($reasons.Count -eq 9 -and @($reasons | Where-Object { Test-HoldsKey -Bytes ([System.Text.Encoding]::UTF8.GetBytes($_)) }).Count -eq 0) "none of the nine refusals says a byte of the key"
+# The pieces, each by itself.
+$unitKey = Join-Path $script:work "unit-keys\files-id.key"
+Check ((Read-HordeFilesKey -Path $unitKey -HeldTries 1 -HeldWaitMs 1).state -ceq "absent") "reading a key that was never made answers absent, which is not a refusal"
+Check ((Get-Safely { New-HordeFilesKey -Path $unitKey }) -ceq "created") "making a key where there is none is told 'created'"
+$unitBytes = [System.IO.File]::ReadAllBytes($unitKey)
+Check ((Get-Safely { New-HordeFilesKey -Path $unitKey }) -ceq "exists") "making one where there is one is told 'exists'"
+Check ([System.BitConverter]::ToString([System.IO.File]::ReadAllBytes($unitKey)) -ceq [System.BitConverter]::ToString($unitBytes) -and (Get-Names (Split-Path -Parent $unitKey)) -ceq "files-id.key") "and the first key is untouched, with no temporary file left: a key is never replaced"
+$readBack = Read-HordeFilesKey -Path $unitKey -HeldTries 1 -HeldWaitMs 1
+Check ($readBack.state -ceq "ok" -and [System.BitConverter]::ToString($readBack.key) -ceq [System.BitConverter]::ToString($unitBytes) -and $readBack.key.Length -eq 32) "reading it gives those 32 bytes"
+$null = New-HordeFilesKey -Path (Join-Path $script:work "unit-keys-2\files-id.key")
+Check ([System.BitConverter]::ToString([System.IO.File]::ReadAllBytes((Join-Path $script:work "unit-keys-2\files-id.key"))) -cne [System.BitConverter]::ToString($unitBytes)) "two keys made one after the other are not the same key"
+# WHEN A KEY MAY BE MADE: only while the store holds no record. Names alone decide it.
+$emptyStore = Join-Path $script:work "store-with-no-record"
+[void][System.IO.Directory]::CreateDirectory($emptyStore)
+[System.IO.File]::WriteAllText((Join-Path $emptyStore "notes.json"), "{}")
+[System.IO.File]::WriteAllText((Join-Path $emptyStore (("ab" * 32) + ".bytes")), "x")
+Check (-not (Test-HordeFilesStoreHasRecord -Root $emptyStore) -and -not (Test-HordeFilesStoreHasRecord -Root (Join-Path $script:work "no-such-store"))) "a store holding bytes and a stray .json, and a store that is not there, hold no record"
+$hFresh = New-TestHome
+$made = Get-HordeFilesKey -HordeHome $hFresh -Root $emptyStore -HeldTries 1 -HeldWaitMs 1
+Check ($made.ok -and $made.key.Length -eq 32 -and [System.IO.File]::Exists((Get-HordeFilesKeyPath -HordeHome $hFresh))) "so a key is made for it"
+[System.IO.File]::WriteAllText((Join-Path $emptyStore (Get-HordeFilesRecordName -FileId ("ab" * 16) -Version 1)), "damaged")
+Check (Test-HordeFilesStoreHasRecord -Root $emptyStore) "one file named as a record, damaged or not, is a record: its id was made with a key"
+$hFresh2 = New-TestHome
+$notMade = Get-HordeFilesKey -HordeHome $hFresh2 -Root $emptyStore -HeldTries 1 -HeldWaitMs 1
+Check (-not $notMade.ok -and $null -eq $notMade.key -and $notMade.reason -like "*is missing*" -and -not (Test-Path -LiteralPath $hFresh2)) "and no key is made for a store that holds one"
+# A key another share made BETWEEN this share's two looks - none when it read, a record when it asked
+# the store - is used, not refused: stood in for by a look at the store that makes the key first.
+$hLate = New-TestHome
+$script:realHasRecord = ${function:Test-HordeFilesStoreHasRecord}
+function Test-HordeFilesStoreHasRecord { param([string]$Root) $null = New-HordeFilesKey -Path (Get-HordeFilesKeyPath -HordeHome $hLate); return $true }
+$lateKey = Get-HordeFilesKey -HordeHome $hLate -Root $emptyStore -HeldTries 1 -HeldWaitMs 1
+Set-Item -Path function:Test-HordeFilesStoreHasRecord -Value $script:realHasRecord
+Check ($lateKey.ok -and [System.BitConverter]::ToString($lateKey.key) -ceq [System.BitConverter]::ToString([System.IO.File]::ReadAllBytes((Get-HordeFilesKeyPath -HordeHome $hLate)))) "a key another first share made between this share's two looks is the key it uses: it is not refused as missing"
+$twoKeys = @((Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "s" }) -FullPath "C:\x\a.md" -Key $anyKey), (Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "s" }) -FullPath "C:\x\a.md" -Key ([byte[]](2..33))), (Get-HordeFilesId -Session ([ordered]@{ known = $true; id = "s" }) -FullPath "C:\X\A.MD" -Key $anyKey))
+Check ($twoKeys[0] -cne $twoKeys[1] -and $twoKeys[0] -ceq $twoKeys[2] -and $twoKeys[0] -cmatch '\A[0-9a-f]{32}\z') "one session and path under two keys are two ids; under one key, in any case, one id of 32 hex digits"
+
+Write-Host ""
+Write-Host "--- one file has one id, however it is named: the path is the open handle's ---" -ForegroundColor Cyan
+$h = New-TestHome
+$named = New-Source -Name "a long report name.md" -Text "# one file, many names"
+$namedReal = Get-RealPath $named
+$script:nameVersion = 1
+$byName = Invoke-Share -TestHome $h -Path $named
+Check ($byName.outcome -ceq "shared" -and $byName.record.version -eq 1) "a file is shared by its plain path: version 1"
+function Test-SameFile {
+    # Shared by -Path, is it the NEXT VERSION of the file first shared by its plain path?
+    param([string]$Path)
+    $r = [pscustomobject]@{ outcome = "threw"; reason = ""; record = $null }
+    try { $r = Invoke-Share -TestHome $h -Path $Path } catch { $r.reason = "$($_.Exception.Message)" }
+    $ok = ($r.outcome -ceq "shared" -and $r.record.fileId -ceq $byName.record.fileId -and $r.record.version -eq ($script:nameVersion + 1))
+    if ($r.outcome -ceq "shared") { $script:nameVersion = [System.Math]::Max($script:nameVersion, [int]$r.record.version) }
+    if (-not $ok) { Write-Host ("         got: " + $r.outcome + " " + $r.reason + $(if ($null -ne $r.record) { " id " + $r.record.fileId + " v" + $r.record.version + ", wanted " + $byName.record.fileId } else { "" })) -ForegroundColor Red }
+    return $ok
+}
+Check (Test-SameFile ("\\?\" + $named)) "by the long-path prefix (\\?\C:\...) it is the next version of the SAME file"
+# Its 8.3 short name, where this volume makes them.
+$shortName = ""
+try { $shortName = (New-Object -ComObject Scripting.FileSystemObject).GetFile($named).ShortPath } catch { $shortName = "" }
+if ($shortName -ne "" -and (Split-Path -Leaf $shortName) -cne (Split-Path -Leaf $named) -and (Split-Path -Leaf $shortName) -like "*~*") {
+    Check ([System.IO.File]::Exists($shortName)) ("CONTROL: this volume gave the file the short name " + (Split-Path -Leaf $shortName))
+    Check (Test-SameFile $shortName) "by its 8.3 short name it is the next version of the SAME file"
+} else { Write-Skip "THE 8.3 SHORT NAME COULD NOT BE TESTED: this volume gave 'a long report name.md' no short name. Run this suite on a volume that makes them." }
+# A drive made with subst, over the file's folder.
+$substLetter = ""
+foreach ($candidate in "ZYXWVUTSRQPONMLKJ".ToCharArray()) { if (-not [System.IO.Directory]::Exists($candidate + ":\")) { $substLetter = "" + $candidate; break } }
+Check ($substLetter -ne "") "a drive letter nothing uses was found for subst"
+$null = & subst.exe ($substLetter + ":") (Split-Path -Parent $named)
+$substMade = ($LASTEXITCODE -eq 0 -and [System.IO.File]::Exists($substLetter + ":\a long report name.md"))
+try {
+    Check $substMade ("subst made " + $substLetter + ": over the file's folder (if this fails, the subst form was NOT tested)")
+    Check (Test-SameFile ($substLetter + ":\a long report name.md")) "by a subst drive it is the next version of the SAME file"
+} finally { $null = & subst.exe ($substLetter + ":") /D }
+Check (-not [System.IO.Directory]::Exists($substLetter + ":\")) "the subst drive is gone again"
+# A share of this machine's own drive. It needs a session that may open the drive's own share.
+$unc = "\\localhost\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2)
+if ([System.IO.File]::Exists($unc)) {
+    Check (Test-SameFile $unc) "by a UNC path to this machine (\\localhost\C$\...) it is the next version of the SAME file"
+    Check (Test-SameFile ("\\127.0.0.1\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2))) "and by this machine's address instead of its name: the server's name is never what decides"
+    Check (Test-SameFile ("\\?\UNC\localhost\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2))) "and by the long-path form of the UNC path"
+    $adminShare = "\\localhost\ADMIN$\win.ini"
+    if ([System.IO.File]::Exists($adminShare)) { Check (Test-Refused $h $adminShare "it is on a network share") "a file on any OTHER share of this machine is refused: nothing proves where it is" }
+    else { Write-Skip "A SHARE THAT IS NOT A DRIVE'S OWN COULD NOT BE TESTED: \\localhost\ADMIN$\win.ini is not there." }
+} else { Write-Skip ("THE UNC FORM COULD NOT BE TESTED: this session cannot open " + $unc + " (the drive's own share needs an administrator's token). Run this suite elevated.") }
+Check (Test-SameFile $named.ToUpperInvariant()) "and by its plain path in capitals"
+$elseFile = Invoke-Share -TestHome $h -Path (New-Source -Name "another long report name.md" -Text "# another file")
+Check ($elseFile.outcome -ceq "shared" -and $elseFile.record.fileId -cne $byName.record.fileId) "CONTROL: another file is another id, so one id for all those names was not one id for everything"
+# A path longer than the first buffer the final path is asked with.
+$longDir = "\\?\" + (Join-Path $script:work ("long\" + ((1..6 | ForEach-Object { "a-folder-name-that-is-eighty-characters-long-" + ("x" * 35) }) -join "\")))
+[void][System.IO.Directory]::CreateDirectory($longDir)
+[System.IO.File]::WriteAllText(($longDir + "\deep.md"), "deep")
+$longShare = Get-Safely { Invoke-Share -TestHome $h -Path ($longDir + "\deep.md") }
+Check ($longDir.Length -gt 520 -and $longShare -isnot [string] -and $longShare.outcome -ceq "shared") ("a file whose path is " + ($longDir.Length + 8) + " characters is shared: the final path is asked again with the size Windows names")
+[System.IO.Directory]::Delete(("\\?\" + (Join-Path $script:work "long")), $true)
+
+Write-Host ""
+Write-Host "--- bringing a network path home: by who the file is, never by the server's name ---" -ForegroundColor Cyan
+$fileA = New-Source -Name "identity-a.md" -Text "a"
+$fileB = New-Source -Name "identity-b.md" -Text "a"
+$realA = Get-RealPath $fileA
+$realB = Get-RealPath $fileB
+# Made at the very same time, as far as the file system says: only the file's own number tells them apart.
+[System.IO.File]::SetCreationTimeUtc($fileB, [System.IO.File]::GetCreationTimeUtc($fileA))
+$handleA = New-Object System.IO.FileStream($fileA, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+$handleA2 = New-Object System.IO.FileStream($fileA, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+$handleB = New-Object System.IO.FileStream($fileB, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+try {
+    $finalA = Get-HordeFilesFinalPath -Stream $handleA
+    Check ($finalA -ceq ("\\?\" + $realA)) "the final path of an open file is its path behind \\?\"
+    $whoA = Get-HordeFilesIdentity -Stream $handleA
+    Check ($whoA -cmatch '\A[0-9]+(:[0-9]+){6}\z' -and $whoA -ceq (Get-HordeFilesIdentity -Stream $handleA2)) "two handles on one file say they are the same file"
+    Check ($whoA -cne (Get-HordeFilesIdentity -Stream $handleB)) "and two files of the same size, holding the same byte, made in the same moment, say they are not"
+    Check (@($whoA.Split(":"))[0] -ne "0") "the volume's serial number is read, and is not 0 (it read as 0 when the structure was laid out wrongly)"
+    Check ((Test-HordeFilesSameFile -One $whoA -Other $whoA) -and -not (Test-HordeFilesSameFile -One $whoA -Other ($whoA + "1"))) "one identity twice is one file, and two identities are two"
+    Check (-not (Test-HordeFilesSameFile -One "" -Other "")) "two files that both gave NO identity are not thereby the same file"
+    $local = Resolve-HordeFilesLocalPath -Stream $handleA -Final $finalA
+    Check ($local.ok -and $local.path -ceq $realA) "a final path on a drive is that path, without the prefix"
+    $uncOfA = "\\?\UNC\a-server-that-is-not-there\" + $realA.Substring(0, 1) + "$" + $realA.Substring(2)
+    $proved = Resolve-HordeFilesLocalPath -Stream $handleA -Final $uncOfA
+    Check ($proved.ok -and $proved.path -ceq $realA) "a final path on some server's drive share, whose local file IS the open file, comes home to the local path - whatever the server is called"
+    $uncOfB = "\\?\UNC\localhost\" + $realB.Substring(0, 1) + "$" + $realB.Substring(2)
+    $notProved = Resolve-HordeFilesLocalPath -Stream $handleA -Final $uncOfB
+    Check (-not $notProved.ok -and $notProved.path -ceq "" -and $notProved.reason -like "*it is on a network share ('\\localhost\*") "one whose local file is ANOTHER file is refused, even from localhost: the name proves nothing, the file does"
+    Check (-not (Resolve-HordeFilesLocalPath -Stream $handleA -Final ($uncOfA + ".not-there")).ok) "one with no local file of that path is refused"
+    Check (-not (Resolve-HordeFilesLocalPath -Stream $handleA -Final "\\?\UNC\server\share\folder\x.md").ok) "a share that is not a drive's own is refused"
+    Check (-not (Resolve-HordeFilesLocalPath -Stream $handleA -Final ("\\?\UNC\server\" + $realA.Substring(0, 1) + "$")).ok) "and so is a drive share with nothing after it"
+    $unsaid = Resolve-HordeFilesLocalPath -Stream $handleA -Final ""
+    Check (-not $unsaid.ok -and $unsaid.reason -like "*Windows would not say where the opened file really is*") "when Windows gives no final path at all, the share is refused with that reason"
+} finally { $handleA.Dispose(); $handleA2.Dispose(); $handleB.Dispose() }
+# A file that was opened and then refused is let go: nothing keeps holding it.
+$script:realResolve = ${function:Resolve-HordeFilesLocalPath}
+function Resolve-HordeFilesLocalPath { param($Stream, [string]$Final) return [pscustomobject]@{ ok = $false; path = ""; reason = "refused by this suite" } }
+$turnedAway = Open-HordeFilesSource -Path $fileA
+Set-Item -Path function:Resolve-HordeFilesLocalPath -Value $script:realResolve
+$toItself = "held"
+try { $alone = New-Object System.IO.FileStream($fileA, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None); $alone.Dispose(); $toItself = "free" } catch { }
+Check (-not $turnedAway.ok -and $null -eq $turnedAway.stream -and $turnedAway.reason -ceq "refused by this suite" -and $toItself -ceq "free") ("a file whose place is refused after it was opened is let go again: another process can have it to itself (" + $toItself + ")")
+$goneOpen = Open-HordeFilesSource -Path (Join-Path $script:work "sources\no-such-file.md")
+Check (-not $goneOpen.ok -and $null -eq $goneOpen.stream -and $goneOpen.reason -like "it cannot be read:*") "opening a file that is not there is a refusal with the reason, and hands back no handle"
+
+Write-Host ""
+Write-Host "--- a device, and a stream inside a file, are refused from the path as written ---" -ForegroundColor Cyan
+$h = New-TestHome
+$null = Invoke-Share -TestHome $h -Path $named
+$inSources = Join-Path $script:work "sources"
+$deviceNames = @("NUL", "nul", "CON", "PRN", "AUX", "COM1", "com9", "COM0", "LPT1", "LPT9", "CONIN$", "CONOUT$", "NUL.txt", "nul.md", "NUL:", "COM1:", "NUL .md",
+    (Join-Path $inSources "NUL"), (Join-Path $inSources "con.md"), (Join-Path $inSources "aux.tar.md"), (Join-Path $inSources "AUX\report.md"), ".\prn.md", "C:/folder/lpt1.md", ("\\?\" + (Join-Path $inSources "nul.md")), ("COM" + [char]0xB9 + ".md"))
+foreach ($d in $deviceNames) { Check (Test-Refused $h $d "is a name Windows keeps for a device") ("a path holding a device's name is refused: " + ($d -replace '[^\x20-\x7E]', '?')) }
+$deviceForms = @("\\.\NUL", ("\\.\" + $named), ("//./" + $named.Replace("\", "/")), "\\.\pipe\some-pipe", "\\.\PhysicalDrive0", "\\?\NUL", "\\?\GLOBALROOT\Device\Null", "\\?\Volume{00000000-0000-0000-0000-000000000000}\x.md", ("\??\" + $named), "\\?\pipe\some-pipe")
+foreach ($d in $deviceForms) { Check (Test-Refused $h $d "is in the device form") ("a path in the device form is refused: " + $d) }
+foreach ($fine in @("console.md", "nullable.md", "com10.md", "lpt.md", "aux1.md", "conin.md", "the nul file.md", "nul-.md", "falcon.md", "annul.md", "xcom1.md")) {
+    Check ((Invoke-Share -TestHome $h -Path (New-Source -Name $fine -Text "words")).outcome -ceq "shared") ("CONTROL: a file whose name only looks like a device's is shared: " + $fine)
+}
+foreach ($fine in @("C:\a\b.md", "\\?\C:\a\b.md", "\\?\UNC\server\share\b.md", "\\server\share\b.md", ".\b.md", "..\b.md", "C:b.md", "b.md", "c:/a/b.md", "")) { Check ((Get-HordeFilesPathRefusal -Path $fine) -ceq "") ("CONTROL: the text of an ordinary path is not refused: '" + $fine + "'") }
+# A REAL stream, made behind the long-path prefix (.NET refuses the plain form by itself).
+$streamOf = $named + ":hidden.txt"
+[System.IO.File]::WriteAllText(("\\?\" + $streamOf), "words kept in a stream")
+Check ([System.IO.File]::ReadAllText(("\\?\" + $streamOf)) -ceq "words kept in a stream" -and [System.IO.File]::ReadAllText($named) -ceq "# one file, many names") "CONTROL: the file has a stream named hidden.txt, holding other words than the file"
+Check (Test-Refused $h $streamOf "that names a stream inside a file") "a path naming a stream of a file is refused"
+Check (Test-Refused $h ("\\?\" + $streamOf) "that names a stream inside a file") "and behind the long-path prefix, where it would open"
+Check (Test-Refused $h ($named + "::`$DATA") "that names a stream inside a file") "and the file's own data named as a stream"
+Check (Test-Refused $h ("\\?\UNC\localhost\share\x.md:y.txt") "that names a stream inside a file") "and a stream of a file on a share"
+Push-Location (Split-Path -Parent $named)
+try { $relStream = Test-Refused $h "a long report name.md:hidden.txt" "that names a stream inside a file" } finally { Pop-Location }
+Check $relStream "and a relative one, which PowerShell would otherwise read as a drive"
+$stillFile = Invoke-Share -TestHome $h -Path $named
+Check ($stillFile.outcome -ceq "shared" -and $stillFile.record.size -eq 22) "CONTROL: the file itself is still shared, and what is kept is the file's 22 bytes, not the stream's"
+
+Write-Host ""
+Write-Host "--- a link swapped in around the open cannot put one file's bytes under another's name ---" -ForegroundColor Cyan
+$h = New-TestHome
+$note = New-Source -Name "swap-note.md" -Text "the note that was named"
+$picture = New-Source -Name "swap-target.png" -Bytes (Get-Padded -Head $png -Length 64)
+$direct = Invoke-Share -TestHome $h -Path $picture
+$noteAlone = Invoke-Share -TestHome $h -Path $note
+Check ($direct.outcome -ceq "shared" -and $noteAlone.outcome -ceq "shared" -and $noteAlone.record.fileId -cne $direct.record.fileId -and $noteAlone.record.type -ceq "text/markdown") "CONTROL: a note and a picture are two files; the note is shared as Markdown"
+# THE ADVERSARY'S MOMENT, made exact: the note becomes a link to the picture just before the open and
+# is the note again just after it. The open itself is the real one.
+$script:realOpen = ${function:Open-HordeFilesSource}
+function Open-HordeFilesSource {
+    param([string]$Path)
+    [System.IO.File]::Delete($note)
+    $null = New-FileLink -Link $note -Target $picture
+    $o = & $script:realOpen -Path $Path
+    [System.IO.File]::Delete($note)
+    [System.IO.File]::WriteAllText($note, "the note that was named")
+    return $o
+}
+$swapped = Get-Safely { Invoke-Share -TestHome $h -Path $note }
+Set-Item -Path function:Open-HordeFilesSource -Value $script:realOpen
+Check ($swapped -isnot [string] -and $swapped.outcome -ceq "shared" -and $swapped.record.sha256 -ceq $direct.record.sha256) "with the swap, what was read is the picture: the link was followed at the open"
+Check ($swapped -isnot [string] -and $swapped.outcome -ceq "shared" -and $swapped.record.type -ceq "image/png") "and it is recorded AS a picture: the type is the opened file's, not the written name's"
+Check ($swapped -isnot [string] -and $swapped.outcome -ceq "shared" -and $swapped.record.fileId -ceq $direct.record.fileId -and $swapped.record.version -eq 2) "under the PICTURE's file id, as its version 2: the picture's bytes are never a version of the note"
+Check (@((Get-HordeFilesList -HordeHome $h).rows | Where-Object { $_.fileId -ceq $noteAlone.record.fileId }).Count -eq 1) "the note still has its one version"
+# A link that is still there after the open is refused, as a link always was.
+function Open-HordeFilesSource {
+    param([string]$Path)
+    [System.IO.File]::Delete($note)
+    $null = New-FileLink -Link $note -Target $picture
+    return (& $script:realOpen -Path $Path)
+}
+$stays = Test-Refused $h $note "is a link"
+Set-Item -Path function:Open-HordeFilesSource -Value $script:realOpen
+Check $stays "a link put in the file's place before the open, and still there after it, is refused: the look comes after the open"
+[System.IO.File]::Delete($note)
 
 # Out of the folder before it is removed: a folder a process stands in cannot be.
 Set-Location -LiteralPath $root

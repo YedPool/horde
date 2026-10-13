@@ -1,7 +1,9 @@
 # Mutations of files/Share.ps1: what may be shared, what a record holds, and the list. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\files-share.psd1
 # Each lets through something that must be refused, or records or lists something wrongly;
-# test\test-files-store.ps1 must fail for every one.
+# test\test-files-store.ps1 must fail for every one, except the one declared Expect = "survives".
+# What the path, the text check and the key each do is in files-path, files-text, files-json and
+# files-key; here are the lines of the share that call them.
 @{
     Target = "files\Share.ps1"
     Suite  = "test\test-files-store.ps1"
@@ -59,6 +61,69 @@
         @{ Name = "link-shared"
            Find = 'if ($link -ne "") { return'
            Replace = 'if ($false) { return' }
+        # --- one open handle: the link test, the type and the id are its path's ---
+        @{ Name = "link-on-the-written-path-not-looked-for"
+           Find = '        $link = Find-HordeFilesLink -Path $full'
+           Replace = '        $link = ""' }
+        @{ Name = "link-on-the-handles-own-path-not-looked-for"
+           Find = 'if ($link -eq "") { $link = Find-HordeFilesLink -Path ("\\?\" + $real) }'
+           Replace = ''
+           Expect = "survives"
+           Reason = "The handle's own path has every symbolic link and junction already taken out of it, so this second look can only find a reparse point that is NOT one of those - a sync folder's placeholder - on a folder the written path did not show, which needs an alias (a subst drive) over such a folder. No test here can make a placeholder. The first look, of the written path, is held by link-on-the-written-path-not-looked-for." }
+        @{ Name = "type-taken-from-the-written-path"
+           Find = '$kind = Get-HordeFilesType -Path $real'
+           Replace = '$kind = Get-HordeFilesType -Path $full' }
+        @{ Name = "id-made-from-the-written-path"
+           Find = '-FullPath $real -Key $keyed.key'
+           Replace = '-FullPath $full -Key $keyed.key' }
+        @{ Name = "path-as-written-not-checked"
+           Find = 'if ($unfit -ne "") { return (& $refuse $unfit) }'
+           Replace = '' }
+        # --- text is text ---
+        @{ Name = "text-not-checked"
+           Find = 'if ($kind.magic -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "text-problem-found-and-ignored"
+           Find = 'if ($notText -ne "") { return (& $refuse $notText) }'
+           Replace = '' }
+        @{ Name = "json-file-held-to-plain-text-only"
+           Find = '$notText = Get-HordeFilesTextProblem -Bytes $source.bytes -Type $kind.type'
+           Replace = '$notText = Get-HordeFilesTextProblem -Bytes $source.bytes -Type "text/plain"' }
+        # --- the key ---
+        @{ Name = "share-goes-on-without-a-key"
+           Find = 'if (-not $keyed.ok) { return (& $refuse $keyed.reason) }'
+           Replace = '' }
+        @{ Name = "key-of-the-ambient-home-whatever-home-is-given"
+           Find = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root $store'
+           Replace = '$keyed = Get-HordeFilesKey -HordeHome "" -Root $store' }
+        @{ Name = "key-made-whatever-the-store-given-holds"
+           Find = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root $store'
+           Replace = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root (Join-Path $store "no-such-folder")' }
+        @{ Name = "held-key-tried-once-whatever-the-setting"
+           Find = '-Root $store -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs'
+           Replace = '-Root $store -HeldTries 1 -HeldWaitMs $settings.heldReadWaitMs' }
+        @{ Name = "held-key-wait-is-not-the-setting"
+           Find = '-Root $store -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs'
+           Replace = '-Root $store -HeldTries $settings.heldReadTries -HeldWaitMs 50' }
+        @{ Name = "id-is-a-plain-digest-again"
+           Find = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)'
+           Replace = '$mac = [System.Security.Cryptography.SHA256]::Create()' }
+        @{ Name = "id-keyed-with-a-key-everyone-has"
+           Find = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)'
+           Replace = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, ([byte[]](1..32)))' }
+        @{ Name = "id-in-capitals"
+           Find = '.Replace("-", "").ToLowerInvariant().Substring(0, 32)) } finally { $mac.Dispose() }'
+           Replace = '.Replace("-", "").Substring(0, 32)) } finally { $mac.Dispose() }' }
+        # --- a file whose versions are used up ---
+        @{ Name = "used-up-file-keeps-its-bytes-before-it-is-refused"
+           Find = 'if ((Get-HordeFilesStoreLastVersion -Root $store -FileId $fileId) -ge $lastVersion) { return (& $refuse $usedUp) }'
+           Replace = '' }
+        @{ Name = "used-up-file-seen-one-version-late"
+           Find = '-ge $lastVersion) { return (& $refuse $usedUp) }'
+           Replace = '-gt $lastVersion) { return (& $refuse $usedUp) }' }
+        @{ Name = "last-version-taken-meanwhile-throws"
+           Find = 'if ($version -gt $lastVersion) { return (& $refuse $usedUp) }'
+           Replace = '' }
         # --- the path ---
         @{ Name = "empty-path-not-named"
            Find = 'if ($Path.Trim() -eq "") { return (& $refuse "no file was named") }'
@@ -71,17 +136,17 @@
            Replace = 'if ($false) { return' }
         # --- the cap, and a file that cannot be read ---
         @{ Name = "cap-itself-refused"
-           Find = 'if ($stream.Length -gt $MaxBytes) {'
-           Replace = 'if ($stream.Length -ge $MaxBytes) {' }
+           Find = 'if ($Stream.Length -gt $MaxBytes) {'
+           Replace = 'if ($Stream.Length -ge $MaxBytes) {' }
         @{ Name = "no-cap"
-           Find = 'if ($stream.Length -gt $MaxBytes) {'
+           Find = 'if ($Stream.Length -gt $MaxBytes) {'
            Replace = 'if ($false) {' }
         @{ Name = "cap-is-not-the-setting"
-           Find = '$source = Read-HordeFilesSource -Path $full -MaxBytes $settings.maxFileBytes'
-           Replace = '$source = Read-HordeFilesSource -Path $full -MaxBytes 1048576' }
-        @{ Name = "unreadable-file-not-said-so"
-           Find = 'catch { return [pscustomobject]@{ ok = $false; bytes = $null; reason = ("it cannot be read: " + $_.Exception.GetBaseException().Message) } }'
-           Replace = 'catch { return [pscustomobject]@{ ok = $false; bytes = $null; reason = "" } }' }
+           Find = '$source = Read-HordeFilesSource -Stream $opened.stream -MaxBytes $settings.maxFileBytes'
+           Replace = '$source = Read-HordeFilesSource -Stream $opened.stream -MaxBytes 1048576' }
+        @{ Name = "file-that-could-not-be-opened-shared"
+           Find = 'if (-not $opened.ok) { return (& $refuse $opened.reason) }'
+           Replace = 'if (-not $opened.ok) { return (& $refuse "") }' }
         @{ Name = "unread-file-shared"
            Find = 'if (-not $source.ok) { return (& $refuse $source.reason) }'
            Replace = '' }

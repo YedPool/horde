@@ -5,12 +5,17 @@
 #   given the SAME file and the same session, so all of them try for the same next version at once.
 #   This is the race that shows whether two shares can both take one version, or one be lost.
 #
+# -Mode first-share: as same-path, but share number i goes to a home of its own, <HordeHome>-<i>,
+#   which nothing has used: every racer's share of a round is the FIRST share of that home, so all of
+#   them find no key there and make one at once. This is the race that shows whether two first
+#   shares can end with two keys.
+#
 # -Mode same-bytes: -Count times it first writes "round <i>" into its OWN file at -Source and then, on
 #   the tick, shares it. Every racer writes the same words, so all of them put the same bytes in the
 #   store at once. This is the race that shows whether bytes kept once can be seen half-written.
 #
 # -Mode stall: it makes ONE share of -Source and stops inside it until the suite kills it: at the
-#   store's move number -StallMove (1 is the bytes taking their name, 2 the record), before the move
+#   move number -StallMove (in a new home 1 is the key taking its name, 2 the bytes, 3 the record), before the move
 #   when -StallWhen is "before" and just after it when "after". It writes -GoFile when it has reached
 #   the step, and writes -LogFile only if the share RETURNS - which it never does, so a log means the
 #   writer was told something. The step is reached by standing in for the store's one move
@@ -23,7 +28,7 @@
 # The ticks come from the wall clock every racer reads (test/fixtures/decisions/race-worker.ps1 says
 # why that makes the racers start together rather than take turns).
 param(
-    [Parameter(Mandatory = $true)][ValidateSet("same-path", "same-bytes", "stall")][string]$Mode,
+    [Parameter(Mandatory = $true)][ValidateSet("same-path", "first-share", "same-bytes", "stall")][string]$Mode,
     [Parameter(Mandatory = $true)][string]$CodePath,
     [Parameter(Mandatory = $true)][string]$HordeHome,
     [Parameter(Mandatory = $true)][string]$Source,
@@ -76,8 +81,10 @@ for ($i = 0; $i -lt $Count; $i++) {
     $target = $startTicks + [long]$i * [long]$TickMs * 10000
     while ([datetime]::UtcNow.Ticks -lt $target) { }
     $line = ""
+    $shareHome = $HordeHome
+    if ($Mode -ceq "first-share") { $shareHome = $HordeHome + "-" + $i }
     try {
-        $told = Add-HordeFilesShare -Path $Source -Title ("racer " + $Racer + " share " + $i) -HordeHome $HordeHome -Asking $asking
+        $told = Add-HordeFilesShare -Path $Source -Title ("racer " + $Racer + " share " + $i) -HordeHome $shareHome -Asking $asking
         if ($told.outcome -ceq "shared") { $line = "" + $i + "|shared|" + $told.record.fileId + "|" + $told.record.version + "|" + $told.attempts + "|" + $told.record.sha256 + "|" }
         else { $line = "" + $i + "|" + $told.outcome + "||0|0||" + ("$($told.reason)" -replace "[\r\n|]", " ") }
     } catch { $line = "" + $i + "|threw||0|0||" + ("$($_.Exception.Message)" -replace "[\r\n|]", " ") }
