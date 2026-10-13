@@ -398,13 +398,13 @@ Check ($back.state -ceq "known" -and @($back.value.known).Count -eq 1 -and $back
 Check ($back.value.known[0].members.Count -eq 12 -and $back.value.known[0].members[(Sid 12)] -eq (At 143)) "and each member's start"
 $readBack = Get-HordeRestoreFinding -Sessions $fleet -Now (At 300) -Settings $settings -Known $back.value.known
 Check ($readBack.state -ceq "known" -and $readBack.value.restoreId -ceq $f.value.restoreId) "so a source that is restarted reads the restore back and knows it for the same one"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x","windowStart":"2026-10-12T08:00:00.0000000Z","windowEnd":"2026-10-12T08:02:00.0000000Z","members":[{"id":"y"}]}]}')
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x","windowStart":"2026-10-12T08:00:00.0000000Z","windowEnd":"2026-10-12T08:02:00.0000000Z","members":[{"id":"y"}]}]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved member with no start is unknown, never half a state"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved posted mail with no id is unknown"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved restore with no window is unknown, never half a state"
-[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), "{ not json")
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), "{ not json")
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved state that cannot be read is unknown, not absent"
 
 Write-Host ""

@@ -87,6 +87,13 @@ Write-Host "=== a home where the watcher never ran, and a wrong command line ===
 $status = Invoke-Wake $fleetHome @("status")
 Check ($status.code -eq 0 -and $status.out -like "*LIVE: it has never run*" -and $status.out -like "*SHADOW: it has never run*" -and $status.out -like "*LIVE: journal empty*" -and $status.out -like "*SHADOW: journal empty*") "status says, for each mode, that the watcher has never run here and its journal is empty"
 Check (-not (Test-Path -LiteralPath $wakeDir)) "and asking made no wake folder"
+# A HOME THAT EARLIER BUILDS RAN IN: their unsuffixed files, written in shadow, are no mode's history.
+$legacyHome = Join-Path $script:work "home-of-earlier-builds"
+New-Item -ItemType Directory -Path (Join-Path $legacyHome "wake") -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\heartbeat.json"), ('{"at":"' + [datetime]::UtcNow.AddSeconds(-4439).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) + '","pid":7,"pass":900,"shadow":true,"tickSeconds":3}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\journal.jsonl"), ('{"at":"2026-10-12T07:00:00.0000000Z","kind":"would-nudge","id":"x","outcome":"would-nudge","reason":"an old shadow line"}' + "`n"), $utf8)
+$status = Invoke-Wake $legacyHome @("status")
+Check ($status.code -eq 0 -and $status.out -like "*LIVE: it has never run*" -and $status.out -like "*SHADOW: it has never run*" -and $status.out -notlike "*STALE*" -and $status.out -notlike "*an old shadow line*") "in a home earlier builds ran in, status says neither mode has ever run - not that a live watcher is dead, and not their old shadow lines as a journal"
 $both = Invoke-Wake $fleetHome @("run", "-Shadow", "-Live", "-Once")
 Check ($both.code -eq 2 -and $both.out -like "*usage: horde wake run*" -and -not (Test-Path -LiteralPath $wakeDir)) "-Shadow and -Live together is a usage error: exit 2, the usage, and nothing run"
 $typo = Invoke-Wake $fleetHome @("run", "-Shadwo")
@@ -125,10 +132,10 @@ Check ($liveRun.code -eq 0) ("run -Live -Once makes its pass and exits 0" + $(if
 Check ($liveRun.out -like "*wake: LIVE - REAL NUDGES*through the waker 'wezfleet'*" -and $liveRun.out -like "*restore source stays shadow*" -and $liveRun.out -like "*pass 1 done*LIVE*") "its first line says LIVE, loudly, and that the restore source stays shadow; its last says LIVE too"
 $typed = @(Read-FakeLog "typed.log")
 Check ($typed.Count -eq 1 -and $typed[0].id -ceq $idle -and "$($typed[0].text)" -cnotmatch '[\x00-\x1F]') "the fleet's record shows one line typed, into the idle session, and no other"
-$liveLines = @(Read-Journal $fleetHome "journal.jsonl")
+$liveLines = @(Read-Journal $fleetHome "journal-live.jsonl")
 Check (@($liveLines | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq $idle -and $_.outcome -ceq "woken" }).Count -eq 1 -and @($liveLines | Where-Object { $_.kind -ceq "nudge" }).Count -eq 1) "the live journal says nudge, woken, for that session, and no other nudge"
 Check (@($liveLines | Where-Object { @("post", "stall") -ccontains $_.kind }).Count -eq 0) "and nothing was posted: the restore source is shadow in a live run too"
-$liveBeat = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat.json")) | ConvertFrom-Json
+$liveBeat = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-live.json")) | ConvertFrom-Json
 $shadowBeat = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-shadow.json")) | ConvertFrom-Json
 Check ($liveBeat.shadow -eq $false -and $liveBeat.pass -eq 1 -and $shadowBeat.shadow -eq $true -and $liveBeat.tickSeconds -eq 3) "each mode has a heartbeat of its own, saying which it is"
 Check (@(Read-Journal $fleetHome "journal-shadow.jsonl" | Where-Object { $_.kind -ceq "nudge" }).Count -eq 0) "and a journal of its own: the shadow journal holds no nudge"
@@ -139,11 +146,11 @@ $status = Invoke-Wake $fleetHome @("status")
 Check ($status.code -eq 0 -and $status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -match "SHADOW: heartbeat \d+ s ago, fresh") "status shows a fresh heartbeat for each mode"
 Check ($status.out -like "*LIVE: journal, the last*" -and $status.out -like "*SHADOW: journal, the last*" -and $status.out -like "*would-nudge*" -and $status.out -like "*woken*") "and each mode's last journal lines"
 $stale = [datetime]::UtcNow.AddSeconds(-600).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
-[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":3}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":3}'), $utf8)
 $status = Invoke-Wake $fleetHome @("status")
 Check ($status.out -match "LIVE: heartbeat \d+ s ago, STALE[^
 ]*not running" -and $status.out -match "SHADOW: heartbeat \d+ s ago, fresh") "a live heartbeat ten minutes old is STALE while the shadow one is fresh: a shadow run does not make a dead live watcher look alive"
-[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":300}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":300}'), $utf8)
 $status = Invoke-Wake $fleetHome @("status")
 # One line at a time: "LIVE ... fresh" must not be satisfied by the shadow line's "fresh" further down.
 Check ($status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -notmatch "LIVE: heartbeat \d+ s ago, STALE") "the same heartbeat from a watcher that beats every 300 s is fresh: stale is three of its ticks"

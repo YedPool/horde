@@ -24,7 +24,7 @@
 # exists to do carefully. The source goes live only when a post that does not knock exists; until then
 # its mail is something a person reads in the journal. Its would-post marks are kept in a file of the
 # live run's own (restore-of-live-run-shadow.json): not the shadow run's, which another process may
-# be writing, and not restore.json, which is for mails that were really posted.
+# be writing, and not restore-live.json, which is for mails that were really posted.
 #
 # THE TWO PASSES STAY APART (core/Wake.ps1, core/RestoreSource.ps1): the watcher only wakes, the restore
 # source only posts, and a tick runs the second beside the first, every restoreEverySeconds, because it

@@ -20,6 +20,12 @@
         @{ Name = "tail-forgets-the-journal-set-aside"
            Find = 'foreach ($ext in @(".1.jsonl", ".jsonl")) {'
            Replace = 'foreach ($ext in @(".jsonl")) {' }
+        @{ Name = "live-reads-the-unsuffixed-files-of-earlier-builds"
+           Find = '$leaf = $Stem + "-live" + $Extension'
+           Replace = '$leaf = $Stem + $Extension' }
+        @{ Name = "live-state-is-the-unsuffixed-file-of-earlier-builds"
+           Find = '$leaf = $Name + "-live.json"'
+           Replace = '$leaf = $Name + ".json"' }
         @{ Name = "shadow-journal-and-heartbeat-are-the-live-ones"
            Find = 'if ($Shadow) { $leaf = $Stem + "-shadow" + $Extension }'
            Replace = '' }

@@ -50,13 +50,15 @@ function Get-HordeWakeFolder {
 }
 
 function Get-HordeWakeStateFile {
-    # The path of one of the state files a run keeps: <home>\wake\<name>.json for a live run, and
+    # The path of one of the state files a run keeps: <home>\wake\<name>-live.json for a live run, and
     # <name>-shadow.json for a shadow run. TWO FILES, BECAUSE SHADOW MUST NOT TOUCH WHAT A LIVE RUN
     # READS. The first version kept one of each, and the review of PR #207 found what a shadow run left
     # in them: back-offs for nudges it never sent, and - worse - the ids of resume mails it never posted,
     # marked posted, so a live watcher started later would never have posted them.
     param([Parameter(Mandatory = $true)][string]$Name, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    $leaf = $Name + ".json"
+    # EVERY MODE'S FILE CARRIES ITS MODE IN ITS NAME, -live or -shadow (Get-HordeWakeModeFile says why
+    # no mode owns the bare name).
+    $leaf = $Name + "-live.json"
     if ($Shadow) { $leaf = $Name + "-shadow.json" }
     return (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) $leaf)
 }
@@ -91,13 +93,20 @@ function Write-HordeWakeFile {
 }
 
 function Get-HordeWakeModeFile {
-    # The path of the journal or the heartbeat of one mode: <home>\wake\<stem><ext> for a live run and
-    # <stem>-shadow<ext> for a shadow run. PER MODE, like the state files and the lock. The first version
+    # The path of the journal or the heartbeat of one mode: <home>\wake\<stem>-live<ext> for a live run
+    # and <stem>-shadow<ext> for a shadow run. PER MODE, like the state files and the lock. The first version
     # had one of each, and the review of PR #208 found what two modes do with them: a shadow run kept
     # heartbeat.json fresh, so a live watcher that had died read as alive; and two processes appended
     # to one journal.jsonl, where their lines can collide.
     param([Parameter(Mandatory = $true)][string]$Stem, [Parameter(Mandatory = $true)][string]$Extension, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    $leaf = $Stem + $Extension
+    # NO MODE OWNS THE BARE NAME. Live was first given the unsuffixed files - heartbeat.json,
+    # journal.jsonl, ledger.json - and those are exactly what the builds before the two modes existed
+    # wrote, in SHADOW, the only way they ran. Measured 2026-10-13 on a home those builds had run in:
+    # status reported "LIVE: heartbeat 4439 s ago, STALE ... this watcher is not running" and showed old
+    # shadow lines as the live journal - a shadow history read as a dead live watcher. So each mode's
+    # files carry its name, and the unsuffixed ones are never read or written again. They are not
+    # deleted: they are a record of what those builds did, and nothing reads them.
+    $leaf = $Stem + "-live" + $Extension
     if ($Shadow) { $leaf = $Stem + "-shadow" + $Extension }
     return (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) $leaf)
 }
@@ -112,7 +121,7 @@ function Get-HordeWakeStaleSeconds {
 }
 
 function Write-HordeWakeJournal {
-    # Append each entry to the mode's journal (journal.jsonl, or journal-shadow.jsonl with -Shadow) as
+    # Append each entry to the mode's journal (journal-live.jsonl, or journal-shadow.jsonl with -Shadow) as
     # one line of JSON. Returns how many lines it wrote.
     # THE JOURNAL IS BOUNDED (review of PR #207: it only grew). When it has reached -MaxBytes it is set
     # aside under the same name with .1 before its extension, replacing the one set aside before, and a new one is begun: at most two
@@ -149,7 +158,7 @@ function Read-HordeWakeJournalTail {
 }
 
 function Write-HordeWakeHeartbeat {
-    # The mode's heartbeat (heartbeat.json, or heartbeat-shadow.json with -Shadow), replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
+    # The mode's heartbeat (heartbeat-live.json, or heartbeat-shadow.json with -Shadow), replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
     # anything else tells a watcher that is running from one that is not; tickSeconds is how often this
     # watcher beats, so a reader knows how long a silence is too long (Get-HordeWakeStaleSeconds).
     param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome))
@@ -207,7 +216,7 @@ function Enter-HordeWakeLock {
     param([switch]$Shadow, [int]$ProcessId = 0, [string]$HordeHome = (Get-HordeHome))
     $dir = Get-HordeWakeFolder -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $leaf = "run.lock"
+    $leaf = "run-live.lock"
     if ($Shadow) { $leaf = "run-shadow.lock" }
     try { $held = New-Object System.IO.FileStream((Join-Path $dir $leaf), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }
     catch [System.IO.IOException] {

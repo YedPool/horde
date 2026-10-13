@@ -299,7 +299,7 @@ function Invoke-HordeWakePass {
 # Kept apart from everything above, which reads and writes none. Only the command's loop calls these.
 
 function Save-HordeWakeLedger {
-    # ledger.json, replaced whole: the back-off of every session being asked, so a watcher that is
+    # The ledger file, replaced whole: the back-off of every session being asked, so a watcher that is
     # restarted does not knock at once on a session it had been told to leave for five minutes.
     # -Shadow names the shadow run's own file (core/WakeFiles.ps1, Get-HordeWakeStateFile).
     param($Ledger, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
