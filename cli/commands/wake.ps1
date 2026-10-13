@@ -9,18 +9,28 @@ $HordeCommand = @{
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "status")][string]$Verb,
             [Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode = "shadow",
             [Parameter(ParameterSetName = "watch", DontShow = $true)][ValidateScript({ $false })][object]$Mod,
-            [Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Proof,
-            [Parameter(ParameterSetName = "proof", Mandatory = $true)][ValidateScript({ $_ -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' })][string]$Target,
-            [Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof", Mandatory = $true)][switch]$Once,
+            [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,
+            [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "target-no-proof")][ValidateScript({ $_ -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' })][string]$Target = "",
+            [Parameter(ParameterSetName = "watch")][Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-target")][Parameter(ParameterSetName = "target-no-proof")][switch]$Once,
             [Parameter(ParameterSetName = "watch")][ValidateRange(1, 300)][int]$TickSeconds = 3
         )
         # A PROOF RUN IS A COMMAND LINE OF ITS OWN: -Proof -Target <session id> -Once, ALL THREE, AND
         # NOTHING OF A WATCH. It types into a real session, so which one is never left to the run: the
         # first version of proof nudged whichever session the fair order served first, and that is the
-        # warchief (review of PR #220). The three are one parameter set, each mandatory in it, and
-        # -Mode and -TickSeconds belong to the other: so a proof with no target, a target with no
-        # proof, a proof that would loop, and a target given to a shadow or a live run are each refused
-        # when the arguments are bound - a usage error, exit 2 - before this body runs. THAT IS WHY
+        # warchief (review of PR #220). The three are one parameter set, "proof", and -Mode and
+        # -TickSeconds belong to the other: so a proof with no target, a target with no proof, a
+        # proof that would loop, and a target given to a shadow or a live run are each refused when
+        # the arguments are bound - a usage error, exit 2 - before this body runs.
+        # NONE OF THE THREE IS DECLARED MANDATORY, AND THAT IS ON PURPOSE. They were, at first: and a
+        # missing mandatory parameter is not refused by PowerShell when it can ask - it PROMPTS
+        # ("Target:"), and a horde started with its input open waited there for ever (found
+        # 2026-10-13: the scenario hung on "wake run -Proof -Once"). So the incomplete forms are each
+        # made AMBIGUOUS instead, which PowerShell refuses at once and never asks about: -Proof alone
+        # fits proof-alone and three other sets, -Proof -Once fits proof and proof-no-target, -Proof
+        # -Target fits proof and proof-no-once, -Target -Once fits proof and target-no-proof - and
+        # none of those is the default set, so none is chosen. Only all three together fit exactly
+        # one set. The four extra sets exist for nothing else, and the body below still refuses
+        # anything but all three. THAT IS WHY
         # PROOF IS A SWITCH AND NOT A THIRD VALUE OF -Mode: a rule between two parameters' VALUES can
         # only be checked in the body, where a refusal is an ordinary failure (cli/Runner.ps1), and
         # "-Mode proof" alone would have bound. -Target is a session id written out in full, a
@@ -76,6 +86,7 @@ $HordeCommand = @{
         # WHICH RUN THIS IS: a proof when -Proof was given (and then -Target and -Once were too, or the
         # arguments would not have bound), else the watch's mode. Not written back into $Mode: that
         # is the parameter, and its validation would refuse the word.
+        if ($PSCmdlet.ParameterSetName -cne "watch" -and -not ($PSCmdlet.ParameterSetName -ceq "proof" -and $Proof -and $Once -and $Target -cne "")) { throw "a proof run is -Proof -Target <session id> -Once, all three; this is not one, and nothing was run" }
         $chosen = $Mode
         $aim = ""
         if ($Proof) { $chosen = "proof"; $aim = $Target }

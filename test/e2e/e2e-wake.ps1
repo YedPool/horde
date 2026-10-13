@@ -146,9 +146,28 @@ Write-Host "=== -Proof -Target <session id> -Once: one pass, one named session, 
 $typedBefore = @(Read-FakeLog "typed.log").Count
 # ONE SESSION, NAMED: every proof command line that does not name a whole session id is a usage error,
 # and so is a target given to a mode that has none. Nothing runs and nothing is typed.
-foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", "A", "-Once"), @("-Proof", "-Target", $idle.Substring(0, 8), "-Once"), @("-Proof", "-Target", $idle.ToUpperInvariant(), "-Once"), @("-Proof", "-Target", "-Once"), @("-Proof", "-Target", $idle), @("-Mode", "shadow", "-Target", $idle, "-Once"), @("-Mode", "live", "-Target", $idle, "-Once"), @("-Mode", "live", "-Proof", "-Target", $idle, "-Once"), @("-Mode", "proof", "-Target", $idle, "-Once"), @("-Proof", "-Target", $idle, "-Once", "-TickSeconds", "3"), @("-Target", $idle, "-Once"), @("-Proof", "-Target", ($idle + "," + $busy), "-Once"))) {
+foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", "A", "-Once"), @("-Proof", "-Target", $idle.Substring(0, 8), "-Once"), @("-Proof", "-Target", $idle.ToUpperInvariant(), "-Once"), @("-Proof", "-Target", "-Once"), @("-Proof", "-Target", $idle), @("-Mode", "shadow", "-Target", $idle, "-Once"), @("-Mode", "live", "-Target", $idle, "-Once"), @("-Mode", "live", "-Proof", "-Target", $idle, "-Once"), @("-Mode", "proof", "-Target", $idle, "-Once"), @("-Proof", "-Target", $idle, "-Once", "-TickSeconds", "3"), @("-Target", $idle, "-Once"), @("-Target", $idle), @("-Proof"), @("-Proof", "-Target", ($idle + "," + $busy), "-Once"))) {
     $r = Invoke-Wake $fleetHome (@("run") + $bad)
     Check ($r.code -eq 2 -and $r.out -like "*usage: horde wake run*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and -not (Test-Path -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json"))) ("run " + ($bad -join " ") + " is a usage error: exit 2, the usage, nothing run and nothing typed")
+}
+# ...AND NONE OF THEM IS A QUESTION. A missing mandatory parameter makes PowerShell ASK when it can, and a
+# horde started with its input open would wait there for ever. So the same incomplete forms, with the
+# input held OPEN and never written, must end by themselves, as a usage error.
+foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", $idle), @("-Proof"), @("-Target", $idle, "-Once"))) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" wake run " + ($bad -join " ")
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    foreach ($k in @{ HORDE_HOME = $fleetHome; WEZFLEET_ROOT = $fleetPin.path; USERPROFILE = $fakeProfile }.GetEnumerator()) { $psi.EnvironmentVariables[$k.Key] = $k.Value }
+    $asked = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $asked.StandardOutput.ReadToEndAsync(); $errTask = $asked.StandardError.ReadToEndAsync()
+    $ended = $asked.WaitForExit(120000)
+    if (-not $ended) { try { $asked.Kill() } catch { } }
+    $code = $(if ($ended) { $asked.ExitCode } else { -1 })
+    $said = $(if ($ended) { "$($outTask.Result)" + "$($errTask.Result)" } else { "" })
+    Check ($ended -and $code -eq 2 -and $said -like "*usage: horde wake run*" -and $said -notlike "*Supply values*") ("run " + ($bad -join " ") + ", with its input held open, ends by itself as a usage error: it does not ask for what is missing (ended " + $ended + ", exit " + $code + ")")
+    $asked.Dispose()
 }
 $stranger = "0a000000-0000-4000-8000-000000000099"
 $astray = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $stranger, "-Once")
