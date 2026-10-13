@@ -6,6 +6,33 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-session-given-up-on-is-forgotten-after-a-day"
+           Find = '$drop = $false'
+           Replace = '$drop = $old' }
+        @{ Name = "a-gave-up-entry-is-dropped-when-its-state-was-not-known"
+           Find = 'if ("$($a.state)" -ceq "known" -and $null -eq (Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $a.value)) { $drop = $true }'
+           Replace = 'if ("$($a.state)" -cne "known" -or $null -eq (Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $a.value)) { $drop = $true }' }
+        @{ Name = "a-gave-up-entry-with-another-mail-now-is-kept-for-ever"
+           Find = 'if ("$($a.state)" -ceq "known" -and $null -eq (Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $a.value)) { $drop = $true }'
+           Replace = '' }
+        @{ Name = "a-session-is-gone-without-a-listing-to-say-so"
+           Find = 'if ($old -and $null -ne $Listed -and @($Listed) -cnotcontains "$id") { $drop = $true }'
+           Replace = 'if ($old -and @($Listed) -cnotcontains "$id") { $drop = $true }' }
+        @{ Name = "a-session-gone-from-a-whole-listing-is-kept-for-ever"
+           Find = 'if ($old -and $null -ne $Listed -and @($Listed) -cnotcontains "$id") { $drop = $true }'
+           Replace = '' }
+        @{ Name = "gone-is-judged-against-the-one-session-of-a-proof"
+           Find = '$listedIds = @($targets | ForEach-Object { "$($_.id)" })'
+           Replace = '$listedIds = $null' }
+        @{ Name = "a-young-gave-up-entry-of-a-session-not-listed-is-dropped"
+           Find = 'if ($old -and $null -ne $Listed -and @($Listed) -cnotcontains "$id") { $drop = $true }'
+           Replace = 'if ($null -ne $Listed -and @($Listed) -cnotcontains "$id") { $drop = $true }' }
+        @{ Name = "mail-taken-does-not-reset"
+           Find = 'if ($taken -or $drop) { $next.Remove($id) }'
+           Replace = 'if ($drop) { $next.Remove($id) }' }
+        @{ Name = "stale-ledger-entry-kept"
+           Find = 'if ($taken -or $drop) { $next.Remove($id) }'
+           Replace = 'if ($taken) { $next.Remove($id) }' }
         @{ Name = "every-session-of-a-silent-fleet-is-probed"
            Find = 'if ($lastOfAny -is [datetime] -and ($Now - $lastOfAny).TotalSeconds -lt $longest) {'
            Replace = 'if ($false) {' }
@@ -96,12 +123,6 @@
         @{ Name = "a-pass-given-one-session-sends-a-probe"
            Find = 'if ($probe -and $NoProbe) { return'
            Replace = 'if ($false) { return' }
-        @{ Name = "a-session-given-up-on-is-forgotten-after-a-day"
-           Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
-           Replace = 'if ($taken -or $old) { $next.Remove($id) }' }
-        @{ Name = "a-given-up-entry-of-a-session-that-cannot-be-read-is-kept-for-ever"
-           Find = '$stands = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -gt 0 -and'
-           Replace = '$stands = ($true -or' }
         @{ Name = "a-pass-sends-unless-told-not-to"
            Find = '$shadowPass = (-not $Send)'
            Replace = '$shadowPass = $false' }
@@ -297,12 +318,6 @@
         @{ Name = "attempts-not-counted"
            Find = '$count = $before + 1'
            Replace = '$count = 1' }
-        @{ Name = "mail-taken-does-not-reset"
-           Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
-           Replace = 'if ($old -and -not $stands) { $next.Remove($id) }' }
-        @{ Name = "stale-ledger-entry-kept"
-           Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
-           Replace = 'if ($taken) { $next.Remove($id) }' }
         @{ Name = "outcome-counted-without-a-nudge"
            Find = 'if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }'
            Replace = 'if ($null -eq $d) { continue }' }

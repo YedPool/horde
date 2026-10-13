@@ -430,8 +430,55 @@ Start-Case; Seat 1
 $null = Pass 0 -Using $capOne
 Set-HordeMemoryWakerFault -Call "state" -Kind "throw"
 $p = Pass 86500 -Using $capOne
-Check ($script:ledger.Count -eq 0) "and so does the entry of a session whose state can no longer be read: it stands only while that mail is KNOWN to be still its oldest unread"
+Check ($script:ledger.Count -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "but NOT the entry of a session whose state could not be read this pass: an unknown state is no evidence that its mail was taken"
 Set-HordeMemoryWakerFault -Call "state" -Kind ""
+# A GAVE-UP ENTRY IS DROPPED ONLY ON EVIDENCE. Three sessions given up on more than a day ago; a fourth, ready.
+function New-GaveUpLedger {
+    $l = @{}
+    foreach ($n in 1..3) { $l[(Sid $n)] = New-HordeWakeLedgerRow -Attempts 6 -LastAttemptAt (At -90000) -LastOutcome "woken" -MailAt (At -100000) -GaveUp $true }
+    return $l
+}
+function Seat-GaveUp { Start-Case; foreach ($n in 1..3) { Seat $n @{ OldestUnreadAt = (At -100000) } }; Seat 4 }
+function Get-GaveUp { param($Ledger) return (@(1..3 | Where-Object { $Ledger.ContainsKey((Sid $_)) -and (Get-HordeWakeEntryValue $Ledger[(Sid $_)] "gaveUp") -eq $true }) -join ",") }
+Seat-GaveUp
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger) -Only (Sid 4)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3" -and (Rang 4) -eq 1 -and (Rang) -eq 1) ("a PROOF pass on a fourth session reads no state of the three given up on more than a day ago, and all three entries are still there: what a pass did not read, it does not forget (" + (Get-GaveUp $r.ledger) + ")")
+Seat-GaveUp
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger) -Only (Sid 4)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3") "and so in shadow"
+Seat-GaveUp
+Set-HordeMemoryWakerFault -Call "state" -Kind "throw"
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3" -and (Rang) -eq 0) "a LIVE pass in which their states read unknown keeps all three: a state that passed through unknown is not evidence"
+Set-HordeMemoryWakerFault -Call "state" -Kind ""
+Seat-GaveUp
+Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3") "a pass whose LISTING could not be read keeps all three: an unreadable listing is no evidence that anybody is gone"
+Set-HordeMemoryWakerFault -Call "targets" -Kind ""
+$kept = Update-HordeWakeLedger -Ledger (New-GaveUpLedger) -Decisions @() -Outcomes @{} -States @{} -Now $t0 -Settings $settings
+Check ((Get-GaveUp $kept) -ceq "1,2,3") "and a caller that hands in no listing at all drops nobody for being gone"
+# THE TWO KINDS OF EVIDENCE.
+Seat-GaveUp
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null }
+Seat 3 @{ OldestUnreadAt = (At -50) }
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1") ("evidence: a session whose mail was taken, and one whose oldest unread mail is now another, are no longer held as given up on; the one whose mail is still there is (" + (Get-GaveUp $r.ledger) + ")")
+Start-Case; Seat 1 @{ OldestUnreadAt = (At -100000) }; Seat 4
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1") ("evidence: two sessions that a WHOLE listing no longer names are gone, and their old entries are dropped (" + (Get-GaveUp $r.ledger) + ")")
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger) -Only (Sid 4)
+Check ((Get-GaveUp $r.ledger) -ceq "1") "and that holds for a proof pass too: gone is judged against the whole listing, not the one session the pass was cut down to"
+$young = @{ (Sid 2) = (New-HordeWakeLedgerRow -Attempts 6 -LastAttemptAt (At -100) -LastOutcome "woken" -MailAt (At -100000) -GaveUp $true) }
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger $young
+Check ($r.ledger.ContainsKey((Sid 2))) "a gave-up entry less than a day old is kept even for a session the listing no longer names: a session that blinks out of a listing is not gone"
+Reset-HordeMemoryWaker
 Start-Case; Seat 1
 $null = Pass 0
 $p = Pass 86500

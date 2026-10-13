@@ -456,7 +456,9 @@ function Update-HordeWakeLedger {
     #   -Open       the ids of the sessions held this pass for a limit with no known end (or a limit
     #               nobody could read): each is noted, below, the first time it is seen so
     #   -Moves      session id -> when it was last seen taking mail (Get-HordeWakeLimit)
-    param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), [switch]$Silent, $Open = @(), $Moves = $null)
+    #   -Listed     the ids of every session in the listing, WHEN THE LISTING WAS READ WHOLE; $null when
+    #               it was not, or the caller has none. Only against it is a session called gone (below)
+    param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), [switch]$Silent, $Open = @(), $Moves = $null, $Listed = $null)
     $next = @{}
     if ($null -ne $Ledger) { foreach ($k in @($Ledger.Keys)) { $next["$k"] = $Ledger[$k] } }
     foreach ($d in @($Decisions)) {
@@ -527,16 +529,31 @@ function Update-HordeWakeLedger {
         $taken = $false
         if ($null -ne $States -and $States.ContainsKey($id)) { $a = $States[$id]; $taken = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -le 0) }
         $old = (($Now - $next[$id].lastAttemptAt).TotalSeconds -gt $script:HordeWakeLedgerKeepSeconds)
-        # A SESSION GIVEN UP ON IS NOT FORGOTTEN WHILE THE MAIL IT WAS GIVEN UP FOR IS STILL ITS OLDEST
-        # UNREAD. Entries were dropped after a day whatever they said, so a session that never takes
-        # its mail got its six nudges again every day (safety review of PR 220). The entry of a
-        # session that is gone, or whose state cannot be read, still ages out.
-        $stands = $false
-        if ((Get-HordeWakeEntryValue $next[$id] "gaveUp") -eq $true -and $null -ne $States -and $States.ContainsKey($id)) {
-            $a = $States[$id]
-            $stands = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -gt 0 -and $null -ne (Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $a.value))
+        # A SESSION GIVEN UP ON IS FORGOTTEN ONLY ON EVIDENCE, NEVER BY AGE ALONE AND NEVER FOR WHAT A PASS
+        # DID NOT READ. Entries were dropped after a day whatever they said, so a session that never
+        # takes its mail got its six nudges again every day (safety review of PR 220). The first
+        # mending kept a gave-up entry only when that session's state had been READ in this pass and
+        # showed the same mail - so a proof pass, which reads ONE session, deleted every other session's
+        # gave-up entry older than a day, out of the ledger it shares with the live watcher; and a
+        # state that passed through unknown did the same in a live run (safety review of PR 230). Each
+        # deletion was six more nudges for a session that had been given up on. So a gave-up entry
+        # stands unless there is evidence against it:
+        #   - its session's state WAS read and its mail is taken (above) or another mail is now its
+        #     oldest unread: the mail it was given up for is gone;
+        #   - its session is not in the listing, AND THE LISTING WAS READ WHOLE (-Listed, the ids of a
+        #     listing the port answered as known). An unreadable listing is no evidence that anybody
+        #     is gone, and with none handed in nothing is dropped for being gone.
+        # A state that was not read, or read as unknown, is no evidence, and the entry stays.
+        $drop = $old
+        if ((Get-HordeWakeEntryValue $next[$id] "gaveUp") -eq $true) {
+            $drop = $false
+            if ($old -and $null -ne $States -and $States.ContainsKey($id)) {
+                $a = $States[$id]
+                if ("$($a.state)" -ceq "known" -and $null -eq (Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $a.value)) { $drop = $true }
+            }
+            if ($old -and $null -ne $Listed -and @($Listed) -cnotcontains "$id") { $drop = $true }
         }
-        if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }
+        if ($taken -or $drop) { $next.Remove($id) }
     }
     return $next
 }
@@ -852,6 +869,9 @@ function Invoke-HordeWakePass {
             if ($Only -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the fleet's listing could not be read, so the one session this pass may nudge was not found: nobody is nudged")) }
         } else {
             $targets = @($listing.value)
+            # EVERY SESSION THE LISTING NAMED, kept before the pass is cut down to one (-Only): a session is
+            # gone only when a whole listing does not name it (Update-HordeWakeLedger, -Listed).
+            $listedIds = @($targets | ForEach-Object { "$($_.id)" })
             # WHO THE WARCHIEF IS, for whoever must tell it something (core/WakeTell.ps1): the one target
             # with that role. Two, or none, is nobody: one is never chosen over another.
             $chiefs = @($targets | Where-Object { $_.role -ceq "warchief" })
@@ -926,7 +946,7 @@ function Invoke-HordeWakePass {
                 }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }
-            $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now -Settings $Settings -Silent:$Silent -Open $open.ToArray() -Moves $Moves
+            $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now -Settings $Settings -Silent:$Silent -Open $open.ToArray() -Moves $Moves -Listed $listedIds
             # THE CAP: a session nudged maxNudgesPerMail times for one mail is given up on, said once.
             $gave = Update-HordeWakeGaveUp -Ledger $nextLedger -Now $Now -Settings $Settings
             $nextLedger = $gave.ledger
