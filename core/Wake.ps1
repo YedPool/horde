@@ -482,7 +482,7 @@ function Save-HordeWakeLedger {
     # The ledger file, replaced whole: the back-off of every session being asked, so a watcher that is
     # restarted does not knock at once on a session it had been told to leave for five minutes.
     # -Shadow names the shadow run's own file (core/WakeFiles.ps1, Get-HordeWakeStateFile).
-    param($Ledger, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    param($Ledger, [switch]$Shadow, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $sessions = New-Object System.Collections.ArrayList
     if ($null -ne $Ledger) {
         foreach ($id in @($Ledger.Keys | Sort-Object)) {
@@ -496,14 +496,14 @@ function Save-HordeWakeLedger {
         }
     }
     $doc = [ordered]@{ schemaVersion = 1; sessions = $sessions.ToArray() }
-    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
 
 function Read-HordeWakeLedger {
     # What Save-HordeWakeLedger wrote: known { ledger }, absent when there is none, or unknown
     # when it cannot be read - the caller then starts from an empty ledger and says so.
-    param([switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    $path = Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome
+    param([switch]$Shadow, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no ledger was saved in this home") }
     try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason "the saved ledger could not be read" -ErrorRecord $_) }

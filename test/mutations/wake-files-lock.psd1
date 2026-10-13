@@ -21,8 +21,8 @@
         @{ Name = "lock-shared-for-writing"
            Find = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }'
            Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite) }' }
-        @{ Name = "shadow-and-live-share-one-lock"
-           Find = 'if ($Shadow) { $leaf = "run-shadow.lock" }'
-           Replace = 'if ($Shadow) { $leaf = "run-live.lock" }' }
+        @{ Name = "every-mode-shares-one-lock"
+           Find = '$leaf = "run-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".lock"'
+           Replace = '$leaf = "run-live.lock"' }
     )
 }

@@ -72,7 +72,8 @@ Check (Test-HordeWakerCapability -Waker $good -Capability "state.box") "yes is h
 Check (-not (Test-HordeWakerCapability -Waker $memory -Capability "reach.unseen")) "declined is not having it"
 $blind = Reg "fixture-blind" -State { param($id) New-HordeKnown -Value ([pscustomobject]@{ id = $id; unreadCount = 0; oldestUnreadAt = $null; idle = "yes"; boxEmpty = $script:blindBox; midTurn = $script:blindTurn }) }
 Check (-not (Test-HordeWakerCapability -Waker $blind -Capability "state.box")) "no is not having it"
-Check (-not (Test-HordeWakerCapability -Waker $blind -Capability "state.turn")) "unverified is not having it"
+Check (-not (Test-HordeWakerCapability -Waker $blind -Capability "state.turn")) "declined is not having it, here either"
+Check (-not (Test-HordeWakerClaims -Waker $blind -Capability "state.box") -and -not (Test-HordeWakerClaims -Waker $blind -Capability "state.turn") -and (Test-HordeWakerClaims -Waker $good -Capability "state.box")) "no and declined are not claims; yes is"
 Check (Throws { Test-HordeWakerCapability -Waker $good -Capability "teleport" } "not a waker capability") "asking about a capability outside the list is an error"
 $r = Resolve-HordeWaker -Name "memory" -Require @("reach.unseen")
 Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains("reach.unseen") -and "$($r.reason)".Contains("declined")) "a caller that requires what the memory waker declines is refused, with the waker's own word for it"
@@ -85,9 +86,33 @@ $unguarded = Reg "fixture-unguarded"
 $p = Resolve-HordeProductionWaker
 Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "a waker whose nudge does not guard itself is not one the production path can pick: still the one"
 Check ((Resolve-HordeWaker -Name "fixture-unguarded" -Require @("nudge.guarded")).state -ceq "unknown") "and a caller that requires nudge.guarded of it is refused"
+# UNVERIFIED: a claim not yet shown. Never picked for a live run; picked, when asked for, only if no
+# waker offers all five.
+$script:claimTurn = "no"
+$claimed = Reg "fixture-unverified" -State { param($id) New-HordeKnown -Value ([pscustomobject]@{ id = $id; unreadCount = 0; oldestUnreadAt = $null; idle = "yes"; boxEmpty = "yes"; midTurn = $script:claimTurn }) }
+Check (-not (Test-HordeWakerCapability -Waker $claimed -Capability "state.turn") -and (Test-HordeWakerClaims -Waker $claimed -Capability "state.turn")) "unverified is not having it, and it is claiming it"
+Check ((@(Get-HordeWakerUnverified -Waker $claimed) -join ",") -ceq "state.turn,nudge.guarded" -and @(Get-HordeWakerUnverified -Waker $good).Count -eq 0 -and @(Get-HordeWakerUnverified -Waker $memory).Count -eq 0) "a waker's unverified capabilities are named, in the port's order; declined is not one of them"
+$a = Get-HordeWakeState -Waker $claimed -Id "0a000000-0000-4000-8000-000000000001"
+Check ($a.state -ceq "known" -and $a.value.midTurn -ceq "no") "a waker that claims state.turn, unverified, may answer about the turn"
+Check ((Resolve-HordeWaker -Name "fixture-unverified" -Require @("state.turn")).state -ceq "unknown") "a caller that requires the capability of it is still refused"
+$p = Resolve-HordeProductionWaker -AllowUnverified
+Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "with a waker that offers all five loaded, it is the one picked, allowed or not: unverified is never preferred"
 $second = Reg "fixture-second"
 $p = Resolve-HordeProductionWaker
 Check ($p.state -ceq "unknown" -and "$($p.reason)".Contains("never chosen")) "with two that could be picked the production path is unknown: one is never chosen over another"
+Check ((Resolve-HordeProductionWaker -AllowUnverified).state -ceq "unknown") "and allowing unverified does not choose between them either"
+# With only wakers that do not offer all five: the memory waker, which declines one, and those that claim.
+$kept = @{}; foreach ($k in @($script:HordeWakers.Keys)) { $kept[$k] = $script:HordeWakers[$k] }
+try {
+    foreach ($k in @("fixture-good", "fixture-second", "fixture-unguarded")) { $script:HordeWakers.Remove($k) }
+    $p = Resolve-HordeProductionWaker
+    Check ($p.state -ceq "absent" -and "$($p.reason)".Contains("fixture-unverified: does not offer state.turn (it says unverified)")) "with no waker that offers all five the production path finds none, and says the unverified one's word for what it lacks"
+    $p = Resolve-HordeProductionWaker -AllowUnverified
+    Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $claimed)) "allowed, it picks the one that claims all five - never the memory waker, which declines one, nor one that says no"
+    $script:HordeWakers["fixture-unguarded"] = $kept["fixture-unguarded"]
+    $p = Resolve-HordeProductionWaker -AllowUnverified
+    Check ($p.state -ceq "unknown" -and "$($p.reason)".Contains("never chosen")) "two that claim all five - the other has an unverified guard - are unknown: one is never chosen over another"
+} finally { $script:HordeWakers.Clear(); foreach ($k in @($kept.Keys)) { $script:HordeWakers[$k] = $kept[$k] } }
 
 Write-Host ""
 Write-Host "--- only a waker registered through the port is called ---" -ForegroundColor Cyan

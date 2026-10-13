@@ -7,15 +7,21 @@
 #     for as long as it lasts, and returns; the loop goes on.
 #   - -Shadow WAS A WORD AT TWO CALL SITES, and deleting it there passed every suite.
 #
-# THE MODE BELONGS TO THE RUN, AND IS SET IN ONE PLACE. A run is made shadow (New-HordeWakeRun) or live
-# (New-HordeWakeRun -Live), says which in its own live member, and reads and writes that mode's files
-# and no other (core/WakeFiles.ps1: ledger, restore state, journal, heartbeat and lock are each per
+# THE MODE BELONGS TO THE RUN, AND IS SET IN ONE PLACE. A run is made in one of three modes
+# (New-HordeWakeRun -Mode), says which in its own mode member, and reads and writes that mode's files
+# and no other (core/WakeFiles.ps1: ledger, sender marks, journal, heartbeat and lock are each per
 # mode). A tick takes its mode from the run it is handed and offers no parameter that could change it:
 # a shadow run cannot be ticked live, and a caller has no word to drop.
-#   SHADOW  journals what a tick would do - would-nudge, would-post, would-stall - and does none of it.
-#   LIVE    sends the nudges the wake pass decided, through the waker it was handed, and nothing else.
+#   SHADOW  journals what a tick would do - would-nudge, would-post, would-tell - and does none of it.
+#           It may read through a waker whose capabilities are unverified, and names them.
+#   LIVE    sends the nudges the wake pass decided, through the waker it was handed, for as long as it
+#           runs. Only through a waker whose every capability is yes.
+#   PROOF   sends real nudges for ONE PASS and ends: the run a person makes, watching, to show against
+#           the real thing what a waker so far only claims. It alone rings through unverified
+#           capabilities, and it is refused as a loop - a proof nobody is watching is a live run
+#           through a waker nobody has verified.
 #
-# THE TWO SENDERS STAY SHADOW EVEN IN A LIVE RUN: the restore source (core/RestoreSource.ps1) and the
+# THE TWO SENDERS STAY SHADOW EVEN IN A LIVE OR A PROOF RUN: the restore source (core/RestoreSource.ps1) and the
 # tell sender (core/WakeTell.ps1). They journal would-post, would-stall and would-tell, and post
 # nothing. Why: the only messenger that reaches a real session types its own wake line on every post
 # (messengers/wezfleet/Messenger.ps1, WOKEN, OR ONLY QUEUED: "wezfleet's post knocks once for each new
@@ -50,13 +56,15 @@ $script:HordeWakeSendersPost = $false
 $script:HordeWakeRestoreEverySeconds = 30
 
 function New-HordeWakeRun {
-    # What a run carries from tick to tick, read from its own mode's files: { live; ledger; posted;
-    # restores; unknown; notes; badMail; restoreAt; pass; said }. SHADOW UNLESS -Live IS GIVEN, and live
-    # is never changed afterwards (the header). said is what the caller should print once: a saved
+    # What a run carries from tick to tick, read from its own mode's files: { mode; live; ledger; posted;
+    # restores; unknown; notes; badMail; restoreAt; pass; said }. SHADOW UNLESS -Mode (or -Live, its
+    # older word for the live mode) SAYS OTHERWISE, and neither member is changed afterwards (the
+    # header). live says whether real nudges are sent: true for live and for proof. said is what the caller should print once: a saved
     # file that could not be read is started from empty, and says so.
-    param([switch]$Live, [string]$HordeHome = (Get-HordeHome))
-    $run = [pscustomobject]@{ live = [bool]$Live; ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
-    $saved = Read-HordeWakeLedger -Shadow:(-not $run.live) -HordeHome $HordeHome
+    param([switch]$Live, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:(-not $Live)
+    $run = [pscustomobject]@{ mode = $word; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
@@ -70,42 +78,88 @@ function New-HordeWakeRun {
 }
 
 function Get-HordeWakeRunPlan {
-    # How `horde wake run` starts, decided here so a suite can hold it: { ok; live; waker; banner; reason }.
-    #   -Live    the person asked for a live run; without it the run is SHADOW, whatever else is true
-    #   -Picked  Resolve-HordeProductionWaker's answer
-    # A LIVE RUN WITH NO WAKER TO RING THROUGH IS REFUSED (ok false, with the reason): it would beat a
-    # live heartbeat, look alive, and wake nobody. A shadow run with none still runs: the restore source
-    # needs no waker. THE BANNER SAYS THE MODE FIRST, IN CAPITALS: which of the two is running is the
-    # one thing a person starting it must not be able to misread.
-    param([switch]$Live, [Parameter(Mandatory = $true)]$Picked)
+    # How `horde wake run` starts, decided here so a suite can hold it: { ok; mode; live; waker; banner;
+    # reason }. live says whether real nudges will be sent (live and proof).
+    #   -Mode    shadow, proof or live, EXACTLY: any other word - another casing, an abbreviation - is
+    #            refused, never taken for the nearest mode
+    #   -Once    the run makes one pass and ends
+    #   -Picked  the port's answer about the installed waker: Resolve-HordeProductionWaker for live, and
+    #            with -AllowUnverified for shadow and proof (Get-HordeWakeRunPick)
+    # THE RULES, EACH A REFUSAL WITH ITS REASON (ok false):
+    #   LIVE needs a waker, and one whose every capability is yes. A live run with none would beat a
+    #        live heartbeat, look alive, and wake nobody; one through unverified capabilities would be
+    #        a watcher left running on claims nobody has seen hold.
+    #   PROOF needs a waker and -Once. It is the one run that rings through a waker whose capabilities
+    #        are unverified (wakers/Port.ps1), because showing them is what it is for; as a loop it is
+    #        refused.
+    #   SHADOW runs with any of that: with no waker the restore source still runs, and through a waker
+    #        with unverified capabilities it reads, and names each one.
+    # THE BANNER SAYS THE MODE FIRST, IN CAPITALS: which of the three is running is the one thing a
+    # person starting it must not be able to misread.
+    param([string]$Mode = "shadow", [switch]$Once, [Parameter(Mandatory = $true)]$Picked)
+    $no = { param($why) [pscustomobject]@{ ok = $false; mode = $Mode; live = $false; waker = $null; banner = ""; reason = $why } }
+    if (@("shadow", "proof", "live") -cnotcontains $Mode) { return (& $no ("'" + $Mode + "' is not a mode of the wake run: shadow, proof or live, written exactly so")) }
     $waker = $null
     if ((Test-HordeAnswer $Picked) -and $Picked.state -ceq "known") { $waker = $Picked.value }
     $why = "the answer about the installed waker is not one"
     if (Test-HordeAnswer $Picked) { $why = "$($Picked.reason)" }
-    if (-not $Live) {
-        if ($null -ne $waker) { return [pscustomobject]@{ ok = $true; live = $false; waker = $waker; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted; what would be is journaled. Reading state through the waker '" + $waker.name + "'") } }
-        return [pscustomobject]@{ ok = $true; live = $false; waker = $null; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted. No waker is installed, so no session is watched for unread mail; the restore source still runs (" + $why + ")") }
+    $unverified = @()
+    if ($null -ne $waker) { $unverified = @(Get-HordeWakerUnverified -Waker $waker) }
+    if ($Mode -ceq "shadow") {
+        $note = ""
+        if ($unverified.Count -gt 0) { $note = ". UNVERIFIED, so nothing this run journals is proof of them: " + ($unverified -join ", ") }
+        if ($null -ne $waker) { return [pscustomobject]@{ ok = $true; mode = "shadow"; live = $false; waker = $waker; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted; what would be is journaled. Reading state through the waker '" + $waker.name + "'" + $note) } }
+        return [pscustomobject]@{ ok = $true; mode = "shadow"; live = $false; waker = $null; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted. No waker is installed, so no session is watched for unread mail; the restore source still runs (" + $why + ")") }
     }
-    if ($null -eq $waker) { return [pscustomobject]@{ ok = $false; live = $false; waker = $null; banner = ""; reason = ("wake run -Live needs an installed waker to send its nudges through, and there is none: " + $why) } }
-    return [pscustomobject]@{ ok = $true; live = $true; waker = $waker; reason = ""; banner = ("LIVE - REAL NUDGES are sent through the waker '" + $waker.name + "'. The restore source stays shadow: it journals what it would post and posts nothing") }
+    if ($null -eq $waker) { return (& $no ("wake run -Mode " + $Mode + " needs an installed waker to send its nudges through, and there is none: " + $why)) }
+    if ($Mode -ceq "proof") {
+        if (-not $Once) { return (& $no "wake run -Mode proof makes one pass and ends: add -Once. A proof left running is a live run through a waker nobody has verified") }
+        $shows = "every capability of this waker is already yes"
+        if ($unverified.Count -gt 0) { $shows = "UNVERIFIED, and what this pass is here to show: " + ($unverified -join ", ") }
+        return [pscustomobject]@{ ok = $true; mode = "proof"; live = $true; waker = $waker; reason = ""; banner = ("PROOF - PROOF - PROOF - ONE PASS OF REAL NUDGES through the waker '" + $waker.name + "', then it ends. WATCH THE SESSIONS: " + $shows + ". Nothing is posted: the restore source and the tells stay shadow") }
+    }
+    if ($unverified.Count -gt 0) { return (& $no ("wake run -Mode live is refused: the waker '" + $waker.name + "' says these are unverified - " + ($unverified -join ", ") + " - and a live run rings only through a waker whose every capability is yes. Show them first, in a proof run (-Mode proof -Once); its capabilities.json says what is still to be run")) }
+    return [pscustomobject]@{ ok = $true; mode = "live"; live = $true; waker = $waker; reason = ""; banner = ("LIVE - REAL NUDGES are sent through the waker '" + $waker.name + "'. The restore source stays shadow: it journals what it would post and posts nothing") }
+}
+
+function Get-HordeWakeRunPick {
+    # The port's answer about the installed waker, as the mode may have it: only a waker that offers
+    # every capability for live; one that claims them, unverified, for shadow and proof as well.
+    param([string]$Mode = "shadow")
+    if ($Mode -ceq "live") { return (Resolve-HordeProductionWaker) }
+    return (Resolve-HordeProductionWaker -AllowUnverified)
+}
+
+function Get-HordeWakeRunMode {
+    # The mode whose files a run reads and writes: shadow, proof or live. ONLY A RUN MADE LIVE SENDS
+    # ANYTHING: whatever its live member holds that is not true - nothing, a word, a number - is shadow,
+    # and of the runs that send, only one that says proof is proof.
+    param([Parameter(Mandatory = $true)]$Run)
+    if ($Run.live -ne $true) { return "shadow" }
+    $p = $Run.PSObject.Properties["mode"]
+    if ($null -ne $p -and "$($p.Value)" -ceq "proof") { return "proof" }
+    return "live"
 }
 
 function Test-HordeWakeSendersShadow {
     # Do the two senders - the restore source and the tell sender - run shadow in this run? Always in a
-    # shadow run; and in every other while THE ONE SWITCH is off (the top of this file).
+    # shadow run, and in a proof run, which is there to show the nudge and nothing else; and in a live
+    # one while THE ONE SWITCH is off (the top of this file).
     param([Parameter(Mandatory = $true)]$Run)
-    if ($Run.live -ne $true) { return $true }
+    if ((Get-HordeWakeRunMode -Run $Run) -cne "live") { return $true }
     return ($script:HordeWakeSendersPost -ne $true)
 }
 
 function Get-HordeWakeSenderFile {
     # Where a sender's marks are kept for this run: { name; mode }, for Get-HordeWakeStateFile. A shadow
-    # run's are <stem>-shadow. A live run whose senders are shadow keeps them in a shadow file OF ITS
-    # OWN, <stem>-of-live-run-shadow - not the shadow run's, which another process may be writing, and
-    # not <stem>-live, which is for mail that was really posted. With the switch on, <stem>-live.
+    # run's are <stem>-shadow. A live or a proof run whose senders are shadow keeps them in a shadow file
+    # OF ITS OWN, <stem>-of-live-run-shadow or <stem>-of-proof-run-shadow - not the shadow run's, which
+    # another process may be writing, and not <stem>-live, which is for mail that was really posted.
+    # With the switch on, a live run's are <stem>-live.
     param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][string]$Stem)
-    if ($Run.live -ne $true) { return [pscustomobject]@{ name = $Stem; mode = "shadow" } }
-    if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-live-run"); mode = "shadow" } }
+    $mode = Get-HordeWakeRunMode -Run $Run
+    if ($mode -ceq "shadow") { return [pscustomobject]@{ name = $Stem; mode = "shadow" } }
+    if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-" + $mode + "-run"); mode = "shadow" } }
     return [pscustomobject]@{ name = $Stem; mode = "live" }
 }
 
@@ -132,7 +186,8 @@ function Invoke-HordeWakeTick {
         [string]$HordeHome = (Get-HordeHome)
     )
     # ONLY A RUN MADE LIVE IS LIVE: anything else in that member - nothing, a word, a number - is shadow.
-    $shadow = ($Run.live -ne $true)
+    $mode = Get-HordeWakeRunMode -Run $Run
+    $shadow = ($mode -ceq "shadow")
     $Run.pass = [long]$Run.pass + 1
     $entries = New-Object System.Collections.ArrayList
     $failed = New-Object System.Collections.ArrayList
@@ -210,17 +265,17 @@ function Invoke-HordeWakeTick {
         }
         $changed = (@($result.entries).Count -gt 0 -or $result.ledger.Count -ne $Run.ledger.Count)
         $Run.ledger = $result.ledger
-        if ($changed) { Save-HordeWakeLedger -Ledger $Run.ledger -Shadow:$shadow -HordeHome $HordeHome }
+        if ($changed) { Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
-    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Shadow:$shadow -HordeHome $HordeHome }
+    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }
     foreach ($f in @($failed)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $f.id -Outcome "unknown" -Reason $f.reason)) }
     $fresh = Select-HordeWakeNewEntries -Entries $entries.ToArray() -Unknown $Run.unknown
     $Run.unknown = $fresh.unknown
     # THE JOURNAL LAST, and its own failure is the one thing a tick can only hand back: the caller
     # prints the entries it returns, so they are not lost with the file.
-    try { $null = Write-HordeWakeJournal -Entries $fresh.entries -Shadow:$shadow -HordeHome $HordeHome }
+    try { $null = Write-HordeWakeJournal -Entries $fresh.entries -Mode $mode -HordeHome $HordeHome }
     catch { return @(@($fresh.entries) + (New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "journal" -Outcome "unknown" -Reason ("the journal could not be written: " + $_.Exception.Message))) }
     return @($fresh.entries)
 }

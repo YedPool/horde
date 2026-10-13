@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "waker": "fixture-unverified",
+  "capabilities": {
+    "nudge.pointer-only": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.box": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.turn": {
+      "support": "unverified",
+      "evidence": "A fixture for test/test-wake-port.ps1; still to be run: state.turn."
+    },
+    "reach.unseen": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "nudge.guarded": {
+      "support": "unverified",
+      "evidence": "A fixture for test/test-wake-port.ps1; still to be run: nudge.guarded."
+    }
+  }
+}

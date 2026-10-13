@@ -29,8 +29,12 @@
 # watcher: a waker that cannot see the input box says unknown, and the session is left alone. That one
 # rule is what stops a nudge being typed into somebody's half-written text.
 #
-# CAPABILITIES ARE CLAIMS, AND ONLY "yes" COUNTS (unverified, declined and no all read as "does not have
-# it"):
+# CAPABILITIES ARE CLAIMS, AND ONLY "yes" COUNTS for a live run (unverified, declined and no all read as
+# "does not have it"). UNVERIFIED IS A CLAIM NOBODY HAS YET SHOWN AGAINST THE REAL THING: the adapter
+# does it, and says in its evidence what is still to be run. Such a waker may be READ through by a run
+# that nudges nobody, and rung through by the one run whose purpose is to show the claim
+# (Resolve-HordeProductionWaker -AllowUnverified; core/WakeRun.ps1 says which runs those are) - and by
+# no other. declined and no are never either.
 #   nudge.pointer-only  the nudge types one fixed pointer line and never any part of a message body
 #   state.box           it can read whether a session's input box is empty
 #   state.turn          it can read whether a session is in the middle of a turn
@@ -205,6 +209,21 @@ function Test-HordeWakerCapability {
     return ((Get-HordeWakerSupport -Waker $Waker -Capability $Capability) -ceq "yes")
 }
 
+function Test-HordeWakerClaims {
+    # True for "yes" and for "unverified": the waker says it does this, shown or not yet. What an
+    # answer may SAY rests on this - a waker that claims to read the box may answer about the box -
+    # while what a live run may DO rests on Test-HordeWakerCapability.
+    param([Parameter(Mandatory = $true)]$Waker, [Parameter(Mandatory = $true)][string]$Capability)
+    return (@("yes", "unverified") -ccontains (Get-HordeWakerSupport -Waker $Waker -Capability $Capability))
+}
+
+function Get-HordeWakerUnverified {
+    # The capabilities a waker declares unverified, in the port's own order: what a banner names, and
+    # what a live run is refused for.
+    param([Parameter(Mandatory = $true)]$Waker)
+    return @($script:HordeWakerCapabilityNames | Where-Object { (Get-HordeWakerSupport -Waker $Waker -Capability $_) -ceq "unverified" })
+}
+
 function Resolve-HordeWaker {
     # A waker by name that has every capability in -Require, as a tristate answer. -Require is mandatory
     # so a caller states what it needs; @() means nothing.
@@ -227,15 +246,25 @@ function Resolve-HordeProductionWaker {
     #   absent   none does; the note says, for each loaded waker, the first capability it lacks
     #   unknown  two or more do - one is never chosen over another (core/SessionSeat.ps1 holds the same
     #            rule for two holders of a role)
+    # -AllowUnverified is for a run that nudges nobody, or whose purpose is to show the claims: when NO
+    # loaded waker offers all five, the one that CLAIMS all five - each yes or unverified - is picked,
+    # and two of those are unknown as two are. A waker that offers all five is always preferred, and
+    # one that declines or lacks a capability is never picked either way. The caller reads which
+    # capabilities are unverified from the waker (Get-HordeWakerUnverified) and says so.
+    param([switch]$AllowUnverified)
     $able = New-Object System.Collections.ArrayList
+    $claims = New-Object System.Collections.ArrayList
     $lacks = New-Object System.Collections.ArrayList
     foreach ($name in @(Get-HordeWakerNames)) {
         $w = $script:HordeWakers[$name]
         $missing = @($script:HordeProductionWakerRequires | Where-Object { -not (Test-HordeWakerCapability -Waker $w -Capability $_) }) | Select-Object -First 1
+        if ($null -ne $missing -and @($script:HordeProductionWakerRequires | Where-Object { -not (Test-HordeWakerClaims -Waker $w -Capability $_) }).Count -eq 0) { [void]$claims.Add($w) }
         if ($null -eq $missing) { [void]$able.Add($w) } else { [void]$lacks.Add($name + ": does not offer " + $missing + " (it says " + (Get-HordeWakerSupport -Waker $w -Capability $missing) + ")") }
     }
     if ($able.Count -eq 1) { return (New-HordeKnown -Value $able[0]) }
     if ($able.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $able.Count + " wakers each offer every capability (" + (@($able | ForEach-Object { $_.name }) -join ", ") + "); one is never chosen over another")) }
+    if ($AllowUnverified -and $claims.Count -eq 1) { return (New-HordeKnown -Value $claims[0]) }
+    if ($AllowUnverified -and $claims.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $claims.Count + " wakers each claim every capability, unverified (" + (@($claims | ForEach-Object { $_.name }) -join ", ") + "); one is never chosen over another")) }
     $loaded = "no waker is loaded"
     if ($lacks.Count -gt 0) { $loaded = $lacks -join "; " }
     return (New-HordeAbsent -Note ("no loaded waker offers " + ($script:HordeProductionWakerRequires -join ", ") + ": " + $loaded))
@@ -420,8 +449,8 @@ function Get-HordeWakeState {
     # WHAT IT CANNOT READ, IT CANNOT CLAIM: a waker that does not offer state.box may only say unknown
     # of the box, and likewise state.turn of the turn. Its yes would be a guess, and a guess here is a
     # nudge typed into somebody's text.
-    if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
-    if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
     return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"] }) -ObservedAt $a.observedAt)
 }
 

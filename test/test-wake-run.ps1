@@ -247,7 +247,7 @@ $null = Invoke-HordeWakeTick -Run $tampered -Now (At 600) -Waker $memory -ReadSe
 Check (@(Get-HordeMemoryWakerAsks).Count -eq 0) "a run whose live is anything but true - a word, here - is ticked as shadow"
 
 Write-Host ""
-Write-Host "--- how a run starts: shadow unless live is asked for, and live only with a waker ---" -ForegroundColor Cyan
+Write-Host "--- how a run starts: shadow unless another mode is named; live only through a verified waker; proof only as one pass ---" -ForegroundColor Cyan
 
 $none5 = New-HordeAbsent -Note "no loaded waker offers every capability"
 $one = New-HordeKnown -Value $memory
@@ -255,16 +255,61 @@ $p = Get-HordeWakeRunPlan -Picked $one
 Check ($p.ok -and $p.live -eq $false -and [object]::ReferenceEquals($p.waker, $memory) -and "$($p.banner)".StartsWith("SHADOW - ")) "with no word the run is shadow, reads through the installed waker, and its banner begins SHADOW"
 $p = Get-HordeWakeRunPlan -Picked $none5
 Check ($p.ok -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.banner)".StartsWith("SHADOW - ") -and "$($p.banner)".Contains("No waker is installed")) "a shadow run with no waker still starts, and says in its banner that none is installed"
-$p = Get-HordeWakeRunPlan -Live -Picked $one
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked $one
 Check ($p.ok -and $p.live -eq $true -and [object]::ReferenceEquals($p.waker, $memory) -and "$($p.banner)".StartsWith("LIVE - REAL NUDGES") -and "$($p.banner)".Contains("restore source stays shadow")) "asked for by name, with a waker, the run is live, and its banner begins LIVE and says the restore source stays shadow"
 # Caught on purpose: a plan that went on with no waker would throw reading its name, and a throw must
 # fail this check rather than end it.
 $p = $null
-try { $p = Get-HordeWakeRunPlan -Live -Picked $none5 } catch { $p = $null }
+try { $p = Get-HordeWakeRunPlan -Mode "live" -Picked $none5 } catch { $p = $null }
 Check ($null -ne $p -and $p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("needs an installed waker") -and "$($p.reason)".Contains("no loaded waker offers")) "a live run with no waker installed is refused, saying why"
-$p = Get-HordeWakeRunPlan -Live -Picked (New-HordeUnknown -Reason "2 wakers each offer every capability")
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked (New-HordeUnknown -Reason "2 wakers each offer every capability")
 Check ($p.ok -eq $false -and "$($p.reason)".Contains("2 wakers")) "and so is one when two wakers could be picked: one is never chosen"
-$p = Get-HordeWakeRunPlan -Live -Picked "not an answer"
+# A WAKER WHOSE CAPABILITIES ARE UNVERIFIED: read through in shadow, named; never rung through live.
+$claimed = Register-HordeWaker -Name "fixture-unverified" -Folder (Join-Path $root "test\fixtures\waker\caps\fixture-unverified") -Targets { New-HordeKnown -Value @() } -State { param($id) New-HordeUnknown -Reason "a fixture" } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" }
+$p = Get-HordeWakeRunPlan -Picked (New-HordeKnown -Value $claimed)
+Check ($p.ok -and $p.live -eq $false -and [object]::ReferenceEquals($p.waker, $claimed) -and "$($p.banner)".StartsWith("SHADOW - ") -and "$($p.banner)".Contains("UNVERIFIED") -and "$($p.banner)".Contains("state.turn, nudge.guarded")) "a shadow run reads through a waker whose capabilities are unverified, and its banner names each one"
+Check (-not "$((Get-HordeWakeRunPlan -Picked $one).banner)".Contains("UNVERIFIED")) "and says nothing of the kind for a waker that has none"
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked (New-HordeKnown -Value $claimed)
+Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("unverified") -and "$($p.reason)".Contains("state.turn, nudge.guarded")) "a live run through it is refused, naming what is unverified"
+# PROOF: one pass of real nudges, the only run that rings through unverified capabilities.
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked (New-HordeKnown -Value $claimed)
+Check ($p.ok -and $p.mode -ceq "proof" -and $p.live -eq $true -and [object]::ReferenceEquals($p.waker, $claimed) -and "$($p.banner)".StartsWith("PROOF - PROOF - PROOF - ONE PASS OF REAL NUDGES") -and "$($p.banner)".Contains("UNVERIFIED") -and "$($p.banner)".Contains("state.turn, nudge.guarded")) "a proof run with -Once rings through a waker whose capabilities are unverified: its banner says PROOF, loudly, and names what it is there to show"
+$p = Get-HordeWakeRunPlan -Mode "proof" -Picked (New-HordeKnown -Value $claimed)
+Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("add -Once")) "a proof run without -Once is refused: it is never a loop"
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked $none5
+Check ($p.ok -eq $false -and "$($p.reason)".Contains("needs an installed waker")) "and so is one with no waker to ring through"
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Picked $one
+Check ($p.ok -and $p.mode -ceq "proof" -and -not "$($p.banner)".Contains("UNVERIFIED")) "a proof run through a waker with nothing unverified runs, and names none"
+foreach ($word in @("LIVE", "Live", "liv", "l", "", "both")) {
+    $p = Get-HordeWakeRunPlan -Mode $word -Once -Picked $one
+    Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker) ("the mode '" + $word + "' is no mode: refused, never taken for the nearest one")
+}
+Check ((Get-HordeWakeRunPlan -Mode "live" -Picked $one).mode -ceq "live" -and (Get-HordeWakeRunPlan -Picked $one).mode -ceq "shadow") "a plan says its mode"
+# WHICH WAKER A MODE MAY HAVE: loaded here are the in-process one, which declines a capability, and
+# the fixture that claims all five with two unverified.
+Check ((Get-HordeWakeRunPick -Mode "live").state -ceq "absent") "for a live run the port is asked for a waker that offers every capability: there is none here"
+$pick = Get-HordeWakeRunPick -Mode "proof"
+Check ($pick.state -ceq "known" -and [object]::ReferenceEquals($pick.value, $claimed) -and (Get-HordeWakeRunPick -Mode "shadow").state -ceq "known" -and (Get-HordeWakeRunPick).state -ceq "known") "for a proof run and a shadow run, one that claims them unverified will do"
+# A PROOF RUN'S FILES ARE ITS OWN.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+Set-HordeMemoryWakerClock (At 0)
+$proof = New-HordeWakeRun -Mode "proof" -HordeHome $h
+$proved = @(Invoke-HordeWakeTick -Run $proof -Now (At 0) -Waker $memory -ReadSessions $readRestored -TickSeconds 3 -ProcessId 4545 -HordeHome $h | ForEach-Object { $_.kind })
+Check ($proof.mode -ceq "proof" -and $proof.live -eq $true -and @(Get-HordeMemoryWakerNudges).Count -eq 1 -and @($proved | Where-Object { $_ -ceq "nudge" }).Count -eq 1) "a proof run's tick sends the real nudge"
+Check (@($proved | Where-Object { $_ -ceq "post" -or $_ -ceq "stall" -or $_ -ceq "tell" }).Count -eq 0 -and @($proved | Where-Object { $_ -ceq "would-post" }).Count -gt 0) "and posts nothing: the senders are shadow in a proof run"
+$names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
+Check (($names -join ",") -ceq "heartbeat-proof.json,journal-proof.jsonl,ledger-proof.json,restore-of-proof-run-shadow.json") ("it wrote the proof run's own files and no file of a live or a shadow run (" + ($names -join ",") + ")")
+$beat = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h
+Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
+$switchWas = $script:HordeWakeSendersPost
+try { $script:HordeWakeSendersPost = $true; Check ((Test-HordeWakeSendersShadow -Run $proof) -eq $true -and (Test-HordeWakeSendersShadow -Run (New-HordeWakeRun -Mode "live" -HordeHome $h)) -eq $false) "with the senders' switch on, a live run posts and a proof run still does not" } finally { $script:HordeWakeSendersPost = $switchWas }
+$threw = $false; try { $null = New-HordeWakeRun -Mode "LIVE" -HordeHome $h } catch { $threw = $true }
+Check $threw "a run cannot be made in a mode that is no mode"
+$lockP = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
+try { Check ($null -ne $lockP -and (Test-Path -LiteralPath (Join-Path $h "wake\run-proof.lock")) -and $null -eq (Enter-HordeWakeLock -Mode "proof" -ProcessId 2 -HordeHome $h)) "a proof run holds a lock of its own, and a second proof run is kept out" } finally { if ($null -ne $lockP) { $lockP.Dispose() } }
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked "not an answer"
 Check ($p.ok -eq $false -and $p.live -eq $false) "and an answer about the waker that is not one never makes a live run"
 
 Write-Host ""

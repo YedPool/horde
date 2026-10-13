@@ -154,14 +154,17 @@ try {
             $support = Get-HordeWakerSupport -Waker $w -Capability $cap
             $state = & $fx.New
             try {
-                if ($support -ceq "yes") {
+                # A CLAIM IS SHOWN, VERIFIED OR NOT: unverified means not yet shown against the real thing,
+                # never not shown at all. Its case runs against the waker's fixture like a yes.
+                if ($support -ceq "yes" -or $support -ceq "unverified") {
                     $shown = & $cases[$cap] $w $fx $state
-                    Check ($shown -eq $true) ("[" + $name + "] " + $cap + " is yes, and the case shows it")
-                } else {
+                    Check ($shown -eq $true) ("[" + $name + "] " + $cap + " is " + $support + ", and the case shows it")
+                }
+                if ($support -cne "yes") {
                     $lacksOne = $true
                     $r = Resolve-HordeWaker -Name $name -Require @($cap)
                     Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains($cap)) ("[" + $name + "] " + $cap + " is " + $support + ", and a caller that requires it is refused, naming it")
-                    if ($mustBeUnknown.ContainsKey($cap)) {
+                    if ($support -cne "unverified" -and $mustBeUnknown.ContainsKey($cap)) {
                         $s = New-Seat
                         & $fx.Seat $state $s
                         $a = Get-HordeWakeState -Waker $w -Id $s.id -Full

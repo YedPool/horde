@@ -5,6 +5,21 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-word-that-is-no-mode-names-a-file"
+           Find = 'if (@("shadow", "proof", "live") -cnotcontains $Mode) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "proof-files-are-the-live-ones"
+           Find = 'if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }'
+           Replace = 'if ($Mode -ceq "" -or $Mode -ceq "proof") { if ($Shadow) { return "shadow" }; return "live" }' }
+        @{ Name = "heartbeat-does-not-say-its-mode"
+           Find = 'shadow = ($word -ceq "shadow"); mode = $word;'
+           Replace = 'shadow = ($word -ceq "shadow"); mode = "";' }
+        @{ Name = "proof-heartbeat-says-shadow"
+           Find = 'shadow = ($word -ceq "shadow"); mode = $word;'
+           Replace = 'shadow = ($word -cne "live"); mode = $word;' }
+        @{ Name = "heartbeat-read-from-the-live-file-whatever-the-mode"
+           Find = '$path = Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome'
+           Replace = '$path = Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -HordeHome $HordeHome' }
         @{ Name = "unknown-journaled-every-pass"
            Find = '-and "$($Unknown["$($e.id)"])" -ceq "$($e.reason)") { continue }'
            Replace = '-and $false) { continue }' }
@@ -24,20 +39,20 @@
            Find = 'foreach ($ext in @(".1.jsonl", ".jsonl")) {'
            Replace = 'foreach ($ext in @(".jsonl")) {' }
         @{ Name = "live-reads-the-unsuffixed-files-of-earlier-builds"
-           Find = '$leaf = $Stem + "-live" + $Extension'
+           Find = '$leaf = $Stem + "-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + $Extension'
            Replace = '$leaf = $Stem + $Extension' }
         @{ Name = "state-file-is-the-unsuffixed-one-of-earlier-builds"
            Find = '$leaf = $Name + "-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".json"'
            Replace = '$leaf = $Name + ".json"' }
         @{ Name = "shadow-journal-and-heartbeat-are-the-live-ones"
-           Find = 'if ($Shadow) { $leaf = $Stem + "-shadow" + $Extension }'
-           Replace = '' }
+           Find = '$leaf = $Stem + "-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + $Extension'
+           Replace = '$leaf = $Stem + "-" + (Get-HordeWakeModeWord -Mode $Mode) + $Extension' }
         @{ Name = "journal-written-to-the-live-file-whatever-the-mode"
-           Find = '$path = Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -Shadow:$Shadow -HordeHome $HordeHome'
+           Find = '$path = Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome'
            Replace = '$path = Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -HordeHome $HordeHome' }
         @{ Name = "tick-not-written-in-the-heartbeat"
-           Find = 'shadow = [bool]$Shadow; tickSeconds = $TickSeconds }'
-           Replace = 'shadow = [bool]$Shadow; tickSeconds = 0 }' }
+           Find = 'mode = $word; tickSeconds = $TickSeconds }'
+           Replace = 'mode = $word; tickSeconds = 0 }' }
         @{ Name = "shadow-state-file-is-the-live-one"
            Find = 'if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }'
            Replace = 'if ($Mode -ceq "") { return "live" }' }

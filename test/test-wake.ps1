@@ -341,6 +341,18 @@ $written = @(Read-HordeWakeJournalTail -Count 2 | ForEach-Object { $_ | ConvertF
 Check ($written[0].elapsedMs -eq 2150 -and $null -eq $written[1].PSObject.Properties["elapsedMs"]) "and it is written to the journal with the line"
 Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
 
+# A PROOF RUN'S FILES ARE ITS OWN, by the mode's word; and a word that is no mode names no file.
+$h7 = Join-Path $pinned.home ("modes-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $h7 | Out-Null
+Check ((Split-Path -Leaf (Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -Mode "proof" -HordeHome $h7)) -ceq "journal-proof.jsonl" -and (Split-Path -Leaf (Get-HordeWakeStateFile -Name "ledger" -Mode "proof" -HordeHome $h7)) -ceq "ledger-proof.json" -and (Split-Path -Leaf (Get-HordeWakeStateFile -Name "ledger" -Mode "shadow" -HordeHome $h7)) -ceq "ledger-shadow.json" -and (Split-Path -Leaf (Get-HordeWakeStateFile -Name "ledger" -Mode "live" -HordeHome $h7)) -ceq "ledger-live.json") "each of the three modes names its own journal and state files"
+$threw = 0; foreach ($word in @("LIVE", "prove", "both")) { try { $null = Get-HordeWakeStateFile -Name "ledger" -Mode $word -HordeHome $h7 } catch { $threw++ } }
+Check ($threw -eq 3) "a word that is no mode - another casing, a near miss - names no file: it is refused"
+Write-HordeWakeHeartbeat -At $t0 -ProcessId 7 -Pass 1 -Mode "proof" -TickSeconds 3 -HordeHome $h7
+$pb = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h7
+Check ($pb.state -ceq "known" -and $pb.value.mode -ceq "proof" -and $pb.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -HordeHome $h7).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).state -ceq "absent") "a proof run's heartbeat says proof, is read back by that mode only, and is neither the live one nor the shadow one"
+Write-HordeWakeHeartbeat -At $t0 -ProcessId 7 -Pass 1 -Shadow -HordeHome $h7
+Write-HordeWakeHeartbeat -At $t0 -ProcessId 7 -Pass 1 -HordeHome $h7
+Check ((Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).value.mode -ceq "shadow" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).value.shadow -eq $true -and (Read-HordeWakeHeartbeat -HordeHome $h7).value.mode -ceq "live") "and the shadow and the live heartbeat each say theirs"
+
 Write-Host ""
 Write-Host "--- the look comes last: a session's box is read only when it is about to be nudged ---" -ForegroundColor Cyan
 
