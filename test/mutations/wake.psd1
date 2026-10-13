@@ -146,8 +146,14 @@
            Find = 'if ("$($status.state)" -cne "known" -or $status.observedAt -isnot [datetime]) { continue }'
            Replace = 'if ($false) { continue }' }
         @{ Name = "partial-listing-read-as-the-fleet"
-           Find = 'if ("$($whole.state)" -cne "known") { return'
+           Find = 'if ($whole.Count -eq 0) { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "session-of-a-listing-not-whole-counted"
+           Find = 'if ("$($of.state)" -cne "known" -or -not $whole.ContainsKey("$($of.value)")) { continue }'
+           Replace = '' }
+        @{ Name = "one-listing-not-whole-is-unknown"
+           Find = 'if ($whole.Count -eq 0) { return'
+           Replace = 'if ($leftOut.Count -gt 0) { return' }
         @{ Name = "role-guessed-from-nothing"
            Find = '$role = "unknown"'
            Replace = '$role = "goblin"' }

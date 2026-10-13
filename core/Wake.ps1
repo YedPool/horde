@@ -380,31 +380,43 @@ function Select-HordeWakeNewEntries {
 
 function Get-HordeRestoreSessions {
     # The running sessions, for Get-HordeRestoreFinding: known, a list of { id; role; parent; startedAt;
-    # lastChangeAt }, or unknown with the reason. startedAt is the session's own (core/Identity.ps1);
+    # lastChangeAt } (and leftOut, below), or unknown with the reason. startedAt is the session's own (core/Identity.ps1);
     # lastChangeAt is when its live status was last written; role and parent are its registry record's
     # (role "unknown" and parent "" where the record says neither - never guessed, core/Roles.ps1).
     #
     # Both times are UTC as core/Identity.ps1 gives them (it reads epoch milliseconds), so neither is converted.
     # ONLY A SESSION SEEN ALIVE COUNTS: one whose start and live status are both known. A control file
     # left by a process that is gone has an unknown status and is not a running session.
-    # A LISTING THAT IS NOT WHOLE IS UNKNOWN, not a shorter fleet: the share of sessions that restarted
-    # together cannot be taken from part of the fleet.
+    # AN AGENT WHOSE LISTING IS NOT WHOLE IS LEFT OUT, AND SAID SO; ONLY WHEN NONE IS WHOLE IS THE ANSWER
+    # UNKNOWN. The first version made any one listing that was not whole the whole answer's unknown.
+    # Measured 2026-10-13 on a machine that runs one agent program: it has no control directory for the
+    # other, that listing is never whole, and the restore source never worked. So sessions are taken from
+    # the agents whose listing is whole; a session under an agent whose listing is not is left out, since
+    # part of a listing is not a count; and the known answer carries leftOut, a list of { agent; reason },
+    # beside its value - which stays the plain list Get-HordeRestoreFinding takes - for the caller to
+    # journal. The registry must be whole, as before: every session's role and parent come from it.
     # BOTH SOURCES ARE PARAMETERS, so a test hands in its own and never reads this machine.
     param($Identity = $null, $Registry = $null)
     try {
         if ($null -eq $Identity) { $Identity = Get-HordeIdentity }
         if ($null -eq $Registry) { $Registry = Read-HordeRegistry -Root (Get-HordeWezfleetRoot) }
     } catch { return (New-HordeUnknown -Reason "the sessions could not be read" -ErrorRecord $_) }
+    $whole = @{}
+    $leftOut = New-Object System.Collections.ArrayList
     foreach ($agent in @($Identity.complete.Keys)) {
-        $whole = $Identity.complete[$agent]
-        if ("$($whole.state)" -cne "known") { return (New-HordeUnknown -Reason ("the listing of " + $agent + " sessions is not whole: " + $whole.reason)) }
+        $listed = $Identity.complete[$agent]
+        if ("$($listed.state)" -ceq "known") { $whole["$agent"] = $true }
+        else { [void]$leftOut.Add([pscustomobject]@{ agent = "$agent"; reason = "$($listed.reason)" }) }
     }
+    if ($whole.Count -eq 0) { return (New-HordeUnknown -Reason ("no agent's listing of sessions is whole: " + (@($leftOut | ForEach-Object { $_.agent + ": " + $_.reason }) -join "; "))) }
     if ("$($Registry.complete.state)" -cne "known") { return (New-HordeUnknown -Reason ("the session registry is not whole: " + $Registry.complete.reason)) }
     $out = New-Object System.Collections.ArrayList
     foreach ($id in @($Identity.records.Keys)) {
         $fields = $Identity.records[$id].fields
         $started = $fields["startedAt"]
         $status = $fields["liveStatus"]
+        $of = $fields["agent"]
+        if ("$($of.state)" -cne "known" -or -not $whole.ContainsKey("$($of.value)")) { continue }
         if ("$($started.state)" -cne "known" -or $started.value -isnot [datetime]) { continue }
         if ("$($status.state)" -cne "known" -or $status.observedAt -isnot [datetime]) { continue }
         $role = "unknown"
@@ -418,7 +430,9 @@ function Get-HordeRestoreSessions {
         }
         [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt })
     }
-    return (New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow))
+    $answer = New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow)
+    Add-Member -InputObject $answer -MemberType NoteProperty -Name "leftOut" -Value $leftOut.ToArray()
+    return $answer
 }
 
 # ---- the files: <home>\wake\journal.jsonl, heartbeat.json and ledger.json ----

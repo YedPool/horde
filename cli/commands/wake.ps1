@@ -54,22 +54,24 @@ $HordeCommand = @{
         $restoreEvery = 30
         $restoreAt = [datetime]::MinValue
         $unknown = @{}
+        $notes = @()
         $pass = [long]0
         while ($true) {
             $pass++
             $now = [datetime]::UtcNow
             $sessions = $null
-            $extra = @()
             if (($now - $restoreAt).TotalSeconds -ge $restoreEvery) {
                 $restoreAt = $now
                 $read = Get-HordeRestoreSessions
-                if ($read.state -ceq "known") { $sessions = @($read.value) }
-                else { $extra = @(New-HordeWakeEntry -At $now -Kind "skip-unknown" -Id "restore" -Outcome "unknown" -Reason ("the restore source could not read the sessions: " + $read.reason)) }
+                if ($read.state -ceq "known") {
+                    $sessions = @($read.value)
+                    $notes = @($read.leftOut | ForEach-Object { [pscustomobject]@{ id = ("restore:" + $_.agent); reason = ("the restore source left out the " + $_.agent + " sessions, whose listing is not whole: " + $_.reason) } })
+                } else { $notes = @([pscustomobject]@{ id = "restore"; reason = ("the restore source could not read the sessions: " + $read.reason) }) }
             }
+            # What the restore source could not read is carried between its readings and offered every
+            # pass, so it is journaled once when it starts and not again every 30 s while it lasts.
+            $extra = @($notes | ForEach-Object { New-HordeWakeEntry -At $now -Kind "skip-unknown" -Id $_.id -Outcome "unknown" -Reason $_.reason })
             $result = Invoke-HordeWakePass -Waker $waker -Now $now -Settings $settings -Ledger $ledger -Shadow -RestoreSessions $sessions -Posted $posted
-            # The restore source's own unknown is carried between its readings, so the passes in between
-            # neither repeat it nor forget it.
-            if ($null -eq $sessions -and $extra.Count -eq 0 -and $unknown.ContainsKey("restore")) { $extra = @(New-HordeWakeEntry -At $now -Kind "skip-unknown" -Id "restore" -Outcome "unknown" -Reason $unknown["restore"]) }
             $fresh = Select-HordeWakeNewEntries -Entries (@($result.entries) + $extra) -Unknown $unknown
             $unknown = $fresh.unknown
             $changed = (@($fresh.entries).Count -gt 0 -or $result.ledger.Count -ne $ledger.Count)

@@ -413,15 +413,16 @@ Write-Host ""
 Write-Host "--- the running sessions, from the two stores handed in ---" -ForegroundColor Cyan
 
 function New-Record {
-    param($StartedAt, $StatusAt)
+    param($StartedAt, $StatusAt, [string]$Agent = "agent-one")
     $fields = @{}
+    $fields["agent"] = New-HordeKnown -Value $Agent
     $fields["startedAt"] = $(if ($null -ne $StartedAt) { New-HordeKnown -Value $StartedAt } else { New-HordeUnknown -Reason "the agent writes no start" })
     $fields["liveStatus"] = $(if ($null -ne $StatusAt) { New-HordeKnown -Value "idle" -ObservedAt $StatusAt } else { New-HordeUnknown -Reason "the process is gone" })
     return [pscustomobject]@{ fields = $fields }
 }
 function New-Listing {
-    param([hashtable]$Records, $Whole = (New-HordeKnown -Value $true))
-    $complete = [ordered]@{ "agent-one" = (New-HordeKnown -Value $true); "agent-two" = $Whole }
+    param([hashtable]$Records, $Whole = (New-HordeKnown -Value $true), $WholeOne = (New-HordeKnown -Value $true))
+    $complete = [ordered]@{ "agent-one" = $WholeOne; "agent-two" = $Whole }
     return [pscustomobject]@{ records = $Records; complete = $complete }
 }
 function New-Registry {
@@ -435,9 +436,10 @@ $records[(Sid 1)] = New-Record (At 0) (At 4)
 $records[(Sid 2)] = New-Record (At 13) (At 80)
 $records[(Sid 3)] = New-Record (At 26) $null
 $records[(Sid 4)] = New-Record $null (At 30)
-$records[(Sid 5)] = New-Record (At 39) (At 41)
+$records[(Sid 5)] = New-Record (At 39) (At 41) "agent-two"
 $registry = New-Registry @{ (Sid 1) = @{ role = "master" }; (Sid 2) = @{ role = "orchestrator"; parent = (Sid 1) }; (Sid 5) = @{ parent = (Sid 2); role = "" } }
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records) -Registry $registry
+Check ($a.state -ceq "known" -and @($a.leftOut).Count -eq 0) "with every listing whole nothing is left out"
 $got = @()
 if ($a.state -ceq "known") { $got = @($a.value | Sort-Object id) }
 Check ($a.state -ceq "known" -and (@($got | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2, 5 | ForEach-Object { Sid $_ }) -join ",")) "only a session whose start and live status are both known is a running session"
@@ -445,7 +447,13 @@ Check ($got.Count -eq 3 -and $got[0].role -ceq "warchief" -and $got[1].role -ceq
 Check ($got.Count -eq 3 -and $got[2].role -ceq "unknown" -and $got[2].parent -ceq (Sid 2)) "a record with no role is unknown, never guessed"
 Check ($got.Count -eq 3 -and $got[1].startedAt -eq (At 13) -and $got[1].lastChangeAt -eq (At 80)) "startedAt is the session's own, and lastChangeAt is when its live status was written"
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records -Whole (New-HordeUnknown -Reason "one control file could not be read")) -Registry $registry
-Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("agent-two") -and "$($a.reason)".Contains("could not be read")) "a listing of sessions that is not whole is unknown, naming which and why"
+$got = @()
+if ($a.state -ceq "known") { $got = @($a.value | Sort-Object id) }
+Check ($a.state -ceq "known" -and (@($got | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2 | ForEach-Object { Sid $_ }) -join ",")) "with one agent's listing whole and the other's not, the answer is known, with the whole one's sessions and none of the other's"
+Check ($a.state -ceq "known" -and @($a.leftOut).Count -eq 1 -and $a.leftOut[0].agent -ceq "agent-two" -and $a.leftOut[0].reason -ceq "one control file could not be read") "and it names the agent it left out, and why"
+Check ((Get-HordeRestoreFinding -Sessions $a.value -Now (At 100) -Settings (Get-HordeWakeSettings -Overrides @{ restoreMinSessions = 2 })).state -ceq "known") "its value is still the plain list the restore finding takes"
+$a = Get-HordeRestoreSessions -Identity (New-Listing $records -Whole (New-HordeUnknown -Reason "one control file could not be read") -WholeOne (New-HordeUnknown -Reason "there is no control directory")) -Registry $registry
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("agent-one: there is no control directory") -and "$($a.reason)".Contains("agent-two: one control file could not be read")) "with no agent's listing whole the answer is unknown, naming each and why"
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records) -Registry (New-Registry @{} -Whole (New-HordeUnknown -Reason "there is no registry"))
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("registry")) "and so is a registry that is not whole"
 $a = Get-HordeRestoreSessions -Identity (New-Listing @{}) -Registry (New-Registry @{})
