@@ -70,6 +70,7 @@ $a = Get-HordeWakeTargets -Waker $w
 $list = @(); if ($a.state -ceq "known") { $list = @($a.value | Sort-Object id) }
 Check ($a.state -ceq "known" -and (@($list | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2, 3, 4, 6 | ForEach-Object { Sid $_ }) -join ",")) "the targets are the fleet's rows that are not retired, and a retired one that still has unread mail - not a retired one with none"
 Check ($list.Count -eq 5 -and $list[0].role -ceq "warchief" -and $list[1].role -ceq "orc" -and $list[2].role -ceq "warg" -and $list[3].role -ceq "unknown") "master is warchief, orchestrator is orc, session is warg, and a word it does not know is unknown"
+Check ($list.Count -eq 5 -and (@($list | ForEach-Object { $_.retired }) -join ",") -ceq "no,no,no,no,yes") "each says whether it is retired: the retired one that still has mail is listed as retired, for the watcher to hold"
 Check ($list.Count -eq 5 -and $list[0].label -ceq "M" -and $list[1].parent -ceq (Sid 1) -and $list[2].reachable -ceq "no" -and $list[4].reachable -ceq "unknown") "label, parent and reachable are carried as the fleet said them"
 $s1 = Get-HordeWakeState -Waker $w -Id (Sid 1)
 $s1full = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
@@ -143,6 +144,37 @@ Check ($a.state -ceq "known" -and $a.value.unreadableCount -eq 1) "RULE 6: and t
 $pass = Invoke-HordeWakePass -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
 Check (@($pass.decisions | Where-Object { $_.id -ceq (Sid 1) -and $_.action -ceq "nudge" }).Count -eq 1 -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "the watcher nudges it: the fleet's record shows the one line typed"
 Check ($pass.unreadable[(Sid 1)] -eq 1) "and the pass hands the unreadable count on for the tick to say bad-mail"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- retired: true is yes, and false is no only for a row the fleet had a record for ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+function Get-Retired { param([int]$N) $l = Get-HordeWakeTargets -Waker $w; if ($l.state -cne "known") { return ("listing " + $l.state) }; return "$(@($l.value | Where-Object { $_.id -ceq (Sid $N) })[0].retired)" }
+& $fx.SetRow $state (New-Row 1 @{ retired = $true })
+Check ((Get-Retired 1) -ceq "yes") "retired true is yes"
+& $fx.SetRow $state (New-Row 1)
+Check ((Get-Retired 1) -ceq "no") "retired false, for a row with a label and a role, is no"
+& $fx.SetRow $state (New-Row 1 @{ reason = "record-unreadable"; reasons = @("record-unreadable") })
+Check ((Get-Retired 1) -ceq "unknown") "retired false for a row whose record could not be read is unknown: the fleet's false there is 'could not tell'"
+& $fx.SetRow $state (New-Row 1 @{ reason = "mail-unreadable"; reasons = @("mail-unreadable", "record-unreadable") })
+Check ((Get-Retired 1) -ceq "unknown") "and so when record-unreadable is one reason among several"
+& $fx.SetRow $state (New-Row 1 @{ label = ""; role = "" })
+Check ((Get-Retired 1) -ceq "unknown") "a row with no label and no role it knows shows nothing a record gives: unknown"
+& $fx.SetRow $state (New-Row 1 @{ label = ""; role = "session" })
+Check ((Get-Retired 1) -ceq "no") "a row with a role and no label had a record: no"
+& $fx.SetRow $state (New-Row 1 @{ reason = "mail-unreadable"; reasons = @("mail-unreadable") })
+Check ((Get-Retired 1) -ceq "no") "a reason that is about the mail says nothing of the record: no"
+& $fx.SetRow $state (New-Row 1 @{ retired = $true; reason = "record-unreadable"; reasons = @("record-unreadable") })
+Check ((Get-Retired 1) -ceq "yes") "retired true is yes whatever else the row says"
+# THE WATCHER, THROUGH THIS WAKER: a retired session with mail, idle and with an empty box, is not nudged.
+& $fx.SetRow $state (New-Row 1 @{ retired = $true; oldestUnreadAt = "2026-10-12T07:00:00Z" })
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ((Get-Count $state "mail nudge*") -eq 0 -and (Get-Typed $state) -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "skip" -and "$($_.reason)".StartsWith("retired") }).Count -eq 1 -and $pass.held.Count -eq 1) "a pass over a retired session with unread mail asks for no nudge and types nothing"
+# THE FLEET'S OWN DOOR: asked all the same, its nudge refuses a retired target, and that is nothing.
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)".StartsWith("retired") -and (Get-Typed $state) -eq 0) "a nudge the fleet refuses because the target is retired is the port's nothing, with the fleet's reason, and nothing was typed"
 & $fx.Remove $state; $state = $null
 
 Write-Host ""

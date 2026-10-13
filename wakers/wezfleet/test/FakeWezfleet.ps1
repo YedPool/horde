@@ -31,7 +31,8 @@
 #                    waiting it out
 #     every answer carries elapsedMs, a whole number of milliseconds since this script began
 #       unreachable  no such session, or its row says it cannot be reached
-#       refused      it has no unread mail: there is nothing to nudge for
+#       refused      it has no unread mail: there is nothing to nudge for; or (reason retired) the
+#                    session is retired - and NOTHING IS TYPED
 #       busy         its box is not empty, it is mid-turn, or it is not idle - and NOTHING IS TYPED
 #       woken        the pointer line is "typed": one line appended to typed.log
 #     exit 2 for an empty -To
@@ -105,6 +106,7 @@ if ($to -eq "") { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reaso
 $row = @(@($rows) | Where-Object { $null -ne $_ -and $_.id -ceq $to }) | Select-Object -First 1
 function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
+if ($row.retired -eq $true) { Write-FakeNudge "refused" "retired" "the session is retired; nothing is typed into a retired session" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }
 # THE BUDGET, before anything is typed: with too little of it left, typing is not begun.
 $budget = 0

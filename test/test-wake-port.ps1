@@ -195,12 +195,26 @@ $script:targetsAnswer = $null
 $script:stateAnswer = $null
 $script:nudgeAnswer = $null
 $scripted = Reg "fixture-scripted" -Targets { & $script:targetsAnswer } -State { param($id) & $script:stateAnswer $id } -Nudge { param($id) & $script:nudgeAnswer $id }
-function New-Target { param([hashtable]$Change = @{}) $t = @{ id = $sid; label = "A"; role = "orc"; parent = ""; reachable = "yes" }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $t.Remove($k) } else { $t[$k] = $Change[$k] } }; return [pscustomobject]$t }
+function New-Target { param([hashtable]$Change = @{}) $t = @{ id = $sid; label = "A"; role = "orc"; parent = ""; reachable = "yes"; retired = "no" }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $t.Remove($k) } else { $t[$k] = $Change[$k] } }; return [pscustomobject]$t }
 function New-State { param([hashtable]$Change = @{}) $s = @{ id = $sid; unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no" }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $s.Remove($k) } else { $s[$k] = $Change[$k] } }; return [pscustomobject]$s }
 function New-Rang { param([hashtable]$Change = @{}) $n = @{ id = $sid; outcome = "woken"; reason = ""; at = $t0 }; foreach ($k in $Change.Keys) { if ($null -eq $Change[$k]) { $n.Remove($k) } else { $n[$k] = $Change[$k] } }; return [pscustomobject]$n }
 
 $script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
 Check ((Get-HordeWakeTargets -Waker $scripted).state -ceq "known") "CONTROL: the scripted waker's good listing is known"
+# retired is carried, and required: a listing that leaves it out is no listing.
+foreach ($word in @("yes", "no", "unknown")) {
+    $script:retiredWord = $word
+    $script:targetsAnswer = { New-HordeKnown -Value @((New-Target @{ retired = $script:retiredWord })) }
+    $got = Get-HordeWakeTargets -Waker $scripted
+    Check ($got.state -ceq "known" -and @($got.value)[0].retired -ceq $word) ("targets: retired " + $word + " is carried")
+}
+foreach ($bad in @($null, $true, "maybe", "")) {
+    $script:retiredWord = $bad
+    $script:targetsAnswer = { New-HordeKnown -Value @((New-Target @{ retired = $script:retiredWord })) }
+    $got = Get-HordeWakeTargets -Waker $scripted
+    Check ($got.state -ceq "unknown" -and "$($got.reason)".Contains("retired")) ("targets: a retired that is '" + $bad + "' - left out, a boolean, a word outside the list - makes the listing unknown: never read as not retired")
+}
+$script:targetsAnswer = { New-HordeKnown -Value @((New-Target)) }
 foreach ($case in @(
         @{ what = "a listing that throws"; block = { throw "the far end fell over" }; like = "fell over" },
         @{ what = "a listing that is not an answer"; block = { @((New-Target)) }; like = "not an answer" },

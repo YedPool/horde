@@ -194,7 +194,17 @@ function Get-HordeWakeHold {
     #   KEEPS A LONE LIMITED SESSION FROM BEING STUCK FOR EVER when nothing else in the fleet moves: with
     #   no end known and nobody else to watch, asking is the only way left to find out. When it was first
     #   seen limited is its ledger entry's probeAt, stamped by the pass that saw it.
+    # A RETIRED SESSION IS NEVER NUDGED, AND THIS IS THE FIRST THING ASKED: before its mail, its state or
+    # anything else. A session that was retired and still has mail was a target like any other - the
+    # fleet works out reachable and idle for it as for any session, and nothing here read retired
+    # (safety review of PR 220) - so the watcher would have typed into a session whose work was over.
+    # It is skip, like a session with no mail: not waiting for anything, not an attempt, not a failure,
+    # never given up on and never told of. retired UNKNOWN - the waker could not tell - is held too:
+    # wait, because it may yet be read as no. Either is journaled once (Invoke-HordeWakePass's held).
     param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent)
+    $retired = "$(Get-HordeWakeEntryValue $Target "retired")"
+    if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }
+    if ($retired -cne "no") { return [pscustomobject]@{ action = "wait"; reason = "retired is unknown: a session that may be retired is not nudged" } }
     if ($null -eq $StateAnswer -or "$($StateAnswer.state)" -cne "known") {
         $why = "nothing answered for it"
         if ($null -ne $StateAnswer) { $why = "$($StateAnswer.reason)" }
@@ -409,29 +419,46 @@ function Update-HordeWakeGaveUp {
     return [pscustomobject]@{ ledger = $next; entries = $entries.ToArray(); sessions = $sessions.ToArray() }
 }
 
-function Update-HordeWakeLimited {
-    # A USAGE LIMIT IS JOURNALED ONCE PER SESSION PER LIMIT, not every pass: { seen; entries }.
-    #   -Seen     session id -> the limit last said for it (Get-HordeWakeLimit's text), from the last pass
-    #   -Limited  session id -> its limit's text now, for the sessions with unread mail that are limited
-    #   -Known    the ids whose state was read this pass: one that was not is left as it was, so a
-    #             pass that could not read a session does not say its limit again on the next
-    # One entry of kind usage-limit when a session becomes limited, and one more when its limit's end
-    # changes - a new time, or a time that passed while the waker still says limited.
-    param($Seen = @{}, $Limited = @{}, $Known = @(), [Parameter(Mandatory = $true)][datetime]$Now)
+function Update-HordeWakeSaidOnce {
+    # A STANDING FACT ABOUT A SESSION IS JOURNALED ONCE, AND AGAIN ONLY WHEN IT CHANGES: { seen; entries }.
+    #   -Seen   session id -> what was last said of it, from the last pass
+    #   -Said   session id -> what there is to say of it now (the entry's reason), for the sessions it
+    #           holds of; a session not in it has nothing said of it any more and is forgotten
+    #   -Known  the ids whose state was read this pass: one that was not is left as it was, so a pass
+    #           that could not read a session does not say the same thing again on the next
+    # A pass holds a retired session, or a limited one, on every pass for as long as it lasts; a line
+    # every 3 s would bury the journal, and no line at all would hide why mail is not being knocked for.
+    param($Seen = @{}, $Said = @{}, $Known = @(), [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)][string]$Kind, [Parameter(Mandatory = $true)][string]$Outcome)
     $next = @{}
     $entries = New-Object System.Collections.ArrayList
     if ($null -ne $Seen) { foreach ($id in @($Seen.Keys)) { if (@($Known) -cnotcontains "$id") { $next["$id"] = $Seen[$id] } } }
-    if ($null -ne $Limited) {
-        foreach ($id in @($Limited.Keys | Sort-Object)) {
-            $text = "$($Limited[$id])"
+    if ($null -ne $Said) {
+        foreach ($id in @($Said.Keys | Sort-Object)) {
+            $text = "$($Said[$id])"
             $next["$id"] = $text
             if ($null -ne $Seen -and $Seen.ContainsKey("$id") -and "$($Seen[$id])" -ceq $text) { continue }
-            $what = ": it is not nudged before then, and no attempt is counted against its mail"
-            if ($text -cnotlike "usage limit until *") { $what = ": it is not nudged until a session of the fleet takes mail, or once an hour, and no attempt is counted against its mail" }
-            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "usage-limit" -Id "$id" -Outcome "limited" -Reason ($text + $what)))
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $Kind -Id "$id" -Outcome $Outcome -Reason $text))
         }
     }
     return [pscustomobject]@{ seen = $next; entries = $entries.ToArray() }
+}
+
+function Update-HordeWakeLimited {
+    # A USAGE LIMIT IS JOURNALED ONCE PER SESSION PER LIMIT, not every pass: { seen; entries }
+    # (Update-HordeWakeSaidOnce). -Limited is session id -> its limit's text now (Get-HordeWakeLimit),
+    # for the sessions with unread mail that are limited. One entry of kind usage-limit when a session
+    # becomes limited, and one more when its limit's end changes.
+    param($Seen = @{}, $Limited = @{}, $Known = @(), [Parameter(Mandatory = $true)][datetime]$Now)
+    $said = @{}
+    if ($null -ne $Limited) {
+        foreach ($id in @($Limited.Keys)) {
+            $text = "$($Limited[$id])"
+            $what = ": it is not nudged before then, and no attempt is counted against its mail"
+            if ($text -cnotlike "usage limit until *") { $what = ": it is not nudged until a session of the fleet takes mail, or once an hour, and no attempt is counted against its mail" }
+            $said["$id"] = $text + $what
+        }
+    }
+    return (Update-HordeWakeSaidOnce -Seen $Seen -Said $said -Known $Known -Now $Now -Kind "usage-limit" -Outcome "limited")
 }
 
 function Update-HordeWakeSilence {
@@ -628,8 +655,11 @@ function Invoke-HordeWakePass {
     #                     that cannot be read - is one entry of kind proof-target-absent, and nobody is
     #                     nudged: the pass never falls back to "whoever is ready".
     param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow, [switch]$Silent, [string]$Only = "")
+    # held is session id -> why a session with unread mail is held for what it IS, not for what it is
+    # doing: retired, or possibly so (Get-HordeWakeHold). For the tick to journal once.
     $mail = @{}
     $limited = @{}
+    $held = @{}
     $entries = New-Object System.Collections.ArrayList
     $nextLedger = $Ledger
     $decisions = @()
@@ -693,6 +723,8 @@ function Invoke-HordeWakePass {
                 $a = $states[$t.id]
                 if ($a.state -cne "known") { continue }
                 $mail[$t.id] = $a.value.oldestUnreadAt
+                if ($a.value.unreadCount -gt 0 -and "$($t.retired)" -ceq "yes") { $held[$t.id] = "retired, with " + $a.value.unreadCount + " unread: a retired session is never nudged, so this mail waits for nobody. It is not counted, and nobody is told" }
+                elseif ($a.value.unreadCount -gt 0 -and "$($t.retired)" -cne "no") { $held[$t.id] = "it could not be told whether this session is retired, and it has " + $a.value.unreadCount + " unread: it is not nudged while that is so" }
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now
                 if ($a.value.unreadCount -gt 0 -and $limit.kind -cne "none") { $limited[$t.id] = $limit.text }
             }
@@ -721,7 +753,7 @@ function Invoke-HordeWakePass {
             foreach ($e in @($gave.entries)) { [void]$entries.Add($e) }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----

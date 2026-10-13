@@ -74,7 +74,7 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:(-not $Live)
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
@@ -261,6 +261,11 @@ function Invoke-HordeWakeTick {
         $limitedNow = Update-HordeWakeLimited -Seen $Run.limited -Limited $result.limited -Known @($result.mail.Keys) -Now $Now
         $Run.limited = $limitedNow.seen
         foreach ($e in @($limitedNow.entries)) { [void]$entries.Add($e) }
+        # A RETIRED SESSION WITH MAIL (or one that may be retired) is said once, and is nothing else:
+        # no attempt, no gave-up, no tell.
+        $heldNow = Update-HordeWakeSaidOnce -Seen $Run.held -Said $result.held -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
+        $Run.held = $heldNow.seen
+        foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
         $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Mail $result.mail -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
         foreach ($e in @($silence.entries)) { [void]$entries.Add($e) }

@@ -66,6 +66,7 @@ function Set-HordeMemoryWakerSession {
         [string]$Role = "warg",
         [string]$Parent = "",
         [string]$Reachable = "yes",
+        [string]$Retired = "no",
         [int]$UnreadCount = 0,
         $OldestUnreadAt = $null,
         [string]$Idle = "yes",
@@ -77,7 +78,7 @@ function Set-HordeMemoryWakerSession {
         $Limited = $null,
         $LimitedUntil = $null
     )
-    $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; unreadCount = $UnreadCount;
+    $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; retired = $Retired; unreadCount = $UnreadCount;
         oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil }
 }
 
@@ -149,7 +150,7 @@ function Invoke-HordeMemoryWakerFault {
 $null = Register-HordeWaker -Name "memory" `
     -Targets {
         if (Invoke-HordeMemoryWakerFault "targets") { return "not an answer" }
-        $list = @($script:HordeMemoryWakerSessions.Values | ForEach-Object { [pscustomobject]@{ id = $_.id; label = $_.label; role = $_.role; parent = $_.parent; reachable = $_.reachable } })
+        $list = @($script:HordeMemoryWakerSessions.Values | ForEach-Object { [pscustomobject]@{ id = $_.id; label = $_.label; role = $_.role; parent = $_.parent; reachable = $_.reachable; retired = $_.retired } })
         return (New-HordeKnown -Value $list -ObservedAt (Get-HordeMemoryWakerTime))
     } `
     -State { param([string]$Id) Get-HordeMemoryWakerState -Id $Id } `

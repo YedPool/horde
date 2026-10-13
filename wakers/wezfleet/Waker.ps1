@@ -595,8 +595,40 @@ function Read-HordeWezfleetWakerState {
     return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil } }
 }
 
+function Get-HordeWezfleetWakerRetired {
+    # Is this row's session retired, as the port's word: yes, no or unknown.
+    # THE ROW'S retired IS A BOOLEAN THAT IS FALSE FOR "COULD NOT TELL" (read from the fleet's own code,
+    # 2026-10-13): a session with no readable registry record is listed with retired false, because
+    # there was no record to read it from. So false is "no" only for a row the fleet had a record for:
+    #   retired true                                                    -> yes
+    #   retired false, and the row says its record could not be read
+    #     (record-unreadable in reason or reasons), or shows none of
+    #     what a record gives - no label and a role this waker does
+    #     not know                                                      -> unknown
+    #   retired false otherwise                                         -> no
+    # reason and reasons are read HERE AND ONLY FOR THIS (rule 1 keeps them out of the state): they are
+    # the one place the fleet says the record itself was unreadable.
+    # THE FLEET HOLDS NOTHING BACK FOR A RETIRED SESSION: it works out reachable, idle and mail for one
+    # like any other, and a retired session with a live process reads reachable yes. So the hold is
+    # the watcher's (core/Wake.ps1), and this only reports.
+    param([Parameter(Mandatory = $true)]$Row)
+    if ($Row.retired -eq $true) { return "yes" }
+    $said = New-Object System.Collections.ArrayList
+    foreach ($n in @("reason", "reasons")) {
+        $p = $Row.PSObject.Properties[$n]
+        if ($null -eq $p) { continue }
+        foreach ($v in @($p.Value)) { if ($v -is [string]) { [void]$said.Add($v) } }
+    }
+    if (@($said) -ccontains "record-unreadable") { return "unknown" }
+    if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }
+    return "no"
+}
+
 function Get-HordeWezfleetWakerTargets {
-    # The port's Targets: form A's rows that are not retired, or that have unread mail (the header).
+    # The port's Targets: form A's rows that are not retired, or that have unread mail (the header). A
+    # retired one with mail is LISTED, saying retired, so the watcher can say once that its mail waits
+    # for nobody; it is never nudged (core/Wake.ps1). And should the watcher ever ask, the fleet's own
+    # nudge refuses a retired target too (refused, retired: the port's nothing) - two doors, both shut.
     $fleet = Read-HordeWezfleetWakerFleet
     if (-not $fleet.ok) {
         # HOW MANY READS IN A ROW HAVE FAILED goes with the unknown (wakers/Port.ps1, Targets): this waker
@@ -610,7 +642,7 @@ function Get-HordeWezfleetWakerTargets {
     foreach ($row in @($fleet.rows.Values)) {
         $hasMail = ($null -ne $row.unreadCount -and $row.unreadCount -gt 0)
         if ($row.retired -and -not $hasMail) { continue }
-        [void]$list.Add([pscustomobject]@{ id = $row.id; label = $row.label; role = (ConvertTo-HordeWezfleetWakerRole $row.role); parent = $row.parent; reachable = $row.reachable })
+        [void]$list.Add([pscustomobject]@{ id = $row.id; label = $row.label; role = (ConvertTo-HordeWezfleetWakerRole $row.role); parent = $row.parent; reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })
     }
     return (New-HordeKnown -Value $list.ToArray() -ObservedAt (Get-HordeWezfleetWakerTime))
 }

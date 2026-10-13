@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-retired-session-is-journaled-every-tick"
+           Find = '$Run.held = $heldNow.seen'
+           Replace = '$Run.held = @{}' }
+        @{ Name = "a-retired-session-is-never-said"
+           Find = 'foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }'
+           Replace = '' }
         @{ Name = "a-proof-run-forgets-its-one-session"
            Find = '-Shadow:$shadow -Silent:$silentNow -Only $only'
            Replace = '-Shadow:$shadow -Silent:$silentNow' }

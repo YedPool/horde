@@ -187,6 +187,7 @@ try {
             $a = Get-HordeWakeTargets -Waker $w
             $mine = @()
             if ($a.state -ceq "known") { $mine = @(@($a.value) | Where-Object { $_.id -ceq $s.id }) }
+            Check ($mine.Count -eq 1 -and @("yes", "no", "unknown") -ccontains "$($mine[0].retired)" -and "$($mine[0].retired)" -ceq "no") ("[" + $name + "] and it says whether that session is retired: a session seated as working is not")
             Check ($mine.Count -eq 1 -and $mine[0].role -ceq "warg" -and $mine[0].parent -ceq $s.parent) ("[" + $name + "] a session it was given is among its targets, once, with its role and parent")
             $a = Get-HordeWakeState -Waker $w -Id $s.id
             Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.oldestUnreadAt -eq $t0) ("[" + $name + "] its unread mail is counted, with the time of the oldest")

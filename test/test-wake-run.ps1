@@ -106,6 +106,16 @@ $gave = New-Object System.Collections.ArrayList
 foreach ($n in 0..7) { Set-HordeMemoryWakerClock (At ($n * 400)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 400)) -Waker $memory -ReadSessions $none -Settings (Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 2 }) -HordeHome $h)) { [void]$gave.Add($e.kind) } }
 Check (@($gave | Where-Object { $_ -ceq "gave-up" }).Count -eq 1 -and @($gave | Where-Object { $_ -ceq "would-tell" }).Count -eq 1) ("a session given up on is one gave-up line and one tell, over eight ticks (" + (@($gave) -join ",") + ")")
 
+# A RETIRED SESSION WITH MAIL: said once, and nothing else - no nudge, no attempt, no gave-up, no tell.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 2 -OldestUnreadAt (At -60) -Retired "yes"
+$run = New-HordeWakeRun -Live -HordeHome $h
+$ret = New-Object System.Collections.ArrayList
+foreach ($n in 0..399) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$ret.Add($e.kind + ":" + $e.id + "@" + ($n * 3)) } }
+Check ((@($ret) -join ",") -ceq ("held:" + (Sid 2) + "@0") -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and $run.ledger.Count -eq 0) ("twenty minutes of live ticks over a retired session with unread mail journal one line - held - and nudge, count, give up on and tell of nobody (" + (@($ret) -join ",") + ")")
+
 # A USAGE LIMIT: said once, no nudge until it ends.
 $h = New-Home
 Reset-HordeMemoryWaker

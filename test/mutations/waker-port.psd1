@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "retired-left-out-reads-as-a-listing"
+           Find = 'if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "retired-is-not-carried"
+           Find = 'reachable = [string]$reach.value; retired = [string]$retired.value })'
+           Replace = 'reachable = [string]$reach.value; retired = "no" })' }
         @{ Name = "limited-not-carried"
            Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
            Replace = 'midTurn = $words["midTurn"]; limited = $false; limitedUntil = $limitedUntil })' }

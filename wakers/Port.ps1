@@ -61,7 +61,8 @@
 #
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
-#   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown.
+#   Targets  param()             -> known: a list of { id; label; role; parent; reachable; retired }, or
+#            unknown. reachable and retired are each yes, no or unknown.
 #            An unknown may carry failures, a whole number: how many readings in a row have failed. A
 #            waker that backs its readings off knows that count and the watcher cannot - its passes are
 #            not the waker's readings - and the watcher uses it to tell a hiccup from a fleet that
@@ -363,7 +364,7 @@ function Start-HordeWakePass {
 }
 
 function Get-HordeWakeTargets {
-    # The sessions -Waker can see, as a known list of { id; label; role; parent; reachable }, or unknown
+    # The sessions -Waker can see, as a known list of { id; label; role; parent; reachable; retired }, or unknown
     # with the reason. A tristate answer, never a throw for the far end. One bad entry makes the whole
     # listing unknown: a listing is complete or it says why not (core/Identity.ps1's first rule).
     param($Waker)
@@ -390,7 +391,13 @@ function Get-HordeWakeTargets {
         if (-not $parent.has -or $parent.value -isnot [string] -or ($parent.value -cne "" -and -not (Test-HordeWakerSessionId $parent.value))) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with a parent that is neither a session id nor empty")) }
         $reach = Get-HordeWakerMember $t "reachable"
         if (-not $reach.has -or $reach.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $reach.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with reachable that is not one of " + ($script:HordeWakerWords -join ", "))) }
-        [void]$out.Add([pscustomobject]@{ id = [string]$id.value; label = [string]$label.value; role = [string]$role.value; parent = [string]$parent.value; reachable = [string]$reach.value })
+        # retired: has the session been retired - told its work is over, its seat given up? yes, no or
+        # unknown, REQUIRED, like reachable: a waker that left it out would be read as "not retired", and
+        # a retired session would be typed into. The port only carries it; that a retired session is
+        # never nudged, and one that may be is held, is the watcher's rule (core/Wake.ps1, Get-HordeWakeHold).
+        $retired = Get-HordeWakerMember $t "retired"
+        if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' listed " + $id.value + " with retired that is not one of " + ($script:HordeWakerWords -join ", "))) }
+        [void]$out.Add([pscustomobject]@{ id = [string]$id.value; label = [string]$label.value; role = [string]$role.value; parent = [string]$parent.value; reachable = [string]$reach.value; retired = [string]$retired.value })
     }
     return (New-HordeKnown -Value $out.ToArray() -ObservedAt $a.observedAt)
 }

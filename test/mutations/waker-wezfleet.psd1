@@ -6,6 +6,21 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "retired-true-read-as-no"
+           Find = 'if ($Row.retired -eq $true) { return "yes" }'
+           Replace = '' }
+        @{ Name = "an-unreadable-record-reads-as-not-retired"
+           Find = 'if (@($said) -ccontains "record-unreadable") { return "unknown" }'
+           Replace = '' }
+        @{ Name = "a-row-with-nothing-of-a-record-reads-as-not-retired"
+           Find = 'if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }'
+           Replace = '' }
+        @{ Name = "a-row-with-no-label-alone-is-unknown"
+           Find = 'if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }'
+           Replace = 'if ("$($Row.label)" -ceq "") { return "unknown" }' }
+        @{ Name = "the-listing-says-nobody-is-retired"
+           Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })'
+           Replace = 'reachable = $row.reachable; retired = "no" })' }
         @{ Name = "limited-unknown-holds-waking-back"
            Find = 'if ($null -eq $p -or $p.Value -cne "yes") { return'
            Replace = 'if ($null -eq $p -or $p.Value -ceq "no") { return' }

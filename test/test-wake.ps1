@@ -267,7 +267,7 @@ foreach ($kind in @("throw", "garbage")) {
 Start-Case; Seat 1; Seat 2 -Change @{ UnreadCount = 2; OldestUnreadAt = $null }
 $r = Pass
 Check ((Decided $r 2).action -ceq "wait" -and (Decided $r 1).action -ceq "nudge" -and (Rang 2) -eq 0) "one session whose state the port refused does not stop another from being nudged"
-$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{} -Ledger @{} -Now $t0 -Settings $settings)
+$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes"; retired = "no" }) -States @{} -Ledger @{} -Now $t0 -Settings $settings)
 Check ($d.Count -eq 1 -and $d[0].action -ceq "wait" -and "$($d[0].reason)".Contains("unknown")) "a target with no state answer at all waits: missing is unknown"
 Check (Throws { Get-HordeWakeSettings -Overrides @{ maxNudgePerPass = 9 } } "not a wake setting") "a setting that is not one is refused, not silently left at its default"
 
@@ -402,10 +402,38 @@ $r = Pass 0
 Check (@(Get-HordeMemoryWakerLooks).Count -eq 0) "a waker whose state already says the box holds text, or a turn is under way, is not asked to look"
 Start-Case; Set-HordeMemoryWakerCheap $true
 Seat 1
-$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1)) } -Ledger @{} -Now $t0 -Settings $settings)
+$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes"; retired = "no" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1)) } -Ledger @{} -Now $t0 -Settings $settings)
 Check ($d[0].action -ceq "wait" -and $d[0].reason -ceq "midTurn is unknown") "without a waker that can look, an unread box or turn is wait, as it always was"
-$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1)) } -Ledger @{} -Now $t0 -Settings $settings -CanLook)
+$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes"; retired = "no" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1)) } -Ledger @{} -Now $t0 -Settings $settings -CanLook)
 Check ($d[0].action -ceq "look") "with one, it is look: everything else holds, go and read the session"
+Reset-HordeMemoryWaker
+
+Write-Host ""
+Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
+
+Start-Case; Seat 1 @{ Retired = "yes" }
+$r = Pass 0
+Check ((Decided $r).action -ceq "skip" -and "$((Decided $r).reason)".StartsWith("retired") -and (Rang) -eq 0 -and $script:ledger.Count -eq 0) "a retired session that is reachable, idle, with old unread mail and an empty box - everything a nudge asks for - is skipped: retired is asked first"
+Check ("$($r.held[(Sid 1)])".StartsWith("retired, with 1 unread") -and @($r.entries).Count -eq 0) "the pass says who it holds for being retired, for the tick to journal once, and journals nothing itself"
+$rung = 0; $lines = 0; foreach ($s in 1..400) { $p = Pass ($s * 3); $rung += (Rang); $lines += @($p.entries).Count }
+Check ($rung -eq 0 -and $lines -eq 0 -and $script:ledger.Count -eq 0) "twenty minutes on it has never been nudged, nothing is counted against it, and it is never given up on: it is nothing, not a failure"
+Start-Case; Seat 1 @{ Retired = "unknown" }
+$r = Pass 0
+Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".StartsWith("retired is unknown") -and (Rang) -eq 0 -and $script:ledger.Count -eq 0 -and "$($r.held[(Sid 1)])".StartsWith("it could not be told whether this session is retired")) "a session the waker cannot say is retired or not is held: unknown never reads as permission"
+Start-Case; Seat 1 @{ Retired = "yes"; UnreadCount = 0; OldestUnreadAt = $null }; Seat 2
+$r = Pass 0
+Check ($r.held.Count -eq 0 -and (Rang 2) -eq 1) "a retired session with no mail has nothing to be said of it, and the session beside it is nudged as ever"
+Start-Case; Seat 1 @{ Retired = "yes"; Role = "warchief" }; Seat 2
+Set-HordeMemoryWakerCheap $true
+$r = Pass 0
+Check ((Rang 2) -eq 1 -and (@(Get-HordeMemoryWakerLooks) -join ",") -ceq (Sid 2)) "a retired warchief does not take the pass's nudge or its look from the session behind it"
+$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1) -Full) } -Ledger @{} -Now $t0 -Settings $settings)
+Check ($d[0].action -ceq "wait" -and "$($d[0].reason)".StartsWith("retired is unknown")) "a target that does not say whether it is retired at all is held like one that says unknown"
+# SAID ONCE: the tick's once-rule, for any standing fact.
+$o1 = Update-HordeWakeSaidOnce -Seen @{} -Said @{ (Sid 1) = "retired, with 1 unread" } -Known @((Sid 1)) -Now (At 0) -Kind "held" -Outcome "held"
+$o2 = Update-HordeWakeSaidOnce -Seen $o1.seen -Said @{ (Sid 1) = "retired, with 1 unread" } -Known @((Sid 1)) -Now (At 3) -Kind "held" -Outcome "held"
+$o3 = Update-HordeWakeSaidOnce -Seen $o2.seen -Said @{ (Sid 1) = "retired, with 2 unread" } -Known @((Sid 1)) -Now (At 6) -Kind "held" -Outcome "held"
+Check (@($o1.entries).Count -eq 1 -and $o1.entries[0].kind -ceq "held" -and $o1.entries[0].outcome -ceq "held" -and $o1.entries[0].id -ceq (Sid 1) -and $o1.entries[0].reason -ceq "retired, with 1 unread" -and @($o2.entries).Count -eq 0 -and @($o3.entries).Count -eq 1) "a session held for being retired is journaled once, not again on the next pass, and again when what there is to say changes"
 Reset-HordeMemoryWaker
 
 Write-Host ""

@@ -6,6 +6,21 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-retired-session-is-nudged"
+           Find = 'if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }'
+           Replace = '' }
+        @{ Name = "a-session-that-may-be-retired-is-nudged"
+           Find = 'if ($retired -cne "no") { return [pscustomobject]@{ action = "wait"; reason = "retired is unknown'
+           Replace = 'if ($false) { return [pscustomobject]@{ action = "wait"; reason = "retired is unknown' }
+        @{ Name = "a-retired-session-waits-for-ever-instead-of-being-nothing"
+           Find = 'if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }'
+           Replace = 'if ($retired -ceq "yes") { return [pscustomobject]@{ action = "wait"; reason = "retired: a retired session is never nudged" } }' }
+        @{ Name = "the-pass-does-not-say-whom-it-holds-as-retired"
+           Find = 'if ($a.value.unreadCount -gt 0 -and "$($t.retired)" -ceq "yes") { $held[$t.id] ='
+           Replace = 'if ($false) { $held[$t.id] =' }
+        @{ Name = "a-standing-fact-is-journaled-every-pass"
+           Find = 'if ($null -ne $Seen -and $Seen.ContainsKey("$id") -and "$($Seen[$id])" -ceq $text) { continue }'
+           Replace = '' }
         @{ Name = "a-pass-given-one-session-runs-over-them-all"
            Find = 'if ($Only -cne "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the fleet'
            Replace = 'if ($false) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "proof-target-absent" -Id $Only -Outcome "absent" -Reason "the fleet' }
@@ -53,9 +68,6 @@
            Replace = '-GaveUp ((Get-HordeWakeEntryValue $e "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $e "probeAt")' }
         @{ Name = "a-release-makes-every-entry-a-probe"
            Find = 'if ((Get-HordeWakeEntryValue $e "probeAt") -isnot [datetime]) { continue }'
-           Replace = '' }
-        @{ Name = "a-limit-journaled-every-pass"
-           Find = 'if ($null -ne $Seen -and $Seen.ContainsKey("$id") -and "$($Seen[$id])" -ceq $text) { continue }'
            Replace = '' }
         @{ Name = "a-changed-limit-not-journaled"
            Find = 'if ($null -ne $Seen -and $Seen.ContainsKey("$id") -and "$($Seen[$id])" -ceq $text) { continue }'
