@@ -30,6 +30,14 @@
 # hands the pass no poster. The poster is built and tested here so that the day the live tick lands it
 # is a call, not a design.
 #
+# WHY THE WARCHIEF IS MAILED THE STALL NOTICE, WHEN "ONLY ORCS ARE MAILED RESUME". The two are different
+# mails for different readers, and the difference is on purpose. A resume mail tells a session to pick
+# its own work back up, and only an orc has work of its own to pick up. The stall notice tells nobody
+# to do anything of its own: it says that every session was brought back and NOT ONE has moved, which
+# is the state of the whole fleet, and the warchief is the one session whose business that is. Without
+# it a fleet where nothing moved would sit silent, each orc holding a resume mail nobody wakes it for.
+# Confirmed by the fleet's owner when the resume mails were narrowed to orcs: the stall line stays.
+#
 # EVERY TIME IS UTC.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
@@ -78,12 +86,15 @@ function Get-HordeRestoreSettings {
         # A restore older than this is history: nothing is planned for it any more.
         restoreMaxAgeSeconds = 86400
         # The hub label a resume mail wears as its sender. A messenger that knows senders by session id
-        # or by label needs one of the two, and this sender is no session.
+        # or by label needs one of the two, and this sender is no session. RS is RESERVED: no session
+        # may be given it (core/ReservedLabels.ps1), so a line from RS is never a session's.
         fromLabel = "RS"
         # How long a resume mail may wait to be taken: as long as a restore is not yet history.
         mailTtlSeconds = 86400
-        resumeText = "START OR RESTORE. Every session on this machine was started or restored together and you have not taken a turn since. Background agents and shell commands from before did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and mail the subsessions you still need: they are not woken unless you ask."
-        stallText = "STALLED START OR RESTORE. Every session on this machine was started or restored together and none has taken a turn since. Each orc was told to resume. Check the sessions you still need."
+        # BOTH TEXTS SAY FIRST THAT THEY ARE AUTOMATED: the reader is an agent session, and it must not
+        # take a machine's line for a person's instruction or answer it as one (review of PR #208).
+        resumeText = "AUTOMATED, from the restore source: START OR RESTORE. Every session on this machine was started or restored together and you have not taken a turn since. Background agents and shell commands from before did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and mail the subsessions you still need: they are not woken unless you ask."
+        stallText = "AUTOMATED, from the restore source: STALLED START OR RESTORE. Every session on this machine was started or restored together and none has taken a turn since. Each orc was told to resume. Check the sessions you still need."
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a restore setting") }

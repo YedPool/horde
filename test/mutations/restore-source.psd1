@@ -118,6 +118,15 @@
         @{ Name = "settle-time-of-a-minute"
            Find = 'restoreSettleSeconds = 120'
            Replace = 'restoreSettleSeconds = 60' }
+        @{ Name = "resume-mail-does-not-say-it-is-automated"
+           Find = 'resumeText = "AUTOMATED, from the restore source: START OR RESTORE.'
+           Replace = 'resumeText = "START OR RESTORE.' }
+        @{ Name = "stall-notice-does-not-say-it-is-automated"
+           Find = 'stallText = "AUTOMATED, from the restore source: STALLED'
+           Replace = 'stallText = "STALLED' }
+        @{ Name = "mail-wears-a-label-a-session-may-have"
+           Find = 'fromLabel = "RS"'
+           Replace = 'fromLabel = "R"' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }

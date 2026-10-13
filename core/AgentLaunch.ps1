@@ -45,6 +45,8 @@
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "AgentDescriptor.ps1")
 . (Join-Path $PSScriptRoot "PermissionLevels.ps1")
+# The labels no session may be given (Format-HordeSessionName refuses them).
+. (Join-Path $PSScriptRoot "ReservedLabels.ps1")
 
 # A REGISTRY IS MADE ONCE, never reset by a later load (review of #114): core files load what they
 # call, so this file is dot-sourced again by files loaded after the adapters have registered, and an
@@ -95,6 +97,9 @@ function Format-HordeSessionName {
     # the label is not a label: a name with no label could collide with another session's.
     param($Label, $Title = $null, [int]$Max = $script:HordeSessionNameMax)
     if ($Label -isnot [string] -or $Label -cnotmatch $script:HordeLabelPattern) { return (New-HordeUnknown -Reason ("'" + $Label + "' is not a session label, so the session gets no name")) }
+    # A RESERVED LABEL IS NOBODY'S NAME (core/ReservedLabels.ps1): a session wearing the label a
+    # machine's mail wears could not be told from it, so no node names a session with one.
+    if (Test-HordeLabelReserved $Label) { return (New-HordeUnknown -Reason ("'" + $Label + "' is a reserved label - it names a sender that is not a session - so the session gets no name")) }
     $t = ""
     if ($null -ne $Title) {
         # Every character outside printable ASCII becomes a space, and runs of spaces become one.

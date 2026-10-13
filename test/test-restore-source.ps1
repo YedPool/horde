@@ -117,7 +117,7 @@ Check ($fNext.state -ceq "known" -and $fNext.value.restoreId -cne $f.value.resto
 $plan = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 10)) -Settings $settings)
 $orcs = @(2, 3, 4 | ForEach-Object { Sid $_ })
 Check ((@($plan | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",") -and @($plan | Where-Object { $_.kind -cne "resume" }).Count -eq 0) "all three orcs are told to resume at once, and nobody else"
-Check (@($plan | Where-Object { $_.body -cne $settings.resumeText }).Count -eq 0 -and $settings.resumeText.StartsWith("START OR RESTORE. Every session on this machine was started or restored together") -and $settings.resumeText.EndsWith("mail the subsessions you still need: they are not woken unless you ask.")) "each with the resume text, which covers a start as well as a restore and tells an orc its subsessions are not woken unless it asks"
+Check (@($plan | Where-Object { $_.body -cne $settings.resumeText }).Count -eq 0 -and $settings.resumeText.StartsWith("AUTOMATED, from the restore source: START OR RESTORE. Every session on this machine was started or restored together") -and $settings.resumeText.EndsWith("mail the subsessions you still need: they are not woken unless you ask.")) "each with the resume text, which covers a start as well as a restore and tells an orc its subsessions are not woken unless it asks"
 $unroled = @($fleet | ForEach-Object { if ($_.id -ceq (Sid 12)) { [pscustomobject]@{ id = $_.id; role = "unknown"; parent = $_.parent; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; status = "idle"; firstSeenAt = ($_.startedAt).AddHours(-1) } } else { $_ } })
 foreach ($after in @(0, 180, 600)) {
     $planAt = @(Get-HordeResumePlan -Finding $f -Now (At ($end + $after)) -Settings $settings | Where-Object { $_.kind -ceq "resume" })
@@ -176,6 +176,9 @@ Check (@($plan299 | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "there i
 $plan300 = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 300)) -Settings $settings)
 $stall = @($plan300 | Where-Object { $_.kind -ceq "stall" })
 Check ($stall.Count -eq 1 -and $stall[0].to -ceq (Sid 1) -and $stall[0].body -ceq $settings.stallText) "at 300 s, with nothing moved, the warchief is told the restore has stalled"
+Check ($settings.stallText.StartsWith("AUTOMATED, from the restore source: ") -and $settings.resumeText.StartsWith("AUTOMATED, from the restore source: ")) "both mails say first that they are automated, and from what"
+. (Join-Path $root "core\ReservedLabels.ps1")
+Check ($settings.fromLabel -ceq "RS" -and (Test-HordeLabelReserved $settings.fromLabel)) "the label they wear, RS, is one no session may be given"
 $planLate = @(Get-HordeResumePlan -Finding (Get-HordeRestoreFinding -Sessions (New-Restored -MovedAfter @{ 7 = 200 }) -Now (At ($end + 400)) -Settings $settings) -Now (At ($end + 400)) -Settings $settings)
 Check (@($planLate | Where-Object { $_.kind -ceq "stall" }).Count -eq 0) "and it is not, at any time, once one member has moved"
 $noChief = Get-HordeRestoreFinding -Sessions @($fleet | Where-Object { $_.role -cne "warchief" }) -Now (At ($end + 300)) -Settings $settings
