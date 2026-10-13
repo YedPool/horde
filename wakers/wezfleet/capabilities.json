@@ -3,24 +3,24 @@
   "waker": "wezfleet",
   "capabilities": {
     "nudge.pointer-only": {
-      "support": "yes",
-      "evidence": "The waker never types: it starts mail nudge, and the fleet types its own one pointer line. Against the fake, two sessions holding different mail were each rung with the same one line, no control character and no line of either body. Run against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header; not yet run against the fleet's real command from a suite, which no suite may start."
+      "support": "unverified",
+      "evidence": "The waker never types: it starts mail nudge, and the fleet types its own one pointer line. Against the fake, two sessions holding different mail were each rung with the same one line, no control character and no line of either body. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header. STILL TO BE RUN against the fleet's real command, by a person, in a proof run (horde wake run -Mode proof -Once): one idle session with unread mail is typed exactly the one pointer line, and no part of the mail's body."
     },
     "state.box": {
-      "support": "yes",
-      "evidence": "mail state -To reads the session's pane for the box. Against the fake, an empty box read yes and a box holding text read no; for a session that is no candidate the pane is not read and the box is answered unknown, never yes. Run against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header; not yet run against the fleet's real command from a suite, which no suite may start."
+      "support": "unverified",
+      "evidence": "mail state -To reads the session's pane for the box. Against the fake, an empty box read yes and a box holding text read no; for a session that is no candidate the pane is not read and the box is answered unknown, never yes. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header. STILL TO BE RUN against the fleet's real command, by a person, in a proof run (horde wake run -Mode proof -Once): a session with text in its input box reads no and is not nudged, and one with an empty box reads yes."
     },
     "state.turn": {
-      "support": "yes",
-      "evidence": "mail state -To reads the session's pane for the turn. Against the fake, a resting session read no and one in a turn read yes. Run against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header; not yet run against the fleet's real command from a suite, which no suite may start."
+      "support": "unverified",
+      "evidence": "mail state -To reads the session's pane for the turn. Against the fake, a resting session read no and one in a turn read yes. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header. STILL TO BE RUN against the fleet's real command, by a person, in a proof run (horde wake run -Mode proof -Once): a session in the middle of a turn reads yes and is not nudged, and a resting one reads no."
     },
     "reach.unseen": {
-      "support": "yes",
-      "evidence": "mail nudge finds the pane and the terminal instance itself, from the fleet's own records, so it needs nothing this watcher saw since a restore. Against the fake, a session seated as not seen since a restore was rung once. Run against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header; not yet run against the fleet's real command from a suite, which no suite may start."
+      "support": "unverified",
+      "evidence": "mail nudge finds the pane and the terminal instance itself, from the fleet's own records, so it needs nothing this watcher saw since a restore. Against the fake, a session seated as not seen since a restore was rung once. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header. STILL TO BE RUN against the fleet's real command, by a person, in a proof run (horde wake run -Mode proof -Once): a session that has not taken a turn since a restore is rung."
     },
     "nudge.guarded": {
-      "support": "yes",
-      "evidence": "mail nudge itself refuses a box that is not empty or a session that is not idle, at the moment it would type, and answers busy. Against the fake, a nudge sent straight at a session with text in its box, and at one mid-turn, typed nothing and answered busy, while a resting one was rung. Run against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header; not yet run against the fleet's real command from a suite, which no suite may start."
+      "support": "unverified",
+      "evidence": "mail nudge itself refuses a box that is not empty or a session that is not idle, at the moment it would type, and answers busy. Against the fake, a nudge sent straight at a session with text in its box, and at one mid-turn, typed nothing and answered busy, while a resting one was rung. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13), which plays the contract in this waker's header. STILL TO BE RUN against the fleet's real command, by a person, in a proof run (horde wake run -Mode proof -Once): a nudge asked for a session whose box is not empty, or that is mid-turn, types nothing and answers busy."
     }
   }
 }
