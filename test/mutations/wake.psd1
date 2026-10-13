@@ -6,6 +6,9 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-pass-sends-unless-told-not-to"
+           Find = '$shadowPass = (-not $Send)'
+           Replace = '$shadowPass = $false' }
         @{ Name = "a-limit-nobody-could-read-is-read-as-not-limited"
            Find = 'if ($word -ceq "unknown") {'
            Replace = 'if ($false) {' }
@@ -348,7 +351,7 @@
            Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
            Replace = 'Sort-Object -Property nothing, attempts, rank, id' }
         @{ Name = "shadow-nudges"
-           Find = 'if ($Shadow) { $outcomes[$d.id] = "would-nudge";'
+           Find = 'if ($shadowPass) { $outcomes[$d.id] = "would-nudge";'
            Replace = 'if ($false) { $outcomes[$d.id] = "would-nudge";' }
     )
 }

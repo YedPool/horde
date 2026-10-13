@@ -8,6 +8,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-run-made-with-no-word-is-live"
+           Find = 'if ($word -ceq "" -and $Live) { $word = "live" }'
+           Replace = 'if ($word -ceq "") { $word = "live" }' }
         @{ Name = "a-run-that-sends-runs-a-program-nobody-named"
            Find = 'if ($loose -cne "") { return (& $no ("wake run -Mode " + $Mode + " is refused: the program'
            Replace = 'if ($false) { return (& $no ("wake run -Mode " + $Mode + " is refused: the program' }
@@ -30,8 +33,8 @@
            Find = 'foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }'
            Replace = '' }
         @{ Name = "a-proof-run-forgets-its-one-session"
-           Find = '-Shadow:$shadow -Silent:$silentNow -Only $only'
-           Replace = '-Shadow:$shadow -Silent:$silentNow' }
+           Find = '-Send:(-not $shadow) -Silent:$silentNow -Only $only'
+           Replace = '-Send:(-not $shadow) -Silent:$silentNow' }
         @{ Name = "a-proof-run-with-no-session-runs-over-the-fleet"
            Find = 'if ($only -ceq "") { throw "a proof run was made without'
            Replace = 'if ($false) { throw "a proof run was made without' }
@@ -54,8 +57,8 @@
            Find = '$Run.silence = $silence.seen'
            Replace = '$Run.silence = $null' }
         @{ Name = "a-silent-fleet-is-nudged-as-ever"
-           Find = '-Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow'
-           Replace = '-Ledger $Run.ledger -Shadow:$shadow' }
+           Find = '-Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow'
+           Replace = '-Ledger $Run.ledger -Send:(-not $shadow)' }
         @{ Name = "found-silent-nothing-is-forgiven"
            Find = 'if ($silence.declared) { $ledgerNow = Reset-HordeWakeLedgerAttempts -Ledger $ledgerNow }'
            Replace = '' }
@@ -102,11 +105,11 @@
            Find = 'name = ($Stem + "-of-" + $mode + "-run"); mode = "shadow" } }'
            Replace = 'name = ($Stem + "-of-live-run"); mode = "shadow" } }' }
         @{ Name = "shadow-tick-nudges"
-           Find = '-Settings $Settings -Ledger $Run.ledger -Shadow:$shadow'
-           Replace = '-Settings $Settings -Ledger $Run.ledger -Shadow:$false' }
+           Find = '-Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow)'
+           Replace = '-Settings $Settings -Ledger $Run.ledger -Send:$true' }
         @{ Name = "live-tick-only-journals"
-           Find = '-Settings $Settings -Ledger $Run.ledger -Shadow:$shadow'
-           Replace = '-Settings $Settings -Ledger $Run.ledger -Shadow:$true' }
+           Find = '-Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow)'
+           Replace = '-Settings $Settings -Ledger $Run.ledger -Send:$false' }
         @{ Name = "restore-source-goes-live-with-the-run"
            Find = '$script:HordeWakeSendersPost = $false'
            Replace = '$script:HordeWakeSendersPost = $true' }

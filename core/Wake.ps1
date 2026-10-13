@@ -671,9 +671,13 @@ function Invoke-HordeWakePass {
     # warchief is the one session with that role, or "".
     #   -Waker            a registered waker, or $null when none is installed: then nobody is nudged
     #   -Ledger           session id -> { attempts; lastAttemptAt; lastOutcome }, from the last pass
-    #   -Shadow           JOURNAL WHAT IT WOULD DO, AND DO NONE OF IT: no nudge is sent. A would-nudge
-    #                     still counts as an attempt in the ledger, so the journal shows the rhythm a
-    #                     live run would have had instead of a line every pass.
+    #   -Send             SEND THE NUDGES IT DECIDES. WITHOUT IT THE PASS IS SHADOW: it journals what it
+    #                     would do and does none of it - no nudge is sent. A would-nudge still counts as
+    #                     an attempt in the ledger, so the journal shows the rhythm a live run would
+    #                     have had instead of a line every pass. Sending is what a caller must ask for:
+    #                     it was the other way round, the pass was live unless -Shadow was passed, and
+    #                     a caller that left the word out ran a live pass over the whole fleet (safety
+    #                     review of PR 220).
     # THE ENTRIES are the journal lines, kinds: nudge, nudge-killed (a nudge the waker had to stop
     # part-way), would-nudge and skip-unknown (a listing or a state the port could not give; id is ""
     # for the listing).
@@ -687,7 +691,8 @@ function Invoke-HordeWakePass {
     #                     that cannot be read - is one entry of kind proof-target-absent, and nobody is
     #                     nudged: the pass never falls back to "whoever is ready".
     #   -MovedAt          when a session was last seen taking mail, or $null (Get-HordeWakeLimit)
-    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow, [switch]$Silent, [string]$Only = "", $MovedAt = $null)
+    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Send, [switch]$Silent, [string]$Only = "", $MovedAt = $null)
+    $shadowPass = (-not $Send)
     # held is session id -> why a session with unread mail is held for what it IS, not for what it is
     # doing: retired, or possibly so (Get-HordeWakeHold). For the tick to journal once.
     $mail = @{}
@@ -770,7 +775,7 @@ function Invoke-HordeWakePass {
             foreach ($d in $decisions) {
                 if ($d.action -cne "nudge") { continue }
                 # SHADOW: the nudge is journaled and counted, and nothing is asked of the waker.
-                if ($Shadow) { $outcomes[$d.id] = "would-nudge"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-nudge" -Id $d.id -Outcome "would-nudge" -Reason $d.reason)); continue }
+                if ($shadowPass) { $outcomes[$d.id] = "would-nudge"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-nudge" -Id $d.id -Outcome "would-nudge" -Reason $d.reason)); continue }
                 $rang = Send-HordeWakeNudge -Waker $Waker -Id $d.id
                 if ($rang.state -ceq "known") {
                     $outcomes[$d.id] = $rang.value.outcome

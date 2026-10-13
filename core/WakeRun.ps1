@@ -71,7 +71,9 @@ function New-HordeWakeRun {
     # file that could not be read is started from empty, and says so.
     # -Target is the one session a proof run may nudge; it is kept for a proof run only.
     param([switch]$Live, [string]$Mode = "", [string]$Target = "", [string]$HordeHome = (Get-HordeHome))
-    $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:(-not $Live)
+    $word = $Mode
+    if ($word -ceq "" -and $Live) { $word = "live" }
+    $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
     $run = [pscustomobject]@{ mode = $word; target = $aim; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
@@ -262,7 +264,7 @@ function Invoke-HordeWakeTick {
         # WHEN A SESSION WAS LAST SEEN TAKING MAIL: what releases a session whose limit nobody could read
         # (core/Wake.ps1, Get-HordeWakeLimit).
         $movedAt = Get-HordeWakeEntryValue $Run.silence "movedAt"
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow -Only $only -MovedAt $movedAt
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -MovedAt $movedAt
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
         # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).

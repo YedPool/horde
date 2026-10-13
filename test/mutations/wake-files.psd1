@@ -5,12 +5,15 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "no-mode-named-is-the-sending-runs-files"
+           Find = 'if ($Mode -ceq "") { return "shadow" }'
+           Replace = 'if ($Mode -ceq "") { return "live" }' }
         @{ Name = "a-word-that-is-no-mode-names-a-file"
            Find = 'if (@("shadow", "proof", "live") -cnotcontains $Mode) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "proof-files-are-the-live-ones"
-           Find = 'if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }'
-           Replace = 'if ($Mode -ceq "" -or $Mode -ceq "proof") { if ($Shadow) { return "shadow" }; return "live" }' }
+           Find = 'if ($Mode -ceq "") { return "shadow" }'
+           Replace = 'if ($Mode -ceq "") { return "shadow" }; if ($Mode -ceq "proof") { return "live" }' }
         @{ Name = "heartbeat-does-not-say-its-mode"
            Find = 'shadow = ($word -ceq "shadow"); mode = $word;'
            Replace = 'shadow = ($word -ceq "shadow"); mode = "";' }
@@ -53,8 +56,5 @@
         @{ Name = "tick-not-written-in-the-heartbeat"
            Find = 'mode = $word; tickSeconds = $TickSeconds }'
            Replace = 'mode = $word; tickSeconds = 0 }' }
-        @{ Name = "shadow-state-file-is-the-live-one"
-           Find = 'if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }'
-           Replace = 'if ($Mode -ceq "") { return "live" }' }
     )
 }

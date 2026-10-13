@@ -124,10 +124,10 @@ Write-Host "--- the watcher decides who is looked at: a pane per nudge, not per 
 $state = & $fx.New
 foreach ($n in 1..4) { & $fx.SetRow $state (New-Row $n) }
 & $fx.SetRow $state (New-Row 5 @{ idle = "no" })
-$first = Invoke-HordeWakePass -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
+$first = Invoke-HordeWakePass -Send -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
 Check ((Get-Count $state "mail state -To *") -eq 1 -and @($first.decisions | Where-Object { $_.action -ceq "nudge" }).Count -eq 1 -and (Get-Typed $state) -eq 1) ("a pass over four idle sessions with unread mail reads ONE pane, the pane of the session it nudges, and no other (" + (Get-Count $state "mail state -To *") + ")")
 Check ((Get-Count $state "mail state -Json") -eq 1) "having read the whole fleet once"
-$second = Invoke-HordeWakePass -Waker $w -Now ([datetime]::UtcNow.AddSeconds(1)) -Ledger $first.ledger
+$second = Invoke-HordeWakePass -Send -Waker $w -Now ([datetime]::UtcNow.AddSeconds(1)) -Ledger $first.ledger
 $nudgedFirst = @($first.decisions | Where-Object { $_.action -ceq "nudge" })[0].id
 Check ((Get-Count $state ("mail state -To " + $nudgedFirst + " *")) -eq 1 -and (Get-Count $state "mail state -To *") -eq 2) "on the next pass the session that is backing off has no pane read: the one pane read is the next session's"
 & $fx.Remove $state; $state = $null
@@ -141,7 +141,7 @@ $a = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
 Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.boxEmpty -ceq "yes" -and $a.value.midTurn -ceq "no") "a row with good mail and one corrupt record - mail known, unread 1, reason mail-unreadable - is a known state with unread mail"
 Check ($a.state -ceq "known" -and $a.value.unreadableCount -eq 1) "RULE 6: and the count of what could not be read is carried beside it"
 & $fx.Forget $state
-$pass = Invoke-HordeWakePass -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
 Check (@($pass.decisions | Where-Object { $_.id -ceq (Sid 1) -and $_.action -ceq "nudge" }).Count -eq 1 -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "the watcher nudges it: the fleet's record shows the one line typed"
 Check ($pass.unreadable[(Sid 1)] -eq 1) "and the pass hands the unreadable count on for the tick to say bad-mail"
 & $fx.Remove $state; $state = $null
@@ -191,7 +191,7 @@ Check ((Get-Retired 1) -ceq "yes") "retired true is yes whatever else the row sa
 # THE WATCHER, THROUGH THIS WAKER: a retired session with mail, idle and with an empty box, is not nudged.
 & $fx.SetRow $state (New-Row 1 @{ retired = $true; oldestUnreadAt = "2026-10-12T07:00:00Z" })
 & $fx.Clock $state $t0
-$pass = Invoke-HordeWakePass -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
 Check ((Get-Count $state "mail nudge*") -eq 0 -and (Get-Typed $state) -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "skip" -and "$($_.reason)".StartsWith("retired") }).Count -eq 1 -and $pass.held.Count -eq 1) "a pass over a retired session with unread mail asks for no nudge and types nothing"
 # THE FLEET'S OWN DOOR: asked all the same, its nudge refuses a retired target, and that is nothing.
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
@@ -215,10 +215,10 @@ foreach ($word in @("no", "unknown")) {
 # THE WATCHER, THROUGH THIS WAKER: a row that cannot say, idle with an empty box and old mail, is not nudged.
 & $fx.SetRow $state (New-Row 1 @{ limited = "unknown" })
 & $fx.Clock $state $t0
-$pass = Invoke-HordeWakePass -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
 Check ((Get-Count $state "mail nudge*") -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".StartsWith("usage limit unknown") }).Count -eq 1) "a pass over a session whose row says limited unknown asks for no nudge: it waits"
 & $fx.Forget $state
-$pass = Invoke-HordeWakePass -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -MovedAt $t0.AddSeconds(-5)
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -MovedAt $t0.AddSeconds(-5)
 Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1) "with a session seen taking mail five seconds ago, the same session is nudged"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2031-01-01T05:55:00Z" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
@@ -260,7 +260,7 @@ Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("no time for the old
 $a = Get-HordeWakeState -Waker $w -Id (Sid 5)
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("no time for the oldest")) "and so is one whose time has no zone: it cannot be placed"
 & $fx.Forget $state
-$pass = Invoke-HordeWakePass -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now ([datetime]::UtcNow) -Ledger @{}
 Check (@($pass.decisions | Where-Object { $_.action -ceq "nudge" }).Count -eq 0 -and (Get-Typed $state) -eq 0 -and (Get-Count $state "mail nudge*") -eq 0 -and @($pass.entries | Where-Object { $_.kind -ceq "skip-unknown" }).Count -eq 5) "the watcher nudges none of the five, asks for no nudge, and journals each as unknown"
 & $fx.Remove $state; $state = $null
 

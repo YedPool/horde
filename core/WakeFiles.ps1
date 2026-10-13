@@ -53,11 +53,14 @@ function Get-HordeWakeFolder {
 }
 
 function Get-HordeWakeModeWord {
-    # The word a mode's files carry: the mode itself when -Mode names one, else shadow with -Shadow and
-    # live without. A word that is no mode is refused: a file named for a mode that does not exist is a
-    # file nothing would ever read back.
+    # The word a mode's files carry: the mode itself when -Mode names one, and SHADOW WHEN NOTHING IS
+    # SAID. It was live when nothing was said - a caller that left a word out read and wrote the files
+    # of the run that sends (safety review of PR 220). Every level now defaults to shadow, and a caller
+    # that means the sending run's files says so: -Mode "live". -Shadow is still taken, and says what
+    # the default says. A word that is no mode is refused: a file named for a mode that does not exist
+    # is a file nothing would ever read back.
     param([string]$Mode = "", [switch]$Shadow)
-    if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }
+    if ($Mode -ceq "") { return "shadow" }
     if (@("shadow", "proof", "live") -cnotcontains $Mode) { throw ("'" + $Mode + "' is not a mode of the wake run: shadow, proof or live") }
     return $Mode
 }

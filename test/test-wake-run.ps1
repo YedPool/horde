@@ -298,14 +298,14 @@ Check (@($kinds | Where-Object { $_ -clike "nudge:*:woken" }).Count -eq 2 -and @
 Check (@($kinds | Where-Object { $_ -clike "would-post:*" }).Count -eq 6 -and @($kinds | Where-Object { $_ -clike "would-stall:*" }).Count -eq 1 -and @($kinds | Where-Object { $_ -clike "post:*" -or $_ -clike "stall:*" }).Count -eq 0) ("in a live run the restore source still only journals would-post and would-stall, and posts nothing (" + (@($kinds | ForEach-Object { ($_ -split ":")[0] } | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
 Check (($names -join ",") -ceq "heartbeat-live.json,journal-live.jsonl,ledger-live.json,restore-of-live-run-shadow.json") ("it wrote the live run's own journal, heartbeat and ledger, and kept what the source would have posted in a shadow file of its own - never restore-live.json, which is for mail really posted (" + ($names -join ",") + ")")
-$beat = Read-HordeWakeHeartbeat -HordeHome $h
+$beat = Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.shadow -eq $false -and $beat.value.pass -eq 2 -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat is the live one, marked not shadow, and no shadow heartbeat was written"
 # A SHADOW RUN BESIDE IT, on the same home: each keeps its own heartbeat and journal.
 Reset-HordeMemoryWaker
 $beside = New-HordeWakeRun -HordeHome $h
 $null = Invoke-HordeWakeTick -Run $beside -Now (At 500) -Waker $memory -ReadSessions $none -TickSeconds 3 -ProcessId 4343 -HordeHome $h
-Check ((Read-HordeWakeHeartbeat -HordeHome $h).value.at -eq (At 3) -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).value.at -eq (At 500)) "a shadow run ticking on the same home leaves the live heartbeat as it was: a live watcher that died is not made to look alive"
-Check (@(Read-HordeWakeJournalTail -Count 1000 -HordeHome $h | ForEach-Object { ($_ | ConvertFrom-Json).kind } | Where-Object { $_ -cnotlike "would-*" -and $_ -cne "nudge" }).Count -eq 0 -and @(Read-HordeWakeJournalTail -Count 1000 -HordeHome $h).Count -eq $kinds.Count) "and the live journal holds only the live run's lines"
+Check ((Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).value.at -eq (At 3) -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).value.at -eq (At 500)) "a shadow run ticking on the same home leaves the live heartbeat as it was: a live watcher that died is not made to look alive"
+Check (@(Read-HordeWakeJournalTail -Mode "live" -Count 1000 -HordeHome $h | ForEach-Object { ($_ | ConvertFrom-Json).kind } | Where-Object { $_ -cnotlike "would-*" -and $_ -cne "nudge" }).Count -eq 0 -and @(Read-HordeWakeJournalTail -Mode "live" -Count 1000 -HordeHome $h).Count -eq $kinds.Count) "and the live journal holds only the live run's lines"
 $tampered = New-HordeWakeRun -HordeHome $h
 $tampered.live = "yes"
 Reset-HordeMemoryWaker
@@ -416,7 +416,7 @@ Check (@($proved | Where-Object { $_ -ceq "post" -or $_ -ceq "stall" -or $_ -ceq
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
 Check (($names -join ",") -ceq "heartbeat-proof.json,journal-proof.jsonl,ledger-proof.json,restore-of-proof-run-shadow.json") ("it wrote the proof run's own files and no file of a live or a shadow run (" + ($names -join ",") + ")")
 $beat = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h
-Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
+Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
 $switchWas = $script:HordeWakeSendersPost
 try { $script:HordeWakeSendersPost = $true; Check ((Test-HordeWakeSendersShadow -Run $proof) -eq $true -and (Test-HordeWakeSendersShadow -Run (New-HordeWakeRun -Mode "live" -HordeHome $h)) -eq $false) "with the senders' switch on, a live run posts and a proof run still does not" } finally { $script:HordeWakeSendersPost = $switchWas }
 $threw = $false; try { $null = New-HordeWakeRun -Mode "LIVE" -HordeHome $h } catch { $threw = $true }
@@ -443,6 +443,9 @@ $script:whence = { New-HordeUnknown -Reason "its settings are refused" }
 $p = Get-HordeWakeRunPlan -Mode "live" -Picked $foundPick
 Check ($p.ok -eq $false -and "$($p.reason)".Contains("could not say where its program comes from") -and (Get-HordeWakeRunPlan -Mode "proof" -Once -Target (Sid 3) -Picked $foundPick).ok -eq $false -and (Get-HordeWakeRunPlan -Picked $foundPick).ok) "a waker that cannot say where its program is may be read through in shadow and is refused for a run that sends"
 $script:HordeWakers.Remove("fixture-source")
+# A RUN IS SHADOW UNLESS IT IS MADE OTHERWISE, at every level it is made at.
+$hs = New-Home
+Check ((New-HordeWakeRun -HordeHome $hs).mode -ceq "shadow" -and (New-HordeWakeRun -Mode "" -HordeHome $hs).mode -ceq "shadow" -and (New-HordeWakeRun -Live:$false -HordeHome $hs).live -eq $false -and (New-HordeWakeRun -Live -HordeHome $hs).mode -ceq "live" -and (Get-HordeWakeRunPlan -Picked $one).mode -ceq "shadow") "a run made with no word, an empty mode or -Live:false is shadow, and so is a plan made with none"
 $p = Get-HordeWakeRunPlan -Mode "live" -Picked "not an answer"
 Check ($p.ok -eq $false -and $p.live -eq $false) "and an answer about the waker that is not one never makes a live run"
 
@@ -456,7 +459,7 @@ Check ($null -ne $lock) "the first run takes the lock"
 $second = "not asked"
 try { $second = Enter-HordeWakeLock -Shadow -ProcessId 4243 -HordeHome $h } catch { $second = "threw: " + $_.Exception.Message }
 Check ($null -eq $second) "a second run in the same home and mode is refused while the first holds it"
-$live = Enter-HordeWakeLock -ProcessId 4244 -HordeHome $h
+$live = Enter-HordeWakeLock -Mode "live" -ProcessId 4244 -HordeHome $h
 Check ($null -ne $live) "a live run's lock is another: shadow and live do not shut each other out"
 if ($null -ne $live) { $live.Dispose() }
 Check ([System.IO.File]::Open((Join-Path $h "wake\run-shadow.lock"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite) -is [System.IO.FileStream]) "CONTROL: the held lock can still be opened for reading"
