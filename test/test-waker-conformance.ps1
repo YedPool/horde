@@ -96,7 +96,10 @@ $cases = [ordered]@{
     }
     "state.turn" = {
         param($W, $Fx, $State)
-        $resting = New-Seat; $working = New-Seat @{ midTurn = "yes"; idle = "no" }
+        # MID-TURN WHILE ITS STATUS STILL SAYS IDLE: the case the turn is read for. A session whose status
+        # already says it is not idle is waited for whatever its turn is, and a waker may leave its
+        # pane unread and answer unknown there (the wezfleet waker does, to read no pane it need not).
+        $resting = New-Seat; $working = New-Seat @{ midTurn = "yes" }
         & $Fx.Seat $State $resting; & $Fx.Seat $State $working
         $a1 = Get-HordeWakeState -Waker $W -Id $resting.id
         $a2 = Get-HordeWakeState -Waker $W -Id $working.id

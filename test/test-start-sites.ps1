@@ -126,4 +126,32 @@ try {
     Check (Says $got "is missing") "with no list at all, the family is refused, not passed"
 } finally { if (Test-Path -LiteralPath $tree) { Remove-Item -LiteralPath $tree -Recurse -Force } }
 
-Complete-HordeSuite -Success "nothing under messengers/ can start a program, run a script block or load code except at the sites messengers/start-sites.txt lists"
+Write-Host ""
+Write-Host "--- wakers/: the same rule for the family that rings sessions ---" -ForegroundColor Cyan
+
+# The wezfleet waker starts the fleet's command too, and wakers/start-sites.txt lists every start site of
+# its family. The instrument is proved above on messengers/; here it is held to the real tree, and to
+# one planted start, so a pass means the list was read.
+$f = @(Test-HordeStartSites -Root $root -Folder "wakers" -List "wakers\start-sites.txt")
+Check ($f.Count -eq 0) "wakers/ has no start site outside wakers/start-sites.txt, and the list no stale line"; Show $f
+$sites = @(Get-HordeStartSites -Root $root -Folder "wakers")
+$starts = @($sites | Where-Object { $_.kind -ceq "method" -and $_.text -clike "*Process]::Start(*" })
+Check ($starts.Count -eq 1) ("exactly one process start in the family (" + $starts.Count + ")")
+$setup = @($sites | Where-Object { $_.kind -ceq "type" -and $_.text -clike "*ProcessStartInfo]::new(*" })
+Check ($setup.Count -eq 1 -and $setup[0].text.Contains('[System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"')) "and the program it starts is named once, as the fixed PowerShell in the system folder"
+Check ((@($sites | Where-Object { $_.kind -ceq "call" }).Count -eq 3)) "CONTROL: the port's three calls of a registered waker are seen as sites"
+Check ((@($sites | Where-Object { $_.kind -ceq "starter" }).Count -eq 3)) "the start has three callers, one for each form of the fleet's command"
+$tree = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-startsites-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
+try {
+    Copy-Item -LiteralPath (Join-Path $root "wakers") -Destination (Join-Path $tree "wakers") -Recurse
+    Check (@(Test-HordeStartSites -Root $tree -Folder "wakers" -List "wakers\start-sites.txt").Count -eq 0) "CONTROL: an unchanged copy of wakers/ has no finding"
+    $planted = Join-Path $tree "wakers\memory\Waker.ps1"
+    [System.IO.File]::AppendAllText($planted, "`r`nfunction Start-Second { [System.Diagnostics.Process]::Start(`$x) }`r`n")
+    $got = try { @(Test-HordeStartSites -Root $tree -Folder "wakers" -List "wakers\start-sites.txt") } catch { @("threw: " + $_.Exception.Message) }
+    Check (Says $got "method start site") "a second process start planted in a waker is refused"
+    Remove-Item -LiteralPath (Join-Path $tree "wakers\start-sites.txt")
+    $got = try { @(Test-HordeStartSites -Root $tree -Folder "wakers" -List "wakers\start-sites.txt") } catch { @("threw: " + $_.Exception.Message) }
+    Check (Says $got "is missing") "with no list at all, the family is refused, not passed"
+} finally { if (Test-Path -LiteralPath $tree) { Remove-Item -LiteralPath $tree -Recurse -Force } }
+
+Complete-HordeSuite -Success "nothing under messengers/ or wakers/ can start a program, run a script block or load code except at the sites its family's start-sites.txt lists"
