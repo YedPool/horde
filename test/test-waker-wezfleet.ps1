@@ -38,7 +38,9 @@ function New-Row {
     # -Change laid over it. A member set to "(none)" is left out of the row altogether.
     param([int]$N = 1, [hashtable]$Change = @{})
     $r = [ordered]@{ id = (Sid $N); label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0
-        oldestUnreadAt = "2026-10-12T07:00:00.0000000Z"; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null }
+        oldestUnreadAt = "2026-10-12T07:00:00.0000000Z"; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null
+        # ...and what the command says since its main 5224296, in the shapes its real output has (read 2026-10-13).
+        handedOverCount = 0; oldestHandedOverAt = $null; acked = "known"; lastAckedAt = $null; betweenTurns = "no" }
     foreach ($k in $Change.Keys) { if ("$($Change[$k])" -ceq "(none)") { $r.Remove($k) } else { $r[$k] = $Change[$k] } }
     return $r
 }
@@ -53,7 +55,7 @@ try {
 Write-Host ""
 Write-Host "--- the mapping: targets, roles, one whole-fleet call a pass, a pane read only for a candidate ---" -ForegroundColor Cyan
 
-Check ((Resolve-HordeProductionWaker).state -ceq "absent" -and (@(Get-HordeWakerUnverified -Waker $w) -join ",") -ceq "nudge.pointer-only,state.box,state.turn,reach.unseen,nudge.guarded,state.limit") "this waker says all six of its capabilities are unverified - shown against the fake, never yet against the fleet's real command - so no live run can pick it"
+Check ((Resolve-HordeProductionWaker).state -ceq "absent" -and (@(Get-HordeWakerUnverified -Waker $w) -join ",") -ceq "nudge.pointer-only,state.box,state.turn,reach.unseen,nudge.guarded,state.limit,state.between-turns") "this waker says all seven of its capabilities are unverified - shown against the fake, never yet against the fleet's real command - so no live run can pick it"
 Check ((Resolve-HordeProductionWaker -AllowUnverified).state -ceq "known" -and (Resolve-HordeProductionWaker -AllowUnverified).value.name -ceq "wezfleet") "and a run that may go through unverified capabilities - shadow, proof - picks this one, never the test waker loaded beside it"
 Check (@($w.capabilities.capabilities.PSObject.Properties | Where-Object { -not "$($_.Value.evidence)".Contains("STILL TO BE RUN against the fleet's real command") }).Count -eq 0) "each one's evidence says what is still to be run"
 $away = Get-HordeWakeTargets -Waker $w
@@ -193,6 +195,88 @@ Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and "$($a.valu
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- rows of the newer command and of the older one are both read: what an older row lacks is unknown, never an error ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+$older = @{ betweenTurns = "(none)"; acked = "(none)"; lastAckedAt = "(none)"; handedOverCount = "(none)"; oldestHandedOverAt = "(none)"; limited = "(none)"; limitedUntil = "(none)" }
+# THE NEWER SHAPE: each member is carried as the port's.
+& $fx.SetRow $state (New-Row 1 @{ betweenTurns = "yes"; acked = "known"; lastAckedAt = "2026-10-12T07:55:00.0000000Z"; handedOverCount = 2; oldestHandedOverAt = "2026-10-12T07:58:00Z" })
+& $fx.Clock $state $t0
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.betweenTurns -ceq "yes" -and $a.value.acked -ceq "known" -and $a.value.lastAckedAt -eq (New-Object System.DateTime(2026, 10, 12, 7, 55, 0, [System.DateTimeKind]::Utc)) -and $a.value.handedOverCount -eq 2 -and $a.value.oldestHandedOverAt -eq (New-Object System.DateTime(2026, 10, 12, 7, 58, 0, [System.DateTimeKind]::Utc))) "a row of the newer command: betweenTurns, what was last acknowledged and what was handed over are each carried"
+foreach ($word in @("no", "unknown")) {
+    & $fx.SetRow $state (New-Row 1 @{ betweenTurns = $word })
+    Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).value.betweenTurns -ceq $word) ("betweenTurns " + $word + " is carried as " + $word)
+}
+& $fx.SetRow $state (New-Row 1 @{ acked = "unknown"; lastAckedAt = "2026-10-12T07:55:00Z" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.acked -ceq "unknown" -and $null -eq $a.value.lastAckedAt) "acked unknown: the time beside it is not read - what could not be read is not evidence"
+& $fx.SetRow $state (New-Row 1 @{ acked = "known"; lastAckedAt = "2026-10-12 07:55" })
+Check ($null -eq (Get-HordeWakeState -Waker $w -Id (Sid 1)).value.lastAckedAt) "a lastAckedAt that names no zone cannot be placed, and is no time"
+& $fx.SetRow $state (New-Row 1 @{ handedOverCount = 0; oldestHandedOverAt = "2026-10-12T07:58:00Z" })
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.value.handedOverCount -eq 0 -and $null -eq $a.value.oldestHandedOverAt) "nothing handed over is a known 0, with no oldest"
+# THE OLDER SHAPE: the command installed before those members. Every one reads as unknown; the row is a row.
+& $fx.SetRow $state (New-Row 1 $older)
+& $fx.SetRow $state (New-Row 2)
+$listing = Get-HordeWakeTargets -Waker $w
+Check ($listing.state -ceq "known" -and @($listing.value).Count -eq 2) "a fleet with a row of the older command beside one of the newer is listed whole: the older row does not blank the listing"
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.betweenTurns -ceq "unknown" -and $a.value.acked -ceq "unknown" -and $null -eq $a.value.lastAckedAt -and $null -eq $a.value.handedOverCount -and $null -eq $a.value.oldestHandedOverAt -and $a.value.limited -ceq "unknown") "the older row's state is known, and each thing it does not say is unknown: never no, never 0, never 'never acknowledged'"
+$full = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
+Check ($full.state -ceq "known" -and $full.value.boxEmpty -ceq "yes" -and $full.value.betweenTurns -ceq "unknown") "and so through the per-session reading of it"
+# A MEMBER THAT IS THERE AND OF THE WRONG KIND is a row this waker does not read (rule 5).
+foreach ($case in @(
+        @{ what = "betweenTurns that is none of the three words"; change = @{ betweenTurns = "maybe" } },
+        @{ what = "acked that is neither known nor unknown"; change = @{ acked = "yes" } },
+        @{ what = "lastAckedAt that is a number"; change = @{ lastAckedAt = 5 } },
+        @{ what = "handedOverCount below 0"; change = @{ handedOverCount = -1 } },
+        @{ what = "handedOverCount that is text"; change = @{ handedOverCount = "2" } },
+        @{ what = "oldestHandedOverAt that is a number"; change = @{ handedOverCount = 1; oldestHandedOverAt = 7 } })) {
+    & $fx.SetRow $state (New-Row 1 $case.change)
+    Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).state -ceq "unknown") ("a row with " + $case.what + " is not read: it is not taken for one that does not say")
+}
+$newest = @(& $fx.Runs $state)
+Check ($newest.Count -gt 0 -and @($newest | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0) "every reading above went through the fake started as the fleet's command is: a process of its own"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- between turns, through the fleet's command: idle by the rule, the box read by -To, the rule in the answer ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+# As the fleet form says it: idle yes BY THE RULE, betweenTurns yes, and the box unknown - that form reads no box.
+& $fx.SetRow $state (New-Row 1 @{ betweenTurns = "yes" })
+& $fx.Clock $state $t0
+$cheap = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($cheap.state -ceq "known" -and $cheap.value.idle -ceq "yes" -and $cheap.value.betweenTurns -ceq "yes" -and $cheap.value.boxEmpty -ceq "unknown") "the fleet form answers idle yes and betweenTurns yes with the box unknown: enough to ask about the session, never enough to type on"
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$line = @($pass.entries | Where-Object { $_.kind -ceq "nudge" })
+Check ((Get-Count $state ("mail state -To " + (Sid 1) + " *")) -eq 1 -and (Get-Typed $state) -eq 1 -and $line.Count -eq 1) "the pass reads the session's own box with -To before it nudges, and nudges once"
+Check ($line.Count -eq 1 -and "$($line[0].reason)".Contains("idle by the between-turns rule (between-turns-background-work)") -and "$($line[0].reason)".Contains("the waker says the rule that let it type was between-turns-background-work")) ("the nudge's journal line says the between-turns rule let it through, and carries the rule the fleet's answer names (" + $(if ($line.Count -eq 1) { $line[0].reason } else { "" }) + ")")
+& $fx.SetRow $state (New-Row 2 @{ betweenTurns = "yes"; boxEmpty = "no" })
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0.AddSeconds(1) -Settings (Get-HordeWakeSettings) -Ledger $pass.ledger
+Check ((& $fx.Observe $state (Sid 2)).nudges -eq 0 -and @($pass.decisions | Where-Object { $_.id -ceq (Sid 2) -and $_.reason -ceq "boxEmpty is no" }).Count -eq 1) "a session between turns whose own box holds text is not nudged: the rule never stands in for the box"
+& $fx.SetRow $state (New-Row 3)
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 3)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["rule"]) "a nudge of a session idle by its own word carries no rule"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- handed-over mail, through the fleet's command: not nudged for, and held by name ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1 @{ unreadCount = 0; oldestUnreadAt = $null; handedOverCount = 2; oldestHandedOverAt = "2026-10-12T07:59:30Z" })
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ((Get-Count $state "mail nudge*") -eq 0 -and (Get-Count $state "mail state -To *") -eq 0 -and $pass.held.ContainsKey((Sid 1)) -and "$($pass.held[(Sid 1)])".StartsWith("handed-over mail: 2 ")) "a row with two handed over and none unread: no nudge is asked for, its pane is not read, and the pass holds it by name"
+& $fx.SetRow $state (New-Row 1 @{ unreadCount = 0; oldestUnreadAt = $null; handedOverCount = "(none)"; oldestHandedOverAt = "(none)" })
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ($pass.held.Count -eq 0 -and (Get-Count $state "mail nudge*") -eq 0) "a row of the older command, which does not say what was handed over, has nothing said for it"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- retired: true is yes, and false is no only for a row the fleet had a record for ---" -ForegroundColor Cyan
 
 $state = & $fx.New
@@ -243,8 +327,15 @@ foreach ($word in @("no", "unknown")) {
 $pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
 Check ((Get-Count $state "mail nudge*") -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".StartsWith("usage limit unknown") }).Count -eq 1) "a pass over a session whose row says limited unknown asks for no nudge: it waits"
 & $fx.Forget $state
-$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -Moves @{ (Sid 99) = $t0.AddSeconds(-5) }
-Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1) "with a session seen taking mail five seconds ago, the same session is nudged"
+& $fx.SetRow $state (New-Row 9 @{ unreadCount = 0; oldestUnreadAt = $null; acked = "known"; lastAckedAt = $t0.AddSeconds(-5).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) })
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1 -and $pass.acks[(Sid 9)] -eq $t0.AddSeconds(-5)) "with ANOTHER session's row saying it acknowledged mail five seconds ago, the same session is nudged: the evidence is read from the fleet's own rows"
+& $fx.SetRow $state (New-Row 9 @{ unreadCount = 0; oldestUnreadAt = $null; acked = "(none)"; lastAckedAt = "(none)" })
+& $fx.SetRow $state (New-Row 1 @{ limited = "unknown" })
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ((Get-Count $state "mail nudge*") -eq 1 -and $pass.acks.Count -eq 1) "a row of the older command, which says nothing of what was acknowledged, is no evidence: no second nudge"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2031-01-01T05:55:00Z" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $a.value.limitedUntil -eq (New-Object System.DateTime(2031, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "limited yes with a time is limited until then"
@@ -409,13 +500,22 @@ foreach ($case in @(
 }
 foreach ($case in @(
         @{ what = "text"; exit = 1; out = ""; err = "wezfleet.ps1 : A parameter cannot be found that matches parameter name 'To'."; like = "not one line of JSON" },
-        @{ what = "an outcome it does not know"; exit = 0; out = ('{"outcome":"typed","reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}'); like = "without an outcome" },
-        @{ what = "no outcome at all"; exit = 0; out = '{"reason":"x"}'; like = "without an outcome" },
         @{ what = "exit 1, a failure of its own"; exit = 1; out = '{"outcome":"unreachable","reason":"internal-error","target":"","pane":"","instance":"","detail":"it fell over"}'; like = "internal-error: " })) {
     Set-Answer $state "nudge" $case.exit $case.out $(if ($case.ContainsKey("err")) { $case.err } else { "" })
     $a = $null
     try { $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1) } catch { $a = $null }
     Check ($null -ne $a -and $a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".Contains($case.like)) ("a nudge answering " + $case.what + " is unreachable, saying so: nothing is known to have been typed")
+}
+# THE OUTCOME WORDS ARE A CLOSED SET: one outside it, or none, is unknown - never woken, never "not rung".
+foreach ($case in @(
+        @{ what = "an outcome it does not know"; out = ('{"outcome":"typed","reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}') },
+        @{ what = "an outcome in another casing"; out = ('{"outcome":"Woken","reason":"woken","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}') },
+        @{ what = "an outcome that is not text"; out = ('{"outcome":true,"reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}') },
+        @{ what = "no outcome at all"; out = '{"reason":"x"}' })) {
+    Set-Answer $state "nudge" 0 $case.out
+    $a = $null
+    try { $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1) } catch { $a = $null }
+    Check ($null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains("without an outcome")) ("a nudge answering " + $case.what + " is UNKNOWN: an outcome outside the four is never permission, and never taken for one of them")
 }
 Set-Answer $state "nudge" 0 ('{"outcome":"woken","reason":"woken","target":"' + (Sid 7) + '","pane":"1","instance":"i","detail":""}')
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
@@ -463,6 +563,110 @@ Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a
 Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)" -ne "") "an outcome the fleet gave no reason for still says why, in the waker's words: the port asks every outcome but woken to"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- a reason word this waker has never seen is text, never an error: a new word from the fleet does not blind the watcher ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+# NUDGE ANSWERS, each printed by the fake started as the fleet's command is. The first four are the
+# real command's words (read 2026-10-13, its main 680754f); the fifth is one nobody has written yet.
+foreach ($word in @("mid-turn", "status-unreadable", "pointer-stale", "sender-busy", "a-word-from-next-year")) {
+    Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"' + $word + '","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":"nothing typed","elapsedMs":12}')
+    $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+    Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)" -ceq ($word + ": nothing typed")) ("busy / " + $word + " is busy, and the word is passed on as the fleet gave it (" + $(if ($a.state -ceq "known") { $a.value.reason } else { $a.reason }) + ")")
+}
+Set-Answer $state "nudge" 0 ('{"outcome":"refused","reason":"no-unread-mail","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":"mail was waiting when asked first, and by the moment of typing none was"}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)".StartsWith("no-unread-mail: ")) "refused / no-unread-mail from INSIDE the fleet's lock - the mail was handed over or acknowledged between its two looks - is the port's nothing, as the first look's refusal is"
+Set-Answer $state "nudge" 0 ('{"outcome":"refused","reason":"a-refusal-from-next-year","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)" -ceq "a-refusal-from-next-year") "a refusal for a reason never seen is still nothing, with the word"
+# CLEANED AND CAPPED: a reason is journaled, and may be mailed.
+$long = "Shouting With Spaces " + ("x" * 300)
+Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"' + $long + '\tand a tab\u0007","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)".Length -eq 80 -and "$($a.value.reason)".StartsWith("Shouting With Spaces xxx") -and "$($a.value.reason)" -cmatch '\A[\x20-\x7E]+\z') "a reason that is no tidy word - long, spaced, with control characters - is cut to 80 printable characters and the outcome stands"
+Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":7,"target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)" -ceq "the fleet answered busy") "and one that is not text at all is left out: busy is still busy"
+# THE JOURNAL carries the word, through a whole pass.
+Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"a-word-from-next-year","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":"nothing typed"}')
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$line = @($pass.entries | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 1) })
+Check ($line.Count -eq 1 -and $line[0].outcome -ceq "busy" -and "$($line[0].reason)" -ceq "a-word-from-next-year: nothing typed" -and $pass.ledger[(Sid 1)].lastOutcome -ceq "busy") "the pass journals that nudge as busy with the fleet's new word in the line, and the ledger counts it as any busy"
+# STATE ROWS: reason and reasons with words never seen, in the fleet form and the per-session one.
+& $fx.SetMode $state $null
+& $fx.SetRow $state (New-Row 1 @{ reason = "a-word-from-next-year"; reasons = @("mid-turn", "status-unreadable", "a-word-from-next-year", "Another One, With Spaces") })
+& $fx.SetRow $state (New-Row 2)
+& $fx.Forget $state
+$listing = Get-HordeWakeTargets -Waker $w
+Check ($listing.state -ceq "known" -and @($listing.value).Count -eq 2) "a fleet with a row whose reason and reasons hold words this waker has never seen is listed WHOLE: the listing is not blanked for it"
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+$full = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
+Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.idle -ceq "yes" -and $full.state -ceq "known" -and $full.value.boxEmpty -ceq "yes") "that row's state is known in both readings: what it says of mail, idle and the box is read, and the new word decides nothing"
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0.AddSeconds(1) -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ($pass.listing.state -ceq "known" -and @($pass.decisions).Count -eq 2 -and @($pass.decisions | Where-Object { $_.id -ceq (Sid 1) -and $_.action -ceq "nudge" }).Count -eq 1 -and (& $fx.Observe $state (Sid 1)).nudges -eq 1 -and @($pass.entries | Where-Object { $_.kind -clike "skip-unknown*" }).Count -eq 0) ("a pass over that fleet decides on both sessions and nudges the one with the new word, which the fleet's record shows typed: the watcher saw all of it (" + (@($pass.decisions | ForEach-Object { $_.action + "/" + $_.reason }) -join ", ") + ")")
+$runs = @(& $fx.Runs $state)
+Check ($runs.Count -gt 0 -and @($runs | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0) "every answer above was printed by the fake started as the fleet's command is: a process of its own"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- the fleet's own list of reserved labels: asked of its command, compared both ways, and 'could not ask' is never 'equal' ---" -ForegroundColor Cyan
+
+. (Join-Path $root "core\ReservedLabels.ps1")
+$state = & $fx.New
+$a = Get-HordeWakerReservedLabels -Waker $w
+$runs = @(& $fx.Runs $state)
+Check ($a.state -ceq "known" -and (@($a.value.labels) -join ",") -ceq "RS,WW,SV" -and (Get-Count $state "labels reserved -Json") -eq 1 -and @($runs | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0) ("the list is asked of the fleet's command - labels reserved -Json, in a process of its own - and read: RS, WW, SV (" + $(if ($a.state -ceq "known") { @($a.value.labels) -join "," } else { $a.reason }) + ")")
+$same = Compare-HordeReservedLabels -Theirs $a.value.labels
+Check ($same.equal -and @($same.onlyOurs).Count -eq 0 -and @($same.onlyTheirs).Count -eq 0) "and it is Horde's own list: neither has a label the other lacks"
+# A DIFFERENCE IN EITHER DIRECTION IS FOUND.
+foreach ($case in @(
+        @{ what = "the fleet lacks one Horde reserves"; list = '["RS","WW"]'; ours = "SV"; theirs = "" },
+        @{ what = "the fleet reserves one Horde does not"; list = '["RS","WW","SV","XX"]'; ours = ""; theirs = "XX" },
+        @{ what = "each has one the other lacks"; list = '["RS","WW","ZZ"]'; ours = "SV"; theirs = "ZZ" },
+        @{ what = "the fleet's is in another casing"; list = '["RS","WW","sv"]'; ours = "SV"; theirs = "sv" },
+        @{ what = "the fleet reserves none"; list = '[]'; ours = "RS,WW,SV"; theirs = "" })) {
+    Set-Answer $state "labels" 0 ('{"schema":"wezfleet.labels.reserved","version":1,"labels":' + $case.list + '}')
+    $a = Get-HordeWakerReservedLabels -Waker $w
+    $d = $(if ($a.state -ceq "known") { Compare-HordeReservedLabels -Theirs $a.value.labels } else { $null })
+    Check ($null -ne $d -and -not $d.equal -and (@($d.onlyOurs) -join ",") -ceq $case.ours -and (@($d.onlyTheirs) -join ",") -ceq $case.theirs) ("when " + $case.what + " the two are NOT equal, and the comparison names which labels and whose")
+}
+Set-Answer $state "labels" 0 '{"schema":"wezfleet.labels.reserved","version":1,"labels":["SV","RS","WW","RS"]}'
+Check ((Compare-HordeReservedLabels -Theirs (Get-HordeWakerReservedLabels -Waker $w).value.labels).equal) "CONTROL: the same labels in another order, one of them twice, are the same list"
+# COULD NOT ASK IS SAID, AND IS NEVER EQUAL.
+foreach ($case in @(
+        @{ what = "a wezfleet from before the verb, which calls the command unknown and exits 1"; exit = 1; out = ""; err = "wezfleet: unknown command 'labels'" },
+        @{ what = "one that exits 2 for it"; exit = 2; out = ""; err = "usage: wezfleet <command>" },
+        @{ what = "one that exits non-zero having printed the very list"; exit = 3; out = '{"schema":"wezfleet.labels.reserved","version":1,"labels":["RS","WW","SV"]}'; err = "" })) {
+    Set-Answer $state "labels" $case.exit $case.out $case.err
+    $a = Get-HordeWakerReservedLabels -Waker $w
+    Check ($a.state -ceq "absent" -and "$($a.reason)".Contains("could not ask") -and "$($a.reason)".Contains("exit " + $case.exit)) ($case.what + ": ABSENT - not asked, with the exit - and so not compared: never a list, never equal (" + $a.state + ")")
+}
+& $fx.SetMode $state $null
+Set-HordeWezfleetWakerRoot -Path (Join-Path $state.dir "no-checkout-here")
+$a = Get-HordeWakerReservedLabels -Waker $w
+Check ($a.state -ceq "absent" -and "$($a.reason)".Contains("could not be run")) ("a fleet command that cannot be found is absent too: not asked (" + $a.state + ": " + $a.reason + ")")
+Set-HordeWezfleetWakerRoot -Path $state.dir
+# IT ANSWERED, AND THIS WAKER CANNOT READ IT: unknown. Not a list, and not "could not ask".
+foreach ($case in @(
+        @{ what = "another schema"; out = '{"schema":"wezfleet.labels.other","version":1,"labels":["RS","WW","SV"]}' },
+        @{ what = "the schema in another casing"; out = '{"schema":"Wezfleet.Labels.Reserved","version":1,"labels":["RS","WW","SV"]}' },
+        @{ what = "a later version"; out = '{"schema":"wezfleet.labels.reserved","version":2,"labels":["RS","WW","SV"]}' },
+        @{ what = "no schema"; out = '{"labels":["RS","WW","SV"]}' },
+        @{ what = "no list"; out = '{"schema":"wezfleet.labels.reserved","version":1}' },
+        @{ what = "a label as text, not a list"; out = '{"schema":"wezfleet.labels.reserved","version":1,"labels":"RS"}' },
+        @{ what = "a number in the list"; out = '{"schema":"wezfleet.labels.reserved","version":1,"labels":["RS",7]}' },
+        @{ what = "the plain form, a label a line"; out = "RS`nWW`nSV" },
+        @{ what = "nothing at all"; out = "" })) {
+    Set-Answer $state "labels" 0 $case.out
+    $a = Get-HordeWakerReservedLabels -Waker $w
+    Check ($a.state -ceq "unknown") ("exit 0 with " + $case.what + " is unknown: the fleet answered, and it is not read as a list or as not asked (" + $a.state + ")")
+}
 & $fx.Remove $state; $state = $null
 
 Write-Host ""

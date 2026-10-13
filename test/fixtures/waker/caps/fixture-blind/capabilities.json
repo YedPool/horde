@@ -25,6 +25,10 @@
     "state.limit": {
       "support": "no",
       "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.between-turns": {
+      "support": "no",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
     }
   }
 }

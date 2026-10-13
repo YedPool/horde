@@ -6,7 +6,7 @@ $HordeCommand = @{
     summary = "run: the wake watcher - every pass it re-reads which sessions have unread mail and are idle with an empty input box, and after every session was started or restored together which orcs have not taken a turn since. Three forms. wake run (or -Mode shadow) is SHADOW: it journals what it would do, and nudges and posts nothing. wake run -Mode live sends real nudges, one a pass, for as long as it runs - only through a waker whose every capability is verified and whose program is named in its settings. wake run -Proof -Target <session id> -Once is a proof run: ONE pass that may type one line into the ONE session named and no other, to verify a waker; all three are required. In every form the restore source and the tells to the warchief only journal what they would send. status: for shadow, proof and live, how long ago each last ran, whether that is stale, and its last 10 journal lines"
     run     = {
         [CmdletBinding(DefaultParameterSetName = "watch")] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "status")][string]$Verb,
+            [Parameter(Position = 0)][ValidateSet("run", "status")][string]$Verb,
             [Parameter(ParameterSetName = "watch")][ValidateSet("shadow", "live")][ValidateScript({ @("shadow", "live") -ccontains $_ })][string]$Mode = "shadow",
             [Parameter(ParameterSetName = "watch", DontShow = $true)][ValidateScript({ $false })][object]$Mod,
             [Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,
@@ -35,6 +35,13 @@ $HordeCommand = @{
         # only be checked in the body, where a refusal is an ordinary failure (cli/Runner.ps1), and
         # "-Mode proof" alone would have bound. -Target is a session id written out in full, a
         # lower-case UUID, in exactly that casing: not a label and not a part of an id.
+        # THE VERB IS NOT DECLARED MANDATORY EITHER, FOR THE SAME REASON: "horde wake", with its input open,
+        # waited at "Verb:" (review of PR 230). There is no making a missing positional ambiguous, so
+        # it is asked for first thing in the body, and refused there as a usage error: exit 2, like
+        # every other wrong form (cli/Commands.ps1, New-HordeUsageError). So is a proof whose -Proof or
+        # -Once was given as FALSE (-Proof:$false, -Once:$false): that binds as the proof form, since
+        # the binder looks at which names were given and not at what they hold, and was refused below
+        # as an ordinary failure, exit 1.
         # THE MODE IS ONE WORD, WRITTEN OUT, AND NOTHING ELSE SELECTS ONE. The two switches this replaces
         # (-Shadow, -Live) could be reached by any prefix PowerShell would complete - -L was a live run -
         # and a live run must never be one keystroke's accident. So: the value is one of two, in
@@ -49,6 +56,7 @@ $HordeCommand = @{
         # -TickSeconds IS AT MOST 300: a watcher that looks less often than every five minutes is not a
         # doorbell, and stale is three ticks (core/WakeFiles.ps1), so a longer tick is a longer blindness.
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
+        if (-not $PSBoundParameters.ContainsKey("Verb")) { throw (New-HordeUsageError "wake needs a verb: run, or status") }
         if ($Verb -eq "status") { foreach ($flag in @("Mode", "Proof", "Target", "Once", "TickSeconds")) { if ($PSBoundParameters.ContainsKey($flag)) { throw ("-" + $flag + " belongs to wake run, not wake status") } } }
         # Loaded here, in the command's own scope, so each waker's functions stay visible to the blocks
         # it registers (wakers/Port.ps1, Get-HordeWakerFiles).
@@ -72,6 +80,9 @@ $HordeCommand = @{
                     $how = "fresh"
                     if ($age -gt $limit) { $how = "STALE (over " + $limit + " s): this watcher is not running" }
                     Write-Output ($shown + ": heartbeat " + $age + " s ago, " + $how + " (pass " + $beat.value.pass + ", pid " + $beat.value.pid + ")")
+                    # WHICH SESSION THAT WATCHER HOLDS AS ITS OWN, when its heartbeat says.
+                    $own = $beat.value.self
+                    if ($own -is [string]) { Write-Output ($shown + ": " + (Get-HordeWakeSelfLine -Self $own)) }
                 }
                 $tail = @(Read-HordeWakeJournalTail -Count 10 -Mode $word)
                 if ($tail.Count -eq 0) { Write-Output ($shown + ": journal empty") }
@@ -86,7 +97,7 @@ $HordeCommand = @{
         # WHICH RUN THIS IS: a proof when -Proof was given (and then -Target and -Once were too, or the
         # arguments would not have bound), else the watch's mode. Not written back into $Mode: that
         # is the parameter, and its validation would refuse the word.
-        if ($PSCmdlet.ParameterSetName -cne "watch" -and -not ($PSCmdlet.ParameterSetName -ceq "proof" -and $Proof -and $Once -and $Target -cne "")) { throw "a proof run is -Proof -Target <session id> -Once, all three; this is not one, and nothing was run" }
+        if ($PSCmdlet.ParameterSetName -cne "watch" -and -not ($PSCmdlet.ParameterSetName -ceq "proof" -and $Proof -and $Once -and $Target -cne "")) { throw (New-HordeUsageError "a proof run is -Proof -Target <session id> -Once, all three; this is not one, and nothing was run") }
         $chosen = $Mode
         $aim = ""
         if ($Proof) { $chosen = "proof"; $aim = $Target }
@@ -104,6 +115,8 @@ $HordeCommand = @{
         try {
             Write-Output ("wake: " + $plan.banner)
             $run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target
+            # Said with the banner, before anything is nudged or refused.
+            Write-Output ("wake: " + (Get-HordeWakeSelfLine -Self "$($run.self)"))
             # A RUN THAT MAY NOT START (core/WakeRun.ps1: a run that sends, over a ledger that cannot
             # be read) is refused here, before its first tick.
             if ("$($run.refused)" -cne "") { throw ("the " + $plan.mode + " wake run has not started: " + $run.refused) }

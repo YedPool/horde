@@ -5,6 +5,12 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-heartbeat-drops-the-watchers-own-session"
+           Find = 'if ($PSBoundParameters.ContainsKey("Self")) { $beat["self"] = "$Self" }'
+           Replace = '' }
+        @{ Name = "a-heartbeat-that-does-not-say-reads-as-none"
+           Find = 'tickSeconds = 0; self = $null }'
+           Replace = 'tickSeconds = 0; self = "" }' }
         @{ Name = "a-proof-run-has-a-lock-and-a-ledger-of-its-own"
            Find = 'if ((Get-HordeWakeModeWord -Mode $Mode) -ceq "shadow") { return "shadow" }'
            Replace = 'if ((Get-HordeWakeModeWord -Mode $Mode) -cne "live") { return (Get-HordeWakeModeWord -Mode $Mode) }' }

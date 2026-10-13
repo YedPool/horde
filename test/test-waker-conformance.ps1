@@ -40,6 +40,7 @@ $fleetPin = Enter-HordeTestEmptyFleet
 $pinned = Enter-HordeTestPinnedHome -Root $root
 . (Join-Path $root "wakers\Port.ps1")
 foreach ($f in @(Get-HordeWakerFiles)) { . $f }
+. (Join-Path $root "core\ReservedLabels.ps1")
 
 $t0 = New-Object System.DateTime(2026, 10, 12, 8, 0, 0, [System.DateTimeKind]::Utc)
 $script:seq = 0
@@ -50,7 +51,7 @@ function New-Seat {
     $script:seq++
     $s = @{
         id = ("0a000000-0000-4000-8000-" + $script:seq.ToString("000000000000")); label = "A"; role = "orc"; parent = ""
-        unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; unseen = $false; limited = "no"
+        unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; unseen = $false; limited = "no"; betweenTurns = "no"
         # Two lines: a body cut at a newline, or typed, would show its first line.
         body = ("conformance body " + [guid]::NewGuid().ToString("N") + "`nsecond line " + [guid]::NewGuid().ToString("N"))
     }
@@ -117,6 +118,16 @@ $cases = [ordered]@{
         $a3 = Get-HordeWakeState -Waker $W -Id $unread.id
         return ($a1.state -ceq "known" -and $a1.value.limited -ceq "no" -and $a2.state -ceq "known" -and $a2.value.limited -ceq "yes" -and $a3.state -ceq "known" -and $a3.value.limited -ceq "unknown")
     }
+    "state.between-turns" = {
+        param($W, $Fx, $State)
+        # ALL THREE ANSWERS, as for the limit: a waker that always said no would pass a check of one.
+        $plain = New-Seat; $between = New-Seat @{ betweenTurns = "yes" }; $unsure = New-Seat @{ betweenTurns = "unknown" }
+        & $Fx.Seat $State $plain; & $Fx.Seat $State $between; & $Fx.Seat $State $unsure
+        $a1 = Get-HordeWakeState -Waker $W -Id $plain.id
+        $a2 = Get-HordeWakeState -Waker $W -Id $between.id
+        $a3 = Get-HordeWakeState -Waker $W -Id $unsure.id
+        return ($a1.state -ceq "known" -and $a1.value.betweenTurns -ceq "no" -and $a2.state -ceq "known" -and $a2.value.betweenTurns -ceq "yes" -and $a3.state -ceq "known" -and $a3.value.betweenTurns -ceq "unknown")
+    }
     "reach.unseen" = {
         param($W, $Fx, $State)
         $s = New-Seat @{ unseen = $true }
@@ -175,6 +186,12 @@ try {
                     $lacksOne = $true
                     $r = Resolve-HordeWaker -Name $name -Require @($cap)
                     Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains($cap)) ("[" + $name + "] " + $cap + " is " + $support + ", and a caller that requires it is refused, naming it")
+                    if ($support -cne "unverified" -and $cap -ceq "state.between-turns") {
+                        $s = New-Seat
+                        & $fx.Seat $state $s
+                        $a = Get-HordeWakeState -Waker $w -Id $s.id
+                        Check ($a.state -ceq "unknown" -or ($a.state -ceq "known" -and "$($a.value.betweenTurns)" -ceq "no")) ("[" + $name + "] and it never answers betweenTurns yes or unknown, which it cannot tell")
+                    }
                     if ($support -cne "unverified" -and $cap -ceq "state.limit") {
                         $s = New-Seat
                         & $fx.Seat $state $s
@@ -216,6 +233,22 @@ try {
             $a = Send-HordeWakeNudge -Waker $w -Id $never
             $o = & $fx.Observe $state $never
             Check (-not ($a.state -ceq "known" -and $a.value.outcome -ceq "woken") -and $o.nudges -eq 0 -and @($o.typed).Count -eq 0) ("[" + $name + "] a nudge of a session it does not know wakes nobody and types nothing")
+        } finally { & $fx.Remove $state }
+        # THE LABELS ITS FLEET RESERVES ARE THE LABELS HORDE RESERVES, BOTH WAYS. Horde's list is a copy
+        # (core\ReservedLabels.ps1 says of what), so the waker is asked for its fleet's own - through
+        # its fixture, as every case here is - and any label one has and the other lacks fails.
+        # A fleet that COULD NOT BE ASKED is said as NOT COMPARED and fails nothing: an older fleet
+        # tool, or a waker with no fleet. It is never counted as the same. One that answered
+        # something the waker could not read fails: that is not "could not ask".
+        $state = & $fx.New
+        try {
+            $theirs = Get-HordeWakerReservedLabels -Waker $w
+            if ($theirs.state -ceq "known") {
+                $d = Compare-HordeReservedLabels -Theirs $theirs.value.labels
+                Check ($d.equal) ("[" + $name + "] the labels its fleet reserves (" + (@($d.theirs) -join ", ") + ") are the labels Horde reserves (" + (@($d.ours) -join ", ") + "), both ways" + $(if (-not $d.equal) { ": only Horde's - " + (@($d.onlyOurs) -join ", ") + "; only the fleet's - " + (@($d.onlyTheirs) -join ", ") } else { "" }))
+            }
+            elseif ($theirs.state -ceq "absent") { Write-Host ("  [NOTE] [" + $name + "] reserved labels NOT COMPARED: " + $theirs.reason) -ForegroundColor Yellow }
+            else { Check $false ("[" + $name + "] its fleet answered which labels it reserves, and the answer could not be read - not compared, and not passed: " + $theirs.reason) }
         } finally { & $fx.Remove $state }
     }
 } finally {

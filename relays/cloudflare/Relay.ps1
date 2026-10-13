@@ -70,11 +70,15 @@
 # reach the Worker to mean anything. A check here would answer for it, and hide a Worker that let an
 # oversize text through.
 #
+# WHICH FILES HERE HOLD THIS RELAY'S SECRETS (relays/Port.ps1, the section of that name) is
+# SecretFiles.ps1's to say: the Google client file the settings name, and the deploy tool's login.
+#
 # Runs on Windows PowerShell 5.1 and PowerShell 7 alike: System.Net.Http and System.Net.WebSockets.
 
 $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
 . (Join-Path $PSScriptRoot "Deploy.ps1")
 . (Join-Path $PSScriptRoot "RequestSigner.ps1")
+. (Join-Path $PSScriptRoot "SecretFiles.ps1")
 Add-Type -AssemblyName System.Net.Http
 
 # https with a host name, or plain http to this machine only. No path, no user, no wildcard.
@@ -425,4 +429,8 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
         param([string]$Site, [scriptblock]$Say, [string]$HordeHome)
         return (Publish-HordeCloudflareRelay -Site $Site -Say $Say -HordeHome $HordeHome)
     } `
-    -RunWatchMs $script:HordeCloudflareRelayRunWatchMs
+    -RunWatchMs $script:HordeCloudflareRelayRunWatchMs `
+    -SecretFiles {
+        param([string]$HordeHome)
+        return (Get-HordeCloudflareRelaySecretFiles -HordeHome $HordeHome)
+    }

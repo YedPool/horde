@@ -13,7 +13,8 @@
 #       elapsedMs }, outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an
 #       empty -To or a bad budget. It does not START typing when less than 30 s of its budget is left,
 #       and answers refused, budget-too-small, for that.
-# (A row may also carry limited and limitedUntil - Get-HordeWezfleetWakerLimit.)
+# (A row may also carry limited and limitedUntil - Get-HordeWezfleetWakerLimit - and, from a newer command,
+# betweenTurns, acked, lastAckedAt, handedOverCount and oldestHandedOverAt - Get-HordeWezfleetWakerLater.)
 # A row is { id; label; role; parent; retired; reachable; mail; unreadCount; unreadableCount;
 # oldestUnreadAt; idle; boxEmpty; midTurn; reason; reasons }. In form A boxEmpty and midTurn are always
 # unknown: reading them means reading a pane, which is form B's.
@@ -476,6 +477,13 @@ function Test-HordeWezfleetWakerRow {
     # limited AND limitedUntil ARE READ WHEN A ROW HAS THEM, and a row of a command too old to say
     # either is still a row (Get-HordeWezfleetWakerLimit).
     if ($names -ccontains "limited" -and ($Row.limited -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.limited)) { return "a row's limited is not yes, no or unknown" }
+    # THE MEMBERS THE COMMAND GAINED LATER ARE EACH READ WHEN A ROW HAS THEM, AND A ROW WITHOUT THEM IS STILL
+    # A ROW (Get-HordeWezfleetWakerLater): a command from before them must never blank the listing.
+    if ($names -ccontains "betweenTurns" -and ($Row.betweenTurns -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.betweenTurns)) { return "a row's betweenTurns is not yes, no or unknown" }
+    if ($names -ccontains "acked" -and ($Row.acked -isnot [string] -or @("known", "unknown") -cnotcontains $Row.acked)) { return "a row's acked is not known or unknown" }
+    if ($names -ccontains "lastAckedAt" -and $null -ne $Row.lastAckedAt -and $Row.lastAckedAt -isnot [string] -and $Row.lastAckedAt -isnot [datetime]) { return "a row's lastAckedAt is neither a time nor null" }
+    if ($names -ccontains "handedOverCount" -and $null -ne $Row.handedOverCount -and -not (($Row.handedOverCount -is [int] -or $Row.handedOverCount -is [long]) -and $Row.handedOverCount -ge 0)) { return "a row's handedOverCount is neither a whole number, 0 or more, nor null" }
+    if ($names -ccontains "oldestHandedOverAt" -and $null -ne $Row.oldestHandedOverAt -and $Row.oldestHandedOverAt -isnot [string] -and $Row.oldestHandedOverAt -isnot [datetime]) { return "a row's oldestHandedOverAt is neither a time nor null" }
     if ($names -ccontains "limitedUntil" -and $null -ne $Row.limitedUntil -and $Row.limitedUntil -isnot [string] -and $Row.limitedUntil -isnot [datetime]) { return "a row's limitedUntil is neither a time nor null" }
     foreach ($k in @("reachable", "idle", "boxEmpty", "midTurn")) { if ($script:HordeWezfleetWakerWords -cnotcontains $Row.$k) { return ("a row's " + $k + " is '" + (ConvertTo-HordeWezfleetWakerLine $Row.$k -Max 40) + "', not yes, no or unknown") } }
     return ""
@@ -619,6 +627,51 @@ function Get-HordeWezfleetWakerLimit {
     return [pscustomobject]@{ limited = "yes"; limitedUntil = $until }
 }
 
+function ConvertTo-HordeWezfleetWakerTime {
+    # A row's time as UTC, or $null: a [datetime] with a zone, or text that says one. Anything else -
+    # null, no zone, not a time - is $null, which every caller reads as "not known".
+    param($Value)
+    if ($Value -is [datetime]) { if ($Value.Kind -ne [System.DateTimeKind]::Unspecified) { return $Value.ToUniversalTime() }; return $null }
+    if ($Value -is [string]) {
+        $parsed = [datetime]::MinValue
+        if ([datetime]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { return $parsed.ToUniversalTime() }
+    }
+    return $null
+}
+
+function Get-HordeWezfleetWakerLater {
+    # WHAT THE FLEET'S COMMAND HAS SAID IN EACH ROW ONLY SINCE ITS MAIN 5224296 (read from its real output,
+    # 2026-10-13), as the port's members: { betweenTurns; acked; lastAckedAt; handedOverCount;
+    # oldestHandedOverAt }.
+    #   betweenTurns       yes, no, unknown: idle is yes BY THE BETWEEN-TURNS RULE - the status says busy
+    #                      for background work and the session's own turn has ended
+    #   acked, lastAckedAt known or unknown, and when the session last acknowledged any mail, or null
+    #   handedOverCount,   mail handed to the session by its own side and not yet acknowledged - in its
+    #   oldestHandedOverAt inbox, and NOT in unreadCount, which is mail waiting for a knock. The command
+    #                      decides when a hand-over has gone stale and counts as waiting again; this
+    #                      waker does not work that out a second time
+    # A ROW OF AN OLDER COMMAND HAS NONE OF THEM, AND EACH THEN READS AS UNKNOWN - betweenTurns unknown,
+    # acked unknown, the count $null - never as no, never as 0, and never as an error: the installed
+    # command and the new one are both read.
+    param([Parameter(Mandatory = $true)]$Row)
+    $between = "unknown"
+    $p = $Row.PSObject.Properties["betweenTurns"]
+    if ($null -ne $p -and $script:HordeWezfleetWakerWords -ccontains $p.Value) { $between = [string]$p.Value }
+    $acked = "unknown"
+    $p = $Row.PSObject.Properties["acked"]
+    if ($null -ne $p -and $p.Value -ceq "known") { $acked = "known" }
+    $lastAcked = $null
+    $p = $Row.PSObject.Properties["lastAckedAt"]
+    if ($acked -ceq "known" -and $null -ne $p) { $lastAcked = ConvertTo-HordeWezfleetWakerTime $p.Value }
+    $handed = $null
+    $p = $Row.PSObject.Properties["handedOverCount"]
+    if ($null -ne $p -and ($p.Value -is [int] -or $p.Value -is [long])) { $handed = [int]$p.Value }
+    $handedAt = $null
+    $p = $Row.PSObject.Properties["oldestHandedOverAt"]
+    if ($null -ne $handed -and $handed -gt 0 -and $null -ne $p) { $handedAt = ConvertTo-HordeWezfleetWakerTime $p.Value }
+    return [pscustomobject]@{ betweenTurns = $between; acked = $acked; lastAckedAt = $lastAcked; handedOverCount = $handed; oldestHandedOverAt = $handedAt }
+}
+
 function Read-HordeWezfleetWakerState {
     # A row as the port's state, or why it is none: { ok; value; reason }.
     #   RULE 1: reason and reasons are NOT read. A row with good mail and one corrupt record is a row
@@ -638,7 +691,8 @@ function Read-HordeWezfleetWakerState {
         if ($null -eq $oldest) { return [pscustomobject]@{ ok = $false; value = $null; reason = ("the fleet says " + $Row.id + " has unread mail and gave no time for the oldest that can be placed") } }
     }
     $limit = Get-HordeWezfleetWakerLimit -Row $Row
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil } }
+    $later = Get-HordeWezfleetWakerLater -Row $Row
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil; betweenTurns = $later.betweenTurns; acked = $later.acked; lastAckedAt = $later.lastAckedAt; handedOverCount = $later.handedOverCount; oldestHandedOverAt = $later.oldestHandedOverAt } }
 }
 
 function Get-HordeWezfleetWakerRetired {
@@ -714,6 +768,44 @@ function Get-HordeWezfleetWakerState {
     return (New-HordeKnown -Value $state.value -ObservedAt (Get-HordeWezfleetWakerTime))
 }
 
+function Get-HordeWezfleetWakerReservedLabels {
+    # THE FLEET'S OWN LIST OF RESERVED LABELS, asked of its command as everything is asked of it: a
+    # process of its own, the fixed PowerShell on the fleet's wezfleet.ps1, under the deadline of a
+    # whole-fleet read (rule 4). The port's Reserved (wakers/Port.ps1).
+    #   wezfleet labels reserved -Json   exit 0, one line:
+    #       { "schema": "wezfleet.labels.reserved", "version": 1, "labels": ["RS", "WW", "SV"] }
+    #   (read from the real command 2026-10-13, at its main after the verb was merged).
+    # THREE ANSWERS, AND THEY ARE NOT ALIKE:
+    #   answered, with the list - exit 0 and that shape;
+    #   NOT ASKED, with why - the command could not be run at all (no checkout to be found, it timed
+    #     out), or it ran and exited with anything but 0: a wezfleet from before the verb says the
+    #     command is unknown and exits non-zero. Nothing was learned, and that is said: it is never
+    #     an empty list, and never "the same as Horde's";
+    #   unknown - exit 0 and something else: the fleet answered and this waker cannot read it.
+    $run = Start-HordeWezfleetWakerProcess -Argv @("labels", "reserved", "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.fleet
+    $at = Get-HordeWezfleetWakerTime
+    if (-not $run.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ answered = $false; why = ("wezfleet labels reserved could not be run: " + (ConvertTo-HordeWezfleetWakerLine "$($run.reason)" -Max $script:HordeWezfleetWakerDetailChars -Tool)) }) -ObservedAt $at) }
+    if ([int]$run.exit -ne 0) {
+        $said = ConvertTo-HordeWezfleetWakerLine ("$($run.stderr)" + "`n" + "$($run.stdout)") -Max $script:HordeWezfleetWakerDetailChars -Tool
+        return (New-HordeKnown -Value ([pscustomobject]@{ answered = $false; why = ("wezfleet labels reserved exit " + $run.exit + ": this wezfleet does not answer it - one from before its list could be asked for" + $(if ($said -ne "") { " (" + $said + ")" } else { "" })) }) -ObservedAt $at)
+    }
+    $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet labels reserved"
+    if (-not $read.ok) { return (New-HordeUnknown -Reason $read.reason -ObservedAt $at) }
+    $j = $read.json
+    $schema = $j.PSObject.Properties["schema"]
+    $version = $j.PSObject.Properties["version"]
+    if ($null -eq $schema -or $schema.Value -isnot [string] -or $schema.Value -cne "wezfleet.labels.reserved" -or $null -eq $version -or -not ($version.Value -is [int] -or $version.Value -is [long]) -or $version.Value -ne 1) { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 answered in a schema or a version this waker does not read (it reads wezfleet.labels.reserved, version 1)" -ObservedAt $at) }
+    $p = $j.PSObject.Properties["labels"]
+    # ConvertFrom-Json gives a list of none as an empty list here; a string or a number is no list.
+    if ($null -eq $p -or $null -eq $p.Value -or $p.Value -is [string] -or $p.Value -is [System.ValueType]) { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 answered without a list of labels" -ObservedAt $at) }
+    $labels = New-Object System.Collections.ArrayList
+    foreach ($l in @($p.Value)) {
+        if ($l -isnot [string] -or $l.Trim() -eq "") { return (New-HordeUnknown -Reason "wezfleet labels reserved exit 0 listed something that is not a label" -ObservedAt $at) }
+        [void]$labels.Add($l)
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ answered = $true; labels = $labels.ToArray() }) -ObservedAt $at)
+}
+
 function Send-HordeWezfleetWakerNudge {
     # The port's Nudge: form C. Every way the call can fail to say what happened is unreachable with the
     # reason (rules 4 and 5) - nothing is known to have been typed, and the watcher backs off and asks
@@ -761,8 +853,17 @@ function Send-HordeWezfleetWakerNudge {
     $said = "wezfleet mail nudge exit " + $run.exit
     if ([int]$run.exit -ne 0) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = (Get-HordeWezfleetWakerFailure -Json $j -Said $said); at = $at }) -ObservedAt $at) }
     $outcome = $j.PSObject.Properties["outcome"]
-    if ($null -eq $outcome -or $outcome.Value -isnot [string] -or -not $script:HordeWezfleetWakerOutcomes.ContainsKey($outcome.Value) -or $script:HordeWezfleetWakerOutcomes[$outcome.Value] -isnot [string]) {
-        return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = ($said + " answered without an outcome this waker reads: not the shape it reads"); at = $at }) -ObservedAt $at)
+    # THE OUTCOME WORDS ARE A CLOSED SET; THE REASON WORDS ARE NOT.
+    # An outcome is what this waker acts on, so one it does not know - or none - is UNKNOWN: it cannot
+    # say whether anything was typed, and unknown is never permission and never "it was not rung".
+    # A reason is what a person reads. The fleet adds reason words as it learns to tell cases apart
+    # (busy / pointer-stale came with its main 680754f, after mid-turn, status-unreadable, sender-busy
+    # and box-not-empty), and a word this waker has never seen must not blind the watcher: whatever
+    # the word, the outcome beside it stands, and the word is passed on as text - its first line,
+    # printable ASCII, at most 80 characters - to be journaled as the fleet said it.
+    # By its exact letters: the table is looked up without regard to case, and "Woken" is not a word of the set.
+    if ($null -eq $outcome -or $outcome.Value -isnot [string] -or @($script:HordeWezfleetWakerOutcomes.Keys) -cnotcontains $outcome.Value) {
+        return (New-HordeUnknown -Reason ($said + " answered without an outcome this waker reads (woken, busy, unreachable, refused): what happened to the session is not known") -ObservedAt $at)
     }
     $target = $j.PSObject.Properties["target"]
     if ($null -ne $target -and $target.Value -is [string] -and $target.Value -cne "" -and $target.Value -cne $Id) { return (New-HordeUnknown -Reason ("wezfleet mail nudge answered about " + (ConvertTo-HordeWezfleetWakerLine $target.Value -Max 60) + ", not " + $Id)) }
@@ -780,6 +881,11 @@ function Send-HordeWezfleetWakerNudge {
     $answer = [ordered]@{ id = $Id; outcome = $mapped; reason = $why; at = $at }
     $took = $j.PSObject.Properties["elapsedMs"]
     if ($null -ne $took -and ($took.Value -is [int] -or $took.Value -is [long]) -and $took.Value -ge 0) { $answer["elapsedMs"] = [long]$took.Value }
+    # rule: the fleet's own name for the rule that let it type, when it was not the plain one
+    # (between-turns-background-work, since its main 5224296). Passed on as text, cleaned and cut short,
+    # whatever the word is; an older command gives none.
+    $ruled = $j.PSObject.Properties["rule"]
+    if ($null -ne $ruled -and $ruled.Value -is [string] -and $ruled.Value.Trim() -ne "") { $answer["rule"] = ConvertTo-HordeWezfleetWakerLine $ruled.Value -Max 80 -Tool }
     return (New-HordeKnown -Value ([pscustomobject]$answer) -ObservedAt $at)
 }
 
@@ -789,4 +895,5 @@ $null = Register-HordeWaker -Name "wezfleet" `
     -Confirm { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id -Full } `
     -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
     -Source { Get-HordeWezfleetWakerSource } `
+    -Reserved { Get-HordeWezfleetWakerReservedLabels } `
     -Begin { Clear-HordeWezfleetWakerPass }

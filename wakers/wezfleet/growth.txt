@@ -1,3 +1,6 @@
 test/mutations/waker-wezfleet.psd1 | 12 -> 25 | 2026-10-13 | the mutation spec quotes more of the code it changes after the review
 test/mutations/waker-wezfleet.psd1 | 25 -> 36 | 2026-10-13 | the mutation spec quotes more of the code it changes after the review
 test/test-waker-wezfleet.ps1 | 0 -> 2 | 2026-10-13 | a suite or spec of the wake watcher names the waker it drives
+test/mutations/waker-wezfleet.psd1 | 36 -> 50 | 2026-10-13 | the mutation spec quotes more of the code it changes after the review
+test/test-waker-wezfleet.ps1 | 2 -> 4 | 2026-10-13 | a suite or spec of the wake watcher names the waker it drives
+wakers/start-sites.txt | 19 -> 22 | 2026-10-13 | the family's list of start sites names this waker's changed start calls

@@ -19,7 +19,12 @@
 #    older items of its own stream go - never another channel's of that sender, another sender's, or
 #    an item whose key names no stream; a duplicate still trims; no number is reused, not even when the
 #    newest item is the one trimmed; and the relay itself, the port bypassed, refuses a trim from past
-#    the key's own seq, or with a key that names no stream, and stores nothing.
+#    the key's own seq, or with a key that names no stream, and stores nothing. And, of a relay that
+#    tells the port which files on this machine hold its secrets (relays/Port.ps1, the section of that
+#    name): asked of an empty Horde home of the suite's own it answers known or absent, from its
+#    settings alone; every file it names reaches the caller by an absolute, whole path and a few
+#    printable words; a home it cannot read is answered, not thrown; and asking writes nothing. This
+#    part needs no relay running, so it is held even of a relay that is skipped below.
 # II. EACH CAPABILITY OF THE CLOSED LIST: a "yes" must be DEMONSTRATED by the case below, or the suite
 #    fails; any other word must make a caller that requires it refuse the relay, by name. durable is
 #    shown across a fresh runspace (no state of this one survives into it), and realtime by a put from a
@@ -167,6 +172,44 @@ Check ((@($listed | Sort-Object) -join ",") -ceq (@($cases.Keys | Sort-Object) -
 Check ($relayNames.Count -ge 1) ("at least one relay is loaded from relays/ (" + ($relayNames -join ", ") + ")")
 Check ($relayNames -cnotcontains "hostile") "and the hostile test relay is not among them"
 $skipped = New-Object System.Collections.ArrayList
+
+Write-Host ""
+Write-Host "--- which files hold its secrets: every relay that says answers from its settings alone, in the port's shape ---" -ForegroundColor Cyan
+# relays/Port.ps1, WHICH FILES ON THIS MACHINE HOLD A RELAY'S SECRETS. Asked of a Horde home of the suite's
+# own, empty, under the temp folder - never the user's - and of a "home" that is a file, which no relay
+# can read. It needs no relay running, so it is held here, before any relay is skipped for what it needs.
+$secretWork = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-relay-conf-secrets-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+$secretHome = Join-Path $secretWork "home"
+$notAHome = Join-Path $secretWork "not-a-folder"
+[void][System.IO.Directory]::CreateDirectory($secretHome)
+[System.IO.File]::WriteAllText($notAHome, "a file where a home was asked for")
+try {
+    $sayers = @($relayNames | Where-Object { $null -ne (Get-HordeRelay -Name $_).secretFiles })
+    Check ($sayers.Count -ge 1) ("CONTROL: at least one relay under relays/ says which files hold its secrets, so what follows holds something (" + ($sayers -join ", ") + ")")
+    $whole = Get-HordeRelaySecretFiles -HordeHome $secretHome
+    Check ($whole.state -ceq "known" -and (@($whole.value.asked) -join ",") -ceq ($sayers -join ",")) ("over a home with no settings every relay that says can tell, and those asked are exactly the relays that handed the block over (" + $whole.state + $(if ($whole.state -cne "known") { ": " + $whole.reason } else { "" }) + ")")
+    foreach ($name in $sayers) {
+        $r = Get-HordeRelay -Name $name
+        $own = $null
+        $threw = $false
+        try { $own = & $r.secretFiles $secretHome } catch { $threw = $true }
+        Check (-not $threw -and (Test-HordeAnswer $own) -and $own.state -cne "unknown") ("[" + $name + "] says which files hold its secrets with an answer, known or absent, over a home with no settings")
+        $said = @()
+        if ($null -ne $own -and $own.state -ceq "known") { $said = @((Get-HordeRelayMember $own.value "files").value | Where-Object { $null -ne $_ }) }
+        $mine = @()
+        if ($whole.state -ceq "known") { $mine = @($whole.value.files | Where-Object { $_.relay -ceq $name }) }
+        $bad = @($mine | Where-Object { -not (Test-HordeRelayAbsolutePath $_.path) -or $_.path -cne [System.IO.Path]::GetFullPath($_.path) -or $_.what -isnot [string] -or $_.what -cnotmatch '\A[\x20-\x7E]{1,80}\z' })
+        Check ($mine.Count -eq $said.Count -and $bad.Count -eq 0) ("[" + $name + "] every file it names reaches the caller, each by an absolute, whole path and a few printable words (" + $mine.Count + " of " + $said.Count + ", " + $bad.Count + " wrong)")
+        $blind = $null
+        $threw = $false
+        try { $blind = & $r.secretFiles $notAHome } catch { $threw = $true }
+        Check (-not $threw -and (Test-HordeAnswer $blind)) ("[" + $name + "] asked about a home that is a file, it still answers and does not throw")
+    }
+    $left = @(Get-ChildItem -LiteralPath $secretWork -Recurse -Force | ForEach-Object { $_.FullName.Substring($secretWork.Length) } | Sort-Object)
+    Check (($left -join ",") -ceq "\home,\not-a-folder" -and [System.IO.File]::ReadAllText($notAHome) -ceq "a file where a home was asked for") ("and asking wrote nothing: the home is as empty as it was made (" + ($left -join ",") + ")")
+} finally {
+    if ($secretWork -like "*horde-relay-conf-secrets-*" -and [System.IO.Directory]::Exists($secretWork)) { Remove-Item -LiteralPath $secretWork -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 foreach ($name in $relayNames) {
     $r = Get-HordeRelay -Name $name

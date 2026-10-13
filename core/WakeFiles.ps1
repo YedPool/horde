@@ -192,11 +192,16 @@ function Write-HordeWakeHeartbeat {
     # The mode's heartbeat (heartbeat-live.json, or heartbeat-shadow.json with -Shadow), replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
     # anything else tells a watcher that is running from one that is not; tickSeconds is how often this
     # watcher beats, so a reader knows how long a silence is too long (Get-HordeWakeStaleSeconds).
-    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [string]$Mode = "", [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome))
+    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [string]$Mode = "", [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome), [string]$Self)
     # mode says which run beat it - shadow, proof or live - and shadow, kept for readers that know only
     # that member, is true for the shadow run alone.
     $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow
     $beat = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At); pid = $ProcessId; pass = $Pass; shadow = ($word -ceq "shadow"); mode = $word; tickSeconds = $TickSeconds }
+    # self IS THE SESSION THE WATCHER HOLDS AS ITS OWN, "" when it holds none (core/WakeRun.ps1,
+    # New-HordeWakeRun): written when the caller says, so `wake status` can show which session a
+    # running watcher will never nudge. It was held silently, and a watcher started from the wrong
+    # session leaves that session unwoken with nothing anywhere saying why (review of PR 230).
+    if ($PSBoundParameters.ContainsKey("Self")) { $beat["self"] = "$Self" }
     Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $beat -Compress)
 }
 
@@ -211,8 +216,9 @@ function Read-HordeWakeHeartbeat {
     $at = $null
     if ($null -ne $j -and $null -ne $j.PSObject.Properties["at"]) { $at = ConvertFrom-HordeWakeTimeText $j.at }
     if ($null -eq $at) { return (New-HordeUnknown -Reason "the heartbeat holds no time") }
-    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false; mode = ""; tickSeconds = 0 }
-    foreach ($n in @("pid", "pass", "shadow", "mode", "tickSeconds")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
+    # self is $null for a heartbeat that does not say - one written before it was said.
+    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false; mode = ""; tickSeconds = 0; self = $null }
+    foreach ($n in @("pid", "pass", "shadow", "mode", "tickSeconds", "self")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
     return (New-HordeKnown -Value ([pscustomobject]$beat) -ObservedAt $at)
 }
 

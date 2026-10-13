@@ -101,7 +101,15 @@ function New-HordeWakeRun {
     # sending runs share one, as they share the ledger whose attempts it forgave.
     $savedSilence = Read-HordeWakeSilence -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }
-    elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }
+    elseif ($savedSilence.state -ceq "unknown") {
+        # A SILENCE FILE THAT IS THERE AND CANNOT BE READ IS NOT "NOT SILENT", for a run that sends. It
+        # was: a watcher restarted in a silent fleet over a damaged file counted its knocks again from
+        # the forgiven ledger and spent every session's budget a second time - the very thing the file
+        # is kept to prevent (review of PR 230). As for the ledger: a shadow run goes on, saying so; a
+        # run that sends is refused, and the ledger's refusal, when there is one, is said first.
+        if ($run.live) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet is there and cannot be read (" + $savedSilence.reason + "): a run that sends does not start as though the fleet were not silent, because in a silent fleet that spends every session's nudges again. Mend the file, or remove it to start as not silent on purpose: " + (Get-HordeWakeStateFile -Name "silence" -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome)) } }
+        else { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }
+    }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
@@ -181,21 +189,28 @@ function Get-HordeWakeRunPick {
     return (Resolve-HordeProductionWaker -AllowUnverified)
 }
 
+function Get-HordeWakeSelfLine {
+    # WHICH SESSION A WATCHER HOLDS AS ITS OWN, in one line, for the run's banner and for `wake status`.
+    # It is taken from what the session it was started from says of itself (core/Identity.ps1), it is
+    # never nudged, and none of that was ever shown: said here so that it is seen.
+    param([string]$Self = "")
+    if ($Self -cne "") { return ("this watcher holds session " + $Self + " as its own - the session it was started from - and never nudges it") }
+    return "this watcher holds no session as its own: it was not started from inside one, so no session is left out for being it"
+}
+
 function Get-HordeWakeSilenceMark {
     # One line that changes exactly when what is SAVED of the silence changes: whether, since when, and
-    # who was seen taking mail when. The tick saves on a change of it, not on every pass.
+    # how many probes it has had.
+    # The tick saves on a change of it, not on every pass.
     param($Seen)
     if ($null -eq $Seen) { return "" }
     $since = ""
     $q = Get-HordeWakeEntryValue $Seen "quietSince"
     if ($q -is [datetime]) { $since = $q.Ticks }
-    $moved = ""
-    $moves = Get-HordeWakeEntryValue $Seen "moves"
-    if ($moves -is [System.Collections.IDictionary]) { $moved = (@($moves.Keys | Sort-Object | ForEach-Object { "$_" + "@" + $(if ($moves[$_] -is [datetime]) { $moves[$_].Ticks } else { "" }) }) -join ",") }
-    # Nothing to say - not silent, no quiet begun, nobody seen taking mail - is the same as nothing seen:
+    # Nothing to say - not silent, no quiet begun - is the same as nothing seen:
     # no file is written for it.
-    if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "" -and $moved -eq "") { return "" }
-    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)
+    if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "") { return "" }
+    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + "$(Get-HordeWakeEntryValue $Seen "probes")")
 }
 
 function Get-HordeWakeRunMode {
@@ -302,10 +317,10 @@ function Invoke-HordeWakeTick {
             $only = "$(Get-HordeWakeEntryValue $Run "target")"
             if ($only -ceq "") { throw "a proof run was made without the one session it may nudge, so it nudged nobody" }
         }
-        # WHEN A SESSION WAS LAST SEEN TAKING MAIL: what releases a session whose limit nobody could read
-        # (core/Wake.ps1, Get-HordeWakeLimit).
-        $moves = Get-HordeWakeEntryValue $Run.silence "moves"
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"
+        $silentProbes = 0
+        $sentSoFar = Get-HordeWakeEntryValue $Run.silence "probes"
+        if ($sentSoFar -is [int] -or $sentSoFar -is [long]) { $silentProbes = [int]$sentSoFar }
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be
@@ -341,9 +356,9 @@ function Invoke-HordeWakeTick {
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
         $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
-        $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Mail $result.mail -Now $Now -Settings $Settings
+        $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
-        # SAVED WHEN IT CHANGES - silent or not, since when, who took mail - so a restart goes on from it.
+        # SAVED WHEN IT CHANGES - silent or not, and since when - so a restart goes on from it.
         if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {
             try { Save-HordeWakeSilence -Seen $Run.silence -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "silence"; reason = ("what is known of a silent fleet could not be saved: " + $_.Exception.Message) }) }
@@ -403,7 +418,7 @@ function Invoke-HordeWakeTick {
         }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
-    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome }
+    try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome -Self "$(Get-HordeWakeEntryValue $Run "self")" }
     catch { [void]$failed.Add([pscustomobject]@{ id = "heartbeat"; reason = ("the heartbeat could not be written: " + $_.Exception.Message) }) }
     foreach ($f in @($failed)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $f.id -Outcome "unknown" -Reason $f.reason)) }
     $fresh = Select-HordeWakeNewEntries -Entries $entries.ToArray() -Unknown $Run.unknown
