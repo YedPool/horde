@@ -173,6 +173,32 @@ Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0
 foreach ($n in 21..22) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
 Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger.ContainsKey((Sid 1)) -and $run.ledger[(Sid 1)].attempts -eq 1 -and $run.silence.movedAt -eq (At 63)) "once another session takes its mail it is nudged, as an ordinary counted attempt: there is fresh evidence that sessions can take turns"
 
+# A FAULT AFTER THE NUDGE MUST NOT FORGET THE NUDGE. What was told cannot be saved - a folder stands where
+# the file belongs - on the very tick a nudge had to be killed, which is a thing the warchief is told of.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Outcome "killed" -OutcomeReason "nudge-killed: stopped part-way"
+New-Item -ItemType Directory -Path (Join-Path $h "wake\tells-of-live-run-shadow.json") -Force | Out-Null
+$run = New-HordeWakeRun -Live -HordeHome $h
+$faulty = New-Object System.Collections.ArrayList
+foreach ($n in 0..40) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$faulty.Add($e.kind + ":" + $e.id + "@" + ($n * 3)) } }
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 1) ("with the tells' file unwritable for two minutes, the session whose nudge was killed is asked ONCE - the nudge is remembered, and its back-off holds - not again on every tick (" + @(Get-HordeMemoryWakerAsks).Count + " asks)")
+Check ($run.ledger.ContainsKey((Sid 2)) -and $run.ledger[(Sid 2)].attempts -ge 1 -and (Read-HordeWakeLedger -Mode "live" -HordeHome $h).state -ceq "known" -and (Read-HordeWakeLedger -Mode "live" -HordeHome $h).value.ledger.ContainsKey((Sid 2))) "the ledger was kept and saved before the tell was tried: a watcher restarted in the middle of the fault does not knock again either"
+Check (@($faulty | Where-Object { $_ -clike "skip-unknown:tell@*" }).Count -eq 1 -and @($faulty | Where-Object { $_ -clike "skip-unknown:pass@*" }).Count -eq 0 -and @($faulty | Where-Object { $_ -clike "nudge-killed:*" }).Count -eq 1 -and @($faulty | Where-Object { $_ -clike "would-tell:*" }).Count -eq 1) ("the fault is said once, as the tell's own and not the pass's, and the nudge and the tell are journaled (" + (@($faulty) -join ",") + ")")
+# ...and a tell that cannot even be MADE costs the pass nothing either.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Outcome "killed" -OutcomeReason "nudge-killed: stopped part-way"
+$run = New-HordeWakeRun -Live -HordeHome $h
+$realKinds = $script:HordeWakeTellKinds
+try {
+    $script:HordeWakeTellKinds = @("gave-up")
+    $unmade = New-Object System.Collections.ArrayList
+    foreach ($n in 0..10) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$unmade.Add($e.kind + ":" + $e.id) } }
+} finally { $script:HordeWakeTellKinds = $realKinds }
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 1 -and $run.ledger.ContainsKey((Sid 2)) -and @($unmade | Where-Object { $_ -ceq "skip-unknown:tell" }).Count -eq 1) ("a tell that cannot be made is said once, and the nudge is remembered: one ask in thirty seconds (" + (@($unmade) -join ",") + ")")
+
 Write-Host ""
 Write-Host "--- the one switch: turned on, a live run posts what both senders have to say, and a shadow run still posts nothing ---" -ForegroundColor Cyan
 
@@ -244,10 +270,11 @@ New-Item -ItemType Directory -Path (Join-Path $h "wake\ledger-shadow.json") -For
 $run = New-HordeWakeRun -HordeHome $h
 $none = { $a = New-HordeKnown -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
 $failed = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h)
-Check (@($failed | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "pass" -and "$($_.reason)".Contains("the wake pass failed") }).Count -eq 1) "a wake pass that throws is an entry saying so"
+Check (@($failed | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "ledger" -and "$($_.reason)".Contains("the ledger could not be saved") }).Count -eq 1) "a ledger that cannot be saved is an entry saying so"
+Check ($run.ledger.Count -eq 1) "and what the pass counted is kept in the running watcher all the same"
 Check ((Read-HordeWakeHeartbeat -Shadow -HordeHome $h).value.pass -eq 1) "and the heartbeat is still written: the watcher is alive"
 $next = @(Invoke-HordeWakeTick -Run $run -Now (At 3) -Waker $memory -ReadSessions $none -HordeHome $h)
-Check (@($next | Where-Object { $_.id -ceq "pass" }).Count -eq 0 -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).value.pass -eq 2) "the next tick runs, and does not journal the same failure again"
+Check (@($next | Where-Object { $_.id -ceq "ledger" -or $_.id -ceq "pass" }).Count -eq 0 -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).value.pass -eq 2) "the next tick runs, and does not journal the same failure again"
 
 # THE HEARTBEAT FAILS: a folder stands where it belongs.
 $h = New-Home

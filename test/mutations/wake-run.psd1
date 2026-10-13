@@ -8,6 +8,18 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-ledger-is-kept-only-after-the-tells"
+           Find = '$Run.ledger = $result.ledger'
+           Replace = '$keptLater = $result.ledger' }
+        @{ Name = "the-ledger-is-not-saved-after-the-pass"
+           Find = 'if ($ledgerChanged) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-tell-whose-state-cannot-be-saved-fails-the-pass"
+           Find = '} catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("what was told could not be saved: " + $_.Exception.Message) }) }'
+           Replace = '} catch { throw }' }
+        @{ Name = "a-tell-that-cannot-be-made-fails-the-pass"
+           Find = 'catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("a tell could not be made: " + $_.Exception.Message) }) }'
+           Replace = 'catch { throw }' }
         @{ Name = "a-run-made-with-no-word-is-live"
            Find = 'if ($word -ceq "" -and $Live) { $word = "live" }'
            Replace = 'if ($word -ceq "") { $word = "live" }' }
@@ -60,17 +72,17 @@
            Find = '-Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow'
            Replace = '-Ledger $Run.ledger -Send:(-not $shadow)' }
         @{ Name = "found-silent-nothing-is-forgiven"
-           Find = 'if ($silence.declared) { $ledgerNow = Reset-HordeWakeLedgerAttempts -Ledger $ledgerNow }'
+           Find = 'if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }'
            Replace = '' }
         @{ Name = "movement-releases-nobody"
-           Find = 'if ($silence.moved) { $ledgerNow = Set-HordeWakeLedgerProbesDue -Ledger $ledgerNow }'
+           Find = 'if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }'
            Replace = '' }
         @{ Name = "a-limit-is-journaled-every-tick"
            Find = '$Run.limited = $limitedNow.seen'
            Replace = '$Run.limited = @{}' }
         @{ Name = "nobody-told-of-a-silent-fleet"
-           Find = 'if ($null -ne $silence.condition) { [void]$conditions.Add('
-           Replace = 'if ($false) { [void]$conditions.Add(' }
+           Find = 'if ($null -ne $silence.condition) { & $make {'
+           Replace = 'if ($false) { & $make {' }
         @{ Name = "proof-as-a-loop"
            Find = 'if (-not $Once) { return (& $no "wake run -Mode proof makes one pass'
            Replace = 'if ($false) { return (& $no "wake run -Mode proof makes one pass' }
@@ -126,8 +138,8 @@
            Find = 'if ($Run.live -ne $true) { return "shadow" }'
            Replace = 'if (-not $Run.live) { return "shadow" }' }
         @{ Name = "ledger-saved-as-the-other-mode"
-           Find = 'Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome'
-           Replace = 'Save-HordeWakeLedger -Ledger $Run.ledger -Mode "live" -HordeHome $HordeHome' }
+           Find = '$Run.ledger = $result.ledger'
+           Replace = '$Run.ledger = $result.ledger; $mode = $(if ($mode -ceq "shadow") { "live" } else { "shadow" })' }
         @{ Name = "ledger-read-from-the-other-mode"
            Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome'
            Replace = '$saved = Read-HordeWakeLedger -Mode "live" -HordeHome $HordeHome' }
@@ -171,8 +183,8 @@
            Find = '-Kind "bad-mail" -Subject $e.id'
            Replace = '-Kind "bad-mail" -Subject ""' }
         @{ Name = "nobody-told-of-a-failing-fleet-read"
-           Find = 'if ($null -ne $fleetRead.condition) { [void]$conditions.Add('
-           Replace = 'if ($false) { [void]$conditions.Add(' }
+           Find = 'if ($null -ne $fleetRead.condition) { & $make {'
+           Replace = 'if ($false) { & $make {' }
         @{ Name = "what-was-told-forgotten-between-ticks"
            Find = '$Run.told = $toldNow.told'
            Replace = '$Run.told = @{}' }
