@@ -1,0 +1,333 @@
+# DOES THE CLAUDE CODE IDLE READER (agents/claude-code/Idle.ps1) TELL A SESSION THAT IS MID-TURN OR
+# HOLDS LIVE WORK FROM ONE THAT HOLDS NOTHING - ON THE RULES OF planning/idle-session-reaper.md?
+#
+# Two committed fixtures are the controls: fixtures/idle/idle-session.jsonl (a turn that ended, then an
+# away summary and metadata) and fixtures/idle/live-session.jsonl (a tool call still running). Their
+# field names and nesting are copied from real lines read on 2026-10-05; every value is invented. Every
+# other case is built line by line below, in one folder in TEMP that is removed at the end. Nothing here
+# reads a real transcript, a control file or a pane.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+foreach ($f in @("Tristate", "ReadShared", "Transcript", "Idle")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+. (Join-Path $root "agents\claude-code\Transcript.ps1")
+. (Join-Path $root "agents\claude-code\Idle.ps1")
+
+$fixtures = Join-Path $here "fixtures\idle"
+$utc = { param($t) [datetime]::SpecifyKind([datetime]::Parse($t, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal), [System.DateTimeKind]::Utc) }
+$since = & $utc "2026-10-01T00:00:00Z"
+$now = & $utc "2026-10-05T02:00:00Z"
+$V = "2.1.284"
+$sid = "33333333-4444-4555-8666-777777777777"
+$work = Join-Path $env:TEMP ("horde-cc-idle-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $work | Out-Null
+$script:n = 0
+
+# ---- line builders: the real shapes, the fields the reader reads ----
+function Prompt { param($ts, $text) @{ type = "user"; timestamp = $ts; version = $V; sessionId = $sid; origin = @{ kind = "human" }; message = @{ role = "user"; content = $text } } }
+function MetaUser { param($ts, $text) @{ type = "user"; timestamp = $ts; version = $V; sessionId = $sid; isMeta = $true; message = @{ role = "user"; content = $text } } }
+# $In, never $input: $input is PowerShell's automatic pipeline variable, and a parameter of that name
+# arrived empty (measured while writing this suite: every tool input read as nothing).
+function ToolUse { param($ts, $id, $name, $In) @{ type = "assistant"; timestamp = $ts; version = $V; sessionId = $sid; message = @{ id = ("msg_" + $id); role = "assistant"; content = @(@{ type = "tool_use"; id = $id; name = $name; input = $In }) } } }
+function ToolResult { param($ts, $id, $text, $err = $false) @{ type = "user"; timestamp = $ts; version = $V; sessionId = $sid; message = @{ role = "user"; content = @(@{ type = "tool_result"; tool_use_id = $id; content = $text; is_error = $err }) } } }
+function Say { param($ts) $script:n++; @{ type = "assistant"; timestamp = $ts; version = $V; sessionId = $sid; message = @{ id = ("msg_say" + $script:n); role = "assistant"; content = @(@{ type = "text"; text = "Done." }) } } }
+function TurnEnd { param($ts, $pending = $null) $h = @{ type = "system"; subtype = "turn_duration"; timestamp = $ts; version = $V; sessionId = $sid; durationMs = 1000 }; if ($null -ne $pending) { $h["pendingBackgroundAgentCount"] = $pending }; $h }
+function Sys { param($ts, $sub, $ver = $V) @{ type = "system"; subtype = $sub; timestamp = $ts; version = $ver; sessionId = $sid } }
+function Meta { param($type) @{ type = $type; sessionId = $sid } }
+function Note { param($ts, $task, $status, $note = "", $call = "") @{ type = "user"; timestamp = $ts; version = $V; sessionId = $sid; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = ("<task-notification>`n<task-id>" + $task + "</task-id>`n<tool-use-id>" + $call + "</tool-use-id>`n<status>" + $status + "</status>`n<note>" + $note + "</note>`n</task-notification>") } } }
+function Queue { param($ts, $op) @{ type = "queue-operation"; operation = $op; timestamp = $ts; sessionId = $sid } }
+function Fire { param($ts, $task) @{ type = "system"; subtype = "scheduled_task_fire"; timestamp = $ts; version = $V; sessionId = $sid; taskId = $task; cron = "*/5 * * * *" } }
+
+$finalNote = "A task-notification fires each time this agent stops with no live background children of its own."
+$interimNote = "This agent stopped with background work of its own still running; the result below may be interim."
+
+function Write-Lines {
+    param([string]$Name, [object[]]$Lines, [switch]$Torn, [string]$Tail = "")
+    $p = Join-Path $work ($Name + ".jsonl")
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($l in $Lines) { [void]$sb.Append((ConvertTo-Json -InputObject $l -Compress -Depth 20)); [void]$sb.Append("`n") }
+    [void]$sb.Append($Tail)
+    if ($Torn) { [void]$sb.Append('{"type":"assistant","timestamp":"2026-10-0') }
+    [System.IO.File]::WriteAllText($p, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    return $p
+}
+function State { param([string]$Path, $Since = $since, $Now = $now) return (Read-ClaudeCodeTurnState -Path $Path -Since $Since -Now $Now) }
+# An ended turn to build on: a prompt, an answer, the turn end.
+$ended = @((Prompt "2026-10-02T10:00:00Z" "go"), (Say "2026-10-02T10:00:05Z"), (TurnEnd "2026-10-02T10:00:06Z"))
+
+try {
+    Write-Host ""
+    Write-Host "--- the controls: a known-idle and a known-live session ---" -ForegroundColor Cyan
+    $idle = State (Join-Path $fixtures "idle-session.jsonl")
+    Check ($idle.atBoundary.state -eq "known" -and $idle.atBoundary.value -eq $true) "CONTROL: the idle fixture is at a turn boundary"
+    Check ($idle.pendingAgents -eq 0 -and @($idle.openTools).Count -eq 0 -and @($idle.openTasks).Count -eq 0 -and $idle.queued -eq 0 -and @($idle.crons).Count -eq 0 -and @($idle.wakes).Count -eq 0 -and @($idle.unknownTasks).Count -eq 0) "CONTROL: the idle fixture holds no agent, tool, task, queue, cron or wake"
+    Check ($idle.newestEventAt.state -eq "known" -and $idle.newestEventAt.value -eq (& $utc "2026-10-01T10:30:00Z")) "the idle fixture's newest event is its away summary, after the turn end"
+    Check ($idle.lastTurnEndAt.state -eq "known" -and $idle.lastTurnEndAt.value -eq (& $utc "2026-10-01T10:00:10.050Z")) "its last turn end is the turn_duration line"
+    Check (@(Get-HordeUnsurveyedVersions -TurnState $idle).Count -eq 0) "every kind the idle fixture's version wrote is known"
+    $live = State (Join-Path $fixtures "live-session.jsonl")
+    Check ($live.atBoundary.state -eq "known" -and $live.atBoundary.value -eq $false) "CONTROL: the live fixture is not at a turn boundary"
+    Check (@($live.openTools).Count -eq 1 -and $live.openTools[0].name -ceq "Bash") "the live fixture's running tool call is open"
+    $through = Read-HordeTurnState -Harness "claude-code" -Path (Join-Path $fixtures "idle-session.jsonl") -Since $since -Now $now
+    Check ($through.state -eq "known" -and $through.value.harness -ceq "claude-code") "the reader registers with the idle port under its harness name"
+
+    Write-Host ""
+    Write-Host "--- age is the newest event, never the file's time ---" -ForegroundColor Cyan
+    $copy = Join-Path $work "touched.jsonl"
+    Copy-Item -LiteralPath (Join-Path $fixtures "idle-session.jsonl") -Destination $copy
+    [System.IO.File]::SetLastWriteTimeUtc($copy, [datetime]::UtcNow)
+    $t = State $copy
+    Check ($t.newestEventAt.value -eq (& $utc "2026-10-01T10:30:00Z")) "a transcript touched just now still ages from its newest line (design I-04)"
+    $p = Write-Lines "nozone" @($ended + @(@{ type = "system"; subtype = "away_summary"; timestamp = "2026-10-02T10:05:00"; version = $V }))
+    Check ((State $p).newestEventAt.state -eq "unknown") "a line time with no zone makes the age unknown"
+    $p = Write-Lines "future" @($ended + @(Sys "2026-10-05T03:00:00Z" "away_summary"))
+    Check ((State $p).newestEventAt.state -eq "unknown") "a line time an hour in the future makes the age unknown"
+    $p = Write-Lines "nearfuture" @($ended + @(Sys "2026-10-05T02:00:03Z" "away_summary"))
+    Check ((State $p).newestEventAt.state -eq "known") "a line time within the clock skew allowance is still known"
+
+    Write-Host ""
+    Write-Host "--- the turn boundary (design 1.5) ---" -ForegroundColor Cyan
+    $p = Write-Lines "noend" @((Prompt "2026-10-02T10:00:00Z" "go"), (Say "2026-10-02T10:00:05Z"))
+    $s = State $p
+    Check ($s.atBoundary.value -eq $false -and $s.lastTurnEndAt.state -eq "absent" -and @($s.blockers) -contains "no turn end") "a transcript with no turn end is not at a boundary"
+    $p = Write-Lines "away" @($ended + @((Sys "2026-10-02T10:30:00Z" "away_summary"), (Sys "2026-10-02T10:31:00Z" "bridge_status"), (Meta "last-prompt"), (Meta "bridge-session")))
+    Check ((State $p).atBoundary.value -eq $true) "allowed system lines and metadata after a turn end keep the boundary"
+    $p = Write-Lines "fire" @($ended + @(Fire "2026-10-02T10:05:00Z" "a1b2c3d4"))
+    $s = State $p
+    Check ($s.atBoundary.value -eq $false -and @($s.blockers) -contains "system/scheduled_task_fire") "a scheduled task firing after a turn end is not a boundary"
+    $p = Write-Lines "newkind" @($ended + @(Sys "2026-10-02T10:05:00Z" "brand_new"))
+    Check ((State $p).atBoundary.value -eq $false) "a line kind the reader has never seen, after a turn end, is not a boundary"
+    $p = Write-Lines "newmeta" @($ended + @(Meta "brand-new-meta"))
+    Check ((State $p).atBoundary.state -eq "unknown") "an untimestamped line of a kind the reader has never seen makes the boundary unknown"
+    $p = Write-Lines "metauser" @($ended + @(MetaUser "2026-10-02T10:05:00Z" "local command output"))
+    $s = State $p
+    Check ($s.atBoundary.value -eq $false -and @($s.blockers) -contains "user") "a user meta line after a turn end (a local command) is not a boundary: a known false keep"
+    $p = Write-Lines "prompted" @($ended + @(Prompt "2026-10-02T10:05:00Z" "next"))
+    Check ((State $p).atBoundary.value -eq $false) "a new prompt after a turn end is not a boundary"
+    $p = Write-Lines "torn" $ended -Torn
+    $s = State $p
+    Check ($s.atBoundary.state -eq "unknown" -and $s.tornTail -eq 1) "a last line still being written makes the boundary unknown"
+
+    Write-Host ""
+    Write-Host "--- pending agents and open tool calls ---" -ForegroundColor Cyan
+    $p = Write-Lines "pending" @((Prompt "2026-10-02T10:00:00Z" "go"), (TurnEnd "2026-10-02T10:00:06Z" 1))
+    Check ((State $p).pendingAgents -eq 1) "a turn end that names a pending background agent holds it"
+    Check ((State (Write-Lines "nopending" $ended)).pendingAgents -eq 0) "CONTROL: a turn end without the field has none pending"
+    $p = Write-Lines "paired" @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_P1" "Read" @{ file_path = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_P1" "x"))
+    Check (@((State $p).openTools).Count -eq 0) "a tool call with its result is not open"
+    # Measured 2026-10-05 over 224 transcripts: 4 of 5,835 turn ends came with a tool call never answered.
+    # The turn end is the harness saying the turn is over, so the call is not counted as running.
+    $p = Write-Lines "unanswered" @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_Z1" "Read" @{ file_path = "x" }), (TurnEnd "2026-10-02T10:00:06Z"))
+    Check (@((State $p).openTools).Count -eq 0) "a tool call the turn ended without answering is not open after the turn end"
+
+    Write-Host ""
+    Write-Host "--- background tasks (P12) ---" -ForegroundColor Cyan
+    $bgStart = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_B1" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_B1" "Command running in background with ID: bsh0001. Output is being written to: x"), (Say "2026-10-02T10:00:03Z"), (TurnEnd "2026-10-02T10:00:04Z"))
+    $s = State (Write-Lines "bg" $bgStart)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bsh0001" -and $s.openTasks[0].kind -ceq "shell" -and $s.pendingAgents -eq 0) "an unfinished background shell task holds the session, though no agent is pending"
+    $s = State (Write-Lines "bgdone" @($bgStart + @(Note "2026-10-02T10:10:00Z" "bsh0001" "completed")))
+    Check (@($s.openTasks).Count -eq 0) "a completed notification finishes it"
+    $s = State (Write-Lines "bgkilled" @($bgStart + @(Note "2026-10-02T10:10:00Z" "bsh0001" "killed")))
+    Check (@($s.openTasks).Count -eq 0) "a killed notification finishes it"
+    $s = State (Write-Lines "bgpasted" @($bgStart + @(Prompt "2026-10-02T10:10:00Z" "<task-notification>`n<task-id>bsh0001</task-id>`n<status>completed</status>`n</task-notification>")))
+    Check (@($s.openTasks).Count -eq 1) "notification text a person pasted does not finish a task: only the harness's marked notifications count"
+    $s = State (Write-Lines "bgold" $bgStart) -Since (& $utc "2026-10-03T00:00:00Z")
+    Check (@($s.openTasks).Count -eq 0) "a task started before this process started died with the old process"
+    $mon = @((ToolUse "2026-10-02T10:00:01Z" "toolu_M1" "Monitor" @{ command = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_M1" "Monitor started (task bmon001, persistent - runs until TaskStop or session end). You will be notified on each event."))
+    $s = State (Write-Lines "mon" @($mon + @(Note "2026-10-02T10:05:00Z" "bmon001" "")))
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].kind -ceq "monitor") "a Monitor stays open across its event notifications"
+    $s = State (Write-Lines "monstop" @($mon + @((ToolUse "2026-10-02T10:06:00Z" "toolu_S1" "TaskStop" @{ task_id = "bmon001" }), (ToolResult "2026-10-02T10:06:01Z" "toolu_S1" "stopped"))))
+    Check (@($s.openTasks).Count -eq 0) "TaskStop finishes the task it names"
+    $s = State (Write-Lines "monstopfail" @($mon + @((ToolUse "2026-10-02T10:06:00Z" "toolu_S1" "TaskStop" @{ task_id = "bmon001" }), (ToolResult "2026-10-02T10:06:01Z" "toolu_S1" "no such task" $true))))
+    Check (@($s.openTasks).Count -eq 1) "a TaskStop that failed finishes nothing"
+    $ag = @((ToolUse "2026-10-02T10:00:01Z" "toolu_A1" "Agent" @{ description = "x"; prompt = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_A1" "Async agent launched successfully.`nagentId: aagent0001 (internal ID)"))
+    $s = State (Write-Lines "aginterim" @($ag + @(Note "2026-10-02T10:30:00Z" "aagent0001" "completed" $interimNote)))
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].kind -ceq "agent") "an agent whose notification says its result may be interim is still running"
+    $s = State (Write-Lines "agfinal" @($ag + @(Note "2026-10-02T10:30:00Z" "aagent0001" "completed" $finalNote)))
+    Check (@($s.openTasks).Count -eq 0) "an agent's final notification finishes it"
+    $s = State (Write-Lines "wf" @((ToolUse "2026-10-02T10:00:01Z" "toolu_W1" "Workflow" @{ name = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_W1" "Workflow launched in wfrun001. Task ID: bwfl0001`nSummary: x")))
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].kind -ceq "workflow") "a launched Workflow holds the session"
+    $s = State (Write-Lines "unknowntask" @($ended + @(Note "2026-10-02T10:05:00Z" "bzzz9999" "running")))
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "bzzz9999") "a report about a task of a kind the reader does not recognise, not final, is unknown"
+    $s = State (Write-Lines "unknowndone" @($ended + @(Note "2026-10-02T10:05:00Z" "bzzz9999" "completed")))
+    Check (@($s.unknownTasks).Count -eq 0) "a final report about an unrecognised task holds nothing"
+
+    Write-Host ""
+    Write-Host "--- queued input (P13) ---" -ForegroundColor Cyan
+    Check ((State (Write-Lines "q1" @($ended + @(Queue "2026-10-02T10:05:00Z" "enqueue")))).queued -eq 1) "a message enqueued and not taken is queued"
+    Check ((State (Write-Lines "q0" @($ended + @((Queue "2026-10-02T10:05:00Z" "enqueue"), (Queue "2026-10-02T10:05:01Z" "dequeue"))))).queued -eq 0) "CONTROL: one dequeued is not"
+    Check ((State (Write-Lines "qr" @($ended + @((Queue "2026-10-02T10:05:00Z" "enqueue"), (Queue "2026-10-02T10:05:01Z" "remove"))))).queued -eq 0) "nor one removed"
+    Check ((State (Write-Lines "qold" @((Queue "2026-09-30T10:05:00Z" "enqueue")) + $ended)).queued -eq 0) "an enqueue before this process started was lost with the old process (design I-19)"
+    Check (Throws { State (Write-Lines "qnew" @($ended + @(Queue "2026-10-02T10:05:00Z" "reshuffle"))) } "reshuffle") "a queue operation the reader does not know is refused, so the turn state is unknown"
+
+    Write-Host ""
+    Write-Host "--- crons and wakes (P8) ---" -ForegroundColor Cyan
+    $cron = @((ToolUse "2026-10-04T10:00:01Z" "toolu_C1" "CronCreate" @{ cron = "*/5 * * * *"; prompt = "x"; recurring = $true }), (ToolResult "2026-10-04T10:00:02Z" "toolu_C1" "Scheduled recurring job a1b2c3d4 (Every 5 minutes). Session-only."))
+    $s = State (Write-Lines "cron" @($cron + $ended))
+    Check (@($s.crons).Count -eq 1 -and $s.crons[0].id -ceq "a1b2c3d4" -and $s.crons[0].recurring -eq $true) "a recurring cron with no CronDelete holds the session"
+    $s = State (Write-Lines "crondel" @($cron + @((ToolUse "2026-10-04T11:00:00Z" "toolu_C2" "CronDelete" @{ id = "a1b2c3d4" }), (ToolResult "2026-10-04T11:00:01Z" "toolu_C2" "deleted"))))
+    Check (@($s.crons).Count -eq 0) "a CronDelete releases its cron"
+    $s = State (Write-Lines "cronfire" @($cron + @(Fire "2026-10-04T10:05:00Z" "a1b2c3d4")))
+    Check (@($s.crons).Count -eq 1) "a recurring cron that fired is still live"
+    $s = State (Write-Lines "cronold" @($cron)) -Since (& $utc "2026-10-04T12:00:00Z")
+    Check (@($s.crons).Count -eq 0) "a cron from before this process started does not hold it"
+    $s = State (Write-Lines "cronexpired" @($cron)) -Now (& $utc "2026-10-11T10:00:03Z")
+    Check (@($s.crons).Count -eq 0) "a recurring cron older than its 7-day expiry no longer holds the session"
+    $s = State (Write-Lines "cronalive" @($cron)) -Now (& $utc "2026-10-11T09:59:00Z")
+    Check (@($s.crons).Count -eq 1) "CONTROL: one just inside the 7 days still does"
+    $one = @((ToolUse "2026-10-04T10:00:01Z" "toolu_O1" "CronCreate" @{ cron = "0 9 5 10 *"; prompt = "x"; recurring = $false }), (ToolResult "2026-10-04T10:00:02Z" "toolu_O1" "Scheduled one-shot job e5f6a7b8 (Oct 5 at 9:00). Session-only."))
+    $s = State (Write-Lines "oneshot" $one)
+    Check (@($s.crons).Count -eq 1 -and $s.crons[0].recurring -eq $false) "a one-shot cron not yet fired holds the session"
+    $s = State (Write-Lines "oneshotfired" @($one + @(Fire "2026-10-05T09:00:00Z" "e5f6a7b8")))
+    Check (@($s.crons).Count -eq 0) "a one-shot cron that fired is gone"
+    $s = State (Write-Lines "cronerr" @((ToolUse "2026-10-04T10:00:01Z" "toolu_E1" "CronCreate" @{ cron = "x"; prompt = "x"; recurring = $true }), (ToolResult "2026-10-04T10:00:02Z" "toolu_E1" "invalid cron" $true)))
+    Check (@($s.crons).Count -eq 0) "a CronCreate that failed created nothing"
+    $s = State (Write-Lines "cronnoid" @((ToolUse "2026-10-04T10:00:01Z" "toolu_N1" "CronCreate" @{ cron = "x"; prompt = "x"; recurring = $true }), (ToolResult "2026-10-04T10:00:02Z" "toolu_N1" "Scheduled something new")))
+    Check (@($s.crons).Count -eq 1) "a created cron whose id cannot be read still holds the session"
+    $s = State (Write-Lines "wake" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K1" "ScheduleWakeup" @{ delaySeconds = 600; prompt = "x"; reason = "x" }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K1" "ok")))
+    Check (@($s.wakes).Count -eq 1 -and $s.wakes[0].dueAt.state -eq "known" -and $s.wakes[0].dueAt.value -eq (& $utc "2026-10-04T10:10:00Z")) "a wake-up is due at its request time plus its delay"
+    $s = State (Write-Lines "wakenodelay" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K2" "ScheduleWakeup" @{ prompt = "x" }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K2" "ok")))
+    Check (@($s.wakes).Count -eq 1 -and $s.wakes[0].dueAt.state -eq "unknown") "a wake-up whose delay cannot be read has an unknown due time"
+    $s = State (Write-Lines "wakeold" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K4" "ScheduleWakeup" @{ delaySeconds = 600; prompt = "x"; reason = "x" }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K4" "ok"))) -Since (& $utc "2026-10-04T12:00:00Z")
+    Check (@($s.wakes).Count -eq 0) "a wake-up requested before this process started died with the old process"
+    $s = State (Write-Lines "wakestop" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K3" "ScheduleWakeup" @{ stop = $true }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K3" "ok")))
+    Check (@($s.wakes).Count -eq 0) "a call that only stops a loop is not a wake-up"
+
+    Write-Host ""
+    Write-Host "--- the per-version survey (design 1.6) ---" -ForegroundColor Cyan
+    $s = State (Write-Lines "versions" @($ended + @(Sys "2026-10-02T10:05:00Z" "brand_new" "9.9.9")))
+    $u = @(Get-HordeUnsurveyedVersions -TurnState $s)
+    Check ($u.Count -eq 1 -and $u[0] -ceq "9.9.9") "a version whose lines carry a kind the reader does not know is unsurveyed, and only that version"
+    $s = State (Write-Lines "versionsold" @(@(Sys "2026-09-30T10:05:00Z" "brand_new" "9.9.9") + $ended))
+    Check (@(Get-HordeUnsurveyedVersions -TurnState $s).Count -eq 0) "lines written before this process started are not this process's version"
+
+    Write-Host ""
+    Write-Host "--- review of #93: shell tasks the harness or the user moved to the background (F1) ---" -ForegroundColor Cyan
+    # Measured 2026-10-07 over 30 days of transcripts: 3,678 results "Command running in background with ID: x.",
+    # 280 "Command did not complete within its Ns timeout and was moved to the background (ID: x).", 11
+    # "Command was manually backgrounded by user with ID: x." - each followed by "Output is being written to".
+    $auto = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_T1" "Bash" @{ command = "x"; timeout = 120000 }), (ToolResult "2026-10-02T10:02:01Z" "toolu_T1" "Command did not complete within its 120s timeout and was moved to the background (ID: bauto0001). Output is being written to: x. You will be notified when it completes."), (Say "2026-10-02T10:02:02Z"), (TurnEnd "2026-10-02T10:02:03Z"))
+    $s = State (Write-Lines "autobg" $auto)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bauto0001" -and $s.openTasks[0].kind -ceq "shell") "a command the harness moved to the background on its timeout holds the session"
+    $man = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_T2" "PowerShell" @{ command = "x" }), (ToolResult "2026-10-02T10:00:31Z" "toolu_T2" "Command was manually backgrounded by user with ID: bman0001. Output is being written to: x"), (Say "2026-10-02T10:00:32Z"), (TurnEnd "2026-10-02T10:00:33Z"))
+    $s = State (Write-Lines "manbg" $man)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bman0001") "a command the user backgrounded with Ctrl+B holds the session"
+    $s = State (Write-Lines "newphrase" @((ToolUse "2026-10-02T10:00:01Z" "toolu_T3" "Bash" @{ command = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_T3" "Shell parked for later (ID: bnew0001). Output is being written to: x")))
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bnew0001") "a background start is recognised by its structure, an id then its output file, whatever the phrase before it"
+    $s = State (Write-Lines "autobgdone" @($auto + @(Note "2026-10-02T10:10:00Z" "bauto0001" "completed")))
+    Check (@($s.openTasks).Count -eq 0) "CONTROL: its completed notification finishes it"
+
+    Write-Host ""
+    Write-Host "--- review of #93: tasks a subagent started (F2) ---" -ForegroundColor Cyan
+    $main = Write-Lines "withsub" $ended
+    $subDir = Join-Path $work "withsub\subagents"
+    New-Item -ItemType Directory -Path $subDir -Force | Out-Null
+    $subLines = @((ToolUse "2026-10-02T10:00:02Z" "toolu_S9" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:03Z" "toolu_S9" "Command running in background with ID: bsub0001. Output is being written to: x"))
+    $sb = New-Object System.Text.StringBuilder; foreach ($l in $subLines) { [void]$sb.Append((ConvertTo-Json -InputObject $l -Compress -Depth 20)); [void]$sb.Append("`n") }
+    [System.IO.File]::WriteAllText((Join-Path $subDir "agent-a0000000000000009.jsonl"), $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State $main
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bsub0001") "a background task a subagent started holds the session, though its start is only in the subagent's transcript"
+    [System.IO.File]::AppendAllText($main, ((ConvertTo-Json -InputObject (Note "2026-10-02T10:20:00Z" "bsub0001" "completed") -Compress -Depth 20) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State $main
+    Check (@($s.openTasks).Count -eq 0) "its notification, delivered to the main transcript, finishes it"
+    $null = Write-Lines "withsubold" $ended
+    New-Item -ItemType Directory -Path (Join-Path $work "withsubold\subagents") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $work "withsubold\subagents\agent-a0000000000000010.jsonl"), $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State (Join-Path $work "withsubold.jsonl") -Since (& $utc "2026-10-03T00:00:00Z")
+    Check (@($s.openTasks).Count -eq 0) "a subagent's task from before this process started does not hold it"
+
+    Write-Host ""
+    Write-Host "--- review of #93: unreadable lines after the last turn end (F3, F4) ---" -ForegroundColor Cyan
+    $s = State (Write-Lines "badline" $ended -Tail ("{`"type`":`"user`",`"timestamp`":`"2026-10-02T10:05:00Z`",`"message`":{`"content`":`"next`"`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a malformed whole line after the last turn end makes the boundary unknown"
+    $deep = ("[" * 120) + ("]" * 120)
+    $s = State (Write-Lines "deep" $ended -Tail ("{`"type`":`"user`",`"timestamp`":`"2026-10-02T10:05:00Z`",`"origin`":{`"kind`":`"human`"},`"message`":{`"role`":`"user`",`"content`":`"x`"},`"x`":" + $deep + "}`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a line nested past the parser's limit after the last turn end makes the boundary unknown"
+    $s = State (Write-Lines "nul" $ended -Tail (("`0" * 64) + "`n"))
+    Check ($s.atBoundary.state -eq "unknown" -and $s.parseSkipped -eq 1) "a NUL-filled line after the last turn end is counted as skipped and makes the boundary unknown"
+    $s = State (Write-Lines "badmiddle" $ended -Tail ("{bad`n" + (ConvertTo-Json -InputObject (Meta "last-prompt") -Compress) + "`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a malformed line after the last turn end makes the boundary unknown even when a readable line follows it"
+    $s = State (Write-Lines "badbefore" @(@(Prompt "2026-10-02T09:00:00Z" "a") + $ended) -Tail "")
+    Check ($s.atBoundary.state -eq "known") "CONTROL: lines that all parse leave the boundary known"
+    $p = Join-Path $work "badearly.jsonl"
+    [System.IO.File]::WriteAllText($p, ("{bad`n" + ((($ended | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 20 }) -join "`n") + "`n")), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State $p
+    Check ($s.atBoundary.state -eq "known" -and $s.atBoundary.value -eq $true -and $s.parseSkipped -eq 1) "a malformed line BEFORE the last turn end is counted but does not decide the boundary"
+    $s = State (Write-Lines "untimeduser" @($ended + @(@{ type = "user"; origin = @{ kind = "human" }; message = @{ role = "user"; content = "next" } })))
+    Check ($s.atBoundary.state -eq "unknown") "an untimestamped prompt after a turn end makes the boundary unknown: only listed metadata may be untimestamped"
+    $s = State (Write-Lines "untimedtool" @($ended + @(@{ type = "assistant"; message = @{ role = "assistant"; content = @(@{ type = "tool_use"; id = "toolu_N1"; name = "Bash"; input = @{ command = "x" } }) } })))
+    Check ($s.atBoundary.state -eq "unknown") "an untimestamped tool call after a turn end makes the boundary unknown"
+
+    Write-Host ""
+    Write-Host "--- review of #93: a cron ends only at a CronDelete that succeeded (F5) ---" -ForegroundColor Cyan
+    $s = State (Write-Lines "crondelfail" @($cron + @((ToolUse "2026-10-04T11:00:00Z" "toolu_C2" "CronDelete" @{ id = "a1b2c3d4" }), (ToolResult "2026-10-04T11:00:01Z" "toolu_C2" "no such job" $true))))
+    Check (@($s.crons).Count -eq 1) "a CronDelete that failed leaves the cron live"
+    $s = State (Write-Lines "crondelpending" @($cron + @(ToolUse "2026-10-04T11:00:00Z" "toolu_C2" "CronDelete" @{ id = "a1b2c3d4" })))
+    Check (@($s.crons).Count -eq 1) "a CronDelete with no result yet leaves the cron live"
+
+    Write-Host ""
+    Write-Host "--- review of #93: the idle direction of each branch (F6) ---" -ForegroundColor Cyan
+    Check ((State (Write-Lines "q2" @($ended + @((Queue "2026-10-02T10:05:00Z" "enqueue"), (Queue "2026-10-02T10:05:00Z" "enqueue"), (Queue "2026-10-02T10:05:02Z" "dequeue"))))).queued -eq 1) "two enqueued and one taken leaves one queued"
+    $s = State (Write-Lines "outoforder" @($ended + @((Sys "2026-10-02T10:30:00Z" "away_summary"), (Sys "2026-10-02T10:20:00Z" "informational"))))
+    Check ($s.newestEventAt.value -eq (& $utc "2026-10-02T10:30:00Z")) "the newest event is the latest time in the file, not the last line's"
+    $untimedCron = @(@{ type = "assistant"; version = $V; message = @{ role = "assistant"; content = @(@{ type = "tool_use"; id = "toolu_U1"; name = "CronCreate"; input = @{ cron = "*/5 * * * *"; prompt = "x"; recurring = $true } }) } }, (ToolResult "2026-10-04T10:00:02Z" "toolu_U1" "Scheduled recurring job c1c2c3c4 (Every 5 minutes). Session-only."))
+    $s = State (Write-Lines "untimedcron" $untimedCron) -Now (& $utc "2026-11-30T00:00:00Z")
+    Check (@($s.crons).Count -eq 1) "a recurring cron whose creation cannot be placed in time never expires"
+    $s = State (Write-Lines "oddnote" @($bgStart + @(Note "2026-10-02T10:10:00Z" "bsh0001" "completed" "A wording the reader has never seen.")))
+    Check (@($s.openTasks).Count -eq 1) "a completed notification with a note the reader does not recognise does not finish the task"
+    $untimedStart = @(@{ type = "user"; version = $V; message = @{ role = "user"; content = @(@{ type = "tool_result"; tool_use_id = "toolu_V1"; content = "Command running in background with ID: buntimed1. Output is being written to: x"; is_error = $false }) } })
+    $s = State (Write-Lines "untimedstart" @(@(ToolUse "2026-10-02T10:00:01Z" "toolu_V1" "Bash" @{ command = "x" }) + $untimedStart))
+    Check (@($s.openTasks).Count -eq 1) "a task start on a line whose time cannot be placed still counts"
+    $s = State (Write-Lines "oldnote" @(@(ToolUse "2026-10-02T10:00:01Z" "toolu_V1" "Bash" @{ command = "x" }) + $untimedStart + @(Note "2026-09-30T10:00:00Z" "buntimed1" "completed")))
+    Check (@($s.openTasks).Count -eq 1) "a notification from before this process started finishes nothing"
+    $p = Write-Lines "hugepending" @((Prompt "2026-10-02T10:00:00Z" "go"), (TurnEnd "2026-10-02T10:00:06Z" ([long]3000000000)))
+    $hp = $null; try { $hp = (State $p).pendingAgents } catch { $hp = $null }
+    Check ($hp -eq [long]3000000000) "a pending count too large for 32 bits is read whole and still holds the session"
+
+    Write-Host ""
+    Write-Host "--- re-review of #93: a start the reader does not recognise fails closed ---" -ForegroundColor Cyan
+    # The reviewer's probe: the harness changes its wording (18 versions in 30 days). A call that asked for
+    # the background, or a result whose first line says background, that matches no known start is an
+    # UNKNOWN task: it holds the session until a final notification names its call.
+    $drift = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_D1" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_D1" "Command running in background with ID: b123abc. Output will be saved to C:\tmp\b123abc.output"), (Say "2026-10-02T10:00:03Z"), (TurnEnd "2026-10-02T10:00:04Z"))
+    $s = State (Write-Lines "drift" $drift)
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_D1") "a background call whose result matches no known start is an unknown task, so a wording change cannot read idle"
+    $s = State (Write-Lines "driftdone" @($drift + @(Note "2026-10-02T10:30:00Z" "b123abc" "completed" "" "toolu_D1")))
+    Check (@($s.unknownTasks).Count -eq 0 -and @($s.openTasks).Count -eq 0) "a final notification naming its call releases it"
+    $s = State (Write-Lines "driftother" @($drift + @(Note "2026-10-02T10:30:00Z" "bzzz0000" "completed" "" "toolu_ZZ")))
+    Check (@($s.unknownTasks).Count -eq 1) "a final notification for another call does not"
+    $s = State (Write-Lines "flagonly" @((ToolUse "2026-10-02T10:00:01Z" "toolu_D2" "PowerShell" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_D2" "Started job 7. Results will appear later."), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_D2") "a call that asked for the background holds the session even when its result never says so"
+    $s = State (Write-Lines "fork" @((ToolUse "2026-10-02T10:00:01Z" "toolu_F1" "Agent" @{ description = "x"; prompt = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_F1" ("Fork started " + [char]0x2014 + " processing in background")), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_F1") "an Agent fork, which names no id, holds the session as an unknown task (11 in 30 days)"
+    $s = State (Write-Lines "skillfork" @((ToolUse "2026-10-02T10:00:01Z" "toolu_K9" "Skill" @{ skill = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_K9" ("Skill " + [char]34 + "x" + [char]34 + " launched (forked execution, running in the background).`n`nRunning in the background as @x")), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 1) "a forked Skill holds the session as an unknown task (6 in 30 days)"
+    $resume = @((ToolUse "2026-10-02T10:00:01Z" "toolu_R1" "SendMessage" @{ to = "x"; message = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_R1" ('{"success":true,"message":"Agent \"a1b2c3d4e5f600001\" had no active task; resumed from transcript in the background with your message.","resumedAgentId":"a1b2c3d4e5f600001"}')), (TurnEnd "2026-10-02T10:00:04Z"))
+    $s = State (Write-Lines "resume" $resume)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "a1b2c3d4e5f600001" -and $s.openTasks[0].kind -ceq "agent") "a subagent resumed by SendMessage is an open agent task, whatever the pending count says (7 in 30 days)"
+    $s = State (Write-Lines "resumedone" @($resume + @(Note "2026-10-02T10:30:00Z" "a1b2c3d4e5f600001" "completed" $finalNote)))
+    Check (@($s.openTasks).Count -eq 0) "its final notification finishes it"
+    $s = State (Write-Lines "readbg" @((ToolUse "2026-10-02T10:00:01Z" "toolu_Q1" "Read" @{ file_path = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_Q1" "     1  the background colour is blue"), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 0) "CONTROL: a read-only tool's result that says background starts nothing"
+    $s = State (Write-Lines "bgerr" @((ToolUse "2026-10-02T10:00:01Z" "toolu_Q2" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_Q2" "permission denied" $true), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 0) "CONTROL: a background call that failed started nothing"
+    $s = State (Write-Lines "fgplain" @((ToolUse "2026-10-02T10:00:01Z" "toolu_Q3" "Bash" @{ command = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_Q3" "done"), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 0) "CONTROL: an ordinary foreground call starts nothing"
+
+    Write-Host ""
+    Write-Host "--- the Remote Control link, reported (design S8) ---" -ForegroundColor Cyan
+    $s = State (Join-Path $fixtures "idle-session.jsonl")
+    Check ($s.remoteLink.state -eq "known" -and $s.remoteLink.value -ceq "session_neutral") "a bridge-session line reports the session's Remote Control link"
+    $s = State (Write-Lines "nolink" $ended)
+    Check ($s.remoteLink.state -eq "absent") "a transcript with no bridge-session line reports no link"
+    Check ($s.atBoundary.value -eq $true) "CONTROL: the link is reported only; it holds nothing"
+
+    Write-Host ""
+    Write-Host "--- no text leaves the reader ---" -ForegroundColor Cyan
+    $secret = "PLANTED-SECRET-91ab"
+    $s = State (Write-Lines "secret" @((Prompt "2026-10-02T10:00:00Z" $secret), (ToolUse "2026-10-02T10:00:01Z" "toolu_X1" "Bash" @{ command = $secret }), (ToolResult "2026-10-02T10:00:02Z" "toolu_X1" ($secret + " Command running in background with ID: bsec0001."))))
+    Check ((ConvertTo-Json -InputObject $s -Depth 20) -notlike ("*" + $secret + "*")) "no prompt, tool input or tool result text appears in the turn state"
+} finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+
+Complete-HordeSuite -Success "the claude-code idle reader holds every session that is mid-turn or holds live work, and releases one that holds nothing"

@@ -1,0 +1,154 @@
+# Mutations of agents/claude-code/Idle.ps1.
+# Run: powershell -File tools\Mutate.ps1 -Spec agents\claude-code\test\mutations\idle.psd1
+# Each breaks one rule of the idle reader (planning/idle-session-reaper.md 1.3, 1.5, 1.6, P8, P12, P13);
+# agents\claude-code\test\test-idle.ps1 must fail for every one.
+@{
+    Target = "agents\claude-code\Idle.ps1"
+    Suite  = "agents\claude-code\test\test-idle.ps1"
+    Mutations = @(
+        @{ Name = "age-from-mtime"
+           Find = 'elseif ($null -eq $st.newest -or $t -gt $st.newest) { $st.newest = $t }'
+           Replace = 'elseif ($null -eq $st.newest) { $st.newest = [System.IO.File]::GetLastWriteTimeUtc($Path) }' }
+        @{ Name = "pending-count-ignored"
+           Find = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = [long]$p }'
+           Replace = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = 0 }' }
+        @{ Name = "task-starts-not-read"
+           Find = 'if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; return }'
+           Replace = 'if ($false) { break }' }
+        @{ Name = "unrecognised-task-finished"
+           Find = 'if ($final) { $St.unknownTasks.Remove($n.taskId) } else { $St.unknownTasks[$n.taskId] = $n.status }'
+           Replace = '$St.unknownTasks.Remove($n.taskId)' }
+        @{ Name = "interim-note-is-final"
+           Find = '(@("final", "none") -ccontains $n.noteKind)'
+           Replace = '$true' }
+        @{ Name = "pasted-notification-counts"
+           Find = 'if ($cur -and (Test-ClaudeCodeNotificationOrigin -Origin $v["origin"])) {'
+           Replace = 'if ($cur -and $true) {' }
+        @{ Name = "recurring-cron-as-one-shot"
+           Find = 'if ($st.crons.ContainsKey($tid) -and -not $st.crons[$tid].recurring) { $st.crons.Remove($tid) }'
+           Replace = 'if ($st.crons.ContainsKey($tid)) { $st.crons.Remove($tid) }' }
+        @{ Name = "tool-calls-before-since-count"
+           Find = 'if (-not $cur -or $in -isnot [System.Collections.IDictionary]) { continue }'
+           Replace = 'if ($in -isnot [System.Collections.IDictionary]) { continue }' }
+        @{ Name = "cron-never-expires"
+           Find = 'Where-Object { -not ($st.crons[$_].recurring -and $null -ne $st.crons[$_].at -and $st.crons[$_].at -lt $expiry) }'
+           Replace = 'Where-Object { $true }' }
+        @{ Name = "scheduled-fire-allowed-at-boundary"
+           Find = '$script:ClaudeCodeBoundaryKinds = @("system/away_summary",'
+           Replace = '$script:ClaudeCodeBoundaryKinds = @("system/scheduled_task_fire", "system/away_summary",' }
+        @{ Name = "untimed-known-kind-allowed-at-boundary"
+           Find = 'if ($script:ClaudeCodeMetadataKinds -cnotcontains $kind -and $st.unreadable -eq "") {'
+           Replace = 'if ($script:ClaudeCodeKnownKinds -cnotcontains $kind -and $st.unreadable -eq "") {' }
+        @{ Name = "enqueue-ignored"
+           Find = 'if ($op -ceq "enqueue") { $st.queued++ }'
+           Replace = 'if ($op -ceq "enqueue") { }' }
+        @{ Name = "queue-before-since-counts"
+           Find = '        if (-not $cur) { return }'
+           Replace = '        if ($false) { return }' }
+        @{ Name = "zone-less-time-accepted"
+           Find = 'if ($null -eq $t) { $st.badTime = "line " + $ln + " has a time with no zone" }'
+           Replace = 'if ($null -eq $t) { }' }
+        @{ Name = "future-time-accepted"
+           Find = 'if (($st.newest - $Now).TotalSeconds -gt $script:HordeClockSkewSeconds) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "torn-tail-is-known"
+           Find = 'if ($read.tornTail -gt 0) { $boundary = New-HordeUnknown -Reason "the last line is still being written" }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "failed-taskstop-finishes"
+           Find = 'if (-not $Err) { $St.tasks.Remove($St.stops[$Id]) }'
+           Replace = '$St.tasks.Remove($St.stops[$Id])' }
+        @{ Name = "failed-croncreate-creates"
+           Find = '        if (-not $Err) {'
+           Replace = '        if ($true) {' }
+        @{ Name = "version-survey-off"
+           Find = 'if ($script:ClaudeCodeKnownKinds -cnotcontains $kind -and -not $st.versions[$vkey].unrecognised.Contains($kind)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "since-ignored"
+           Find = '$cur = ($null -eq $t) -or ($t -ge $Since)'
+           Replace = '$cur = $true' }
+        @{ Name = "stop-only-call-is-a-wake"
+           Find = 'elseif ($name -ceq "ScheduleWakeup" -and ($in.ContainsKey("delaySeconds") -or $in.ContainsKey("prompt"))) {'
+           Replace = 'elseif ($name -ceq "ScheduleWakeup") {' }
+        @{ Name = "wake-delay-ignored"
+           Find = '$due = New-HordeKnown -Value $t.AddSeconds([double]$d)'
+           Replace = '$due = New-HordeKnown -Value $t' }
+        @{ Name = "tool-calls-survive-turn-end"
+           Find = '$st.blockers.Clear(); $st.tools.Clear()'
+           Replace = '$st.blockers.Clear()' }
+        @{ Name = "no-turn-end-is-a-boundary"
+           Find = 'elseif (-not $st.hasEnd) { $boundary = New-HordeKnown -Value $false; $blockers = @("no turn end") }'
+           Replace = 'elseif (-not $st.hasEnd) { $boundary = New-HordeKnown -Value $true }' }
+        @{ Name = "tool-result-closes-nothing"
+           Find = '                $st.tools.Remove($id)'
+           Replace = '                $null = 0' }
+        # The review of #93's seven survivors, each moving the reader towards idle.
+        @{ Name = "dequeue-clears-queue"
+           Find = 'if ($st.queued -gt 0) { $st.queued-- }'
+           Replace = '$st.queued = 0' }
+        @{ Name = "newest-is-last-not-max"
+           Find = 'elseif ($null -eq $st.newest -or $t -gt $st.newest) { $st.newest = $t }'
+           Replace = 'else { $st.newest = $t }' }
+        @{ Name = "untimed-cron-expires"
+           Find = '$null -ne $st.crons[$_].at -and $st.crons[$_].at -lt $expiry'
+           Replace = '$st.crons[$_].at -lt $expiry' }
+        @{ Name = "unrecognised-note-is-final"
+           Find = '(@("final", "none") -ccontains $n.noteKind)'
+           Replace = '(@("final", "none", "unrecognised") -ccontains $n.noteKind)' }
+        @{ Name = "untimed-line-not-current"
+           Find = '$cur = ($null -eq $t) -or ($t -ge $Since)'
+           Replace = '$cur = ($null -ne $t) -and ($t -ge $Since)' }
+        @{ Name = "notification-before-since-counts"
+           Find = 'if ($cur -and (Test-ClaudeCodeNotificationOrigin -Origin $v["origin"])) {'
+           Replace = 'if ((Test-ClaudeCodeNotificationOrigin -Origin $v["origin"])) {' }
+        @{ Name = "pending-ignored-when-long"
+           Find = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = [long]$p }'
+           Replace = 'elseif ($p -is [int]) { $st.pending = [long]$p }' }
+        # The fixes of the review of #93.
+        @{ Name = "shell-start-by-one-phrase"
+           Find = 'pattern = ''ID: ([A-Za-z0-9]+)\)?\.?\s*Output is being written to'''
+           Replace = 'pattern = ''running in background with ID: ([A-Za-z0-9]+)''' }
+        @{ Name = "subagents-not-read"
+           Find = '    Read-ClaudeCodeSubagentTasks -St $st -Path $Path -Since $Since'
+           Replace = '    $null = 0' }
+        @{ Name = "subagent-lines-before-since-count"
+           Find = 'if ($null -ne $t -and $t -lt $Since) { return }'
+           Replace = '$null = 0' }
+        @{ Name = "skipped-line-gap-ignored"
+           Find = 'if ($st.hasEnd -and $ln -ne $st.lastLn + 1 -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "skipped-last-line-ignored"
+           Find = 'if ($st.hasEnd -and $read.lineCount -gt $st.lastLn -and $read.tornTail -eq 0 -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreadable-is-a-known-boundary"
+           Find = 'elseif ($st.unreadable -ne "") { $boundary = New-HordeUnknown -Reason $st.unreadable }'
+           Replace = 'elseif ($false) { }' }
+        @{ Name = "crondelete-releases-at-the-call"
+           Find = 'elseif ($name -ceq "CronDelete") { $st.deletes[$id] = "$($in["id"])" }'
+           Replace = 'elseif ($name -ceq "CronDelete") { $st.crons.Remove("$($in["id"])") }' }
+        @{ Name = "failed-crondelete-releases"
+           Find = 'if ($St.deletes.ContainsKey($Id)) { if (-not $Err) { $St.crons.Remove($St.deletes[$Id]) }; $St.deletes.Remove($Id) }'
+           Replace = 'if ($St.deletes.ContainsKey($Id)) { $St.crons.Remove($St.deletes[$Id]); $St.deletes.Remove($Id) }' }
+        @{ Name = "remote-link-not-reported"
+           Find = 'if ($kind -ceq "bridge-session" -and $v["bridgeSessionId"] -is [string] -and $v["bridgeSessionId"] -ne "") { $st.link = $v["bridgeSessionId"] }'
+           Replace = '$null = 0' }
+        # The re-review of #93: a start the reader does not recognise fails closed.
+        @{ Name = "unrecognised-start-is-nothing"
+           Find = 'if ($asked -or $says) { $St.unknownStarts[$Id] = $true }'
+           Replace = '$null = 0' }
+        @{ Name = "background-call-not-noticed"
+           Find = '$asked = ($null -ne $call -and $call.bg)'
+           Replace = '$asked = $false' }
+        @{ Name = "background-wording-not-noticed"
+           Find = '$says = ($first -match ''background'') -and -not ($null -ne $call -and $script:ClaudeCodeReadOnlyTools -ccontains $call.name)'
+           Replace = '$says = $false' }
+        @{ Name = "read-only-result-starts-something"
+           Find = '$says = ($first -match ''background'') -and -not ($null -ne $call -and $script:ClaudeCodeReadOnlyTools -ccontains $call.name)'
+           Replace = '$says = ($first -match ''background'')' }
+        @{ Name = "any-notification-releases-an-unknown-start"
+           Find = 'if ($final -and $n.toolCallId -ne "" -and $St.unknownStarts.ContainsKey($n.toolCallId)) { $St.unknownStarts.Remove($n.toolCallId) }'
+           Replace = 'if ($final) { $St.unknownStarts.Clear() }' }
+        @{ Name = "resume-not-a-task"
+           Find = '    @{ kind = "agent"; pattern = ''"resumedAgentId":"([A-Za-z0-9]+)"'' }'
+           Replace = '    @{ kind = "agent"; pattern = ''(?!)'' }' }
+    )
+}

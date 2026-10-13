@@ -27,5 +27,8 @@
         @{ Name = "file-order-not-checked"
            Find = '    if ($r.line -lt $PreviousLine) {'
            Replace = '    if ($false) {' }
+        @{ Name = "nul-line-read-as-blank"
+           Find = 'if ($text.Trim() -eq "" -and $text.IndexOf([char]0) -lt 0) { continue }'
+           Replace = 'if ($text.Trim() -eq "") { continue }' }
     )
 }

@@ -8,6 +8,10 @@
     { "name": "model-select", "port": "agent", "meaning": "The model can be chosen when a session starts." },
     { "name": "provider-select", "port": "agent", "meaning": "The endpoint and credential of a provider other than the native one can be chosen when a session starts." },
     { "name": "session-id-preset", "port": "agent", "meaning": "A session can be started with an id Horde chose, so its id is known before it runs." },
-    { "name": "session.remoteName", "port": "agent", "meaning": "Horde can set the name a remote or web view shows for a session, at birth and on a live session." }
+    { "name": "session.remoteName", "port": "agent", "meaning": "Horde can set the name a remote or web view shows for a session, at birth and on a live session." },
+    { "name": "idle.turnState", "port": "agent", "meaning": "Horde can tell from the harness's own files whether a session's turn has ended and whether it still holds background work, a queued message or a scheduled wake, read by each harness's own idle reader." },
+    { "name": "idle.lastEvent", "port": "agent", "meaning": "Every line the harness writes carries a time with a zone, so a session's idle age is measured from its newest event, never from a file's modification time." },
+    { "name": "input.box", "port": "agent", "meaning": "Horde can read, from the host's screen text, whether the session's input box is empty, holds typed text, or cannot be read." },
+    { "name": "close.keys", "port": "agent", "meaning": "A key sequence ends the harness cleanly at an empty prompt, and its effect on the transcript has been measured." }
   ]
 }

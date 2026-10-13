@@ -24,7 +24,11 @@
     "model-select": { "support": "yes", "evidence": "fixture: --model in its help" },
     "provider-select": { "support": "declined", "evidence": "fixture: Horde chooses not to use it" },
     "session-id-preset": { "support": "yes", "evidence": "fixture: --id <uuid> in its help" },
-    "session.remoteName": { "support": "unverified", "evidence": "fixture: nobody has measured a remote view" }
+    "session.remoteName": { "support": "unverified", "evidence": "fixture: nobody has measured a remote view" },
+    "idle.turnState": { "support": "unverified", "evidence": "a neutral fixture harness: nothing measured" },
+    "idle.lastEvent": { "support": "unverified", "evidence": "a neutral fixture harness: nothing measured" },
+    "input.box": { "support": "unverified", "evidence": "a neutral fixture harness: nothing measured" },
+    "close.keys": { "support": "unverified", "evidence": "a neutral fixture harness: nothing measured" }
   },
   "permissionLevels": [
     { "level": "plan", "argv": ["--mode", "look"], "entryPoints": ["interactive"], "evidence": "fixture: --mode look in its help", "readback": "fixture: the started harness reports mode look", "preconditions": [{ "name": "folder-ok", "evidence": "fixture: look silently becomes careful in a folder it does not trust" }] },
