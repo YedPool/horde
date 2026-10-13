@@ -55,11 +55,74 @@ and parse it back.
 Rule learnt: when `horde listen` runs elevated, `horde hub serve -Listen` must run elevated too. (Run ids
 must match `YYYYMMDD-HHMMSS-name`; `20261013-0335-x` is refused by the hub before anything is sent.)
 
+
+## Round trip proven, 2026-10-13 05:20-06:01Z
+
+### How the always-on PC got an interactive desktop without anyone at it
+
+- S4U tasks (run whether or not signed in, no stored password) were tried first: wezterm-gui did start in
+  session 0, made gui-sock-<pid> and answered `wezterm cli list`, and the hub heard an S4U dial. Abandoned
+  for the route below before a session ran; every S4U task, its config folder and processes were removed.
+- The route that stands: M enabled Remote Desktop on the always-on PC (firewall rule "Horde M - RDP from
+  laptop only", remote 192.168.1.179 only, NLA on), signed Yagdil in once from the laptop and DISCONNECTED;
+  the desktop session (session 2, state Disc) keeps running. No auto-logon, no stored password on either
+  machine.
+- Founder rule: WezTerm runs as admin ("many operations require admin access"). Task "Horde M - WezTerm at
+  logon" starts wezterm-gui RunLevel Highest; "Horde node serve (dial laptop hub)" is RunLevel Highest too.
+
+### Three things had to be fixed on the node before a spawn could run
+
+1. Claude's folder-trust dialog. Each spawn stopped at "Is this a project you trust?" and Horde's close
+   text then answered it No. Fix: `projects["C:/Users/Yagdil/bin/horde"]` and
+   `projects["C:/Users/Yagdil/Documents/Code/imadi"]` got `hasTrustDialogAccepted: true` in
+   %USERPROFILE%\.claude.json (backup: .claude.json.before-horde-trust).
+2. The bypass-mode warning kept appearing although settings.json already said
+   `skipDangerousModePermissionPrompt: true`: the file was INVALID, so Claude skipped all of it -- one hook
+   (wf-cmdlog.exe) had `"args": {}` where the laptop has `"args": []`. Fixed to `[]` with node (backup of
+   the broken original: settings.json.before-horde-bypass). Do not rewrite these files with Windows
+   PowerShell 5.1's ConvertTo-Json: it turns one-item and empty arrays into objects, which is how this
+   breaks.
+3. The account's usage limit was hit at 05:27Z (reset 05:30Z); the run waited it out.
+
+### The run
+
+| # | Command (hub) | Result |
+|---|---------------|--------|
+| 17 | `horde session spawn -Node 32c5d8f3-... -Label W -Run 20261013-055000-alwayson -Profile claude -Repo github.com/YedPool/horde -Prompt "<write hostname, UTC time, elevation to C:\Users\Yagdil\horde-spawn-proof.txt>" -Permission bypass -TimeoutSeconds 300` | `DONE session.spawn request 118682ce-... session 46211e51-... pid 15628 procStart 134363426815649205`; pid 15628 is claude in session 2 |
+| 18 | read over ssh: C:\Users\Yagdil\horde-spawn-proof.txt | `hostname: DESKTOP-TJQJGTM`, `utc: 2026-10-13T05:31:10.0404876Z`, `elevated: True` |
+| 19 | `horde session status -RequestId 118682ce-...` | the same DONE line |
+| 20 | `horde session close -SessionId 46211e51-... -TimeoutSeconds 300` | `DONE session.close request af6ce86b-... session 46211e51-...` |
+| 21 | `horde hub revoke -Device 32c5d8f3-...` | key refused; a spawn to it: "is not enrolled live, so nothing is sent to it"; the node's next dial: "Connection reset by 192.168.1.179 port 2222"; the listener stopped (no enrolled node left) |
+| 22 | node: `horde node rotate-key`; hub: `horde hub enroll -Device 32c5d8f3-... -Key <new> -Address 192.168.1.182`; restart the listener task, then the node's serve task | `heard at 2026-10-13T06:01:02Z` |
+
+UNRESOLVED, recorded not explained: in row 17's run, Horde's typed no-op line and its "Read ...prompt.txt"
+line both sat UNSUBMITTED in Claude's input box; the spawn was still reported DONE (mode proven), and the
+work ran only after an Enter was sent by hand. Earlier spawns of the same night failed on the dialogs
+above, so this is the first spawn that reached the typing step on this node. Needs its own look.
+
+Operational notes:
+- After a revoke the listener exits; restart its task after re-enrolling. Its start takes about 40 s
+  (a NetTCPIP module-load error is printed and survived each time). The node's serve process must be
+  restarted after `node rotate-key`; the running one kept failing to frame until it was.
+- The listener task's log was switched from `*>> listen-task.log` (it stopped writing after a restart)
+  to a transcript: C:\Users\yedid\.horde\hub\listen-transcript.log.
+- `horde nodes` shows the inventory as "partial" (R1 no layout port; W1/W3/W8 no .wezfleet folders;
+  X4 no host adapter). That is the read-only fleet inventory, which looks for wezfleet's stores; the
+  always-on PC has no wezfleet. It does not affect spawn/close (proven above); it only means the hub
+  cannot list sessions on that machine that Horde did not start.
+
+### Undo, every change on the always-on PC
+- Tasks: `Unregister-ScheduledTask 'Horde node serve (dial laptop hub)'`, and M's 'Horde M - WezTerm at logon'.
+- Claude config: restore %USERPROFILE%\.claude.json.before-horde-trust (loses Claude state written since)
+  or delete the two `projects` trust entries; settings.json: keep the `args: []` fix (the backup is the
+  broken file).
+- Node: `horde hub revoke -Device 32c5d8f3-...` on the hub; delete %USERPROFILE%\.horde and \bin\horde.
+- RDP: M's rule "Horde M - RDP from laptop only" and the RDP switch (M's change; M lists it).
+
 ## Waiting on the founder
 
 1. DONE 2026-10-13: the elevated listener script (row 9).
-2. The always-on PC: sign in at its console (TeamViewer) and leave a WezTerm window open; the node task
-   starts at that sign-in, and the node starts each session in that window.
+2. DONE 2026-10-13: signed in by M over RDP and left disconnected (see above).
 
 ## Still to prove (sections 4 to 6 of first-live-link-ov615.md, unchanged)
 
