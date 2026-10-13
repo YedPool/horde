@@ -472,6 +472,18 @@ Check ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["elapse
 $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = "soon" }) }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["elapsedMs"]) "nudge: an elapsedMs that is no whole number is left out, and the outcome stands"
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ rule = "between-turns-background-work" }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["rule"] -and $a.value.rule -ceq "between-turns-background-work") "nudge: the rule the waker names is carried"
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ rule = "a-rule-nobody-has-heard-of-yet" }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.rule -ceq "a-rule-nobody-has-heard-of-yet") "nudge: and so is one the port has never heard of: a new name is not an error"
+foreach ($bad in @("", "  ", 7, "two`nlines")) {
+    $script:badRule = $bad
+    $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ rule = $script:badRule }) }
+    $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+    Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["rule"]) ("nudge: a rule that is '" + "$bad".Trim() + "' - blank, not text, two lines - is left out, and the outcome stands")
+}
 $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "killed"; reason = "nudge-killed: stopped part-way" }) }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and $a.value.reason -ceq "nudge-killed: stopped part-way") "nudge: killed - the waker stopped its own nudge part-way - is carried with its reason"

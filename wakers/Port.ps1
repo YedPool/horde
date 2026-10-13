@@ -607,5 +607,10 @@ function Send-HordeWakeNudge {
     # outcome that is otherwise sound.
     $took = Get-HordeWakerMember $v "elapsedMs"
     if ($took.has -and ($took.value -is [int] -or $took.value -is [long]) -and $took.value -ge 0) { $value["elapsedMs"] = [long]$took.value }
+    # rule IS OPTIONAL: the waker's own name for the rule that let it type, when it was not the plain
+    # one - "the session said idle". One line of text, carried as given (cut to 200 characters);
+    # anything else there is left out. The port does not know the names: a new one is not an error.
+    $ruled = Get-HordeWakerMember $v "rule"
+    if ($ruled.has -and $ruled.value -is [string] -and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] = $(if ($ruled.value.Length -gt 200) { $ruled.value.Substring(0, 200) } else { $ruled.value }) }
     return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $a.observedAt)
 }

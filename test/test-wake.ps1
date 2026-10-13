@@ -486,6 +486,35 @@ Check ((Rang) -eq 2) "CONTROL: an ordinary entry, of a session not given up on, 
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- idle by the between-turns rule: the journal says which rule let a nudge through ---" -ForegroundColor Cyan
+
+Start-Case; Seat 1 @{ BetweenTurns = "yes"; Rule = "between-turns-background-work" }
+$r = Pass 0 -Shadow
+Check ((Kinds $r) -ceq "would-nudge" -and "$($r.entries[0].reason)" -ceq "unread mail, idle by the between-turns rule (between-turns-background-work), empty box") ("a would-nudge of a session that is idle by the between-turns rule says so, with the rule's word (" + $r.entries[0].reason + ")")
+Start-Case; Seat 1 @{ BetweenTurns = "yes"; Rule = "between-turns-background-work" }
+$r = Pass 0
+Check ((Kinds $r) -ceq "nudge" -and (Rang) -eq 1 -and "$($r.entries[0].reason)".Contains("sent because: unread mail, idle by the between-turns rule (between-turns-background-work), empty box") -and "$($r.entries[0].reason)".Contains("the waker says the rule that let it type was between-turns-background-work")) ("a real nudge of it says why it was sent, and the rule the waker itself names in its answer (" + $r.entries[0].reason + ")")
+Start-Case; Seat 1
+$r = Pass 0 -Shadow
+$r2 = $null; Start-Case; Seat 1; $r2 = Pass 0
+Check ("$($r.entries[0].reason)" -ceq "unread mail, idle, empty box" -and -not "$($r2.entries[0].reason)".Contains("rule")) "CONTROL: a session idle by its own word is journaled as before, with no rule named"
+foreach ($word in @("no", "unknown")) {
+    Start-Case; Seat 1 @{ BetweenTurns = $word }
+    Check ("$((Pass 0 -Shadow).entries[0].reason)" -ceq "unread mail, idle, empty box") ("betweenTurns " + $word + " names no rule")
+}
+# THE BOX IS STILL READ BEFORE ANY NUDGE, rule or no rule: the rule says idle, never "the box is empty".
+Start-Case; Set-HordeMemoryWakerCheap $true; Seat 1 @{ BetweenTurns = "yes" }
+$r = Pass 0
+Check ((@(Get-HordeMemoryWakerLooks) -join ",") -ceq (Sid 1) -and (Rang) -eq 1) "a session idle by the between-turns rule, whose box the cheap reading does not say, is LOOKED AT before it is nudged"
+Start-Case; Set-HordeMemoryWakerCheap $true; Seat 1 @{ BetweenTurns = "yes"; BoxEmpty = "no" }
+$r = Pass 0
+Check ((Rang) -eq 0 -and (Decided $r).reason -ceq "boxEmpty is no") "and one whose box that look finds holding text is not nudged, between turns or not"
+Start-Case; Seat 1 @{ BetweenTurns = "yes"; BoxEmpty = "unknown" }
+$r = Pass 0
+Check ((Rang) -eq 0 -and (Decided $r).action -ceq "wait") "nor one whose box nobody could read: unknown is never permission"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
 
 Start-Case; Seat 1 @{ Retired = "yes" }

@@ -78,13 +78,14 @@ function Set-HordeMemoryWakerSession {
         [string]$Limited = "no",
         $LimitedUntil = $null,
         [string]$BetweenTurns = "no",
+        [string]$Rule = "",
         [string]$Acked = "known",
         $LastAckedAt = $null,
         $HandedOverCount = 0,
         $OldestHandedOverAt = $null
     )
     $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; retired = $Retired; unreadCount = $UnreadCount;
-        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt }
+        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; rule = $Rule; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt }
 }
 
 function Set-HordeMemoryWakerAcked {
@@ -187,6 +188,8 @@ $null = Register-HordeWaker -Name "memory" `
         # it did not ring, so nothing was typed for them; killed is a nudge stopped part-way, which a
         # test asks for by name.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }
-        return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }) -ObservedAt $at)
+        $rang = [ordered]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }
+        if ("$($s.rule)" -ne "") { $rang["rule"] = $s.rule }
+        return (New-HordeKnown -Value ([pscustomobject]$rang) -ObservedAt $at)
     } `
     -Begin { $script:HordeMemoryWakerBegins++ }

@@ -392,7 +392,7 @@ function Get-HordeWakeDecisions {
         if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
         $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Acks $Acks -NoProbe:$NoProbe -Self $Self
-        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0 }
+        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0; between = ("$(Get-HordeWakeEntryValue $stateNow "betweenTurns")" -ceq "yes") }
         $lastProbe = Get-HordeWakeEntryValue $entry "probeAt"
         if ($lastProbe -is [datetime]) { $row.probed = $lastProbe.Ticks }
         if ($hold.action -ceq "ready" -or $hold.action -ceq "look") {
@@ -429,7 +429,18 @@ function Get-HordeWakeDecisions {
     }
     for ($i = 0; $i -lt $ready.Count; $i++) {
         if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }
-        elseif ($ready[$i].action -ceq "ready") { $ready[$i].action = "nudge"; $ready[$i].reason = "unread mail, idle, empty box" }
+        elseif ($ready[$i].action -ceq "ready") {
+            # WHICH RULE SAID IDLE IS SAID WITH THE DECISION. A session is ordinarily idle because its own
+            # status says so. One whose status says busy only for background work, its turn having
+            # ended, is idle BY THE BETWEEN-TURNS RULE (wakers/Port.ps1, betweenTurns): a nudge it gets
+            # was let through by that rule, and a reader of the journal must be able to see it was -
+            # it is the nudge to look at first if a session is ever typed into mid-work. The box is
+            # still read empty by a look at the session itself before any nudge, rule or no rule
+            # (Get-HordeWakeHold): the rule says idle, never "the box is empty".
+            $ready[$i].action = "nudge"
+            $ready[$i].reason = "unread mail, idle, empty box"
+            if ($ready[$i].between) { $ready[$i].reason = "unread mail, idle by the between-turns rule (between-turns-background-work), empty box" }
+        }
     }
     return @($rows | ForEach-Object { [pscustomobject]@{ id = $_.id; action = $_.action; reason = $_.reason } })
 }
@@ -954,7 +965,14 @@ function Invoke-HordeWakePass {
                     # A NUDGE THE WAKER HAD TO KILL IS ITS OWN KIND OF LINE, so nobody reads it as one more nudge.
                     $kind = "nudge"
                     if ($rang.value.outcome -ceq "killed") { $kind = "nudge-killed" }
-                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason -ElapsedMs (Get-HordeWakeEntryValue $rang.value "elapsedMs")))
+                    # A REAL NUDGE'S LINE SAYS WHY IT WAS SENT, WHAT THE WAKER ANSWERED, AND - when the waker names one -
+                    # THE RULE that let it type (wakers/Port.ps1, rule). A woken used to be journaled with
+                    # no reason at all.
+                    $told = "$($rang.value.reason)"
+                    if ($d.reason -clike "*between-turns*") { $told = $(if ($told -ne "") { $told + "; " } else { "" }) + "sent because: " + $d.reason }
+                    $rule = "$(Get-HordeWakeEntryValue $rang.value "rule")"
+                    if ($rule -ne "") { $told = $(if ($told -ne "") { $told + "; " } else { "" }) + "the waker says the rule that let it type was " + $rule }
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $d.id -Outcome $rang.value.outcome -Reason $told -ElapsedMs (Get-HordeWakeEntryValue $rang.value "elapsedMs")))
                 }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }

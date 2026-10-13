@@ -241,6 +241,28 @@ Check ($newest.Count -gt 0 -and @($newest | Where-Object { [int]$_.pid -eq $PID 
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- between turns, through the fleet's command: idle by the rule, the box read by -To, the rule in the answer ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+# As the fleet form says it: idle yes BY THE RULE, betweenTurns yes, and the box unknown - that form reads no box.
+& $fx.SetRow $state (New-Row 1 @{ betweenTurns = "yes" })
+& $fx.Clock $state $t0
+$cheap = Get-HordeWakeState -Waker $w -Id (Sid 1)
+Check ($cheap.state -ceq "known" -and $cheap.value.idle -ceq "yes" -and $cheap.value.betweenTurns -ceq "yes" -and $cheap.value.boxEmpty -ceq "unknown") "the fleet form answers idle yes and betweenTurns yes with the box unknown: enough to ask about the session, never enough to type on"
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$line = @($pass.entries | Where-Object { $_.kind -ceq "nudge" })
+Check ((Get-Count $state ("mail state -To " + (Sid 1) + " *")) -eq 1 -and (Get-Typed $state) -eq 1 -and $line.Count -eq 1) "the pass reads the session's own box with -To before it nudges, and nudges once"
+Check ($line.Count -eq 1 -and "$($line[0].reason)".Contains("idle by the between-turns rule (between-turns-background-work)") -and "$($line[0].reason)".Contains("the waker says the rule that let it type was between-turns-background-work")) ("the nudge's journal line says the between-turns rule let it through, and carries the rule the fleet's answer names (" + $(if ($line.Count -eq 1) { $line[0].reason } else { "" }) + ")")
+& $fx.SetRow $state (New-Row 2 @{ betweenTurns = "yes"; boxEmpty = "no" })
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0.AddSeconds(1) -Settings (Get-HordeWakeSettings) -Ledger $pass.ledger
+Check ((& $fx.Observe $state (Sid 2)).nudges -eq 0 -and @($pass.decisions | Where-Object { $_.id -ceq (Sid 2) -and $_.reason -ceq "boxEmpty is no" }).Count -eq 1) "a session between turns whose own box holds text is not nudged: the rule never stands in for the box"
+& $fx.SetRow $state (New-Row 3)
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 3)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["rule"]) "a nudge of a session idle by its own word carries no rule"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- retired: true is yes, and false is no only for a row the fleet had a record for ---" -ForegroundColor Cyan
 
 $state = & $fx.New

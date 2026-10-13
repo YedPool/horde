@@ -30,7 +30,9 @@
 #                    one that is not a whole number from 35 to 300 is exit 2, bad-budget. mode.json's
 #                    nudge.slowStartSeconds is counted as time this script took to start, without
 #                    waiting it out
-#     every answer carries elapsedMs, a whole number of milliseconds since this script began
+#     every answer carries elapsedMs, a whole number of milliseconds since this script began, and rule:
+#     between-turns-background-work for a woken of a session whose row says betweenTurns yes, else ""
+#     (the real command's shape, read 2026-10-13)
 #       unreachable  no such session, or its row says it cannot be reached
 #       refused      it has no unread mail: there is nothing to nudge for; or (reason retired) the
 #                    session is retired - and NOTHING IS TYPED
@@ -109,7 +111,7 @@ if ($form -ceq "pane") {
 # nudge
 if ($to -eq "") { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-to"; target = ""; pane = ""; instance = ""; detail = "an empty -To" }) }
 $row = @(@($rows) | Where-Object { $null -ne $_ -and $_.id -ceq $to }) | Select-Object -First 1
-function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
+function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds; rule = $(if ($Outcome -ceq "woken" -and "$($row.betweenTurns)" -ceq "yes") { "between-turns-background-work" } else { "" }) }) }
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
 if ($row.retired -eq $true) { Write-FakeNudge "refused" "retired" "the session is retired; nothing is typed into a retired session" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }

@@ -6,6 +6,18 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-between-turns-rule-is-not-named-in-a-nudges-reason"
+           Find = 'if ($ready[$i].between) { $ready[$i].reason ='
+           Replace = 'if ($false) { $ready[$i].reason =' }
+        @{ Name = "every-nudge-is-said-to-be-by-the-between-turns-rule"
+           Find = 'between = ("$(Get-HordeWakeEntryValue $stateNow "betweenTurns")" -ceq "yes") }'
+           Replace = 'between = $true }' }
+        @{ Name = "the-rule-the-waker-names-is-not-journaled"
+           Find = 'if ($rule -ne "") { $told ='
+           Replace = 'if ($false) { $told =' }
+        @{ Name = "why-a-between-turns-nudge-was-sent-is-not-journaled"
+           Find = 'if ($d.reason -clike "*between-turns*") { $told ='
+           Replace = 'if ($false) { $told =' }
         @{ Name = "a-sessions-own-acknowledgement-is-evidence-for-itself"
            Find = 'if ("$who" -ceq $self) { continue }'
            Replace = '' }

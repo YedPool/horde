@@ -8,6 +8,12 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-rule-a-waker-names-is-not-carried"
+           Find = 'if ($ruled.has -and $ruled.value -is [string] -and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] ='
+           Replace = 'if ($false) { $value["rule"] =' }
+        @{ Name = "a-rule-of-two-lines-is-carried"
+           Find = '-and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] ='
+           Replace = '-and $ruled.value.Trim() -ne "") { $value["rule"] =' }
         @{ Name = "a-waker-that-says-nothing-of-betweenturns-reads-as-no"
            Find = '        $between = "unknown"'
            Replace = '        $between = "no"' }

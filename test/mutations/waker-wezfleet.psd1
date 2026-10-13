@@ -6,6 +6,9 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-fleets-rule-is-not-passed-on"
+           Find = 'if ($null -ne $ruled -and $ruled.Value -is [string] -and $ruled.Value.Trim() -ne "") { $answer["rule"] ='
+           Replace = 'if ($false) { $answer["rule"] =' }
         @{ Name = "an-older-rows-betweenturns-reads-as-no"
            Find = '    $between = "unknown"'
            Replace = '    $between = "no"' }

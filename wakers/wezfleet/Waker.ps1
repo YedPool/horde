@@ -834,6 +834,11 @@ function Send-HordeWezfleetWakerNudge {
     $answer = [ordered]@{ id = $Id; outcome = $mapped; reason = $why; at = $at }
     $took = $j.PSObject.Properties["elapsedMs"]
     if ($null -ne $took -and ($took.Value -is [int] -or $took.Value -is [long]) -and $took.Value -ge 0) { $answer["elapsedMs"] = [long]$took.Value }
+    # rule: the fleet's own name for the rule that let it type, when it was not the plain one
+    # (between-turns-background-work, since its main 5224296). Passed on as text, cleaned and cut short,
+    # whatever the word is; an older command gives none.
+    $ruled = $j.PSObject.Properties["rule"]
+    if ($null -ne $ruled -and $ruled.Value -is [string] -and $ruled.Value.Trim() -ne "") { $answer["rule"] = ConvertTo-HordeWezfleetWakerLine $ruled.Value -Max 80 -Tool }
     return (New-HordeKnown -Value ([pscustomobject]$answer) -ObservedAt $at)
 }
 
