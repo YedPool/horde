@@ -335,7 +335,15 @@ const commands = {
     await until(shown("doc") + " || (" + notice + ") !== " + JSON.stringify(was), 30000);
     return await evaluate("({ doc: " + shown("doc") + ", mode: document.getElementById('mode').hidden ? '' : document.getElementById('mode').textContent, notice: " + notice + " })");
   },
-  async lock() { await evaluate("document.getElementById('lockBtn').click()", true); return { locked: !!(await until(shown("lockedView"), 10000)), ...(await evaluate(leftovers)) }; },
+  // THE PROGRESS LOG IS COUNTED IN THE SAME TURN AS THE TOUCH, before and after it. Two places in the
+  // page empty the log: the lock itself, at once, and the redraw that follows when the bridge answers
+  // that the horde is locked. Counted only once the locked screen was up, the second hid the loss of
+  // the first (mutant progress-left-on-a-locked-page survived, 2026-10-13). Nothing the bridge says
+  // can be drawn before this expression returns, so logAtOnce is the lock's own doing.
+  async lock() {
+    const at = await evaluate("(() => { const n = () => document.querySelectorAll('#progressLog .progress-item').length; const before = n(); document.getElementById('lockBtn').click(); return { logBefore: before, logAtOnce: n() }; })()", true);
+    return { locked: !!(await until(shown("lockedView"), 10000)), ...(await evaluate(leftovers)), ...at };
+  },
   // The page told it is hidden (as a phone's screen going off or the app switched away does), then
   // left so for ms: what is still on it.
   async hide(c) {
