@@ -511,6 +511,14 @@ Start-Case; Seat 1
 Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
 $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1)
 Check ((Kinds $r) -ceq "skip-unknown,proof-target-absent" -and (Rang) -eq 0) "with a listing that cannot be read, the pass says its one session was not found"
+# A PASS GIVEN ONE SESSION SENDS NO PROBE: a limited session is not typed into on a timer read from a ledger.
+Start-Case; Seat 1 @{ Limited = "yes" }
+$stale = @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At -9000) -LastOutcome "limited" -MailAt (At -60) -ProbeAt (At -9000)) }
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger $stale -Only (Sid 1)
+Check ((Rang) -eq 0 -and @($r.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".Contains("sends no probe") }).Count -eq 1) "a session limited with no known end, whose hourly probe is long due by the ledger, is NOT nudged by a pass given that one session"
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger $stale
+Check ((Rang) -eq 1) "CONTROL: the watcher's own pass, over the whole fleet, does send the probe that is due"
 Start-Case; Seat 1; Seat 2
 Check ((Rang) -eq 0 -and @((Pass 0).decisions).Count -eq 2) "CONTROL: a pass given no one session is a pass over them all"
 Reset-HordeMemoryWaker

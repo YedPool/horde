@@ -8,6 +8,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-proof-run-reads-a-ledger-of-its-own"
+           Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome'
+           Replace = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome' }
         @{ Name = "a-run-that-sends-starts-from-a-ledger-it-cannot-read"
            Find = 'if ($run.live) { $run.refused = ('
            Replace = 'if ($false) { $run.refused = (' }
@@ -150,7 +153,7 @@
            Find = '$Run.ledger = $result.ledger'
            Replace = '$Run.ledger = $result.ledger; $mode = $(if ($mode -ceq "shadow") { "live" } else { "shadow" })' }
         @{ Name = "ledger-read-from-the-other-mode"
-           Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome'
+           Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome'
            Replace = '$saved = Read-HordeWakeLedger -Mode "live" -HordeHome $HordeHome' }
         @{ Name = "would-posts-of-a-live-run-saved-as-posted"
            Find = 'if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-" + $mode + "-run"); mode = "shadow" } }'

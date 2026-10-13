@@ -203,15 +203,15 @@ Check (@(Get-HordeMemoryWakerAsks).Count -eq 1 -and $run.ledger.ContainsKey((Sid
 foreach ($sending in @("live", "proof")) {
     $h = New-Home
     New-Item -ItemType Directory -Path (Join-Path $h "wake") -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $h ("wake\ledger-" + $sending + ".json")), "{ not json")
+    [System.IO.File]::WriteAllText((Join-Path $h "wake\ledger-live.json"), "{ not json")
     Reset-HordeMemoryWaker
     Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
     Set-HordeMemoryWakerClock (At 0)
     $bad = New-HordeWakeRun -Mode $sending -Target (Sid 1) -HordeHome $h
-    Check ("$($bad.refused)".Contains("cannot be read") -and "$($bad.refused)".Contains("ledger-" + $sending + ".json")) ("a " + $sending + " run made over a ledger file that cannot be read is refused, naming the file")
+    Check ("$($bad.refused)".Contains("cannot be read") -and "$($bad.refused)".Contains("ledger-live.json")) ("a " + $sending + " run made over a ledger file that cannot be read is refused, naming the file")
     $did = @(Invoke-HordeWakeTick -Run $bad -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h)
     Check (@(Get-HordeMemoryWakerAsks).Count -eq 0 -and @(Get-HordeMemoryWakerReads).Count -eq 0 -and @($did | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "pass" -and "$($_.reason)".Contains("was refused") }).Count -eq 1) ("and a tick handed that run nudges nobody: an unreadable ledger is never read as an empty one by a run that sends")
-    Check ([System.IO.File]::ReadAllText((Join-Path $h ("wake\ledger-" + $sending + ".json"))) -ceq "{ not json") "the file is left as it was, for a person to mend"
+    Check ([System.IO.File]::ReadAllText((Join-Path $h "wake\ledger-live.json")) -ceq "{ not json") "the file is left as it was, for a person to mend"
 }
 $h = New-Home
 New-Item -ItemType Directory -Path (Join-Path $h "wake") -Force | Out-Null
@@ -462,7 +462,7 @@ $proved = @(Invoke-HordeWakeTick -Run $proof -Now (At 0) -Waker $memory -ReadSes
 Check ($proof.mode -ceq "proof" -and $proof.live -eq $true -and @(Get-HordeMemoryWakerNudges).Count -eq 1 -and @($proved | Where-Object { $_ -ceq "nudge" }).Count -eq 1) "a proof run's tick sends the real nudge"
 Check (@($proved | Where-Object { $_ -ceq "post" -or $_ -ceq "stall" -or $_ -ceq "tell" }).Count -eq 0 -and @($proved | Where-Object { $_ -ceq "would-post" }).Count -gt 0) "and posts nothing: the senders are shadow in a proof run"
 $names = @(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($names -join ",") -ceq "heartbeat-proof.json,journal-proof.jsonl,ledger-proof.json,restore-of-proof-run-shadow.json") ("it wrote the proof run's own files and no file of a live or a shadow run (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "heartbeat-proof.json,journal-proof.jsonl,ledger-live.json,restore-of-proof-run-shadow.json") ("it wrote the proof run's own journal and heartbeat, and counted its nudge in the ONE ledger the sending runs share - no ledger of its own (" + ($names -join ",") + ")")
 $beat = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h
 Check ($beat.state -ceq "known" -and $beat.value.mode -ceq "proof" -and $beat.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h).state -ceq "absent") "its heartbeat says proof, and neither the live nor the shadow heartbeat was written: a proof pass does not make a live watcher look alive"
 $switchWas = $script:HordeWakeSendersPost
@@ -473,7 +473,7 @@ $lockP = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
 # Caught on purpose: a lock that threw for a second holder must fail this check, not end the suite.
 $secondP = "threw"
 try { $secondP = Enter-HordeWakeLock -Mode "proof" -ProcessId 2 -HordeHome $h } catch { $secondP = "threw" }
-try { Check ($null -ne $lockP -and (Test-Path -LiteralPath (Join-Path $h "wake\run-proof.lock")) -and $null -eq $secondP) "a proof run holds a lock of its own, and a second proof run is kept out" } finally { if ($null -ne $lockP) { $lockP.Dispose() }; if ($null -ne $secondP -and $secondP -isnot [string]) { $secondP.Dispose() } }
+try { Check ($null -ne $lockP -and (Test-Path -LiteralPath (Join-Path $h "wake\run-live.lock")) -and -not (Test-Path -LiteralPath (Join-Path $h "wake\run-proof.lock")) -and $null -eq $secondP) "a proof run holds the sending runs' one lock, and a second proof run is kept out" } finally { if ($null -ne $lockP) { $lockP.Dispose() }; if ($null -ne $secondP -and $secondP -isnot [string]) { $secondP.Dispose() } }
 # A RUN THAT SENDS RUNS ONLY A PROGRAM A PERSON NAMED: one the waker merely found is refused.
 $script:whence = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $false; how = "the command is in the folder found from the command on PATH, X:\somewhere\tool.cmd" }) }
 $found = Register-HordeWaker -Name "fixture-source" -Folder (Join-Path $root "test\fixtures\waker\caps\fixture-source") -Targets { New-HordeKnown -Value @() } -State { param($id) New-HordeUnknown -Reason "a fixture" } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" } -Source { & $script:whence }
@@ -494,6 +494,51 @@ $script:HordeWakers.Remove("fixture-source")
 # A RUN IS SHADOW UNLESS IT IS MADE OTHERWISE, at every level it is made at.
 $hs = New-Home
 Check ((New-HordeWakeRun -HordeHome $hs).mode -ceq "shadow" -and (New-HordeWakeRun -Mode "" -HordeHome $hs).mode -ceq "shadow" -and (New-HordeWakeRun -Live:$false -HordeHome $hs).live -eq $false -and (New-HordeWakeRun -Live -HordeHome $hs).mode -ceq "live" -and (Get-HordeWakeRunPlan -Picked $one).mode -ceq "shadow") "a run made with no word, an empty mode or -Live:false is shadow, and so is a plan made with none"
+# ONE LOCK AND ONE LEDGER FOR THE RUNS THAT SEND.
+$h = New-Home
+$heldLive = Enter-HordeWakeLock -Mode "live" -ProcessId 1 -HordeHome $h
+$tryProof = "threw"; try { $tryProof = Enter-HordeWakeLock -Mode "proof" -ProcessId 2 -HordeHome $h } catch { $tryProof = "threw" }
+$tryShadow = "threw"; try { $tryShadow = Enter-HordeWakeLock -ProcessId 3 -HordeHome $h } catch { $tryShadow = "threw" }
+try { Check ($null -ne $heldLive -and $null -eq $tryProof -and $null -ne $tryShadow -and $tryShadow -isnot [string]) "while a live run holds its lock a proof run is kept out, and a shadow run is not" } finally { foreach ($l in @($heldLive, $tryProof, $tryShadow)) { if ($null -ne $l -and $l -isnot [string]) { $l.Dispose() } } }
+$heldProof = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
+$tryLive = "threw"; try { $tryLive = Enter-HordeWakeLock -Mode "live" -ProcessId 2 -HordeHome $h } catch { $tryLive = "threw" }
+try { Check ($null -ne $heldProof -and $null -eq $tryLive) "and while a proof run holds it a live run is kept out: two runs never send at once" } finally { foreach ($l in @($heldProof, $tryLive)) { if ($null -ne $l -and $l -isnot [string]) { $l.Dispose() } } }
+Check ((Get-HordeWakeSendWord -Mode "proof") -ceq "live" -and (Get-HordeWakeSendWord -Mode "live") -ceq "live" -and (Get-HordeWakeSendWord -Mode "shadow") -ceq "shadow" -and (Get-HordeWakeSendWord) -ceq "shadow") "the sending runs share the word live for their lock and their ledger; shadow, and a caller that names no mode, have shadow's"
+# THE BUDGET IS ONE: what a live run counted against a session, a proof run starts from, and adds to.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+$liveRun = New-HordeWakeRun -Mode "live" -HordeHome $h
+foreach ($n in 0..1) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $liveRun -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 2) "CONTROL: a live run nudged both sessions once"
+$after = New-HordeWakeRun -Mode "proof" -Target (Sid 1) -HordeHome $h
+Check ($after.ledger.Count -eq 2 -and $after.ledger[(Sid 1)].attempts -eq 1) "a proof run made afterwards starts from the ledger the live run wrote: the session's one attempt is already counted"
+Set-HordeMemoryWakerClock (At 7)
+$did = @(Invoke-HordeWakeTick -Run $after -Now (At 7) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind })
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 3 -and $after.ledger[(Sid 1)].attempts -eq 2) "its nudge is the session's second, not a first out of a budget of its own"
+$backLive = New-HordeWakeRun -Mode "live" -HordeHome $h
+Check ($backLive.ledger[(Sid 1)].attempts -eq 2 -and $backLive.ledger[(Sid 2)].attempts -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $h "wake\ledger-proof.json"))) "and a live run started after it reads both: the proof wrote the same ledger, kept the other session's entry, and made no ledger of its own"
+$backProof = New-HordeWakeRun -Mode "proof" -Target (Sid 1) -HordeHome $h
+Set-HordeMemoryWakerClock (At 9)
+$null = Invoke-HordeWakeTick -Run $backProof -Now (At 9) -Waker $memory -ReadSessions $none -HordeHome $h
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 3) "a proof repeated two seconds later is held by the back-off the first one left: proofs cannot be used to hammer a session"
+# A PROOF SENDS NO PROBE, however old the ledger it reads: a limited session is not typed into because an hour has passed.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "yes"
+$first = New-HordeWakeRun -Mode "proof" -Target (Sid 1) -HordeHome $h
+Set-HordeMemoryWakerClock (At 0)
+$null = Invoke-HordeWakeTick -Run $first -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h
+$second = New-HordeWakeRun -Mode "proof" -Target (Sid 1) -HordeHome $h
+Set-HordeMemoryWakerClock (At 7200)
+$late = @(Invoke-HordeWakeTick -Run $second -Now (At 7200) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 0 -and $second.ledger.ContainsKey((Sid 1))) ("a second proof two hours after the first, aimed at a session limited with no known end, types nothing: the hourly probe is the watcher's, never a proof's (" + (@($late | ForEach-Object { $_.kind }) -join ",") + ")")
+$liveLate = New-HordeWakeRun -Mode "live" -HordeHome $h
+Set-HordeMemoryWakerClock (At 7203)
+$null = Invoke-HordeWakeTick -Run $liveLate -Now (At 7203) -Waker $memory -ReadSessions $none -HordeHome $h
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 1) "CONTROL: a live run at that moment does send the probe that is due"
+Reset-HordeMemoryWaker
 $p = Get-HordeWakeRunPlan -Mode "live" -Picked "not an answer"
 Check ($p.ok -eq $false -and $p.live -eq $false) "and an answer about the waker that is not one never makes a live run"
 

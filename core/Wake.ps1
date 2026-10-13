@@ -226,7 +226,7 @@ function Get-HordeWakeHold {
     # It is skip, like a session with no mail: not waiting for anything, not an attempt, not a failure,
     # never given up on and never told of. retired UNKNOWN - the waker could not tell - is held too:
     # wait, because it may yet be read as no. Either is journaled once (Invoke-HordeWakePass's held).
-    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent, $MovedAt = $null)
+    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent, $MovedAt = $null, [switch]$NoProbe)
     $retired = "$(Get-HordeWakeEntryValue $Target "retired")"
     if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }
     if ($retired -cne "no") { return [pscustomobject]@{ action = "wait"; reason = "retired is unknown: a session that may be retired is not nudged" } }
@@ -256,6 +256,13 @@ function Get-HordeWakeHold {
     # more is tried for it. A session that takes the mail, or whose oldest unread mail becomes another,
     # starts again from nothing (Get-HordeWakeLedgerEntry).
     $probe = ($Silent -or $limit.kind -ceq "open")
+    # A PASS CUT DOWN TO ONE SESSION SENDS NO PROBE (-NoProbe; Invoke-HordeWakePass sets it with -Only).
+    # A probe is sent on a timer read from the ledger - an hour since the last, five minutes in a
+    # silent fleet - and a proof run reads a ledger it did not write and that may be hours old: a
+    # second proof an hour after the first would have typed into a session that is limited, because
+    # its hour was up. A proof is there to show a nudge of a session that can take one; a session
+    # that is limited, or whose limit nobody could read, waits, and the person is told why.
+    if ($probe -and $NoProbe) { return [pscustomobject]@{ action = "wait"; reason = ($(if ($limit.kind -ceq "open") { $limit.text } else { "the fleet is silent" }) + ": a pass given one session sends no probe") } }
     if ($probe) {
         $why = "the fleet is silent"
         if ($limit.kind -ceq "open") { $why = $limit.text }
@@ -304,7 +311,7 @@ function Get-HordeWakeDecisions {
     # 5 s after its first, would go ahead of nine sessions nobody had knocked on yet. The rest get wait
     # "rate limit" and are ready again next pass.
     #   -Silent     the fleet is silent (Update-HordeWakeSilence): every nudge is a probe
-    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook, [switch]$Silent, $MovedAt = $null)
+    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook, [switch]$Silent, $MovedAt = $null, [switch]$NoProbe)
     $roles = @(Get-HordeWakerRoles)
     $rows = New-Object System.Collections.ArrayList
     foreach ($t in @($Targets)) {
@@ -317,7 +324,7 @@ function Get-HordeWakeDecisions {
         $stateNow = $null
         if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
-        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -MovedAt $MovedAt
+        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -MovedAt $MovedAt -NoProbe:$NoProbe
         $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
         if ($hold.action -ceq "ready" -or $hold.action -ceq "look") {
             if ($null -ne $entry) { $row.attempts = [int]$entry.attempts }
@@ -750,7 +757,7 @@ function Invoke-HordeWakePass {
             # maxConfirmsPerPass looks. What is still unlooked then waits for the next pass.
             $canLook = Test-HordeWakerConfirms $Waker
             $confirmed = @{}
-            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -MovedAt $MovedAt)
+            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -MovedAt $MovedAt -NoProbe:($Only -cne ""))
             # THE LOOKS ARE COUNTED AS THEY ARE MADE, not by how many sessions have been looked at: the
             # bound must hold even if one session were looked at twice.
             $looks = 0
@@ -764,7 +771,7 @@ function Invoke-HordeWakePass {
                     if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
                     else { $states[$d.id] = $confirmed[$d.id] }
                 }
-                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -MovedAt $MovedAt)
+                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -MovedAt $MovedAt -NoProbe:($Only -cne ""))
             }
             foreach ($d in $decisions) { if ($d.action -ceq "look") { $d.action = "wait"; $d.reason = "its box and its turn were not read this pass: the pass's looks were used up" } }
             foreach ($t in $targets) {

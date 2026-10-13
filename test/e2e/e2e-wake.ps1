@@ -176,10 +176,10 @@ $aside = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $busy, "-Once")
 Check ($aside.code -eq 0 -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) "a proof run aimed at the busy session types nothing - and does not type into the idle one instead"
 Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
 # A LEDGER THAT CANNOT BE READ: the proof does not start, and types nothing. Mended (removed), it runs.
-$proofLedger = Join-Path $wakeDir "ledger-proof.json"
+$proofLedger = Join-Path $wakeDir "ledger-live.json"
 [System.IO.File]::WriteAllText($proofLedger, "{ not json", $utf8)
 $refusedRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
-Check ($refusedRun.code -eq 1 -and $refusedRun.out -like "*has not started*cannot be read*ledger-proof.json*" -and $refusedRun.out -notlike "*pass 1 done*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and [System.IO.File]::ReadAllText($proofLedger) -ceq "{ not json") ("a proof run over a ledger file that cannot be read does not start: exit 1, the file named and left as it was, nothing typed" + $(if ($refusedRun.code -ne 1) { ": " + $refusedRun.out } else { "" }))
+Check ($refusedRun.code -eq 1 -and $refusedRun.out -like "*has not started*cannot be read*ledger-live.json*" -and $refusedRun.out -notlike "*pass 1 done*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and [System.IO.File]::ReadAllText($proofLedger) -ceq "{ not json") ("a proof run over a ledger file that cannot be read does not start: exit 1, the file named and left as it was, nothing typed" + $(if ($refusedRun.code -ne 1) { ": " + $refusedRun.out } else { "" }))
 Remove-Item -LiteralPath $proofLedger -Force
 Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
 $proofRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
@@ -245,7 +245,7 @@ Check ($second.code -eq 1 -and $second.out -like "*shadow wake run is already ru
 # A RUN IN ANOTHER MODE IS NOT THE SAME RUN: the lock is per mode. (No fleet here: its one pass can
 # reach nobody.)
 $beside = Invoke-Wake $pinnedHome @("run", "-Proof", "-Target", "0a000000-0000-4000-8000-000000000001", "-Once")
-Check ($beside.code -eq 1 -and $beside.out -like "*pass 1 done*PROOF*" -and $beside.out -like "*nudged nobody*" -and $beside.out -notlike "*already running*" -and (Test-Path -LiteralPath (Join-Path $pinnedWake "run-proof.lock") -PathType Leaf) -and -not $run.p.HasExited) "a proof run beside the running shadow one is not refused: each mode has a lock of its own. (It finds no fleet, so it says it nudged nobody.)"
+Check ($beside.code -eq 1 -and $beside.out -like "*pass 1 done*PROOF*" -and $beside.out -like "*nudged nobody*" -and $beside.out -notlike "*already running*" -and (Test-Path -LiteralPath (Join-Path $pinnedWake "run-live.lock") -PathType Leaf) -and -not $run.p.HasExited) "a proof run beside the running SHADOW one is not refused: shadow has a lock of its own, and the runs that send share the other. (It finds no fleet, so it says it nudged nobody.)"
 $pinnedLines = @(Read-Journal $pinnedHome "journal-shadow.jsonl")
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "" -and "$($_.reason)" -like "*not a wezfleet checkout*" }).Count -eq 1) "with no fleet to read, the journal says once that the targets are unknown, and why - not once a pass"
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "restore" }).Count -eq 1) "and once that the restore source could not read the sessions of this scenario's empty profile"

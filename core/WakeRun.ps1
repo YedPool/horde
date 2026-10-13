@@ -9,8 +9,8 @@
 #
 # THE MODE BELONGS TO THE RUN, AND IS SET IN ONE PLACE. A run is made in one of three modes
 # (New-HordeWakeRun -Mode), says which in its own mode member, and reads and writes that mode's files
-# and no other (core/WakeFiles.ps1: ledger, sender marks, journal, heartbeat and lock are each per
-# mode). A tick takes its mode from the run it is handed and offers no parameter that could change it:
+# and no other (core/WakeFiles.ps1: sender marks, journal and heartbeat are each per mode; the ledger
+# and the lock are the shadow run's or the SENDING runs', which a proof run and a live run share). A tick takes its mode from the run it is handed and offers no parameter that could change it:
 # a shadow run cannot be ticked live, and a caller has no word to drop.
 #   SHADOW  journals what a tick would do - would-nudge, would-post, would-tell - and does none of it.
 #           It may read through a waker whose capabilities are unverified, and names them.
@@ -77,7 +77,7 @@ function New-HordeWakeRun {
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
     $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
-    $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
+    $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
         # A LEDGER THAT IS THERE AND CANNOT BE READ IS NOT AN EMPTY ONE. It was read as empty, which is
@@ -85,7 +85,7 @@ function New-HordeWakeRun {
         # again from nothing (safety review of PR 220). A SHADOW run may go on from empty, saying so -
         # it sends nothing. A run that SENDS is refused: refused says why, the command does not start
         # it, and a tick handed such a run nudges nobody. A person mends or removes the file.
-        if ($run.live) { $run.refused = ("its ledger is there and cannot be read (" + $saved.reason + "): a run that sends does not start from a ledger it cannot read, because that would forget every back-off and every session it gave up on. Mend the file, or remove it to start from nothing on purpose: " + (Get-HordeWakeStateFile -Name "ledger" -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome)) }
+        if ($run.live) { $run.refused = ("its ledger is there and cannot be read (" + $saved.reason + "): a run that sends does not start from a ledger it cannot read, because that would forget every back-off and every session it gave up on. Mend the file, or remove it to start from nothing on purpose: " + (Get-HordeWakeStateFile -Name "ledger" -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome)) }
         else { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
     }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
@@ -286,7 +286,7 @@ function Invoke-HordeWakeTick {
         $Run.ledger = $result.ledger
         foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
         if ($ledgerChanged) {
-            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome }
+            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
@@ -310,7 +310,7 @@ function Invoke-HordeWakeTick {
         if ($silence.declared -or $silence.moved) {
             if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }
             if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }
-            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome }
+            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }
         # MAIL NOBODY CAN READ, said once when it lasts two passes (core/Wake.ps1, Update-HordeWakeBadMail).

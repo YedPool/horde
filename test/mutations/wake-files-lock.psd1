@@ -6,6 +6,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-lock-is-per-mode-again"
+           Find = '$leaf = "run-" + (Get-HordeWakeSendWord -Mode (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow)) + ".lock"'
+           Replace = '$leaf = "run-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".lock"' }
         @{ Name = "any-io-failure-is-a-held-lock"
            Find = 'if ($win32 -eq 32 -or $win32 -eq 33) { return $true }'
            Replace = 'return $true' }
@@ -22,7 +25,7 @@
            Find = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }'
            Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite) }' }
         @{ Name = "every-mode-shares-one-lock"
-           Find = '$leaf = "run-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".lock"'
+           Find = '$leaf = "run-" + (Get-HordeWakeSendWord -Mode (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow)) + ".lock"'
            Replace = '$leaf = "run-live.lock"' }
     )
 }

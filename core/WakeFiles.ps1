@@ -65,6 +65,20 @@ function Get-HordeWakeModeWord {
     return $Mode
 }
 
+function Get-HordeWakeSendWord {
+    # The word of the files that the runs which SEND share: shadow for a shadow run, and live for a live
+    # run AND for a proof run. ONE LOCK AND ONE LEDGER FOR THE MODES THAT SEND: each had its own, so a
+    # proof run could start beside a running live watcher, with a ledger of its own - a second budget
+    # of nudges for the same session, and two processes typing at once (safety review of PR 220). A
+    # nudge is a nudge whichever run sent it: both count it in ledger-live.json, and run-live.lock
+    # lets only one of them run. What a proof run keeps for itself is what is only about that run: its
+    # journal and its heartbeat, so a proof pass neither hides in a live journal nor makes a live
+    # watcher look alive.
+    param([string]$Mode = "")
+    if ((Get-HordeWakeModeWord -Mode $Mode) -ceq "shadow") { return "shadow" }
+    return "live"
+}
+
 function Get-HordeWakeStateFile {
     # The path of one of the state files a run keeps: <home>\wake\<name>-live.json for a live run, and
     # <name>-shadow.json for a shadow run. TWO FILES, BECAUSE SHADOW MUST NOT TOUCH WHAT A LIVE RUN
@@ -236,7 +250,8 @@ function Enter-HordeWakeLock {
     param([switch]$Shadow, [string]$Mode = "", [int]$ProcessId = 0, [string]$HordeHome = (Get-HordeHome))
     $dir = Get-HordeWakeFolder -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $leaf = "run-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".lock"
+    # ONE LOCK FOR THE RUNS THAT SEND (Get-HordeWakeSendWord): a proof run and a live run hold the same one.
+    $leaf = "run-" + (Get-HordeWakeSendWord -Mode (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow)) + ".lock"
     try { $held = New-Object System.IO.FileStream((Join-Path $dir $leaf), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }
     catch [System.IO.IOException] {
         if (Test-HordeWakeSharingViolation $_.Exception) { return $null }

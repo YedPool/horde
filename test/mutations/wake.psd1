@@ -6,6 +6,9 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-pass-given-one-session-sends-a-probe"
+           Find = 'if ($probe -and $NoProbe) { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "a-session-given-up-on-is-forgotten-after-a-day"
            Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
            Replace = 'if ($taken -or $old) { $next.Remove($id) }' }

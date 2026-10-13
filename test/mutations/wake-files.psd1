@@ -5,6 +5,9 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-proof-run-has-a-lock-and-a-ledger-of-its-own"
+           Find = 'if ((Get-HordeWakeModeWord -Mode $Mode) -ceq "shadow") { return "shadow" }'
+           Replace = 'if ((Get-HordeWakeModeWord -Mode $Mode) -cne "live") { return (Get-HordeWakeModeWord -Mode $Mode) }' }
         @{ Name = "no-mode-named-is-the-sending-runs-files"
            Find = 'if ($Mode -ceq "") { return "shadow" }'
            Replace = 'if ($Mode -ceq "") { return "live" }' }
