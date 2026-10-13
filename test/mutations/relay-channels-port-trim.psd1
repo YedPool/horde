@@ -19,14 +19,21 @@
            Find = 'if ($null -eq $named -or $Keep -lt 1) { return [long]0 }'
            Replace = 'if ($null -eq $named) { return [long]0 }' }
         @{ Name = "full-mailbox-is-one-more-failure"
-           Find = 'if ([int]$status.Value -eq 507) { $Context.full[$Mailbox] ='
-           Replace = 'if ($false) { $Context.full[$Mailbox] =' }
+           Find = 'if ([int]$status.Value -eq 507) {'
+           Replace = 'if ($false) {' }
         @{ Name = "every-refusal-is-a-full-mailbox"
            Find = 'if ([int]$status.Value -eq 507) {'
            Replace = 'if ($true) {' }
         @{ Name = "full-is-never-over"
-           Find = 'if ($Context.full.ContainsKey($Mailbox)) { $Context.full.Remove($Mailbox) }'
+           Find = 'if ($Context.full[$Mailbox].channels.Count -eq 0) { $Context.full.Remove($Mailbox) }'
            Replace = '' }
+        # --- full is kept by the channel that was refused (review of PR 232)
+        @{ Name = "any-channels-put-clears-a-full-mailbox"
+           Find = '$Context.full[$Mailbox].channels.Remove((Get-HordeRelayChannelOfKey -Key $Saved.key))'
+           Replace = '$Context.full[$Mailbox].channels.Clear()' }
+        @{ Name = "refused-channel-not-named"
+           Find = '$Context.full[$Mailbox].channels[(Get-HordeRelayChannelOfKey -Key $Saved.key)] = $true'
+           Replace = '$Context.full[$Mailbox].channels[""] = $true' }
         @{ Name = "untrimmed-put-not-told"
            Find = 'if ($put.value.trimmed -lt 0) { $Context.untrimmed[$Mailbox] = $true }'
            Replace = 'if ($false) { $Context.untrimmed[$Mailbox] = $true }' }

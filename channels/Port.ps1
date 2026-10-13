@@ -83,7 +83,15 @@
 #   full       by mailbox: the relay REFUSED a put there because the mailbox, or the account, holds its
 #              most (status 507). Until 2026-10-13 that was one more failed turn among others, backed off
 #              from for ever in a log nobody was reading, while nothing reached the founder's phone. It
-#              is kept here until a put into that mailbox is taken again.
+#              is kept here until a put into that mailbox is taken again - BY THE CHANNEL THAT WAS
+#              REFUSED (review of PR 232, 2026-10-14). It was kept by mailbox alone and cleared by any
+#              put taken there, and the Ticks run in name order: decisions was refused, progress put
+#              one small envelope a moment later in the same round, and the mark was gone before the
+#              runner looked - nothing said, nobody told; or chat cleared it and decisions set it
+#              again the next turn, and the line and the notice were repeated. A small envelope
+#              fitting says nothing about a large one that did not. So the mark names the channels
+#              refused there (the channel is in the envelope's own key), a channel's own success
+#              takes only its own name off, and the mailbox is full until none is left.
 #   untrimmed  by mailbox: a put there asked for a trim and the relay took the put without trimming -
 #              a relay with no such thing, or a hosted one deployed before it. Nothing failed, and the
 #              mailbox is growing toward full: worth one plain line.
@@ -269,6 +277,15 @@ function Get-HordeRelayChannelKeepFrom {
     return [long][System.Math]::Max([long]0, $named.seq - $Keep + 1)
 }
 
+function Get-HordeRelayChannelOfKey {
+    # The channel an envelope's key names (<sender>/<channel>/<seq>/<nonce>), or "" for a key that names
+    # no stream: what a refusal as full is kept under (the header, WHAT A PUT TELLS THE RUN).
+    param([string]$Key)
+    $named = Read-HordeRelayStreamKey -Key $Key
+    if ($null -eq $named) { return "" }
+    return $named.stream.Split([char]'/')[1]
+}
+
 function Send-HordeRelayChannelSaved {
     # Put an envelope Save-HordeRelayChannelEnvelope recorded into -Mailbox, under its replay key, so a
     # put made again is the same item. -KeepFrom, over 0, also asks the relay to delete what is before
@@ -285,11 +302,18 @@ function Send-HordeRelayChannelSaved {
             $refused | Add-Member -NotePropertyName status -NotePropertyValue ([int]$status.Value)
             # FULL IS NOT ONE MORE FAILURE: it is kept, with the relay's own words, for the runner to say
             # plainly and to tell the warchief of.
-            if ([int]$status.Value -eq 507) { $Context.full[$Mailbox] = [pscustomobject]@{ mailbox = $Mailbox; reason = "$($put.reason)"; since = [datetime]::UtcNow } }
+            if ([int]$status.Value -eq 507) {
+                if (-not $Context.full.ContainsKey($Mailbox)) { $Context.full[$Mailbox] = [pscustomobject]@{ mailbox = $Mailbox; reason = "$($put.reason)"; since = [datetime]::UtcNow; channels = @{} } }
+                $Context.full[$Mailbox].channels[(Get-HordeRelayChannelOfKey -Key $Saved.key)] = $true
+            }
         }
         return $refused
     }
-    if ($Context.full.ContainsKey($Mailbox)) { $Context.full.Remove($Mailbox) }
+    # TAKEN: this channel is no longer refused there. Another channel's mark stays (the header, full).
+    if ($Context.full.ContainsKey($Mailbox)) {
+        $Context.full[$Mailbox].channels.Remove((Get-HordeRelayChannelOfKey -Key $Saved.key))
+        if ($Context.full[$Mailbox].channels.Count -eq 0) { $Context.full.Remove($Mailbox) }
+    }
     if ($KeepFrom -gt 0) {
         if ($put.value.trimmed -lt 0) { $Context.untrimmed[$Mailbox] = $true }
         elseif ($Context.untrimmed.ContainsKey($Mailbox)) { $Context.untrimmed.Remove($Mailbox) }
