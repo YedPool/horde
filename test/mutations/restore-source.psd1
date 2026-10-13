@@ -49,6 +49,21 @@
         @{ Name = "saved-restores-never-dropped"
            Find = '-and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })'
            Replace = '})' }
+        @{ Name = "held-mail-marked-posted"
+           Find = 'if ($script:HordeRestoreSourceStages -cnotcontains "$($posted.value.stage)") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "source-picks-a-messenger-production-may-not"
+           Find = '$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")'
+           Replace = '$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post")' }
+        @{ Name = "no-messenger-found-is-a-throw"
+           Find = 'if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("there is no messenger to post through: " + $found.reason)) }'
+           Replace = '' }
+        @{ Name = "mail-wears-no-label"
+           Find = 'sessionId = $script:HordeRestoreSourceFrom; label = "$($Settings.fromLabel)" }'
+           Replace = 'sessionId = $script:HordeRestoreSourceFrom; label = "RS" }' }
+        @{ Name = "mail-carries-another-body"
+           Find = 'from = $from; body = "$($Mail.body)";'
+           Replace = 'from = $from; body = "resume";' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }

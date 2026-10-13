@@ -14,6 +14,22 @@
 # port; the time is always -Now. Invoke-HordeRestoreSourcePass is one pass and does no file I/O. The
 # reader of the running sessions and the file of what was posted are apart, at the bottom.
 #
+# IT POSTS THROUGH THE MESSENGER PORT, as the decisions doorbell does (decisions/Notify.ps1): it names no
+# messenger, states what it needs, and takes the one loaded messenger that offers it
+# (Send-HordeRestoreMail). It needs body.untyped (a resume mail typed into an input box is the defect
+# family the fleet's mail was built to end), idempotent.post (every mail's id is made from the restore
+# and the session, and a pass that plans it again must be the same one message), and receipt.receiver.
+# NOT wake: waking is the watcher's, and a sender that also knocked would be the two responsibilities
+# joined again. WHY receipt.receiver, which this module never reads: the in-process test messenger
+# offers the first two, so with only those required a machine that has it and a real messenger loaded
+# has two that qualify, and the port never chooses between two - nothing would ever be posted. It
+# declines receipt.receiver so that production paths cannot pick it (messengers/Port.ps1), and requiring
+# it here is how this one does not. Like core/Wake.ps1 with the waker port, this core file loads a port
+# that lives beside its adapters, because it calls it.
+# NOTHING POSTS LIVE YET: `horde wake run` refuses without -Shadow, and the shadow tick (core/WakeRun.ps1)
+# hands the pass no poster. The poster is built and tested here so that the day the live tick lands it
+# is a call, not a design.
+#
 # EVERY TIME IS UTC.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
@@ -24,6 +40,17 @@
 . (Join-Path $PSScriptRoot "Identity.ps1")
 . (Join-Path $PSScriptRoot "WezfleetState.ps1")
 . (Join-Path $PSScriptRoot "WakeFiles.ps1")
+. (Join-Path $PSScriptRoot "Device.ps1")
+# The port the mails are posted through (the header says why it is loaded from here).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "messengers\Port.ps1")
+
+# What the restore source needs of a messenger (the header).
+$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
+# WHO A RESUME MAIL IS FROM: this module, by a name of its own in place of a session id - it is not a
+# session - as the decisions doorbell names itself.
+$script:HordeRestoreSourceFrom = "horde-restore-source"
+# The stages at which a mail is in the session's mailbox or further (messengers/Port.ps1, THE STAGES).
+$script:HordeRestoreSourceStages = @("accepted", "handed-over", "seen")
 
 function Get-HordeRestoreSettings {
     # The restore source's settings, with -Overrides laid over the defaults. A name that is not a
@@ -46,6 +73,11 @@ function Get-HordeRestoreSettings {
         stallSeconds = 300
         # A restore older than this is history: nothing is planned for it any more.
         restoreMaxAgeSeconds = 86400
+        # The hub label a resume mail wears as its sender. A messenger that knows senders by session id
+        # or by label needs one of the two, and this sender is no session.
+        fromLabel = "RS"
+        # How long a resume mail may wait to be taken: as long as a restore is not yet history.
+        mailTtlSeconds = 86400
         resumeText = "START OR RESTORE. Every session on this machine was started or restored together and you have not taken a turn since. Background agents and shell commands from before did not survive. Read your mail, check what of yours was in flight and whether it finished or died half-way, restart only what is needed, and mail the subsessions you still need: they are not woken unless you ask."
         stallText = "STALLED START OR RESTORE. Every session on this machine was started or restored together and none has taken a turn since. Each orc was told to resume. Check the sessions you still need."
     }
@@ -219,6 +251,37 @@ function Invoke-HordeRestoreSourcePass {
         }
     }
     return [pscustomobject]@{ entries = $entries.ToArray(); posted = $nextPosted; known = $nextKnown }
+}
+
+function Send-HordeRestoreMail {
+    # Post one planned mail ({ kind; to; messageId; body }, Get-HordeResumePlan's) to its session through
+    # the messenger port. A tristate answer, as Invoke-HordeRestoreSourcePass's -Post must give: known
+    # { messageId; stage; messenger } when the mail is in the session's mailbox or further, and unknown
+    # with the reason for everything else - no messenger that offers what is needed, two that do, no
+    # device id, a mail the port refused, a messenger that held it. NOTHING IS CLAIMED THAT DID NOT
+    # HAPPEN: only known is marked posted, and what is not is planned and tried again by the next pass.
+    # -Messenger is for a caller that holds one - a test hands in the in-process one - and is found
+    # through the port when it is not given.
+    param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeRestoreSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome))
+    $through = $Messenger
+    if ($null -eq $through) {
+        $found = Find-HordeMessenger -Require $script:HordeRestoreSourceMessengerNeeds
+        if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("there is no messenger to post through: " + $found.reason)) }
+        $through = $found.value
+    }
+    $deviceId = ""
+    try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { return (New-HordeUnknown -Reason "this machine's device id could not be had" -ErrorRecord $_) }
+    $from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeRestoreSourceFrom; label = "$($Settings.fromLabel)" }
+    $message = [pscustomobject]@{ messageId = "$($Mail.messageId)"; sessionId = "$($Mail.to)"; from = $from; body = "$($Mail.body)"; ttlSeconds = [int]$Settings.mailTtlSeconds }
+    $posted = Send-HordeMessengerMessage -Messenger $through -Message $message
+    if ($posted.state -cne "known") { return $posted }
+    if ($script:HordeRestoreSourceStages -cnotcontains "$($posted.value.stage)") {
+        $why = ""
+        $p = $posted.value.PSObject.Properties["reason"]
+        if ($null -ne $p) { $why = ": " + $p.Value }
+        return (New-HordeUnknown -Reason ("the messenger answered " + $posted.value.stage + $why))
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Mail.messageId)"; stage = "$($posted.value.stage)"; messenger = "$($through.name)" }) -ObservedAt $posted.observedAt)
 }
 
 function Get-HordeRestoreSessions {

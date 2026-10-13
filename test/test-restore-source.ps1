@@ -9,6 +9,9 @@
 #     changes.
 #   - NO RESTORE: a quiet night, one restarted session, too few, too small a share.
 #   - A PASS posts each mail once, tries again what the poster could not take, and in shadow posts none.
+#   - THE POSTER hands each mail to the messenger port: through the in-process messenger each mail is
+#     one record holding the resume text, a pass repeated with its state lost adds none, and with no
+#     messenger that may be picked nothing is posted and nothing is marked posted.
 #   - THE RUNNING SESSIONS are read from the two stores handed in, never from this machine.
 # The file (restore.json) is written under a home this suite made and removes.
 
@@ -23,6 +26,8 @@ Set-StrictMode -Version Latest
 $fleetPin = Enter-HordeTestEmptyFleet
 $pinned = Enter-HordeTestPinnedHome -Root $root
 . (Join-Path $root "core\RestoreSource.ps1")
+# The in-process test messenger, and no other: what the poster posts through below, handed to it.
+. (Join-Path $root "messengers\memory\Messenger.ps1")
 
 $settings = Get-HordeRestoreSettings
 $t0 = New-Object System.DateTime(2026, 10, 12, 8, 0, 0, [System.DateTimeKind]::Utc)
@@ -223,6 +228,39 @@ for ($i = 0; $i -lt 40; $i++) {
 Check ($script:posts -eq 0) "forty shadow passes over a restore post zero mails, with a poster in hand"
 Check ((@($kinds | Sort-Object) -join ",") -ceq "would-post,would-post,would-post,would-stall") ("the journal says would-post once for each of the three orcs and would-stall once, not once a pass (" + ($kinds -join ",") + ")")
 Check (Throws { Get-HordeRestoreSettings -Overrides @{ stallSecond = 9 } } "not a restore setting") "a setting that is not one is refused, not silently left at its default"
+
+Write-Host ""
+Write-Host "--- the poster: each mail through the messenger port, once ---" -ForegroundColor Cyan
+
+$inProcess = Get-HordeMessenger -Name "memory"
+$watch = & (Join-Path $root "messengers\memory\test\Fixture.ps1") -Root $root
+$box = & $watch.New
+try {
+    $through = { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -Messenger $inProcess -HordeHome $pinned.home }
+    $sent = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 10)) -Settings $settings -Post $through -Posted @{}
+    $sentIds = @($sent.entries | ForEach-Object { $_.messageId })
+    Check ((Kinds $sent) -ceq "post,post,post" -and @($sent.entries | Where-Object { $_.outcome -cne "posted" }).Count -eq 0 -and $sent.posted.Count -eq 3) "a live pass posts the three orcs their resume mail through the messenger port, and marks each posted"
+    $seen = @($sentIds | ForEach-Object { & $watch.Observe $box $_ })
+    Check (@($seen | Where-Object { $_.records -ne 1 -or "$(@($_.bodies)[0])" -cne $settings.resumeText -or @($_.typed).Count -ne 0 }).Count -eq 0) "each is one record in the messenger's store, holding the resume text, and nothing was typed"
+    $where = @($sentIds | ForEach-Object { Get-HordeMessengerStatus -Messenger $inProcess -MessageId $_ })
+    Check (@($where | Where-Object { $_.state -cne "known" -or $_.value.stage -cne "accepted" }).Count -eq 0) "and the port says each is accepted: in the session's mailbox"
+    $lost = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 40)) -Settings $settings -Post $through -Posted @{}
+    $seen = @($sentIds | ForEach-Object { & $watch.Observe $box $_ })
+    Check ((@($lost.entries | ForEach-Object { $_.messageId } | Sort-Object) -join ",") -ceq (@($sentIds | Sort-Object) -join ",") -and @($seen | Where-Object { $_.records -ne 1 }).Count -eq 0) "a pass that lost what it had posted posts the same ids again, and the messenger keeps each as the one message it has"
+    $one = Send-HordeRestoreMail -Mail ([pscustomobject]@{ kind = "resume"; to = (Sid 2); messageId = "0d000000-0000-4000-8000-0000000000aa"; body = $settings.resumeText }) -Settings $settings -Messenger $inProcess -HordeHome $pinned.home
+    Check ($one.state -ceq "known" -and $one.value.messageId -ceq "0d000000-0000-4000-8000-0000000000aa" -and $one.value.stage -ceq "accepted" -and $one.value.messenger -ceq "memory") "one mail's answer says which message, how far it got, and through which messenger"
+    # NO MESSENGER THAT MAY BE PICKED: only the in-process one is loaded, and it declines what the
+    # source requires, so the port finds none - which is what keeps it out of a production run.
+    $unsent = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 50)) -Settings $settings -Post { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -HordeHome $pinned.home } -Posted @{}
+    Check (@($unsent.entries | Where-Object { $_.outcome -ceq "unknown" -and "$($_.reason)".Contains("no messenger to post through") -and "$($_.reason)".Contains("receipt.receiver") }).Count -eq 3 -and $unsent.posted.Count -eq 0) "left to find a messenger itself, the source does not pick the in-process one: nothing is posted, nothing is marked posted, and each entry says why"
+    $badLabel = Send-HordeRestoreMail -Mail ([pscustomobject]@{ kind = "resume"; to = (Sid 3); messageId = "0d000000-0000-4000-8000-0000000000ab"; body = "x" }) -Settings (Get-HordeRestoreSettings -Overrides @{ fromLabel = "not a label" }) -Messenger $inProcess -HordeHome $pinned.home
+    Check ($badLabel.state -ceq "unknown" -and (& $watch.Observe $box "0d000000-0000-4000-8000-0000000000ab").records -eq 0) "a mail the port refuses - a sender label that is not one - is unknown, and never reaches the messenger"
+    $noTarget = Send-HordeRestoreMail -Mail ([pscustomobject]@{ kind = "stall"; to = ""; messageId = "0d000000-0000-4000-8000-0000000000ac"; body = "x" }) -Settings $settings -Messenger $inProcess -HordeHome $pinned.home
+    Check ($noTarget.state -ceq "unknown" -and (& $watch.Observe $box "0d000000-0000-4000-8000-0000000000ac").records -eq 0) "and so is a mail addressed to nobody"
+    $hush = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 300)) -Settings $settings -Shadow -Post $through -Posted @{}
+    $stallId = @($hush.entries | Where-Object { $_.kind -ceq "would-stall" } | ForEach-Object { $_.messageId })[0]
+    Check ((& $watch.Observe $box $stallId).records -eq 0) "in shadow, with this poster in hand, the stall notice reaches no messenger"
+} finally { & $watch.Remove $box }
 
 Write-Host ""
 Write-Host "--- the file: what was posted, under a home of this suite's ---" -ForegroundColor Cyan
