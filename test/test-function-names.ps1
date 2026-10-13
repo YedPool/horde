@@ -36,6 +36,7 @@ Check ($files -ccontains "fleet/StatusPanel.ps1") "CONTROL: the fleet code ships
 Check (($files -ccontains "relay/Envelope.ps1") -and ($files -ccontains "relay/BackendCng.ps1") -and -not ($files -clike "relay/*/test/*")) "CONTROL: the relay module ships and is scanned"
 Check (($files -ccontains "relays/Port.ps1") -and (@($files | Where-Object { $_ -clike "relays/*/Relay.ps1" }).Count -ge 1) -and -not ($files -clike "relays/*/test/*")) "CONTROL: the relays ship and are scanned, their test fixtures not"
 Check (($files -ccontains "conversations/Port.ps1") -and (@($files | Where-Object { $_ -clike "agents/*/Conversation.ps1" }).Count -ge 1) -and -not ($files -clike "agents/*/test/*")) "CONTROL: the conversation port and its adapters ship and are scanned, their test fixtures not"
+Check (($files -ccontains "wakers/Port.ps1") -and (@($files | Where-Object { $_ -clike "wakers/*/Waker.ps1" }).Count -ge 1) -and -not ($files -clike "wakers/*/test/*")) "CONTROL: the waker port and its adapters ship and are scanned, their test fixtures not"
 Check (@($files | Where-Object { @($_ -split '/') -contains "test" }).Count -eq 0) "no file in a test folder is scanned: a suite may override a function in its own process"
 $defs = @(Get-HordeTopFunctionDefinitions -Root $root -Files $files)
 Check (@($defs | Where-Object { $_.name -ceq "<parse error>" }).Count -eq 0) ("every shipped file parses (" + (@($defs | Where-Object { $_.name -ceq "<parse error>" } | ForEach-Object { $_.file }) -join ", ") + ")")
