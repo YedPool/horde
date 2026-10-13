@@ -175,6 +175,13 @@ Check ($astray.code -eq 1 -and $astray.out -like "*proof-target-absent*" -and $a
 $aside = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $busy, "-Once")
 Check ($aside.code -eq 0 -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) "a proof run aimed at the busy session types nothing - and does not type into the idle one instead"
 Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
+# A LEDGER THAT CANNOT BE READ: the proof does not start, and types nothing. Mended (removed), it runs.
+$proofLedger = Join-Path $wakeDir "ledger-proof.json"
+[System.IO.File]::WriteAllText($proofLedger, "{ not json", $utf8)
+$refusedRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
+Check ($refusedRun.code -eq 1 -and $refusedRun.out -like "*has not started*cannot be read*ledger-proof.json*" -and $refusedRun.out -notlike "*pass 1 done*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and [System.IO.File]::ReadAllText($proofLedger) -ceq "{ not json") ("a proof run over a ledger file that cannot be read does not start: exit 1, the file named and left as it was, nothing typed" + $(if ($refusedRun.code -ne 1) { ": " + $refusedRun.out } else { "" }))
+Remove-Item -LiteralPath $proofLedger -Force
+Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
 $proofRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
 Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
 $typedNow = @(Read-FakeLog "typed.log")

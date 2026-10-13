@@ -414,7 +414,16 @@ function Update-HordeWakeLedger {
         $taken = $false
         if ($null -ne $States -and $States.ContainsKey($id)) { $a = $States[$id]; $taken = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -le 0) }
         $old = (($Now - $next[$id].lastAttemptAt).TotalSeconds -gt $script:HordeWakeLedgerKeepSeconds)
-        if ($taken -or $old) { $next.Remove($id) }
+        # A SESSION GIVEN UP ON IS NOT FORGOTTEN WHILE THE MAIL IT WAS GIVEN UP FOR IS STILL ITS OLDEST
+        # UNREAD. Entries were dropped after a day whatever they said, so a session that never takes
+        # its mail got its six nudges again every day (safety review of PR 220). The entry of a
+        # session that is gone, or whose state cannot be read, still ages out.
+        $stands = $false
+        if ((Get-HordeWakeEntryValue $next[$id] "gaveUp") -eq $true -and $null -ne $States -and $States.ContainsKey($id)) {
+            $a = $States[$id]
+            $stands = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -gt 0 -and $null -ne (Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $a.value))
+        }
+        if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }
     }
     return $next
 }

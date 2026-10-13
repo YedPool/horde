@@ -8,6 +8,15 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-run-that-sends-starts-from-a-ledger-it-cannot-read"
+           Find = 'if ($run.live) { $run.refused = ('
+           Replace = 'if ($false) { $run.refused = (' }
+        @{ Name = "a-refused-run-is-ticked-all-the-same"
+           Find = 'if ("$(Get-HordeWakeEntryValue $Run "refused")" -cne "") { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "a-shadow-run-is-refused-for-its-ledger"
+           Find = 'if ($run.live) { $run.refused = ('
+           Replace = 'if ($true) { $run.refused = (' }
         @{ Name = "the-ledger-is-kept-only-after-the-tells"
            Find = '$Run.ledger = $result.ledger'
            Replace = '$keptLater = $result.ledger' }

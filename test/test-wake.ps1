@@ -409,6 +409,30 @@ Check ($d[0].action -ceq "look") "with one, it is look: everything else holds, g
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- a session given up on is not forgotten after a day ---" -ForegroundColor Cyan
+
+Start-Case; Seat 1
+$capOne = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 1 }
+$null = Pass 0 -Using $capOne
+Check ((Rang) -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "CONTROL: with a cap of one, the session is nudged once and given up on"
+$again = 0; $said = 0
+foreach ($day in 1..5) { foreach ($s in @(0, 3, 6)) { $p = Pass ($day * 86400 + 60 + $s) -Using $capOne; $said += @($p.entries | Where-Object { $_.kind -ceq "gave-up" }).Count } }
+Check ((Rang) -eq 1 -and $said -eq 0 -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("five days on, with the same mail still unread, it has not been nudged again and has not been given up on a second time: the entry is not dropped at 24 hours (" + (Rang) + " nudges)")
+Seat 1 @{ OldestUnreadAt = (At 500000) }
+$p = Pass 500100 -Using $capOne
+Check ((Rang) -eq 2) "another mail becoming its oldest unread is a new mail, knocked for from nothing"
+Start-Case; Seat 1
+$null = Pass 0 -Using $capOne
+Reset-HordeMemoryWaker
+$p = Pass 86500 -Using $capOne
+Check ($script:ledger.Count -eq 0) "the entry of a session that is gone from the fleet still ages out after a day: it is not kept for ever"
+Start-Case; Seat 1
+$null = Pass 0
+$p = Pass 86500
+Check ((Rang) -eq 2) "CONTROL: an ordinary entry, of a session not given up on, is dropped after a day as before"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
 
 Start-Case; Seat 1 @{ Retired = "yes" }

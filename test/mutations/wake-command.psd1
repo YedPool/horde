@@ -9,6 +9,9 @@
     Suite  = "test\e2e\e2e-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-refused-run-is-started-by-the-command"
+           Find = 'if ("$($run.refused)" -cne "") { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "a-proof-with-no-target-binds"
            Find = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][Parameter(ParameterSetName = "proof-no-target")][switch]$Proof,'
            Replace = '[Parameter(ParameterSetName = "proof")][Parameter(ParameterSetName = "proof-alone")][Parameter(ParameterSetName = "proof-no-once")][switch]$Proof,' }

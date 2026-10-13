@@ -199,6 +199,27 @@ try {
 } finally { $script:HordeWakeTellKinds = $realKinds }
 Check (@(Get-HordeMemoryWakerAsks).Count -eq 1 -and $run.ledger.ContainsKey((Sid 2)) -and @($unmade | Where-Object { $_ -ceq "skip-unknown:tell" }).Count -eq 1) ("a tell that cannot be made is said once, and the nudge is remembered: one ask in thirty seconds (" + (@($unmade) -join ",") + ")")
 
+# A LEDGER THAT IS THERE AND CANNOT BE READ: a run that sends is refused; a shadow run starts from empty and says so.
+foreach ($sending in @("live", "proof")) {
+    $h = New-Home
+    New-Item -ItemType Directory -Path (Join-Path $h "wake") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $h ("wake\ledger-" + $sending + ".json")), "{ not json")
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60)
+    Set-HordeMemoryWakerClock (At 0)
+    $bad = New-HordeWakeRun -Mode $sending -Target (Sid 1) -HordeHome $h
+    Check ("$($bad.refused)".Contains("cannot be read") -and "$($bad.refused)".Contains("ledger-" + $sending + ".json")) ("a " + $sending + " run made over a ledger file that cannot be read is refused, naming the file")
+    $did = @(Invoke-HordeWakeTick -Run $bad -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h)
+    Check (@(Get-HordeMemoryWakerAsks).Count -eq 0 -and @(Get-HordeMemoryWakerReads).Count -eq 0 -and @($did | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "pass" -and "$($_.reason)".Contains("was refused") }).Count -eq 1) ("and a tick handed that run nudges nobody: an unreadable ledger is never read as an empty one by a run that sends")
+    Check ([System.IO.File]::ReadAllText((Join-Path $h ("wake\ledger-" + $sending + ".json"))) -ceq "{ not json") "the file is left as it was, for a person to mend"
+}
+$h = New-Home
+New-Item -ItemType Directory -Path (Join-Path $h "wake") -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $h "wake\ledger-shadow.json"), "{ not json")
+$soft = New-HordeWakeRun -HordeHome $h
+Check ("$($soft.refused)" -ceq "" -and @($soft.said | Where-Object { "$_".Contains("starting from an empty ledger") }).Count -eq 1) "a shadow run over an unreadable ledger starts from empty and says so: it sends nothing"
+Check ("$((New-HordeWakeRun -Mode "live" -HordeHome (New-Home)).refused)" -ceq "") "CONTROL: a run that sends, with no ledger file at all, is not refused: absent is not unreadable"
+
 Write-Host ""
 Write-Host "--- the one switch: turned on, a live run posts what both senders have to say, and a shadow run still posts nothing ---" -ForegroundColor Cyan
 

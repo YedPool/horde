@@ -6,6 +6,12 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-session-given-up-on-is-forgotten-after-a-day"
+           Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
+           Replace = 'if ($taken -or $old) { $next.Remove($id) }' }
+        @{ Name = "a-given-up-entry-of-a-session-that-is-gone-is-kept-for-ever"
+           Find = '$stands = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -gt 0 -and'
+           Replace = '$stands = ($true -or' }
         @{ Name = "a-pass-sends-unless-told-not-to"
            Find = '$shadowPass = (-not $Send)'
            Replace = '$shadowPass = $false' }
@@ -220,10 +226,10 @@
            Find = '$count = $before + 1'
            Replace = '$count = 1' }
         @{ Name = "mail-taken-does-not-reset"
-           Find = 'if ($taken -or $old) { $next.Remove($id) }'
-           Replace = 'if ($old) { $next.Remove($id) }' }
+           Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
+           Replace = 'if ($old -and -not $stands) { $next.Remove($id) }' }
         @{ Name = "stale-ledger-entry-kept"
-           Find = 'if ($taken -or $old) { $next.Remove($id) }'
+           Find = 'if ($taken -or ($old -and -not $stands)) { $next.Remove($id) }'
            Replace = 'if ($taken) { $next.Remove($id) }' }
         @{ Name = "outcome-counted-without-a-nudge"
            Find = 'if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }'

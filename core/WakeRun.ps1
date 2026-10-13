@@ -76,10 +76,18 @@ function New-HordeWakeRun {
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
-    elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
+    elseif ($saved.state -ceq "unknown") {
+        # A LEDGER THAT IS THERE AND CANNOT BE READ IS NOT AN EMPTY ONE. It was read as empty, which is
+        # a fresh budget for every session: every back-off forgotten, everybody given up on nudged
+        # again from nothing (safety review of PR 220). A SHADOW run may go on from empty, saying so -
+        # it sends nothing. A run that SENDS is refused: refused says why, the command does not start
+        # it, and a tick handed such a run nudges nobody. A person mends or removes the file.
+        if ($run.live) { $run.refused = ("its ledger is there and cannot be read (" + $saved.reason + "): a run that sends does not start from a ledger it cannot read, because that would forget every back-off and every session it gave up on. Mend the file, or remove it to start from nothing on purpose: " + (Get-HordeWakeStateFile -Name "ledger" -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome)) }
+        else { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
+    }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
@@ -256,6 +264,8 @@ function Invoke-HordeWakeTick {
         $silentNow = ($null -ne $Run.silence -and $Run.silence.silent -eq $true)
         # A PROOF RUN'S ONE SESSION (the header). Without one it nudges nobody: it never runs the pass
         # over the whole fleet.
+        # A RUN THAT WAS REFUSED AT ITS START (New-HordeWakeRun) NUDGES NOBODY, whoever ticks it.
+        if ("$(Get-HordeWakeEntryValue $Run "refused")" -cne "") { throw ("this run was refused and nudges nobody: " + $Run.refused) }
         $only = ""
         if ($mode -ceq "proof") {
             $only = "$(Get-HordeWakeEntryValue $Run "target")"

@@ -103,6 +103,9 @@ $HordeCommand = @{
         try {
             Write-Output ("wake: " + $plan.banner)
             $run = New-HordeWakeRun -Mode $plan.mode -Target $plan.target
+            # A RUN THAT MAY NOT START (core/WakeRun.ps1: a run that sends, over a ledger that cannot
+            # be read) is refused here, before its first tick.
+            if ("$($run.refused)" -cne "") { throw ("the " + $plan.mode + " wake run has not started: " + $run.refused) }
             foreach ($line in @($run.said)) { Write-Output ("wake: " + $line) }
             $modeWord = $(if ($plan.mode -ceq "shadow") { "shadow" } else { $plan.mode.ToUpperInvariant() })
             while ($true) {
