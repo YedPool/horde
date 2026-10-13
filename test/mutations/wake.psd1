@@ -6,6 +6,30 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-free-knock-is-not-bounded-by-the-hour"
+           Find = 'if ($free -and $FreeAt -is [datetime] -and ($Now - $FreeAt).TotalSeconds -lt [double]$Settings.freeKnockSeconds) { $free = $false }'
+           Replace = '' }
+        @{ Name = "when-a-free-knock-was-sent-is-not-recorded"
+           Find = '-Probes 0 -FreeFor $limitNow.until -FreeAt $Now'
+           Replace = '-Probes 0 -FreeFor $limitNow.until' }
+        @{ Name = "the-ledger-counts-a-bounded-knock-as-free"
+           Find = '-and $wasFree -eq $limitNow.until) -and -not $recent) {'
+           Replace = '-and $wasFree -eq $limitNow.until)) {' }
+        @{ Name = "the-decision-is-not-told-when-the-last-free-knock-was"
+           Find = '-FreeAt $(if ($null -ne $Ledger -and $Ledger.ContainsKey($id)) { Get-HordeWakeEntryValue $Ledger[$id] "freeAt" } else { $null })'
+           Replace = '' }
+        @{ Name = "when-a-free-knock-was-sent-is-not-saved"
+           Find = 'if ($freeAt -is [datetime]) { $row["freeAt"] = ConvertTo-HordeWakeTimeText $freeAt }'
+           Replace = '' }
+        @{ Name = "when-a-free-knock-was-sent-is-not-read-back"
+           Find = 'if ($null -ne $freeAt) { $entry["freeAt"] = $freeAt }'
+           Replace = '' }
+        @{ Name = "when-a-free-knock-was-sent-is-lost-with-the-row"
+           Find = 'if ($kept -is [datetime] -and (Get-HordeWakeEntryValue $next[$id] "freeAt") -isnot [datetime]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-free-knock-is-owed-again-after-a-minute"
+           Find = '$recent = ($freeWas -is [datetime] -and ($Now - $freeWas).TotalSeconds -lt [double]$Settings.freeKnockSeconds)'
+           Replace = '$recent = ($freeWas -is [datetime] -and ($Now - $freeWas).TotalSeconds -lt 60)' }
         @{ Name = "silent-probes-are-never-capped"
            Find = 'if ($SilentProbes -ge [int]$Settings.maxSilentProbes) {'
            Replace = 'if ($false) {' }
@@ -151,7 +175,7 @@
            Find = '$free = ($limit.kind -ceq "over" -and -not ($freeFor -is [datetime] -and $freeFor -eq $limit.until))'
            Replace = '$free = ($limit.kind -ceq "over")' }
         @{ Name = "the-free-knock-is-counted"
-           Find = 'if ($limitNow.kind -ceq "over" -and -not ($wasFree -is [datetime] -and $wasFree -eq $limitNow.until)) {'
+           Find = 'if ($limitNow.kind -ceq "over" -and -not ($wasFree -is [datetime] -and $wasFree -eq $limitNow.until) -and -not $recent) {'
            Replace = 'if ($false) {' }
         @{ Name = "no-wait-after-the-free-knock"
            Find = 'if ($freeFor -is [datetime] -and $steps -lt 1) { $steps = 1 }'

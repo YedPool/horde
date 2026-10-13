@@ -96,6 +96,13 @@ function Get-HordeWakeSettings {
         # 5, 10, 20 and 40 minutes and then hourly, twelve probes in a little over eight hours.
         # NOTHING IS LOST BY STOPPING: the silence ends when any session acknowledges mail, which
         # the watcher sees on every pass whether it probes or not.
+        # AT MOST ONE FREE KNOCK A SESSION IN THIS LONG, WHATEVER LIMIT IT IS FOR (Get-HordeWakeHold, A
+        # LIMIT THAT IS OVER). The free knock skips the cap and the back-off, and was owed once per
+        # limit - told apart by the time the limit ended. A waker whose past limitedUntil SHIFTS, a
+        # new time on every reading, was then a new limit on every pass: a line typed every three
+        # seconds, uncounted, for ever (review of PR 230). Inside the hour a knock under a limit that
+        # is over is an ordinary attempt, counted and backed off.
+        freeKnockSeconds = 3600
         silentProbeStretch = 2
         silentProbeMaxSeconds = 3600
         maxSilentProbes = 12
@@ -163,7 +170,7 @@ function New-HordeWakeLedgerRow {
     # PROBE).
     # probes is how many uncounted knocks a session LIMITED WITH NO KNOWN END has had for this mail
     # (Get-HordeWakeHold); it is taken from -Carry, the entry this one replaces, unless -Probes says.
-    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false, $ProbeAt = $null, $Carry = $null, [int]$Probes = -1, $FreeFor = $null)
+    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false, $ProbeAt = $null, $Carry = $null, [int]$Probes = -1, $FreeFor = $null, $FreeAt = $null)
     $row = [ordered]@{ attempts = $Attempts; lastAttemptAt = $LastAttemptAt; lastOutcome = $LastOutcome }
     $probed = $Probes
     if ($probed -lt 0) { $probed = 0; $was = Get-HordeWakeEntryValue $Carry "probes"; if ($was -is [int] -or $was -is [long]) { $probed = [int]$was } }
@@ -172,6 +179,10 @@ function New-HordeWakeLedgerRow {
     $free = $FreeFor
     if ($free -isnot [datetime]) { $free = Get-HordeWakeEntryValue $Carry "freeFor" }
     if ($free -is [datetime]) { $row["freeFor"] = $free }
+    # freeAt is WHEN the session last had a free knock, for whichever limit; carried too.
+    $freeWhen = $FreeAt
+    if ($freeWhen -isnot [datetime]) { $freeWhen = Get-HordeWakeEntryValue $Carry "freeAt" }
+    if ($freeWhen -is [datetime]) { $row["freeAt"] = $freeWhen }
     if ($ProbeAt -is [datetime]) { $row["probeAt"] = $ProbeAt }
     if ($NothingAt -is [datetime]) { $row["nothingAt"] = $NothingAt }
     if ($MailAt -is [datetime]) { $row["mailAt"] = $MailAt }
@@ -297,7 +308,7 @@ function Get-HordeWakeHold {
     # It is skip, like a session with no mail: not waiting for anything, not an attempt, not a failure,
     # never given up on and never told of. retired UNKNOWN - the waker could not tell - is held too:
     # wait, because it may yet be read as no. Either is journaled once (Invoke-HordeWakePass's held).
-    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent, $Acks = $null, [switch]$NoProbe, [string]$Self = "")
+    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent, $Acks = $null, [switch]$NoProbe, [string]$Self = "", $FreeAt = $null)
     $retired = "$(Get-HordeWakeEntryValue $Target "retired")"
     if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }
     if ($retired -cne "no") { return [pscustomobject]@{ action = "wait"; reason = "retired is unknown: a session that may be retired is not nudged" } }
@@ -354,8 +365,14 @@ function Get-HordeWakeHold {
     # limit ends is free: it ignores the cap and the back-off, and is not counted
     # (Update-HordeWakeLedger records which limit it was for, freeFor). From the next attempt the
     # normal rules hold, the first step of the back-off counted from that free knock.
+    # ONE PER LIMIT, AND NEVER MORE THAN ONE AN HOUR PER SESSION (below, freeKnockSeconds).
     $freeFor = Get-HordeWakeEntryValue $Entry "freeFor"
     $free = ($limit.kind -ceq "over" -and -not ($freeFor -is [datetime] -and $freeFor -eq $limit.until))
+    # AND AT MOST ONE IN freeKnockSeconds, WHATEVER THE LIMIT (Get-HordeWakeSettings says why). -FreeAt is
+    # when this session last had one, read from its ledger row AS IT STANDS - not from the entry for
+    # its oldest mail, which is nothing when another mail has become the oldest: the bound is on the
+    # session. One dated in the future counts as just sent.
+    if ($free -and $FreeAt -is [datetime] -and ($Now - $FreeAt).TotalSeconds -lt [double]$Settings.freeKnockSeconds) { $free = $false }
     $probe = ($Silent -or $limit.kind -ceq "open")
     # A PASS CUT DOWN TO ONE SESSION SENDS NO PROBE (-NoProbe; Invoke-HordeWakePass sets it with -Only).
     # A probe is sent on a timer read from the ledger - an hour since the last, five minutes in a
@@ -437,7 +454,7 @@ function Get-HordeWakeDecisions {
         $stateNow = $null
         if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
-        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Acks $Acks -NoProbe:$NoProbe -Self $Self
+        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Acks $Acks -NoProbe:$NoProbe -Self $Self -FreeAt $(if ($null -ne $Ledger -and $Ledger.ContainsKey($id)) { Get-HordeWakeEntryValue $Ledger[$id] "freeAt" } else { $null })
         $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0; between = ("$(Get-HordeWakeEntryValue $stateNow "betweenTurns")" -ceq "yes") }
         $lastProbe = Get-HordeWakeEntryValue $entry "probeAt"
         if ($lastProbe -is [datetime]) { $row.probed = $lastProbe.Ticks }
@@ -560,10 +577,14 @@ function Update-HordeWakeLedger {
         # THE ONE FREE KNOCK AFTER A LIMIT ENDED (Get-HordeWakeHold): not counted, and marked with the limit
         # it was for, so a second knock under the same past limit is an ordinary attempt.
         $wasFree = Get-HordeWakeEntryValue $had "freeFor"
-        if ($limitNow.kind -ceq "over" -and -not ($wasFree -is [datetime] -and $wasFree -eq $limitNow.until)) {
+        # ...and bounded as the decision bounded it (Get-HordeWakeHold): by when this session last had one.
+        $freeWas = $null
+        if ($null -ne $Ledger -and $Ledger.ContainsKey($id)) { $freeWas = Get-HordeWakeEntryValue $Ledger[$id] "freeAt" }
+        $recent = ($freeWas -is [datetime] -and ($Now - $freeWas).TotalSeconds -lt [double]$Settings.freeKnockSeconds)
+        if ($limitNow.kind -ceq "over" -and -not ($wasFree -is [datetime] -and $wasFree -eq $limitNow.until) -and -not $recent) {
             $kept = 0
             if ($null -ne $had) { $kept = [int]$had.attempts }
-            $next[$id] = New-HordeWakeLedgerRow -Attempts $kept -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true -and $kept -ge [int]$Settings.maxNudgesPerMail) -Probes 0 -FreeFor $limitNow.until
+            $next[$id] = New-HordeWakeLedgerRow -Attempts $kept -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true -and $kept -ge [int]$Settings.maxNudgesPerMail) -Probes 0 -FreeFor $limitNow.until -FreeAt $Now
             continue
         }
         $before = 0
@@ -620,6 +641,15 @@ function Update-HordeWakeLedger {
             if ($old -and $null -ne $Listed -and @($Listed) -cnotcontains "$id") { $drop = $true }
         }
         if ($taken -or $drop) { $next.Remove($id) }
+    }
+    # WHEN A SESSION LAST HAD A FREE KNOCK OUTLIVES ITS ROW BEING REPLACED - for another mail, a probe,
+    # a nothing - for as long as the session has a row at all: the bound is on the session.
+    if ($null -ne $Ledger) {
+        foreach ($id in @($next.Keys)) {
+            if (-not $Ledger.ContainsKey($id)) { continue }
+            $kept = Get-HordeWakeEntryValue $Ledger[$id] "freeAt"
+            if ($kept -is [datetime] -and (Get-HordeWakeEntryValue $next[$id] "freeAt") -isnot [datetime]) { $next[$id] = New-HordeWakeLedgerRow -Attempts ([int]$next[$id].attempts) -LastAttemptAt $next[$id].lastAttemptAt -LastOutcome "$($next[$id].lastOutcome)" -NothingAt (Get-HordeWakeEntryValue $next[$id] "nothingAt") -MailAt (Get-HordeWakeEntryValue $next[$id] "mailAt") -GaveUp ((Get-HordeWakeEntryValue $next[$id] "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $next[$id] "probeAt") -Carry $next[$id] -FreeAt $kept }
+        }
     }
     return $next
 }
@@ -1075,6 +1105,8 @@ function Save-HordeWakeLedger {
             if (($knocks -is [int] -or $knocks -is [long]) -and $knocks -gt 0) { $row["probes"] = [int]$knocks }
             $freeFor = Get-HordeWakeEntryValue $Ledger[$id] "freeFor"
             if ($freeFor -is [datetime]) { $row["freeFor"] = ConvertTo-HordeWakeTimeText $freeFor }
+            $freeAt = Get-HordeWakeEntryValue $Ledger[$id] "freeAt"
+            if ($freeAt -is [datetime]) { $row["freeAt"] = ConvertTo-HordeWakeTimeText $freeAt }
             [void]$sessions.Add($row)
         }
     }
@@ -1104,6 +1136,7 @@ function Read-HordeWakeLedger {
             if ($null -ne $row.PSObject.Properties["probeAt"]) { $probeAt = ConvertFrom-HordeWakeTimeText $row.probeAt; if ($null -ne $probeAt) { $entry["probeAt"] = $probeAt } }
             if ($null -ne $row.PSObject.Properties["probes"]) { $entry["probes"] = [int]$row.probes }
             if ($null -ne $row.PSObject.Properties["freeFor"]) { $freeFor = ConvertFrom-HordeWakeTimeText $row.freeFor; if ($null -ne $freeFor) { $entry["freeFor"] = $freeFor } }
+            if ($null -ne $row.PSObject.Properties["freeAt"]) { $freeAt = ConvertFrom-HordeWakeTimeText $row.freeAt; if ($null -ne $freeAt) { $entry["freeAt"] = $freeAt } }
             $ledger["$($row.id)"] = [pscustomobject]$entry
         }
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }

@@ -700,7 +700,38 @@ Check ((Rang) -eq 2 -and "$((Decided $r).reason)".StartsWith("gave up")) "and th
 Seat 1 @{ Limited = "yes"; LimitedUntil = (At 900) }
 $null = Pass 600 -Using $capOne
 $r = Pass 900 -Using $capOne
-Check ((Rang) -eq 3) "another limit, ending at another time, has a free knock of its own"
+Check ((Rang) -eq 2 -and "$((Decided $r).reason)".StartsWith("gave up")) "another limit that ends INSIDE THE HOUR of that free knock has none of its own: the cap holds"
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At 3800) }
+$null = Pass 3000 -Using $capOne
+$r = Pass 3800 -Using $capOne
+Check ((Rang) -eq 3 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "freeAt") -eq (At 3800)) "another limit, ending more than an hour after it, has a free knock of its own"
+# A PAST limitedUntil THAT SHIFTS: a new time, already over, on every reading. Each was "a new limit",
+# and so a free knock on every pass.
+Check ((Get-HordeWakeSettings).freeKnockSeconds -eq 3600) "the bound is a named setting, an hour"
+Start-Case
+$shifted = New-Object System.Collections.ArrayList
+for ($t = 0; $t -le 7500; $t += 3) {
+    Seat 1 @{ Limited = "yes"; LimitedUntil = (At ($t - 10)) }
+    $before = (Rang)
+    $r = Pass $t
+    if ((Rang) -gt $before) { [void]$shifted.Add($t) }
+}
+$firstHour = @($shifted | Where-Object { $_ -lt 3600 })
+$uncounted = @($shifted | Where-Object { $_ -eq 0 -or $_ -eq 3600 -or $_ -eq 7200 })
+Check ($firstHour.Count -eq 7 -and $shifted.Count -eq 9 -and $uncounted.Count -eq 3) ("two hours and five minutes of a limit whose past end shifts on every pass - 2500 passes: ONE free knock an hour, at 0, 3600 and 7200 s, and between them only the six counted attempts the cap allows - nine lines typed, not 2500 (" + ($shifted -join ",") + ")")
+Check ($script:ledger[(Sid 1)].attempts -eq 6 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "freeAt") -eq (At 7200)) "the knocks in between were counted and the session given up on, as for any session that does not take its mail"
+# The bound is on the SESSION: another mail becoming its oldest does not hand it a new free knock.
+Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At -10) }
+$r = Pass 0
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At -5); OldestUnreadAt = (At 1) }
+$r = Pass 9
+Check ((Rang) -eq 2 -and $script:ledger[(Sid 1)].attempts -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "freeAt") -eq (At 0)) "a second past limit and ANOTHER mail, nine seconds after a free knock: the knock is an ordinary attempt, counted, and when the free one was sent is still known"
+Seat 1 @{ Limited = "unknown"; OldestUnreadAt = (At 1) }
+$r = Pass 20
+Check ((Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "freeAt") -eq (At 0)) "and it stays known while the row is rewritten for other things - here, a limit nobody can read"
+$fa = Join-Path $pinned.home ("freeat-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $fa | Out-Null
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60) -FreeFor (At -10) -FreeAt (At 0)) } -HordeHome $fa
+Check ((Get-HordeWakeEntryValue (Read-HordeWakeLedger -HordeHome $fa).value.ledger[(Sid 1)] "freeAt") -eq (At 0)) "when a session last had a free knock is saved with the ledger: a restart does not hand it another inside the hour"
 Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "over" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "no"; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, over when its time has come, open with no time, and none when the waker says not limited"
 $hf = Join-Path $pinned.home ("free-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hf | Out-Null
 Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60) -FreeFor (At -10)) } -HordeHome $hf
