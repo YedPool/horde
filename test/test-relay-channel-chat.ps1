@@ -68,8 +68,13 @@ $postBlock = {
     if ($script:postFails) { throw "the test messenger cannot take it now" }
     $id = "$($Message.messageId)"
     if (-not $script:posts.ContainsKey($id)) { $script:posts[$id] = @{ message = $Message; by = $null } }
-    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "" }))
+    $said = [ordered]@{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = $script:postWhy }
+    if ($null -ne $script:postWoken) { $said["woken"] = $script:postWoken }
+    return (New-HordeKnown -Value ([pscustomobject]$said))
 }
+# What a test messenger says of its knock: $null says nothing, as before; true or false is its woken.
+$script:postWoken = $null
+$script:postWhy = ""
 $statusBlock = { param([string]$MessageId) return (New-HordeAbsent -Note "not kept") }
 function Register-TestMessenger {
     param([string]$Name)
@@ -188,7 +193,7 @@ function Get-Line {
 }
 function Has { param($Turn, [string]$Text) return [bool]($Turn.text.Contains($Text)) }
 function Get-Records { return @($script:posts.Values) }
-function Reset-Posts { $script:posts = @{}; $script:postCalls = 0; $script:postFails = $false }
+function Reset-Posts { $script:posts = @{}; $script:postCalls = 0; $script:postFails = $false; $script:postWoken = $null; $script:postWhy = "" }
 
 try {
     Write-Host ""
@@ -362,6 +367,11 @@ try {
     $rc = @(Get-Receipts @(Get-NewMail $I))
     Check ($rc.Count -eq 1 -and $rc[0].messageId -ceq $mid -and $rc[0].status -ceq "accepted" -and $rc[0].code -ceq "queued" -and $rc[0].text -ceq $words -and $rc[0].session -ceq (Get-ThrallSession $I)) ("a receipt comes back: accepted, queued, with his words (" + $(if ($rc.Count) { $rc[0].status + "/" + $rc[0].code } else { "none" }) + ")")
 
+    # WHEN HE SENT IT (the founder asked for the time of every message, 2026-10-12): the time in the line's
+    # own envelope, which his passkey signed - not the machine's clock when the receipt was made.
+    $signedAt = [long]$line.header.ts
+    Check ($rc.Count -eq 1 -and $null -ne $rc[0].PSObject.Properties["sentAt"] -and [long]$rc[0].sentAt -eq $signedAt -and $signedAt -gt 1700000000000) ("the receipt carries when he sent it: the time his passkey signed in the line's envelope (" + $signedAt + ")")
+
     Write-Host ""
     Write-Host "--- IN 2. replayed, re-signed, resent: one post ---" -ForegroundColor Cyan
     [void](Send-ToMachine $I $line.text -Key ($line.key + "-again"))
@@ -489,6 +499,10 @@ try {
     $a1 = Invoke-HordeChatChannelAccept -Context $I.ctx -Item $item
     $a2 = Invoke-HordeChatChannelAccept -Context $I.ctx -Item $item
     Check ($a1.outcome -ceq "done" -and $a2.outcome -ceq "done" -and @(Get-Records | Where-Object { $_.message.body -like "*twice handed" }).Count -eq 1) "a record handed over again after a crash is the same post: one record"
+    # NO TIME, NO STAMP: that item carried no envelope time (as one handed over by older code would not),
+    # so its receipts name none - the machine's own clock is never put in its place.
+    $rc7 = @(Get-Receipts @(Get-NewMail $I) | Where-Object { $_.messageId -ceq ("c" * 32) })
+    Check ($rc7.Count -ge 1 -and @($rc7 | Where-Object { $null -ne $_.PSObject.Properties["sentAt"] }).Count -eq 0) ("a line whose record carries no signed time is receipted with no time at all, never a guessed one (" + $rc7.Count + " receipt(s))")
     Write-Host ""
     Write-Host "--- IN 8. his delivered line comes back as his turn - only word for word; nobody can quote one into being ---" -ForegroundColor Cyan
     $null = Invoke-Tick $I
@@ -543,6 +557,15 @@ try {
     Check ($vr.Count -eq 2 -and @($vr | Where-Object { $_.message.body.EndsWith("Do NOT deploy to prod") }).Count -eq 1) ("an edited line resent under the same id is posted as the new words, not swallowed as the first (" + $vr.Count + " posts)")
     $postedWords = @($vr | ForEach-Object { $_.message.body.Substring($_.message.body.IndexOf("`n`n") + 2) })
     Check ($vrc.Count -eq 2 -and @($vrc | Where-Object { $postedWords -cnotcontains $_.text }).Count -eq 0) "every receipt carries words that were posted, never words the Thrall did not get"
+    # A LINE THAT WAITED: the receipt names the time he signed, not the time the machine took it.
+    $fiveAgo = [datetime]::UtcNow.AddMinutes(-5)
+    $V.phone.seq["chat"] = [long]$V.phone.seq["chat"] + 1
+    $lateDraft = New-HordeRelayEnvelopeDraft -Kind "line" -Channel "chat" -From $V.phone.keyId -Seq ([long]$V.phone.seq["chat"]) -Body (New-HordeTestPhoneLineBody -Machine $V.id.sign.keyId -Session (Get-ThrallSession $V) -Text "sent five minutes ago") -Recipients $V.agree -Now $fiveAgo
+    $lateSig = New-HordeTestPhoneAssertion -Phone $V.phone -Challenge $lateDraft.challenge
+    [void](Send-ToMachine $V (Complete-HordeRelayEnvelope -Draft $lateDraft -AuthenticatorData $lateSig.authenticatorData -ClientDataJson $lateSig.clientDataJson -Signature $lateSig.signature))
+    $lateTurn = Invoke-Turn $V
+    $lateRc = @(Get-Receipts @(Get-NewMail $V) | Where-Object { $_.text -ceq "sent five minutes ago" })
+    Check ($lateRc.Count -eq 1 -and [long]$lateRc[0].sentAt -eq [long]$lateDraft.header.ts -and ([datetime]::UtcNow - $fiveAgo).TotalMinutes -ge 4.9) ("a line that waited five minutes is receipted with the time he signed, five minutes ago, never the time the machine took it (" + $lateTurn.text + ")")
 
     Write-Host ""
     Write-Host "--- REVIEW 2. an envelope recorded before a key was revoked is never put to it ---" -ForegroundColor Cyan
@@ -600,6 +623,36 @@ try {
     [System.IO.File]::WriteAllText($hD, '{"schemaVersion": 1, "settings": {"lineChars": 60000}}', $utf8)
     $sD = Get-HordeModuleSettings -Declaration (Get-HordeChatChannelSettingsDeclaration) -HordeHome $D4.home
     Check ($sD.state -ceq "refused") "a lineChars no message could carry is refused by the settings"
+
+    Write-Host ""
+    Write-Host "--- WAKE. the line says whether the Thrall was woken, or only has it in its mailbox ---" -ForegroundColor Cyan
+    # The founder's bug of 2026-10-12: his phone's lines reached this machine in seconds and every one
+    # read "accepted (queued) - messenger ... took it for the Thrall", while the Thrall slept until its
+    # next turn. In the mailbox is not woken, and the line now says which, in the messenger's own words.
+    $K = New-World
+    $null = Invoke-Tick $K; $null = Get-NewMail $K
+    Reset-Posts; Remove-TestMessengers; $null = Register-TestMessenger "chat-wakes"
+    $script:postWoken = $true; $script:postWhy = "woken"
+    [void](Send-ToMachine $K (Get-Line $K -Text "are you there?").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "accepted (queued)") -and (Has $turn "took it for the Thrall; woken") -and -not (Has $turn "NOT woken")) ("a line whose knock landed says woken (" + $turn.text + ")")
+    $script:postWoken = $false; $script:postWhy = "send-refused: not woken (occupied)"
+    [void](Send-ToMachine $K (Get-Line $K -Text "and now?").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "accepted (queued)") -and (Has $turn "took it for the Thrall; queued, NOT woken: send-refused: not woken (occupied)")) ("a line in the mailbox of a Thrall nobody woke says queued, NOT woken, and why (" + $turn.text + ")")
+    $rcK = @(Get-Receipts @(Get-NewMail $K))
+    Check (@(Get-Records).Count -eq 2 -and @($rcK | Where-Object { $_.status -ceq "accepted" -and $_.code -ceq "queued" }).Count -eq 2) "both are posted once, and the phone is told accepted, queued, for each: the code list is unchanged"
+    $script:postWoken = $null; $script:postWhy = ""
+    [void](Send-ToMachine $K (Get-Line $K -Text "a third").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "took it for the Thrall") -and -not (Has $turn "woken")) ("a messenger that does not say leaves the line as it was: nothing is claimed either way (" + $turn.text + ")")
+    # ONLY A MESSENGER THAT OFFERS WAKE IS BELIEVED: one that only sees, saying it woke the Thrall, is not.
+    Reset-Posts; Remove-TestMessengers; $null = Register-TestMessenger "chat-sees"
+    $script:postWoken = $true; $script:postWhy = "woken"
+    [void](Send-ToMachine $K (Get-Line $K -Text "a fourth").text)
+    $turn = Invoke-Turn $K
+    Check ((Has $turn "took it for the Thrall") -and -not (Has $turn "; woken")) ("a messenger that declares no wake cannot make the line say woken (" + $turn.text + ")")
+    Reset-Posts
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin

@@ -5,6 +5,15 @@
     Target = "surfaces\pwa\page\bridge.js"
     Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
     Mutations = @(
+        @{ Name = "progress-not-pushed-with-a-refresh"
+           Find = 'emit("progress-changed", await progressRecord());'
+           Replace = '' }
+        @{ Name = "progress-read-with-nothing-named-marks-all"
+           Find = 'a.all === true ? "" : String(a.id || "-")'
+           Replace = 'String(a.id || "")' }
+        @{ Name = "progress-read-ignores-the-entry"
+           Find = 'phone.markProgressRead(picked, a.all === true ? "" : String(a.id || "-"))'
+           Replace = 'phone.markProgressRead(picked, "")' }
         @{ Name = "requests-not-a-closed-list"
            Find = 'if (REQUESTS.indexOf(name) < 0) return Promise.reject('
            Replace = 'if (!(name in handlers)) return Promise.reject(' }

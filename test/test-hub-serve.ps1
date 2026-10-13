@@ -104,7 +104,7 @@ try {
     $gp = Write-HordeHubMirror -Root $mirrorRoot -Mirror $good -Contract $contract
     Check ((Read-HordeHubMirror -Path $gp -DeviceId $device -Contract $contract).state -ceq "known") "CONTROL: a mirror holding the node's real list reads"
     $text = [System.IO.File]::ReadAllText($gp)
-    $broken = $text.Replace('"role":{"state":"known","value":"goblin"', '"role":{"state":"known"')
+    $broken = $text.Replace('"role":{"state":"known","value":"warg"', '"role":{"state":"known"')
     Check ($broken -cne $text) "CONTROL: the fixture's role answer is there to break"
     [System.IO.File]::WriteAllText($bad, $broken)
     $r = Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract
@@ -128,7 +128,7 @@ try {
         $ns = [pscustomobject][ordered]@{ device = $device; space = "windows" }
         $u = { [pscustomobject][ordered]@{ state = "unknown"; reason = $why } }
         $placed = { [pscustomobject][ordered]@{ state = "unknown"; reason = $why; ns = $ns } }
-        return [pscustomobject][ordered]@{ sessionId = $Id; agent = [pscustomobject][ordered]@{ state = "known"; value = "harness-a"; reason = ""; observedAt = $at }; fleetSessionId = (& $u); role = [pscustomobject][ordered]@{ state = "known"; value = "goblin"; reason = ""; observedAt = $at }; label = (& $u); parent = (& $u); liveStatus = (& $u); workState = (& $u); startedAt = (& $u); lastActivity = (& $u); retired = (& $u); pid = (& $placed); procStart = (& $placed); projectCwd = (& $placed) }
+        return [pscustomobject][ordered]@{ sessionId = $Id; agent = [pscustomobject][ordered]@{ state = "known"; value = "harness-a"; reason = ""; observedAt = $at }; fleetSessionId = (& $u); role = [pscustomobject][ordered]@{ state = "known"; value = "warg"; reason = ""; observedAt = $at }; label = (& $u); parent = (& $u); liveStatus = (& $u); workState = (& $u); startedAt = (& $u); lastActivity = (& $u); retired = (& $u); pid = (& $placed); procStart = (& $placed); projectCwd = (& $placed) }
     }
     function BigList {
         param([object[]]$Sessions, [bool]$Complete)
@@ -444,7 +444,7 @@ try {
     $json = $rep | ConvertTo-Json -Depth 40 | ConvertFrom-Json
     Check (@($json.nodes).Count -eq 1 -and $json.nodes[0].heard.state -ceq "unknown" -and $json.nodes[0].heard.reason -clike "*unreachable since*") "each node's answer is a record: state and reason"
     Check (@($json.sessions).Count -eq 2 -and @($json.sessions | Where-Object { $_.presence.state -ceq "unknown" -and $_.fields.role.state -ceq "unknown" -and $_.device -ceq $device }).Count -eq 2) "each session row carries its device, its presence and its fields as records"
-    Check (@($json.sessions | Where-Object { "$($_.lastKnown.role.value)" -ceq "goblin" }).Count -ge 1) "and its last-known copy while it is not current"
+    Check (@($json.sessions | Where-Object { "$($_.lastKnown.role.value)" -ceq "warg" }).Count -ge 1) "and its last-known copy while it is not current"
     $text = @(Format-HordeNodesText -Report $rep)
     Check (@($text | Where-Object { $_ -clike "*fixture-node*$device*unreachable since*" }).Count -eq 1) ("the text names the node and why it is not heard (" + ($text -join " | ") + ")")
     $fleet = Get-HordeFleetView -Mirrors @($after1.value) -Now (Utc)

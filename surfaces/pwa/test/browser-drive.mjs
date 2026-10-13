@@ -126,6 +126,8 @@ async function load(url) {
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
 const listed = "(document.getElementById('lists').innerText + ' ' + Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join(' '))";
+// Everything the lists hold, shown or folded away.
+const everything = "document.getElementById('lists').textContent";
 // What a locked page still holds of the lists: their boxes, and the words standing in any field.
 const leftovers = "({ boxes: document.querySelectorAll('#lists .horde-list').length, fields: Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join('|') })";
 const shown = (id) => "(document.getElementById('" + id + "') && !document.getElementById('" + id + "').hidden)";
@@ -187,7 +189,7 @@ const commands = {
   // THE WAY BETWEEN THE VIEWS: with the page made long and scrolled to its end (as a long chat is), the
   // other view's tab is still on the screen, and a real touch at its centre opens that view.
   async navTouch(c) {
-    const tab = c.to === "chat" ? "tabChat" : "tabDecisions";
+    const tab = c.to === "chat" ? "tabChat" : c.to === "progress" ? "tabProgress" : "tabDecisions";
     await evaluate("document.getElementById('chatLog').style.minHeight = '4000px'; document.getElementById('lists').style.minHeight = '4000px'; window.scrollTo(0, document.documentElement.scrollHeight)");
     await sleep(300);
     const r = await evaluate("(() => { const b = document.getElementById('" + tab + "').getBoundingClientRect(); return { top: b.top, bottom: b.bottom, x: b.left + b.width / 2, y: b.top + b.height / 2, scrolled: window.scrollY, h: window.innerHeight }; })()");
@@ -196,7 +198,7 @@ const commands = {
       await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: r.x, y: r.y }] });
       await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     }
-    const opened = !!(await until(shown(c.to === "chat" ? "chat" : "doc"), 10000));
+    const opened = !!(await until(shown(c.to === "chat" ? "chat" : c.to === "progress" ? "progress" : "doc"), 10000));
     await evaluate("document.getElementById('chatLog').style.minHeight = ''; document.getElementById('lists').style.minHeight = ''");
     return { inView, opened, scrolled: r.scrolled, top: r.top, bottom: r.bottom };
   },
@@ -204,7 +206,57 @@ const commands = {
   async back() {
     await evaluate("history.back()");
     await sleep(800);
-    return await evaluate("({ chat: " + shown("chat") + ", doc: " + shown("doc") + " })");
+    return await evaluate("({ chat: " + shown("chat") + ", doc: " + shown("doc") + ", progress: " + shown("progress") + " })");
+  },
+  // THE PROGRESS LOG: its tab, what it draws, and his place in it.
+  async progressState() {
+    return await evaluate(`(() => {
+      const items = Array.from(document.querySelectorAll('#progressLog .progress-item'));
+      const first = items[0], foot = document.getElementById('progressFoot').getBoundingClientRect(), newest = document.getElementById('progressNewest').getBoundingClientRect();
+      const mark = document.getElementById('progressNew');
+      const bar = document.getElementById('bar').getBoundingClientRect().bottom;
+      const onScreen = items.filter((b) => { const r = b.getBoundingClientRect(); return r.bottom > bar && r.top < foot.top; }).map((b) => b.getAttribute('data-id'));
+      return {
+        shown: !document.getElementById('progress').hidden, doc: !document.getElementById('doc').hidden, chat: !document.getElementById('chat').hidden, keys: !document.getElementById('keys').hidden,
+        tab: document.getElementById('tabProgress').textContent, selected: document.getElementById('tabProgress').getAttribute('aria-selected'), count: document.getElementById('progressCount').textContent,
+        items: items.length, ids: items.map((b) => b.getAttribute('data-id')), onScreen,
+        firstChips: first ? Array.from(first.querySelectorAll('.progress-head .chip')).map((c) => c.textContent) : [],
+        firstTime: first && first.querySelector('.stamp') ? first.querySelector('.stamp').textContent : '',
+        firstTitle: first ? first.querySelector('.progress-title').textContent : '', titleWeight: first ? Number(getComputedStyle(first.querySelector('.progress-title')).fontWeight) : 0,
+        firstLabels: first ? Array.from(first.querySelectorAll('.progress-text b')).map((b) => b.textContent) : [], firstParagraphs: first ? Array.from(first.querySelectorAll('.progress-text p')).map((p) => p.textContent) : [],
+        corrections: items.filter((b) => b.querySelector('.progress-correction')).map((b) => b.getAttribute('data-id') + ' <- ' + b.querySelector('.progress-correction .progress-title').textContent),
+        notes: Array.from(document.querySelectorAll('#progressLog .progress-item > .progress-note')).map((n) => n.textContent),
+        mark: mark ? { top: Math.round(mark.getBoundingClientRect().top - bar), before: mark.nextElementSibling ? mark.nextElementSibling.getAttribute('data-id') : '' } : null,
+        note: document.getElementById('progressNote').hidden ? '' : document.getElementById('progressNote').textContent, empty: !document.getElementById('progressEmpty').hidden,
+        footBottom: Math.round(foot.bottom), newestInView: newest.top >= 0 && newest.bottom <= window.innerHeight && newest.width > 0, innerHeight: window.innerHeight, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
+        atEnd: window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2, scrollY: Math.round(window.scrollY)
+      };
+    })()`);
+  },
+  async progressTab() {
+    await evaluate("document.getElementById('tabProgress').click()", true);
+    await until(shown("progress"), 15000);
+    await sleep(900);
+    return await commands.progressState();
+  },
+  async progressWait(c) {
+    const found = await until("document.getElementById('progressLog').innerText.indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
+    await sleep(900);
+    return { found: !!found, ...(await commands.progressState()) };
+  },
+  // He reads on: the page scrolled down by screens, as a thumb does, each entry passing over the screen.
+  async progressReadOn(c) {
+    for (let i = 0; i < c.screens; i++) { await evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.5))"); await sleep(350); }
+    await sleep(900);
+    return await commands.progressState();
+  },
+  // A real touch on one of the foot's keys.
+  async progressTouch(c) {
+    const at = await centre(c.which === "all" ? "#progressAllRead" : "#progressNewest");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(1200);
+    return await commands.progressState();
   },
   async announce() {
     const ticked = await evaluate("document.getElementById('wroteCode').checked");
@@ -214,7 +266,10 @@ const commands = {
     await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
     return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
-  async waitText(c) { const found = await until(listed + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(listed) }; },
+  // folded: the words are looked for in everything the lists hold, what stands under a folded heading
+  // included (an answered question is out of his list, under the folded "With Thrall"); without it,
+  // only in what is shown.
+  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);
@@ -298,6 +353,26 @@ const commands = {
   },
   async chatState() {
     return await evaluate("({ mode: document.getElementById('chatMode').hidden ? '' : document.getElementById('chatMode').textContent, disabled: document.getElementById('chatText').disabled, items: document.querySelectorAll('#chatLog .chat-item').length, log: document.getElementById('chatLog').innerText })");
+  },
+  // WHEN IT WAS SAID: every item's stamp and the day dividers, as drawn; then a real touch on the first
+  // stamp (the exact time opens), the log drawn again by a refresh meanwhile (it stays open), and a second
+  // touch (the short time is back).
+  async chatStamps() {
+    const read = "({ items: document.querySelectorAll('#chatLog .chat-item').length, stamps: Array.from(document.querySelectorAll('#chatLog .chat-item .stamp')).map((s) => s.textContent), titles: Array.from(document.querySelectorAll('#chatLog .chat-item .stamp')).map((s) => s.title), days: Array.from(document.querySelectorAll('#chatLog .chat-day')).map((d) => d.textContent), first: document.getElementById('chatLog').firstElementChild ? document.getElementById('chatLog').firstElementChild.className : '' })";
+    const before = await evaluate(read);
+    const touch = async () => {
+      const at = await centre("#chatLog .chat-item .stamp");
+      await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+      await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await sleep(400);
+      return await evaluate("document.querySelector('#chatLog .chat-item .stamp').textContent");
+    };
+    const tapped = await touch();
+    await evaluate("window.HordeBridge.request('refresh')");
+    await sleep(400);
+    const kept = await evaluate("document.querySelector('#chatLog .chat-item .stamp').textContent");
+    const again = await touch();
+    return { ...before, tapped, kept, again };
   },
   async chatNewline(c) {
     const before = headOf(c.mailbox);

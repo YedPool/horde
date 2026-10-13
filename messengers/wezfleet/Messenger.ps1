@@ -77,6 +77,20 @@
 # between the probe and the start is a window of milliseconds: old to new posts unlabelled once, new to
 # old is unknown once and retried.
 #
+# WOKEN, OR ONLY QUEUED (the founder's bug of 2026-10-12, messengers/Port.ps1, THE WAKE WORD). wezfleet's
+# post knocks once for each new message - the same one-line notice, through the same guarded send, as its
+# tell - and answers woken true or false with a code: woken; send-refused (the knock was refused: the
+# target's box holds somebody's unsent text, another sender has the pane); pane-unverified or
+# no-registry-record (no pane of the target's was found). This messenger passes that on as the answer's
+# woken, and the reason keeps wezfleet's code and words. No argument asks for the wake, so there is
+# nothing to probe for: every wezfleet with these commands knocks. WHAT WAS WRONG was on wezfleet's side,
+# measured that day on the founder's machine from its own records: a post made by a process outside any
+# pane - the relay runner, started hidden - could not reach the terminal at all (pane-unverified, "the terminal
+# did not answer"), so his phone's lines were queued in seconds and never woke the Thrall, while the
+# decisions doorbell, started from a pane, woke it or was refused by an occupied box as a tell is. wezfleet's
+# fix/mail-post-wake mends that; against a wezfleet without it this messenger still posts, and says
+# queued, NOT woken, which is the truth.
+#
 # THE ONE START SITE (plan R21 slice 3b, merge condition 2). Start-HordeWezfleetMessengerProcess starts the
 # fixed PowerShell from the system folder, named once in one expression, on wezfleet.ps1 in the
 # configured folder - which it finds itself, so no caller can hand it another script - with -NoProfile
@@ -544,7 +558,12 @@ function Read-HordeWezfleetMessengerAnswer {
     $reason = $code
     if ($detail -ne "") { $reason = $(if ($reason -ne "") { $reason + ": " + $detail } else { $detail }) }
     if ($where -ne "") { $reason = $(if ($reason -ne "") { $reason + "; " + $where } else { $where }) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = $MessageId; stage = $stage; at = $now; reason = $reason }) -ObservedAt $now)
+    $value = [ordered]@{ messageId = $MessageId; stage = $stage; at = $now; reason = $reason }
+    # THE WAKE WORD (messengers/Port.ps1): a fresh post's, from wezfleet's own woken and its code together -
+    # true only when both say so, so a wake the code denies is never claimed. Not for a repost (wezfleet
+    # knocks nobody again, and its false there is not "the target sleeps"), and not for exit 4, held.
+    if ($Command -ceq "post" -and [int]$Run.exit -eq 0 -and $code -cne "already-posted") { $value["woken"] = ($j.woken -eq $true -and $code -ceq "woken") }
+    return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $now)
 }
 
 function Send-HordeWezfleetMessengerPost {

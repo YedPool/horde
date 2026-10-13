@@ -320,6 +320,40 @@ foreach ($c in @(
         Check ($a.state -ceq "known" -and $a.value.stage -ceq $c.want -and (Why $a).Contains($c.why)) ("wezfleet " + (($c.mode.Keys | ForEach-Object { $_ + "=" + $c.mode[$_] }) -join " ") + " is the port's " + $c.want + ", reason with '" + $c.why + "' (" + (Show-Answer $a) + ")")
     }
 }
+# WOKEN, OR ONLY QUEUED (the founder's bug of 2026-10-12): each fresh post says whether wezfleet's knock
+# landed, from wezfleet's own woken and its code together, and the port's words for it name the reason.
+function Woken-Of { param($Answer) if ($Answer.state -cne "known") { return "not known" }; $p = $Answer.value.PSObject.Properties["woken"]; if ($null -eq $p) { return "unsaid" }; return "$($p.Value)" }
+foreach ($c in @(
+        @{ what = "a wake that landed"; mode = @{}; woken = "True"; words = "woken" },
+        @{ what = "no pane of the target's found"; mode = @{ noWake = $true }; woken = "False"; words = "queued, NOT woken: no-registry-record: no registry record for this session on this machine, so no pane can be verified; the mail waits for its next turn boundary" },
+        @{ what = "the terminal not answering"; mode = @{ noWake = $true; reason = "pane-unverified"; detail = "not woken: the terminal did not answer, so no pane can be verified; the mail waits for its next turn boundary" }; woken = "False"; words = "queued, NOT woken: pane-unverified: not woken: the terminal did not answer, so no pane can be verified; the mail waits for its next turn boundary" },
+        @{ what = "a box holding somebody's unsent text"; mode = @{ noWake = $true; reason = "send-refused"; detail = "not woken (occupied); the mail waits for its next turn boundary" }; woken = "False"; words = "queued, NOT woken: send-refused: not woken (occupied); the mail waits for its next turn boundary" },
+        @{ what = "woken true beside a code that says refused"; mode = @{ reason = "send-refused"; detail = "not woken (occupied)" }; woken = "False"; words = "queued, NOT woken: send-refused: not woken (occupied)" },
+        @{ what = "the code woken beside woken false"; mode = @{ noWake = $true; reason = "woken"; detail = "" }; woken = "False"; words = "queued, NOT woken: woken" })) {
+    With-Fake {
+        param($st)
+        & $fx.SetMode $st @{ post = $c.mode }
+        $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+        Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and (Woken-Of $a) -ceq $c.woken) ($c.what + ": accepted, woken " + $c.woken + " (" + (Woken-Of $a) + ", " + (Show-Answer $a) + ")")
+        Check ((Format-HordeMessengerWake -Answer $a) -ceq $c.words) ("  and the words are '" + $c.words + "' (" + (Format-HordeMessengerWake -Answer $a) + ")")
+    }
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $first = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $again = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ((Woken-Of $first) -ceq "True" -and $again.state -ceq "known" -and (Why $again).StartsWith("already-posted") -and (Woken-Of $again) -ceq "unsaid") ("a repost knocks nobody again, and does not say the target sleeps: woken is left out (" + (Woken-Of $again) + ")")
+    Check ((Format-HordeMessengerWake -Answer $again) -ceq "") "  and no wake words are made for it"
+    $st2 = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
+    Check ($st2.state -ceq "known" -and (Woken-Of $st2) -ceq "unsaid") ("a status says nothing of the wake (" + (Show-Answer $st2) + ")")
+}
+With-Fake {
+    param($st)
+    & $fx.SetMode $st @{ post = @{ stalePane = $true } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Woken-Of $a) -ceq "unsaid") ("exit 4 is held, and held says why in its reason, not in woken (" + (Woken-Of $a) + ")")
+}
 With-Fake {
     param($st)
     & $fx.SetMode $st @{ post = @{ stage = "unconfirmed"; reason = ""; detail = "" } }

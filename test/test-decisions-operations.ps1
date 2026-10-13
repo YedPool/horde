@@ -144,7 +144,7 @@ Check (Test-Refused (Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; 
 Check (Test-Refused (Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; question = (New-Question @{ colour = "red" }) }) "question has 'colour'") "a field a question does not have is refused"
 Check (Test-Refused (Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; question = (New-Question @{ needsSecret = "yes" }) }) "question.needsSecret should be boolean") "a flag given as text is refused"
 Check (Test-Refused (Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; question = (New-Question @{ waiting = "orc-b" }) }) "question.waiting should be array") "a list given as one text is refused"
-Check (Test-Refused (Invoke-Op $s "add" @{ id = (New-Id); actor = "goblin"; question = (New-Question) }) "'goblin' is not a role that may change the list") "a role outside the closed list is refused by name"
+Check (Test-Refused (Invoke-Op $s "add" @{ id = (New-Id); actor = "warg"; question = (New-Question) }) "'warg' is not a role that may change the list") "a role outside the closed list is refused by name"
 Check (Test-Refused (Invoke-Op $s "add" @{ id = (New-Id); actor = "Warchief"; question = (New-Question) }) "request.actor does not match") "and so is the right role spelled another way"
 Check ((Get-Files $s) -eq "" -and -not (Test-Path -LiteralPath $s)) "none of these wrote anything, or made the store folder"
 

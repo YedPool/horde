@@ -90,5 +90,15 @@
         @{ Name = "undelivered-snapshot-not-a-failure"
            Find = 'return [pscustomobject]@{ lines = @($what + " recorded; not delivered yet: " + $why); failed = $true }'
            Replace = 'return [pscustomobject]@{ lines = @($what + " recorded; not delivered yet: " + $why); failed = $false }' }
+        # --- the Tick turns the bell (the founder's bug of 2026-10-12)
+        @{ Name = "tick-does-not-turn-the-bell"
+           Find = '$bell = Invoke-HordeDecisionsChannelBell -Context $Context'
+           Replace = '$bell = [pscustomobject]@{ lines = @(); againMs = 0 }' }
+        @{ Name = "bell-line-not-said"
+           Find = 'if ("$($turn.said)" -cne "") { $lines = @("notify: " + $turn.said) }'
+           Replace = 'if ($false) { $lines = @("notify: " + $turn.said) }' }
+        @{ Name = "bell-does-not-ask-for-its-turn"
+           Find = 'failed = [bool]$out.failed; againMs = $bell.againMs }'
+           Replace = 'failed = [bool]$out.failed; againMs = 0 }' }
     )
 }

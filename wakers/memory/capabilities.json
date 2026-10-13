@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "waker": "memory",
+  "capabilities": {
+    "nudge.pointer-only": {
+      "support": "yes",
+      "evidence": "A nudge records one fixed line and holds no message at all, so no body can reach it. test/test-waker-conformance.ps1 nudges two sessions holding different mail and observes the same one line for both."
+    },
+    "state.box": {
+      "support": "yes",
+      "evidence": "The box is whatever the test said it is, read back through the port, in test/test-waker-conformance.ps1 and test/test-wake-port.ps1."
+    },
+    "state.turn": {
+      "support": "yes",
+      "evidence": "The turn is whatever the test said it is, read back through the port, in test/test-waker-conformance.ps1 and test/test-wake-port.ps1."
+    },
+    "reach.unseen": {
+      "support": "declined",
+      "evidence": "An in-process table for tests: there is no session, so nothing was ever restored and nothing can be reached. Declined so that Resolve-HordeProductionWaker, which requires reach.unseen, never picks it (test/test-wake-port.ps1)."
+    },
+    "nudge.guarded": {
+      "support": "yes",
+      "evidence": "The nudge reads the session's box and turn as they are when it is asked, and answers busy without recording a line when the box is not empty or a turn is under way. test/test-waker-conformance.ps1 seats each case and observes no nudge and no typed text."
+    }
+  }
+}

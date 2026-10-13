@@ -28,7 +28,12 @@
 #      WebAuthn, which a run posts to the Thrall once, and its receipt shows; at phone width nothing
 #      scrolls sideways and the composer stands at the foot; with the page scrolled to its end the other
 #      view's tab is still on the screen and a touch opens it, both ways, and the phone's Back goes back
-#      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page.
+#      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page;
+#  11. the progress tab (the founder asked for it, 2026-10-12): a changelog under the suite's home is sent by
+#      a run and drawn oldest to newest in the order written, each entry with its time, bold title, labelled
+#      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
+#      down moves his place, Jump to newest marks nothing, a reload opens at his place, Mark all read; the
+#      tab is reached by touch from the other views, and a lock takes the log off the page.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 
@@ -214,8 +219,11 @@ try {
     Check ($re.ok -and $re.value.locked -and $re.value.controlled) "after a reload the page is the worker's, and the horde is locked"
     $un = Invoke-Browser @{ cmd = "unlock" }
     Check ($un.ok -and $un.value.doc) ("Chrome's passkey, by PRF, unlocks it (" + $(if ($un.ok) { $un.value.notice } else { $un.reason }) + ")")
-    $again = Invoke-Browser @{ cmd = "waitText"; text = $title }
-    Check ($again.ok -and $again.value.found -and $again.value.text.Contains("short chime")) ("and the question shows again, his answer under it (" + $(if ($again.ok) { ($again.value.text -replace '\s+', ' ') } else { $again.reason }) + ")")
+    # HE HAS ANSWERED IT, so it is not in his list (2026-10-12): it stands under the folded "With Thrall",
+    # with his answer, and the list itself shows the order line and that heading only.
+    $again = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
+    Check ($again.ok -and $again.value.found -and $again.value.text.Contains("short chime") -and $again.value.shown.Contains("With Thrall (1)") -and -not $again.value.shown.Contains($title)) ("and the question he answered is there again, out of his list under the folded With Thrall, his answer with it (" + $(if ($again.ok) { ($again.value.shown -replace '\s+', ' ') } else { $again.reason }) + ")")
+    Check ($again.ok -and $again.value.shown.Contains("Order by") -and $again.value.shown.Contains("Task importance") -and $again.value.shown.Contains("Blocking")) "the line where he chooses the order is on the phone too: Date, Task importance, Blocking"
     $null = Invoke-Browser @{ cmd = "serve"; on = $false }
     $off = Invoke-Browser @{ cmd = "reload" }
     Check ($off.ok -and $off.value.locked) "with the site's server down the app still starts, from the worker's cache"
@@ -228,11 +236,16 @@ try {
 
     Write-Host ""
     Write-Host "--- 7. the recovery code reads, and never answers ---" -ForegroundColor Cyan
+    # A second question first: the one he answered is out of his list, and has no field to type in.
+    $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
+    Check ($q2.state -ceq "known" -and $q2.value.outcome -ceq "done") "CONTROL: a second question is asked"
+    $run = Invoke-Run -Turns 1
     $null = Invoke-Browser @{ cmd = "unlock" }
+    $seen2 = Invoke-Browser @{ cmd = "waitText"; text = "Which chime of the three?" }
     $null = Invoke-Browser @{ cmd = "lock" }
     $rc = Invoke-Browser @{ cmd = "recover"; code = $(if ($paired.ok) { $paired.value.recoveryCode } else { "" }) }
     Check ($rc.ok -and $rc.value.doc -and $rc.value.mode.Contains("Read only")) ("the recovery code unlocks the horde, said to be read only (" + $(if ($rc.ok) { $rc.value.notice } else { $rc.reason }) + ")")
-    $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox }
+    $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox; question = "Which chime of the three?" }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
     $lk = Invoke-Browser @{ cmd = "lock" }
     Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
@@ -240,9 +253,6 @@ try {
 
     Write-Host ""
     Write-Host "--- 8. the row's Send key, by touch ---" -ForegroundColor Cyan
-    $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
-    Check ($q2.state -ceq "known" -and $q2.value.outcome -ceq "done") "CONTROL: a second question is asked"
-    $run = Invoke-Run -Turns 1
     $seen2 = Invoke-Browser @{ cmd = "waitText"; text = "Which chime of the three?" }
     $null = Save-Shot "phone-two-questions"
     $touch = Invoke-Browser @{ cmd = "answer"; text = "The second one."; via = "touch"; mailbox = $mailbox; question = "Which chime of the three?" }
@@ -255,7 +265,7 @@ try {
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
     Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
-    $null = Invoke-Browser @{ cmd = "waitText"; text = $title }
+    $null = Invoke-Browser @{ cmd = "waitText"; text = $title; folded = $true }
     $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
     $sh = Invoke-Browser @{ cmd = "show" }
     Check ($sh.ok -and $sh.value.docHiddenAtOnce) "shown again, the list is hidden in the same moment, before the lock check runs"
@@ -276,6 +286,13 @@ try {
     Check ($posts.Count -eq 1 -and $posts[0].to -ceq $thrall.state.session -and $posts[0].body.EndsWith("Use the second chime.")) ("a run posts it to the Thrall once (" + $posts.Count + ")")
     $w2 = Invoke-Browser @{ cmd = "chatWait"; text = "Sent: the Thrall's mailbox has it." }
     Check ($w2.ok -and $w2.value.found) "its receipt shows under it, in the app's own words"
+    # WHEN IT WAS SAID (the founder asked for the time of every message, 2026-10-12).
+    $stamps = Invoke-Browser @{ cmd = "chatStamps" }
+    $stampList = @(); $dayList = @(); if ($stamps.ok) { $stampList = @($stamps.value.stamps); $dayList = @($stamps.value.days) }
+    Check ($stamps.ok -and $stamps.value.items -ge 3 -and $stampList.Count -eq $stamps.value.items -and @($stampList | Where-Object { $_ -cnotmatch '\A[0-9]{2}:[0-9]{2}\z' }).Count -eq 0) ("every message in the chat - the Thrall's turns and his own line - shows when it was said, as a short local time (" + ($stampList -join ", ") + ")")
+    Check ($stamps.ok -and $dayList.Count -ge 1 -and $stamps.value.first -ceq "chat-day" -and @($dayList | Where-Object { $_ -cnotmatch '\A(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}\z' }).Count -eq 0 -and @($dayList | Select-Object -Unique).Count -eq $dayList.Count) ("the day stands on a line of its own before the first message of each day, once (" + ($dayList -join ", ") + ")")
+    $exactLook = '\A(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}, [0-9]{2}:[0-9]{2}:[0-9]{2} \(UTC[^)]*\)\z'
+    Check ($stamps.ok -and $stamps.value.tapped -cmatch $exactLook -and $stamps.value.titles[0] -ceq $stamps.value.tapped -and $stamps.value.kept -ceq $stamps.value.tapped -and $stamps.value.again -ceq $stampList[0]) ("a touch on a time opens the exact one, to the second and with its zone - also its title; it stays open when the log is drawn again; a second touch closes it (" + $(if ($stamps.ok) { $stamps.value.tapped } else { $stamps.reason }) + ")")
     $shot = Invoke-Browser @{ cmd = "chatShot"; path = (Join-Path $work "phone-chat.png") }
     Check ($shot.ok -and $shot.value.scrollWidth -le $shot.value.innerWidth -and [math]::Abs($shot.value.composeBottom - $shot.value.innerHeight) -le 1) "at phone width nothing scrolls sideways, and the composer stands at the foot of the screen"
     if ($env:HORDE_PWA_SHOTS -and (Test-Path -LiteralPath $env:HORDE_PWA_SHOTS -PathType Container)) { Copy-Item -LiteralPath (Join-Path $work "phone-chat.png") -Destination (Join-Path $env:HORDE_PWA_SHOTS "phone-chat.png") -Force }
@@ -289,6 +306,66 @@ try {
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
     Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
+
+    Write-Host ""
+    Write-Host "--- 11. the progress tab: the log in the order written, his place kept, the newest always within reach ---" -ForegroundColor Cyan
+    # A changelog of the suite's own, in the shape the fleet's is, where a run with no progressFile set
+    # looks for it: under the suite's home.
+    $logFile = Join-Path $hh "progress\changelog.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $logFile) -Force | Out-Null
+    $kinds = @("started", "progress", "merged", "blocked", "waiting", "decision", "result", "done", "note")
+    $logLines = @(1..40 | ForEach-Object {
+        $extra = $(if ($_ -eq 1) { ',"lane":"F","task":"T-0096"' } else { '' })
+        '{"v":1,"id":"20261012T' + ('{0:d2}' -f (10 + ($_ % 10))) + '0000Z-' + ('{0:d2}' -f $_) + '","ts":"2026-10-12T' + ('{0:d2}' -f (10 + ($_ % 10))) + ':00:00Z","kind":"' + $kinds[($_ - 1) % 9] + '","area":"' + $(if ($_ % 2) { "Form fill" } else { "Ask Orah voice" }) + '"' + $extra + ',"title":"Progress entry ' + $_ + '","text":"Asked: do thing ' + $_ + '.\nHappened: it was done.\nMeans: one less to do.\nNext: thing ' + ($_ + 1) + '."}'
+    })
+    $logLines += '{"v":1,"id":"20261012T200000Z-41","ts":"2026-10-12T20:00:00Z","kind":"note","area":"Form fill","title":"Not quite","text":"Means: entry 2 was only half done.","corrects":"20261012T120000Z-02"}'
+    [System.IO.File]::WriteAllText($logFile, (($logLines | ForEach-Object { $_ + "`n" }) -join ""), $utf8)
+    $run = Invoke-Run -Turns 1
+    Check ($run.code -eq 0 -and $run.out.Contains("41 progress entries in ")) ("a run reads the changelog under its own home and sends its 41 entries (exit " + $run.code + ")")
+    $pt = Invoke-Browser @{ cmd = "progressTab" }
+    Check ($pt.ok -and $pt.value.shown -and -not $pt.value.doc -and -not $pt.value.chat -and -not $pt.value.keys -and $pt.value.selected -ceq "true") "a third tab, Progress, beside Decisions and Chat, shows the log, and the other views and the answering row go"
+    $pw = Invoke-Browser @{ cmd = "progressWait"; text = "Progress entry 40" }
+    $ids = @(); if ($pw.ok) { $ids = @($pw.value.ids) }
+    Check ($pw.ok -and $pw.value.found -and $pw.value.items -eq 41 -and $ids[0].EndsWith("-01") -and $ids[39].EndsWith("-40") -and $ids[40].EndsWith("-41")) ("the entries are drawn oldest to newest in the order they were written, though their times are not in order (" + $(if ($pw.ok) { "" + $pw.value.items } else { $pw.reason }) + ")")
+    Check ($pw.ok -and (@($pw.value.firstChips) -join "|") -ceq "Form fill|Started|Lane F|T-0096") ("an entry's chips: the area's plain name first, its kind in a plain word, and the lane and task when it names them (" + $(if ($pw.ok) { @($pw.value.firstChips) -join "|" } else { "" }) + ")")
+    Check ($pw.ok -and $pw.value.firstTime -cmatch '\A[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}\z' -and $pw.value.firstTitle -ceq "Progress entry 1" -and $pw.value.titleWeight -ge 600) ("with its day and time, and its title in bold (" + $(if ($pw.ok) { $pw.value.firstTime } else { "" }) + ")")
+    Check ($pw.ok -and (@($pw.value.firstLabels) -join "|") -ceq "Asked: |Happened: |Means: |Next: " -and @($pw.value.firstParagraphs).Count -eq 4 -and $pw.value.firstParagraphs[1] -ceq "Happened: it was done.") "its text is four short paragraphs, each label in bold"
+    Check ($pw.ok -and @($pw.value.corrections).Count -eq 1 -and $pw.value.corrections[0] -ceq "20261012T120000Z-02 <- Not quite" -and @($pw.value.notes) -ccontains "This corrects: Progress entry 2") ("a correction is shown on the entry it corrects, and in its own place says what it corrects (" + $(if ($pw.ok) { @($pw.value.corrections) -join "; " } else { "" }) + ")")
+    $null = Save-Shot "phone-progress"
+    $unread0 = $(if ($pw.ok -and $pw.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
+    Check ($pw.ok -and $unread0 -gt 20 -and $unread0 -lt 41 -and $pw.value.count -ceq ("" + $unread0 + " new") -and $null -eq $pw.value.mark -and $pw.value.scrollY -eq 0) ("never read before, it opens at its start; what stands on the screen is read, and the tab and the foot count the rest (" + $(if ($pw.ok) { $pw.value.tab } else { "" }) + ")")
+    Check ($pw.ok -and [math]::Abs($pw.value.footBottom - $pw.value.innerHeight) -le 1 -and $pw.value.newestInView -and $pw.value.scrollWidth -le $pw.value.innerWidth) "at phone width nothing scrolls sideways, and Jump to newest stands at the foot of the screen"
+    $ro = Invoke-Browser @{ cmd = "progressReadOn"; screens = 5 }
+    $unread1 = $(if ($ro.ok -and $ro.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
+    Check ($ro.ok -and $unread1 -gt 8 -and $unread1 -lt $unread0 -and $ro.value.newestInView) ("as he reads down, his place moves on with him - " + $unread0 + " new, then " + $unread1 + " - and Jump to newest is still on the screen")
+    $jump = Invoke-Browser @{ cmd = "progressTouch"; which = "newest" }
+    Check ($jump.ok -and $jump.value.atEnd -and @($jump.value.onScreen) -ccontains $ids[40] -and $jump.value.tab -ceq ("Progress (" + $unread1 + ")")) ("a touch on Jump to newest lands on the newest entry, and marks nothing read: the entries jumped past are still new (" + $(if ($jump.ok) { $jump.value.tab } else { $jump.reason }) + ")")
+    $firstUnread = $ids[41 - $unread1]
+    $null = Invoke-Browser @{ cmd = "reload" }
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $null = Invoke-Browser @{ cmd = "progressTab" }
+    $again = Invoke-Browser @{ cmd = "progressWait"; text = "Progress entry 40" }
+    Check ($again.ok -and $null -ne $again.value.mark -and $again.value.mark.before -ceq $firstUnread -and $again.value.mark.top -ge 0 -and $again.value.mark.top -le 40 -and @($again.value.onScreen) -ccontains $firstUnread) ("after a reload the log opens at his place: a line where the new entries begin, at the top of the screen, the first new entry under it (" + $(if ($again.ok -and $null -ne $again.value.mark) { $again.value.mark.before } else { "no line" }) + ")")
+    $unread2 = $(if ($again.ok -and $again.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
+    Check ($unread2 -gt 0 -and $unread2 -le $unread1) ("with the count of what is still new (" + $unread2 + " of " + $unread1 + ")")
+    $allRead = Invoke-Browser @{ cmd = "progressTouch"; which = "all" }
+    Check ($allRead.ok -and $allRead.value.tab -ceq "Progress" -and $allRead.value.count -ceq "All read") ("a touch on Mark all read leaves nothing new (" + $(if ($allRead.ok) { $allRead.value.tab + "; " + $allRead.value.count } else { $allRead.reason }) + ")")
+    $pdump = Invoke-Browser @{ cmd = "dump" }
+    Check ($pdump.ok -and $pdump.value.Contains('"progressRead":{"id":"20261012T200000Z-41","n":41}') -and -not $pdump.value.Contains("Progress entry") -and -not $pdump.value.Contains("Not quite") -and -not $pdump.value.Contains("Ask Orah")) "Chrome keeps his place - an entry's id and line number - and no word of the log"
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261012T210000Z-42","ts":"2026-10-12T21:00:00Z","kind":"done","area":"Whole fleet","title":"Written while he was reading","text":"Happened: one more."}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $live = Invoke-Browser @{ cmd = "progressWait"; text = "Written while he was reading" }
+    Check ($live.ok -and $live.value.found -and $live.value.items -eq 42) "an entry written meanwhile appears at the end without a reload"
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
+    $toProgress = Invoke-Browser @{ cmd = "navTouch"; to = "progress" }
+    $backFrom = Invoke-Browser @{ cmd = "back" }
+    Check ($toProgress.ok -and $toProgress.value.inView -and $toProgress.value.opened -and $backFrom.ok -and $backFrom.value.doc -and -not $backFrom.value.progress) ("with the questions scrolled to their end the Progress tab is still on the screen and a touch opens it; the phone's Back goes back to the questions (" + $(if ($toProgress.ok) { ConvertTo-Json $toProgress.value -Compress } else { $toProgress.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "progressTab" }
+    $lk = Invoke-Browser @{ cmd = "lock" }
+    $ps = Invoke-Browser @{ cmd = "progressState" }
+    Check ($lk.ok -and $lk.value.locked -and $ps.ok -and $ps.value.items -eq 0 -and $ps.value.tab -ceq "Progress") "a lock takes the log off the page, not only out of sight"
     $null = Invoke-Browser @{ cmd = "unlock" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }

@@ -80,6 +80,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Operations.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Notify.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 
 $script:HordeDecisionsChannelFolder = $PSScriptRoot
@@ -90,6 +91,11 @@ $script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snap
 $script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }
 $script:HordeDecisionsChannelAnswerHighest = 2
 $script:HordeDecisionsChannelIdDomain = "horde-relay/decisions/v1 answer id"
+# For a test only: the seat and the clock the bell's turn is handed (decisions/Notify.ps1). $null, as it
+# is everywhere but in a suite, means the real warchief's seat and the real time.
+$script:HordeDecisionsChannelBellSeat = $null
+$script:HordeDecisionsChannelBellClock = $null
+$script:HordeDecisionsChannelBellRoot = ""
 
 function Get-HordeDecisionsChannelAnswerId {
     # The decisions request id of one answer (the header): 32 lower-case hex.
@@ -253,7 +259,37 @@ function Send-HordeDecisionsChannelPending {
     return ""
 }
 
+function Invoke-HordeDecisionsChannelBell {
+    # THE BELL (the founder's bug of 2026-10-12): an answer from the phone is written to the store by this
+    # channel's Accept, and with the decisions window closed nobody was running notify, so the warchief
+    # was never told. Each Tick therefore turns the bell once - decisions/Notify.ps1's own pass, through
+    # Invoke-HordeDecisionNotifyTurn, which stands aside while a notify loop (the window's) holds the
+    # home's bell. { lines; againMs }: a line when the bell has something new to say, and how soon the run
+    # should turn again for the bell's sake (the quiet period's end), so a watch is not waited out first.
+    # Never fails the Tick: a bell that cannot ring says so and the snapshot still goes.
+    param($Context)
+    if (-not $Context.state.ContainsKey("decisions-bell")) { $Context.state["decisions-bell"] = @{} }
+    # The store this run reads and writes, for the bell's reading of the inbox: a script block cannot
+    # carry a local, so it is kept where the block finds it.
+    $script:HordeDecisionsChannelBellRoot = $Context.decisionsRoot
+    $inbox = { return (Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief" } -Root $script:HordeDecisionsChannelBellRoot) }
+    try {
+        $turn = Invoke-HordeDecisionNotifyTurn -Memory $Context.state["decisions-bell"] -HordeHome $Context.hordeHome -StoreRoot $Context.decisionsRoot -Inbox $inbox -Seat $script:HordeDecisionsChannelBellSeat -Clock $script:HordeDecisionsChannelBellClock
+    } catch { return [pscustomobject]@{ lines = @("the founder's answers could not be rung for: " + $_.Exception.Message); againMs = 0 } }
+    $lines = @()
+    if ("$($turn.said)" -cne "") { $lines = @("notify: " + $turn.said) }
+    return [pscustomobject]@{ lines = $lines; againMs = [int]$turn.againMs }
+}
+
 function Invoke-HordeDecisionsChannelTick {
+    # OUT, in the header, then THE BELL: { lines; failed; againMs }.
+    param($Context)
+    $out = Invoke-HordeDecisionsChannelSnapshotTick -Context $Context
+    $bell = Invoke-HordeDecisionsChannelBell -Context $Context
+    return [pscustomobject]@{ lines = @(@($out.lines) + @($bell.lines)); failed = [bool]$out.failed; againMs = $bell.againMs }
+}
+
+function Invoke-HordeDecisionsChannelSnapshotTick {
     # OUT, in the header: { lines; failed }.
     param($Context)
     if (-not $Context.state.ContainsKey("decisions")) { $Context.state["decisions"] = @{ fingerprint = $null; sent = ""; pending = (New-Object System.Collections.ArrayList) } }

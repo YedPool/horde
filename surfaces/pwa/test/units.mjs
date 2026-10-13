@@ -643,6 +643,7 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   c = await a.phone.chat(a.paired.id);
   const mine = c.items.find((x) => x.kind === "line");
   check(mine && mine.words === P.CHAT_SENDING && mine.text === "carry on", "until a receipt comes it is shown as sending");
+  check(mine && mine.said === opened.header.ts && mine.saidHow === "sent" && opened.header.ts > 1700000000000, "and it says when he sent it: the very time his passkey signed in the line's envelope", JSON.stringify({ said: mine && mine.said, ts: opened.header.ts }));
   // The receipt, a forged code, a turn that merely quotes the line's header, and the machine's founder turn.
   await sendChat(t, m, a.phoneKey, receiptBody(m, "sess-1", mid, "held", "your-account-expired", "carry on"), "receipt");
   await a.phone.refresh(a.paired.id);
@@ -719,6 +720,185 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   const r = P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [{ id: "x", role: "tool", session: "s", text: "t" }, { id: "y", role: "user", session: "s", text: "ok" }] })), "work", "a".repeat(32));
   check(r.ok && r.value.turns.length === 1 && r.value.dropped === 1, "a turn with a role off the list is dropped and counted");
   check((await throwsAsync(async () => P.lineBody({ messageId: "x", horde: "work", machine: "a".repeat(32), session: "s", text: "t" }))) !== "", "a line body with a bad message id is refused before anything is signed");
+}
+
+// --- 10c. when it was said: the turn's own time, the line's signed one, and never a guessed one ---
+{
+  const at = Date.parse("2026-10-12T21:30:09.000Z");
+  // The zone is given as getTimezoneOffset gives it: minutes, positive west of UTC.
+  check(P.clockTime(at, -180) === "00:30" && P.clockTime(at, 0) === "21:30" && P.clockTime(at, 270) === "17:00" && P.clockTime(Date.parse("2026-10-12T05:07:00Z"), 0) === "05:07", "a time is shown short, in the phone's own zone, 24-hour, two digits each", [P.clockTime(at, -180), P.clockTime(at, 0), P.clockTime(at, 270)].join(" "));
+  check(P.dayKey(at, -180) === "2026-10-13" && P.dayKey(at, 0) === "2026-10-12" && P.dayLabel(at, -180) === "Tue 13 Oct 2026" && P.dayLabel(at, 0) === "Mon 12 Oct 2026" && P.dayLabel(Date.parse("2026-01-04T12:00:00Z"), 0) === "Sun 4 Jan 2026", "the day is the phone's local day: past midnight there, it is the next day", P.dayLabel(at, -180));
+  check(P.exactTime(at, -180) === "Tue 13 Oct 2026, 00:30:09 (UTC+3)" && P.exactTime(at, 270) === "Mon 12 Oct 2026, 17:00:09 (UTC-4:30)" && P.exactTime(at, 0) === "Mon 12 Oct 2026, 21:30:09 (UTC)", "the exact time names the day, the second and the zone it is told in", P.exactTime(at, 270));
+  check(P.clockTime(0, 0) === "" && P.clockTime(-5, 0) === "" && P.clockTime(undefined, 0) === "" && P.clockTime(1.5, 0) === "" && P.clockTime(8.7e15, 0) === "" && P.exactTime(0, 0) === "" && P.dayKey(0, 0) === "" && P.dayLabel(NaN, 0) === "" && P.localParts("2026", 0) === null, "what is not a time - none, zero, a fraction, past what a date holds - is shown as no time");
+  check(P.clockTime(at) === P.clockTime(at, new Date(at).getTimezoneOffset()) && P.clockTime(at).length === 5, "with no zone given, the device's own");
+  check(P.timeOf("2026-10-12T21:30:09.000Z") === at && P.timeOf("2026-10-13T00:30:09+03:00") === at && P.timeOf("2026-10-12T21:30:09") === 0 && P.timeOf("2026-10-12") === 0 && P.timeOf("yesterday") === 0 && P.timeOf("") === 0 && P.timeOf(at) === 0, "a turn's time is a time only with a zone: one without cannot be placed, and is none");
+  const days = P.withDays([{ id: "a", said: 0 }, { id: "b", said: at - 3600000 }, { id: "c", said: at }, { id: "d", said: 0 }, { id: "e", said: at + 60000 }, { id: "f", said: at + 86400000 }], -180);
+  check(days.map((x) => (x.kind === "day" ? "[" + x.label + "]" : x.id)).join(" ") === "a [Mon 12 Oct 2026] b [Tue 13 Oct 2026] c d e [Wed 14 Oct 2026] f", "the day is named once where it changes, and a thing with no time neither gets a divider nor moves one", days.map((x) => (x.kind === "day" ? "[" + x.label + "]" : x.id)).join(" "));
+  // The timeline: each item's said.
+  const T = (id, role, time, extra = {}) => ({ id, role, session: "s", text: id, time, group: "", part: 0, parts: 0, truncated: false, redactions: 0, line: "", seq: 1, ...extra });
+  const tl = P.chatTimeline({ turns: [T("t1", "assistant", "2026-10-12T21:30:09.000Z"), T("t2", "user", ""), T("t3", "assistant", "2026-10-12T21:31:00")] });
+  check(tl.find((x) => x.id === "t1").said === at && tl.find((x) => x.id === "t1").saidHow === "turn", "a turn says when it was said: its own time from the conversation");
+  check(tl.find((x) => x.id === "t2").said === 0 && tl.find((x) => x.id === "t3").said === 0, "a turn that carries no time, or one with no zone, says none: no stamp, never a guessed one");
+  const L = "a".repeat(32), M = "b".repeat(32), N = "c".repeat(32), O = "d".repeat(32);
+  const lines = P.chatTimeline({
+    sent: [{ messageId: L, text: "mine", at: at + 5, session: "s" }],
+    receipts: [
+      { messageId: L, status: "accepted", code: "queued", text: "mine", session: "s", seq: 2, ts: at + 9000, sentAt: 0 },
+      { messageId: M, status: "accepted", code: "queued", text: "after a reload", session: "s", seq: 3, ts: at + 9000, sentAt: at + 7 },
+      { messageId: N, status: "accepted", code: "queued", text: "from an old machine", session: "s", seq: 4, ts: at + 9000, sentAt: 0 },
+      { messageId: O, status: "accepted", code: "delivered", text: "old machine, then delivered", session: "s", seq: 5, ts: at + 9000, sentAt: 0 }
+    ],
+    turns: [T("f1", "founder", "2026-10-12T21:40:00.000Z", { line: O }), T("f2", "founder", "2026-10-12T21:41:00.000Z", { line: "e".repeat(32) }), T("f3", "founder", "2026-10-12T21:42:00.000Z", { line: M })]
+  });
+  const lineOf = (id) => lines.find((x) => x.kind === "line" && x.messageId === id);
+  check(lineOf(L).said === at + 5 && lineOf(L).saidHow === "sent", "a line this phone sent keeps the time it signed, whatever its receipt carries");
+  check(lineOf(M).said === at + 7 && lineOf(M).saidHow === "sent" && lineOf(M).at === at + 7, "after a reload a line says when he sent it from its receipt's signed time - and the machine's founder turn does not replace it", JSON.stringify(lineOf(M)));
+  check(lineOf(N).said === 0 && lineOf(N).at === at + 9000, "a receipt from a machine that sends no signed time gives the line NO time: the receipt's own envelope time orders it and is never shown as when he said it", JSON.stringify(lineOf(N)));
+  check(lineOf(O).said === Date.parse("2026-10-12T21:40:00.000Z") && lineOf(O).saidHow === "delivered" && lineOf("e".repeat(32)).saidHow === "delivered" && lineOf("e".repeat(32)).said === Date.parse("2026-10-12T21:41:00.000Z"), "with no signed time left, the line says when it reached the Thrall - the founder turn's own time - and that this is what it is", JSON.stringify(lineOf(O)));
+  const m = await newMachine("work");
+  const withTime = P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: at, text: "t" })), "work", m.keyId);
+  const bad = ["soon", -1, 1.5, null, 0].map((v) => P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: v, text: "t" })), "work", m.keyId));
+  const none = P.readChatReceipt(receiptBody(m, "s", L, "accepted", "queued", "t"), "work", m.keyId);
+  check(withTime.ok && withTime.value.sentAt === at && none.ok && none.value.sentAt === 0 && bad.every((r) => r.ok && r.value.sentAt === 0), "a receipt's sentAt is read as a whole number of milliseconds; one with none (an older machine), or with something else in its place, is still read, with no time");
+}
+
+// --- 10d. the progress log: in the order written, each once, corrections on what they correct, his place kept ---
+const entriesBody = (m, entries, { backfill = false } = {}) => P.utf8(JSON.stringify({ v: 1, kind: "progress-entries", horde: m.horde, machine: m.keyId, backfill, entries }));
+const noticeBody = (m, code, count = 0) => P.utf8(JSON.stringify({ v: 1, kind: "progress-notice", horde: m.horde, machine: m.keyId, code, count }));
+async function sendProgress(t, m, phone, body, kind = "entries") { const e = await machineEnvelope(m, { kind, channel: "progress", body, phones: [phone] }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
+const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", kind: "progress", title: "title " + id, text: "Happened: " + id, ...extra });
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?")]);
+  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t1", "assistant", "a turn")], { backfill: true }));
+  await a.phone.refresh(a.paired.id);
+  const none = await a.phone.progress(a.paired.id);
+  check(none.items.length === 0 && none.unread === 0 && none.readIndex === -1 && none.newest === null && none.stopped === false && none.skipped === 0, "CONTROL: a new app with no progress yet shows an empty log, nothing unread, no place", JSON.stringify(none));
+  const mailBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  // Two envelopes: the live one arrives before the backfill, and line 3 happened before line 2.
+  const four = "Asked: fix the ruled line.\nHappened: PR 1605 merged.\nMeans: text no longer touches ink.\nNext: the box path.";
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("e4", 4, { kind: "merged", area: "Form fill", lane: "F", task: "T-0096", title: "Ruled-line fix merged", text: four }), entry("e5", 5, { kind: "celebration", text: "no label here\nNext: rest" })]));
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("e2", 2, { ts: "2026-10-12T12:00:00.000Z" }), entry("e3", 3, { ts: "2026-10-12T08:00:00.000Z" }), entry("e4", 4, { title: "the same id, sent again with other words" })], { backfill: true }));
+  const first = await a.phone.refresh(a.paired.id);
+  let g = await a.phone.progress(a.paired.id);
+  check(g.items.map((x) => x.id).join(",") === "e2,e3,e4,e5", "the entries are shown oldest to newest in the order they were WRITTEN - not the order they arrived, and not by their times (e3 happened before e2)", g.items.map((x) => x.id).join(","));
+  const e4 = g.items.find((x) => x.id === "e4");
+  check(g.items.filter((x) => x.id === "e4").length === 1 && e4.title === "Ruled-line fix merged", "an entry that reaches the phone twice - a backfill beside a live batch - is shown once, and the first that came stands");
+  check(e4.said === Date.parse("2026-10-12T18:15:00.000Z") && e4.kind === "merged" && e4.kindWord === "Merged" && e4.area === "Form fill" && e4.lane === "F" && e4.task === "T-0096", "an entry carries its time, its kind in the phone's own word, and its area, lane and task", JSON.stringify(e4));
+  check(JSON.stringify(e4.paragraphs) === JSON.stringify([{ label: "Asked", text: "fix the ruled line." }, { label: "Happened", text: "PR 1605 merged." }, { label: "Means", text: "text no longer touches ink." }, { label: "Next", text: "the box path." }]), "its text is four short paragraphs, each with its label", JSON.stringify(e4.paragraphs));
+  const e5 = g.items.find((x) => x.id === "e5");
+  check(e5.kind === "note" && e5.kindWord === "Note" && JSON.stringify(e5.paragraphs) === JSON.stringify([{ label: "", text: "no label here" }, { label: "Next", text: "rest" }]) && e5.area === "" && e5.lane === "", "a kind this phone does not know is a note - the entry is still shown - and a line with no known label is plain words", JSON.stringify(e5));
+  check(first.questions.length === 1 && first.anomalies.length === 0 && (await a.phone.chat(a.paired.id)).items.length === 1, "the questions and the chat beside it are as they were: progress envelopes disturb neither, and are no anomaly", JSON.stringify(first.anomalies));
+  // An envelope of a channel this app does not know (a later one) is passed over without a word.
+  const later = await machineEnvelope(m, { kind: "thing", channel: "future", body: P.utf8("{}"), phones: [a.phoneKey] });
+  await t.put("work/phone", later.key, later.text);
+  const withLater = await a.phone.refresh(a.paired.id);
+  check(withLater.anomalies.length === 0 && withLater.questions.length === 1 && (await a.phone.progress(a.paired.id)).items.length === 4, "an envelope on a channel the app does not know is passed over safely: no anomaly, nothing drawn, nothing lost - as an app from before the progress channel passes over progress", JSON.stringify(withLater.anomalies));
+  // Entries that do not hold together are dropped and counted; a body of another machine is refused.
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [
+    entry("bad id", 6), entry("b2", 0), entry("b3", 6, { ts: "2026-10-12T18:15:00" }), entry("b4", 6, { title: "t".repeat(101) }), entry("b5", 6, { text: "x".repeat(2001) }),
+    entry("b6", 6, { corrects: "has space" }), entry("b7", 6, { title: "" }), { n: 6 }, null, entry("b8", 1.5), entry("ok6", 6, { area: 5, lane: "x".repeat(33) })]));
+  const dropped = await a.phone.refresh(a.paired.id);
+  g = await a.phone.progress(a.paired.id);
+  check(g.items.map((x) => x.id).join(",") === "e2,e3,e4,e5,ok6" && dropped.anomalies.some((x) => x.indexOf("10 progress entries that do not hold together were left out") >= 0), "entries that do not hold together - a bad id, no line number, a time with no zone, a title or text too long, a bad corrects - are left out and counted, and the good one beside them is shown", JSON.stringify(dropped.anomalies));
+  check(g.items.find((x) => x.id === "ok6").area === "" && g.items.find((x) => x.id === "ok6").lane === "", "a label that is not a short plain text is shown as no label");
+  check(!P.readProgressEntries(entriesBody({ horde: "work", keyId: "b".repeat(32) }, []), "work", m.keyId).ok && !P.readProgressEntries(entriesBody({ horde: "personal", keyId: m.keyId }, []), "work", m.keyId).ok && !P.readProgressEntries(P.utf8("{"), "work", m.keyId).ok && !P.readProgressEntries(P.utf8(JSON.stringify({ v: 1, kind: "progress-entries", horde: "work", machine: m.keyId, backfill: false })), "work", m.keyId).ok, "an entries body of another machine or horde, or with no entries list, is refused");
+
+  // Corrections: on the entry they correct, and in their own place.
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("c7", 7, { corrects: "e4", title: "Not merged yet", text: "Means: it is still open." }), entry("c8", 8, { corrects: "gone-from-this-phone" }), entry("c9", 9, { corrects: "c9" })]));
+  await a.phone.refresh(a.paired.id);
+  g = await a.phone.progress(a.paired.id);
+  const fixed = g.items.find((x) => x.id === "e4"), c7 = g.items.find((x) => x.id === "c7");
+  check(fixed.corrections.length === 1 && fixed.corrections[0].id === "c7" && fixed.corrections[0].title === "Not merged yet" && fixed.corrections[0].paragraphs[0].label === "Means", "a correction is shown on the entry it corrects, with its own title and words", JSON.stringify(fixed.corrections));
+  check(g.items.map((x) => x.id).join(",") === "e2,e3,e4,e5,ok6,c7,c8,c9" && c7.corrects === "e4" && c7.correctsTitle === "Ruled-line fix merged", "and it keeps its own place in the log, naming what it corrects, so reading on from any point meets it");
+  const c8 = g.items.find((x) => x.id === "c8"), c9 = g.items.find((x) => x.id === "c9");
+  check(c8.correctsTitle === "" && c8.corrects === "gone-from-this-phone" && c9.corrections.length === 0 && c9.correctsTitle === "" && g.items.every((x) => x.id === "e4" || x.corrections.length === 0), "a correction of an entry this phone does not hold, or of itself, attaches to nothing");
+
+  // His reading position: kept per device, forward only, guarded.
+  check(g.unread === 8 && g.readIndex === -1, "before he has read anything, every entry is unread", JSON.stringify({ unread: g.unread, readIndex: g.readIndex }));
+  let r = await a.phone.markProgressRead(a.paired.id, "e4");
+  check(r.unread === 5 && r.readIndex === 2 && JSON.stringify((await a.store.get("horde/" + a.paired.id)).progressRead) === JSON.stringify({ id: "e4", n: 4 }), "reading as far as an entry is kept on the device as that entry's id and line number, and what comes after it is unread", JSON.stringify(r.unread));
+  r = await a.phone.markProgressRead(a.paired.id, "e2");
+  check(r.unread === 5 && r.readIndex === 2 && (await a.store.get("horde/" + a.paired.id)).progressRead.id === "e4", "the place only moves forward: an earlier entry seen again does not move it back");
+  check((await throwsAsync(() => a.phone.markProgressRead(a.paired.id, "never-sent"))).indexOf("not in the progress log") >= 0 && (await a.store.get("horde/" + a.paired.id)).progressRead.id === "e4", "and never to an entry the phone was not sent");
+  // A reload: nothing of the log was stored, the mailbox is read again, and he is back at his place.
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
+  check((await throwsAsync(() => b.progress(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no progress");
+  await b.unlock(a.paired.id);
+  await b.refresh(a.paired.id);
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("e10", 10)]));
+  await b.refresh(a.paired.id);
+  const back = await b.progress(a.paired.id);
+  check(back.readIndex === 2 && back.items[back.readIndex].id === "e4" && back.unread === 6 && back.newest.id === "e10", "after a reload the log opens at his place - the last entry he read - with the count of what is new since", JSON.stringify({ readIndex: back.readIndex, unread: back.unread }));
+  const dump = JSON.stringify(await a.store.list(""));
+  check(dump.indexOf("Ruled-line") < 0 && dump.indexOf("ruled line") < 0 && dump.indexOf("Not merged yet") < 0 && dump.indexOf("Form fill") < 0 && dump.indexOf('"progressRead":{"id":"e4","n":4}') >= 0, "the store holds his place - an id and a number - and no word of the log: like the chat, the log is kept in memory only");
+  // The entry he read is no longer held (the relay kept less): his place is the last one written before it.
+  const held = P.progressLog({ entries: [{ ...entry("x3", 3), at: 1, seq: 1 }, { ...entry("x6", 6), at: 1, seq: 1 }, { ...entry("x9", 9), at: 1, seq: 2 }], position: { id: "gone", n: 7 } });
+  check(held.readIndex === 1 && held.unread === 1, "when the entry he read is no longer on the phone, his place is the last entry written at or before it - never the start, never the end", JSON.stringify({ readIndex: held.readIndex, unread: held.unread }));
+  // A damaged record is no place, and is mended by the next read.
+  for (const junk of [{ id: "e4" }, { id: "has space", n: 4 }, { id: "e4", n: 0 }, { id: "e4", n: "4" }, "e4", 7, null, []]) {
+    await a.store.update("horde/" + a.paired.id, (x) => ({ ...x, progressRead: junk }));
+    const d = await b.progress(a.paired.id);
+    if (d.readIndex !== -1 || d.unread !== d.items.length) check(false, "a damaged position record is no position", JSON.stringify(junk));
+  }
+  check(P.progressPosition({ id: "e4", n: 4 }) !== null && P.progressPosition({ id: "e4", n: 4, extra: 1 }).n === 4, "a position record that does not hold together is no position - everything is unread - and never a throw or a wrong place");
+  r = await b.markProgressRead(a.paired.id);
+  check(r.unread === 0 && r.readIndex === r.items.length - 1 && (await a.store.get("horde/" + a.paired.id)).progressRead.id === "e10", "mark all read moves his place to the newest entry");
+  // Read only (the recovery code): the log is read and his place kept - nothing here is signed or sent.
+  b.lock(a.paired.id);
+  await b.recover(a.paired.id, a.paired.recoveryCode);
+  await b.refresh(a.paired.id);
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("e11", 11)]));
+  await b.refresh(a.paired.id);
+  const ro = await b.markProgressRead(a.paired.id, "e11");
+  check(ro.mode === "recovery" && ro.unread === 0 && ro.items.length === 10, "unlocked by the recovery code, the log is read and his place is kept: reading signs nothing");
+  check((await t.get(m.mailbox, 0, 256)).value.items.length === mailBefore, "the phone sends nothing on the progress channel: the machine's mailbox is as it was");
+
+  // Notices: codes only, in the phone's own words.
+  await sendProgress(t, m, a.phoneKey, noticeBody(m, "lines-skipped", 2), "notice");
+  await sendProgress(t, m, a.phoneKey, noticeBody(m, "file-replaced"), "notice");
+  await sendProgress(t, m, a.phoneKey, noticeBody(m, "your-account-expired"), "notice");
+  await sendProgress(t, m, a.phoneKey, noticeBody(m, "lines-skipped", 3), "notice");
+  const noted = await b.refresh(a.paired.id);
+  let n = await b.progress(a.paired.id);
+  check(n.stopped === true && n.skipped === 5, "the machine's notices are read: it stopped following the log, and five lines were left out", JSON.stringify({ stopped: n.stopped, skipped: n.skipped }));
+  check(noted.anomalies.some((x) => x.indexOf("code is not one this phone knows") >= 0) && Object.keys(P.PROGRESS_WORDS).sort().join(",") === "file-replaced,following,lines-skipped", "a notice with a code the phone does not know is not shown: no word of the machine's reaches the screen");
+  await sendProgress(t, m, a.phoneKey, noticeBody(m, "following"), "notice");
+  await b.refresh(a.paired.id);
+  n = await b.progress(a.paired.id);
+  check(n.stopped === false && n.skipped === 5, "a later word that the machine is following again takes the stop off the screen");
+
+  // Through the bridge.
+  const br = createBridge(b, { loadKinds: async () => ({}) });
+  const events = [];
+  br.on("progress-changed", (rec) => events.push(rec));
+  await br.request("pick", { id: a.paired.id });
+  const rec = await br.request("progress");
+  check(rec.state === "known" && rec.value.items.length === 10 && rec.value.unread === 0 && events.length === 1 && events[0].state === "known", "the bridge answers progress with the log, and pushes progress-changed with every refresh");
+  await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("e12", 12), entry("e13", 13)]));
+  await br.request("refresh");
+  const one = await br.request("progress-read", { id: "e12" });
+  const off = await br.request("progress-read", { id: "nope" });
+  const allRead = await br.request("progress-read", { all: true });
+  check(events[events.length - 1].value.unread === 2 && one.state === "known" && one.value.unread === 1 && off.state === "unknown" && off.reason.indexOf("not in the progress log") >= 0 && allRead.value.unread === 0, "progress-read moves his place to an entry, refuses one the phone does not hold in words, and with all moves it to the newest", JSON.stringify({ one: one.value && one.value.unread, off: off.reason }));
+  const missing = await br.request("progress-read", {});
+  check(missing.state === "unknown", "progress-read with neither an entry nor all marks nothing read");
+  await br.request("lock", { id: a.paired.id });
+  const lockedRec = await br.request("progress");
+  check(lockedRec.state === "unknown" && lockedRec.reason.indexOf("locked") >= 0, "a locked horde's progress is unknown, with the reason");
+}
+{
+  const at = Date.parse("2026-10-12T21:30:09.000Z");
+  check(P.dayTime(at, -180) === "13 Oct 00:30" && P.dayTime(at, 0) === "12 Oct 21:30" && P.dayTime(0, 0) === "", "an entry's time is shown with its day (entries are not in the order of their times), in the phone's own zone", P.dayTime(at, -180));
+  check(JSON.stringify(P.progressParagraphs("Asked: a\n\nNext:b\nAsked later: c\nUnknown: d\n: e\n  \nMeans: ")) === JSON.stringify([{ label: "Asked", text: "a" }, { label: "Next", text: "b" }, { label: "", text: "Asked later: c" }, { label: "", text: "Unknown: d" }, { label: "", text: ": e" }, { label: "Means", text: "" }]), "a text's lines are its paragraphs: a known label and a colon open a labelled one, anything else is the line as it stands, and an empty line is none", JSON.stringify(P.progressParagraphs("Asked: a\n\nNext:b\nAsked later: c\nUnknown: d\n: e\n  \nMeans: ")));
+  check(Object.keys(P.PROGRESS_KINDS).join(",") === "decision,result,merged,blocked,waiting,started,progress,done,note", "the kinds the phone has a word for are the nine the log is written with");
+  const m = { horde: "work", keyId: "a".repeat(32) };
+  const k = P.readProgressEntries(entriesBody(m, [entry("p1", 1, { kind: "__proto__" }), entry("p2", 2, { kind: "toString" })]), "work", m.keyId);
+  check(k.ok && k.value.entries.length === 2 && k.value.entries.every((e) => e.kind === "note"), "a kind that is the name of something every object has is still not a kind: a note");
+  const same = P.progressLog({ entries: [{ ...entry("a", 5), at: 1, seq: 9 }, { ...entry("b", 5), at: 1, seq: 3 }, { ...entry("a", 5, { title: "earlier envelope" }), at: 1, seq: 2 }] });
+  check(same.items.map((x) => x.id + ":" + x.title).join(",") === "a:earlier envelope,b:title b", "of two envelopes carrying one id the earlier stands, and entries of one line number keep their envelopes' order", same.items.map((x) => x.id + ":" + x.title).join(","));
 }
 
 // --- 10b. the hosted relay's transport speaks its mailbox API, and distrusts it like any other ---

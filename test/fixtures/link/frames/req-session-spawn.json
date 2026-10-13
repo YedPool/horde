@@ -9,7 +9,7 @@
   "issuedAt": "2026-09-30T11:59:58.000Z",
   "args": {
     "label": "B3",
-    "role": "goblin",
+    "role": "warg",
     "parent": "11111111-2222-4333-8444-555555555555",
     "runId": "20260930-120000-remote-r1",
     "profile": "default",

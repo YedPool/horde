@@ -598,6 +598,63 @@ try {
     }
 
     Write-Host ""
+    Write-Host "--- a phone answer rings the warchief with no decisions window open: the Tick turns the bell ---" -ForegroundColor Cyan
+    # The founder's bug of 2026-10-12: notify ran only beside the window, so an answer from the phone with
+    # the window closed was stored and rang for nobody. The channel's Tick now turns notify's own pass.
+    if ($script:canDecide) {
+    $keepMessengers = $script:HordeMessengers
+    $script:HordeMessengers = @{}
+    $script:bellPosts = New-Object System.Collections.ArrayList
+    try {
+        $null = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\decisions-notify\doorbell") `
+            -Post { param($Message) [void]$script:bellPosts.Add($Message); return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Message.messageId)"; stage = "accepted"; at = [datetime]::UtcNow; reason = "woken"; woken = $true }) -ObservedAt ([datetime]::UtcNow)) } `
+            -Status { param($MessageId) return (New-HordeAbsent -Note "the stand-in keeps no status") }
+        $script:HordeDecisionsChannelBellSeat = { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = "warchief-session-1"; pane = "3"; instance = "t1" })) }
+        $B = New-World
+        [System.IO.File]::WriteAllText((Join-Path $B.home "settings\decisions-notify.json"), '{"schemaVersion": 1, "settings": {"quietSeconds": 0}}', $utf8)
+        [void](Send-ToMachine $B (Get-Answer $B -Text "From the phone, window closed.").text)
+        $t = Invoke-Turn $B
+        Check ((Has $t "done") -and $script:bellPosts.Count -eq 0) ("CONTROL: the answer landed, and landing it rang nothing by itself (" + $t.text + ")")
+        Use-World $B
+        $ticks = Invoke-HordeRelayChannelTicks -Context $B.ctx
+        Check ($script:bellPosts.Count -eq 1 -and "$($script:bellPosts[0].sessionId)" -ceq "warchief-session-1" -and @("$($script:bellPosts[0].body)" -split "`r?`n")[0] -ceq "FOUNDER ANSWER from the decisions window") ("the next Tick rings the warchief for it: notify's own notice, once (" + (@($ticks.lines) -join " | ") + ")")
+        Check (@($ticks.lines | Where-Object { $_ -clike "decisions: notify: rang for 1 answer, on question 1, through messenger doorbell (accepted; woken)*" }).Count -eq 1) "and the run's log has notify's own line for it, with whether the warchief was woken"
+        $v = Get-Member2 $script:bellPosts[0].from "verified"
+        Check ($null -ne $v -and $v.keyId -ceq $B.phone.keyId) "as the founder, verified by the passkey that signed the answer"
+        $ticks = Invoke-HordeRelayChannelTicks -Context $B.ctx
+        Check ($script:bellPosts.Count -eq 1 -and @($ticks.lines | Where-Object { $_ -clike "*notify:*" }).Count -eq 0) "a Tick after that rings nothing more and says nothing more"
+        # IN ITS QUIET PERIOD an answer is not rung for yet, and the Tick asks to be turned again in time.
+        $Q = New-World
+        [System.IO.File]::WriteAllText((Join-Path $Q.home "settings\decisions-notify.json"), '{"schemaVersion": 1, "settings": {"quietSeconds": 20}}', $utf8)
+        [void](Send-ToMachine $Q (Get-Answer $Q -Text "Wait for the quiet.").text)
+        $null = Invoke-Turn $Q
+        Use-World $Q
+        $ticks = Invoke-HordeRelayChannelTicks -Context $Q.ctx
+        Check ($script:bellPosts.Count -eq 1 -and $ticks.againMs -gt 0 -and $ticks.againMs -le 20000 -and -not $ticks.failed) ("inside the quiet period nothing is rung, and the Ticks ask for a turn when it ends (" + $ticks.againMs + " ms)")
+        # THE RUN OBEYS: its next watch waits no longer than that, where the run's own watch is longer.
+        [System.IO.File]::WriteAllText((Join-Path $Q.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 60000, "minTurnMs": 50}}', $utf8)
+        $script:watched = New-Object System.Collections.ArrayList
+        $script:realReceive = ${function:Receive-HordeRelayInbox}
+        function Receive-HordeRelayInbox { param($Context, [int]$TimeoutMs = 0) [void]$script:watched.Add($TimeoutMs); return (& $script:realReceive -Context $Context -TimeoutMs 0) }
+        try { $r = Invoke-HordeRelayRun -HordeHome $Q.home -Connection $Q.conn -MaxTurns 1 -Say { param($Line) } }
+        finally { Set-Item function:Receive-HordeRelayInbox $script:realReceive }
+        Check ($script:watched.Count -eq 1 -and $script:watched[0] -gt 0 -and $script:watched[0] -le 20000) ("a run whose watch is 60 s watches only until the quiet period ends (" + (@($script:watched) -join ",") + " ms)")
+        $script:watched.Clear()
+        function Receive-HordeRelayInbox { param($Context, [int]$TimeoutMs = 0) [void]$script:watched.Add($TimeoutMs); return (& $script:realReceive -Context $Context -TimeoutMs 0) }
+        try { $r = Invoke-HordeRelayRun -HordeHome $B.home -Connection $B.conn -MaxTurns 1 -Say { param($Line) } }
+        finally { Set-Item function:Receive-HordeRelayInbox $script:realReceive }
+        [System.IO.File]::WriteAllText((Join-Path $B.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 60000, "minTurnMs": 50}}', $utf8)
+        $script:watched.Clear()
+        function Receive-HordeRelayInbox { param($Context, [int]$TimeoutMs = 0) [void]$script:watched.Add($TimeoutMs); return (& $script:realReceive -Context $Context -TimeoutMs 0) }
+        try { $r = Invoke-HordeRelayRun -HordeHome $B.home -Connection $B.conn -MaxTurns 1 -Say { param($Line) } }
+        finally { Set-Item function:Receive-HordeRelayInbox $script:realReceive }
+        Check ($script:watched.Count -eq 1 -and $script:watched[0] -eq 60000) ("CONTROL: with nothing waiting to be rung, the run's watch is its own 60 s (" + (@($script:watched) -join ",") + ")")
+    } finally { $script:HordeMessengers = $keepMessengers; $script:HordeDecisionsChannelBellSeat = $null }
+    }
+    Check ((Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs 20000) -eq 20000 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs 0) -eq 60000 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs $null) -eq 60000) "a turn's watch is what a channel asked when that is sooner, and the run's own when nobody asked"
+    Check ((Get-HordeRelayRunTurnWatchMs -WatchMs 25000 -AgainMs 90000) -eq 25000 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 0 -AgainMs 500) -eq 0 -and (Get-HordeRelayRunTurnWatchMs -WatchMs 60000 -AgainMs -5) -eq 60000) "a channel can only shorten a watch, never lengthen it, and a watch of 0 stays 0"
+
+    Write-Host ""
     Write-Host "--- a relay that lies cannot make an answer land twice, or out of order ---" -ForegroundColor Cyan
     Reset-HordeHostileRelay
     $hc = Connect-HordeRelay -Name "hostile" -Options @{}

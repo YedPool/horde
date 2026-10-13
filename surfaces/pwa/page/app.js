@@ -38,8 +38,24 @@
 // phone-core.js), offers "Announce this phone" - not only the small link on the locked screen. Every
 // announcement still waits for the founder's tap and his passkey; none is sent by itself.
 //
-// THE WAY BETWEEN DECISIONS AND CHAT stays on screen (the bar is sticky, app.css), and the phone's Back
+// THE WAY BETWEEN DECISIONS, CHAT AND PROGRESS stays on screen (the bar is sticky, app.css), and the phone's Back
 // goes back between them: each switch is a history entry, and going back to one shows that view again.
+// ONE TABLE NAMES THE VIEWS (PANES): a tab, its view, its place in history and its Back all come from it.
+//
+// THE PROGRESS LOG is the horde's third view (the founder asked for it, 2026-10-12): the fleet's progress
+// entries, oldest at the top, in the order they were written, to be read on from wherever he stopped.
+// Each shows its time, its title in bold, its text as short paragraphs with their labels (Asked, Happened,
+// Means, Next) in bold, and small chips: the area's plain name first, the kind, and the lane and task only
+// when the entry names them. HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
+// opens under the last entry he read, with a line where the new ones begin and their count on the tab;
+// the place moves on as he reads down, entry by entry; Jump to newest and Mark all read stand at the foot
+// of the screen always. A correction is shown on the entry it corrects, and in its own place. The log is
+// taken off the page when the horde locks, like the list and the chat.
+//
+// EVERY MESSAGE IN THE CHAT SAYS WHEN IT WAS SAID (the founder asked, 2026-10-12): the short local time
+// beside who said it, the day on a line of its own where it changes, the exact time on a tap. The times
+// are the turn's own and the line's signed one (relay/js/protocol.js, chatTimeline); what carries none
+// shows none.
 //
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value).
 import { createPhone } from "./phone-core.js";
@@ -49,6 +65,7 @@ import { accountFromConfig } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
+import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS } from "../relay/protocol.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
@@ -90,15 +107,17 @@ made.catch((e) => say("boot", "This app cannot start here: " + messageOf(e)));
 
 // --- the screens ---
 
-const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat"];
+const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress"];
+// The views of an unlocked horde, each a tab of the bar: the pane's name, and the view and the tab it is.
+const PANES = { decisions: { view: "doc", tab: "tabDecisions" }, chat: { view: "chat", tab: "tabChat" }, progress: { view: "progress", tab: "tabProgress" } };
 function show(view) {
   for (const v of VIEWS) $(v).hidden = v !== view;
   $("keys").hidden = view !== "doc";
-  $("viewTabs").hidden = view !== "doc" && view !== "chat";
+  $("viewTabs").hidden = !Object.keys(PANES).some((p) => PANES[p].view === view);
   // Shown again by render() for an unlocked horde the machine has not answered yet.
   $("announceBox").hidden = true;
 }
-// Which view of an unlocked horde is up: its questions, or its chat.
+// Which view of an unlocked horde is up: its questions, its chat, or the progress log.
 let pane = "decisions";
 
 let hordes = [];
@@ -173,9 +192,10 @@ function render(h, rec) {
   }
   const d = docOf(h.id);
   d.box.hidden = false;
-  show(pane === "chat" ? "chat" : "doc");
+  show(PANES[pane].view);
   showAnnounceBox(h, rec);
   if (pane === "chat") bridge.request("chat").then(drawChat);
+  if (pane === "progress") bridge.request("progress").then(drawProgress);
   const banners = {
     recovery: "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer.",
     "read-only": "Read only: this passkey gives no PRF, so answers are never sent from this phone for this horde. Answer at the machine, or pair again with a passkey that has PRF."
@@ -227,15 +247,37 @@ const CHAT_BANNERS = {
 function pickPane(which, fromHistory = false) {
   // A switch is a history entry, so the phone's Back goes to the other view; Back itself is not one.
   if (!fromHistory && which !== pane) { try { history.pushState({ hordePane: which }, ""); } catch (e) { /* a page with no history keeps working */ } }
+  // The log opens at his place each time its tab is opened, not only the first.
+  if (which === "progress" && pane !== "progress") progressDrawn = "";
   pane = which;
-  $("tabDecisions").setAttribute("aria-selected", which === "decisions" ? "true" : "false");
-  $("tabChat").setAttribute("aria-selected", which === "chat" ? "true" : "false");
+  for (const p of Object.keys(PANES)) $(PANES[p].tab).setAttribute("aria-selected", which === p ? "true" : "false");
   if (current) pick(current);
 }
-$("tabDecisions").addEventListener("click", () => pickPane("decisions"));
-$("tabChat").addEventListener("click", () => pickPane("chat"));
-window.addEventListener("popstate", (e) => { const p = e.state && e.state.hordePane; pickPane(p === "chat" ? "chat" : "decisions", true); });
+for (const p of Object.keys(PANES)) $(PANES[p].tab).addEventListener("click", () => pickPane(p));
+window.addEventListener("popstate", (e) => { const p = e.state && e.state.hordePane; pickPane(Object.prototype.hasOwnProperty.call(PANES, p) ? p : "decisions", true); });
 try { history.replaceState({ hordePane: "decisions" }, ""); } catch (e) { /* as above */ }
+// WHEN IT WAS SAID, beside who said it: the short local time, and the exact one as its title and on a
+// tap (a phone has no pointer to rest on it), tapped again for the short one. Nothing for a thing with
+// no time: an old envelope that carries none is shown without, never with a guess.
+// A stamp opened stays open while the log is drawn again (every refresh draws it anew): the keys of the
+// open ones are kept here, and dropped when the horde locks.
+const openStamps = new Set();
+function timeStamp(ms, before, key, shortForm = clockTime) {
+  const short = shortForm(ms);
+  if (!short) return null;
+  const exact = before + exactTime(ms);
+  const t = document.createElement("button");
+  t.type = "button";
+  t.className = "stamp";
+  const show = () => { t.textContent = openStamps.has(key) ? exact : short; };
+  t.title = exact;
+  t.setAttribute("aria-label", exact); show();
+  t.addEventListener("click", () => {
+    if (openStamps.has(key)) openStamps.delete(key); else openStamps.add(key);
+    show();
+  });
+  return t;
+}
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
 function drawChat(rec) {
   if ($("chat").hidden || !rec) return;
@@ -244,13 +286,19 @@ function drawChat(rec) {
   const log = $("chatLog");
   const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
   clearChat();
-  for (const it of v.items) {
+  for (const it of withDays(v.items)) {
+    // The day, on a line of its own, wherever it changes.
+    if (it.kind === "day") { const day = document.createElement("div"); day.className = "chat-day"; day.textContent = it.label; log.appendChild(day); continue; }
     const box = document.createElement("div");
     const who = document.createElement("div");
     const text = document.createElement("div");
     box.className = "chat-item " + (it.kind === "line" ? "founder" : it.role);
     who.className = "chat-who";
-    who.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    const name = document.createElement("span");
+    name.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    who.appendChild(name);
+    const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", "chat/" + (it.kind === "line" ? "line/" + it.messageId : "turn/" + it.id));
+    if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
     text.textContent = it.text;
     box.appendChild(who);
@@ -309,6 +357,138 @@ $("chatNewline").addEventListener("pointerdown", (e) => {
   f.selectionStart = f.selectionEnd = a + 1;
   f.focus();
 });
+// --- the progress log ---
+
+// WHAT WAS LAST DRAWN, so a refresh that brings nothing new does not rebuild the page under his thumb:
+// the horde, how many entries, the newest one, and the notices. "" draws anew, and goes to his place.
+let progressDrawn = "";
+// Where the "new since you last read" line stands, fixed when the log is opened: it does not creep down
+// the page while he reads.
+let progressMark = -1;
+let progressLast = null;
+// The entries that have been on his screen since the horde was unlocked (by id): what "seen" means below.
+const seenEntries = new Set();
+let watcher = null;
+function clearProgress() { const log = $("progressLog"); while (log.firstChild) log.removeChild(log.firstChild); progressDrawn = ""; progressLast = null; seenEntries.clear(); if (watcher) { watcher.disconnect(); watcher = null; } }
+function showProgressCount(v) {
+  const n = v ? v.unread : 0;
+  $("tabProgress").textContent = "Progress" + (n > 0 ? " (" + n + ")" : "");
+  $("progressCount").textContent = !v || v.items.length === 0 ? "" : n > 0 ? n + " new" : "All read";
+  $("progressAllRead").disabled = n === 0;
+}
+function paragraphsInto(box, paragraphs) {
+  for (const p of paragraphs) {
+    const line = document.createElement("p");
+    if (p.label) { const b = document.createElement("b"); b.textContent = p.label + ": "; line.appendChild(b); }
+    line.appendChild(document.createTextNode(p.text));
+    box.appendChild(line);
+  }
+}
+function chip(words, kind) { const c = document.createElement("span"); c.className = "chip " + kind; c.textContent = words; return c; }
+function drawProgress(rec) {
+  if (!rec) return;
+  if (rec.state !== "known") { clearProgress(); showProgressCount(null); if (!$("progress").hidden) { $("progressEmpty").hidden = true; $("progressNote").hidden = true; say("relay", rec.reason || ""); } return; }
+  const v = rec.value;
+  progressLast = v;
+  // The count on the tab is kept whichever view is up.
+  showProgressCount(v);
+  if ($("progress").hidden) return;
+  const notes = [];
+  if (v.stopped) notes.push(PROGRESS_WORDS["file-replaced"]);
+  if (v.skipped) notes.push(v.skipped + " " + PROGRESS_WORDS["lines-skipped"]);
+  $("progressNote").textContent = notes.join(" ");
+  $("progressNote").hidden = notes.length === 0;
+  $("progressEmpty").hidden = v.items.length > 0;
+  const sig = current + "/" + v.items.length + "/" + (v.newest ? v.newest.id : "") + "/" + v.items.reduce((n, it) => n + it.corrections.length, 0);
+  if (sig === progressDrawn) return;
+  const opening = progressDrawn === "";
+  if (opening) progressMark = v.readIndex;
+  progressDrawn = sig;
+  const log = $("progressLog");
+  while (log.firstChild) log.removeChild(log.firstChild);
+  v.items.forEach((it, i) => {
+    if (i === progressMark + 1 && progressMark >= 0) { const line = document.createElement("div"); line.className = "progress-new"; line.id = "progressNew"; line.textContent = "New since you last read"; log.appendChild(line); }
+    const box = document.createElement("div");
+    box.className = "progress-item";
+    box.setAttribute("data-id", it.id);
+    const head = document.createElement("div");
+    head.className = "progress-head";
+    // The area's plain name first; the kind; the lane and the task only when the entry names them, small.
+    if (it.area) head.appendChild(chip(it.area, "area"));
+    head.appendChild(chip(it.kindWord, "kind-" + it.kind));
+    if (it.lane) head.appendChild(chip("Lane " + it.lane, "lane"));
+    if (it.task) head.appendChild(chip(it.task, "task"));
+    const grow = document.createElement("span"); grow.className = "grow"; head.appendChild(grow);
+    const stamp = timeStamp(it.said, "", "progress/" + it.id, dayTime);
+    if (stamp) head.appendChild(stamp);
+    box.appendChild(head);
+    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; box.appendChild(title);
+    const text = document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
+    if (it.corrects) { const n = document.createElement("div"); n.className = "progress-note"; n.textContent = it.correctsTitle ? "This corrects: " + it.correctsTitle : "This corrects an earlier entry that is not on this phone."; box.appendChild(n); }
+    // A CORRECTION IS SHOWN ON THE ENTRY IT CORRECTS, as well as in its own place further down.
+    for (const c of it.corrections) {
+      const cb = document.createElement("div"); cb.className = "progress-correction";
+      const ch = document.createElement("div"); ch.className = "progress-note"; ch.textContent = "Corrected" + (dayTime(c.said) ? ", " + dayTime(c.said) : "") + ":"; cb.appendChild(ch);
+      const ct = document.createElement("div"); ct.className = "progress-title"; ct.textContent = c.title; cb.appendChild(ct);
+      const cx = document.createElement("div"); cx.className = "progress-text"; paragraphsInto(cx, c.paragraphs); cb.appendChild(cx);
+      box.appendChild(cb);
+    }
+    log.appendChild(box);
+  });
+  if (opening) {
+    // BACK TO HIS PLACE: the line under the last entry he read, at the top of the screen; with nothing new
+    // (or nothing read yet), the newest end, or the start.
+    const mark = $("progressNew");
+    if (mark) window.scrollTo(0, Math.max(0, window.scrollY + mark.getBoundingClientRect().top - $("bar").getBoundingClientRect().bottom - 8));
+    else if (progressMark >= 0) window.scrollTo(0, document.documentElement.scrollHeight);
+    else window.scrollTo(0, 0);
+  }
+  // Only now, with the page where it will stand, is what is on the screen taken as seen.
+  watchEntries();
+}
+// HE HAS READ WHAT HE HAS SEEN, IN ORDER. An entry is seen once half of it - or, for one taller than the
+// screen, half a screen of it - has stood between the bar and the foot; the browser tells the page so as
+// entries pass (an IntersectionObserver), whether he reads slowly or scrolls on. His place moves on from
+// the last entry read through every next entry seen, and stops at the first one not seen: entries he
+// JUMPED past - Jump to newest lands on the end without passing them - were never on the screen, so a
+// jump marks nothing between read and his place is kept.
+let readTimer = null;
+function isSeen(box) {
+  const top = $("bar").getBoundingClientRect().bottom, bottom = $("progressFoot").getBoundingClientRect().top;
+  const r = box.getBoundingClientRect();
+  const shown = Math.min(r.bottom, bottom) - Math.max(r.top, top);
+  return shown > 0 && shown >= Math.min(r.height, bottom - top) / 2;
+}
+function noteSeen() {
+  if ($("progress").hidden) return;
+  for (const box of $("progressLog").querySelectorAll(".progress-item")) { if (!seenEntries.has(box.getAttribute("data-id")) && isSeen(box)) seenEntries.add(box.getAttribute("data-id")); }
+  clearTimeout(readTimer);
+  readTimer = setTimeout(readAsSeen, 250);
+}
+function watchEntries() {
+  if (watcher) { watcher.disconnect(); watcher = null; }
+  // Told as entries cross the screen; the page then measures for itself (isSeen), so the rule is one.
+  if (typeof IntersectionObserver === "function") {
+    watcher = new IntersectionObserver(() => noteSeen(), { threshold: [0, 0.25, 0.5, 0.75, 1] });
+    for (const box of $("progressLog").querySelectorAll(".progress-item")) watcher.observe(box);
+  }
+  noteSeen();
+}
+function readAsSeen() {
+  const v = progressLast;
+  if (!v || $("progress").hidden || v.unread === 0) return;
+  let upTo = "";
+  for (let i = v.readIndex + 1; i < v.items.length; i++) {
+    if (!seenEntries.has(v.items[i].id)) break;
+    upTo = v.items[i].id;
+  }
+  if (upTo) bridge.request("progress-read", { id: upTo }).then((rec) => { if (rec.state === "known") { progressLast = rec.value; showProgressCount(rec.value); } });
+}
+// A browser with no such observer is told by the scroll itself.
+window.addEventListener("scroll", () => { if (!watcher) noteSeen(); }, { passive: true });
+$("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));
+$("progressAllRead").addEventListener("click", () => { bridge.request("progress-read", { all: true }).then((rec) => { if (rec.state === "known") { progressLast = rec.value; showProgressCount(rec.value); } else say("action", rec.reason || ""); }); });
+bridge.on("progress-changed", (rec) => drawProgress(rec));
 bridge.on("hordes-changed", (list) => { hordes = list; drawTabs(); });
 bridge.on("notice", (words) => say("relay", words));
 
@@ -492,7 +672,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
@@ -517,6 +697,7 @@ document.addEventListener("visibilitychange", () => {
   $("doc").hidden = true;
   $("keys").hidden = true;
   $("chat").hidden = true;
+  $("progress").hidden = true;
   clearTimeout(lockTimer);
   const expired = hiddenAt && Date.now() - hiddenAt >= lockAfterMs();
   hiddenAt = 0;

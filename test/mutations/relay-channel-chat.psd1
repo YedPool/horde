@@ -10,6 +10,15 @@
         @{ Name = "any-trusted-sender-speaks"
            Find = '-Name "chat" -Kinds @("line") -Senders "founder"'
            Replace = '-Name "chat" -Kinds @("line") -Senders "horde"' }
+        @{ Name = "receipt-time-is-the-machines"
+           Find = 'if ($null -ne $signedAt -and [long]$signedAt.Value -gt 0) { $sentAt = [long]$signedAt.Value }'
+           Replace = '$sentAt = [long]([datetime]::UtcNow - (New-Object datetime -ArgumentList 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc))).TotalMilliseconds' }
+        @{ Name = "receipt-carries-no-time"
+           Find = '-Session $Session -Text $line.text -SentAt $sentAt'
+           Replace = '-Session $Session -Text $line.text' }
+        @{ Name = "receipt-time-written-when-there-is-none"
+           Find = '$(if ($SentAt -gt 0) { '',"sentAt":'' + $SentAt } else { '''' })'
+           Replace = '('',"sentAt":'' + $SentAt)' }
         @{ Name = "machine-not-checked"
            Find = 'if ($line.machine -cne $Context.signKeyId) {'
            Replace = 'if ($false) {' }
@@ -119,5 +128,12 @@
         @{ Name = "line-verified-by-another-key"
            Find = 'keyId = $Item.from } }'
            Replace = 'keyId = ("0" * 32) } }' }
+        # --- woken, or only queued (the founder's bug of 2026-10-12)
+        @{ Name = "line-does-not-say-whether-woken"
+           Find = '" took it for the Thrall" + $wake)'
+           Replace = '" took it for the Thrall")' }
+        @{ Name = "line-wake-word-never-asked"
+           Find = '$wake = Format-HordeMessengerWake -Answer $posted'
+           Replace = '$wake = ""' }
     )
 }

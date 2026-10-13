@@ -73,10 +73,21 @@
 // THE CHAT (channels/chat) comes through the same mailbox and the same refresh: the Thrall's turns and
 // the receipts of the founder's lines are opened with the same key, kept IN MEMORY ONLY for the session
 // like the snapshot, and put together by relay/js/protocol.js's chatTimeline (a turn once by id, a long
-// one only once all its parts are here, the phone's own line once). A line is a command-equivalent: it
+// one only once all its parts are here, the phone's own line once), each with the time it was said: a
+// turn's own, and a line's as the passkey signed it - the time in the line's envelope, which is what
+// this phone keeps for a line it sent, and what the machine's receipt hands back. A line is a command-equivalent: it
 // is sent only from a passkey session, signed by the passkey (user verification), bound to the horde,
 // the machine and the Thrall's session the phone last heard of - the same keys rule as an answer: a
 // recovery or a read-only session reads the chat and never writes to it.
+//
+// THE PROGRESS LOG (channels/progress) comes through the same mailbox and the same refresh, machine to
+// phone only: the phone sends nothing on that channel. Its entries are opened with the same key and kept
+// IN MEMORY ONLY for the session, exactly as the chat's turns are - every session reads the mailbox from
+// its start, and relay/js/protocol.js's progressLog puts them in the order they were written, each once
+// by id. WHAT IS STORED of it is one thing: the READING POSITION, per horde entry on this device - the
+// id and line number of the last entry read (progressRead) - so the log opens where he left it, with
+// how many are new. An id and a number, never a word of the log; read back guarded (progressPosition),
+// so a damaged record is no position. The position only ever moves forward.
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
@@ -106,8 +117,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat() });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress() });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
+  const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
 
   async function entryOf(id) {
@@ -132,7 +144,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   }
   async function sealAndSign(e, kind, channel, body, assert) {
     const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq: await nextSeq(e.id, channel), ts: now(), recipientPublic: P.unb64u(e.machineAgreePublic), body });
-    return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header) };
+    // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it.
+    return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header), ts: parts.header.ts };
   }
 
   // The PRF wrap from what a passkey get() just gave, while the session still holds the key's bytes
@@ -165,6 +178,25 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const r = P.readChatReceipt(opened.body, e.horde, e.machine);
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
       c.receipts.push({ ...r.value, seq: h.seq, ts: h.ts });
+    }
+  }
+
+  // One opened progress envelope into the session's memory (THE PROGRESS LOG, in the header). An envelope
+  // already taken is skipped; a kind this phone does not know is left alone.
+  function takeProgress(e, s, opened, item, anomalies) {
+    const g = s.progress;
+    if (g.ids.has(opened.key)) return;
+    g.ids.add(opened.key);
+    const h = opened.header;
+    if (h.kind === "entries") {
+      const r = P.readProgressEntries(opened.body, e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " progress entr" + (r.value.dropped === 1 ? "y that does" : "ies that do") + " not hold together " + (r.value.dropped === 1 ? "was" : "were") + " left out");
+      for (const x of r.value.entries) g.entries.push({ ...x, seq: h.seq });
+    } else if (h.kind === "notice") {
+      const r = P.readProgressNotice(opened.body, e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      g.notices.push({ ...r.value, seq: h.seq });
     }
   }
 
@@ -323,6 +355,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
             s.cursor = 0;
             s.seen.clear();
             s.chat.ids.clear();
+            s.progress.ids.clear();
             restarted = true;
             continue;
           }
@@ -334,6 +367,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           // mailbox is the horde's. A forged or broken one from "this" machine is.
           if (!o.ok) { if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") anomalies.push("item " + item.seq + ": " + o.reason); continue; }
           if (o.value.header.channel === "chat") { takeChat(e, s, o.value, item, anomalies); continue; }
+          if (o.value.header.channel === "progress") { takeProgress(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel !== "decisions" || o.value.header.kind !== "snapshot") continue;
           const page = P.readSnapshotPage(o.value.body, e.horde, e.machine);
           if (!page.ok) { anomalies.push("item " + item.seq + ": " + page.reason); continue; }
@@ -369,6 +403,33 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       return { session: s.chat.session, items: P.chatTimeline(s.chat), mode: s.mode };
     },
 
+    // The progress log of the horde as this session holds it (refresh reads it), with the reading position
+    // this device keeps: relay/js/protocol.js's progressLog, and the session's mode. Needs an unlocked session.
+    async progress(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };
+    },
+
+    // He has read as far as the entry entryId (or, with none, to the newest): kept on this device, an id
+    // and a line number. Only an entry this session holds, and only forward - a position is never moved
+    // back, and never to something the phone was not sent. The log, as progress() answers it.
+    async markProgressRead(id, entryId = "") {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const log = P.progressLog({ ...s.progress, position: e.progressRead });
+      const index = entryId ? log.items.findIndex((it) => it.id === entryId) : log.items.length - 1;
+      if (entryId && index < 0) throw fail("That entry is not in the progress log this phone holds.");
+      if (index > log.readIndex) {
+        const read = { id: log.items[index].id, n: log.items[index].n };
+        await store.update(ENTRY + id, (x) => { if (!x) throw fail("there is no such horde on this phone"); return { ...x, progressRead: read }; });
+        return { ...P.progressLog({ ...s.progress, position: read }), mode: s.mode };
+      }
+      return { ...log, mode: s.mode };
+    },
+
     // One line of the founder to the Thrall, signed with the passkey (user verification) and put into the
     // machine's mailbox, bound to the horde, the machine and the Thrall's session last heard of.
     // messageId is the page's id for these words: sent again, they are posted once. { key, seq }.
@@ -386,7 +447,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const env = await sealAndSign(e, "line", "chat", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same line is never delivered twice."); }
-      if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: now(), session: s.chat.session });
+      if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });
       return { key: env.key, seq: put.value.seq };
     },
 

@@ -4,7 +4,7 @@
 //
 // THE SPECIFICATION IS THE POWERSHELL. Each section names the machine-side file whose strings it
 // copies: relay/Envelope.ps1, relay/Hpke.ps1, relay/Pairing.ps1, relay/Trust.ps1 and
-// channels/decisions/Channel.ps1 and channels/chat/Channel.ps1. A string here that differs from its twin there is a bug here; the
+// channels/decisions/Channel.ps1, channels/chat/Channel.ps1 and channels/progress/Channel.ps1. A string here that differs from its twin there is a bug here; the
 // end-to-end suites (test/test-relay-phone-e2e.ps1, surfaces/pwa/test/test-pwa-phone-e2e.ps1) put
 // what this file makes through the real machine code.
 //
@@ -478,6 +478,61 @@ export function newestSnapshot(pages) {
   return best;
 }
 
+// --- times, as the phone shows them ---
+
+// WHEN A THING WAS SAID is shown in the phone's own local time, in a short form ("14:05"), with the day
+// on a divider where the day changes and the exact time one tap away (the founder asked for the time
+// of every message, 2026-10-12). Every function here takes a time in milliseconds and, for the suites,
+// the zone as getTimezoneOffset gives it (minutes, positive WEST of UTC); with none it is the device's
+// own zone at that moment. A time that is not one - 0, none, past what a date can hold - gives "" (or
+// null): what has no time is shown with no time, never a guessed one. The words are fixed English and
+// 24-hour, so one message reads the same on every phone.
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const two = (n) => (n < 10 ? "0" : "") + n;
+// An ISO 8601 time WITH A ZONE, as the conversation port writes a turn's (conversations/Port.ps1), in
+// milliseconds; 0 for anything else. A time with no zone cannot be placed, so it is not one.
+const ISO_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$/;
+export function timeOf(text) {
+  if (typeof text !== "string" || !ISO_TIME.test(text)) return 0;
+  const ms = Date.parse(text);
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : 0;
+}
+export function localParts(ms, offsetMinutes) {
+  if (!Number.isSafeInteger(ms) || ms <= 0) return null;
+  const off = Number.isSafeInteger(offsetMinutes) ? offsetMinutes : new Date(ms).getTimezoneOffset();
+  const d = new Date(ms - off * 60000);
+  if (!Number.isSafeInteger(off) || Number.isNaN(d.getTime())) return null;
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate(), weekday: d.getUTCDay(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds(), offsetMinutes: off };
+}
+// "14:05"
+export function clockTime(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? two(p.hour) + ":" + two(p.minute) : ""; }
+// "2026-10-12": the local day, to tell where the day changes.
+export function dayKey(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? p.year + "-" + two(p.month + 1) + "-" + two(p.day) : ""; }
+// "Mon 12 Oct 2026"
+export function dayLabel(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? WEEKDAYS[p.weekday] + " " + p.day + " " + MONTHS[p.month] + " " + p.year : ""; }
+// "Mon 12 Oct 2026, 14:05:09 (UTC+3)": the exact time, with the zone it is told in.
+export function exactTime(ms, offsetMinutes) {
+  const p = localParts(ms, offsetMinutes);
+  if (!p) return "";
+  const east = -p.offsetMinutes, a = Math.abs(east);
+  const zone = "UTC" + (east === 0 ? "" : (east > 0 ? "+" : "-") + Math.floor(a / 60) + (a % 60 ? ":" + two(a % 60) : ""));
+  return dayLabel(ms, p.offsetMinutes) + ", " + two(p.hour) + ":" + two(p.minute) + ":" + two(p.second) + " (" + zone + ")";
+}
+// A list of things that each carry said (milliseconds, or 0 for none), with a { kind: "day", key, label }
+// put before the first of each local day, wherever the day is another than the last one named. What has
+// no time gets no divider and changes none.
+export function withDays(items, offsetMinutes) {
+  const out = [];
+  let last = "";
+  for (const it of items) {
+    const key = dayKey(it.said, offsetMinutes);
+    if (key && key !== last) { out.push({ kind: "day", key, label: dayLabel(it.said, offsetMinutes) }); last = key; }
+    out.push(it);
+  }
+  return out;
+}
+
 // --- the chat channel (channels/chat/Channel.ps1) ---
 
 // The receipt's codes, by status, and the ONE sentence the phone shows for each: what a receipt says is
@@ -553,8 +608,10 @@ export function readChatTurns(bodyBytes, horde, machine) {
   return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped } };
 }
 
-// A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text }.
-// A status or code off the list is refused: the phone never shows a word it did not choose.
+// A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text,
+// sentAt }. A status or code off the list is refused: the phone never shows a word it did not choose.
+// sentAt is when he sent the line, as his passkey signed it (channels/chat, THE RECEIPT), or 0 when the
+// receipt carries none (a machine older than the member): then the line is shown with no time.
 export function readChatReceipt(bodyBytes, horde, machine) {
   const h = chatHead(bodyBytes, "chat-receipt", horde, machine);
   if (h.error) return { ok: false, reason: h.error, value: null };
@@ -562,7 +619,7 @@ export function readChatReceipt(bodyBytes, horde, machine) {
   if (typeof b.messageId !== "string" || !/^[0-9a-f]{32}$/.test(b.messageId)) return { ok: false, reason: "the receipt names no line", value: null };
   if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return { ok: false, reason: "the receipt's status or code is not one this phone knows", value: null };
   if (typeof b.text !== "string") return { ok: false, reason: "the receipt has no words", value: null };
-  return { ok: true, reason: "", value: { session: b.session, messageId: b.messageId, status: b.status, code: b.code, text: b.text } };
+  return { ok: true, reason: "", value: { session: b.session, messageId: b.messageId, status: b.status, code: b.code, text: b.text, sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };
 }
 
 // The chat as the phone shows it, from what it holds in memory:
@@ -570,12 +627,18 @@ export function readChatReceipt(bodyBytes, horde, machine) {
 //   receipts  every receipt read, each with seq and ts (the envelope's)
 //   sent      the lines this phone sent this session: { messageId, text, at, session }
 // -> { session, items } where items are, in order of time, { kind: "turn", id, role, text, time, session,
-// truncated, redactions } and { kind: "line", messageId, text, at, status, code, words }. A turn is shown
+// truncated, redactions, said } and { kind: "line", messageId, text, at, status, code, words, said, saidHow }. A turn is shown
 // once, by id, and only once all its parts are here; a line is shown once, its newest receipt's status
 // on it, or "sending" when there is none yet. A founder turn (the machine found the line delivered) is
 // that line: beside a send or a receipt it is not shown twice, and with neither - after a reload, once
 // the relay dropped the receipt - it is shown as his line, delivered. A user turn that merely QUOTES a
 // line's header is a user turn: nothing in a turn's text makes it the founder's.
+// WHEN IT WAS SAID is each item's said, in milliseconds, or 0 when nothing says: a turn's own time from the
+// conversation port; a line's time as his passkey signed it - this phone's own send, or the receipt's
+// sentAt - and, where neither is left, the time of the machine's founder turn, which is when the line
+// reached the Thrall (saidHow "delivered", so the screen can say which it is). A receipt's own envelope
+// time is the machine's, later than the send by however long the line waited: it orders a line with no
+// better time, and is never shown as when he said it.
 export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
   const byId = new Map();
   for (const t of turns) {
@@ -585,12 +648,13 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
     else g.whole = t;
   }
   const lines = new Map();
-  for (const s of sent) lines.set(s.messageId, { kind: "line", messageId: s.messageId, text: s.text, at: s.at, session: s.session, status: "sending", code: "", words: CHAT_SENDING, seq: -1 });
+  for (const s of sent) lines.set(s.messageId, { kind: "line", messageId: s.messageId, text: s.text, at: s.at, said: Number.isSafeInteger(s.at) && s.at > 0 ? s.at : 0, saidHow: "sent", session: s.session, status: "sending", code: "", words: CHAT_SENDING, seq: -1 });
   for (const r of receipts) {
     const had = lines.get(r.messageId);
     if (had && had.seq > r.seq) continue;
     // The receipt's words are the words posted: what the line shows, whatever the phone kept.
-    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : r.ts, session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
+    const said = r.sentAt || (had ? had.said : 0);
+    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : (r.sentAt || r.ts), said, saidHow: "sent", session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
   }
   const items = [];
   for (const [id, g] of byId) {
@@ -605,14 +669,145 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
     const t = g.whole || g.first;
     if (t.role === "founder") {
       const had = lines.get(t.line);
-      if (had) { if (had.status === "sending") { had.status = "accepted"; had.code = "delivered"; had.words = CHAT_WORDS.accepted.delivered; } }
+      if (had) {
+        if (had.status === "sending") { had.status = "accepted"; had.code = "delivered"; had.words = CHAT_WORDS.accepted.delivered; }
+        if (!had.said) { had.said = timeOf(t.time); had.saidHow = "delivered"; }
+      }
       // Kept as the line, by its id: a messenger that delivers at least once may hand it over twice.
-      else lines.set(t.line, { kind: "line", messageId: t.line, text, at: Date.parse(t.time) || 0, session: t.session, status: "accepted", code: "delivered", words: CHAT_WORDS.accepted.delivered, seq: -1, order: g.seq });
+      else lines.set(t.line, { kind: "line", messageId: t.line, text, at: Date.parse(t.time) || 0, said: timeOf(t.time), saidHow: "delivered", session: t.session, status: "accepted", code: "delivered", words: CHAT_WORDS.accepted.delivered, seq: -1, order: g.seq });
       continue;
     }
-    items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, order: g.seq });
+    items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, said: timeOf(t.time), saidHow: "turn", order: g.seq });
   }
   for (const l of lines.values()) items.push({ ...l, order: l.order === undefined ? Number.MAX_SAFE_INTEGER : l.order });
   items.sort((a, b) => (a.at - b.at) || (a.order - b.order));
   return items;
+}
+
+// --- the progress channel (channels/progress/Channel.ps1) ---
+
+// THE FLEET'S PROGRESS LOG, machine to phone only: entries of the changelog the machine follows, in the
+// order they were WRITTEN (each carries its line number, n) - an entry's time is when the thing
+// happened, so a later line may carry an earlier time, and the phone never reorders by it. The phone
+// sends nothing on this channel.
+// A kind's word on the screen. A kind this phone does not know is a note: the entry is still shown.
+export const PROGRESS_KINDS = { decision: "Decision", result: "Result", merged: "Merged", blocked: "Blocked", waiting: "Waiting", started: "Started", progress: "Progress", done: "Done", note: "Note" };
+// What a notice says is a code from this list, and the ONE sentence the phone shows for it: never words
+// of the machine's or the relay's.
+export const PROGRESS_WORDS = {
+  "file-replaced": "The progress log at the machine was replaced or cut short, so the machine stopped following it. Nothing was sent again. It needs a look at the machine.",
+  following: "The progress log at the machine is as it was again, and is being followed.",
+  "lines-skipped": "line(s) of the progress log could not be read at the machine and were left out."
+};
+// The labels a text's lines may open with, in their order; a line with none of them is plain words.
+export const PROGRESS_LABELS = ["Asked", "Happened", "Means", "Next"];
+const ENTRY_ID = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
+const PLAIN = /^[^\x00-\x1f\x7f-\x9f]*$/;
+const PROGRESS_LIMITS = { title: 100, text: 2000, area: 60, lane: 32, task: 64 };
+
+function progressHead(bodyBytes, kind, horde, machine) {
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return { error: "the progress body is not JSON" }; }
+  if (!b || b.v !== 1 || b.kind !== kind) return { error: "not a version 1 " + kind };
+  if (b.horde !== horde || b.machine !== machine) return { error: "the progress body names another horde or machine" };
+  return { body: b };
+}
+const label = (v, most) => (typeof v === "string" && v.length <= most && PLAIN.test(v) ? v : "");
+
+// An entries body, read: { ok, reason, value } with value { backfill, entries, dropped }. Each entry is
+// { id, n, at, kind, title, text, area, lane, task, corrects } - at its time in milliseconds, kind one of
+// PROGRESS_KINDS' (a word off the list is "note"), the labels "" when it carries none. An entry that
+// does not hold together is dropped, and counted in value.dropped.
+export function readProgressEntries(bodyBytes, horde, machine) {
+  const h = progressHead(bodyBytes, "progress-entries", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (typeof b.backfill !== "boolean" || !Array.isArray(b.entries)) return { ok: false, reason: "the entries body has no entries list", value: null };
+  const entries = [];
+  let dropped = 0;
+  for (const e of b.entries) {
+    const ok = e && typeof e.id === "string" && ENTRY_ID.test(e.id) && Number.isSafeInteger(e.n) && e.n >= 1 && timeOf(e.ts) > 0 &&
+      typeof e.title === "string" && e.title.trim() !== "" && e.title.length <= PROGRESS_LIMITS.title && PLAIN.test(e.title) &&
+      typeof e.text === "string" && e.text.length <= PROGRESS_LIMITS.text && (e.corrects === undefined || (typeof e.corrects === "string" && ENTRY_ID.test(e.corrects)));
+    if (!ok) { dropped++; continue; }
+    entries.push({ id: e.id, n: e.n, at: timeOf(e.ts), kind: Object.prototype.hasOwnProperty.call(PROGRESS_KINDS, e.kind) ? e.kind : "note", title: e.title, text: e.text,
+      area: label(e.area, PROGRESS_LIMITS.area), lane: label(e.lane, PROGRESS_LIMITS.lane), task: label(e.task, PROGRESS_LIMITS.task), corrects: e.corrects || "" });
+  }
+  return { ok: true, reason: "", value: { backfill: b.backfill, entries, dropped } };
+}
+
+// A notice body, read: { ok, reason, value } with value { code, count }. A code off the list is refused:
+// the phone never shows a word it did not choose.
+export function readProgressNotice(bodyBytes, horde, machine) {
+  const h = progressHead(bodyBytes, "progress-notice", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (!Object.prototype.hasOwnProperty.call(PROGRESS_WORDS, b.code)) return { ok: false, reason: "the notice's code is not one this phone knows", value: null };
+  return { ok: true, reason: "", value: { code: b.code, count: Number.isSafeInteger(b.count) && b.count > 0 ? b.count : 0 } };
+}
+
+// A text as its paragraphs: one for each line that holds words, { label, text } - label one of
+// PROGRESS_LABELS when the line opens with it and a colon, else "" and the line as it stands.
+export function progressParagraphs(text) {
+  const out = [];
+  for (const line of String(text).split("\n")) {
+    if (!line.trim()) continue;
+    const at = line.indexOf(":");
+    const name = at > 0 ? line.slice(0, at) : "";
+    if (PROGRESS_LABELS.indexOf(name) >= 0) out.push({ label: name, text: line.slice(at + 1).trim() });
+    else out.push({ label: "", text: line });
+  }
+  return out;
+}
+
+// A reading position as the store keeps it, read: { id, n } - the last entry read and its line number -
+// or null for anything else, so a damaged record is no position and never a wrong one.
+export function progressPosition(value) {
+  if (!value || typeof value !== "object" || typeof value.id !== "string" || !ENTRY_ID.test(value.id) || !Number.isSafeInteger(value.n) || value.n < 1) return null;
+  return { id: value.id, n: value.n };
+}
+
+// "12 Oct 14:05": the day and the time, for a log whose entries are not in the order of their times.
+export function dayTime(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? p.day + " " + MONTHS[p.month] + " " + two(p.hour) + ":" + two(p.minute) : ""; }
+
+// The log as the phone shows it, from what it holds in memory:
+//   entries   every entry read (repeats included), each with seq (its envelope's)
+//   notices   every notice read, each with seq
+//   position  the reading position (progressPosition's), or null
+// -> { items, unread, readIndex, newest, stopped, skipped }. items are the entries OLDEST TO NEWEST BY
+// THE ORDER THEY WERE WRITTEN (n; never by time), each once by id - the first that came stands - as
+// { id, n, said, kind, kindWord, title, text, paragraphs, area, lane, task, corrects, correctsTitle,
+// corrections }. A CORRECTION (an entry that names another in corrects) is an entry of the log in its
+// own place, and is ALSO shown on the entry it corrects: that entry's corrections lists it. corrects
+// that names an entry this phone does not hold, or itself, attaches to nothing; correctsTitle is then "".
+// readIndex is the place of the position among the items - by its id, or, when that entry is no longer
+// held, the last one written at or before it - and -1 for none; unread how many items come after it.
+// stopped: the newest word on the file is that the machine stopped following it; skipped: how many
+// lines the machine said it left out.
+export function progressLog({ entries = [], notices = [], position = null }) {
+  const byId = new Map();
+  for (const e of entries) { const had = byId.get(e.id); if (!had || e.seq < had.seq) byId.set(e.id, e); }
+  const ordered = [...byId.values()].sort((a, b) => (a.n - b.n) || (a.seq - b.seq));
+  const items = ordered.map((e) => ({ id: e.id, n: e.n, said: e.at, kind: e.kind, kindWord: PROGRESS_KINDS[e.kind], title: e.title, text: e.text, paragraphs: progressParagraphs(e.text),
+    area: e.area, lane: e.lane, task: e.task, corrects: e.corrects, correctsTitle: "", corrections: [] }));
+  const at = new Map(items.map((it) => [it.id, it]));
+  for (const it of items) {
+    const target = it.corrects && it.corrects !== it.id ? at.get(it.corrects) : null;
+    if (!target) continue;
+    it.correctsTitle = target.title;
+    target.corrections.push({ id: it.id, said: it.said, title: it.title, paragraphs: it.paragraphs });
+  }
+  const pos = progressPosition(position);
+  let readIndex = -1;
+  if (pos) {
+    readIndex = items.findIndex((it) => it.id === pos.id);
+    if (readIndex < 0) for (let i = 0; i < items.length && items[i].n <= pos.n; i++) readIndex = i;
+  }
+  let stopped = false, stopSeq = -1, skipped = 0;
+  for (const n of notices) {
+    if (n.code === "lines-skipped") skipped += n.count;
+    else if (n.seq > stopSeq) { stopSeq = n.seq; stopped = n.code === "file-replaced"; }
+  }
+  const last = items.length ? items[items.length - 1] : null;
+  return { items, unread: items.length - 1 - readIndex, readIndex, newest: last ? { id: last.id, n: last.n } : null, stopped, skipped };
 }

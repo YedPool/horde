@@ -1,12 +1,12 @@
 # core/roles - Horde's role names, and wezfleet's, read through one alias table.
 #
-# Horde speaks warchief, orc and goblin. wezfleet stored master, orchestrator and session. The
+# Horde speaks warchief, orc and warg. wezfleet stored master, orchestrator and session. The
 # translation happens ON READ, and Horde never writes a wezfleet file: wezfleet's record writer lost
 # the role field three times (b9c9122, f37dee4 with 91e63df, 17c5d42 - see
 # planning/ledger/core-roles.md), and a rename that rewrote records would have exercised that writer
 # on every one of them. Reading is the one path that cannot lose a role.
 #
-# A ROLE THAT IS NOT THERE IS UNKNOWN, NEVER GOBLIN. On the live store 13 of 31 records have no role
+# A ROLE THAT IS NOT THERE IS UNKNOWN, NEVER WARG. On the live store 13 of 31 records have no role
 # key, and in every case where a missing role mattered the session was really a master or an
 # orchestrator. Defaulting to the humblest role would have mislabelled exactly those.
 #
@@ -20,6 +20,11 @@
 # trimmed (wezfleet never trims, so " master" is not a master to it either).
 #
 # The table is data (core\roles.json), so a further vocabulary is a row, not code.
+#
+# GOBLIN IS AN ALIAS OF WARG. The founder renamed the role on 2026-10-13. No Horde home searched held
+# the old word (this machine's and the always-on box's: 0 files, where the same search found
+# "warchief"), but the office hub and OV615 from the 2026-10-11 live link could not be searched, so a
+# record or file written before the rename still reads here as the role it always meant.
 
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
@@ -37,7 +42,7 @@ function Get-HordeRoleTable {
 
 function Resolve-HordeRole {
     # One stored role value, translated. Returns { role; raw; field }:
-    #   role   a Horde answer - known (warchief, orc or goblin) or unknown with the reason
+    #   role   a Horde answer - known (warchief, orc or warg) or unknown with the reason
     #   raw    exactly what was stored, so a caller can always see what the mapping started from
     #   field  "missing", "empty" or "present" - absent and empty are different facts, and wezfleet
     #          reads both as the same thing

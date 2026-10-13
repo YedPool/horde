@@ -708,7 +708,9 @@ $realSurfaces = @(Get-ChildItem -LiteralPath (Join-Path $root "surfaces") -Direc
 Check ($realSurfaces.Count -ge 1) ("CONTROL: this repository has at least one surface to check (" + $realSurfaces.Count + ")")
 $realRelays = @(Get-ChildItem -LiteralPath (Join-Path $root "relays") -Directory -ErrorAction SilentlyContinue)
 Check ($realRelays.Count -ge 1) ("CONTROL: this repository has at least one relay to check (" + $realRelays.Count + ")")
-foreach ($h in @($realHosts + $realAgents + $realTransports + $realMessengers + $realSurfaces + $realRelays)) {
+$realWakers = @(Get-ChildItem -LiteralPath (Join-Path $root "wakers") -Directory -ErrorAction SilentlyContinue)
+Check ($realWakers.Count -ge 1) ("CONTROL: this repository has at least one waker to check (" + $realWakers.Count + ")")
+foreach ($h in @($realHosts + $realAgents + $realTransports + $realMessengers + $realSurfaces + $realRelays + $realWakers)) {
     $port = Split-Path -Leaf (Split-Path -Parent $h.FullName)
     $np = Join-Path $h.FullName "names.txt"
     # NOT WRAPPED IN @(). Read-HordeHostTable returns its list as ONE object (`return , $rows`), so

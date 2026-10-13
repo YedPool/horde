@@ -13,12 +13,12 @@ trap { Register-HordeSuiteError $_; continue }
 $l0 = @(Get-HordeBuiltinLayer -Root $root)
 $desc = (Get-HordeAgentDescriptors -Root $root).value
 $now = [datetime]::UtcNow
-foreach ($role in @("warchief", "orc", "goblin")) {
+foreach ($role in @("warchief", "orc", "warg")) {
     $res = Resolve-HordeEngine -Layers $l0 -Target @{ role = $role } -Descriptors $desc -Now $now
     Check ($res.binding.state -eq "known" -and $res.binding.value.harness -ceq "claude-code" -and $res.binding.value.provider -ceq "anthropic") ("with no user file a " + $role + " runs on this harness, on its own login")
     Check ($res.capabilities.state -eq "known" -and $res.capabilities.value.ok -eq $true) ("and has every capability a " + $role + " needs")
 }
-$s = Get-HordeEngineSetting -Resolution (Resolve-HordeEngine -Layers $l0 -Target @{ role = "goblin" } -Descriptors $desc -Now $now) -Key "harness"
+$s = Get-HordeEngineSetting -Resolution (Resolve-HordeEngine -Layers $l0 -Target @{ role = "warg" } -Descriptors $desc -Now $now) -Key "harness"
 Check ($s.layer -ceq "L0" -and $s.source -ceq "agents/claude-code/engine.json" -and $s.rule -ceq "builtin-default") "and the answer says it came from this folder's default rule"
 
 Complete-HordeSuite -Success "zero configuration runs every role on this harness"

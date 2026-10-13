@@ -216,7 +216,7 @@ section 1.3 table, and each is carried below or dropped with its reason.
 - disposition: dropped
 - reason: Horde stores no text at any level (metrics design section 8, rule 2); verdicts are graded outside the metrics store (experiment program section 4).
 
-### L-041 Goblins and their run keys were entered by hand
+### L-041 Wargs and their run keys were entered by hand
 - source: study/join.js `gob` and `runKeys`
 - disposition: dropped
 - reason: hand-entered attribution is what M1 refuses; plan step M2 links spans from meta.json and run records.

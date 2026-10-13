@@ -1,0 +1,31 @@
+# Every place code under wakers/ may start a program, run a script block or load code. tools/StartSites.ps1
+# finds every such site and test/test-start-sites.ps1 fails on one this list does not have, and on a line
+# no site matches. A line allows ONE site, matched by file, function, kind and its exact text with white
+# space made single. Folders named test are not read. The family got this list with its first waker that
+# starts a program (wakers/wezfleet), as messengers/ got messengers/start-sites.txt with its first.
+#
+# file | function | kind | text | why
+wakers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1") | the port's loader line: core's answers
+wakers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1") | the port's loader line: core's schema reader
+wakers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1") | the port's loader line: the one list of roles
+wakers/Port.ps1 | Get-HordeWakeTargets | call | & $Waker.targets | the port calls the targets of a waker Register-HordeWaker made, and no other
+wakers/Port.ps1 | Get-HordeWakeState | call | & $Waker.state $Id | the port calls the state of a waker Register-HordeWaker made, and no other
+wakers/Port.ps1 | Send-HordeWakeNudge | call | & $Waker.nudge $Id | the port calls the nudge of a waker Register-HordeWaker made, and no other
+wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its three reads as script blocks, which only the port's calls above run
+wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its three reads as script blocks, which only the port's calls above run
+wakers/Port.ps1 | Register-HordeWaker | type | [scriptblock] | a parameter of the registration: a waker registers its three reads as script blocks, which only the port's calls above run
+wakers/wezfleet/Waker.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1") | the waker's loader line: Horde's home, where its settings are read from
+wakers/wezfleet/Waker.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1") | the waker's loader line: the settings file where a person names the fleet's folder
+wakers/wezfleet/Waker.ps1 | Get-HordeWezfleetWakerDescendants | command | Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction Stop | a read of the process table, which starts nothing: it finds the processes the started command started, so a deadline stops the whole tree
+wakers/wezfleet/Waker.ps1 | Get-HordeWezfleetWakerFleetAnswer | starter | Start-HordeWezfleetWakerProcess -Argv @("mail", "state", "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.fleet | form A's one call of the start: mail state, its arguments fixed here
+wakers/wezfleet/Waker.ps1 | Read-HordeWezfleetWakerPane | starter | Start-HordeWezfleetWakerProcess -Argv @("mail", "state", "-To", $Id, "-TimeoutSeconds", ("" + $flag), "-Json") -DeadlineSeconds (3 * $flag) | form B's one call of the start: mail state for one session, its arguments fixed here but the session and the seconds
+wakers/wezfleet/Waker.ps1 | Send-HordeWezfleetWakerNudge | starter | Start-HordeWezfleetWakerProcess -Argv @("mail", "nudge", "-To", $Id, "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.nudge | form C's one call of the start: mail nudge, its arguments fixed here but the session
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | assign | $psi.UseShellExecute = $false | the program is started directly, never through the shell's file associations
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | assign | $psi.CreateNoWindow = $true | no console window
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | assign | $psi.RedirectStandardOutput = $true | its one line of JSON is read
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | assign | $psi.RedirectStandardError = $true | its errors are read into a reason
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | assign | $psi.RedirectStandardInput = $true | input held open and never written, so a prompt waits for the deadline instead of reading this console
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | method | [System.Diagnostics.Process]::Start($psi) | THE ONE START, seen as the method call it is
+wakers/wezfleet/Waker.ps1 | Stop-HordeWezfleetWakerProcess | type | [System.Diagnostics.Process] | the stop takes the one process the start made, by its handle
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | type | [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"), (ConvertTo-HordeWezfleetWakerCommandLine -Argv $all)) | THE ONE PROGRAM: the fixed PowerShell from the system folder, its arguments joined by the one quoting function
+wakers/wezfleet/Waker.ps1 | Start-HordeWezfleetWakerProcess | type | [System.Diagnostics.Process]::Start($psi) | THE ONE START, of the start info above

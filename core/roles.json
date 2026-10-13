@@ -1,8 +1,9 @@
 {
-  "native": ["warchief", "orc", "goblin"],
+  "native": ["warchief", "orc", "warg"],
   "aliases": {
     "master": "warchief",
     "orchestrator": "orc",
-    "session": "goblin"
+    "session": "warg",
+    "goblin": "warg"
   }
 }

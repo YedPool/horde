@@ -81,7 +81,7 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
    the cell takes what it needs, at least the window's 40, and the margin it hangs in grows to match. */
 #lists .hd-qrow { --hang: 70px; }
 
-/* THE TWO VIEWS of a horde: its open questions and its chat with the Thrall, side by side as tabs. */
+/* THE THREE VIEWS of a horde: its open questions, its chat with the Thrall and the fleet's progress log, side by side as tabs. */
 #viewTabs { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
 #viewTabs button { flex: 1 1 0; }
 #viewTabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
@@ -94,6 +94,11 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 .chat-item.assistant { margin-right: 15%; }
 .chat-item.system { color: var(--warn); }
 .chat-who { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.chat-who { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+/* WHEN IT WAS SAID: small, beside who said it; a key only so that a tap can open the exact time, so it
+   takes no more room than its letters (the 44 pixel rule is for keys that act; this one only tells). */
+button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); text-align: right; cursor: pointer; }
+.chat-day { margin: 14px 0 6px; text-align: center; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); border-bottom: 1px solid var(--line); }
 .chat-text { white-space: pre-wrap; }
 .chat-note { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); margin-top: 4px; }
 #chatCompose { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 6; padding: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
@@ -101,3 +106,23 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 #chatKeys { display: flex; gap: 6px; margin-top: 6px; }
 #chatKeys button { flex: 1 1 0; }
 #lists .hd-qt > .hd-num { flex: 0 0 auto; width: auto; min-width: 40px; }
+/* THE PROGRESS LOG: one long page to read from wherever he left it, oldest at the top. Its foot - how many
+   are new, Mark all read, Jump to newest - stands at the bottom of the screen like the chat's composer,
+   so the way to the newest entry is always within reach however far up he is reading. */
+#progress { padding: 8px 12px calc(var(--keys-h) + 28px + env(safe-area-inset-bottom)); max-width: 720px; margin: 0 auto; }
+#progressNote { padding: 4px 0 8px; }
+.progress-item { margin: 0; padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.progress-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.progress-head .grow { flex: 1 1 auto; }
+.chip { padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; white-space: nowrap; }
+.chip.area { color: var(--ink); border-color: var(--bar); }
+.chip.kind-blocked, .chip.kind-waiting { color: var(--warn); border-color: var(--warn); }
+.chip.kind-merged, .chip.kind-done, .chip.kind-decision { color: var(--accent); border-color: var(--accent); }
+.progress-title { font-weight: 600; margin: 4px 0 2px; }
+.progress-text p { margin: 2px 0; white-space: pre-wrap; }
+.progress-note { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); margin-top: 4px; }
+.progress-correction { margin: 8px 0 0 12px; padding: 6px 0 2px 10px; border-left: 3px solid var(--warn); }
+.progress-new { margin: 6px 0 0; padding: 4px 0; text-align: center; color: var(--accent); font-weight: 600; font-size: var(--small-px); line-height: var(--small-line-px); border-bottom: 2px solid var(--accent); }
+#progressFoot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; align-items: center; gap: 6px; padding: 4px 6px; padding-bottom: calc(4px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
+#progressCount { flex: 1 1 auto; min-width: 0; padding-left: 6px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+#progressFoot button { flex: 0 0 auto; white-space: nowrap; }

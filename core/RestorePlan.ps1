@@ -148,7 +148,7 @@ function Test-HordePlanResume {
 
 function Add-HordePlanParentCycles {
     # Parents that go round in a circle: a fleet with no root, which the hierarchy (warchief, orcs,
-    # goblins) cannot be. Reported once per cycle, at its lowest-numbered session, so a cycle of two
+    # wargs) cannot be. Reported once per cycle, at its lowest-numbered session, so a cycle of two
     # is one finding, not two. A parent naming itself is reported by the caller and not walked here;
     # a parent naming no session ends the walk, since that is reported too.
     param($Sessions, $IdAt, $Findings)

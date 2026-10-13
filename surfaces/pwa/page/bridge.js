@@ -33,8 +33,13 @@
 //                         unknown with the reason
 //   chat-send {text, id}  one line to the Thrall, signed and sent: { ok } or { ok: false, reason }; id is
 //                         the page's id for the words (32 hex), so the same words sent again are one line
-// EVENTS: list-changed (the list record), chat-changed (the chat record), hordes-changed (the
-// summaries), notice (a sentence).
+//   progress              the picked horde's progress log: { state, value } as phone-core's progress
+//                         answers it (the entries in the order they were written, how many are unread,
+//                         where he read to); a locked or empty horde answers unknown with the reason
+//   progress-read {id}    he has read as far as that entry - or, with all: true, to the newest - kept on
+//                         this phone: the same record as progress, with the new count
+// EVENTS: list-changed (the list record), chat-changed (the chat record), progress-changed (the progress
+// record), hordes-changed (the summaries), notice (a sentence).
 //
 // "SAVED" MEANS SENT AND SIGNED. say answers ok once the relay has taken the signed envelope; the
 // machine stores it when its runner next turns, and the next snapshot shows it under the question. The
@@ -42,7 +47,7 @@
 // document keeps the words as the standing answer until a snapshot that holds them arrives (list.js,
 // standingOf). The same words sent again carry the same id, which is the answerId: the machine stores
 // them once (channels/decisions, Get-HordeDecisionsChannelAnswerId).
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -71,6 +76,11 @@ export function createBridge(phone, options = {}) {
     try { return { state: "known", reason: "", value: await phone.chat(picked) }; }
     catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
   }
+  async function progressRecord(read = null) {
+    if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
+    try { return { state: "known", reason: "", value: read ? await read() : await phone.progress(picked) }; }
+    catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
+  }
   async function hordes() { const h = await phone.hordes(); emit("hordes-changed", h); return h; }
   let locked = true;
   let relayDown = false;
@@ -87,6 +97,7 @@ export function createBridge(phone, options = {}) {
     const rec = listRecord();
     emit("list-changed", rec);
     emit("chat-changed", await chatRecord());
+    emit("progress-changed", await progressRecord());
     return rec;
   }
   // The live refresh: one long-poll at a time, for whichever horde is picked, while it is unlocked and
@@ -137,6 +148,8 @@ export function createBridge(phone, options = {}) {
     forget: async (a) => { await phone.forget(String(a.id)); if (String(a.id) === picked) { picked = ""; view = null; emit("list-changed", listRecord()); } return hordes(); },
     refresh: async () => refresh(),
     chat: async () => chatRecord(),
+    progress: async () => progressRecord(),
+    "progress-read": async (a) => progressRecord(() => phone.markProgressRead(picked, a.all === true ? "" : String(a.id || "-"))),
     "chat-send": async (a) => {
       try {
         const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();

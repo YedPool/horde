@@ -1,0 +1,16 @@
+# The files outside wakers/wezfleet/ that may name the wezfleet waker, and exactly how many times
+# (CONTRIBUTING rule 14). A mention is one occurrence of any name in names.txt, plus one if the file's path
+# has one. tools/HostNames.ps1 fails test/test-host-names.ps1 on a file not listed here, on a listed file
+# that names the waker more times than listed, and on an entry that allows more than its file needs - and,
+# once this list is on origin/main, on an entry origin/main lacks or a count above its count. When a
+# mention must be added, add or raise the entry here AND append a line to growth.txt in this folder:
+# path | old -> new | YYYY-MM-DD | reason.
+#
+# MEASURED, NOT WRITTEN BY HAND: each count is the occurrences of WezfleetWaker in the file, counted on
+# 2026-10-13 when this waker came in, and test/test-host-names.ps1 checks it. Its own suite
+# (test/test-waker-wezfleet.ps1) and the end-to-end scenario are not here: they reach it through its
+# fixture and its folder and never name a function of it.
+#
+# path | mentions | why this file may name the waker
+wakers/start-sites.txt | 19 | the family's list of start sites names this waker's start function, its three callers, what it sets and its read of the process table, which is the point of the list
+test/mutations/waker-wezfleet.psd1 | 12 | a mutation spec quotes the code it changes
