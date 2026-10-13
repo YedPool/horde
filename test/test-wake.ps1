@@ -710,12 +710,13 @@ $r = Pass 7400 -Using $one
 Check ((Rang) -eq 2 -and (Kinds $r) -cnotlike "*gave-up*" -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("a probe its waker answers with nothing leaves the session given up on, and gave-up is not said a second time (" + (Kinds $r) + ")")
 # 5. LIMITED UNKNOWN: the waker can tell, and for this session could not. UNKNOWN IS NOT NO.
 function PassM {
-    # One pass at t0 + -Seconds, told that ANOTHER session (99) was seen taking mail at -MovedAt, or
-    # nothing; -Moves hands in the whole table instead.
+    # One pass at t0 + -Seconds, in a fleet where ANOTHER session (99, with no mail of its own) last
+    # acknowledged mail at -MovedAt, or nobody did; -Moves says who acknowledged when, instead.
     param([double]$Seconds, $MovedAt = $null, $Moves = $null)
     if ($null -eq $Moves -and $MovedAt -is [datetime]) { $Moves = @{ (Sid 99) = $MovedAt } }
+    if ($null -ne $Moves) { foreach ($who in @($Moves.Keys)) { Set-HordeMemoryWakerAcked -Id $who -At $Moves[$who] } }
     Set-HordeMemoryWakerClock (At $Seconds)
-    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -Moves $Moves
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger
     $script:ledger = $r.ledger
     return $r
 }
@@ -764,16 +765,42 @@ Start-Case; Seat 1 @{ Limited = "unknown" }
 $null = PassM 0
 $r = PassM 3600
 Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 0) "with no evidence for an hour, it is knocked for once, uncounted: a lone session is not stuck for ever behind a transcript nobody can read"
-# WHAT IS EVIDENCE: a session TAKING MAIL, and never a nudge answered woken.
-$mailA = @{ (Sid 1) = (At -60); (Sid 2) = (At -60) }
-$e1 = Update-HordeWakeSilence -Seen $null -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail $mailA -Now (At 0) -Settings $settings
-Check ($e1.seen.moves.Count -eq 0 -and -not $e1.moved) "a nudge answered woken is NOT evidence that sessions can take turns: every knock of the incident was answered woken"
-$e2 = Update-HordeWakeSilence -Seen $e1.seen -Entries @() -Mail @{ (Sid 1) = (At -60); (Sid 2) = $null } -Now (At 30) -Settings $settings
-Check ($e2.moved -and $e2.seen.moves.Count -eq 1 -and $e2.seen.moves[(Sid 2)] -eq (At 30)) "a session whose mail was taken is: who it was, and when, is kept"
-$e3 = Update-HordeWakeSilence -Seen $e2.seen -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail @{ (Sid 1) = (At -60) } -Now (At 60) -Settings $settings
-Check ($e3.seen.moves.Count -eq 1 -and $e3.seen.moves[(Sid 2)] -eq (At 30)) "and a later woken does not move it: it is the taking that is evidence, and it ages from when it was seen"
-$e4 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Mail @{ (Sid 1) = (At 50) } -Now (At 90) -Settings $settings
-Check ($e4.seen.moves[(Sid 1)] -eq (At 90) -and $e4.seen.moves[(Sid 2)] -eq (At 30)) "each session that took mail is kept under its own id, so nobody is judged by its own"
+# WHAT IS EVIDENCE: another session ACKNOWLEDGING mail. Not a woken answer, not an inbox that changed.
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null }
+$r = PassM 0
+Check ((Test-Held $r "usage limit unknown") -and $r.acks.ContainsKey((Sid 2)) -and $null -eq $r.acks[(Sid 2)]) "a session that has never acknowledged any mail is seen, and is no evidence"
+Seat 2 @{ UnreadCount = 3; OldestUnreadAt = (At -5) }
+$r = PassM 3
+Check ((Decided $r 1).action -ceq "wait" -and "$((Decided $r 1).reason)".StartsWith("usage limit unknown")) "mail ARRIVING in another session's inbox is no evidence"
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null }
+$r = PassM 6
+Check ((Decided $r 1).action -ceq "wait" -and "$((Decided $r 1).reason)".StartsWith("usage limit unknown")) "another session's inbox EMPTYING is no evidence either: the fleet's own repair moves a mailbox with no turn taken"
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 5) }
+$r = PassM 9
+Check ((Decided $r 1).action -ceq "nudge" -and $r.acks[(Sid 2)] -eq (At 5)) "another session ACKNOWLEDGING mail four seconds ago is: the limited-unknown session is nudged"
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At -5); Acked = "unknown" }
+$r = PassM 0
+Check ((Test-Held $r "usage limit unknown") -and -not $r.acks.ContainsKey((Sid 2))) "an acknowledgement its waker could not read (acked unknown) is no evidence, whatever time stands beside it"
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At -5); Reachable = "no" }
+$r = PassM 0
+Check ((Decided $r 1).action -ceq "wait" -and -not $r.acks.ContainsKey((Sid 2))) "nor is the acknowledgement of a session that cannot be reached: it is not known to be a live one"
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 500) }
+$r = PassM 0
+Check ((Decided $r 1).action -ceq "wait") "nor one dated in the future"
+# The silence's own reading of the same thing.
+$seenA = @{ (Sid 1) = $null; (Sid 2) = $null }
+$e1 = Update-HordeWakeSilence -Seen $null -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Acks $seenA -Now (At 0) -Settings $settings
+Check (-not $e1.moved -and $e1.seen.acks.Count -eq 2) "a nudge answered woken is NOT a session answering: every knock of the incident was answered woken"
+$e2 = Update-HordeWakeSilence -Seen $e1.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 20) } -Now (At 30) -Settings $settings
+Check ($e2.moved -and $e2.seen.acks[(Sid 2)] -eq (At 20)) "a session seen before that now shows an acknowledgement is one"
+$e3 = Update-HordeWakeSilence -Seen $e2.seen -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Acks @{ (Sid 1) = $null; (Sid 2) = (At 20) } -Now (At 60) -Settings $settings
+Check (-not $e3.moved) "the same acknowledgement seen again is not a new one"
+$e4 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 10) } -Now (At 90) -Settings $settings
+$e5 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 500) } -Now (At 90) -Settings $settings
+$e6 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 20); (Sid 7) = (At 80) } -Now (At 90) -Settings $settings
+Check (-not $e4.moved -and -not $e5.moved -and -not $e6.moved) "an older acknowledgement, one dated in the future, and what a session seen for the FIRST time already had are none of them a session answering now"
+$e7 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 2) = (At 85) } -Now (At 90) -Settings $settings
+Check ($e7.moved -and $e7.seen.acks.ContainsKey((Sid 1))) "a newer one is; and a session this pass could not read is remembered as it was"
 
 # THE JOURNAL: once per session per limit.
 $said = Update-HordeWakeLimited -Seen @{} -Limited @{ (Sid 1) = "usage limit until 2026-10-12T08:10:00Z" } -Known @((Sid 1)) -Now (At 0)
@@ -804,56 +831,60 @@ $ten = Get-HordeWakeSettings -Overrides @{ fleetSilentMinutes = 10 }
 function Knock { param([int]$N, [string]$Outcome = "woken", [string]$Kind = "nudge") return (New-HordeWakeEntry -At $t0 -Kind $Kind -Id (Sid $N) -Outcome $Outcome) }
 function Walk {
     # Passes every 30 s from -From to -To, one knock on each, round the sessions in -Who; returns
-    # { seen; entries; last }. -Mail is what every pass reads.
-    param($Seen, [int]$From, [int]$To, [int[]]$Who = @(1, 2, 3), $Mail = $unread)
+    # { seen; entries; last }. -Acks is what every pass reads of who has acknowledged mail.
+    param($Seen, [int]$From, [int]$To, [int[]]$Who = @(1, 2, 3), $Acks = $unread)
     $all = New-Object System.Collections.ArrayList
     $last = $null
     $i = 0
     for ($s = $From; $s -le $To; $s += 30) {
-        $last = Update-HordeWakeSilence -Seen $Seen -Entries @((Knock $Who[$i % $Who.Count])) -Mail $Mail -Now (At $s) -Settings $ten
+        $last = Update-HordeWakeSilence -Seen $Seen -Entries @((Knock $Who[$i % $Who.Count])) -Acks $Acks -Now (At $s) -Settings $ten
         $Seen = $last.seen; $i++
         foreach ($e in @($last.entries)) { [void]$all.Add($e) }
     }
     return [pscustomobject]@{ seen = $Seen; entries = $all.ToArray(); last = $last }
 }
-$unread = @{ (Sid 1) = (At -60); (Sid 2) = (At -60); (Sid 3) = (At -60) }
+# Three sessions, each seen, none of which has ever acknowledged any mail.
+$unread = @{ (Sid 1) = $null; (Sid 2) = $null; (Sid 3) = $null }
 $w = Walk -Seen $null -From 0 -To 570
 Check (@($w.entries).Count -eq 0 -and $w.last.silent -eq $false -and $w.last.declared -eq $false -and $w.seen.quietSince -eq (At 0)) "nine and a half minutes of nudges all answered woken, and no mail taken, is not yet a silent fleet"
-$d = Update-HordeWakeSilence -Seen $w.seen -Entries @() -Mail $unread -Now (At 600) -Settings $ten
+$d = Update-HordeWakeSilence -Seen $w.seen -Entries @() -Acks $unread -Now (At 600) -Settings $ten
 Check ($d.silent -and $d.declared -and @($d.entries).Count -eq 1 -and $d.entries[0].kind -ceq "fleet-silent" -and $d.entries[0].id -ceq "" -and "$($d.entries[0].reason)".StartsWith("for 10 minutes every nudge - 19, to 3 sessions - was answered woken, and no session took its mail")) "at ten minutes it is: one line, saying how many nudges, to how many sessions"
 Check ($null -ne $d.condition -and $d.condition.kind -ceq "fleet-silent" -and $d.condition.instance -ceq "2026-10-12T08:00:00.0000000Z" -and $d.moved -eq $false) "with a condition for the warchief, named by when the quiet began"
-$e = Update-HordeWakeSilence -Seen $d.seen -Entries @((Knock 1)) -Mail $unread -Now (At 900) -Settings $ten
+$e = Update-HordeWakeSilence -Seen $d.seen -Entries @((Knock 1)) -Acks $unread -Now (At 900) -Settings $ten
 Check ($e.silent -and -not $e.declared -and @($e.entries).Count -eq 0 -and $null -eq $e.condition) "while it lasts nothing more is said, and it is found silent once"
-$grown = @{ (Sid 1) = (At -60); (Sid 2) = (At -60); (Sid 3) = (At -60); (Sid 4) = (At 890) }
-$f = Update-HordeWakeSilence -Seen $e.seen -Entries @() -Mail $grown -Now (At 903) -Settings $ten
-Check ($f.silent -and -not $f.moved) "mail ARRIVING for a session is not a session answering: the fleet is still silent"
-$partial = @{ (Sid 1) = (At -60) }
-$g = Update-HordeWakeSilence -Seen $f.seen -Entries @() -Mail $partial -Now (At 906) -Settings $ten
-Check ($g.silent -and -not $g.moved -and $g.seen.mail.ContainsKey((Sid 2))) "nor is a pass that could not read a session: what it held is remembered"
-$took = @{ (Sid 1) = (At -60); (Sid 2) = $null; (Sid 3) = (At -60); (Sid 4) = (At 890) }
-$m = Update-HordeWakeSilence -Seen $g.seen -Entries @() -Mail $took -Now (At 909) -Settings $ten
-Check (-not $m.silent -and $m.moved -and @($m.entries).Count -eq 1 -and $m.entries[0].kind -ceq "fleet-moving" -and $null -eq $m.seen.quietSince -and @($m.seen.nudges).Count -eq 0) "a session that takes its mail ends it: one fleet-moving line, and the count of quiet starts over"
-$next = @{ (Sid 1) = (At 950); (Sid 3) = (At -60); (Sid 4) = (At 890) }
-$m2 = Update-HordeWakeSilence -Seen $m.seen -Entries @() -Mail $next -Now (At 960) -Settings $ten
-Check ($m2.moved -and @($m2.entries).Count -eq 0) "a session whose oldest unread mail became another took the first: that is movement too, and said only when the fleet had been called silent"
+$grown = @{ (Sid 1) = $null; (Sid 2) = $null; (Sid 3) = $null; (Sid 4) = (At 890) }
+$f = Update-HordeWakeSilence -Seen $e.seen -Entries @() -Acks $grown -Now (At 903) -Settings $ten
+Check ($f.silent -and -not $f.moved) "a session seen for the first time, with an acknowledgement it already had, is not a session answering: the fleet is still silent"
+$partial = @{ (Sid 1) = $null }
+$g = Update-HordeWakeSilence -Seen $f.seen -Entries @() -Acks $partial -Now (At 906) -Settings $ten
+Check ($g.silent -and -not $g.moved -and $g.seen.acks.ContainsKey((Sid 2))) "nor is a pass that could not read a session: what it held is remembered"
+$took = @{ (Sid 1) = $null; (Sid 2) = (At 905); (Sid 3) = $null; (Sid 4) = (At 890) }
+$m = Update-HordeWakeSilence -Seen $g.seen -Entries @() -Acks $took -Now (At 909) -Settings $ten
+Check (-not $m.silent -and $m.moved -and @($m.entries).Count -eq 1 -and $m.entries[0].kind -ceq "fleet-moving" -and $null -eq $m.seen.quietSince -and @($m.seen.nudges).Count -eq 0) "a session that acknowledges mail ends it: one fleet-moving line, and the count of quiet starts over"
+$next = @{ (Sid 1) = (At 950); (Sid 3) = $null; (Sid 4) = (At 890) }
+$m2 = Update-HordeWakeSilence -Seen $m.seen -Entries @() -Acks $next -Now (At 960) -Settings $ten
+Check ($m2.moved -and @($m2.entries).Count -eq 0) "another session acknowledging mail later is movement too, and is said only when the fleet had been called silent"
 # What is NOT a silent fleet.
 $two = Walk -Seen $null -From 0 -To 900 -Who @(1, 2)
 Check (@($two.entries).Count -eq 0 -and -not $two.last.silent) "two sessions that do not answer are two sessions: it takes three for a fleet"
 $busy = Walk -Seen $null -From 0 -To 300
-$b = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "busy")) -Mail $unread -Now (At 330) -Settings $ten
+$b = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "busy")) -Acks $unread -Now (At 330) -Settings $ten
 $after = Walk -Seen $b.seen -From 360 -To 900
 Check (@($after.entries).Count -eq 0 -and -not $after.last.silent) "one nudge answered busy is a session at work: with it in the last ten minutes the fleet is not silent"
 $later = Walk -Seen $after.seen -From 930 -To 960
 Check (@($later.entries | Where-Object { $_.kind -ceq "fleet-silent" }).Count -eq 1) "ten minutes after that busy answer, with only woken since, it is"
-$k = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "killed" "nudge-killed")) -Mail $unread -Now (At 330) -Settings $ten
+$k = Update-HordeWakeSilence -Seen $busy.seen -Entries @((Knock 2 "killed" "nudge-killed")) -Acks $unread -Now (At 330) -Settings $ten
 Check (-not (Walk -Seen $k.seen -From 360 -To 900).last.silent) "a nudge that had to be killed is not a woken either"
 $mid = Walk -Seen $null -From 0 -To 300
-$mv = Update-HordeWakeSilence -Seen $mid.seen -Entries @() -Mail $took -Now (At 310) -Settings $ten
+$mv = Update-HordeWakeSilence -Seen $mid.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 305); (Sid 3) = $null } -Now (At 310) -Settings $ten
 $rest = Walk -Seen $mv.seen -From 330 -To 900
-Check ($mv.moved -and @($mv.entries).Count -eq 0 -and -not $rest.last.silent) "mail taken half-way starts the ten minutes over: at ten minutes from the first nudge the fleet is not silent"
+Check ($mv.moved -and @($mv.entries).Count -eq 0 -and -not $rest.last.silent) "mail acknowledged half-way starts the ten minutes over: at ten minutes from the first nudge the fleet is not silent"
 Check ((Walk -Seen $rest.seen -From 930 -To 930).last.silent) "and at ten minutes from the first nudge after it, it is"
-$none = Update-HordeWakeSilence -Seen $null -Entries @() -Mail @{} -Now (At 0) -Settings $ten
+$none = Update-HordeWakeSilence -Seen $null -Entries @() -Acks @{} -Now (At 0) -Settings $ten
 Check (-not $none.silent -and -not $none.moved -and (Walk -Seen $none.seen -From 3600 -To 3600).last.silent -eq $false) "a watcher that has nudged nobody has no quiet to count from"
+# A SILENCE IS DECLARED ONLY WHERE ITS END CAN BE SEEN.
+$blind = Walk -Seen $null -From 0 -To 1800 -Acks @{}
+Check (@($blind.entries).Count -eq 0 -and -not $blind.last.silent) "through a waker that reads no acknowledgements the fleet is never called silent, however long everybody answers woken: there would be no way to see it end"
 # WHILE THE FLEET IS SILENT every nudge is a probe: the longest step, and never counted.
 Start-Case; Seat 1; Seat 2; Seat 3
 foreach ($s in @(0, 3, 6, 9, 12, 15, 30, 33, 36)) { $null = Pass $s }
@@ -893,7 +924,7 @@ function Drive {
         for ($n = 1; $n -le $Arrive.Count; $n++) { if (-not $seated.ContainsKey($n) -and $t -ge $Arrive[$n - 1]) { $seated[$n] = $true; Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At ($Arrive[$n - 1] - 60)) } }
         Set-HordeMemoryWakerClock (At $t)
         $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $t) -Settings $Using -Ledger $ledger -Silent:$silent
-        $sil = Update-HordeWakeSilence -Seen $seen -Entries $r.entries -Mail $r.mail -Now (At $t) -Settings $Using
+        $sil = Update-HordeWakeSilence -Seen $seen -Entries $r.entries -Acks $r.acks -Now (At $t) -Settings $Using
         $ledger = $r.ledger
         if ($sil.declared) { $ledger = Reset-HordeWakeLedgerAttempts -Ledger $ledger }
         if ($sil.moved) { $ledger = Set-HordeWakeLedgerProbesDue -Ledger $ledger }

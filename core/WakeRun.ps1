@@ -182,20 +182,17 @@ function Get-HordeWakeRunPick {
 }
 
 function Get-HordeWakeSilenceMark {
-    # One line that changes exactly when what is SAVED of the silence changes: whether, since when, and
-    # who was seen taking mail when. The tick saves on a change of it, not on every pass.
+    # One line that changes exactly when what is SAVED of the silence changes: whether, and since when.
+    # The tick saves on a change of it, not on every pass.
     param($Seen)
     if ($null -eq $Seen) { return "" }
     $since = ""
     $q = Get-HordeWakeEntryValue $Seen "quietSince"
     if ($q -is [datetime]) { $since = $q.Ticks }
-    $moved = ""
-    $moves = Get-HordeWakeEntryValue $Seen "moves"
-    if ($moves -is [System.Collections.IDictionary]) { $moved = (@($moves.Keys | Sort-Object | ForEach-Object { "$_" + "@" + $(if ($moves[$_] -is [datetime]) { $moves[$_].Ticks } else { "" }) }) -join ",") }
-    # Nothing to say - not silent, no quiet begun, nobody seen taking mail - is the same as nothing seen:
+    # Nothing to say - not silent, no quiet begun - is the same as nothing seen:
     # no file is written for it.
-    if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "" -and $moved -eq "") { return "" }
-    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)
+    if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "") { return "" }
+    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since)
 }
 
 function Get-HordeWakeRunMode {
@@ -302,10 +299,7 @@ function Invoke-HordeWakeTick {
             $only = "$(Get-HordeWakeEntryValue $Run "target")"
             if ($only -ceq "") { throw "a proof run was made without the one session it may nudge, so it nudged nobody" }
         }
-        # WHEN A SESSION WAS LAST SEEN TAKING MAIL: what releases a session whose limit nobody could read
-        # (core/Wake.ps1, Get-HordeWakeLimit).
-        $moves = Get-HordeWakeEntryValue $Run.silence "moves"
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")"
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be
@@ -341,9 +335,9 @@ function Invoke-HordeWakeTick {
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
         $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
-        $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Mail $result.mail -Now $Now -Settings $Settings
+        $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
-        # SAVED WHEN IT CHANGES - silent or not, since when, who took mail - so a restart goes on from it.
+        # SAVED WHEN IT CHANGES - silent or not, and since when - so a restart goes on from it.
         if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {
             try { Save-HordeWakeSilence -Seen $Run.silence -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "silence"; reason = ("what is known of a silent fleet could not be saved: " + $_.Exception.Message) }) }

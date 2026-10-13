@@ -8,6 +8,9 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-acknowledgements-do-not-reach-the-silence"
+           Find = '-Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings'
+           Replace = '-Entries $result.entries -Acks @{} -Now $Now -Settings $Settings' }
         @{ Name = "the-silence-is-not-saved"
            Find = 'if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {'
            Replace = 'if ($false) {' }
@@ -18,11 +21,11 @@
            Find = 'elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }'
            Replace = '' }
         @{ Name = "the-end-of-a-silence-is-not-saved"
-           Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)'
-           Replace = 'return ("" + $since + "|" + $moved)' }
+           Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since)'
+           Replace = 'return ("" + $since)' }
         @{ Name = "the-watchers-own-session-does-not-reach-the-pass"
-           Find = '-Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"'
-           Replace = '-Only $only -Moves $moves' }
+           Find = '-Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")"'
+           Replace = '-Only $only' }
         @{ Name = "a-never-nudged-session-is-journaled-every-tick"
            Find = '$Run.never = $neverNow.seen'
            Replace = '$Run.never = @{}' }
@@ -71,9 +74,6 @@
         @{ Name = "shadow-is-silent-about-a-program-nobody-named"
            Find = 'if ($loose -cne "" -and $source.state -ceq "known") { $note ='
            Replace = 'if ($false) { $note =' }
-        @{ Name = "the-evidence-does-not-reach-the-pass"
-           Find = '-Silent:$silentNow -Only $only -Moves $moves'
-           Replace = '-Silent:$silentNow -Only $only' }
         @{ Name = "a-retired-session-is-journaled-every-tick"
            Find = '$Run.held = $heldNow.seen'
            Replace = '$Run.held = @{}' }

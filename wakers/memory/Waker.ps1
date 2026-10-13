@@ -87,6 +87,13 @@ function Set-HordeMemoryWakerSession {
         oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt }
 }
 
+function Set-HordeMemoryWakerAcked {
+    # Plays a session acknowledging mail at -At: one that is not there is added, with no unread mail.
+    param([Parameter(Mandatory = $true)][string]$Id, $At)
+    if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { Set-HordeMemoryWakerSession -Id $Id -Label "Z" -Role "warg" -UnreadCount 0 }
+    $script:HordeMemoryWakerSessions[$Id].lastAckedAt = $At
+}
+
 function Set-HordeMemoryWakerFault {
     # Makes one call misbehave from now on: -Call targets, state or nudge; -Kind throw (the call throws),
     # garbage (it answers with something that is not an answer), or "" (it behaves again).
