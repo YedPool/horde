@@ -40,15 +40,24 @@ $script:real = Split-Path -Parent $opened.path
 $profileDir = Join-Path $script:real "profile"
 New-Item -ItemType Directory -Path $profileDir | Out-Null
 $env:USERPROFILE = $profileDir
+# THE PROFILE THE OPERATING SYSTEM NAMES cannot be moved by a variable, which is the point of asking
+# it (files/Deny.ps1), so the one function that asks is replaced, for this suite, by one that answers
+# with a folder of the suite's own: NO TEST HERE LOOKS AT THE REAL PROFILE. It is called exactly as
+# the real one is, with nothing handed to it. The real one is kept, and asked once, further down.
+$script:realOsProfile = ${function:Get-HordeFilesOsProfile}
+$script:osProfile = Join-Path $script:real "os-profile"
+New-Item -ItemType Directory -Path $script:osProfile | Out-Null
+function Get-HordeFilesOsProfile { return $script:osProfile }
 # Whatever a function here is not handed, it must not find the real home.
 $env:HORDE_HOME = Join-Path $script:real "home-nobody-uses"
 $env:HORDE_TEST_HARNESS_X_HOME = Join-Path $script:real "harness-x-moved"
+$env:HORDE_TEST_HARNESS_Y_HOME = ""
 # TWO HARNESSES OF THIS SUITE'S OWN, described the way a real one describes itself.
 $repo = Join-Path $script:real "repo"
 New-Item -ItemType Directory -Path (Join-Path $repo "agents\harness-x") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $repo "agents\harness-y") | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "env": "HORDE_TEST_HARNESS_X_HOME" } ] }')
-[System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-y\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-y" } ] }')
+[System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-y\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-y" }, { "env": "HORDE_TEST_HARNESS_Y_HOME" } ] }')
 $script:n = 0
 $sess = New-HordeKnown -Value "deny-session"
 
@@ -119,18 +128,31 @@ Write-Host ""
 Write-Host "--- the list: one place, six words, and what -Force may lift ---" -ForegroundColor Cyan
 $list = Get-HordeFilesDenyList
 Check ((@($list.words) -join ",") -ceq "credential,secret,token,key,password,.env") ("the words are the six that were asked for (" + (@($list.words) -join ",") + ")")
-Check ($list.secretsFolder -ceq ".horde-secrets" -and $list.sshFolder -ceq ".ssh") "the two folders of the profile are .horde-secrets and .ssh"
+Check ($list.secretsFolder -ceq ".horde-secrets" -and $list.sshFolder -ceq ".ssh" -and $list.homeFolder -ceq ".horde") "the three folders of the profile are .horde, .horde-secrets and .ssh"
+$wasHome = $env:HORDE_HOME; $env:HORDE_HOME = ""
+$defaultHome = Get-HordeHome
+$env:HORDE_HOME = $wasHome
+Check ($defaultHome -ceq (Join-Path $profileDir $list.homeFolder)) ("and the first is what core/Home.ps1 calls the home when no variable moves it (" + (Split-Path -Leaf $defaultHome) + ")")
 Check (@($list.ordinary.Keys).Count -eq 1 -and @($list.ordinary["key"]).Count -eq 15) ("only 'key' has ordinary words taken out of a name first, and there are 15 of them (" + @($list.ordinary["key"]).Count + ")")
 $h = New-TestHome
 $found = Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repo
 $kinds = (@($found.places | ForEach-Object { $_.kind + ":" + $_.force }) -join ",")
-Check ($found.unknown -eq "" -and $kinds -ceq "home:False,secrets:False,ssh:True,agent:True,agent:True,agent:True") ("the places: the home and .horde-secrets, which -Force never lifts, then .ssh and each harness's folders, which it does (" + $kinds + ")")
+Check ($found.unknown -eq "" -and $found.unknownNever -eq "" -and $kinds -ceq "home:False,home:False,secrets:False,ssh:True,home:False,secrets:False,ssh:True,agent:True,agent:True,agent:True,agent:True,agent:True") ("the places: the home that was named; then under the profile the variable names and again under the one the system names, .horde and .horde-secrets, which -Force never lifts, and .ssh; then each harness's folders, each named once (" + $kinds + ")")
 $placePaths = @($found.places | ForEach-Object { $_.path })
-Check ($placePaths -ccontains $h -and $placePaths -ccontains (Join-Path $profileDir ".horde-secrets") -and $placePaths -ccontains (Join-Path $profileDir ".ssh")) "the home is the one the caller named, and the two folders are in the user's profile"
+Check ($placePaths[0] -ceq $h -and $placePaths -ccontains (Join-Path $profileDir ".horde") -and $placePaths -ccontains (Join-Path $profileDir ".horde-secrets") -and $placePaths -ccontains (Join-Path $profileDir ".ssh")) "the home is the one the caller named, and the three folders are in the profile the variable names"
+Check ($placePaths -ccontains (Join-Path $script:osProfile ".horde") -and $placePaths -ccontains (Join-Path $script:osProfile ".horde-secrets") -and $placePaths -ccontains (Join-Path $script:osProfile ".ssh")) "and in the profile the operating system names, which is another folder here"
 Check ($placePaths -ccontains (Join-Path $profileDir ".harness-x") -and $placePaths -ccontains (Join-Path $profileDir ".harness-y") -and $placePaths -ccontains $env:HORDE_TEST_HARNESS_X_HOME) "each harness's folders are the ones its own stores.json declares: in the profile, and where its variable moves its store"
+Check ($placePaths -ccontains (Join-Path $script:osProfile ".harness-x") -and $placePaths -ccontains (Join-Path $script:osProfile ".harness-y")) "and each harness's folder in the system's profile is a place too"
 $realRepo = Get-HordeFilesDenyPlaces -HordeHome $h
 $declared = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "stores.json") })
-Check ($realRepo.unknown -eq "" -and $declared.Count -ge 1 -and @($realRepo.places | Where-Object { $_.kind -ceq "agent" }).Count -ge $declared.Count) ("with no folder named, the shipped harnesses are read: every one of the " + $declared.Count + " that declares its stores gives at least one folder")
+Check ($realRepo.unknown -eq "" -and $declared.Count -ge 1 -and @($realRepo.places | Where-Object { $_.kind -ceq "agent" }).Count -ge (2 * $declared.Count)) ("with no folder named, the shipped harnesses are read: every one of the " + $declared.Count + " that declares its stores gives a folder under each of the two profiles")
+# THE REAL FUNCTION, asked once and only for a path: nothing is opened. It answers what the system's
+# own call answers, and NOT what the variable says, which this suite set to a folder of its own.
+$systemSays = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+$realAnswer = & $script:realOsProfile
+Check ($realAnswer -is [string] -and $realAnswer -ceq $systemSays -and $systemSays -ne "") "the real question of the operating system answers what GetFolderPath answers for the user's profile"
+Check ($realAnswer -cne $env:USERPROFILE -and $env:USERPROFILE -ceq $profileDir) "MEASURED HERE: with USERPROFILE set to this suite's folder, the system's answer is not that folder - a variable does not move it"
+Check ((Get-HordeFilesDenyProfiles).variable -ceq $profileDir -and (Get-HordeFilesDenyProfiles).system -ceq $script:osProfile) "the two profiles are the variable's and the one that question answers"
 
 Write-Host ""
 Write-Host "--- a name: each word at the start, in the middle and at the end, in any case of A to Z ---" -ForegroundColor Cyan
@@ -219,6 +241,107 @@ Check (Test-Shared $h (New-File (Join-Path $profileDir ".harness-xy\notes.md")))
 # WHAT -Force NEVER LIFTS IS JUDGED FIRST: a file in the home whose name holds a word is refused as the home.
 Check (Test-Refused $h (New-File (Join-Path $h "settings\api-key.txt")) $inHome -NotLike "holds 'key'") "a file in the home with a word in its name is refused for the home, not for the name"
 Check (Test-Refused $h (New-File (Join-Path $profileDir ".ssh\api-key.txt")) $inSsh -NotLike "holds 'key'") "and one in .ssh for .ssh"
+
+Write-Host ""
+Write-Host "--- a variable the caller sets moves no place away: the review's sequences ---" -ForegroundColor Cyan
+# THE REVIEW OF THIS LIST (2026-10-13) moved a variable and shared, with no -Force, what was in the
+# real place. Each sequence is run here as it was run there: the variable is moved, and the file in
+# the place the SYSTEM names must still be refused, as that place. "The real profile" below is the
+# folder this suite's stand-in for the system's question names; the machine's own is never looked at.
+$osSsh = New-File (Join-Path $script:osProfile ".ssh\notes.txt")
+$osAgentX = New-File (Join-Path $script:osProfile ".harness-x\sign-in\notes.json") '{"dummy":1}'
+$osAgentY = New-File (Join-Path $script:osProfile ".harness-y\notes.md")
+$osHome = New-File (Join-Path $script:osProfile ".horde\settings\notes.json") '{"dummy":1}'
+$osSecrets = New-File (Join-Path $script:osProfile ".horde-secrets\client.json") '{"dummy":1}'
+$varHome = New-File (Join-Path $profileDir ".horde\settings\notes.json") '{"dummy":1}'
+$emptyProfile = Join-Path $script:real "an-empty-profile"
+New-Item -ItemType Directory -Path $emptyProfile | Out-Null
+$inRealPlace = "('" + $script:osProfile + "\"
+function Test-RealPlaces {
+    # Is every file in a place of the system's profile refused, as that place and by its own path?
+    # The answers as one text, "ssh agent-x agent-y home home-forced secrets" when all six are.
+    $said = New-Object System.Collections.ArrayList
+    if ((Test-Refused $h $osSsh $inSsh) -and (Test-Refused $h $osSsh ($inRealPlace + ".ssh')"))) { [void]$said.Add("ssh") }
+    if ((Test-Refused $h $osAgentX $inAgent) -and (Test-Refused $h $osAgentX ($inRealPlace + ".harness-x')"))) { [void]$said.Add("agent-x") }
+    if ((Test-Refused $h $osAgentY $inAgent) -and (Test-Refused $h $osAgentY ($inRealPlace + ".harness-y')"))) { [void]$said.Add("agent-y") }
+    if ((Test-Refused $h $osHome $inHome) -and (Test-Refused $h $osHome ($inRealPlace + ".horde')"))) { [void]$said.Add("home") }
+    if (Test-Refused $h $osHome $inHome -Force) { [void]$said.Add("home-forced") }
+    if (Test-Refused $h $osSecrets ($inRealPlace + ".horde-secrets')") -Force) { [void]$said.Add("secrets") }
+    return ($said -join " ")
+}
+$allSix = "ssh agent-x agent-y home home-forced secrets"
+Check ((Test-RealPlaces) -ceq $allSix) "CONTROL: with no variable moved, a file in each place of the real profile is refused as that place: its .ssh, each harness's folder, its .horde and its .horde-secrets"
+# ONE: USERPROFILE moved to an empty folder.
+$env:USERPROFILE = $emptyProfile
+$seq1 = Test-RealPlaces
+$seq1Beside = Test-Shared $h (New-File (Join-Path $emptyProfile "notes.md"))
+$seq1Outside = Test-Shared $h (New-File (Join-Path $script:osProfile "documents\notes.md"))
+$env:USERPROFILE = $profileDir
+Check ($seq1 -ceq $allSix) ("USERPROFILE MOVED to an empty folder: a file in the real .ssh, in each harness's real folder, in the real .horde and the real .horde-secrets is still refused, each as its place (" + $seq1 + ")")
+Check ($seq1Beside -and $seq1Outside) "CONTROL: a file in the empty folder it was moved to, and one in the real profile outside those folders, are shared: it is the places that are refused, not the profile"
+# TWO: the home moved (the review set HORDE_HOME; here both the variable and what the caller hands in).
+$wasHome = $env:HORDE_HOME
+$env:HORDE_HOME = Join-Path $script:real "a-moved-home"
+$seq2 = Test-RealPlaces
+$seq2Var = Test-Refused $h $varHome ("is under the Horde home, where Horde keeps its own records, keys and settings ('" + $profileDir + "\.horde')") -Force
+$ambient = [pscustomobject]@{ outcome = "threw"; reason = "" }
+try { $ambient = Add-HordeFilesShare -Path $osHome -Title "A title" -Asking $sess -RepoRoot $repo -Force } catch { $ambient.reason = "$($_.Exception.Message)" }
+$seq2Moved = Test-Refused $env:HORDE_HOME (New-File (Join-Path $env:HORDE_HOME "settings\notes.json") '{"dummy":1}') ("('" + $env:HORDE_HOME + "')") -Force
+$seq2Control = Test-Shared $h (New-File (Join-Path $docs "home-moved-control.md"))
+$env:HORDE_HOME = $wasHome
+Check ($seq2 -ceq $allSix) ("HORDE_HOME MOVED: the real profile's .horde is still refused, -Force or not, and so is every other place (" + $seq2 + ")")
+Check $seq2Var "and so is .horde in the profile the variable names, which is where the home would be had it not been moved"
+Check ($ambient.outcome -ceq "refused" -and $ambient.reason -like ("*" + $inHome + "*")) "and with no home handed in at all, only the variable, the real .horde is refused the same"
+Check $seq2Moved "the home it was moved to is refused too: a home that really was moved is where the variable says"
+Check $seq2Control "CONTROL: an ordinary file is shared with the home moved"
+# THREE and FOUR: a harness's own variable moves its store (each of the two harnesses has one).
+foreach ($moved in @("HORDE_TEST_HARNESS_X_HOME", "HORDE_TEST_HARNESS_Y_HOME")) {
+    $wasMovedTo = [Environment]::GetEnvironmentVariable($moved)
+    $movedTo = Join-Path $script:real ("moved-store-" + $moved.Substring(19, 1))
+    [Environment]::SetEnvironmentVariable($moved, $movedTo)
+    $seq = Test-RealPlaces
+    $atMoved = New-File (Join-Path $movedTo "notes.md")
+    $seqMoved = ((Test-Refused $h $atMoved $inAgent) -and (Test-Refused $h $atMoved ("('" + $movedTo + "')")))
+    $seqMovedForce = Test-Shared $h $atMoved -Force
+    $leaf = ".harness-" + $moved.Substring(19, 1).ToLowerInvariant()
+    $seqDefault = Test-Refused $h (New-File (Join-Path $profileDir ($leaf + "\notes.md"))) ("('" + $profileDir + "\" + $leaf + "')")
+    [Environment]::SetEnvironmentVariable($moved, $wasMovedTo)
+    $seqAfter = Test-Shared $h $atMoved
+    Check ($seq -ceq $allSix) ("A HARNESS'S OWN VARIABLE MOVED (" + $moved + "): its folder in the real profile is still refused, and so is every other place (" + $seq + ")")
+    Check ($seqMoved -and $seqMovedForce) "the folder its variable moved the store to is refused as that harness's, and -Force shares from it"
+    Check $seqDefault "and its folder in the profile the variable names is still refused"
+    Check $seqAfter "CONTROL: once the variable is put back, the folder it named is an ordinary folder, and the same file is shared"
+}
+# FIVE: two of them moved together, and then all of them.
+$env:USERPROFILE = $emptyProfile; $env:HORDE_HOME = Join-Path $script:real "a-moved-home"
+$seq5 = Test-RealPlaces
+$env:HORDE_TEST_HARNESS_X_HOME = Join-Path $script:real "moved-store-X"; $env:HORDE_TEST_HARNESS_Y_HOME = Join-Path $script:real "moved-store-Y"
+$seq6 = Test-RealPlaces
+$seq6Control = Test-Shared $h (New-File (Join-Path $docs "all-moved-control.md"))
+$env:USERPROFILE = $profileDir; $env:HORDE_HOME = $wasHome; $env:HORDE_TEST_HARNESS_X_HOME = Join-Path $script:real "harness-x-moved"; $env:HORDE_TEST_HARNESS_Y_HOME = ""
+Check ($seq5 -ceq $allSix) ("USERPROFILE AND HORDE_HOME MOVED TOGETHER: every real place is still refused (" + $seq5 + ")")
+Check ($seq6 -ceq $allSix) ("ALL FOUR VARIABLES MOVED TOGETHER: every real place is still refused (" + $seq6 + ")")
+Check $seq6Control "CONTROL: an ordinary file is shared with all four moved"
+# THE OTHER HALF OF THE UNION: what the variable names is still refused when the system names another.
+Check (Test-Refused $h (Join-Path $profileDir ".ssh\notes.txt") ("('" + $profileDir + "\.ssh')")) "the profile the variable names keeps its places: its .ssh is refused as before"
+Check (Test-Refused $h $inSecretsFile ("('" + $profileDir + "\.horde-secrets')") -Force) "and its .horde-secrets, -Force or not"
+# WHEN THE SYSTEM WILL NOT SAY where the profile is, nothing can be told to be outside the real places.
+$plainDocEarly = New-File (Join-Path $docs "plain-early.md")
+$script:keptOsProfile = $script:osProfile
+$script:osProfile = ""
+$silent = Test-Refused $h $plainDocEarly "the operating system would not say where the user's profile is"
+$silentForce = Test-Refused $h $plainDocEarly $never -Force
+$script:osProfile = $script:keptOsProfile
+Check $silent "when the operating system will not say where the profile is, an ordinary file is refused, and the reason says that"
+Check $silentForce "and -Force does not change it: where the home and the user's keys are is not known"
+Check (Test-Shared $h $plainDocEarly) "CONTROL: asked again with the system answering, the same file is shared"
+# A FOLDER NAMED .horde ANYWHERE on the way to the file, as .horde-secrets is.
+$inNamedHome = "is under a .horde folder"
+Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.Horde\deep\notes.md")) $inNamedHome -Force) "a folder named .horde anywhere on the way to the file, in any case of its letters, is refused, -Force or not"
+Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.horde\notes.md")) $never -Force) "and the reason says -Force does not change that"
+Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\.horde-old\notes.md"))) "CONTROL: a folder whose name only begins with .horde is not that folder"
+Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\horde\notes.md"))) "CONTROL: nor is a folder named horde, with no dot"
+Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\plain\.horde.md"))) "CONTROL: and a FILE whose name begins so is a file, not a folder on the way"
 
 Write-Host ""
 Write-Host "--- a harness nobody described is not left open ---" -ForegroundColor Cyan

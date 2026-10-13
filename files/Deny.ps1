@@ -7,9 +7,11 @@
 # leaves the machine, so those are refused here, each with its reason.
 #
 # THE PLACES. A file in one of these folders, at any depth, is refused:
-#   never, whatever the caller says   the Horde home (its records, its keys and its settings);
-#                                     .horde-secrets in the user's profile, and any folder of that
-#                                     name anywhere on the way to the file;
+#   never, whatever the caller says   the Horde home (its records, its keys and its settings), and
+#                                     .horde in the user's profile, which is the home unless a
+#                                     variable moved it; .horde-secrets in the user's profile; and
+#                                     any folder named .horde or .horde-secrets anywhere on the way
+#                                     to the file;
 #   unless the caller gives -Force    .ssh in the user's profile; and every folder an agent harness
 #                                     keeps its own files in.
 #   WHICH FOLDERS ARE A HARNESS'S is each adapter's to say and is read as data
@@ -18,6 +20,17 @@
 #   named here (CONTRIBUTING 14), and a new one is covered the day its folder declares its stores.
 #   An adapter that does not say makes the answer unknown, and that is a refusal: a harness nobody
 #   described is not left open.
+#   EVERY PLACE IS WORKED OUT TWICE, AND BOTH ANSWERS ARE REFUSED. The review of this list
+#   (2026-10-13) set USERPROFILE to an empty folder and shared, with no -Force, a file in the real
+#   .ssh, a harness's real sign-in file and the real home's settings; and with HORDE_HOME set
+#   elsewhere, a file in the profile's own .horde. Whoever runs the command sets its variables, so
+#   a place that only a variable names is a place the caller chose. So the profile is asked of the
+#   variable, as before - a home or a store that really was moved is where the variable says - AND
+#   of the operating system (Get-HordeFilesOsProfile), which no variable moves: measured the same
+#   day on Windows PowerShell 5.1.26100, with USERPROFILE, HOMEDRIVE and HOMEPATH all changed in
+#   the process, the answer was the one from before. Under each of the two: .horde,
+#   .horde-secrets, .ssh, and every harness's folder. The configured home is beside them, and a
+#   harness's folder that its own variable moved is beside its usual one, which is still refused.
 #
 # THE NAMES. A file whose NAME holds one of the words credential, secret, token, key, password or
 # .env is refused unless the caller gives -Force.
@@ -68,6 +81,9 @@ function Get-HordeFilesDenyList {
     #   words                      what a file's name may not hold, in lower case.
     #   ordinary                   for a word, the ordinary words holding it that are no secret.
     return [pscustomobject]@{
+        # What core/Home.ps1 calls the home when no variable moves it. That file is the one that
+        # decides; test/test-files-deny.ps1 fails when the two names come to differ.
+        homeFolder = ".horde"
         secretsFolder = ".horde-secrets"
         sshFolder = ".ssh"
         words = @("credential", "secret", "token", "key", "password", ".env")
@@ -100,10 +116,27 @@ function Test-HordeFilesPathUnder {
     return ([string]::Equals($inner, $outer, [System.StringComparison]::Ordinal) -or $inner.StartsWith(($outer + "\"), [System.StringComparison]::Ordinal))
 }
 
+function Get-HordeFilesOsProfile {
+    # The user's profile AS THE OPERATING SYSTEM SAYS IT, which no variable of the caller's moves
+    # (the header has the measurement), or "" when it will not say. THE ONE PLACE THAT QUESTION IS
+    # ASKED: a suite replaces this function, called exactly as it is here, so that no test looks
+    # at the real profile of the machine it runs on.
+    return ("" + [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile))
+}
+
+function Get-HordeFilesDenyProfiles {
+    # The profiles the places are worked out under: { variable; system }, each a path or "".
+    # variable is what USERPROFILE says now, system what the operating system says. Both are used,
+    # and the header says why neither is enough alone.
+    return [pscustomobject]@{ variable = "$env:USERPROFILE".Trim(); system = ("" + (Get-HordeFilesOsProfile)).Trim() }
+}
+
 function Get-HordeFilesDenyPlaces {
-    # The folders of the list for this user and this home: { places; unknown }. places is
-    # { kind: home | secrets | ssh | agent; path; force }, path as it is written and force whether
-    # -Force lifts it. unknown is why the harnesses' folders could not be learned, or "".
+    # The folders of the list for this user and this home: { places; unknown; unknownNever }.
+    # places is { kind: home | secrets | ssh | agent; path; force }, path as it is written and
+    # force whether -Force lifts it; a folder that two ways of asking both name is there once.
+    # unknown is why the harnesses' folders could not be learned, or "". unknownNever is why a
+    # place -Force never lifts could not be learned, or "".
     # -RepoRoot is where the agents folder is read from, for a caller that must not use the real one.
     param([string]$HordeHome = "", [string]$RepoRoot = "")
     $list = Get-HordeFilesDenyList
@@ -111,18 +144,38 @@ function Get-HordeFilesDenyPlaces {
     $base = $HordeHome
     if ($base -eq "") { $base = Get-HordeHome }
     [void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false })
-    # With no profile there is no such folder to name: core/Home.ps1 has already refused a home then.
-    $profileDir = "$env:USERPROFILE".Trim()
-    if ($profileDir -ne "") {
+    # THE TWO PROFILES (the header says why two). With none in the variable there is no such folder
+    # to name: core/Home.ps1 has already refused a home then. THE SYSTEM'S IS NOT LET OFF SO: when it
+    # will not say, where the real home, .horde-secrets and .ssh are is not known, and that is a
+    # refusal -Force does not lift.
+    $profiles = Get-HordeFilesDenyProfiles
+    $unknownNever = ""
+    if ($profiles.system -eq "") { $unknownNever = "the operating system would not say where the user's profile is" }
+    foreach ($profileDir in @($profiles.variable, $profiles.system)) {
+        if ($profileDir -eq "") { continue }
+        [void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false })
         [void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })
         [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $true })
     }
-    $stores = $null
-    if ($RepoRoot -eq "") { $stores = Get-HordeAgentStoreRoots } else { $stores = Get-HordeAgentStoreRoots -Root $RepoRoot }
+    # THE HARNESSES, ASKED TWICE: under the profile the variable names, with wherever a harness's
+    # own variable moved its store, and then under the system's profile.
     $unknown = ""
-    if ($stores.state -cne "known") { $unknown = "" + $stores.reason }
-    else { foreach ($storeRoot in @($stores.value)) { [void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true }) } }
-    return [pscustomobject]@{ places = @($places.ToArray()); unknown = $unknown }
+    $from = @{}
+    if ($RepoRoot -ne "") { $from = @{ Root = $RepoRoot } }
+    foreach ($under in @("", $profiles.system)) {
+        $stores = $null
+        if ($under -eq "") { $stores = Get-HordeAgentStoreRoots @from } else { $stores = Get-HordeAgentStoreRoots @from -ProfileRoot $under }
+        if ($stores.state -cne "known") { $unknown = "" + $stores.reason }
+        else { foreach ($storeRoot in @($stores.value)) { [void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true }) } }
+    }
+    # A folder that two ways of asking both name is one place, and is opened and asked once.
+    $once = New-Object System.Collections.ArrayList
+    foreach ($place in $places) {
+        $have = $false
+        foreach ($kept in $once) { if ($kept.kind -ceq $place.kind -and [string]::Equals($kept.path, $place.path, [System.StringComparison]::Ordinal)) { $have = $true } }
+        if (-not $have) { [void]$once.Add($place) }
+    }
+    return [pscustomobject]@{ places = @($once.ToArray()); unknown = $unknown; unknownNever = $unknownNever }
 }
 
 function Resolve-HordeFilesDenyPlace {
@@ -154,7 +207,7 @@ function Get-HordeFilesDenyRefusal {
     # that a file in the Horde home is refused for that and not for its name.
     param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force)
     $list = Get-HordeFilesDenyList
-    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)" }
+    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; homeNamed = ("a " + $list.homeFolder + " folder, where Horde keeps its own records, keys and settings"); secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)" }
     $never = ". Nothing there is ever shared, and -Force does not change that"
     $insist = ". If this file holds no secret, share it again with -Force"
     $found = Get-HordeFilesDenyPlaces -HordeHome $HordeHome -RepoRoot $RepoRoot
@@ -163,12 +216,16 @@ function Get-HordeFilesDenyRefusal {
     # cannot be looked at without its prefix. The first part is the drive, the last the file's
     # name, and what is between are the folders.
     $parts = @($FinalPath -split '\\')
+    if ($found.unknownNever -ne "") { return ($found.unknownNever + ", so whether '" + $FinalPath + "' is in " + $what.home + " or among the user's own keys cannot be told" + $never) }
     foreach ($lifted in @($false, $true)) {
         if ($lifted) {
-            # BETWEEN THE TWO ROUNDS: the folder name that is refused wherever it stands, and then
+            # BETWEEN THE TWO ROUNDS: the two folder names that are refused wherever they stand - a
+            # copy of a home, or a home on another drive, still holds a home's files - and then
             # everything after this is what -Force lifts.
             for ($at = 1; $at -lt ($parts.Count - 1); $at++) {
-                if ([string]::Equals((ConvertTo-HordeAsciiLower -Text $parts[$at]), $list.secretsFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.secrets + $never) }
+                $folderName = ConvertTo-HordeAsciiLower -Text $parts[$at]
+                if ([string]::Equals($folderName, $list.secretsFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.secrets + $never) }
+                if ([string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.homeNamed + $never) }
             }
             if ($Force) { return "" }
             if ($found.unknown -ne "") { return ("which folders the agent harnesses keep their own files in is not known (" + $found.unknown + "), so whether '" + $FinalPath + "' is in one cannot be told" + $insist) }

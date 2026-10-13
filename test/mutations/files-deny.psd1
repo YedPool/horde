@@ -111,8 +111,57 @@
            Find = '[void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true })'
            Replace = '' }
         @{ Name = "harnesses-read-from-the-real-repository-whatever-is-given"
-           Find = 'if ($RepoRoot -eq "") { $stores = Get-HordeAgentStoreRoots } else {'
-           Replace = 'if ($true) { $stores = Get-HordeAgentStoreRoots } else {' }
+           Find = 'if ($RepoRoot -ne "") { $from = @{ Root = $RepoRoot } }'
+           Replace = 'if ($false) { $from = @{ Root = $RepoRoot } }' }
+        # --- the union: every place under the variable's profile AND under the system's ---
+        @{ Name = "places-not-worked-out-under-the-systems-profile"
+           Find = 'foreach ($profileDir in @($profiles.variable, $profiles.system)) {'
+           Replace = 'foreach ($profileDir in @($profiles.variable)) {' }
+        @{ Name = "places-not-worked-out-under-the-variables-profile"
+           Find = 'foreach ($profileDir in @($profiles.variable, $profiles.system)) {'
+           Replace = 'foreach ($profileDir in @($profiles.system)) {' }
+        @{ Name = "harnesses-not-asked-under-the-systems-profile"
+           Find = 'foreach ($under in @("", $profiles.system)) {'
+           Replace = 'foreach ($under in @("")) {' }
+        @{ Name = "harnesses-asked-only-under-the-systems-profile"
+           Find = 'foreach ($under in @("", $profiles.system)) {'
+           Replace = 'foreach ($under in @($profiles.system)) {' }
+        @{ Name = "systems-profile-not-handed-to-the-harness-question"
+           Find = '$stores = Get-HordeAgentStoreRoots @from -ProfileRoot $under }'
+           Replace = '$stores = Get-HordeAgentStoreRoots @from }' }
+        @{ Name = "the-profiles-own-home-folder-not-a-place"
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false })'
+           Replace = '' }
+        @{ Name = "force-lifts-the-profiles-own-home-folder"
+           Find = 'path = (Join-Path $profileDir $list.homeFolder); force = $false'
+           Replace = 'path = (Join-Path $profileDir $list.homeFolder); force = $true' }
+        @{ Name = "the-system-is-asked-by-reading-the-variable"
+           Find = 'return ("" + [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile))'
+           Replace = 'return ("" + $env:USERPROFILE)' }
+        @{ Name = "the-systems-profile-is-taken-from-the-variable"
+           Find = 'system = ("" + (Get-HordeFilesOsProfile)).Trim() }'
+           Replace = 'system = "$env:USERPROFILE".Trim() }' }
+        @{ Name = "the-variables-profile-is-taken-from-the-system"
+           Find = 'variable = "$env:USERPROFILE".Trim(); system'
+           Replace = 'variable = ("" + (Get-HordeFilesOsProfile)).Trim(); system' }
+        @{ Name = "a-system-that-will-not-say-is-not-a-refusal"
+           Find = 'if ($profiles.system -eq "") { $unknownNever ='
+           Replace = 'if ($false) { $unknownNever =' }
+        @{ Name = "a-system-that-will-not-say-not-refused"
+           Find = 'if ($found.unknownNever -ne "") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-folder-named-twice-is-two-places"
+           Find = 'if (-not $have) { [void]$once.Add($place) }'
+           Replace = '[void]$once.Add($place)' }
+        @{ Name = "home-folder-under-another-name"
+           Find = 'homeFolder = ".horde"'
+           Replace = 'homeFolder = ".hordes"' }
+        @{ Name = "home-folder-anywhere-on-the-way-not-looked-for"
+           Find = 'if ([string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "folder-on-the-way-compared-with-its-case"
+           Find = '$folderName = ConvertTo-HordeAsciiLower -Text $parts[$at]'
+           Replace = '$folderName = $parts[$at]' }
         @{ Name = "harness-that-does-not-say-is-left-open"
            Find = 'if ($stores.state -cne "known") { $unknown = "" + $stores.reason }'
            Replace = 'if ($false) { $unknown = "" + $stores.reason }' }
@@ -160,9 +209,9 @@
         @{ Name = "file-named-as-the-secrets-folder-taken-for-one"
            Find = 'for ($at = 1; $at -lt ($parts.Count - 1); $at++) {'
            Replace = 'for ($at = 1; $at -lt $parts.Count; $at++) {' }
-        @{ Name = "secrets-folder-anywhere-compared-with-its-case"
-           Find = '[string]::Equals((ConvertTo-HordeAsciiLower -Text $parts[$at]), $list.secretsFolder, [System.StringComparison]::Ordinal)'
-           Replace = '[string]::Equals($parts[$at], $list.secretsFolder, [System.StringComparison]::Ordinal)' }
+        @{ Name = "secrets-folder-anywhere-not-refused"
+           Find = 'if ([string]::Equals($folderName, $list.secretsFolder, [System.StringComparison]::Ordinal)) { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "harness-that-does-not-say-not-refused"
            Find = 'if ($found.unknown -ne "") { return'
            Replace = 'if ($false) { return' }
