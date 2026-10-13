@@ -188,6 +188,10 @@ Check ($pass -ge 3 -and $pass -lt 60) ("its heartbeat moves on, pass after pass 
 Check (-not $run.p.HasExited) "and it is still running: it does not stop by itself"
 $second = Invoke-Wake $pinnedHome @("run", "-Once")
 Check ($second.code -eq 1 -and $second.out -like "*shadow wake run is already running*" -and $second.out -notlike "*pass 1 done*") "a second shadow run on the same home is refused at once, saying one is running"
+# A RUN IN ANOTHER MODE IS NOT THE SAME RUN: the lock is per mode. (No fleet here: its one pass can
+# reach nobody.)
+$beside = Invoke-Wake $pinnedHome @("run", "-Mode", "proof", "-Once")
+Check ($beside.code -eq 0 -and $beside.out -like "*pass 1 done*PROOF*" -and (Test-Path -LiteralPath (Join-Path $pinnedWake "run-proof.lock") -PathType Leaf) -and -not $run.p.HasExited) ("a proof run beside the running shadow one is not refused: each mode has a lock of its own" + $(if ($beside.code -ne 0) { ": " + $beside.out } else { "" }))
 $pinnedLines = @(Read-Journal $pinnedHome "journal-shadow.jsonl")
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "" -and "$($_.reason)" -like "*not a wezfleet checkout*" }).Count -eq 1) "with no fleet to read, the journal says once that the targets are unknown, and why - not once a pass"
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "restore" }).Count -eq 1) "and once that the restore source could not read the sessions of this scenario's empty profile"

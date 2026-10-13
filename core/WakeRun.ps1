@@ -227,13 +227,11 @@ function Invoke-HordeWakeTick {
         $silentNow = ($null -ne $Run.silence -and $Run.silence.silent -eq $true)
         $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
-        # in a row - said once - and then the line for each unreadable pass is dropped until it works.
+        # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
+        # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).
         $fleetRead = Update-HordeWakeFleetRead -Seen $Run.fleetRead -Listing $result.listing -Now $Now -Settings $Settings
         $Run.fleetRead = $fleetRead.seen
-        foreach ($e in @($result.entries)) {
-            if ($fleetRead.quiet -and $e.kind -ceq "skip-unknown" -and "$($e.id)" -ceq "") { continue }
-            [void]$entries.Add($e)
-        }
+        foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
         foreach ($e in @($fleetRead.entries)) { [void]$entries.Add($e) }
         # A USAGE LIMIT is said once per session per limit; and a fleet in which nobody answers is found.
         $limitedNow = Update-HordeWakeLimited -Seen $Run.limited -Limited $result.limited -Known @($result.mail.Keys) -Now $Now

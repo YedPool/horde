@@ -651,11 +651,15 @@ function Invoke-HordeWakePass {
             $canLook = Test-HordeWakerConfirms $Waker
             $confirmed = @{}
             $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent)
-            while ($confirmed.Count -lt [int]$Settings.maxConfirmsPerPass) {
+            # THE LOOKS ARE COUNTED AS THEY ARE MADE, not by how many sessions have been looked at: the
+            # bound must hold even if one session were looked at twice.
+            $looks = 0
+            while ($looks -lt [int]$Settings.maxConfirmsPerPass) {
                 $toLook = @($decisions | Where-Object { $_.action -ceq "look" })
                 if ($toLook.Count -eq 0) { break }
                 foreach ($d in $toLook) {
-                    if ($confirmed.Count -ge [int]$Settings.maxConfirmsPerPass) { break }
+                    if ($looks -ge [int]$Settings.maxConfirmsPerPass) { break }
+                    $looks++
                     $confirmed[$d.id] = Get-HordeWakeState -Waker $Waker -Id $d.id -Full
                     if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
                     else { $states[$d.id] = $confirmed[$d.id] }

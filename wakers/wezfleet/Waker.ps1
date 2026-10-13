@@ -103,7 +103,9 @@ $script:HordeWezfleetWakerMaxBytes = 1048576
 $script:HordeWezfleetWakerDetailChars = 300
 # RULE 4, the deadlines: form A, the -TimeoutSeconds form B passes (its own deadline is three times
 # that), and form C.
-$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudgeBudget = 60 }
+# The budget a nudge is given, in one place: the table below and the function that resets it both read it.
+$script:HordeWezfleetWakerNudgeBudget = 60
+$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudgeBudget = $script:HordeWezfleetWakerNudgeBudget }
 # RULE 3, the wait after each consecutive failure of a read.
 $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
 # How long one form A answer serves a caller that never says a pass begins, counted from its arrival.
@@ -135,7 +137,7 @@ function Set-HordeWezfleetWakerRoot {
 
 function Set-HordeWezfleetWakerDeadlines {
     # For tests: the deadlines of rule 4, in seconds, so a case that waits one out waits a second or two.
-    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = 60)
+    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = $script:HordeWezfleetWakerNudgeBudget)
     if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeBudgetSeconds -lt 1) { throw "a deadline is at least 1 s" }
     $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudgeBudget = $NudgeBudgetSeconds }
 }

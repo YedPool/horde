@@ -141,8 +141,8 @@
            Find = 'if ($run.ok) { $why = $tooOld + $why }'
            Replace = '' }
         @{ Name = "nudge-budget-of-thirty"
-           Find = 'paneFlag = 5; nudgeBudget = 60 }'
-           Replace = 'paneFlag = 5; nudgeBudget = 30 }' }
+           Find = '$script:HordeWezfleetWakerNudgeBudget = 60'
+           Replace = '$script:HordeWezfleetWakerNudgeBudget = 30' }
         @{ Name = "elapsed-time-dropped"
            Find = '-and $took.Value -ge 0) { $answer["elapsedMs"] = [long]$took.Value }'
            Replace = '-and $false) { $answer["elapsedMs"] = [long]$took.Value }' }

@@ -349,7 +349,10 @@ try { $script:HordeWakeSendersPost = $true; Check ((Test-HordeWakeSendersShadow 
 $threw = $false; try { $null = New-HordeWakeRun -Mode "LIVE" -HordeHome $h } catch { $threw = $true }
 Check $threw "a run cannot be made in a mode that is no mode"
 $lockP = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
-try { Check ($null -ne $lockP -and (Test-Path -LiteralPath (Join-Path $h "wake\run-proof.lock")) -and $null -eq (Enter-HordeWakeLock -Mode "proof" -ProcessId 2 -HordeHome $h)) "a proof run holds a lock of its own, and a second proof run is kept out" } finally { if ($null -ne $lockP) { $lockP.Dispose() } }
+# Caught on purpose: a lock that threw for a second holder must fail this check, not end the suite.
+$secondP = "threw"
+try { $secondP = Enter-HordeWakeLock -Mode "proof" -ProcessId 2 -HordeHome $h } catch { $secondP = "threw" }
+try { Check ($null -ne $lockP -and (Test-Path -LiteralPath (Join-Path $h "wake\run-proof.lock")) -and $null -eq $secondP) "a proof run holds a lock of its own, and a second proof run is kept out" } finally { if ($null -ne $lockP) { $lockP.Dispose() }; if ($null -ne $secondP -and $secondP -isnot [string]) { $secondP.Dispose() } }
 $p = Get-HordeWakeRunPlan -Mode "live" -Picked "not an answer"
 Check ($p.ok -eq $false -and $p.live -eq $false) "and an answer about the waker that is not one never makes a live run"
 

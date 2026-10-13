@@ -346,7 +346,7 @@ foreach ($case in @(
 }
 $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = 1234 }) }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
-Check ($a.state -ceq "known" -and $a.value.elapsedMs -eq 1234) "nudge: elapsedMs is carried when the waker timed the nudge"
+Check ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["elapsedMs"] -and $a.value.elapsedMs -eq 1234) "nudge: elapsedMs is carried when the waker timed the nudge"
 $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ elapsedMs = "soon" }) }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $a.value.PSObject.Properties["elapsedMs"]) "nudge: an elapsedMs that is no whole number is left out, and the outcome stands"

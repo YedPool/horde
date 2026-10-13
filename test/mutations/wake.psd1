@@ -208,7 +208,7 @@
            Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
            Replace = 'if ($i -ge $allowed -and $ready[$i].action -ceq "ready") { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }' }
         @{ Name = "looks-in-a-pass-not-capped"
-           Find = 'if ($confirmed.Count -ge [int]$Settings.maxConfirmsPerPass) { break }'
+           Find = 'if ($looks -ge [int]$Settings.maxConfirmsPerPass) { break }'
            Replace = '' }
         @{ Name = "a-known-full-box-is-looked-at-anyway"
            Find = 'if ($CanLook -and $unseen -and "$($s.midTurn)" -cne "yes" -and "$($s.boxEmpty)" -cne "no") {'
@@ -221,7 +221,9 @@
            Replace = '-CanLook:$CanLook' }
         @{ Name = "the-look-is-not-used"
            Find = 'if ($looked) { $answer = $Confirmed[$id] }'
-           Replace = '' }
+           Replace = ''
+           Expect = "survives"
+           Reason = "the pass copies a look that is known into the states it decides from, so this line decides only for a look that itself failed, and then only the words of the wait: with it the session waits as unknown, without it as unread. It is what makes Get-HordeWakeDecisions right for a caller that hands it looks and leaves its states alone" }
         @{ Name = "killed-nudge-backs-off-like-any-other"
            Find = 'if ("$($Outcomes[$id])" -ceq "killed") { $count = [System.Math]::Max($count, @($Settings.backoffSeconds).Count) }'
            Replace = '' }
@@ -281,7 +283,7 @@
            Replace = '$chiefs = @($targets)' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
-           Replace = '' }
+           Replace = 'if ($false) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }' }
         @{ Name = "role-order-ignored"
            Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
            Replace = 'Sort-Object -Property nothing, attempts, oldest, id' }

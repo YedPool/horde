@@ -107,9 +107,6 @@
         @{ Name = "bad-mail-forgotten-between-ticks"
            Find = '$Run.badMail = $bad.seen'
            Replace = '$Run.badMail = @{}' }
-        @{ Name = "unreadable-passes-journaled-after-permanent"
-           Find = 'if ($fleetRead.quiet -and $e.kind -ceq "skip-unknown" -and "$($e.id)" -ceq "") { continue }'
-           Replace = '' }
         @{ Name = "fleet-read-count-forgotten-between-ticks"
            Find = '$Run.fleetRead = $fleetRead.seen'
            Replace = '$Run.fleetRead = $null' }
@@ -136,7 +133,7 @@
            Replace = '$Run.told = @{}' }
         @{ Name = "what-was-told-not-read-back"
            Find = 'if ($savedTells.state -ceq "known") { $run.told = $savedTells.value.told }'
-           Replace = '' }
+           Replace = 'if ($false) { $run.told = $savedTells.value.told }' }
         @{ Name = "live-through-an-unverified-waker"
            Find = 'if ($unverified.Count -gt 0) { return (& $no ("wake run -Mode live is refused'
            Replace = 'if ($false) { return (& $no ("wake run -Mode live is refused' }
