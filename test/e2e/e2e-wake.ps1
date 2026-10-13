@@ -130,6 +130,21 @@ Check (@($asked | Where-Object { $_ -clike "mail nudge*" }).Count -eq 0 -and @($
 Check (@($asked | Where-Object { $_ -clike ("mail state -To " + $idle + " *") }).Count -eq 1 -and @($asked | Where-Object { $_ -clike ("mail state -To " + $busy + " *") }).Count -eq 0) "a pane was read for the one candidate, and not for the session that is not idle"
 $names = @(Get-ChildItem -LiteralPath $wakeDir | ForEach-Object { $_.Name } | Sort-Object)
 Check (($names -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")
+# CALLED FROM INSIDE A SESSION THAT SETS DEFAULTS FOR PARAMETERS BY NAME, the run is still shadow: horde is
+# started here by -Command, in a PowerShell whose $PSDefaultParameterValues says every -Mode is live.
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "powershell.exe"
+$psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"`$PSDefaultParameterValues = @{ '*:Mode' = 'live'; '*:Once' = `$true }; & '" + (Join-Path $root "horde.ps1") + "' wake run -Once; exit `$LASTEXITCODE`""
+$psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+$psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+foreach ($k in @{ HORDE_HOME = $fleetHome; WEZFLEET_ROOT = $fleetPin.path; USERPROFILE = $fakeProfile }.GetEnumerator()) { $psi.EnvironmentVariables[$k.Key] = $k.Value }
+$inside = [System.Diagnostics.Process]::Start($psi)
+$insideOut = $inside.StandardOutput.ReadToEndAsync(); $insideErr = $inside.StandardError.ReadToEndAsync()
+$insideEnded = $inside.WaitForExit(180000)
+if (-not $insideEnded) { try { $inside.Kill() } catch { } }
+$insideSaid = $(if ($insideEnded) { "$($insideOut.Result)" + "$($insideErr.Result)" } else { "(did not end)" })
+Check ($insideEnded -and $insideSaid -like "*wake: SHADOW*" -and $insideSaid -notlike "*-Mode live*" -and $insideSaid -notlike "*wake: LIVE*" -and @(Read-FakeLog "typed.log").Count -eq 0) ("called from a PowerShell whose `$PSDefaultParameterValues makes every -Mode live, wake run is still a SHADOW run: a command is given what was typed, not what a session defaults (" + ($insideSaid -split "`r?`n")[0] + ")")
+$inside.Dispose()
 $explicit = Invoke-Wake $fleetHome @("run", "-Mode", "shadow", "-Once")
 Check ($explicit.code -eq 0 -and $explicit.out -like "*wake: SHADOW*" -and @(Read-FakeLog "typed.log").Count -eq 0) "-Mode shadow, the explicit form, is the same shadow run"
 
