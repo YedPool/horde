@@ -257,6 +257,11 @@ try {
     Check ($badLabel.state -ceq "unknown" -and (& $watch.Observe $box "0d000000-0000-4000-8000-0000000000ab").records -eq 0) "a mail the port refuses - a sender label that is not one - is unknown, and never reaches the messenger"
     $noTarget = Send-HordeRestoreMail -Mail ([pscustomobject]@{ kind = "stall"; to = ""; messageId = "0d000000-0000-4000-8000-0000000000ac"; body = "x" }) -Settings $settings -Messenger $inProcess -HordeHome $pinned.home
     Check ($noTarget.state -ceq "unknown" -and (& $watch.Observe $box "0d000000-0000-4000-8000-0000000000ac").records -eq 0) "and so is a mail addressed to nobody"
+    # A MESSENGER THAT HOLDS THE MAIL: known not delivered. Registered from the messenger port suite's own
+    # fixture folder, with a post of this suite's.
+    $holder = Register-HordeMessenger -Folder (Join-Path $root "test\fixtures\messenger\caps\fixture-good") -Post { param($m) New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "held"; at = [datetime]::UtcNow; reason = "its mailbox is full" }) } -Status { param($id) New-HordeAbsent -Note "the fixture knows nothing" }
+    $heldBack = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 60)) -Settings $settings -Post { param($m) Send-HordeRestoreMail -Mail $m -Settings $settings -Messenger $holder -HordeHome $pinned.home } -Posted @{}
+    Check (@($heldBack.entries | Where-Object { $_.outcome -ceq "unknown" -and "$($_.reason)".Contains("held") -and "$($_.reason)".Contains("its mailbox is full") }).Count -eq 3 -and $heldBack.posted.Count -eq 0) "a mail the messenger holds is not posted: the entry says held and why, and it is not marked posted"
     $hush = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 300)) -Settings $settings -Shadow -Post $through -Posted @{}
     $stallId = @($hush.entries | Where-Object { $_.kind -ceq "would-stall" } | ForEach-Object { $_.messageId })[0]
     Check ((& $watch.Observe $box $stallId).records -eq 0) "in shadow, with this poster in hand, the stall notice reaches no messenger"

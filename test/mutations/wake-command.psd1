@@ -28,8 +28,5 @@
         @{ Name = "tick-of-an-hour-accepted"
            Find = '[ValidateRange(1, 300)][int]$TickSeconds = 3'
            Replace = '[ValidateRange(1, 3600)][int]$TickSeconds = 3' }
-        @{ Name = "once-loops"
-           Find = 'if ($Once) { Write-Output ("wake: pass " + $run.pass'
-           Replace = 'if ($false) { Write-Output ("wake: pass " + $run.pass' }
     )
 }

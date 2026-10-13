@@ -198,7 +198,6 @@ foreach ($case in @(
         @{ what = "unread mail with no time for the oldest"; block = { param($id) New-HordeKnown -Value (New-State @{ oldestUnreadAt = $null }) }; like = "no time" },
         @{ what = "unread mail whose oldest time is text"; block = { param($id) New-HordeKnown -Value (New-State @{ oldestUnreadAt = "2026-10-12T08:00:00Z" }) }; like = "no time" },
         @{ what = "unread mail whose oldest time has no zone"; block = { param($id) New-HordeKnown -Value (New-State @{ oldestUnreadAt = (New-Object System.DateTime(2026, 10, 12, 8, 0, 0)) }) }; like = "no zone" },
-        @{ what = "an unread count too large to be one"; block = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = [long]3000000000 }) }; like = "no count of mail" },
         @{ what = "idle given as true"; block = { param($id) New-HordeKnown -Value (New-State @{ idle = $true }) }; like = "idle" },
         @{ what = "idle given as Yes"; block = { param($id) New-HordeKnown -Value (New-State @{ idle = "Yes" }) }; like = "idle" },
         @{ what = "boxEmpty left out"; block = { param($id) New-HordeKnown -Value (New-State @{ boxEmpty = $null }) }; like = "boxEmpty" },
@@ -212,6 +211,12 @@ $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadCou
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 3 -and $a.value.oldestUnreadAt -eq $t0 -and $a.value.oldestUnreadAt.Kind -eq [System.DateTimeKind]::Utc) "state: a local time is carried as the same instant in UTC"
 
+# Caught here on purpose: the port must ANSWER for a count that does not fit, and a throw must fail
+# this check rather than end it (a check whose expression throws records an error, not a failure).
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = [long]3000000000 }) }
+$a = $null
+try { $a = Get-HordeWakeState -Waker $scripted -Id $sid } catch { $a = $null }
+Check ($null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains("no count of mail")) "state: an unread count too large to be one is unknown, saying so - answered, not thrown"
 $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = [long]2147483647 }) }
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 2147483647 -and $a.value.unreadCount -is [int]) "state: the largest count that fits is carried"

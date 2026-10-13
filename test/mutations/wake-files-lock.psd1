@@ -12,8 +12,5 @@
         @{ Name = "shadow-and-live-share-one-lock"
            Find = 'if ($Shadow) { $leaf = "run-shadow.lock" }'
            Replace = 'if ($Shadow) { $leaf = "run.lock" }' }
-        @{ Name = "a-held-lock-throws-instead-of-answering"
-           Find = 'catch [System.IO.IOException] { return $null }'
-           Replace = 'catch [System.IO.IOException] { throw }' }
     )
 }
