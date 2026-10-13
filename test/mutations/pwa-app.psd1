@@ -89,5 +89,9 @@
         @{ Name = "back-not-followed"
            Find = 'window.addEventListener("popstate",'
            Replace = 'window.addEventListener("popstate-unheard",' }
+        # --- one part's answer (2026-10-12) ---
+        @{ Name = "the-app-sends-a-part-as-words-to-the-whole-question"
+           Find = '    sayPart: (number, letter, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId, part: letter }),'
+           Replace = '' }
     )
 }
