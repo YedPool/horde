@@ -115,6 +115,34 @@ try {
 } finally { $script:HordeWakers.Clear(); foreach ($k in @($kept.Keys)) { $script:HordeWakers[$k] = $kept[$k] } }
 
 Write-Host ""
+Write-Host "--- where a waker's program comes from, and whether a person named it ---" -ForegroundColor Cyan
+
+Check ((Get-HordeWakerSource -Waker $memory).state -ceq "absent" -and (Get-HordeWakerSource -Waker $good).state -ceq "absent") "a waker that registered no Source runs no program whose place has to be named: absent"
+$script:sourceAnswer = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $true; how = "set as root in a settings file" }) }
+$sourced = Register-HordeWaker -Name "fixture-source" -Folder (Join-Path $fx "fixture-source") -Targets { New-HordeKnown -Value @() } -State { param($id) New-HordeUnknown -Reason "a fixture" } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" } -Source { & $script:sourceAnswer }
+$a = Get-HordeWakerSource -Waker $sourced
+Check ($a.state -ceq "known" -and $a.value.fixed -eq $true -and $a.value.how -ceq "set as root in a settings file") "a program a person named is known, fixed, with how it was named"
+$script:sourceAnswer = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $false; how = "found on PATH" }) }
+$a = Get-HordeWakerSource -Waker $sourced
+Check ($a.state -ceq "known" -and $a.value.fixed -eq $false -and $a.value.how -ceq "found on PATH") "and one that was only found is known, not fixed"
+foreach ($case in @(
+        @{ what = "something that is not an answer"; answer = { "on PATH" } },
+        @{ what = "a value that is not an object"; answer = { New-HordeKnown -Value "on PATH" } },
+        @{ what = "fixed as a word"; answer = { New-HordeKnown -Value ([pscustomobject]@{ fixed = "yes"; how = "x" }) } },
+        @{ what = "no fixed at all"; answer = { New-HordeKnown -Value ([pscustomobject]@{ how = "x" }) } },
+        @{ what = "no how"; answer = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $true }) } },
+        @{ what = "a blank how"; answer = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $true; how = "  " }) } },
+        @{ what = "a how of two lines"; answer = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $true; how = "one`ntwo" }) } },
+        @{ what = "a throw"; answer = { throw "no settings" } },
+        @{ what = "its own unknown"; answer = { New-HordeUnknown -Reason "the settings are refused" } })) {
+    $script:sourceAnswer = $case.answer
+    $a = Get-HordeWakerSource -Waker $sourced
+    Check ($a.state -ceq "unknown") ("source: " + $case.what + " is unknown - never read as a program somebody named")
+}
+Check ((Get-HordeWakerSource -Waker ([pscustomobject]@{ name = "fixture-source"; source = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $true; how = "x" }) } })).state -ceq "unknown") "source: a look-alike that was never registered is not asked"
+$script:HordeWakers.Remove("fixture-source")
+
+Write-Host ""
 Write-Host "--- only a waker registered through the port is called ---" -ForegroundColor Cyan
 
 $script:calls = 0

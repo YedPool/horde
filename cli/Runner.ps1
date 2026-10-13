@@ -26,4 +26,11 @@ param($Run, $Named, $Positional, $State)
 # made private once bound; measured 2026-09-29, the body then sees none of them by name. As in
 # horde.ps1, Get-Variable -Scope 1 still reaches them: this stops accidents, not intent.
 foreach ($private:hordeParam in @("Run", "Named", "Positional", "State")) { (Get-Variable -Name $hordeParam -Scope Local).Options = "Private" }
+# A COMMAND IS GIVEN WHAT WAS TYPED, AND NOTHING ELSE. $PSDefaultParameterValues supplies a value for any
+# parameter a caller left out, by name - and when horde is called from inside a PowerShell session that
+# has one set ('*:Mode' = 'live', say), the run block below was bound with it: "horde wake run" became a
+# live run with nobody having asked (safety review of PR 220; measured 2026-10-13). An empty table of
+# this script's own stands in front of the session's for the call below and everything it calls, so a
+# command's defaults are the ones written in its own param block.
+$PSDefaultParameterValues = @{}
 do { & $Run @Named @Positional; $State.completed = $true } while ($false)

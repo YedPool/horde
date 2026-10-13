@@ -8,8 +8,71 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-silence-is-not-saved"
+           Find = 'if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-silence-is-not-read-back"
+           Find = 'if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }'
+           Replace = 'if ($false) { $run.silence = $savedSilence.value.seen }' }
+        @{ Name = "an-unreadable-silence-is-not-said"
+           Find = 'elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }'
+           Replace = '' }
+        @{ Name = "the-end-of-a-silence-is-not-saved"
+           Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)'
+           Replace = 'return ("" + $since + "|" + $moved)' }
+        @{ Name = "the-watchers-own-session-does-not-reach-the-pass"
+           Find = '-Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"'
+           Replace = '-Only $only -Moves $moves' }
+        @{ Name = "a-never-nudged-session-is-journaled-every-tick"
+           Find = '$Run.never = $neverNow.seen'
+           Replace = '$Run.never = @{}' }
+        @{ Name = "a-retired-session-is-journaled-as-held"
+           Find = '-Kind "never-nudged" -Outcome "skipped"'
+           Replace = '-Kind "held" -Outcome "held"' }
+        @{ Name = "a-given-own-session-is-ignored"
+           Find = 'if ($PSBoundParameters.ContainsKey("Self")) { $own = $Self }'
+           Replace = 'if ($false) { $own = $Self }' }
+        @{ Name = "a-proof-run-reads-a-ledger-of-its-own"
+           Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome'
+           Replace = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome' }
+        @{ Name = "a-run-that-sends-starts-from-a-ledger-it-cannot-read"
+           Find = 'if ($run.live) { $run.refused = ('
+           Replace = 'if ($false) { $run.refused = (' }
+        @{ Name = "a-refused-run-is-ticked-all-the-same"
+           Find = 'if ("$(Get-HordeWakeEntryValue $Run "refused")" -cne "") { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "a-shadow-run-is-refused-for-its-ledger"
+           Find = 'if ($run.live) { $run.refused = ('
+           Replace = 'if ($true) { $run.refused = (' }
+        @{ Name = "the-ledger-is-kept-only-after-the-tells"
+           Find = '$Run.ledger = $result.ledger'
+           Replace = '$keptLater = $result.ledger' }
+        @{ Name = "the-ledger-is-not-saved-after-the-pass"
+           Find = 'if ($ledgerChanged) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-tell-whose-state-cannot-be-saved-fails-the-pass"
+           Find = '} catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("what was told could not be saved: " + $_.Exception.Message) }) }'
+           Replace = '} catch { throw }' }
+        @{ Name = "a-tell-that-cannot-be-made-fails-the-pass"
+           Find = 'catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("a tell could not be made: " + $_.Exception.Message) }) }'
+           Replace = 'catch { throw }' }
+        @{ Name = "a-run-made-with-no-word-is-live"
+           Find = 'if ($word -ceq "" -and $Live) { $word = "live" }'
+           Replace = 'if ($word -ceq "") { $word = "live" }' }
+        @{ Name = "a-run-that-sends-runs-a-program-nobody-named"
+           Find = 'if ($loose -cne "") { return (& $no ("wake run -Mode " + $Mode + " is refused: the program'
+           Replace = 'if ($false) { return (& $no ("wake run -Mode " + $Mode + " is refused: the program' }
+        @{ Name = "a-program-only-found-is-read-as-named"
+           Find = 'if ($null -ne $source -and $source.state -ceq "known" -and $source.value.fixed -ne $true) { $loose = "$($source.value.how)" }'
+           Replace = '' }
+        @{ Name = "a-waker-that-cannot-say-where-its-program-is-may-send"
+           Find = 'if ($null -ne $source -and $source.state -ceq "unknown") { $loose ='
+           Replace = 'if ($false) { $loose =' }
+        @{ Name = "shadow-is-silent-about-a-program-nobody-named"
+           Find = 'if ($loose -cne "" -and $source.state -ceq "known") { $note ='
+           Replace = 'if ($false) { $note =' }
         @{ Name = "the-evidence-does-not-reach-the-pass"
-           Find = '-Silent:$silentNow -Only $only -MovedAt $movedAt'
+           Find = '-Silent:$silentNow -Only $only -Moves $moves'
            Replace = '-Silent:$silentNow -Only $only' }
         @{ Name = "a-retired-session-is-journaled-every-tick"
            Find = '$Run.held = $heldNow.seen'
@@ -18,8 +81,8 @@
            Find = 'foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }'
            Replace = '' }
         @{ Name = "a-proof-run-forgets-its-one-session"
-           Find = '-Shadow:$shadow -Silent:$silentNow -Only $only'
-           Replace = '-Shadow:$shadow -Silent:$silentNow' }
+           Find = '-Send:(-not $shadow) -Silent:$silentNow -Only $only'
+           Replace = '-Send:(-not $shadow) -Silent:$silentNow' }
         @{ Name = "a-proof-run-with-no-session-runs-over-the-fleet"
            Find = 'if ($only -ceq "") { throw "a proof run was made without'
            Replace = 'if ($false) { throw "a proof run was made without' }
@@ -42,20 +105,20 @@
            Find = '$Run.silence = $silence.seen'
            Replace = '$Run.silence = $null' }
         @{ Name = "a-silent-fleet-is-nudged-as-ever"
-           Find = '-Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow'
-           Replace = '-Ledger $Run.ledger -Shadow:$shadow' }
+           Find = '-Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow'
+           Replace = '-Ledger $Run.ledger -Send:(-not $shadow)' }
         @{ Name = "found-silent-nothing-is-forgiven"
-           Find = 'if ($silence.declared) { $ledgerNow = Reset-HordeWakeLedgerAttempts -Ledger $ledgerNow }'
+           Find = 'if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }'
            Replace = '' }
         @{ Name = "movement-releases-nobody"
-           Find = 'if ($silence.moved) { $ledgerNow = Set-HordeWakeLedgerProbesDue -Ledger $ledgerNow }'
+           Find = 'if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }'
            Replace = '' }
         @{ Name = "a-limit-is-journaled-every-tick"
            Find = '$Run.limited = $limitedNow.seen'
            Replace = '$Run.limited = @{}' }
         @{ Name = "nobody-told-of-a-silent-fleet"
-           Find = 'if ($null -ne $silence.condition) { [void]$conditions.Add('
-           Replace = 'if ($false) { [void]$conditions.Add(' }
+           Find = 'if ($null -ne $silence.condition) { & $make {'
+           Replace = 'if ($false) { & $make {' }
         @{ Name = "proof-as-a-loop"
            Find = 'if (-not $Once) { return (& $no "wake run -Mode proof makes one pass'
            Replace = 'if ($false) { return (& $no "wake run -Mode proof makes one pass' }
@@ -90,11 +153,11 @@
            Find = 'name = ($Stem + "-of-" + $mode + "-run"); mode = "shadow" } }'
            Replace = 'name = ($Stem + "-of-live-run"); mode = "shadow" } }' }
         @{ Name = "shadow-tick-nudges"
-           Find = '-Settings $Settings -Ledger $Run.ledger -Shadow:$shadow'
-           Replace = '-Settings $Settings -Ledger $Run.ledger -Shadow:$false' }
+           Find = '-Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow)'
+           Replace = '-Settings $Settings -Ledger $Run.ledger -Send:$true' }
         @{ Name = "live-tick-only-journals"
-           Find = '-Settings $Settings -Ledger $Run.ledger -Shadow:$shadow'
-           Replace = '-Settings $Settings -Ledger $Run.ledger -Shadow:$true' }
+           Find = '-Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow)'
+           Replace = '-Settings $Settings -Ledger $Run.ledger -Send:$false' }
         @{ Name = "restore-source-goes-live-with-the-run"
            Find = '$script:HordeWakeSendersPost = $false'
            Replace = '$script:HordeWakeSendersPost = $true' }
@@ -111,10 +174,10 @@
            Find = 'if ($Run.live -ne $true) { return "shadow" }'
            Replace = 'if (-not $Run.live) { return "shadow" }' }
         @{ Name = "ledger-saved-as-the-other-mode"
-           Find = 'Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome'
-           Replace = 'Save-HordeWakeLedger -Ledger $Run.ledger -Mode "live" -HordeHome $HordeHome' }
+           Find = '$Run.ledger = $result.ledger'
+           Replace = '$Run.ledger = $result.ledger; $mode = $(if ($mode -ceq "shadow") { "live" } else { "shadow" })' }
         @{ Name = "ledger-read-from-the-other-mode"
-           Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome'
+           Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome'
            Replace = '$saved = Read-HordeWakeLedger -Mode "live" -HordeHome $HordeHome' }
         @{ Name = "would-posts-of-a-live-run-saved-as-posted"
            Find = 'if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-" + $mode + "-run"); mode = "shadow" } }'
@@ -156,8 +219,8 @@
            Find = '-Kind "bad-mail" -Subject $e.id'
            Replace = '-Kind "bad-mail" -Subject ""' }
         @{ Name = "nobody-told-of-a-failing-fleet-read"
-           Find = 'if ($null -ne $fleetRead.condition) { [void]$conditions.Add('
-           Replace = 'if ($false) { [void]$conditions.Add(' }
+           Find = 'if ($null -ne $fleetRead.condition) { & $make {'
+           Replace = 'if ($false) { & $make {' }
         @{ Name = "what-was-told-forgotten-between-ticks"
            Find = '$Run.told = $toldNow.told'
            Replace = '$Run.told = @{}' }

@@ -373,19 +373,19 @@ try {
 Write-Host ""
 Write-Host "--- the file: what was posted, under a home of this suite's ---" -ForegroundColor Cyan
 
-Check ((Read-HordeRestoreState).state -ceq "absent") "with nothing saved the state is absent"
+Check ((Read-HordeRestoreState -Mode "live").state -ceq "absent") "with nothing saved the state is absent"
 # WHAT A SHADOW RUN WOULD HAVE POSTED IS NOT POSTED FOR A LIVE RUN. The shadow passes above marked four
 # mails; saved as a shadow run saves them, a live run that starts afterwards reads none and posts all.
 Save-HordeRestoreState -Posted $posted -Known $r.known -Shadow
-Check ((Read-HordeRestoreState).state -ceq "absent" -and (Read-HordeRestoreState -Shadow).value.posted.Count -eq 4) "a shadow run's state is a file of its own, and the live state is still absent"
-$liveStart = Read-HordeRestoreState
+Check ((Read-HordeRestoreState -Mode "live").state -ceq "absent" -and (Read-HordeRestoreState -Shadow).value.posted.Count -eq 4) "a shadow run's state is a file of its own, and the live state is still absent"
+$liveStart = Read-HordeRestoreState -Mode "live"
 $livePosted = @{}
 if ($liveStart.state -ceq "known") { $livePosted = $liveStart.value.posted }
 $script:mails.Clear()
 $live = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 400)) -Settings $settings -Post $poster -Posted $livePosted
 Check ($script:mails.Count -eq 4 -and @($live.entries | Where-Object { $_.outcome -ceq "posted" }).Count -eq 4) "so a live run started after a shadow run posts every mail the shadow run only would have"
-Save-HordeRestoreState -Posted @{ "0d000000-0000-4000-8000-000000000001" = (At 7); "0d000000-0000-4000-8000-000000000002" = $true } -Known @($f.value.anchor)
-$back = Read-HordeRestoreState
+Save-HordeRestoreState -Mode "live" -Posted @{ "0d000000-0000-4000-8000-000000000001" = (At 7); "0d000000-0000-4000-8000-000000000002" = $true } -Known @($f.value.anchor)
+$back = Read-HordeRestoreState -Mode "live"
 Check ($back.state -ceq "known" -and $back.value.posted.Count -eq 2 -and $back.value.posted["0d000000-0000-4000-8000-000000000001"] -eq (At 7) -and $null -eq $back.value.posted["0d000000-0000-4000-8000-000000000002"]) "the mails already posted save and read back, each with when it was posted where that is known"
 
 $aged = @{ "0d000000-0000-4000-8000-000000000003" = (At -86401); "0d000000-0000-4000-8000-000000000004" = (At -86400); "0d000000-0000-4000-8000-000000000005" = $true }
@@ -399,13 +399,13 @@ Check ($back.value.known[0].members.Count -eq 12 -and $back.value.known[0].membe
 $readBack = Get-HordeRestoreFinding -Sessions $fleet -Now (At 300) -Settings $settings -Known $back.value.known
 Check ($readBack.state -ceq "known" -and $readBack.value.restoreId -ceq $f.value.restoreId) "so a source that is restarted reads the restore back and knows it for the same one"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x","windowStart":"2026-10-12T08:00:00.0000000Z","windowEnd":"2026-10-12T08:02:00.0000000Z","members":[{"id":"y"}]}]}')
-Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved member with no start is unknown, never half a state"
+Check ((Read-HordeRestoreState -Mode "live").state -ceq "unknown") "a saved member with no start is unknown, never half a state"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
-Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved posted mail with no id is unknown"
+Check ((Read-HordeRestoreState -Mode "live").state -ceq "unknown") "a saved posted mail with no id is unknown"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
-Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved restore with no window is unknown, never half a state"
+Check ((Read-HordeRestoreState -Mode "live").state -ceq "unknown") "a saved restore with no window is unknown, never half a state"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore-live.json"), "{ not json")
-Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved state that cannot be read is unknown, not absent"
+Check ((Read-HordeRestoreState -Mode "live").state -ceq "unknown") "a saved state that cannot be read is unknown, not absent"
 
 Write-Host ""
 Write-Host "--- the running sessions, from the two stores handed in ---" -ForegroundColor Cyan

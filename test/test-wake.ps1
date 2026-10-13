@@ -50,7 +50,7 @@ function Pass {
     # One pass at t0 + -Seconds, carrying the ledger on. Returns the pass's result.
     param([double]$Seconds = 0, [switch]$Shadow, $Using = $settings)
     Set-HordeMemoryWakerClock (At $Seconds)
-    $r = Invoke-HordeWakePass -Waker $memory -Now (At $Seconds) -Settings $Using -Ledger $script:ledger -Shadow:$Shadow
+    $r = Invoke-HordeWakePass -Waker $memory -Now (At $Seconds) -Settings $Using -Ledger $script:ledger -Send:(-not $Shadow)
     $script:ledger = $r.ledger
     return $r
 }
@@ -187,8 +187,8 @@ Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "woken" -and $nul
 Seat 1 @{ Role = "warchief"; Outcome = "nothing"; OutcomeReason = "its mailbox is empty" }
 $r = Pass 80
 Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "nothing") "and a new run of nothings is journaled again, once"
-Save-HordeWakeLedger -Ledger $script:ledger
-$back = Read-HordeWakeLedger
+Save-HordeWakeLedger -Mode "live" -Ledger $script:ledger
+$back = Read-HordeWakeLedger -Mode "live"
 Check ($back.state -ceq "known" -and (Get-HordeWakeNothingAt $back.value.ledger[(Sid 1)]) -eq (At 80) -and $back.value.ledger[(Sid 1)].attempts -eq 1 -and -not $back.value.ledger.ContainsKey((Sid 2))) "the hold is saved with the ledger and read back, and a session with none has none"
 Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
 
@@ -316,11 +316,11 @@ for ($s = 0; $s -le 3600; $s += 3) { $r = Pass $s -Shadow; foreach ($e in @($r.e
 Check ((@($kindsSeen) -join ",") -ceq "would-nudge,would-nudge,would-nudge,would-nudge,would-nudge,would-nudge,gave-up" -and (Rang) -eq 0) "a shadow run journals six would-nudges and then that it would give up, and rings nobody"
 $gu = Update-HordeWakeGaveUp -Ledger @{ (Sid 1) = [pscustomobject]@{ attempts = 6; lastAttemptAt = (At 0); lastOutcome = "busy" }; (Sid 2) = [pscustomobject]@{ attempts = 5; lastAttemptAt = (At 0); lastOutcome = "busy" } } -Now (At 9) -Settings $settings
 Check (@($gu.entries).Count -eq 1 -and $gu.entries[0].id -ceq (Sid 1) -and $gu.ledger[(Sid 1)].gaveUp -eq $true -and $null -eq (Get-HordeWakeEntryValue $gu.ledger[(Sid 2)] "gaveUp")) "an entry written before entries recorded their mail is capped all the same, and one below the cap is not"
-Save-HordeWakeLedger -Ledger $gu.ledger
-$back = Read-HordeWakeLedger
+Save-HordeWakeLedger -Mode "live" -Ledger $gu.ledger
+$back = Read-HordeWakeLedger -Mode "live"
 Check ($back.state -ceq "known" -and $back.value.ledger[(Sid 1)].gaveUp -eq $true -and $null -eq (Get-HordeWakeEntryValue $back.value.ledger[(Sid 2)] "gaveUp")) "that a session was given up on is saved with the ledger, so a restarted watcher does not say it again"
-Save-HordeWakeLedger -Ledger @{ (Sid 3) = (New-HordeWakeLedgerRow -Attempts 2 -LastAttemptAt (At 1) -LastOutcome "busy" -MailAt (At -60)) }
-Check ((Read-HordeWakeLedger).value.ledger[(Sid 3)].mailAt -eq (At -60)) "and so is the mail an entry is for"
+Save-HordeWakeLedger -Mode "live" -Ledger @{ (Sid 3) = (New-HordeWakeLedgerRow -Attempts 2 -LastAttemptAt (At 1) -LastOutcome "busy" -MailAt (At -60)) }
+Check ((Read-HordeWakeLedger -Mode "live").value.ledger[(Sid 3)].mailAt -eq (At -60)) "and so is the mail an entry is for"
 Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
 
 Write-Host ""
@@ -342,8 +342,8 @@ Check ($after[(Sid 1)].attempts -eq 8) "a session already past every step is cou
 $timed = New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken" -ElapsedMs 2150
 $untimed = New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken"
 Check ($timed.elapsedMs -eq 2150 -and $null -eq $untimed.PSObject.Properties["elapsedMs"] -and $null -eq (New-HordeWakeEntry -At $t0 -Kind "nudge" -ElapsedMs "soon").PSObject.Properties["elapsedMs"]) "a journal line carries elapsedMs when it is given a whole number, and not otherwise"
-$null = Write-HordeWakeJournal -Entries @($timed, $untimed)
-$written = @(Read-HordeWakeJournalTail -Count 2 | ForEach-Object { $_ | ConvertFrom-Json })
+$null = Write-HordeWakeJournal -Mode "live" -Entries @($timed, $untimed)
+$written = @(Read-HordeWakeJournalTail -Mode "live" -Count 2 | ForEach-Object { $_ | ConvertFrom-Json })
 Check ($null -ne $written[0].PSObject.Properties["elapsedMs"] -and $written[0].elapsedMs -eq 2150 -and $null -eq $written[1].PSObject.Properties["elapsedMs"]) "and it is written to the journal with the line"
 Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
 
@@ -354,10 +354,10 @@ $threw = 0; foreach ($word in @("LIVE", "prove", "both")) { try { $null = Get-Ho
 Check ($threw -eq 3) "a word that is no mode - another casing, a near miss - names no file: it is refused"
 Write-HordeWakeHeartbeat -At $t0 -ProcessId 7 -Pass 1 -Mode "proof" -TickSeconds 3 -HordeHome $h7
 $pb = Read-HordeWakeHeartbeat -Mode "proof" -HordeHome $h7
-Check ($pb.state -ceq "known" -and $pb.value.mode -ceq "proof" -and $pb.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -HordeHome $h7).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).state -ceq "absent") "a proof run's heartbeat says proof, is read back by that mode only, and is neither the live one nor the shadow one"
+Check ($pb.state -ceq "known" -and $pb.value.mode -ceq "proof" -and $pb.value.shadow -eq $false -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h7).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).state -ceq "absent") "a proof run's heartbeat says proof, is read back by that mode only, and is neither the live one nor the shadow one"
 Write-HordeWakeHeartbeat -At $t0 -ProcessId 7 -Pass 1 -Shadow -HordeHome $h7
-Write-HordeWakeHeartbeat -At $t0 -ProcessId 7 -Pass 1 -HordeHome $h7
-Check ((Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).value.mode -ceq "shadow" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).value.shadow -eq $true -and (Read-HordeWakeHeartbeat -HordeHome $h7).value.mode -ceq "live") "and the shadow and the live heartbeat each say theirs"
+Write-HordeWakeHeartbeat -Mode "live" -At $t0 -ProcessId 7 -Pass 1 -HordeHome $h7
+Check ((Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).value.mode -ceq "shadow" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $h7).value.shadow -eq $true -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $h7).value.mode -ceq "live") "and the shadow and the live heartbeat each say theirs"
 
 Write-Host ""
 Write-Host "--- the look comes last: a session's box is read only when it is about to be nudged ---" -ForegroundColor Cyan
@@ -409,12 +409,89 @@ Check ($d[0].action -ceq "look") "with one, it is look: everything else holds, g
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- a session given up on is not forgotten after a day ---" -ForegroundColor Cyan
+
+Start-Case; Seat 1
+$capOne = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 1 }
+$null = Pass 0 -Using $capOne
+Check ((Rang) -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "CONTROL: with a cap of one, the session is nudged once and given up on"
+$again = 0; $said = 0
+foreach ($day in 1..5) { foreach ($s in @(0, 3, 6)) { $p = Pass ($day * 86400 + 60 + $s) -Using $capOne; $said += @($p.entries | Where-Object { $_.kind -ceq "gave-up" }).Count } }
+Check ((Rang) -eq 1 -and $said -eq 0 -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("five days on, with the same mail still unread, it has not been nudged again and has not been given up on a second time: the entry is not dropped at 24 hours (" + (Rang) + " nudges)")
+Seat 1 @{ OldestUnreadAt = (At 500000) }
+$p = Pass 500100 -Using $capOne
+Check ((Rang) -eq 2) "another mail becoming its oldest unread is a new mail, knocked for from nothing"
+Start-Case; Seat 1
+$null = Pass 0 -Using $capOne
+Reset-HordeMemoryWaker
+$p = Pass 86500 -Using $capOne
+Check ($script:ledger.Count -eq 0) "the entry of a session that is gone from the fleet still ages out after a day: it is not kept for ever"
+Start-Case; Seat 1
+$null = Pass 0 -Using $capOne
+Set-HordeMemoryWakerFault -Call "state" -Kind "throw"
+$p = Pass 86500 -Using $capOne
+Check ($script:ledger.Count -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "but NOT the entry of a session whose state could not be read this pass: an unknown state is no evidence that its mail was taken"
+Set-HordeMemoryWakerFault -Call "state" -Kind ""
+# A GAVE-UP ENTRY IS DROPPED ONLY ON EVIDENCE. Three sessions given up on more than a day ago; a fourth, ready.
+function New-GaveUpLedger {
+    $l = @{}
+    foreach ($n in 1..3) { $l[(Sid $n)] = New-HordeWakeLedgerRow -Attempts 6 -LastAttemptAt (At -90000) -LastOutcome "woken" -MailAt (At -100000) -GaveUp $true }
+    return $l
+}
+function Seat-GaveUp { Start-Case; foreach ($n in 1..3) { Seat $n @{ OldestUnreadAt = (At -100000) } }; Seat 4 }
+function Get-GaveUp { param($Ledger) return (@(1..3 | Where-Object { $Ledger.ContainsKey((Sid $_)) -and (Get-HordeWakeEntryValue $Ledger[(Sid $_)] "gaveUp") -eq $true }) -join ",") }
+Seat-GaveUp
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger) -Only (Sid 4)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3" -and (Rang 4) -eq 1 -and (Rang) -eq 1) ("a PROOF pass on a fourth session reads no state of the three given up on more than a day ago, and all three entries are still there: what a pass did not read, it does not forget (" + (Get-GaveUp $r.ledger) + ")")
+Seat-GaveUp
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger) -Only (Sid 4)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3") "and so in shadow"
+Seat-GaveUp
+Set-HordeMemoryWakerFault -Call "state" -Kind "throw"
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3" -and (Rang) -eq 0) "a LIVE pass in which their states read unknown keeps all three: a state that passed through unknown is not evidence"
+Set-HordeMemoryWakerFault -Call "state" -Kind ""
+Seat-GaveUp
+Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1,2,3") "a pass whose LISTING could not be read keeps all three: an unreadable listing is no evidence that anybody is gone"
+Set-HordeMemoryWakerFault -Call "targets" -Kind ""
+$kept = Update-HordeWakeLedger -Ledger (New-GaveUpLedger) -Decisions @() -Outcomes @{} -States @{} -Now $t0 -Settings $settings
+Check ((Get-GaveUp $kept) -ceq "1,2,3") "and a caller that hands in no listing at all drops nobody for being gone"
+# THE TWO KINDS OF EVIDENCE.
+Seat-GaveUp
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null }
+Seat 3 @{ OldestUnreadAt = (At -50) }
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1") ("evidence: a session whose mail was taken, and one whose oldest unread mail is now another, are no longer held as given up on; the one whose mail is still there is (" + (Get-GaveUp $r.ledger) + ")")
+Start-Case; Seat 1 @{ OldestUnreadAt = (At -100000) }; Seat 4
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger)
+Check ((Get-GaveUp $r.ledger) -ceq "1") ("evidence: two sessions that a WHOLE listing no longer names are gone, and their old entries are dropped (" + (Get-GaveUp $r.ledger) + ")")
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger (New-GaveUpLedger) -Only (Sid 4)
+Check ((Get-GaveUp $r.ledger) -ceq "1") "and that holds for a proof pass too: gone is judged against the whole listing, not the one session the pass was cut down to"
+$young = @{ (Sid 2) = (New-HordeWakeLedgerRow -Attempts 6 -LastAttemptAt (At -100) -LastOutcome "woken" -MailAt (At -100000) -GaveUp $true) }
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger $young
+Check ($r.ledger.ContainsKey((Sid 2))) "a gave-up entry less than a day old is kept even for a session the listing no longer names: a session that blinks out of a listing is not gone"
+Reset-HordeMemoryWaker
+Start-Case; Seat 1
+$null = Pass 0
+$p = Pass 86500
+Check ((Rang) -eq 2) "CONTROL: an ordinary entry, of a session not given up on, is dropped after a day as before"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
 
 Start-Case; Seat 1 @{ Retired = "yes" }
 $r = Pass 0
 Check ((Decided $r).action -ceq "skip" -and "$((Decided $r).reason)".StartsWith("retired") -and (Rang) -eq 0 -and $script:ledger.Count -eq 0) "a retired session that is reachable, idle, with old unread mail and an empty box - everything a nudge asks for - is skipped: retired is asked first"
-Check ("$($r.held[(Sid 1)])".StartsWith("retired, with 1 unread") -and @($r.entries).Count -eq 0) "the pass says who it holds for being retired, for the tick to journal once, and journals nothing itself"
+Check ("$($r.never[(Sid 1)])".StartsWith("retired, with 1 unread") -and $r.held.Count -eq 0 -and @($r.entries).Count -eq 0) "the pass says who it holds for being retired, for the tick to journal once, and journals nothing itself"
 $rung = 0; $lines = 0; foreach ($s in 1..400) { $p = Pass ($s * 3); $rung += (Rang); $lines += @($p.entries).Count }
 Check ($rung -eq 0 -and $lines -eq 0 -and $script:ledger.Count -eq 0) "twenty minutes on it has never been nudged, nothing is counted against it, and it is never given up on: it is nothing, not a failure"
 Start-Case; Seat 1 @{ Retired = "unknown" }
@@ -422,7 +499,7 @@ $r = Pass 0
 Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".StartsWith("retired is unknown") -and (Rang) -eq 0 -and $script:ledger.Count -eq 0 -and "$($r.held[(Sid 1)])".StartsWith("it could not be told whether this session is retired")) "a session the waker cannot say is retired or not is held: unknown never reads as permission"
 Start-Case; Seat 1 @{ Retired = "yes"; UnreadCount = 0; OldestUnreadAt = $null }; Seat 2
 $r = Pass 0
-Check ($r.held.Count -eq 0 -and (Rang 2) -eq 1) "a retired session with no mail has nothing to be said of it, and the session beside it is nudged as ever"
+Check ($r.held.Count -eq 0 -and $r.never.Count -eq 0 -and (Rang 2) -eq 1) "a retired session with no mail has nothing to be said of it, and the session beside it is nudged as ever"
 Start-Case; Seat 1 @{ Retired = "yes"; Role = "warchief" }; Seat 2
 Set-HordeMemoryWakerCheap $true
 $r = Pass 0
@@ -437,30 +514,95 @@ Check (@($o1.entries).Count -eq 1 -and $o1.entries[0].kind -ceq "held" -and $o1.
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- shadow is the default at every level: sending, and the sending run's files, are asked for by name ---" -ForegroundColor Cyan
+
+Start-Case; Seat 1 @{ Role = "warchief" }; Seat 2; Seat 3
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{}
+Check ((Rang) -eq 0 -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and (Kinds $r) -ceq "would-nudge") ("a pass over a ready fleet, given no word about sending, is a SHADOW pass: it asks for no nudge and journals what it would do (" + (Kinds $r) + ")")
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only ""
+Check ((Rang) -eq 0 -and @(Get-HordeMemoryWakerAsks).Count -eq 0) "and so is one given an empty -Only: no one session and no word about sending is never a live pass over the fleet"
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Send:$false
+Check ((Rang) -eq 0) "-Send:`$false is shadow"
+$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Send
+Check ((Rang) -eq 1 -and (Kinds $r) -ceq "nudge") "CONTROL: asked to send, it sends"
+$hd = Join-Path $pinned.home ("default-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hd | Out-Null
+Check ((Get-HordeWakeSendWord -Mode "proof") -ceq "live" -and (Get-HordeWakeSendWord -Mode "live") -ceq "live" -and (Get-HordeWakeSendWord -Mode "shadow") -ceq "shadow" -and (Get-HordeWakeSendWord) -ceq "shadow") "the runs that send - proof and live - share one word for their lock and their ledger; shadow, and a caller that names no mode, have shadow's"
+Check ((Get-HordeWakeModeWord) -ceq "shadow" -and (Get-HordeWakeModeWord -Shadow) -ceq "shadow" -and (Get-HordeWakeModeWord -Mode "live") -ceq "live" -and (Get-HordeWakeModeWord -Mode "proof") -ceq "proof") "a mode's files are the shadow run's when no mode is named: the sending run's are asked for by name"
+Check ((Split-Path -Leaf (Get-HordeWakeStateFile -Name "ledger" -HordeHome $hd)) -ceq "ledger-shadow.json" -and (Split-Path -Leaf (Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -HordeHome $hd)) -ceq "journal-shadow.jsonl") "so a state file and a journal named with no mode are the shadow ones"
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 1 -LastAttemptAt $t0 -LastOutcome "would-nudge") } -HordeHome $hd
+Write-HordeWakeHeartbeat -At $t0 -ProcessId 1 -Pass 1 -HordeHome $hd
+$null = Write-HordeWakeJournal -Entries @((New-HordeWakeEntry -At $t0 -Kind "would-nudge" -Id (Sid 1) -Outcome "would-nudge")) -HordeHome $hd
+$lk = Enter-HordeWakeLock -ProcessId 1 -HordeHome $hd
+if ($null -ne $lk) { $lk.Dispose() }
+$made = @(Get-ChildItem -LiteralPath (Join-Path $hd "wake") | ForEach-Object { $_.Name } | Sort-Object)
+Check (($made -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("a ledger, a heartbeat, a journal and a lock written with no mode named are all the shadow run's: nothing of the sending run is touched by a caller that left a word out (" + ($made -join ",") + ")")
+Check ((Read-HordeWakeLedger -Mode "live" -HordeHome $hd).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $hd).state -ceq "absent" -and (Read-HordeWakeLedger -HordeHome $hd).state -ceq "known") "and read back the same way"
+Reset-HordeMemoryWaker
+
+Write-Host ""
+Write-Host "--- a sender's label and the watcher's own session are never nudged, in any mode ---" -ForegroundColor Cyan
+
+foreach ($label in @("RS", "WW", "SV")) {
+    Start-Case; Seat 1 @{ Label = $label; Role = "warchief" }; Seat 2 @{ Label = "A" }
+    Set-HordeMemoryWakerClock $t0
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{}
+    Check ((Rang 1) -eq 0 -and (Rang 2) -eq 1 -and (Decided $r 1).action -ceq "skip" -and "$((Decided $r 1).reason)".Contains("reserved") -and "$($r.never[(Sid 1)])".Contains($label) -and $r.ledger.Count -eq 1) ("a session labelled " + $label + " - ready in every other way, and the warchief - is skipped by a pass that sends, and the session behind it is nudged")
+    $r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{}
+    Check ((Decided $r 1).action -ceq "skip" -and @($r.entries | Where-Object { $_.id -ceq (Sid 1) }).Count -eq 0) "and by a shadow pass: not even a would-nudge is journaled for it"
+    Start-Case; Seat 1 @{ Label = $label }
+    Set-HordeMemoryWakerClock $t0
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1)
+    Check ((Rang) -eq 0 -and (Decided $r 1).action -ceq "skip") "and by a pass given that one session: a proof cannot be aimed at it either"
+}
+Start-Case; Seat 1 @{ Label = "RS1" }; Seat 2 @{ Label = "R" }
+$r = Pass 0
+Check ((Decided $r 1).action -cne "skip" -and (Decided $r 2).action -cne "skip") "RS1 and R are other labels, and ordinary sessions"
+Start-Case; Seat 1 @{ Role = "warchief" }; Seat 2
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Self (Sid 1)
+Check ((Rang 1) -eq 0 -and (Rang 2) -eq 1 -and (Decided $r 1).action -ceq "skip" -and "$((Decided $r 1).reason)".Contains("started from") -and "$($r.never[(Sid 1)])".Contains("started from")) "the session the watcher was started from is skipped, though it is ready and first in the fair order, and the next is nudged"
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1) -Self (Sid 1)
+Check ((Rang 1) -eq 0) "a pass given that one session does not nudge it either"
+Start-Case; Seat 1
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Self ""
+Check ((Rang) -eq 1) "CONTROL: a watcher started from no session holds nobody back for that"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- one session, and no other: a pass cut down to the session it was given ---" -ForegroundColor Cyan
 
 Start-Case
 Seat 1 @{ Role = "warchief"; OldestUnreadAt = (At -600) }; Seat 2 @{ OldestUnreadAt = (At -300) }; Seat 3 @{ Role = "warg" }
 Set-HordeMemoryWakerClock $t0
-$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 3)
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 3)
 Check ((@(Get-HordeMemoryWakerNudges | ForEach-Object { $_.id }) -join ",") -ceq (Sid 3) -and (@(Get-HordeMemoryWakerAsks) -join ",") -ceq (Sid 3)) "of three ready sessions, a pass given the one the fair order serves last nudges that one and no other"
 Check ((@(Get-HordeMemoryWakerReads | Sort-Object -Unique) -join ",") -ceq (Sid 3) -and @($r.decisions).Count -eq 1 -and $r.decisions[0].id -ceq (Sid 3) -and $r.ledger.Count -eq 1) "the other two were never read and never decided on: the pass was cut down before the first state was read"
 Check ($r.warchief -ceq (Sid 1)) "who the warchief is is still known, from the listing alone"
 Start-Case
 Seat 1 @{ Role = "warchief" }; Seat 2
 Set-HordeMemoryWakerClock $t0
-$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 9)
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 9)
 Check ((Rang) -eq 0 -and @(Get-HordeMemoryWakerReads).Count -eq 0 -and @($r.decisions).Count -eq 0 -and (Kinds $r) -ceq "proof-target-absent" -and $r.entries[0].id -ceq (Sid 9)) "a pass given a session the fleet does not list nudges nobody and reads nobody: it never falls back to whoever is ready"
 foreach ($near in @(((Sid 1).Substring(0, 8)), ((Sid 1).ToUpperInvariant()), "A")) {
     Start-Case; Seat 1 @{ Role = "warchief"; Label = "A" }
     Set-HordeMemoryWakerClock $t0
-    $r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only $near
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only $near
     Check ((Rang) -eq 0 -and (Kinds $r) -ceq "proof-target-absent") ("'" + $near + "' - a part of the id, its other casing, the session's label - is not the session: nobody is nudged")
 }
 Start-Case; Seat 1
 Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
-$r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1)
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1)
 Check ((Kinds $r) -ceq "skip-unknown,proof-target-absent" -and (Rang) -eq 0) "with a listing that cannot be read, the pass says its one session was not found"
+# A PASS GIVEN ONE SESSION SENDS NO PROBE: a limited session is not typed into on a timer read from a ledger.
+Start-Case; Seat 1 @{ Limited = "yes" }
+$stale = @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At -9000) -LastOutcome "limited" -MailAt (At -60) -ProbeAt (At -9000)) }
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger $stale -Only (Sid 1)
+Check ((Rang) -eq 0 -and @($r.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".Contains("sends no probe") }).Count -eq 1) "a session limited with no known end, whose hourly probe is long due by the ledger, is NOT nudged by a pass given that one session"
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger $stale
+Check ((Rang) -eq 1) "CONTROL: the watcher's own pass, over the whole fleet, does send the probe that is due"
 Start-Case; Seat 1; Seat 2
 Check ((Rang) -eq 0 -and @((Pass 0).decisions).Count -eq 2) "CONTROL: a pass given no one session is a pass over them all"
 Reset-HordeMemoryWaker
@@ -475,12 +617,38 @@ Check ((Test-Held $r "usage limit until 2026-10-12T08:10:00Z") -and $script:ledg
 $rung = 0; foreach ($s in 1..199) { $null = Pass ($s * 3); $rung += (Rang) }
 Check ($rung -eq 0 -and $script:ledger.Count -eq 0) "for the ten minutes of the limit - two hundred passes - it is never nudged and never counted"
 $r = Pass 600
-Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $r.limited.Count -eq 0) "at the time the limit ends it is nudged, as its first attempt"
-# 2. THE LIMIT IS OVER: the waker still says limited, with a time that has passed. Normal rules.
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 0 -and $r.limited.Count -eq 0) "at the time the limit ends it is knocked for, once and uncounted"
+# 2. THE LIMIT IS OVER: the waker still says limited, with a time that has passed. ONE knock, uncounted;
+#    then the normal rules.
 Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At -10) }
 $r = Pass 0
-Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $null -eq (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt") -and $r.limited.Count -eq 0) "a limit whose time has passed is over, whatever the waker still says: the session is nudged under the normal rules, and the nudge counts"
-Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "no"; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, open with no time, and none when its time has come, or when the waker says not limited"
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "freeFor") -eq (At -10) -and $r.limited.Count -eq 0) "a session whose limit is over - the waker still says limited, with a time that has passed - is knocked for once, and that knock is NOT counted"
+$r = Pass 3
+Check ((Test-Held2 $r "back-off") -and (Rang) -eq 1) "it is not knocked for again at once: the first step of the back-off runs from the free knock"
+$r = Pass 6
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 2 -and $script:ledger[(Sid 1)].attempts -eq 1) "its next knock is an ordinary attempt, counted as the first"
+foreach ($s in @(30, 80, 250, 600, 1000, 1400, 1800, 2200)) { $null = Pass $s }
+Check ((Rang) -eq 7 -and $script:ledger[(Sid 1)].attempts -eq 6 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("and from there the normal rules hold: six counted attempts and it is given up on - seven knocks in all, one of them free (" + (Rang) + ")")
+# A SESSION ALREADY AT ITS CAP WHEN ITS LIMIT ENDS: the free knock is what it is owed.
+Start-Case; Seat 1
+$null = Pass 0 -Using $capOne
+Check ((Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true -and (Rang) -eq 1) "CONTROL: a session nudged to its cap - one, here - is given up on"
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At 100) }
+$r = Pass 50 -Using $capOne
+Check ((Rang) -eq 1) "CONTROL: while its limit lasts it is not knocked for"
+$r = Pass 100 -Using $capOne
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 2 -and $script:ledger[(Sid 1)].attempts -eq 1) "at the moment its limit ends it is knocked for once, cap or no cap: the knocks it had could not have been answered"
+$r = Pass 500 -Using $capOne
+Check ((Rang) -eq 2 -and "$((Decided $r).reason)".StartsWith("gave up")) "and then its cap holds again: one free knock, not a new budget"
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At 900) }
+$null = Pass 600 -Using $capOne
+$r = Pass 900 -Using $capOne
+Check ((Rang) -eq 3) "another limit, ending at another time, has a free knock of its own"
+Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "over" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "no"; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, over when its time has come, open with no time, and none when the waker says not limited"
+$hf = Join-Path $pinned.home ("free-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hf | Out-Null
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60) -FreeFor (At -10)) } -HordeHome $hf
+$rf = Read-HordeWakeLedger -HordeHome $hf
+Check ($rf.state -ceq "known" -and (Get-HordeWakeEntryValue $rf.value.ledger[(Sid 1)] "freeFor") -eq (At -10)) "which limit's free knock a session has had is saved with the ledger: a restart does not hand it another"
 # 3. NO KNOWN END, RELEASED BY THE HOUR: one knock an hour, never counted.
 Start-Case; Seat 1 @{ Limited = "yes" }
 $r = Pass 0
@@ -491,8 +659,29 @@ $r = Pass 3600
 Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt") -eq (At 3600)) "an hour after it was first seen so it is knocked for once, and the knock is not counted"
 $r = Pass 3603
 Check ((Test-Held2 $r "usage limit, end unknown") -and (Rang) -eq 1) "and then it waits again"
-foreach ($h in 2..9) { $null = Pass ($h * 3600) }
-Check ((Rang) -eq 9 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -ne $true) "nine hours are nine knocks, more than a mail is allowed, and still none is counted and nothing is given up: the hourly knock is what keeps a lone limited session from being stuck for ever"
+# ...AND THE KNOCKS ARE CAPPED: six for one mail, then one gave-up line, and silence.
+$gaveLines = 0; $gaveTold = 0
+foreach ($h in 2..9) { $p = Pass ($h * 3600); $gaveLines += @($p.entries | Where-Object { $_.kind -ceq "gave-up" }).Count; $gaveTold += @($p.gaveUp).Count }
+Check ((Rang) -eq 6 -and $script:ledger[(Sid 1)].attempts -eq 0 -and $script:ledger[(Sid 1)].probes -eq 6) ("nine hours are SIX knocks, not nine: a session limited with no known end is not typed into for ever (" + (Rang) + " knocks)")
+Check ($gaveLines -eq 1 -and $gaveTold -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "after the sixth it is given up on, said once, with one session for the warchief to be told of"
+$r = Pass 40000
+Check ((Test-Held2 $r "gave up after 6 knocks while it was limited") -and (Rang) -eq 6) "and it waits, saying so"
+$script:ledger = Set-HordeWakeLedgerProbesDue -Ledger $script:ledger
+$r = Pass 40003
+Check ((Rang) -eq 6 -and $script:ledger[(Sid 1)].probes -eq 6) "a session of the fleet taking mail does not buy it a seventh: the release is capped with the hour"
+Seat 1 @{ Limited = "no" }
+$r = Pass 40006
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 7 -and $script:ledger[(Sid 1)].attempts -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -ne $true) "when its waker stops saying it is limited it is nudged under the normal rules, from no attempts - and is not held as given up on for a limit that is over"
+Start-Case; Seat 1 @{ Limited = "yes" }
+foreach ($h in 0..8) { $null = Pass ($h * 3600) }
+Seat 1 @{ Limited = "yes"; OldestUnreadAt = (At 40000) }
+$null = Pass 40100
+$r = Pass (40100 + 3600)
+Check ((Rang) -eq 7 -and $script:ledger[(Sid 1)].probes -eq 1) "another mail becoming its oldest unread starts the count again: the cap is for one mail"
+$hp = Join-Path $pinned.home ("probes-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hp | Out-Null
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60) -ProbeAt (At 7) -Probes 4) } -HordeHome $hp
+$rb = Read-HordeWakeLedger -HordeHome $hp
+Check ($rb.state -ceq "known" -and (Get-HordeWakeEntryValue $rb.value.ledger[(Sid 1)] "probes") -eq 4) "how many knocks a limited session has had is saved with the ledger: a restart does not hand it six more"
 # 4. NO KNOWN END, RELEASED WHEN A SESSION OF THE FLEET TAKES MAIL.
 Start-Case; Seat 1 @{ Limited = "yes" }; Seat 2 @{ Limited = "yes" }; Seat 3 @{ UnreadCount = 0; OldestUnreadAt = $null }
 $null = Pass 0
@@ -521,10 +710,12 @@ $r = Pass 7400 -Using $one
 Check ((Rang) -eq 2 -and (Kinds $r) -cnotlike "*gave-up*" -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("a probe its waker answers with nothing leaves the session given up on, and gave-up is not said a second time (" + (Kinds $r) + ")")
 # 5. LIMITED UNKNOWN: the waker can tell, and for this session could not. UNKNOWN IS NOT NO.
 function PassM {
-    # One pass at t0 + -Seconds, told when a session was last seen taking mail (-MovedAt, or $null).
-    param([double]$Seconds, $MovedAt = $null)
+    # One pass at t0 + -Seconds, told that ANOTHER session (99) was seen taking mail at -MovedAt, or
+    # nothing; -Moves hands in the whole table instead.
+    param([double]$Seconds, $MovedAt = $null, $Moves = $null)
+    if ($null -eq $Moves -and $MovedAt -is [datetime]) { $Moves = @{ (Sid 99) = $MovedAt } }
     Set-HordeMemoryWakerClock (At $Seconds)
-    $r = Invoke-HordeWakePass -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -MovedAt $MovedAt
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -Moves $Moves
     $script:ledger = $r.ledger
     return $r
 }
@@ -549,6 +740,17 @@ Start-Case; Seat 1 @{ Limited = "unknown" }
 $r = PassM 0 -MovedAt (At 5)
 Check ((Test-Held $r "usage limit unknown")) "and a time that has not come yet is no evidence of anything"
 Check ($settings.movingEvidenceSeconds -eq 600) "the window is a setting, 600 s"
+# THE JUDGED SESSION'S OWN MAILBOX IS NEVER THE EVIDENCE: the fleet's repair moves a mailbox with no turn taken.
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 0 -Moves @{ (Sid 1) = (At -5) }
+Check ((Test-Held $r "usage limit unknown") -and (Rang) -eq 0) "a session whose limit is unknown is NOT released by its own mailbox having changed five seconds ago: that is no evidence anybody took a turn"
+$r = PassM 3 -Moves @{ (Sid 1) = (At -5); (Sid 2) = (At -700) }
+Check ((Test-Held $r "usage limit unknown")) "nor with another session's taking that is too old beside it"
+$r = PassM 6 -Moves @{ (Sid 1) = (At -5); (Sid 2) = (At -100) }
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1) "another session's taking, inside the window, releases it"
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ Limited = "unknown" }
+$r = PassM 0 -Moves @{ (Sid 1) = (At -5) }
+Check ((Decided $r 2).action -ceq "nudge" -and (Decided $r 1).action -ceq "wait" -and "$((Decided $r 1).reason)".StartsWith("usage limit unknown")) "one session's taking is evidence for the OTHER and not for itself"
 # IT IS ONLY ASKED OF A SESSION THAT CAN BE REACHED: the fleet says unknown for every row it cannot reach.
 Start-Case; Seat 1 @{ Limited = "unknown"; Reachable = "no" }
 $r = PassM 0 -MovedAt (At -1)
@@ -565,13 +767,13 @@ Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(S
 # WHAT IS EVIDENCE: a session TAKING MAIL, and never a nudge answered woken.
 $mailA = @{ (Sid 1) = (At -60); (Sid 2) = (At -60) }
 $e1 = Update-HordeWakeSilence -Seen $null -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail $mailA -Now (At 0) -Settings $settings
-Check ($null -eq $e1.seen.movedAt -and -not $e1.moved) "a nudge answered woken is NOT evidence that sessions can take turns: every knock of the incident was answered woken"
+Check ($e1.seen.moves.Count -eq 0 -and -not $e1.moved) "a nudge answered woken is NOT evidence that sessions can take turns: every knock of the incident was answered woken"
 $e2 = Update-HordeWakeSilence -Seen $e1.seen -Entries @() -Mail @{ (Sid 1) = (At -60); (Sid 2) = $null } -Now (At 30) -Settings $settings
-Check ($e2.moved -and $e2.seen.movedAt -eq (At 30)) "a session whose mail was taken is: when it was seen is kept"
+Check ($e2.moved -and $e2.seen.moves.Count -eq 1 -and $e2.seen.moves[(Sid 2)] -eq (At 30)) "a session whose mail was taken is: who it was, and when, is kept"
 $e3 = Update-HordeWakeSilence -Seen $e2.seen -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail @{ (Sid 1) = (At -60) } -Now (At 60) -Settings $settings
-Check ($e3.seen.movedAt -eq (At 30)) "and a later woken does not move it: it is the taking that is evidence, and it ages from when it was seen"
+Check ($e3.seen.moves.Count -eq 1 -and $e3.seen.moves[(Sid 2)] -eq (At 30)) "and a later woken does not move it: it is the taking that is evidence, and it ages from when it was seen"
 $e4 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Mail @{ (Sid 1) = (At 50) } -Now (At 90) -Settings $settings
-Check ($e4.seen.movedAt -eq (At 90)) "the session being judged taking its own mail - its oldest unread becoming another - is evidence too"
+Check ($e4.seen.moves[(Sid 1)] -eq (At 90) -and $e4.seen.moves[(Sid 2)] -eq (At 30)) "each session that took mail is kept under its own id, so nobody is judged by its own"
 
 # THE JOURNAL: once per session per limit.
 $said = Update-HordeWakeLimited -Seen @{} -Limited @{ (Sid 1) = "usage limit until 2026-10-12T08:10:00Z" } -Known @((Sid 1)) -Now (At 0)
@@ -658,13 +860,18 @@ foreach ($s in @(0, 3, 6, 9, 12, 15, 30, 33, 36)) { $null = Pass $s }
 Check ($script:ledger[(Sid 1)].attempts -eq 3 -and $script:ledger[(Sid 2)].attempts -eq 3 -and $script:ledger[(Sid 3)].attempts -eq 3) "CONTROL: three sessions, each nudged three times and counted"
 $script:ledger = Reset-HordeWakeLedgerAttempts -Ledger $script:ledger
 Check (@($script:ledger.Values | Where-Object { $_.attempts -ne 0 -or $_.probeAt -ne $_.lastAttemptAt }).Count -eq 0) "found silent, every attempt is forgiven: they went to sessions that could not answer; when each was last asked is kept"
-function Hush { param([double]$Seconds) Set-HordeMemoryWakerClock (At $Seconds); $r = Invoke-HordeWakePass -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -Silent; $script:ledger = $r.ledger; return $r }
+function Hush { param([double]$Seconds) Set-HordeMemoryWakerClock (At $Seconds); $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -Silent; $script:ledger = $r.ledger; return $r }
 $before = (Rang)
 $r = Hush 100
 Check ((Rang) -eq $before -and @($r.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".StartsWith("the fleet is silent: it is asked only every 300 s") }).Count -eq 3) "in a silent fleet nobody is asked before the longest step has passed since it was last asked"
 $gave = 0; for ($s = 330; $s -le 14400; $s += 3) { $gave += @((Hush $s).entries | Where-Object { $_.kind -ceq "gave-up" }).Count }
 $asked = (Rang) - $before
-Check ($asked -ge 130 -and $asked -le 145 -and $gave -eq 0 -and @($script:ledger.Values | Where-Object { $_.attempts -ne 0 }).Count -eq 0) ("four hours of silence are a knock on each session every five minutes, far more than a mail is allowed, and not one is counted or given up on (" + $asked + " knocks)")
+Check ($asked -ge 44 -and $asked -le 48 -and $gave -eq 0 -and @($script:ledger.Values | Where-Object { $_.attempts -ne 0 }).Count -eq 0) ("four hours of silence are ONE knock every five minutes for the whole fleet of three - not one for each - and not one is counted or given up on (" + $asked + " knocks)")
+$each = @(1, 2, 3 | ForEach-Object { (Rang $_) })
+Check ((($each | Measure-Object -Maximum).Maximum - ($each | Measure-Object -Minimum).Minimum) -le 1) ("and the probe goes round: each of the three was asked as often as the others, within one (" + ($each -join ",") + ")")
+$times = @(Get-HordeMemoryWakerNudges | Where-Object { $_.at -ge (At 330) } | ForEach-Object { $_.at } | Sort-Object)
+$gaps = @(for ($i = 1; $i -lt $times.Count; $i++) { ($times[$i] - $times[$i - 1]).TotalSeconds })
+Check ($gaps.Count -gt 40 -and ($gaps | Measure-Object -Minimum).Minimum -ge 300) ("no two knocks anywhere in the fleet are less than five minutes apart (shortest gap " + ($gaps | Measure-Object -Minimum).Minimum + " s)")
 $r = Pass 14403
 Check (@($r.decisions | Where-Object { $_.action -ceq "nudge" }).Count -eq 1 -and @($script:ledger.Values | Where-Object { $_.attempts -eq 1 }).Count -eq 1) "when the fleet moves again the next nudge is an ordinary one, counted from nothing"
 Start-Case; Seat 1
@@ -685,7 +892,7 @@ function Drive {
     for ($t = 0; $t -le $Seconds; $t += 3) {
         for ($n = 1; $n -le $Arrive.Count; $n++) { if (-not $seated.ContainsKey($n) -and $t -ge $Arrive[$n - 1]) { $seated[$n] = $true; Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At ($Arrive[$n - 1] - 60)) } }
         Set-HordeMemoryWakerClock (At $t)
-        $r = Invoke-HordeWakePass -Waker $memory -Now (At $t) -Settings $Using -Ledger $ledger -Silent:$silent
+        $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $t) -Settings $Using -Ledger $ledger -Silent:$silent
         $sil = Update-HordeWakeSilence -Seen $seen -Entries $r.entries -Mail $r.mail -Now (At $t) -Settings $Using
         $ledger = $r.ledger
         if ($sil.declared) { $ledger = Reset-HordeWakeLedgerAttempts -Ledger $ledger }
@@ -796,9 +1003,9 @@ Write-Host "--- the files: journal, heartbeat and ledger, under a home of this s
 
 $wakeDir = Get-HordeWakeFolder
 Check ($wakeDir -ceq (Join-Path $pinned.home "wake") -and -not (Test-Path -LiteralPath $wakeDir)) "CONTROL: the wake folder is in this suite's home, and reading where it is did not make it"
-Check ((Read-HordeWakeHeartbeat).state -ceq "absent") "with no heartbeat the watcher has never run here: absent"
-Check (@(Read-HordeWakeJournalTail).Count -eq 0) "and the journal has no lines"
-Check ((Read-HordeWakeLedger).state -ceq "absent") "and no ledger was saved"
+Check ((Read-HordeWakeHeartbeat -Mode "live").state -ceq "absent") "with no heartbeat the watcher has never run here: absent"
+Check (@(Read-HordeWakeJournalTail -Mode "live").Count -eq 0) "and the journal has no lines"
+Check ((Read-HordeWakeLedger -Mode "live").state -ceq "absent") "and no ledger was saved"
 # THE BARE NAMES ARE NOBODY'S. Builds from before the two modes wrote them, in shadow; a home that
 # holds only those has had neither mode run in it.
 $legacyHome = Join-Path $pinned.home "legacy"
@@ -806,74 +1013,74 @@ New-Item -ItemType Directory -Path (Join-Path $legacyHome "wake") -Force | Out-N
 [System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\heartbeat.json"), '{"at":"2026-10-12T07:00:00.0000000Z","pid":7,"pass":900,"shadow":true}')
 [System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\journal.jsonl"), '{"at":"2026-10-12T07:00:00.0000000Z","kind":"would-nudge","id":"x","outcome":"would-nudge","reason":"old"}' + "`n")
 [System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\ledger.json"), '{"schemaVersion":1,"sessions":[{"id":"x","attempts":3,"lastAttemptAt":"2026-10-12T07:00:00.0000000Z","lastOutcome":"would-nudge"}]}')
-Check ((Read-HordeWakeHeartbeat -HordeHome $legacyHome).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $legacyHome).state -ceq "absent") "in a home holding only the unsuffixed files of earlier builds, neither the live nor the shadow watcher has ever run"
-Check (@(Read-HordeWakeJournalTail -HordeHome $legacyHome).Count -eq 0 -and @(Read-HordeWakeJournalTail -Shadow -HordeHome $legacyHome).Count -eq 0) "neither journal has a line: the old journal.jsonl is no mode's"
-Check ((Read-HordeWakeLedger -HordeHome $legacyHome).state -ceq "absent" -and (Read-HordeWakeLedger -Shadow -HordeHome $legacyHome).state -ceq "absent") "and neither has a ledger: the old ledger.json is read by nobody"
-Write-HordeWakeHeartbeat -At (At 1) -ProcessId 1 -Pass 1 -HordeHome $legacyHome
-$null = Write-HordeWakeJournal -Entries @(New-HordeWakeEntry -At (At 1) -Kind "nudge" -Id (Sid 1) -Outcome "woken") -HordeHome $legacyHome
-Save-HordeWakeLedger -Ledger @{} -HordeHome $legacyHome
+Check ((Read-HordeWakeHeartbeat -Mode "live" -HordeHome $legacyHome).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $legacyHome).state -ceq "absent") "in a home holding only the unsuffixed files of earlier builds, neither the live nor the shadow watcher has ever run"
+Check (@(Read-HordeWakeJournalTail -Mode "live" -HordeHome $legacyHome).Count -eq 0 -and @(Read-HordeWakeJournalTail -Shadow -HordeHome $legacyHome).Count -eq 0) "neither journal has a line: the old journal.jsonl is no mode's"
+Check ((Read-HordeWakeLedger -Mode "live" -HordeHome $legacyHome).state -ceq "absent" -and (Read-HordeWakeLedger -Shadow -HordeHome $legacyHome).state -ceq "absent") "and neither has a ledger: the old ledger.json is read by nobody"
+Write-HordeWakeHeartbeat -Mode "live" -At (At 1) -ProcessId 1 -Pass 1 -HordeHome $legacyHome
+$null = Write-HordeWakeJournal -Mode "live" -Entries @(New-HordeWakeEntry -At (At 1) -Kind "nudge" -Id (Sid 1) -Outcome "woken") -HordeHome $legacyHome
+Save-HordeWakeLedger -Mode "live" -Ledger @{} -HordeHome $legacyHome
 $legacyNames = (@(Get-ChildItem -LiteralPath (Join-Path $legacyHome "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",")
 Check ($legacyNames -ceq "heartbeat.json,heartbeat-live.json,journal.jsonl,journal-live.jsonl,ledger.json,ledger-live.json" -and ([System.IO.File]::ReadAllText((Join-Path $legacyHome "wake\heartbeat.json")) -like "*900*")) ("a live run writes files named for it, and the old ones are left as they were, not written over and not deleted (" + $legacyNames + ")")
-Check ((Write-HordeWakeJournal -Entries @()) -eq 0 -and -not (Test-Path -LiteralPath $wakeDir)) "journaling nothing writes nothing"
+Check ((Write-HordeWakeJournal -Mode "live" -Entries @()) -eq 0 -and -not (Test-Path -LiteralPath $wakeDir)) "journaling nothing writes nothing"
 $entries = @(1..12 | ForEach-Object { New-HordeWakeEntry -At (At $_) -Kind "would-nudge" -Id (Sid $_) -Outcome "would-nudge" -Reason "unread mail, idle, empty box" })
 $entries += New-HordeWakeEntry -At (At 13) -Kind "would-post" -Id (Sid 2) -Outcome "would-post" -Reason "restore x" -MessageId "0d000000-0000-4000-8000-000000000001"
-Check ((Write-HordeWakeJournal -Entries $entries) -eq 13) "thirteen entries are thirteen journal lines"
-$tail = @(Read-HordeWakeJournalTail -Count 10)
+Check ((Write-HordeWakeJournal -Mode "live" -Entries $entries) -eq 13) "thirteen entries are thirteen journal lines"
+$tail = @(Read-HordeWakeJournalTail -Mode "live" -Count 10)
 $last = $tail[9] | ConvertFrom-Json
 $firstOfTail = $tail[0] | ConvertFrom-Json
 Check ($tail.Count -eq 10 -and $firstOfTail.id -ceq (Sid 4) -and $last.kind -ceq "would-post" -and $last.messageId -ceq "0d000000-0000-4000-8000-000000000001" -and $last.at -ceq "2026-10-12T08:00:13.0000000Z") "the tail is the last ten, each a line of JSON with its time in UTC, and a mail's line carries its messageId"
 Check ($null -eq $firstOfTail.PSObject.Properties["messageId"]) "a nudge's line carries none"
-$null = Write-HordeWakeJournal -Entries @($entries[0])
-Check (@(Read-HordeWakeJournalTail -Count 100).Count -eq 14) "the journal is appended to, never replaced"
+$null = Write-HordeWakeJournal -Mode "live" -Entries @($entries[0])
+Check (@(Read-HordeWakeJournalTail -Mode "live" -Count 100).Count -eq 14) "the journal is appended to, never replaced"
 
 Write-HordeWakeHeartbeat -At (At 5) -ProcessId 4242 -Pass 7 -Shadow
-Check ((Read-HordeWakeHeartbeat).state -ceq "absent") "a shadow heartbeat is not the live one: after it, the live watcher has still never run"
+Check ((Read-HordeWakeHeartbeat -Mode "live").state -ceq "absent") "a shadow heartbeat is not the live one: after it, the live watcher has still never run"
 $beat = Read-HordeWakeHeartbeat -Shadow
 Check ($beat.state -ceq "known" -and $beat.value.at -eq (At 5) -and $beat.value.pid -eq 4242 -and $beat.value.pass -eq 7 -and $beat.value.shadow -eq $true) "a heartbeat reads back as it was written: when, which process, which pass, and that it was shadow"
-Write-HordeWakeHeartbeat -At (At 8) -ProcessId 4242 -Pass 8
-$beat = Read-HordeWakeHeartbeat
+Write-HordeWakeHeartbeat -Mode "live" -At (At 8) -ProcessId 4242 -Pass 8
+$beat = Read-HordeWakeHeartbeat -Mode "live"
 Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0 -and (Read-HordeWakeHeartbeat -Shadow).value.pass -eq 7) "a live one is a file of its own, written whole with no temporary file left, and the shadow one is as it was"
 $null = Write-HordeWakeJournal -Entries @($entries[1]) -Shadow
-Check (@(Read-HordeWakeJournalTail -Count 100).Count -eq 14 -and @(Read-HordeWakeJournalTail -Count 100 -Shadow).Count -eq 1) "the journal is per mode too: a shadow line goes to the shadow journal and the live one is as it was"
+Check (@(Read-HordeWakeJournalTail -Mode "live" -Count 100).Count -eq 14 -and @(Read-HordeWakeJournalTail -Count 100 -Shadow).Count -eq 1) "the journal is per mode too: a shadow line goes to the shadow journal and the live one is as it was"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), "{ not json")
-Check ((Read-HordeWakeHeartbeat).state -ceq "unknown") "a heartbeat that cannot be read is unknown, not absent"
+Check ((Read-HordeWakeHeartbeat -Mode "live").state -ceq "unknown") "a heartbeat that cannot be read is unknown, not absent"
 Check ((Get-HordeWakeStaleSeconds) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 3) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 40) -eq 120) "a heartbeat is stale after 120 s, for any tick up to 40 s"
 Check ((Get-HordeWakeStaleSeconds -TickSeconds 41) -eq 123 -and (Get-HordeWakeStaleSeconds -TickSeconds 300) -eq 900) "and after three ticks for a slower watcher: stale is relative to how often it beats"
-Write-HordeWakeHeartbeat -At (At 9) -ProcessId 4242 -Pass 9 -TickSeconds 60
-Check ((Read-HordeWakeHeartbeat).value.tickSeconds -eq 60) "the heartbeat carries the tick, so a reader knows what stale is for this watcher"
+Write-HordeWakeHeartbeat -Mode "live" -At (At 9) -ProcessId 4242 -Pass 9 -TickSeconds 60
+Check ((Read-HordeWakeHeartbeat -Mode "live").value.tickSeconds -eq 60) "the heartbeat carries the tick, so a reader knows what stale is for this watcher"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"pass":2,"shadow":true}')
-Check ((Read-HordeWakeHeartbeat).value.tickSeconds -eq 0) "a heartbeat written before it carried one reads as no tick, which is the 120 s floor"
+Check ((Read-HordeWakeHeartbeat -Mode "live").value.tickSeconds -eq 0) "a heartbeat written before it carried one reads as no tick, which is the 120 s floor"
 
 # THE JOURNAL IS BOUNDED: at the cap it is set aside, once, and the tail still reads across the two.
 $small = Join-Path $pinned.home "rotate"
 $line = New-HordeWakeEntry -At (At 1) -Kind "would-nudge" -Id (Sid 1) -Outcome "would-nudge" -Reason ("x" * 100)
-foreach ($n in 1..6) { $null = Write-HordeWakeJournal -Entries @($line) -HordeHome $small -MaxBytes 400 }
+foreach ($n in 1..6) { $null = Write-HordeWakeJournal -Mode "live" -Entries @($line) -HordeHome $small -MaxBytes 400 }
 $files = @(Get-ChildItem -LiteralPath (Join-Path $small "wake") | ForEach-Object { $_.Name } | Sort-Object)
 Check (($files -join ",") -ceq "journal-live.1.jsonl,journal-live.jsonl") ("past its cap the journal is set aside as journal-live.1.jsonl, and there are never more than the two (" + ($files -join ",") + ")")
 Check ((Get-Item -LiteralPath (Join-Path $small "wake\journal-live.jsonl")).Length -lt 800) "the journal that is written to stays under twice the cap"
 $last = New-HordeWakeEntry -At (At 2) -Kind "would-nudge" -Id (Sid 9) -Outcome "would-nudge" -Reason "the newest"
-foreach ($n in 1..3) { $null = Write-HordeWakeJournal -Entries @($line) -HordeHome $small -MaxBytes 400 }
-$null = Write-HordeWakeJournal -Entries @($last) -HordeHome $small -MaxBytes 400
-$tail = @(Read-HordeWakeJournalTail -Count 4 -HordeHome $small)
+foreach ($n in 1..3) { $null = Write-HordeWakeJournal -Mode "live" -Entries @($line) -HordeHome $small -MaxBytes 400 }
+$null = Write-HordeWakeJournal -Mode "live" -Entries @($last) -HordeHome $small -MaxBytes 400
+$tail = @(Read-HordeWakeJournalTail -Mode "live" -Count 4 -HordeHome $small)
 Check ($tail.Count -eq 4 -and ($tail[3] | ConvertFrom-Json).reason -ceq "the newest") "the tail is still the newest lines, filled from the journal set aside when the new one is short"
 
 $keep = @{}
 $keep[(Sid 1)] = [pscustomobject]@{ attempts = 4; lastAttemptAt = (At 200); lastOutcome = "busy" }
 $keep[(Sid 2)] = [pscustomobject]@{ attempts = 1; lastAttemptAt = (At 3); lastOutcome = "would-nudge" }
-Save-HordeWakeLedger -Ledger $keep
-$back = Read-HordeWakeLedger
+Save-HordeWakeLedger -Mode "live" -Ledger $keep
+$back = Read-HordeWakeLedger -Mode "live"
 Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 2 -and $back.value.ledger[(Sid 1)].attempts -eq 4 -and $back.value.ledger[(Sid 1)].lastAttemptAt -eq (At 200) -and $back.value.ledger[(Sid 1)].lastOutcome -ceq "busy") "a saved ledger reads back: each session's attempts, time and outcome"
 Start-Case; Seat -Change @{ Outcome = "busy"; OutcomeReason = "busy" }
 $script:ledger = $back.value.ledger
 $r = Pass 300
 Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".Contains("back-off")) "so a watcher that was restarted keeps the back-off it had"
-Save-HordeWakeLedger -Ledger @{}
-$back = Read-HordeWakeLedger
+Save-HordeWakeLedger -Mode "live" -Ledger @{}
+$back = Read-HordeWakeLedger -Mode "live"
 Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 0) "an empty ledger saves and reads back empty"
 Save-HordeWakeLedger -Ledger $keep -Shadow
-Check ((Test-Path -LiteralPath (Join-Path $wakeDir "ledger-shadow.json") -PathType Leaf) -and (Read-HordeWakeLedger).value.ledger.Count -eq 0 -and (Read-HordeWakeLedger -Shadow).value.ledger.Count -eq 2) "a shadow run's ledger is a file of its own: saving it leaves the live ledger as it was, and each reads back its own"
+Check ((Test-Path -LiteralPath (Join-Path $wakeDir "ledger-shadow.json") -PathType Leaf) -and (Read-HordeWakeLedger -Mode "live").value.ledger.Count -eq 0 -and (Read-HordeWakeLedger -Shadow).value.ledger.Count -eq 2) "a shadow run's ledger is a file of its own: saving it leaves the live ledger as it was, and each reads back its own"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "ledger-live.json"), '{"schemaVersion":1,"sessions":[{"id":"x"}]}')
-Check ((Read-HordeWakeLedger).state -ceq "unknown") "a saved ledger with a broken entry is unknown, never half a ledger"
+Check ((Read-HordeWakeLedger -Mode "live").state -ceq "unknown") "a saved ledger with a broken entry is unknown, never half a ledger"
 
 } finally {
     Reset-HordeMemoryWaker

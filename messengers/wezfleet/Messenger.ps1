@@ -135,6 +135,7 @@
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\PathText.ps1")
 
 $script:HordeWezfleetMessengerFolder = $PSScriptRoot
 # Set only by Set-HordeWezfleetMessengerRoot; "" means the setting, then the command on PATH, decide.
@@ -202,7 +203,9 @@ function Find-HordeWezfleetMessengerOnPath {
     if ($null -eq $cmd) { return (New-HordeWezfleetMessengerChoice -Reason ("no wezfleet command is on PATH and no root is set, so the fleet's command was not run" + $instead)) }
     $src = [string]$cmd.Path
     $from = "found from the wezfleet command on PATH, " + $src
-    $ext = [System.IO.Path]::GetExtension($src).ToLowerInvariant()
+    # Lower-cased by the 26 letters alone (core/PathText.ps1), never by the runtime's case table, which
+    # differs between runtimes: an extension is compared here, and the comparison must not move with them.
+    $ext = ConvertTo-HordeAsciiLower -Text ([System.IO.Path]::GetExtension($src))
     $dir = Split-Path -Parent $src
     if ($ext -ceq ".ps1") { return (New-HordeWezfleetMessengerChoice -Root $dir -How $from) }
     if ($ext -cne ".cmd" -and $ext -cne ".bat") {
@@ -215,7 +218,7 @@ function Find-HordeWezfleetMessengerOnPath {
         $text = [System.IO.File]::ReadAllText($src)
     } catch { return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet command on PATH, the shim '" + $src + "', could not be read: " + $_.Exception.Message + $instead)) }
     # ONE FOLDER, compared ignoring case as Windows compares paths: the same line twice is one folder.
-    $named = @([regex]::Matches($text, $script:HordeWezfleetMessengerShimPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) | ForEach-Object { $_.Groups[1].Value.Replace('/', '\').ToLowerInvariant() } | Select-Object -Unique)
+    $named = @([regex]::Matches($text, $script:HordeWezfleetMessengerShimPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) | ForEach-Object { ConvertTo-HordeAsciiLower -Text ($_.Groups[1].Value.Replace('/', '\')) } | Select-Object -Unique)
     if ($named.Count -ne 1) {
         return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet command on PATH is the shim '" + $src + "', which names " + $named.Count + " scripts as %~dp0<folder>wezfleet.ps1, not one, so its checkout is not known" + $instead))
     }

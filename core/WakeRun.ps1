@@ -9,8 +9,8 @@
 #
 # THE MODE BELONGS TO THE RUN, AND IS SET IN ONE PLACE. A run is made in one of three modes
 # (New-HordeWakeRun -Mode), says which in its own mode member, and reads and writes that mode's files
-# and no other (core/WakeFiles.ps1: ledger, sender marks, journal, heartbeat and lock are each per
-# mode). A tick takes its mode from the run it is handed and offers no parameter that could change it:
+# and no other (core/WakeFiles.ps1: sender marks, journal and heartbeat are each per mode; the ledger
+# and the lock are the shadow run's or the SENDING runs', which a proof run and a live run share). A tick takes its mode from the run it is handed and offers no parameter that could change it:
 # a shadow run cannot be ticked live, and a caller has no word to drop.
 #   SHADOW  journals what a tick would do - would-nudge, would-post, would-tell - and does none of it.
 #           It may read through a waker whose capabilities are unverified, and names them.
@@ -48,6 +48,7 @@
 . (Join-Path $PSScriptRoot "Wake.ps1")
 . (Join-Path $PSScriptRoot "RestoreSource.ps1")
 . (Join-Path $PSScriptRoot "WakeTell.ps1")
+. (Join-Path $PSScriptRoot "Identity.ps1")
 
 # THE ONE SWITCH FOR BOTH SENDERS. While it is $false, the restore source and the tell sender run SHADOW in
 # every mode of the run - they journal would-post, would-stall and would-tell, and post nothing - for the
@@ -70,14 +71,37 @@ function New-HordeWakeRun {
     # header). live says whether real nudges are sent: true for live and for proof. said is what the caller should print once: a saved
     # file that could not be read is started from empty, and says so.
     # -Target is the one session a proof run may nudge; it is kept for a proof run only.
-    param([switch]$Live, [string]$Mode = "", [string]$Target = "", [string]$HordeHome = (Get-HordeHome))
-    $word = Get-HordeWakeModeWord -Mode $Mode -Shadow:(-not $Live)
+    param([switch]$Live, [string]$Mode = "", [string]$Target = "", [string]$Self = "", [string]$HordeHome = (Get-HordeHome))
+    # THE SESSION THIS WATCHER WAS STARTED FROM, when there is one and it can be known: the agent's own
+    # export of its session id, which a process started from inside a session inherits
+    # (core/Identity.ps1, Get-HordeSelfSessionId). It is never nudged (core/Wake.ps1, Get-HordeWakeHold).
+    # Started from no session - a service, a plain terminal - there is none, and nothing is held for it.
+    # -Self is for a caller that knows (a test); left out, the environment is asked.
+    $own = ""
+    if ($PSBoundParameters.ContainsKey("Self")) { $own = $Self }
+    else { $mine = Get-HordeSelfSessionId; if ($mine.state -ceq "known") { $own = "$($mine.value)" } }
+    $word = $Mode
+    if ($word -ceq "" -and $Live) { $word = "live" }
+    $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
-    $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
-    elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
+    elseif ($saved.state -ceq "unknown") {
+        # A LEDGER THAT IS THERE AND CANNOT BE READ IS NOT AN EMPTY ONE. It was read as empty, which is
+        # a fresh budget for every session: every back-off forgotten, everybody given up on nudged
+        # again from nothing (safety review of PR 220). A SHADOW run may go on from empty, saying so -
+        # it sends nothing. A run that SENDS is refused: refused says why, the command does not start
+        # it, and a tick handed such a run nudges nobody. A person mends or removes the file.
+        if ($run.live) { $run.refused = ("its ledger is there and cannot be read (" + $saved.reason + "): a run that sends does not start from a ledger it cannot read, because that would forget every back-off and every session it gave up on. Mend the file, or remove it to start from nothing on purpose: " + (Get-HordeWakeStateFile -Name "ledger" -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome)) }
+        else { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
+    }
+    # THE SILENCE, read back with the ledger it goes with (core/Wake.ps1, Save-HordeWakeSilence): the
+    # sending runs share one, as they share the ledger whose attempts it forgave.
+    $savedSilence = Read-HordeWakeSilence -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
+    if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }
+    elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
@@ -122,13 +146,23 @@ function Get-HordeWakeRunPlan {
     if (Test-HordeAnswer $Picked) { $why = "$($Picked.reason)" }
     $unverified = @()
     if ($null -ne $waker) { $unverified = @(Get-HordeWakerUnverified -Waker $waker) }
+    # WHERE THE WAKER'S PROGRAM COMES FROM (wakers/Port.ps1, Get-HordeWakerSource). A RUN THAT SENDS
+    # REFUSES A PROGRAM NOBODY NAMED: one found on PATH is whatever is first on PATH that day, and it
+    # would be the program typing into sessions. Shadow may read through it, and says where it was found.
+    $source = $null
+    if ($null -ne $waker) { $source = Get-HordeWakerSource -Waker $waker }
+    $loose = ""
+    if ($null -ne $source -and $source.state -ceq "known" -and $source.value.fixed -ne $true) { $loose = "$($source.value.how)" }
+    if ($null -ne $source -and $source.state -ceq "unknown") { $loose = "it could not say where its program comes from (" + $source.reason + ")" }
     if ($Mode -ceq "shadow") {
         $note = ""
-        if ($unverified.Count -gt 0) { $note = ". UNVERIFIED, so nothing this run journals is proof of them: " + ($unverified -join ", ") }
+        if ($loose -cne "" -and $source.state -ceq "known") { $note = ". NOT NAMED IN A SETTING: " + $loose + " - a run that sends would be refused until it is" }
+        if ($unverified.Count -gt 0) { $note = $note + ". UNVERIFIED, so nothing this run journals is proof of them: " + ($unverified -join ", ") }
         if ($null -ne $waker) { return [pscustomobject]@{ ok = $true; usage = $false; mode = "shadow"; target = ""; live = $false; waker = $waker; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted; what would be is journaled. Reading state through the waker '" + $waker.name + "'" + $note) } }
         return [pscustomobject]@{ ok = $true; usage = $false; mode = "shadow"; target = ""; live = $false; waker = $null; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted. No waker is installed, so no session is watched for unread mail; the restore source still runs (" + $why + ")") }
     }
     if ($null -eq $waker) { return (& $no ("wake run -Mode " + $Mode + " needs an installed waker to send its nudges through, and there is none: " + $why)) }
+    if ($loose -cne "") { return (& $no ("wake run -Mode " + $Mode + " is refused: the program the waker '" + $waker.name + "' would run was not named in a setting - " + $loose + ". A run that sends real nudges runs only a program a person named: set it in the waker's settings, and start again")) }
     if ($Mode -ceq "proof") {
         if (-not $Once) { return (& $no "wake run -Mode proof makes one pass and ends: add -Once. A proof left running is a live run through a waker nobody has verified") }
         $shows = "every capability of this waker is already yes"
@@ -145,6 +179,23 @@ function Get-HordeWakeRunPick {
     param([string]$Mode = "shadow")
     if ($Mode -ceq "live") { return (Resolve-HordeProductionWaker) }
     return (Resolve-HordeProductionWaker -AllowUnverified)
+}
+
+function Get-HordeWakeSilenceMark {
+    # One line that changes exactly when what is SAVED of the silence changes: whether, since when, and
+    # who was seen taking mail when. The tick saves on a change of it, not on every pass.
+    param($Seen)
+    if ($null -eq $Seen) { return "" }
+    $since = ""
+    $q = Get-HordeWakeEntryValue $Seen "quietSince"
+    if ($q -is [datetime]) { $since = $q.Ticks }
+    $moved = ""
+    $moves = Get-HordeWakeEntryValue $Seen "moves"
+    if ($moves -is [System.Collections.IDictionary]) { $moved = (@($moves.Keys | Sort-Object | ForEach-Object { "$_" + "@" + $(if ($moves[$_] -is [datetime]) { $moves[$_].Ticks } else { "" }) }) -join ",") }
+    # Nothing to say - not silent, no quiet begun, nobody seen taking mail - is the same as nothing seen:
+    # no file is written for it.
+    if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "" -and $moved -eq "") { return "" }
+    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)
 }
 
 function Get-HordeWakeRunMode {
@@ -244,6 +295,8 @@ function Invoke-HordeWakeTick {
         $silentNow = ($null -ne $Run.silence -and $Run.silence.silent -eq $true)
         # A PROOF RUN'S ONE SESSION (the header). Without one it nudges nobody: it never runs the pass
         # over the whole fleet.
+        # A RUN THAT WAS REFUSED AT ITS START (New-HordeWakeRun) NUDGES NOBODY, whoever ticks it.
+        if ("$(Get-HordeWakeEntryValue $Run "refused")" -cne "") { throw ("this run was refused and nudges nobody: " + $Run.refused) }
         $only = ""
         if ($mode -ceq "proof") {
             $only = "$(Get-HordeWakeEntryValue $Run "target")"
@@ -251,14 +304,27 @@ function Invoke-HordeWakeTick {
         }
         # WHEN A SESSION WAS LAST SEEN TAKING MAIL: what releases a session whose limit nobody could read
         # (core/Wake.ps1, Get-HordeWakeLimit).
-        $movedAt = Get-HordeWakeEntryValue $Run.silence "movedAt"
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow -Only $only -MovedAt $movedAt
+        $moves = Get-HordeWakeEntryValue $Run.silence "moves"
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"
+        # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
+        # counted is the only thing that keeps the next tick from nudging the same session again. It
+        # was kept and saved at the END of this block, after the tells: a tell whose state could not be
+        # saved threw past it, the nudge was forgotten, and the session was nudged again on every tick,
+        # with no back-off, for as long as the fault lasted (safety review of PR 220). So it is taken
+        # into the run at once - which alone is enough for the next tick - and written; and a write that
+        # fails is said, and loses nothing the running watcher needs.
+        $ledgerChanged = (@($result.entries).Count -gt 0 -or $result.ledger.Count -ne $Run.ledger.Count)
+        $Run.ledger = $result.ledger
+        foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
+        if ($ledgerChanged) {
+            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
+            catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
+        }
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
         # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).
         $fleetRead = Update-HordeWakeFleetRead -Seen $Run.fleetRead -Listing $result.listing -Now $Now -Settings $Settings
         $Run.fleetRead = $fleetRead.seen
-        foreach ($e in @($result.entries)) { [void]$entries.Add($e) }
         foreach ($e in @($fleetRead.entries)) { [void]$entries.Add($e) }
         # A USAGE LIMIT is said once per session per limit; and a fleet in which nobody answers is found.
         $limitedNow = Update-HordeWakeLimited -Seen $Run.limited -Limited $result.limited -Known @($result.mail.Keys) -Now $Now
@@ -266,50 +332,75 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($limitedNow.entries)) { [void]$entries.Add($e) }
         # A RETIRED SESSION WITH MAIL (or one that may be retired) is said once, and is nothing else:
         # no attempt, no gave-up, no tell.
+        # THE KIND SAYS WHICH: never-nudged for a session that is skipped for what it is (retired, a
+        # reserved label, the watcher's own session), held for one that waits because it MAY be retired.
+        $neverNow = Update-HordeWakeSaidOnce -Seen $Run.never -Said $result.never -Known @($result.mail.Keys) -Now $Now -Kind "never-nudged" -Outcome "skipped"
+        $Run.never = $neverNow.seen
+        foreach ($e in @($neverNow.entries)) { [void]$entries.Add($e) }
         $heldNow = Update-HordeWakeSaidOnce -Seen $Run.held -Said $result.held -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
+        $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
         $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Mail $result.mail -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
+        # SAVED WHEN IT CHANGES - silent or not, since when, who took mail - so a restart goes on from it.
+        if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {
+            try { Save-HordeWakeSilence -Seen $Run.silence -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
+            catch { [void]$failed.Add([pscustomobject]@{ id = "silence"; reason = ("what is known of a silent fleet could not be saved: " + $_.Exception.Message) }) }
+        }
         foreach ($e in @($silence.entries)) { [void]$entries.Add($e) }
-        $ledgerNow = $result.ledger
-        if ($silence.declared) { $ledgerNow = Reset-HordeWakeLedgerAttempts -Ledger $ledgerNow }
-        if ($silence.moved) { $ledgerNow = Set-HordeWakeLedgerProbesDue -Ledger $ledgerNow }
+        if ($silence.declared -or $silence.moved) {
+            if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }
+            if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }
+            try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
+            catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
+        }
         # MAIL NOBODY CAN READ, said once when it lasts two passes (core/Wake.ps1, Update-HordeWakeBadMail).
         $bad = Update-HordeWakeBadMail -Seen $Run.badMail -Unreadable $result.unreadable -Now $Now
         $Run.badMail = $bad.seen
         foreach ($e in @($bad.entries)) { [void]$entries.Add($e) }
-        # WHAT THE WARCHIEF MUST HEAR (core/WakeTell.ps1): the four things this pass may have met.
-        $conditions = New-Object System.Collections.ArrayList
-        foreach ($g in @($result.gaveUp)) {
-            $mail = "unknown"
-            if ($g.mailAt -is [datetime]) { $mail = $g.mailAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
-            [void]$conditions.Add((New-HordeWakeTellCondition -Kind "gave-up" -Subject $g.id -Instance $mail -Text ("the session " + $g.id + " was nudged " + $g.attempts + " times for its mail unread since " + $mail + " and did not take it. It is not nudged again for that mail. Look at that session.")))
-        }
-        foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {
-            [void]$conditions.Add((New-HordeWakeTellCondition -Kind "nudge-killed" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("a nudge of the session " + $e.id + " had to be stopped part-way, and its input box may now hold the unsent line; while it does, that session cannot be woken. Look at its box. " + $e.reason)))
-        }
-        foreach ($e in @($bad.entries)) {
-            [void]$conditions.Add((New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)))
-        }
-        if ($null -ne $silence.condition) { [void]$conditions.Add((New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text)) }
-        if ($null -ne $fleetRead.condition) { [void]$conditions.Add((New-HordeWakeTellCondition -Kind $fleetRead.condition.kind -Subject $fleetRead.condition.subject -Instance $fleetRead.condition.instance -Text $fleetRead.condition.text)) }
         # WHO THE WARCHIEF IS IS REMEMBERED from the last pass that could say: the pass on which the fleet
         # cannot be read is the one that most needs somebody told, and it is the one that cannot say who.
         if ("$($result.warchief)" -cne "") { $Run.warchief = "$($result.warchief)" }
-        if ($conditions.Count -gt 0) {
-            $sendersShadow = Test-HordeWakeSendersShadow -Run $Run
-            $poster = $null
-            if (-not $sendersShadow) { $poster = { param($m) Send-HordeWakeTell -Mail $m -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
-            $toldNow = Invoke-HordeWakeTellPass -Conditions $conditions.ToArray() -Warchief "$($Run.warchief)" -Now $Now -Shadow:$sendersShadow -Post $poster -Told $Run.told
-            foreach ($e in @($toldNow.entries)) { [void]$entries.Add($e) }
-            $Run.told = $toldNow.told
-            $place = Get-HordeWakeSenderFile -Run $Run -Stem "tells"
-            Save-HordeWakeTellState -Told $Run.told -Name $place.name -Mode $place.mode -HordeHome $HordeHome
+        # WHAT THE WARCHIEF MUST HEAR (core/WakeTell.ps1), AND NOTHING OF IT MAY COST THE PASS ANYTHING.
+        # Each condition is made in a try of its own, the tells are sent in one, and what was told is
+        # saved in one: a tell that cannot be made, sent or remembered is said once, as a failure named
+        # tell, and the ledger above is already kept and saved whatever happens here.
+        $conditions = New-Object System.Collections.ArrayList
+        $make = {
+            param([scriptblock]$Build)
+            try { foreach ($c in @(& $Build)) { if ($null -ne $c) { [void]$conditions.Add($c) } } }
+            catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("a tell could not be made: " + $_.Exception.Message) }) }
         }
-        $changed = (@($result.entries).Count -gt 0 -or $ledgerNow.Count -ne $Run.ledger.Count -or $silence.declared -or $silence.moved)
-        $Run.ledger = $ledgerNow
-        if ($changed) { Save-HordeWakeLedger -Ledger $Run.ledger -Mode $mode -HordeHome $HordeHome }
+        foreach ($g in @($result.gaveUp)) {
+            & $make {
+                $mail = "unknown"
+                if ($g.mailAt -is [datetime]) { $mail = $g.mailAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
+                (New-HordeWakeTellCondition -Kind "gave-up" -Subject $g.id -Instance $mail -Text ("the session " + $g.id + " was nudged " + $g.attempts + " times for its mail unread since " + $mail + " and did not take it. It is not nudged again for that mail. Look at that session."))
+            }
+        }
+        foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {
+            & $make { (New-HordeWakeTellCondition -Kind "nudge-killed" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("a nudge of the session " + $e.id + " had to be stopped part-way, and its input box may now hold the unsent line; while it does, that session cannot be woken. Look at its box. " + $e.reason)) }
+        }
+        foreach ($e in @($bad.entries)) {
+            & $make { (New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)) }
+        }
+        if ($null -ne $silence.condition) { & $make { (New-HordeWakeTellCondition -Kind $silence.condition.kind -Subject $silence.condition.subject -Instance $silence.condition.instance -Text $silence.condition.text) } }
+        if ($null -ne $fleetRead.condition) { & $make { (New-HordeWakeTellCondition -Kind $fleetRead.condition.kind -Subject $fleetRead.condition.subject -Instance $fleetRead.condition.instance -Text $fleetRead.condition.text) } }
+        if ($conditions.Count -gt 0) {
+            try {
+                $sendersShadow = Test-HordeWakeSendersShadow -Run $Run
+                $poster = $null
+                if (-not $sendersShadow) { $poster = { param($m) Send-HordeWakeTell -Mail $m -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
+                $toldNow = Invoke-HordeWakeTellPass -Conditions $conditions.ToArray() -Warchief "$($Run.warchief)" -Now $Now -Shadow:$sendersShadow -Post $poster -Told $Run.told
+                foreach ($e in @($toldNow.entries)) { [void]$entries.Add($e) }
+                $Run.told = $toldNow.told
+            } catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("the tells could not be sent: " + $_.Exception.Message) }) }
+            try {
+                $place = Get-HordeWakeSenderFile -Run $Run -Stem "tells"
+                Save-HordeWakeTellState -Told $Run.told -Name $place.name -Mode $place.mode -HordeHome $HordeHome
+            } catch { [void]$failed.Add([pscustomobject]@{ id = "tell"; reason = ("what was told could not be saved: " + $_.Exception.Message) }) }
+        }
     } catch { [void]$failed.Add([pscustomobject]@{ id = "pass"; reason = ("the wake pass failed: " + $_.Exception.Message) }) }
     # THE HEARTBEAT, whatever happened above: a tick that got this far is a watcher that is alive.
     try { Write-HordeWakeHeartbeat -At $Now -ProcessId $ProcessId -Pass $Run.pass -TickSeconds $TickSeconds -Mode $mode -HordeHome $HordeHome }

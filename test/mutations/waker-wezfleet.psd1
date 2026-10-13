@@ -6,6 +6,27 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-commands-paths-are-kept-in-a-reason"
+           Find = 'if ($Tool) { $clean = [regex]::Replace('
+           Replace = 'if ($false) { $clean = [regex]::Replace(' }
+        @{ Name = "three-hundred-characters-of-the-commands-words"
+           Find = '$script:HordeWezfleetWakerDetailChars = 120'
+           Replace = '$script:HordeWezfleetWakerDetailChars = 300' }
+        @{ Name = "a-failing-reads-detail-is-not-cleaned"
+           Find = '{ $detail = ConvertTo-HordeWezfleetWakerLine $d.Value -Max $script:HordeWezfleetWakerDetailChars -Tool }'
+           Replace = '{ $detail = ConvertTo-HordeWezfleetWakerLine $d.Value -Max $script:HordeWezfleetWakerDetailChars }' }
+        @{ Name = "output-that-is-not-json-is-not-cleaned"
+           Find = 'printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0] -Max $script:HordeWezfleetWakerDetailChars -Tool)'
+           Replace = 'printed something that is not JSON: " + (ConvertTo-HordeWezfleetWakerLine $lines[0])' }
+        @{ Name = "a-nudge-cut-for-printing-too-much-is-unreachable"
+           Find = 'if ($null -ne $cut -and $cut.Value -eq $true) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-command-found-on-path-is-called-named"
+           Find = 'fixed = [bool]$choice.fixed; how ='
+           Replace = 'fixed = $true; how =' }
+        @{ Name = "the-root-setting-is-not-called-named"
+           Find = 'return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path) -Fixed) }'
+           Replace = 'return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path)) }' }
         @{ Name = "a-row-that-does-not-say-reads-as-not-limited"
            Find = '        $word = "unknown"'
            Replace = '        $word = "no"' }
@@ -171,7 +192,7 @@
            Find = 'if ($s.state -cne "defaults" -and $s.state -cne "read") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "path-wins-over-the-setting"
-           Find = 'if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path)) }'
+           Find = 'if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path) -Fixed) }'
            Replace = '' }
         @{ Name = "folder-with-dot-dot-accepted"
            Find = '-or @($dir -split ''[\\/]'') -contains "..") {'
