@@ -266,5 +266,15 @@
         @{ Name = "accept-takes-what-it-is-handed"
            Find = 'outcome = "refused"; reason = "the progress channel takes nothing in'
            Replace = 'outcome = "done"; reason = "the progress channel takes nothing in' }
+        # --- the phone's mailbox holds the last keepEnvelopes (2026-10-13)
+        @{ Name = "progress-envelopes-pile-up-in-the-phones-mailbox"
+           Find = '-Mailbox $mailbox -KeepFrom (Get-HordeRelayChannelKeepFrom -Key $key -Keep $keep)'
+           Replace = '-Mailbox $mailbox' }
+        @{ Name = "keep-envelopes-setting-not-read"
+           Find = '$mine["keepEnvelopes"] = [long]$set.keepEnvelopes'
+           Replace = '' }
+        @{ Name = "keep-envelopes-setting-not-used"
+           Find = 'if ($Mine.ContainsKey("keepEnvelopes")) { $keep = [long]$Mine["keepEnvelopes"] }'
+           Replace = '' }
     )
 }

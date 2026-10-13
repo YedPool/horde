@@ -514,6 +514,25 @@ try {
     Check ((Said $t) -like "*progress is stopped*the setting progressFile names another*" -and @(Get-Entries @(Get-NewMail $D)).Count -eq 0) "the setting changed to another file - even one with the same bytes - is a stop too: nothing is started over by itself"
 
     Write-Host ""
+    Write-Host "--- 15b. the phone's mailbox holds the log's last keepEnvelopes, and no more ---" -ForegroundColor Cyan
+    # channels/progress, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes: nobody acks that mailbox, so every
+    # put of this channel says what to keep from, and the relay deletes the progress envelopes before it.
+    $K = New-World -Settings '{"sendIntervalMs": 0, "backfillEntries": 3, "keepEnvelopes": 2, "progressFile": "@FILE@"}'
+    foreach ($kept in 1..5) {
+        Add-Lines $K @((New-Line -Id ("kept-" + $kept) -Title ("kept " + $kept) -Ts ("2026-10-13T0" + $kept + ":00:00Z")))
+        $null = Invoke-Tick $K
+    }
+    $heldLog = @(Get-PhoneItems $K)
+    Check ($heldLog.Count -eq 2 -and (@($heldLog | ForEach-Object { $_.seq }) -join ",") -ceq "4,5") ("five envelopes of progress were put, and with keepEnvelopes 2 the mailbox holds the last two (items " + (@($heldLog | ForEach-Object { $_.seq }) -join ",") + ")")
+    Check ((Get-Ids @(Get-NewMail $K -All)) -ceq "kept-4,kept-5") ("which are what the phone now opens: the newest entries, and nothing older (" + (Get-Ids @(Get-NewMail $K -All)) + ")")
+    $U = New-World
+    foreach ($kept in 1..5) {
+        Add-Lines $U @((New-Line -Id ("kept-" + $kept) -Title ("kept " + $kept) -Ts ("2026-10-13T0" + $kept + ":00:00Z")))
+        $null = Invoke-Tick $U
+    }
+    Check (@(Get-PhoneItems $U).Count -eq 5) ("CONTROL: with the setting as it ships (100) the same five envelopes are all still there (" + @(Get-PhoneItems $U).Count + ")")
+
+    Write-Host ""
     Write-Host "--- 16. no phone key; a damaged state; refused settings ---" -ForegroundColor Cyan
     $N = New-World -NoPhoneKey
     Add-Lines $N @((New-Line -Id "n1"))
