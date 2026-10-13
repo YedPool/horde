@@ -103,7 +103,7 @@
            Find = '-Name $name -Prompt "" -Resolve $resolveProgram'
            Replace = '-Name $name -Prompt $prompt -Resolve $resolveProgram' }
         @{ Name = "prompt-failure-done"
-           Find = 'if ($notSent -ne "") {'
+           Find = 'if ($sent.state -eq "unsent") {'
            Replace = 'if ($false) {' }
         @{ Name = "reconcile-skipped"
            Find = 'if ("" + $r.outcome -cne "starting") { continue }'
@@ -133,23 +133,23 @@
            Find = 'if ($hubId -eq "") { return (New-HordeNodeOutcome -State "refused" -Reason "the request names no hub, so no hub could close the session; nothing is started") }'
            Replace = '' }
         @{ Name = "prompt-sent-first"
-           Find = '$noop = & $actor.send $term $record.handle $script:HordeNodeNoOpLine $true'
-           Replace = '$noop = & $actor.send $term $record.handle $prompt $true' }
+           Find = '-SessionId $sid -Line $script:HordeNodeNoOpLine'
+           Replace = '-SessionId $sid -Line $prompt' }
         @{ Name = "no-op-dropped"
-           Find = '$noop = & $actor.send $term $record.handle $script:HordeNodeNoOpLine $true'
-           Replace = '$noop = New-HordeKnown -Value $true' }
+           Find = '    $noop = Submit-HordeNodeLine -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -Line $script:HordeNodeNoOpLine'
+           Replace = '    $noop = [pscustomobject]@{ state = "taken"; extraEnter = $false; reason = "" }' }
         @{ Name = "no-op-failure-read-anyway"
-           Find = 'if ($null -ne $noop -and $noop.state -eq "known") {'
+           Find = 'if ($noop.state -ne "unsent") {'
            Replace = 'if ($true) {' }
         @{ Name = "no-op-unrecorded"
-           Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpAt'
-           Replace = '$record.noOp = ""; $record.noOpAt' }
+           Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpTurn'
+           Replace = '$record.noOp = ""; $record.noOpTurn' }
         @{ Name = "prompt-before-mode-kept"
            Find = '$gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart'
            Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart' }
         @{ Name = "raw-prompt-typed"
-           Find = '    $r = & $Actor.send $Target $Handle $line $true'
-           Replace = '    $r = & $Actor.send $Target $Handle $Prompt $true' }
+           Find = '-SessionId $SessionId -Line $line'
+           Replace = '-SessionId $SessionId -Line $Prompt' }
         @{ Name = "typed-line-mode-prefix-allowed"
            Find = 'return [bool]("!/#@".IndexOf($Line[0]) -lt 0)'
            Replace = 'return $true' }
@@ -171,5 +171,36 @@
         @{ Name = "untypeable-path-started"
            Find = 'if (-not (Test-HordeNodeTypedLine -Line $line)) { $out.reason ='
            Replace = 'if ($false) { $out.reason =' }
+        # Issue #214: a spawn is done only when its prompt line became a turn.
+        @{ Name = "prompt-not-submitted-reported-done"
+           Find = '    if ($sent.state -eq "not-taken") {'
+           Replace = '    if ($false) {' }
+        @{ Name = "prompt-unconfirmed-reported-done"
+           Find = '    if ($sent.state -eq "unknown") {'
+           Replace = '    if ($false) {' }
+        @{ Name = "noop-not-submitted-ignored"
+           Find = '    if ($noop.state -eq "not-taken") {'
+           Replace = '    if ($false) {' }
+        @{ Name = "extra-enter-into-an-empty-box"
+           Find = '    elseif ($box.value -ne $true) {'
+           Replace = '    elseif ($false) {' }
+        @{ Name = "unreadable-box-not-said"
+           Find = '    if ($null -eq $box -or $box.state -ne "known") { $boxSaid ='
+           Replace = '    if ($false) { $boxSaid =' }
+        @{ Name = "second-extra-enter"
+           Find = '            if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.retrySeconds -Probe $look)) { $out.state = "taken"; return $out }'
+           Replace = '            $null = & $Actor.send $Target $Handle "" $true; if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.retrySeconds -Probe $look)) { $out.state = "taken"; return $out }' }
+        @{ Name = "mark-from-the-start"
+           Find = '    if ($canTell) { $mark = & $Adapter.turnMark $SessionId $Context.environment }'
+           Replace = '    if ($canTell) { $mark = New-HordeKnown -Value ([pscustomobject]@{ n = 0; size = [long]0 }) }' }
+        @{ Name = "receipt-not-waited"
+           Find = '-Seconds $Context.bounds.receiptSeconds -Probe $look'
+           Replace = '-Seconds 0 -Probe $look' }
+        @{ Name = "cannot-tell-taken"
+           Find = '    if (-not $canTell) { $out.reason ='
+           Replace = '    if (-not $canTell) { $out.state = "taken"; $out.reason =' }
+        @{ Name = "receipt-wait-past-the-hub"
+           Find = 'receiptSeconds = 20; retrySeconds = 10;'
+           Replace = 'receiptSeconds = 120; retrySeconds = 10;' }
     )
 }

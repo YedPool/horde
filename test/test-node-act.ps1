@@ -39,6 +39,18 @@ $script:stopRefused = 0
 $script:stopDenied = $false
 $script:promptRefused = $false
 $script:noOpRefused = $false
+# THE TURN RECEIPT'S WORLD (issue #214): what each pane's input box holds, the user turns the fixture
+# harness recorded, and the ways an Enter is lost. A line is lost by pattern: -clike against the box's
+# text when Enter is pressed. loseFirstLike loses only the Enter typed with the text, so the one extra
+# Enter submits it; loseAllLike loses every Enter; dropTurnLike empties the box and records no turn.
+$script:box = @{}
+$script:turns = New-Object System.Collections.ArrayList
+$script:loseFirstLike = ""
+$script:loseAllLike = ""
+$script:dropTurnLike = ""
+$script:lateLooks = 0
+$script:noTranscript = $false
+$script:noScreen = $false
 $script:alerts = New-Object System.Collections.ArrayList
 # How many texts had been typed when a session's mode was first read, by session id.
 $script:readAt = @{}
@@ -46,12 +58,29 @@ $noOp = "Reply with OK only."
 $hub = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 $modeOf = @{ careful = "ask"; edit = "edits"; look = "plan" }
 
-Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
+function Register-FixtureHarness {
+    # harness-a; -Blind registers it without the turn receipt, as a kind that cannot tell.
+    param([switch]$Blind)
+    $receipt = @{}
+    if (-not $Blind) {
+        $receipt["TurnMark"] = { param($id, $view) New-HordeKnown -Value ([pscustomobject]@{ n = $script:turns.Count }) }
+        $receipt["TurnSeen"] = { param($id, $view, $mark, $line)
+            if ($script:noTranscript) { return (New-HordeKnown -Value $false) }
+            $h = $script:sessions[$id].handle
+            $hit = $false
+            for ($i = [int]$mark.n; $i -lt $script:turns.Count; $i++) { if ($script:turns[$i].handle -ceq $h -and $script:turns[$i].text -ceq $line) { $hit = $true } }
+            if ($hit -and $script:lateLooks -gt 0) { $script:lateLooks--; $hit = $false }
+            New-HordeKnown -Value $hit }
+        $receipt["InputHolds"] = { param($screen, $line) if (@($screen)[0] -ceq "NO BOX") { New-HordeUnknown -Reason "no box on the fixture screen" } else { New-HordeKnown -Value (@($screen)[0] -ceq ("BOX:" + $line)) } }
+    }
+Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" @receipt `
     -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "no control file yet" } } `
     -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
     -CloseText @("bye", "`r")
+}
+Register-FixtureHarness
 
 # The fixture terminal: named explicitly by Own, as the real host names the node's own (review of #96).
 $fakeTerm = [pscustomobject]@{ socket = "C:\fake\terminal-1"; guiPid = 1; guiStart = "1" }
@@ -76,10 +105,20 @@ Register-HordeHostActor -Name "fakehost" `
         if ("" + $t -cmatch '[\x00-\x1F]') { return (New-HordeUnknown -Reason "the fixture host, like the real one, types printable text only") }
         if ($script:noOpRefused -and "" + $t -ceq "Reply with OK only.") { return (New-HordeUnknown -Reason "the fixture host refuses this text") }
         if ($script:promptRefused -and "" + $t -ne "" -and "" + $t -cne "bye" -and "" + $t -cne "Reply with OK only.") { return (New-HordeUnknown -Reason "the fixture host refuses this text") }
-        if ("" + $t -ne "") { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = $t }) }
-        if ($submit) { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = "<enter>" }) }
-        if ($submit -and "" + $t -eq "" -and -not $script:stubborn) { foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } } }
+        if ("" + $t -ne "") { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = $t }); $script:box[$h] = ("" + $script:box[$h]) + $t }
+        if ($submit) {
+            [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = "<enter>" })
+            $held = "" + $script:box[$h]
+            $lost = ($script:loseAllLike -ne "" -and $held -clike $script:loseAllLike) -or ($script:loseFirstLike -ne "" -and "" + $t -ne "" -and $held -clike $script:loseFirstLike)
+            if (-not $lost) {
+                $script:box[$h] = ""
+                # The close text then Enter: the fixture harness exits.
+                if ($held -ceq "bye") { if (-not $script:stubborn) { foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } } } }
+                elseif ($held -ne "" -and -not ($script:dropTurnLike -ne "" -and $held -clike $script:dropTurnLike)) { [void]$script:turns.Add([pscustomobject]@{ handle = $h; text = $held }) }
+            }
+        }
         New-HordeKnown -Value $true } `
+    -Text { param($term, $h) if ($script:noScreen) { New-HordeUnknown -Reason "the fixture host shows no screen" } else { New-HordeKnown -Value ([string[]]@("BOX:" + $script:box[$h])) } } `
     -Live { param($term, $h, $expect) New-HordeKnown -Value $true } `
     -Stop { param($term, $h, $expect)
         # Like the real host: ends a pane only for the expected process, alive with its start time.
@@ -105,7 +144,7 @@ function New-Context {
         alert = { param($m) [void]$script:alerts.Add($m) }
         processStart = { param($p) if ($script:procs.ContainsKey([int]$p)) { $script:procs[[int]$p] } else { $null } }
         sleep = { param($ms) }; now = { [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime() }
-        bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; pollMs = 100 }
+        bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; receiptSeconds = 1; retrySeconds = 1; pollMs = 100 }
         workdirExists = { param($p) Test-Path -LiteralPath $p -PathType Container }
     }
 }
@@ -121,7 +160,8 @@ function CloseWith { param($CloseArgs, [string]$From = $hub) return (Invoke-Hord
 function PromptFile { param($Ctx, [string]$Sid) return (Join-Path (Join-Path $Ctx.records $Sid) "prompt.txt") }
 function PromptLine { param($Ctx, [string]$Sid) return ("Read " + (PromptFile $Ctx $Sid) + " and do what it says.") }
 function Typed { return @($script:sent | ForEach-Object { $_.text }) }
-function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0; $script:stopDenied = $false; $script:promptRefused = $false; $script:noOpRefused = $false; $script:alerts.Clear(); $script:readAt.Clear() }
+function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0; $script:stopDenied = $false; $script:promptRefused = $false; $script:noOpRefused = $false; $script:alerts.Clear(); $script:readAt.Clear()
+    $script:box.Clear(); $script:turns.Clear(); $script:loseFirstLike = ""; $script:loseAllLike = ""; $script:dropTurnLike = ""; $script:lateLooks = 0; $script:noTranscript = $false; $script:noScreen = $false }
 
 try {
 Write-Host ""
@@ -214,13 +254,8 @@ Reset; $script:offByMicros = $true
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
 Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*never reported its process*") "a reported start 100 microseconds off the live one is another process: start times are compared to the microsecond, not the millisecond"
 Check ((Test-HordeNodeSameStart "133000000000000207" "133000000000000200") -eq $true -and (Test-HordeNodeSameStart "133000000000001200" "133000000000000200") -eq $false) "the same instant read to 100 ns matches; 100 microseconds apart does not"
-# Back to the reporting adapter for what follows.
-Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
-    -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; New-HordeKnown -Value ([string[]]$a) } `
-    -Preconditions { param($n) @() } `
-    -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "none" } } `
-    -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "none" } } `
-    -CloseText @("bye", "`r")
+# Back to the reporting adapter, with its turn receipt, for what follows.
+Register-FixtureHarness
 
 Write-Host ""
 Write-Host "--- a wrong-mode session that cannot be ended (review of #104, F2) ---" -ForegroundColor Cyan
@@ -304,6 +339,43 @@ $ctxP = New-Context
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxP
 $rec = Read-HordeNodeSpawnRecord -Dir $ctxP.records -SessionId $o.sessionId
 Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*prompt could not be typed*" -and $null -ne $o.expect -and "$($rec.value.outcome)" -ceq "running-no-prompt") ("a prompt the host will not type fails the spawn, with the process to close it by, recorded as running without its work (" + $o.state + " " + $o.reason + ")")
+
+Write-Host ""
+Write-Host "--- a typed line counts only once it is a turn in the transcript (issue #214) ---" -ForegroundColor Cyan
+function SpawnOnce { $c = New-Context; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value; line = (PromptLine $c $o.sessionId) } }
+function Alive { param($O) return [bool]($null -ne $O.expect -and $script:procs.ContainsKey([int]$O.expect.pid) -and @($script:stopped).Count -eq 0) }
+Reset
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.noOpTurn)" -ceq "taken" -and "$($x.rec.promptTurn)" -ceq "taken" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("CONTROL: both turns seen at once: done, no extra Enter (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:loseFirstLike = "*"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|<enter>|" + $x.line + "|<enter>|<enter>")) ("the first Enter of each line lost: ONE extra Enter per line, as its box still held it, and done (" + $x.o.state + " " + $x.o.reason + " / " + ((Typed) -join "|") + ")")
+Reset; $script:loseAllLike = "Read *"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and $x.o.reason -like ("*session " + $x.o.sessionId + "*") -and $x.o.reason -like ("*pane " + $x.rec.handle + "*") -and $x.o.reason -like "*LEFT RUNNING*" -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "prompt-not-submitted") ("every Enter of the prompt line lost: failed prompt-not-submitted, naming the session and its pane, and the session is left running (" + $x.o.state + " " + $x.o.reason + ")")
+Check (((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>|<enter>") -and $x.o.reason -like "*ONE more Enter*") ("...with exactly one extra Enter for that line, never two (" + ((Typed) -join "|") + ")")
+Reset; $script:loseAllLike = "*"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted: the no-op line*" -and (Alive $x.o) -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|<enter>")) ("every Enter of the no-op line lost: failed prompt-not-submitted, one extra Enter, the prompt line never typed after it, the session left running (" + $x.o.reason + " / " + ((Typed) -join "|") + ")")
+Reset; $script:loseAllLike = "Reply*"; [void]$script:turns.Add([pscustomobject]@{ handle = "100"; text = $noOp })
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted: the no-op line*" -and $x.rec.handle -ceq "100") ("a turn holding the same line in that pane BEFORE it was typed is not its receipt (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:lateLooks = 5
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("a turn that arrives late but inside the wait: done, no extra Enter (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:noTranscript = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and $x.o.reason -like "*did not hold the line*" -and (Alive $x.o) -and ((Typed) -join "|") -ceq ($noOp + "|<enter>")) ("no transcript ever, the box emptied: not done, and no extra Enter (" + $x.o.reason + ")")
+Reset; $script:dropTurnLike = "Read *"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and (Alive $x.o) -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("the box already empty with no turn: no extra Enter, failed prompt-not-submitted (" + $x.o.reason + ")")
+Reset; $script:noScreen = $true; $script:loseAllLike = "Read *"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*could not be read*" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("a screen the host cannot show: no extra Enter is pressed blind (" + $x.o.reason + ")")
+Reset
+Register-FixtureHarness -Blind
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-unconfirmed:*cannot tell*" -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "prompt-unconfirmed" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("a harness that cannot tell: NOT done, said plainly, the session left running, no extra Enter (" + $x.o.state + " " + $x.o.reason + ")")
 
 Write-Host ""
 Write-Host "--- refused before anything starts: a profile that needs a key (round 1: this had no test) ---" -ForegroundColor Cyan
@@ -419,11 +491,18 @@ function Real-Context {
     $c.descriptors = $descriptors; $c.builtin = @(Read-HordeEngineLayerText -Text ([System.IO.File]::ReadAllText((Join-Path $fx "builtin.json")) -replace ',\s*\{ "name": "beta"[^}]*\}', '') -Layer "L0" -Source "fixture L0")
     $c.processStart = { param($p) if ($script:procs.ContainsKey([int]$p)) { $script:procs[[int]$p] } else { $null } }
     $c.sleep = { param($ms) }; $c.now = { [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime() }
-    $c.bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; pollMs = 100 }
+    $c.bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; receiptSeconds = 1; retrySeconds = 1; pollMs = 100 }
     $c.environment = @{}; $c.alert = { param($m) [void]$script:alerts.Add($m) }
     return $c
 }
 $rc = Real-Context
+# THE NEW WAITS FIT THE HUB'S (issue #214). The longest a spawn holds the serve loop at the default bounds -
+# its process, the no-op's turn with its one extra Enter, the mode, then the prompt's turn the same way or
+# a close and the host's end - must leave room inside the hub's 240 s wait (cli/HubAct.ps1).
+$db = (New-HordeNodeActContext -Root $root -HordeHome $h1 -Namespace ([pscustomobject]@{ device = $device; space = "windows" })).bounds
+$line = [double]$db.receiptSeconds + [double]$db.retrySeconds
+$worst = [double]$db.identifySeconds + $line + [double]$db.modeSeconds + [math]::Max($line, 2 * [double]$db.closeSeconds)
+Check ($line -ge 20 -and $line -le 30 -and $worst -le 200) ("a typed line's turn is waited for 20 to 30 s, and a spawn's longest path is " + $worst + " s, well inside the hub's 240 s")
 Check ($rc.note -like "*acts: OFF*no policy file*") ("a node with no policy says, as it starts serving, that it acts on nothing (" + $rc.note + ")")
 Set-Pol 3
 Reset
