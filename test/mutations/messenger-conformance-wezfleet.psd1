@@ -14,5 +14,8 @@
         @{ Name = "absent-read-as-unknown"
            Find = 'if ($Command -ceq "status" -and $j.stage -ceq "absent") { return (New-HordeAbsent'
            Replace = 'if ($false) { return (New-HordeAbsent' }
+        @{ Name = "woken-never-said-true"
+           Find = '$value["woken"] = ($j.woken -eq $true -and $code -ceq "woken") }'
+           Replace = '$value["woken"] = $false }' }
     )
 }

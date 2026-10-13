@@ -12,7 +12,7 @@
 #             trusted; this only narrows it;
 #   Accept    param($Context, $Item) -> { outcome; reason }: one opened envelope, handed over once it
 #             is verified, journaled and opened. $Item is { from; channel; kind; seq; key; evidence;
-#             body (bytes) }. outcome is "done" (acted on), "refused" (never will be: say why) or
+#             ts; body (bytes) } - ts the envelope's own time, in milliseconds, as its sender signed it. outcome is "done" (acted on), "refused" (never will be: say why) or
 #             "retry" (not now: the same record is handed over again later, from the journal).
 #             AN ACCEPT MUST BE IDEMPOTENT BY THE RECORD: after a crash between its act and the done
 #             mark the same item comes again (relay/Journal.ps1, FINISHED AND UNFINISHED);
@@ -358,7 +358,7 @@ function Invoke-HordeRelayChannelRecord {
     # The senders trusted NOW: a device revoked since the record was made opens nothing.
     $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind
     if (-not $opened.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("not opened: " + $opened.reason) } }
-    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; body = [byte[]]$opened.value }
+    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; ts = [long]$r.value.header.ts; body = [byte[]]$opened.value }
     $got = $null
     try { $got = & $Channel.accept $Context $item }
     catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message) } }
@@ -374,9 +374,14 @@ function Invoke-HordeRelayChannelTicks {
     # The path out: every channel's Tick, in name order. { lines; failed } - lines each starting with its
     # channel's name; failed when any channel said it failed, or threw. A channel that throws is a line,
     # and the others still run.
+    #
+    # againMs: a Tick may say how soon it wants to be turned again (its answer's againMs, over 0) - the
+    # decisions channel's bell does, for the end of a quiet period. The soonest of them is returned, 0
+    # when none asked, and the run's next watch waits no longer than that (cli/RelayRun.ps1).
     param([Parameter(Mandatory = $true)]$Context, $Now = $null)
     $out = New-Object System.Collections.ArrayList
     $failed = $false
+    $again = 0
     foreach ($name in @(Get-HordeRelayChannelNames)) {
         $ch = Get-HordeRelayChannel -Name $name
         if ($null -eq $ch.tick) { continue }
@@ -386,10 +391,12 @@ function Invoke-HordeRelayChannelTicks {
             if ($got.Count -eq 1 -and $null -ne $got[0] -and $got[0] -isnot [string] -and $null -ne $got[0].PSObject.Properties["lines"]) {
                 $lines = @($got[0].lines)
                 if ($null -ne $got[0].PSObject.Properties["failed"] -and $got[0].failed -eq $true) { $failed = $true }
+                $ask = $got[0].PSObject.Properties["againMs"]
+                if ($null -ne $ask -and $ask.Value -is [int] -and $ask.Value -gt 0 -and ($again -eq 0 -or $ask.Value -lt $again)) { $again = [int]$ask.Value }
             }
             foreach ($l in $lines) { if ("$l" -ne "") { [void]$out.Add($name + ": " + $l) } }
         }
         catch { [void]$out.Add($name + ": failed: " + $_.Exception.Message); $failed = $true }
     }
-    return [pscustomobject]@{ lines = @($out.ToArray()); failed = $failed }
+    return [pscustomobject]@{ lines = @($out.ToArray()); failed = $failed; againMs = $again }
 }

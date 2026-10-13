@@ -7,6 +7,12 @@
     Suite  = "surfaces\pwa\test\test-pwa-browser.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "progress-foot-scrolls-away"
+           Find = '#progressFoot { position: fixed;'
+           Replace = '#progressFoot { position: static;' }
+        @{ Name = "progress-title-not-bold"
+           Find = '.progress-title { font-weight: 600;'
+           Replace = '.progress-title { font-weight: 400;' }
         @{ Name = "bar-scrolls-away"
            Find = '#bar { position: sticky;'
            Replace = '#bar { position: static;' }
