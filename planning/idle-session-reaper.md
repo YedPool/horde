@@ -41,6 +41,9 @@ the close offer (section 12) and the closed-session pool (section 13). In his wo
 > session handles to restart them easily, built as a clean, self-contained, organized, consumable
 > module. Other idle sessions follow the design's leans (report-only first for a day, then closing)."
 
+**Corrected the same day:** the founder narrowed the pool to closed **Orcs only**. A closed Warg
+(a subsession or worker) leaves only its closure record (13.1).
+
 Where this text and an older paragraph below disagree, this revision wins. The paragraphs it changes
 say so in place.
 
@@ -494,7 +497,7 @@ file.
 
 | lost on close | why | how the design handles it |
 |---|---|---|
-| the Remote Control link and its URL | `--resume` does not re-enable the bridge, and each `/remote-control` issues a new URL (I-16) | P11 keeps linked sessions unless the founder accepts a close offer (section 12). Then the record, and the pool entry (section 13), store the bridge id and the remote name, so a restart can ask for a new link under the same name |
+| the Remote Control link and its URL | `--resume` does not re-enable the bridge, and each `/remote-control` issues a new URL (I-16) | P11 keeps linked sessions unless the founder accepts a close offer (section 12). Then the record, and for an Orc the pool entry (section 13), store the bridge id and the remote name, so a restart can ask for a new link under the same name |
 | session crons, `ScheduleWakeup` and Monitors | they live inside the process | P8 and P12 keep any session that holds one |
 | queued input and an unsent box | in memory only | P13 and P3 |
 | the pane and wezfleet's registry mapping | the pane is the host's | recorded in the closure record; section 10 |
@@ -826,9 +829,9 @@ so PA can start as soon as this revision merges. It needs nothing from RA to RE:
 
 | # | pull request | depends on | tests first (assertion text) | mutation spec (each must turn red) |
 |---|---|---|---|---|
-| **PA** | **the pool module**: `pool/` with its port (13.2), the entry schema in `schema/`, the store and its ownership row (H7), `horde pool list` and `show`, the retention sweep. Entries are written by an injected source, so a fixture closure record drives every test | this design | "an entry is written once and never rewritten"; "a session closed twice gets two entries"; "the 7-day window holds an entry closed 6 days ago and not one closed 8 days ago"; "an entry older than the retention is swept, its closure record is not"; "an entry holds no transcript text"; "list reads no transcript" | rewrite an entry in place; count windows from the start time; sweep the closure record; copy the last prompt into the entry |
+| **PA** | **the pool module**: `pool/` with its port (13.2), the entry schema in `schema/`, the store (H7), `horde pool list`, `show` and `sweep`, and the retention sweep. Orcs only. Entries are written by an injected source, so a fixture closure record drives every test | this design | "a closed Warg makes no pool entry"; "an unknown role is kept as an Orc"; "an entry is written once and never rewritten"; "a session closed twice gets two entries"; "the 7-day window holds an entry closed 6 days ago and not one closed 8 days ago"; "an entry older than the retention is swept, its closure record is not"; "an entry holds no transcript text"; "list reads no transcript" | admit a Warg; rewrite an entry in place; count windows from the start time; sweep the closure record; copy the last prompt into the entry |
 | **PB** | **restart from the pool** (13.4): `horde pool restart`, the restart record, the live-session refusal and the resumable re-check. The resume itself goes through the agent adapter and the host adapter, tested only in the isolated host instance | PA; the host port's open-pane verb (Phase 3); lifecycle 3.1's binding, or the closure record's resume argv until then | "a restart re-checks the transcript before starting anything"; "a session already running is not started twice"; "a restart on another machine's entry is refused here and routed to that machine"; "a restart writes its record before it starts the process" | skip the re-check; skip the live check; write the record after the start |
-| **RO** | **the close offer** (section 12): the offer builder, the decisions store as the founder's question surface, the accepted-offer claim, and the close through RE's closer | RC (the would-close facts); RE (the closer) | "an Orc is offered and never closed without an accepted offer"; "a linked session is offered and never closed without an accepted offer"; "an answer not signed by the founder's device does not close"; "an accepted offer lifts P1, P11 and P14 for that pid and procStart only"; "every other protection is re-checked at the moment of closing"; "a keep answer silences the same process for the snooze"; "a closed offer leaves a pool entry" | accept an unsigned answer; carry the acceptance to a new process; skip the re-check after acceptance; offer while mid-turn |
+| **RO** | **the close offer** (section 12): the offer builder, the decisions store as the founder's question surface, the accepted-offer claim, and the close through RE's closer | RC (the would-close facts); RE (the closer) | "an Orc is offered and never closed without an accepted offer"; "a linked session is offered and never closed without an accepted offer"; "an answer not signed by the founder's device does not close"; "an accepted offer lifts P1, P11 and P14 for that pid and procStart only"; "every other protection is re-checked at the moment of closing"; "a keep answer silences the same process for the snooze"; "a closed Orc's offer leaves a pool entry"; "a closed Warg's offer leaves none" | accept an unsigned answer; carry the acceptance to a new process; skip the re-check after acceptance; offer while mid-turn |
 | **PC** | **the pool on the phone** (13.5): the `pool` relay channel, the PWA's Closed tab, and the restart request with its signature check on the machine | PA, PB; the relay's signed-answer path | "the snapshot holds the three windows and nothing older"; "a restart request with a bad signature does nothing"; "a restart request for another machine's entry is ignored here"; "a restart request is used once" | accept an unsigned request; let the relay pick the machine; accept a replayed nonce |
 
 **Order with them:** PA can start at once. RA, RB and RC as before. RO after RE. PB after PA. PC
@@ -938,7 +941,8 @@ by hand, and why.
 - **Other idle sessions** (workers, meaning sessions owned by an Orc that are not Orcs themselves)
   follow this design's leans: report-only first (RC's trial, at least a day of ticks, 5.4), then
   closing (RE).
-- **Every closed session goes into the pool** (section 13), whoever closed it.
+- **Every closed Orc goes into the pool** (section 13), whoever closed it. A closed Warg (a subsession
+  or worker) does not. It leaves only its closure record (founder's correction, 2026-10-13).
 
 The original wording of (a) and (b) is kept below for the record.
 
@@ -1008,7 +1012,8 @@ the relay's decisions channel and the decisions window, so the reaper adds no ne
   - the machine;
   - how long it has been idle, and the memory it holds (private MB);
   - what closing loses. For a linked session: "the phone link ends; a restart asks for a new link".
-  - that it lands in the pool and can be restarted from there.
+  - for an Orc, that it lands in the pool and can be restarted from there. A Warg that is offered
+    because of its link leaves only its closure record.
 - **Importance:**
   - `-Importance normal -Blocks none` normally: nothing waits on it;
   - `-Importance high` when the pressure level is `constrained` or `critical` (5.2).
@@ -1043,7 +1048,7 @@ Its effects:
 
 When the close finishes, the reaper replies under the question:
 
-- "closed, in the pool as `<entry>`"; or
+- "closed, in the pool as `<entry>`" for an Orc, or "closed, resume with `<argv>`" for a Warg; or
 - "not closed: `<reason>`", for example "it started a new turn at 14:02".
 
 A Keep answer writes nothing but a decision event and the snooze.
@@ -1061,7 +1066,13 @@ record's id and its source. An answer whose source does not qualify is recorded 
 
 ## 13.1 What it is, and why it is its own module
 
-The pool remembers every session that has been closed and could come back. It shows them by **the
+**Orcs only** (the founder's correction of 2026-10-13, relayed by C). The pool holds closed Orcs and
+never closed Wargs, meaning subsessions and workers. P14's definition decides who is an Orc, and an
+unknown role counts as one. A closed Warg leaves only its closure record (H3), as before. Its
+conversation can still be resumed from that record's resume argv, but it is not listed, shown or
+offered for restart.
+
+The pool remembers every Orc that has been closed and could come back. It shows them by **the
 last 7 days, the last 30 days and the last 3 months**, each with the handle to restart it. It answers
 one question: "what did I close, and how do I get it back?"
 
@@ -1112,8 +1123,10 @@ wezfleet's "reaped" marker (section 10, item 12). Another close path joins by ca
   written with `CreateNew` and never rewritten.
 - Restart records: `<HordeHome>\store\pool\restarts\<entryId>-<utc>.json`, also write-once.
 
-The pool is a new store, **H7**. It gets a row in `core/ownership.json` with the pool module as its
-only writer, and a schema in `schema/`.
+The pool is a new store, **H7**, written only by the pool module, with a schema in `schema/`. It is
+not a row in `core/ownership.json`: that table lists where each field of the session record comes
+from, not Horde's own stores, and the files store is not in it either. This corrects the first
+wording of this paragraph.
 
 **What an entry holds** (`schemaVersion` 1):
 
@@ -1122,7 +1135,7 @@ only writer, and a schema in `schema/`.
 | `entryId` | 32 hex characters, random |
 | `machine` | the Horde machine id and its display name. A horde spans machines, and each machine's pool holds its own sessions |
 | `harness`, `sessionId` | which conversation |
-| `label`, `name`, `role`, `owner`, `parent` | as the registry had them at close: `role` is `orc`, `worker`, `founder` or `unknown` |
+| `label`, `name`, `role`, `owner`, `parent` | as the registry had them at close. `role` is `orc`, `warg`, `founder` or `unknown`. Only `orc` and `unknown` make an entry. For `warg` or `founder`, `Add-HordePoolEntry` writes nothing and answers "not an Orc". It does not throw, because reconciliation offers it every close. The pool trusts the role it is given; deciding P14 is the classifier's job (RB) |
 | `taskIds` | fleet ledger task ids from the registry, when it has them |
 | `cwd` | the working directory. The full path stays on the machine, and the phone gets its last segment |
 | `startedAt`, `lastActiveAt`, `closedAt` | procStart, the newest transcript event's time, and the verified close |
@@ -1137,10 +1150,11 @@ events. The pool is shown on a phone through a hosted relay.
 
 **How entries are made.**
 
-- The closer calls `Add-HordePoolEntry` after 4.3 verifies the close.
-- Each reaper tick then **reconciles**:
-  - a `closed` closure record without an entry gets one;
-  - a session the registry still lists, whose pid plus procStart is gone and which has no closure
+- The closer calls `Add-HordePoolEntry` after 4.3 verifies the close. The pool keeps it only if the
+  session is an Orc.
+- Each reaper tick then **reconciles**, for Orcs only:
+  - a `closed` closure record of an Orc without an entry gets one;
+  - an Orc the registry still lists, whose pid plus procStart is gone and which has no closure
     record, gets an entry with `closedBy = ended`. It gets `founder-manual` when the wezfleet registry
     recorded his close.
 
