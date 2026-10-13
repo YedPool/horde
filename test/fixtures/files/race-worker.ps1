@@ -8,15 +8,26 @@
 # -Mode first-share: as same-path, but share number i goes to a home of its own, <HordeHome>-<i>,
 #   which nothing has used: every racer's share of a round is the FIRST share of that home, so all of
 #   them find no key there. This is the race that shows whether two first shares can end with two keys.
-#   THE ORDER IS STAGED, NOT HOPED FOR. Left to the machine, the racers overlap or do not as its load
-#   decides (measured 2026-10-13, with other runs busy on the machine: in one run no racer overlapped
-#   another, and a broken key move went unseen). So each racer, having found no key and no record at
-#   the tick, WAITS before it makes its key: racer 0 for 50 ms, racer 1 for 85, and so on, 35 ms
-#   apart. Every racer has then decided to make a key, and they make them one after another: with a
-#   move that does not replace, the second is told the name is taken and reads the first one's key;
-#   with one that replaces, it reads its own. The wait is put where the real code asks the store
-#   whether it holds a record (Test-HordeFilesStoreHasRecord), whose REAL answer is worked out
-#   first and returned unchanged: only the moment is this worker's, never the answer.
+#   THE ORDER IS STAGED, NOT HOPED FOR, AND NOT BY THE CLOCK. Left to the machine, the racers overlap
+#   or do not as its load decides (measured 2026-10-13, with other runs busy on the machine: in one
+#   run no racer overlapped another, and a broken key move went unseen). Until the second round of
+#   that day's review the order was staged by time - racer 0 waited 50 ms before it made its key,
+#   racer 1 for 85, and so on, 35 ms apart - and a machine at 70 percent CPU held racers back
+#   longer than that: the control that must see two keys saw them in 0 to 2 of 6 rounds, three
+#   runs in a row. A control that fails under load fails in somebody's net.
+#   SO THE RACERS TELL EACH OTHER WHERE THEY ARE, by files in the race's own folder, and no clock
+#   decides anything. Each racer, having found no key and no record, writes that it has DECIDED to
+#   make a key, and waits until every racer of the round has written the same: all of them have
+#   then seen "no key". Then they go on one at a time, in the order of their numbers: a racer
+#   waits until the one before it has written that its share is DONE. With a move that does not
+#   replace, the second is told the name is taken and reads the first one's key; with one that
+#   replaces, it reads its own. Load makes this slower and never puts it in another order.
+#   The wait is put where the real code asks the store whether it holds a record
+#   (Test-HordeFilesStoreHasRecord), whose REAL answer is worked out first and returned
+#   unchanged: only the moment is this worker's, never the answer.
+#   A WAIT THAT IS NEVER ANSWERED ENDS, after 180 s, and the racer writes that the staging FAILED
+#   for that round and goes on; so does a racer whose share never came to that question. The suite
+#   counts those files and fails on one: a round that was not staged proves nothing.
 #
 # -Mode same-bytes: -Count times it first writes "round <i>" into its OWN file at -Source and then, on
 #   the tick, shares it. Every racer writes the same words, so all of them put the same bytes in the
@@ -46,6 +57,7 @@ param(
     [Parameter(Mandatory = $true)][int]$Racer,
     [Parameter(Mandatory = $true)][int]$Count,
     [Parameter(Mandatory = $true)][int]$TickMs,
+    [int]$Racers = 1,
     [int]$StallMove = 0,
     [ValidateSet("before", "after")][string]$StallWhen = "before"
 )
@@ -87,11 +99,31 @@ if ($Mode -ceq "stall") {
 
 if ($Mode -ceq "first-share") {
     $script:realHasRecord = ${function:Test-HordeFilesStoreHasRecord}
-    $script:stageAt = [long]0
+    # The round whose first asking is staged, or -1: outside a round, and after that first asking,
+    # the question is answered at once.
+    $script:stageRound = -1
+    $script:stageDir = Split-Path -Parent $GoFile
+    function Get-StageMark { param([int]$Round, [string]$What, [int]$Of) return (Join-Path $script:stageDir ("stage-" + $Round + "-" + $What + "-" + $Of)) }
+    function Wait-StageMarks {
+        # Wait until every file of -Marks is there: $true, or $false when -Seconds passed first.
+        param([string[]]$Marks, [int]$Seconds = 180)
+        $until = [datetime]::UtcNow.AddSeconds($Seconds)
+        while (@($Marks | Where-Object { -not [System.IO.File]::Exists($_) }).Count -gt 0) {
+            if ([datetime]::UtcNow -gt $until) { return $false }
+            Start-Sleep -Milliseconds 5
+        }
+        return $true
+    }
     function Test-HordeFilesStoreHasRecord {
         param([string]$Root)
         $said = & $script:realHasRecord -Root $Root
-        while ([datetime]::UtcNow.Ticks -lt $script:stageAt) { }
+        if ($script:stageRound -lt 0) { return $said }
+        $staged = $script:stageRound
+        $script:stageRound = -1
+        [System.IO.File]::WriteAllText((Get-StageMark -Round $staged -What "decided" -Of $Racer), "")
+        $held = Wait-StageMarks -Marks @(0..($Racers - 1) | ForEach-Object { Get-StageMark -Round $staged -What "decided" -Of $_ })
+        if ($held -and $Racer -gt 0) { $held = Wait-StageMarks -Marks @((Get-StageMark -Round $staged -What "done" -Of ($Racer - 1))) }
+        if (-not $held) { [System.IO.File]::WriteAllText((Get-StageMark -Round $staged -What "failed" -Of $Racer), "") }
         return $said
     }
 }
@@ -110,12 +142,22 @@ for ($i = 0; $i -lt $Count; $i++) {
     while ([datetime]::UtcNow.Ticks -lt $target) { }
     $line = ""
     $shareHome = $HordeHome
-    if ($Mode -ceq "first-share") { $shareHome = $HordeHome + "-" + $i; $script:stageAt = $target + [long](50 + 35 * $Racer) * 10000 }
+    if ($Mode -ceq "first-share") { $shareHome = $HordeHome + "-" + $i; $script:stageRound = $i }
     try {
         $told = Add-HordeFilesShare -Path $Source -Title ("racer " + $Racer + " share " + $i) -HordeHome $shareHome -Asking $asking
         if ($told.outcome -ceq "shared") { $line = "" + $i + "|shared|" + $told.record.fileId + "|" + $told.record.version + "|" + $told.attempts + "|" + $told.record.sha256 + "|" }
         else { $line = "" + $i + "|" + $told.outcome + "||0|0||" + ("$($told.reason)" -replace "[\r\n|]", " ") }
     } catch { $line = "" + $i + "|threw||0|0||" + ("$($_.Exception.Message)" -replace "[\r\n|]", " ") }
+    if ($Mode -ceq "first-share") {
+        # A share that never asked the staged question was not staged: said, and the others are not
+        # left waiting for it. Then DONE, whatever the share was told, so the next racer goes on.
+        if ($script:stageRound -ge 0) {
+            $script:stageRound = -1
+            [System.IO.File]::WriteAllText((Get-StageMark -Round $i -What "failed" -Of $Racer), "")
+            [System.IO.File]::WriteAllText((Get-StageMark -Round $i -What "decided" -Of $Racer), "")
+        }
+        [System.IO.File]::WriteAllText((Get-StageMark -Round $i -What "done" -Of $Racer), "")
+    }
     [void]$log.Add($line)
 }
 [void]$log.Add("END")

@@ -40,6 +40,18 @@
         @{ Name = "moved-store-unguarded"
            Find = '                if ("$v".Trim() -ne "") { [void]$roots.Add("$v"); [void]$labelled.Add('
            Replace = '                if ($false) { [void]$roots.Add("$v"); [void]$labelled.Add(' }
+        @{ Name = "profile-that-was-named-is-ignored"
+           Find = '    $profileBase = $ProfileRoot'
+           Replace = '    $profileBase = ""' }
+        @{ Name = "variables-profile-not-used-when-none-is-named"
+           Find = '-and "$env:USERPROFILE".Trim() -ne "") { $profileBase = "$env:USERPROFILE" }'
+           Replace = '-and $false) { $profileBase = "$env:USERPROFILE" }' }
+        @{ Name = "variables-profile-used-whatever-is-named"
+           Find = 'if ($profileBase.Trim() -eq "" -and "$env:USERPROFILE".Trim() -ne "") {'
+           Replace = 'if ("$env:USERPROFILE".Trim() -ne "") {' }
+        @{ Name = "named-profile-not-handed-on-by-the-roots-question"
+           Find = '$stores = Get-HordeAgentStores -Root $Root -ProfileRoot $ProfileRoot'
+           Replace = '$stores = Get-HordeAgentStores -Root $Root' }
         @{ Name = "unknown-roots-allow-writing"
            Find = '    if ($roots.state -ne "known") { return [pscustomobject]@{ write = $false;'
            Replace = '    if ($roots.state -ne "known") { $roots = New-HordeKnown -Value @(); } if ($false) { return [pscustomobject]@{ write = $false;' }

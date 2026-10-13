@@ -34,6 +34,22 @@
         @{ Name = "invalid-utf8-noticed-and-let-through"
            Find = 'return ("it is not UTF-8: it holds a byte sequence'
            Replace = '$null = ("it is not UTF-8: it holds a byte sequence' }
+        # --- a refusal says where, and never what (review of the files deny list, 2026-10-13) ---
+        @{ Name = "refusal-repeats-the-bytes-that-are-not-utf8"
+           Find = '$which = " (it stops being UTF-8 at byte " + ($notText - 1) + ")"'
+           Replace = '$which = " (the bytes " + [System.BitConverter]::ToString($Bytes, ($notText - 1), 1) + ")"' }
+        @{ Name = "refusal-repeats-the-byte-it-stopped-at"
+           Find = '$which = " (it stops being UTF-8 at byte " + ($notText - 1) + ")"'
+           Replace = '$which = " (it stops being UTF-8 at byte " + ($notText - 1) + ", which is " + $Bytes[$notText - 1].ToString("X2") + ")"' }
+        @{ Name = "not-utf8-said-to-be-one-byte-later"
+           Find = 'at byte " + ($notText - 1) + ")"'
+           Replace = 'at byte " + $notText + ")"' }
+        @{ Name = "text-cut-short-said-to-stop-at-a-byte"
+           Find = 'if (-not $readsToTheEnd) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "not-utf8-position-taken-from-the-first-half-only"
+           Find = 'if ($reads) { $stillText = $half } else { $notText = $half }'
+           Replace = '$notText = $half' }
         @{ Name = "json-held-to-nothing-more-than-text"
            Find = 'if ($Type -ceq "application/json") {'
            Replace = 'if ($false) {' }
@@ -50,7 +66,7 @@
            Find = 'if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) { $after = 3 }'
            Replace = 'if ($Bytes.Length -ge 3) { $after = 3 }' }
         @{ Name = "json-read-from-its-first-byte-whatever-is-asked"
-           Find = 'return [HordeFilesJsonV1]::Problem($Bytes, $Offset)'
-           Replace = 'return [HordeFilesJsonV1]::Problem($Bytes, 0)' }
+           Find = 'return [HordeFilesJsonV2]::Problem($Bytes, $Offset)'
+           Replace = 'return [HordeFilesJsonV2]::Problem($Bytes, 0)' }
     )
 }

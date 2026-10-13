@@ -18,9 +18,22 @@
 // answered, not a stack overflow. It keeps no value: a number is never converted, so 1e400 and a
 // number of thirty digits are JSON here as they are in the grammar.
 //
-// The name ends in V1 because a loaded type cannot be replaced in a process: a changed grammar is V2.
-public static class HordeFilesJsonV1
+// TWO THINGS THE GRAMMAR ALLOWS ARE REFUSED ALL THE SAME, since the review of 2026-10-13, because the
+// readers this text is for do not take them:
+//   - MORE THAN 512 OBJECTS AND ARRAYS OPEN AT ONCE (MaxDepth). The phone's parsers cap how deep
+//     they go; a text one deeper than a reader goes is a text that reader cannot read.
+//   - HALF OF A SURROGATE PAIR, WRITTEN ALONE AS AN ESCAPE. The escape of a first half (D800 to
+//     DBFF) must be followed at once by the escape of a second half (DC00 to DFFF), and a second
+//     half with no first before it is refused: alone, either is no character, and a strict reader
+//     refuses the string.
+//
+// The name ends in V2 because a loaded type cannot be replaced in a process: a changed grammar is
+// the next number. V1 was the grammar alone; V2 is the grammar with the two refusals above.
+public static class HordeFilesJsonV2
 {
+    // The most objects and arrays that may be open at one place in the text.
+    public const int MaxDepth = 512;
+
     // "" when bytes[offset..] is exactly one JSON text; otherwise why it is not, in words.
     public static string Problem(byte[] bytes, int offset)
     {
@@ -60,6 +73,7 @@ public static class HordeFilesJsonV1
             }
             // A value (state 0 or 1).
             if (state == 1 && c == (byte)']') { i++; open.RemoveAt(open.Count - 1); state = (open.Count == 0) ? 6 : 5; continue; }
+            if ((c == (byte)'{' || c == (byte)'[') && open.Count >= MaxDepth) { return At(i, "it is nested more than " + MaxDepth + " deep, which is deeper than the readers of a shared file go"); }
             if (c == (byte)'{') { i++; open.Add(c); state = 2; continue; }
             if (c == (byte)'[') { i++; open.Add(c); state = 1; continue; }
             if (c == (byte)'"') { i = Text(bytes, i, ref why); }
@@ -95,12 +109,31 @@ public static class HordeFilesJsonV1
             byte e = b[j];
             if (e == (byte)'"' || e == (byte)'\\' || e == (byte)'/' || e == (byte)'b' || e == (byte)'f' || e == (byte)'n' || e == (byte)'r' || e == (byte)'t') { j++; continue; }
             if (e != (byte)'u') { why = At(j - 1, "an escape that JSON does not have"); return -1; }
-            for (int k = 1; k <= 4; k++)
-            {
-                if (j + k >= n || !Hex(b[j + k])) { why = At(j - 1, "a \\u escape without its four hex digits"); return -1; }
-            }
+            int unit = Unit(b, j);
+            if (unit < 0) { why = At(j - 1, "a \\u escape without its four hex digits"); return -1; }
+            if (unit >= 0xDC00 && unit <= 0xDFFF) { why = At(j - 1, "a \\u escape of the second half of a surrogate pair, with no first half before it"); return -1; }
             j += 5;
+            if (unit >= 0xD800 && unit <= 0xDBFF)
+            {
+                // The second half must stand right here, and as an escape too.
+                int next = (j + 1 < n && b[j] == (byte)'\\' && b[j + 1] == (byte)'u') ? Unit(b, j + 1) : -1;
+                if (next < 0xDC00 || next > 0xDFFF) { why = At(j - 6, "a \\u escape of the first half of a surrogate pair, not followed by its second half"); return -1; }
+                j += 6;
+            }
         }
+    }
+
+    // The number the four hex digits after the u at j write, or -1 when they are not four hex digits.
+    private static int Unit(byte[] b, int j)
+    {
+        int unit = 0;
+        for (int k = 1; k <= 4; k++)
+        {
+            if (j + k >= b.Length || !Hex(b[j + k])) { return -1; }
+            byte h = b[j + k];
+            unit = unit * 16 + ((h <= (byte)'9') ? h - (byte)'0' : (h | 0x20) - (byte)'a' + 10);
+        }
+        return unit;
     }
 
     private static bool Hex(byte c) { return (c >= (byte)'0' && c <= (byte)'9') || (c >= (byte)'a' && c <= (byte)'f') || (c >= (byte)'A' && c <= (byte)'F'); }

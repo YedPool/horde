@@ -1,5 +1,5 @@
-# core/PathText - two questions answered from a path's TEXT alone: its letters A to Z in one case,
-# and whether it names a place on the network.
+# core/PathText - three questions answered of a path without opening it: its letters A to Z in one
+# case, whether its text names a place on the network, and whether its drive letter stands for one.
 #
 # WHY ITS OWN FILE. Both were written for the files store (files/Share.ps1, files/Path.ps1; the review
 # of its pull request #215, 2026-10-13). The decisions code needs the same two answers: it makes
@@ -43,13 +43,17 @@
 #     before resolving as well as after: PowerShell's own resolver
 #     (GetUnresolvedProviderPathFromPSPath), handed a network drive's letter, looked the host up
 #     (measured the same day: 1289 ms, and the entry in the cache).
-#   - It does not see an alias the drive's type does not give away: a subst drive over a network
-#     drive, a volume mount point. Only the open handle's final path shows those
-#     (files/Path.ps1, Resolve-HordeFilesLocalPath), which is after the open.
+#   - It does not see a drive letter that STANDS FOR a network drive, and for such a letter it is
+#     itself the harm: Get-HordeDriveAliasRefusal, below, is asked BEFORE it.
+#   - It does not see a volume mount point that leads to the network. Only the open handle's final
+#     path shows that (files/Path.ps1, Resolve-HordeFilesLocalPath), which is after the open.
 #   - It says nothing of devices or of streams inside a file (files/Path.ps1,
 #     Get-HordeFilesPathRefusal). A path it answers "" for is not thereby safe to open.
-#   - Its reason is worded for a share ("only a file on one of this machine's own drives is
-#     shared"): the words moved with the function, unchanged.
+#   ITS REASON SAYS ONLY WHAT IS TRUE FOR EVERY CALLER: that the path is a network path, or on a
+#   network drive, and that only a path on one of this machine's own drives is taken. What the
+#   caller was doing with the path - sharing a file, opening a report - is the caller's to add
+#   (files/Path.ps1's Get-HordeFilesPlaceRefusal adds the sentence about sharing). Until 2026-10-13
+#   the reason said "is shared", which was the files store's word and wrong for anyone else.
 #   THE SURPRISE: A BACKSLASH AND THEN A FORWARD SLASH. Windows reads \/host\share\x.md as the
 #   network path \\host\share\x.md. PowerShell's resolver does not: it resolves that spelling to a
 #   LOCAL path on the current drive, C:\host\share\x.md (measured 2026-10-13, 5.1). So code that
@@ -57,7 +61,32 @@
 #   the path as written reaches the network. This function refuses it from the text as written;
 #   that is one more reason the question is asked before the resolve and not only after it.
 #
-# test/test-path-text.ps1 holds both, and test/mutations/path-text.psd1 their mutants.
+# Get-HordeDriveAliasRefusal - WHERE A DRIVE LETTER REALLY POINTS, ANSWERED WITHOUT OPENING ANYTHING.
+# Asked BEFORE Get-HordeNetworkPathRefusal, of the path as written and again of the path it resolves to.
+#   WHY IT EXISTS, AND WHY FIRST. A drive letter can stand for another drive letter: subst makes
+#   one over a folder, and DefineDosDevice over anything. Measured 2026-10-13 on a letter S: defined
+#   over R:\, R: being a network drive aimed at a host that does not exist, one fresh host a step:
+#     defining S:, and reading from the system's table what S: stands for   host NOT looked up
+#     asking the type of R:                                                 host NOT looked up
+#     asking the type of S: (the answer is NoRootDirectory, not Network)    host WAS looked up
+#   So for such a letter the network question above does not refuse - and its asking is the harm.
+#   WHAT IT DOES: reads the system's own table of drive names (QueryDosDevice), which asks no disk
+#   and no network, a letter at a time until one stands for no other letter, and asks the TYPE of
+#   that last letter only. It refuses a letter whose chain ends at a network drive, and a chain
+#   that does not end within eight letters (a ring), since where that is cannot be told.
+#   WHAT IT DOES NOT SEE:
+#   - A network drive whose target in the table is not written as a share (a drive the system
+#     mapped has a redirector's device there). It answers "" and the network question refuses
+#     it by its type; that question is safe for such a letter. A letter DEFINED straight over a
+#     share (\??\UNC\host\share) is refused here, since the review of 2026-10-13: the table has
+#     already said what it is.
+#   - A volume mount point, a junction or a symbolic link that leads to the network from a folder
+#     of a local drive. Those are not drive letters; only an open handle's final path shows them.
+#   - A PowerShell drive (New-PSDrive), which is not in the system's table. It shows once the path
+#     is resolved, which is why the question is asked again then.
+#   - A letter redefined between the question and the open. It is a look, not a lock.
+#
+# test/test-path-text.ps1 holds all three, and test/mutations/path-text.psd1 their mutants.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It loads nothing.
 
@@ -95,7 +124,7 @@ function Get-HordeNetworkPathRefusal {
     # and it touches no disk and no network: the header has the measurement. Asked of the path as
     # written and again of the path it resolves to.
     param([AllowEmptyString()][string]$Path)
-    $local = "only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
+    $local = "only a path on one of this machine's own drives is taken"
     # Two separators of either kind first, unless what follows is the device or long-path prefix...
     $unc = ($Path -cmatch '\A[\\/]{2}' -and $Path -cnotmatch '\A[\\/]{2}[.?][\\/]')
     # ...and that prefix, or the NT one, before UNC. The letters are written out in both cases: an
@@ -109,5 +138,53 @@ function Get-HordeNetworkPathRefusal {
         $type = Get-HordeDriveLetterType -Letter $letter
         if ($type -ceq "Network") { return ("'" + $Path + "' is on a network drive (" + $letter + ":), and " + $local) }
     }
+    return ""
+}
+
+function Initialize-HordePathTextNative {
+    # The one question this file asks of Windows, defined once a process (core/FileAtomic.ps1's way):
+    # QueryDosDevice, what a drive letter stands for in the system's own table of names.
+    if (([System.Management.Automation.PSTypeName]"HordeNative.DriveName").Type) { return }
+    Add-Type -Namespace HordeNative -Name DriveName -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax);'
+}
+
+function Get-HordeDriveLetterTarget {
+    # What the drive letter -Letter stands for, as Windows keeps it, or "" when it names nothing.
+    # Measured 2026-10-13: C: is \Device\HarddiskVolume3; a subst drive over a folder is
+    # \??\C:\that\folder; a letter aimed at a share is \??\UNC\host\share.
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    Initialize-HordePathTextNative
+    $text = New-Object System.Text.StringBuilder 1024
+    if ([HordeNative.DriveName]::QueryDosDevice($Letter + ":", $text, 1024) -le 0) { return "" }
+    return $text.ToString()
+}
+
+function Get-HordeDriveAliasRefusal {
+    # Why -Path is on a drive letter that STANDS FOR a network drive, or "" when nothing says it is.
+    # ASKED BEFORE THE NETWORK QUESTION, and nothing is opened: the header has the measurement, and
+    # what this does not see. A letter that stands for no other letter is the network question's,
+    # and this answers "" - unless the table says it stands straight for a share.
+    param([AllowEmptyString()][string]$Path)
+    if ($Path -cnotmatch '\A(?:\\\\\?\\)?([A-Za-z]):') { return "" }
+    $first = $Matches[1]
+    $ownDrives = "only a path on one of this machine's own drives is taken"
+    $last = $first
+    $ended = $false
+    # Eight letters deep is more than anyone makes; a ring of letters never ends, and is refused.
+    for ($hop = 1; $hop -le 8; $hop++) {
+        $target = Get-HordeDriveLetterTarget -Letter $last
+        # Anything but another drive letter is a volume, a share or nothing: the chain ends here.
+        if ($target -cnotmatch '\A\\\?\?\\([A-Za-z]):') { $ended = $true; break }
+        $last = $Matches[1]
+    }
+    if (-not $ended) { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for another drive letter, and that for another, without end: where it really is cannot be told, and " + $ownDrives) }
+    if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) {
+        # A LETTER DEFINED STRAIGHT OVER A SHARE says so in the table itself: its target is the
+        # device prefix and then UNC. The network question refuses such a letter too, by its type;
+        # this refuses it from what was already read, and does not lean on the type being right.
+        if ($target -cmatch '\A\\\?\?\\[Uu][Nn][Cc](?:\\|\z)') { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network share, and " + $ownDrives) }
+        return ""
+    }
+    if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network drive (" + $last + ":), and " + $ownDrives) }
     return ""
 }
