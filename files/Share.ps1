@@ -39,9 +39,12 @@
 #     anything is looked at or made;
 #   - a title that is empty, holds a control character, a line or paragraph separator or a
 #     character that turns the direction of text, or is longer than the setting maxTitleChars;
-#   - A FILE IN A PLACE, OR OF A NAME, ON THE DENY LIST (files/Deny.ps1): the Horde home and
-#     .horde-secrets whatever the caller says; .ssh, an agent harness's own folders, and a name
-#     holding credential, secret, token, key, password or .env unless the caller gives -Force;
+#   - A FILE IN A PLACE, OR OF A NAME, ON THE DENY LIST (files/Deny.ps1): the Horde home,
+#     .horde-secrets and .ssh whatever the caller says; an agent harness's own folders, and a name
+#     a file of secrets has, unless the caller gives -Force - which lifts the folder and never
+#     such a name inside it;
+#   - A TEXT FILE THAT HOLDS A CREDENTIAL BY ITS SHAPE (files/Deny.ps1): a private key whatever
+#     the caller says, a token of a known shape unless the caller gives -Force;
 #   - a path that names no file, or names a folder; a path in the device form, one holding a name
 #     Windows keeps for a device, and one naming a stream inside a file (files/Path.ps1);
 #   - A NETWORK PATH, in every spelling, and a file on a network drive - this machine's own drive
@@ -295,6 +298,11 @@ function Add-HordeFilesShare {
     if ($kind.magic -eq "") {
         $notText = Get-HordeFilesTextProblem -Bytes $source.bytes -Type $kind.type
         if ($notText -ne "") { return (& $refuse $notText) }
+        # WHAT THE TEXT HOLDS, now that it is known to be text and before anything is kept
+        # (files/Deny.ps1): a private key whatever the caller says, a token of a known shape
+        # unless the caller gives -Force. A picture and a PDF are not looked into.
+        $holds = Get-HordeFilesContentRefusal -Bytes $source.bytes -Force:$Force
+        if ($holds -ne "") { return (& $refuse $holds) }
     }
 
     # THE KEY, LAST OF ALL THAT CAN REFUSE THE FILE ITSELF: a first share that is refused makes no key.

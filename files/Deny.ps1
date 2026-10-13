@@ -107,6 +107,8 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\PathText.ps1")
 # Where each agent harness keeps its own files: read as data, never named.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\MetricsStore.ps1")
+# What looks like a credential in a text: the one statement of it, core's.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Secrets.ps1")
 . (Join-Path $PSScriptRoot "Path.ps1")
 
 function Get-HordeFilesDenyList {
@@ -391,5 +393,36 @@ function Get-HordeFilesDenyRefusal {
     # not share a harness's sign-in because nobody could say where the harness keeps it.
     if ($named -ne "" -and $harness -ne "") { return ($named + ", and it is under " + $what.agent + " ('" + $harness + "'). -Force shares other files from such a folder, and never one that is named so") }
     if ($named -ne "" -and $harnessDoubt -ne "") { return ($named + ", and " + $harnessDoubt + ". -Force never shares a file that is named so from a harness's folder, so it is not shared from here either") }
+    return ""
+}
+
+function Get-HordeFilesContentRefusal {
+    # Why a TEXT file holding -Bytes is not shared for what it holds, or "" when nothing in it has
+    # the shape of a credential. Asked after the bytes are known to be strict UTF-8
+    # (files/Text.ps1) and BEFORE anything is kept: a shared file leaves the machine, and a key
+    # pasted into a report leaves with it whatever the report is called.
+    #   - THE ONE STATEMENT OF WHAT A CREDENTIAL LOOKS LIKE IS core/Secrets.ps1's, and no pattern
+    #     is written here. The list (Get-HordeFilesDenyList, shapes) names which of its kinds are
+    #     asked for, and a name core does not have throws there rather than finding nothing.
+    #   - ONLY THE KINDS THAT KNOW A CREDENTIAL BY ITS SHAPE (the review's decision, 2026-10-13): a
+    #     private key's first line, a token with a known prefix, a signed web token, a webhook
+    #     address. core's other kinds go by a word beside any text (password=..., a bearer value)
+    #     or by how random a long run looks, and those are what ordinary reports are full of: a
+    #     page that explains a setting, a hash, a picture written as base64. A refusal that fires
+    #     on ordinary files teaches everyone to type -Force, so they are not asked for at all.
+    #     Measured 2026-10-13 on a sample of what sessions write: the pull request has the count.
+    #   - A PRIVATE KEY IS NEVER LIFTED; the other shapes are what -Force lifts.
+    #   - THE REFUSAL NAMES THE KIND AND NEVER WHAT WAS FOUND: a reason is printed and logged.
+    #   WHAT THIS DOES NOT SEE: a picture or a PDF (never looked into); a credential written in
+    #   another encoding of itself (base64 of a key, an escaped form); one cut across two lines;
+    #   and any secret that has no shape, which is most passwords.
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes, [switch]$Force)
+    $list = Get-HordeFilesDenyList
+    $text = [System.Text.Encoding]::UTF8.GetString($Bytes)
+    $neverKind = Find-HordeSecretKind -Text $text -Kinds @($list.shapes.never)
+    if ($neverKind -ne "") { return ("what it holds looks like " + $neverKind + ": the line such a key begins with is in it. A file that holds one is never shared, and -Force does not change that") }
+    if ($Force) { return "" }
+    $liftedKind = Find-HordeSecretKind -Text $text -Kinds @($list.shapes.lifted)
+    if ($liftedKind -ne "") { return ("what it holds looks like " + $liftedKind + ", by its shape; what was found is not repeated here. If this file holds no secret, share it again with -Force") }
     return ""
 }

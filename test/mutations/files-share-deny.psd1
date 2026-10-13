@@ -27,5 +27,15 @@
         @{ Name = "force-handed-to-the-deny-list-whatever-was-said"
            Find = '-RepoRoot $RepoRoot -Force:$Force'
            Replace = '-RepoRoot $RepoRoot -Force' }
+        # --- what a text file holds (files/Deny.ps1, Get-HordeFilesContentRefusal) ---
+        @{ Name = "text-not-looked-into"
+           Find = 'if ($holds -ne "") { return (& $refuse $holds) }'
+           Replace = '' }
+        @{ Name = "force-not-handed-to-the-look-into-a-text"
+           Find = '$holds = Get-HordeFilesContentRefusal -Bytes $source.bytes -Force:$Force'
+           Replace = '$holds = Get-HordeFilesContentRefusal -Bytes $source.bytes' }
+        @{ Name = "force-handed-to-the-look-into-a-text-whatever-was-said"
+           Find = '$holds = Get-HordeFilesContentRefusal -Bytes $source.bytes -Force:$Force'
+           Replace = '$holds = Get-HordeFilesContentRefusal -Bytes $source.bytes -Force' }
     )
 }

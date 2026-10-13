@@ -394,5 +394,45 @@
         @{ Name = "name-not-judged"
            Find = 'if ($word -ne "") { return'
            Replace = 'if ($false) { return' }
+        # --- what a text file holds ---
+        @{ Name = "private-key-in-a-text-not-looked-for"
+           Find = '$neverKind = Find-HordeSecretKind -Text $text -Kinds @($list.shapes.never)'
+           Replace = '$neverKind = ""' }
+        @{ Name = "force-lifts-a-private-key-in-a-text"
+           Find = '    $text = [System.Text.Encoding]::UTF8.GetString($Bytes)'
+           Replace = '    if ($Force) { return "" }; $text = [System.Text.Encoding]::UTF8.GetString($Bytes)' }
+        @{ Name = "private-key-refusal-says-force-shares-it"
+           Find = 'A file that holds one is never shared, and -Force does not change that")'
+           Replace = 'If this file holds no secret, share it again with -Force")' }
+        @{ Name = "force-does-not-lift-a-token-in-a-text"
+           Find = '    if ($Force) { return "" }'
+           Replace = '' }
+        @{ Name = "tokens-in-a-text-not-looked-for"
+           Find = '$liftedKind = Find-HordeSecretKind -Text $text -Kinds @($list.shapes.lifted)'
+           Replace = '$liftedKind = ""' }
+        @{ Name = "every-kind-of-secret-looked-for-in-a-text"
+           Find = '$liftedKind = Find-HordeSecretKind -Text $text -Kinds @($list.shapes.lifted)'
+           Replace = '$liftedKind = Find-HordeSecretKind -Text $text' }
+        @{ Name = "access-token-off-the-shapes"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("a private key", "a signed web token", "a webhook address") }' }
+        @{ Name = "signed-web-token-off-the-shapes"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a private key", "a webhook address") }' }
+        @{ Name = "webhook-address-off-the-shapes"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a private key") }' }
+        @{ Name = "private-key-is-a-shape-force-lifts"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
+           Replace = 'shapes = @{ never = @("a webhook address"); lifted = @("an access token", "a signed web token", "a private key") }' }
+        @{ Name = "long-runs-looked-for-in-a-text"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a long random-looking string, as a key or token is") }' }
+        @{ Name = "name-value-pairs-looked-for-in-a-text"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a password or key written as name=value") }' }
+        @{ Name = "token-refusal-does-not-name-the-kind"
+           Find = '("what it holds looks like " + $liftedKind + ", by its shape'
+           Replace = '("what it holds looks like a secret" + ", by its shape' }
     )
 }

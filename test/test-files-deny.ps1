@@ -705,6 +705,131 @@ Check ($deep -eq "") "CONTROL: a chain of letters that ends at a folder of this 
 Check $deepShared "and a file named through it is shared"
 Check ((Get-Target $letters[0]) -eq "" -and (Get-Target $letters[1]) -eq "" -and (Get-Target $letters[2]) -eq "") "and those letters are gone again"
 
+Write-Host ""
+Write-Host "--- what a text file holds: a private key never, a token of a known shape unless -Force ---" -ForegroundColor Cyan
+# EVERY PLANTED SHAPE IS ASSEMBLED FROM PIECES AT RUN TIME, as test/test-secrets.ps1 does, so that no
+# credential-shaped text sits in this file; none of them was ever a credential. The patterns are
+# core/Secrets.ps1's and are not tested here: what is tested is which kinds a share asks for, what
+# -Force lifts, what the reason says, and that nothing is kept.
+$h = New-TestHome
+$held = Join-Path $script:real "held"
+$keyLine = "-----BEGIN RSA PRIV" + "ATE KEY-----"
+$keyBody = "MIIEow" + "IBAAKCAQEAx9Qm2Lp7Rt4Vb8Nc1Hdq3J9s"
+$keyBlock = $keyLine + "`n" + $keyBody + "`n-----END RSA PRIV" + "ATE KEY-----"
+$neverSays = "what it holds looks like a private key"
+$keyFiles = [ordered]@{
+    "report.md" = ("# A report`n`nSome words.`n`n" + $keyBlock + "`n`nMore words.")
+    "at-the-start.txt" = ($keyBlock + "`nwords after it")
+    "at-the-end.txt" = ("words before it`n" + $keyLine)
+    "one-line.txt" = ("words " + $keyLine + " words")
+    "with-crlf.txt" = ("words`r`n" + $keyLine + "`r`n" + $keyBody + "`r`n")
+    "account.json" = ('{"type":"dummy","pk":"' + $keyLine.Replace("RSA ", "") + '\n' + $keyBody + '\n"}')
+    "page.html" = ("<html><body><pre>" + $keyBlock + "</pre></body></html>")
+    "page.htm" = ("<p>" + $keyLine.Replace("RSA", "OPENSSH") + "</p>")
+    "encrypted.md" = ("words`n" + $keyLine.Replace("RSA", "ENCRYPTED") + "`n")
+    "pgp.txt" = ("words`n" + $keyLine.Replace("RSA PRIV", "PGP PRIV").Replace("KEY-----", "KEY BLOCK-----") + "`n")
+    "bare.txt" = ("words`n" + $keyLine.Replace("RSA ", "") + "`n")
+}
+foreach ($named in $keyFiles.Keys) {
+    $file = New-File (Join-Path $held $named) $keyFiles[$named]
+    Check (Test-Refused $h $file $neverSays -NotLike $keyBody) ($named + ": a text holding a private key's first line is refused, and the reason names the kind and repeats nothing of it")
+    Check (Test-Refused $h $file "A file that holds one is never shared, and -Force does not change that" -NotLike "share it again" -Force) "and with -Force it is refused all the same, and the reason says so"
+}
+$withMark = Join-Path $held "with-a-mark.md"
+[System.IO.File]::WriteAllBytes($withMark, ([byte[]](0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes($keyBlock)))
+Check (Test-Refused $h $withMark $neverSays -Force) "after a byte order mark too"
+$big = New-Object System.Text.StringBuilder
+while ($big.Length -lt 1050000) { [void]$big.Append("An ordinary line of an ordinary report, with nothing in it at all.`n") }
+$bigText = $big.ToString().Substring(0, 1048576 - $keyLine.Length) + $keyLine
+$bigFile = New-File (Join-Path $held "the-largest.md") $bigText
+Check ((New-Object System.IO.FileInfo($bigFile)).Length -eq 1048576) "CONTROL: a text file of exactly the largest size that is shared was made, the key's first line its last bytes"
+Check (Test-Refused $h $bigFile $neverSays -Force) "a private key's first line at the very end of the largest file is found"
+Check (Test-Shared $h (New-File (Join-Path $held "the-largest-plain.md") $big.ToString().Substring(0, 1048576))) "CONTROL: the same file without it is shared"
+# WHAT IS NO PRIVATE KEY, though it looks near to one.
+$nearKeys = [ordered]@{
+    "public.md" = "-----BEGIN PUBLIC KEY-----`nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A`n-----END PUBLIC KEY-----"
+    "certificate.txt" = "-----BEGIN CERTIFICATE-----`nMIIDdzCCAl-gAwIBAgIEAgAAuTANBgkq`n-----END CERTIFICATE-----"
+    "small-letters.md" = ("words " + $keyLine.ToLowerInvariant() + " words")
+    "the-words-alone.md" = "How to make a PRIVATE KEY, and where the BEGIN line goes."
+    "end-line-only.txt" = ("-----END RSA PRIV" + "ATE KEY-----")
+}
+foreach ($named in $nearKeys.Keys) { Check (Test-Shared $h (New-File (Join-Path $held $named) $nearKeys[$named])) ("CONTROL: " + $named + " holds no private key's first line, and is shared with no -Force") }
+
+$tokenBody = "Ab1" * 12
+$shaped = [ordered]@{
+    "an access token" = @(("gh" + "p_" + $tokenBody), ("github" + "_pat_" + ("Ef3" * 10)), ("gl" + "pat-" + ("Gh4" * 8)), ("xo" + "xb-" + ("123456789012" * 2)), ("s" + "k-" + ("Ij5" * 10)), ("AK" + "IA" + "ABCDEFGHIJKLMNOP"), ("AI" + "za" + ("Kl6" * 12)))
+    "a signed web token" = @(("ey" + "JhbGciOiJIUzI1NiJ9" + "." + "ey" + "JzdWIiOiIxMjM0In0" + "." + "c2lnbmF0dXJlLXBhcnQ"))
+    "a webhook address" = @(("https://hooks.slack" + ".com/services/T00000000/B00000000/" + "XyXyXyXyXyXyXyXyXyXyXyXy"), ("https://discord" + ".com/api/webhooks/123456789012/" + "AbCdEfGhIjKl"))
+}
+$shapeCount = 0
+foreach ($kindName in $shaped.Keys) {
+    foreach ($plantedShape in @($shaped[$kindName])) {
+        $shapeCount++
+        $wrapped = @(("The value is " + $plantedShape + " and more words."), ('{"value":"' + $plantedShape + '"}'), ("<a href=""https://example.org/?t=" + $plantedShape + """>x</a>"))
+        $names = @(("shape-" + $shapeCount + ".md"), ("shape-" + $shapeCount + ".json"), ("shape-" + $shapeCount + ".html"))
+        for ($at = 0; $at -lt 3; $at++) {
+            # A webhook address is itself an address: it is not put inside another one.
+            if ($at -eq 2 -and $kindName -ceq "a webhook address") { continue }
+            $file = New-File (Join-Path $held $names[$at]) $wrapped[$at]
+            $tail = $plantedShape.Substring($plantedShape.Length - 8)
+            Check (Test-Refused $h $file ("what it holds looks like " + $kindName + ", by its shape; what was found is not repeated here") -NotLike $tail) ($names[$at] + ": a text holding " + $kindName + " is refused, and the reason names the kind and repeats nothing of it")
+            Check (Test-Refused $h $file $insist) "and says that -Force shares it"
+            Check (Test-Shared $h $file -Force) "with -Force it is shared"
+        }
+    }
+}
+Check ($shapeCount -eq 10) "ten planted shapes of the three kinds -Force lifts were each tried in Markdown, JSON and HTML"
+$both = New-File (Join-Path $held "both.md") ("a token " + $shaped["an access token"][0] + " and a key`n" + $keyBlock)
+Check (Test-Refused $h $both $neverSays -Force) "a text holding a token AND a private key is refused for the key, which -Force does not lift"
+# THE KINDS THAT ARE NOT ASKED FOR AT ALL (the review's decision): core finds each of these in a
+# text, and a share lets each by with no -Force, because ordinary reports are full of them.
+$notAsked = [ordered]@{
+    "name-value.md" = ("Set pass" + "word=" + "hunter2longer in the file.")
+    "after-a-colon.txt" = ("Pass" + "word: " + "hunter2x")
+    "in-a-sentence.md" = ("the pass" + "word is 'correct horse battery staple'")
+    "bearer.md" = ("Send Bea" + "rer " + ("a1b2c3d4e5" * 3) + " in the header.")
+    "authorization.txt" = ("Authorization: Basic " + "ZGVwbG95OlRyMHViNGRvcjM=")
+    "inside-an-address.md" = ("clone https://deploy:Tr0ub4dor3x@" + "git.example.com/repo.git")
+    "a-long-run.json" = ('{"id":"' + "Zx9Qm2Lp7Rt4Vb8Nc1Hd" + "6Jf3Kg5Ws0YaUe4Ti7Ro" + '"}')
+    "a-run-with-slashes.txt" = ("wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY")
+}
+foreach ($named in $notAsked.Keys) {
+    $file = New-File (Join-Path $held $named) $notAsked[$named]
+    Check ((Find-HordeSecretKind -Text $notAsked[$named]) -cne "" -and (Test-Shared $h $file)) ("CONTROL: " + $named + " holds what core calls '" + (Find-HordeSecretKind -Text $notAsked[$named]) + "', which a share does not ask for: it is shared with no -Force")
+}
+# WHAT SESSIONS REALLY WRITE, in small: each is shared with no -Force. The measurement on full-size
+# files, with the numbers, is in the pull request.
+$sha = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+$picture = [System.Convert]::ToBase64String([byte[]](0..255 | ForEach-Object { ($_ * 37 + 11) % 256 }) * 8)
+$reallyWritten = [ordered]@{
+    "report-with-a-picture.html" = ("<html><body><h1>Report</h1><img src=""data:image/png;base64," + $picture + """></body></html>")
+    "minified.txt" = "!function(e,t){""use strict"";var n=function(e){return e&&e.__esModule?e:{default:e}},r=t.a1B2c3D4e5F6g7H8,o=Object.assign||function(e){for(var t=1;t<arguments.length;t++){var n=arguments[t];for(var r in n)Object.prototype.hasOwnProperty.call(n,r)&&(e[r]=n[r])}return e};e.exports=o}(module,exports);"
+    "ids-and-hashes.json" = ('{"id":"0273216a-4aa6-420b-8bd6-b5d61a13d73d","commit":"07af8361c2d4e5f60718293a4b5c6d7e8f901234","sha256":"' + $sha + '","etag":"W/\"5d41402abc4b2a76b9719d911017c592\"","rows":[{"fileId":"a3f1c2d4e5b60718293a4b5c6d7e8f90","version":3}]}')
+    "commit-and-sha.md" = ("Merged at 07af8361c2d4e5f60718293a4b5c6d7e8f901234.`n`n    sha256: " + $sha + "`n")
+    "setting-up-the-api.md" = ("# Setting the API key`n`nPut your key in the environment:`n`n    export EXAMPLE_API_KEY=your-api-key-here`n    EXAMPLE_API_KEY=<paste the key>`n`nA key starts with s" + "k- and is shown once. Never commit it.`n")
+}
+foreach ($named in $reallyWritten.Keys) { Check (Test-Shared $h (New-File (Join-Path $held $named) $reallyWritten[$named])) ("CONTROL: " + $named + ", as a session writes one, is shared with no -Force") }
+# A PICTURE AND A PDF ARE NOT LOOKED INTO, pinned so that it is known: their bytes are not text.
+$pngHead = [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+$pngFile = Join-Path $held "picture.png"
+[System.IO.File]::WriteAllBytes($pngFile, ($pngHead + [System.Text.Encoding]::ASCII.GetBytes($keyBlock)))
+Check (Test-Shared $h $pngFile) "KNOWN LIMIT: a picture is not looked into - one whose bytes hold a private key's first line is shared"
+$pdfFile = Join-Path $held "paper.pdf"
+[System.IO.File]::WriteAllBytes($pdfFile, [System.Text.Encoding]::ASCII.GetBytes("%PDF-1.4`n" + $shaped["an access token"][0] + "`n"))
+Check (Test-Shared $h $pdfFile) "KNOWN LIMIT: nor is a PDF - one whose bytes hold a token is shared"
+# AND WHAT ELSE IT DOES NOT SEE, pinned the same way.
+$cut = $shaped["an access token"][0]
+Check (Test-Shared $h (New-File (Join-Path $held "cut-in-two.md") ($cut.Substring(0, 10) + "`n" + $cut.Substring(10)))) "KNOWN LIMIT: a token cut across two lines is not found"
+Check (Test-Shared $h (New-File (Join-Path $held "as-base64.txt") ([System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($keyBlock))))) "KNOWN LIMIT: nor is a private key written as base64 of itself"
+# THE FUNCTION ITSELF, and the list it reads.
+Check ((@($list.shapes.never) -join ",") -ceq "a private key" -and (@($list.shapes.lifted) -join ",") -ceq "an access token,a signed web token,a webhook address") "the kinds asked for are one that is never lifted and three that -Force lifts"
+$asBytes = { param([string]$Words) return ,([System.Text.Encoding]::UTF8.GetBytes($Words)) }
+Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes "plain words")) -eq "" -and (Get-HordeFilesContentRefusal -Bytes ([byte[]]@())) -eq "" -and (Get-HordeFilesContentRefusal -Bytes (& $asBytes "plain words") -Force) -eq "") "plain words and an empty file hold nothing"
+Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes $keyBlock)) -like ($neverSays + "*") -and (Get-HordeFilesContentRefusal -Bytes (& $asBytes $keyBlock) -Force) -like ($neverSays + "*")) "a private key is answered the same with and without -Force"
+Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes $cut)) -like "*an access token*" -and (Get-HordeFilesContentRefusal -Bytes (& $asBytes $cut) -Force) -eq "") "a token is answered without -Force and not with it"
+$everyKind = @(Find-HordeSecretKind -Text $keyBlock -Kinds (@($list.shapes.never) + @($list.shapes.lifted)))
+Check ($everyKind.Count -eq 1 -and $everyKind[0] -ceq "a private key") "CONTROL: every kind the list names is one core/Secrets.ps1 has - it throws for a name it does not have"
+
 Set-Location -LiteralPath $env:TEMP
 [System.IO.Directory]::SetCurrentDirectory($env:TEMP)
 if ((Split-Path -Leaf $script:work) -match '\Ahorde-files-deny-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) {
