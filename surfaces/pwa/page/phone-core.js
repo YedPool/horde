@@ -342,7 +342,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     async forget(id) { this.lock(id); pairings.delete(id); await store.delete(ENTRY + id); },
 
     // Read the horde's phone mailbox and return the newest complete snapshot this phone can open:
-    // { snapshot, seq, questions, pageKeyByNumber, withheld, counts, anomalies, stale, diagnostics }:
+    // { snapshot, seq, questions, pageKeyByNumber, withheld, notShown, counts, anomalies, stale, diagnostics }:
+    // notShown is the one line for what the snapshot withholds, "" for nothing (relay/js/protocol.js,
+    // withheldWords): this phone's own sentence, never the machine's words.
+    //
     // anomalies are this phone's own sentences, for the screen; diagnostics hold what the relay said,
     // for a person diagnosing, never the screen. waitMs > 0
     // long-polls the relay first (a watch). Needs an unlocked session.
@@ -403,7 +406,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (v) for (const q of v.questions) pageKeyByNumber[q.question.number] = q.pageKey;
       return {
         snapshot: v ? v.snapshot : "", seq: v ? v.seq : -1, questions: v ? v.questions.map((q) => q.question) : [], pageKeyByNumber,
-        withheld: v ? v.withheld : [], counts: v ? v.counts : null, unreadable: v ? v.unreadable : 0, notUnderstood: v ? v.notUnderstood : 0,
+        withheld: v ? v.withheld : [], notShown: v ? P.withheldWords(v.withheld) : "", counts: v ? v.counts : null, unreadable: v ? v.unreadable : 0, notUnderstood: v ? v.notUnderstood : 0,
         anomalies, stale, mode: s.mode, relayDown: said.length > 0, diagnostics: said.concat(diagnostics.splice(0))
       };
     },

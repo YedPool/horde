@@ -478,6 +478,44 @@ export function newestSnapshot(pages) {
   return best;
 }
 
+// --- what a snapshot leaves out, as the phone says it ---
+
+// A SNAPSHOT MAY SHOW LESS THAN THE LIST HOLDS, and says so: its withheld list names, by number, each
+// open question it does not carry, with the machine's reason (channels/decisions/Channel.ps1). Until
+// 2026-10-14 the phone never read it, so a shortened list looked like the whole one - and since a
+// machine now sends ONE page first into a full mailbox, with every other question withheld, a list of
+// forty could show as six with no word said, for as long as that mailbox stays full.
+// THE REASON SHOWN IS THIS PHONE'S OWN SENTENCE, chosen by which of the machine's reasons it is: the
+// machine's words are read only as far as telling the three apart, and are never put on the screen (as
+// a progress notice's are not, PROGRESS_WORDS). A reason this phone does not know gets a sentence that
+// says only that. NOTHING OF A WITHHELD QUESTION IS SHOWN, not even its number: a number is no help on
+// a phone that cannot show the question, and the count is what tells him the list is short.
+const WITHHELD_KINDS = [
+  { opens: "it is in the snapshot that follows", one: "it comes in the snapshot that follows", many: "they come in the snapshot that follows" },
+  { opens: "it holds what looks like a secret", one: "it holds what looks like a secret, so it is shown at the machine only", many: "they hold what looks like a secret, so they are shown at the machine only" },
+  { opens: "it is too large to send to the phone", one: "it is too large to send to the phone, so it is shown at the machine only", many: "they are too large to send to the phone, so they are shown at the machine only" }
+];
+const WITHHELD_OTHER = { one: "it is shown at the machine only", many: "they are shown at the machine only" };
+// The one line for a snapshot's withheld list: "" when nothing is withheld, else a sentence for each
+// kind of reason there is, in the order above - "3 questions are not shown here: they come in the
+// snapshot that follows." An entry that is not an object with a reason counts as one of no known kind.
+export function withheldWords(withheld) {
+  const list = Array.isArray(withheld) ? withheld : [];
+  const counts = new Array(WITHHELD_KINDS.length + 1).fill(0);
+  for (const w of list) {
+    const reason = w && typeof w === "object" && typeof w.reason === "string" ? w.reason : "";
+    const at = WITHHELD_KINDS.findIndex((k) => reason.startsWith(k.opens));
+    counts[at < 0 ? WITHHELD_KINDS.length : at] += 1;
+  }
+  const out = [];
+  counts.forEach((n, i) => {
+    if (n === 0) return;
+    const words = i < WITHHELD_KINDS.length ? WITHHELD_KINDS[i] : WITHHELD_OTHER;
+    out.push(n + (n === 1 ? " question is" : " questions are") + " not shown here: " + (n === 1 ? words.one : words.many) + ".");
+  });
+  return out.join(" ");
+}
+
 // --- times, as the phone shows them ---
 
 // WHEN A THING WAS SAID is shown in the phone's own local time, in a short form ("14:05"), with the day
