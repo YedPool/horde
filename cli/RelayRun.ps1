@@ -16,6 +16,37 @@
 # and a retired agreement key opens only through its grace. What the run has learnt survives that
 # reopen - the channels' memory always, the cursor and the ack while the mailbox is the same
 # (channels/Port.ps1, Update-HordeRelayRunContext; review of 48bc492, finding 3).
+# SENDING DURING THE WATCH (2026-10-13). Step 2 ran once a turn, and a turn is as long as its watch: so
+# what a channel had to SEND a second into the watch - the Thrall's reply under a question, a line of
+# chat, a new question - waited for the watch to end, up to 60 s on the hosted relay, while what came IN
+# was always fast (a put ends the watch at once). Measured with a real run over the local relay and an
+# 8 s watch: a note written about a second into the watch reached the phone's mailbox 6.9 s later, three
+# times of three; the same run with what is described here, 0.7 to 0.9 s. A shorter watch was never the
+# answer: the hosted relay counts requests (20,000 a day an account), a watch is one, and a 2 s watch
+# is 43,200 a day.
+# So, ON A RELAY THAT WATCHES IN SLICES (relays/Port.ps1, A WATCH IN SLICES), the turn's one watch is
+# held open and waited on sendCheckMs at a time (1000 by default), and between two slices the run asks
+# every channel's Glance (channels/Port.ps1) - a look at local state that costs the relay nothing - and
+# runs the Tick, there and then, of each channel that says it has something. Only that Tick's own puts
+# reach the relay: an idle watch is one request, as it was, and a send during it is that send's puts and
+# no more (test/test-relay-run-send.ps1 counts both). What does not change:
+#   - RETRY-SAFE, as below: the watch in slices is the same one watch, and its batch goes through the
+#     same journal and ack; a Tick during the watch is the turn's Tick run sooner, recording before it
+#     puts as it always does.
+#   - A SEND THAT FAILS IS NOT TRIED AGAIN IN THAT WATCH. The first Tick that says it failed ends the
+#     looking for the rest of the turn; the watch itself goes on to its end, so an outbound fault still
+#     never holds an answer back, and the turn then counts as failed and waits out its backoff, exactly
+#     as a failed Tick at the top of a turn does. A relay that is refusing is never asked once a second.
+#   - NEVER A SPIN. A relay whose slice comes back sooner than it was asked to wait is waited for here,
+#     to the end of the interval, before the next look: two looks are never closer than sendCheckMs.
+#   - A STOP IS SEEN BETWEEN SLICES, and ends the watch there: within sendCheckMs, where it was watchMs.
+#   - THE TURN IS NO LONGER THAN IT WAS: the watch's time runs while a Tick works, so the heartbeat's
+#     tick, computed from the watch and the longest backoff, still describes how often the run beats.
+#   - A RELAY THAT DOES NOT WATCH IN SLICES is watched by one blocking watch, by the very line that
+#     always did it, and nothing is looked at during it.
+# What a channel asks for with againMs is still the turn's: it shortens the turn's watch when the
+# turn's Tick asks, and is not read from a Tick run during the watch.
+#
 # A MINIMUM TURN (finding 5): a turn whose watch came back at once with nothing - watchMs 0, or a relay
 # that does not wait - is padded to minTurnMs (1000 by default, at least 50), so no setting and no relay
 # makes the loop spin.
@@ -36,7 +67,8 @@
 # stop file holds the moment it was asked, and EVERY run whose start is before that moment obeys it -
 # no run that stops deletes it, so a second run on the same home stops too (finding 4: the first to stop
 # deleted it, and the second ran on). A run that STARTS removes a stop asked before its start: that was
-# a request to the runs before it. A watch is at most watchMs, and every wait - a backoff, a padded
+# a request to the runs before it. A watch is at most watchMs - and on a relay that watches in
+# slices a stop is seen between two of them, within sendCheckMs - and every wait - a backoff, a padded
 # turn - is slept in slices of at most 500 ms with the stop asked between them (finding 6: a 15 s
 # backoff hid a stop for 15 s).
 #
@@ -82,7 +114,13 @@ $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Set
        what = "How often, in minutes, retired agreement keys past their grace are released and the keys opened again." },
     # 50 ms is the floor: twenty empty turns a second at most, whatever watchMs and the relay do.
     @{ name = "minTurnMs"; kind = "whole"; default = 1000; min = 50; max = 60000
-       what = "The shortest a turn may be, in milliseconds, when its watch came back at once with nothing." }
+       what = "The shortest a turn may be, in milliseconds, when its watch came back at once with nothing." },
+    # 1000 ms is "about a second": with a Tick's own work, what a channel has to send is at the relay
+    # within about two of when it was written. 200 ms is the floor - five looks a second, each a few
+    # milliseconds of local reads (channels/Port.ps1, Glance) - and 60000, the longest watch there is,
+    # the ceiling: at the ceiling nothing is looked at during a watch, which is how it was before.
+    @{ name = "sendCheckMs"; kind = "whole"; default = 1000; min = 200; max = 60000
+       what = "How often, in milliseconds, the run looks during a watch for something a channel has to send." }
 )
 # The longest one sleep of the loop: a stop is asked between slices (A CLEAN STOP, above).
 $script:HordeRelayRunSliceMs = 500
@@ -190,6 +228,46 @@ function Wait-HordeRelayRunSliced {
     return (Test-HordeRelayRunStopAsked -Path $StopPath -StartedMs $StartedMs)
 }
 
+# What Receive-HordeRelayInbox runs between two slices of the turn's watch (SENDING DURING THE WATCH, in
+# the header): handed the context and the run's own table for the watch, it answers $true to end the
+# watch (a stop was asked). A block, because that is what the channels' port takes; the work is a
+# function, so it is tested by name.
+$script:HordeRelayRunBetweenSlices = { param($Context, $Watching) return (Invoke-HordeRelayRunSendCheck -Context $Context -Watching $Watching) }
+
+function New-HordeRelayRunWatching {
+    # The run's table for its looks during a watch: what Invoke-HordeRelayRunSendCheck needs, and what
+    # it learns. failed is set at the top of every turn's watch; said is the run's, so a Glance that
+    # cannot look says so once a run and not once a second.
+    param([Parameter(Mandatory = $true)][scriptblock]$Say, [Parameter(Mandatory = $true)][scriptblock]$Sleep, [Parameter(Mandatory = $true)][string]$StopPath,
+        [Parameter(Mandatory = $true)][long]$StartedMs, [Parameter(Mandatory = $true)][int]$CheckMs)
+    return @{ say = $Say; sleep = $Sleep; stopPath = $StopPath; startedMs = $StartedMs; checkMs = $CheckMs
+        failed = $false; said = @{}; sinceLook = [System.Diagnostics.Stopwatch]::StartNew() }
+}
+
+function Invoke-HordeRelayRunSendCheck {
+    # ONE LOOK BETWEEN TWO SLICES OF THE WATCH (SENDING DURING THE WATCH, in the header). $true when a
+    # stop was asked: the watch then ends here. Otherwise $false, after running the Tick of every
+    # channel whose Glance says it has something to send - unless a Tick has already failed in this
+    # turn, when nothing more is sent before the turn's backoff.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][hashtable]$Watching)
+    if (Test-HordeRelayRunStopAsked -Path $Watching.stopPath -StartedMs $Watching.startedMs) { return $true }
+    # NEVER A SPIN: a slice that came back sooner than the interval is waited for here, in slices that
+    # ask for a stop, so two looks are never closer than checkMs whatever the relay does.
+    $early = [long]$Watching.checkMs - $Watching.sinceLook.ElapsedMilliseconds
+    if ($early -gt 0 -and (Wait-HordeRelayRunSliced -Ms $early -Why "check" -Sleep $Watching.sleep -StopPath $Watching.stopPath -StartedMs $Watching.startedMs)) { return $true }
+    try {
+        if ($Watching.failed) { return $false }
+        $look = Find-HordeRelayChannelsToSend -Context $Context
+        foreach ($l in @($look.lines)) { if (-not $Watching.said.ContainsKey($l)) { $Watching.said[$l] = $true; $null = & $Watching.say $l } }
+        if (@($look.due).Count -eq 0) { return $false }
+        $ticked = Invoke-HordeRelayChannelTicks -Context $Context -Only @($look.due)
+        foreach ($l in @($ticked.lines)) { $null = & $Watching.say $l }
+        # A SEND THAT FAILS IS NOT TRIED AGAIN IN THIS WATCH: the turn counts as failed and backs off.
+        if ($ticked.failed) { $Watching.failed = $true }
+        return $false
+    } finally { $Watching.sinceLook.Restart() }
+}
+
 function Invoke-HordeRelayRun {
     # The loop (the header). -Connection is a relays/Port.ps1 connection the caller made; -Say receives
     # each line the loop has to say (the command prints them). Returns { turns; failures; stoppedBy }.
@@ -229,6 +307,7 @@ function Invoke-HordeRelayRun {
     $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $HordeHome
     $beatTick = Get-HordeRelayRunTickSeconds -WatchMs $watchMs -Settings $set
     $beatFailed = $false
+    $watching = New-HordeRelayRunWatching -Say $Say -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs -CheckMs ([int]$set.sendCheckMs)
     try {
         while ($true) {
             if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }
@@ -265,7 +344,12 @@ function Invoke-HordeRelayRun {
                 # A channel that asked to be turned again sooner (the decisions bell, at the end of a
                 # quiet period) is: this watch waits no longer than it asked. A put still ends it at once.
                 $turnWatch = Get-HordeRelayRunTurnWatchMs -WatchMs $watchMs -AgainMs $ticks.againMs
-                $in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $turnWatch
+                # On a relay that watches in slices the watch is held open and the channels are looked at
+                # between its slices (SENDING DURING THE WATCH, in the header); on any other, -Between is
+                # never run and this is the one blocking watch it always was. A turn whose own Tick could
+                # not send begins its watch as failed: nothing more is sent before the turn's backoff.
+                $watching.failed = [bool]$ticks.failed; $watching.sinceLook.Restart()
+                $in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $turnWatch -SliceMs ([int]$set.sendCheckMs) -Between $script:HordeRelayRunBetweenSlices -With $watching
                 if ($in.state -cne "known") { $failed = "the mailbox could not be read: " + $in.reason }
                 else {
                     foreach ($l in @($in.value.refused)) { $null = & $Say ("refused " + $l) }
@@ -279,6 +363,7 @@ function Invoke-HordeRelayRun {
                 # A channel that could not send counts toward the backoff (finding 1), after the inbound
                 # work of the turn is done: an outbound fault never holds an answer back.
                 if ($failed -ceq "" -and $ticks.failed) { $failed = "a channel could not send (above)" }
+                if ($failed -ceq "" -and $watching.failed) { $failed = "a channel could not send during the watch (above)" }
             }
             $last = ($MaxTurns -gt 0 -and $turns -ge $MaxTurns)
             if ($failed -cne "") {
