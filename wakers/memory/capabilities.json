@@ -21,6 +21,10 @@
     "nudge.guarded": {
       "support": "yes",
       "evidence": "The nudge reads the session's box and turn as they are when it is asked, and answers busy without recording a line when the box is not empty or a turn is under way. test/test-waker-conformance.ps1 seats each case and observes no nudge and no typed text."
+    },
+    "state.limit": {
+      "support": "yes",
+      "evidence": "Whether a session is limited, and until when, is whatever the test said it is, read back through the port, in test/test-waker-conformance.ps1 and test/test-wake.ps1."
     }
   }
 }

@@ -8,6 +8,36 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-waker-that-says-nothing-of-the-limit-reads-as-not-limited"
+           Find = '        $limited = "unknown"'
+           Replace = '        $limited = "no"' }
+        @{ Name = "a-waker-that-cannot-tell-may-say-limited"
+           Find = 'if ($lim.has -and $null -ne $lim.value -and "$($lim.value)" -cne "no") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-waker-that-cannot-tell-is-read-as-unknown"
+           Find = 'if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.limit")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-limited-outside-the-three-words-accepted"
+           Find = 'if ($lim.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $lim.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "an-end-read-beside-a-limit-that-is-not-yes"
+           Find = 'if ($limited -ceq "yes" -and $until.has -and $null -ne $until.value) {'
+           Replace = 'if ($until.has -and $null -ne $until.value) {' }
+        @{ Name = "retired-left-out-reads-as-a-listing"
+           Find = 'if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "retired-is-not-carried"
+           Find = 'reachable = [string]$reach.value; retired = [string]$retired.value })'
+           Replace = 'reachable = [string]$reach.value; retired = "no" })' }
+        @{ Name = "limited-not-carried"
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
+           Replace = 'midTurn = $words["midTurn"]; limited = $false; limitedUntil = $limitedUntil })' }
+        @{ Name = "the-end-of-a-limit-not-carried"
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
+           Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null })' }
+        @{ Name = "a-limit-ending-at-a-time-with-no-zone-accepted"
+           Find = 'if ($null -eq $limitedUntil) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
         @{ Name = "invalid-capabilities-registered"
            Find = 'if ($findings.Count -gt 0) { throw ("waker ''" + (Split-Path -Leaf $from) + "'' refused: "'
            Replace = 'if ($false) { throw ("waker ''" + (Split-Path -Leaf $from) + "'' refused: "' }
@@ -35,9 +65,39 @@
         @{ Name = "production-does-not-require-the-guard"
            Find = '$script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")'
            Replace = '$script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")' }
+        @{ Name = "unverified-picked-without-being-allowed"
+           Find = 'if ($AllowUnverified -and $claims.Count -eq 1) { return (New-HordeKnown -Value $claims[0]) }'
+           Replace = 'if ($claims.Count -eq 1) { return (New-HordeKnown -Value $claims[0]) }' }
+        @{ Name = "unverified-never-picked"
+           Find = 'if ($AllowUnverified -and $claims.Count -eq 1) { return (New-HordeKnown -Value $claims[0]) }'
+           Replace = '' }
+        @{ Name = "one-of-two-unverified-chosen"
+           Find = 'if ($AllowUnverified -and $claims.Count -gt 1) { return (New-HordeUnknown'
+           Replace = 'if ($AllowUnverified -and $claims.Count -gt 1) { return (New-HordeKnown -Value $claims[0]) }; if ($false) { return (New-HordeUnknown' }
+        @{ Name = "declined-counts-as-a-claim"
+           Find = 'return (@("yes", "unverified") -ccontains (Get-HordeWakerSupport'
+           Replace = 'return (@("yes", "unverified", "declined") -ccontains (Get-HordeWakerSupport' }
+        @{ Name = "unverified-may-not-answer"
+           Find = 'return (@("yes", "unverified") -ccontains (Get-HordeWakerSupport'
+           Replace = 'return (@("yes") -ccontains (Get-HordeWakerSupport' }
+        @{ Name = "unverified-capabilities-not-named"
+           Find = 'Where-Object { (Get-HordeWakerSupport -Waker $Waker -Capability $_) -ceq "unverified" })'
+           Replace = 'Where-Object { $false })' }
         @{ Name = "production-chooses-between-two"
            Find = 'if ($able.Count -gt 1) { return (New-HordeUnknown'
            Replace = 'if ($able.Count -gt 1) { return (New-HordeKnown -Value $able[0]) }; if ($false) { return (New-HordeUnknown' }
+        @{ Name = "full-reading-never-asked"
+           Find = 'if ($Full -and $null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }'
+           Replace = 'if ($false) { $a = & $Waker.confirm $Id }' }
+        @{ Name = "every-reading-is-the-full-one"
+           Find = 'if ($Full -and $null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }'
+           Replace = 'if ($null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }' }
+        @{ Name = "begin-never-told"
+           Find = 'try { $null = & $Waker.begin } catch { }'
+           Replace = '' }
+        @{ Name = "begin-that-throws-is-a-throw"
+           Find = 'try { $null = & $Waker.begin } catch { }'
+           Replace = '$null = & $Waker.begin' }
         @{ Name = "look-alike-waker-called"
            Find = 'return [object]::ReferenceEquals($script:HordeWakers[$n.Value], $Waker)'
            Replace = 'return $true' }
@@ -93,17 +153,26 @@
            Find = '$m.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $m.value) { return'
            Replace = '$m.value -isnot [string]) { return' }
         @{ Name = "box-claimed-without-the-capability"
-           Find = 'if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return'
+           Find = 'if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "turn-claimed-without-the-capability"
-           Find = 'if (-not (Test-HordeWakerCapability -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return'
+           Find = 'if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "outcome-outside-the-list-accepted"
            Find = '$outcome.value -isnot [string] -or $script:HordeWakerOutcomes -cnotcontains $outcome.value) { return'
            Replace = '$outcome.value -isnot [string]) { return' }
         @{ Name = "nothing-is-not-an-outcome"
-           Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")'
-           Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable")' }
+           Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")'
+           Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "killed")' }
+        @{ Name = "elapsed-time-not-carried"
+           Find = '-and $took.value -ge 0) { $value["elapsedMs"] = [long]$took.value }'
+           Replace = '-and $false) { $value["elapsedMs"] = [long]$took.value }' }
+        @{ Name = "killed-is-not-an-outcome"
+           Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")'
+           Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")' }
+        @{ Name = "killed-without-a-reason-accepted"
+           Find = '$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing", "killed")'
+           Replace = '$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing")' }
         @{ Name = "busy-without-a-reason-accepted"
            Find = 'if ($script:HordeWakerReasonOutcomes -ccontains $outcome.value -and $why.Trim() -eq "") { return'
            Replace = 'if ($false) { return' }

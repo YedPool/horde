@@ -10,7 +10,7 @@ return [pscustomobject]@{
     Seat = {
         param($State, $Session)
         Set-HordeMemoryWakerSession -Id $Session.id -Label $Session.label -Role $Session.role -Parent $Session.parent -UnreadCount $Session.unreadCount `
-            -OldestUnreadAt $Session.oldestUnreadAt -Idle $Session.idle -BoxEmpty $Session.boxEmpty -MidTurn $Session.midTurn
+            -OldestUnreadAt $Session.oldestUnreadAt -Idle $Session.idle -BoxEmpty $Session.boxEmpty -MidTurn $Session.midTurn -Limited $Session.limited
     }
     Observe = {
         param($State, $Id)
