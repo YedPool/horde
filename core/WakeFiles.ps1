@@ -90,6 +90,18 @@ function Write-HordeWakeFile {
     catch { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue; throw }
 }
 
+function Get-HordeWakeModeFile {
+    # The path of the journal or the heartbeat of one mode: <home>\wake\<stem><ext> for a live run and
+    # <stem>-shadow<ext> for a shadow run. PER MODE, like the state files and the lock. The first version
+    # had one of each, and the review of PR #208 found what two modes do with them: a shadow run kept
+    # heartbeat.json fresh, so a live watcher that had died read as alive; and two processes appended
+    # to one journal.jsonl, where their lines can collide.
+    param([Parameter(Mandatory = $true)][string]$Stem, [Parameter(Mandatory = $true)][string]$Extension, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    $leaf = $Stem + $Extension
+    if ($Shadow) { $leaf = $Stem + "-shadow" + $Extension }
+    return (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) $leaf)
+}
+
 function Get-HordeWakeStaleSeconds {
     # After how long with no heartbeat a watcher that ticks every -TickSeconds is stale: three ticks,
     # and never less than 120 s. The first version said 120 s whatever the tick, while the command took
@@ -100,11 +112,12 @@ function Get-HordeWakeStaleSeconds {
 }
 
 function Write-HordeWakeJournal {
-    # Append each entry to journal.jsonl as one line of JSON. Returns how many lines it wrote.
+    # Append each entry to the mode's journal (journal.jsonl, or journal-shadow.jsonl with -Shadow) as
+    # one line of JSON. Returns how many lines it wrote.
     # THE JOURNAL IS BOUNDED (review of PR #207: it only grew). When it has reached -MaxBytes it is set
-    # aside as journal.1.jsonl, replacing the one set aside before, and a new one is begun: at most two
+    # aside under the same name with .1 before its extension, replacing the one set aside before, and a new one is begun: at most two
     # files, and the newest lines are never the ones lost.
-    param($Entries, [string]$HordeHome = (Get-HordeHome), [long]$MaxBytes = $script:HordeWakeJournalMaxBytes)
+    param($Entries, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome), [long]$MaxBytes = $script:HordeWakeJournalMaxBytes)
     $lines = New-Object System.Collections.ArrayList
     foreach ($e in @($Entries)) {
         if ($null -eq $e) { continue }
@@ -115,20 +128,19 @@ function Write-HordeWakeJournal {
     if ($lines.Count -eq 0) { return 0 }
     $dir = Get-HordeWakeFolder -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $path = Join-Path $dir "journal.jsonl"
-    if ((Test-Path -LiteralPath $path -PathType Leaf) -and (New-Object System.IO.FileInfo($path)).Length -ge $MaxBytes) { Move-HordeFileAtomic -From $path -To (Join-Path $dir "journal.1.jsonl") }
+    $path = Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -Shadow:$Shadow -HordeHome $HordeHome
+    if ((Test-Path -LiteralPath $path -PathType Leaf) -and (New-Object System.IO.FileInfo($path)).Length -ge $MaxBytes) { Move-HordeFileAtomic -From $path -To (Get-HordeWakeModeFile -Stem "journal" -Extension ".1.jsonl" -Shadow:$Shadow -HordeHome $HordeHome) }
     [System.IO.File]::AppendAllText($path, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
     return $lines.Count
 }
 
 function Read-HordeWakeJournalTail {
-    # The journal's last -Count lines, as they were written; none when there is no journal. Just after
+    # The last -Count lines of the mode's journal, as they were written; none when there is no journal. Just after
     # the journal was set aside the new one is short, so the tail is filled from the one before it.
-    param([int]$Count = 10, [string]$HordeHome = (Get-HordeHome))
-    $dir = Get-HordeWakeFolder -HordeHome $HordeHome
+    param([int]$Count = 10, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
     $lines = @()
-    foreach ($leaf in @("journal.1.jsonl", "journal.jsonl")) {
-        $path = Join-Path $dir $leaf
+    foreach ($ext in @(".1.jsonl", ".jsonl")) {
+        $path = Get-HordeWakeModeFile -Stem "journal" -Extension $ext -Shadow:$Shadow -HordeHome $HordeHome
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
         $lines = @($lines) + @((Read-HordeSharedText -Path $path) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
     }
@@ -137,20 +149,20 @@ function Read-HordeWakeJournalTail {
 }
 
 function Write-HordeWakeHeartbeat {
-    # heartbeat.json, replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
+    # The mode's heartbeat (heartbeat.json, or heartbeat-shadow.json with -Shadow), replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
     # anything else tells a watcher that is running from one that is not; tickSeconds is how often this
     # watcher beats, so a reader knows how long a silence is too long (Get-HordeWakeStaleSeconds).
     param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome))
     $beat = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At); pid = $ProcessId; pass = $Pass; shadow = [bool]$Shadow; tickSeconds = $TickSeconds }
-    Write-HordeWakeFile -Path (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "heartbeat.json") -Text (ConvertTo-Json -InputObject $beat -Compress)
+    Write-HordeWakeFile -Path (Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $beat -Compress)
 }
 
 function Read-HordeWakeHeartbeat {
-    # The last heartbeat: known { at; pid; pass; shadow; tickSeconds }, absent when the watcher never ran
+    # The mode's last heartbeat: known { at; pid; pass; shadow; tickSeconds }, absent when the watcher never ran
     # here, or unknown when the file cannot be read as one.
-    param([string]$HordeHome = (Get-HordeHome))
-    $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "heartbeat.json"
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "the wake watcher has never run in this home: there is no heartbeat") }
+    param([switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeModeFile -Stem "heartbeat" -Extension ".json" -Shadow:$Shadow -HordeHome $HordeHome
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "it has never run in this home: there is no heartbeat") }
     try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason "the heartbeat could not be read" -ErrorRecord $_) }
     $at = $null

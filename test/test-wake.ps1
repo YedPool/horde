@@ -322,11 +322,14 @@ $null = Write-HordeWakeJournal -Entries @($entries[0])
 Check (@(Read-HordeWakeJournalTail -Count 100).Count -eq 14) "the journal is appended to, never replaced"
 
 Write-HordeWakeHeartbeat -At (At 5) -ProcessId 4242 -Pass 7 -Shadow
-$beat = Read-HordeWakeHeartbeat
+Check ((Read-HordeWakeHeartbeat).state -ceq "absent") "a shadow heartbeat is not the live one: after it, the live watcher has still never run"
+$beat = Read-HordeWakeHeartbeat -Shadow
 Check ($beat.state -ceq "known" -and $beat.value.at -eq (At 5) -and $beat.value.pid -eq 4242 -and $beat.value.pass -eq 7 -and $beat.value.shadow -eq $true) "a heartbeat reads back as it was written: when, which process, which pass, and that it was shadow"
 Write-HordeWakeHeartbeat -At (At 8) -ProcessId 4242 -Pass 8
 $beat = Read-HordeWakeHeartbeat
-Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0) "the next one replaces it whole, and leaves no temporary file"
+Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0 -and (Read-HordeWakeHeartbeat -Shadow).value.pass -eq 7) "a live one is a file of its own, written whole with no temporary file left, and the shadow one is as it was"
+$null = Write-HordeWakeJournal -Entries @($entries[1]) -Shadow
+Check (@(Read-HordeWakeJournalTail -Count 100).Count -eq 14 -and @(Read-HordeWakeJournalTail -Count 100 -Shadow).Count -eq 1) "the journal is per mode too: a shadow line goes to the shadow journal and the live one is as it was"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), "{ not json")
 Check ((Read-HordeWakeHeartbeat).state -ceq "unknown") "a heartbeat that cannot be read is unknown, not absent"
 Check ((Get-HordeWakeStaleSeconds) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 3) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 40) -eq 120) "a heartbeat is stale after 120 s, for any tick up to 40 s"
