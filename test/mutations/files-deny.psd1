@@ -296,9 +296,6 @@
         @{ Name = "home-folder-under-another-name"
            Find = 'homeFolder = ".horde"'
            Replace = 'homeFolder = ".hordes"' }
-        @{ Name = "home-folder-anywhere-on-the-way-not-looked-for"
-           Find = 'if ([string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)) { return'
-           Replace = 'if ($false) { return' }
         @{ Name = "folder-on-the-way-compared-with-its-case"
            Find = '$folderName = ConvertTo-HordeAsciiLower -Text $parts[$at]'
            Replace = '$folderName = $parts[$at]' }
@@ -334,15 +331,31 @@
         @{ Name = "what-force-lifts-judged-as-what-it-never-lifts"
            Find = 'Where-Object { $_.force -eq $lifted }'
            Replace = 'Where-Object { $true }' }
+        # --- Horde's own folders by one rule: the name .horde, or a name that begins with .horde- ---
+        @{ Name = "hordes-own-folder-by-its-exact-name-not-refused"
+           Find = '$isHordes = [string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)'
+           Replace = '$isHordes = $false' }
+        @{ Name = "hordes-own-folders-by-the-start-of-their-name-not-refused"
+           Find = 'if (-not $isHordes) { $isHordes = $folderName.StartsWith(($list.homeFolder + "-"), [System.StringComparison]::Ordinal) }'
+           Replace = '' }
+        @{ Name = "any-folder-whose-name-begins-like-the-home-is-refused"
+           Find = 'if (-not $isHordes) { $isHordes = $folderName.StartsWith(($list.homeFolder + "-"), [System.StringComparison]::Ordinal) }'
+           Replace = 'if (-not $isHordes) { $isHordes = $folderName.StartsWith($list.homeFolder, [System.StringComparison]::Ordinal) }' }
+        @{ Name = "a-folder-that-only-holds-the-name-is-refused"
+           Find = 'if (-not $isHordes) { $isHordes = $folderName.StartsWith(($list.homeFolder + "-"), [System.StringComparison]::Ordinal) }'
+           Replace = 'if (-not $isHordes) { $isHordes = $folderName.Contains(($list.homeFolder + "-")) }' }
+        @{ Name = "force-lifts-hordes-own-folders"
+           Find = 'if ($isHordes) { return'
+           Replace = 'if ($isHordes -and -not $Force) { return' }
+        @{ Name = "hordes-own-folder-refusal-does-not-name-the-folder"
+           Find = 'is under a folder named ''" + $parts[$at] + "'': a folder'
+           Replace = 'is under a folder named ''" + $list.homeFolder + "'': a folder' }
         @{ Name = "secrets-folder-anywhere-on-the-way-not-looked-for"
            Find = 'for ($at = 1; $at -lt ($parts.Count - 1); $at++) {'
            Replace = 'for ($at = 1; $at -lt 0; $at++) {' }
         @{ Name = "file-named-as-the-secrets-folder-taken-for-one"
            Find = 'for ($at = 1; $at -lt ($parts.Count - 1); $at++) {'
            Replace = 'for ($at = 1; $at -lt $parts.Count; $at++) {' }
-        @{ Name = "secrets-folder-anywhere-not-refused"
-           Find = 'if ([string]::Equals($folderName, $list.secretsFolder, [System.StringComparison]::Ordinal)) { return'
-           Replace = 'if ($false) { return' }
         @{ Name = "force-lifts-nothing"
            Find = '    if (-not $Force) {'
            Replace = '    if ($true) {' }

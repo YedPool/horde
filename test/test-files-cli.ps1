@@ -336,7 +336,7 @@ Check (Test-Denied @("share", $inHome4, "-Title", "From the home", "-Force") ("i
 Check (Test-Allowed @("share", (New-Dummy ($home4 + "-beside\notes.md")), "-Title", "Beside the home")) "CONTROL: a file in a folder whose name only begins with the home's is shared"
 $inSecrets4 = New-Dummy (Join-Path $profile4 ".horde-secrets\client.json") '{"dummy":1}'
 Check (Test-Denied @("share", $inSecrets4, "-Title", "A client file", "-Force") ("is under a .horde-secrets folder*" + $neverSaid)) "a file under .horde-secrets in the profile is refused as that, with -Force too, and the line says -Force does not change that"
-Check (Test-Denied @("share", (New-Dummy (Join-Path $script:work "a-copy\.horde-secrets\client.md")), "-Title", "A copy", "-Force") "is under a .horde-secrets folder") "a folder of that name anywhere on the way to the file is refused, -Force or not"
+Check (Test-Denied @("share", (New-Dummy (Join-Path $script:work "a-copy\.horde-secrets\client.md")), "-Title", "A copy", "-Force") ("is under a folder named '.horde-secrets': a folder named .horde, or one whose name begins with .horde-, is Horde's own*" + $neverSaid)) "a folder of that name anywhere on the way to the file is refused, -Force or not: it is one of Horde's own folders by its name"
 $inSsh4 = New-Dummy (Join-Path $profile4 ".ssh\notes.txt")
 Check (Test-Denied @("share", $inSsh4, "-Title", "From .ssh") "is under the folder the user's SSH keys are kept in") "a file under .ssh in the profile is refused as that"
 Check (Test-Denied @("share", $inSsh4, "-Title", "From .ssh, and no secret", "-Force") ("is under the folder the user's SSH keys are kept in*" + $neverSaid)) "with -Force it is refused all the same, and the line says -Force does not change that"

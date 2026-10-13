@@ -308,9 +308,9 @@ $inSecretsFile = New-File (Join-Path $profileDir ".horde-secrets\client.json") '
 Check (Test-Refused $h $inSecretsFile $inSecrets) "a file under .horde-secrets in the profile is refused as that"
 Check (Test-Refused $h $inSecretsFile $never -Force) "and -Force does not change that"
 $elsewhere = New-File (Join-Path $script:real "a-copy\.Horde-Secrets\deep\client.md")
-Check (Test-Refused $h $elsewhere $inSecrets -Force) "a folder named .horde-secrets anywhere on the way to the file, in any case of its letters, is refused the same, -Force or not"
-Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\plain-folder\.horde-secrets")) "is not one that is shared" -NotLike "is under a .horde-secrets folder" -Force) "a FILE named .horde-secrets in an ordinary folder is not a folder on the way: it is refused for its type, not as that folder"
-Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\.horde-secrets-old\client.md"))) "CONTROL: a folder whose name only begins with .horde-secrets is not that folder"
+Check (Test-Refused $h $elsewhere "is under a folder named '.Horde-Secrets': a folder named .horde, or one whose name begins with .horde-, is Horde's own" -Force) "a folder named .horde-secrets anywhere on the way to the file, in any case of its letters, is refused, -Force or not: it is one of Horde's own folders by its name"
+Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\plain-folder\.horde-secrets")) "is not one that is shared" -NotLike "is under a folder named" -Force) "a FILE named .horde-secrets in an ordinary folder is not a folder on the way: it is refused for its type, not as that folder"
+Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.horde-secrets-old\client.md")) "is under a folder named '.horde-secrets-old'" -Force) "and so is a folder whose name only BEGINS like it (.horde-secrets-old): every folder whose name begins with .horde- is Horde's own"
 Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\.horde-secrets.md")) -Force) "CONTROL: and a FILE whose name begins so is a file, not a folder on the way: -Force, which never lifts the folder, shares it"
 $inSshFile = New-File (Join-Path $profileDir ".ssh\notes.txt")
 Check (Test-Refused $h $inSshFile $inSsh) "a file under .ssh in the profile is refused as that"
@@ -445,13 +445,43 @@ $script:osProfile = $script:keptOsProfile
 Check $silent "when the operating system will not say where the profile is, an ordinary file is refused, and the reason says that"
 Check $silentForce "and -Force does not change it: where the home and the user's keys are is not known"
 Check (Test-Shared $h $plainDocEarly) "CONTROL: asked again with the system answering, the same file is shared"
-# A FOLDER NAMED .horde ANYWHERE on the way to the file, as .horde-secrets is.
-$inNamedHome = "is under a .horde folder"
-Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.Horde\deep\notes.md")) $inNamedHome -Force) "a folder named .horde anywhere on the way to the file, in any case of its letters, is refused, -Force or not"
-Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.horde\notes.md")) $never -Force) "and the reason says -Force does not change that"
-Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\.horde-old\notes.md"))) "CONTROL: a folder whose name only begins with .horde is not that folder"
-Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\horde\notes.md"))) "CONTROL: nor is a folder named horde, with no dot"
-Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\plain\.horde.md"))) "CONTROL: and a FILE whose name begins so is a file, not a folder on the way"
+# HORDE'S OWN FOLDERS, BY ONE RULE AND NO LIST: a folder named exactly .horde, or whose name begins
+# with .horde-, anywhere on the way to the file, in any case of A to Z, is never shared from.
+# ".horde-anything" is a name nobody has made: the rule covers the folder that comes next.
+$inHordes = "is Horde's own, where it keeps its records, keys and credentials"
+function Get-HordesSaid { param([string]$Folder) return ("is under a folder named '" + $Folder + "': a folder named .horde, or one whose name begins with .horde-, " + $inHordes) }
+Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.Horde\deep\notes.md")) (Get-HordesSaid ".Horde") -Force) "a folder named .horde anywhere on the way to the file, in any case of its letters, is refused, -Force or not, and the reason names it as it is written"
+Check (Test-Refused $h (New-File (Join-Path $script:real "a-copy\.horde\notes.md")) $never -NotLike "share it again" -Force) "and the reason says -Force does not change that"
+foreach ($placed in @(@("as the folder the file is in", "family\plain\.horde-anything\notes.md"), @("in the middle of the path", "family\.horde-anything\plain\deeper\notes.md"), @("with capitals", "family\caps\.HORDE-Anything\notes.md"), @("named for something that is real elsewhere", "family\.horde-mesh\notes.md"), @("with nothing after the dash", "family\.horde-\notes.md"))) {
+    $inFamily = New-File (Join-Path $script:real $placed[1])
+    $folderWritten = @($placed[1] -split '\\' | Where-Object { $_ -like ".horde*" })[0]
+    Check (Test-Refused $h $inFamily (Get-HordesSaid $folderWritten)) ("a folder whose name begins with .horde- is refused, " + $placed[0] + " (" + $folderWritten + ")")
+    Check (Test-Refused $h $inFamily $never -NotLike "share it again" -Force) "and -Force does not change that"
+}
+# AT THE TOP OF A PATH, which no test may make on a real drive: the question is asked of the path.
+$topSaid = Get-HordeFilesDenyRefusal -FinalPath "C:\.horde-anything\notes.md" -HordeHome $h -RepoRoot $repo -Force
+Check ($topSaid -like ("*" + (Get-HordesSaid ".horde-anything") + "*") -and $topSaid -like ("*" + $never)) "and as the first folder of a path, straight under the drive"
+Check ((Get-HordeFilesDenyRefusal -FinalPath "C:\.horde\notes.md" -HordeHome $h -RepoRoot $repo -Force) -like ("*" + (Get-HordesSaid ".horde") + "*")) "as is a folder named .horde there"
+# THROUGH A JUNCTION: the junction has an innocent name, and the folder it leads to does not.
+$familyTarget = Join-Path $script:real "family\plain\.horde-anything"
+$familyJunction = Join-Path $script:real "family\an-innocent-junction"
+Check (New-Junction $familyJunction $familyTarget) "CONTROL: a junction with an innocent name was made to a folder whose name begins with .horde-"
+Check (Test-Refused $h (Join-Path $familyJunction "notes.md") (Get-HordesSaid ".horde-anything") -NotLike "is a link" -Force) "a file named through that junction is refused for the folder it is really in, -Force or not: the open handle's own path is judged"
+$innocentTarget = Join-Path $script:real "family\an-ordinary-folder"
+$null = New-File (Join-Path $innocentTarget "notes.md")
+$namedJunction = Join-Path $script:real "family\.horde-by-name-only"
+Check (New-Junction $namedJunction $innocentTarget) "CONTROL: and a junction NAMED so was made to an ordinary folder"
+Check (Test-Refused $h (Join-Path $namedJunction "notes.md") "is a link" -NotLike $inHordes) "a file named through THAT junction is not in such a folder - its own path has no such name - and is refused only as a link is"
+# WHAT IS NOT OF THAT FAMILY.
+Check (Test-Shared $h (New-File (Join-Path $script:real "family\.hordes\notes.md"))) "CONTROL: a folder named .hordes is not: the name is .horde, or .horde and a dash"
+Check (Test-Shared $h (New-File (Join-Path $script:real "family\my.horde-notes\notes.md"))) "CONTROL: nor a folder named my.horde-notes: the name must BEGIN so"
+Check (Test-Shared $h (New-File (Join-Path $script:real "family\.horde_notes\notes.md"))) "CONTROL: nor one named .horde_notes: an underscore is not the dash"
+Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\horde\notes.md"))) "CONTROL: nor a folder named horde, with no dot"
+Check (Test-Shared $h (New-File (Join-Path $script:real "family\plain2\.horde-notes.md"))) "CONTROL: and a FILE named .horde-notes.md in an ordinary folder is shared: the rule is about folders"
+Check (Test-Shared $h (New-File (Join-Path $script:real "a-copy\plain\.horde.md"))) "CONTROL: as is a FILE named .horde.md"
+# The two junctions by their own entries, so that nothing later follows one.
+foreach ($madeJunction in @($familyJunction, $namedJunction)) { if (Test-Link $madeJunction) { [System.IO.Directory]::Delete($madeJunction) } }
+Check (-not (Test-Path -LiteralPath $familyJunction) -and -not (Test-Path -LiteralPath $namedJunction) -and [System.IO.File]::Exists((Join-Path $familyTarget "notes.md"))) "the two junctions are gone again, and what they led to is still there"
 
 Write-Host ""
 Write-Host "--- a harness nobody described is not left open ---" -ForegroundColor Cyan
@@ -831,6 +861,18 @@ Check (Test-Shared $h $pdfFile) "KNOWN LIMIT: nor is a PDF - one whose bytes hol
 $cut = $shaped["an access token"][0]
 Check (Test-Shared $h (New-File (Join-Path $held "cut-in-two.md") ($cut.Substring(0, 10) + "`n" + $cut.Substring(10)))) "KNOWN LIMIT: a token cut across two lines is not found"
 Check (Test-Shared $h (New-File (Join-Path $held "as-base64.txt") ([System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($keyBlock))))) "KNOWN LIMIT: nor is a private key written as base64 of itself"
+# THE GAP THAT IS LEFT OPEN ON PURPOSE FOR NOW (the review, 2026-10-13), pinned so that closing it is
+# seen: the file a sign-in provider issues for a web client, which one of Horde's settings may name
+# anywhere. It is JSON with a member called client_secret. Made up here, never the real one. Under
+# the name it is downloaded with it is refused for its name; under a name that says nothing, in an
+# ordinary folder, NOTHING refuses it, with no -Force at all: core's kinds that go by a word want
+# an equals sign or another word, and the one kind that does see the value is the long-run look,
+# which a share does not ask for.
+$clientValue = "GOC" + "SPX-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1w"
+$clientFile = '{"web":{"client_id":"123456789012-abcdefghijklmnopqrstuvwxyz012345.apps.example.com","project_id":"made-up","client_' + 'secret":"' + $clientValue + '","redirect_uris":["https://relay.example.org/auth/callback"]}}'
+Check ((Find-HordeSecretKind -Text $clientFile) -ceq "a long random-looking string, as a key or token is" -and (Find-HordeSecretKind -Text $clientFile -Kinds (@($list.shapes.never) + @($list.shapes.lifted))) -ceq "") "CONTROL: of core's kinds only the long-run look sees a made-up client file, and none of the kinds a share asks for does"
+Check (Test-Refused $h (New-File (Join-Path $held "client_secret_123456789012.apps.example.com.json") $clientFile) "holds 'secret'") "under the name it is downloaded with, such a file is refused for its name"
+Check (Test-Shared $h (New-File (Join-Path $held "web-client.json") $clientFile)) "KNOWN LIMIT: under a name that says nothing, in an ordinary folder, it is shared, with no -Force: nothing knows it for what it is until the setting that names it is asked"
 # THE FUNCTION ITSELF, and the list it reads.
 Check ((@($list.shapes.never) -join ",") -ceq "a private key" -and (@($list.shapes.lifted) -join ",") -ceq "an access token,a signed web token,a webhook address") "the kinds asked for are one that is never lifted and three that -Force lifts"
 $asBytes = { param([string]$Words) return ,([System.Text.Encoding]::UTF8.GetBytes($Words)) }

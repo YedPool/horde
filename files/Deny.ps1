@@ -10,8 +10,9 @@
 #   never, whatever the caller says   the Horde home (its records, its keys and its settings), and
 #                                     .horde in the user's profile, which is the home unless a
 #                                     variable moved it; .horde-secrets in the user's profile; and
-#                                     any folder named .horde or .horde-secrets anywhere on the way
-#                                     to the file;
+#                                     ANY FOLDER NAMED .horde, OR WHOSE NAME BEGINS WITH .horde-,
+#                                     anywhere on the way to the file: one rule and no list, so
+#                                     that the next folder of that family is covered unnamed;
 #                                     .ssh in the user's profile;
 #   unless the caller gives -Force    every folder an agent harness keeps its own files in.
 #   WHICH FOLDERS ARE A HARNESS'S is each adapter's to say and is read as data
@@ -339,7 +340,7 @@ function Get-HordeFilesDenyRefusal {
     # that a file in the Horde home is refused for that and not for its name.
     param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force)
     $list = Get-HordeFilesDenyList
-    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; homeNamed = ("a " + $list.homeFolder + " folder, where Horde keeps its own records, keys and settings"); secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)" }
+    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)" }
     $never = ". Nothing there is ever shared, and -Force does not change that"
     $insist = ". If this file holds no secret, share it again with -Force"
     $found = Get-HordeFilesDenyPlaces -HordeHome $HordeHome -RepoRoot $RepoRoot
@@ -358,9 +359,14 @@ function Get-HordeFilesDenyRefusal {
             # copy of a home, or a home on another drive, still holds a home's files - and then
             # everything after this is what -Force lifts.
             for ($at = 1; $at -lt ($parts.Count - 1); $at++) {
+                # ONE RULE, NOT A LIST (the review's decision, 2026-10-13): a folder named exactly
+                # as the home is, or beginning with that name and a dash, is Horde's own. The
+                # home, its credentials folder, and whatever folder of that family comes next are
+                # covered the day they are made, with nobody adding a name here.
                 $folderName = ConvertTo-HordeAsciiLower -Text $parts[$at]
-                if ([string]::Equals($folderName, $list.secretsFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.secrets + $never) }
-                if ([string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.homeNamed + $never) }
+                $isHordes = [string]::Equals($folderName, $list.homeFolder, [System.StringComparison]::Ordinal)
+                if (-not $isHordes) { $isHordes = $folderName.StartsWith(($list.homeFolder + "-"), [System.StringComparison]::Ordinal) }
+                if ($isHordes) { return ("'" + $FinalPath + "' is under a folder named '" + $parts[$at] + "': a folder named " + $list.homeFolder + ", or one whose name begins with " + $list.homeFolder + "-, is Horde's own, where it keeps its records, keys and credentials" + $never) }
             }
             if ($found.unknown -ne "") { $harnessDoubt = "which folders the agent harnesses keep their own files in is not known (" + $found.unknown + "), so whether '" + $FinalPath + "' is in one cannot be told" }
         }
