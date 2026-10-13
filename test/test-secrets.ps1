@@ -132,4 +132,33 @@ $differ = @($all | Where-Object { (Find-HordeDecisionSecretKind -Text $_) -cne (
 Check ($differ.Count -eq 0) ("decisions' kind function answers exactly what core's does, over " + $all.Count + " planted and ordinary texts (" + $differ.Count + " differ)")
 Check ((Get-HordeTextBits -Text "abcd") -eq 2.0 -and (Get-HordeTextBits -Text "aaaa") -eq 0.0) "the entropy: 2 bits a character for four distinct letters, 0 for one repeated"
 
+Write-Host ""
+Write-Host "--- a caller may name which kinds are looked for, and every other caller is as before ---" -ForegroundColor Cyan
+$runKind = "a long random-looking string, as a key or token is"
+$tokenText = "see " + $planted["an access token"][0] + " here"
+$keyText = "see " + $planted["a private key block"][0] + " here"
+$runText = "see " + $planted["a long random-looking string"][0] + " here"
+$slashText = "see " + $planted["a cloud secret key with slashes"][0] + " here"
+$pairText = "see " + $planted["a password as name=value, the whole value"][0] + " here"
+Check ((Find-HordeSecretKind -Text $tokenText -Kinds @("an access token")) -ceq "an access token") "asked for one kind, a text holding that kind answers it"
+Check ((Find-HordeSecretKind -Text $tokenText -Kinds @("a private key")) -ceq "") "asked for another kind, the same text answers nothing"
+Check ((Find-HordeSecretKind -Text $tokenText) -ceq "an access token") "CONTROL: asked for no kind in particular, it answers as it always did"
+Check ((Find-HordeSecretKind -Text $pairText -Kinds @("a private key", "an access token", "a signed web token", "a webhook address")) -ceq "" -and (Find-HordeSecretKind -Text $pairText) -ceq "a password or key written as name=value") "a kind that was not asked for is not looked for, though the text holds it"
+Check ((Find-HordeSecretKind -Text ($pairText + " " + $keyText) -Kinds @("an access token", "a private key")) -ceq "a private key") "of several kinds asked for, the answer is the one the text holds, whatever order they were named in"
+Check ((Find-HordeSecretKind -Text $runText -Kinds @("an access token")) -ceq "" -and (Find-HordeSecretKind -Text $slashText -Kinds @("an access token")) -ceq "") "THE TWO LONG-RUN LOOKS ARE NOT USED unless their kind is asked for: a random-looking string and a key with slashes answer nothing"
+Check ((Find-HordeSecretKind -Text $runText) -ceq $runKind -and (Find-HordeSecretKind -Text $slashText) -ceq $runKind) "CONTROL: asked for no kind in particular, both are found, as before"
+function Get-KindOrThrew { param([string]$Text, [string[]]$Kinds) try { return ("" + (Find-HordeSecretKind -Text $Text -Kinds $Kinds)) } catch { return ("threw: " + $_.Exception.Message) } }
+Check ((Get-KindOrThrew -Text $runText -Kinds @($runKind)) -ceq $runKind -and (Get-KindOrThrew -Text $slashText -Kinds @($runKind)) -ceq $runKind) "and asked for by their own kind, they are found"
+Check ((Find-HordeSecretKind -Text $tokenText) -ceq "an access token" -and (Get-KindOrThrew -Text $tokenText -Kinds @($runKind)) -ceq "") "while a token of a known shape, which is no random-looking run, then answers nothing: the patterns are not used"
+Check ((Find-HordeSecretKind -Text $tokenText -Kinds @()) -ceq "an access token" -and (Find-HordeSecretKind -Text $runText -Kinds @()) -ceq $runKind) "an empty list of kinds is every kind"
+$threw = ""
+try { $null = Find-HordeSecretKind -Text "plain words" -Kinds @("an access tokin") } catch { $threw = "$($_.Exception.Message)" }
+Check ($threw -like "*'an access tokin' is not a kind of secret*") "a kind that is no kind throws, and never answers 'no secret' for a misspelt name"
+$threw = ""
+try { $null = Find-HordeSecretKind -Text "plain words" -Kinds @("an access token", "A Private Key") } catch { $threw = "$($_.Exception.Message)" }
+Check ($threw -like "*'A Private Key' is not a kind*") "and a kind is named exactly, in its own case"
+$allKinds = @("a private key", "an access token", "a signed web token", "a bearer token", "a password or key written as name=value", "a password written after a colon", "a password written in a sentence", "a password inside an address", "a webhook address", "an authorization value", $runKind)
+$differ = @($all | Where-Object { (Find-HordeSecretKind -Text $_ -Kinds $allKinds) -cne (Find-HordeSecretKind -Text $_) })
+Check ($differ.Count -eq 0) ("asked for all eleven kinds by name, every planted and ordinary text answers as it does asked for none (" + $differ.Count + " of " + $all.Count + " differ)")
+
 Complete-HordeSuite -Success "every secret shape is found and hidden whole, near misses stay, and decisions reads the one list"

@@ -6,6 +6,31 @@
     Target = "core\Secrets.ps1"
     Suite  = "test\test-secrets.ps1"
     Mutations = @(
+        # --- which kinds are looked for (Find-HordeSecretKind -Kinds) ---
+        @{ Name = "kinds-that-were-named-are-ignored"
+           Find = 'if ($asked.Count -gt 0 -and $asked -cnotcontains $name) { continue }'
+           Replace = '' }
+        @{ Name = "no-kind-named-is-no-kind-looked-for"
+           Find = 'if ($asked.Count -gt 0 -and $asked -cnotcontains $name) { continue }'
+           Replace = 'if ($asked -cnotcontains $name) { continue }' }
+        @{ Name = "long-runs-looked-for-whatever-was-named"
+           Find = 'if ($asked.Count -gt 0 -and $asked -cnotcontains $script:HordeSecretRunKind) { return "" }'
+           Replace = '' }
+        @{ Name = "long-runs-never-looked-for-once-a-kind-is-named"
+           Find = 'if ($asked.Count -gt 0 -and $asked -cnotcontains $script:HordeSecretRunKind) { return "" }'
+           Replace = 'if ($asked.Count -gt 0) { return "" }' }
+        @{ Name = "long-runs-not-looked-for-when-no-kind-is-named"
+           Find = 'if ($asked.Count -gt 0 -and $asked -cnotcontains $script:HordeSecretRunKind) { return "" }'
+           Replace = 'if ($asked -cnotcontains $script:HordeSecretRunKind) { return "" }' }
+        @{ Name = "a-name-that-is-no-kind-is-let-by"
+           Find = '-and $kindName -cne $script:HordeSecretRunKind) { throw'
+           Replace = '-and $false) { throw' }
+        @{ Name = "the-long-run-kind-cannot-be-named"
+           Find = ' -and $kindName -cne $script:HordeSecretRunKind) { throw'
+           Replace = ') { throw' }
+        @{ Name = "a-kind-named-in-another-case-is-taken"
+           Find = '-cnotcontains $kindName -and'
+           Replace = '-notcontains $kindName -and' }
         @{ Name = "key-body-left-after-its-header"
            Find = 'if ($close.Success) { $end = $end + $close.Index + $close.Length } else { $end = $Text.Length }'
            Replace = '$null = $close' }

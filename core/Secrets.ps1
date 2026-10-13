@@ -110,10 +110,21 @@ function Test-HordeSecretSlashRun {
 
 function Find-HordeSecretKind {
     # What kind of secret a text looks like it holds, as words for a finding, or "" for none.
-    param([string]$Text)
+    # -Kinds NAMES WHICH KINDS ARE LOOKED FOR, by the words this function answers with; left out,
+    # or empty, every kind is, as for every caller before it was added (review of the files deny
+    # list, 2026-10-13). A caller that judges whole FILES asks only for the kinds that know a
+    # credential by its shape: the two long-run looks below fire on ordinary reports. A name that
+    # is no kind THROWS: misspelt, it would look for nothing and answer "no secret".
+    param([string]$Text, [string[]]$Kinds = @())
+    $asked = @($Kinds)
+    foreach ($kindName in $asked) {
+        if (@($script:HordeSecretKinds.Keys) -cnotcontains $kindName -and $kindName -cne $script:HordeSecretRunKind) { throw ("'" + $kindName + "' is not a kind of secret core/Secrets.ps1 looks for") }
+    }
     foreach ($name in $script:HordeSecretKinds.Keys) {
+        if ($asked.Count -gt 0 -and $asked -cnotcontains $name) { continue }
         if ([regex]::IsMatch($Text, $script:HordeSecretKinds[$name])) { return $name }
     }
+    if ($asked.Count -gt 0 -and $asked -cnotcontains $script:HordeSecretRunKind) { return "" }
     foreach ($m in [regex]::Matches($Text, $script:HordeSecretRunPattern)) {
         if (Test-HordeSecretRun -Run $m.Value) { return $script:HordeSecretRunKind }
     }
