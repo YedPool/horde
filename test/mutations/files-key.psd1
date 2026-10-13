@@ -21,7 +21,9 @@
         # --- only the current user may open it ---
         @{ Name = "key-inherits-its-folders-access-list"
            Find = '$access.SetAccessRuleProtection($true, $false)'
-           Replace = '$access.SetAccessRuleProtection($false, $false)' }
+           Replace = '$access.SetAccessRuleProtection($false, $false)'
+           Expect = "survives"
+           Reason = "Measured 2026-10-13 on NTFS: a file CREATED with an access list of its own comes out protected whichever way this flag is set (its list reads D:P(A;;FA;;;<user>) either way), and stays so after its folder is given a new inheritable entry (D:PAI, still the one entry). So on this file system the line cannot change what the file is; it is kept because it says what is meant, and because a file system that honoured the flag at creation would need it. What the key file's list IS, is held by key-made-without-its-access-list and everyone-may-read-the-key." }
         @{ Name = "key-made-without-its-access-list"
            Find = '[System.Security.AccessControl.FileSystemRights]::FullControl, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough, $access)'
            Replace = '[System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)' }

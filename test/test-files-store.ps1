@@ -326,7 +326,9 @@ Check (Test-Refused $h $doc "control character" -Title ("two" + [char]10 + "line
 Check (Test-Refused $h $doc "the setting maxTitleChars" -Title ("t" * 121)) "a title of 121 characters is refused, naming the setting"
 Check ((Invoke-Share -TestHome $h -Path $doc -Title ("t" * 120)).outcome -ceq "shared") "and one of exactly 120 is shared"
 Check (Test-Refused $h (New-Source -Name "drawing.svg" -Text "<svg/>") "an SVG file is not shared") "an SVG file is refused by name"
-Check (Test-Refused $h (New-Source -Name "DRAWING.SVG" -Text "<svg/>") "an SVG file is not shared") "whatever the case of its extension"
+# A name of its own: DRAWING.SVG would be the file drawing.svg above, whose name on disk stays in small
+# letters, and the type is read from the name the open handle gives, not from what was typed.
+Check (Test-Refused $h (New-Source -Name "SHOUTED.SVG" -Text "<svg/>") "an SVG file is not shared") "whatever the case of its extension"
 Check (Test-Refused $h (New-Source -Name "tool.exe" -Text "MZ") "is not one that is shared") "a type that is not on the list is refused, and the reason lists the types"
 Check (Test-Refused $h (New-Source -Name "README" -Text "words") "no extension") "a file with no extension is refused"
 Check (Test-Refused $h (New-Source -Name "archive.md.zip" -Text "words") "(.zip)") "the type is the LAST extension: report.md.zip is a zip"
@@ -613,15 +615,19 @@ $invalidJson = [ordered]@{
     "new Date" = 'new Date(1)'; "a value in brackets ()" = '(1)'; "a no-break space as white space" = ([char]0xA0 + '{}'); "a mark after the value" = ('{}' + [char]0xFEFF); "a vertical tab as white space" = ([char]0x0B + '1'); "a form feed as white space" = ([char]0x0C + '1')
     "a ] alone" = ']'; "a comma alone" = ','; "a colon alone" = ':'
 }
-$wrongValid = @($validJson.Keys | Where-Object { (Get-HordeFilesTextProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($validJson[$_])) -Type "application/json") -cne "" })
+# A CHECKER THAT THROWS IS A FAILED CHECK, never a vanished one: every call goes through Get-Safely, whose
+# "threw: ..." is neither "" nor a refusal. (Measured 2026-10-13: a mutant that read past the end of
+# the text on a lone minus sign threw, the throw ended the loop below, and no check failed.)
+function Get-JsonSaid { param([string]$Text, [string]$Type = "") $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text); if ($Type -eq "") { return ("" + (Get-Safely { Get-HordeFilesJsonProblem -Bytes $bytes })) }; return ("" + (Get-Safely { Get-HordeFilesTextProblem -Bytes $bytes -Type $Type })) }
+$wrongValid = @($validJson.Keys | Where-Object { (Get-JsonSaid $validJson[$_] "application/json") -cne "" })
 Check ($wrongValid.Count -eq 0) ("every one of " + $validJson.Count + " valid JSON texts passes the rule, among them what the platform's parsers wrongly refuse (" + ($wrongValid -join "; ") + ")")
-$wrongInvalid = @($invalidJson.Keys | Where-Object { (Get-HordeFilesTextProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($invalidJson[$_])) -Type "application/json") -notlike "its name says JSON, but it is not: *" })
+$wrongInvalid = @($invalidJson.Keys | Where-Object { (Get-JsonSaid $invalidJson[$_] "application/json") -notlike "its name says JSON, but it is not: *" })
 Check ($wrongInvalid.Count -eq 0) ("every one of " + $invalidJson.Count + " texts that are not JSON is refused by the rule, among them what the platform's parsers wrongly take (" + ($wrongInvalid -join "; ") + ")")
-$asText = @($invalidJson.Keys | Where-Object { (Get-HordeFilesTextProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($invalidJson[$_])) -Type "text/plain") -cne "" })
+$asText = @($invalidJson.Keys | Where-Object { (Get-JsonSaid $invalidJson[$_] "text/plain") -cne "" })
 Check ($asText.Count -eq 0) "CONTROL: named as plain text, every one of those passes: it is the JSON rule that refuses them"
 # Each of the broken texts on its own line, so that one let through is named.
-foreach ($k in $invalidJson.Keys) { Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($invalidJson[$k]))) -cne "") ("not JSON: " + $k) }
-foreach ($k in $validJson.Keys) { Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes($validJson[$k]))) -ceq "") ("JSON: " + $k) }
+foreach ($k in $invalidJson.Keys) { $saidOf = Get-JsonSaid $invalidJson[$k]; Check ($saidOf -cne "" -and $saidOf -notlike "threw:*") ("not JSON, and refused in words, not by a crash: " + $k + $(if ($saidOf -like "threw:*") { " (" + $saidOf + ")" } else { "" })) }
+foreach ($k in $validJson.Keys) { Check ((Get-JsonSaid $validJson[$k]) -ceq "") ("JSON: " + $k) }
 Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes('[1,]'))) -ceq "at byte 3, a value was expected") "the reason says where: [1,] is refused at byte 3"
 Check ((Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes(''))) -like "it holds no value*" -and (Get-HordeFilesJsonProblem -Bytes ([System.Text.Encoding]::UTF8.GetBytes('{"a":1'))) -like "it ends before*") "an empty text is said to hold no value, and a cut one to end too soon"
 $deep = [System.Text.Encoding]::ASCII.GetBytes((('[' * 100000) + (']' * 100000)))
@@ -822,6 +828,11 @@ try { $shortName = (New-Object -ComObject Scripting.FileSystemObject).GetFile($n
 if ($shortName -ne "" -and (Split-Path -Leaf $shortName) -cne (Split-Path -Leaf $named) -and (Split-Path -Leaf $shortName) -like "*~*") {
     Check ([System.IO.File]::Exists($shortName)) ("CONTROL: this volume gave the file the short name " + (Split-Path -Leaf $shortName))
     Check (Test-SameFile $shortName) "by its 8.3 short name it is the next version of the SAME file"
+    # .NET itself writes a short name out in full before it opens anything, so the line above never
+    # shows Windows a short name (measured 2026-10-13: asking for the name AS OPENED instead of the
+    # normalized one changed nothing there). Behind the long-path prefix .NET changes nothing, and the
+    # handle really is opened by the short name.
+    Check (Test-SameFile ("\\?\" + $shortName)) "and by its short name behind the long-path prefix, where the handle is opened by the short name itself"
 } else { Write-Skip "THE 8.3 SHORT NAME COULD NOT BE TESTED: this volume gave 'a long report name.md' no short name. Run this suite on a volume that makes them." }
 # A drive made with subst, over the file's folder.
 $substLetter = ""
