@@ -52,7 +52,8 @@ $HordeCommand = @{
         if ($saved.state -ceq "known") { $ledger = $saved.value.ledger }
         elseif ($saved.state -ceq "unknown") { Write-Output ("wake: starting from an empty ledger - " + $saved.reason) }
         $savedRestore = Read-HordeRestoreState
-        if ($savedRestore.state -ceq "known") { $posted = $savedRestore.value.posted }
+        $restores = @()
+        if ($savedRestore.state -ceq "known") { $posted = $savedRestore.value.posted; $restores = @($savedRestore.value.known) }
         elseif ($savedRestore.state -ceq "unknown") { Write-Output ("wake: starting with no mail marked posted - " + $savedRestore.reason) }
         # THE RESTORE SOURCE RUNS EVERY 30 s, BESIDE THE WAKE PASS, NOT IN IT (core/RestoreSource.ps1: it
         # is a sender, and the watcher only wakes). Not every pass: it reads the process table, and a
@@ -70,10 +71,11 @@ $HordeCommand = @{
                 $restoreAt = $now
                 $read = Get-HordeRestoreSessions
                 if ($read.state -ceq "known") {
-                    $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $now -Settings $restoreSettings -Shadow -Posted $posted
+                    $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $now -Settings $restoreSettings -Shadow -Posted $posted -Known $restores
                     $sourceEntries = @($sourced.entries)
-                    if ($sourceEntries.Count -gt 0) { Save-HordeRestoreState -Posted $sourced.posted }
+                    if ($sourceEntries.Count -gt 0 -or @($sourced.known).Count -ne $restores.Count) { Save-HordeRestoreState -Posted $sourced.posted -Known $sourced.known }
                     $posted = $sourced.posted
+                    $restores = @($sourced.known)
                     $notes = @($read.leftOut | ForEach-Object { [pscustomobject]@{ id = ("restore:" + $_.agent); reason = ("the restore source left out the " + $_.agent + " sessions, whose listing is not whole: " + $_.reason) } })
                 } else { $notes = @([pscustomobject]@{ id = "restore"; reason = ("the restore source could not read the sessions: " + $read.reason) }) }
             }

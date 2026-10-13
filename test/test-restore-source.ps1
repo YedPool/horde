@@ -63,6 +63,24 @@ $shifted = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.
 $f7 = Get-HordeRestoreFinding -Sessions $shifted -Now (At 2000) -Settings $settings
 Check ($f7.state -ceq "known" -and $f7.value.restoreId -cne $f.value.restoreId) "a restore that began in another minute has another id"
 
+
+# THE EARLIEST MEMBER CLOSES. This fleet's first session started at 08:06:50 and its second at 08:07:03,
+# so without the first the window begins in another minute.
+$shifted = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddSeconds(410); lastChangeAt = $_.lastChangeAt.AddSeconds(410); status = "idle"; firstSeenAt = $_.firstSeenAt } })
+$f7 = Get-HordeRestoreFinding -Sessions $shifted -Now (At 2000) -Settings $settings
+$late = @($shifted | Where-Object { $_.id -cne (Sid 1) })
+$f7late = Get-HordeRestoreFinding -Sessions $late -Now (At 2100) -Settings $settings
+Check ($f7late.state -ceq "known" -and $f7late.value.restoreId -cne $f7.value.restoreId) "CONTROL: with nothing saved, a restore whose earliest member closed would be named anew"
+$f7kept = Get-HordeRestoreFinding -Sessions $late -Now (At 2100) -Settings $settings -Known @($f7.value.anchor)
+Check ($f7kept.state -ceq "known" -and $f7kept.value.restoreId -ceq $f7.value.restoreId) "given the restore that was saved, a window that overlaps it keeps its id when its earliest member has closed"
+Check ($f7kept.value.anchor.windowStart -eq $f7.value.windowStart -and $f7kept.value.anchor.windowEnd -eq $f7.value.windowEnd -and $f7kept.value.windowStart -gt $f7.value.windowStart) "and what it hands back to save covers both windows, while its own window is the one it found"
+$idsBefore = (@(Get-HordeResumePlan -Finding $f7 -Now (At 2100) -Settings $settings | Where-Object { $_.kind -ceq "resume" } | Sort-Object to | ForEach-Object { $_.messageId }) -join ",")
+$idsAfter = (@(Get-HordeResumePlan -Finding $f7kept -Now (At 2100) -Settings $settings | Where-Object { $_.kind -ceq "resume" } | Sort-Object to | ForEach-Object { $_.messageId }) -join ",")
+Check ($idsBefore -ceq $idsAfter -and $idsBefore -ne "") "so every resume mail keeps its messageId, and nobody is mailed again"
+$nextDay = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddDays(1); lastChangeAt = $_.lastChangeAt.AddDays(1); status = "idle"; firstSeenAt = $_.firstSeenAt } })
+$fNext = Get-HordeRestoreFinding -Sessions $nextDay -Now (At (86400 + 200)) -Settings $settings -Known @($f.value.anchor)
+Check ($fNext.state -ceq "known" -and $fNext.value.restoreId -cne $f.value.restoreId) "a restore the next day overlaps no saved one, and is a new restore with a new id"
+
 $plan = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 10)) -Settings $settings)
 $orcs = @(2, 3, 4 | ForEach-Object { Sid $_ })
 Check ((@($plan | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",") -and @($plan | Where-Object { $_.kind -cne "resume" }).Count -eq 0) "all three orcs are told to resume at once, and nobody else"
@@ -121,6 +139,10 @@ $script:postWorks = $true
 $poster = { param($m) [void]$script:mails.Add($m); if ($script:postWorks) { New-HordeKnown -Value $true } else { New-HordeUnknown -Reason "the mailbox is locked" } }
 $r = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 10)) -Settings $settings -Post $poster -Posted @{}
 Check ($script:mails.Count -eq 3 -and (Kinds $r) -ceq "post,post,post" -and @($r.entries | Where-Object { $_.outcome -cne "posted" -or $_.messageId -eq "" }).Count -eq 0) "three resume mails are posted, each journaled with its messageId"
+Check (@($r.known).Count -eq 1 -and $r.known[0].restoreId -ceq $f.value.restoreId -and $r.known[0].windowStart -eq $t0 -and $r.known[0].windowEnd -eq (At $end)) "and the pass hands back the restore it found, to be saved"
+$closed = @($fleet | Where-Object { $_.id -cne (Sid 1) })
+$rc = Invoke-HordeRestoreSourcePass -Sessions $closed -Now (At ($end + 11)) -Settings $settings -Post $poster -Posted $r.posted -Known $r.known
+Check ($script:mails.Count -eq 3 -and @($rc.entries).Count -eq 0 -and @($rc.known).Count -eq 1 -and $rc.known[0].restoreId -ceq $f.value.restoreId) "a pass after the earliest member closed posts nothing again: the saved restore kept its id"
 $r2 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 13)) -Settings $settings -Post $poster -Posted $r.posted
 Check ($script:mails.Count -eq 3 -and @($r2.entries).Count -eq 0) "the next pass posts none of them again"
 $r180 = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 180)) -Settings $settings -Post $poster -Posted $r2.posted
@@ -206,9 +228,12 @@ Write-Host ""
 Write-Host "--- the file: what was posted, under a home of this suite's ---" -ForegroundColor Cyan
 
 Check ((Read-HordeRestoreState).state -ceq "absent") "with nothing saved the state is absent"
-Save-HordeRestoreState -Posted @{ "0d000000-0000-4000-8000-000000000001" = $true }
+Save-HordeRestoreState -Posted @{ "0d000000-0000-4000-8000-000000000001" = $true } -Known @($f.value.anchor)
 $back = Read-HordeRestoreState
 Check ($back.state -ceq "known" -and $back.value.posted.Count -eq 1 -and $back.value.posted.ContainsKey("0d000000-0000-4000-8000-000000000001")) "the mails already posted save and read back"
+Check ($back.state -ceq "known" -and @($back.value.known).Count -eq 1 -and $back.value.known[0].restoreId -ceq $f.value.restoreId -and $back.value.known[0].windowStart -eq $f.value.windowStart -and $back.value.known[0].windowEnd -eq $f.value.windowEnd) "and so do the restores already found, with their ids and windows"
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
+Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved restore with no window is unknown, never half a state"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), "{ not json")
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved state that cannot be read is unknown, not absent"
 

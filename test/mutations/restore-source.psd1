@@ -31,6 +31,15 @@
         @{ Name = "first-seen-not-carried"
            Find = 'status = "$($status.value)"; firstSeenAt = $firstSeenAt })'
            Replace = 'status = "$($status.value)"; firstSeenAt = $null })' }
+        @{ Name = "saved-restore-ignored-so-the-id-follows-the-earliest-member"
+           Find = 'if ($null -ne $same) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "any-saved-restore-is-this-one"
+           Find = '-and $_.windowStart -le $windowEnd -and $_.windowEnd -ge $windowStart }'
+           Replace = '}' }
+        @{ Name = "found-restore-not-handed-back"
+           Find = 'if ($finding.state -ceq "known") { $nextKnown ='
+           Replace = 'if ($false) { $nextKnown =' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }
