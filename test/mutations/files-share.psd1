@@ -219,7 +219,7 @@
            Replace = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2068]' }
         @{ Name = "refusal-does-not-name-the-character"
            Find = '(U+" + ([int][char]$Matches[0]).ToString("X4") + ")'
-           Replace = '"' }
+           Replace = '(U+" + "" + ")' }
         # --- the runtime, the alias, and the look at the resolved path ---
         @{ Name = "runtime-not-asked"
            Find = 'if ($runtime -ne "") { return (& $refuse $runtime) }'
