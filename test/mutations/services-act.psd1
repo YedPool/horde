@@ -93,5 +93,50 @@
            Replace = '    $env2 = @{}'
            Expect = "survives"
            Reason = "no fixture remote asks for a credential, and a suite must not wait on a prompt to prove one would appear; the rule is in the header and in this line" }
+        # --- safety review of the first build ---
+        @{ Name = "callers-git-environment-inherited"
+           Find = ' -TimeoutSeconds $TimeoutSeconds -DropEnvironment @("GIT_")'
+           Replace = ' -TimeoutSeconds $TimeoutSeconds' }
+        @{ Name = "repository-above-is-used"
+           Find = '    if ($named.ToUpperInvariant() -cne $full.ToUpperInvariant()) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "repository-check-skipped"
+           Find = '    if (-not $Unchecked) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "revision-tool-by-bare-name"
+           Find = '        $script:HordeServiceGitProgram = $found'
+           Replace = '        $script:HordeServiceGitProgram = "git"' }
+        @{ Name = "file-in-the-way-not-asked"
+           Find = 'if ([System.IO.File]::Exists($there) -or [System.IO.Directory]::Exists($there)) { return (& $fail ("it adds "'
+           Replace = 'if ($false) { return (& $fail ("it adds "' }
+        @{ Name = "moved-file-not-asked"
+           Find = '@("diff", "--no-renames", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision)'
+           Replace = '@("diff", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision)' }
+        @{ Name = "cut-move-says-untouched"
+           Find = '{ return (& $fail ("the checkout did not move, or not wholly (" + $moved.detail + ")") $true) }'
+           Replace = '{ return (& $fail ("the checkout did not move, or not wholly (" + $moved.detail + ")")) }' }
+        @{ Name = "refused-move-says-touched"
+           Find = '    $fail = { param([string]$Why, [bool]$Touched = $false) return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText $Why); touched = $Touched } }'
+           Replace = '    $fail = { param([string]$Why, [bool]$Touched = $false) return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText $Why); touched = $true } }' }
+        @{ Name = "full-look-is-the-cheap-look"
+           Find = 'spotless = [bool]($all.out -eq "") })'
+           Replace = 'spotless = $true })' }
+        @{ Name = "window-start-time-not-checked"
+           Find = 'if ($still.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("its window was not asked to close: "'
+           Replace = 'if ($false) { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("its window was not asked to close: "' }
+        @{ Name = "exit-record-not-asked-for"
+           Find = '        $exitFile = Get-HordeServiceExitPath -Name $Definition.name -HordeHome $SupervisorHome'
+           Replace = '        $exitFile = ""' }
+        @{ Name = "old-exit-record-left"
+           Find = '        try { if ([System.IO.File]::Exists($exitFile)) { [System.IO.File]::Delete($exitFile) } } catch { }'
+           Replace = '' }
+        @{ Name = "exit-record-asked-of-every-service"
+           Find = '    if ($null -ne $deliberate -and @($deliberate.Value).Count -gt 0) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "kill-without-holding-the-process"
+           Find = 'try { $null = $p.Handle; if ($p.HasExited)'
+           Replace = 'try { if ($p.HasExited)'
+           Expect = "survives"
+           Reason = "what the held handle prevents is a pid passing to another process in the instant between the start-time proof and the kill; no suite can make Windows reuse a pid in that instant, so the line is held by its comment and by review" }
     )
 }

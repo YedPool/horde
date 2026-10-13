@@ -42,10 +42,13 @@
            Find = '{ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited }'
            Replace = '{ }' }
         @{ Name = "with-person-job-flashes-a-window"
-           Find = '{ return [pscustomobject]@{ program = "conhost.exe"; arguments = ("--headless powershell.exe " + $shellArguments) } }'
-           Replace = '{ }' }
+           Find = '        return [pscustomobject]@{ program = $console; arguments = (''--headless "'' + $shell + ''" '' + $shellArguments) }'
+           Replace = '' }
         @{ Name = "every-job-with-the-person"
            Find = 'if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { $principal ='
            Replace = 'if ($true) { $principal =' }
+        @{ Name = "with-person-job-by-bare-names"
+           Find = '        return [pscustomobject]@{ program = $console; arguments = (''--headless "'' + $shell + ''" '' + $shellArguments) }'
+           Replace = '        return [pscustomobject]@{ program = "conhost.exe"; arguments = ("--headless powershell.exe " + $shellArguments) }' }
     )
 }

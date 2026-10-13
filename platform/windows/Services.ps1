@@ -168,10 +168,46 @@ function Start-HordeWindowsService {
     $made = ([wmiclass]"Win32_Process").Create($line, $folder, $null)
     if ($null -eq $made -or [int]$made.ReturnValue -ne 0) { return (New-HordeUnknown -Reason ("Windows did not create the process (Win32_Process.Create answered " + $(if ($null -eq $made) { "nothing" } else { "" + $made.ReturnValue }) + ")")) }
     $processId = [int]$made.ProcessId
+    $started = $null
     try {
         $p = [System.Diagnostics.Process]::GetProcessById($processId)
-        try { return (New-HordeKnown -Value ([pscustomobject]@{ pid = $processId; startedAt = $p.StartTime.ToUniversalTime() })) } finally { $p.Dispose() }
+        try { $started = $p.StartTime.ToUniversalTime() } finally { $p.Dispose() }
     } catch { return (New-HordeUnknown -Reason ("process " + $processId + " was created and had ended before it could be looked at")) }
+    # THE EXIT RECORD (core/ServiceHostPort.ps1): a watcher beside the service, never around it. Its
+    # failing to start costs the record and nothing else: the service is running, and is reported so.
+    if ("" + $Launch.exitFile -ne "") {
+        try { $null = ([wmiclass]"Win32_Process").Create((ConvertTo-HordeWindowsWatcherCommandLine -ProcessId $processId -StartedAt $started -ExitFile $Launch.exitFile), $null, $null) } catch { }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ pid = $processId; startedAt = $started }))
+}
+
+function ConvertTo-HordeWindowsWatcherScript {
+    # The watcher's fixed command (core/ServiceHostPort.ps1, THE EXIT RECORD). The pid and the start
+    # time are numbers this adapter read from Windows; the file's path is base64, decoded at run time,
+    # like every path a launch carries. It opens the process and takes its handle BEFORE it checks the
+    # start time, so the process it then waits on is the one it checked; a process that is not the
+    # one named - its number was given out again - is left alone and nothing is written. The record
+    # is written beside itself and moved into place, so a reader finds a whole record or none.
+    param([Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][datetime]$StartedAt, [Parameter(Mandatory = $true)][string]$ExitFile)
+    $ticks = $StartedAt.ToUniversalTime().Ticks
+    $stamp = $StartedAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+    $file = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ExitFile))
+    $q = [string][char]39
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('$ErrorActionPreference = "Stop"; try { $p = [System.Diagnostics.Process]::GetProcessById(' + $ProcessId + '); $null = $p.Handle; ')
+    # Ten million ticks are one second: the slack core/Heartbeat.ps1 allows two readings of one start.
+    [void]$sb.Append('if ([System.Math]::Abs($p.StartTime.ToUniversalTime().Ticks - ' + $ticks + ') -gt 10000000) { exit 0 }; $p.WaitForExit(); ')
+    [void]$sb.Append('$f = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("' + $file + '")); ')
+    [void]$sb.Append('$t = ' + $q + '{"pid":' + $ProcessId + ',"startedAt":"' + $stamp + '","code":' + $q + ' + $p.ExitCode + ' + $q + ',"at":"' + $q + ' + [datetime]::UtcNow.ToString("o") + ' + $q + '"}' + $q + '; ')
+    [void]$sb.Append('[void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($f)); [System.IO.File]::WriteAllText(($f + ".tmp"), $t); ')
+    [void]$sb.Append('if ([System.IO.File]::Exists($f)) { [System.IO.File]::Delete($f) }; [System.IO.File]::Move(($f + ".tmp"), $f) } catch { exit 1 }')
+    return $sb.ToString()
+}
+
+function ConvertTo-HordeWindowsWatcherCommandLine {
+    param([Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][datetime]$StartedAt, [Parameter(Mandatory = $true)][string]$ExitFile)
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes((ConvertTo-HordeWindowsWatcherScript -ProcessId $ProcessId -StartedAt $StartedAt -ExitFile $ExitFile)))
+    return ((ConvertTo-HordeServiceArgument -Text (Get-HordeWindowsServiceShell)) + " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded)
 }
 
 function Get-HordeWindowsCloseSource { return @"

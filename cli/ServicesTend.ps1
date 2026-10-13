@@ -56,7 +56,8 @@ function New-HordeServiceTools {
         Heartbeat    = { param($Path) return (Read-HordeHeartbeat -Path $Path) }
         Idle         = { return (Get-HordePersonIdleSeconds) }
         Fetch        = { param($Definition, $Policy) return (Update-HordeServiceRemote -Definition $Definition -TimeoutSeconds $Policy.gitSeconds) }
-        Checkout     = { param($Definition, $RunningRevision, $Policy) return (Get-HordeServiceCheckoutState -Definition $Definition -RunningRevision $RunningRevision -TimeoutSeconds $Policy.gitSeconds) }
+        Checkout     = { param($Definition, $RunningRevision, $Policy, $Full) return (Get-HordeServiceCheckoutState -Definition $Definition -RunningRevision $RunningRevision -TimeoutSeconds $Policy.gitSeconds -Full:($Full -eq $true)) }
+        ExitCode     = { param($Definition, $HordeHome, $Process) return (Read-HordeServiceExitRecord -Name $Definition.name -Process $Process -HordeHome $HordeHome) }
         Verify       = { param($Definition, $Revision, $Policy) return (Test-HordeServiceRevision -Definition $Definition -Revision $Revision -GitSeconds $Policy.gitSeconds -CheckSeconds $Policy.checkSeconds) }
         Advance      = { param($Definition, $Revision, $Policy) return (Move-HordeServiceCheckout -Definition $Definition -Revision $Revision -TimeoutSeconds $Policy.gitSeconds) }
         Retreat      = { param($Definition, $Revision, $Policy) return (Move-HordeServiceCheckout -Definition $Definition -Revision $Revision -Back -TimeoutSeconds $Policy.gitSeconds) }
@@ -79,7 +80,7 @@ function Get-HordeServiceObservation {
     # state is the one handed in with what looking changed - when the remote was last asked, and what
     # went wrong. Every tool that throws or does not answer becomes an unknown with the reason.
     # -NoFetch is `status`: it reads, and never asks a remote. -ForceFetch is `rollout`: it asks now.
-    param([Parameter(Mandatory = $true)]$Definition, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][datetime]$Now, [switch]$ForceFetch, [switch]$NoFetch)
+    param([Parameter(Mandatory = $true)]$Definition, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][datetime]$Now, [switch]$ForceFetch, [switch]$NoFetch, [string]$HordeHome = "")
     $s = Copy-HordeServiceState -State $State
     $verdictOf = {
         param($Claim)
@@ -115,7 +116,7 @@ function Get-HordeServiceObservation {
             $s.fetchProblem = $(if ($null -ne $fetched -and $fetched.ok -eq $true) { "" } else { Protect-HordeServiceText ("the remote could not be asked: " + $(if ($null -ne $fetched) { "" + $fetched.detail } else { "the fetch did not answer" })) })
         }
         $read = $null
-        try { $read = Invoke-HordeServiceTool -Tools $Tools -Name "Checkout" -With @($Definition, $s.runningRevision, $Policy) } catch { $read = $null; $checkout = New-HordeUnknown -Reason "its checkout could not be read" -ErrorRecord $_ }
+        try { $read = Invoke-HordeServiceTool -Tools $Tools -Name "Checkout" -With @($Definition, $s.runningRevision, $Policy, [bool]($null -ne $s.moving)) } catch { $read = $null; $checkout = New-HordeUnknown -Reason "its checkout could not be read" -ErrorRecord $_ }
         if ($null -ne $read -and (Test-HordeAnswer $read.checkout) -and (Test-HordeAnswer $read.wanted)) { $checkout = $read.checkout; $wanted = $read.wanted }
         elseif ($checkout.state -cne "unknown") { $checkout = New-HordeUnknown -Reason "its checkout reader did not answer" }
         if ($checkout.state -cne "known") { $wanted = New-HordeUnknown -Reason $checkout.reason }
@@ -126,7 +127,14 @@ function Get-HordeServiceObservation {
             if (-not (Test-HordeAnswer $idle) -or $idle.state -ceq "absent") { $idle = New-HordeUnknown -Reason "nothing answered whether the person is idle" }
         }
     }
-    return [pscustomobject]@{ observed = (New-HordeServiceObserved -Started $started -Heartbeat $beat -Beater $beater -Checkout $checkout -Wanted $wanted -IdleSeconds $idle); state = $s }
+    # The code its process ended with is asked only when it could matter: the definition lists
+    # deliberate exit codes, and the process the state names has just been found gone.
+    $exit = New-HordeUnknown -Reason "nobody looked: it has not just ended, or no exit code of its is deliberate"
+    if ($null -ne $s.started -and $started.state -ceq "absent" -and $null -ne $Tools["ExitCode"] -and @($Definition.stop.deliberateExitCodes).Count -gt 0) {
+        try { $exit = Invoke-HordeServiceTool -Tools $Tools -Name "ExitCode" -With @($Definition, $HordeHome, $s.started) } catch { $exit = New-HordeUnknown -Reason "the code it ended with could not be read" -ErrorRecord $_ }
+        if (-not (Test-HordeAnswer $exit) -or $exit.state -ceq "absent" -or ($exit.state -ceq "known" -and $exit.value -isnot [int] -and $exit.value -isnot [long])) { $exit = New-HordeUnknown -Reason "nothing recorded the code it ended with" }
+    }
+    return [pscustomobject]@{ observed = (New-HordeServiceObserved -Started $started -Heartbeat $beat -Beater $beater -Checkout $checkout -Wanted $wanted -IdleSeconds $idle -ExitCode $exit); state = $s }
 }
 
 function Invoke-HordeServiceStep {
@@ -174,8 +182,11 @@ function Wait-HordeServiceGone {
 function Invoke-HordeServiceTendOne {
     # One service, one pass: { name; lines; action; step; code; reason; steps; left }. left is true
     # when the service was left alone because its state file could not be read.
-    param([Parameter(Mandatory = $true)]$Definition, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [string]$HordeHome = "", [Parameter(Mandatory = $true)][datetime]$Deadline, [switch]$IgnoreIdle, [switch]$ForceFetch)
+    param([Parameter(Mandatory = $true)]$Definition, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [string]$HordeHome = "", [Parameter(Mandatory = $true)][datetime]$Deadline, [switch]$IgnoreIdle, [switch]$ForceFetch, [double]$SupervisorGapSeconds = 0)
     $name = $Definition.name
+    # The gap is handed to the FIRST decision of the pass only: it gives a revision being confirmed
+    # the time back, and given again at every step it would give it back again and again.
+    $gap = $SupervisorGapSeconds
     $lines = New-Object System.Collections.ArrayList
     $kept = Read-HordeServiceState -Name $name -HordeHome $HordeHome
     # A state that cannot be read is never begun again as new (core/ServicesFiles.ps1 says why).
@@ -192,8 +203,9 @@ function Invoke-HordeServiceTendOne {
     $steps = 0
     while ($true) {
         $now = Invoke-HordeServiceTool -Tools $Tools -Name "Now"
-        $seen = Get-HordeServiceObservation -Definition $Definition -State $s -Tools $Tools -Policy $Policy -Now $now -ForceFetch:($ForceFetch -and $steps -eq 0)
-        $d = Get-HordeServiceDecision -Definition $Definition -State $seen.state -Observed $seen.observed -Now $now -Policy $Policy -IgnoreIdle:$IgnoreIdle
+        $seen = Get-HordeServiceObservation -Definition $Definition -State $s -Tools $Tools -Policy $Policy -Now $now -ForceFetch:($ForceFetch -and $steps -eq 0) -HordeHome $HordeHome
+        $d = Get-HordeServiceDecision -Definition $Definition -State $seen.state -Observed $seen.observed -Now $now -Policy $Policy -IgnoreIdle:$IgnoreIdle -SupervisorGapSeconds $gap
+        $gap = 0
         $s = $d.state
         if ($d.notify -ne "") { $s = Add-HordeServiceNotice -State $s -Decision $d -Id (Invoke-HordeServiceTool -Tools $Tools -Name "NewId") -Now $now }
         $worth = Test-HordeServiceWorthSaying -Decision $d -LastSaid $s.lastSaid
@@ -239,7 +251,7 @@ function Send-HordeServicePending {
         $kept = Read-HordeServiceState -Name $def.name -HordeHome $HordeHome
         if ($kept.state -cne "known" -or @($kept.value.notices).Count -eq 0) { continue }
         $states[$def.name] = $kept.value
-        foreach ($n in @($kept.value.notices)) { [void]$waiting.Add([pscustomobject]@{ id = $n.id; kind = $n.kind; text = $n.text; at = $n.at; service = $def.name }) }
+        foreach ($n in @($kept.value.notices)) { [void]$waiting.Add([pscustomobject]@{ id = $n.id; kind = $n.kind; text = $n.text; at = $n.at; service = $def.name; what = (Get-HordeServiceNoticeWhat -Notice $n) }) }
     }
     if ($waiting.Count -eq 0) { return @() }
     if ($Policy.tellWarchief -ne $true) { return @("" + $waiting.Count + " notice(s) wait untold: telling is switched off (the setting tellWarchief)") }
@@ -300,8 +312,15 @@ function Invoke-HordeServiceSupervisor {
         $before = Read-HordeHeartbeat -Path $beatPath
         $pass = [long]1
         if ($before.state -ceq "known") { $pass = [long]$before.value.pass + 1 }
+        # WAS THE SUPERVISOR ITSELF NOT RUNNING? Its own last heartbeat says: stale by its own tick
+        # means no pass came round - the machine slept, its clock moved, or the job was off - and for
+        # exactly that long nobody was looking (core/Services.ps1 says what a decision does with it).
+        # Read on the pass's own clock, like everything else a pass decides by.
+        $gapSeconds = [double]0
+        $own = Get-HordeHeartbeatVerdict -Heartbeat $before -Now (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -DefaultTickSeconds (Get-HordeServiceTendTickSeconds)
+        if ($own.state -ceq "known" -and -not $own.value.fresh) { $gapSeconds = [double]$own.value.ageSeconds; [void]$lines.Add("the supervisor's own last pass was " + $own.value.ageSeconds + " s ago: it was not running, so for this pass an old heartbeat is not read as a hung service") }
         # At the start as well as the end: a pass that takes its whole minute is not stale meanwhile.
-        $null = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
+        $null = Write-HordeHeartbeatQuietly -Path $beatPath -At (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
         if ($chosen.Count -eq 0) { [void]$lines.Add("no service is defined in " + $defined.path + "; there is nothing to tend") }
         $budget = $(if ($BudgetSeconds -gt 0) { $BudgetSeconds } else { [int]$policy.passBudgetSeconds })
         $settleBy = (Invoke-HordeServiceTool -Tools $Tools -Name "Now").AddSeconds($SettleSeconds)
@@ -310,7 +329,7 @@ function Invoke-HordeServiceSupervisor {
             $deadline = (Invoke-HordeServiceTool -Tools $Tools -Name "Now").AddSeconds($budget)
             foreach ($def in $chosen) {
                 $one = $null
-                try { $one = Invoke-HordeServiceTendOne -Definition $def -Tools $Tools -Policy $policy -HordeHome $HordeHome -Deadline $deadline -IgnoreIdle:$IgnoreIdle -ForceFetch:($ForceFetch -and $first) }
+                try { $one = Invoke-HordeServiceTendOne -Definition $def -Tools $Tools -Policy $policy -HordeHome $HordeHome -Deadline $deadline -IgnoreIdle:$IgnoreIdle -ForceFetch:($ForceFetch -and $first) -SupervisorGapSeconds $(if ($first) { $gapSeconds } else { 0 }) }
                 catch {
                     # One service's failure is its own: the others are still tended.
                     $why = Protect-HordeServiceText $_.Exception.Message
@@ -325,7 +344,7 @@ function Invoke-HordeServiceSupervisor {
             $null = Invoke-HordeServiceTool -Tools $Tools -Name "Sleep" -With @(2000)
         }
         foreach ($l in @(Send-HordeServicePending -Definitions $chosen -Tools $Tools -Policy $policy -HordeHome $HordeHome)) { [void]$lines.Add($l) }
-        $null = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
+        $null = Write-HordeHeartbeatQuietly -Path $beatPath -At (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
     } finally { $lock.Dispose() }
     return [pscustomobject]@{ ran = $true; problem = ""; lines = [string[]]@($lines.ToArray()); services = @($chosen | ForEach-Object { $last[$_.name] } | Where-Object { $null -ne $_ }) }
 }
@@ -356,7 +375,7 @@ function Get-HordeServiceStatusReport {
             $kept = Read-HordeServiceState -Name $def.name -HordeHome $HordeHome
             if ($kept.state -ceq "unknown") { [void]$rows.Add([pscustomobject]@{ name = $def.name; enabled = [bool]$def.enabled; alive = "unknown"; why = $kept.reason; pid = $null; heartbeatAgeSeconds = $null; phase = $null; runningRevision = $null; wantedRevision = $null; current = $null; next = "wait"; nextReason = "it is left alone until its state file is mended or removed"; lastAction = $null; failures = $null; escalated = [string[]]@(); untold = 0; pinnedRevision = $null; fetchProblem = "" }); continue }
             $s = $(if ($kept.state -ceq "known") { $kept.value } else { New-HordeServiceState -Name $def.name })
-            $seen = Get-HordeServiceObservation -Definition $def -State $s -Tools $Tools -Policy $settings.values -Now $Now -NoFetch
+            $seen = Get-HordeServiceObservation -Definition $def -State $s -Tools $Tools -Policy $settings.values -Now $Now -NoFetch -HordeHome $HordeHome
             [void]$rows.Add((Get-HordeServiceStatus -Definition $def -State $s -Observed $seen.observed -Now $Now -Policy $settings.values))
         }
     }
@@ -397,6 +416,7 @@ function Format-HordeServiceStatus {
         $alive = switch ("" + $r.alive) { "yes" { "alive" } "no" { "NOT RUNNING" } "starting" { "starting" } "hung" { "HUNG" } default { "UNKNOWN" } }
         [void]$lines.Add("")
         [void]$lines.Add($r.name + ": " + $alive + $(if (-not $r.enabled) { " (not supervised: enabled is false)" } else { "" }) + " - " + $r.why)
+        if ($null -ne $r.PSObject.Properties["held"] -and $r.held -eq $true) { [void]$lines.Add("    HELD" + $(if ("" + $r.heldWhy -ne "") { " - " + $r.heldWhy } else { "" }) + ": the supervisor leaves it as it is until horde services start " + $r.name) }
         if ($null -ne $r.heartbeatAgeSeconds) { [void]$lines.Add("    heartbeat: " + $r.heartbeatAgeSeconds + " s ago") }
         if ($null -ne $r.wantedRevision -or $null -ne $r.runningRevision) {
             $state = $(if ($null -eq $r.current) { "cannot be compared" } elseif ($r.current) { "current" } else { "NOT CURRENT" })
@@ -412,12 +432,17 @@ function Format-HordeServiceStatus {
 }
 
 function New-HordeServiceTendJob {
-    # The supervisor's job: this checkout's horde, `services tend`, every minute, stopped at one
-    # minute, in the person's own session (core/Schedule.ps1, -WithPerson, says why it cannot run
+    # The supervisor's job: this checkout's horde, `services tend`, every minute, in the person's own
+    # session. STOPPED AT FIVE MINUTES, NOT ONE: a pass decides to take a step while it has budget
+    # left, and the step it then takes - the move of a checkout, a self-check - may itself run a
+    # minute; ended at one minute, a pass was being cut down in the middle of exactly the steps that
+    # must not be cut (safety review of the first build, item 6). Two passes never overlap: the
+    # scheduler starts no second run while one is going, and a pass holds the lock. Still in the
+    # person's own session (core/Schedule.ps1, -WithPerson, says why it cannot run
     # where nobody is). The home travels with it as data, as the metrics job's does.
     param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [switch]$Disabled)
     $home2 = Get-HordeHome
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
 }
 
 function Invoke-HordeServiceSchedule {
@@ -458,6 +483,75 @@ function Invoke-HordeServiceSchedule {
     }
 }
 
+function Set-HordeServiceHeld {
+    # `horde services stop <name>` and `horde services start <name>`: { ok; problem; lines }.
+    #   -Held        STOP IT AND HOLD IT. The service is asked to stop the way its definition says,
+    #                waited for as long as its definition gives it, then ended; and its state is marked
+    #                held, which every pass respects (core/Services.ps1): it is not started, stopped or
+    #                updated until it is let go. Nobody edits a definitions file to stop a service.
+    #   not -Held    LET IT GO. The mark is taken off, with what a held service may have left behind -
+    #                a start whose outcome was never recorded, its count of failed starts, the telling
+    #                that it ended itself - and the caller tends it at once.
+    # Done under the pass's own lock, so a pass and a person never act on one service together. A
+    # service whose state file cannot be read is refused: its state is where the mark is kept.
+    param([Parameter(Mandatory = $true)][string]$Name, [switch]$Held, [string]$HordeHome = "", $Tools = $null)
+    if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
+    if ($null -eq $Tools) { $Tools = New-HordeServiceTools }
+    $answer = { param([string]$Problem, [string[]]$Lines = @()) return [pscustomobject]@{ ok = [bool]($Problem -eq ""); problem = $Problem; lines = [string[]]@($Lines) } }
+    $settings = Get-HordeServiceSettings -HordeHome $HordeHome
+    if ($settings.state -ceq "refused") { return (& $answer ($settings.findings -join " ")) }
+    $defined = Get-HordeServiceDefinitions -HordeHome $HordeHome
+    if ($defined.state -ceq "refused") { return (& $answer ($defined.findings -join " ")) }
+    $def = @($defined.services | Where-Object { $_.name -ceq $Name }) | Select-Object -First 1
+    if ($null -eq $def) { return (& $answer ("no service named '" + $Name + "' is defined in " + $defined.path + $(if (@($defined.services).Count -gt 0) { " (defined: " + (@($defined.services | ForEach-Object { $_.name }) -join ", ") + ")" } else { "" }))) }
+    $lock = Enter-HordeServiceTendLock -HordeHome $HordeHome -WaitSeconds 90
+    if ($null -eq $lock) { return (& $answer "a pass of the supervisor is still running on this home after 90 s; nothing was done") }
+    $lines = New-Object System.Collections.ArrayList
+    try {
+        $kept = Read-HordeServiceState -Name $Name -HordeHome $HordeHome
+        if ($kept.state -ceq "unknown") { return (& $answer ("nothing was done: " + $kept.reason)) }
+        $s = $(if ($kept.state -ceq "known") { Copy-HordeServiceState -State $kept.value } else { New-HordeServiceState -Name $Name })
+        $now = Invoke-HordeServiceTool -Tools $Tools -Name "Now"
+        if (-not $Held) {
+            $was = [bool]($s.held -eq $true)
+            $s.held = $false; $s.heldWhy = ""; $s.launchingAt = $null; $s.failures = 0; $s.nextStartAt = $null; $s.proving = $false
+            $s.told = [string[]]@(@($s.told) | Where-Object { @("ended-itself", "start-unrecorded") -cnotcontains $_ })
+            $s.lastAction = [pscustomobject]@{ at = $now.ToUniversalTime(); action = "start"; step = "let-go"; outcome = "done"; reason = "a person let it go with horde services start" }
+            Write-HordeServiceState -State $s -HordeHome $HordeHome
+            $null = Write-HordeServiceJournal -HordeHome $HordeHome -Entries @(New-HordeServiceJournalEntry -At $now -Service $Name -Action "start" -Step "let-go" -Code "let-go" -Outcome "done" -Reason "a person let it go with horde services start")
+            [void]$lines.Add($Name + ": " + $(if ($was) { "no longer held" } else { "was not held" }) + "; the supervisor tends it again")
+            return (& $answer "" @($lines.ToArray()))
+        }
+        # THE MARK FIRST, on disk, before anything is stopped: a pass that came round between the
+        # stop and the mark would find the service gone and start it again.
+        $s.held = $true; $s.heldWhy = "a person stopped it with horde services stop"; Write-HordeServiceState -State $s -HordeHome $HordeHome
+        $seen = Get-HordeServiceObservation -Definition $def -State $s -Tools $Tools -Policy $settings.values -Now $now -NoFetch -HordeHome $HordeHome
+        $live = Get-HordeServiceLiveness -Definition $def -State $s -Observed $seen.observed -Now $now
+        $said = "it was not running"
+        if ($live.alive -ceq "unknown") { $said = "whether it is running could not be told (" + $live.why + "), so nothing was stopped" }
+        elseif ($null -ne $live.process) {
+            $asked = $null
+            try { $asked = Invoke-HordeServiceTool -Tools $Tools -Name "Stop" -With @($def, $live.process, $settings.values) } catch { $asked = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+            $gone = Wait-HordeServiceGone -Process $live.process -Tools $Tools -Seconds ([double]$def.stop.waitSeconds)
+            if ($gone) { $said = "it was asked to stop, and stopped" }
+            else {
+                # Asked, waited for, still there: ended, as a pass would end it - by pid AND start.
+                $ended = $null
+                try { $ended = Invoke-HordeServiceTool -Tools $Tools -Name "Kill" -With @(, $live.process) } catch { $ended = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+                $said = $(if ($null -ne $ended -and $ended.ok -eq $true) { "it did not stop when asked within " + $def.stop.waitSeconds + " s, and was ended" } else { "IT IS STILL RUNNING: it did not stop when asked, and could not be ended (" + (Protect-HordeServiceText ("" + $ended.detail)) + ")" })
+                $gone = [bool]($null -ne $ended -and $ended.ok -eq $true)
+            }
+            if ($gone) { $s.started = $null }
+        }
+        $s.proving = $false
+        $s.lastAction = [pscustomobject]@{ at = $now.ToUniversalTime(); action = "stop"; step = "hold"; outcome = "done"; reason = ("a person stopped it with horde services stop: " + $said) }
+        Write-HordeServiceState -State $s -HordeHome $HordeHome
+        $null = Write-HordeServiceJournal -HordeHome $HordeHome -Entries @(New-HordeServiceJournalEntry -At $now -Service $Name -Action "stop" -Step "hold" -Code "held" -Outcome "done" -Reason ("a person stopped it with horde services stop: " + $said))
+        [void]$lines.Add($Name + ": held - " + $said + ". The supervisor leaves it as it is until horde services start " + $Name)
+        return (& $answer "" @($lines.ToArray()))
+    } finally { $lock.Dispose() }
+}
+
 function Get-HordeServiceRolloutVerdict {
     # PURE. After `horde rollout`: which of the chosen services did not end where a roll-out should
     # leave them, as { name; reason }. A service that follows a revision must end on it (current, or
@@ -468,7 +562,7 @@ function Get-HordeServiceRolloutVerdict {
     foreach ($def in @($Definitions)) {
         $one = @($Services | Where-Object { $_.name -ceq $def.name }) | Select-Object -First 1
         if ($null -eq $one) { [void]$out.Add([pscustomobject]@{ name = $def.name; reason = "it was not looked at" }); continue }
-        if (@("current", "updated", "disabled") -ccontains $one.code) { continue }
+        if (@("current", "updated", "disabled", "held") -ccontains $one.code) { continue }
         if ($null -eq $def.follow -and $one.code -ceq "running") { continue }
         [void]$out.Add([pscustomobject]@{ name = $def.name; reason = $one.reason })
     }
