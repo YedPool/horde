@@ -194,7 +194,10 @@ Check ((Get-HordeDriveLetterType -Letter $system) -ceq "Fixed") ("CONTROL: the r
 Check ((Get-HordeDriveLetterType -Letter $system.ToLowerInvariant()) -ceq "Fixed") "and so with its letter in small"
 $nothingThere = @("QRSTUVWXYZPONMLKJ".ToCharArray() | ForEach-Object { "" + $_ } | Where-Object { -not [System.IO.Directory]::Exists($_ + ":\") -and $null -eq (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) -and @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1) }) -cnotcontains $_ })
 Check ($nothingThere.Count -ge 1 -and (Get-HordeDriveLetterType -Letter $nothingThere[0]) -ceq "NoRootDirectory") "a letter that names nothing is of the type NoRootDirectory"
-Check ((Get-HordeDriveLetterType -Letter "1") -ceq "" -and (Get-HordeDriveLetterType -Letter "??") -ceq "") "what is no drive letter cannot be asked, and that is an empty answer, never an error"
+# Asked inside a try, so that an error is a FAILED CHECK and not a broken suite: the changed-mutants
+# run of 2026-10-13 showed the mutant that makes this throw crashing the suite, which catches nothing.
+function Get-TypeOrThrew { param([string]$Letter) try { return ("" + (Get-HordeDriveLetterType -Letter $Letter)) } catch { return ("threw: " + $_.Exception.Message) } }
+Check ((Get-TypeOrThrew "1") -ceq "" -and (Get-TypeOrThrew "??") -ceq "") ("what is no drive letter cannot be asked, and that is an empty answer, never an error ('" + (Get-TypeOrThrew "1") + "', '" + (Get-TypeOrThrew "??") + "')")
 Check (Test-NotRefused ($system + ":\folder\x.md")) "CONTROL: with the real question back, a path on a local drive is not refused"
 
 Write-Host ""
