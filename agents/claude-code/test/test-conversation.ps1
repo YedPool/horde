@@ -8,6 +8,12 @@
 #     are never chosen between; a record with no transcript, or another session's, is unknown; a
 #     registry with an unreadable record is unknown; a Thrall with no file yet reads empty; a past
 #     session asked for by its id is found though retired, and a session that never held the role is not.
+#   - A SESSION DESCRIBED BY ITS ID, from its registry record: a subsession as the fleet writes it (a
+#     label, a parent, no role); the old role words translated; a retired record; a record with no
+#     label, an empty one, a null one; a label that is a number, an object, a list, or text of another
+#     shape; a record that cannot be read; ANOTHER record that cannot be read; a copy filed under another
+#     name; an id in another case; another fleet's registry; no registry at all; a record changed, and
+#     removed, between two calls.
 #   - WHAT IS A TURN: each kind of the harness's own line is planted alone and must give nothing; a
 #     prompt as text blocks is one turn; a line with several text blocks gives one turn each, ids
 #     uuid and uuid#1, one groupId; a response's text blocks split by tool results share the groupId; an
@@ -82,6 +88,110 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $reg.root "registry\sessions\broken.json"), "{ not json")
     $f = Find-Thrall $reg
     Check ($f.state -ceq "unknown" -and $f.reason -like "*could not all be read*") "a registry with an unreadable record: unknown - that record may be the Thrall's"
+
+    Write-Host ""
+    Write-Host "--- a session described by its id, from its registry record ---" -ForegroundColor Cyan
+    function Get-Described { param($Reg, [string]$Id) return (Get-HordeConversationSession -Fleet "alpha" -SessionId $Id -Vendor $vendor -Options @{ registryRoot = $Reg.root }) }
+    function Set-RecordField {
+        # Rewrite one field of a record the suite made, to a value the helper would never write.
+        param($Reg, [string]$Id, [string]$Name, $Value)
+        $file = Join-Path $Reg.root ("registry\sessions\" + $Id + ".json")
+        $j = Get-Content -Raw $file | ConvertFrom-Json
+        $j | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+        [System.IO.File]::WriteAllText($file, ($j | ConvertTo-Json -Depth 4))
+    }
+    $reg = New-ClaudeCodeRegistry; [void]$made.Add($reg)
+    $thrallId = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $reg -Session $thrallId -Label "M"
+    $orcId = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $reg -Session $orcId -Role "orchestrator" -Label "E"
+    $wargId = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $reg -Session $wargId -Role "" -Label "E3" -Parent $orcId
+    $d = Get-Described $reg $wargId
+    Check ($d.state -ceq "known" -and $d.value.vendor -ceq $vendor -and $d.value.session -ceq $wargId -and $d.value.fleet -ceq "alpha") ("a subsession's record: known, for its vendor and the horde asked about (" + $d.state + " " + $d.reason + ")")
+    Check ($d.value.label.state -ceq "known" -and $d.value.label.value -ceq "E3" -and $d.value.parent.state -ceq "known" -and $d.value.parent.value -ceq $orcId) "its label, and its parent's session id, as the record holds them"
+    Check ($d.value.role.state -ceq "unknown" -and $d.value.role.reason -like "*no role*") ("a record with a parent and no role - as the fleet writes a subsession - has an unknown role, never the humblest one (" + $d.value.role.reason + ")")
+    $d = Get-Described $reg $orcId
+    Check ($d.state -ceq "known" -and $d.value.role.value -ceq "orc" -and $d.value.label.value -ceq "E" -and $d.value.parent.state -ceq "absent") "the parent, described in turn: the registry's 'orchestrator' is an orc, with no parent"
+    $d = Get-Described $reg $thrallId
+    Check ($d.state -ceq "known" -and $d.value.role.value -ceq "warchief" -and $d.value.label.value -ceq "M") "the registry's 'master' is the warchief"
+    $goneId = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $reg -Session $goneId -Role "" -Retired $true -Label "E5" -Parent $orcId
+    $d = Get-Described $reg $goneId
+    Check ($d.state -ceq "known" -and $d.value.label.value -ceq "E5") "a retired session is still described: what it sent before it ended is still its own"
+
+    $plainId = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $reg -Session $plainId -Role ""
+    $d = Get-Described $reg $plainId
+    Check ($d.state -ceq "known" -and $d.value.label.state -ceq "absent" -and $d.value.parent.state -ceq "absent" -and $d.value.role.state -ceq "unknown") "a record with no label and no parent: known, and each is said to be none"
+    Set-RecordField $reg $plainId "label" ""
+    Check ((Get-Described $reg $plainId).value.label.state -ceq "absent") "an empty label is no label (the registry writes an empty text for none)"
+    Set-RecordField $reg $plainId "label" $null
+    Check ((Get-Described $reg $plainId).value.label.state -ceq "absent") "a null label is no label"
+    Set-RecordField $reg $plainId "label" "E7"
+    Check ((Get-Described $reg $plainId).value.label.value -ceq "E7") "CONTROL: the same rewrite with a real label gives that label - and the record was read again, not remembered"
+    $damaged = [ordered]@{ "a number" = 7; "true" = $true; "an object" = ([pscustomobject]@{ text = "E7" }); "a list" = @("E", "7") }
+    foreach ($k in $damaged.Keys) {
+        Set-RecordField $reg $plainId "label" $damaged[$k]
+        $d = Get-Described $reg $plainId
+        Check ($d.state -ceq "known" -and $d.value.label.state -ceq "unknown" -and $d.value.label.reason -like "*not text*") ("a label that is " + $k + ": the session is known, its label unknown, said to be not text (" + $d.value.label.reason + ")")
+    }
+    foreach ($text in @("e7", "E07", "the Thrall", ("E7 password=" + "hunter2longer"), "<b>E7</b>")) {
+        Set-RecordField $reg $plainId "label" $text
+        $d = Get-Described $reg $plainId
+        # Read from the label itself, not from the answer as JSON: there a "<" is written <, and a
+        # session id may hold "e7".
+        Check ($d.state -ceq "known" -and $d.value.label.state -ceq "unknown" -and $null -eq $d.value.label.value -and -not $d.value.label.reason.Contains($text)) ("a label of another shape (" + $text.Length + " characters) is unknown: neither its value nor in its reason")
+    }
+    Set-RecordField $reg $plainId "label" "E7"
+    Set-RecordField $reg $plainId "parent" 12
+    $d = Get-Described $reg $plainId
+    Check ($d.state -ceq "known" -and $d.value.parent.state -ceq "unknown" -and $d.value.parent.reason -like "*not text*" -and $d.value.label.value -ceq "E7") "a parent that is a number is unknown, and the label beside it stands"
+    Set-RecordField $reg $plainId "parent" "not an id!"
+    $d = Get-Described $reg $plainId
+    Check ($d.state -ceq "known" -and $d.value.parent.state -ceq "unknown") "a parent that is no session id is unknown"
+    Set-RecordField $reg $plainId "role" ("emperor password=" + "hunter2longer")
+    $d = Get-Described $reg $plainId
+    Check ($d.state -ceq "known" -and $d.value.role.state -ceq "unknown" -and -not ($d | ConvertTo-Json -Depth 6).Contains("hunter2longer")) "a role Horde does not know is unknown, and a secret in it does not leave the port"
+
+    $d = Get-Described $reg ([guid]::NewGuid().ToString())
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*no adapter has a record*") ("an id with no record, in a registry read whole: unknown, because no record holds it (" + $d.reason + ")")
+    $d = Get-Described $reg $wargId.ToUpperInvariant()
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*no adapter has a record*") "the same id in another case is another id"
+    $regB = New-ClaudeCodeRegistry; [void]$made.Add($regB)
+    $theirs = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $regB -Session $theirs -Role "" -Label "B7"
+    Check ((Get-Described $reg $theirs).state -ceq "unknown") "a session of another fleet's registry is unknown in this one"
+    Check ((Get-Described $regB $theirs).value.label.value -ceq "B7") "CONTROL: in its own registry it is known"
+    Check ((Get-Described $regB $wargId).state -ceq "unknown") "and the other way round"
+
+    # THE REGISTRY CHANGING BETWEEN CALLS: relabelled, then removed.
+    $null = Set-ClaudeCodeRecord -Registry $regB -Session $theirs -Role "" -Label "B8" -Parent $orcId
+    $d = Get-Described $regB $theirs
+    Check ($d.value.label.value -ceq "B8" -and $d.value.parent.value -ceq $orcId) "a record rewritten between two calls: the second call says what it holds now"
+    [System.IO.File]::Delete((Join-Path $regB.root ("registry\sessions\" + $theirs + ".json")))
+    Check ((Get-Described $regB $theirs).state -ceq "unknown") "and removed between two calls, it is unknown: nothing is remembered"
+
+    # DAMAGE. One other record that cannot be read does not take the label from every session.
+    [System.IO.File]::WriteAllText((Join-Path $reg.root "registry\sessions\broken.json"), "{ not json")
+    $d = Get-Described $reg $wargId
+    Check ($d.state -ceq "known" -and $d.value.label.value -ceq "E3") ("ANOTHER record that cannot be read: this session's own record was read, so it is still known (" + $d.state + " " + $d.reason + ")")
+    $d = Get-Described $reg ([guid]::NewGuid().ToString())
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*could not all be read*") ("but an id with no record is now unknown for another reason: the record that could not be read may be its own (" + $d.reason + ")")
+    [System.IO.File]::WriteAllText((Join-Path $reg.root ("registry\sessions\" + $wargId + ".json")), "{ not json")
+    $d = Get-Described $reg $wargId
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*is there and could not be read*") ("the session's OWN record cannot be read: unknown, in those words (" + $d.reason + ")")
+    $regC = New-ClaudeCodeRegistry; [void]$made.Add($regC)
+    $strayId = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $regC -Session $strayId -Role "" -Label "C2"
+    Move-Item -LiteralPath (Join-Path $regC.root ("registry\sessions\" + $strayId + ".json")) -Destination (Join-Path $regC.root "registry\sessions\a-copy.json")
+    $d = Get-Described $regC $strayId
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*may be the only copy*") ("a record filed under another name is not read as the session's, and is not hidden either: unknown (" + $d.reason + ")")
+    [System.IO.Directory]::Delete((Join-Path $regC.root "registry\sessions"), $true)
+    $d = Get-Described $regC $strayId
+    Check ($d.state -ceq "unknown" -and $d.reason -like "*no registry sessions directory*") ("a fleet root with no registry: unknown, never an empty fleet (" + $d.reason + ")")
+    $nowhere = [pscustomobject]@{ root = (Join-Path $regC.root "no-such-root") }
+    Check ((Get-Described $nowhere $strayId).state -ceq "unknown") "a fleet root that is not there: unknown"
 
     Write-Host ""
     Write-Host "--- what is a turn ---" -ForegroundColor Cyan
