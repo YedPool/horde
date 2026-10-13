@@ -82,6 +82,9 @@ function Get-HordeWakeSettings {
         # A session limited with no known end is knocked for once after this long, uncounted
         # (Get-HordeWakeHold, LIMITED WITH NO KNOWN END).
         limitedUnknownProbeSeconds = 3600
+        # At most this many such knocks for ONE unread mail of one session, whether its hour came or a
+        # session of the fleet took mail (Get-HordeWakeHold, LIMITED WITH NO KNOWN END).
+        maxLimitProbesPerMail = 6
         # For how long a session seen TAKING MAIL is evidence that sessions can take turns
         # (Get-HordeWakeLimit, LIMITED UNKNOWN).
         movingEvidenceSeconds = 600
@@ -132,8 +135,13 @@ function New-HordeWakeLedgerRow {
     # there is something to say in them.
     # probeAt is when the session was last nudged WITHOUT the nudge being counted (Get-HordeWakeHold, A
     # PROBE).
-    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false, $ProbeAt = $null)
+    # probes is how many uncounted knocks a session LIMITED WITH NO KNOWN END has had for this mail
+    # (Get-HordeWakeHold); it is taken from -Carry, the entry this one replaces, unless -Probes says.
+    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false, $ProbeAt = $null, $Carry = $null, [int]$Probes = -1)
     $row = [ordered]@{ attempts = $Attempts; lastAttemptAt = $LastAttemptAt; lastOutcome = $LastOutcome }
+    $probed = $Probes
+    if ($probed -lt 0) { $probed = 0; $was = Get-HordeWakeEntryValue $Carry "probes"; if ($was -is [int] -or $was -is [long]) { $probed = [int]$was } }
+    if ($probed -gt 0) { $row["probes"] = $probed }
     if ($ProbeAt -is [datetime]) { $row["probeAt"] = $ProbeAt }
     if ($NothingAt -is [datetime]) { $row["nothingAt"] = $NothingAt }
     if ($MailAt -is [datetime]) { $row["mailAt"] = $MailAt }
@@ -297,6 +305,14 @@ function Get-HordeWakeHold {
         if ($steps.Count -gt 0) { $longest = [int]$steps[$steps.Count - 1] }
         $last = Get-HordeWakeEntryValue $Entry "probeAt"
         if ($limit.kind -ceq "open") {
+            # AND IT IS CAPPED. An hourly knock, and one more each time any session takes mail, was a
+            # line typed into a session that cannot answer for as long as its limit lasted - days, for a
+            # weekly one - with nothing ever said (safety review of PR 220). After
+            # maxLimitProbesPerMail of them for one mail the watcher gives up on it: one gave-up entry
+            # and one tell (Update-HordeWakeGaveUp), and nothing more until its oldest unread mail
+            # becomes another or its waker stops saying it is limited.
+            $knocks = Get-HordeWakeEntryValue $Entry "probes"
+            if (($knocks -is [int] -or $knocks -is [long]) -and $knocks -ge [int]$Settings.maxLimitProbesPerMail) { return [pscustomobject]@{ action = "wait"; reason = ($why + ": gave up after " + $knocks + " knocks while it was limited; nothing more is tried until its mail changes or it is no longer limited") } }
             $every = [int]$Settings.limitedUnknownProbeSeconds
             if ($last -isnot [datetime]) { return [pscustomobject]@{ action = "wait"; reason = ($why + ": it waits for a session of the fleet to take mail, or " + $every + " s") } }
             if (($Now - $last).TotalSeconds -lt $every) { return [pscustomobject]@{ action = "wait"; reason = ($why + ": it waits for a session of the fleet to take mail, or " + [int][System.Math]::Ceiling($every - ($Now - $last).TotalSeconds) + " s more") } }
@@ -413,13 +429,20 @@ function Update-HordeWakeLedger {
         $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $stateNow
         if ("$($Outcomes[$id])" -ceq "nothing") {
             $kept = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "nothing" -NothingAt $Now -MailAt $mailAt
-            if ($null -ne $had) { $kept = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") }
+            if ($null -ne $had) { $kept = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had }
             $next[$id] = $kept
             continue
         }
-        if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {
-            $probed = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -ProbeAt $Now
-            if ($null -ne $had) { $probed = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now }
+        $limitNow = Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves
+        if ($Silent -or $limitNow.kind -ceq "open") {
+            # A KNOCK AT A SESSION LIMITED WITH NO KNOWN END IS COUNTED AS A PROBE (the cap on those is in
+            # Get-HordeWakeHold); one sent only because the fleet is silent is not: that has its own bound.
+            $knocks = 0
+            $was = Get-HordeWakeEntryValue $had "probes"
+            if ($was -is [int] -or $was -is [long]) { $knocks = [int]$was }
+            if ($limitNow.kind -ceq "open") { $knocks++ }
+            $probed = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -ProbeAt $Now -Probes $knocks
+            if ($null -ne $had) { $probed = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now -Probes $knocks }
             $next[$id] = $probed
             continue
         }
@@ -427,7 +450,12 @@ function Update-HordeWakeLedger {
         if ($null -ne $had) { $before = [int]$had.attempts }
         $count = $before + 1
         if ("$($Outcomes[$id])" -ceq "killed") { $count = [System.Math]::Max($count, @($Settings.backoffSeconds).Count) }
-        $next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true)
+        # gaveUp is carried only when it was said for the ATTEMPTS: one said for the probes of a limited
+        # session (Update-HordeWakeGaveUp) is about a limit that is over by the time an attempt is
+        # counted, and must not swallow the line the cap on attempts would say later.
+        # And the knocks it had while limited are not carried into a counted attempt: the limit is over.
+        $stood = ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true -and [int]$had.attempts -ge [int]$Settings.maxNudgesPerMail)
+        $next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp $stood -Probes 0
     }
     # FIRST SEEN LIMITED WITH NO KNOWN END: stamped now, as the entry's probeAt, which is what its hour
     # is counted from (Get-HordeWakeHold). An entry it already has keeps its count.
@@ -439,7 +467,7 @@ function Update-HordeWakeLedger {
             $had = Get-HordeWakeLedgerEntry -Ledger $next -Id "$id" -State $a.value
             if ((Get-HordeWakeEntryValue $had "probeAt") -is [datetime]) { continue }
             $seen = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "limited" -MailAt $a.value.oldestUnreadAt -ProbeAt $Now
-            if ($null -ne $had) { $seen = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $had) -MailAt $a.value.oldestUnreadAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now }
+            if ($null -ne $had) { $seen = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $had) -MailAt $a.value.oldestUnreadAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now -Carry $had }
             $next["$id"] = $seen
         }
     }
@@ -480,13 +508,21 @@ function Update-HordeWakeGaveUp {
         foreach ($id in @($Ledger.Keys | Sort-Object)) {
             $e = $Ledger[$id]
             $next["$id"] = $e
-            if ([int]$e.attempts -lt [int]$Settings.maxNudgesPerMail -or (Get-HordeWakeEntryValue $e "gaveUp") -eq $true) { continue }
+            $knocks = 0
+            $was = Get-HordeWakeEntryValue $e "probes"
+            if ($was -is [int] -or $was -is [long]) { $knocks = [int]$was }
+            $spent = ([int]$e.attempts -ge [int]$Settings.maxNudgesPerMail)
+            $probedOut = ($knocks -ge [int]$Settings.maxLimitProbesPerMail)
+            if (-not ($spent -or $probedOut) -or (Get-HordeWakeEntryValue $e "gaveUp") -eq $true) { continue }
             $mailAt = Get-HordeWakeEntryValue $e "mailAt"
-            $next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt $mailAt -GaveUp $true -ProbeAt (Get-HordeWakeEntryValue $e "probeAt")
+            $next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt $mailAt -GaveUp $true -ProbeAt (Get-HordeWakeEntryValue $e "probeAt") -Carry $e
             $since = ""
             if ($mailAt -is [datetime]) { $since = " unread since " + $mailAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) }
-            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "gave-up" -Id "$id" -Outcome "gave-up" -Reason ("" + $e.attempts + " nudges for its mail" + $since + ", the last answered " + $e.lastOutcome + ", and the mail was not taken; it is not nudged again for this mail")))
-            [void]$sessions.Add([pscustomobject]@{ id = "$id"; mailAt = $mailAt; attempts = [int]$e.attempts })
+            $what = ("" + $e.attempts + " nudges for its mail" + $since + ", the last answered " + $e.lastOutcome + ", and the mail was not taken; it is not nudged again for this mail")
+            $tried = [int]$e.attempts
+            if (-not $spent) { $what = ("" + $knocks + " knocks for its mail" + $since + " while it was under a usage limit with no known end, the last answered " + $e.lastOutcome + ", and the mail was not taken; it is not knocked for again until its mail changes or it is no longer limited"); $tried = $knocks }
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "gave-up" -Id "$id" -Outcome "gave-up" -Reason $what))
+            [void]$sessions.Add([pscustomobject]@{ id = "$id"; mailAt = $mailAt; attempts = $tried })
         }
     }
     return [pscustomobject]@{ ledger = $next; entries = $entries.ToArray(); sessions = $sessions.ToArray() }
@@ -615,7 +651,7 @@ function Set-HordeWakeLedgerProbesDue {
             $e = $Ledger[$id]
             $next["$id"] = $e
             if ((Get-HordeWakeEntryValue $e "probeAt") -isnot [datetime]) { continue }
-            $next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt (Get-HordeWakeEntryValue $e "mailAt") -GaveUp ((Get-HordeWakeEntryValue $e "gaveUp") -eq $true) -ProbeAt $script:HordeWakeProbeDue
+            $next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt (Get-HordeWakeEntryValue $e "mailAt") -GaveUp ((Get-HordeWakeEntryValue $e "gaveUp") -eq $true) -ProbeAt $script:HordeWakeProbeDue -Carry $e
         }
     }
     return $next
@@ -631,7 +667,7 @@ function Reset-HordeWakeLedgerAttempts {
     if ($null -ne $Ledger) {
         foreach ($id in @($Ledger.Keys)) {
             $e = $Ledger[$id]
-            $next["$id"] = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt (Get-HordeWakeEntryValue $e "mailAt") -ProbeAt $e.lastAttemptAt
+            $next["$id"] = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt (Get-HordeWakeEntryValue $e "mailAt") -ProbeAt $e.lastAttemptAt -Carry $e
         }
     }
     return $next
@@ -868,6 +904,8 @@ function Save-HordeWakeLedger {
             if ((Get-HordeWakeEntryValue $Ledger[$id] "gaveUp") -eq $true) { $row["gaveUp"] = $true }
             $probeAt = Get-HordeWakeEntryValue $Ledger[$id] "probeAt"
             if ($probeAt -is [datetime]) { $row["probeAt"] = ConvertTo-HordeWakeTimeText $probeAt }
+            $knocks = Get-HordeWakeEntryValue $Ledger[$id] "probes"
+            if (($knocks -is [int] -or $knocks -is [long]) -and $knocks -gt 0) { $row["probes"] = [int]$knocks }
             [void]$sessions.Add($row)
         }
     }
@@ -895,6 +933,7 @@ function Read-HordeWakeLedger {
             if ($null -ne $row.PSObject.Properties["mailAt"]) { $mailAt = ConvertFrom-HordeWakeTimeText $row.mailAt; if ($null -ne $mailAt) { $entry["mailAt"] = $mailAt } }
             if ($null -ne $row.PSObject.Properties["gaveUp"] -and $row.gaveUp -eq $true) { $entry["gaveUp"] = $true }
             if ($null -ne $row.PSObject.Properties["probeAt"]) { $probeAt = ConvertFrom-HordeWakeTimeText $row.probeAt; if ($null -ne $probeAt) { $entry["probeAt"] = $probeAt } }
+            if ($null -ne $row.PSObject.Properties["probes"]) { $entry["probes"] = [int]$row.probes }
             $ledger["$($row.id)"] = [pscustomobject]$entry
         }
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }

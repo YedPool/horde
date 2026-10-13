@@ -579,8 +579,29 @@ $r = Pass 3600
 Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt") -eq (At 3600)) "an hour after it was first seen so it is knocked for once, and the knock is not counted"
 $r = Pass 3603
 Check ((Test-Held2 $r "usage limit, end unknown") -and (Rang) -eq 1) "and then it waits again"
-foreach ($h in 2..9) { $null = Pass ($h * 3600) }
-Check ((Rang) -eq 9 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -ne $true) "nine hours are nine knocks, more than a mail is allowed, and still none is counted and nothing is given up: the hourly knock is what keeps a lone limited session from being stuck for ever"
+# ...AND THE KNOCKS ARE CAPPED: six for one mail, then one gave-up line, and silence.
+$gaveLines = 0; $gaveTold = 0
+foreach ($h in 2..9) { $p = Pass ($h * 3600); $gaveLines += @($p.entries | Where-Object { $_.kind -ceq "gave-up" }).Count; $gaveTold += @($p.gaveUp).Count }
+Check ((Rang) -eq 6 -and $script:ledger[(Sid 1)].attempts -eq 0 -and $script:ledger[(Sid 1)].probes -eq 6) ("nine hours are SIX knocks, not nine: a session limited with no known end is not typed into for ever (" + (Rang) + " knocks)")
+Check ($gaveLines -eq 1 -and $gaveTold -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "after the sixth it is given up on, said once, with one session for the warchief to be told of"
+$r = Pass 40000
+Check ((Test-Held2 $r "gave up after 6 knocks while it was limited") -and (Rang) -eq 6) "and it waits, saying so"
+$script:ledger = Set-HordeWakeLedgerProbesDue -Ledger $script:ledger
+$r = Pass 40003
+Check ((Rang) -eq 6 -and $script:ledger[(Sid 1)].probes -eq 6) "a session of the fleet taking mail does not buy it a seventh: the release is capped with the hour"
+Seat 1 @{ Limited = "no" }
+$r = Pass 40006
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 7 -and $script:ledger[(Sid 1)].attempts -eq 1 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -ne $true) "when its waker stops saying it is limited it is nudged under the normal rules, from no attempts - and is not held as given up on for a limit that is over"
+Start-Case; Seat 1 @{ Limited = "yes" }
+foreach ($h in 0..8) { $null = Pass ($h * 3600) }
+Seat 1 @{ Limited = "yes"; OldestUnreadAt = (At 40000) }
+$null = Pass 40100
+$r = Pass (40100 + 3600)
+Check ((Rang) -eq 7 -and $script:ledger[(Sid 1)].probes -eq 1) "another mail becoming its oldest unread starts the count again: the cap is for one mail"
+$hp = Join-Path $pinned.home ("probes-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hp | Out-Null
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60) -ProbeAt (At 7) -Probes 4) } -HordeHome $hp
+$rb = Read-HordeWakeLedger -HordeHome $hp
+Check ($rb.state -ceq "known" -and (Get-HordeWakeEntryValue $rb.value.ledger[(Sid 1)] "probes") -eq 4) "how many knocks a limited session has had is saved with the ledger: a restart does not hand it six more"
 # 4. NO KNOWN END, RELEASED WHEN A SESSION OF THE FLEET TAKES MAIL.
 Start-Case; Seat 1 @{ Limited = "yes" }; Seat 2 @{ Limited = "yes" }; Seat 3 @{ UnreadCount = 0; OldestUnreadAt = $null }
 $null = Pass 0

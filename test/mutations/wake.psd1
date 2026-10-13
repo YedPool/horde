@@ -6,6 +6,27 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-limited-session-is-knocked-for-without-end"
+           Find = '-and $knocks -ge [int]$Settings.maxLimitProbesPerMail) { return'
+           Replace = '-and $false) { return' }
+        @{ Name = "a-knock-at-a-limited-session-is-not-counted-as-one"
+           Find = 'if ($limitNow.kind -ceq "open") { $knocks++ }'
+           Replace = '' }
+        @{ Name = "the-cap-on-knocks-is-seven"
+           Find = 'maxLimitProbesPerMail = 6'
+           Replace = 'maxLimitProbesPerMail = 7' }
+        @{ Name = "giving-up-on-a-limited-session-is-never-said"
+           Find = '$probedOut = ($knocks -ge [int]$Settings.maxLimitProbesPerMail)'
+           Replace = '$probedOut = $false' }
+        @{ Name = "a-gave-up-for-probes-outlives-the-limit"
+           Find = '$stood = ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true -and [int]$had.attempts -ge [int]$Settings.maxNudgesPerMail)'
+           Replace = '$stood = ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true)' }
+        @{ Name = "the-knocks-are-not-saved"
+           Find = 'if (($knocks -is [int] -or $knocks -is [long]) -and $knocks -gt 0) { $row["probes"] = [int]$knocks }'
+           Replace = '' }
+        @{ Name = "a-release-forgets-the-knocks"
+           Find = '-ProbeAt $script:HordeWakeProbeDue -Carry $e'
+           Replace = '-ProbeAt $script:HordeWakeProbeDue' }
         @{ Name = "evidence-a-second-inside-the-edge-only"
            Find = 'if ($latest -is [datetime] -and ($Now - $latest).TotalSeconds -le $window) { return'
            Replace = 'if ($latest -is [datetime] -and ($Now - $latest).TotalSeconds -lt $window) { return' }
@@ -109,11 +130,11 @@
            Find = 'if (($Now - $last).TotalSeconds -lt $every) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "the-hourly-knock-is-counted"
-           Find = 'if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {'
+           Find = 'if ($Silent -or $limitNow.kind -ceq "open") {'
            Replace = 'if ($Silent) {' }
         @{ Name = "a-silent-fleets-probes-are-counted"
-           Find = 'if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {'
-           Replace = 'if ((Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {' }
+           Find = 'if ($Silent -or $limitNow.kind -ceq "open") {'
+           Replace = 'if ($limitNow.kind -ceq "open") {' }
         @{ Name = "the-hour-is-two"
            Find = 'limitedUnknownProbeSeconds = 3600'
            Replace = 'limitedUnknownProbeSeconds = 7200' }
@@ -333,8 +354,8 @@
            Find = '-and $State.oldestUnreadAt -ne $mailAt) { return $null }'
            Replace = '-and $false) { return $null }' }
         @{ Name = "given-up-on-forgotten-after-nothing"
-           Find = '-NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") }'
-           Replace = '-NothingAt $Now -MailAt $mailAt }' }
+           Find = '-NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had }'
+           Replace = '-NothingAt $Now -MailAt $mailAt -Carry $had }' }
         @{ Name = "who-was-given-up-on-not-handed-on"
            Find = '$gaveUp = @($gave.sessions)'
            Replace = '$gaveUp = @()' }
