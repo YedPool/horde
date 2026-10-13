@@ -3,6 +3,8 @@
 //
 //   GET  /v1/mailboxes/<horde>/<reader>/items?since=<n>&max=<n>                  -> 200 { items }
 //   POST /v1/mailboxes/<horde>/<reader>/items   { "key": "...", "text": "..." }   -> 200 { seq, duplicate }
+//   POST /v1/mailboxes/<horde>/<reader>/items?keepFrom=<n>   the same put, by a machine, that also
+//        deletes the older items of its own stream (below)        -> 200 { seq, duplicate, trimmed }
 //   GET  /v1/mailboxes/<horde>/<reader>/watch?since=<n>&max=<n>&timeoutMs=<n>
 //        a WebSocket upgrade: one message { items } when there is anything after since, then closed;
 //        or one message { error, code } when the relay ends it (mailbox.js: a newer watch of the same
@@ -31,6 +33,23 @@
 // WHAT IS READ OF A REQUEST: the path, the query numbers, and the outer JSON of a put or an ack - key,
 // text and through, the fields relays/Port.ps1 already exposes. The text is checked as printable ASCII
 // of the right length and stored as it came; it is never parsed, opened or logged.
+//
+// A SENDER TRIMS ITS OWN STREAM (relays/Port.ps1, the section of that name; mailbox.js does it). The
+// phone's mailbox is acked by nobody - several phones read it - so it only ever grew, to the 2,000
+// envelopes after which every put is refused (limits.js). A put may therefore say keepFrom=<n>: of the
+// items in this mailbox whose KEY names the same sender and channel as the put's own key, delete those
+// whose seq in that stream is before n. The relay reads keys for this and nothing else.
+//   - IN THE QUERY, because a machine's signature covers the path and the query (request-signature.js)
+//     and the body's members are held to exactly key and text (body.js): a deployment from before
+//     this takes the put and ignores the query, and one from after it answers trimmed, so the machine
+//     can tell which it is speaking to without a request to ask.
+//   - ONLY A MACHINE, AND ONLY ITS OWN STREAM: the key's sender must be the very key id that signed the
+//     request (auth.js), so one machine can never trim another's envelopes, even in its own horde's
+//     mailbox, and no key it does not hold can be named. A PHONE MAY NEVER TRIM, whatever it sends: 403,
+//     and the put is not made. (The test principal of a local dev, which has no key, may trim the
+//     stream its key names: the conformance suite measures the mailbox's contract through it.)
+//   - NEVER ITSELF: keepFrom is 1 to the key's own seq, or the request is refused, 400, and nothing is put.
+//   - IT COSTS NO REQUEST: it is the put, counted once (limits.js, requestsPerDay).
 import { authenticate, authorize } from "./auth.js";
 import { answer, refuse, refusalOf } from "./answers.js";
 import { readJson } from "./body.js";
@@ -39,7 +58,7 @@ import { handleRotation, ROTATION_PATH } from "./rotation.js";
 import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
-import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
+import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
 const ROUTE = /^\/v1\/mailboxes\/([^/]{1,63})\/([^/]{1,63})\/(items|watch|ack)$/;
@@ -49,14 +68,38 @@ export function isApiPath(pathname) {
   return pathname === "/v1" || pathname.startsWith(API_ROOT);
 }
 
-async function put(request, box, limits, owner) {
+// May who trim the stream this key names (the header, A SENDER TRIMS ITS OWN STREAM)? A machine, its
+// own; the test principal, any; a phone, none.
+function mayTrim(who, stream) {
+  if (who.kind === "machine") return stream.sender === who.keyId;
+  return who.kind === "test";
+}
+
+async function put(request, url, box, limits, owner, who) {
+  // THE TRIM IS JUDGED BEFORE THE BODY IS READ AS FAR AS IT CAN BE: who asks. A phone that names
+  // keepFrom is refused whatever else it sent, so nothing of a phone's can ever reach the trim.
+  const asked = url.searchParams.get("keepFrom");
+  let keepFrom = 0;
+  if (asked !== null) {
+    if (who.kind !== "machine" && who.kind !== "test") return refuse(403, "only the machine that wrote a stream may trim it");
+    const n = wholeOf(asked, SEQ_MAX);
+    if (n === null || n < 1) return refuse(400, "keepFrom must be a whole number from 1 to 2^53-1");
+    keepFrom = n;
+  }
   const { body, refusal } = await readJson(request, ["key", "text"], BODY_BYTES);
   if (refusal) return refusal;
   if (keyProblem(body.key)) return refuse(400, "the key is not 1 to 160 of A-Z, a-z, 0-9 and . _ : / -");
   if (typeof body.text === "string" && body.text.length > MAX_TEXT_CHARS) return refuse(413, "the text is longer than the " + MAX_TEXT_CHARS + " characters this relay holds");
   if (itemTextProblem(body.text)) return refuse(400, "the text is not 1 to " + MAX_TEXT_CHARS + " printable ASCII characters");
-  const done = await box.put(body.key, body.text, { now: Date.now(), limits, owner });
+  if (keepFrom > 0) {
+    const stream = streamOf(body.key);
+    if (!stream) return refuse(400, "a put that trims must have a key that names its stream: <sender>/<channel>/<seq>/<nonce>");
+    if (!mayTrim(who, stream)) return refuse(403, "only the machine that wrote a stream may trim it");
+    if (keepFrom > stream.seq) return refuse(400, "keepFrom is past the key's own seq: a put never trims itself");
+  }
+  const done = await box.put(body.key, body.text, { now: Date.now(), limits, owner, keepFrom });
   if (!done.ok) return done.code ? refusalOf(done) : refuse(400, "the mailbox refused the item");
+  if (keepFrom > 0) return answer(200, { seq: done.seq, duplicate: done.duplicate, trimmed: done.trimmed });
   return answer(200, { seq: done.seq, duplicate: done.duplicate });
 }
 
@@ -119,7 +162,7 @@ export async function handleApi(request, env, url) {
     if (!g.ok) return refusalOf(g);
   }
   const box = mailboxOf(env, who.account, who.epoch, mailbox);
-  if (op === "put") return put(request, box, limits, who.gated ? { account: who.account, epoch: who.epoch, mailbox } : null);
+  if (op === "put") return put(request, url, box, limits, who.gated ? { account: who.account, epoch: who.epoch, mailbox } : null, who);
   if (op === "get") return get(url, box);
   if (op === "watch") return watch(request, url, box, who.device);
   return ack(request, box);

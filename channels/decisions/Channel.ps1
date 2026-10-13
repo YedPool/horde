@@ -8,9 +8,9 @@
 # the question it follows up with what he answered there, its wording, and its whole conversation with the warchief's replies and whose turn it
 # is, which is what the founder needs to answer from the phone (review of 48bc492, item 9). It is
 # sealed to every TRUSTED phone identity key of the horde (relay/Trust.ps1, Find-HordeRelayPhoneKeys)
-# and put into the horde's phone mailbox, <horde>/phone - and only when the snapshot itself differs
-# from the last one sent, so a change that shows nothing new (a read mark, a later-kind record) sends
-# nothing.
+# and put into the horde's phone mailbox, <horde>/phone - and only when the snapshot itself, or the set
+# of phones it is sealed to, differs from the last one sent, so a change that shows nothing new (a read
+# mark, a later-kind record) sends nothing.
 #   - WHAT CHANGED IS ASKED CHEAPLY. Reading the list checks every record against its schemas (3.4 s for
 #     81 records, measured 2026-10-06, decisions/Operations.ps1), so it is not done on every turn. The
 #     store's records are write-once and named by their order, so the list of their NAMES changes
@@ -32,7 +32,47 @@
 #     journal first (its seq is spent) and kept in the channel's memory until the relay takes it; a
 #     relay that will not take it is asked again, with the SAME envelope, on the next turn - no new
 #     snapshot is made while one is waiting - and the tick says it failed, so the runner backs off.
-#   - THE LAST SNAPSHOT SENT is remembered in the run's context, as its hash, and so is what is waiting
+#   - THE SNAPSHOT BEFORE IS DEAD WEIGHT THE MOMENT THIS ONE IS WHOLE IN THE MAILBOX, AND ONLY THEN
+#     (2026-10-13). The phone shows the newest complete snapshot and nothing of an older one; nobody
+#     acks the phone's mailbox, so every snapshot ever sent stayed in it until the relay's retention,
+#     and the hosted relay refuses every put once a mailbox holds 2,000 envelopes. So the put of a
+#     snapshot's LAST page says to keep, of this machine's decisions envelopes, from the snapshot's
+#     FIRST page on (channels/Port.ps1, WHAT GOES TO THE PHONE IS TRIMMED BY ITS SENDER): everything
+#     this machine sent on the channel before it goes. It rides on the last page and on no other,
+#     because pages are put in order and each is put only once the one before was taken: while any
+#     page is still waiting, the snapshot before is the newest whole one there is, and it stays. A
+#     PHONE PAIRED LATER LOSES NOTHING by it: what was sent before its key was trusted was never
+#     sealed to it, and its key changes the fingerprint, so a snapshot sealed to it too is sent.
+#   - EVERY OTHER PAGE KEEPS FROM THE LAST SNAPSHOT THE RELAY WHOLLY TOOK (review of PR 232, 2026-10-14).
+#     The first seq of that snapshot is remembered where it survives a restart
+#     (<HORDE_HOME>\relay\decisions\state.json: the machine's key id and that one number, replaced whole
+#     in one rename), written when a snapshot's last page is taken. A page that is not the last says
+#     to keep from it: what is older than a whole snapshot is dead weight whatever becomes of this
+#     one, so that trim can never leave the phone with none. A memory that is not there, cannot be
+#     read, is another key's (the identity was rotated) or names a seq past the page's own is no
+#     memory, and such a page then says nothing, as before.
+#   - A FULL MAILBOX IS EMPTIED BY ONE PAGE SENT FIRST (the same review: without this the mailbox this
+#     was built to rescue could never be rescued). A mailbox at its cap refuses page 1 of a snapshot of
+#     several pages (507); pages go in order, so the last page - the only one whose trim makes room -
+#     was never sent, on every turn and after every restart. WHAT WAS LOOKED AT AND DOES NOT WORK: the
+#     last page first (it deletes the snapshot before while this one is not whole); the memory above
+#     (in exactly this case there is none: a snapshot that landed under this code already emptied the
+#     mailbox); the journal (it records an envelope BEFORE the relay is asked, relay/Journal.ps1, so
+#     it says what was made and never what was taken, and a page's number is inside its sealed body);
+#     and reading the mailbox back (the machine cannot open what it sealed to the phones). WHAT DOES:
+#     a snapshot of ONE page is its own last page - its put carries its own trim, and the relay counts
+#     what a trim frees before it asks its caps and writes the item before it deletes anything. So
+#     when a page that is not the last is refused as full, the pages waiting are let go (their seqs
+#     are spent; any the relay took are deleted with the rest) and ONE page is sent: the questions
+#     that fit it, and every other open question withheld BY NUMBER, saying it is in the snapshot that
+#     follows. It is true, it is whole, and it empties this machine's decisions stream; the full
+#     snapshot is then sent in the same look, into the room that made, and replaces it. The phone
+#     shows the short one for about as long as that takes. ONCE A RUN, until a snapshot of several
+#     pages has landed: a mailbox still full after it is full of something this channel cannot trim,
+#     and that is the runner's to say out loud (cli/RelayRun.ps1), not a reason to send it again.
+#   - THE LAST SNAPSHOT SENT is remembered in the run's context, as its hash and the phone keys it was
+#     sealed to (a phone paired while the list stands still is sent the same snapshot, sealed to it:
+#     nothing sent before was), and so is what is waiting
 #     to be put; the context's hourly reopen keeps both (channels/Port.ps1, Update-HordeRelayRunContext).
 #     A new run sends one snapshot at its first look whatever the last run sent: the phone shows the
 #     newest, so a repeat costs one envelope.
@@ -222,10 +262,48 @@ function ConvertTo-HordeDecisionsChannelQuestion {
     return (ConvertTo-Json -InputObject $q -Compress -Depth 20)
 }
 
+function Get-HordeDecisionsChannelStatePath {
+    # Where the channel keeps what must survive a restart (the header, EVERY OTHER PAGE KEEPS FROM...).
+    param($Context)
+    $homeDir = $Context.hordeHome
+    if ($homeDir -ceq "") { $homeDir = Get-HordeHome }
+    return [System.IO.Path]::Combine($homeDir, "relay", "decisions", "state.json")
+}
+
+function Read-HordeDecisionsChannelWhole {
+    # The first seq of the last snapshot the relay wholly took from THIS machine's key, or 0 for no
+    # memory: no file, one that does not read exactly, or one written under another key. Never throws:
+    # no memory only costs the trim the other pages would have asked for.
+    param($Context)
+    try {
+        $path = Get-HordeDecisionsChannelStatePath -Context $Context
+        if (-not [System.IO.File]::Exists($path)) { return [long]0 }
+        $m = [regex]::Match([System.IO.File]::ReadAllText($path), '\A\{"v":1,"machine":"([0-9a-f]{32})","whole":([1-9][0-9]{0,15})\}\s*\z')
+        if ($m.Success -and $m.Groups[1].Value -ceq $Context.signKeyId) { return [long]$m.Groups[2].Value }
+    } catch { }
+    return [long]0
+}
+
+function Write-HordeDecisionsChannelWhole {
+    # Keep -Whole for the next run: written beside itself, then moved over the old one in one step
+    # (core/FileAtomic.ps1). "" when kept, else why not - said once by the Tick, and never a failure.
+    param($Context, [long]$Whole)
+    try {
+        $path = Get-HordeDecisionsChannelStatePath -Context $Context
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
+        $temp = $path + "." + $PID + ".tmp"
+        [System.IO.File]::WriteAllText($temp, ('{"v":1,"machine":"' + $Context.signKeyId + '","whole":' + $Whole + '}'), [System.Text.Encoding]::ASCII)
+        Move-HordeFileAtomic -From $temp -To $path
+        return ""
+    } catch { return ("" + $_.Exception.Message) }
+}
+
 function New-HordeDecisionsChannelPages {
     # The snapshot as page bodies (OUT, in the header): { hash; bodies; shown; withheld }. -Budget is the
-    # largest body one page may have.
-    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)]$List, [Parameter(Mandatory = $true)][long]$Budget)
+    # largest body one page may have. -OnePage: the one page sent first into a full mailbox (the header,
+    # A FULL MAILBOX IS EMPTIED BY ONE PAGE SENT FIRST) - the questions that fit one page, and every
+    # other one withheld by number.
+    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)]$List, [Parameter(Mandatory = $true)][long]$Budget, [switch]$OnePage)
     $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
     $shown = New-Object System.Collections.ArrayList
     $withheld = New-Object System.Collections.ArrayList
@@ -251,6 +329,20 @@ function New-HordeDecisionsChannelPages {
             continue
         }
         [void]$fitting.Add($s)
+    }
+    if ($OnePage) {
+        # In the list's order, as a page is filled below; from the first that does not fit, every one
+        # is withheld - never one from further down in place of it. The reason is within the 160 bytes
+        # the frame counts for each withheld question.
+        $onOne = New-Object System.Collections.ArrayList
+        $usedOne = $frameBytes
+        $cut = $false
+        foreach ($s in $fitting) {
+            if (-not $cut -and ($onOne.Count -eq 0 -or $usedOne + $s.bytes + 1 -le $Budget)) { [void]$onOne.Add($s); $usedOne += $s.bytes + 1; continue }
+            $cut = $true
+            [void]$withheld.Add([ordered]@{ number = $s.number; reason = "it is in the snapshot that follows: this one page was sent first, to make room in the phone's full mailbox" })
+        }
+        $fitting = $onOne
     }
     $withheldText = ConvertTo-Json -InputObject @($withheld.ToArray()) -Compress -Depth 4
     if (@($withheld).Count -eq 0) { $withheldText = "[]" }
@@ -280,11 +372,41 @@ function Send-HordeDecisionsChannelPending {
     param($Context, $Mine)
     while ($Mine.pending.Count -gt 0) {
         $p = $Mine.pending[0]
-        $put = Send-HordeRelayChannelSaved -Context $Context -Saved $p -Mailbox $p.mailbox
-        if ($put.state -cne "known") { return $put.reason }
+        # The last page of a snapshot says to keep from that snapshot's own first page; every other
+        # page, from the last snapshot the relay wholly took - or nothing, with no such memory or one
+        # that names a seq past the page's own (the header, EVERY OTHER PAGE KEEPS FROM...).
+        $isLast = ($null -ne $p.PSObject.Properties["keepFrom"])
+        $from = [long]$Mine.whole
+        if ($from -gt [long]$p.seq) { $from = [long]0 }
+        if ($isLast) { $from = [long]$p.keepFrom }
+        $put = Send-HordeRelayChannelSaved -Context $Context -Saved $p -Mailbox $p.mailbox -KeepFrom $from
+        if ($put.state -cne "known") {
+            # REFUSED AS FULL, AND NOT THE LAST PAGE: the one case one page sent first can mend (the header).
+            $status = $put.PSObject.Properties["status"]
+            $Mine.stuckFull = (-not $isLast -and $null -ne $status -and [int]$status.Value -eq 507)
+            return $put.reason
+        }
         $Mine.pending.RemoveAt(0)
+        if ($isLast) {
+            # A SNAPSHOT IS WHOLE AT THE RELAY: remembered here, and for the next run.
+            $Mine.whole = [long]$p.keepFrom
+            $Mine.wholeProblem = Write-HordeDecisionsChannelWhole -Context $Context -Whole $Mine.whole
+        }
     }
+    $Mine.stuckFull = $false
     return ""
+}
+
+function Test-HordeDecisionsChannelOnePageFirst {
+    # Is this the moment to let the waiting pages go and send one page first (the header, A FULL MAILBOX
+    # IS EMPTIED BY ONE PAGE SENT FIRST)? $true, with the waiting pages let go, when a page that was
+    # not the last was just refused as full and no such page has been sent yet in this run.
+    param($Mine)
+    if (-not $Mine.stuckFull -or $Mine.onePageSent) { return $false }
+    $Mine.pending.Clear()
+    $Mine.stuckFull = $false
+    $Mine.onePageNext = $true
+    return $true
 }
 
 function Invoke-HordeDecisionsChannelBell {
@@ -322,11 +444,20 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     param($Context)
     if (-not $Context.state.ContainsKey("decisions")) { $Context.state["decisions"] = @{ fingerprint = $null; sent = ""; pending = (New-Object System.Collections.ArrayList) } }
     $mine = $Context.state["decisions"]
+    # What must survive a restart, read once a run; and what this run knows of a full mailbox.
+    if (-not $mine.ContainsKey("whole")) { $mine.whole = (Read-HordeDecisionsChannelWhole -Context $Context); $mine.wholeProblem = ""; $mine.stuckFull = $false; $mine.onePageNext = $false; $mine.onePageSent = $false }
+    $said = New-Object System.Collections.ArrayList
     # What was recorded and not taken, first: the same envelopes, never new ones.
     if ($mine.pending.Count -gt 0) {
+        $waiting = $mine.pending.Count
         $why = Send-HordeDecisionsChannelPending -Context $Context -Mine $mine
-        if ($why -cne "") { return [pscustomobject]@{ lines = @("snapshot not delivered yet (" + $mine.pending.Count + " envelope(s) recorded and waiting): " + $why); failed = $true } }
+        if ($why -cne "") {
+            if (-not (Test-HordeDecisionsChannelOnePageFirst -Mine $mine)) { return [pscustomobject]@{ lines = @("snapshot not delivered yet (" + $mine.pending.Count + " envelope(s) recorded and waiting): " + $why); failed = $true } }
+            [void]$said.Add("the phone's mailbox is full and would not take a page of the snapshot (" + $waiting + " waiting): they are let go, and one page is sent first to make room")
+        }
+        elseif ("$($mine.fingerprint)" -cne "one page") { $mine.onePageSent = $false }
     }
+    $onePage = [bool]$mine.onePageNext
     $phones = Find-HordeRelayPhoneKeys -HordeHome $Context.hordeHome
     if ($phones.state -cne "known") { return [pscustomobject]@{ lines = @("no snapshot: " + $phones.reason); failed = $true } }
     $keys = @($phones.value)
@@ -339,29 +470,59 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     $root = $Context.decisionsRoot
     if ($root -ceq "") { $root = Get-HordeDecisionStoreRoot }
     $print = Get-HordeDecisionsChannelFingerprint -Root $root -PhoneKeyIds @($keys | ForEach-Object { $_.agreeKeyId })
-    if ($print -cne "" -and $print -ceq $mine.fingerprint) { return [pscustomobject]@{ lines = @(); failed = $false } }
+    if (-not $onePage -and $print -cne "" -and $print -ceq $mine.fingerprint) { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
     $list = Invoke-HordeDecision -Operation "list" -Request @{ state = "open"; messages = $true } -Root $Context.decisionsRoot
     if ($list.state -cne "known" -or $list.value.outcome -cne "done") { return [pscustomobject]@{ lines = @("no snapshot: the decisions list could not be read (" + $(if ($list.state -ceq "known") { $list.value.reason } else { $list.reason }) + ")"); failed = $true } }
     $budget = Get-HordeRelayChannelBodyBudget -Context $Context -Recipients $keys.Count
-    $pages = New-HordeDecisionsChannelPages -Horde $Context.horde -Machine $Context.signKeyId -List $list.value -Budget $budget
-    if ($pages.hash -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @(); failed = $false } }
+    $pages = New-HordeDecisionsChannelPages -Horde $Context.horde -Machine $Context.signKeyId -List $list.value -Budget $budget -OnePage:$onePage
+    # THE SAME SNAPSHOT FOR THE SAME PHONES is not sent again; the same snapshot for ANOTHER SET OF
+    # PHONES is. What was sent is remembered as its hash and the keys it was sealed to: until
+    # 2026-10-13 it was the hash alone, so a phone paired while the list stood still was sent nothing
+    # until some record changed - and nothing already in the mailbox was sealed to it.
+    $sentAs = $pages.hash + "|" + (@($keys | ForEach-Object { $_.agreeKeyId }) -join ",")
+    if (-not $onePage -and $sentAs -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
     $recipients = @($keys | ForEach-Object { , ([byte[]]$_.public) })
     $keysSent = New-Object System.Collections.ArrayList
+    $firstSeq = [long]0
+    $lastPage = $null
     foreach ($body in @($pages.bodies)) {
         $saved = Save-HordeRelayChannelEnvelope -Context $Context -Channel "decisions" -Kind "snapshot" -Body ([byte[]]$body) -Recipients $recipients
         if ($saved.state -cne "known") { return [pscustomobject]@{ lines = @("no snapshot: " + $saved.reason); failed = $true } }
         $saved.value | Add-Member -NotePropertyName "mailbox" -NotePropertyValue $mailbox
         [void]$mine.pending.Add($saved.value)
         [void]$keysSent.Add($saved.value.key)
+        if ($firstSeq -eq 0) { $firstSeq = [long]$saved.value.seq }
+        $lastPage = $saved.value
     }
+    # THE LAST PAGE, AND ONLY ONCE EVERY PAGE IS RECORDED, is told what to keep from: this snapshot's
+    # first page (the header, THE SNAPSHOT BEFORE IS DEAD WEIGHT). A snapshot whose pages could not all
+    # be recorded returned above, with no page of it saying anything.
+    if ($null -ne $lastPage) { $lastPage | Add-Member -NotePropertyName "keepFrom" -NotePropertyValue $firstSeq }
     # Every page is recorded: this snapshot is the one sent, whatever the relay does next.
-    $mine.sent = $pages.hash
+    $mine.sent = $sentAs
     $mine.fingerprint = $print
+    # THE ONE PAGE IS RECORDED: it is not what the list is, so the fingerprint is one no look can match,
+    # and the look after it sends the whole snapshot. And it is sent once a run (the header).
+    if ($onePage) { $mine.fingerprint = "one page"; $mine.onePageNext = $false; $mine.onePageSent = $true }
     $what = "snapshot of " + $pages.shown + " open question(s)" + $(if ($pages.withheld -gt 0) { ", " + $pages.withheld + " withheld" } else { "" }) + " in " + @($pages.bodies).Count + " page(s) for " + $keys.Count + " phone key(s), as " + ($keysSent -join ", ")
     $why = Send-HordeDecisionsChannelPending -Context $Context -Mine $mine
-    if ($why -cne "") { return [pscustomobject]@{ lines = @($what + " recorded; not delivered yet: " + $why); failed = $true } }
-    return [pscustomobject]@{ lines = @($what + " sent"); failed = $false }
+    if ($why -cne "") {
+        if (-not (Test-HordeDecisionsChannelOnePageFirst -Mine $mine)) { return [pscustomobject]@{ lines = @(@($said.ToArray()) + @($what + " recorded; not delivered yet: " + $why)); failed = $true } }
+        # A page of it that was not the last was refused as full: one page first, in this same look.
+        [void]$said.Add($what + " recorded; the phone's mailbox is full and would not take a page of it: its pages are let go, and one page is sent first to make room")
+        $first = Invoke-HordeDecisionsChannelSnapshotTick -Context $Context
+        return [pscustomobject]@{ lines = @(@($said.ToArray()) + @($first.lines)); failed = [bool]$first.failed }
+    }
+    [void]$said.Add($what + " sent")
+    if ($mine.wholeProblem -cne "") { [void]$said.Add("what the relay last wholly took could not be kept for the next run (" + $mine.wholeProblem + "): it costs that run one trim, nothing else"); $mine.wholeProblem = "" }
+    if ($onePage) {
+        # THE ROOM IS MADE: the whole snapshot now, in the same look, and it replaces the one page.
+        $whole = Invoke-HordeDecisionsChannelSnapshotTick -Context $Context
+        return [pscustomobject]@{ lines = @(@($said.ToArray()) + @($whole.lines)); failed = [bool]$whole.failed }
+    }
+    if (@($pages.bodies).Count -gt 1) { $mine.onePageSent = $false }
+    return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false }
 }
 
 $null = Register-HordeRelayChannel -Folder $script:HordeDecisionsChannelFolder -Name "decisions" -Kinds @("answer") -Senders "founder" `

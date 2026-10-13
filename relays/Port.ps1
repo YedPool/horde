@@ -37,7 +37,7 @@
 #
 # THE OPERATIONS, each a tristate answer:
 #   Connect-HordeRelay        -Name -Options                    -> known connection
-#   Send-HordeRelayItem       -Connection -Mailbox -Text [-Key] -> known { mailbox; key; seq; duplicate }
+#   Send-HordeRelayItem       -Connection -Mailbox -Text [-Key] [-KeepFrom] -> known { mailbox; key; seq; duplicate; trimmed }
 #   Receive-HordeRelayItems   -Connection -Mailbox -Since [-Max] -> known { mailbox; since; next; items; anomalies }
 #   Wait-HordeRelayItems      as Receive, plus -TimeoutMs: returns as soon as there is anything after
 #                             -Since, or empty when the time is up (long-poll, design Q8); plus waitedMs
@@ -121,6 +121,42 @@
 # it was given can do, as it does to -Deploy and -RunWatchMs - and test/test-relay-conformance.ps1
 # holds every relay that hands the three over to what is written here.
 #
+# A SENDER TRIMS ITS OWN STREAM, FOR A MAILBOX NOBODY ACKS (2026-10-13). The phone's mailbox,
+# <horde>/phone, is read by every trusted phone of the horde and acked by none of them - one phone's ack
+# would delete what another has not read, and a phone paired tomorrow must still find the state - so
+# nothing ever left it but by retention, 30 days on the hosted relay, whose mailbox holds 2,000
+# envelopes. A machine puts a whole new decisions snapshot there at every change of the list and an
+# envelope for every batch of chat and of progress, since today within a second of each: reckoned from
+# the channels' own numbers that is some hundreds to over a thousand envelopes a working day, so the
+# mailbox was days from full, and full means every put refused and the founder's phone silent.
+# WHO KNOWS WHAT IS DEAD WEIGHT IS THE SENDER: an older snapshot the moment a newer one is whole in the
+# mailbox, chat past the history a phone is shown. And the relay can act on that WITHOUT READING
+# ANYTHING, because an envelope's key already names its stream: <sender key id>/<channel>/<seq>/<nonce>
+# (relay/Envelope.ps1, Get-HordeRelayReplayKey). So a put may carry -KeepFrom, a seq OF THAT STREAM:
+#   "of the items in this mailbox whose key is <the same sender>/<the same channel>/<n>/..., keep those
+#    with n at or after KeepFrom, and delete the rest".
+# The stream is never named apart from the put: it is the stream of the key being put, so a put can
+# only ever trim the stream it adds to. KeepFrom is 1 to that key's own seq, so a put never deletes
+# itself, and nothing newer. The trim costs no request of its own: it rides on a put that was being
+# made anyway (the hosted relay counts requests).
+#   - ONLY WHEN THE PUT IS TAKEN, or was a duplicate of an item still held. A put the relay refuses
+#     trims nothing: a snapshot's last page carries the trim of the snapshot before it, and a last page
+#     that is refused must leave that older snapshot whole - the phone is never left with none.
+#   - WHOSE STREAM IT IS, is the relay's to hold (the hosted one answers a machine only by its signed
+#     requests, and lets it trim only keys that begin with that very key id; a phone may not trim at
+#     all - its own folder says how). The port cannot check it and does not pretend to: a relay
+#     that trims what it should not has only dropped items, which it could always do.
+#   - AN OPTIONAL BLOCK, NOT A CAPABILITY OF THE CLOSED LIST, for the reason the watch in slices is not:
+#     nothing picks a relay by it, a caller adapts. A relay that can hands Register-HordeRelay
+#       PutKeeping param($State, [string]$Mailbox, [string]$Key, [string]$Text, [long]$KeepFrom)
+#                  -> known { seq; duplicate; trimmed }
+#     trimmed is how many items it deleted, a whole number; a relay whose far end took the put and
+#     said nothing of a trim (an older deployment of the hosted relay) leaves it out. On a relay with
+#     no such block the put is made as it always was. Either way Send-HordeRelayItem answers trimmed
+#     -1 for "not trimmed, or not said", and the caller says so once, in words (cli/RelayRun.ps1): a
+#     mailbox that is not being trimmed is one that fills.
+# test/test-relay-conformance.ps1 holds every relay that hands the block over to what is written here.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -151,6 +187,11 @@ $script:HordeRelayDeviceNamePattern = '\A(con|prn|aux|nul|com[0-9]|lpt[0-9])\z'
 # An envelope's replay key is <32 hex>/<channel>/<seq>/<24 hex>, at most 107 characters; a content hash
 # key is 71. 160 is room for either with a longer channel name, and no more.
 $script:HordeRelayKeyPattern = '\A[A-Za-z0-9._:/-]{1,160}\z'
+# A key that names its stream (the header, A SENDER TRIMS ITS OWN STREAM): an envelope's replay key,
+# <32 hex sender key id>/<channel>/<seq>/<24 hex nonce>. Group 1 is the stream - sender, channel and
+# the slash after them, so "chat" is never a prefix of "chat2" - and group 2 the seq in it, written as
+# the envelope writes it: digits, no leading zero.
+$script:HordeRelayStreamKeyPattern = '\A([0-9a-f]{32}/[a-z][a-z0-9-]{0,31}/)([1-9][0-9]{0,15})/[0-9a-f]{24}\z'
 # Printable ASCII, space to tilde: an envelope's canonical text is a subset (no whitespace at all), and
 # a text with no line break can be stored one per line by any relay.
 $script:HordeRelayTextPattern = '\A[\x20-\x7E]+\z'
@@ -207,7 +248,8 @@ function Register-HordeRelay {
         [int]$RunWatchMs = 0,
         [scriptblock]$WatchOpen = $null,
         [scriptblock]$WatchWait = $null,
-        [scriptblock]$WatchClose = $null
+        [scriptblock]$WatchClose = $null,
+        [scriptblock]$PutKeeping = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -226,7 +268,7 @@ function Register-HordeRelay {
     }
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
-        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose
+        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping
         connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
@@ -438,10 +480,31 @@ function Invoke-HordeRelayAdapter {
     return $a
 }
 
+function Read-HordeRelayStreamKey {
+    # The stream a key names and its seq in it (the header, A SENDER TRIMS ITS OWN STREAM):
+    # { stream; seq }, or $null for a key that names none - a content hash, a pairing key.
+    param($Key)
+    if ($Key -isnot [string]) { return $null }
+    $m = [regex]::Match($Key, $script:HordeRelayStreamKeyPattern)
+    if (-not $m.Success) { return $null }
+    $n = [long]$m.Groups[2].Value
+    if ($n -gt $script:HordeRelaySeqMax) { return $null }
+    return [pscustomobject]@{ stream = $m.Groups[1].Value; seq = $n }
+}
+
+function Test-HordeRelaySenderTrim {
+    # Does this connection's relay trim a sender's stream on a put (the header)? False for anything
+    # that is not a connection the port made.
+    param($Connection)
+    return ((Test-HordeRelayConnection $Connection) -and $null -ne $Connection.relay.putKeeping)
+}
+
 function Send-HordeRelayItem {
     # Put one text into a mailbox. -Key is the caller's idempotency key (an envelope's replay key); with
-    # none, the text's own hash.
-    param($Connection, $Mailbox, $Text, [string]$Key = "")
+    # none, the text's own hash. -KeepFrom, over 0, asks the relay to delete the older items of the
+    # key's own stream (the header, A SENDER TRIMS ITS OWN STREAM); the answer's trimmed is how many it
+    # deleted, or -1 when nothing was asked, this relay does not trim, or it did not say.
+    param($Connection, $Mailbox, $Text, [string]$Key = "", $KeepFrom = [long]0)
     $refusal = Get-HordeRelayConnectionRefusal -Connection $Connection -Mailbox $Mailbox -What "put"
     if ($refusal -ne "") { return (New-HordeUnknown -Reason $refusal) }
     $lim = $Connection.relay.limits
@@ -449,13 +512,30 @@ function Send-HordeRelayItem {
     if ($tf -ne "") { return (New-HordeUnknown -Reason ("the put was not made: " + $tf)) }
     if ($Key -eq "") { $Key = Get-HordeRelayContentKey -Text $Text }
     elseif ($Key -cnotmatch $script:HordeRelayKeyPattern) { return (New-HordeUnknown -Reason "the put was not made: the key is not 1 to 160 of A-Z, a-z, 0-9 and . _ : / -") }
-    $a = Invoke-HordeRelayAdapter -Connection $Connection -Op "put" -Arguments @($Connection.state, $Mailbox, $Key, $Text) -What "put"
+    if (-not ($KeepFrom -is [int] -or $KeepFrom -is [long]) -or $KeepFrom -lt 0) { return (New-HordeUnknown -Reason ("the put was not made: the seq to keep from, " + $KeepFrom + ", is not a whole number from 0")) }
+    $keeping = $false
+    if ($KeepFrom -gt 0) {
+        # CHECKED BEFORE THE RELAY SEES ANYTHING: the key names a stream, and the trim stops at the key's
+        # own seq - a put that could delete itself, or what was put after it, is a bug in its caller.
+        $named = Read-HordeRelayStreamKey -Key $Key
+        if ($null -eq $named) { return (New-HordeUnknown -Reason "the put was not made: it asks to trim a stream, and its key names none (<sender>/<channel>/<seq>/<nonce>)") }
+        if ($KeepFrom -gt $named.seq) { return (New-HordeUnknown -Reason ("the put was not made: it asks to keep from seq " + $KeepFrom + " of its stream, past its own seq " + $named.seq)) }
+        $keeping = ($null -ne $Connection.relay.putKeeping)
+    }
+    if ($keeping) { $a = Invoke-HordeRelayAdapter -Connection $Connection -Op "putKeeping" -Arguments @($Connection.state, $Mailbox, $Key, $Text, [long]$KeepFrom) -What "put" }
+    else { $a = Invoke-HordeRelayAdapter -Connection $Connection -Op "put" -Arguments @($Connection.state, $Mailbox, $Key, $Text) -What "put" }
     if ($a.state -cne "known") { return $a }
     $seq = Get-HordeRelayMember $a.value "seq"
     if (-not $seq.has -or -not (Test-HordeRelaySeq $seq.value)) { return (New-HordeUnknown -Reason ("relay '" + $Connection.relay.name + "' answered the put without a seq from 1 to " + $script:HordeRelaySeqMax)) }
     $dup = Get-HordeRelayMember $a.value "duplicate"
     if (-not $dup.has -or $dup.value -isnot [bool]) { return (New-HordeUnknown -Reason ("relay '" + $Connection.relay.name + "' answered the put without saying, true or false, whether it was a duplicate")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ mailbox = $Mailbox; key = $Key; seq = [long]$seq.value; duplicate = [bool]$dup.value }) -ObservedAt $a.observedAt)
+    # HOW MANY IT TRIMMED IS THE RELAY'S WORD, taken only when it is a count: anything else is "not said".
+    $trimmed = [long]-1
+    if ($keeping) {
+        $t = Get-HordeRelayMember $a.value "trimmed"
+        if ($t.has -and (Test-HordeRelayCursor $t.value)) { $trimmed = [long]$t.value }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ mailbox = $Mailbox; key = $Key; seq = [long]$seq.value; duplicate = [bool]$dup.value; trimmed = $trimmed }) -ObservedAt $a.observedAt)
 }
 
 function ConvertFrom-HordeRelayBatch {

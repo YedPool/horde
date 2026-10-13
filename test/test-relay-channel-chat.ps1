@@ -343,6 +343,22 @@ try {
     Check ($t.failed -and (@($t.lines) -join " ") -like "*chat is stopped*" -and @(Get-PhoneItems $X).Count -eq 0) ("a damaged state file stops the channel, in words; it is never quietly started over (" + (@($t.lines) -join "; ") + ")")
 
     Write-Host ""
+    Write-Host "--- OUT 10. the phone's mailbox holds the chat's last keepEnvelopes, and no more ---" -ForegroundColor Cyan
+    # channels/chat, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes: nobody acks that mailbox, so every
+    # put of this channel says what to keep from, and the relay deletes the chat envelopes before it.
+    $K = New-World -Settings '{"sendIntervalMs": 0, "startTurns": 3, "keepEnvelopes": 2}'
+    $null = Invoke-Tick $K
+    foreach ($kept in 1..4) { Add-HordeMemoryConversationTurn -Store $K.store -Fleet "work" -Role "assistant" -Text ("kept turn " + $kept); $null = Invoke-Tick $K }
+    $heldChat = @(Get-PhoneItems $K)
+    $heldTurns = Get-TurnTexts @(Get-NewMail $K -All)
+    Check ($heldChat.Count -eq 2 -and (@($heldChat | ForEach-Object { $_.seq }) -join ",") -ceq "4,5") ("five envelopes of chat were put, and with keepEnvelopes 2 the mailbox holds the last two (items " + (@($heldChat | ForEach-Object { $_.seq }) -join ",") + ")")
+    Check ($heldTurns -ceq "kept turn 3|kept turn 4") ("which are what the phone now opens: the newest turns, and nothing older (" + $heldTurns + ")")
+    $U = New-World
+    $null = Invoke-Tick $U
+    foreach ($kept in 1..4) { Add-HordeMemoryConversationTurn -Store $U.store -Fleet "work" -Role "assistant" -Text ("kept turn " + $kept); $null = Invoke-Tick $U }
+    Check (@(Get-PhoneItems $U).Count -eq 5) ("CONTROL: with the setting as it ships (150) the same five envelopes are all still there (" + @(Get-PhoneItems $U).Count + ")")
+
+    Write-Host ""
     Write-Host "--- IN 1. a signed line reaches the Thrall once, and a receipt comes back ---" -ForegroundColor Cyan
     $I = New-World
     $null = Invoke-Tick $I

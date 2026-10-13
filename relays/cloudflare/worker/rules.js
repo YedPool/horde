@@ -33,6 +33,20 @@ export const BODY_BYTES = 2 * MAX_TEXT_CHARS + 1024;
 
 export function itemTextProblem(text) { return textProblem(text, MAX_TEXT_CHARS); }
 
+// THE STREAM A KEY NAMES (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM): an envelope's replay key is
+// <32 hex sender key id>/<channel>/<seq>/<24 hex nonce>, and the relay reads exactly that much of it -
+// the outside of an item, never its text. { sender, prefix, seq }: prefix is the sender, the channel
+// and the slash after them, so one channel's name is never the start of another's; seq is written as
+// the envelope writes it, digits with no leading zero, so one seq has one spelling. null for a key
+// that names no stream (a content hash, a pairing key): such a put cannot trim anything.
+const STREAM_KEY = /^(([0-9a-f]{32})\/[a-z][a-z0-9-]{0,31}\/)([1-9][0-9]{0,15})\/[0-9a-f]{24}$/;
+export function streamOf(key) {
+  const m = typeof key === "string" ? STREAM_KEY.exec(key) : null;
+  if (!m) return null;
+  const seq = Number(m[3]);
+  return Number.isSafeInteger(seq) ? { sender: m[2], prefix: m[1], seq } : null;
+}
+
 // A whole number written in digits only, from 0 to max, or null. "007", "1e3", "-1", " 1" and "" are
 // not numbers here: the port never writes them, and a parser that took them would make two spellings
 // of one cursor.

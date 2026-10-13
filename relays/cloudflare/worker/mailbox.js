@@ -36,6 +36,21 @@
 // object's other requests may otherwise run while it waits on another object, and a put's "read the
 // head, write the item" must not interleave with another's.
 //
+// A SENDER TRIMS ITS OWN STREAM (relays/Port.ps1, the section of that name; api.js says who may). A put
+// may carry keepFrom, a seq of the stream its own key names (rules.js, streamOf): the items of this
+// mailbox whose keys name that stream with a lower seq are then deleted, exactly as an ack deletes -
+// their keys with them, the size taken down, the account credited. WHICH ITEMS is read from the k:
+// names, which are the keys: one ordered list under "k:<sender>/<channel>/", never a text opened.
+//   - WHAT THE TRIM FREES COUNTS BEFORE THE CAPS ARE ASKED: a mailbox at its most takes a put whose own
+//     trim makes the room. Without that, a mailbox that had filled before this existed could never be
+//     emptied by the machine that filled it - every put that could carry the trim would be refused.
+//   - A PUT THAT IS REFUSED TRIMS NOTHING, and the item is written BEFORE anything is deleted: a
+//     decisions snapshot's last page carries the trim of the snapshot before it, and a phone must
+//     never find the old one gone and the new one not whole. A put killed between the write and the
+//     deletes leaves older items the next trim deletes.
+//   - A DUPLICATE STILL TRIMS: a put made again because its answer was lost is the same request.
+//   - THE FLOOR IS THE ACK'S and is not moved; the head never moves back, so no seq is reused.
+//
 // RETENTION BY ALARM, NOT BY A SCHEDULE. Each item carries exp (its put plus retentionMs, 30 days), and
 // the object keeps ONE alarm, at the oldest held item's exp: when it fires, the items past their exp
 // are deleted and the alarm moves to the next one's. When an ack leaves nothing, the alarm is cleared.
@@ -66,7 +81,7 @@
 //
 // THE OBJECT NEVER OPENS A TEXT, and never logs anything.
 import { DurableObject } from "cloudflare:workers";
-import { keyProblem, itemTextProblem, BATCH_CHARS } from "./rules.js";
+import { keyProblem, itemTextProblem, streamOf, BATCH_CHARS } from "./rules.js";
 import { CODES } from "./answers.js";
 import { accountOf } from "./accounts.js";
 
@@ -108,20 +123,31 @@ export class Mailbox extends DurableObject {
   // (relays/Port.ps1, ADAPTER CONTRACT: "an adapter refuses a text over its own maxTextChars by itself
   // too"). limits are the Worker's (limits.js), now the time of the put, owner { account, epoch,
   // mailbox } the account it is charged to (null for the test principal, which has no account).
-  async put(key, text, { now, limits, owner }) {
-    return this.ctx.blockConcurrencyWhile(() => this.putNow(key, text, now, limits, owner));
+  // keepFrom, over 0, also trims the key's own stream (the header): the answer then says trimmed.
+  async put(key, text, { now, limits, owner, keepFrom = 0 }) {
+    return this.ctx.blockConcurrencyWhile(() => this.putNow(key, text, now, limits, owner, keepFrom));
   }
 
-  async putNow(key, text, now, limits, owner) {
+  async putNow(key, text, now, limits, owner, keepFrom) {
     const why = keyProblem(key) || itemTextProblem(text);
     if (why) return { ok: false, status: 400, reason: why };
     const storage = this.ctx.storage;
     if (await storage.get(GONE)) return { ok: false, status: 410, code: CODES.mailboxGone, reason: "this mailbox was deleted with its account" };
+    // What this put's own trim would delete (the header): found first, deleted last.
+    const older = keepFrom > 0 ? await this.olderOf(key, keepFrom) : [];
     const held = await storage.get(KEY + key);
-    if (held !== undefined) return { ok: true, seq: held, duplicate: true };
+    if (held !== undefined) {
+      if (older.length > 0) await this.drop(older);
+      return { ok: true, seq: held, duplicate: true, trimmed: older.length };
+    }
+    let freed = 0;
+    for (const [, item] of older) freed += item.text.length;
     const size = (await storage.get(SIZE)) || { count: 0, chars: 0 };
-    if (size.count + 1 > limits.mailboxMaxItems) return { ok: false, status: 507, code: CODES.mailboxFull, reason: "this mailbox holds " + size.count + " envelopes its reader has not acked, its most: nothing more is taken until some are acked" };
-    if (size.chars + text.length > limits.mailboxMaxChars) return { ok: false, status: 507, code: CODES.mailboxFull, reason: "this mailbox holds " + size.chars + " characters its reader has not acked; this text would take it past its most, " + limits.mailboxMaxChars };
+    // WHAT THE TRIM FREES COUNTS BEFORE THE CAPS ARE ASKED (the header).
+    const count = Math.max(0, size.count - older.length);
+    const chars = Math.max(0, size.chars - freed);
+    if (count + 1 > limits.mailboxMaxItems) return { ok: false, status: 507, code: CODES.mailboxFull, reason: "this mailbox holds " + size.count + " envelopes its reader has not acked, its most: nothing more is taken until some are acked" };
+    if (chars + text.length > limits.mailboxMaxChars) return { ok: false, status: 507, code: CODES.mailboxFull, reason: "this mailbox holds " + size.chars + " characters its reader has not acked; this text would take it past its most, " + limits.mailboxMaxChars };
     if (owner) {
       const charged = await accountOf(this.env, owner.account).charge({ mailbox: owner.mailbox, chars: text.length, epoch: owner.epoch, limits });
       if (!charged.ok) return { ok: false, status: charged.status, code: charged.code, reason: charged.reason };
@@ -131,8 +157,30 @@ export class Mailbox extends DurableObject {
     const exp = now + limits.retentionMs;
     await storage.put({ [ITEM + pad(seq)]: { key, text, exp }, [KEY + key]: seq, [HEAD]: seq, [SIZE]: { count: size.count + 1, chars: size.chars + text.length } });
     if ((await storage.getAlarm()) === null) await storage.setAlarm(exp);
+    // THE ITEM IS WRITTEN: only now is anything deleted (the header, A PUT THAT IS REFUSED TRIMS NOTHING).
+    if (older.length > 0) await this.drop(older);
     await this.wake();
-    return { ok: true, seq, duplicate: false };
+    return { ok: true, seq, duplicate: false, trimmed: older.length };
+  }
+
+  // The items a put of key with keepFrom would trim, as [name, item] pairs for drop(): those whose
+  // key names key's stream with a seq before keepFrom. The k: names ARE the keys, so they are listed
+  // under the stream's prefix and each read as a key again - a name that is not exactly a key of this
+  // stream is passed over - and only then are the items themselves fetched, for their lengths.
+  async olderOf(key, keepFrom) {
+    const stream = streamOf(key);
+    if (!stream || keepFrom > stream.seq) return [];
+    const storage = this.ctx.storage;
+    const names = [];
+    for (const [name, seq] of await storage.list({ prefix: KEY + stream.prefix })) {
+      const k = streamOf(name.slice(KEY.length));
+      if (k && k.prefix === stream.prefix && k.seq < keepFrom) names.push(ITEM + pad(seq));
+    }
+    const out = [];
+    for (let i = 0; i < names.length; i += DELETE_BATCH) {
+      for (const pair of await storage.get(names.slice(i, i + DELETE_BATCH))) out.push(pair);
+    }
+    return out;
   }
 
   // The items after since, at most max of them and at most BATCH_CHARS of text: { items }.

@@ -60,6 +60,17 @@
 #     compared with the phone keys trusted now; one sealed to a key no longer trusted is dropped - every
 #     waiting envelope of entries with it - and the state goes back to where it was before the oldest
 #     of them (rewind), so those lines are read again and sealed to the keys trusted now.
+#   - THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes OF THIS LOG, NO MORE (2026-10-13). Nobody acks
+#     that mailbox (several phones read it), so every envelope this machine ever sent stayed in it for
+#     the relay's 30 days, and the hosted relay refuses every put to a mailbox that holds 2,000. So every
+#     put of this channel says to keep, of this machine's progress envelopes, the last keepEnvelopes
+#     (channels/Port.ps1, WHAT GOES TO THE PHONE IS TRIMMED BY ITS SENDER): it rides on the put, and costs
+#     the relay no request. WHAT THE PHONE SHOWS IS WHAT THE MAILBOX HOLDS - it keeps no entry between
+#     sessions, only where he had read to - so this is also how far back the log goes on the phone:
+#     100 envelopes is at least 100 entries, and several working days of a fleet that writes a few tens
+#     a day. A reading position whose entry is no longer there still holds, by its line number
+#     (relay/js/protocol.js, progressLog). A phone paired later is sent its own backfill, sealed to
+#     it, as before.
 #   - NOTICES, kind notice: { code, count } - file-replaced, following, lines-skipped (count: how many).
 #     Codes only: the phone shows its own fixed sentence for each (relay/js/protocol.js, PROGRESS_WORDS).
 #
@@ -81,7 +92,10 @@ $script:HordeProgressChannelSettings = New-HordeModuleSettings -Module "relay-pr
     # one a six-byte escape) is about 13,000 bytes, so a page always holds at least one.
     @{ name = "pageBytes"; kind = "whole"; default = 262144; min = 16384; max = 1048576; what = "The largest body of one envelope of entries, in bytes; a longer batch is sent as more envelopes." },
     @{ name = "readBytes"; kind = "whole"; default = 1048576; min = 131072; max = 33554432; what = "The most bytes of the changelog read in one look." },
-    @{ name = "sendIntervalMs"; kind = "whole"; default = 2000; min = 0; max = 600000; what = "The shortest time between two sends of entries, in milliseconds: lines written meanwhile go together." }
+    @{ name = "sendIntervalMs"; kind = "whole"; default = 2000; min = 0; max = 600000; what = "The shortest time between two sends of entries, in milliseconds: lines written meanwhile go together." },
+    # 100: the header, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes. 1,000 is the ceiling because the
+    # hosted relay's mailbox holds 2,000 envelopes for every channel of every machine of the horde.
+    @{ name = "keepEnvelopes"; kind = "whole"; default = 100; min = 1; max = 1000; what = "How many of this machine's newest progress envelopes stay in the phone's mailbox; older ones are deleted from the relay, so this is how far back the log goes on the phone." }
 )
 $script:HordeProgressChannelKinds = @("decision", "result", "merged", "blocked", "waiting", "started", "progress", "done", "note")
 $script:HordeProgressChannelNoticeCodes = @("file-replaced", "following", "lines-skipped")
@@ -478,6 +492,10 @@ function Send-HordeProgressChannelPending {
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
     $d = $Mine.durable
     $trusted = $null
+    # How many envelopes stay (the header, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes): the
+    # setting as the Tick last read it, and its declared default for a put made before any Tick.
+    $keep = [long]@($script:HordeProgressChannelSettings.settings | Where-Object { $_.name -ceq "keepEnvelopes" })[0].default
+    if ($Mine.ContainsKey("keepEnvelopes")) { $keep = [long]$Mine["keepEnvelopes"] }
     while (@($d.pending).Count -gt 0) {
         $key = @($d.pending)[0]
         $rec = Test-HordeRelayJournalSent -Key $key -HordeHome $homeDir
@@ -510,7 +528,7 @@ function Send-HordeProgressChannelPending {
                 try { Write-HordeProgressChannelState -HordeHome $homeDir -State $d } catch { return ("the progress state could not be written: " + $_.Exception.Message) }
                 continue
             }
-            $put = Send-HordeRelayChannelSaved -Context $Context -Saved ([pscustomobject]@{ key = $key; text = $rec.value.text }) -Mailbox $mailbox
+            $put = Send-HordeRelayChannelSaved -Context $Context -Saved ([pscustomobject]@{ key = $key; text = $rec.value.text }) -Mailbox $mailbox -KeepFrom (Get-HordeRelayChannelKeepFrom -Key $key -Keep $keep)
             if ($put.state -cne "known") { return $put.reason }
         }
         # A key the journal does not hold was never recorded (a state written by hand): nothing to put.
@@ -560,6 +578,8 @@ function Invoke-HordeProgressChannelTick {
     $set = $set.value
     # For the Glance, which reads no settings itself: how long this Tick leaves between two sends.
     $mine["sendIntervalMs"] = [long]$set.sendIntervalMs
+    # For every put of this run: how many envelopes stay in the phone's mailbox.
+    $mine["keepEnvelopes"] = [long]$set.keepEnvelopes
     $homeDir = Get-HordeProgressChannelHome $Context
     $path = Get-HordeProgressChannelFilePath -HordeHome $homeDir -Setting $set.progressFile
     $d = $mine.durable

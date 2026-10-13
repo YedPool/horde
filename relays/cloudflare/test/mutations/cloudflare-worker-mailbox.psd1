@@ -14,8 +14,8 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "duplicate-key-stored-again"
-           Find = 'if (held !== undefined) return { ok: true, seq: held, duplicate: true };'
-           Replace = '' }
+           Find = 'if (held !== undefined) {'
+           Replace = 'if (false) {' }
         @{ Name = "seq-reused-after-trim"
            Find = '      await storage.put(FLOOR, through);'
            Replace = '      await storage.put({ [FLOOR]: through, [HEAD]: 0 });' }

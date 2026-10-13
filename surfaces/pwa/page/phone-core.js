@@ -51,6 +51,19 @@
 // asks for the first item again: if it is not the item this session read under that seq, the relay's
 // numbering went backwards, which is said, and the mailbox is read again from the start.
 //
+// A HOLE IN THIS MAILBOX IS NOT AN ANOMALY (2026-10-13). The horde's phone mailbox is read by every
+// trusted phone and acked by none, so its senders keep it small themselves: a machine deletes its own
+// older snapshots the moment a newer one is whole there, and its chat and progress past the history
+// a phone is shown (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM). What is left has holes in the
+// relay's numbering, by design, and a session that has read to item 40 may next be handed item 47.
+// The relay client reports holes apart from its anomalies for exactly this (relay-client.js, gaps),
+// and refresh() does not put them on the screen: until this was so, every trimmed snapshot was a
+// "gap" notice on the founder's phone. NOTHING RESTED ON THEM: a relay that withholds a newer
+// snapshot is caught by lastSnapshotSeq (FRESHNESS, above), and one that withholds the newest of
+// anything leaves no hole to see at all. The check that the relay's numbering has not gone BACKWARDS
+// is unchanged, and holds through a trim: the first item still in the mailbox is one this session
+// read under that very number.
+//
 // THE RELAY'S WORDS ARE NEVER SHOWN (finding 4): a relay that answers "your passkey expired, re-pair
 // at ..." must not get that sentence onto the founder's screen. What it says is kept in diagnostics,
 // labelled as the relay's and cut to 200 characters; the screen gets a fixed sentence.
@@ -346,6 +359,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
         const r = (first && waitMs > 0) ? await relay.watch(mailbox, s.cursor, 256, waitMs) : await relay.get(mailbox, s.cursor, 256);
         first = false;
         if (r.state !== "known") { anomalies.push(RELAY_DOWN); said.push(relaySaid(r.reason)); break; }
+        // The batch's anomalies, and not its gaps (the header, A HOLE IN THIS MAILBOX IS NOT AN ANOMALY).
         anomalies.push(...r.value.anomalies);
         if (r.value.items.length === 0 && s.cursor > 0 && !restarted) {
           const head = await relay.get(mailbox, 0, 1);
