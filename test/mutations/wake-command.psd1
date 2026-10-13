@@ -9,6 +9,18 @@
     Suite  = "test\e2e\e2e-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-proof-given-as-false-is-an-ordinary-failure"
+           Find = '{ throw (New-HordeUsageError "a proof run is -Proof'
+           Replace = '{ throw ([string]"a proof run is -Proof' }
+        @{ Name = "no-verb-is-not-refused"
+           Find = 'if (-not $PSBoundParameters.ContainsKey("Verb")) { throw (New-HordeUsageError "wake needs a verb: run, or status") }'
+           Replace = '' }
+        @{ Name = "no-verb-is-an-ordinary-failure"
+           Find = 'if (-not $PSBoundParameters.ContainsKey("Verb")) { throw (New-HordeUsageError "wake needs a verb: run, or status") }'
+           Replace = 'if (-not $PSBoundParameters.ContainsKey("Verb")) { throw "wake needs a verb: run, or status" }' }
+        @{ Name = "the-verb-is-asked-for-at-a-prompt"
+           Find = '[Parameter(Position = 0)][ValidateSet("run", "status")][string]$Verb,'
+           Replace = '[Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "status")][string]$Verb,' }
         @{ Name = "a-refused-run-is-started-by-the-command"
            Find = 'if ("$($run.refused)" -cne "") { throw'
            Replace = 'if ($false) { throw' }

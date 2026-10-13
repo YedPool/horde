@@ -124,6 +124,11 @@ catch [System.Management.Automation.ParameterBindingException] {
 catch {
     $settled = $true
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
+    # The body's own word for "the command line was wrong" (cli\Commands.ps1, New-HordeUsageError).
+    if (Test-HordeUsageError $_.Exception) {
+        [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)
+        exit 2
+    }
     exit 1
 }
 finally {

@@ -184,6 +184,27 @@ foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", $idle), @("-Proo
     Check ($ended -and $code -eq 2 -and $said -like "*usage: horde wake run*" -and $said -notlike "*Supply values*") ("run " + ($bad -join " ") + ", with its input held open, ends by itself as a usage error: it does not ask for what is missing (ended " + $ended + ", exit " + $code + ")")
     $asked.Dispose()
 }
+# AND SO FOR NO VERB AT ALL, AND FOR A PROOF WHOSE SWITCH WAS GIVEN AS FALSE: each ends by itself, with
+# its input held open, as a usage error - exit 2 and the usage, like every other wrong form - and
+# nothing is typed. (The whole command line is written here: the first has no "run" in it.)
+foreach ($line in @("wake", ("wake run -Proof:`$false -Target " + $idle + " -Once"), ("wake run -Proof -Target " + $idle + " -Once:`$false"), ("wake run -Proof:`$false -Target " + $idle + " -Once:`$false"))) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" " + $line
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    foreach ($k in @{ HORDE_HOME = $fleetHome; WEZFLEET_ROOT = $fleetPin.path; USERPROFILE = $fakeProfile }.GetEnumerator()) { $psi.EnvironmentVariables[$k.Key] = $k.Value }
+    $asked = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $asked.StandardOutput.ReadToEndAsync(); $errTask = $asked.StandardError.ReadToEndAsync()
+    $ended = $asked.WaitForExit(120000)
+    if (-not $ended) { try { $asked.Kill() } catch { } }
+    $code = $(if ($ended) { $asked.ExitCode } else { -1 })
+    $said = $(if ($ended) { "$($outTask.Result)" + "$($errTask.Result)" } else { "" })
+    Check ($ended -and $code -eq 2 -and $said -like "*usage: horde wake run*" -and $said -notlike "*Supply values*" -and $said -cnotlike "*Verb:*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and -not (Test-Path -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json"))) ("horde " + $line + ", with its input held open, ends by itself as a usage error, exit 2, with nothing run or typed (ended " + $ended + ", exit " + $code + ": " + $(if ($said.Length -gt 160) { $said.Substring(0, 160) } else { $said }) + ")")
+    $asked.Dispose()
+}
+$wrongFlag = Invoke-Wake $fleetHome @("status", "-Once")
+Check ($wrongFlag.code -eq 1) "CONTROL: a refusal that is not about the form of the command line - a flag of run given to status - is still exit 1"
 $stranger = "0a000000-0000-4000-8000-000000000099"
 $astray = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $stranger, "-Once")
 Check ($astray.code -eq 1 -and $astray.out -like "*proof-target-absent*" -and $astray.out -like "*nudged nobody*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) ("a proof run aimed at a session the fleet does not list nudges nobody - not the idle session that is ready - says so, and exits 1" + $(if ($astray.code -ne 1) { ": " + $astray.out } else { "" }))
