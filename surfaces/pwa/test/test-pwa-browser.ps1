@@ -400,6 +400,11 @@ try {
     $lk = Invoke-Browser @{ cmd = "lock" }
     $ps = Invoke-Browser @{ cmd = "progressState" }
     Check ($lk.ok -and $lk.value.locked -and $ps.ok -and $ps.value.items -eq 0 -and $ps.value.tab -ceq "Progress") "a lock takes the log off the page, not only out of sight"
+    # AT ONCE, AND BY THE LOCK ITSELF. The check above is also met by the redraw that follows the
+    # bridge's answer, so it could not tell whether the lock emptied the log or only the answer did -
+    # and a lock whose answer never comes must still leave no word on the page.
+    Check ($lk.ok -and $lk.value.logBefore -gt 0) ("CONTROL: the log held entries when the lock was touched (" + $(if ($lk.ok) { $lk.value.logBefore } else { $lk.reason }) + ")")
+    Check ($lk.ok -and $lk.value.logAtOnce -eq 0) ("and it is gone in the same moment as the touch, before the bridge has answered (" + $(if ($lk.ok) { "" + $lk.value.logAtOnce + " left" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }
