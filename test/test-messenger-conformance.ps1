@@ -110,10 +110,13 @@ $cases = [ordered]@{
     "wake" = {
         param($M, $Fx, $State)
         $msg = New-Msg
-        $null = Send-HordeMessengerMessage -Messenger $M -Message $msg
+        $a = Send-HordeMessengerMessage -Messenger $M -Message $msg
         $o = & $Fx.Observe $State $msg.messageId
         # One wake, as the fake target recorded it: one line, no control character, never the body.
-        return ($o.wakes -eq 1 -and @($o.typed).Count -ge 1 -and (Test-TypedClean $o $msg.body))
+        # AND THE MESSENGER SAYS SO ITSELF (messengers/Port.ps1, THE WAKE WORD): the post that woke its
+        # target answers woken, true - what it says is held to what the target saw.
+        $said = ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["woken"] -and $a.value.woken -is [bool] -and $a.value.woken)
+        return ($o.wakes -eq 1 -and @($o.typed).Count -ge 1 -and (Test-TypedClean $o $msg.body) -and $said)
     }
 }
 # What requires each capability, for the honest refusal of any word but yes.

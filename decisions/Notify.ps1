@@ -323,8 +323,11 @@ function Get-HordeDecisionNotifyName {
 function Get-HordeDecisionNotifyStoreMark {
     # A cheap look at whether the store changed, so the inbox is not read every few seconds: how many
     # files, and the last name. Only a hint; the inbox is read every rereadSeconds whatever it says.
+    # -Root: a store other than this home's own (the relay run's, when it was given one).
+    param([string]$Root = "")
     try {
-        $folder = Get-HordeDecisionStoreRoot
+        $folder = $Root
+        if ($folder -eq "") { $folder = Get-HordeDecisionStoreRoot }
         if (-not [System.IO.Directory]::Exists($folder)) { return "none" }
         $names = [System.IO.Directory]::GetFiles($folder)
         $newest = ""
@@ -403,12 +406,18 @@ function Invoke-HordeDecisionNotifyPass {
                 $stamp = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")
                 $entries = @(@($record.entries) + @($pending | ForEach-Object { [pscustomobject]@{ question = [int]$_.question; message = $_.message; at = $stamp; notice = $noticeId } }))
                 $Tracker.problem = ""; $Tracker.retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; $Tracker.nextAttemptAt = [datetime]::MinValue
-                $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + ")"
+                # WOKEN, OR ONLY QUEUED: the messenger's own word on its knock (messengers/Port.ps1, THE
+                # WAKE WORD). The set is told either way - the notice is in the mailbox - and the line
+                # says whether the warchief was woken for it or reads it at its next turn.
+                $wake = Format-HordeMessengerWake -Answer $posted
+                if ($wake -cne "") { $wake = "; " + $wake }
+                $said = "rang for " + $what + ", through messenger " + $messenger.name + " (" + $posted.value.stage + $wake + ")"
                 if ($null -ne $who.verified) {
                     $said = $said + "; as the founder, verified by his passkey " + $who.verified.keyId
                     # What the messenger says of it: one that cannot show a verified sender posts by label.
+                    # Not a second time when the wake words above already hold its reason.
                     $note = $posted.value.PSObject.Properties["reason"]
-                    if ($null -ne $note -and "$($note.Value)" -ne "") { $said = $said + "; " + $note.Value }
+                    if ($null -ne $note -and "$($note.Value)" -ne "" -and -not $wake.Contains("$($note.Value)")) { $said = $said + "; " + $note.Value }
                 }
                 elseif ($who.claimed) { $said = $said + "; by label only: " + $who.why }
                 # The record after the post: a crash or a failed write between the two leaves the set
@@ -429,6 +438,87 @@ function Invoke-HordeDecisionNotifyPass {
     $Tracker.nextAttemptAt = $now.AddSeconds($Tracker.retryDelay)
     $Tracker.retryDelay = [Math]::Min($Tracker.retryDelay * 2, $script:HordeDecisionNotifyRetryMostSeconds)
     return (& $result "pending" (Format-HordeDecisionNotifyPending -Problem $problem -What $what -Count $pending.Count -At $Tracker.nextAttemptAt) $Tracker.nextAttemptAt $pending.Count)
+}
+
+function Invoke-HordeDecisionNotifyTurn {
+    # ONE TURN OF THE BELL, FOR A CALLER THAT IS NOT THE LOOP: the relay runner's decisions channel
+    # (channels/decisions), each time it turns. WHY (the founder's bug of 2026-10-12): the loop below runs
+    # beside the decisions window, or when someone starts `horde decisions notify`. An answer the founder
+    # gave FROM HIS PHONE with the window closed was written to the store by the relay runner and rang for
+    # nobody: no notify was running. The runner is the process that is there whenever a phone answer
+    # arrives, so it turns the bell itself - this same pass, the same quiet rule, told record, messenger
+    # and notice, never a second implementation.
+    #
+    # ONE BELL A HOME. The loop holds the home's mutex for as long as it runs; this takes it for one
+    # turn. When a loop holds it - the window is open - that loop rings and this does nothing
+    # (outcome elsewhere). Two turns can never ring at once, and a set rung by either is in the told
+    # record the other reads.
+    #
+    # -Memory is the caller's own table, kept between turns: the tracker (when each answer was first
+    # seen, the back-off) and the last line said. Returns { outcome; said; againMs }: outcome the pass's
+    # (nothing, waiting, rang, pending, refused), or elsewhere; said a line only when it is new and worth
+    # a log's line (rang, pending, refused - not waiting, not nothing); againMs how soon to turn again
+    # for the bell's sake (the end of the quiet period, the end of a back-off), 0 when there is no reason.
+    # NOT EVERY TURN READS THE INBOX, as the loop does not: only when the store's mark changed, the time
+    # the last pass asked for has come, or rereadSeconds have passed (outcome idle otherwise). Measured
+    # 2026-10-12: a pass on every turn made an empty turn of the run longer than its 300 ms minimum.
+    # -StoreRoot names the store when it is not this home's own. -Clock, -Inbox, -Seat and -Trust are the
+    # pass's, for a test.
+    param([Parameter(Mandatory = $true)][hashtable]$Memory, [string]$HordeHome = "", [string]$StoreRoot = "", [scriptblock]$Clock = $null, [scriptblock]$Inbox = $null, [scriptblock]$Seat = $null, [scriptblock]$Trust = $null)
+    if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
+    if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
+    $answer = {
+        param([string]$Outcome, [string]$Line, [int]$AgainMs)
+        $said = ""
+        if ($Line -cne "" -and $Line -cne "$($Memory['said'])") { $said = $Line }
+        if ($Line -cne "") { $Memory["said"] = $Line }
+        return [pscustomobject]@{ outcome = $Outcome; said = $said; againMs = $AgainMs }
+    }
+    $settings = Get-HordeDecisionNotifySettings -HordeHome $HordeHome
+    if ($settings.state -ceq "refused") { return (& $answer "refused" ("the founder's answers are not rung for, because the notify settings file is refused: " + (@($settings.findings) -join "; ")) 0) }
+    $v = $settings.values
+    $tracker = $Memory["tracker"]
+    if ($null -eq $tracker -or $tracker.quietSeconds -ne [int]$v.quietSeconds -or $tracker.fromLabel -cne "$($v.fromLabel)") {
+        $fresh = New-HordeDecisionNotifyTracker -FromLabel $v.fromLabel -QuietSeconds $v.quietSeconds
+        if ($null -ne $tracker) { $fresh.firstSeen = $tracker.firstSeen }
+        $tracker = $fresh
+        $Memory["tracker"] = $tracker
+    }
+    $now = & $Clock
+    $mark = Get-HordeDecisionNotifyStoreMark -Root $StoreRoot
+    $wakeAt = $Memory["wakeAt"]
+    $due = (-not $Memory.ContainsKey("mark")) -or $mark -cne "$($Memory['mark'])" -or ($null -ne $wakeAt -and $now -ge [datetime]$wakeAt) -or ($now - [datetime]$Memory["passAt"]).TotalSeconds -ge $v.rereadSeconds
+    if (-not $due) {
+        $left = 0
+        if ($null -ne $wakeAt) { $left = [int][Math]::Max(200, [Math]::Min(3600000, ([datetime]$wakeAt - $now).TotalMilliseconds)) }
+        return [pscustomobject]@{ outcome = "idle"; said = ""; againMs = $left }
+    }
+    $mutex = New-Object System.Threading.Mutex($false, ("Local\" + (Get-HordeDecisionNotifyName -HordeHome $HordeHome)))
+    $mine = $false
+    try { $mine = $mutex.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $mine = $true }
+    if (-not $mine) { $mutex.Dispose(); return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }
+    $last = $null
+    try {
+        # The quiet period can end while the store is being read: read again before ringing, a few times
+        # at most, as the loop does.
+        for ($i = 0; $i -lt 3; $i++) {
+            $last = Invoke-HordeDecisionNotifyPass -Tracker $tracker -Clock $Clock -Inbox $Inbox -Seat $Seat -HordeHome $HordeHome -Trust $Trust
+            if ($last.outcome -cne "reread") { break }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    finally {
+        try { $mutex.ReleaseMutex() } catch { }
+        $mutex.Dispose()
+    }
+    $Memory["mark"] = $mark; $Memory["passAt"] = $now; $Memory["wakeAt"] = $last.wakeAt
+    $again = 0
+    if ($null -ne $last.wakeAt) { $again = [int][Math]::Max(200, [Math]::Min(3600000, ([datetime]$last.wakeAt - (& $Clock)).TotalMilliseconds)) }
+    $line = ""
+    if (@("rang", "pending", "refused") -ccontains $last.outcome) { $line = $last.said }
+    if ($last.outcome -ceq "nothing") { $Memory["said"] = "" }
+    return (& $answer $last.outcome $line $again)
 }
 
 function Invoke-HordeDecisionNotifyLoop {

@@ -12,6 +12,123 @@
     Target = "relay\js\protocol.js"
     Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
     Mutations = @(
+        @{ Name = "progress-ordered-by-time"
+           Find = 'const ordered = [...byId.values()].sort((a, b) => (a.n - b.n) || (a.seq - b.seq));'
+           Replace = 'const ordered = [...byId.values()].sort((a, b) => (a.at - b.at) || (a.seq - b.seq));' }
+        @{ Name = "progress-ordered-by-arrival"
+           Find = 'const ordered = [...byId.values()].sort((a, b) => (a.n - b.n) || (a.seq - b.seq));'
+           Replace = 'const ordered = [...byId.values()];' }
+        @{ Name = "progress-later-copy-of-an-entry-wins"
+           Find = 'if (!had || e.seq < had.seq) byId.set(e.id, e);'
+           Replace = 'byId.set(e.id, e);' }
+        @{ Name = "progress-unknown-kind-shown-as-written"
+           Find = 'Object.prototype.hasOwnProperty.call(PROGRESS_KINDS, e.kind) ? e.kind : "note", title'
+           Replace = 'e.kind, title' }
+        @{ Name = "progress-kind-looked-up-on-the-prototype"
+           Find = 'Object.prototype.hasOwnProperty.call(PROGRESS_KINDS, e.kind) ? e.kind : "note", title'
+           Replace = '(e.kind in PROGRESS_KINDS) ? e.kind : "note", title' }
+        @{ Name = "progress-entry-id-not-checked"
+           Find = 'typeof e.id === "string" && ENTRY_ID.test(e.id) &&'
+           Replace = 'typeof e.id === "string" &&' }
+        @{ Name = "progress-entry-line-number-not-checked"
+           Find = 'Number.isSafeInteger(e.n) && e.n >= 1 &&'
+           Replace = 'true &&' }
+        @{ Name = "progress-entry-time-not-checked"
+           Find = 'e.n >= 1 && timeOf(e.ts) > 0 &&'
+           Replace = 'e.n >= 1 &&' }
+        @{ Name = "progress-blank-title-shown"
+           Find = 'e.title.trim() !== "" &&'
+           Replace = 'true &&' }
+        @{ Name = "progress-long-title-shown"
+           Find = 'e.title.length <= PROGRESS_LIMITS.title &&'
+           Replace = 'true &&' }
+        @{ Name = "progress-long-text-shown"
+           Find = 'e.text.length <= PROGRESS_LIMITS.text &&'
+           Replace = 'true &&' }
+        @{ Name = "progress-corrects-of-any-shape-taken"
+           Find = '(typeof e.corrects === "string" && ENTRY_ID.test(e.corrects))'
+           Replace = '(typeof e.corrects === "string")' }
+        @{ Name = "progress-label-of-any-length-shown"
+           Find = 'typeof v === "string" && v.length <= most && PLAIN.test(v) ? v : ""'
+           Replace = 'typeof v === "string" ? v : ""' }
+        @{ Name = "progress-of-another-machine-taken"
+           Find = 'if (b.horde !== horde || b.machine !== machine) return { error: "the progress body names another horde or machine" };'
+           Replace = '' }
+        @{ Name = "progress-notice-of-any-code-taken"
+           Find = 'if (!Object.prototype.hasOwnProperty.call(PROGRESS_WORDS, b.code)) return'
+           Replace = 'if (false) return' }
+        @{ Name = "progress-skipped-lines-not-counted"
+           Find = 'if (n.code === "lines-skipped") skipped += n.count;'
+           Replace = 'if (n.code === "lines-skipped") skipped += 1;' }
+        @{ Name = "progress-stop-never-lifted"
+           Find = 'stopped = n.code === "file-replaced"; }'
+           Replace = 'stopped = stopped || n.code === "file-replaced"; }' }
+        @{ Name = "progress-any-colon-is-a-label"
+           Find = 'if (PROGRESS_LABELS.indexOf(name) >= 0) out.push('
+           Replace = 'if (at > 0) out.push(' }
+        @{ Name = "progress-empty-line-is-a-paragraph"
+           Find = 'if (!line.trim()) continue;'
+           Replace = '' }
+        @{ Name = "progress-position-without-its-line-taken"
+           Find = ' || !Number.isSafeInteger(value.n) || value.n < 1) return null;'
+           Replace = ') return null;' }
+        @{ Name = "progress-position-with-any-id-taken"
+           Find = ' || !ENTRY_ID.test(value.id) ||'
+           Replace = ' ||' }
+        @{ Name = "progress-place-lost-with-its-entry"
+           Find = 'if (readIndex < 0) for (let i = 0; i < items.length && items[i].n <= pos.n; i++) readIndex = i;'
+           Replace = '' }
+        @{ Name = "progress-unread-miscounted"
+           Find = 'unread: items.length - 1 - readIndex,'
+           Replace = 'unread: items.length - readIndex,' }
+        @{ Name = "progress-correction-not-on-its-entry"
+           Find = 'target.corrections.push({ id: it.id, said: it.said, title: it.title, paragraphs: it.paragraphs });'
+           Replace = '' }
+        @{ Name = "progress-entry-corrects-itself"
+           Find = 'it.corrects && it.corrects !== it.id ? at.get(it.corrects) : null'
+           Replace = 'it.corrects ? at.get(it.corrects) : null' }
+        @{ Name = "progress-time-without-its-day"
+           Find = 'p.day + " " + MONTHS[p.month] + " " + two(p.hour)'
+           Replace = 'two(p.hour)' }
+        @{ Name = "time-shown-in-utc-not-local"
+           Find = 'const d = new Date(ms - off * 60000);'
+           Replace = 'const d = new Date(ms);' }
+        @{ Name = "time-zone-sign-flipped"
+           Find = 'const east = -p.offsetMinutes, a = Math.abs(east);'
+           Replace = 'const east = p.offsetMinutes, a = Math.abs(east);' }
+        @{ Name = "no-time-shown-as-1970"
+           Find = 'if (!Number.isSafeInteger(ms) || ms <= 0) return null;'
+           Replace = 'if (!Number.isSafeInteger(ms)) return null;' }
+        @{ Name = "time-with-no-zone-taken"
+           Find = 'if (typeof text !== "string" || !ISO_TIME.test(text)) return 0;'
+           Replace = 'if (typeof text !== "string") return 0;' }
+        @{ Name = "day-divider-on-every-item"
+           Find = 'if (key && key !== last) { out.push('
+           Replace = 'if (key) { out.push(' }
+        @{ Name = "day-divider-for-a-thing-with-no-time"
+           Find = 'if (key && key !== last) { out.push({ kind: "day", key, label: dayLabel(it.said, offsetMinutes) }); last = key; }'
+           Replace = 'if (key !== last) { out.push({ kind: "day", key, label: dayLabel(it.said, offsetMinutes) }); last = key; }' }
+        @{ Name = "exact-time-without-seconds"
+           Find = 'two(p.hour) + ":" + two(p.minute) + ":" + two(p.second) + " (" + zone + ")"'
+           Replace = 'two(p.hour) + ":" + two(p.minute) + " (" + zone + ")"' }
+        @{ Name = "turn-time-not-shown"
+           Find = 'said: timeOf(t.time), saidHow: "turn", order: g.seq });'
+           Replace = 'said: 0, saidHow: "turn", order: g.seq });' }
+        @{ Name = "receipt-envelope-time-shown-as-when-he-said-it"
+           Find = 'const said = r.sentAt || (had ? had.said : 0);'
+           Replace = 'const said = r.sentAt || (had ? had.said : 0) || r.ts;' }
+        @{ Name = "signed-send-time-dropped-from-the-receipt"
+           Find = 'sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };'
+           Replace = 'sentAt: 0 } };' }
+        @{ Name = "receipt-time-of-any-shape-taken"
+           Find = 'sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };'
+           Replace = 'sentAt: b.sentAt || 0 } };' }
+        @{ Name = "delivered-time-replaces-the-signed-one"
+           Find = 'if (!had.said) { had.said = timeOf(t.time); had.saidHow = "delivered"; }'
+           Replace = 'had.said = timeOf(t.time); had.saidHow = "delivered";' }
+        @{ Name = "delivered-line-with-no-time"
+           Find = 'said: timeOf(t.time), saidHow: "delivered", session: t.session'
+           Replace = 'said: 0, saidHow: "delivered", session: t.session' }
         @{ Name = "machine-signature-not-checked"
            Find = 'if (!verified) return no("the machine''s signature does not verify");'
            Replace = 'if (false) return no("the machine''s signature does not verify");' }
@@ -46,8 +163,8 @@
            Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
            Replace = 'if (false) return' }
         @{ Name = "chat-receipt-words-not-shown"
-           Find = 'text: r.text, at: had && had.at ? had.at : r.ts'
-           Replace = 'text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts' }
+           Find = 'messageId: r.messageId, text: r.text, at: had'
+           Replace = 'messageId: r.messageId, text: had ? had.text : r.text, at: had' }
         @{ Name = "chat-founder-turn-shown-twice"
            Find = 'if (t.role === "founder") {'
            Replace = 'if (false) {' }
