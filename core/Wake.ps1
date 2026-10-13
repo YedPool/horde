@@ -1097,5 +1097,12 @@ function Read-HordeWakeSilence {
     try {
         if ($null -ne $j.PSObject.Properties["quietSince"] -and $null -ne $j.quietSince) { $since = ConvertFrom-HordeWakeTimeText $j.quietSince; if ($null -eq $since) { return (New-HordeUnknown -Reason "what was saved of a silent fleet holds a time that is not one") } }
     } catch { return (New-HordeUnknown -Reason "what was saved of a silent fleet holds an entry that is not one" -ErrorRecord $_) }
+    # WHEN THE FLEET WAS NOT SILENT, THE QUIET BEGINS AGAIN FROM NOTHING. quietSince is when the answers
+    # now being counted began, and the nudges it was counted from are not saved. Read back alone it is an
+    # old date with no history behind it: after a restart, or the passes of a proof, the first three
+    # nudges answered woken were "three sessions, quiet for longer than the window" and the fleet was
+    # called silent at once, on three answers (review of PR 230). A silence that WAS declared keeps its
+    # date: it needs no history to last, only an acknowledgement to end.
+    if (-not [bool]$j.silent) { $since = $null }
     return (New-HordeKnown -Value ([pscustomobject]@{ seen = [pscustomobject]@{ silent = [bool]$j.silent; quietSince = $since; nudges = @(); acks = @{} } }))
 }

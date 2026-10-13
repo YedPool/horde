@@ -179,6 +179,24 @@ $moved = New-Object System.Collections.ArrayList
 foreach ($n in 301..310) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $tenMinutes -HordeHome $h)) { [void]$moved.Add($e.kind + ":" + $e.id) } }
 Check (@($moved | Where-Object { $_ -ceq "fleet-moving:" }).Count -eq 1 -and $moved[0] -ceq "fleet-moving:" -and $run.silence.silent -eq $false) ("when one session takes its mail the tick says fleet-moving, once (" + (@($moved) -join ",") + ")")
 Check (@($moved | Where-Object { $_ -ceq ("nudge:" + (Sid 1)) }).Count -ge 1 -and @($moved | Where-Object { $_ -ceq ("nudge:" + (Sid 3)) }).Count -ge 1 -and @($run.ledger.Values | Where-Object { $_.attempts -ge 1 }).Count -eq 2) "and the two that still have mail are knocked for at once, as ordinary attempts counted from nothing: nobody is left unwoken when the fleet comes back"
+# A WATCHER RESTARTED IN A FLEET THAT WAS NOT SILENT counts its quiet from nothing: an old quietSince, read
+# back with none of the nudges it was counted from, must not make three woken answers a silent fleet.
+$h = New-Home
+Reset-HordeMemoryWaker
+foreach ($n in 1..3) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..60) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $tenMinutes -HordeHome $h }
+$onDisk = [System.IO.File]::ReadAllText((Join-Path $h "wake\silence-live.json")) | ConvertFrom-Json
+Check ($run.silence.silent -eq $false -and $run.silence.quietSince -eq (At 0) -and $onDisk.silent -eq $false -and $null -ne $onDisk.quietSince) "CONTROL: three minutes in, the fleet is not silent, and the file holds when its quiet began"
+$late = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ($null -ne $late.silence -and $late.silence.silent -eq $false -and $null -eq $late.silence.quietSince) "a watcher started again over it reads back NOT silent, and no beginning of a quiet: that is counted afresh"
+$first = New-Object System.Collections.ArrayList
+foreach ($n in 1200..1220) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $late -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $tenMinutes -HordeHome $h)) { [void]$first.Add($e.kind) } }
+Check (@($first | Where-Object { $_ -ceq "nudge" }).Count -ge 3 -and @($first | Where-Object { $_ -ceq "fleet-silent" }).Count -eq 0 -and $late.silence.silent -eq $false -and $late.silence.quietSince -eq (At 3600)) ("an hour later its first minute nudges all three, all answer woken, and the fleet is NOT called silent on those three answers: the quiet is counted from the first of them (" + (@($first) -join ",") + ")")
+$sinceSilent = Read-HordeWakeSilence -Mode "live" -HordeHome $h
+Save-HordeWakeSilence -Seen ([pscustomobject]@{ silent = $true; quietSince = (At 7) }) -Mode "live" -HordeHome $h
+Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).value.seen.quietSince -eq (At 7)) "CONTROL: a silence that WAS declared keeps its date when read back"
+
 # A WATCHER RESTARTED IN A SILENT FLEET goes on from the silence: it is not found a second time, and no budget is spent again.
 $h = New-Home
 Reset-HordeMemoryWaker

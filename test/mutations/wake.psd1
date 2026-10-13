@@ -6,6 +6,9 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "an-old-quiet-is-read-back-with-no-history"
+           Find = 'if (-not [bool]$j.silent) { $since = $null }'
+           Replace = '' }
         @{ Name = "handed-over-mail-is-not-named-in-the-decision"
            Find = 'if ($handed -gt 0) { return [pscustomobject]@{ action = "skip"; reason = ("no unread mail: " + $handed'
            Replace = 'if ($false) { return [pscustomobject]@{ action = "skip"; reason = ("no unread mail: " + $handed' }
