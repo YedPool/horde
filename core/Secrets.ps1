@@ -83,22 +83,42 @@ $script:HordeSecretRunKind = "a long random-looking string, as a key or token is
 # share asks for, and client_secret=VALUE fired none at all, because the word boundary of the
 # name=value kind above does not break at an underscore. That kind is left as it is: other callers
 # rely on it.
-#   THE NAME is one of six, in any case of A to Z, and is the WHOLE name: a letter, a digit or an
-#   underscore on either side makes it another name (my_api_key_name, DB_PASSWORD are not found).
-#   TWO SPELLINGS. As a member: the name in quotes of either kind, a colon with any white space
+#   THE NAME is one of six, and IT IS FOLDED BEFORE IT IS COMPARED (the review's next round,
+#   2026-10-13): underscores, dashes and A to Z case do not count, so client_secret, clientSecret,
+#   client-secret and CLIENT_SECRET are one name, and so are api_key, apiKey and apikey. ANY NAME
+#   THAT ENDS IN ONE OF THE SIX is that name with a prefix, and is found too: google_client_secret,
+#   DB_PASSWORD, my_api_key. A NAME THAT GOES ON PAST ONE OF THE SIX names something else and is
+#   not found - my_api_key_name, password_hash, client_secret_path: a hash, an id or the path to a
+#   file is not the secret (the file at a path is the deny list's places to refuse). Measured that
+#   day, the first rule missed the YAML, camelCase, dashed and prefixed names a sign-in client's
+#   settings are written in; the pull request has the count on the sessions' files.
+#   THREE SPELLINGS. As a member: the name in quotes of either kind, a colon with any white space
 #   round it, line breaks too, and the value in quotes. As name=value: an equals sign with blanks or
 #   tabs round it and never a line break - an empty value must not take the next line's first word
-#   for its own - and the value bare or in quotes. A name with no quotes before a colon is NOT
-#   looked for: "password: required" is what a page that explains a setting says.
+#   for its own - and the value bare or in quotes. As YAML: the name with no quotes, a colon, at
+#   least one blank or tab, and a value that is THE REST OF ITS LINE (a comment after a blank aside):
+#   "password: ask the owner" and "password: required for login" are what a page that explains a
+#   setting says, and their value is not one word to the end of the line.
 #   THE VALUE is 8 or more characters with no white space in it. A number, null, true or an object
 #   is no value here: a schema that describes the member is not the secret.
+#   AN UNQUOTED VALUE WITH A PARENTHESIS IN IT IS CODE, NOT A SECRET (the same review):
+#   password = get_password_from_vault() and login(password=user_password) are a call and an
+#   argument. EITHER parenthesis, open or close: the second of those two holds only the closing
+#   one in what follows the equals sign. A value in quotes is still a value, parenthesis or not.
 #   A PLACEHOLDER IS NOT A VALUE: one holding an angle bracket, a dollar sign, an open brace or
 #   three dots, or one of the words your, xxx, example, changeme, redacted in any case, anywhere in
 #   it. So a shell line that reads the value from a variable is not found, and neither is a real
 #   secret that happens to hold one of those: the cost of not refusing every page of documentation.
 $script:HordeSecretNamedKind = "a secret written under a name such as client_secret or password"
 $script:HordeSecretNamedNames = 'client_secret|private_key|refresh_token|access_token|api_key|password'
-$script:HordeSecretNamedPattern = '(?<q>["''])(?<name>(?i:' + $script:HordeSecretNamedNames + '))\k<q>\s*:\s*(?<v>["''])(?<value>(?:\\.|(?!\k<v>)[^\\\s]){8,})\k<v>|(?<![A-Za-z0-9_])(?<name>(?i:' + $script:HordeSecretNamedNames + '))[ \t]*=[ \t]*(?:(?<w>["''])(?<value>(?:(?!\k<w>)\S){8,})\k<w>|(?<value>[^\s"''=]\S{7,}))'
+# The six folded (the header): each with its underscores out and any number of underscores or
+# dashes allowed between two of its letters, in any case, after any prefix of a name's characters.
+# A bare name starts where a name starts (the look-behind): that changes no answer, since any prefix
+# is allowed, and keeps the search from trying again at every character of a long run of letters.
+$script:HordeSecretNamedName = '[A-Za-z0-9_-]*?(?i:' + ((@($script:HordeSecretNamedNames -split '\|') | ForEach-Object { ($_.Replace("_", "").ToCharArray() | ForEach-Object { "" + $_ }) -join '[_-]*' }) -join '|') + ')'
+$script:HordeSecretNamedPattern = '(?<q>["''])(?<name>' + $script:HordeSecretNamedName + ')\k<q>\s*:\s*(?<v>["''])(?<value>(?:\\.|(?!\k<v>)[^\\\s]){8,})\k<v>' +
+    '|(?<![A-Za-z0-9_-])(?<name>' + $script:HordeSecretNamedName + ')[ \t]*=[ \t]*(?:(?<w>["''])(?<value>(?:(?!\k<w>)\S){8,})\k<w>|(?<bare>[^\s"''=]\S{7,}))' +
+    '|(?<![A-Za-z0-9_-])(?<name>' + $script:HordeSecretNamedName + ')[ \t]*:[ \t]+(?:(?<y>["''])(?<value>(?:(?!\k<y>)\S){8,})\k<y>|(?<bare>[^\s"''=]\S{7,}))(?=[ \t]*(?:\r|\n|\z|#))'
 $script:HordeSecretNamedPlaceholder = '[<>${]|\.\.\.|(?i:your|xxx|example|changeme|redacted)'
 # THE MARKER a hidden secret leaves. Its own characters match no pattern above (test/test-secrets.ps1
 # redacts a redacted text and requires no change), so redacting twice is redacting once.
@@ -139,7 +159,10 @@ function Test-HordeSecretNamed {
     param([string]$Text)
     $invariant = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
     foreach ($m in [regex]::Matches($Text, $script:HordeSecretNamedPattern, $invariant)) {
-        if (-not [regex]::IsMatch($m.Groups["value"].Value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }
+        $bare = $m.Groups["bare"]
+        if ($bare.Success -and $bare.Value.IndexOfAny([char[]]@('(', ')')) -ge 0) { continue }
+        $value = $(if ($bare.Success) { $bare.Value } else { $m.Groups["value"].Value })
+        if (-not [regex]::IsMatch($value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }
     }
     return $false
 }

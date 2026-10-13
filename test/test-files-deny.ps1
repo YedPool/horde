@@ -903,7 +903,7 @@ Check (Test-Refused $h $both $neverSays -Force) "a text holding a token AND a pr
 # THE KINDS THAT ARE NOT ASKED FOR AT ALL (the review's decision): core finds each of these in a
 # text, and a share lets each by with no -Force, because ordinary reports are full of them.
 $notAsked = [ordered]@{
-    "after-a-colon.txt" = ("Pass" + "word: " + "hunter2x")
+    "after-a-colon.txt" = ("Pass" + "word: " + "hunter2x, and then rotate it")
     "in-a-sentence.md" = ("the pass" + "word is 'correct horse battery staple'")
     "bearer.md" = ("Send Bea" + "rer " + ("a1b2c3d4e5" * 3) + " in the header.")
     "authorization.txt" = ("Authorization: Basic " + "ZGVwbG95OlRyMHViNGRvcjM=")
@@ -911,6 +911,11 @@ $notAsked = [ordered]@{
     "a-long-run.json" = ('{"id":"' + "Zx9Qm2Lp7Rt4Vb8Nc1Hd" + "6Jf3Kg5Ws0YaUe4Ti7Ro" + '"}')
     "a-run-with-slashes.txt" = ("wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY")
 }
+# ALONE ON ITS LINE, THAT IS A YAML SECRET (core/Secrets.ps1, the next round of the review): the named
+# kind finds it, and -Force lifts it. Followed by more words on its line, as above, it is prose.
+$yamlLine = New-File (Join-Path $held "yaml-line.txt") ("Pass" + "word: " + "hunter2x")
+Check (Test-Refused $h $yamlLine "a secret written under a name such as client_secret or password") "a password alone after a colon, the rest of its line, is refused as a secret under its own name"
+Check (Test-Shared $h $yamlLine -Force) "and -Force shares it"
 foreach ($named in $notAsked.Keys) {
     $file = New-File (Join-Path $held $named) $notAsked[$named]
     Check ((Find-HordeSecretKind -Text $notAsked[$named]) -cne "" -and (Test-Shared $h $file)) ("CONTROL: " + $named + " holds what core calls '" + (Find-HordeSecretKind -Text $notAsked[$named]) + "', which a share does not ask for: it is shared with no -Force")

@@ -113,8 +113,9 @@
 # WHAT A TEXT FILE HOLDS IS LOOKED AT TOO, before its bytes are kept
 # (Get-HordeFilesContentRefusal): a private key's first line is refused whatever the caller
 # says, and a token of a known shape unless the caller gives -Force; and, the same way, a secret
-# written under its own name (client_secret, api_key, password and three more, as a JSON member
-# or as name=value: core/Secrets.ps1 has the rule, and the names). A picture and a PDF are not
+# written under its own name (client_secret, api_key, password and three more, in any case, with
+# or without underscores or dashes and after any prefix, as a JSON member, as name=value or as YAML:
+# core/Secrets.ps1 has the rule, and the names). A picture and a PDF are not
 # looked into.
 #
 # EVERY RULE JUDGES THE FINAL PATH OF THE OPEN HANDLE, never the path that was written
