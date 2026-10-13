@@ -59,29 +59,14 @@
            Find = 'if ($finding.state -ceq "known") { $nextKnown ='
            Replace = 'if ($false) { $nextKnown =' }
         @{ Name = "shadow-state-written-where-live-reads"
-           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome) -Text'
-           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -HordeHome $HordeHome) -Text' }
+           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text'
+           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -HordeHome $HordeHome) -Text' }
         @{ Name = "posted-ids-never-dropped"
            Find = 'if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }'
            Replace = '$nextPosted["$k"] = $when' }
         @{ Name = "saved-restores-never-dropped"
            Find = '-and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })'
            Replace = '})' }
-        @{ Name = "held-mail-marked-posted"
-           Find = 'if ($script:HordeRestoreSourceStages -cnotcontains "$($posted.value.stage)") {'
-           Replace = 'if ($false) {' }
-        @{ Name = "source-picks-a-messenger-production-may-not"
-           Find = '$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")'
-           Replace = '$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post")' }
-        @{ Name = "no-messenger-found-is-a-throw"
-           Find = 'if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("there is no messenger to post through: " + $found.reason)) }'
-           Replace = '' }
-        @{ Name = "mail-wears-no-label"
-           Find = 'sessionId = $script:HordeRestoreSourceFrom; label = "$($Settings.fromLabel)" }'
-           Replace = 'sessionId = $script:HordeRestoreSourceFrom; label = "RS" }' }
-        @{ Name = "mail-carries-another-body"
-           Find = 'from = $from; body = "$($Mail.body)";'
-           Replace = 'from = $from; body = "resume";' }
         @{ Name = "any-status-change-is-a-move"
            Find = '$late = ($_.lastChangeAt -is [datetime] -and ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)'
            Replace = '$late = ($_.lastChangeAt -is [datetime] -and ($_.lastChangeAt - $_.startedAt).TotalSeconds -gt 0)' }
@@ -127,6 +112,12 @@
         @{ Name = "mail-wears-a-label-a-session-may-have"
            Find = 'fromLabel = "RS"'
            Replace = 'fromLabel = "R"' }
+        @{ Name = "resume-mail-not-from-the-restore-source"
+           Find = '-From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)"'
+           Replace = '-From "" -Label "$($Settings.fromLabel)"' }
+        @{ Name = "resume-mail-wears-a-fixed-label"
+           Find = '-From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)"'
+           Replace = '-From $script:HordeRestoreSourceFrom -Label "RS"' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }

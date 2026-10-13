@@ -45,7 +45,8 @@ Check ((Format-HordeSessionName -Label "Q12").value -ceq "Q12") "no title: the l
 $reserved = Format-HordeSessionName -Label "RS" -Title "client search orc"
 Check ($reserved.state -ceq "unknown" -and "$($reserved.reason)".Contains("reserved label")) "a reserved label - RS, which the restore source's mail wears - names no session: no name, and the answer says why"
 Check ((Format-HordeSessionName -Label "RS1").state -ceq "known" -and (Format-HordeSessionName -Label "R").state -ceq "known" -and (Format-HordeSessionName -Label "S").state -ceq "known") "the reservation is exact: RS1, R and S are ordinary labels"
-Check ((@(Get-HordeReservedLabels) -join ",") -ceq "RS" -and -not (Test-HordeLabelReserved "rs") -and -not (Test-HordeLabelReserved $null)) "the reserved labels are listed in one place, and matched exactly"
+Check ((Format-HordeSessionName -Label "WW").state -ceq "unknown") "WW, which the wake watcher's tells wear, names no session either"
+Check ((@(Get-HordeReservedLabels) -join ",") -ceq "RS,WW" -and -not (Test-HordeLabelReserved "rs") -and -not (Test-HordeLabelReserved $null)) "the reserved labels are listed in one place, and matched exactly"
 $n = Format-HordeSessionName -Label "E" -Title ("tab`there`r`nnew " + [char]0x00E9 + "  line")
 Check ($n.value -ceq "E tab here new line") "tabs, line breaks, runs of spaces and characters outside printable ASCII become single spaces"
 $long = Format-HordeSessionName -Label "AB12" -Title ("word " * 30)

@@ -409,7 +409,15 @@ Check ((Update-HordeWakeFleetRead -Seen $null -Listing $null -Now $t0 -Settings 
 Start-Case; Seat
 Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
 $r = Pass 0
-Check ($null -ne $r.listing -and $r.listing.state -ceq "unknown") "the pass hands on what the listing answered, for the tick to count"
+Check ($null -ne $r.listing -and $r.listing.state -ceq "unknown" -and $r.warchief -ceq "") "the pass hands on what the listing answered, for the tick to count; and a fleet it cannot read has no warchief it can name"
+Reset-HordeMemoryWaker
+# WHO THE WARCHIEF IS, for whoever must tell it something: the one session with that role.
+Start-Case
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "warchief" -UnreadCount 0
+Check ((Pass 0).warchief -ceq (Sid 2)) "the pass names the warchief: the one session with that role"
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "warchief" -UnreadCount 0
+Check ((Pass 3).warchief -ceq "") "two sessions with that role are no warchief: one is never chosen over the other"
 Reset-HordeMemoryWaker
 
 Write-Host ""

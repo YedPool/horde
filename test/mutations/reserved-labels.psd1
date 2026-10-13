@@ -7,13 +7,16 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "nothing-reserved"
-           Find = 'return @("RS")'
+           Find = 'return @("RS", "WW")'
            Replace = 'return @()' }
+        @{ Name = "the-tell-senders-label-not-reserved"
+           Find = 'return @("RS", "WW")'
+           Replace = 'return @("RS")' }
         @{ Name = "reserved-ignoring-case"
            Find = '(Get-HordeReservedLabels) -ccontains $Label)'
            Replace = '(Get-HordeReservedLabels) -contains $Label)' }
         @{ Name = "another-label-reserved-in-its-place"
-           Find = 'return @("RS")'
-           Replace = 'return @("R")' }
+           Find = 'return @("RS", "WW")'
+           Replace = 'return @("R", "WW")' }
     )
 }

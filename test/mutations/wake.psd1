@@ -160,8 +160,14 @@
            Find = 'return [pscustomobject]@{ seen = [pscustomobject]@{ failures = 0; since = $null; told = $false }; entries = $entries.ToArray(); quiet = $false; condition = $null }'
            Replace = 'return [pscustomobject]@{ seen = $before; entries = $entries.ToArray(); quiet = $false; condition = $null }' }
         @{ Name = "listing-not-handed-on"
-           Find = 'gaveUp = $gaveUp; listing = $listing }'
-           Replace = 'gaveUp = $gaveUp; listing = $null }' }
+           Find = 'gaveUp = $gaveUp; listing = $listing; warchief = $warchief }'
+           Replace = 'gaveUp = $gaveUp; listing = $null; warchief = $warchief }' }
+        @{ Name = "one-of-two-warchiefs-chosen"
+           Find = 'if ($chiefs.Count -eq 1) { $warchief = $chiefs[0].id }'
+           Replace = 'if ($chiefs.Count -ge 1) { $warchief = $chiefs[0].id }' }
+        @{ Name = "an-orc-taken-for-the-warchief"
+           Find = '$chiefs = @($targets | Where-Object { $_.role -ceq "warchief" })'
+           Replace = '$chiefs = @($targets)' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
            Replace = '' }

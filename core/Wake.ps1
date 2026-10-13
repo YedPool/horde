@@ -363,9 +363,8 @@ function Update-HordeWakeBadMail {
     # the session shows none (or is not seen at all) forgets it, and a later return is told again.
     # THIS ONLY JOURNALS. It is never a reason not to nudge: the good mail beside a bad record is knocked
     # for as always (the waker port carries the count apart from unreadCount for exactly that).
-    # THE SEAM FOR THE LIVE SLICE: telling the warchief by mail that a session's mailbox holds records
-    # nobody can read belongs where this entry is made - a mail under an id made from the session and
-    # the day, posted as core/RestoreSource.ps1 posts. Nothing posts it yet.
+    # THE WARCHIEF IS TOLD OF IT by the tell sender (core/WakeTell.ps1), which the tick hands each entry
+    # made here as a condition; this function only decides when there is something to say.
     param($Seen = @{}, $Unreadable = @{}, [Parameter(Mandatory = $true)][datetime]$Now)
     $next = @{}
     $entries = New-Object System.Collections.ArrayList
@@ -388,9 +387,11 @@ function Update-HordeWakeBadMail {
 
 function Invoke-HordeWakePass {
     # ONE PASS. Reads the targets and each one's state through the port, decides, and acts; returns
-    # { ledger; entries; decisions; unreadable }. It reads no clock and no file: the loop passes -Now and
-    # keeps what comes back. unreadable is session id -> how many records of its mail could not be read,
-    # for the sessions that have any (Update-HordeWakeBadMail, which the loop calls with it).
+    # { ledger; entries; decisions; unreadable; gaveUp; listing; warchief }. It reads no clock and no file:
+    # the loop passes -Now and keeps what comes back. unreadable is session id -> how many records of
+    # its mail could not be read (Update-HordeWakeBadMail, which the loop calls with it); gaveUp is who
+    # was given up on this pass; listing is what the waker answered to "which sessions are there"; and
+    # warchief is the one session with that role, or "".
     #   -Waker            a registered waker, or $null when none is installed: then nobody is nudged
     #   -Ledger           session id -> { attempts; lastAttemptAt; lastOutcome }, from the last pass
     #   -Shadow           JOURNAL WHAT IT WOULD DO, AND DO NONE OF IT: no nudge is sent. A would-nudge
@@ -406,6 +407,7 @@ function Invoke-HordeWakePass {
     $unreadable = @{}
     $gaveUp = @()
     $listing = $null
+    $warchief = ""
     if ($null -ne $Waker) {
         # A PASS BEGINS: the waker is told, so what it read of the fleet for the last pass is not reused
         # for this one and is read once for all of this one's questions (wakers/Port.ps1, Begin).
@@ -415,6 +417,10 @@ function Invoke-HordeWakePass {
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Outcome "unknown" -Reason ("the targets are unknown: " + $listing.reason)))
         } else {
             $targets = @($listing.value)
+            # WHO THE WARCHIEF IS, for whoever must tell it something (core/WakeTell.ps1): the one target
+            # with that role. Two, or none, is nobody: one is never chosen over another.
+            $chiefs = @($targets | Where-Object { $_.role -ceq "warchief" })
+            if ($chiefs.Count -eq 1) { $warchief = $chiefs[0].id }
             $states = @{}
             foreach ($t in $targets) {
                 $states[$t.id] = Get-HordeWakeState -Waker $Waker -Id $t.id
@@ -466,7 +472,7 @@ function Invoke-HordeWakePass {
             foreach ($e in @($gave.entries)) { [void]$entries.Add($e) }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----

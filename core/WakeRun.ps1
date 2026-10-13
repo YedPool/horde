@@ -15,7 +15,8 @@
 #   SHADOW  journals what a tick would do - would-nudge, would-post, would-stall - and does none of it.
 #   LIVE    sends the nudges the wake pass decided, through the waker it was handed, and nothing else.
 #
-# THE RESTORE SOURCE STAYS SHADOW EVEN IN A LIVE RUN. It journals would-post and would-stall and posts
+# THE TWO SENDERS STAY SHADOW EVEN IN A LIVE RUN: the restore source (core/RestoreSource.ps1) and the
+# tell sender (core/WakeTell.ps1). They journal would-post, would-stall and would-tell, and post
 # nothing. Why: the only messenger that reaches a real session types its own wake line on every post
 # (messengers/wezfleet/Messenger.ps1, WOKEN, OR ONLY QUEUED: "wezfleet's post knocks once for each new
 # message"). A live resume post would therefore type into every orc at once - outside nudge.guarded,
@@ -37,11 +38,16 @@
 . (Join-Path $PSScriptRoot "WakeFiles.ps1")
 . (Join-Path $PSScriptRoot "Wake.ps1")
 . (Join-Path $PSScriptRoot "RestoreSource.ps1")
+. (Join-Path $PSScriptRoot "WakeTell.ps1")
 
+# THE ONE SWITCH FOR BOTH SENDERS. While it is $false, the restore source and the tell sender run SHADOW in
+# every mode of the run - they journal would-post, would-stall and would-tell, and post nothing - for the
+# reason the header gives: a post types a wake line. When a post that does not knock exists, this is
+# what turns on, and nothing else has to: with it $true, a live run hands both senders their posters
+# (Send-HordeRestoreMail, Send-HordeWakeTell) and keeps their marks in its own live files.
+$script:HordeWakeSendersPost = $false
 # How often a tick runs the restore source.
 $script:HordeWakeRestoreEverySeconds = 30
-# The restore source's would-post marks in a live run (the header).
-$script:HordeWakeLiveRestoreName = "restore-of-live-run"
 
 function New-HordeWakeRun {
     # What a run carries from tick to tick, read from its own mode's files: { live; ledger; posted;
@@ -49,13 +55,17 @@ function New-HordeWakeRun {
     # is never changed afterwards (the header). said is what the caller should print once: a saved
     # file that could not be read is started from empty, and says so.
     param([switch]$Live, [string]$HordeHome = (Get-HordeHome))
-    $run = [pscustomobject]@{ live = [bool]$Live; ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ live = [bool]$Live; ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Shadow:(-not $run.live) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
-    $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeRestoreName -Run $run) -Shadow -HordeHome $HordeHome
+    $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
+    $place = Get-HordeWakeSenderFile -Run $run -Stem "tells"
+    $savedTells = Read-HordeWakeTellState -Name $place.name -Mode $place.mode -HordeHome $HordeHome
+    if ($savedTells.state -ceq "known") { $run.told = $savedTells.value.told }
+    elseif ($savedTells.state -ceq "unknown") { $run.said = @($run.said) + ("starting with nothing marked told - " + $savedTells.reason) }
     return $run
 }
 
@@ -80,12 +90,23 @@ function Get-HordeWakeRunPlan {
     return [pscustomobject]@{ ok = $true; live = $true; waker = $waker; reason = ""; banner = ("LIVE - REAL NUDGES are sent through the waker '" + $waker.name + "'. The restore source stays shadow: it journals what it would post and posts nothing") }
 }
 
-function Get-HordeWakeRestoreName {
-    # The name of the file the restore source's marks are kept under for this run. Always a SHADOW file,
-    # because the source is shadow in both modes (the header): the shadow run's own, or the live run's own.
+function Test-HordeWakeSendersShadow {
+    # Do the two senders - the restore source and the tell sender - run shadow in this run? Always in a
+    # shadow run; and in every other while THE ONE SWITCH is off (the top of this file).
     param([Parameter(Mandatory = $true)]$Run)
-    if ($Run.live -eq $true) { return $script:HordeWakeLiveRestoreName }
-    return "restore"
+    if ($Run.live -ne $true) { return $true }
+    return ($script:HordeWakeSendersPost -ne $true)
+}
+
+function Get-HordeWakeSenderFile {
+    # Where a sender's marks are kept for this run: { name; mode }, for Get-HordeWakeStateFile. A shadow
+    # run's are <stem>-shadow. A live run whose senders are shadow keeps them in a shadow file OF ITS
+    # OWN, <stem>-of-live-run-shadow - not the shadow run's, which another process may be writing, and
+    # not <stem>-live, which is for mail that was really posted. With the switch on, <stem>-live.
+    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][string]$Stem)
+    if ($Run.live -ne $true) { return [pscustomobject]@{ name = $Stem; mode = "shadow" } }
+    if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-live-run"); mode = "shadow" } }
+    return [pscustomobject]@{ name = $Stem; mode = "live" }
 }
 
 function Invoke-HordeWakeTick {
@@ -96,6 +117,8 @@ function Invoke-HordeWakeTick {
     #   -ReadSessions  () -> Get-HordeRestoreSessions' answer; a test hands in its own, and the default
     #                  reads the two stores of this machine
     #   -TickSeconds   the loop's tick, written into the heartbeat so a reader knows what stale is
+    #   -Messenger     what the two senders post through when they post at all (THE ONE SWITCH); found
+    #                  through the messenger port when it is not given. A test hands in the in-process one.
     param(
         [Parameter(Mandatory = $true)]$Run,
         [Parameter(Mandatory = $true)][datetime]$Now,
@@ -105,6 +128,7 @@ function Invoke-HordeWakeTick {
         [scriptblock]$ReadSessions = { Get-HordeRestoreSessions },
         [int]$TickSeconds = 3,
         [int]$ProcessId = 0,
+        $Messenger = $null,
         [string]$HordeHome = (Get-HordeHome)
     )
     # ONLY A RUN MADE LIVE IS LIVE: anything else in that member - nothing, a word, a number - is shadow.
@@ -120,12 +144,15 @@ function Invoke-HordeWakeTick {
         try {
             $read = & $ReadSessions
             if ((Test-HordeAnswer $read) -and $read.state -ceq "known") {
-                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow -Posted $Run.posted -Known $Run.restores
+                $sourceShadow = Test-HordeWakeSendersShadow -Run $Run
+                $sourcePoster = $null
+                if (-not $sourceShadow) { $sourcePoster = { param($m) Send-HordeRestoreMail -Mail $m -Settings $RestoreSettings -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
+                $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $Now -Settings $RestoreSettings -Shadow:$sourceShadow -Post $sourcePoster -Posted $Run.posted -Known $Run.restores
                 foreach ($e in @($sourced.entries)) { [void]$entries.Add($e) }
                 $dirty = (@($sourced.entries).Count -gt 0 -or @($sourced.known).Count -ne @($Run.restores).Count -or $sourced.posted.Count -ne $Run.posted.Count)
                 $Run.posted = $sourced.posted
                 $Run.restores = @($sourced.known)
-                if ($dirty) { Save-HordeRestoreState -Posted $Run.posted -Known $Run.restores -Name (Get-HordeWakeRestoreName -Run $Run) -Shadow -HordeHome $HordeHome }
+                if ($dirty) { Save-HordeRestoreState -Posted $Run.posted -Known $Run.restores -Name (Get-HordeWakeSenderFile -Run $Run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $Run -Stem "restore").mode -HordeHome $HordeHome }
                 $left = @()
                 $p = $read.PSObject.Properties["leftOut"]
                 if ($null -ne $p) { $left = @($p.Value) }
@@ -154,6 +181,33 @@ function Invoke-HordeWakeTick {
         $bad = Update-HordeWakeBadMail -Seen $Run.badMail -Unreadable $result.unreadable -Now $Now
         $Run.badMail = $bad.seen
         foreach ($e in @($bad.entries)) { [void]$entries.Add($e) }
+        # WHAT THE WARCHIEF MUST HEAR (core/WakeTell.ps1): the four things this pass may have met.
+        $conditions = New-Object System.Collections.ArrayList
+        foreach ($g in @($result.gaveUp)) {
+            $mail = "unknown"
+            if ($g.mailAt -is [datetime]) { $mail = $g.mailAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
+            [void]$conditions.Add((New-HordeWakeTellCondition -Kind "gave-up" -Subject $g.id -Instance $mail -Text ("the session " + $g.id + " was nudged " + $g.attempts + " times for its mail unread since " + $mail + " and did not take it. It is not nudged again for that mail. Look at that session.")))
+        }
+        foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {
+            [void]$conditions.Add((New-HordeWakeTellCondition -Kind "nudge-killed" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("a nudge of the session " + $e.id + " had to be stopped part-way, and its input box may now hold the unsent line; while it does, that session cannot be woken. Look at its box. " + $e.reason)))
+        }
+        foreach ($e in @($bad.entries)) {
+            [void]$conditions.Add((New-HordeWakeTellCondition -Kind "bad-mail" -Subject $e.id -Instance $Now.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture) -Text ("the mailbox of the session " + $e.id + " holds mail nobody can read: " + $e.reason)))
+        }
+        if ($null -ne $fleetRead.condition) { [void]$conditions.Add((New-HordeWakeTellCondition -Kind $fleetRead.condition.kind -Subject $fleetRead.condition.subject -Instance $fleetRead.condition.instance -Text $fleetRead.condition.text)) }
+        # WHO THE WARCHIEF IS IS REMEMBERED from the last pass that could say: the pass on which the fleet
+        # cannot be read is the one that most needs somebody told, and it is the one that cannot say who.
+        if ("$($result.warchief)" -cne "") { $Run.warchief = "$($result.warchief)" }
+        if ($conditions.Count -gt 0) {
+            $sendersShadow = Test-HordeWakeSendersShadow -Run $Run
+            $poster = $null
+            if (-not $sendersShadow) { $poster = { param($m) Send-HordeWakeTell -Mail $m -Messenger $Messenger -HordeHome $HordeHome }.GetNewClosure() }
+            $toldNow = Invoke-HordeWakeTellPass -Conditions $conditions.ToArray() -Warchief "$($Run.warchief)" -Now $Now -Shadow:$sendersShadow -Post $poster -Told $Run.told
+            foreach ($e in @($toldNow.entries)) { [void]$entries.Add($e) }
+            $Run.told = $toldNow.told
+            $place = Get-HordeWakeSenderFile -Run $Run -Stem "tells"
+            Save-HordeWakeTellState -Told $Run.told -Name $place.name -Mode $place.mode -HordeHome $HordeHome
+        }
         $changed = (@($result.entries).Count -gt 0 -or $result.ledger.Count -ne $Run.ledger.Count)
         $Run.ledger = $result.ledger
         if ($changed) { Save-HordeWakeLedger -Ledger $Run.ledger -Shadow:$shadow -HordeHome $HordeHome }

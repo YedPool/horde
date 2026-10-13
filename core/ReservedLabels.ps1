@@ -1,8 +1,9 @@
 # core/ReservedLabels - the labels no session may ever be given.
 #
 # WHY. A label is how the fleet's people and sessions name a session at a glance: A, B, C1. Some mail is
-# not from a session at all - the restore source's resume mail and stall notice (core/RestoreSource.ps1)
-# - and a messenger that names senders by label needs one for it. That mail wears RS. If a real session
+# not from a session at all - the restore source's resume mail and stall notice (core/RestoreSource.ps1),
+# and what the wake watcher tells the warchief (core/WakeTell.ps1) - and a messenger that names senders
+# by label needs one for each. That mail wears RS, or WW. If a real session
 # could be given RS too, a line "from RS" would be a machine's or a session's and nobody could tell
 # which; worse, a session told "RS says resume" might answer RS. So the label is reserved here, in one
 # list, and refused wherever Horde takes a label for a session (review of PR #208):
@@ -18,7 +19,8 @@
 function Get-HordeReservedLabels {
     # Every label that is not a session's to wear, with whose it is.
     #   RS  the restore source (core/RestoreSource.ps1, the setting fromLabel)
-    return @("RS")
+    #   WW  the wake watcher's tell sender (core/WakeTell.ps1, the setting fromLabel)
+    return @("RS", "WW")
 }
 
 function Test-HordeLabelReserved {

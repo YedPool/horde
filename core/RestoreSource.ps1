@@ -14,21 +14,11 @@
 # port; the time is always -Now. Invoke-HordeRestoreSourcePass is one pass and does no file I/O. The
 # reader of the running sessions and the file of what was posted are apart, at the bottom.
 #
-# IT POSTS THROUGH THE MESSENGER PORT, as the decisions doorbell does (decisions/Notify.ps1): it names no
-# messenger, states what it needs, and takes the one loaded messenger that offers it
-# (Send-HordeRestoreMail). It needs body.untyped (a resume mail typed into an input box is the defect
-# family the fleet's mail was built to end), idempotent.post (every mail's id is made from the restore
-# and the session, and a pass that plans it again must be the same one message), and receipt.receiver.
-# NOT wake: waking is the watcher's, and a sender that also knocked would be the two responsibilities
-# joined again. WHY receipt.receiver, which this module never reads: the in-process test messenger
-# offers the first two, so with only those required a machine that has it and a real messenger loaded
-# has two that qualify, and the port never chooses between two - nothing would ever be posted. It
-# declines receipt.receiver so that production paths cannot pick it (messengers/Port.ps1), and requiring
-# it here is how this one does not. Like core/Wake.ps1 with the waker port, this core file loads a port
-# that lives beside its adapters, because it calls it.
-# NOTHING POSTS LIVE YET: `horde wake run` refuses without -Shadow, and the shadow tick (core/WakeRun.ps1)
-# hands the pass no poster. The poster is built and tested here so that the day the live tick lands it
-# is a call, not a design.
+# IT POSTS THROUGH THE MESSENGER PORT, by core/WakeMail.ps1, which says what such a sender needs of a
+# messenger and why (Send-HordeRestoreMail).
+# NOTHING POSTS LIVE YET: the tick runs this source in shadow in every mode of the run (core/WakeRun.ps1
+# says why, at the one switch that will turn it on). The poster is built and tested so that day is a
+# switch, not a design.
 #
 # WHY THE WARCHIEF IS MAILED THE STALL NOTICE, WHEN "ONLY ORCS ARE MAILED RESUME". The two are different
 # mails for different readers, and the difference is on purpose. A resume mail tells a session to pick
@@ -48,17 +38,12 @@
 . (Join-Path $PSScriptRoot "Identity.ps1")
 . (Join-Path $PSScriptRoot "WezfleetState.ps1")
 . (Join-Path $PSScriptRoot "WakeFiles.ps1")
-. (Join-Path $PSScriptRoot "Device.ps1")
-# The port the mails are posted through (the header says why it is loaded from here).
-. (Join-Path (Split-Path -Parent $PSScriptRoot) "messengers\Port.ps1")
+# How a sender that is not a session posts mail (the messenger port, and what it needs of a messenger).
+. (Join-Path $PSScriptRoot "WakeMail.ps1")
 
-# What the restore source needs of a messenger (the header).
-$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")
 # WHO A RESUME MAIL IS FROM: this module, by a name of its own in place of a session id - it is not a
 # session - as the decisions doorbell names itself.
 $script:HordeRestoreSourceFrom = "horde-restore-source"
-# The stages at which a mail is in the session's mailbox or further (messengers/Port.ps1, THE STAGES).
-$script:HordeRestoreSourceStages = @("accepted", "handed-over", "seen")
 
 function Get-HordeRestoreSettings {
     # The restore source's settings, with -Overrides laid over the defaults. A name that is not a
@@ -346,25 +331,7 @@ function Send-HordeRestoreMail {
     # -Messenger is for a caller that holds one - a test hands in the in-process one - and is found
     # through the port when it is not given.
     param([Parameter(Mandatory = $true)]$Mail, $Settings = (Get-HordeRestoreSettings), $Messenger = $null, [string]$HordeHome = (Get-HordeHome))
-    $through = $Messenger
-    if ($null -eq $through) {
-        $found = Find-HordeMessenger -Require $script:HordeRestoreSourceMessengerNeeds
-        if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("there is no messenger to post through: " + $found.reason)) }
-        $through = $found.value
-    }
-    $deviceId = ""
-    try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { return (New-HordeUnknown -Reason "this machine's device id could not be had" -ErrorRecord $_) }
-    $from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeRestoreSourceFrom; label = "$($Settings.fromLabel)" }
-    $message = [pscustomobject]@{ messageId = "$($Mail.messageId)"; sessionId = "$($Mail.to)"; from = $from; body = "$($Mail.body)"; ttlSeconds = [int]$Settings.mailTtlSeconds }
-    $posted = Send-HordeMessengerMessage -Messenger $through -Message $message
-    if ($posted.state -cne "known") { return $posted }
-    if ($script:HordeRestoreSourceStages -cnotcontains "$($posted.value.stage)") {
-        $why = ""
-        $p = $posted.value.PSObject.Properties["reason"]
-        if ($null -ne $p) { $why = ": " + $p.Value }
-        return (New-HordeUnknown -Reason ("the messenger answered " + $posted.value.stage + $why))
-    }
-    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Mail.messageId)"; stage = "$($posted.value.stage)"; messenger = "$($through.name)" }) -ObservedAt $posted.observedAt)
+    return (Send-HordeWakeMail -Mail $Mail -From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)" -TtlSeconds ([int]$Settings.mailTtlSeconds) -Messenger $Messenger -HordeHome $HordeHome)
 }
 
 function Get-HordeRestoreSessions {
@@ -442,7 +409,7 @@ function Save-HordeRestoreState {
     # a live run reads.
     # -Name is the file's stem, restore unless a caller keeps a second state (core/WakeRun.ps1 does, for
     # what the source only would have posted during a live run).
-    param($Posted = @{}, $Known = @(), [switch]$Shadow, [string]$Name = "restore", [string]$HordeHome = (Get-HordeHome))
+    param($Posted = @{}, $Known = @(), [switch]$Shadow, [string]$Name = "restore", [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
     $ids = @()
     if ($null -ne $Posted) { $ids = @($Posted.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; at = $(if ($Posted[$_] -is [datetime]) { ConvertTo-HordeWakeTimeText $Posted[$_] } else { "" }) } }) }
     $restores = @(@($Known) | Where-Object { $null -ne $_ } | ForEach-Object {
@@ -452,14 +419,14 @@ function Save-HordeRestoreState {
             $row
         })
     $doc = [ordered]@{ schemaVersion = 1; posted = $ids; restores = $restores }
-    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
 
 function Read-HordeRestoreState {
     # What Save-HordeRestoreState wrote: known { posted; known }, absent when there is none, or unknown when it
     # cannot be read - the caller then starts from nothing posted and says so.
-    param([switch]$Shadow, [string]$Name = "restore", [string]$HordeHome = (Get-HordeHome))
-    $path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome
+    param([switch]$Shadow, [string]$Name = "restore", [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no restore state was saved in this home") }
     try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason "the saved restore state could not be read" -ErrorRecord $_) }

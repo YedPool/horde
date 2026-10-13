@@ -23,6 +23,8 @@ $fleetPin = Enter-HordeTestEmptyFleet
 $pinned = Enter-HordeTestPinnedHome -Root $root
 . (Join-Path $root "core\WakeRun.ps1")
 . (Join-Path $root "wakers\memory\Waker.ps1")
+# The in-process test messenger: what the two senders post through in the one section that turns them on.
+. (Join-Path $root "messengers\memory\Messenger.ps1")
 
 $memory = Get-HordeWaker -Name "memory"
 $t0 = New-Object System.DateTime(2026, 10, 12, 8, 0, 0, [System.DateTimeKind]::Utc)
@@ -68,7 +70,11 @@ Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 0 -UnreadableCo
 $run = New-HordeWakeRun -HordeHome $h
 $none = { $a = New-HordeKnown -Value @(); Add-Member -InputObject $a -MemberType NoteProperty -Name "leftOut" -Value @(); $a }
 $said = @(); foreach ($s in @(0, 3, 6, 9)) { $said += , @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind }) }
-Check (@($said[0]).Count -eq 0 -and (@($said[1]) -join ",") -ceq "bad-mail" -and @($said[2]).Count -eq 0 -and @($said[3]).Count -eq 0) "a session whose mailbox holds records nobody can read is journaled bad-mail once, on the second tick that shows it, and not again"
+Check (@($said[0]).Count -eq 0 -and (@($said[1]) -join ",") -ceq "bad-mail,would-tell" -and @($said[2]).Count -eq 0 -and @($said[3]).Count -eq 0) "a session whose mailbox holds records nobody can read is journaled bad-mail once, on the second tick that shows it, with the tell the warchief would get, and not again"
+$line = @(Read-Lines $h | Where-Object { $_.kind -ceq "would-tell" })
+Check ($line.Count -eq 1 -and $line[0].id -ceq (Sid 1) -and "$($line[0].reason)".StartsWith("bad-mail: the mailbox of the session " + (Sid 1)) -and (Test-Path -LiteralPath (Join-Path $h "wake\tells-shadow.json"))) "the would-tell line names the session and the condition, and what was told is kept in the shadow run's own file"
+$again = New-HordeWakeRun -HordeHome $h
+Check ($again.told.Count -eq 1 -and @($again.told.Values)[0].state -ceq "would-tell") "a run that starts again reads back what it would have told, so it is not said twice"
 
 # A FLEET THAT CANNOT BE READ: the tick says it once as unknown, once as permanent, and once as recovered.
 $h = New-Home
@@ -77,10 +83,75 @@ Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
 $run = New-HordeWakeRun -HordeHome $h
 $seenKinds = New-Object System.Collections.ArrayList
 foreach ($n in 0..29) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$seenKinds.Add($e.kind + "@" + $n) } }
-Check ((@($seenKinds) -join ",") -ceq "skip-unknown@0,fleet-read-failing@9") ("thirty ticks over a fleet that cannot be read journal two lines: unknown on the first, permanent on the tenth, and nothing after (" + (@($seenKinds) -join ",") + ")")
+Check ((@($seenKinds) -join ",") -ceq "skip-unknown@0,fleet-read-failing@9,would-tell@9") ("thirty ticks over a fleet that cannot be read journal three lines: unknown on the first, permanent and the tell of it on the tenth, and nothing after (" + (@($seenKinds) -join ",") + ")")
 Set-HordeMemoryWakerFault -Call "targets" -Kind ""
 $back = @(Invoke-HordeWakeTick -Run $run -Now (At 100) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind })
 Check (($back -join ",") -ceq "recovered") "the tick on which it can be read again says recovered"
+
+# A SESSION GIVEN UP ON, AND A NUDGE THAT HAD TO BE KILLED: each is a tell, once.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Outcome "killed" -OutcomeReason "nudge-killed: stopped part-way"
+$run = New-HordeWakeRun -Live -HordeHome $h
+Set-HordeMemoryWakerClock (At 0)
+$first = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.id })
+Check (($first -join ",") -ceq ("nudge-killed:" + (Sid 2) + ",would-tell:" + (Sid 2)) -and $run.warchief -ceq (Sid 1)) ("a nudge that had to be killed is journaled, and the warchief would be told of it - would, because the senders are shadow even in a live run (" + ($first -join ",") + ")")
+Check ((@(Get-ChildItem -LiteralPath (Join-Path $h "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "heartbeat-live.json,journal-live.jsonl,ledger-live.json,tells-of-live-run-shadow.json") "and what the live run would have told is kept in a shadow file of its own - never tells-live.json, which is for what was really told, and never the shadow run's"
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Outcome "busy" -OutcomeReason "mid-turn"
+$run = New-HordeWakeRun -Live -HordeHome $h
+$gave = New-Object System.Collections.ArrayList
+foreach ($n in 0..7) { Set-HordeMemoryWakerClock (At ($n * 400)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 400)) -Waker $memory -ReadSessions $none -Settings (Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 2 }) -HordeHome $h)) { [void]$gave.Add($e.kind) } }
+Check (@($gave | Where-Object { $_ -ceq "gave-up" }).Count -eq 1 -and @($gave | Where-Object { $_ -ceq "would-tell" }).Count -eq 1) ("a session given up on is one gave-up line and one tell, over eight ticks (" + (@($gave) -join ",") + ")")
+
+Write-Host ""
+Write-Host "--- the one switch: turned on, a live run posts what both senders have to say, and a shadow run still posts nothing ---" -ForegroundColor Cyan
+
+$watch = & (Join-Path $root "messengers\memory\test\Fixture.ps1") -Root $root
+$box = & $watch.New
+$inProcess = Get-HordeMessenger -Name "memory"
+$wasPosting = $script:HordeWakeSendersPost
+Check ($wasPosting -eq $false) "the switch is off as shipped: neither sender posts in any mode"
+try {
+    $script:HordeWakeSendersPost = $true
+    $h = New-Home
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+    Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -UnreadableCount 2
+    $run = New-HordeWakeRun -Live -HordeHome $h
+    $on = New-Object System.Collections.ArrayList
+    foreach ($s in @(0, 3, 6)) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $none -Messenger $inProcess -HordeHome $h)) { [void]$on.Add($e) } }
+    $tells = @($on | Where-Object { $_.kind -ceq "tell" })
+    Check ($tells.Count -eq 1 -and $tells[0].outcome -ceq "posted" -and @($on | Where-Object { $_.kind -ceq "would-tell" }).Count -eq 0) "with the switch on, a live run tells the warchief for real, once"
+    $got = & $watch.Observe $box $tells[0].messageId
+    Check ($got.records -eq 1 -and "$(@($got.bodies)[0])".StartsWith("AUTOMATED, from the wake watcher: the mailbox of the session " + (Sid 2))) "the mail is in the messenger's store, one record, and says it is automated"
+    Check ((Test-Path -LiteralPath (Join-Path $h "wake\tells-live.json")) -and -not (Test-Path -LiteralPath (Join-Path $h "wake\tells-of-live-run-shadow.json"))) "and what was really told is kept in the live file"
+    # THE FLEET CANNOT BE READ NOW: the warchief the last good pass named is who is told.
+    Set-HordeMemoryWakerFault -Call "targets" -Kind "throw"
+    $dark = New-Object System.Collections.ArrayList
+    foreach ($n in 0..11) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At (100 + $n * 3)) -Waker $memory -ReadSessions $none -Messenger $inProcess -HordeHome $h)) { [void]$dark.Add($e) } }
+    $told = @($dark | Where-Object { $_.kind -ceq "tell" })
+    Check ($told.Count -eq 1 -and $told[0].outcome -ceq "posted" -and (& $watch.Observe $box $told[0].messageId).records -eq 1) "a fleet that can no longer be read is told to the warchief the last good pass named: the pass that most needs somebody told is the one that cannot say who"
+    Set-HordeMemoryWakerFault -Call "targets" -Kind ""
+    # THE RESTORE SOURCE TURNS ON WITH IT.
+    $h = New-Home
+    Reset-HordeMemoryWaker
+    $run = New-HordeWakeRun -Live -HordeHome $h
+    $script:reads = 0
+    $posts = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $readRestored -Messenger $inProcess -HordeHome $h | Where-Object { $_.kind -ceq "post" -or $_.kind -ceq "would-post" })
+    Check ($posts.Count -gt 0 -and @($posts | Where-Object { $_.kind -cne "post" -or $_.outcome -cne "posted" }).Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $h "wake\restore-live.json"))) "and so does the restore source, at the same switch: its resume mails are posted, and marked in the live file"
+    # A SHADOW RUN IS SHADOW WHATEVER THE SWITCH SAYS.
+    $h = New-Home
+    Reset-HordeMemoryWaker
+    Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 0
+    Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -UnreadableCount 2
+    $run = New-HordeWakeRun -HordeHome $h
+    $quiet = New-Object System.Collections.ArrayList
+    foreach ($s in @(0, 3)) { foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At $s) -Waker $memory -ReadSessions $readRestored -Messenger $inProcess -HordeHome $h)) { [void]$quiet.Add($e.kind) } }
+    Check (@($quiet | Where-Object { $_ -ceq "tell" -or $_ -ceq "post" -or $_ -ceq "stall" }).Count -eq 0 -and @($quiet | Where-Object { $_ -ceq "would-tell" }).Count -eq 1 -and @($quiet | Where-Object { $_ -ceq "would-post" }).Count -gt 0) "a shadow run, with the switch on and a messenger in hand, still posts nothing: would-tell and would-post only"
+} finally { $script:HordeWakeSendersPost = $wasPosting; & $watch.Remove $box }
 
 Write-Host ""
 Write-Host "--- a tick never throws: what fails is journaled once, and the next tick runs ---" -ForegroundColor Cyan

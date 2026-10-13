@@ -15,11 +15,11 @@
            Find = '-Settings $Settings -Ledger $Run.ledger -Shadow:$shadow'
            Replace = '-Settings $Settings -Ledger $Run.ledger -Shadow:$true' }
         @{ Name = "restore-source-goes-live-with-the-run"
-           Find = '-Settings $RestoreSettings -Shadow -Posted $Run.posted'
-           Replace = '-Settings $RestoreSettings -Shadow:$shadow -Posted $Run.posted' }
+           Find = '$script:HordeWakeSendersPost = $false'
+           Replace = '$script:HordeWakeSendersPost = $true' }
         @{ Name = "restore-source-never-shadow"
-           Find = '-Settings $RestoreSettings -Shadow -Posted $Run.posted'
-           Replace = '-Settings $RestoreSettings -Posted $Run.posted' }
+           Find = 'return ($script:HordeWakeSendersPost -ne $true)'
+           Replace = 'return $false' }
         @{ Name = "a-run-is-live-by-default"
            Find = '$run = [pscustomobject]@{ live = [bool]$Live;'
            Replace = '$run = [pscustomobject]@{ live = $true;' }
@@ -36,14 +36,14 @@
            Find = '$saved = Read-HordeWakeLedger -Shadow:(-not $run.live) -HordeHome $HordeHome'
            Replace = '$saved = Read-HordeWakeLedger -Shadow:($run.live) -HordeHome $HordeHome' }
         @{ Name = "would-posts-of-a-live-run-saved-as-posted"
-           Find = 'Save-HordeRestoreState -Posted $Run.posted -Known $Run.restores -Name (Get-HordeWakeRestoreName -Run $Run) -Shadow -HordeHome $HordeHome'
-           Replace = 'Save-HordeRestoreState -Posted $Run.posted -Known $Run.restores -HordeHome $HordeHome' }
-        @{ Name = "live-run-shares-the-shadow-runs-restore-file"
-           Find = 'if ($Run.live -eq $true) { return $script:HordeWakeLiveRestoreName }'
+           Find = 'if (Test-HordeWakeSendersShadow -Run $Run) { return [pscustomobject]@{ name = ($Stem + "-of-live-run"); mode = "shadow" } }'
            Replace = '' }
+        @{ Name = "live-run-shares-the-shadow-runs-restore-file"
+           Find = 'return [pscustomobject]@{ name = ($Stem + "-of-live-run"); mode = "shadow" } }'
+           Replace = 'return [pscustomobject]@{ name = $Stem; mode = "shadow" } }' }
         @{ Name = "restore-state-not-read-back"
-           Find = '$savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeRestoreName -Run $run) -Shadow -HordeHome $HordeHome'
-           Replace = '$savedRestore = Read-HordeRestoreState -Name "none" -Shadow -HordeHome $HordeHome' }
+           Find = '$savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name'
+           Replace = '$savedRestore = Read-HordeRestoreState -Name "none"' }
         @{ Name = "heartbeat-of-the-other-mode"
            Find = '-Pass $Run.pass -TickSeconds $TickSeconds -Shadow:$shadow'
            Replace = '-Pass $Run.pass -TickSeconds $TickSeconds -Shadow:(-not $shadow)' }
@@ -62,6 +62,30 @@
         @{ Name = "fleet-read-count-forgotten-between-ticks"
            Find = '$Run.fleetRead = $fleetRead.seen'
            Replace = '$Run.fleetRead = $null' }
+        @{ Name = "senders-shadow-in-a-shadow-run-only-by-the-switch"
+           Find = 'if ($Run.live -ne $true) { return $true }'
+           Replace = '' }
+        @{ Name = "the-warchief-forgotten-when-the-fleet-goes-dark"
+           Find = 'if ("$($result.warchief)" -cne "") { $Run.warchief = "$($result.warchief)" }'
+           Replace = '$Run.warchief = "$($result.warchief)"' }
+        @{ Name = "nobody-told-of-a-session-given-up-on"
+           Find = 'foreach ($g in @($result.gaveUp)) {'
+           Replace = 'foreach ($g in @()) {' }
+        @{ Name = "nobody-told-of-a-killed-nudge"
+           Find = 'foreach ($e in @($result.entries | Where-Object { $_.kind -ceq "nudge-killed" })) {'
+           Replace = 'foreach ($e in @()) {' }
+        @{ Name = "nobody-told-of-bad-mail"
+           Find = '-Kind "bad-mail" -Subject $e.id'
+           Replace = '-Kind "bad-mail" -Subject ""' }
+        @{ Name = "nobody-told-of-a-failing-fleet-read"
+           Find = 'if ($null -ne $fleetRead.condition) { [void]$conditions.Add('
+           Replace = 'if ($false) { [void]$conditions.Add(' }
+        @{ Name = "what-was-told-forgotten-between-ticks"
+           Find = '$Run.told = $toldNow.told'
+           Replace = '$Run.told = @{}' }
+        @{ Name = "what-was-told-not-read-back"
+           Find = 'if ($savedTells.state -ceq "known") { $run.told = $savedTells.value.told }'
+           Replace = '' }
         @{ Name = "restore-source-every-tick"
            Find = 'if (($Now - $Run.restoreAt).TotalSeconds -ge $script:HordeWakeRestoreEverySeconds) {'
            Replace = 'if ($true) {' }

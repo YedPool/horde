@@ -26,8 +26,8 @@
         @{ Name = "live-reads-the-unsuffixed-files-of-earlier-builds"
            Find = '$leaf = $Stem + "-live" + $Extension'
            Replace = '$leaf = $Stem + $Extension' }
-        @{ Name = "live-state-is-the-unsuffixed-file-of-earlier-builds"
-           Find = '$leaf = $Name + "-live.json"'
+        @{ Name = "state-file-is-the-unsuffixed-one-of-earlier-builds"
+           Find = '$leaf = $Name + "-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".json"'
            Replace = '$leaf = $Name + ".json"' }
         @{ Name = "shadow-journal-and-heartbeat-are-the-live-ones"
            Find = 'if ($Shadow) { $leaf = $Stem + "-shadow" + $Extension }'
@@ -39,7 +39,7 @@
            Find = 'shadow = [bool]$Shadow; tickSeconds = $TickSeconds }'
            Replace = 'shadow = [bool]$Shadow; tickSeconds = 0 }' }
         @{ Name = "shadow-state-file-is-the-live-one"
-           Find = 'if ($Shadow) { $leaf = $Name + "-shadow.json" }'
-           Replace = '' }
+           Find = 'if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }'
+           Replace = 'if ($Mode -ceq "") { return "live" }' }
     )
 }

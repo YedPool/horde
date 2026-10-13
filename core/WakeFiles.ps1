@@ -52,17 +52,26 @@ function Get-HordeWakeFolder {
     return (Join-Path $HordeHome "wake")
 }
 
+function Get-HordeWakeModeWord {
+    # The word a mode's files carry: the mode itself when -Mode names one, else shadow with -Shadow and
+    # live without. A word that is no mode is refused: a file named for a mode that does not exist is a
+    # file nothing would ever read back.
+    param([string]$Mode = "", [switch]$Shadow)
+    if ($Mode -ceq "") { if ($Shadow) { return "shadow" }; return "live" }
+    if (@("shadow", "proof", "live") -cnotcontains $Mode) { throw ("'" + $Mode + "' is not a mode of the wake run: shadow, proof or live") }
+    return $Mode
+}
+
 function Get-HordeWakeStateFile {
     # The path of one of the state files a run keeps: <home>\wake\<name>-live.json for a live run, and
     # <name>-shadow.json for a shadow run. TWO FILES, BECAUSE SHADOW MUST NOT TOUCH WHAT A LIVE RUN
     # READS. The first version kept one of each, and the review of PR #207 found what a shadow run left
     # in them: back-offs for nudges it never sent, and - worse - the ids of resume mails it never posted,
     # marked posted, so a live watcher started later would never have posted them.
-    param([Parameter(Mandatory = $true)][string]$Name, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    # EVERY MODE'S FILE CARRIES ITS MODE IN ITS NAME, -live or -shadow (Get-HordeWakeModeFile says why
-    # no mode owns the bare name).
-    $leaf = $Name + "-live.json"
-    if ($Shadow) { $leaf = $Name + "-shadow.json" }
+    param([Parameter(Mandatory = $true)][string]$Name, [switch]$Shadow, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    # EVERY MODE'S FILE CARRIES ITS MODE IN ITS NAME (Get-HordeWakeModeFile says why no mode owns the
+    # bare name).
+    $leaf = $Name + "-" + (Get-HordeWakeModeWord -Mode $Mode -Shadow:$Shadow) + ".json"
     return (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) $leaf)
 }
 
