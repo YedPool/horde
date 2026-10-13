@@ -45,8 +45,21 @@
            Find = '$script:HordeLocalRelayPollMs = 50'
            Replace = '$script:HordeLocalRelayPollMs = 5000' }
         @{ Name = "watch-misses-items-already-there"
-           Find = 'if ($items.Count -gt 0) { return (New-HordeLocalRelayItems -Items $items) }'
-           Replace = 'if ($items.Count -gt 0 -and $clock.ElapsedMilliseconds -ge $TimeoutMs) { return (New-HordeLocalRelayItems -Items $items) }' }
+           Find = 'if ($items.Count -gt 0) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = $items })'
+           Replace = 'if ($items.Count -gt 0 -and $Watch.began.ElapsedMilliseconds -ge $Watch.timeoutMs) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = $items })' }
+        # --- the watch in slices (relays/Port.ps1, A WATCH IN SLICES)
+        @{ Name = "slice-waits-out-the-whole-watch"
+           Find = 'if ($leftOfSlice -le 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "slice-over-ends-the-watch"
+           Find = 'return (New-HordeKnown -Value ([pscustomobject]@{ ended = $false; items = @() })'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = @() })' }
+        @{ Name = "each-slice-starts-the-watch-again"
+           Find = '$left = $Watch.timeoutMs - $Watch.began.ElapsedMilliseconds'
+           Replace = '$left = $Watch.timeoutMs - $slice.ElapsedMilliseconds' }
+        @{ Name = "slice-sleeps-past-its-end"
+           Find = '[Math]::Min($script:HordeLocalRelayPollMs, [Math]::Min($left, $leftOfSlice))'
+           Replace = '[Math]::Max(5000, [Math]::Min($left, $leftOfSlice))' }
         @{ Name = "empty-read-is-one-null-item"
            Find = '$items = @(Read-HordeLocalRelayItems -Dir (Get-HordeLocalRelayDir -State $State -Mailbox $Mailbox) -Since $Since -Max $Max)'
            Replace = '$items = Read-HordeLocalRelayItems -Dir (Get-HordeLocalRelayDir -State $State -Mailbox $Mailbox) -Since $Since -Max $Max; if ($null -eq $items) { $items = @($null) }' }

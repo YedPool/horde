@@ -396,4 +396,112 @@ try {
     Check ((Publish-HordeRelay -Name "no-such-relay" -Site $siteDir).state -ceq "unknown") "a relay nobody loaded is unknown"
 } finally { Remove-Item -LiteralPath $siteDir -Recurse -Force -ErrorAction SilentlyContinue }
 
+Write-Host ""
+Write-Host "--- a watch in slices: opened once, waited on a slice at a time, its time and its items the port's ---" -ForegroundColor Cyan
+# relays/Port.ps1, A WATCH IN SLICES. The relay here is scripted: it counts every call, records the wait
+# each slice was given, and answers each slice with the next entry of $script:sliceAnswers (when there
+# is none: "not ended, nothing"), so every outcome is exact. fixture-good's maxWatchMs is 2000.
+$script:HordeRelays.Remove("fixture-good")
+$null = Reg "fixture-good"
+$plain = Conn "fixture-good"
+$script:calls = 0
+Check ((Test-HordeRelayWatchInSlices $plain) -eq $false) "a relay that registered no slice blocks does not watch in slices"
+$a = Open-HordeRelayWatch -Connection $plain -Mailbox $mb -Since 0 -TimeoutMs 100
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("does not watch in slices") -and $script:calls -eq 0) "and a watch in slices of it is refused, in words, without the relay being asked"
+foreach ($given in @(@{ o = $true; w = $false; c = $false; n = 1 }, @{ o = $true; w = $true; c = $false; n = 2 }, @{ o = $false; w = $true; c = $true; n = 2 })) {
+    $script:HordeRelays.Remove("fixture-good")
+    $blocks = @{}
+    if ($given.o) { $blocks["WatchOpen"] = { New-HordeKnown -Value 1 } }
+    if ($given.w) { $blocks["WatchWait"] = { New-HordeKnown -Value 1 } }
+    if ($given.c) { $blocks["WatchClose"] = { } }
+    Check (Throws { Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { New-HordeKnown -Value 1 } -Put {} -Get {} -Watch {} -Ack {} @blocks } "together") ("refused: " + $given.n + " of the three slice blocks - a watch in slices is all three or none")
+}
+$script:opens = New-Object System.Collections.ArrayList
+$script:waits = New-Object System.Collections.ArrayList
+$script:closes = 0
+$script:sliceAnswers = New-Object System.Collections.Queue
+$script:sliceSleeps = $false
+$script:HordeRelays.Remove("fixture-good")
+$null = Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { param($o) New-HordeKnown -Value @{ fixture = $true } } -Put {} -Get {} -Ack {} `
+    -Watch { param($s, $m, $since, $max, $ms) $script:calls++; New-HordeKnown -Value ([pscustomobject]@{ items = @() }) } `
+    -WatchOpen { param($s, $m, $since, $max, $ms) [void]$script:opens.Add(@($m, $since, $max, $ms)); New-HordeKnown -Value "the relay's own handle" } `
+    -WatchWait {
+        param($s, $h, $ms)
+        [void]$script:waits.Add([pscustomobject]@{ handle = $h; ms = $ms })
+        if ($script:sliceSleeps) { Start-Sleep -Milliseconds $ms }
+        if ($script:sliceAnswers.Count -gt 0) { $next = $script:sliceAnswers.Dequeue(); if ($next -is [scriptblock]) { return (& $next) }; return $next }
+        New-HordeKnown -Value ([pscustomobject]@{ ended = $false; items = @() })
+    } `
+    -WatchClose { param($s, $h) $script:closes++; throw "a close that fails is nobody's to mend" }
+$sliced = Conn "fixture-good"
+Check ((Test-HordeRelayWatchInSlices $sliced) -eq $true -and (Test-HordeRelayWatchInSlices ([pscustomobject]@{ relay = $sliced.relay })) -eq $false) "a relay that registered all three watches in slices; a look-alike connection does not"
+foreach ($case in @(
+        @{ m = "nope"; s = [long]0; x = 1; t = 100; like = "mailbox"; why = "a bad mailbox" },
+        @{ m = $mb; s = [long]-1; x = 1; t = 100; like = "cursor"; why = "a negative cursor" },
+        @{ m = $mb; s = [long]0; x = 9; t = 100; like = "batch"; why = "a batch over the relay's maxBatch (8)" },
+        @{ m = $mb; s = [long]0; x = 1; t = 2001; like = "2000"; why = "a timeout over the relay's maxWatchMs" },
+        @{ m = $mb; s = [long]0; x = 1; t = -1; like = "timeout"; why = "a negative timeout" })) {
+    $a = Open-HordeRelayWatch -Connection $sliced -Mailbox $case.m -Since $case.s -Max $case.x -TimeoutMs $case.t
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like)) ("a watch in slices refused: " + $case.why)
+}
+Check ($script:opens.Count -eq 0) ("and the relay was never asked to open any of them (" + $script:opens.Count + ")")
+$o = Open-HordeRelayWatch -Connection $sliced -Mailbox $mb -Since 3 -TimeoutMs 2000
+Check ($o.state -ceq "known" -and $script:opens.Count -eq 1 -and ($script:opens[0] -join ",") -ceq ($mb + ",3,8,2000")) ("a watch in slices is opened at the relay ONCE, with the mailbox, the cursor, the relay's batch and the timeout (" + ($script:opens[0] -join ",") + ")")
+$w1 = Wait-HordeRelayWatch -Watch $o.value -WaitMs 100
+$w2 = Wait-HordeRelayWatch -Watch $o.value -WaitMs 250
+Check ($w1.state -ceq "known" -and $w1.value.ended -eq $false -and $w2.value.ended -eq $false -and $script:opens.Count -eq 1 -and $script:calls -eq 0 -and (@($script:waits | ForEach-Object { $_.ms }) -join ",") -ceq "100,250" -and $script:waits[0].handle -ceq "the relay's own handle") "two slices with nothing in them are two waits on the SAME open watch - the relay's own handle, the slice asked - and no second open and no blocking watch"
+$a = Wait-HordeRelayWatch -Watch $o.value -WaitMs 2001
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("slice") -and $script:waits.Count -eq 2) "a slice longer than the relay's longest watch is refused before the relay is asked"
+# THE ITEMS ARE NEVER BELIEVED, in a slice as in a blocking watch: stale, malformed and repeated ones dropped.
+$script:sliceAnswers.Enqueue((New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = @(
+                [pscustomobject]@{ seq = [long]5; key = "k5"; text = "five" }, [pscustomobject]@{ seq = [long]2; key = "k2"; text = "stale" },
+                [pscustomobject]@{ seq = [long]4; key = "k4"; text = "four" }, "a bare string", [pscustomobject]@{ seq = [long]4; key = "k4"; text = "four" }) })))
+$w3 = Wait-HordeRelayWatch -Watch $o.value -WaitMs 100
+Check ($w3.state -ceq "known" -and $w3.value.ended -eq $true -and (@($w3.value.items | ForEach-Object { $_.seq }) -join ",") -ceq "4,5" -and $w3.value.next -eq 5 -and $w3.value.since -eq 3 -and $w3.value.mailbox -ceq $mb -and $w3.value.waitedMs -ge 0) ("a slice that ends the watch hands over a batch rebuilt by the port: in order, from the cursor, the cursor its own (" + (@($w3.value.items | ForEach-Object { $_.seq }) -join ",") + ")")
+Check (@($w3.value.anomalies | Where-Object { "$_".Contains("at or before the cursor") }).Count -eq 1 -and @($w3.value.anomalies | Where-Object { "$_".Contains("not an object") }).Count -eq 1 -and @($w3.value.anomalies | Where-Object { "$_".Contains("came twice") }).Count -eq 1) "and what it dropped is said: the stale item, the malformed one and the repeat"
+$asked = $script:waits.Count
+$a = Wait-HordeRelayWatch -Watch $o.value -WaitMs 100
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("has ended") -and $script:waits.Count -eq $asked) "a watch that has ended is not waited on again: the relay is not asked"
+$threw = $false
+try { Close-HordeRelayWatch -Watch $o.value; Close-HordeRelayWatch -Watch $o.value } catch { $threw = $true }
+Check ($script:closes -eq 1 -and -not $threw) ("closing lets go of it at the relay once - a second close asks nothing - and a close that fails at the relay never throws (" + $script:closes + ")")
+$a = Wait-HordeRelayWatch -Watch $o.value -WaitMs 100
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("closed") -and $script:waits.Count -eq $asked) "a closed watch is not waited on"
+# Each wrong word from the relay ends the watch, as unknown.
+foreach ($case in @(
+        @{ what = "items handed over with 'not ended'"; answer = (New-HordeKnown -Value ([pscustomobject]@{ ended = $false; items = @([pscustomobject]@{ seq = [long]1; key = "k1"; text = "one" }) })); state = "known"; like = "" },
+        @{ what = "no word on whether it ended"; answer = (New-HordeKnown -Value ([pscustomobject]@{ items = @() })); state = "unknown"; like = "whether it has ended" },
+        @{ what = "an 'ended' that is not a true or a false"; answer = (New-HordeKnown -Value ([pscustomobject]@{ ended = "no"; items = @() })); state = "unknown"; like = "whether it has ended" },
+        @{ what = "something that is not an answer"; answer = "still waiting"; state = "unknown"; like = "not an answer" },
+        @{ what = "an unknown"; answer = (New-HordeUnknown -Reason "the socket fell"); state = "unknown"; like = "the socket fell" },
+        @{ what = "a throw"; answer = { throw "wait broke" }; state = "unknown"; like = "wait broke" })) {
+    $o = Open-HordeRelayWatch -Connection $sliced -Mailbox $mb -Since 0 -TimeoutMs 2000
+    $script:sliceAnswers.Enqueue($case.answer)
+    $a = Wait-HordeRelayWatch -Watch $o.value -WaitMs 50
+    $again = Wait-HordeRelayWatch -Watch $o.value -WaitMs 50
+    Close-HordeRelayWatch -Watch $o.value
+    $fits = $(if ($case.state -ceq "known") { $a.state -ceq "known" -and $a.value.ended -eq $true -and @($a.value.items).Count -eq 1 } else { $a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like) })
+    Check ($fits -and $again.state -ceq "unknown" -and "$($again.reason)".Contains("has ended")) ("a slice answered with " + $case.what + " ends the watch" + $(if ($case.state -ceq "known") { ", and the items are taken" } else { " as unknown, with the reason (" + $a.reason + ")" }))
+}
+# THE WATCH'S TIME IS THE PORT'S TO KEEP: a relay that never says ended is ended when the time is up, no
+# slice is longer than what is left, and the last ask does not wait.
+$script:waits.Clear()
+$script:sliceSleeps = $true
+$o = Open-HordeRelayWatch -Connection $sliced -Mailbox $mb -Since 7 -TimeoutMs 300
+$rounds = 0
+do { $rounds++; $a = Wait-HordeRelayWatch -Watch $o.value -WaitMs 200 } while ($a.state -ceq "known" -and -not $a.value.ended -and $rounds -lt 50)
+Close-HordeRelayWatch -Watch $o.value
+$script:sliceSleeps = $false
+$asked = @($script:waits | ForEach-Object { $_.ms })
+Check ($a.state -ceq "known" -and $a.value.ended -eq $true -and @($a.value.items).Count -eq 0 -and $a.value.next -eq 7 -and $rounds -le 4 -and $a.value.waitedMs -ge 300 -and $a.value.waitedMs -lt 2000) ("a relay that never says a watch of 300 ms ended is ended by the port when its time is up, empty, the cursor kept (" + $rounds + " slices, " + $a.value.waitedMs + " ms)")
+Check ($asked[0] -eq 200 -and $asked.Count -ge 3 -and $asked[1] -le 100 -and $asked[$asked.Count - 1] -eq 0 -and ($asked | Measure-Object -Sum).Sum -le 300) ("no slice is given more than the watch has left - the waits the relay was asked for add up to no more than the watch - and the last ask, once the time is up, does not wait (" + ($asked -join ",") + ")")
+$script:waits.Clear()
+$o = Open-HordeRelayWatch -Connection $sliced -Mailbox $mb -Since 0 -TimeoutMs 2000
+$a = Wait-HordeRelayWatch -Watch $o.value -WaitMs 500 -Last
+Check ($a.state -ceq "known" -and $a.value.ended -eq $true -and $script:waits.Count -eq 1 -and $script:waits[0].ms -eq 0) "a last slice is the watch's end whatever the relay says: asked once more, without waiting"
+$fake = [pscustomobject]@{ PSTypeName = "Horde.RelayWatch"; id = $o.value.id; connection = $sliced; mailbox = $mb; since = [long]0; max = 8; timeoutMs = 2000; handle = "forged"; clock = [System.Diagnostics.Stopwatch]::StartNew(); ended = $false }
+$a = Wait-HordeRelayWatch -Watch $fake -WaitMs 10
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not one Open-HordeRelayWatch made") -and $script:waits.Count -eq 1) "a look-alike watch carrying a real one's id is refused, and the relay is not asked"
+Close-HordeRelayWatch -Watch $o.value
+
 Complete-HordeSuite -Success "the relay port refuses what it cannot vouch for, checks every answer, and never believes an item"

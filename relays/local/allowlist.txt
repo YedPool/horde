@@ -11,4 +11,4 @@
 # folder and test/Fixture.ps1.
 #
 # path | mentions | why this file may name the relay
-test/mutations/relay-local.psd1 | 12 | the local relay's mutation spec lives in test/mutations and quotes its code, which names its functions and variables, to change it
+test/mutations/relay-local.psd1 | 11 | the local relay's mutation spec lives in test/mutations and quotes its code, which names its functions and variables, to change it

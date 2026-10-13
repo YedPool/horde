@@ -42,6 +42,8 @@
 #   Wait-HordeRelayItems      as Receive, plus -TimeoutMs: returns as soon as there is anything after
 #                             -Since, or empty when the time is up (long-poll, design Q8); plus waitedMs
 #   Confirm-HordeRelayItems   -Connection -Mailbox -Through     -> known { mailbox; through }
+#   Open-HordeRelayWatch, Wait-HordeRelayWatch, Close-HordeRelayWatch: the same watch, held open and
+#                             waited on a slice at a time, on a relay that can (A WATCH IN SLICES, below)
 # An item is { seq; key; text }. seq is the relay's number for it in its mailbox: 1 for the first put,
 # then contiguous, never reused, at most 2^53-1 (so a browser reads it exactly). The cursor is a seq: 0
 # is "before everything", and a read returns the items after it.
@@ -94,6 +96,31 @@
 # A runner's quiet turn is one watch, so this is what one always-on machine costs it a day. 0, the
 # default, declares none, and the runner's own setting applies. It is held to 1..maxWatchMs.
 #
+# A WATCH IN SLICES, FOR A RELAY THAT CAN HOLD ONE OPEN WHILE ITS CALLER DOES SOMETHING ELSE. Watch, above,
+# blocks its caller for the whole wait: a runner with something to SEND one second into a 60 s watch
+# could send it only when the watch ended, so the founder saw his own message go and then nothing for up
+# to a minute (measured 2026-10-13 with a real run over the local relay and an 8 s watch: a note written
+# about a second into the watch reached the phone's mailbox 6.9 s later, three times of three). A
+# shorter watch is not the answer where requests are counted: a 2 s watch is 43,200 requests a day
+# against a day of 20,000. So a relay may also hand Register-HordeRelay three more blocks, all or none:
+#   WatchOpen  param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs) -> known handle
+#              the watch is open at the relay from now, for TimeoutMs: for a relay that counts requests
+#              this is the ONE request the whole watch costs. The handle is the relay's own - anything
+#              the other two take.
+#   WatchWait  param($State, $Handle, [int]$WaitMs) -> known { ended; items }
+#              wait up to WaitMs more on the watch already open, COSTING THE RELAY NOTHING: ended is
+#              $true, with the items, once something came or the watch's own time is up; $false, with
+#              no items, when only this slice is over and the watch is still open.
+#   WatchClose param($State, $Handle)   let go of it; what it answers is not read.
+# Between two slices the caller may put, read or ack on the same connection: the watch stays open. The
+# port keeps the watch's time by its own clock (a WatchWait that never says ended is ended by the port
+# when the time is up), checks that ended is a true or a false, and rebuilds the items exactly as it
+# rebuilds a blocking watch's. A relay that hands over none of the three is watched as it always was,
+# by Watch; a caller asks Test-HordeRelayWatchInSlices before it opens one. NOT A CAPABILITY OF THE
+# CLOSED LIST: nothing picks a relay by it (Find-HordeRelay -Require) - a caller adapts to what the relay
+# it was given can do, as it does to -Deploy and -RunWatchMs - and test/test-relay-conformance.ps1
+# holds every relay that hands the three over to what is written here.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -101,6 +128,8 @@
 
 if ($null -eq (Get-Variable -Name HordeRelays -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelays = @{} }
 if ($null -eq (Get-Variable -Name HordeRelayConnections -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayConnections = @{} }
+# The watches open in slices now (Open-HordeRelayWatch), by id: only one of these is ever waited on.
+if ($null -eq (Get-Variable -Name HordeRelayWatches -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayWatches = @{} }
 $script:HordeRelayCapabilityNames = @("durable", "realtime", "reach.remote", "trim.on.ack")
 # THE CEILINGS. textChars is relay/Envelope.ps1's text cap (Get-HordeRelayEnvelopeLimits: base64url of a
 # 1 MiB body plus 16 KiB), copied and not loaded because the port never loads envelope code;
@@ -175,7 +204,10 @@ function Register-HordeRelay {
         [Parameter(Mandatory = $true)][scriptblock]$Watch,
         [Parameter(Mandatory = $true)][scriptblock]$Ack,
         [scriptblock]$Deploy = $null,
-        [int]$RunWatchMs = 0
+        [int]$RunWatchMs = 0,
+        [scriptblock]$WatchOpen = $null,
+        [scriptblock]$WatchWait = $null,
+        [scriptblock]$WatchClose = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -183,6 +215,10 @@ function Register-HordeRelay {
     $findings = @(Test-HordeRelayCapabilities -Capabilities $caps -Folder $Folder)
     if ($findings.Count -gt 0) { throw ("relay '" + (Split-Path -Leaf $Folder) + "' refused: " + ($findings -join "; ")) }
     if ($RunWatchMs -lt 0 -or $RunWatchMs -gt [int]$caps.limits.maxWatchMs) { throw ("relay '" + (Split-Path -Leaf $Folder) + "' refused: -RunWatchMs is " + $RunWatchMs + ", not 0 to its maxWatchMs " + $caps.limits.maxWatchMs) }
+    # A WATCH IN SLICES is three blocks or none (the header): a relay that could open a watch and not
+    # wait on it, or not let go of it, would leave its caller holding a watch for ever.
+    $sliceBlocks = @(@($WatchOpen, $WatchWait, $WatchClose) | Where-Object { $null -ne $_ }).Count
+    if ($sliceBlocks -ne 0 -and $sliceBlocks -ne 3) { throw ("relay '" + (Split-Path -Leaf $Folder) + "' refused: a watch in slices is -WatchOpen, -WatchWait and -WatchClose together, and it gave " + $sliceBlocks + " of the three") }
     # Once per name: a second registration would silently swap the relay every caller resolves by that
     # name (the transport port's review of PR #42 found exactly that).
     if ($script:HordeRelays.ContainsKey("$($caps.relay)")) {
@@ -190,6 +226,7 @@ function Register-HordeRelay {
     }
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
+        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose
         connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
@@ -512,6 +549,97 @@ function Wait-HordeRelayItems {
     $b = ConvertFrom-HordeRelayBatch -Connection $Connection -Answer $a -Mailbox $Mailbox -Since ([long]$Since) -Max ([int]$Max) -What "watch"
     if ($b.state -ceq "known") { $b.value | Add-Member -NotePropertyName waitedMs -NotePropertyValue ([long]$clock.ElapsedMilliseconds) }
     return $b
+}
+
+function Test-HordeRelayWatchInSlices {
+    # Can this connection's relay hold a watch open while its caller does something else (the header, A
+    # WATCH IN SLICES)? False for anything that is not a connection the port made.
+    param($Connection)
+    if (-not (Test-HordeRelayConnection $Connection)) { return $false }
+    return ($null -ne $Connection.relay.watchOpen -and $null -ne $Connection.relay.watchWait -and $null -ne $Connection.relay.watchClose)
+}
+
+function Test-HordeRelayWatch {
+    # Is this the very watch object Open-HordeRelayWatch made, not yet closed, on a connection that
+    # still holds? A look-alike carrying the same id is not, and neither is one already closed.
+    param($Watch)
+    if ($null -eq $Watch -or $Watch -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    if (@($Watch.PSObject.TypeNames) -notcontains "Horde.RelayWatch") { return $false }
+    $id = $Watch.PSObject.Properties["id"]
+    if ($null -eq $id -or $id.Value -isnot [string] -or -not $script:HordeRelayWatches.ContainsKey($id.Value)) { return $false }
+    if (-not [object]::ReferenceEquals($script:HordeRelayWatches[$id.Value], $Watch)) { return $false }
+    return (Test-HordeRelayWatchInSlices $Watch.connection)
+}
+
+function Open-HordeRelayWatch {
+    # Open a watch of -Mailbox after -Since that is waited on in slices (the header, A WATCH IN SLICES):
+    # known, the watch, to hand to Wait-HordeRelayWatch and, always, to Close-HordeRelayWatch. Checked
+    # as Wait-HordeRelayItems checks its own, before the relay sees anything; unknown too when this
+    # relay does not watch in slices - a caller asks Test-HordeRelayWatchInSlices first.
+    param($Connection, $Mailbox, $Since = [long]0, $Max = $null, $TimeoutMs = 0)
+    if ($null -eq $Max -and (Test-HordeRelayConnection $Connection)) { $Max = $Connection.relay.limits.maxBatch }
+    $refusal = Get-HordeRelayReadRefusal -Connection $Connection -Mailbox $Mailbox -Since $Since -Max $Max -What "watch"
+    if ($refusal -ne "") { return (New-HordeUnknown -Reason $refusal) }
+    $longest = $Connection.relay.limits.maxWatchMs
+    if (-not ($TimeoutMs -is [int] -or $TimeoutMs -is [long]) -or $TimeoutMs -lt 0 -or $TimeoutMs -gt $longest) { return (New-HordeUnknown -Reason ("the watch was not opened: the timeout " + $TimeoutMs + " ms is not from 0 to the relay's " + $longest)) }
+    if (-not (Test-HordeRelayWatchInSlices $Connection)) { return (New-HordeUnknown -Reason ("the watch was not opened: relay '" + $Connection.relay.name + "' does not watch in slices")) }
+    # THE PORT'S OWN CLOCK, started before the relay is asked: the time the relay takes to open the
+    # watch is the watch's, so a watch in slices is never longer than the blocking one it stands in for.
+    $sinceOpen = [System.Diagnostics.Stopwatch]::StartNew()
+    $a = Invoke-HordeRelayAdapter -Connection $Connection -Op "watchOpen" -Arguments @($Connection.state, $Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs) -What "watch"
+    if ($a.state -cne "known") { return $a }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.RelayWatch"; id = [guid]::NewGuid().ToString("N"); connection = $Connection; mailbox = $Mailbox
+        since = [long]$Since; max = [int]$Max; timeoutMs = [int]$TimeoutMs; handle = $a.value; clock = $sinceOpen; ended = $false }
+    $script:HordeRelayWatches[$w.id] = $w
+    return (New-HordeKnown -Value $w -ObservedAt $a.observedAt)
+}
+
+function Wait-HordeRelayWatch {
+    # Wait up to -WaitMs more on a watch Open-HordeRelayWatch made, costing the relay nothing. Known
+    # { ended = $false; waitedMs } when the slice is over and the watch is still open; known { ended =
+    # $true; mailbox; since; next; items; anomalies; waitedMs } - a batch exactly as Wait-HordeRelayItems
+    # hands it, waitedMs counted from the open - once something came or the watch's time is up; unknown
+    # when the relay failed it, and the watch is then over too. -Last makes this the watch's end whatever
+    # the relay says: it is asked once more, without waiting, and what it has is the batch (a caller that
+    # must stop uses it, so nothing that arrived during its last slice is left unread).
+    param($Watch, $WaitMs = 0, [switch]$Last)
+    if (-not (Test-HordeRelayWatch $Watch)) { return (New-HordeUnknown -Reason "the wait was not made: the watch is not one Open-HordeRelayWatch made, or it is closed") }
+    if ($Watch.ended) { return (New-HordeUnknown -Reason "the wait was not made: the watch has ended") }
+    $c = $Watch.connection
+    if (-not ($WaitMs -is [int] -or $WaitMs -is [long]) -or $WaitMs -lt 0 -or $WaitMs -gt $c.relay.limits.maxWatchMs) { return (New-HordeUnknown -Reason ("the wait was not made: the slice " + $WaitMs + " ms is not from 0 to the relay's " + $c.relay.limits.maxWatchMs)) }
+    # THE WATCH'S TIME IS THE PORT'S TO KEEP: a slice never runs past it, and once it is up the relay is
+    # asked one last time without waiting and the watch is over, whatever the relay says of it.
+    $leftMs = [long]$Watch.timeoutMs - $Watch.clock.ElapsedMilliseconds
+    $over = ($Last -or $leftMs -le 0)
+    $sliceMs = 0
+    if (-not $over) { $sliceMs = [int][System.Math]::Min([double]$WaitMs, [double]$leftMs) }
+    $a = Invoke-HordeRelayAdapter -Connection $c -Op "watchWait" -Arguments @($c.state, $Watch.handle, [int]$sliceMs) -What "watch"
+    if ($a.state -cne "known") { $Watch.ended = $true; return $a }
+    $said = Get-HordeRelayMember $a.value "ended"
+    if (-not $said.has -or $said.value -isnot [bool]) { $Watch.ended = $true; return (New-HordeUnknown -Reason ("relay '" + $c.relay.name + "' answered the watch without saying, true or false, whether it has ended")) }
+    # Items handed over with "not ended" end it all the same: a relay does not hand an item over twice.
+    $held = Get-HordeRelayMember $a.value "items"
+    $some = ($held.has -and $null -ne $held.value -and @($held.value).Count -gt 0)
+    if (-not ($said.value -or $some -or $over)) {
+        return (New-HordeKnown -Value ([pscustomobject]@{ ended = $false; waitedMs = [long]$Watch.clock.ElapsedMilliseconds }) -ObservedAt $a.observedAt)
+    }
+    $Watch.ended = $true
+    $b = ConvertFrom-HordeRelayBatch -Connection $c -Answer $a -Mailbox $Watch.mailbox -Since $Watch.since -Max $Watch.max -What "watch"
+    if ($b.state -ceq "known") {
+        $b.value | Add-Member -NotePropertyName ended -NotePropertyValue $true
+        $b.value | Add-Member -NotePropertyName waitedMs -NotePropertyValue ([long]$Watch.clock.ElapsedMilliseconds)
+    }
+    return $b
+}
+
+function Close-HordeRelayWatch {
+    # Let go of a watch Open-HordeRelayWatch made: always called, ended or not. Safe to call twice, and
+    # never throws for the relay - there is nothing a caller could do about a close that failed.
+    param($Watch)
+    if (-not (Test-HordeRelayWatch $Watch)) { return }
+    $script:HordeRelayWatches.Remove($Watch.id)
+    $Watch.ended = $true
+    try { $null = & $Watch.connection.relay.watchClose $Watch.connection.state $Watch.handle } catch { }
 }
 
 function Confirm-HordeRelayItems {
