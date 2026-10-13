@@ -608,6 +608,34 @@ foreach ($a in $attacks) {
     # The rule itself, for both kinds of text: a .json file is held to the same bytes before its grammar.
     Check ((Get-HordeFilesTextProblem -Bytes ([byte[]]$a.bytes) -Type "text/plain") -like ("*" + $a.like + "*") -and (Get-HordeFilesTextProblem -Bytes ([byte[]]$a.bytes) -Type "application/json") -like ("*" + $a.like + "*")) ("and the reason is the same whichever text type it is named as")
 }
+# A REFUSAL SAYS WHERE AND NEVER WHAT. Until the review of 2026-10-13 this reason printed the bytes
+# that are no UTF-8, as hex: part of whatever the file holds, on a line that is printed and logged.
+# It says the position now. The bad bytes are put after a known number of letters, so the position
+# is checked against where they really are, and the reason is searched for each of them.
+$saysWhere = '\Ait is not UTF-8: it holds a byte sequence that is no character in UTF-8 \((?:it stops being UTF-8 at byte (?<at>[0-9]+)|it ends in the middle of a character)\); text is shared as UTF-8\z'
+$loose = @($attacks | Where-Object { $_.like -ceq $notUtf8 -and (Get-HordeFilesTextProblem -Bytes ([byte[]]$_.bytes) -Type "text/plain") -cnotmatch $saysWhere })
+Check ($loose.Count -eq 0 -and @($attacks | Where-Object { $_.like -ceq $notUtf8 }).Count -ge 14) ("every one of those not-UTF-8 reasons is exactly the sentence, with a position or 'the middle of a character' and nothing else in it (" + $loose.Count + " are not)")
+$letters = [System.Text.Encoding]::ASCII.GetBytes(("plain words " * 40))
+$placed = @(
+    @{ what = "one byte that is no UTF-8, first of all"; at = 0; bad = @(0xF8) },
+    @{ what = "one continuation byte with no lead, after 37 letters"; at = 37; bad = @(0x80) },
+    @{ what = "a lead byte with a letter after it, after 200"; at = 200; bad = @(0xC3, 0x28) },
+    @{ what = "a lone surrogate, after 123"; at = 123; bad = @(0xED, 0xA0, 0x80) },
+    @{ what = "a character past U+10FFFF, after 64"; at = 64; bad = @(0xF4, 0x90, 0x80, 0x80) })
+foreach ($p in $placed) {
+    $fileBytes = [byte[]](@($letters | Select-Object -First $p.at) + @($p.bad) + @(0x68, 0x69))
+    $said = Get-HordeFilesTextProblem -Bytes $fileBytes -Type "text/plain"
+    $found = [regex]::Match($said, $saysWhere)
+    $at = -1; if ($found.Success -and $found.Groups["at"].Success) { $at = [int]$found.Groups["at"].Value }
+    Check ($at -ge $p.at -and $at -lt ($p.at + @($p.bad).Count)) ($p.what + ": the reason says where, inside the " + @($p.bad).Count + " byte(s) that are wrong (said " + $at + ", they begin at " + $p.at + ")")
+    $repeated = @($p.bad | ForEach-Object { ([int]$_).ToString("X2") } | Where-Object { $said.Contains($_) })
+    Check ($repeated.Count -eq 0 -and $said -notlike "*the bytes*") ("and it holds none of those bytes" + $(if ($repeated.Count) { " (REPEATED: " + ($repeated -join " ") + ")" } else { "" }))
+}
+foreach ($cutShort in @(@("a lead byte as the last byte", [byte[]]@(0x68, 0x69, 0xC3)), @("a three-byte character cut short after 300 letters", [byte[]](@($letters | Select-Object -First 300) + @(0xE2, 0x82))))) {
+    $said = Get-HordeFilesTextProblem -Bytes $cutShort[1] -Type "text/plain"
+    Check ($said -cmatch $saysWhere -and $said -like "*(it ends in the middle of a character)*" -and $said -notlike "*at byte*") ($cutShort[0] + ": the reason says the text ends in the middle of a character, and gives no byte")
+}
+Check (Test-Refused $h (New-Source -Name "where-not-what.md" -Bytes ([byte[]](@($letters | Select-Object -First 37) + @(0x80, 0x68)))) "(it stops being UTF-8 at byte 37)") "and a share refused for it says the same: where, and nothing of what"
 $realPng = Get-Padded -Head $png -Length 64
 $noNulBinary = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xD9)
 foreach ($ext in @(".txt", ".md", ".json", ".html", ".htm")) {
