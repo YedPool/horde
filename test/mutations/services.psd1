@@ -155,7 +155,7 @@
            Find = '        if ($at -lt $again) {'
            Replace = '        if ($false) {' }
         @{ Name = "refused-revision-never-retried"
-           Find = '        $again = $s.refused.at.AddMinutes($Policy.retryRefusedMinutes)'
+           Find = '        $again = $s.refused.at.AddMinutes((Get-HordeServiceRefusedWaitMinutes -Count (Get-HordeServiceRefusedCount -Refused $s.refused) -Policy $Policy))'
            Replace = '        $again = $s.refused.at.AddYears(50)' }
         @{ Name = "old-heartbeat-confirms"
            Find = '            if ($null -ne $Definition.alive -or $left -le 0) {'
@@ -173,7 +173,7 @@
            Find = '            $s.pinnedRevision = $s.target; $s.verifiedRevision = ""'
            Replace = '            $s.verifiedRevision = ""' }
         @{ Name = "failed-check-not-recorded"
-           Find = '            else { $s.verifiedRevision = ""; $s.refused = [pscustomobject]@{ revision = $Decision.revision; kind = "verify"; reason = $detail; at = $at } }'
+           Find = '            else { $s.verifiedRevision = ""; $s.refused = [pscustomobject]@{ revision = $Decision.revision; kind = "verify"; reason = $detail; at = $at; count = (& $times $Decision.revision "verify") } }'
            Replace = '            else { $s.verifiedRevision = $Decision.revision }' }
         @{ Name = "failed-start-not-counted"
            Find = '                $s.failures = [int]$s.failures + 1'
@@ -188,13 +188,129 @@
            Find = '    $s = Copy-HordeServiceState -State $State'
            Replace = '    $s = $State' }
         @{ Name = "notices-unbounded"
-           Find = 'at = $Now.ToUniversalTime() }) | Select-Object -Last $script:HordeServiceNoticesMost)'
-           Replace = 'at = $Now.ToUniversalTime() }))' }
+           Find = 'what = (Get-HordeServiceNoticeWhat -Notice $Decision) }) | Select-Object -Last $script:HordeServiceNoticesMost)'
+           Replace = 'what = (Get-HordeServiceNoticeWhat -Notice $Decision) }))' }
         @{ Name = "fetch-every-pass"
            Find = '    return [bool]($since -ge $IntervalSeconds -or $since -lt 0)'
            Replace = '    return $true' }
         @{ Name = "future-fetch-waits"
            Find = '    return [bool]($since -ge $IntervalSeconds -or $since -lt 0)'
            Replace = '    return [bool]($since -ge $IntervalSeconds)' }
+        # --- safety review of the first build ---
+        # 1. a checkout left part way through a move is never started from
+        @{ Name = "half-moved-checkout-started"
+           Find = '            if ($broken -ne "") {'
+           Replace = '            if ($false) {' }
+        @{ Name = "move-not-marked"
+           Find = 'if ($Step -ceq "advance" -or $Step -ceq "retreat") { $freshMove = [bool]($null -eq $s.moving); $s.moving ='
+           Replace = 'if ($false) { $freshMove = [bool]($null -eq $s.moving); $s.moving =' }
+        @{ Name = "any-revision-is-whole"
+           Find = 'if (@(("" + $s.moving.from), ("" + $s.moving.target)) -cnotcontains ("" + $seen.head)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unasked-is-spotless"
+           Find = 'if ($null -eq $whole -or $whole.Value -ne $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unread-checkout-is-whole"
+           Find = 'if ($Observed.checkout.state -cne "known") { return ("its checkout could not be read after a move'
+           Replace = 'if ($false) { return ("its checkout could not be read after a move' }
+        @{ Name = "unsaid-is-untouched"
+           Find = 'return [bool]($null -ne $said -and $said.Value -is [bool] -and $said.Value -eq $false -and $null -ne $fresh -and $fresh.Value -eq $true) }'
+           Replace = 'return $true }' }
+        @{ Name = "later-refusal-clears-an-earlier-mark"
+           Find = 'return [bool]($null -ne $said -and $said.Value -is [bool] -and $said.Value -eq $false -and $null -ne $fresh -and $fresh.Value -eq $true) }'
+           Replace = 'return [bool]($null -ne $said -and $said.Value -is [bool] -and $said.Value -eq $false) }' }
+        @{ Name = "mark-kept-after-a-proven-start"
+           Find = '                $s.moving = $null; $s.launchingAt = $at'
+           Replace = '                $s.launchingAt = $at' }
+        # 2. two services that follow a revision may not share a checkout
+        @{ Name = "shared-checkout-allowed"
+           Find = '        if ($owners.ContainsKey($key)) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "shared-checkout-compared-as-written"
+           Find = 'try { $key = [System.IO.Path]::GetFullPath($def.checkout).TrimEnd(''\'', ''/'').ToUpperInvariant() }'
+           Replace = 'try { $key = $def.checkout }' }
+        @{ Name = "non-following-service-counted"
+           Find = '        if ($null -eq $def.follow -or $def.checkout -eq "") { continue }'
+           Replace = '        if ($def.checkout -eq "") { continue }' }
+        # 3. a machine that slept does not read as hung services
+        @{ Name = "gap-ignored"
+           Find = '    if ($SupervisorGapSeconds -gt 0) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "allowance-for-one-pass-only"
+           Find = 'elseif ($live.alive -ceq "hung") { $live.alive = "starting";'
+           Replace = 'elseif ($live.alive -ceq "hung" -and $SupervisorGapSeconds -gt 0) { $live.alive = "starting";' }
+        @{ Name = "allowance-for-ever"
+           Find = 'if ($live.alive -ceq "yes" -or ($at - $s.resumedAt).TotalSeconds -ge (Get-HordeHeartbeatStaleSeconds -TickSeconds $tick)) { $s.resumedAt = $null }'
+           Replace = 'if ($live.alive -ceq "yes") { $s.resumedAt = $null }' }
+        @{ Name = "confirm-time-not-given-back"
+           Find = '        if ($s.confirmBy -is [datetime]) { $s.confirmBy = $s.confirmBy.AddSeconds($SupervisorGapSeconds) }'
+           Replace = '' }
+        # 4. an update that will not go in backs off
+        @{ Name = "refusals-do-not-back-off"
+           Find = '{ $minutes = $minutes * 2 }'
+           Replace = '{ }' }
+        @{ Name = "refusal-wait-uncapped"
+           Find = '    return [int][System.Math]::Min($minutes, 1440)'
+           Replace = '    return [int]$minutes' }
+        @{ Name = "refusal-not-counted"
+           Find = '{ return ((Get-HordeServiceRefusedCount -Refused $s.refused) + 1) } return 1 }'
+           Replace = '{ return 1 } return 1 }' }
+        @{ Name = "passed-check-forgets-the-refused-move"
+           Find = 'if ($ok) { $s.verifiedRevision = $Decision.revision; if ($null -ne $s.refused -and $s.refused.kind -ceq "verify") { $s.refused = $null } }'
+           Replace = 'if ($ok) { $s.verifiedRevision = $Decision.revision; if ($null -ne $s.refused -and $s.refused.kind -cne "retreat") { $s.refused = $null } }' }
+        # 6. a start whose outcome was never recorded is not made twice
+        @{ Name = "start-not-marked-before-it-is-made"
+           Find = '                $s.moving = $null; $s.launchingAt = $at'
+           Replace = '                $s.moving = $null' }
+        @{ Name = "unrecorded-start-made-again"
+           Find = '        if ($s.launchingAt -isnot [datetime]) { return $null }'
+           Replace = '        if ($true) { return $null }' }
+        @{ Name = "unrecorded-start-not-waited-for"
+           Find = 'if ($ago -lt $Definition.confirmSeconds) { return (& $finish "wait" "" "start-unrecorded"'
+           Replace = 'if ($false) { return (& $finish "wait" "" "start-unrecorded"' }
+        @{ Name = "unrecorded-start-not-told"
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key "start-unrecorded"'
+           Replace = '[void]@((New-HordeServiceTrouble -Key "start-unrecorded"' }
+        @{ Name = "found-start-not-adopted"
+           Find = '        if ($s.launchingAt -is [datetime] -and $null -ne $live.process) {'
+           Replace = '        if ($false) {' }
+        # 11 and 12. held, by a person or by its own deliberate exit
+        @{ Name = "held-service-tended"
+           Find = 'if ($s.held -eq $true) { return (& $finish "nothing" "" "held"'
+           Replace = 'if ($false) { return (& $finish "nothing" "" "held"' }
+        @{ Name = "deliberate-exit-restarted"
+           Find = 'if ($codes.Count -gt 0 -and $Observed.exitCode.state -ceq "known" -and $codes -contains [int]$Observed.exitCode.value) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unknown-exit-read-as-deliberate"
+           Find = 'if ($codes.Count -gt 0 -and $Observed.exitCode.state -ceq "known" -and $codes -contains [int]$Observed.exitCode.value) {'
+           Replace = 'if ($codes.Count -gt 0) {' }
+        @{ Name = "any-exit-code-is-deliberate"
+           Find = 'if ($codes.Count -gt 0 -and $Observed.exitCode.state -ceq "known" -and $codes -contains [int]$Observed.exitCode.value) {'
+           Replace = 'if ($codes.Count -gt 0 -and $Observed.exitCode.state -ceq "known") {' }
+        @{ Name = "deliberate-exit-not-held"
+           Find = '$s.held = $true; $s.heldWhy = "it ended itself with code " + $code'
+           Replace = '$s.heldWhy = "it ended itself with code " + $code' }
+        @{ Name = "deliberate-exit-not-told"
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key "ended-itself"'
+           Replace = '[void]@((New-HordeServiceTrouble -Key "ended-itself"' }
+        @{ Name = "exit-codes-may-be-words"
+           Find = '($_ -isnot [int] -and $_ -isnot [long]) -or $_ -lt -2147483648'
+           Replace = '$false -or $_ -lt -2147483648' }
+        @{ Name = "exit-codes-need-not-be-a-list"
+           Find = 'if ($listed -isnot [array] -or @($listed).Count -gt 16 -or'
+           Replace = 'if (@($listed).Count -gt 16 -or' }
+        @{ Name = "batch-file-taken-as-a-program"
+           Find = 'if ($program -match ''\.(cmd|bat)\s*\z'') {'
+           Replace = 'if ($false) {' }
+        # 9. a notice is told by its kind
+        @{ Name = "kind-not-carried"
+           Find = '$what = (@($fresh | ForEach-Object { ("" + $_.key).Split(":")[0] } | Select-Object -Unique) -join ",")'
+           Replace = '$what = ""' }
+        @{ Name = "kind-carries-the-revision"
+           Find = '$what = (@($fresh | ForEach-Object { ("" + $_.key).Split(":")[0] } | Select-Object -Unique) -join ",")'
+           Replace = '$what = (@($fresh | ForEach-Object { "" + $_.key }) -join ",")' }
+        @{ Name = "notice-kept-without-its-kind"
+           Find = 'at = $Now.ToUniversalTime(); what = (Get-HordeServiceNoticeWhat -Notice $Decision) })'
+           Replace = 'at = $Now.ToUniversalTime(); what = "" })' }
     )
 }

@@ -35,23 +35,37 @@ $full = $places + ", " + $startHorde + ", " + $stopHorde + ", " + $beatDef + ", 
 
 function Proc { param([int]$Id, [datetime]$Born) return [pscustomobject]@{ pid = $Id; startedAt = $Born } }
 function Beat { param([int]$Id, [datetime]$Born, [datetime]$At, [int]$Tick = 60) return (New-HordeKnown -Value ([pscustomobject]@{ at = $At; pid = $Id; startedAt = $Born; tickSeconds = $Tick; pass = [long]1 }) -ObservedAt $At) }
-function Co { param([string]$Head, [bool]$Detached = $true, [bool]$Clean = $true, [string]$Branch = "") return (New-HordeKnown -Value ([pscustomobject]@{ head = $Head; detached = $Detached; clean = $Clean; branch = $Branch })) }
+function Co {
+    # A look at a checkout. -Spotless is given only for the full look made after a move that was
+    # not seen to end; left out, the value has no such member, as the cheap look has none.
+    param([string]$Head, [bool]$Detached = $true, [bool]$Clean = $true, [string]$Branch = "", $Spotless = $null)
+    $v = [ordered]@{ head = $Head; detached = $Detached; clean = $Clean; branch = $Branch }
+    if ($null -ne $Spotless) { $v["spotless"] = [bool]$Spotless }
+    return (New-HordeKnown -Value ([pscustomobject]$v))
+}
 function Want { param([string]$Revision, [bool]$Forward = $true) return (New-HordeKnown -Value ([pscustomobject]@{ revision = $Revision; fastForward = $Forward })) }
 $none = New-HordeAbsent -Note "none"
 function Obs {
     # An observation. -Running is the state's own process when it is alive; -Beat a heartbeat answer;
     # -Beater the process the heartbeat names when THAT is alive and is not the state's own.
-    param($Running = $null, $Beat = $null, $Beater = $null, $Checkout = $null, $Wanted = $null, $Idle = $null, $Started = $null)
+    param($Running = $null, $Beat = $null, $Beater = $null, $Checkout = $null, $Wanted = $null, $Idle = $null, $Started = $null, $Exit = $null)
     $st = $(if ($null -ne $Started) { $Started } elseif ($null -ne $Running) { New-HordeKnown -Value $Running } else { $none })
     $bt = $(if ($null -ne $Beat) { $Beat } else { $none })
     $br = $(if ($null -ne $Beater) { New-HordeKnown -Value $Beater } elseif ($null -ne $Running -and $null -ne $Beat) { New-HordeKnown -Value $Running } else { $none })
     $co = $(if ($null -ne $Checkout) { $Checkout } else { $none })
     $wa = $(if ($null -ne $Wanted) { $Wanted } else { $none })
     $id = $(if ($null -ne $Idle) { $Idle } else { New-HordeUnknown -Reason "nobody looked" })
-    return (New-HordeServiceObserved -Started $st -Heartbeat $bt -Beater $br -Checkout $co -Wanted $wa -IdleSeconds $id)
+    return (New-HordeServiceObserved -Started $st -Heartbeat $bt -Beater $br -Checkout $co -Wanted $wa -IdleSeconds $id -ExitCode $Exit)
 }
-function Decide { param($Def, $State, $Seen, [datetime]$At, [switch]$IgnoreIdle) return (Get-HordeServiceDecision -Definition $Def -State $State -Observed $Seen -Now $At -Policy $policy -IgnoreIdle:$IgnoreIdle) }
-function Did { param($Def, $Decision, [bool]$Ok, [datetime]$At, $Process = $null, [string]$Detail = "", [string]$Revision = "") return (Complete-HordeServiceStep -Definition $Def -Decision $Decision -Outcome ([pscustomobject]@{ ok = $Ok; detail = $Detail; process = $Process; revision = $Revision }) -Now $At -Policy $policy) }
+function Decide { param($Def, $State, $Seen, [datetime]$At, [switch]$IgnoreIdle, [double]$Gap = 0) return (Get-HordeServiceDecision -Definition $Def -State $State -Observed $Seen -Now $At -Policy $policy -IgnoreIdle:$IgnoreIdle -SupervisorGapSeconds $Gap) }
+function Did {
+    # The state after a step. -Touched is what a move says of the checkout (true, false); left out,
+    # the outcome does not say, as a tool that threw does not.
+    param($Def, $Decision, [bool]$Ok, [datetime]$At, $Process = $null, [string]$Detail = "", [string]$Revision = "", $Touched = $null)
+    $o = [ordered]@{ ok = $Ok; detail = $Detail; process = $Process; revision = $Revision }
+    if ($null -ne $Touched) { $o["touched"] = [bool]$Touched }
+    return (Complete-HordeServiceStep -Definition $Def -Decision $Decision -Outcome ([pscustomobject]$o) -Now $At -Policy $policy)
+}
 function Is { param($Decision, [string]$Action, [string]$Step, [string]$Code) return [bool]($Decision.action -ceq $Action -and $Decision.step -ceq $Step -and $Decision.code -ceq $Code) }
 
 try {
@@ -332,7 +346,7 @@ try {
     $dL = Decide $up $launch (Obs -Checkout (Co $revB) -Wanted (Want $revB)) $newBorn
     $failed = Did $up $dL $false $newBorn $null "there is no horde entry point"
     Check ($failed.phase -ceq "stopping" -and $failed.intent -ceq "rollback" -and (Decide $up $failed (Obs -Checkout (Co $revB) -Wanted (Want $revB)) $newBorn.AddSeconds(1)).step -ceq "retreat") "a new revision that cannot even be started is rolled back"
-    $sBad = Did $up $dRetreat $false $newBorn.AddSeconds(124) $null "its checkout has local changes"
+    $sBad = Did $up $dRetreat $false $newBorn.AddSeconds(124) $null "its checkout has local changes" "" $false
     Check ($sBad.pinnedRevision -ceq $revB -and $sBad.refused.kind -ceq "retreat" -and $sBad.phase -ceq "steady") "a roll-back that could not be done still pins the revision"
     $dBad = Decide $up $sBad (Obs -Checkout (Co $revB) -Wanted (Want $revB)) $newBorn.AddSeconds(200)
     Check ($dBad.notify -ceq "escalate" -and $dBad.notice -like "*roll-back from bbbbbbbbb could not be done*needs a person*" -and $dBad.step -ceq "start") "and says its checkout needs a person, while still starting what is there"
@@ -340,7 +354,7 @@ try {
     Check ($null -eq $dHand.state.refused) "once a person has moved the checkout off that revision, that trouble is over"
     $sAdv = New-HordeServiceState -Name "svc"; $sAdv.phase = "stopping"; $sAdv.intent = "update"; $sAdv.phaseSince = $t0; $sAdv.target = $revB; $sAdv.from = $revA; $sAdv.runningRevision = $revA; $sAdv.verifiedRevision = $revB
     $dA = Decide $up $sAdv (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddSeconds(2)
-    $sNo = Did $up $dA $false $t0.AddSeconds(3) $null "it is no longer what origin/main names"
+    $sNo = Did $up $dA $false $t0.AddSeconds(3) $null "it is no longer what origin/main names" "" $false
     $dOld = Decide $up $sNo (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddSeconds(4)
     Check ($sNo.phase -ceq "steady" -and $sNo.refused.kind -ceq "apply" -and (Is $dOld "start" "start" "start")) "a checkout that would not move leaves the old revision, which is started as a service that is simply not running"
 
@@ -370,6 +384,130 @@ try {
     $flood = $n1
     foreach ($i in 1..15) { $flood = Add-HordeServiceNotice -State $flood -Decision $dTell -Id ([guid]::NewGuid().ToString()) -Now $t0 }
     Check (@($flood.notices).Count -eq 10) "at most ten wait: the oldest go first"
+
+    Write-Host ""
+    Write-Host "--- review 1: a checkout left part way through a move is never started from ---" -ForegroundColor Cyan
+    # A move that failed AFTER it touched the checkout (the revision tool passed its time limit, or the
+    # pass was ended under it) may have left files of two revisions. The mark stays, and no start is
+    # decided until the checkout is proven whole: on one of the move's two revisions, and spotless.
+    $sAdv2 = New-HordeServiceState -Name "svc"; $sAdv2.phase = "stopping"; $sAdv2.intent = "update"; $sAdv2.phaseSince = $t0; $sAdv2.target = $revB; $sAdv2.from = $revA; $sAdv2.runningRevision = $revA; $sAdv2.verifiedRevision = $revB
+    $dMove = Decide $up $sAdv2 (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddSeconds(2)
+    Check ($dMove.step -ceq "advance" -and $null -ne $dMove.state.moving -and $dMove.state.moving.from -ceq $revA -and $dMove.state.moving.target -ceq $revB -and $dMove.freshMove) "the decision to move a checkout marks it as being moved, BEFORE the move, in the state that is saved first"
+    $sHalf = Did $up $dMove $false $t0.AddSeconds(62) $null "git checkout: it did not finish within 60 s and was ended" "" $true
+    Check ($null -ne $sHalf.moving -and $sHalf.phase -ceq "steady" -and $null -ne $sHalf.refused -and $sHalf.refused.kind -ceq "apply") "a move that failed after touching the checkout leaves the mark"
+    $dHalf = Decide $up $sHalf (Obs -Checkout (Co $revA $true $false "" $false) -Wanted (Want $revB)) $t0.AddSeconds(70)
+    Check ((Is $dHalf "wait" "" "checkout-unsafe") -and $dHalf.notify -ceq "escalate" -and $dHalf.what -ceq "half-moved" -and $dHalf.reason -like "*changed or stray files*" -and $null -eq $dHalf.state.launchingAt) "with changed or stray files in it, NOTHING is started from it: wait, and tell someone"
+    Check ((Decide $up $dHalf.state (Obs -Checkout (Co $revA $true $false "" $false) -Wanted (Want $revB)) $t0.AddSeconds(130)).notify -eq "") "told once"
+    Check ((Decide $up $sHalf (Obs -Checkout (Co $revC $true $true "" $true) -Wanted (Want $revB)) $t0.AddSeconds(70)).code -ceq "checkout-unsafe") "nor when it is spotless but on a revision that is neither end of the move"
+    Check ((Decide $up $sHalf (Obs -Checkout (New-HordeUnknown -Reason "status timed out") -Wanted (Want $revB)) $t0.AddSeconds(70)).code -ceq "checkout-unsafe") "nor when it cannot be read: unknown is never whole"
+    Check ((Decide $up $sHalf (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddSeconds(70)).code -ceq "checkout-unsafe") "nor on a look that did not ask whether it is spotless"
+    $dWholeA = Decide $up $sHalf (Obs -Checkout (Co $revA $true $true "" $true) -Wanted (Want $revB)) $t0.AddSeconds(70)
+    Check ((Is $dWholeA "start" "start" "start") -and $null -eq $dWholeA.state.moving) "proven whole on the revision it came from, it is started, and the mark is taken off"
+    $dWholeB = Decide $up $sHalf (Obs -Checkout (Co $revB $true $true "" $true) -Wanted (Want $revB)) $t0.AddSeconds(70)
+    Check (Is $dWholeB "start" "start" "start") "proven whole on the revision it was going to, it is started too: the move did finish"
+    $sUnsaid = Did $up $dMove $false $t0.AddSeconds(3) $null "the advance failed: boom"
+    Check ($null -ne $sUnsaid.moving) "a move whose outcome does not say whether it touched the checkout keeps the mark: not saying is not 'untouched'"
+    $sClean = Did $up $dMove $false $t0.AddSeconds(3) $null "the remote has moved on" "" $false
+    Check ($null -eq $sClean.moving -and (Decide $up $sClean (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddSeconds(4)).step -ceq "start") "a move refused before it touched anything leaves no mark, and the old revision is started as before"
+    $again2 = Copy-HordeServiceState -State $sHalf; $again2.phase = "stopping"; $again2.intent = "update"; $again2.phaseSince = $t0.AddHours(2); $again2.target = $revB; $again2.from = $revA
+    $dMove2 = Decide $up $again2 (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddHours(2).AddSeconds(2)
+    $sStill = Did $up $dMove2 $false $t0.AddHours(2).AddSeconds(3) $null "its checkout has local changes" "" $false
+    Check ($dMove2.step -ceq "advance" -and -not $dMove2.freshMove -and $null -ne $sStill.moving) "a LATER move refused before touching anything does not take off the mark an EARLIER move left: that refusal proves nothing about the earlier one"
+    $sRet = Did $up $dRetreat $false $newBorn.AddSeconds(190) $null "git checkout: it did not finish within 60 s and was ended" "" $true
+    Check ($null -ne $sRet.moving -and (Decide $up $sRet (Obs -Checkout (Co $revB $true $false "" $false) -Wanted (Want $revB)) $newBorn.AddSeconds(200)).code -ceq "checkout-unsafe") "a roll-back cut short is held to the same: nothing is started from it either"
+    $inFlight = Copy-HordeServiceState -State $dMove.state; $inFlight.phase = "launching"
+    Check ((Decide $up $inFlight (Obs -Checkout (Co $revB $true $false "" $false) -Wanted (Want $revB)) $t0.AddSeconds(9)).code -ceq "checkout-unsafe") "and so is the start of a new revision itself: every start passes the same gate"
+
+    Write-Host ""
+    Write-Host "--- review 2: two services that follow a revision may not share a checkout ---" -ForegroundColor Cyan
+    $followA = '"a": { "checkout": "C:\\co", "hordeHome": "C:\\hh", ' + $startHorde + ', ' + $stopHorde + ', "follow": { } }'
+    Check (Refused ($followA + ', "b": { "checkout": "C:\\co", "hordeHome": "C:\\h2", ' + $startHorde + ', ' + $stopHorde + ', "follow": { } }') "both follow a revision in the same checkout") "two services following a revision in one checkout are refused"
+    Check (Refused ($followA + ', "b": { "checkout": "c:\\CO\\", "hordeHome": "C:\\h2", ' + $startHorde + ', ' + $stopHorde + ', "follow": { } }') "both follow a revision in the same checkout") "the same checkout written in another case, with a trailing slash, is the same checkout"
+    Check (Refused ($followA + ', "b": { "checkout": "C:\\x\\..\\co", "hordeHome": "C:\\h2", ' + $startHorde + ', ' + $stopHorde + ', "follow": { } }') "both follow a revision in the same checkout") "and so is one reached through another spelling of the path"
+    Check ((Defs ($followA + ', "b": { "checkout": "C:\\co2", "hordeHome": "C:\\h2", ' + $startHorde + ', ' + $stopHorde + ', "follow": { } }')).state -ceq "read") "CONTROL: each with a checkout of its own is read"
+    Check ((Defs ($followA + ', "b": { "checkout": "C:\\co", "hordeHome": "C:\\h2", ' + $startHorde + ', ' + $stopHorde + ' }')).state -ceq "read") "a service that follows nothing may run from a checkout another follows: it never moves it"
+
+    Write-Host ""
+    Write-Host "--- review 3: a machine that slept does not read as hung services ---" -ForegroundColor Cyan
+    $s = New-HordeServiceState -Name "svc"; $s.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
+    $asleep = Beat 700 $run.startedAt $t0.AddHours(-8)
+    $wake = $t0
+    Check ((Decide $svc $s (Obs -Running $run -Beat $asleep) $wake).step -ceq "stop") "CONTROL: with the supervisor having run all along, a heartbeat eight hours old IS a hung service"
+    $dWake = Decide $svc $s (Obs -Running $run -Beat $asleep) $wake -Gap 28800
+    Check ((Is $dWake "wait" "" "starting") -and $dWake.state.phase -ceq "steady" -and $dWake.state.resumedAt -eq $wake -and $dWake.reason -like "*the supervisor itself had not been running*") "when the supervisor's OWN heartbeat was stale too, nobody was looking: the service is not stopped, it is given time to beat"
+    Check ((Is (Decide $svc $dWake.state (Obs -Running $run -Beat $asleep) $wake.AddSeconds(60)) "wait" "" "starting")) "the next pass, a minute on, still waits: its heartbeat's own stale time has not passed since the wake"
+    $dBeats = Decide $svc $dWake.state (Obs -Running $run -Beat (Beat 700 $run.startedAt $wake.AddSeconds(50))) $wake.AddSeconds(60)
+    Check ((Is $dBeats "nothing" "" "running") -and $null -eq $dBeats.state.resumedAt) "once it beats, it is simply running, and the allowance is over"
+    $dReally = Decide $svc $dWake.state (Obs -Running $run -Beat $asleep) $wake.AddSeconds(180)
+    Check ($dReally.step -ceq "stop" -and $null -eq $dReally.state.resumedAt) "a service that still has not beaten when that time has passed really is hung, and is stopped"
+    $conf = New-HordeServiceState -Name "svc"; $conf.phase = "confirming"; $conf.intent = "update"; $conf.phaseSince = $newBorn; $conf.target = $revB; $conf.from = $revA; $conf.confirmBy = $newBorn.AddSeconds(120); $conf.started = [pscustomobject]@{ pid = 710; startedAt = $newBorn; at = $newBorn }
+    $after = $newBorn.AddSeconds(30).AddHours(8)
+    Check ((Decide $up $conf (Obs -Running $new -Checkout (Co $revB) -Wanted (Want $revB)) $after).action -ceq "roll-back") "CONTROL: without the allowance, a revision being confirmed when the machine slept is rolled back for having been asleep"
+    $dConf = Decide $up $conf (Obs -Running $new -Checkout (Co $revB) -Wanted (Want $revB)) $after -Gap 28800
+    Check ((Is $dConf "wait" "" "confirming") -and $dConf.state.confirmBy -eq $newBorn.AddSeconds(120 + 28800) -and $dConf.state.pinnedRevision -eq "") "with it, the time nobody was looking is given back: it is still being confirmed, and nothing is pinned"
+    Check ((Decide $up $dConf.state (Obs -Running $new -Checkout (Co $revB) -Wanted (Want $revB)) $after.AddSeconds(100)).action -ceq "roll-back") "and when the time given back has run out with still no heartbeat, it is rolled back as ever"
+
+    Write-Host ""
+    Write-Host "--- review 4: an update that will not go in backs off ---" -ForegroundColor Cyan
+    Check ((Get-HordeServiceRefusedWaitMinutes -Count 1 -Policy $policy) -eq 30 -and (Get-HordeServiceRefusedWaitMinutes -Count 2 -Policy $policy) -eq 60 -and (Get-HordeServiceRefusedWaitMinutes -Count 4 -Policy $policy) -eq 240 -and (Get-HordeServiceRefusedWaitMinutes -Count 30 -Policy $policy) -eq 1440) "a refused update waits 30 minutes, doubled for each refusal of the same revision, and never more than a day"
+    $ref1 = Did $up $dMove $false $t0 $null "an untracked file is in the way" "" $false
+    Check ($ref1.refused.count -eq 1) "the first refusal is counted once"
+    $runAgain = Copy-HordeServiceState -State $ref1; $runAgain.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }; $runAgain.verifiedRevision = $revB
+    $v2 = Did $up ([pscustomobject]@{ step = "verify"; action = "restart-for-update"; reason = "r"; revision = $revB; state = $runAgain; freshMove = $false }) $true $t0.AddMinutes(31)
+    Check ($null -ne $v2.refused -and $v2.refused.kind -ceq "apply" -and $v2.refused.count -eq 1) "a check that passes again does not forget that the MOVE was refused"
+    $again3 = Copy-HordeServiceState -State $v2; $again3.phase = "stopping"; $again3.intent = "update"; $again3.phaseSince = $t0.AddMinutes(32); $again3.target = $revB; $again3.from = $revA; $again3.started = $null
+    $ref2 = Did $up (Decide $up $again3 (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddMinutes(32)) $false $t0.AddMinutes(32) $null "an untracked file is in the way" "" $false
+    Check ($ref2.refused.count -eq 2) "the same move refused again is the second in a row"
+    $ref2.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
+    Check ((Decide $up $ref2 (& $seen $t0.AddMinutes(32 + 59) $idle) $t0.AddMinutes(32 + 59)).code -ceq "not-verified") "after two refusals it waits 60 minutes, not 30: 59 minutes on it still waits"
+    Check ((Decide $up $ref2 (& $seen $t0.AddMinutes(32 + 60) $idle) $t0.AddMinutes(32 + 60)).code -cne "not-verified") "and at 60 it is tried"
+
+    Write-Host ""
+    Write-Host "--- review 6: a start whose outcome was never recorded is not made twice ---" -ForegroundColor Cyan
+    $dS = Decide $svc (New-HordeServiceState -Name "svc") (Obs) $t0
+    Check ($dS.step -ceq "start" -and $dS.state.launchingAt -eq $t0) "the decision to start says so in the state that is saved BEFORE the process is made"
+    Check ($null -eq (Did $svc $dS $true $t0 (Proc 900 $t0)).launchingAt -and $null -eq (Did $svc $dS $false $t0).launchingAt) "a start that was recorded, worked or not, takes the mark off"
+    $cut = $dS.state
+    Check ((Is (Decide $svc $cut (Obs) $t0.AddSeconds(60)) "wait" "" "start-unrecorded")) "a pass that finds the mark and no process waits: the start may have happened, and its heartbeat will show"
+    $dFound = Decide $svc $cut (Obs -Beat (Beat 950 $t0.AddSeconds(5) $t0.AddSeconds(55)) -Beater (Proc 950 $t0.AddSeconds(5))) $t0.AddSeconds(60)
+    Check ($dFound.action -ceq "nothing" -and $dFound.state.started.pid -eq 950 -and $null -eq $dFound.state.launchingAt) "it did happen: the process shows itself by its heartbeat and is taken as the service, not started a second time"
+    $dGiveUp = Decide $svc $cut (Obs) $t0.AddSeconds(120)
+    Check ($dGiveUp.step -ceq "start") "with no heartbeat by the time one was due, the start did not happen, and it is started"
+    $dPlain = Decide $plain (New-HordeServiceState -Name "svc") (Obs) $t0
+    $dBlind = Decide $plain $dPlain.state (Obs) $t0.AddHours(3)
+    Check ((Is $dBlind "wait" "" "start-unrecorded") -and $dBlind.notify -ceq "escalate" -and $dBlind.what -ceq "start-unrecorded" -and $dBlind.reason -like "*horde services start svc*") "a service with NO heartbeat cannot show itself: it is never started on a guess, however long ago - someone is told, and a person says"
+    $lCut = New-HordeServiceState -Name "svc"; $lCut.phase = "launching"; $lCut.intent = "update"; $lCut.phaseSince = $t0; $lCut.target = $revB; $lCut.from = $revA; $lCut.launchingAt = $t0
+    $dLFound = Decide $up $lCut (Obs -Beat (Beat 960 $t0.AddSeconds(2) $t0.AddSeconds(20)) -Beater (Proc 960 $t0.AddSeconds(2)) -Checkout (Co $revB) -Wanted (Want $revB)) $t0.AddSeconds(30)
+    Check ((Is $dLFound "wait" "" "confirming") -and $dLFound.state.phase -ceq "confirming" -and $dLFound.state.started.pid -eq 960) "a NEW revision whose start was not recorded is found the same way, and goes on to be confirmed"
+
+    Write-Host ""
+    Write-Host "--- review 11 and 12: held, by a person or by its own deliberate exit ---" -ForegroundColor Cyan
+    $heldState = New-HordeServiceState -Name "svc"; $heldState.held = $true; $heldState.heldWhy = "a person stopped it with horde services stop"; $heldState.runningRevision = $revA
+    $dHeld = Decide $up $heldState (Obs -Checkout (Co $revA) -Wanted (Want $revB) -Idle $idle) $t0
+    Check ((Is $dHeld "nothing" "" "held") -and $dHeld.reason -like "*horde services start svc*" -and $dHeld.notify -eq "") "a held service that is not running is NOT started, and an update waiting for it is not taken"
+    Check ((Decide $up $heldState (Obs -Checkout (Co $revA) -Wanted (Want $revB) -Idle $idle) $t0 -IgnoreIdle).code -ceq "held") "not by rollout -Now either"
+    $heldRun = Copy-HordeServiceState -State $heldState; $heldRun.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
+    Check ((Decide $svc $heldRun (Obs -Running $run -Beat (Beat 700 $run.startedAt $t0.AddHours(-3))) $t0).code -ceq "held") "nor is one that looks hung stopped: held is left exactly as it is"
+    $thr = One ('"start": { "kind": "program", "program": "C:\\t\\throttle.exe", "arguments": ["-a", "b c"] }, "stop": { "kind": "kill", "deliberateExitCodes": [10, 11] }')
+    Check (($thr.stop.deliberateExitCodes -join ",") -ceq "10,11" -and ($thr.start.arguments -join "|") -ceq "-a|b c" -and @((One $base).stop.deliberateExitCodes).Count -eq 0) "a definition may list the exit codes with which its service ends itself on purpose; its arguments stay exactly as given"
+    Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t.exe" }, "stop": { "kind": "kill", "deliberateExitCodes": ["10"] } }') "deliberateExitCodes must be a list") "the codes are whole numbers, not words"
+    Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t.exe" }, "stop": { "kind": "kill", "deliberateExitCodes": 10 } }') "deliberateExitCodes must be a list") "and a list"
+    Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t\\run.cmd" }, "stop": { "kind": "kill" } }') "is a batch file") "a batch file is not taken as a program: the command interpreter would read its arguments again as commands"
+    Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t\\RUN.BAT" }, "stop": { "kind": "kill" } }') "is a batch file") "in any case of letters"
+    $ranThr = New-HordeServiceState -Name "svc"; $ranThr.started = [pscustomobject]@{ pid = 800; startedAt = $born; at = $born }
+    $dOnPurpose = Decide $thr $ranThr (Obs -Exit (New-HordeKnown -Value 10)) $t0
+    Check ((Is $dOnPurpose "nothing" "" "ended-itself") -and $dOnPurpose.state.held -and $dOnPurpose.state.heldWhy -ceq "it ended itself with code 10" -and $null -eq $dOnPurpose.state.started -and $dOnPurpose.state.failures -eq 0) "a service that ended itself with a listed code is NOT restarted: it is held, with the code as the reason"
+    Check ($dOnPurpose.notify -ceq "escalate" -and $dOnPurpose.what -ceq "ended-itself") "and someone is told, once"
+    $dStays = Decide $thr $dOnPurpose.state (Obs) $t0.AddHours(5)
+    Check ((Is $dStays "nothing" "" "held") -and $dStays.notify -eq "") "it stays held, and nobody is told again"
+    Check ((Decide $thr $ranThr (Obs -Exit (New-HordeKnown -Value 3)) $t0).step -ceq "start") "a code that is not listed is an ordinary death: it is started again"
+    Check ((Decide $thr $ranThr (Obs -Exit (New-HordeUnknown -Reason "nothing recorded it")) $t0).step -ceq "start" -and (Decide $thr $ranThr (Obs) $t0).step -ceq "start") "and so is an exit nobody recorded: an unknown code is never read as deliberate"
+    Check ((Decide $svc $held (Obs -Exit (New-HordeKnown -Value 10)) $t0).step -ceq "start") "a service whose definition lists no such code is restarted whatever it ended with"
+
+    Write-Host ""
+    Write-Host "--- review 9: a notice is told by its kind, never by its text ---" -ForegroundColor Cyan
+    Check ($dTell.what -ceq "failing" -and $dBack.what -ceq "rolled-back" -and $dDirty.what -ceq "checkout" -and $dNot.what -ceq "verify" -and $dWell.what -ceq "recovered") "each decision that tells says WHAT kind of trouble it is, apart from the sentence that explains it"
+    Check ($n1.notices[0].what -ceq "failing") "and the notice kept in the state carries it"
 
     Write-Host ""
     Write-Host "--- the remote is asked at an interval, not every pass ---" -ForegroundColor Cyan
@@ -423,6 +561,34 @@ try {
     }
     [System.IO.File]::WriteAllText($statePath, '{ "schemaVersion": 1, "name": "svc", "phase": "steady" }')
     Check ((Read-HordeServiceState -Name "svc" -HordeHome $hh).state -ceq "known") "CONTROL: the smallest whole state is read"
+    # What the first safety review added to the state comes back as it went in.
+    $more = New-HordeServiceState -Name "svc"
+    $more.moving = [pscustomobject]@{ from = $revA; target = $revB; at = $t0 }; $more.launchingAt = $t0.AddSeconds(5); $more.resumedAt = $t0.AddSeconds(6); $more.held = $true; $more.heldWhy = "it ended itself with code 10"
+    $more.refused = [pscustomobject]@{ revision = $revB; kind = "apply"; reason = "in the way"; at = $t0; count = 3 }
+    $more = Add-HordeServiceNotice -State $more -Decision $dTell -Id "55555555-5555-5555-5555-555555555555" -Now $t0
+    Write-HordeServiceState -State $more -HordeHome $hh
+    $moreBack = (Read-HordeServiceState -Name "svc" -HordeHome $hh).value
+    Check ($null -ne $moreBack -and $null -ne $moreBack.moving -and $moreBack.moving.from -ceq $revA -and $moreBack.moving.target -ceq $revB -and $moreBack.moving.at -eq $t0 -and $moreBack.launchingAt -eq $t0.AddSeconds(5) -and $moreBack.resumedAt -eq $t0.AddSeconds(6)) "a move not seen to end, a start not yet recorded and the moment of a wake come back"
+    Check ($null -ne $moreBack -and $moreBack.held -eq $true -and $moreBack.heldWhy -ceq "it ended itself with code 10" -and $moreBack.refused.count -eq 3 -and $moreBack.notices[0].what -ceq "failing") "held and why, how many times an update was refused, and what a notice is told by"
+    foreach ($case in @(
+        @(('{ "schemaVersion": 1, "name": "svc", "phase": "steady", "moving": { "from": "' + $revA + '" } }'), "move of its checkout it names is not whole"),
+        @('{ "schemaVersion": 1, "name": "svc", "phase": "steady", "held": "yes" }', "held mark is not true or false"),
+        @('{ "schemaVersion": 1, "name": "svc", "phase": "steady", "launchingAt": "soon" }', "launchingAt is not a time")
+    )) {
+        [System.IO.File]::WriteAllText($statePath, $case[0])
+        $got = Read-HordeServiceState -Name "svc" -HordeHome $hh
+        Check ($got.state -ceq "unknown" -and $got.reason -like ("*" + $case[1] + "*")) ("a state whose new members are not whole is unknown, never read without them: " + $case[1])
+    }
+    $exitPath = Get-HordeServiceExitPath -Name "svc" -HordeHome $hh
+    $ended = [pscustomobject]@{ pid = 4321; startedAt = $born }
+    Check ((Read-HordeServiceExitRecord -Name "svc" -Process $ended -HordeHome $hh).state -ceq "unknown") "with no exit record, the code a process ended with is unknown"
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($exitPath))
+    [System.IO.File]::WriteAllText($exitPath, ('{"pid":4321,"startedAt":"' + (ConvertTo-HordeHeartbeatTimeText -At $born) + '","code":11,"at":"2026-10-13T12:00:00.0000000Z"}'))
+    $code = Read-HordeServiceExitRecord -Name "svc" -Process $ended -HordeHome $hh
+    Check ($code.state -ceq "known" -and $code.value -eq 11 -and $exitPath -ceq (Join-Path $hh "services\exits\svc.json")) "a record about THAT process - its pid and its start - gives the code"
+    Check ((Read-HordeServiceExitRecord -Name "svc" -Process ([pscustomobject]@{ pid = 4321; startedAt = $born.AddMinutes(9) }) -HordeHome $hh).reason -like "*about another process*" -and (Read-HordeServiceExitRecord -Name "svc" -Process ([pscustomobject]@{ pid = 4322; startedAt = $born }) -HordeHome $hh).state -ceq "unknown") "a record left by another run - the same pid started at another time, or another pid - says nothing about this one"
+    [System.IO.File]::WriteAllText($exitPath, ('{"pid":4321,"startedAt":"' + (ConvertTo-HordeHeartbeatTimeText -At $born) + '","code":"ten"}'))
+    Check ((Read-HordeServiceExitRecord -Name "svc" -Process $ended -HordeHome $hh).state -ceq "unknown") "and one whose code is not a number is unknown"
     Check (Throws { Get-HordeServiceStatePath -Name "..\x" -HordeHome $hh } "not a service name") "a state path is never made from something that is not a service name"
 
     Write-Host ""

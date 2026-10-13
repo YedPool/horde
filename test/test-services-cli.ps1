@@ -33,7 +33,10 @@ function New-Home {
     if ($Definitions -ne "") { [System.IO.File]::WriteAllText((Join-Path $h "settings\service-definitions.json"), ('{ "schemaVersion": 1, "settings": { ' + $Definitions + ' } }')) }
     return $h
 }
-function Horde { param([string]$HordeHome, [string[]]$A) return (Invoke-HordeCliProcess -Root $root -HordeArgs $A -Env @{ HORDE_HOME = $HordeHome }) }
+# WEZFLEET_ROOT is where a seat would be looked up: every command of this suite is pointed at an empty
+# folder of the suite's own, so a tell could find no session even if both other guards failed -
+# tellWarchief false in every home, and the teller's own refusal of a home under the temp folder.
+function Horde { param([string]$HordeHome, [string[]]$A) return (Invoke-HordeCliProcess -Root $root -HordeArgs $A -Env @{ HORDE_HOME = $HordeHome; WEZFLEET_ROOT = (Join-Path $work "no-fleet-here") }) }
 $testName = "Horde services tend TEST " + [guid]::NewGuid().ToString("N").Substring(0, 12)
 function Assert-TestName { param([string]$Name) if ($Name -notlike "*TEST*") { throw ("refusing to act on a job this suite did not name: '" + $Name + "'") } }
 $stubHome = Join-Path $work "stub served"
@@ -52,6 +55,10 @@ try {
     Check ($wrong.code -eq 1 -and $wrong.out -like "*-Json does not belong to services tend*") "a flag meant for another verb is refused, never ignored"
     Check ((Horde $empty @("services", "schedule", "now")).out -like "*takes nothing, or status, after it*") "schedule takes nothing, or status"
     Check ((Horde $empty @("services", "unschedule", "-Disabled")).out -like "*-Disabled does not belong to services unschedule*") "-Disabled belongs to schedule"
+    $noName = Horde $empty @("services", "stop")
+    Check ($noName.code -eq 1 -and $noName.out -like "*services stop needs the name of a service*") "stop needs the name of a service"
+    $noSuch = Horde $empty @("services", "start", "nope")
+    Check ($noSuch.code -eq 1 -and $noSuch.out -like "*no service named 'nope' is defined*") "start of a service that is not defined fails, naming it"
 
     Write-Host ""
     Write-Host "--- a home with nothing defined ---" -ForegroundColor Cyan
@@ -120,6 +127,23 @@ exit 0
     Check ($logText -match '(?m)^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d stub beat 1 for relay run -Relay none') "what the service says is kept in its log under the supervisor's home, with the time, and it was started with its words and named value"
     $journal = @(Read-HordeServiceJournalTail -Count 20 -HordeHome $sup | ForEach-Object { $_ | ConvertFrom-Json })
     Check (@($journal | Where-Object { $_.service -ceq "stub" -and $_.step -ceq "start" -and $_.outcome -ceq "done" }).Count -eq 1) "the journal has the one start"
+    # STOP AND START, AS A PERSON WOULD: nobody edits a definitions file to stop a service.
+    $firstPid = $kept.value.started.pid
+    $sp = Horde $sup @("services", "stop", "stub")
+    Check ($sp.code -eq 0 -and $sp.out -like "*stub: held - it was asked to stop, and stopped*horde services start stub*" -and (Get-HordeServiceProcessEntry -ProcessId $firstPid).state -ceq "absent") ("horde services stop asks it to stop with its own command, and it stops (" + $sp.out.Trim() + ")")
+    $t = Horde $sup @("services", "tend")
+    Check ($t.code -eq 0 -and $t.out -like "*stub: nothing - held, and left as it is (a person stopped it with horde services stop)*" -and $t.out -notlike "*start (start)*") "a pass leaves it stopped: held is not 'not running, so start it'"
+    $st = Horde $sup @("services", "status")
+    Check ($st.out -like "*stub: NOT RUNNING*" -and $st.out -like "*HELD - a person stopped it with horde services stop*") "status says it is held, and why"
+    # The stub ends when it sees its stop file; a person letting it go wants it to run again.
+    [System.IO.File]::Delete($stopFile)
+    [System.IO.File]::Delete((Join-Path $stubHome "beat.json"))
+    $go = Horde $sup @("services", "start", "stub")
+    Check ($go.code -eq 0 -and $go.out -like "*stub: no longer held*" -and $go.out -like "*stub: start (start) done - started as process *") ("horde services start lets it go and starts it at once (" + $go.out.Trim() + ")")
+    $deadline = (Get-Date).AddSeconds(90)
+    while (-not (Test-Path -LiteralPath (Join-Path $stubHome "beat.json")) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    $kept = Read-HordeServiceState -Name "stub" -HordeHome $sup
+    Check ($kept.state -ceq "known" -and -not $kept.value.held -and $null -ne $kept.value.started -and $kept.value.started.pid -ne $firstPid -and (Read-HordeHeartbeat -Path (Join-Path $stubHome "beat.json")).state -ceq "known") "it runs again, as a new process, and beats"
     # The service is asked to stop the way its definition says, by the supervisor's own hands.
     $def = @((Get-HordeServiceDefinitions -HordeHome $sup).services)[0]
     $asked = Request-HordeServiceStop -Definition $def -Process $kept.value.started

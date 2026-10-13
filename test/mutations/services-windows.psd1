@@ -43,5 +43,18 @@
            Replace = ''
            Expect = "survives"
            Reason = "the suite runs in the person's own session, where the adapter is never blind; what makes it blind is the function above, which the suite calls with each case" }
+        # --- safety review of the first build ---
+        @{ Name = "no-watcher"
+           Find = '    if ("" + $Launch.exitFile -ne "") {'
+           Replace = '    if ($false) {' }
+        @{ Name = "watcher-path-as-text"
+           Find = '    $file = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ExitFile))'
+           Replace = '    $file = $ExitFile' }
+        @{ Name = "watcher-checks-before-it-holds"
+           Find = '); $null = $p.Handle; '')'
+           Replace = '); '')' }
+        @{ Name = "watcher-records-another-pid"
+           Find = '[void]$sb.Append(''$t = '' + $q + ''{"pid":'' + $ProcessId +'
+           Replace = '[void]$sb.Append(''$t = '' + $q + ''{"pid":'' + 1 +' }
     )
 }

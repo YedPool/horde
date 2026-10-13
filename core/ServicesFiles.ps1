@@ -67,6 +67,34 @@ function Get-HordeServiceLogPath {
     return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "logs", ($Name + ".log"))
 }
 
+function Get-HordeServiceExitPath {
+    # Where the code a service's process ended with is recorded, by whatever watched it end
+    # (core/ServiceHostPort.ps1, THE EXIT RECORD): <home>\services\exits\<name>.json.
+    param([Parameter(Mandatory = $true)][string]$Name, [string]$HordeHome = "")
+    if ($Name -cnotmatch $script:HordeServiceNamePattern) { throw ("not a service name, so it has no exit record: '" + $Name + "'") }
+    return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "exits", ($Name + ".json"))
+}
+
+function Read-HordeServiceExitRecord {
+    # The code -Process ({ pid; startedAt }) ended with, as an answer: known whole number, or unknown
+    # with the reason. THE RECORD MUST BE ABOUT THAT PROCESS - the same pid AND the same start - or it
+    # says nothing: a record left by an earlier run of the service, read as this run's, would hold a
+    # service that had merely died. Unknown is the ordinary answer, and an unknown exit is an
+    # ordinary death (core/Services.ps1).
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)]$Process, [string]$HordeHome = "")
+    $path = Get-HordeServiceExitPath -Name $Name -HordeHome $HordeHome
+    if (-not [System.IO.File]::Exists($path)) { return (New-HordeUnknown -Reason "nothing recorded the code it ended with") }
+    try {
+        $text = Read-HordeSharedText -Path $path
+        if ($text.Length -gt 4096) { return (New-HordeUnknown -Reason "its exit record is larger than one is") }
+        $have = Get-HordeObjectByKey ($text | ConvertFrom-Json)
+        $started = ConvertFrom-HordeHeartbeatTimeText $have["startedAt"]
+        if (($have["pid"] -isnot [int] -and $have["pid"] -isnot [long]) -or [long]$have["pid"] -ne [long]$Process.pid -or -not (Test-HordeHeartbeatSameStart -One $started -Other $Process.startedAt)) { return (New-HordeUnknown -Reason "its exit record is about another process") }
+        if ($have["code"] -isnot [int] -and $have["code"] -isnot [long]) { return (New-HordeUnknown -Reason "its exit record holds no code") }
+        return (New-HordeKnown -Value ([int]$have["code"]))
+    } catch { return (New-HordeUnknown -Reason "its exit record could not be read" -ErrorRecord $_) }
+}
+
 function Get-HordeServiceJournalPath { param([string]$HordeHome = "") return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "journal.jsonl") }
 function Get-HordeServiceTendHeartbeatPath { param([string]$HordeHome = "") return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "tend-heartbeat.json") }
 function Get-HordeServiceTendLockPath { param([string]$HordeHome = "") return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "tend.lock") }
@@ -92,11 +120,13 @@ function ConvertTo-HordeServiceStateRecord {
         pinnedRevision = "" + $State.pinnedRevision; verifiedRevision = "" + $State.verifiedRevision; refused = $null; started = $null
         proving = [bool]$State.proving; failures = [int]$State.failures; nextStartAt = (& $time $State.nextStartAt); confirmBy = (& $time $State.confirmBy)
         stuck = (Protect-HordeServiceText ("" + $State.stuck)); told = @($State.told | ForEach-Object { "" + $_ }); notices = @(); lastAction = $null
-        lastFetchAt = (& $time $State.lastFetchAt); fetchProblem = (Protect-HordeServiceText ("" + $State.fetchProblem)); lastSaid = "" + $State.lastSaid }
-    if ($null -ne $State.refused) { $r["refused"] = [ordered]@{ revision = "" + $State.refused.revision; kind = "" + $State.refused.kind; reason = (Protect-HordeServiceText ("" + $State.refused.reason)); at = (& $time $State.refused.at) } }
+        lastFetchAt = (& $time $State.lastFetchAt); fetchProblem = (Protect-HordeServiceText ("" + $State.fetchProblem)); lastSaid = "" + $State.lastSaid
+        moving = $null; launchingAt = (& $time $State.launchingAt); resumedAt = (& $time $State.resumedAt); held = [bool]($State.held -eq $true); heldWhy = (Protect-HordeServiceText ("" + $State.heldWhy)) }
+    if ($null -ne $State.moving) { $r["moving"] = [ordered]@{ from = "" + $State.moving.from; target = "" + $State.moving.target; at = (& $time $State.moving.at) } }
+    if ($null -ne $State.refused) { $r["refused"] = [ordered]@{ revision = "" + $State.refused.revision; kind = "" + $State.refused.kind; reason = (Protect-HordeServiceText ("" + $State.refused.reason)); at = (& $time $State.refused.at); count = (Get-HordeServiceRefusedCount -Refused $State.refused) } }
     if ($null -ne $State.started) { $r["started"] = [ordered]@{ pid = [int]$State.started.pid; startedAt = (& $time $State.started.startedAt); at = (& $time $State.started.at) } }
     if ($null -ne $State.lastAction) { $r["lastAction"] = [ordered]@{ at = (& $time $State.lastAction.at); action = "" + $State.lastAction.action; step = "" + $State.lastAction.step; outcome = "" + $State.lastAction.outcome; reason = (Protect-HordeServiceText ("" + $State.lastAction.reason)) } }
-    $r["notices"] = @($State.notices | ForEach-Object { [ordered]@{ id = "" + $_.id; kind = "" + $_.kind; text = (Protect-HordeServiceText ("" + $_.text)); at = (& $time $_.at) } })
+    $r["notices"] = @($State.notices | ForEach-Object { [ordered]@{ id = "" + $_.id; kind = "" + $_.kind; text = (Protect-HordeServiceText ("" + $_.text)); at = (& $time $_.at); what = (Get-HordeServiceNoticeWhat -Notice $_) } })
     return $r
 }
 
@@ -121,7 +151,7 @@ function ConvertFrom-HordeServiceStateRecord {
         if ($v -ne "" -and $v -cnotmatch $script:HordeServiceRevisionPattern) { return (& $bad ("its " + $k + " is not a revision")) }
         $s.$k = $v
     }
-    foreach ($k in @("phaseSince", "nextStartAt", "confirmBy", "lastFetchAt")) {
+    foreach ($k in @("phaseSince", "nextStartAt", "confirmBy", "lastFetchAt", "launchingAt", "resumedAt")) {
         if ($have.ContainsKey($k) -and $null -ne $have[$k]) {
             $t = & $when $have[$k]
             if ($null -eq $t) { return (& $bad ("its " + $k + " is not a time")) }
@@ -135,6 +165,10 @@ function ConvertFrom-HordeServiceStateRecord {
         if ($s.intent -ceq "heal" -and $s.phase -cne "stopping") { return (& $bad "its phase and what it is doing do not go together") }
     }
     if ($have.ContainsKey("proving")) { $s.proving = [bool]($have["proving"] -eq $true) }
+    # HELD IS KEPT EXACTLY: a file that says held is held, and one that does not say is not. A person
+    # stopped it, and no reading of the file may let the supervisor start it again by itself.
+    if ($have.ContainsKey("held")) { if ($have["held"] -isnot [bool]) { return (& $bad "its held mark is not true or false") }; $s.held = [bool]$have["held"] }
+    $s.heldWhy = & $text "heldWhy"
     if ($have.ContainsKey("failures") -and ($have["failures"] -is [int] -or $have["failures"] -is [long]) -and $have["failures"] -ge 0 -and $have["failures"] -le 1000000) { $s.failures = [int]$have["failures"] }
     $s.stuck = & $text "stuck"
     $s.fetchProblem = & $text "fetchProblem"
@@ -148,7 +182,17 @@ function ConvertFrom-HordeServiceStateRecord {
         $fat = $null
         if ($null -ne $f) { $fat = & $when $f["at"] }
         if ($null -eq $f -or ("" + $f["revision"]) -cnotmatch $script:HordeServiceRevisionPattern -or @("verify", "apply", "retreat") -cnotcontains ("" + $f["kind"]) -or $null -eq $fat) { return (& $bad "its refused update is not whole") }
-        $s.refused = [pscustomobject]@{ revision = "" + $f["revision"]; kind = "" + $f["kind"]; reason = "" + $f["reason"]; at = $fat }
+        $s.refused = [pscustomobject]@{ revision = "" + $f["revision"]; kind = "" + $f["kind"]; reason = "" + $f["reason"]; at = $fat; count = 1 }
+        if (($f["count"] -is [int] -or $f["count"] -is [long]) -and $f["count"] -ge 1) { $s.refused.count = [int][System.Math]::Min([long]$f["count"], 1000) }
+    }
+    # A MOVE THAT WAS NOT SEEN TO END must come back whole: read as "no move", the next pass would
+    # start the service from a checkout nobody has proven (core/Services.ps1, the decision's $unsafe).
+    if ($have.ContainsKey("moving") -and $null -ne $have["moving"]) {
+        $m = & $part $have["moving"]
+        $mAt = $null
+        if ($null -ne $m) { $mAt = & $when $m["at"] }
+        if ($null -eq $m -or ("" + $m["from"]) -cnotmatch $script:HordeServiceRevisionPattern -or ("" + $m["target"]) -cnotmatch $script:HordeServiceRevisionPattern -or $null -eq $mAt) { return (& $bad "the move of its checkout it names is not whole: from, target and when") }
+        $s.moving = [pscustomobject]@{ from = "" + $m["from"]; target = "" + $m["target"]; at = $mAt }
     }
     if ($have.ContainsKey("started") -and $null -ne $have["started"]) {
         $p = & $part $have["started"]
@@ -170,7 +214,7 @@ function ConvertFrom-HordeServiceStateRecord {
             if ($null -eq $n) { continue }
             $nAt = & $when $n["at"]
             if (("" + $n["id"]) -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' -or @("escalate", "recovered") -cnotcontains ("" + $n["kind"]) -or ("" + $n["text"]) -eq "" -or $null -eq $nAt) { continue }
-            [void]$kept.Add([pscustomobject]@{ id = "" + $n["id"]; kind = "" + $n["kind"]; text = "" + $n["text"]; at = $nAt })
+            [void]$kept.Add([pscustomobject]@{ id = "" + $n["id"]; kind = "" + $n["kind"]; text = "" + $n["text"]; at = $nAt; what = $(if ($n["what"] -is [string]) { [string]$n["what"] } else { "" }) })
         }
         $s.notices = @($kept.ToArray() | Select-Object -Last $script:HordeServiceNoticesMost)
     }
