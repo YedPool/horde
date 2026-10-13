@@ -263,6 +263,31 @@ Check ($d.Count -eq 1 -and $d[0].action -ceq "wait" -and "$($d[0].reason)".Conta
 Check (Throws { Get-HordeWakeSettings -Overrides @{ maxNudgePerPass = 9 } } "not a wake setting") "a setting that is not one is refused, not silently left at its default"
 
 Write-Host ""
+Write-Host "--- mail nobody can read: said once, when it lasts two passes, and never a reason not to nudge ---" -ForegroundColor Cyan
+
+Start-Case; Seat -Change @{ UnreadableCount = 1 }
+$r = Pass 0
+Check ((Decided $r).action -ceq "nudge" -and (Rang 1) -eq 1 -and $r.unreadable[(Sid 1)] -eq 1) "a session with good mail and one record nobody can read is nudged for the good mail, and the pass hands the count on"
+Start-Case; Seat -Change @{ UnreadableCount = 0 }
+Check ((Pass 0).unreadable.Count -eq 0) "a session with no such record is not handed on"
+$b1 = Update-HordeWakeBadMail -Seen @{} -Unreadable @{ (Sid 1) = 2 } -Now (At 0)
+Check (@($b1.entries).Count -eq 0 -and $b1.seen[(Sid 1)].passes -eq 1) "seen on one pass, nothing is said yet: a record being written is unreadable for a moment"
+$b2 = Update-HordeWakeBadMail -Seen $b1.seen -Unreadable @{ (Sid 1) = 2 } -Now (At 3)
+Check (@($b2.entries).Count -eq 1 -and $b2.entries[0].kind -ceq "bad-mail" -and $b2.entries[0].id -ceq (Sid 1) -and $b2.entries[0].outcome -ceq "unreadable" -and "$($b2.entries[0].reason)".StartsWith("2 record(s)") -and $b2.entries[0].at -eq (At 3)) "seen on two passes in a row, one bad-mail entry is made, naming the session and how many"
+$b3 = Update-HordeWakeBadMail -Seen $b2.seen -Unreadable @{ (Sid 1) = 2 } -Now (At 6)
+$b4 = Update-HordeWakeBadMail -Seen $b3.seen -Unreadable @{ (Sid 1) = 5 } -Now (At 9)
+Check (@($b3.entries).Count -eq 0 -and @($b4.entries).Count -eq 0) "and no other while it lasts, whatever the count becomes"
+$b5 = Update-HordeWakeBadMail -Seen $b4.seen -Unreadable @{} -Now (At 12)
+Check ($b5.seen.Count -eq 0) "a pass on which it shows none forgets it"
+$b6 = Update-HordeWakeBadMail -Seen $b5.seen -Unreadable @{ (Sid 1) = 1 } -Now (At 15)
+$b7 = Update-HordeWakeBadMail -Seen $b6.seen -Unreadable @{ (Sid 1) = 1 } -Now (At 18)
+Check (@($b6.entries).Count -eq 0 -and @($b7.entries).Count -eq 1) "so one that comes back is told again, after two passes again"
+$gap = Update-HordeWakeBadMail -Seen (Update-HordeWakeBadMail -Seen $b1.seen -Unreadable @{} -Now (At 3)).seen -Unreadable @{ (Sid 1) = 2 } -Now (At 6)
+Check (@($gap.entries).Count -eq 0) "two sightings with a clear pass between them are not two in a row"
+$two = Update-HordeWakeBadMail -Seen (Update-HordeWakeBadMail -Seen @{} -Unreadable @{ (Sid 1) = 1; (Sid 2) = 0 } -Now (At 0)).seen -Unreadable @{ (Sid 1) = 1; (Sid 2) = 3 } -Now (At 3)
+Check (@($two.entries).Count -eq 1 -and $two.entries[0].id -ceq (Sid 1)) "each session is counted by itself, and a count of 0 is not a sighting"
+
+Write-Host ""
 Write-Host "--- the journal says an unknown once, not every pass ---" -ForegroundColor Cyan
 
 $u1 = New-HordeWakeEntry -At $t0 -Kind "skip-unknown" -Id (Sid 1) -Outcome "unknown" -Reason "locked"
@@ -284,6 +309,21 @@ Check ($wakeDir -ceq (Join-Path $pinned.home "wake") -and -not (Test-Path -Liter
 Check ((Read-HordeWakeHeartbeat).state -ceq "absent") "with no heartbeat the watcher has never run here: absent"
 Check (@(Read-HordeWakeJournalTail).Count -eq 0) "and the journal has no lines"
 Check ((Read-HordeWakeLedger).state -ceq "absent") "and no ledger was saved"
+# THE BARE NAMES ARE NOBODY'S. Builds from before the two modes wrote them, in shadow; a home that
+# holds only those has had neither mode run in it.
+$legacyHome = Join-Path $pinned.home "legacy"
+New-Item -ItemType Directory -Path (Join-Path $legacyHome "wake") -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\heartbeat.json"), '{"at":"2026-10-12T07:00:00.0000000Z","pid":7,"pass":900,"shadow":true}')
+[System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\journal.jsonl"), '{"at":"2026-10-12T07:00:00.0000000Z","kind":"would-nudge","id":"x","outcome":"would-nudge","reason":"old"}' + "`n")
+[System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\ledger.json"), '{"schemaVersion":1,"sessions":[{"id":"x","attempts":3,"lastAttemptAt":"2026-10-12T07:00:00.0000000Z","lastOutcome":"would-nudge"}]}')
+Check ((Read-HordeWakeHeartbeat -HordeHome $legacyHome).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Shadow -HordeHome $legacyHome).state -ceq "absent") "in a home holding only the unsuffixed files of earlier builds, neither the live nor the shadow watcher has ever run"
+Check (@(Read-HordeWakeJournalTail -HordeHome $legacyHome).Count -eq 0 -and @(Read-HordeWakeJournalTail -Shadow -HordeHome $legacyHome).Count -eq 0) "neither journal has a line: the old journal.jsonl is no mode's"
+Check ((Read-HordeWakeLedger -HordeHome $legacyHome).state -ceq "absent" -and (Read-HordeWakeLedger -Shadow -HordeHome $legacyHome).state -ceq "absent") "and neither has a ledger: the old ledger.json is read by nobody"
+Write-HordeWakeHeartbeat -At (At 1) -ProcessId 1 -Pass 1 -HordeHome $legacyHome
+$null = Write-HordeWakeJournal -Entries @(New-HordeWakeEntry -At (At 1) -Kind "nudge" -Id (Sid 1) -Outcome "woken") -HordeHome $legacyHome
+Save-HordeWakeLedger -Ledger @{} -HordeHome $legacyHome
+$legacyNames = (@(Get-ChildItem -LiteralPath (Join-Path $legacyHome "wake") | ForEach-Object { $_.Name } | Sort-Object) -join ",")
+Check ($legacyNames -ceq "heartbeat.json,heartbeat-live.json,journal.jsonl,journal-live.jsonl,ledger.json,ledger-live.json" -and ([System.IO.File]::ReadAllText((Join-Path $legacyHome "wake\heartbeat.json")) -like "*900*")) ("a live run writes files named for it, and the old ones are left as they were, not written over and not deleted (" + $legacyNames + ")")
 Check ((Write-HordeWakeJournal -Entries @()) -eq 0 -and -not (Test-Path -LiteralPath $wakeDir)) "journaling nothing writes nothing"
 $entries = @(1..12 | ForEach-Object { New-HordeWakeEntry -At (At $_) -Kind "would-nudge" -Id (Sid $_) -Outcome "would-nudge" -Reason "unread mail, idle, empty box" })
 $entries += New-HordeWakeEntry -At (At 13) -Kind "would-post" -Id (Sid 2) -Outcome "would-post" -Reason "restore x" -MessageId "0d000000-0000-4000-8000-000000000001"
@@ -297,18 +337,21 @@ $null = Write-HordeWakeJournal -Entries @($entries[0])
 Check (@(Read-HordeWakeJournalTail -Count 100).Count -eq 14) "the journal is appended to, never replaced"
 
 Write-HordeWakeHeartbeat -At (At 5) -ProcessId 4242 -Pass 7 -Shadow
-$beat = Read-HordeWakeHeartbeat
+Check ((Read-HordeWakeHeartbeat).state -ceq "absent") "a shadow heartbeat is not the live one: after it, the live watcher has still never run"
+$beat = Read-HordeWakeHeartbeat -Shadow
 Check ($beat.state -ceq "known" -and $beat.value.at -eq (At 5) -and $beat.value.pid -eq 4242 -and $beat.value.pass -eq 7 -and $beat.value.shadow -eq $true) "a heartbeat reads back as it was written: when, which process, which pass, and that it was shadow"
 Write-HordeWakeHeartbeat -At (At 8) -ProcessId 4242 -Pass 8
 $beat = Read-HordeWakeHeartbeat
-Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0) "the next one replaces it whole, and leaves no temporary file"
-[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), "{ not json")
+Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0 -and (Read-HordeWakeHeartbeat -Shadow).value.pass -eq 7) "a live one is a file of its own, written whole with no temporary file left, and the shadow one is as it was"
+$null = Write-HordeWakeJournal -Entries @($entries[1]) -Shadow
+Check (@(Read-HordeWakeJournalTail -Count 100).Count -eq 14 -and @(Read-HordeWakeJournalTail -Count 100 -Shadow).Count -eq 1) "the journal is per mode too: a shadow line goes to the shadow journal and the live one is as it was"
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), "{ not json")
 Check ((Read-HordeWakeHeartbeat).state -ceq "unknown") "a heartbeat that cannot be read is unknown, not absent"
 Check ((Get-HordeWakeStaleSeconds) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 3) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 40) -eq 120) "a heartbeat is stale after 120 s, for any tick up to 40 s"
 Check ((Get-HordeWakeStaleSeconds -TickSeconds 41) -eq 123 -and (Get-HordeWakeStaleSeconds -TickSeconds 300) -eq 900) "and after three ticks for a slower watcher: stale is relative to how often it beats"
 Write-HordeWakeHeartbeat -At (At 9) -ProcessId 4242 -Pass 9 -TickSeconds 60
 Check ((Read-HordeWakeHeartbeat).value.tickSeconds -eq 60) "the heartbeat carries the tick, so a reader knows what stale is for this watcher"
-[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"pass":2,"shadow":true}')
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"pass":2,"shadow":true}')
 Check ((Read-HordeWakeHeartbeat).value.tickSeconds -eq 0) "a heartbeat written before it carried one reads as no tick, which is the 120 s floor"
 
 # THE JOURNAL IS BOUNDED: at the cap it is set aside, once, and the tail still reads across the two.
@@ -316,8 +359,8 @@ $small = Join-Path $pinned.home "rotate"
 $line = New-HordeWakeEntry -At (At 1) -Kind "would-nudge" -Id (Sid 1) -Outcome "would-nudge" -Reason ("x" * 100)
 foreach ($n in 1..6) { $null = Write-HordeWakeJournal -Entries @($line) -HordeHome $small -MaxBytes 400 }
 $files = @(Get-ChildItem -LiteralPath (Join-Path $small "wake") | ForEach-Object { $_.Name } | Sort-Object)
-Check (($files -join ",") -ceq "journal.1.jsonl,journal.jsonl") ("past its cap the journal is set aside as journal.1.jsonl, and there are never more than the two (" + ($files -join ",") + ")")
-Check ((Get-Item -LiteralPath (Join-Path $small "wake\journal.jsonl")).Length -lt 800) "the journal that is written to stays under twice the cap"
+Check (($files -join ",") -ceq "journal-live.1.jsonl,journal-live.jsonl") ("past its cap the journal is set aside as journal-live.1.jsonl, and there are never more than the two (" + ($files -join ",") + ")")
+Check ((Get-Item -LiteralPath (Join-Path $small "wake\journal-live.jsonl")).Length -lt 800) "the journal that is written to stays under twice the cap"
 $last = New-HordeWakeEntry -At (At 2) -Kind "would-nudge" -Id (Sid 9) -Outcome "would-nudge" -Reason "the newest"
 foreach ($n in 1..3) { $null = Write-HordeWakeJournal -Entries @($line) -HordeHome $small -MaxBytes 400 }
 $null = Write-HordeWakeJournal -Entries @($last) -HordeHome $small -MaxBytes 400
@@ -339,7 +382,7 @@ $back = Read-HordeWakeLedger
 Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 0) "an empty ledger saves and reads back empty"
 Save-HordeWakeLedger -Ledger $keep -Shadow
 Check ((Test-Path -LiteralPath (Join-Path $wakeDir "ledger-shadow.json") -PathType Leaf) -and (Read-HordeWakeLedger).value.ledger.Count -eq 0 -and (Read-HordeWakeLedger -Shadow).value.ledger.Count -eq 2) "a shadow run's ledger is a file of its own: saving it leaves the live ledger as it was, and each reads back its own"
-[System.IO.File]::WriteAllText((Join-Path $wakeDir "ledger.json"), '{"schemaVersion":1,"sessions":[{"id":"x"}]}')
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "ledger-live.json"), '{"schemaVersion":1,"sessions":[{"id":"x"}]}')
 Check ((Read-HordeWakeLedger).state -ceq "unknown") "a saved ledger with a broken entry is unknown, never half a ledger"
 
 } finally {

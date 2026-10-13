@@ -352,24 +352,26 @@ function Get-HordeRestoreSessions {
 # Kept apart from everything above, which reads and writes none. Only the command's loop calls these.
 
 function Save-HordeRestoreState {
-    # restore.json, replaced whole: the ids of the mails already posted and the restores already found,
+    # The restore state file, replaced whole: the ids of the mails already posted and the restores already found,
     # so a source that is restarted neither posts a resume mail a second time nor gives a restore it
     # had already named a new id. -Shadow names the shadow run's own file (core/WakeFiles.ps1,
     # Get-HordeWakeStateFile): a mail a shadow run only would have posted is never marked posted where
     # a live run reads.
-    param($Posted = @{}, $Known = @(), [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    # -Name is the file's stem, restore unless a caller keeps a second state (core/WakeRun.ps1 does, for
+    # what the source only would have posted during a live run).
+    param($Posted = @{}, $Known = @(), [switch]$Shadow, [string]$Name = "restore", [string]$HordeHome = (Get-HordeHome))
     $ids = @()
     if ($null -ne $Posted) { $ids = @($Posted.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; at = $(if ($Posted[$_] -is [datetime]) { ConvertTo-HordeWakeTimeText $Posted[$_] } else { "" }) } }) }
     $restores = @(@($Known) | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ restoreId = "$($_.restoreId)"; windowStart = (ConvertTo-HordeWakeTimeText $_.windowStart); windowEnd = (ConvertTo-HordeWakeTimeText $_.windowEnd) } })
     $doc = [ordered]@{ schemaVersion = 1; posted = $ids; restores = $restores }
-    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "restore" -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
 
 function Read-HordeRestoreState {
     # What Save-HordeRestoreState wrote: known { posted; known }, absent when there is none, or unknown when it
     # cannot be read - the caller then starts from nothing posted and says so.
-    param([switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    $path = Get-HordeWakeStateFile -Name "restore" -Shadow:$Shadow -HordeHome $HordeHome
+    param([switch]$Shadow, [string]$Name = "restore", [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no restore state was saved in this home") }
     try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason "the saved restore state could not be read" -ErrorRecord $_) }

@@ -224,6 +224,25 @@ $script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ at = $t0.T
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.at -eq $t0 -and $a.value.at.Kind -eq [System.DateTimeKind]::Utc) "nudge: a local time is carried as the same instant in UTC"
 
+Check ($a.state -ceq "known") "CONTROL: the nudge above is known"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.unreadableCount -eq 0) "state: a waker that does not report unreadableCount is read as reporting none"
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadableCount = 2 }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.unreadableCount -eq 2 -and $a.value.unreadCount -eq 1) "state: unreadableCount is carried beside unreadCount, and takes nothing from it"
+foreach ($case in @(
+        @{ what = "below zero"; v = -1 }, @{ what = "given as text"; v = "2" }, @{ what = "a fraction"; v = 1.5 }, @{ what = "too large to be a count"; v = [long]3000000000 })) {
+    $script:badCount = $case.v
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadableCount = $script:badCount }) }
+    $a = $null
+    try { $a = Get-HordeWakeState -Waker $scripted -Id $sid } catch { $a = $null }
+    Check ($null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains("unreadableCount")) ("state: an unreadableCount " + $case.what + " is unknown, saying so")
+}
+$script:stateAnswer = { param($id) $s = New-State; Add-Member -InputObject $s -MemberType NoteProperty -Name "unreadableCount" -Value $null; New-HordeKnown -Value $s }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unreadableCount")) "state: an unreadableCount of null is 'I could not count', which is unknown and never 0"
+
 $script:blindBox = "unknown"; $script:blindTurn = "unknown"
 Check ((Get-HordeWakeState -Waker $blind -Id $sid).state -ceq "known") "state: a waker that cannot read the box or the turn may say unknown of both"
 $script:blindBox = "yes"; $script:blindTurn = "unknown"

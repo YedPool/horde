@@ -212,10 +212,44 @@ function Update-HordeWakeLedger {
     return $next
 }
 
+function Update-HordeWakeBadMail {
+    # WHAT A MAILBOX WITH RECORDS NOBODY CAN READ IS TOLD ABOUT, AND WHEN: { seen; entries }.
+    #   -Seen        session id -> { passes; told }, from the last pass
+    #   -Unreadable  session id -> how many records of its mail could not be read, this pass
+    # DEBOUNCED: a record being written as the fleet reads it is unreadable for one pass and whole the
+    # next, so one sighting says nothing. Only when the same session shows unreadable mail on TWO PASSES
+    # IN A ROW is one entry of kind bad-mail made, and then no other until it clears - a pass on which
+    # the session shows none (or is not seen at all) forgets it, and a later return is told again.
+    # THIS ONLY JOURNALS. It is never a reason not to nudge: the good mail beside a bad record is knocked
+    # for as always (the waker port carries the count apart from unreadCount for exactly that).
+    # THE SEAM FOR THE LIVE SLICE: telling the warchief by mail that a session's mailbox holds records
+    # nobody can read belongs where this entry is made - a mail under an id made from the session and
+    # the day, posted as core/RestoreSource.ps1 posts. Nothing posts it yet.
+    param($Seen = @{}, $Unreadable = @{}, [Parameter(Mandatory = $true)][datetime]$Now)
+    $next = @{}
+    $entries = New-Object System.Collections.ArrayList
+    if ($null -ne $Unreadable) {
+        foreach ($id in @($Unreadable.Keys)) {
+            $count = [int]$Unreadable[$id]
+            if ($count -le 0) { continue }
+            $passes = 1
+            $told = $false
+            if ($null -ne $Seen -and $Seen.ContainsKey($id)) { $passes = [int]$Seen[$id].passes + 1; $told = [bool]$Seen[$id].told }
+            if ($passes -ge 2 -and -not $told) {
+                $told = $true
+                [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "bad-mail" -Id "$id" -Outcome "unreadable" -Reason ("" + $count + " record(s) of its mail cannot be read; the mail that can be is knocked for as always")))
+            }
+            $next["$id"] = [pscustomobject]@{ passes = $passes; told = $told }
+        }
+    }
+    return [pscustomobject]@{ seen = $next; entries = $entries.ToArray() }
+}
+
 function Invoke-HordeWakePass {
     # ONE PASS. Reads the targets and each one's state through the port, decides, and acts; returns
-    # { ledger; entries; decisions }. It reads no clock and no file: the loop passes -Now and keeps what
-    # comes back.
+    # { ledger; entries; decisions; unreadable }. It reads no clock and no file: the loop passes -Now and
+    # keeps what comes back. unreadable is session id -> how many records of its mail could not be read,
+    # for the sessions that have any (Update-HordeWakeBadMail, which the loop calls with it).
     #   -Waker            a registered waker, or $null when none is installed: then nobody is nudged
     #   -Ledger           session id -> { attempts; lastAttemptAt; lastOutcome }, from the last pass
     #   -Shadow           JOURNAL WHAT IT WOULD DO, AND DO NONE OF IT: no nudge is sent. A would-nudge
@@ -227,6 +261,7 @@ function Invoke-HordeWakePass {
     $entries = New-Object System.Collections.ArrayList
     $nextLedger = $Ledger
     $decisions = @()
+    $unreadable = @{}
     if ($null -ne $Waker) {
         $listing = Get-HordeWakeTargets -Waker $Waker
         if ($listing.state -cne "known") {
@@ -236,6 +271,7 @@ function Invoke-HordeWakePass {
             $states = @{}
             foreach ($t in $targets) {
                 $states[$t.id] = Get-HordeWakeState -Waker $Waker -Id $t.id
+                if ($states[$t.id].state -ceq "known" -and $states[$t.id].value.unreadableCount -gt 0) { $unreadable[$t.id] = $states[$t.id].value.unreadableCount }
                 if ($states[$t.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $t.id -Outcome "unknown" -Reason "$($states[$t.id].reason)")) }
             }
             $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings)
@@ -256,14 +292,14 @@ function Invoke-HordeWakePass {
             $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----
 # Kept apart from everything above, which reads and writes none. Only the command's loop calls these.
 
 function Save-HordeWakeLedger {
-    # ledger.json, replaced whole: the back-off of every session being asked, so a watcher that is
+    # The ledger file, replaced whole: the back-off of every session being asked, so a watcher that is
     # restarted does not knock at once on a session it had been told to leave for five minutes.
     # -Shadow names the shadow run's own file (core/WakeFiles.ps1, Get-HordeWakeStateFile).
     param($Ledger, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))

@@ -175,7 +175,11 @@ $script:HordeHostNamesProseFolder = "planning"
 # THE SIXTH FAMILY (relay design 2026-10-09, PR plan item 3): nothing outside relays/<name>/ names what
 # identifies a relay, so the hosted relay after the local one is a new folder and not a change to the
 # relay module. relays/Port.ps1 belongs to no relay.
-$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays")
+# THE SEVENTH FAMILY (the wake watcher's first real waker, 2026-10-13): nothing outside wakers/<name>/
+# names what identifies a waker, so the watcher's rules (core/Wake.ps1) and its port stay free of any
+# fleet tool, terminal or agent program, and the second way of seeing and ringing sessions is a new
+# folder too. wakers/Port.ps1 belongs to no waker.
+$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays", "wakers")
 # The file types a fingerprint list may excuse from being read as text (header, AND ONLY A PROGRAM
 # LIBRARY): compiled program libraries. A new type is a line here, agreed in review, never a line in
 # a list.

@@ -41,8 +41,8 @@
            Find = 'if ($finding.state -ceq "known") { $nextKnown ='
            Replace = 'if ($false) { $nextKnown =' }
         @{ Name = "shadow-state-written-where-live-reads"
-           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "restore" -Shadow:$Shadow -HordeHome $HordeHome) -Text'
-           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "restore" -HordeHome $HordeHome) -Text' }
+           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome) -Text'
+           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -HordeHome $HordeHome) -Text' }
         @{ Name = "posted-ids-never-dropped"
            Find = 'if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }'
            Replace = '$nextPosted["$k"] = $when' }

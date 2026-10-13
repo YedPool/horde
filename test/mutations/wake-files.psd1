@@ -18,8 +18,20 @@
            Find = '(New-Object System.IO.FileInfo($path)).Length -ge $MaxBytes) {'
            Replace = '$false) {' }
         @{ Name = "tail-forgets-the-journal-set-aside"
-           Find = 'foreach ($leaf in @("journal.1.jsonl", "journal.jsonl")) {'
-           Replace = 'foreach ($leaf in @("journal.jsonl")) {' }
+           Find = 'foreach ($ext in @(".1.jsonl", ".jsonl")) {'
+           Replace = 'foreach ($ext in @(".jsonl")) {' }
+        @{ Name = "live-reads-the-unsuffixed-files-of-earlier-builds"
+           Find = '$leaf = $Stem + "-live" + $Extension'
+           Replace = '$leaf = $Stem + $Extension' }
+        @{ Name = "live-state-is-the-unsuffixed-file-of-earlier-builds"
+           Find = '$leaf = $Name + "-live.json"'
+           Replace = '$leaf = $Name + ".json"' }
+        @{ Name = "shadow-journal-and-heartbeat-are-the-live-ones"
+           Find = 'if ($Shadow) { $leaf = $Stem + "-shadow" + $Extension }'
+           Replace = '' }
+        @{ Name = "journal-written-to-the-live-file-whatever-the-mode"
+           Find = '$path = Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -Shadow:$Shadow -HordeHome $HordeHome'
+           Replace = '$path = Get-HordeWakeModeFile -Stem "journal" -Extension ".jsonl" -HordeHome $HordeHome' }
         @{ Name = "tick-not-written-in-the-heartbeat"
            Find = 'shadow = [bool]$Shadow; tickSeconds = $TickSeconds }'
            Replace = 'shadow = [bool]$Shadow; tickSeconds = 0 }' }

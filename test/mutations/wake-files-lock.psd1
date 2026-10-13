@@ -11,6 +11,6 @@
            Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite) }' }
         @{ Name = "shadow-and-live-share-one-lock"
            Find = 'if ($Shadow) { $leaf = "run-shadow.lock" }'
-           Replace = 'if ($Shadow) { $leaf = "run.lock" }' }
+           Replace = 'if ($Shadow) { $leaf = "run-live.lock" }' }
     )
 }
