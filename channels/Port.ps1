@@ -73,6 +73,21 @@
 # record in the journal BEFORE the relay sees it (so its seq is spent whatever happens next), put it
 # under its replay key (so a retried put is the same item).
 #
+# WHAT GOES TO THE PHONE IS TRIMMED BY ITS SENDER (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM). The
+# phone's mailbox is acked by nobody, so a channel that puts there says, on the put itself, how much of
+# its own stream is still wanted: Send-HordeRelayChannelSaved -KeepFrom, a seq of the envelope's own
+# stream (this machine, that channel). decisions keeps from the first page of the snapshot whose last
+# page is being put; chat and progress keep their last so-many envelopes (Get-HordeRelayChannelKeepFrom).
+# It is one more thing said on a put that was being made anyway: no request is added.
+# WHAT A PUT TELLS THE RUN, kept in the context for the runner to say and to act on (cli/RelayRun.ps1):
+#   full       by mailbox: the relay REFUSED a put there because the mailbox, or the account, holds its
+#              most (status 507). Until 2026-10-13 that was one more failed turn among others, backed off
+#              from for ever in a log nobody was reading, while nothing reached the founder's phone. It
+#              is kept here until a put into that mailbox is taken again.
+#   untrimmed  by mailbox: a put there asked for a trim and the relay took the put without trimming -
+#              a relay with no such thing, or a hosted one deployed before it. Nothing failed, and the
+#              mailbox is growing toward full: worth one plain line.
+#
 # Answers are core/tristate; the channels' outcomes are words. Nothing here prints: the runner does.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
@@ -139,9 +154,10 @@ function Get-HordeRelayChannel {
 function New-HordeRelayRunContext {
     # What the channels work with for one run: this machine's identity and keys, the journal made ready,
     # and the relay connection. Known { hordeHome; horde; signKeyId; signKey; agreeKeyId; openingKeys;
-    # mailbox; connection; decisionsRoot; cursor; acked; state }, where openingKeys is the agreement keys
-    # that may open (the current one and any retired one in its grace) and state a table each channel
-    # keeps its own memory in, by name. The caller closes it (Close-HordeRelayRunContext). The identity's
+    # mailbox; connection; decisionsRoot; cursor; acked; state; full; untrimmed }, where openingKeys is the agreement keys
+    # that may open (the current one and any retired one in its grace), state a table each channel
+    # keeps its own memory in, by name, and full and untrimmed what the puts have told the run (the
+    # header, WHAT A PUT TELLS THE RUN). The caller closes it (Close-HordeRelayRunContext). The identity's
     # answer when there is none; unknown when the journal cannot be made ready.
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)]$Connection, [string]$DecisionsRoot = "", $Now = $null)
     $j = Initialize-HordeRelayJournal -HordeHome $HordeHome -Now $Now
@@ -157,7 +173,7 @@ function New-HordeRelayRunContext {
     return (New-HordeKnown -Value ([pscustomobject]@{
         hordeHome = $HordeHome; horde = $id.value.horde; signKeyId = $id.value.sign.keyId; signKey = $id.value.sign.key
         agreeKeyId = $id.value.agree.keyId; openingKeys = $open.value.keys; mailbox = $id.value.mailbox; connection = $Connection
-        decisionsRoot = $DecisionsRoot; cursor = [long]0; acked = [long]0; state = @{}
+        decisionsRoot = $DecisionsRoot; cursor = [long]0; acked = [long]0; state = @{}; full = @{}; untrimmed = @{}
     }))
 }
 
@@ -171,6 +187,8 @@ function Update-HordeRelayRunContext {
     $made = New-HordeRelayRunContext -HordeHome $Context.hordeHome -Connection $Context.connection -DecisionsRoot $Context.decisionsRoot -Now $Now
     if ($made.state -cne "known") { return $made }
     $made.value.state = $Context.state
+    # What the puts have told the run is the run's too, and is about the relay, not the keys.
+    $made.value.full = $Context.full; $made.value.untrimmed = $Context.untrimmed
     if ($made.value.mailbox -ceq $Context.mailbox) { $made.value.cursor = $Context.cursor; $made.value.acked = $Context.acked }
     Close-HordeRelayRunContext -Context $Context
     return $made
@@ -240,13 +258,43 @@ function Save-HordeRelayChannelEnvelope {
     return (New-HordeUnknown -Reason "nothing was recorded: another sender of this stream took the next sequence number twice")
 }
 
+function Get-HordeRelayChannelKeepFrom {
+    # The seq to keep from so that the stream of -Key holds its last -Keep envelopes once -Key is put
+    # (the header, WHAT GOES TO THE PHONE IS TRIMMED BY ITS SENDER): the key's own seq less Keep, plus
+    # one. 0 - ask for nothing - while the stream is not yet longer than that, for a key that names no
+    # stream, and for a Keep under 1: a channel that keeps nothing of its own stream has a bug.
+    param([Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][long]$Keep)
+    $named = Read-HordeRelayStreamKey -Key $Key
+    if ($null -eq $named -or $Keep -lt 1) { return [long]0 }
+    return [long][System.Math]::Max([long]0, $named.seq - $Keep + 1)
+}
+
 function Send-HordeRelayChannelSaved {
     # Put an envelope Save-HordeRelayChannelEnvelope recorded into -Mailbox, under its replay key, so a
-    # put made again is the same item. Known { key; relaySeq; duplicate }; unknown with the relay's reason.
-    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Saved, [Parameter(Mandatory = $true)][string]$Mailbox)
-    $put = Send-HordeRelayItem -Connection $Context.connection -Mailbox $Mailbox -Text $Saved.text -Key $Saved.key
-    if ($put.state -cne "known") { return (New-HordeUnknown -Reason ("the envelope " + $Saved.key + " is recorded, and the relay did not take it: " + $put.reason)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ key = $Saved.key; relaySeq = $put.value.seq; duplicate = $put.value.duplicate }))
+    # put made again is the same item. -KeepFrom, over 0, also asks the relay to delete what is before
+    # that seq in the envelope's own stream (the header). Known { key; relaySeq; duplicate; trimmed } -
+    # trimmed how many the relay deleted, -1 when none was asked or the relay did not say; unknown with
+    # the relay's reason, and its status when it gave one. What the put told the run goes into the
+    # context (the header, WHAT A PUT TELLS THE RUN).
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Saved, [Parameter(Mandatory = $true)][string]$Mailbox, [long]$KeepFrom = 0)
+    $put = Send-HordeRelayItem -Connection $Context.connection -Mailbox $Mailbox -Text $Saved.text -Key $Saved.key -KeepFrom $KeepFrom
+    if ($put.state -cne "known") {
+        $refused = New-HordeUnknown -Reason ("the envelope " + $Saved.key + " is recorded, and the relay did not take it: " + $put.reason)
+        $status = $put.PSObject.Properties["status"]
+        if ($null -ne $status) {
+            $refused | Add-Member -NotePropertyName status -NotePropertyValue ([int]$status.Value)
+            # FULL IS NOT ONE MORE FAILURE: it is kept, with the relay's own words, for the runner to say
+            # plainly and to tell the warchief of.
+            if ([int]$status.Value -eq 507) { $Context.full[$Mailbox] = [pscustomobject]@{ mailbox = $Mailbox; reason = "$($put.reason)"; since = [datetime]::UtcNow } }
+        }
+        return $refused
+    }
+    if ($Context.full.ContainsKey($Mailbox)) { $Context.full.Remove($Mailbox) }
+    if ($KeepFrom -gt 0) {
+        if ($put.value.trimmed -lt 0) { $Context.untrimmed[$Mailbox] = $true }
+        elseif ($Context.untrimmed.ContainsKey($Mailbox)) { $Context.untrimmed.Remove($Mailbox) }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ key = $Saved.key; relaySeq = $put.value.seq; duplicate = $put.value.duplicate; trimmed = $put.value.trimmed }))
 }
 
 function Send-HordeRelayChannelEnvelope {
