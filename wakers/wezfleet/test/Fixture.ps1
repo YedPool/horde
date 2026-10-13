@@ -104,5 +104,5 @@ return [pscustomobject]@{
     Forget = { param($State) Clear-HordeWezfleetWakerMemory }
     NoSnapshot = { param($State, [bool]$On) Set-HordeWezfleetWakerSnapshotFault $On }
     Clock = { param($State, $Now) Set-HordeWezfleetWakerClock $Now }
-    Deadlines = { param($State, [int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeSeconds = 20) Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds -NudgeSeconds $NudgeSeconds }
+    Deadlines = { param($State, [int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = 30) Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds -NudgeBudgetSeconds $NudgeBudgetSeconds }
 }

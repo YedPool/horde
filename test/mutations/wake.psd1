@@ -49,8 +49,8 @@
            Find = 'backoffSeconds = @(5, 15, 45, 135, 300)'
            Replace = 'backoffSeconds = @(5, 15, 45, 135)' }
         @{ Name = "attempts-not-counted"
-           Find = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt'
-           Replace = '$next[$id] = [pscustomobject]@{ attempts = 1; lastAttemptAt' }
+           Find = '$count = $before + 1'
+           Replace = '$count = 1' }
         @{ Name = "mail-taken-does-not-reset"
            Find = 'if ($taken -or $old) { $next.Remove($id) }'
            Replace = 'if ($old) { $next.Remove($id) }' }
@@ -73,8 +73,8 @@
            Find = 'if ($rang.value.outcome -ceq "nothing" -and $null -ne (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $d.id))) { continue }'
            Replace = '' }
         @{ Name = "hold-outlives-a-real-attempt"
-           Find = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }'
-           Replace = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])"; nothingAt = (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id)) }' }
+           Find = '$next[$id] = [pscustomobject]@{ attempts = $count; lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }'
+           Replace = '$next[$id] = [pscustomobject]@{ attempts = $count; lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])"; nothingAt = (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id)) }' }
         @{ Name = "shadow-ledger-written-where-live-reads"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -HordeHome $HordeHome) -Text' }
@@ -110,6 +110,15 @@
            Replace = '-CanLook:$CanLook' }
         @{ Name = "the-look-is-not-used"
            Find = 'if ($looked) { $answer = $Confirmed[$id] }'
+           Replace = '' }
+        @{ Name = "killed-nudge-backs-off-like-any-other"
+           Find = 'if ("$($Outcomes[$id])" -ceq "killed") { $count = [System.Math]::Max($count, @($Settings.backoffSeconds).Count) }'
+           Replace = '' }
+        @{ Name = "killed-nudge-sets-a-long-count-back"
+           Find = '$count = [System.Math]::Max($count, @($Settings.backoffSeconds).Count) }'
+           Replace = '$count = @($Settings.backoffSeconds).Count }' }
+        @{ Name = "killed-nudge-journaled-as-a-nudge"
+           Find = 'if ($rang.value.outcome -ceq "killed") { $kind = "nudge-killed" }'
            Replace = '' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'

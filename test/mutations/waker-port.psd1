@@ -114,8 +114,14 @@
            Find = '$outcome.value -isnot [string] -or $script:HordeWakerOutcomes -cnotcontains $outcome.value) { return'
            Replace = '$outcome.value -isnot [string]) { return' }
         @{ Name = "nothing-is-not-an-outcome"
-           Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")'
-           Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable")' }
+           Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")'
+           Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "killed")' }
+        @{ Name = "killed-is-not-an-outcome"
+           Find = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")'
+           Replace = '$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")' }
+        @{ Name = "killed-without-a-reason-accepted"
+           Find = '$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing", "killed")'
+           Replace = '$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing")' }
         @{ Name = "busy-without-a-reason-accepted"
            Find = 'if ($script:HordeWakerReasonOutcomes -ccontains $outcome.value -and $why.Trim() -eq "") { return'
            Replace = 'if ($false) { return' }

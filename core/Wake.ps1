@@ -206,7 +206,10 @@ function Update-HordeWakeLedger {
     # the fleet and journals every 3 s. So a nothing is recorded as a HOLD, nothingAt, beside the attempts
     # it leaves alone: the session is out of the ready set for the first step of the back-off, and goes
     # behind every other ready session after that. A real attempt, or the mail being taken, ends the hold.
-    param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now)
+    # "killed" IS THE LONGEST BACK-OFF AT ONCE: the waker stopped its own nudge part-way, and the session's
+    # box may hold the unsent line (wakers/Port.ps1). Asking again in 5 s would be typing into that. The
+    # attempt is counted as though every step of the back-off had already been used.
+    param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
     $next = @{}
     if ($null -ne $Ledger) { foreach ($k in @($Ledger.Keys)) { $next["$k"] = $Ledger[$k] } }
     foreach ($d in @($Decisions)) {
@@ -221,7 +224,9 @@ function Update-HordeWakeLedger {
         }
         $before = 0
         if ($next.ContainsKey($id)) { $before = [int]$next[$id].attempts }
-        $next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }
+        $count = $before + 1
+        if ("$($Outcomes[$id])" -ceq "killed") { $count = [System.Math]::Max($count, @($Settings.backoffSeconds).Count) }
+        $next[$id] = [pscustomobject]@{ attempts = $count; lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }
     }
     foreach ($id in @($next.Keys)) {
         $taken = $false
@@ -275,8 +280,9 @@ function Invoke-HordeWakePass {
     #   -Shadow           JOURNAL WHAT IT WOULD DO, AND DO NONE OF IT: no nudge is sent. A would-nudge
     #                     still counts as an attempt in the ledger, so the journal shows the rhythm a
     #                     live run would have had instead of a line every pass.
-    # THE ENTRIES are the journal lines, kinds: nudge, would-nudge and skip-unknown (a listing or a state
-    # the port could not give; id is "" for the listing).
+    # THE ENTRIES are the journal lines, kinds: nudge, nudge-killed (a nudge the waker had to stop
+    # part-way), would-nudge and skip-unknown (a listing or a state the port could not give; id is ""
+    # for the listing).
     param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Shadow)
     $entries = New-Object System.Collections.ArrayList
     $nextLedger = $Ledger
@@ -327,11 +333,14 @@ function Invoke-HordeWakePass {
                     $outcomes[$d.id] = $rang.value.outcome
                     # A RUN OF NOTHINGS IS JOURNALED ONCE, when it starts: the ledger's hold says one is under way.
                     if ($rang.value.outcome -ceq "nothing" -and $null -ne (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $d.id))) { continue }
-                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason))
+                    # A NUDGE THE WAKER HAD TO KILL IS ITS OWN KIND OF LINE, so nobody reads it as one more nudge.
+                    $kind = "nudge"
+                    if ($rang.value.outcome -ceq "killed") { $kind = "nudge-killed" }
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason))
                 }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }
-            $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now
+            $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now -Settings $Settings
         }
     }
     return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable }

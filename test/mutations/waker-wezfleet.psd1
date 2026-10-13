@@ -108,8 +108,23 @@
            Find = '-and $target.Value -cne "" -and $target.Value -cne $Id) { return (New-HordeUnknown'
            Replace = '-and $false) { return (New-HordeUnknown' }
         @{ Name = "failed-nudge-read-as-woken"
-           Find = 'if (-not $read.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $read.reason; at = $at })'
-           Replace = 'if (-not $read.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "woken"; reason = $read.reason; at = $at })' }
+           Find = 'return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $why; at = $at }) -ObservedAt $at)'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "woken"; reason = $why; at = $at }) -ObservedAt $at)' }
+        @{ Name = "nudge-sent-without-its-budget"
+           Find = '@("mail", "nudge", "-To", $Id, "-BudgetSeconds", ("" + $budget), "-Json")'
+           Replace = '@("mail", "nudge", "-To", $Id, "-Json")' }
+        @{ Name = "nudge-killed-at-its-budget"
+           Find = '("" + $budget), "-Json") -DeadlineSeconds (3 * $budget)'
+           Replace = '("" + $budget), "-Json") -DeadlineSeconds $budget' }
+        @{ Name = "killed-nudge-read-as-unreachable"
+           Find = 'if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed";'
+           Replace = 'if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable";' }
+        @{ Name = "old-tool-not-said-to-be-old"
+           Find = 'if ($run.ok) { $why = $tooOld + $why }'
+           Replace = '' }
+        @{ Name = "exit-2-not-said-to-be-an-old-tool"
+           Find = 'if ([int]$run.exit -eq 2) { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "outcome-with-no-reason-left-blank"
            Find = 'if ($why -eq "" -and $mapped -cne "woken") { $why = "the fleet answered " + $outcome.Value }'
            Replace = '' }

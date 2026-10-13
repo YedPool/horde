@@ -9,8 +9,9 @@
 #   (B) mail state -To <id> -TimeoutSeconds <n> -Json      one session, reading its pane: { at; session: row };
 #       exit 3 { at; to; reason: absent; detail } for a session nobody answers to, exit 1
 #       records-unreadable, exit 2 bad arguments
-#   (C) mail nudge -To <id> -Json                           { outcome; reason; target; pane; instance; detail },
-#       outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an empty -To
+#   (C) mail nudge -To <id> -BudgetSeconds <n> -Json        { outcome; reason; target; pane; instance; detail },
+#       outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an empty -To.
+#       It does not START typing when too little of its budget is left, and answers refused for that.
 # A row is { id; label; role; parent; retired; reachable; mail; unreadCount; unreadableCount;
 # oldestUnreadAt; idle; boxEmpty; midTurn; reason; reasons }. In form A boxEmpty and midTurn are always
 # unknown: reading them means reading a pane, which is form B's.
@@ -42,9 +43,10 @@
 #      consecutive failures the next read waits 5, 15, 45, 135, then 300 s, and until then the same
 #      unknown is answered, in the same words, so the journal says it once (core/WakeFiles.ps1).
 #   4. EVERY CALL RUNS UNDER THIS ADAPTER'S OWN DEADLINE: form A 10 s, form B three times the
-#      -TimeoutSeconds it passes (5, so 15 s), form C 20 s. Past it the child and everything it started
-#      are stopped and the answer is unknown, or unreachable for a nudge, with the reason timed-out. The
-#      loop that wakes every session never waits on one.
+#      -TimeoutSeconds it passes (5, so 15 s), form C three times the budget it passes (30, so 90 s).
+#      Past it the child and everything it started are stopped and the answer is unknown with the
+#      reason timed-out - or, for a nudge, the outcome killed (Send-HordeWezfleetWakerNudge says why
+#      that is not just another failure). The loop that wakes every session never waits on one.
 #   5. AN ANSWER THAT IS NOT ONE LINE OF JSON OF THE EXPECTED SHAPE - a binding error prints text - is
 #      unknown, or unreachable for a nudge, with the reason. Never a throw.
 #   6. unreadableCount IS CARRIED, not acted on here: the port's state has it, and the watcher's tick
@@ -97,7 +99,7 @@ $script:HordeWezfleetWakerMaxBytes = 1048576
 $script:HordeWezfleetWakerDetailChars = 300
 # RULE 4, the deadlines: form A, the -TimeoutSeconds form B passes (its own deadline is three times
 # that), and form C.
-$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudge = 20 }
+$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudgeBudget = 30 }
 # RULE 3, the wait after each consecutive failure of a read.
 $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
 # How long one form A answer serves a caller that never says a pass begins, counted from its arrival.
@@ -129,9 +131,9 @@ function Set-HordeWezfleetWakerRoot {
 
 function Set-HordeWezfleetWakerDeadlines {
     # For tests: the deadlines of rule 4, in seconds, so a case that waits one out waits a second or two.
-    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeSeconds = 20)
-    if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeSeconds -lt 1) { throw "a deadline is at least 1 s" }
-    $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudge = $NudgeSeconds }
+    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = 30)
+    if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeBudgetSeconds -lt 1) { throw "a deadline is at least 1 s" }
+    $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudgeBudget = $NudgeBudgetSeconds }
 }
 
 function Set-HordeWezfleetWakerSnapshotFault {
@@ -591,13 +593,35 @@ function Send-HordeWezfleetWakerNudge {
     # reason (rules 4 and 5) - nothing is known to have been typed, and the watcher backs off and asks
     # again - except an answer about ANOTHER session, which is unknown: this waker cannot say what
     # happened to the one it was asked about.
+    #
+    # THE FLEET'S COMMAND OWNS THE TYPING, SO IT IS THE ONE THAT DECIDES WHEN THERE IS NO TIME LEFT TO TYPE.
+    # This waker's deadline used to be 20 s and killed the process tree at it. On a throttled machine a
+    # real nudge can run longer, and a kill that falls between the line being typed and Enter being
+    # pressed leaves text in the box: the box is then never empty, and that session is never woken
+    # again (review of PR #211). So the command is handed its BUDGET (-BudgetSeconds, 30) and refuses to
+    # START typing when too little of it is left - answering refused, which is the port's nothing, with
+    # its reason - and this waker's own kill is set at three times the budget (90 s), far above it: it is
+    # for a process that hung, never a way to hurry one that is typing.
+    # IF THE KILL DOES FIRE, the outcome is killed, and it says so first in its reason: the box may hold
+    # text now, and the watcher puts the session on its longest back-off and tells the warchief.
+    # A COMMAND TOO OLD TO KNOW -BudgetSeconds answers with usage text or exit 2. That is unreachable,
+    # with a reason that says so. IT IS NEVER ASKED AGAIN WITHOUT THE FLAG: an unbudgeted nudge is the
+    # defect this is here to end.
     param([Parameter(Mandatory = $true)][string]$Id)
     $at = Get-HordeWezfleetWakerTime
-    $run = Start-HordeWezfleetWakerProcess -Argv @("mail", "nudge", "-To", $Id, "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.nudge
+    $budget = [int]$script:HordeWezfleetWakerDeadlines.nudgeBudget
+    $run = Start-HordeWezfleetWakerProcess -Argv @("mail", "nudge", "-To", $Id, "-BudgetSeconds", ("" + $budget), "-Json") -DeadlineSeconds (3 * $budget)
+    if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed"; reason = ("nudge-killed: the nudge ran past " + (3 * $budget) + " s, three times its budget, and was stopped; its box may now hold the unsent line. " + $run.reason); at = $at }) -ObservedAt $at) }
     $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet mail nudge"
-    if (-not $read.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $read.reason; at = $at }) -ObservedAt $at) }
+    $tooOld = "tool-too-old: the fleet's command did not take mail nudge -BudgetSeconds as this waker asks it, so it may be older than the nudge budget, and it is not asked without one: "
+    if (-not $read.ok) {
+        $why = $read.reason
+        if ($run.ok) { $why = $tooOld + $why }
+        return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $why; at = $at }) -ObservedAt $at)
+    }
     $j = $read.json
     $said = "wezfleet mail nudge exit " + $run.exit
+    if ([int]$run.exit -eq 2) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = ($tooOld + (Get-HordeWezfleetWakerFailure -Json $j -Said $said)); at = $at }) -ObservedAt $at) }
     if ([int]$run.exit -ne 0) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = (Get-HordeWezfleetWakerFailure -Json $j -Said $said); at = $at }) -ObservedAt $at) }
     $outcome = $j.PSObject.Properties["outcome"]
     if ($null -eq $outcome -or $outcome.Value -isnot [string] -or -not $script:HordeWezfleetWakerOutcomes.ContainsKey($outcome.Value) -or $script:HordeWezfleetWakerOutcomes[$outcome.Value] -isnot [string]) {

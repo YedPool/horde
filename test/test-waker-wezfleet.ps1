@@ -241,10 +241,11 @@ $a = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
 Check ($a.state -ceq "unknown" -and "$($a.reason)".StartsWith("timed-out: ") -and "$($a.reason)".Contains("within 3 s") -and $clock.Elapsed.TotalSeconds -lt 30) "a pane read that hangs is stopped at three times the seconds it gave the fleet's command, and answered unknown, timed-out"
 Check ((Get-Count $state ("mail state -To " + (Sid 1) + " -TimeoutSeconds 1 -Json")) -eq 1) "having given the fleet's command a third of its own deadline"
 & $fx.SetMode $state @{ nudge = @{ hangSeconds = 60 } }
+& $fx.Deadlines $state 2 1 10
 $clock.Restart()
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".StartsWith("timed-out: ") -and $clock.Elapsed.TotalSeconds -lt 30) "a nudge that hangs is stopped at its deadline and answered unreachable, timed-out"
-Check ((Get-Typed $state) -eq 0) "and nothing is known to have been typed"
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and "$($a.value.reason)".StartsWith("nudge-killed: ") -and "$($a.value.reason)".Contains("past 30 s, three times its budget") -and "$($a.value.reason)".Contains("box may now hold") -and $clock.Elapsed.TotalSeconds -lt 50 -and $clock.Elapsed.TotalSeconds -ge 29) ("a nudge that hangs is stopped only at THREE TIMES its budget, and the outcome is killed, said first in its reason (" + [int]$clock.Elapsed.TotalSeconds + " s for a budget of 10)")
+Check ((Get-Count $state ("mail nudge -To " + (Sid 1) + " -BudgetSeconds 10 -Json")) -eq 1) "having handed the fleet's command its budget, a third of the kill deadline"
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
@@ -287,7 +288,7 @@ foreach ($case in @(
         @{ what = "text"; exit = 1; out = ""; err = "wezfleet.ps1 : A parameter cannot be found that matches parameter name 'To'."; like = "not one line of JSON" },
         @{ what = "an outcome it does not know"; exit = 0; out = ('{"outcome":"typed","reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}'); like = "without an outcome" },
         @{ what = "no outcome at all"; exit = 0; out = '{"reason":"x"}'; like = "without an outcome" },
-        @{ what = "exit 2, an empty -To"; exit = 2; out = '{"outcome":"unreachable","reason":"bad-to","target":"","pane":"","instance":"","detail":"an empty -To"}'; like = "bad-to: " })) {
+        @{ what = "exit 1, a failure of its own"; exit = 1; out = '{"outcome":"unreachable","reason":"internal-error","target":"","pane":"","instance":"","detail":"it fell over"}'; like = "internal-error: " })) {
     Set-Answer $state "nudge" $case.exit $case.out $(if ($case.ContainsKey("err")) { $case.err } else { "" })
     $a = $null
     try { $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1) } catch { $a = $null }
@@ -308,7 +309,19 @@ $state = & $fx.New
 & $fx.SetRow $state (New-Row 4 @{ reachable = "no" })
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 $o = & $fx.Observe $state (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $o.nudges -eq 1 -and (Get-Count $state ("mail nudge -To " + (Sid 1) + " -Json")) -eq 1) "woken is woken: the fleet typed its one line, having been asked with the session's id and nothing else"
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $o.nudges -eq 1 -and (Get-Count $state ("mail nudge -To " + (Sid 1) + " -BudgetSeconds 30 -Json")) -eq 1) "woken is woken: the fleet typed its one line, having been asked with the session's id and a budget of 30 s, and nothing else"
+& $fx.Deadlines $state 10 5 9
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)".StartsWith("budget-too-small") -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "a nudge the fleet's command refuses to START - too little of its budget left - is the port's nothing, with the reason, and nothing more was typed"
+& $fx.Deadlines $state
+& $fx.SetMode $state @{ nudge = @{ exit = 1; stdout = ""; stderr = "wezfleet.ps1 : A parameter cannot be found that matches parameter name 'BudgetSeconds'." } }
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".StartsWith("tool-too-old: ") -and "$($a.value.reason)".Contains("BudgetSeconds")) "a fleet command too old to know -BudgetSeconds is unreachable, with a reason that says it is too old"
+Check ((Get-Count $state "mail nudge*") -eq (Get-Count $state "mail nudge -To * -BudgetSeconds * -Json") -and (& $fx.Observe $state (Sid 1)).nudges -eq 1) "and it is never asked again without the budget: every nudge ever asked for carried one"
+& $fx.SetMode $state @{ nudge = @{ exit = 2; stdout = '{"outcome":"unreachable","reason":"bad-arguments","target":"","pane":"","instance":"","detail":"unknown argument"}' } }
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".StartsWith("tool-too-old: ") -and "$($a.value.reason)".Contains("bad-arguments")) "exit 2 - the command refusing its arguments - says the same, with the command's own reason"
+& $fx.SetMode $state $null
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 2)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)".StartsWith("box-not-empty") -and (& $fx.Observe $state (Sid 2)).nudges -eq 0) "busy is busy, with the fleet's reason code first: a box that is not empty, and nothing typed"
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 3)

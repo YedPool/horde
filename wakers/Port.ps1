@@ -75,7 +75,8 @@
 #            two passes and never repeated inside one, however slow the fleet was to answer.
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
-# unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
+# unreachable, nothing (the mail was taken before the nudge, so nobody was rung) or killed (the waker
+# stopped its own nudge part-way, and the box may hold text); reason is one line and
 # required unless the outcome is woken; at is a [datetime]. A session the waker does not know is unknown,
 # with the reason - never a state of zeros.
 #
@@ -97,9 +98,14 @@ $script:HordeWakerWords = @("yes", "no", "unknown")
 # nothing: asked to nudge, the waker found the session had no unread mail by then - it was taken between
 # the state read and the nudge - and rang nobody. It is not a failure, and the watcher counts no attempt
 # for it (core/Wake.ps1).
-$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")
+# killed: the waker had to stop its own nudge part-way - it hung past the waker's last deadline. NOBODY
+# KNOWS WHAT THE SESSION'S BOX HOLDS NOW: the stop may have fallen between the line being typed and its
+# being sent, and text left in a box is a box that is never empty, so that session would never be woken
+# again. It is the one outcome that may have made things worse, and the watcher treats it as that: its
+# own loud journal line, and the longest back-off (core/Wake.ps1).
+$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing", "killed")
 # The outcomes that must say why: woken needs no account, and the others have no other.
-$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing")
+$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing", "killed")
 $script:HordeWakerTargetMembers = @("id", "label", "role", "parent", "reachable")
 $script:HordeWakerSessionPattern = $null
 

@@ -153,7 +153,8 @@ $null = Register-HordeWaker -Name "memory" `
         if ("$($s.boxEmpty)" -cne "yes") { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "busy"; reason = "its input box is not empty, so nothing was typed"; at = $at }) -ObservedAt $at) }
         if ("$($s.midTurn)" -cne "no") { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "busy"; reason = "it is in the middle of a turn, so nothing was typed"; at = $at }) -ObservedAt $at) }
         # RECORDED ONLY WHEN IT WOULD HAVE BEEN TYPED: busy, unreachable and nothing are the waker saying
-        # it did not ring, so nothing was typed for them.
+        # it did not ring, so nothing was typed for them; killed is a nudge stopped part-way, which a
+        # test asks for by name.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }
         return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }) -ObservedAt $at)
     } `

@@ -264,6 +264,21 @@ Check ($d.Count -eq 1 -and $d[0].action -ceq "wait" -and "$($d[0].reason)".Conta
 Check (Throws { Get-HordeWakeSettings -Overrides @{ maxNudgePerPass = 9 } } "not a wake setting") "a setting that is not one is refused, not silently left at its default"
 
 Write-Host ""
+Write-Host "--- a nudge the waker had to kill: its own loud line, and the longest back-off at once ---" -ForegroundColor Cyan
+
+Start-Case; Seat -Change @{ Outcome = "killed"; OutcomeReason = "nudge-killed: stopped after 90 s; its box may now hold the unsent line" }
+$r = Pass 0
+Check ((Kinds $r) -ceq "nudge-killed" -and $r.entries[0].outcome -ceq "killed" -and "$($r.entries[0].reason)".StartsWith("nudge-killed: ")) "a nudge the waker stopped part-way is journaled as nudge-killed, not as one more nudge"
+Check ($script:ledger[(Sid 1)].attempts -eq 5 -and $script:ledger[(Sid 1)].lastOutcome -ceq "killed") "and the session is put on the longest back-off at once: its box may hold text"
+Seat
+$r = Pass 299
+Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".Contains("back-off") -and (Rang) -eq 0) "it is not asked again 299 s later, though it is idle with an empty box"
+$r = Pass 300
+Check ((Decided $r).action -ceq "nudge" -and (Rang 1) -eq 1) "and is at 300 s"
+$after = Update-HordeWakeLedger -Ledger @{ (Sid 1) = [pscustomobject]@{ attempts = 7; lastAttemptAt = (At 0); lastOutcome = "busy" } } -Decisions @([pscustomobject]@{ id = (Sid 1); action = "nudge"; reason = "" }) -Outcomes @{ (Sid 1) = "killed" } -States @{} -Now (At 9) -Settings $settings
+Check ($after[(Sid 1)].attempts -eq 8) "a session already past every step is counted one more, never set back"
+
+Write-Host ""
 Write-Host "--- the look comes last: a session's box is read only when it is about to be nudged ---" -ForegroundColor Cyan
 
 # A WAKER WHOSE STATE IS CHEAP: the box and the turn are unknown until it is asked to look.

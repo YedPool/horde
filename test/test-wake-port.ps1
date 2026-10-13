@@ -291,11 +291,15 @@ foreach ($case in @(
         @{ what = "busy with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy" }) }; like = "without saying why" },
         @{ what = "unreachable with a blank reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "unreachable"; reason = "  " }) }; like = "without saying why" },
         @{ what = "nothing with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "nothing" }) }; like = "without saying why" },
+        @{ what = "killed with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "killed" }) }; like = "without saying why" },
         @{ what = "a reason of two lines"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy"; reason = "one`ntwo" }) }; like = "line break" })) {
     $script:nudgeAnswer = $case.block
     $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like)) ("nudge: " + $case.what + " is unknown, saying so")
 }
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "killed"; reason = "nudge-killed: stopped part-way" }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "killed" -and $a.value.reason -ceq "nudge-killed: stopped part-way") "nudge: killed - the waker stopped its own nudge part-way - is carried with its reason"
 $script:nudgeAnswer = { param($id) New-HordeUnknown -Reason "the terminal did not answer" }
 $a = Send-HordeWakeNudge -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)" -ceq "the terminal did not answer") "nudge: an adapter's own unknown is passed on with its reason"
