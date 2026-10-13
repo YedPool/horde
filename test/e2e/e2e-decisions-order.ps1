@@ -202,7 +202,10 @@ Check ($closed.exited -and $closed.code -eq 0) "the window is closed and the com
 $final = Read-HordeProbeReport -Path $script:report
 Check ($final.saysRefused -eq 1 -and @($final.errors).Count -eq 0) ("one answer was refused - the one that held a secret - and nothing failed inside the window (refused " + $final.saysRefused + "; " + (@($final.errors) -join " | ") + ")")
 $script:report = Join-Path $script:work "report2.json"
-$script:open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $script:report, "-Probe", $script:probeFile) -Env $childEnv
+# WITH NO PROBE FILE: the file still holds the last steps handed over - "order: importance" - and a
+# window given it would act them out again, and so be in that order whether or not it was kept (seen
+# 2026-10-13: with the keeping taken out, this check still passed).
+$script:open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $script:report) -Env $childEnv
 $back = Wait-Report { param($x) $null -ne $x.drawn -and @($x.drawn.lines).Count -eq 5 -and $null -ne $x.drawn.answer } 150
 Check ($back.drawn.order.key -ceq "importance" -and $back.drawn.order.pressed -ceq "Task importance" -and (Get-Order $back) -ceq "6,7,5,3,8") ("OPENED AGAIN, the list is in the order he chose: by task importance (" + (Get-Order $back) + ")")
 Check ($null -eq (Get-Line $back 4) -and (Get-Done $back 4).a -ceq "some day, yes" -and (Get-Done $back 2).a -ceq "yes, it waits" -and (Get-Done $back 1).k -ceq "thrall") "and what he answered is where it was left: out of his list, with the keeper"
