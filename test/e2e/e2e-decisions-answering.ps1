@@ -109,13 +109,16 @@ $keepHome = $env:HORDE_HOME
 try {
     $env:HORDE_HOME = $hordeHome
     . (Join-Path $root "decisions\Operations.ps1")
+    # THE LIST IS NEWEST FIRST (2026-10-12), so the 22 are stamped a minute apart with question 1 the
+    # LATEST: they then stand in the order of their numbers, which is how this scenario walks them.
+    $when = [datetime]::SpecifyKind([datetime]"2026-01-01T09:00:00", [System.DateTimeKind]::Utc)
     for ($n = 1; $n -le 22; $n++) {
         $asked = "Orc " + [string][char](65 + ($n % 4)); if ($n % 11 -eq 0) { $asked = "the warchief" }
         $title = "Should step " + $n + " of the plan go ahead as it is written?"
         if ($n -eq 13) { $title = $long }
         $question = [ordered]@{ title = $title; kind = "yes-no"; whatItIs = ("Step " + $n + " is ready and waits only for a yes."); group = @("Unblocks work now", "The study")[[int]($n -gt 11)]; askedBy = $asked }
         if ($n -ne 4) { $question["recommendation"] = @("yes.", "no, not in this pass", "yes, as it is written and no further")[$n % 3] }
-        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question }
+        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question } -Now $when.AddMinutes(30 - $n)
         if ($added.state -cne "known" -or $added.value.outcome -cne "done" -or $added.value.number -ne $n) { throw ("question " + $n + " was not added: " + $added.state + " " + $added.reason) }
     }
     $list = @((Invoke-HordeDecision -Operation "list" -Request @{ state = "all" }).value.questions)
@@ -128,6 +131,7 @@ $script:open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "op
 $first = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 150 -Until { param($r) $null -ne $r.drawn -and @($r.drawn.lines).Count -eq 22 -and $null -ne $r.drawn.answer }
 $drawn = $first.drawn
 Check ($null -ne $drawn -and @($drawn.lines).Count -eq 22) "the page reports the 22 question lines it drew"
+Check ((@($drawn.lines | ForEach-Object { $_.n }) -join ",") -ceq ((1..22) -join ",")) "CONTROL: newest first, they stand in the order of their numbers - question 1 was stamped latest"
 Check ($drawn.answer.fields -eq 22 -and $first.says -eq 0) "ALL 22 ANSWER FIELDS ARE THERE TO TYPE IN, and nothing was clicked, unfolded or pressed to get them"
 Check ((@($drawn.lines | Where-Object { [int]$_.fh -eq 1 -or "$($_.p)".Length -gt 30 }).Count) -eq 22 -and @($drawn.lines | Where-Object { "$($_.a)" -ne "" }).Count -eq 0) "each is empty and one line tall (a long suggestion may take a second line, never cut)"
 $wantP = @($list | Sort-Object number | ForEach-Object { "" + $_.number + "|" + $_.recommendation }) -join "`n"
@@ -164,7 +168,7 @@ Check ($said1.Count -eq 1 -and $said1[0].text -ceq "Yes - commit it as it stands
 Check ($said1[0].speaker -ceq "founder" -and $said1[0].route -ceq "window" -and $said1[0].wordingStated -eq $true -and $said1[0].wordingVersion -eq 1) "said by the founder, typed in the window, to the wording the page showed"
 Check ($r.drawn.answer.focus -ceq "2") "THE CARET MOVED to question 2's field"
 Check ((Get-Line $r 1).a -ceq "Yes - commit it as it stands." -and (Get-Line $r 1).m -ceq "saved" -and (Get-Line $r 1).r -ceq "" -and $r.drawn.answer.drafts -eq 0) "question 1's field shows his words, marked saved, and they are no longer a draft"
-Check ("$($r.drawn.top)" -ceq "21 to answer" -and (Get-Line $r 1).m -ceq "saved" -and (Get-Line $r 1).z -ceq "main") ("and the top line counts down, while the answered question stays where it is, marked saved, until the keeper has read it: " + $r.drawn.top)
+Check ("$($r.drawn.top)" -ceq "21 to answer" -and (Get-Line $r 1).z -ceq "main") ("and the top line counts down at once, while the answered question is still in its place for the moment it takes to show it was saved: " + $r.drawn.top)
 Check ($r.says -eq 1 -and $r.saysRefused -eq 0) "the window counts one answer stored"
 
 Write-Host ""
@@ -173,8 +177,10 @@ $r = Send-Steps @((Step "type" -Text "Second answer"), (Step "key" -Key "Enter")
 $said2 = @(Get-Said 2)
 Check ($said2.Count -eq 1 -and $said2[0].text -ceq "Second answer") "A DOUBLE ENTER IS ONE MESSAGE under question 2"
 Check ($r.drawn.answer.focus -ceq "3" -and @(Get-Said 3).Count -eq 0) "and the second press, landing on the empty field the caret had only just reached, skipped nothing: the caret is in question 3"
-$r = Send-Steps @((Step "focus" -Q 2), (Step "key" -Key "Enter"), (Step "settle"))
-Check (@(Get-Said 2).Count -eq 1 -and $r.drawn.answer.focus -ceq "3" -and $r.says -eq 2) "Enter on an answer that is already saved, unchanged, says nothing again and moves on"
+# A SAVED ANSWER LEAVES THE LIST A MOMENT AFTER IT IS SAVED (2026-10-12): question 1 is, by now or very
+# soon, in the folded With Thrall - whether or not the keeper has read it.
+$left = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 30 -Until { param($x) $null -eq (@($x.drawn.lines | Where-Object { $_.n -ceq "1" })[0]) -and @($x.drawn.done | Where-Object { $_.n -ceq "1" -and $_.k -ceq "thrall" }).Count -eq 1 }
+Check ($null -eq (Get-Line $left 1) -and @($left.drawn.done | Where-Object { $_.n -ceq "1" })[0].a -ceq "Yes - commit it as it stands." -and $left.drawn.answer.focus -ceq "3") "ANSWERED, QUESTION 1 HAS LEFT HIS LIST for the folded With Thrall, his answer shown - and the caret is where it was"
 
 Write-Host ""
 Write-Host "=== Shift+Enter and Ctrl+J: a new line in the answer, the caret stays ===" -ForegroundColor Cyan
@@ -186,7 +192,8 @@ Check ($r.drawn.answer.focus -ceq "3" -and (Get-Line $r 3).a -ceq "line one`nlin
 $r = Send-Steps @((Step "key" -Key "Enter"), (Step "settle"))
 $said3 = @(Get-Said 3)
 Check ($said3.Count -eq 1 -and $said3[0].text -ceq "line one`nline two`nline three" -and $r.drawn.answer.focus -ceq "4") "Enter then saved all three lines as one message, line breaks kept, and moved to question 4"
-Check ([int](Get-Line $r 3).fh -eq 2 -and (Get-Line $r 3).more -ceq "+1 line" -and (Get-Line $r 3).a -ceq "line one`nline two`nline three") ("saved, and the caret gone from it, the long answer rests at two lines and says how many more it has; every word is still in the field (" + (Get-Line $r 3).more + ")")
+$gone3 = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 30 -Until { param($x) @($x.drawn.done | Where-Object { $_.n -ceq "3" }).Count -eq 1 }
+Check (@($gone3.drawn.done | Where-Object { $_.n -ceq "3" })[0].a -ceq "line one`nline two`nline three") "and in With Thrall the answer is his three lines, every word"
 
 Write-Host ""
 Write-Host "=== Tab and the right arrow take the grey suggestion; Tab otherwise moves on ===" -ForegroundColor Cyan
@@ -201,8 +208,11 @@ Check ($said5.Count -eq 1 -and $said5[0].text -ceq ($rec5 + " but only this once
 $rec6 = "$((Get-Shown -Number 6).recommendation)"
 $r = Send-Steps @((Step "key" -Key "ArrowRight"))
 Check ($r.drawn.answer.focus -ceq "6" -and (Get-Line $r 6).a -ceq $rec6 -and @(Get-Said 6).Count -eq 0) "the right arrow in an empty field does the same: the suggestion is filled in and the caret stays"
+# Question 5 was answered a moment ago: once it has folded or left, going back passes over it, to the
+# nearest question he has still to answer - question 4, which he skipped.
+$null = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 30 -Until { param($x) $l = @($x.drawn.lines | Where-Object { $_.n -ceq "5" })[0]; $null -eq $l -or "$($l.ad)" -ceq "Answered" }
 $r = Send-Steps @((Step "key" -Key "Tab" -Shift))
-Check ($r.drawn.answer.focus -ceq "5" -and @(Get-Said 6).Count -eq 0 -and (Get-Line $r 6).a -ceq $rec6 -and (Get-Line $r 6).m -ceq "draft") "Shift+Tab goes back one, and what was left in question 6 stays there as a draft"
+Check ($r.drawn.answer.focus -ceq "4" -and @(Get-Said 6).Count -eq 0 -and (Get-Line $r 6).a -ceq $rec6 -and (Get-Line $r 6).m -ceq "draft") ("Shift+Tab goes back to the nearest question still to answer - an answered one is passed over - and what was left in question 6 stays there as a draft (caret " + $r.drawn.answer.focus + ")")
 
 Write-Host ""
 Write-Host "=== Ctrl+Enter on an empty field: the recommendation is his answer ===" -ForegroundColor Cyan
@@ -210,7 +220,7 @@ $rec7 = "$((Get-Shown -Number 7).recommendation)"
 $r = Send-Steps @((Step "focus" -Q 7), (Step "key" -Key "Enter" -Ctrl), (Step "settle"))
 $said7 = @(Get-Said 7)
 Check ($said7.Count -eq 1 -and $said7[0].text -ceq $rec7 -and $rec7 -ne "" -and $said7[0].route -ceq "window") ("the store holds the recommendation's own text as his message under question 7 (" + $rec7 + ")")
-Check ($r.drawn.answer.focus -ceq "8" -and (Get-Line $r 7).m -ceq "saved") "and the caret moved on to question 8"
+Check ($r.drawn.answer.focus -ceq "8") "and the caret moved on to question 8"
 $r = Send-Steps @((Step "focus" -Q 4), (Step "key" -Key "Enter" -Ctrl), (Step "settle"))
 Check ($r.drawn.answer.focus -ceq "4" -and @(Get-Said 4).Count -eq 0) "where there is no recommendation Ctrl+Enter on an empty field saves nothing and stays"
 
@@ -235,9 +245,14 @@ $r = Send-Steps @((Step "key" -Key " " -Ctrl))
 Check ((Get-Line $r 9).open -eq $false -and $r.drawn.answer.focus -ceq "9") "Ctrl+Space folds it again, the caret still there"
 
 Write-Host ""
-Write-Host "=== a reply made at the command line appears under the question, with no reload ===" -ForegroundColor Cyan
+Write-Host "=== a reply that asks, already in the store, appears under the question, with no reload ===" -ForegroundColor Cyan
+# The real command no longer writes such a reply under a question he has answered (2026-10-12: an
+# answered question is never put back in front of him). A store may already hold one, written before
+# that rule, and the window still shows it as it always did: the record is put there as a file.
 $reply = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "reply", "1", "-Text", "Which branch should it go to?") -Env $cliEnv
-Check ($reply.code -eq 0) "the keeper of the list replies under question 1 with the real command"
+Check ($reply.code -eq 1 -and $reply.out -like "*question 1 has been answered and is off the founder's list*" -and $reply.out -like "*-FollowsUp 1*") "the real command refuses to ask again under the question he answered, and says to ask a follow-up"
+$planted = Add-HordeProbeStoredRecord -Store (Join-Path $hordeHome "store\decisions") -Kind "message-said" -Data ([ordered]@{ number = 1; speaker = "warchief"; route = "command"; text = "Which branch should it go to?" })
+Check ($planted -ge 2) "a reply that asks is in the store all the same, as an earlier version left one"
 $after = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @((@($x.drawn.lines | Where-Object { $_.n -ceq "1" })[0]).th).Count -eq 2 }
 $l1 = Get-Line $after 1
 Check ((@($l1.th) -join " | ") -ceq "You: Yes - commit it as it stands. | Thrall: Which branch should it go to?") ("under question 1 stand his answer and then the reply, speaker and words, newest last (" + (@($l1.th) -join " | ") + ")")
@@ -247,22 +262,22 @@ Check ($after.handle -eq $first.handle -and $after.pid -eq $first.pid -and $afte
 Check ($after.drawn.answer.focus -ceq "9" -and (Get-Line $after 8).a -clike "*ask me in person" -and (Get-Line $after 6).a -ceq $rec6) "THE REDRAW TOOK NOTHING: the caret is where it was, and the two drafts are in their fields"
 
 Write-Host ""
-Write-Host "=== the marks: saved, then told, then read ===" -ForegroundColor Cyan
+Write-Host "=== what the notifier announced is read from its file; what he answered stays with the keeper ===" -ForegroundColor Cyan
 $seq2 = [long]$said2[0].sequence
 [System.IO.File]::WriteAllText($toldFile, "this is not JSON {", $utf8)
 $bad = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) "$($x.toldMarks.problem)" -clike "*could not be read as JSON*" }
-Check ("$($bad.toldMarks.problem)" -clike "*could not be read as JSON*" -and (Get-Line $bad 2).m -ceq "saved") "a file of announced messages that is not JSON marks nothing, and the report says why; question 2 is still marked saved"
+Check ("$($bad.toldMarks.problem)" -clike "*could not be read as JSON*" -and $bad.toldMarks.told -eq 0) "a file of announced messages that is not JSON marks nothing, and the report says why"
 Write-Whole -Path $toldFile -Text (ConvertTo-Json -InputObject ([ordered]@{ schemaVersion = 1; rung = @([ordered]@{ question = 2; message = ("" + $seq2); at = "2026-10-07T12:00:00Z" }) }) -Depth 4 -Compress)
-$told = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) (@($x.drawn.lines | Where-Object { $_.n -ceq "2" })[0]).m -ceq "told Thrall" }
-Check ((Get-Line $told 2).m -ceq "told Thrall" -and (Get-Line $told 3).m -ceq "saved" -and "$($told.toldMarks.problem)" -ceq "" -and $told.toldMarks.told -eq 1) "once the file names question 2's message, its mark reads told Thrall; question 3's, which it does not name, stays saved"
+$told = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) "$($x.toldMarks.problem)" -ceq "" -and $x.toldMarks.told -eq 1 }
+Check ("$($told.toldMarks.problem)" -ceq "" -and $told.toldMarks.told -eq 1) "once the file names question 2's message, the window has read it as one message announced, with nothing wrong"
 $r = Send-Steps @((Step "window-focus"), (Step "sleep"))
-Check ($r.drawn.answer.focus -ceq "1") "given the keyboard again later, the caret goes to question 1, which is his turn again since the reply; an answered question is passed over"
+Check ($r.drawn.answer.focus -ceq "1") "given the keyboard again later, the caret goes to question 1, which a reply from before the rule put back in his list; an answered question is not in it"
 $r = Send-Steps @((Step "focus" -Q 9))
 $inbox = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "inbox") -Env $cliEnv
 Check ($inbox.code -eq 0 -and $inbox.out -like "*Second answer*" -and $inbox.out -like "*line one*line two*line three*" -and $inbox.out -like "*Marked as read*") "the keeper of the list reads its inbox with the real command: his words are printed exactly, and marked read"
 $read = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) @($x.drawn.done | Where-Object { $_.n -ceq "2" }).Count -eq 1 }
 function Get-Done { param($Report, [int]$Number) return @($Report.drawn.done | Where-Object { $_.n -ceq ("" + $Number) })[0] }
-Check ($null -eq (Get-Line $read 2) -and (Get-Done $read 2).k -ceq "thrall" -and (Get-Done $read 2).a -ceq "Second answer" -and (Get-Done $read 3).k -ceq "thrall" -and (Get-Done $read 7).k -ceq "thrall") "ONCE THE KEEPER HAS READ THEM, the answered questions leave the list for the folded With Thrall, each showing his answer, to be read only"
+Check ($null -eq (Get-Line $read 2) -and (Get-Done $read 2).k -ceq "thrall" -and (Get-Done $read 2).a -ceq "Second answer" -and (Get-Done $read 3).k -ceq "thrall" -and (Get-Done $read 7).k -ceq "thrall") "AND ONCE THE KEEPER HAS READ THEM nothing moves: the answered questions were already out of his list, in the folded With Thrall, each showing his answer, to be read only"
 Check (@($read.drawn.headings | Where-Object { $_.t -ceq ("With Thrall (" + @($read.drawn.done | Where-Object { $_.k -ceq "thrall" }).Count + ")") -and $_.folded }).Count -eq 1 -and "$($read.drawn.top)" -ceq ("" + $read.drawn.counts.toAnswer + " to answer")) "the fold says how many are with the keeper, folded; the top line counts only the list"
 
 Write-Host ""
@@ -272,7 +287,7 @@ $q23 = Join-Path $script:work "q23.json"
 $add = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "add", "-File", $q23) -Env $cliEnv
 $grown = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) $null -ne (@($x.drawn.lines | Where-Object { $_.n -ceq "23" })[0]) }
 Check ($add.code -eq 0 -and (Get-Line $grown 23).t -ceq "Is a question asked while the window is open shown in it?" -and (Get-Line $grown 23).p -ceq "yes" -and $grown.drawn.answer.fields -eq (23 - @($grown.drawn.done | Where-Object { $_.k -ceq "thrall" }).Count)) "a 23rd question asked at the command line appears with its own field and suggestion (a field for each question not with the keeper)"
-Check ((Get-Line $grown 23).nw -eq $true -and (Get-Line $grown 23).g -eq 0 -and $grown.drawn.headings[0].t -ceq "New") "NEW QUESTIONS AT THE TOP: question 23 stands first, under New, marked new"
+Check ((Get-Line $grown 23).nw -eq $true -and (Get-Line $grown 23).g -eq 0 -and $grown.drawn.lines[0].n -ceq "23" -and $grown.drawn.headings[0].t -ceq "The study") "NEW QUESTIONS AT THE TOP: question 23 is the first line of the page, under its own group's heading, marked new"
 $park = Join-Path $script:work "park.json"
 [System.IO.File]::WriteAllText($park, '{"group":"Parked"}', $utf8)
 $parkedCli = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "update", "22", "-File", $park) -Env $cliEnv

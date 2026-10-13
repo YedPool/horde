@@ -21,32 +21,35 @@
            Find = 'if (@($rel -split ''/'') -contains "test") { continue }'
            Replace = '' }
         @{ Name = "a-folder-left-out"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")' }
         @{ Name = "messengers-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")' }
         @{ Name = "decisions-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")' }
         @{ Name = "platform-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")' }
         @{ Name = "surfaces-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")' }
         @{ Name = "fleet-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")' }
         @{ Name = "relay-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
            Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relays", "conversations")' }
         @{ Name = "relays-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
            Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "conversations")' }
         @{ Name = "conversations-not-shipped"
-           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")'
-           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays")' }
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "wakers")' }
+        @{ Name = "wakers-not-shipped"
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations")' }
         @{ Name = "duplicates-not-reported"
            Find = 'if ($byName[$k].Count -gt 1) {'
            Replace = 'if ($byName[$k].Count -gt 2) {' }

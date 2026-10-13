@@ -7,7 +7,7 @@
 // document DIMS - never hides - the questions that are not the picked entry's.
 //
 // EVERYTHING DRAWN COMES THROUGH window.HordeBridge, by the closed list of requests the window's
-// composer keeps (decisions/Window.ps1): setup, kinds, list, fleet, attachment, say - the reader's
+// composer keeps (decisions/Window.ps1): setup, kinds, list, fleet, attachment, say and say-part - the reader's
 // words under a question, handed to Horde to be stored, answered with whether they were - act, his
 // park or unpark of a question, and hand-back: Escape, the keyboard asked back to the terminal
 // window this one stands beside (Horde does nothing when it stands beside none). Another, report,
@@ -48,6 +48,9 @@
     onDraw: function () { draws += 1; report(); },
     onChange: function () { showCounts(); report(); },
     say: say,
+    // One part's answer: the request say-part, which is say with the part's letter beside the words
+    // (decisions/Window.ps1); it is answered as say is, by the event said.
+    sayPart: function (number, letter, text, wording, id) { return asked("say-part", { number: number, text: text, wording: wording, id: id, part: letter }); },
     act: function (number, what, wording, id) { return asked("act", { number: number, act: what, wording: wording, id: id }); }
   });
 
@@ -193,7 +196,7 @@
     snap.answer.probe = probed;
     if (notices.drafts !== snap.answer.storage) { notices.drafts = snap.answer.storage; showNotices(); }
     var value = {
-      v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer, done: snap.done, toast: snap.toast,
+      v: 1, draws: draws, counts: doc.counts(), order: snap.order, headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer, done: snap.done, toast: snap.toast,
       fleet: { open: line.open, picked: line.picked, head: line.head.slice(0, bounds.textChars), rows: line.rows.map(function (r) { return r.slice(0, bounds.lineChars); }), entries: line.entries, written: line.written, notRead: line.notRead, headLines: line.headLines, headClipped: line.headClipped, rowsLines: line.rowsLines },
       top: document.getElementById("counts").textContent.slice(0, bounds.lineChars),
       notice: noticeBox.textContent.slice(0, bounds.textChars), foot: foot.textContent.slice(0, bounds.lineChars),

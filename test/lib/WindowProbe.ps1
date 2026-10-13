@@ -121,6 +121,21 @@ function Get-HordeProbeWindow {
         owner = $owner; processId = [long]$processId; dpi = $dpi; foreground = [bool]([HordeProbe.Native]::GetForegroundWindow() -eq $h) }
 }
 
+function Add-HordeProbeStoredRecord {
+    # Put one record into a decisions store of a scenario's own AS A FILE, the way an earlier version
+    # of Horde left it there: for what the operations no longer write and a window must still show (a
+    # reply that asks, under a question already answered). The next sequence number, written whole
+    # under a temporary name and moved into place, as the store itself does. Returns the number.
+    param([Parameter(Mandatory = $true)][string]$Store, [Parameter(Mandatory = $true)][string]$Kind, [Parameter(Mandatory = $true)]$Data, [string]$Actor = "warchief")
+    $seq = @(Get-ChildItem -LiteralPath $Store -File -Filter "*.json").Count + 1
+    $envelope = [ordered]@{ schemaVersion = 1; sequence = $seq; id = [guid]::NewGuid().ToString("N"); kind = $Kind
+        at = [datetime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture); actor = $Actor; requestHash = ("0" * 64); data = $Data }
+    $temp = Join-Path $Store ("planted-" + [guid]::NewGuid().ToString("N") + ".part")
+    [System.IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $envelope -Compress -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::Move($temp, (Join-Path $Store ($seq.ToString("D10") + ".json")))
+    return $seq
+}
+
 function Close-HordeProbeWindow {
     # Ask the window -Handle to close, as its close button would - only if it belongs to -Process, the
     # process this scenario started - and wait for that process to end. If it does not, end it by its

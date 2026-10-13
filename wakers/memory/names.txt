@@ -1,0 +1,10 @@
+# What identifies the in-process test waker, memory. tools/HostNames.ps1 fails test/test-host-names.ps1
+# when any of these appears in a file outside wakers/memory/ (and outside the prose under planning/, by
+# rule) that wakers/memory/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule
+# 14). Each is matched as a case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this waker
+MemoryWaker | the stem of every function and variable of this waker, its test helpers included, the one thing nothing else names
+#
+# CONSIDERED AND LEFT OUT:
+#   memory - an ordinary word, meaning RAM or recall in many files, and the folder of two other in-process test ports.

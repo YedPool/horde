@@ -101,13 +101,21 @@ $a4 = Invoke-Decisions @("add", "-File", $q4)
 Check ($a4.code -eq 0 -and $a4.out -like "*Added question 4: Test the view-on-screen fix on a device, then say merge?*") "the new question is number 4: the closed number 1 is not given again"
 
 Write-Host ""
-Write-Host "=== question 1 comes back ===" -ForegroundColor Cyan
+Write-Host "=== the bug of question 1 comes back: it is NOT reopened; a follow-up is asked ===" -ForegroundColor Cyan
+# The founder's rule, 2026-10-12: a question he has dealt with is never put back in front of him under
+# its old number. The session tries the old way, is told the new one in the refusal, and types it.
 $reopen = Invoke-Decisions @("reopen", "1", "-Reason", "a second device was registered from one code again on the test server")
-Check ($reopen.code -eq 0 -and $reopen.out -like "*Reopened question 1: Fix the bug where one registration code can register two devices?*") "question 1 is reopened as question 1"
+Check ($reopen.code -eq 1 -and $reopen.out -like "*Refused: a question is never put back in front of the founder under its old number, so nothing is reopened any more; nothing was written.*" -and $reopen.out -like "*horde decisions add -File <question.json> -FollowsUp 1.*") "reopen is refused, exits 1, and says how to ask a follow-up of question 1"
+$q5 = Write-File "q5.json" '{"title":"The two-devices-from-one-code bug is back on the test server: fix it again before the release?","kind":"yes-no","whatItIs":"A second device was registered from one code again on the test server, after the first fix.","yesMeans":"The release waits for a second fix.","recommendation":"yes","group":"security and accounts","askedBy":"orc-d","waiting":["orc-d"]}'
+$a5 = Invoke-Decisions @("add", "-File", $q5, "-FollowsUp", "1", "-Importance", "high", "-Blocks", "all")
+Check ($a5.code -eq 0 -and $a5.out -like "*Added question 5: The two-devices-from-one-code bug is back on the test server: fix it again before the release?*" -and $a5.out -like "*importance of its task: high; blocks: all.*" -and $a5.out -like "*follows up on question 1: he sees that question and his answer folded under this one*") "the follow-up is question 5 - a number of its own - with how much it matters and how much it blocks said back"
 $all = Invoke-Decisions @("list", "-State", "all")
-Check ($all.out -like "*Decisions: 4 open, 0 closed.*" -and (Get-QuestionLines $all) -ceq "1|Fix the bug where one registration code can register two devices?;3|Can a test account be provided for the signed-in pages?;2|Which languages besides English should the test talker speak?;4|Test the view-on-screen fix on a device, then say merge?") "at the end of the day all four are open, each under the number it was given when it was asked"
+Check ($all.out -like "*Decisions: 4 open, 1 closed.*" -and (Get-QuestionLines $all) -ceq "1|Fix the bug where one registration code can register two devices?;3|Can a test account be provided for the signed-in pages?;5|The two-devices-from-one-code bug is back on the test server: fix it again before the release?;2|Which languages besides English should the test talker speak?;4|Test the view-on-screen fix on a device, then say merge?") "question 1 is still closed under its number, and the follow-up stands in its group as question 5"
+Check (@($all.lines | Where-Object { $_.Trim() -ceq "Important; Blocks all work" }).Count -eq 1 -and @($all.lines | Where-Object { $_.Trim() -ceq "follows up on question 1: Fix the bug where one registration code can register two devices?" }).Count -eq 1) "the list marks it as important and blocking all work, and says which question it follows"
+$five = Invoke-Decisions @("show", "5")
+Check ($five.out -like "*Follows up on question 1 (closed): Fix the bug where one registration code can register two devices?*" -and $five.out -like "*  He had not answered it.*" -and @($five.lines | Where-Object { $_ -ceq "  It was closed with: Fixed: the second request with the same code now fails. [...]" }).Count -eq 1 -and @($five.lines | Where-Object { $_ -ceq "Importance of its task: high (Important)" -or $_ -ceq "Blocks: all (Blocks all work)" }).Count -eq 2) "show 5 gives the question it follows, what became of it, and the two words in plain words"
 $one = Invoke-Decisions @("show", "1")
-Check ($one.out -like "*Last reopened because: a second device was registered from one code again on the test server*" -and @($one.lines | Where-Object { $_ -like "*  added (by*" -or $_ -like "*  closed (by*" -or $_ -like "*  reopened (by*" }).Count -eq 3) "show 1 says why it is open again, and its history holds the add, the close and the reopen"
+Check (@($one.lines | Where-Object { $_ -ceq "Question 1 - closed (wording 1)" }).Count -eq 1 -and @($one.lines | Where-Object { $_ -like "*  added (by*" -or $_ -like "*  closed (by*" }).Count -eq 2 -and $one.out -notlike "*reopened*") "and question 1 is as it was closed: its history holds the add and the close, and nothing reopened it"
 
 Write-Host ""
 Write-Host "=== a whole exchange under question 2 ===" -ForegroundColor Cyan
@@ -124,10 +132,16 @@ Check (@($inbox.lines | Where-Object { $_ -ceq "      Both, but Hebrew first." -
 Check (@($inbox.lines | Where-Object { $_ -ceq "Marked as read: 1 message(s), up to record 8." }).Count -eq 1) "and then, having printed them, it marks them read and says so"
 $inboxAgain = Invoke-Decisions @("inbox")
 Check ($inboxAgain.code -eq 0 -and $inboxAgain.out -like "*Nothing unread*" -and $inboxAgain.out -notlike "*Marked as read*") "the inbox read again is empty: nothing is handed over twice, and nothing is marked"
-$reply = Invoke-Decisions @("reply", "2", "-Text", "A second voice, recorded this week; Hebrew goes first.")
-Check ($reply.code -eq 0 -and $reply.out -like "*Replied under question 2 (record 10): Which languages besides English should the test talker speak?*") "reply puts the session's answer under the same question"
+# He has answered, so question 2 is off his list. Words that ask him something would put it back, and
+# are refused; the session tells him what it will do as a NOTE, which asks nothing.
+$asking = Invoke-Decisions @("reply", "2", "-Text", "A second voice, recorded this week; is Hebrew first all right?")
+Check ($asking.code -eq 1 -and $asking.out -like "*Refused: nothing was written: question 2 has been answered and is off the founder's list*" -and $asking.out -like "*-FollowsUp 2*" -and $asking.out -like "*say it as a note (reply -Note)*" -and @(Get-ChildItem -LiteralPath $store -File).Count -eq 9) "a reply that asks, under the question he has answered, is refused with what to do instead, and writes nothing"
+$waitingNow = Invoke-Decisions @("list")
+Check (@($waitingNow.lines | Where-Object { $_.Trim() -ceq "answered, and off his list: Both, but Hebrew first. [...]" }).Count -eq 1) "the session's own list still shows the question, and what he answered under it"
+$reply = Invoke-Decisions @("reply", "2", "-Text", "A second voice, recorded this week; Hebrew goes first.", "-Note")
+Check ($reply.code -eq 0 -and $reply.out -like "*Replied under question 2 (record 10): Which languages besides English should the test talker speak?*") "reply -Note puts the session's words under the same question"
 $thread = Invoke-Decisions @("show", "2")
-Check ($thread.code -eq 0 -and @($thread.lines | Where-Object { $_ -ceq "Conversation: 2 message(s); turn: the founder" }).Count -eq 1) "show 2 gives the conversation: two messages, and it is the person's turn again"
+Check ($thread.code -eq 0 -and @($thread.lines | Where-Object { $_ -ceq "Conversation: 2 message(s); turn: the warchief" }).Count -eq 1) "show 2 gives the conversation: two messages, and it is still the session's turn - a note hands him nothing"
 $saidAt = [array]::IndexOf($thread.lines, "      Which voice would the Spanish one be?")
 $repliedAt = [array]::IndexOf($thread.lines, "      A second voice, recorded this week; Hebrew goes first.")
 Check ($saidAt -gt 0 -and $repliedAt -gt $saidAt -and @($thread.lines | Where-Object { $_ -like "  the warchief, by command, * UTC (record 10, wording not stated)" }).Count -eq 1) "his words first and the reply after them, each with who said it and by what route"
@@ -147,18 +161,22 @@ $marked = Invoke-Decisions @("mark-read", "-UpTo", "12")
 Check ($marked.code -eq 0 -and @($marked.lines | Where-Object { $_ -ceq "Marked as read: 1 message(s), up to record 12." }).Count -eq 1) "mark-read -UpTo 12 then marks what the session received"
 $drained = Invoke-Decisions @("inbox")
 Check ($drained.code -eq 0 -and $drained.out -like "*Nothing unread*") "and the inbox is empty"
+# The follow-up turns out to hold up less than was said: the session corrects it, as a record of its own.
+$ranked = Invoke-Decisions @("rank", "5", "-Blocks", "part")
+Check ($ranked.code -eq 0 -and $ranked.out -like "*Ranked question 5:*" -and @($ranked.lines | Where-Object { $_ -ceq "  ranked: blocks part" }).Count -eq 1) "rank corrects how much question 5 blocks, and says what it changed"
 $end = Invoke-Decisions @("list", "-State", "all")
-Check ($end.out -like "*Decisions: 3 open, 1 closed.*" -and (Get-QuestionLines $end) -ceq "1|Fix the bug where one registration code can register two devices?;3|Can a test account be provided for the signed-in pages?;2|Which languages besides English should the test talker speak?;4|Test the view-on-screen fix on a device, then say merge?") "at the end of the day every question has the number it was given, and question 2 is closed: his late words reopened nothing"
+Check (@($end.lines | Where-Object { $_.Trim() -ceq "Important" }).Count -eq 1 -and @($end.lines | Where-Object { $_ -like "*Blocks all work*" }).Count -eq 0) "and the list now marks it as important only"
+Check ($end.out -like "*Decisions: 3 open, 2 closed.*" -and (Get-QuestionLines $end) -ceq "1|Fix the bug where one registration code can register two devices?;3|Can a test account be provided for the signed-in pages?;5|The two-devices-from-one-code bug is back on the test server: fix it again before the release?;2|Which languages besides English should the test talker speak?;4|Test the view-on-screen fix on a device, then say merge?") "at the end of the day every question has the number it was given, and question 2 is closed: his late words reopened nothing"
 
 Write-Host ""
 Write-Host "=== the state left behind ===" -ForegroundColor Cyan
 $names = @(Get-ChildItem -LiteralPath $store -File | Sort-Object Name | ForEach-Object { $_.Name })
-Check (($names -join ",") -ceq ((1..13 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "the store holds thirteen records, one for each command that changed the list or marked something read, named 1 to 12"
+Check (($names -join ",") -ceq ((1..14 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "the store holds fourteen records, one for each command that changed the list or marked something read, named 1 to 14 - and none for the two that were refused"
 $kinds = @($names | ForEach-Object { ([System.IO.File]::ReadAllText((Join-Path $store $_)) | ConvertFrom-Json).kind })
-Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-updated,question-closed,question-added,question-reopened,message-said,messages-read,message-said,question-closed,message-said,messages-read") "in the order the day went: three asked, one reworded, one closed, one asked, one reopened; then said, read, replied, closed, said once more, and read"
+Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-updated,question-closed,question-added,question-added,message-said,messages-read,message-said,question-closed,message-said,messages-read,question-ranked") "in the order the day went: three asked, one reworded, one closed, one asked, a follow-up asked; then said, read, noted, closed, said once more, read, and ranked"
 $kept = ([System.IO.File]::ReadAllText((Join-Path $store "0000000008.json"), $utf8) | ConvertFrom-Json)
 Check ($kept.data.text -ceq ("Both, but Hebrew first." + "`r`n" + "Which voice would the Spanish one be?") -and $kept.data.speaker -ceq "founder" -and $kept.data.route -ceq "chat-recorded" -and $kept.actor -ceq "warchief") "his words are in their record exactly as the file held them, line break and all, as his, recorded by the session"
-Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 13) "and nothing else was written anywhere under the home: no index, no copy of the list, no lock"
+Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 14) "and nothing else was written anywhere under the home: no index, no copy of the list, no lock"
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-e2e-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

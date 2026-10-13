@@ -85,6 +85,11 @@ try {
     $env:HORDE_HOME = $hordeHome
     . (Join-Path $root "decisions\Operations.ps1")
     $groups = @("Unblocks work now", "The closing behaviour", "Security and accounts", "The study")
+    # THE LIST IS NEWEST FIRST (2026-10-12), and a group is the heading of each RUN of its questions. The
+    # 22 are stamped a minute apart so that each group's questions were asked one after another - the
+    # first group latest - and so stand together, in the order of their numbers, under one heading each.
+    $askedOrder = @(1, 5, 9, 13, 17, 2, 6, 10, 14, 18, 3, 7, 11, 15, 4, 8, 12, 16, 19, 20, 21, 22)
+    $when = [datetime]::SpecifyKind([datetime]"2026-01-01T09:00:00", [System.DateTimeKind]::Utc)
     for ($n = 1; $n -le 22; $n++) {
         $orc = "Orc " + [string][char](65 + ($n % 4))
         $waiting = @(); if ($n % 4 -ne 0) { $waiting = @($orc + " (step " + $n + ")") }
@@ -95,7 +100,7 @@ try {
         $question = [ordered]@{ title = ("Should step " + $n + " of the plan go ahead as it is written?"); kind = "yes-no"; whatItIs = ("Step " + $n + " is ready and waits only for a yes. <script>this is shown as text</script>"); yesMeans = ("Step " + $n + " is done today."); recommendation = "yes"; group = $group; askedBy = $asked; waiting = $waiting }
         # One group carries a note of background, as real lists do: the page keeps it folded behind a word.
         if ($n -eq 2) { $question["groupNote"] = "Settled already: she asks after 12 seconds of quiet." }
-        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question }
+        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question } -Now $when.AddMinutes(30 - [array]::IndexOf($askedOrder, $n))
         if ($added.state -cne "known" -or $added.value.outcome -cne "done" -or $added.value.number -ne $n) { throw ("question " + $n + " was not added: " + $added.state + " " + $added.reason) }
     }
 } finally { $env:HORDE_HOME = $keepHome }
@@ -127,7 +132,7 @@ $got = @($drawn.lines | Sort-Object { [int]$_.n } | ForEach-Object { $_.n + "|" 
 Check ($list.Count -eq 22 -and $got -ceq $want) "THE NUMBER AND THE TEXT OF EVERY LINE DRAWN are the list's: each of the 22 questions once, under its own number, with its own title"
 Check (@($drawn.lines | Group-Object n | Where-Object { $_.Count -ne 1 }).Count -eq 0) "no number is drawn twice"
 $heads = @($drawn.headings)
-Check ((@($heads | ForEach-Object { $_.t + "=" + $_.count }) -join ", ") -ceq "Unblocks work now=5, The closing behaviour=5, Security and accounts=4, The study=4, __proto__=2, constructor=2") ("the headings, in the order their first question comes, each with its count (" + (@($heads | ForEach-Object { $_.t + "=" + $_.count }) -join ", ") + ")")
+Check ((@($heads | ForEach-Object { $_.t + "=" + $_.count }) -join ", ") -ceq "Unblocks work now=5, The closing behaviour=5, Security and accounts=4, The study=4, __proto__=2, constructor=2") ("the headings, in the order of the list - each group's questions were asked together - each with its count (" + (@($heads | ForEach-Object { $_.t + "=" + $_.count }) -join ", ") + ")")
 Check ((@($heads | ForEach-Object { "[" + $_.note + "]" }) -join "") -ceq "[][folded][][][][]") ("a group's note of background is there and FOLDED until the reader asks for it, so that a note of several lines does not stand between the questions; a group with none says none (" + (@($heads | ForEach-Object { "[" + $_.note + "]" }) -join "") + ")")
 foreach ($named in @(@{ group = "__proto__"; numbers = "19,20" }, @{ group = "constructor"; numbers = "21,22" })) {
     $at = -1; for ($i = 0; $i -lt $heads.Count; $i++) { if ($heads[$i].t -ceq $named.group) { $at = $i } }
@@ -217,7 +222,8 @@ $new = @($after.drawn.lines | Where-Object { $_.n -ceq "23" })
 Check ($new.Count -eq 1 -and $new[0].t -ceq "Is a question asked while the window is open shown in it?" -and $new[0].dim -eq $false) ("the page draws line 23 with its own text (" + [Math]::Round($clock.Elapsed.TotalSeconds, 1) + " s after the add command was started), not dimmed: it is Orc B's")
 $list = @(Get-ListNow)
 Check ((@($after.drawn.lines | Sort-Object { [int]$_.n } | ForEach-Object { $_.n + "|" + $_.t }) -join "`n") -ceq (@($list | Sort-Object number | ForEach-Object { "" + $_.number + "|" + $_.title }) -join "`n")) "and all 23 lines drawn are again the list's, number by number and text by text"
-Check ($after.drawn.headings[0].t -ceq "New" -and $after.drawn.headings[0].count -eq 1 -and $new[0].nw -eq $true -and $new[0].g -eq 0 -and (@($after.drawn.headings | Where-Object { $_.t -ceq "__proto__" })[0].count) -eq 2) "A NEW QUESTION STANDS AT THE TOP, under New, marked new; its group __proto__ still holds the two it had (the owner, 2026-10-07: new questions at the top)"
+$protoHeads = @($after.drawn.headings | Where-Object { $_.t -ceq "__proto__" })
+Check ($after.drawn.lines[0].n -ceq "23" -and $new[0].nw -eq $true -and $new[0].g -eq 0 -and $after.drawn.headings[0].t -ceq "__proto__" -and $after.drawn.headings[0].count -eq 1 -and $protoHeads.Count -eq 2 -and $protoHeads[1].count -eq 2) "A NEW QUESTION STANDS AT THE TOP OF THE PAGE, marked new, under its group's name; the two older questions of that group keep their own heading further down - the order is never bent to keep a group in one piece"
 Check ((@($after.drawn.lines | Where-Object { $_.open } | ForEach-Object { $_.n }) -join ",") -ceq "3,19" -and $after.drawn.fleet.open -eq $true -and $after.drawn.fleet.picked -ceq "orc:B") "THE REDRAW FOLDED NOTHING: 3 and 19 are still unfolded, the fleet line still unfolded, Orc B still picked"
 Check (@($after.drawn.lines | Where-Object { $_.dim }).Count -eq 16 -and @($after.drawn.lines | Where-Object { -not $_.dim }).Count -eq 7) "and it kept the dimming: Orc B's seven questions as they were, the other sixteen dimmed and drawn"
 Check ($after.pushes -ge 1 -and $after.changes -ge 1 -and $after.watching -eq $true -and $after.watchFailures -eq 0) "because the store's folder is watched and the new list was pushed to the page"

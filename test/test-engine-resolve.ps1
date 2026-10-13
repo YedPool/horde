@@ -28,9 +28,9 @@ function New-Rule { param([string]$Id, [hashtable]$Match = @{}, [hashtable]$Set,
 $base = @((New-Layer "L0" (Read-Fixture "builtin.json")), (New-Layer "L1" (Read-Fixture "user.json")))
 $parent = "11111111-2222-4333-8444-555555555555"
 $session = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-$goblin = @{ role = "goblin"; parent = $parent; run = "20261002-101500-audit"; fleetId = "f1"; session = $session; label = "D7"; title = "lane-x" }
+$warg = @{ role = "warg"; parent = $parent; run = "20261002-101500-audit"; fleetId = "f1"; session = $session; label = "D7"; title = "lane-x" }
 $now = [datetime]::Parse("2026-10-02T12:00:00Z").ToUniversalTime()
-function Resolve { param([object[]]$Layers, [hashtable]$Target = $goblin, $Registry = $null, $HostCaps = $null, $Requirements = $null)
+function Resolve { param([object[]]$Layers, [hashtable]$Target = $warg, $Registry = $null, $HostCaps = $null, $Requirements = $null)
     $a = @{ Layers = $Layers; Target = $Target; Descriptors = $descriptors; Now = $now }
     if ($null -ne $Registry) { $a.Registry = $Registry }
     if ($null -ne $HostCaps) { $a.HostCapabilities = $HostCaps }
@@ -58,42 +58,42 @@ Write-Host ""
 Write-Host "--- fields resolve independently ---" -ForegroundColor Cyan
 $res = Resolve ($base + @(New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ model = "model-a-small" }))))
 Check ((Get-Val $res "model") -ceq "model-a-small" -and (Get-Val $res "harness") -ceq "harness-a" -and (Get-HordeEngineSetting -Resolution $res -Key "harness").layer -ceq "L1") "a spawn's model over a user profile keeps the profile's harness, from the user layer"
-Check ((Get-HordeEngineSetting -Resolution $res -Key "harness").via -ceq "gamma") "and the harness says it came through the profile gamma (goblins' profile in the user layer)"
+Check ((Get-HordeEngineSetting -Resolution $res -Key "harness").via -ceq "gamma") "and the harness says it came through the profile gamma (wargs' profile in the user layer)"
 
 Write-Host ""
 Write-Host "--- specificity, inside one layer ---" -ForegroundColor Cyan
-function Test-Beats { param([string]$What, [hashtable]$Strong, [hashtable]$Weak, [hashtable]$Target = $goblin)
+function Test-Beats { param([string]$What, [hashtable]$Strong, [hashtable]$Weak, [hashtable]$Target = $warg)
     $doc = New-Doc @((New-Rule "weak" $Weak @{ model = "model-weak" }), (New-Rule "strong" $Strong @{ model = "model-strong" }))
     $r1 = Resolve @((New-Layer "L1" $doc)) -Target $Target
     $doc2 = New-Doc @((New-Rule "strong" $Strong @{ model = "model-strong" }), (New-Rule "weak" $Weak @{ model = "model-weak" }))
     $r2 = Resolve @((New-Layer "L1" $doc2)) -Target $Target
     Check ((Get-Val $r1 "model") -ceq "model-strong" -and (Get-Val $r2 "model") -ceq "model-strong") ($What + " (in either file order)")
 }
-Test-Beats "{session} beats {run, fleetId}" @{ session = $session } @{ run = $goblin.run; fleetId = "f1" }
-Test-Beats "{run, fleetId} beats {title}" @{ run = $goblin.run; fleetId = "f1" } @{ title = "lane-x" }
-Test-Beats "{parent} beats {run, role}: this orc's goblins is narrower than goblins in this run" @{ parent = $parent } @{ run = $goblin.run; role = "goblin" }
-Test-Beats "{parent, role} beats {parent}" @{ parent = $parent; role = "goblin" } @{ parent = $parent }
-Test-Beats "{run} beats {role}" @{ run = $goblin.run } @{ role = "goblin" }
-Test-Beats "{role} beats the empty match" @{ role = "goblin" } @{}
+Test-Beats "{session} beats {run, fleetId}" @{ session = $session } @{ run = $warg.run; fleetId = "f1" }
+Test-Beats "{run, fleetId} beats {title}" @{ run = $warg.run; fleetId = "f1" } @{ title = "lane-x" }
+Test-Beats "{parent} beats {run, role}: this orc's wargs is narrower than wargs in this run" @{ parent = $parent } @{ run = $warg.run; role = "warg" }
+Test-Beats "{parent, role} beats {parent}" @{ parent = $parent; role = "warg" } @{ parent = $parent }
+Test-Beats "{run} beats {role}" @{ run = $warg.run } @{ role = "warg" }
+Test-Beats "{role} beats the empty match" @{ role = "warg" } @{}
 Test-Beats "an exact label beats a wildcard one" @{ label = "D7" } @{ label = "D*" }
-$doc = New-Doc @((New-Rule "goblins-x" @{ role = "goblin" } @{ model = "model-x" }), (New-Rule "goblins-y" @{ role = "goblin" } @{ model = "model-y" }))
+$doc = New-Doc @((New-Rule "wargs-x" @{ role = "warg" } @{ model = "model-x" }), (New-Rule "wargs-y" @{ role = "warg" } @{ model = "model-y" }))
 $s = Get-HordeEngineSetting -Resolution (Resolve @((New-Layer "L1" $doc))) -Key "model"
-Check ($s.answer.state -eq "unknown" -and $s.answer.reason -like "*goblins-x*" -and $s.answer.reason -like "*goblins-y*") "two equally specific rules that disagree are unknown, naming both rules - never file order"
-$doc = New-Doc @((New-Rule "goblins-x" @{ role = "goblin" } @{ model = "model-x" }), (New-Rule "goblins-x2" @{ role = "goblin" } @{ model = "model-x" }))
+Check ($s.answer.state -eq "unknown" -and $s.answer.reason -like "*wargs-x*" -and $s.answer.reason -like "*wargs-y*") "two equally specific rules that disagree are unknown, naming both rules - never file order"
+$doc = New-Doc @((New-Rule "wargs-x" @{ role = "warg" } @{ model = "model-x" }), (New-Rule "wargs-x2" @{ role = "warg" } @{ model = "model-x" }))
 Check ((Get-Val (Resolve @((New-Layer "L1" $doc))) "model") -ceq "model-x") "two that agree resolve"
-$doc = New-Doc @((New-Rule "goblins-x" @{ role = "goblin" } @{ model = "model-x" }), (New-Rule "goblins-y" @{ role = "goblin" } @{ model = "model-y" }), (New-Rule "this-one" @{ session = $session } @{ model = "model-z" }))
+$doc = New-Doc @((New-Rule "wargs-x" @{ role = "warg" } @{ model = "model-x" }), (New-Rule "wargs-y" @{ role = "warg" } @{ model = "model-y" }), (New-Rule "this-one" @{ session = $session } @{ model = "model-z" }))
 Check ((Get-Val (Resolve @((New-Layer "L1" $doc))) "model") -ceq "model-z") "CONTROL: a tie below the winner does not matter"
 
 Write-Host ""
 Write-Host "--- matching ---" -ForegroundColor Cyan
 $doc = New-Doc @((New-Rule "orcs" @{ role = "orc" } @{ model = "model-orc" }), (New-Rule "all" @{} @{ model = "model-all" }))
 Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "orchestrator" }) "model") -ceq "model-orc") "a target's role in the old vocabulary is translated through core/roles.json before it is matched"
-Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "goblin" }) "model") -ceq "model-all") "CONTROL: another role does not match"
+Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "warg" }) "model") -ceq "model-all") "CONTROL: another role does not match"
 $doc = New-Doc @((New-Rule "in-run" @{ run = "20261002-101500-audit" } @{ model = "model-run" }), (New-Rule "all" @{} @{ model = "model-all" }))
-Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "goblin" }) "model") -ceq "model-all") "a rule on a key the target does not have does not match it"
+Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "warg" }) "model") -ceq "model-all") "a rule on a key the target does not have does not match it"
 $doc = New-Doc @((New-Rule "d-star" @{ label = "D*" } @{ model = "model-d" }), (New-Rule "all" @{} @{ model = "model-all" }))
-Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "goblin"; label = "D7" }) "model") -ceq "model-d") "a label glob matches"
-Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "goblin"; label = "E7" }) "model") -ceq "model-all") "CONTROL: and a label outside it does not"
+Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "warg"; label = "D7" }) "model") -ceq "model-d") "a label glob matches"
+Check ((Get-Val (Resolve @((New-Layer "L1" $doc)) -Target @{ role = "warg"; label = "E7" }) "model") -ceq "model-all") "CONTROL: and a label outside it does not"
 $doc = New-Doc @((New-Rule "by-id" @{ session = $session.ToUpperInvariant() } @{ model = "model-id" }), (New-Rule "all" @{} @{ model = "model-all" }))
 Check ((Get-Val (Resolve @((New-Layer "L4" $doc))) "model") -ceq "model-id") "a session id matches ignoring case, as a UUID"
 $live = New-Doc @((New-Rule "old" @{} @{ model = "model-old" } "cli" "2026-10-01T00:00:00Z"))
@@ -113,16 +113,16 @@ $u = Read-Fixture "user.json"
 $u.providers = @($u.providers) + @([pscustomobject]@{ name = "provider-d"; protocol = "anthropic-messages"; credential = [pscustomobject]@{ kind = "harness-login" } })
 $res = Resolve @((New-Layer "L0" (Read-Fixture "builtin.json")), (New-Layer "L1" $u), (New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ provider = "provider-d"; model = "x-1" })))) -Target @{ role = "orc" }
 Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*provider-d*own login*") "a harness-login provider under a harness whose native provider is another is refused (the subscription rule)"
-$res = Resolve ($base + @(New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ model = "model-c9" })))) -Target @{ role = "goblin" }
+$res = Resolve ($base + @(New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ model = "model-c9" })))) -Target @{ role = "warg" }
 Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*model-c9*allowlist*provider-c*") "a model outside the resolved provider's allowlist is refused, though no single layer stated the pair"
-$res = Resolve @((New-Layer "L0" (Read-Fixture "builtin.json"))) -Target @{ role = "goblin" }
+$res = Resolve @((New-Layer "L0" (Read-Fixture "builtin.json"))) -Target @{ role = "warg" }
 Check ($res.binding.state -eq "known" -and $null -eq $res.binding.value.model) "with no model set, the binding carries none: the harness's own default"
 
 Write-Host ""
 Write-Host "--- capabilities: the role's requirements against harness, provider and host ---" -ForegroundColor Cyan
-$req = [pscustomobject]@{ warchief = @("message-inject", "delivery-receipt", "resume", "report-hook"); orc = @("message-inject", "resume", "report-hook"); goblin = @("resume", "report-hook") }
-$res = Resolve $base -Target @{ role = "goblin" } -Requirements $req
-Check ($res.capabilities.state -eq "known" -and $res.capabilities.value.ok -eq $true) "a goblin on the fixture harness has what a goblin needs"
+$req = [pscustomobject]@{ warchief = @("message-inject", "delivery-receipt", "resume", "report-hook"); orc = @("message-inject", "resume", "report-hook"); warg = @("resume", "report-hook") }
+$res = Resolve $base -Target @{ role = "warg" } -Requirements $req
+Check ($res.capabilities.state -eq "known" -and $res.capabilities.value.ok -eq $true) "a warg on the fixture harness has what a warg needs"
 $res = Resolve $base -Target @{ role = "warchief" } -Requirements $req
 $missing = @($res.capabilities.value.missing | ForEach-Object { $_.name })
 Check ($res.capabilities.value.ok -eq $false -and ($missing -join ",") -ceq "message-inject,delivery-receipt") ("a warchief there lacks message-inject and delivery-receipt, unverified on the harness (" + ($missing -join ",") + ")")
@@ -131,9 +131,9 @@ $res = Resolve $base -Target @{ role = "orc" } -Requirements $req -HostCaps @{ "
 Check ($res.capabilities.value.ok -eq $true) "an orc there is satisfied when the host can type text, the capability either port may give"
 $res = Resolve $base -Target @{ role = "orc" } -Requirements $req -HostCaps @{ "text.send" = "unverified" }
 Check ($res.capabilities.value.ok -eq $false) "CONTROL: not when the host's text.send is only unverified"
-$reqD = [pscustomobject]@{ warchief = @(); orc = @(); goblin = @("resume", "delivery-receipt") }
+$reqD = [pscustomobject]@{ warchief = @(); orc = @(); warg = @("resume", "delivery-receipt") }
 $descriptors["harness-a"].capabilities."delivery-receipt".support = "yes"
-$res = Resolve $base -Target $goblin -Requirements $reqD
+$res = Resolve $base -Target $warg -Requirements $reqD
 Check ($res.capabilities.value.ok -eq $false -and @($res.capabilities.value.missing | Where-Object { $_.name -ceq "delivery-receipt" -and $_.why -like "*provider-c lacks*" }).Count -eq 1) "a capability the harness has is still missing when the resolved provider lacks it"
 $res = Resolve $base -Target @{ role = "orc" } -Requirements $reqD
 Check ($res.capabilities.value.ok -eq $true) "CONTROL: on the native provider, which lacks nothing, it is there"
@@ -150,7 +150,7 @@ Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $lower))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.state -eq "known" -and $s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "tuned" -and $_.why -like "*only raise*" }).Count -eq 1) "one that lowers it is refused, recorded as refused, and the value below stands"
 Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $byCli))) -Registry $reg) "fixture.reserve") -ceq "low") "CONTROL: a person's live rule may lower it"
-$twoLow = New-Doc @((New-Rule "tuned-goblins" @{ role = "goblin" } @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"), (New-Rule "tuned-all" @{} @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"))
+$twoLow = New-Doc @((New-Rule "tuned-wargs" @{ role = "warg" } @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"), (New-Rule "tuned-all" @{} @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"))
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $twoLow))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.value -ceq "mid" -and @($s.refused).Count -eq 2) "every tuner rule that lowers is refused, not only the most specific - a general one does not get through behind it"
 # NEW-B: when the rules a person wrote tie, the tuner is held to the strictest of them, not let through.
@@ -186,15 +186,15 @@ Check ($s.answer.state -ne "known" -and @($s.refused | Where-Object { $_.rule -c
 # REVIEW OF PR #74 (HIGH): only the most specific rule of a layer was checked, so when it was refused a
 # less specific rule of the same layer that raised just as far won instead. Every rule is checked
 # before specificity chooses among the ones left.
-$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "raise-goblins" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "raise-all" @{} @{ "fixture.ceiling" = "bypass" } "cli")))))
-Check ($s.answer.value -ceq "ask" -and @($s.refused | ForEach-Object { $_.rule } | Sort-Object) -join "," -ceq "raise-all,raise-goblins") "the reviewer's case in L4: a specific and a general rule both raising to bypass are both refused, and ask stands"
-$s = Get-Ceiling @($own, (New-Layer "L5" (New-Doc @((New-Rule "spawn-goblins" @{ role = "goblin" } @{ "fixture.ceiling" = "edits" }), (New-Rule "spawn-all" @{} @{ "fixture.ceiling" = "edits" })))))
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "raise-wargs" @{ role = "warg" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "raise-all" @{} @{ "fixture.ceiling" = "bypass" } "cli")))))
+Check ($s.answer.value -ceq "ask" -and @($s.refused | ForEach-Object { $_.rule } | Sort-Object) -join "," -ceq "raise-all,raise-wargs") "the reviewer's case in L4: a specific and a general rule both raising to bypass are both refused, and ask stands"
+$s = Get-Ceiling @($own, (New-Layer "L5" (New-Doc @((New-Rule "spawn-wargs" @{ role = "warg" } @{ "fixture.ceiling" = "edits" }), (New-Rule "spawn-all" @{} @{ "fixture.ceiling" = "edits" })))))
 Check ($s.answer.value -ceq "ask" -and @($s.refused).Count -eq 2) "the reviewer's case in L5: both rules raising to edits are refused"
-$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-edits" @{} @{ "fixture.ceiling" = "edits" } "cli")))))
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "warg" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-edits" @{} @{ "fixture.ceiling" = "edits" } "cli")))))
 Check ($s.answer.value -ceq "ask" -and @($s.refused).Count -eq 2) "a layer whose two rules both raise, to different values, gives neither"
-$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-plan" @{} @{ "fixture.ceiling" = "plan" } "cli")))))
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "warg" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-plan" @{} @{ "fixture.ceiling" = "plan" } "cli")))))
 Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "to-bypass" }).Count -eq 1) "a layer where the specific rule raises and a less specific one lowers gives the lowered value"
-$tieSpec = New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "goblin" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-edits" @{ role = "goblin" } @{ "fixture.ceiling" = "edits" })))
+$tieSpec = New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "warg" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-edits" @{ role = "warg" } @{ "fixture.ceiling" = "edits" })))
 $s = Get-Ceiling @($ownHigh, $tieSpec, (New-Layer "L5" (New-Doc @(New-Rule "after-tie" @{} @{ "fixture.ceiling" = "edits" }))))
 Check (@($s.refused | Where-Object { $_.rule -ceq "after-tie" }).Count -eq 1) "after a tie in a lower layer, the next layer is held to the strictest of the tied values, never the most permissive"
 # REVIEW OF PR #74, round 3, NEW-A (HIGH): a value outside the enum ranked as -1, which counted as a
@@ -206,7 +206,7 @@ foreach ($bad in @("zzz", "Bypass", 3)) {
 }
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "only-bad" @{} @{ "fixture.ceiling" = "zzz" } "cli"))))
 Check ($s.answer.value -ceq "ask") "a layer whose only rule is outside the enum contributes nothing"
-$s = Get-Ceiling @($own, (New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "goblin" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-bad" @{ role = "goblin" } @{ "fixture.ceiling" = "zzz" })))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-bypass" @{} @{ "fixture.ceiling" = "bypass" }))))
+$s = Get-Ceiling @($own, (New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "warg" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-bad" @{ role = "warg" } @{ "fixture.ceiling" = "zzz" })))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-bypass" @{} @{ "fixture.ceiling" = "bypass" }))))
 Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "spawn-bypass" }).Count -eq 1) "a tie with a value outside the enum is no tie: the bad value is refused, and the good one holds the layers above"
 $badBase = New-Layer "L1" (New-Doc @(New-Rule "owner-bad" @{} @{ "fixture.ceiling" = "zzz" })) -Source "owner"
 $s = Get-Ceiling @($badBase, (New-Layer "L4" (New-Doc @(New-Rule "agent-any" @{} @{ "fixture.ceiling" = "edits" } "cli"))))
@@ -224,18 +224,18 @@ Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["a", "b"] }, "tuner": "free"'))) -like "*tuner 'free'*") "and a tuner rule other than raise-only"
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["a", "b"] }, "tuner": "raise-only"'))) -eq "") "CONTROL: raise-only on an enum loads"
 $reqReal = Get-HordeRoleRequirements
-Check (@($reqReal.goblin).Count -ge 1 -and @($reqReal.warchief).Count -ge @($reqReal.goblin).Count) "the role requirements load, and the warchief needs at least what a goblin needs"
+Check (@($reqReal.warg).Count -ge 1 -and @($reqReal.warchief).Count -ge @($reqReal.warg).Count) "the role requirements load, and the warchief needs at least what a warg needs"
 $tmpReq = Join-Path $env:TEMP ("horde-role-req-" + [guid]::NewGuid().ToString("N") + ".json")
 try {
-    [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": ["telepathy"], "orc": [], "goblin": [] } }')
+    [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": ["telepathy"], "orc": [], "warg": [] } }')
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "telepathy") "a requirement the capability vocabulary does not have is refused, so a typo cannot require nothing"
     [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": [], "orc": [] } }')
-    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "goblin has no requirement list") "a role with no requirement list is refused"
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "warg has no requirement list") "a role with no requirement list is refused"
 
     # DUTIES: what a role must DO, beside what it needs from its harness. Each is checked when the
     # file is read, so a duty cannot name a role that does not exist, say nothing, or point at a
     # document that is not there.
-    $okRequires = '"requires": { "warchief": [], "orc": [], "goblin": [] }'
+    $okRequires = '"requires": { "warchief": [], "orc": [], "warg": [] }'
     $okDoc = "planning/ledger/README.md"
     [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "' + $okDoc + '" } ] } }')
     Check (@((Get-HordeRoleDuties -Path $tmpReq).warchief).Count -eq 1) "CONTROL: a well-formed duty loads"
@@ -278,7 +278,7 @@ $realDesc = (Get-HordeAgentDescriptors -Root $root).value
 Check ($l0.Count -ge 1 -and @($l0 | Where-Object { $_.layer -cne "L0" }).Count -eq 0) ("the repository's built-in layer is read from the harness folders, every file as L0 (" + $l0.Count + " files)")
 $f = @(Test-HordeEngineConfig -Documents $l0 -Descriptors $realDesc)
 Check ($f.Count -eq 0) ("the built-in layer passes its own checker" + $(if ($f.Count) { " (" + (@($f | ForEach-Object { $_.code + " " + $_.detail }) -join " | ") + ")" } else { "" }))
-foreach ($role in @("warchief", "orc", "goblin")) {
+foreach ($role in @("warchief", "orc", "warg")) {
     $res = Resolve-HordeEngine -Layers $l0 -Target @{ role = $role } -Descriptors $realDesc -Now $now
     Check ($res.binding.state -eq "known" -and $null -eq $res.binding.value.model) ("with no user file, a " + $role + " resolves to a whole binding with the harness's own model (zero configuration)")
 }

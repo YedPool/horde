@@ -3,16 +3,17 @@
 # the keeper's side by the real command line.
 #
 # WHAT THE OWNER ASKED FOR, 2026-10-07 (his record 72, and the coordinator's items from it):
-#   - answers that have been picked up leave the list: an answered question stays, marked saved, until
-#     the keeper has READ it, then moves to the folded "With Thrall"; a note (reply -Note) leaves it
-#     there; a reply that asks him something brings it back with the reply shown; a close moves it to
-#     the folded "History" with its outcome; Enter and Tab never go into a fold; the top line counts
-#     the list;
+#   - answers that have been picked up leave the list - and since 2026-10-12, his rule that "once he
+#     answers a question it goes away from his list", they leave it as soon as they are saved, read by
+#     the keeper or not: to the folded "With Thrall"; a note (reply -Note) leaves it there; a reply
+#     that asks, which the command no longer writes under an answered question but a store from before
+#     may hold, brings it back with the reply shown; a close moves it to the folded "History" with its
+#     outcome; Enter and Tab never go into a fold; the top line counts the list;
 #   - an answer he changes says "edited", the earlier one is kept as a line marked earlier, and the
 #     keeper's inbox says the new words replace his earlier answer;
 #   - Ctrl+B parks a question, recorded as his own act, with Ctrl+Z to undo; in the Parked fold Ctrl+B
 #     brings it back;
-#   - new questions stand at the top, marked new until he has passed them;
+#   - new questions stand at the top - the list is newest first - marked new until he has passed them;
 #   - the view follows him: a question he moves to comes up near the top, the field he types in stays
 #     in view, a question whose context he unfolds goes to the top.
 # NOTHING OF THE OWNER'S IS USED: HORDE_HOME is a folder this scenario made and removes.
@@ -86,44 +87,52 @@ $keepHome = $env:HORDE_HOME
 try {
     $env:HORDE_HOME = $hordeHome
     . (Join-Path $root "decisions\Operations.ps1")
+    # Stamped a minute apart with question 1 the LATEST: newest first, they stand in the order of their numbers.
+    $when = [datetime]::SpecifyKind([datetime]"2026-01-01T09:00:00", [System.DateTimeKind]::Utc)
     for ($n = 1; $n -le 14; $n++) {
         $q = [ordered]@{ title = ("Should step " + $n + " of the plan go ahead as it is written today?"); kind = "yes-no"; whatItIs = (("Step " + $n + " is ready. ") * 30); recommendation = "yes"; group = "The plan"; askedBy = "Orc B" }
-        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $q }
+        $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $q } -Now $when.AddMinutes(30 - $n)
         if ($added.state -cne "known" -or $added.value.outcome -cne "done") { throw ("not added: " + $added.reason) }
     }
 } finally { $env:HORDE_HOME = $keepHome }
 
 $script:open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report, "-Probe", $script:probeFile) -Env $childEnv
 $first = Wait-Report { param($r) $null -ne $r.drawn -and @($r.drawn.lines).Count -eq 14 -and $null -ne $r.drawn.answer } 150
-Check ($first.drawn.top -ceq "14 to answer" -and @($first.drawn.headings | Where-Object { $_.t -ceq "New" }).Count -eq 0) ("the first list the page is ever handed has nothing new in it, and the top line counts the list (" + $first.drawn.top + ")")
+Check ($first.drawn.top -ceq "14 to answer" -and @($first.drawn.lines | Where-Object { $_.nw -eq $true }).Count -eq 0 -and (@($first.drawn.lines | ForEach-Object { $_.n }) -join ",") -ceq ((1..14) -join ",")) ("the first list the page is ever handed has nothing new in it, and the top line counts the list (" + $first.drawn.top + ")")
 [void](Send-Probe -Keys @([pscustomobject]@{ focus = $true }))
 $r = Wait-Report { param($x) "" + $x.drawn.answer.focus -ne "" } 40
 Check ($r.drawn.answer.focus -ceq "1") "given the keyboard, the caret is in question 1"
 
 Write-Host ""
-Write-Host "=== answered: it stays, saved, until the keeper has read it; then it is With Thrall ===" -ForegroundColor Cyan
+Write-Host "=== answered: it leaves his list for With Thrall, read by the keeper or not ===" -ForegroundColor Cyan
 $r = Send-Probe -Keys @((Typed "yes for one"), (Key "Enter")) -Steps @((Step "settle"))
-Check ((Get-Line $r 1).m -ceq "saved" -and (Get-Line $r 1).z -ceq "main" -and $r.drawn.answer.focus -ceq "2" -and $r.drawn.top -ceq "13 to answer") ("AN ANSWER STAYS WHERE IT IS, marked saved and still his to change, until the keeper has read it; the top line counts down (" + $r.drawn.top + ")")
+Check ($r.drawn.answer.focus -ceq "2" -and $r.drawn.top -ceq "13 to answer" -and @(Get-Said 1).Count -eq 1) ("his answer is saved, the caret went on, and the top line counts down at once (" + $r.drawn.top + ")")
+$r = Wait-Report { param($x) $null -ne (Get-Done $x 1) -and $null -eq (Get-Line $x 1) }
+Check ($null -eq (Get-Line $r 1) -and (Get-Done $r 1).k -ceq "thrall" -and (Get-Done $r 1).a -ceq "yes for one" -and (Get-Head $r "With Thrall (1)").folded -eq $true) "ANSWERED, IT LEAVES THE LIST for the folded With Thrall (1), showing his answer, to be read only - and the keeper has read nothing yet"
+Check ($r.drawn.answer.focus -ceq "2") "and the caret is where it was"
 $inbox = Horde @("inbox")
 $r = Wait-Report { param($x) $null -ne (Get-Done $x 1) }
-Check ($inbox.code -eq 0 -and $null -eq (Get-Line $r 1) -and (Get-Done $r 1).k -ceq "thrall" -and (Get-Done $r 1).a -ceq "yes for one" -and (Get-Head $r "With Thrall (1)").folded -eq $true) "ONCE READ, it leaves the list for the folded With Thrall (1), showing his answer, to be read only"
-Check ($r.drawn.answer.focus -ceq "2") "and the caret is where it was"
+Check ($inbox.code -eq 0 -and $inbox.out -like "*yes for one*" -and $null -eq (Get-Line $r 1) -and (Get-Done $r 1).k -ceq "thrall") "the keeper reads it with the real command, and nothing moves: it was already out of his list"
 
 Write-Host ""
-Write-Host "=== a note leaves it there; a reply that asks brings it back with the reply shown ===" -ForegroundColor Cyan
+Write-Host "=== a note leaves it there; a reply that asks, from before the rule, brings it back with the reply shown ===" -ForegroundColor Cyan
 $note = Horde @("reply", "1", "-Text", "Noted, I am on it.", "-Note")
 $r = Wait-Report { param($x) (Get-Done $x 1).r -ceq "Noted, I am on it." }
 Check ($note.code -eq 0 -and (Get-Done $r 1).k -ceq "thrall" -and $null -eq (Get-Line $r 1)) "A NOTE (reply -Note) ASKS HIM NOTHING: question 1 stays With Thrall, the note shown under his answer"
+# The real command no longer asks again under an answered question (2026-10-12); a store may hold such a
+# reply from before, and the window still brings the question back for it: the record is put there as a file.
 $ask = Horde @("reply", "1", "-Text", "Which build should it go to?")
+Check ($ask.code -eq 1 -and $ask.out -like "*question 1 has been answered and is off the founder's list*") "the real command refuses a reply that asks under the question he answered"
+$null = Add-HordeProbeStoredRecord -Store (Join-Path $hordeHome "store\decisions") -Kind "message-said" -Data ([ordered]@{ number = 1; speaker = "warchief"; route = "command"; text = "Which build should it go to?" })
 $r = Wait-Report { param($x) $null -ne (Get-Line $x 1) }
-Check ($ask.code -eq 0 -and (Get-Line $r 1).z -ceq "main" -and ((@((Get-Line $r 1).th)) -join " | ") -clike "*Thrall: Which build should it go to?" -and (Get-Line $r 1).a -ceq "" -and $null -eq (Get-Done $r 1)) "A REPLY THAT ASKS brings it back to the list by itself, the reply shown, his field empty"
+Check ((Get-Line $r 1).z -ceq "main" -and ((@((Get-Line $r 1).th)) -join " | ") -clike "*Thrall: Which build should it go to?" -and (Get-Line $r 1).a -ceq "" -and $null -eq (Get-Done $r 1)) "A REPLY THAT ASKS, ALREADY IN THE STORE, brings it back to the list by itself, the reply shown, his field empty"
 Check ($r.drawn.top -ceq "14 to answer") ("and the top line counts it again (" + $r.drawn.top + ")")
 
 Write-Host ""
 Write-Host "=== a close moves it to History with its outcome ===" -ForegroundColor Cyan
 $r = Send-Probe -Keys @((Typed "two is fine"), (Key "Enter")) -Steps @((Step "settle"))
 $closed2 = Horde @("close", "2", "-Outcome", "Done as he said: step two went ahead.")
-$r = Wait-Report { param($x) $null -ne (Get-Done $x 2) }
+$r = Wait-Report { param($x) "$((Get-Done $x 2).k)" -ceq "history" }
 Check ($closed2.code -eq 0 -and (Get-Done $r 2).k -ceq "history" -and (Get-Done $r 2).o -ceq "Done as he said: step two went ahead." -and (Get-Done $r 2).a -ceq "two is fine" -and (Get-Head $r "History (1)").folded -eq $true) "CLOSED, it is in the folded History (1), with his answer and the one-line outcome"
 
 Write-Host ""
@@ -134,20 +143,27 @@ Check ($r.drawn.answer.focus -ceq "14" -and $r.drawn.answer.focusHead -ceq "") "
 
 Write-Host ""
 Write-Host "=== an answer he changes says edited, and the earlier one is kept ===" -ForegroundColor Cyan
-$r = Send-Probe -Steps @((Step "focus" -Q 3))
-$r = Send-Probe -Keys @((Typed "three as planned"), (Key "Enter")) -Steps @((Step "settle"))
-$r = Send-Probe -Steps @((Step "focus" -Q 3))
-$r = Send-Probe -Keys @((Key "a" -Ctrl), (Typed "three, but a week later"), (Key "Enter")) -Steps @((Step "settle"))
-$said3 = @(Get-Said 3)
-Check ($said3.Count -eq 2 -and $said3[1].text -ceq "three, but a week later" -and $said3[1].replaces -eq $true) "his change is a second message, which the store says replaces his first"
-$r = Wait-Report { param($x) (Get-Line $x 3).m -clike "*edited*" }
-Check ((Get-Line $r 3).a -ceq "three, but a week later" -and (Get-Line $r 3).m -ceq "saved, edited" -and ((@((Get-Line $r 3).th)) -join " | ") -ceq "You, earlier: three as planned") ("THE CURRENT ANSWER SAYS EDITED, and the earlier one is kept above it, one line, marked earlier (" + (Get-Line $r 3).m + " | " + ((@((Get-Line $r 3).th)) -join " | ") + ")")
+# On the LAST question of the list, where Enter has nowhere to go on to: the caret lets go of the
+# field, so that the question folds to Answered like any other. A press on that word brings the field
+# back - the caret in it, his words in it - and with the caret there it is neither folded nor moved.
+$r = Send-Probe -Keys @((Key "a" -Ctrl), (Typed "fourteen as planned"), (Key "Enter")) -Steps @((Step "settle"))
+Check ($r.drawn.answer.focus -ceq "" -and @(Get-Said 14).Count -eq 1) ("his answer to the last question is saved, and the caret has let go of the field: there is no question to go on to (caret '" + $r.drawn.answer.focus + "', " + @(Get-Said 14).Count + " message(s))")
+$r = Wait-Report { param($x) "$((Get-Line $x 14).ad)" -ceq "Answered" } 20
+Check ((Get-Line $r 14).ad -ceq "Answered" -and (Get-Line $r 14).z -ceq "main") "THE LAST QUESTION HE ANSWERS FOLDS TO Answered too"
+$r = Send-Probe -Steps @((Step "focus" -Q 14))
+Check ($r.drawn.answer.focus -ceq "14" -and (Get-Line $r 14).ad -eq "" -and (Get-Line $r 14).a -ceq "fourteen as planned") "a press on the folded question brings its field back, his words in it, the caret there"
+$r = Send-Probe -Keys @((Key "a" -Ctrl), (Typed "fourteen, but a week later"), (Key "Enter")) -Steps @((Step "settle"))
+$said14 = @(Get-Said 14)
+Check ($said14.Count -eq 2 -and $said14[1].text -ceq "fourteen, but a week later" -and $said14[1].replaces -eq $true) "his change is a second message, which the store says replaces his first"
+Check ((Get-Line $r 14).a -ceq "fourteen, but a week later" -and (Get-Line $r 14).m -ceq "saved, edited" -and ((@((Get-Line $r 14).th)) -join " | ") -ceq "You, earlier: fourteen as planned") ("THE CURRENT ANSWER SAYS EDITED, and the earlier one is kept above it, one line, marked earlier (" + (Get-Line $r 14).m + " | " + ((@((Get-Line $r 14).th)) -join " | ") + ")")
 $peek = Horde @("inbox", "-Peek")
-Check ($peek.code -eq 0 -and $peek.out -like "*three, but a week later*" -and $peek.out -like "*(replaces his earlier answer)*") "the keeper's inbox prints the new words with (replaces his earlier answer)"
+Check ($peek.code -eq 0 -and $peek.out -like "*fourteen, but a week later*" -and $peek.out -like "*(replaces his earlier answer)*") "the keeper's inbox prints the new words with (replaces his earlier answer)"
+$r = Send-Probe -Steps @((Step "focus" -Q 4))
+$r = Wait-Report { param($x) $null -ne (Get-Done $x 14) -and $null -eq (Get-Line $x 14) }
+Check ((Get-Done $r 14).k -ceq "thrall" -and (Get-Done $r 14).a -ceq "fourteen, but a week later") "once the caret has left it, the answered question leaves the list like any other, with the answer he changed it to"
 
 Write-Host ""
 Write-Host "=== Ctrl+B parks, as his own act; Ctrl+Z undoes; in the Parked fold Ctrl+B brings it back ===" -ForegroundColor Cyan
-$r = Send-Probe -Steps @((Step "focus" -Q 4))
 $r = Send-Probe -Keys @((Key "b" -Ctrl)) -Steps @((Step "settle"))
 Check ((Get-Line $r 4).z -ceq "parked" -and $r.drawn.answer.focus -ceq "5" -and $r.drawn.toast -ceq "Question 4 parked. Ctrl+Z to undo.") ("A REAL CTRL+B PARKS question 4: it is in the Parked fold, the caret went on to question 5, and a short line offers Ctrl+Z (" + $r.drawn.toast + "; caret " + $r.drawn.answer.focus + "; zone " + (Get-Line $r 4).z + ")")
 $r = Wait-Report { param($x) @(Get-Said 4).Count -ge 1 } 30
@@ -159,7 +175,9 @@ $said4 = @(Wait-Said -Number 4 -Count 2)
 Check ($said4.Count -eq 2 -and $said4[1].act -ceq "unpark") "and that is recorded as his act too: unpark"
 $r = Send-Probe -Keys @((Key "b" -Ctrl)) -Steps @((Step "settle"))
 $r = Send-Probe -Keys @((Key "ArrowDown" -Ctrl))
-Check ($r.drawn.answer.focusHead -clike "Parked (1)") ("Ctrl+Down goes to the folded lines, the first being Parked (1) (" + $r.drawn.answer.focusHead + ")")
+Check ($r.drawn.answer.focusHead -clike "With Thrall (*)") ("Ctrl+Down goes to the folded lines, the first being With Thrall (" + $r.drawn.answer.focusHead + ")")
+$r = Send-Probe -Keys @((Key "ArrowDown"))
+Check ($r.drawn.answer.focusHead -clike "Parked (1)") ("and Down goes to the next of them, Parked (1) (" + $r.drawn.answer.focusHead + ")")
 $r = Send-Probe -Keys @((Key "Enter"))
 Check ($r.drawn.answer.focus -ceq "4" -and (Get-Line $r 4).z -ceq "parked") "Enter opens it, the caret in the parked question's field"
 $r = Send-Probe -Keys @((Key "b" -Ctrl)) -Steps @((Step "settle"))
@@ -173,11 +191,11 @@ $q15 = Join-Path $script:work "q15.json"
 [System.IO.File]::WriteAllText($q15, '{"title":"Is a question asked while the window is open shown at the top of it?","kind":"yes-no","whatItIs":"Asked at the command line.","recommendation":"yes","group":"The plan","askedBy":"Orc C"}', $utf8)
 $add = Horde @("add", "-File", $q15)
 $r = Wait-Report { param($x) $null -ne (Get-Line $x 15) }
-Check ($add.code -eq 0 -and (Get-Line $r 15).nw -eq $true -and (Get-Line $r 15).g -eq 0 -and $r.drawn.headings[0].t -ceq "New") "NEW AT THE TOP: question 15 stands first, under New, marked new"
+Check ($add.code -eq 0 -and (Get-Line $r 15).nw -eq $true -and (Get-Line $r 15).g -eq 0 -and $r.drawn.lines[0].n -ceq "15") "NEW AT THE TOP: question 15 is the first line of the page, marked new"
 $r = Send-Probe -Steps @((Step "focus" -Q 15))
 $r = Send-Probe -Keys @((Key "Tab" -Shift)) -Steps @((Step "focus" -Q 6))
 $r = Send-Probe -Keys @((Key "F2"), (Key "F2"))
-Check ((Get-Line $r 15).nw -eq $false -and $r.drawn.headings[0].t -cne "New") "once he has been in it and left it, it is no longer new: it stands in its group"
+Check ((Get-Line $r 15).nw -eq $false -and $r.drawn.lines[0].n -ceq "15") "once he has been in it and left it, it is no longer marked new; it is still first, being the newest"
 
 Write-Host ""
 Write-Host "=== the view follows him ===" -ForegroundColor Cyan
@@ -208,4 +226,4 @@ Check ($closed.exited -and $closed.code -eq 0) "the window is closed and the com
 }
 Check (-not (Test-Path -LiteralPath $script:work)) "the scenario's temp folder is removed"
 
-Complete-HordeSuite -Success "the list is his turn: answers leave it once read, a note leaves them, a reply brings them back, Ctrl+B parks, new questions stand first, and the view follows him"
+Complete-HordeSuite -Success "the list is what he has still to answer: an answer leaves it once saved, a note leaves it out, only a reply from before the rule brings one back, Ctrl+B parks, new questions stand first, and the view follows him"

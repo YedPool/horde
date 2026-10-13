@@ -7,9 +7,14 @@
 // to its host to be said (options.say). It knows no bridge and no fleet, and it never decides whether
 // words were saved: the host answers that, and until it has, the words are a draft this page keeps.
 //
-//   var doc = HordeDecisionsDocument.mount(element, { topInset, onDraw, onChange, say, storage });
+//   var doc = HordeDecisionsDocument.mount(element, { topInset, onDraw, onChange, say, sayPart, storage, prefs });
 //     say(number, text, wording, id)  ->  a promise of { ok: true, sequence, ... } or { ok: false, reason }
+//     sayPart(number, letter, text, wording, id)   the same, for the answer to ONE PART of a question
+//                                         of parts; a host that has none is handed the part through
+//                                         say, as the words "(b) ..." (see A QUESTION OF SEVERAL PARTS)
 //     storage                             where drafts are kept (default: this page's own localStorage)
+//     prefs                               where the chosen order is kept (default: the same; a host
+//                                         that keeps drafts in memory only still keeps the order)
 //   doc.setKinds(record)     the answer of the kinds operation, as { state, value, reason }
 //   doc.setList(record)      the answer of the list operation; says what it did: "drawn", "same"
 //                            (the very answer already drawn: nothing is touched) or "unread" (the
@@ -19,6 +24,7 @@
 //   doc.setUnfolded(numbers) these questions' context unfolded as well; doc.unfoldAll(); doc.foldAll()
 //   doc.reveal(number)       that question brought into view, if it is not wholly in it already
 //   doc.takeKeyboard()       the caret into the first unanswered question's field
+//   doc.order(), doc.setOrder(key)   the order chosen (date, importance or blocks), and choosing one
 //   doc.drive(steps)         a check's steps acted out on the page's own fields (see drive below)
 //   doc.counts()             { open, waiting, other }
 //   doc.snapshot(limits)     WHAT IS DRAWN, read back from the page's own elements; see snapshot below
@@ -37,6 +43,23 @@
 //   Ctrl+Enter            in an empty field: the suggestion IS the answer; save it and go on
 //   Shift+Enter, Ctrl+J   a new line inside the answer
 //   F2, Ctrl+Space        the question's context, unfolded and folded in place; the caret stays
+//
+// THE ORDER IS HIS (the founder, 2026-10-12): the questions he has still to answer stand NEWEST FIRST,
+// and a small line at the head of the page lets him order them instead by how important the task is,
+// or by how much the question blocks it - the two words the keeper states when it asks
+// (decisions/Rules.ps1, HOW MUCH A QUESTION MATTERS); ties go to the newest. ONE FUNCTION SORTS
+// (compareBy), for the window and for the phone alike, because this file is both. What he chose is
+// remembered on this device. A question's group is still its heading: questions that stand together
+// in the order and share a group share one heading, so a group may be named more than once down the
+// page, and the order is never bent to keep a group in one piece.
+//
+// ONCE HE HAS ANSWERED, THE QUESTION LEAVES HIS LIST (the same day: "once he answers a question it
+// goes away from his list"). The words turn green when the host says they are saved; a moment later
+// the question folds to one line that says Answered; and when a list arrives that holds the answer it
+// moves to the folded With Thrall, below. It never comes back by itself: the keeper asks what is
+// left as a NEW question, which shows the old one and his answer folded under it ("Follows up on
+// question N"). An answer that was NOT saved never turns green: the field keeps the words and the
+// reason stands under them.
 //
 // NOTHING TYPED IS LOST. Whatever stands in a field and is not the saved answer is a draft, kept by
 // the question's number in the page's own storage on every keystroke: it survives a redraw, a new
@@ -82,11 +105,34 @@
   // Each mark has a short form, drawn where there is no room beside the field (list.css).
   var WORDS = {
     you: "You", keeper: KEEPER, saving: "saving", saved: "saved", told: "told " + KEEPER, read: "read by " + KEEPER, draft: "draft",
-    toldShort: "told", readShort: "read", edited: "edited", earlier: "You, earlier", isNew: "new",
+    toldShort: "told", readShort: "read", edited: "edited", earlier: "You, earlier", isNew: "new", answered: "Answered",
     afterClosing: "the question is closed; kept, and it reopens nothing", earlierWording: "said to an earlier wording",
     marks: "this message holds direction or invisible characters"
   };
   var DRAFTS_KEY = "horde-decisions-drafts-v1";
+  // THE ORDERS HE CAN CHOOSE (header, THE ORDER IS HIS): key, the word on its button, and what the
+  // button says to a screen reader. The first is the one he gets until he chooses.
+  var ORDER_KEY = "horde-decisions-order-v1";
+  var ORDERS = [
+    { key: "date", label: "Date", says: "Order by date: the newest question first" },
+    { key: "importance", label: "Task importance", says: "Order by how important the task is: the most important first" },
+    { key: "blocks", label: "Blocking", says: "Order by how much the question blocks its task: the most blocking first" }
+  ];
+  var DEFAULT_ORDER = "date";
+  // THE TWO WORDS BESIDE A QUESTION, each list in the order it sorts in, and the word a question
+  // reads as when it states none - or states one this page does not know. They are
+  // decisions/Rules.ps1's lists, written again here because a page cannot ask the rules;
+  // test/test-decisions-rules.ps1 holds these four lines to them, word for word.
+  var IMPORTANCES = ["high", "normal", "low"];
+  var BLOCKINGS = ["all", "part", "none"];
+  var DEFAULT_IMPORTANCE = "normal";
+  var DEFAULT_BLOCKS = "part";
+  // AFTER A SAVE (header, ONCE HE HAS ANSWERED): how long the saved words stand green before the
+  // question folds to "Answered", and how long from the save the folded line is kept in the list
+  // even when the list that holds the answer has already arrived - so that what he did is seen to
+  // have happened, and does not vanish under his eyes.
+  var GREEN_MS = 1500;
+  var LINGER_MS = 4000;
   // How long after the caret arrives in an empty field an Enter is taken for the tail of a doubled
   // key press. Longer than a key bounce or an accidental double tap; shorter than reading a question.
   var ARRIVAL_MS = 350;
@@ -122,6 +168,31 @@
   function textOf(value) { return (value === null || value === undefined) ? "" : String(value); }
   function listOf(value) { return Array.isArray(value) ? value : []; }
   function capital(word) { return word ? word.charAt(0).toUpperCase() + word.slice(1) : word; }
+  // WHERE A WORD STANDS IN ITS LIST; a word the list does not hold stands where the default does.
+  function placeIn(words, word, fallback) {
+    var at = words.indexOf(textOf(word));
+    return at >= 0 ? at : words.indexOf(fallback);
+  }
+  // When a question was asked, as a number; 0 when the list does not say (then its number decides).
+  function askedAt(q) {
+    var t = Date.parse(textOf(q.addedAt));
+    return isNaN(t) ? 0 : t;
+  }
+  // NEWEST FIRST: by when it was asked, and between two asked in the same instant - or with no time
+  // stated - the higher number, which was asked later. It is also how every other order breaks a tie.
+  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (Number(b.number) - Number(a.number)); }
+  function orderOf(key) {
+    for (var i = 0; i < ORDERS.length; i += 1) { if (ORDERS[i].key === key) { return key; } }
+    return DEFAULT_ORDER;
+  }
+  // THE ONE COMPARISON of two questions for an order (header, THE ORDER IS HIS).
+  function compareBy(key) {
+    if (key === "importance") { return function (a, b) { return (placeIn(IMPORTANCES, a.importance, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }
+    if (key === "blocks") { return function (a, b) { return (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }
+    return newestFirst;
+  }
+  // A list of questions in an order: a new list, the one handed in is not touched.
+  function inOrder(list, key) { return listOf(list).slice().sort(compareBy(orderOf(key))); }
   function newId() {
     var bytes = new Uint8Array(16);
     window.crypto.getRandomValues(bytes);
@@ -133,8 +204,14 @@
   // A QUESTION OF SEVERAL PARTS IS ANSWERED PART BY PART (the owner's question 28, 2026-10-07: five
   // parts, (a) to (e), and his stored answer was the one letter "a" - he began "a ..." and a key saved
   // it). Each part gets a small field of its own, labelled with its letter and its words; Enter and
-  // Tab go from part to part; the answer is sent ONCE, when the last part is left (or on Ctrl+Enter),
-  // as one message with a line per part, "(a) ...", so that the keeper reads it whole. The store keeps
+  // Tab go from part to part. EACH PART IS SENT BY ITSELF, the moment he leaves it (the founder,
+  // 2026-10-12: "answering one part sends that part at once; do not wait for all parts"): its words
+  // turn green when they are saved and the part folds to one line that says Answered, while the parts
+  // still to answer stay open; the question leaves his list when every part is answered. The host is
+  // handed the part's letter with the words (sayPart); the store keeps each as a record of its own
+  // (decisions/Rules.ps1, A QUESTION OF PARTS), so the keeper is told which part was answered. A host
+  // that cannot say a part is handed the words as "(b) ...", which every earlier version reads back
+  // into the part's field. The store keeps
   // parts as the question's list "parts" (decisions/Rules.ps1), each written by the keeper as
   // "(a) words" (seen in the real list that day: questions 6 and 28 to 31); a part that does not begin
   // so is given the next letter. ONE RECOMMENDATION FOR ALL PARTS, written "(a) approve; (b) approve;
@@ -148,7 +225,10 @@
     for (var i = 0; i < list.length; i += 1) {
       var words = textOf(list[i]);
       var mark = PART_MARK.exec(words);
-      var letter = mark ? mark[1] : String.fromCharCode(97 + i);
+      // An unmarked part takes the letter of its place; there are twenty-six, and a part beyond
+      // them has none, so the parts cannot all be told apart (decisions/Rules.ps1 reads them so too).
+      var letter = mark ? mark[1] : (i < 26 ? String.fromCharCode(97 + i) : "");
+      if (!letter) { return null; }
       out.push({ letter: letter, words: mark ? words.slice(mark[0].length) : words, rec: "" });
     }
     // Each letter once, or they are not parts that can be told apart: then one field, as before.
@@ -226,8 +306,20 @@
     var say = (typeof options.say === "function") ? options.say : function () { return Promise.resolve({ ok: false, reason: "Not saved: this page has nobody to hand the words to." }); };
     // act(number, "park" or "unpark", wording, id): his act, recorded; answered as say is.
     var act = (typeof options.act === "function") ? options.act : function () { return Promise.resolve({ ok: false, reason: "this page has nobody to record it with." }); };
+    // sayPart(number, letter, text, wording, id): his answer to one part. A host that has no such
+    // request is handed the words through say with the part's letter before them, "(b) ...": one
+    // message a part, which a store of any version keeps and an earlier page reads into the part.
+    var sayPart = (typeof options.sayPart === "function") ? options.sayPart : function (number, letter, text, wording, id) { return say(number, "(" + letter + ") " + text, wording, id); };
     var storage = options.storage || null;
     if (!storage) { try { storage = window.localStorage; } catch (e) { storage = null; } }
+    // WHERE THE CHOSEN ORDER IS KEPT: its own place, because a host may keep drafts in memory only (the
+    // phone: what he typed is never written to the phone's disk) and the order is not his words.
+    // Asked for with care: a page with no storage, or one that refuses, keeps the order for as long
+    // as it is open and says nothing.
+    var prefs = options.prefs || null;
+    if (!prefs) { try { prefs = window.localStorage; } catch (e) { prefs = null; } }
+    var orderKey = DEFAULT_ORDER;
+    try { orderKey = orderOf(prefs ? prefs.getItem(ORDER_KEY) : ""); } catch (e) { orderKey = DEFAULT_ORDER; }
     var kinds = Object.create(null);
     var questions = [];
     var lastJson = null;
@@ -259,9 +351,25 @@
       catch (e) { storageProblem = "Drafts could not be kept: what is typed and not saved is lost when the window closes."; }
     }
 
-    function sentOf(number) {
-      if (!sent[number]) { sent[number] = { sentText: null, sentId: null, pending: 0, refusal: "", saved: null }; }
-      return sent[number];
+    // What became of what was sent is kept by the question's number, and for the answer to one part
+    // by its number and the part's letter, "28:b".
+    function sentKey(number, letter) { return letter ? (number + ":" + letter) : String(number); }
+    function sentOf(key) {
+      if (!sent[key]) { sent[key] = { sentText: null, sentId: null, pending: 0, refusal: "", saved: null }; }
+      return sent[key];
+    }
+    // AFTER A SAVE (GREEN_MS and LINGER_MS, above): until when a saved answer stands green, by the
+    // same key, and until when its question is kept in the list, by the question's number.
+    var greenUntil = Object.create(null);
+    var lingerUntil = Object.create(null);
+    function isGreen(key) { return greenUntil[key] !== undefined && Date.now() < greenUntil[key]; }
+    // Is something of this question still on its way to the host, or only just saved?
+    function lingers(q) {
+      if (lingerUntil[q.number] !== undefined && Date.now() < lingerUntil[q.number]) { return true; }
+      var s = sent[q.number];
+      if (s && s.pending > 0) { return true; }
+      var info = partsOf(q);
+      return !!info && info.parts.some(function (p) { var sp = sent[sentKey(q.number, p.letter)]; return !!sp && sp.pending > 0; });
     }
     function allMessagesOf(q) { return (q.thread && Array.isArray(q.thread.messages)) ? q.thread.messages : []; }
     // WHAT WAS SAID, his acts left out (park and unpark are records of what he did, not words; the
@@ -278,8 +386,9 @@
       for (var i = all.length - 1; i >= 0; i -= 1) { if (textOf(all[i].act)) { return textOf(all[i].act); } }
       return "";
     }
-    // THE ANSWER THAT STANDS: the reader's own message when it is the last thing said under the
-    // question; or what the host has just answered is saved, until a list arrives that holds it.
+    // THE ANSWER THAT STANDS, to the question as a whole: the reader's own message when it is the
+    // last thing said under the question - his answers to single parts, said after it, left aside -
+    // or what the host has just answered is saved, until a list arrives that holds it.
     function standingOf(q) {
       var msgs = messagesOf(q);
       var s = sent[q.number];
@@ -287,18 +396,66 @@
         var caught = allMessagesOf(q).some(function (m) { return Number(m.sequence) >= s.saved.sequence; });
         if (caught) { s.saved = null; } else { return s.saved; }
       }
-      var last = msgs.length ? msgs[msgs.length - 1] : null;
-      return (last && last.speaker === MINE) ? last : null;
+      for (var i = msgs.length - 1; i >= 0; i -= 1) {
+        if (msgs[i].speaker !== MINE) { return null; }
+        if (!textOf(msgs[i].part)) { return msgs[i]; }
+      }
+      return null;
+    }
+    // THE ANSWER THAT STANDS TO ONE PART: what the host has just answered is saved for it, until a
+    // list arrives that holds it; else his last message that names the part.
+    function partSavedOf(q, letter) {
+      var s = sent[sentKey(q.number, letter)];
+      if (s && s.saved) {
+        var caught = allMessagesOf(q).some(function (m) { return m.speaker === MINE && !textOf(m.act) && Number(m.sequence) >= s.saved.sequence && (textOf(m.part) === letter || !textOf(m.part)); });
+        if (caught) { s.saved = null; } else { return s.saved; }
+      }
+      var msgs = messagesOf(q);
+      for (var i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].speaker === MINE && textOf(msgs[i].part) === letter) { return msgs[i]; } }
+      return null;
+    }
+    // HAS HE ANSWERED IT? { answered, local }: answered when an answer to the whole question stands,
+    // or every one of its parts has one; local when any of that is known only from this page - saved,
+    // and not yet in a list.
+    function stateOf(q) {
+      var standing = standingOf(q);
+      if (standing) { return { answered: true, local: standing.local === true }; }
+      var info = partsOf(q);
+      if (!info) { return { answered: false, local: false }; }
+      var local = false;
+      for (var i = 0; i < info.parts.length; i += 1) {
+        var a = partSavedOf(q, info.parts[i].letter);
+        if (!a) { return { answered: false, local: false }; }
+        if (a.local === true) { local = true; }
+      }
+      return { answered: true, local: local };
+    }
+    // WHAT HE ANSWERED, as one text: his words to the whole question, and a line for each part he
+    // answered after them, "(a) words", in the parts' order.
+    function answerOf(q) {
+      var lines = [];
+      var standing = standingOf(q);
+      if (standing) { lines.push(textOf(standing.text)); }
+      var info = partsOf(q);
+      if (info) {
+        info.parts.forEach(function (p) {
+          var a = partSavedOf(q, p.letter);
+          if (a && (!standing || Number(a.sequence) > Number(standing.sequence))) { lines.push("(" + p.letter + ") " + textOf(a.text)); }
+        });
+      }
+      return lines.join("\n");
     }
     // What stands above the field: everything said before the standing answer. AN ANSWER HE REPLACED
     // (an edit: his words straight after his own) stays, as one line marked "earlier", folded with the
     // question's context (the owner, 2026-10-07: the earlier one kept under a fold).
+    // His answer to a part that stands is drawn in the part's own row, never above the fields too.
     function earlierOf(q) {
       var msgs = messagesOf(q);
       var standing = standingOf(q);
       var out = [];
       for (var i = 0; i < msgs.length; i += 1) {
         if (standing && msgs[i] === standing) { continue; }
+        if (msgs[i].speaker === MINE && textOf(msgs[i].part) && partSavedOf(q, textOf(msgs[i].part)) === msgs[i]) { continue; }
         out.push(msgs[i]);
       }
       return out;
@@ -307,9 +464,30 @@
       var msgs = messagesOf(q);
       var at = msgs.indexOf(m);
       if (m.speaker !== MINE) { return false; }
+      // An answer to one part is replaced only by a later answer to that part.
+      if (textOf(m.part)) { var now = partSavedOf(q, textOf(m.part)); return !!now && now !== m; }
       if (at >= 0 && at + 1 < msgs.length) { return msgs[at + 1].speaker === MINE; }
       var standing = standingOf(q);
       return at === msgs.length - 1 && !!standing && standing !== m;
+    }
+    // WHAT STANDS IN EACH PART'S FIELD when the question is drawn: what he typed there and has not
+    // sent (the draft, kept as the parts' one text); else his saved answer to the part; else, for an
+    // answer given to all the parts in one message - as an earlier page sent it - that part of it.
+    function partValuesOf(q, info) {
+      var typedIn = (drafts[q.number] !== undefined) ? readParts(drafts[q.number], info.parts) : null;
+      var standing = standingOf(q);
+      var whole = standing ? readParts(textOf(standing.text), info.parts) : null;
+      return info.parts.map(function (p, i) {
+        if (typedIn && typedIn[i] !== "") { return typedIn[i]; }
+        return partBaseOf(q, info, i, whole);
+      });
+    }
+    // What a part's field holds when nothing unsent is typed in it.
+    function partBaseOf(q, info, i, whole) {
+      var a = partSavedOf(q, info.parts[i].letter);
+      if (a) { return textOf(a.text); }
+      if (whole === undefined) { var standing = standingOf(q); whole = standing ? readParts(textOf(standing.text), info.parts) : null; }
+      return whole ? whole[i] : "";
     }
     function valueOf(q) {
       if (drafts[q.number] !== undefined) { return drafts[q.number]; }
@@ -371,13 +549,15 @@
     }
 
     // WHERE A QUESTION STANDS (the owner, 2026-10-07: "answers that have been picked up should be
-    // moved out of the list"; "new questions should appear at the top"). THE LIST IS HIS TURN:
-    //   main     open, not set aside, and either never answered, or the keeper has said something to
-    //            him that asks since his last answer. And his answer, saved, stays where it is - marked
-    //            saved, still his to change - until the keeper has READ it; the next list after the
-    //            keeper's read mark passes it moves it out.
-    //   thrall   answered and read, or told something that asks nothing (a note), not closed: the
-    //            keeper's turn. Back up by itself when the keeper asks him something.
+    // moved out of the list"; the founder, 2026-10-12: "once he answers a question it goes away from
+    // his list, even if there is a follow-up"). THE LIST IS WHAT HE HAS STILL TO ANSWER:
+    //   main     open, not set aside, and not answered: no answer of his stands, or not every part
+    //            has one. And for a moment a question he has JUST answered here: green, then folded
+    //            to "Answered", until a list that holds the answer has come (header, ONCE HE HAS
+    //            ANSWERED). A question in a store from before that rule, asked again under its
+    //            number by a reply that asks, is in the list too, once, until he answers it.
+    //   thrall   answered, or told something that asks nothing (a note), not closed: the keeper's
+    //            turn. Nothing brings it back: what is left to ask comes as a new question.
     //   parked   set aside: by his own Ctrl+B (an act he recorded), or by the keeper, who puts it in a
     //            group the host names (foldedGroups). His unpark brings it back whatever the group.
     //   history  closed.
@@ -388,8 +568,8 @@
       var did = lastActOf(q);
       if (did === "park") { return "parked"; }
       if (did !== "unpark" && parked[textOf(q.group)] === true) { return "parked"; }
-      var standing = standingOf(q);
-      if (standing) { return (Array.isArray(standing.unreadBy) && standing.unreadBy.length === 0) ? "thrall" : "main"; }
+      var st = stateOf(q);
+      if (st.answered) { return (st.local || lingers(q)) ? "main" : "thrall"; }
       var msgs = messagesOf(q);
       var last = msgs.length ? msgs[msgs.length - 1] : null;
       if (last && last.asks === false && msgs.some(function (m) { return m.speaker === MINE; })) { return "thrall"; }
@@ -414,7 +594,7 @@
     }
     function keepSeen() { try { if (storage && seen) { storage.setItem(SEEN_KEY, JSON.stringify({ numbers: Object.keys(seen).map(Number) })); } } catch (e) { /* only "new" is lost */ } }
     function markSeen(number) { if (seen && !seen[number]) { seen[number] = true; keepSeen(); } }
-    function isNew(q) { return !!seen && !seen[q.number] && !standingOf(q); }
+    function isNew(q) { return !!seen && !seen[q.number] && !stateOf(q).answered; }
 
     function sectionsOf() {
       var heads = [];
@@ -425,7 +605,7 @@
         if (!byKey[key]) { byKey[key] = { key: key, kind: kind, name: name, note: "", qs: [] }; if (kind === "group") { groupsInOrder.push(byKey[key]); } }
         return byKey[key];
       }
-      var fresh = [];
+      var mine = [];
       questions.forEach(function (q) {
         var section = sectionOf(q);
         var keyWas = placedAt[q.number];
@@ -434,14 +614,27 @@
           if (wasFold !== section) { section = wasFold; }
         }
         if (section !== "main") { folds[section].push(q); return; }
-        var stays = !!keyWas && held(q) && keyWas.indexOf("fold:") !== 0;
-        if ((stays && keyWas === "new") || (!stays && isNew(q))) { fresh.push(q); return; }
-        var h = head("group:" + textOf(q.group), "group", textOf(q.group) || "No group");
-        if (!h.note && textOf(q.groupNote)) { h.note = textOf(q.groupNote); }
-        h.qs.push(q);
+        mine.push(q);
       });
-      if (fresh.length) { heads.push({ key: "new", kind: "new", name: "New", note: "", qs: fresh.sort(function (a, b) { return b.number - a.number; }) }); }
+      // THE LIST, IN HIS ORDER (header, THE ORDER IS HIS), under a heading for each run of questions
+      // that share a group: the first run of a group is keyed by the group's name alone, a later
+      // one by the name and which run it is, so that each keeps its own fold between draws.
+      var runs = Object.create(null);
+      var run = null;
+      inOrder(mine, orderKey).forEach(function (q) {
+        var name = textOf(q.group);
+        if (!run || run.group !== name) {
+          runs[name] = (runs[name] || 0) + 1;
+          run = head("group:" + name + (runs[name] > 1 ? "#" + runs[name] : ""), "group", name || "No group");
+          run.group = name;
+        }
+        if (!run.note && textOf(q.groupNote)) { run.note = textOf(q.groupNote); }
+        run.qs.push(q);
+      });
       heads = heads.concat(groupsInOrder);
+      // What is with the keeper, and what is set aside, stand in the same order under their folds.
+      folds.thrall = inOrder(folds.thrall, orderKey);
+      folds.parked = inOrder(folds.parked, orderKey);
       var foldNames = { thrall: "With " + KEEPER, parked: "Parked", history: "History" };
       folds.history.sort(function (a, b) { return textOf(b.closedAt).localeCompare(textOf(a.closedAt)) || (b.number - a.number); });
       FOLDS.forEach(function (f) { if (folds[f].length) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
@@ -468,7 +661,11 @@
       for (var i = 0; i < drawnLines.length; i += 1) { if (drawnLines[i].q.number === number) { return drawnLines[i]; } }
       return null;
     }
-    function shownLines() { return drawnLines.filter(function (line) { return line.field.offsetParent !== null; }); }
+    // The fields of a line that can be typed in now: a part that is answered and folded has none.
+    function openFields(line) { return line.fields.filter(function (f) { return f.offsetParent !== null; }); }
+    // The lines in the run of answering: those with a field to type in. A question folded to
+    // "Answered" is passed over by Enter and Tab.
+    function shownLines() { return drawnLines.filter(function (line) { return openFields(line).length > 0; }); }
     function focusedLine() {
       var act = document.activeElement;
       for (var i = 0; i < drawnLines.length; i += 1) { if (drawnLines[i].fields.indexOf(act) >= 0) { return drawnLines[i]; } }
@@ -486,7 +683,7 @@
     function fit(line) {
       if (line.parts) { line.fields.forEach(fitPart); return; }
       var field = line.field;
-      if (field.offsetParent === null) { return; }
+      if (field.offsetParent === null) { line.more.textContent = ""; return; }
       var linePx = parseFloat(window.getComputedStyle(field).lineHeight) || 22;
       var empty = field.value === "" && field.placeholder !== "";
       if (empty) { field.value = field.placeholder; }
@@ -512,10 +709,41 @@
       field.style.height = "calc(" + lines + " * var(--line-px))";
     }
 
+    // One part's row, from what is known now: its mark, the refusal under it, whether its words
+    // stand green, and whether it is folded to its saved answer and the word Answered. A part is
+    // never folded under the caret, nor while what stands in its field is not the saved answer.
+    function refreshPart(line, i) {
+      var q = line.q;
+      var row = line.rows[i];
+      var field = line.fields[i];
+      var key = sentKey(q.number, line.parts[i].letter);
+      var s = sent[key];
+      var saved = partSavedOf(q, line.parts[i].letter);
+      var isSaved = !!saved && field.value === textOf(saved.text);
+      var words = "";
+      if (s && s.pending > 0) { words = WORDS.saving; }
+      else if (isSaved) { words = WORDS.saved; }
+      else if (field.value !== "" && field.value !== partBaseOf(q, { parts: line.parts }, i)) { words = WORDS.draft; }
+      var green = isSaved && isGreen(key);
+      var folded = isSaved && !green && document.activeElement !== field && !(s && s.pending > 0);
+      row.mark.textContent = folded ? WORDS.answered : words;
+      row.mark.hidden = row.mark.textContent === "";
+      row.el.classList.toggle("saved-now", green);
+      row.el.classList.toggle("answered", folded);
+      row.done.textContent = folded ? textOf(saved.text) : "";
+      row.done.hidden = !folded;
+      row.refusal.textContent = (s && s.refusal) ? s.refusal : "";
+      row.refusal.hidden = !(s && s.refusal);
+    }
     function refresh(line) {
       // The mark and the refusal of one line, from what is known now. No redraw.
-      var s = sent[line.q.number];
-      var mark = markOf(line.q, lineValue(line));
+      // AND WHERE IT IS ON THE WAY OUT OF THE LIST (header, ONCE HE HAS ANSWERED): green while its
+      // saved words are fresh, then folded to the one word Answered - never under the caret, and
+      // never while the field holds words that are not the saved answer.
+      var q = line.q;
+      var s = sent[q.number];
+      if (line.parts) { line.parts.forEach(function (p, i) { refreshPart(line, i); }); }
+      var mark = line.parts ? { full: "", short: "", note: "" } : markOf(q, lineValue(line));
       line.markFull.textContent = mark.full;
       line.markShort.textContent = mark.short;
       line.mark.hidden = mark.full === "";
@@ -523,6 +751,25 @@
       line.markNote.hidden = mark.note === "";
       line.refusal.textContent = (s && s.refusal) ? s.refusal : "";
       line.refusal.hidden = !(s && s.refusal);
+      var st = stateOf(q);
+      var green = !line.parts && st.answered && isGreen(String(q.number));
+      var partsBusy = !!line.parts && line.rows.some(function (r) { return !r.el.classList.contains("answered"); });
+      var folded = st.answered && !green && !partsBusy && drafts[q.number] === undefined && focusedLine() !== line && !(s && s.pending > 0);
+      line.wrap.classList.toggle("saved-now", green);
+      line.wrap.classList.toggle("answered", folded);
+      line.done.hidden = !folded;
+    }
+    // The caret into a line that is folded to Answered, or into one of its folded parts: unfolded
+    // for as long as the caret stays, so that he can still change what he said before it leaves.
+    function unfold(line, part) {
+      var field = (part === undefined) ? line.field : line.fields[part];
+      line.wrap.classList.remove("answered");
+      line.done.hidden = true;
+      if (line.parts) { var row = line.rows[part === undefined ? 0 : part]; row.el.classList.remove("answered"); row.done.hidden = true; }
+      field.focus({ preventScroll: true });
+      fit(line);
+      refresh(line);
+      onChange();
     }
 
     // THE VIEW FOLLOWS HIM (the owner, 2026-10-07: "when tabbing to a new question the question should
@@ -556,12 +803,21 @@
       else if (box.top < inset && box.height <= window.innerHeight - inset) { window.scrollBy(0, box.top - inset - NEAR_TOP_PX); }
     }
     function enter(line, part) {
-      var field = line.fields[Math.max(0, Math.min(line.fields.length - 1, part === undefined ? 0 : (part < 0 ? line.fields.length + part : part)))];
+      // Into the part asked for; with none asked for, the first part still to answer. A part that is
+      // folded has no field to stand in: the nearest open one after it, or before it, is taken.
+      var open = openFields(line);
+      if (!open.length) { return; }
+      var want = part === undefined ? -1 : (part < 0 ? line.fields.length + part : part);
+      var field = null;
+      if (want < 0) { for (var u = 0; u < open.length && !field; u += 1) { if (!line.parts || !partSavedOf(line.q, line.parts[line.fields.indexOf(open[u])].letter)) { field = open[u]; } } }
+      else if (part !== undefined && part < 0) { field = open[open.length - 1]; }
+      else { for (var v = 0; v < open.length && !field; v += 1) { if (line.fields.indexOf(open[v]) >= want) { field = open[v]; } } }
+      if (!field) { field = (part !== undefined && part >= 0) ? open[open.length - 1] : open[0]; }
       var sameQuestion = focusedLine() === line;
       field.focus({ preventScroll: true });
       var end = field.value.length;
       try { field.setSelectionRange(end, end); } catch (e) { /* a field not drawn has no caret */ }
-      arrived = { number: line.q.number, at: Date.now(), bySave: false };
+      arrived = { number: line.q.number, part: line.fields.indexOf(field), at: Date.now(), bySave: false };
       // From part to part of one question only the field is kept in view; a new question comes up.
       if (sameQuestion) { keepInView(field); } else { intoView(line); keepInView(field); }
       onChange();
@@ -576,12 +832,21 @@
       if (at >= 0 && next) { enter(next, step < 0 ? -1 : 0); return true; }
       return false;
     }
+    // ON FROM A FIELD WHOSE WORDS WERE JUST SENT. With a field to go on to, the caret goes there. With
+    // none - it was the last question of the list - the caret lets go of the field: a question is
+    // never folded under the caret, and the last one he answers must fold to Answered and leave like
+    // any other (header, ONCE HE HAS ANSWERED). Nothing sent, the caret stays where it is.
+    function onFrom(line, sentNow) {
+      var moved = move(line, 1);
+      if (sentNow) { arrived.bySave = true; }
+      if (!moved && sentNow && document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
+    }
     function mainLines() { return shownLines().filter(function (l) { return l.zone === "main"; }); }
     function takeKeyboard() {
       var shown = mainLines();
       var first = null;
       for (var i = 0; i < shown.length; i += 1) {
-        if (!standingOf(shown[i].q)) { first = shown[i]; break; }
+        if (!stateOf(shown[i].q).answered) { first = shown[i]; break; }
       }
       if (!first && shown.length) { first = shown[0]; }
       if (first) { enter(first); }
@@ -591,8 +856,17 @@
       // What stands in the field now: a draft unless it is the standing answer, word for word.
       var q = line.q;
       var value = lineValue(line);
-      var standing = standingOf(q);
-      if (value === (standing ? textOf(standing.text) : "")) { delete drafts[q.number]; } else { drafts[q.number] = value; }
+      if (line.parts) {
+        // PART BY PART: the draft is what stands in the parts' fields and is not their saved answer,
+        // as the one text the parts make; a part whose field is its saved answer, or empty, is not in it.
+        var info = { parts: line.parts };
+        var unsent = joinParts(line.parts, line.fields.map(function (f, i) { return f.value === partBaseOf(q, info, i) ? "" : f.value; }));
+        if (unsent === "") { delete drafts[q.number]; } else { drafts[q.number] = unsent; }
+        line.parts.forEach(function (p, i) { var sp = sent[sentKey(q.number, p.letter)]; if (sp && sp.refusal && line.fields[i].value !== sp.sentText) { sp.refusal = ""; } });
+      } else {
+        var standing = standingOf(q);
+        if (value === (standing ? textOf(standing.text) : "")) { delete drafts[q.number]; } else { drafts[q.number] = value; }
+      }
       keepDrafts();
       // Words changed after a refusal are not the words that were refused.
       var s = sent[q.number];
@@ -616,24 +890,49 @@
       typed(line);
     }
 
-    function answered(number, id, text, result) {
-      var s = sentOf(number);
+    // The host has answered what became of words that were sent: -letter names the part they were
+    // the answer to, or is "" for an answer to the whole question.
+    function answered(number, id, text, result, letter) {
+      var key = sentKey(number, letter);
+      var s = sentOf(key);
       s.pending -= 1;
       var line = lineOf(number);
-      if (result && result.ok === true) {
-        s.saved = { text: text, sequence: Number(result.sequence), speaker: MINE, arrivedAfterClosing: result.arrivedAfterClosing === true, saidToEarlierWording: result.saidToEarlierWording === true, replaces: s.replacing === true };
+      var partAt = (line && line.parts && letter) ? line.parts.map(function (p) { return p.letter; }).indexOf(letter) : -1;
+      // SAVED IS WHAT THE HOST SAYS IS SAVED, and nothing else: no answer, or one that is not ok, is not.
+      var savedNow = !!result && result.ok === true;
+      if (savedNow) {
+        // local: known from this page only, until a list arrives that holds it (stateOf).
+        s.saved = { text: text, sequence: Number(result.sequence), speaker: MINE, part: letter || "", local: true, arrivedAfterClosing: result.arrivedAfterClosing === true, saidToEarlierWording: result.saidToEarlierWording === true, replaces: s.replacing === true };
         if (s.sentId === id) { s.refusal = ""; }
         // The draft is dropped only if it is still these very words.
-        if (drafts[number] === text) { delete drafts[number]; keepDrafts(); }
+        if (!letter && drafts[number] === text) { delete drafts[number]; keepDrafts(); }
+        // SAVED: GREEN NOW, FOLDED IN A MOMENT, OUT OF THE LIST WHEN A LIST HOLDS IT (header, ONCE HE
+        // HAS ANSWERED). Only here: words that were not saved never turn green.
+        greenUntil[key] = Date.now() + GREEN_MS;
+        lingerUntil[number] = Date.now() + LINGER_MS;
+        window.setTimeout(function () { var l = lineOf(number); if (l) { refresh(l); fit(l); onChange(); } }, GREEN_MS + 20);
+        window.setTimeout(function () { if (lastJson !== null) { draw(); } }, LINGER_MS + 40);
       } else if (s.sentId === id) {
         s.refusal = textOf(result && result.reason) || "Not saved, and no reason was given.";
-        // BACK TO THE WORDS THAT WERE NOT SAVED, unless the reader is typing somewhere else.
+        // BACK TO THE WORDS THAT WERE NOT SAVED, unless the reader is typing somewhere else - which,
+        // for a part, may be another part of the same question: there he is typing when its field
+        // holds words.
         var now = focusedLine();
-        if (line && now !== line && (!now || lineValue(now) === "" || drafts[now.q.number] === undefined)) { enter(line); }
+        var inField = now ? document.activeElement : null;
+        var elsewhere = !!line && (now !== line || (partAt >= 0 && line.fields[partAt] !== inField));
+        var typing = !!now && ((now === line && partAt >= 0) ? inField.value !== "" : (lineValue(now) !== "" && drafts[now.q.number] !== undefined));
+        if (elsewhere && !typing) { enter(line, partAt >= 0 ? partAt : undefined); }
+      }
+      // A part's draft is what is typed and not saved: worked out again from the fields (typed).
+      if (line && line.parts && letter && savedNow) {
+        var info = { parts: line.parts };
+        var unsent = joinParts(line.parts, line.fields.map(function (f, i) { return f.value === partBaseOf(line.q, info, i) ? "" : f.value; }));
+        if (unsent === "") { delete drafts[number]; } else { drafts[number] = unsent; }
+        keepDrafts();
       }
       // What was said above the field may have changed with it: an answer he replaced is now kept
       // there, marked earlier (an edit).
-      if (line && result && result.ok === true) { line.said = drawTalk(line.q, line.talk, line.ans); }
+      if (line && savedNow) { line.said = drawTalk(line.q, line.talk, line.ans); }
       if (line) { refresh(line); fit(line); }
       onChange();
     }
@@ -652,8 +951,29 @@
       refresh(line);
       var number = q.number;
       Promise.resolve().then(function () { return say(number, text, Number(q.wordingVersion), id); }).then(
-        function (result) { answered(number, id, text, result); },
-        function (error) { answered(number, id, text, { ok: false, reason: "Not saved: " + ((error && error.message) ? error.message : error) }); });
+        function (result) { answered(number, id, text, result, ""); },
+        function (error) { answered(number, id, text, { ok: false, reason: "Not saved: " + ((error && error.message) ? error.message : error) }, ""); });
+      return true;
+    }
+    // ONE PART, SENT BY ITSELF (header, A QUESTION OF SEVERAL PARTS): what stands in that part's
+    // field, if it says something and is not already its saved answer. Returns whether there was
+    // anything to send. The same words sent twice carry the same id, so they are one answer.
+    function savePart(line, at) {
+      var q = line.q;
+      var letter = line.parts[at].letter;
+      var text = line.fields[at].value;
+      var saved = partSavedOf(q, letter);
+      if (text.trim() === "" || (saved && text === textOf(saved.text))) { return false; }
+      var s = sentOf(sentKey(q.number, letter));
+      if (s.pending > 0 && s.sentText === text) { return true; }
+      var id = (s.sentText === text && s.sentId) ? s.sentId : newId();
+      s.sentText = text; s.sentId = id; s.pending += 1; s.refusal = "";
+      s.replacing = !!saved;
+      refresh(line);
+      var number = q.number;
+      Promise.resolve().then(function () { return sayPart(number, letter, text, Number(q.wordingVersion), id); }).then(
+        function (result) { answered(number, id, text, result, letter); },
+        function (error) { answered(number, id, text, { ok: false, reason: "Not saved: " + ((error && error.message) ? error.message : error) }, letter); });
       return true;
     }
 
@@ -724,38 +1044,57 @@
       if (opening && line) { toTop(line); }
     }
 
-    // THE KEYS IN A PART'S FIELD (header, A QUESTION OF SEVERAL PARTS): Enter and Tab go to the next
-    // part, and from the last part they send the whole answer once and go to the next question;
-    // Shift+Tab goes back a part. A Tab on an empty part with a suggestion fills it and stays; a Tab
-    // on a part of one character moves on. Ctrl+Enter in an empty part takes its suggestion; on the
-    // first part with every part empty it takes every part's; then the answer is sent and the caret
-    // goes to the next question.
+    // THE KEYS IN A PART'S FIELD (header, A QUESTION OF SEVERAL PARTS): Enter and Tab SEND THAT PART,
+    // if it says something new, and go to the next part still open - from the last one, to the next
+    // question; Shift+Tab goes back a part. A Tab on an empty part with a suggestion fills it and
+    // stays; a Tab on a part of one character moves on and sends nothing (the owner's question 28:
+    // one letter is the start of an answer, not an answer). Ctrl+Enter in an empty part takes its
+    // suggestion and sends it; on the first part with every part empty it takes every part's, sends
+    // each, and goes to the next question.
     function onPartKey(e, line, field) {
       var at = fieldIndex(line, field);
-      var last = at === line.fields.length - 1;
       var key = e.key;
       var plain = !e.ctrlKey && !e.altKey && !e.metaKey;
       var rec = line.parts[at].rec;
-      var leave = function () { var sentNow = save(line); move(line, 1); if (sentNow) { arrived.bySave = true; } };
+      // On from this part: the next open part of the question, else the next question.
+      var onward = function (sentNow) {
+        var open = openFields(line);
+        for (var i = 0; i < open.length; i += 1) { if (fieldIndex(line, open[i]) > at) { enter(line, fieldIndex(line, open[i])); if (sentNow) { arrived.bySave = true; } return; } }
+        onFrom(line, sentNow === true);
+      };
+      var back = function () {
+        var open = openFields(line);
+        for (var i = open.length - 1; i >= 0; i -= 1) { if (fieldIndex(line, open[i]) < at) { enter(line, fieldIndex(line, open[i])); return; } }
+        move(line, -1);
+      };
+      var leave = function () { onward(savePart(line, at)); };
       if (key === "Enter" && e.ctrlKey) {
         e.preventDefault();
         var allEmpty = line.fields.every(function (f) { return f.value.trim() === ""; });
-        if (at === 0 && allEmpty) { line.fields.forEach(function (f, i) { if (line.parts[i].rec) { f.value = line.parts[i].rec; } }); typed(line); }
-        else if (field.value.trim() === "" && rec) { setValue(line, rec, field); }
+        if (at === 0 && allEmpty) {
+          line.fields.forEach(function (f, i) { if (line.parts[i].rec) { f.value = line.parts[i].rec; } });
+          typed(line);
+          var any = false;
+          line.parts.forEach(function (p, i) { if (savePart(line, i)) { any = true; } });
+          onFrom(line, any);
+          return true;
+        }
+        if (field.value.trim() === "" && rec) { setValue(line, rec, field); }
         leave();
         return true;
       }
       if (key === "Enter" && plain && !e.shiftKey) {
         e.preventDefault();
-        if (last) { leave(); } else { enter(line, at + 1); }
+        // The tail of a doubled key press, on the empty part the caret has only just arrived in.
+        if (field.value === "" && arrived.number === line.q.number && arrived.part === at && Date.now() - arrived.at < (arrived.bySave ? SAVE_ECHO_MS : ARRIVAL_MS)) { return true; }
+        leave();
         return true;
       }
-      if (key === "Tab" && e.shiftKey) { e.preventDefault(); if (at > 0) { enter(line, at - 1); } else { move(line, -1); } return true; }
+      if (key === "Tab" && e.shiftKey) { e.preventDefault(); back(); return true; }
       if (key === "Tab" && plain) {
         e.preventDefault();
         if (field.value === "" && rec) { setValue(line, rec, field); return true; }
-        if (!last) { enter(line, at + 1); return true; }
-        if (field.value.trim().length === 1) { move(line, 1); return true; }
+        if (field.value.trim().length === 1) { onward(false); return true; }
         leave();
         return true;
       }
@@ -778,17 +1117,13 @@
       if (key === "Enter" && e.ctrlKey) {
         e.preventDefault();
         if (blank) { if (!rec) { return; } setValue(line, rec); }
-        var accepted = save(line);
-        move(line, 1);
-        if (accepted) { arrived.bySave = true; }
+        onFrom(line, save(line));
         return;
       }
       if (key === "Enter" && plain) {
         e.preventDefault();
         if (field.value === "" && arrived.number === q.number && Date.now() - arrived.at < (arrived.bySave ? SAVE_ECHO_MS : ARRIVAL_MS)) { return; }
-        var sentNow = save(line);
-        move(line, 1);
-        if (sentNow) { arrived.bySave = true; }
+        onFrom(line, save(line));
         return;
       }
       if (key === "Tab" && e.shiftKey) { e.preventDefault(); move(line, -1); return; }
@@ -798,9 +1133,7 @@
         // ONE CHARACTER IS NOT AN ANSWER TO SEND ON A TAB (the owner's question 28, 2026-10-07: he
         // began "a ..." and a Tab stored the answer "a"). It stays, a draft, and the caret moves on.
         if (field.value.trim().length === 1) { move(line, 1); return; }
-        var tabbed = save(line);
-        move(line, 1);
-        if (tabbed) { arrived.bySave = true; }
+        onFrom(line, save(line));
         return;
       }
       if (key === "ArrowRight" && plain && !e.shiftKey && field.value === "" && rec) { e.preventDefault(); setValue(line, rec); return; }
@@ -825,7 +1158,7 @@
       ans.classList.remove("wide");
       var said = [];
       var earlier = earlierOf(q);
-      var answered = !!standingOf(q);
+      var answered = stateOf(q).answered;
       earlier.forEach(function (m, i) {
         var drawn = drawMessage(m, replacedLater(q, m) ? WORDS.earlier : null);
         // Whole only when it is what the reader has to answer (header, ROOM IS KEPT); else one line,
@@ -861,6 +1194,64 @@
         if (info.recOnce) { box.appendChild(make("div", "hd-partsrec", "Recommended: " + info.recOnce)); }
       }
       return said;
+    }
+    // WHAT STANDS OUT ABOUT A QUESTION, as one small line above what was said under it, into -box
+    // (emptied first): the few plain words for how much it matters and how much it holds up, as the
+    // list hands them out (importanceShown, blocksShown - nothing for the defaults, and nothing from
+    // a list that has neither), and, for a follow-up, the question it follows: one pressable line,
+    // "Follows up on question 7", that unfolds that question's words and what he answered. Returns
+    // { badges, follow } as drawn. The line takes no room when there is nothing to say.
+    var followShown = Object.create(null);
+    function drawTags(q, box) {
+      while (box.firstChild) { box.removeChild(box.firstChild); }
+      var drawn = { badges: [], follow: null };
+      [textOf(q.importanceShown), textOf(q.blocksShown)].forEach(function (words) {
+        if (words === "") { return; }
+        var badge = make("span", "hd-badge", words);
+        box.appendChild(badge);
+        drawn.badges.push(badge);
+      });
+      var old = (q.followsUp && typeof q.followsUp === "object") ? q.followsUp : null;
+      if (old) {
+        var shown = followShown[q.number] === true;
+        var press = make("button", "hd-follow-btn", "Follows up on question " + textOf(old.number));
+        press.type = "button";
+        press.tabIndex = -1;
+        press.setAttribute("aria-expanded", shown ? "true" : "false");
+        press.addEventListener("click", function (e) { e.stopPropagation(); followShown[q.number] = followShown[q.number] !== true; draw(); });
+        box.appendChild(press);
+        var more = make("div", "hd-follow");
+        more.hidden = !shown;
+        if (textOf(old.title) === "") { more.appendChild(make("div", "hd-msg", "Question " + textOf(old.number) + " cannot be shown here.")); }
+        else {
+          var asked = make("div", "hd-msg");
+          asked.appendChild(make("span", "hd-who", "Question " + textOf(old.number) + ":"));
+          var words = make("span", "hd-said", textOf(old.title));
+          words.setAttribute("dir", "auto");
+          asked.appendChild(words);
+          more.appendChild(asked);
+          var was = make("div", "hd-msg");
+          if (textOf(old.answer) === "") { was.textContent = "You had not answered it."; }
+          else {
+            was.appendChild(make("span", "hd-who", "You answered:"));
+            var said = make("span", "hd-said", textOf(old.answer) + (old.answerCut === true ? " ..." : ""));
+            said.setAttribute("dir", "auto");
+            was.appendChild(said);
+            if (old.answerCut === true) { was.appendChild(make("span", "hd-flag", " (the start of it; the rest is under question " + textOf(old.number) + ")")); }
+          }
+          more.appendChild(was);
+          if (textOf(old.outcome) !== "") {
+            var done = make("div", "hd-msg");
+            done.appendChild(make("span", "hd-who", "What was done:"));
+            done.appendChild(make("span", "hd-said", textOf(old.outcome)));
+            more.appendChild(done);
+          }
+        }
+        box.appendChild(more);
+        drawn.follow = { press: press, more: more, shown: shown };
+      }
+      box.hidden = !box.firstChild;
+      return drawn;
     }
     // The context of an unfolded question, its sub-numbered lines, into -box (emptied first).
     function drawSubs(q, box) {
@@ -907,10 +1298,14 @@
         toggleContext(q);
       });
       var ans = make("div", "hd-ans");
+      var tagBox = make("div", "hd-tags");
+      ans.appendChild(tagBox);
+      var tags = drawTags(q, tagBox);
       var talk = make("div", "hd-talk");
       ans.appendChild(talk);
       var said = drawTalk(q, talk, ans);
       var info = partsOf(q);
+      var rows = [];
       var fl = make("div", "hd-fl");
       var mark = make("span", "hd-mark");
       var markFull = make("span", "hd-mark-full");
@@ -921,8 +1316,7 @@
       var field;
       if (info) {
         // A field per part (header, A QUESTION OF SEVERAL PARTS), across the whole row.
-        var values = readParts(valueOf(q), info.parts);
-        if (!values) { values = info.parts.map(function () { return ""; }); }
+        var values = partValuesOf(q, info);
         var box = make("div", "hd-parts");
         info.parts.forEach(function (part, i) {
           var prow = make("div", "hd-part");
@@ -936,9 +1330,21 @@
           pf.spellcheck = false;
           pf.placeholder = part.rec;
           pf.value = values[i];
-          prow.appendChild(label); prow.appendChild(pf);
+          // EACH PART HAS ITS OWN MARK AND ITS OWN REFUSAL (it is sent by itself), and, once it is
+          // answered, one line in place of its field: his words and the word Answered. A press on
+          // that line brings the field back, for as long as the caret stays in it.
+          var pmark = make("span", "hd-partmark");
+          pmark.hidden = true;
+          label.appendChild(pmark);
+          var pdone = make("div", "hd-partdone");
+          pdone.setAttribute("dir", "auto");
+          pdone.hidden = true;
+          var prefusal = make("div", "hd-refusal");
+          prefusal.hidden = true;
+          prow.appendChild(label); prow.appendChild(pf); prow.appendChild(pdone); prow.appendChild(prefusal);
           box.appendChild(prow);
           fields.push(pf);
+          rows.push({ el: prow, mark: pmark, done: pdone, refusal: prefusal });
         });
         fl.appendChild(box); fl.appendChild(mark);
         fl.classList.add("parts");
@@ -958,20 +1364,29 @@
       markNote.hidden = true;
       var refusal = make("div", "hd-refusal");
       refusal.hidden = true;
-      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal);
+      // THE ONE WORD A QUESTION FOLDS TO once he has answered it (header, ONCE HE HAS ANSWERED), until
+      // it leaves the list. A press on it brings the field back for as long as the caret stays.
+      var done = make("button", "hd-answered", WORDS.answered);
+      done.type = "button";
+      done.tabIndex = -1;
+      done.hidden = true;
+      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
       var subBox = make("div", "hd-sub");
       wrap.appendChild(subBox);
       var subs = drawSubs(q, subBox);
-      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, talk: talk, subBox: subBox, field: field, fields: fields, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
+      done.addEventListener("click", function (e) { e.stopPropagation(); if (!drawn.parts) { unfold(drawn); } });
+      rows.forEach(function (r, i) { r.done.addEventListener("click", function (e) { e.stopPropagation(); unfold(drawn, i); }); });
       fields.forEach(function (f) {
         f.addEventListener("input", function () { typed(drawn); });
         f.addEventListener("keydown", function (e) { onKey(e, drawn, f); });
-        // The caret in it, an answer is whole; the caret gone, a saved one rests again. A question
-        // the caret has been in and left has been passed: it is no longer new.
+        // The caret in it, an answer is whole; the caret gone, a saved one rests again - and an
+        // answered one folds again. A question the caret has been in and left has been passed: it
+        // is no longer new.
         f.addEventListener("focus", function () { fit(drawn); onChange(); });
-        f.addEventListener("blur", function () { fit(drawn); if (focusedLine() !== drawn) { markSeen(drawn.q.number); } onChange(); });
+        f.addEventListener("blur", function () { window.setTimeout(function () { refresh(drawn); fit(drawn); if (focusedLine() !== drawn) { markSeen(drawn.q.number); } onChange(); }, 0); });
       });
       refresh(drawn);
       return drawn;
@@ -989,6 +1404,7 @@
       line.wrap.classList.toggle("open", open);
       line.wrap.classList.toggle("dim", !!(dim && dim(q)));
       line.tri.setAttribute("aria-expanded", open ? "true" : "false");
+      line.tags = drawTags(q, line.tagBox);
       line.said = drawTalk(q, line.talk, line.ans);
       line.subs = drawSubs(q, line.subBox);
       refresh(line);
@@ -1016,6 +1432,9 @@
       qt.appendChild(tri); qt.appendChild(num); qt.appendChild(txt);
       qt.addEventListener("click", function () { if (String(window.getSelection ? window.getSelection() : "") !== "") { return; } toggleContext(q); });
       var ans = make("div", "hd-ans wide");
+      var tagBox = make("div", "hd-tags");
+      ans.appendChild(tagBox);
+      var tags = drawTags(q, tagBox);
       var msgs = messagesOf(q);
       var mine = null, theirs = null;
       for (var i = msgs.length - 1; i >= 0; i -= 1) {
@@ -1023,6 +1442,8 @@
         if (!mine && !theirs && msgs[i].speaker !== MINE) { theirs = msgs[i]; }
       }
       var said = { mine: "", theirs: "", outcome: "" };
+      // Answered part by part, his answer is every part's, as one text; else his last words.
+      if (mine && textOf(mine.part)) { mine = { speaker: MINE, text: answerOf(q) || textOf(mine.text), holdsDirectionOrInvisibleCharacters: mine.holdsDirectionOrInvisibleCharacters }; }
       if (mine) { var a = drawMessage(mine); a.row.classList.add("rest"); ans.appendChild(a.row); said.mine = textOf(mine.text); }
       else { ans.appendChild(make("div", "hd-msg", "No answer of yours.")); }
       if (theirs) { var t = drawMessage(theirs); t.row.classList.add("brief"); ans.appendChild(t.row); said.theirs = textOf(theirs.text); }
@@ -1038,7 +1459,7 @@
       var subBox = make("div", "hd-sub");
       wrap.appendChild(subBox);
       drawSubs(q, subBox);
-      var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said };
+      var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said, tags: tags };
       drawnRows.push(drawn);
       return drawn;
     }
@@ -1048,6 +1469,35 @@
     // put in order by moving the others around them, so a field that stays is never taken out of the
     // page - taken out, it would lose the caret and whatever the engine was doing with his keys.
     var headEls = Object.create(null);
+    // THE LINE AT THE HEAD OF THE PAGE WHERE HE CHOOSES THE ORDER (header, THE ORDER IS HIS): the two
+    // words "Order by" and a button for each order, the chosen one pressed. Its buttons are reached
+    // by a press, never by Tab: the run of Enter and Tab is the fields'.
+    var orderBar = make("div", "hd-order");
+    orderBar.setAttribute("role", "group");
+    orderBar.setAttribute("aria-label", "The order of the questions");
+    orderBar.appendChild(make("span", "hd-order-lab", "Order by"));
+    var orderButtons = ORDERS.map(function (o) {
+      var b = make("button", "hd-order-btn", o.label);
+      b.type = "button";
+      b.tabIndex = -1;
+      b.setAttribute("aria-label", o.says);
+      b.addEventListener("click", function () { setOrder(o.key); });
+      orderBar.appendChild(b);
+      return b;
+    });
+    function drawOrderBar() {
+      orderButtons.forEach(function (b, i) {
+        var on = ORDERS[i].key === orderKey;
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.classList.toggle("on", on);
+      });
+    }
+    // He chose an order: it is drawn at once, and kept for the next time the page is opened here.
+    function setOrder(key) {
+      orderKey = orderOf(key);
+      try { if (prefs) { prefs.setItem(ORDER_KEY, orderKey); } } catch (e) { /* only the remembering is lost */ }
+      if (lastJson !== null) { draw(); } else { drawOrderBar(); }
+    }
     function order(box, want) {
       var wanted = new Set(want);
       Array.prototype.slice.call(box.childNodes).forEach(function (n) { if (!wanted.has(n)) { box.removeChild(n); } });
@@ -1061,6 +1511,11 @@
       var caret = had ? { number: had.q.number, part: had.fields.indexOf(hadField), from: hadField.selectionStart, to: hadField.selectionEnd } : null;
       var keep = Object.create(null);
       drawnLines.forEach(function (l) { if (l === had || drafts[l.q.number] !== undefined) { keep[l.q.number] = l; } });
+      // A FOLD'S HEADING THAT HAS THE KEYBOARD KEEPS IT: a heading's row is made again on every draw,
+      // and a list that arrived while he stood on "With Thrall" took the keyboard from under him
+      // (seen 2026-10-12 in the turns scenario: Ctrl+Down, a redraw, and Down went nowhere).
+      var headHad = null;
+      drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { headHad = h.head.key; } });
       var heads = sectionsOf();
       drawnHeads = [];
       drawnLines = [];
@@ -1140,7 +1595,7 @@
         if (note) { el.group.insertBefore(note, el.kids); }
         el.row = row; el.note = note; el.tri = tri;
         var want = [];
-        var zone = (head.kind === "new" || head.kind === "group") ? "main" : head.kind;
+        var zone = (head.kind === "group") ? "main" : head.kind;
         head.qs.forEach(function (q) {
           placedAt[q.number] = head.key;
           if (zone === "thrall" || zone === "history") { want.push(drawDone(q, zone).wrap); return; }
@@ -1148,7 +1603,7 @@
           if (line) { update(line, q); } else { line = drawQuestion(q); }
           line.zone = zone;
           line.head = index;
-          line.wrap.classList.toggle("new", head.kind === "new");
+          line.wrap.classList.toggle("new", zone === "main" && isNew(q));
           drawnLines.push(line);
           want.push(line.wrap);
         });
@@ -1157,8 +1612,10 @@
         drawnHeads.push({ head: head, txt: txt, tri: tri, folded: folded, group: el.group, note: note });
       });
       Object.keys(headEls).forEach(function (k) { if (!used[k]) { delete headEls[k]; } });
-      order(root, groups);
-      drawnLines.forEach(function (line) { fit(line); });
+      drawOrderBar();
+      order(root, [orderBar].concat(groups));
+      // In the page now, so what is folded can be told from what is shown: each line's state again.
+      drawnLines.forEach(function (line) { refresh(line); fit(line); });
       if (before) {
         var stood = lineOf(before.number) || rowOf(before.number);
         if (stood) {
@@ -1166,6 +1623,7 @@
           if (moved !== 0) { window.scrollBy(0, moved); }
         }
       }
+      if (headHad && headEls[headHad] && headEls[headHad].tri && document.activeElement !== headEls[headHad].tri) { headEls[headHad].tri.focus({ preventScroll: true }); }
       if (caret) {
         var again = lineOf(caret.number);
         var back = again ? (again.fields[caret.part] || again.field) : null;
@@ -1199,7 +1657,9 @@
 
     // A CHECK'S STEPS, acted out on the page's own fields and nowhere else: a check cannot press a
     // key, so it hands the page these and the page's own handlers do the rest. Each step is
-    //   { do: "focus", q }        the caret into that question's field
+    //   { do: "focus", q, part }  the caret into that question's field (part: into that part's)
+    //   { do: "order", key }      that order chosen, as a press on its button does
+    //   { do: "follow", q }       a press on that question's "Follows up on question N"
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
     //   { do: "blur" }            the caret taken out of whatever has it, and put nowhere
@@ -1222,7 +1682,15 @@
         i += 1;
         var line = focusedLine();
         var target;
-        if (step.do === "focus") { target = lineOf(Number(step.q)); if (target) { enter(target); arrived.at = 0; } }
+        if (step.do === "focus") {
+          // A question folded to Answered, or one of its folded parts, is unfolded, as a press on it does.
+          target = lineOf(Number(step.q));
+          var part = (typeof step.part === "number") ? step.part : undefined;
+          if (target && (part !== undefined ? target.fields[part] && target.fields[part].offsetParent === null : !openFields(target).length)) { unfold(target, part); arrived.at = 0; }
+          else if (target) { enter(target, part); arrived.at = 0; }
+        }
+        else if (step.do === "order") { setOrder(textOf(step.key)); }
+        else if (step.do === "follow") { target = lineOf(Number(step.q)); if (target && target.tags.follow) { target.tags.follow.press.click(); } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
         else if (step.do === "blur") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } onChange(); }
@@ -1252,8 +1720,10 @@
       }, 120);
     });
     // A key pressed with the caret nowhere: the same, and the key is not lost to the page's own Tab order.
+    // A key a field has already acted on is not such a key, though the field may have let go of the
+    // caret in acting on it (onFrom: the last question of the list, answered).
     document.addEventListener("keydown", function (e) {
-      if (focusedLine() || e.ctrlKey || e.altKey || e.metaKey) { return; }
+      if (e.defaultPrevented || focusedLine() || e.ctrlKey || e.altKey || e.metaKey) { return; }
       var act = document.activeElement;
       if (act && act !== document.body && act !== document.documentElement) { return; }
       if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); takeKeyboard(); }
@@ -1331,6 +1801,10 @@
         draw();
       },
       takeKeyboard: takeKeyboard,
+      // The order chosen, by its key (date, importance or blocks); setOrder chooses one, as a press
+      // on its button does.
+      order: function () { return orderKey; },
+      setOrder: setOrder,
       drive: drive,
       // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
       // questions are in the run of answering (not parked), toAnswer how many of those have no
@@ -1348,7 +1822,7 @@
           if (l.zone === "parked") { aside += 1; return; }
           if (l.zone !== "main") { return; }
           run += 1;
-          if (!standingOf(l.q)) { toAnswer += 1; }
+          if (!stateOf(l.q).answered) { toAnswer += 1; }
           if (l.wrap.classList.contains("new")) { fresh += 1; }
         });
         drawnRows.forEach(function (r) { if (r.kind === "thrall") { thrall += 1; } });
@@ -1378,7 +1852,9 @@
       //   left      { lines, sub }                how many were left out by the caller's limits
       // limits is { lines, subLines, lineChars }: the most of each, and the most characters of a text.
       snapshot: function (limits) {
-        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 } };
+        // order: the order chosen, by its key, and the word on the button drawn as pressed.
+        var pressed = orderButtons.filter(function (b) { return b.getAttribute("aria-pressed") === "true"; }).map(function (b) { return b.textContent; });
+        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, order: { key: orderKey, pressed: pressed.join(","), shown: orderBar.parentNode === root, words: orderButtons.map(function (b) { return b.textContent; }) } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
         drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.kind === "parked", kind: h.head.kind, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
@@ -1386,6 +1862,19 @@
           out.lines.push({
             n: line.num.textContent, l: line.letter.textContent, t: cut(line.txt.textContent, limits.lineChars), s: "", g: line.head,
             z: textOf(line.zone), nw: line.wrap.classList.contains("new"),
+            // b the plain words that stand out about it, as drawn; fu the question it follows: its
+            // line's words, whether it is unfolded, and what is unfolded; gn whether its saved words
+            // stand green; ad whether it is folded to the one word Answered (and that word, as drawn);
+            // pm each part's mark, pg and pd which parts stand green and which are folded, pt what a
+            // folded part shows, pr each part's refusal.
+            b: line.tags.badges.map(function (el) { return cut(el.textContent, limits.lineChars); }),
+            fu: line.tags.follow ? { t: cut(line.tags.follow.press.textContent, limits.lineChars), open: !line.tags.follow.more.hidden, more: cut(line.tags.follow.more.textContent, limits.lineChars) } : null,
+            gn: line.wrap.classList.contains("saved-now"), ad: line.wrap.classList.contains("answered") ? cut(line.done.textContent, limits.lineChars) : "",
+            pm: line.rows.map(function (r) { return cut(r.mark.textContent, limits.lineChars); }),
+            pg: line.rows.map(function (r) { return r.el.classList.contains("saved-now"); }),
+            pd: line.rows.map(function (r) { return r.el.classList.contains("answered"); }),
+            pt: line.rows.map(function (r) { return cut(r.done.textContent, limits.lineChars); }),
+            pr: line.rows.map(function (r) { return cut(r.refusal.textContent, limits.lineChars); }),
             open: line.wrap.classList.contains("open"), dim: line.wrap.classList.contains("dim"),
             rows: Math.round(line.txt.getBoundingClientRect().height / linePx), clip: clipped(line.txt),
             a: cut(lineValue(line), limits.lineChars), p: cut(line.field.placeholder, limits.lineChars),
@@ -1403,7 +1892,7 @@
         // The rows that are only read (With the keeper, History): number, text, which fold, and what
         // they show of his answer, the keeper's last words and the outcome.
         out.done = drawnRows.slice(0, limits.lines).map(function (r) {
-          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars) };
+          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars), b: r.tags.badges.map(function (el) { return cut(el.textContent, limits.lineChars); }) };
         });
         out.toast = (toast && !toast.hidden) ? cut(toast.textContent, limits.lineChars) : "";
         var has = focusedLine();
@@ -1431,5 +1920,7 @@
     };
   }
 
-  window.HordeDecisionsDocument = { mount: mount };
+  // order: the one sorting of questions, for a check that holds it without a page (inOrder(list, key),
+  // and the orders there are).
+  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };
 }());

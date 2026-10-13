@@ -22,10 +22,11 @@
    themes (the WCAG ratio, worked out from the colours, 2026-10-08): light muted 5.00, hint (the grey
    suggestion) 4.59, faint and dim 4.59; dark muted 6.83, hint 5.19, faint and dim 4.60. Before, the
    foot's faint text was 2.61 light and 3.73 dark, and a question dimmed while another Orc is picked
-   was 1.95 and 2.61. --bar is the scroll bar's thumb only, which carries no text. */
-:root { --bg: #ffffff; --ink: #16181c; --muted: #68707c; --faint: #6e7682; --hint: #6e7682; --line: #e3e6ea; --accent: #1f5fae; --dim: #6e7682; --bar: #b4bac2; --warn: #a4331f; }
+   was 1.95 and 2.61. --bar is the scroll bar's thumb only, which carries no text. --ok, the colour
+   of an answer that was saved (decisions/page/list.css), is 5.1 to 1 light and 9.4 dark. */
+:root { --bg: #ffffff; --ink: #16181c; --muted: #68707c; --faint: #6e7682; --hint: #6e7682; --line: #e3e6ea; --accent: #1f5fae; --dim: #6e7682; --bar: #b4bac2; --warn: #a4331f; --ok: #1a7f37; }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #17191d; --ink: #e9ebee; --muted: #9aa2ad; --faint: #7c838e; --hint: #858c97; --line: #2c3037; --accent: #8ab8f5; --dim: #7c838e; --bar: #555c66; --warn: #f0907c; }
+  :root { --bg: #17191d; --ink: #e9ebee; --muted: #9aa2ad; --faint: #7c838e; --hint: #858c97; --line: #2c3037; --accent: #8ab8f5; --dim: #7c838e; --bar: #555c66; --warn: #f0907c; --ok: #6fd08c; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }

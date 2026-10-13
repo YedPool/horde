@@ -18,7 +18,7 @@
           "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The name the layout uses for this session, unique in the plan. Never a pane number: lower-case letters, digits and hyphens, starting with a letter, so it is never a bare number and no two slots differ only in case." },
           "sessionId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The conversation id: the session's stable identity, unique in the plan ignoring the case of its hex digits (a UUID in capitals is the same id). Same shape as schema/session-record.v1's sessionId." },
           "agent": { "type": "string", "description": "Which agent runs the session, e.g. claude or codex." },
-          "role": { "type": "string", "enum": ["warchief", "orc", "goblin"], "description": "The native roles of core/roles.json; test/test-schema-restore-plan.ps1 fails if the two differ." },
+          "role": { "type": "string", "enum": ["warchief", "orc", "warg"], "description": "The native roles of core/roles.json; test/test-schema-restore-plan.ps1 fails if the two differ." },
           "label": { "type": "string", "description": "The session's fleet label, e.g. D or D1." },
           "parent": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The sessionId of the session that spawned this one. When present it names another session in this plan, ignoring case." },
           "cwd": { "type": "string", "pattern": "\\S", "description": "The directory the session runs in; never empty, since an empty directory would start the session wherever the host happens to be." },

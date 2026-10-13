@@ -126,6 +126,8 @@ async function load(url) {
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
 const listed = "(document.getElementById('lists').innerText + ' ' + Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join(' '))";
+// Everything the lists hold, shown or folded away.
+const everything = "document.getElementById('lists').textContent";
 // What a locked page still holds of the lists: their boxes, and the words standing in any field.
 const leftovers = "({ boxes: document.querySelectorAll('#lists .horde-list').length, fields: Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join('|') })";
 const shown = (id) => "(document.getElementById('" + id + "') && !document.getElementById('" + id + "').hidden)";
@@ -264,7 +266,10 @@ const commands = {
     await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
     return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
-  async waitText(c) { const found = await until(listed + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(listed) }; },
+  // folded: the words are looked for in everything the lists hold, what stands under a folded heading
+  // included (an answered question is out of his list, under the folded "With Thrall"); without it,
+  // only in what is shown.
+  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);

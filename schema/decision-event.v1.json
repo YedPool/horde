@@ -23,7 +23,10 @@
       "additionalProperties": false,
       "properties": {
         "number": {"type": "integer", "minimum": 1, "description": "The permanent number the question was given. It is DERIVED, not counted anywhere: the Nth question-added record is question N. It is written down here as a check on that derivation, so that a record which later becomes unreadable cannot shift the number of any question added after it."},
-        "question": {"type": "object", "description": "The question's words, schema/decision-question.v1, complete."}
+        "question": {"type": "object", "description": "The question's words, schema/decision-question.v1, complete."},
+        "importance": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "How much the task this question belongs to matters overall, as one lowercase label. The closed list is the importances of decisions/Rules.ps1, asked of a request; a record is read whatever label it holds. Absent - as in every record written before the word existed - reads as the default, normal."},
+        "blocks": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "How much of that task's work stands still until the question is answered, as one lowercase label. The closed list is the blockings of decisions/Rules.ps1. Absent reads as the default, part."},
+        "followsUp": {"type": "integer", "minimum": 1, "description": "The number of the earlier question this one follows up on. A follow-up is a new question with a number of its own, never the earlier one opened again; the earlier question and what was answered under it are shown with this one as context, worked out from the list each time and never copied here."}
       }
     },
     "question-updated": {
@@ -53,6 +56,17 @@
         "reason": {"type": "string", "pattern": "\\S", "description": "Why it is open again, on one line. Never blank."}
       }
     },
+    "question-ranked": {
+      "type": "object",
+      "description": "The keeper corrected how much a question matters, or how much it holds up. A record of its own: the words the question was added with are never edited. It holds only what it changes; a record that names neither word changes nothing and is reported as that.",
+      "required": ["number"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "importance": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The importance from this record on. The closed list is the importances of decisions/Rules.ps1."},
+        "blocks": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The blocking from this record on. The closed list is the blockings of decisions/Rules.ps1."}
+      }
+    },
     "message-said": {
       "type": "object",
       "description": "Someone said something under a question. The record holds what was said and what its speaker was looking at; whether the question was closed by then, whether its wording had moved on, whose turn it now is and whether the other side has read it are DERIVED from the order of the records (decisions/Rules.ps1) and are stored nowhere.",
@@ -67,6 +81,7 @@
         "asks": {"type": "boolean", "description": "False when the keeper's words ask the founder nothing (a note): the turn does not pass to him. Absent means true."},
         "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "The founder's words record an act of his: park or unpark. The turn does not pass."},
         "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them. Only the hash: the envelope and its passkey signature are kept in relay's own journal (relay/Journal.ps1)."},
+        "part": {"type": "string", "pattern": "^[a-z]$", "description": "The words answer ONE PART of a question of parts: that part's letter. Each part is answered by a record of its own, and the question is the other speaker's turn once every part has one. Absent means the words are said to the whole question."},
         "signedBy": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "Words answered on the founder's phone: the key id of the passkey the relay channel verified the answer's envelope against, written once by that channel. Absent in every record written before 2026-10-12 and for every other route: such a record names no passkey, and nothing is put in its place."}
       }
     },

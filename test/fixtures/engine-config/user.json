@@ -13,7 +13,7 @@
   ],
   "rules": [
     { "id": "user-default", "match": {}, "set": { "profile": "alpha-big" }, "writtenBy": "user" },
-    { "id": "goblins-gamma", "match": { "role": "goblin" }, "set": { "profile": "gamma" }, "writtenBy": "cli" },
+    { "id": "wargs-gamma", "match": { "role": "warg" }, "set": { "profile": "gamma" }, "writtenBy": "cli" },
     { "id": "one-session", "match": { "run": "20261002-101500-audit", "fleetId": "f1" }, "set": { "model": "big" }, "writtenBy": "user", "note": "a fixture rule" }
   ]
 }

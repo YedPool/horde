@@ -70,7 +70,7 @@ try {
     $a = Read $envHome
     Check ((@($a.deliverTo) -join ",") -ceq "A12,B3") "CONTROL: with the same variables set, engine.json still decides, alone"
 } finally { foreach ($v in @($saved.Keys)) { [System.Environment]::SetEnvironmentVariable($v, $saved[$v]) } }
-$a = Read (Home -User (Rules (Rule "only-goblins" "A12" '{ "role": "goblin" }')))
+$a = Read (Home -User (Rules (Rule "only-wargs" "A12" '{ "role": "warg" }')))
 Check ("$($a.error)" -clike "*node-wide*") "a rule that sets it for a match is refused: the list is node-wide, never per target"
 $a = Read (Home -User (Rules ((Rule "one" "A12") + ", " + (Rule "two" "B3"))))
 Check ("$($a.error)" -clike "*one*two*") "two rules of one layer that disagree are refused, naming both, never the last one read"

@@ -1,0 +1,11 @@
+# What identifies the wezfleet waker. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of these
+# appears in a file outside wakers/wezfleet/ (and outside the prose under planning/, by rule) that
+# wakers/wezfleet/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule 14). Each is
+# matched as a case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this waker
+WezfleetWaker | the stem of every function and variable of this waker (its one start function, its readers of the fleet's answers and the rest), which nothing else names
+#
+# CONSIDERED AND LEFT OUT, as the wezfleet messenger's names.txt leaves them out and for its reasons:
+#   wezfleet - the orchestrator Horde replaces, named across core/ (its stores are read by design).
+#   mail state, mail nudge - the two commands this waker runs: ordinary words, and the fleet's own.
