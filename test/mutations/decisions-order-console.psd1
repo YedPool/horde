@@ -103,5 +103,21 @@
         @{ Name = "rank-does-not-say-what-it-changed"
            Find = '        if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last'
            Replace = '        if ($Verb -ceq "update") { $last' }
+        # --- a correction ("Change my answer", 2026-10-13) ---
+        @{ Name = "the-inbox-does-not-say-it-is-a-correction"
+           Find = '    if ((& $has "corrects") -and [long]$Message.corrects -gt 0) { [void]$lines.Add('
+           Replace = '    if ($false) { [void]$lines.Add(' }
+        @{ Name = "every-answer-is-called-a-correction"
+           Find = '    if ((& $has "corrects") -and [long]$Message.corrects -gt 0) { [void]$lines.Add('
+           Replace = '    if ((& $has "corrects")) { [void]$lines.Add(' }
+        @{ Name = "the-record-corrected-is-not-handed-on"
+           Find = '            $request["corrects"] = [long]$correctsText'
+           Replace = '' }
+        @{ Name = "a-correction-that-is-not-a-number-is-cast"
+           Find = "            if (`$correctsText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw"
+           Replace = "            if (`$false) { throw" }
+        @{ Name = "reply-takes-a-correction"
+           Find = '    reply  = @{ number = $true;  flags = @("Text", "File", "Note", "Wording", "Id", "Json"); usage'
+           Replace = '    reply  = @{ number = $true;  flags = @("Text", "File", "Note", "Corrects", "Wording", "Id", "Json"); usage' }
     )
 }

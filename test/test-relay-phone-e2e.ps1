@@ -211,7 +211,7 @@ try {
     $run = Invoke-Run -Turns 1
     $po = Open-Latest $c.value
     $pqSnap = $(if ($po.ok) { @($po.body.questions | Where-Object { $_.number -eq $pn })[0] } else { $null })
-    Check ($po.ok -and $null -ne $pqSnap -and $po.body.answers -eq 2 -and $po.body.v -eq 1) ("the snapshot that carries the question of parts says the machine reads version 2 answers, and is still a version 1 snapshot (" + $po.reason + ")")
+    Check ($po.ok -and $null -ne $pqSnap -and $po.body.answers -eq 3 -and $po.body.v -eq 1) ("the snapshot that carries the question of parts says the machine reads answers up to version 3, and is still a version 1 snapshot (" + $po.reason + ")")
     $partAns = Invoke-Phone "answer" @{ number = $pn; wordingVersion = 1; text = "Quiet."; part = "b"; machine = "$($po.body.machine)"; snapshot = "$($po.key)" }
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $partAns.envelope -Key $partAns.key)
     $run = Invoke-Run -Turns 1
@@ -223,6 +223,13 @@ try {
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $again.envelope -Key $again.key)
     $run = Invoke-Run -Turns 1
     Check ($run.out.Contains("(replayed)") -and @(Get-Said | Where-Object { $_.data.number -eq $pn }).Count -eq 1) "the same part's answer resent in a new envelope is the first record answered again: one record"
+
+    # "Change my answer": the phone corrects that part's answer; the runner stores a NEW record naming it.
+    $fix = Invoke-Phone "answer" @{ number = $pn; wordingVersion = 1; text = "Loud."; part = "b"; corrects = [long]$partSaid[0].sequence; machine = "$($po.body.machine)"; snapshot = "$($po.key)" }
+    [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $fix.envelope -Key $fix.key)
+    $run = Invoke-Run -Turns 1
+    $fixed = @(Get-Said | Where-Object { $_.data.number -eq $pn })
+    Check ($run.code -eq 0 -and $run.out.Contains("correction of record " + $partSaid[0].sequence) -and $fixed.Count -eq 2 -and $null -ne $fixed[1].data.PSObject.Properties["corrects"] -and $fixed[1].data.corrects -eq [long]$partSaid[0].sequence -and $fixed[1].data.text -ceq "Loud." -and $fixed[0].data.text -ceq "Quiet.") ("a correction from the phone is stored by the runner as a new record that names the answer corrected, which still holds his first words (" + $fixed.Count + " record(s))")
 
     Write-Host ""
     Write-Host "--- 6. one run per home: a second refuses; the first stops when asked ---" -ForegroundColor Cyan

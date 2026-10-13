@@ -107,7 +107,7 @@ async function open(st, input) {
 
 async function answer(st, input) {
   const answerId = input.answerId || P.hex(P.randomBytes(16));
-  const body = P.answerBody({ answerId, machine: input.machine, snapshot: input.snapshot, number: input.number, wordingVersion: input.wordingVersion, text: input.text, part: input.part || "" });
+  const body = P.answerBody({ answerId, machine: input.machine, snapshot: input.snapshot, number: input.number, wordingVersion: input.wordingVersion, text: input.text, part: input.part || "", corrects: input.corrects || 0 });
   const parts = await seal(st, "answer", "decisions", body);
   return { envelope: await P.signEnvelope(parts, passkey(st)), key: P.replayKey(parts.header), answerId };
 }

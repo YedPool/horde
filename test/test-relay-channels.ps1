@@ -174,12 +174,12 @@ function Get-PhoneMail {
 function Get-Answer {
     # An answer envelope from the world's phone, made from the machine's newest snapshot unless -Machine
     # or -Snapshot say otherwise.
-    param($World, [string]$AnswerId = "", [string]$Text = "Yes, play it.", [int]$Number = 1, $Phone = $null, [object[]]$To = $null, [string]$Machine = "", [string]$Snapshot = "", [string]$Part = "")
+    param($World, [string]$AnswerId = "", [string]$Text = "Yes, play it.", [int]$Number = 1, $Phone = $null, [object[]]$To = $null, [string]$Machine = "", [string]$Snapshot = "", [string]$Part = "", [long]$Corrects = 0)
     if ($null -eq $Phone) { $Phone = $World.phone }
     if ($null -eq $To) { $To = $World.agree }
     if ($Machine -ceq "") { $Machine = $World.id.sign.keyId }
     if ($Snapshot -ceq "") { $Snapshot = Get-SentKey -World $World }
-    return (New-HordeTestPhoneEnvelope -Phone $Phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $AnswerId -Text $Text -Number $Number -Machine $Machine -Snapshot $Snapshot -Part $Part) -To $To)
+    return (New-HordeTestPhoneEnvelope -Phone $Phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $AnswerId -Text $Text -Number $Number -Machine $Machine -Snapshot $Snapshot -Part $Part -Corrects $Corrects) -To $To)
 }
 function Get-RawAnswer {
     # An answer envelope whose body is exactly -Json, for a body no honest phone makes. {machine} and
@@ -871,7 +871,7 @@ try {
     $snap = Open-HordeTestPhoneEnvelope -Phone $P.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $P.id.sign.public
     $q2 = $(if ($snap.ok) { @($snap.body.questions | Where-Object { $_.number -eq 2 })[0] } else { $null })
     Check ($partsAdded.state -ceq "known" -and $partsAdded.value.outcome -ceq "done" -and $snap.ok -and $null -ne $q2) ("CONTROL: the question of parts is added and the phone opens the snapshot that holds it (" + (@($tick) -join " | ") + ")")
-    Check ((Get-Member2 $snap.body "answers") -eq 2 -and $snap.body.v -eq 1) "THE SNAPSHOT SAYS WHICH ANSWERS THIS MACHINE READS - up to version 2, a part by itself - and is still a version 1 snapshot, which a phone that knows nothing of it reads as it always did"
+    Check ((Get-Member2 $snap.body "answers") -eq 3 -and $snap.body.v -eq 1) "THE SNAPSHOT SAYS WHICH ANSWERS THIS MACHINE READS - up to version 3: a part by itself, and a correction - and is still a version 1 snapshot, which a phone that knows nothing of it reads as it always did"
     Check ((Get-Member2 $q2 "importance") -ceq "high" -and (Get-Member2 $q2 "importanceShown") -ceq "Important" -and (Get-Member2 $q2 "blocks") -ceq "all" -and (Get-Member2 $q2 "blocksShown") -ceq "Blocks all work") "THE SNAPSHOT CARRIES how much the question matters and how much it blocks, each with its plain words"
     $fu = Get-Member2 $q2 "followsUp"
     Check ($null -ne $fu -and $fu.number -eq 1 -and $fu.title -ceq "Should the closing sound play when the assistant closes?" -and $fu.answer -ceq "Yes, a short chime." -and $fu.answerCut -eq $false) "and the question it follows up, with what he answered there"
@@ -912,10 +912,35 @@ try {
         @{ what = "a part that is a capital letter"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"A"}'; says = "the answer's part is not one lower-case letter" }
         @{ what = "a part that is two letters"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"ab"}'; says = "the answer's part is not one lower-case letter" }
         @{ what = "a part that is a number"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":1}'; says = "the answer's part is not one lower-case letter" }
-        @{ what = "a version this machine does not read"; json = '{"v":3,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"a","more":true}'; says = "the answer is not a version this machine reads (1, 2)" }
+        @{ what = "a version this machine does not read"; json = '{"v":4,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"a","corrects":1,"more":true}'; says = "the answer is not a version this machine reads (1, 2, 3)" }
         @{ what = "a version that is text"; json = '{"v":"2","answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"a"}'; says = "the answer is not a version this machine reads" }
         @{ what = "a part the question does not have"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"d"}'; says = "it answers part (d) of question 2, which has no such part" }
         @{ what = "a part of a question that has none"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":1,"wordingVersion":1,"text":"x","part":"a"}'; says = "which is not a question of parts that are answered one by one" }
+    )) {
+        [void](Send-ToMachine $P (Get-RawAnswer $P $case.json).text)
+        $t = Invoke-Turn $P
+        Check ((Has $t "refused") -and (Has $t $case.says) -and @(Get-Said $P.store).Count -eq $count) ($case.what + " is refused, says why, and nothing lands (" + $t.text + ")")
+    }
+    # "CHANGE MY ANSWER": a correction is a version 3 answer, and lands as a NEW record naming the one it corrects.
+    $partB = @(Get-Said $P.store | Where-Object { $_.data.number -eq 2 -and (Get-Member2 $_.data "part") -ceq "b" })[0]
+    $fixB = Get-Answer $P -Number 2 -Part "b" -Corrects ([long]$partB.sequence) -Text "Yes after all, on every close."
+    [void](Send-ToMachine $P $fixB.text)
+    $t = Invoke-Turn $P
+    $nowB = @(Get-Said $P.store | Where-Object { $_.data.number -eq 2 -and (Get-Member2 $_.data "part") -ceq "b" })
+    Check ((Has $t "done") -and (Has $t ("correction of record " + $partB.sequence)) -and $nowB.Count -eq 2 -and (Get-Member2 $nowB[1].data "corrects") -eq [long]$partB.sequence -and $nowB[1].data.text -ceq "Yes after all, on every close." -and $nowB[0].data.text -ceq "No, only when she closes it herself." -and (Get-Member2 $nowB[1].data "signedBy") -ceq $P.phone.keyId) ("A CORRECTION FROM THE PHONE lands as a new record that names the answer corrected - which still holds his first words - signed like any answer (" + $t.text + ")")
+    $whole1 = @(Get-Said $P.store | Where-Object { $_.data.number -eq 1 })[0]
+    [void](Send-ToMachine $P (Get-Answer $P -Number 1 -Corrects ([long]$whole1.sequence) -Text "No: no chime at all.").text)
+    $t = Invoke-Turn $P
+    $now1 = @(Get-Said $P.store | Where-Object { $_.data.number -eq 1 })
+    Check ((Has $t "done") -and $now1.Count -eq 2 -and (Get-Member2 $now1[1].data "corrects") -eq [long]$whole1.sequence -and $null -eq (Get-Member2 $now1[1].data "part") -and $now1[1].data.route -ceq "phone") ("a correction of an answer to the whole question carries an empty part, which is no part (" + $t.text + ")")
+    $count = @(Get-Said $P.store).Count
+    foreach ($case in @(
+        @{ what = "a correction that names no record"; json = '{"v":3,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"b"}'; says = "the answer's members are" }
+        @{ what = "a correction of record 0"; json = '{"v":3,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"b","corrects":0}'; says = "the answer's corrects is not a record's number" }
+        @{ what = "a correction named by text"; json = '{"v":3,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"b","corrects":"5"}'; says = "the answer's corrects is not a record's number" }
+        @{ what = "a version 2 answer with an empty part"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":""}'; says = "the answer's part is not one lower-case letter" }
+        @{ what = "a version 2 answer that names a record corrected"; json = '{"v":2,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"b","corrects":5}'; says = "the answer's members are" }
+        @{ what = "a correction of a record that is no answer of his"; json = '{"v":3,"answerId":"' + (New-Id) + '","machine":"{machine}","snapshot":"{snapshot}","number":2,"wordingVersion":1,"text":"x","part":"","corrects":1}'; says = "it corrects record 1, which is not something said under question 2" }
     )) {
         [void](Send-ToMachine $P (Get-RawAnswer $P $case.json).text)
         $t = Invoke-Turn $P

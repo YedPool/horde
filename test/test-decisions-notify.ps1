@@ -191,6 +191,18 @@ $threeParts = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ quest
 Check (@($threeParts -split "`r?`n")[1] -ceq "3 answers, for question 6 (parts a, b and c).") ("three parts of one question (" + @($threeParts -split "`r?`n")[1] + ")")
 $odd = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 6; message = "40"; part = "his words; rm -rf" }, [pscustomobject]@{ question = 7; message = "41"; part = "B" })
 Check (@($odd -split "`r?`n")[1] -ceq "2 answers, for questions 6 and 7.") "ONLY A LETTER IS EVER NAMED: a part that is anything else is left out, so no text can reach the notice through it"
+# A CORRECTION SAYS SO (2026-10-13: "Change my answer"): the keeper may have acted on the answer he changed.
+$fixes = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 4; message = "60"; part = ""; corrects = $true }, [pscustomobject]@{ question = 28; message = "61"; part = "b"; corrects = $true }, [pscustomobject]@{ question = 28; message = "62"; part = "a"; corrects = $false }, [pscustomobject]@{ question = 9; message = "63"; part = ""; corrects = $false })
+Check (@($fixes -split "`r?`n")[1] -ceq "4 answers, for questions 4 (a correction), 9 and 28 (parts a and b, a correction).") ("a correction is named beside its question, with its part when it has one (" + @($fixes -split "`r?`n")[1] + ")")
+$oddFix = Format-HordeDecisionNotifyNotice -Items @([pscustomobject]@{ question = 4; message = "60"; part = ""; corrects = "yes; his words" }, [pscustomobject]@{ question = 5; message = "61" })
+Check (@($oddFix -split "`r?`n")[1] -ceq "2 answers, for questions 4 and 5.") "only true says a correction: anything else is not one, and an item from before corrections has no such member"
+$withFix = New-HordeKnown -Value ([pscustomobject]@{ outcome = "done"; messages = @(
+    [pscustomobject]@{ number = 4; message = [pscustomobject]@{ speaker = "founder"; sequence = 70; at = "2026-10-09T12:00:00Z"; part = ""; corrects = 12 } },
+    [pscustomobject]@{ number = 4; message = [pscustomobject]@{ speaker = "founder"; sequence = 71; at = "2026-10-09T12:00:01Z"; part = ""; corrects = 0 } },
+    [pscustomobject]@{ number = 5; message = [pscustomobject]@{ speaker = "founder"; sequence = 72; at = "2026-10-09T12:00:02Z"; corrects = "12" } },
+    [pscustomobject]@{ number = 6; message = [pscustomobject]@{ speaker = "founder"; sequence = 73; at = "2026-10-09T12:00:03Z" } }) })
+$unreadFix = Get-HordeDecisionNotifyUnread -Answer $withFix
+Check ($unreadFix.ok -and (@($unreadFix.items | ForEach-Object { "" + $_.message + ":" + $_.corrects }) -join ",") -ceq "70:True,71:False,72:False,73:False") "what is rung for says whether it is a correction: a record number from 1 up, and nothing else"
 $withPart = New-HordeKnown -Value ([pscustomobject]@{ outcome = "done"; messages = @(
     [pscustomobject]@{ number = 28; message = [pscustomobject]@{ speaker = "founder"; sequence = 50; at = "2026-10-09T12:00:00Z"; part = "b" } },
     [pscustomobject]@{ number = 28; message = [pscustomobject]@{ speaker = "founder"; sequence = 51; at = "2026-10-09T12:00:01Z"; part = "" } },

@@ -74,11 +74,27 @@
            Replace = '-QuietSeconds $v.quietSeconds' }
         # --- a part answered (2026-10-12) ---
         @{ Name = "the-notice-does-not-say-which-part"
-           Find = '        elseif ($letters.Count -eq 1) { "" + $number + " (part " + $letters[0] + ")" }'
-           Replace = '        elseif ($letters.Count -eq 1) { "" + $number }' }
+           Find = '        if ($letters.Count -eq 1) { $about = "part " + $letters[0] }'
+           Replace = '        if ($letters.Count -eq 1) { $about = "" }' }
         @{ Name = "the-notice-names-only-the-first-of-several-parts"
-           Find = '        else { "" + $number + " (parts " + (($letters[0..($letters.Count - 2)]) -join ", ") + " and " + $letters[$letters.Count - 1] + ")" }'
-           Replace = '        else { "" + $number + " (part " + $letters[0] + ")" }' }
+           Find = '        elseif ($letters.Count -gt 1) { $about = "parts " + (($letters[0..($letters.Count - 2)]) -join ", ") + " and " + $letters[$letters.Count - 1] }'
+           Replace = '        elseif ($letters.Count -gt 1) { $about = "part " + $letters[0] }' }
+        # --- a correction ("Change my answer", 2026-10-13) ---
+        @{ Name = "the-notice-does-not-say-it-is-a-correction"
+           Find = '        if ($changed) { $about = $(if ($about -eq "") { "a correction" } else { $about + ", a correction" }) }'
+           Replace = '' }
+        @{ Name = "anything-called-corrects-is-a-correction"
+           Find = '$null -ne $_.PSObject.Properties["corrects"] -and $_.corrects -eq $true }).Count -gt 0)'
+           Replace = '$null -ne $_.PSObject.Properties["corrects"] }).Count -gt 0)' }
+        @{ Name = "a-correction-is-named-for-another-question"
+           Find = '        $changed = (@($Items | Where-Object { [int]$_.question -eq $number -and $null -ne $_.PSObject.Properties["corrects"]'
+           Replace = '        $changed = (@($Items | Where-Object { $null -ne $_.PSObject.Properties["corrects"]' }
+        @{ Name = "what-is-rung-for-is-never-a-correction"
+           Find = '-and [long]$_.message.corrects -gt 0) }'
+           Replace = '-and $false) }' }
+        @{ Name = "record-zero-is-a-correction"
+           Find = '-and [long]$_.message.corrects -gt 0) }'
+           Replace = '-and [long]$_.message.corrects -ge 0) }' }
         @{ Name = "anything-called-a-part-reaches-the-notice"
            Find = """`$(`$_.part)"" -cmatch '\A[a-z]\z' } | ForEach-Object"
            Replace = "`$true } | ForEach-Object" }
@@ -86,8 +102,8 @@
            Find = '        $letters = @($Items | Where-Object { [int]$_.question -eq $number -and'
            Replace = '        $letters = @($Items | Where-Object {' }
         @{ Name = "what-is-rung-for-carries-no-part"
-           Find = 'signedBy = $held["signedBy"]; part = $held["part"] }'
-           Replace = 'signedBy = $held["signedBy"]; part = "" }' }
+           Find = 'signedBy = $held["signedBy"]; part = $held["part"]; corrects ='
+           Replace = 'signedBy = $held["signedBy"]; part = ""; corrects =' }
         # --- woken, or only queued (the founder's bug of 2026-10-12)
         @{ Name = "bell-does-not-say-whether-woken"
            Find = '$posted.value.stage + $wake + ")"'

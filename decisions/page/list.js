@@ -12,6 +12,10 @@
 //     sayPart(number, letter, text, wording, id)   the same, for the answer to ONE PART of a question
 //                                         of parts; a host that has none is handed the part through
 //                                         say, as the words "(b) ..." (see A QUESTION OF SEVERAL PARTS)
+//     correct(number, text, wording, id, corrects, letter)   the same, for a CHANGE to an answer he
+//                                         has already given: corrects is the record number of that
+//                                         answer, letter its part or "". A host that has none is
+//                                         handed the words as a new answer (say or sayPart)
 //     storage                             where drafts are kept (default: this page's own localStorage)
 //     prefs                               where the chosen order is kept (default: the same; a host
 //                                         that keeps drafts in memory only still keeps the order)
@@ -60,6 +64,14 @@
 // left as a NEW question, which shows the old one and his answer folded under it ("Follows up on
 // question N"). An answer that was NOT saved never turns green: the field keeps the words and the
 // reason stands under them.
+//
+// "CHANGE MY ANSWER" (2026-10-13). A question that has left his list for With Thrall is only read
+// there - but he may have answered wrongly. Each such row offers "Change my answer": it puts his
+// answer (each part's, for a question answered part by part) back into a field; Enter or "Save the
+// change" sends what he changed as a CORRECTION - new words that name the record of the answer they
+// correct, which the store keeps as a record of its own and tells the keeper is a correction - and
+// Escape or Cancel leaves everything as it was. Nothing is ever edited in place. A change that was
+// not saved keeps its words in the field with the reason under them.
 //
 // NOTHING TYPED IS LOST. Whatever stands in a field and is not the saved answer is a draft, kept by
 // the question's number in the page's own storage on every keystroke: it survives a redraw, a new
@@ -310,6 +322,10 @@
     // request is handed the words through say with the part's letter before them, "(b) ...": one
     // message a part, which a store of any version keeps and an earlier page reads into the part.
     var sayPart = (typeof options.sayPart === "function") ? options.sayPart : function (number, letter, text, wording, id) { return say(number, "(" + letter + ") " + text, wording, id); };
+    // correct(number, text, wording, id, corrects, letter): a change to an answer already given, naming
+    // the record of that answer. A host with no such request is handed the words as a new answer,
+    // which every store keeps as his latest: the change is not lost, only not named a correction.
+    var correct = (typeof options.correct === "function") ? options.correct : function (number, text, wording, id, corrects, letter) { return letter ? sayPart(number, letter, text, wording, id) : say(number, text, wording, id); };
     var storage = options.storage || null;
     if (!storage) { try { storage = window.localStorage; } catch (e) { storage = null; } }
     // WHERE THE CHOSEN ORDER IS KEPT: its own place, because a host may keep drafts in memory only (the
@@ -1413,6 +1429,85 @@
     // A ROW THAT IS ONLY READ (header, WHERE A QUESTION STANDS): a question with the keeper, or closed.
     // Its words, then his last answer (two lines at most) and the keeper's last words after it, or the
     // outcome it was closed with. A press on it unfolds its context.
+    // "CHANGE MY ANSWER" (header). By question number: whether its row is open for a change. By
+    // question number and part ("28:b", or "28:" for an answer to the whole question): what he has
+    // typed there, why a change was refused, what was last sent (so that the same words sent again
+    // carry the same id), and a change the host has saved that no list holds yet.
+    var changing = Object.create(null);
+    var changeTyped = Object.create(null);
+    var changeRefused = Object.create(null);
+    var changeSent = Object.create(null);
+    var changeSaved = Object.create(null);
+    var changePending = 0;
+    var changeCaret = null;
+    function changeKey(number, letter) { return number + ":" + (letter || ""); }
+    // THE ANSWERS OF HIS THAT STAND UNDER A QUESTION, each as the list holds it: his last words to the
+    // whole question, and after them his last answer to each part. Only what a list holds: an answer
+    // still on its way has no record yet for a correction to name.
+    function piecesOf(q) {
+      var whole = null;
+      var byPart = Object.create(null);
+      messagesOf(q).forEach(function (m) {
+        if (m.speaker !== MINE) { return; }
+        if (textOf(m.part)) { byPart[textOf(m.part)] = m; } else { whole = m; byPart = Object.create(null); }
+      });
+      var out = [];
+      if (whole) { out.push({ letter: "", words: "", msg: whole }); }
+      var info = partsOf(q);
+      if (info) { info.parts.forEach(function (p) { if (byPart[p.letter]) { out.push({ letter: p.letter, words: p.words, msg: byPart[p.letter] }); } }); }
+      return out;
+    }
+    // What a piece reads as now: a change saved here that no list holds yet, else the list's words.
+    function pieceText(q, piece) {
+      var key = changeKey(q.number, piece.letter);
+      var kept = changeSaved[key];
+      if (kept) {
+        if (messagesOf(q).some(function (m) { return m.speaker === MINE && Number(m.sequence) >= kept.sequence; })) { delete changeSaved[key]; }
+        else { return kept.text; }
+      }
+      return textOf(piece.msg.text);
+    }
+    function piecesText(q, pieces) { return pieces.map(function (p) { return (p.letter ? "(" + p.letter + ") " : "") + pieceText(q, p); }).join("\n"); }
+    function openChange(q) { changing[q.number] = true; changeCaret = changeKey(q.number, (piecesOf(q)[0] || { letter: "" }).letter); draw(); }
+    function closeChange(q) {
+      delete changing[q.number];
+      piecesOf(q).forEach(function (p) { var key = changeKey(q.number, p.letter); delete changeTyped[key]; delete changeRefused[key]; });
+      changeCaret = null;
+      draw();
+    }
+    // SEND WHAT HE CHANGED, each piece as a correction of its own. A piece left as it was, or emptied,
+    // is not sent. When every one sent is saved the row is read-only again, showing the new words;
+    // one that was refused keeps its field, its words and the reason.
+    function saveChange(q) {
+      var pieces = piecesOf(q);
+      var sends = [];
+      pieces.forEach(function (p) {
+        var key = changeKey(q.number, p.letter);
+        var text = changeTyped[key];
+        if (text === undefined || text.trim() === "" || text === pieceText(q, p)) { return; }
+        var last = changeSent[key];
+        var id = (last && last.text === text) ? last.id : newId();
+        changeSent[key] = { text: text, id: id };
+        delete changeRefused[key];
+        sends.push({ key: key, piece: p, text: text, id: id });
+      });
+      if (!sends.length) { closeChange(q); return; }
+      changePending += sends.length;
+      var left = sends.length;
+      var failed = false;
+      sends.forEach(function (s) {
+        var done = function (result) {
+          changePending -= 1;
+          left -= 1;
+          if (result && result.ok === true) { changeSaved[s.key] = { text: s.text, sequence: Number(result.sequence) }; delete changeTyped[s.key]; }
+          else { failed = true; changeRefused[s.key] = textOf(result && result.reason) || "Not saved, and no reason was given."; }
+          if (left === 0) { if (failed) { draw(); } else { closeChange(q); } }
+          onChange();
+        };
+        Promise.resolve().then(function () { return correct(q.number, s.text, Number(q.wordingVersion), s.id, Number(s.piece.msg.sequence), s.piece.letter); }).then(done, function (error) { done({ ok: false, reason: "Not saved: " + ((error && error.message) ? error.message : error) }); });
+      });
+      draw();
+    }
     var drawnRows = [];
     function rowOf(number) { for (var i = 0; i < drawnRows.length; i += 1) { if (drawnRows[i].q.number === number) { return drawnRows[i]; } } return null; }
     function drawDone(q, kind) {
@@ -1442,9 +1537,74 @@
         if (!mine && !theirs && msgs[i].speaker !== MINE) { theirs = msgs[i]; }
       }
       var said = { mine: "", theirs: "", outcome: "" };
+      // WITH THE KEEPER, his answer is what stands of it - every part's, as one text, and a change he
+      // has just saved - and he can change it ("CHANGE MY ANSWER", header). Closed, it is only read.
+      var pieces = (kind === "thrall") ? piecesOf(q) : [];
+      var change = { offered: false, open: false, fields: [], refusals: [], mark: "" };
       // Answered part by part, his answer is every part's, as one text; else his last words.
-      if (mine && textOf(mine.part)) { mine = { speaker: MINE, text: answerOf(q) || textOf(mine.text), holdsDirectionOrInvisibleCharacters: mine.holdsDirectionOrInvisibleCharacters }; }
-      if (mine) { var a = drawMessage(mine); a.row.classList.add("rest"); ans.appendChild(a.row); said.mine = textOf(mine.text); }
+      if (pieces.length) { mine = { speaker: MINE, text: piecesText(q, pieces), holdsDirectionOrInvisibleCharacters: pieces.some(function (p) { return p.msg.holdsDirectionOrInvisibleCharacters === true; }) }; }
+      else if (mine && textOf(mine.part)) { mine = { speaker: MINE, text: answerOf(q) || textOf(mine.text), holdsDirectionOrInvisibleCharacters: mine.holdsDirectionOrInvisibleCharacters }; }
+      if (pieces.length && changing[q.number] === true) {
+        change.open = true;
+        said.mine = textOf(mine.text);
+        var box = make("div", "hd-changebox");
+        pieces.forEach(function (p) {
+          var key = changeKey(q.number, p.letter);
+          if (p.letter) {
+            var lab = make("div", "hd-partlab");
+            lab.appendChild(make("span", "hd-partlet", "(" + p.letter + ")"));
+            lab.appendChild(make("span", "hd-partwords", p.words));
+            box.appendChild(lab);
+          }
+          var cf = make("textarea", "hd-field hd-changefield");
+          cf.rows = 1;
+          cf.setAttribute("dir", "auto");
+          cf.setAttribute("aria-label", "Your changed answer to " + (p.letter ? "part " + p.letter + " of " : "") + "question " + q.number);
+          cf.spellcheck = false;
+          cf.value = (changeTyped[key] !== undefined) ? changeTyped[key] : pieceText(q, p);
+          cf.setAttribute("data-change", key);
+          var grow = function () { cf.style.height = "auto"; var linePx = parseFloat(window.getComputedStyle(cf).lineHeight) || 22; cf.style.height = "calc(" + Math.max(1, Math.round(cf.scrollHeight / linePx)) + " * var(--line-px))"; };
+          cf.addEventListener("input", function () { changeTyped[key] = cf.value; if (changeRefused[key] && changeSent[key] && cf.value !== changeSent[key].text) { delete changeRefused[key]; refusedBox.hidden = true; refusedBox.textContent = ""; } grow(); onChange(); });
+          cf.addEventListener("focus", function () { changeCaret = key; });
+          cf.addEventListener("keydown", function (e) {
+            if (e.isComposing) { return; }
+            // The keys are the answer's own: Enter saves, Shift+Enter and Ctrl+J add a line; Escape
+            // leaves the answer as it was - and is not the host's Escape, which hands the keyboard away.
+            if ((e.key === "Enter" && e.shiftKey) || ((e.key === "j" || e.key === "J") && e.ctrlKey && !e.altKey)) { e.preventDefault(); e.stopPropagation(); var at = cf.selectionStart; cf.value = cf.value.slice(0, at) + "\n" + cf.value.slice(cf.selectionEnd); try { cf.setSelectionRange(at + 1, at + 1); } catch (x) { /* not drawn */ } changeTyped[key] = cf.value; grow(); return; }
+            if (e.key === "Enter" && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); e.stopPropagation(); changeTyped[key] = cf.value; saveChange(q); return; }
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeChange(q); }
+          });
+          box.appendChild(cf);
+          var refusedBox = make("div", "hd-refusal", changeRefused[key] || "");
+          refusedBox.hidden = !changeRefused[key];
+          box.appendChild(refusedBox);
+          change.fields.push(cf);
+          change.refusals.push(refusedBox);
+          window.setTimeout(grow, 0);
+        });
+        var keysRow = make("div", "hd-changekeys");
+        var saveBtn = make("button", "hd-change-save", "Save the change");
+        saveBtn.type = "button"; saveBtn.tabIndex = -1;
+        saveBtn.addEventListener("click", function (e) { e.stopPropagation(); change.fields.forEach(function (cf) { changeTyped[cf.getAttribute("data-change")] = cf.value; }); saveChange(q); });
+        var cancelBtn = make("button", "hd-change-cancel", "Cancel");
+        cancelBtn.type = "button"; cancelBtn.tabIndex = -1;
+        cancelBtn.addEventListener("click", function (e) { e.stopPropagation(); closeChange(q); });
+        keysRow.appendChild(saveBtn); keysRow.appendChild(cancelBtn);
+        box.appendChild(keysRow);
+        ans.appendChild(box);
+      }
+      else if (mine) {
+        var a = drawMessage(mine); a.row.classList.add("rest"); ans.appendChild(a.row); said.mine = textOf(mine.text);
+        if (pieces.length) {
+          // A change the host has saved and no list holds yet says so, beside the new words.
+          if (pieces.some(function (p) { return !!changeSaved[changeKey(q.number, p.letter)]; })) { change.mark = "changed"; a.row.appendChild(make("span", "hd-flag hd-changed", " (changed)")); }
+          var changeBtn = make("button", "hd-change", "Change my answer");
+          changeBtn.type = "button"; changeBtn.tabIndex = -1;
+          changeBtn.addEventListener("click", function (e) { e.stopPropagation(); openChange(q); });
+          ans.appendChild(changeBtn);
+          change.offered = true;
+        }
+      }
       else { ans.appendChild(make("div", "hd-msg", "No answer of yours.")); }
       if (theirs) { var t = drawMessage(theirs); t.row.classList.add("brief"); ans.appendChild(t.row); said.theirs = textOf(theirs.text); }
       if (kind === "history") {
@@ -1459,7 +1619,7 @@
       var subBox = make("div", "hd-sub");
       wrap.appendChild(subBox);
       drawSubs(q, subBox);
-      var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said, tags: tags };
+      var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said, tags: tags, change: change };
       drawnRows.push(drawn);
       return drawn;
     }
@@ -1469,6 +1629,8 @@
     // put in order by moving the others around them, so a field that stays is never taken out of the
     // page - taken out, it would lose the caret and whatever the engine was doing with his keys.
     var headEls = Object.create(null);
+    // The change field the caret was last asked into (draw, below): asked once when a row is opened.
+    var changeWanted = null;
     // THE LINE AT THE HEAD OF THE PAGE WHERE HE CHOOSES THE ORDER (header, THE ORDER IS HIS): the two
     // words "Order by" and a button for each order, the chosen one pressed. Its buttons are reached
     // by a press, never by Tab: the run of Enter and Tab is the fields'.
@@ -1516,6 +1678,7 @@
       // (seen 2026-10-12 in the turns scenario: Ctrl+Down, a redraw, and Down went nowhere).
       var headHad = null;
       drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { headHad = h.head.key; } });
+      var hadChange = !!(document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute("data-change"));
       var heads = sectionsOf();
       drawnHeads = [];
       drawnLines = [];
@@ -1624,6 +1787,12 @@
         }
       }
       if (headHad && headEls[headHad] && headEls[headHad].tri && document.activeElement !== headEls[headHad].tri) { headEls[headHad].tri.focus({ preventScroll: true }); }
+      // A FIELD HE IS CHANGING AN ANSWER IN KEEPS THE CARET: the rows that are only read are made
+      // again on every draw, and the field with them; what he typed is kept apart (changeTyped).
+      if (changeCaret && (hadChange || changeWanted !== changeCaret)) {
+        drawnRows.forEach(function (r) { r.change.fields.forEach(function (cf) { if (cf.getAttribute("data-change") === changeCaret && cf.offsetParent !== null) { cf.focus({ preventScroll: true }); try { cf.setSelectionRange(cf.value.length, cf.value.length); } catch (e) { /* not drawn */ } } }); });
+      }
+      changeWanted = changeCaret;
       if (caret) {
         var again = lineOf(caret.number);
         var back = again ? (again.fields[caret.part] || again.field) : null;
@@ -1652,13 +1821,15 @@
     function pending() {
       var n = 0;
       Object.keys(sent).forEach(function (k) { n += sent[k].pending; });
-      return n;
+      return n + changePending;
     }
 
     // A CHECK'S STEPS, acted out on the page's own fields and nowhere else: a check cannot press a
     // key, so it hands the page these and the page's own handlers do the rest. Each step is
     //   { do: "focus", q, part }  the caret into that question's field (part: into that part's)
     //   { do: "order", key }      that order chosen, as a press on its button does
+    //   { do: "change", q }       a press on "Change my answer" of that question, with the keeper;
+    //   { do: "change-type", q, part, text }, { do: "change-save", q }, { do: "change-cancel", q }
     //   { do: "follow", q }       a press on that question's "Follows up on question N"
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
@@ -1690,6 +1861,16 @@
           else if (target) { enter(target, part); arrived.at = 0; }
         }
         else if (step.do === "order") { setOrder(textOf(step.key)); }
+        else if (step.do === "change" || step.do === "change-save" || step.do === "change-cancel" || step.do === "change-type") {
+          // "Change my answer" on a row that is with the keeper, as a press on its buttons does; and
+          // words put into one of its fields (part: which, from 0), as typing them does.
+          var changeRow = rowOf(Number(step.q));
+          var changeQ = changeRow ? changeRow.q : null;
+          if (changeQ && step.do === "change" && changeRow.change.offered) { openChange(changeQ); }
+          else if (changeQ && step.do === "change-cancel" && changeRow.change.open) { closeChange(changeQ); }
+          else if (changeQ && step.do === "change-save" && changeRow.change.open) { changeRow.change.fields.forEach(function (cf) { changeTyped[cf.getAttribute("data-change")] = cf.value; }); saveChange(changeQ); }
+          else if (changeQ && step.do === "change-type" && changeRow.change.open) { var cfield = changeRow.change.fields[Number(step.part) || 0]; if (cfield) { cfield.value = textOf(step.text); cfield.dispatchEvent(new Event("input", { bubbles: true })); } }
+        }
         else if (step.do === "follow") { target = lineOf(Number(step.q)); if (target && target.tags.follow) { target.tags.follow.press.click(); } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
@@ -1716,6 +1897,8 @@
     window.addEventListener("focus", function () {
       window.setTimeout(function () {
         if (focusedLine() || (pressed.own && Date.now() - pressed.at < 600)) { return; }
+        // A field he is changing an answer in has the caret: it is not "no field".
+        if (document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute("data-change")) { return; }
         takeKeyboard();
       }, 120);
     });
@@ -1892,7 +2075,10 @@
         // The rows that are only read (With the keeper, History): number, text, which fold, and what
         // they show of his answer, the keeper's last words and the outcome.
         out.done = drawnRows.slice(0, limits.lines).map(function (r) {
-          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars), b: r.tags.badges.map(function (el) { return cut(el.textContent, limits.lineChars); }) };
+          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars), b: r.tags.badges.map(function (el) { return cut(el.textContent, limits.lineChars); }),
+            // "Change my answer": cb whether the row offers it, ch whether it is open, cf what stands in
+            // its fields, cr the refusal under each, cm the mark of a change saved and not yet in a list.
+            cb: r.change.offered, ch: r.change.open, cf: r.change.fields.map(function (el) { return cut(el.value, limits.lineChars); }), cr: r.change.refusals.map(function (el) { return cut(el.textContent, limits.lineChars); }), cm: r.change.mark };
         });
         out.toast = (toast && !toast.hidden) ? cut(toast.textContent, limits.lineChars) : "";
         var has = focusedLine();

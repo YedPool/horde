@@ -140,6 +140,8 @@ function docOf(id) {
     say: (number, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId }),
     // One part's answer: the same request with the part's letter, signed and sent by itself.
     sayPart: (number, letter, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId, part: letter }),
+    // "Change my answer": the same request, naming the record of the answer the words correct.
+    correct: (number, text, wording, answerId, corrects, letter) => bridge.request("say", { number, text, wording, id: answerId, part: letter || "", corrects }),
     act: (number, what, wording, answerId) => bridge.request("act", { number, act: what, wording, id: answerId })
   });
   docs[id] = { box, doc, kinds: false };

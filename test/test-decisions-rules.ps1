@@ -949,6 +949,51 @@ Check ((Test-Says (Get-Marks @{ part = "b"; act = "park" }) "an act answers no p
 foreach ($bad in @("B", "ab", "", "1", 2)) { Check ((Test-Says (Get-Marks @{ part = $bad }) "'part' is one lower-case letter")) ("a part of '" + $bad + "' is refused as not a letter, and is not said back") }
 
 Write-Host ""
+Write-Host "--- a correction: new words in a new record that names the answer it corrects ---" -ForegroundColor Cyan
+# "CHANGE MY ANSWER" (2026-10-13): after a question has left his list he may still correct what he
+# answered. Never an edit in place: a new record, naming the record of the answer corrected.
+function New-Corrected { param([long]$Seq, [int]$Number, [long]$Corrects, [string]$Text = "No, the other one.", [string]$Part = "", [string]$Speaker = "founder", [string]$Route = "window", [string]$Actor = "founder", $Wording = 1) $r = New-Said -Seq $Seq -Number $Number -Speaker $Speaker -Route $Route -Text $Text -Wording $Wording -Actor $Actor; Add-Member -InputObject $r.data.data -NotePropertyName corrects -NotePropertyValue $Corrects; if ($Part -ne "") { Add-Member -InputObject $r.data.data -NotePropertyName part -NotePropertyValue $Part }; return $r }
+function Get-CorrectLine { param($State, [int]$Number = 1) return (@((Get-Thread $State $Number).messages | ForEach-Object { "" + $_.sequence + ":" + $_.corrects + ":" + $_.replaces }) -join ",") }
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes."), (New-Reply 3 1 -Text "Done as you said."), (New-Corrected 4 1 2 -Text "No, wait: the other one."))
+$t = Get-Thread $st 1
+Check ((Get-CorrectLine $st) -ceq "2:0:False,3:0:False,4:2:True" -and $t.messages[2].text -ceq "No, wait: the other one." -and $t.messages[0].text -ceq "Yes." -and $st.ignored.Count -eq 0 -and $st.unreadable.Count -eq 0) ("A CORRECTION is a message of its own that names the record it corrects and says it replaces it - though the keeper spoke in between - and THE ANSWER CORRECTED IS STILL THERE, word for word (" + (Get-CorrectLine $st) + ")")
+Check ($t.turn -ceq "warchief" -and (Get-Unread $t) -eq 3 -and (Get-HordeDecisionAnswerText -Question $st.questions[1]) -ceq "No, wait: the other one.") "it puts nothing back in front of him - the turn is the keeper's - it is unread by the keeper like any answer, and what he answered is now the corrected words"
+Check ((Get-Thread (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes."))) 1).messages[0].corrects -eq 0) "CONTROL: an answer that corrects nothing says 0"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), (New-PartSaid 3 1 "b" -Text "second"), (New-PartSaid 4 1 "c" -Text "third"), (New-Corrected 5 1 3 -Text "second, changed" -Part "b"))
+Check ((Get-CorrectLine $st) -ceq "2:0:False,3:0:False,4:0:False,5:3:True" -and (Get-HordeDecisionAnswerText -Question $st.questions[1]) -ceq "(a) first`n(b) second, changed`n(c) third" -and (Get-PartsLine $st) -ceq "a:y,b:y,c:y warchief") "a correction of one part's answer names that part; his answer is then the other parts as they were and that part as corrected"
+foreach ($case in @(
+    @{ what = "a correction of a record that is not under the question"; record = (New-Corrected 4 1 99); says = "it corrects record 99, which is not something said under question 1" }
+    @{ what = "a correction of the keeper's words"; record = (New-Corrected 4 1 3); says = "it corrects record 3, which is not an answer of the speaker's own under question 1" }
+    @{ what = "a correction of the question's own record"; record = (New-Corrected 4 1 1); says = "it corrects record 1, which is not something said under question 1" }
+    @{ what = "a correction that names a part, of an answer to the whole question"; record = (New-Corrected 4 1 2 -Part "a"); says = "which is not a question of parts" }
+)) {
+    $st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes."), (New-Reply 3 1 -Text "Done."), $case.record)
+    Check ($st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 4 -and $st.ignored[0].reason -like ("*" + $case.says + "*") -and (Get-Thread $st 1).count -eq 2) ($case.what + " does not apply, and says why (" + $(if ($st.ignored.Count) { $st.ignored[0].reason } else { "applied" }) + ")")
+}
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), (New-Corrected 3 1 2 -Text "x" -Part "b"))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*it corrects record 2, which answers part (a), and is itself an answer to part (b)*") "a correction answers what the answer it corrects answered: one of part (a)'s answer that names part (b) does not apply"
+$st = Get-Fold @((New-AddedWith 1 1 -Parts $three), (New-PartSaid 2 1 "a" -Text "first"), (New-Corrected 3 1 2 -Text "x"))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*which answers part (a), and is itself an answer to the whole question*") "nor does one that names no part"
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Route "window" -Actor "founder" -Text "parked"), (New-Corrected 3 1 2))
+$st2 = Get-Fold @((New-Added 1 1), (New-Record 2 "message-said" ([ordered]@{ number = 1; speaker = "founder"; route = "window"; text = "(parked)"; wordingVersion = 1; act = "park" })), (New-Corrected 3 1 2))
+Check ($st.ignored.Count -eq 0 -and $st2.ignored.Count -eq 1 -and $st2.ignored[0].reason -like "*which is not an answer of the speaker's own*") "his park is an act, not an answer: it is not corrected"
+foreach ($case in @(
+    @{ what = "a correction of record 0"; corrects = 0; says = "is not what a message-said record holds" }
+    @{ what = "a correction named by text"; corrects = "2"; says = "is not what a message-said record holds" }
+    @{ what = "a correction of record 1e30"; corrects = 1e30; says = "'corrects' is beyond 9999999999" }
+)) {
+    $bad = New-Said -Seq 3 -Number 1 -Route "window" -Actor "founder" -Text "x"; Add-Member -InputObject $bad.data.data -NotePropertyName corrects -NotePropertyValue $case.corrects
+    $st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes."), $bad, (New-Said 4 1 -Text "and after"))
+    Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like ("*" + $case.says + "*") -and (Get-Thread $st 1).count -eq 2) ($case.what + " makes the record unreadable by name, and the words around it are still there")
+}
+Check ((Get-Marks @{ corrects = 12 }).Count -eq 0 -and (Get-Marks @{ corrects = 12 } -Route "phone").Count -eq 0 -and (Get-Marks @{ corrects = 12; part = "b" }).Count -eq 0) "the founder's words may correct an answer, by whatever route, with a part or with none"
+Check ((Test-Says (Get-Marks @{ corrects = 12 } -Speaker "warchief" -Route "command") "only the founder corrects an answer, and only his own")) "the keeper corrects nothing"
+Check ((Test-Says (Get-Marks @{ corrects = 12; act = "park" }) "an act corrects no answer")) "an act corrects nothing"
+foreach ($bad in @(0, -1, "12", 1.5, 1e30, $true)) { Check ((Test-Says (Get-Marks @{ corrects = $bad }) "'corrects' is the record number of the answer corrected")) ("a correction of '" + $bad + "' is refused as not a record's number, never cast") }
+$found = @(Test-HordeSchema -Value (Get-View (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes."), (New-Corrected 3 1 2))) 1 -Messages) -Schema $defs.resultSchema.definitions.view -Root $defs.resultSchema)
+Check ($found.Count -eq 0) ("a question with a correction under it, as shown, matches decision-result.v1's view" + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
+
+Write-Host ""
 Write-Host "--- a follow-up shows the question it follows, and what he answered ---" -ForegroundColor Cyan
 function Get-Follows { param($State, [int]$Number) $v = Get-View $State $Number; if ($null -eq $v.PSObject.Properties["followsUp"]) { return "(none)" }; $f = $v.followsUp; return ("" + $f.number + "|" + $f.state + "|" + $f.title + "|" + $f.answer + "|" + $f.answerCut + "|" + $f.outcome) }
 $st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "Yes, the short one."), (New-AddedWith 3 2 @{ followsUp = 1 }))

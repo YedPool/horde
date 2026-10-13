@@ -106,7 +106,7 @@ $script:HordeDecisionEventKinds = [ordered]@{
     "question-closed"   = @{ data = "question-closed";   words = "";         apply = "Step-HordeDecisionClosed";   about = "question"; actors = "keepers";  counts = @{} }
     "question-reopened" = @{ data = "question-reopened"; words = "";         apply = "Step-HordeDecisionReopened"; about = "question"; actors = "keepers";  counts = @{} }
     "question-ranked"   = @{ data = "question-ranked";   words = "";         apply = "Step-HordeDecisionRanked";   about = "question"; actors = "keepers";  counts = @{} }
-    "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number" } }
+    "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number"; corrects = "sequence" } }
     "messages-read"     = @{ data = "messages-read";     words = "";         apply = "Step-HordeDecisionRead";     about = "list";     actors = "speakers"; counts = @{ upTo = "sequence" } }
 }
 
@@ -928,6 +928,16 @@ function Test-HordeDecisionSayMarks {
         if ($script:HordeDecisionActs -cnotcontains [string]$Request.act) { [void]$found.Add("'act' is one of: " + ($script:HordeDecisionActs -join ", ")) }
         elseif ($Speaker -cne $script:HordeDecisionFirstTurn -or $script:HordeDecisionActRoutes -cnotcontains $Route) { [void]$found.Add("an act is recorded only for the founder's words typed in the window") }
     }
+    # A CORRECTION: the founder changes an answer he has already given, after the question has left
+    # his list. It is NEW WORDS IN A NEW RECORD that names the record of the answer it corrects - never
+    # an edit of that record, which stays as he said it. Only the one the question is asked of corrects,
+    # and an act corrects nothing. Whether the record named IS an answer of his under this question is
+    # asked where the question is known (Step-HordeDecisionSaid).
+    if (Test-HordeDecisionMember -Object $Request -Name "corrects") {
+        if (-not (Test-HordeDecisionCount -Value $Request.corrects -Most (Get-HordeDecisionMaxSequence))) { [void]$found.Add("'corrects' is the record number of the answer corrected: a whole number from 1, no larger than " + (Get-HordeDecisionMaxSequence)) }
+        elseif ($Speaker -cne $script:HordeDecisionFirstTurn) { [void]$found.Add("only " + (Get-HordeDecisionSpeakerShown -Speaker $script:HordeDecisionFirstTurn) + " corrects an answer, and only his own") }
+        elseif (Test-HordeDecisionMember -Object $Request -Name "act") { [void]$found.Add("an act corrects no answer: give 'corrects' or 'act', not both") }
+    }
     # A PART (above, A QUESTION OF PARTS): the answer to one part of the question, by its letter. Only
     # the one the question is asked of answers a part, and an act answers nothing. Whether the question
     # HAS that part is asked where the question is known (Step-HordeDecisionSaid).
@@ -980,6 +990,18 @@ function Step-HordeDecisionSaid {
             return ("it answers part (" + $part + ") of question " + $question.number + ", which has no such part; its parts are: " + (@($parts | ForEach-Object { "(" + $_.letter + ")" }) -join ", "))
         }
     }
+    # THE ANSWER CORRECTED, when the record names one (Test-HordeDecisionSayMarks, A CORRECTION): it must
+    # be words of the same speaker, said under this question before, to the same part or - like these -
+    # to the whole question. A record that names anything else does not apply: a correction of nothing,
+    # or of somebody else's words, would be shown to the keeper as his change of mind.
+    $corrects = [long]0
+    if (Test-HordeDecisionMember -Object $Ev.data -Name "corrects") {
+        $corrects = [long]$Ev.data.corrects
+        $was = @($question.thread | Where-Object { [long]$_.sequence -eq $corrects }) | Select-Object -First 1
+        if ($null -eq $was) { return ("it corrects record " + $corrects + ", which is not something said under question " + $question.number) }
+        if ("$($was.speaker)" -cne $speaker -or "$($was.act)" -ne "") { return ("it corrects record " + $corrects + ", which is not an answer of the speaker's own under question " + $question.number) }
+        if ("$($was.part)" -cne $part) { return ("it corrects record " + $corrects + ", which answers " + $(if ("$($was.part)" -ne "") { "part (" + $was.part + ")" } else { "the whole question" }) + ", and is itself an answer to " + $(if ($part -ne "") { "part (" + $part + ")" } else { "the whole question" }) + ": a correction answers what the answer it corrects answered") }
+    }
     [void]$question.thread.Add([pscustomobject]@{
         sequence = [long]$Ev.sequence; at = "$($Ev.at)"; speaker = $speaker; route = "$($Ev.data.route)"; recordedBy = "$($Ev.actor)"
         # Exactly what the record holds: never trimmed, never re-wrapped.
@@ -997,6 +1019,8 @@ function Step-HordeDecisionSaid {
         # The part answered ("" for none), and that part's words as they read at this record's place.
         part = $part
         partWords = $partWords
+        # The record of the answer these words correct, or 0 when they correct none.
+        corrects = $corrects
         # The key id of the passkey that signed (the route phone), as the record holds it; "" when it
         # names none - every record written before 2026-10-12, and every other route's.
         signedBy = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "signedBy") { [string]$Ev.data.signedBy } else { "" })
@@ -1006,8 +1030,9 @@ function Step-HordeDecisionSaid {
     # words under the question - acts left aside - replace them. Worked out here, at the record's place.
     # THE ANSWER TO A PART REPLACES ONLY AN EARLIER ANSWER TO THAT PART: his answers to the other parts,
     # said in between, are stepped over, and the other speaker's words end the search as they always did.
-    $replaces = $false
-    if ($last.act -eq "") {
+    # A correction replaces the answer it names, whatever was said in between.
+    $replaces = ($corrects -gt 0)
+    if (-not $replaces -and $last.act -eq "") {
         for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
             $before = $question.thread[$i]
             if ("$($before.act)" -ne "") { continue }
@@ -1206,6 +1231,7 @@ function ConvertTo-HordeDecisionMessageView {
         evidence = "$($Message.evidence)"
         part = "$($Message.part)"
         partWords = "$($Message.partWords)"
+        corrects = [long]$Message.corrects
         signedBy = "$($Message.signedBy)"
     }
 }

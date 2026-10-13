@@ -40,5 +40,9 @@
         @{ Name = "the-part-is-not-part-of-what-makes-a-request-the-same"
            Find = '    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy") }'
            Replace = '    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy", "part") }' }
+        # --- a correction ("Change my answer", 2026-10-13) ---
+        @{ Name = "the-record-corrected-is-not-recorded"
+           Find = '(Test-HordeDecisionCount -Value $Request.corrects -Most (Get-HordeDecisionMaxSequence))) { $body["corrects"] = [long]$Request.corrects }'
+           Replace = '(Test-HordeDecisionCount -Value $Request.corrects -Most (Get-HordeDecisionMaxSequence))) { }' }
     )
 }

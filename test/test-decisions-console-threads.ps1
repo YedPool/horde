@@ -349,6 +349,21 @@ Check ((Test-Trimmed $listed "conversation: 3 message(s); 3 not yet read by the 
 Check ((Run "answer" @{ Number = "1"; Text = "x"; Part = "d" }).failure -like "*it answers part (d) of question 1, which has no such part; its parts are: (a), (b), (c)*" -and (Run "answer" @{ Number = "1"; Text = "x"; Part = "ab" }).failure -like "THREW: -Part is the letter of the part answered*" -and (Run "reply" @{ Number = "1"; Text = "x"; Part = "a" }).failure -like "THREW: -Part does not belong to decisions reply*") "a part the question does not have, a part that is not a letter, and a part on the keeper's own reply are refused"
 Check ((Get-Kinds $store) -ceq "added,said,said,said") "CONTROL: three answers, three records"
 
+Write-Host ""
+Write-Host "--- a correction: the keeper is told it replaces an answer, and which ---" -ForegroundColor Cyan
+$store = New-Home
+$null = Add-Q
+$null = Run "answer" @{ Number = "1"; Text = "Yes, play it." }      # record 2
+$null = Run "inbox"                                                 # record 3: read
+$fix = Run "answer" @{ Number = "1"; Text = "No, do not play it."; Corrects = "2" }
+Check ($fix.failure -eq "" -and (@((Read-Record $store 4).data.PSObject.Properties | Where-Object { $_.Name -ceq "corrects" } | ForEach-Object { $_.Value }) -join ",") -ceq "2") ("answer -Corrects records which answer his words correct (" + $fix.failure + ")")
+$peek = Run "inbox" @{ Peek = $true }
+Check ((Test-Line $peek "    (A CORRECTION: he changed his answer. This replaces what he said in record 2)") -and (Test-Line $peek "      No, do not play it.") -and @($peek.lines | Where-Object { $_ -like "*Yes, play it.*" }).Count -eq 0) "THE INBOX SAYS IT IS A CORRECTION, and of which record, above his new words"
+$shown = Run "show" @{ Number = "1" }
+Check ((Test-Line $shown "      Yes, play it.") -and (Test-Line $shown "      No, do not play it.") -and @($shown.lines | Where-Object { $_ -like "*A CORRECTION*" }).Count -eq 1) "show prints both - the answer as he first gave it, and the correction marked as one"
+Check ((Test-Trimmed (Run "list") "answered, and off his list: No, do not play it.")) "and the keeper's list shows the corrected words as his answer"
+Check ((Run "answer" @{ Number = "1"; Text = "x"; Corrects = "two" }).failure -like "THREW: -Corrects is the record number of the answer his words correct*" -and (Run "reply" @{ Number = "1"; Text = "x"; Corrects = "2" }).failure -like "THREW: -Corrects does not belong to decisions reply*" -and (Run "answer" @{ Number = "1"; Text = "x"; Corrects = "3" }).failure -like "*it corrects record 3, which is not something said under question 1*") "a correction that is not a record's number, one on the keeper's own reply, and one of a record that is no answer are refused"
+
 } finally {
     $env:HORDE_HOME = $keepHome
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-console-threads-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

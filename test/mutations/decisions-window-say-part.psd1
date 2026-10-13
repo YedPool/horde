@@ -18,5 +18,15 @@
         @{ Name = "say-part-takes-no-part"
            Find = 'id = @{ type = "string"; most = 32 }; part = @{ type = "string"; most = 1 } }'
            Replace = 'id = @{ type = "string"; most = 32 } }' }
+        # --- "Change my answer" (2026-10-13) ---
+        @{ Name = "the-record-corrected-is-not-handed-to-the-operation"
+           Find = '    if (($correctsRecord -is [int] -or $correctsRecord -is [long]) -and [long]$correctsRecord -ge 1) { $request["corrects"] = [long]$correctsRecord }'
+           Replace = '' }
+        @{ Name = "record-zero-is-handed-on-as-corrected"
+           Find = '    if (($correctsRecord -is [int] -or $correctsRecord -is [long]) -and [long]$correctsRecord -ge 1) {'
+           Replace = '    if (($correctsRecord -is [int] -or $correctsRecord -is [long])) {' }
+        @{ Name = "correct-takes-no-record"
+           Find = 'part = @{ type = "string"; most = 1 }; corrects = @{ type = "integer"; most = (Get-HordeDecisionMaxSequence) } }'
+           Replace = 'part = @{ type = "string"; most = 1 } }' }
     )
 }

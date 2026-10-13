@@ -31,19 +31,19 @@
            Replace = 'if ($false) {' }
         # --- in: one part's answer, version 2 (2026-10-12) ---
         @{ Name = "a-version-1-answer-must-name-a-part"
-           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
-           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @("part"); "2" = @("part") }' }
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part", "corrects") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @("part"); "2" = @("part"); "3" = @("part", "corrects") }' }
         @{ Name = "a-version-2-answer-is-not-read"
-           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
-           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @() }' }
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part", "corrects") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "3" = @("part", "corrects") }' }
         @{ Name = "a-version-2-answer-need-name-no-part"
-           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
-           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @() }' }
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part", "corrects") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @(); "3" = @("part", "corrects") }' }
         @{ Name = "the-part-is-not-handed-to-the-list"
            Find = '    if ($r.value.part -cne "") { $request["part"] = $r.value.part }'
            Replace = '' }
         @{ Name = "a-part-of-any-spelling-is-handed-on"
-           Find = "        if (`$a.part -isnot [string] -or `$a.part -cnotmatch '\A[a-z]\z') {"
+           Find = "        if (-not `$whole -and (`$a.part -isnot [string] -or `$a.part -cnotmatch '\A[a-z]\z')) {"
            Replace = "        if (`$false) {" }
         @{ Name = "the-turn-does-not-say-which-part"
            Find = '$(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" })'
@@ -53,8 +53,30 @@
            Find = "+ ',`"answers`":' + `$script:HordeDecisionsChannelAnswerHighest + '}'"
            Replace = "+ '}'" }
         @{ Name = "the-snapshot-claims-a-version-this-machine-does-not-read"
-           Find = '$script:HordeDecisionsChannelAnswerHighest = 2'
-           Replace = '$script:HordeDecisionsChannelAnswerHighest = 3' }
+           Find = '$script:HordeDecisionsChannelAnswerHighest = 3'
+           Replace = '$script:HordeDecisionsChannelAnswerHighest = 4' }
+        # --- in: a correction, version 3 ("Change my answer", 2026-10-13) ---
+        @{ Name = "a-correction-is-not-read"
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part", "corrects") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }' }
+        @{ Name = "a-correction-need-name-no-record"
+           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part", "corrects") }'
+           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part") }' }
+        @{ Name = "the-record-corrected-is-not-handed-to-the-list"
+           Find = '    if ($r.value.corrects -gt 0) { $request["corrects"] = $r.value.corrects }'
+           Replace = '' }
+        @{ Name = "a-corrects-of-any-kind-is-cast"
+           Find = '        if (-not (Test-HordeDecisionCount -Value $a.corrects -Most (Get-HordeDecisionMaxSequence))) { $fail.reason = "the answer''s corrects is not a record''s number"; return $fail }'
+           Replace = '' }
+        @{ Name = "a-version-2-answer-may-have-an-empty-part"
+           Find = '        $whole = ($version -ge 3 -and $a.part -is [string] -and $a.part -ceq "")'
+           Replace = '        $whole = ($a.part -is [string] -and $a.part -ceq "")' }
+        @{ Name = "a-correction-of-a-whole-answer-is-refused"
+           Find = '        $whole = ($version -ge 3 -and $a.part -is [string] -and $a.part -ceq "")'
+           Replace = '        $whole = $false' }
+        @{ Name = "the-turn-does-not-say-it-is-a-correction"
+           Find = '$(if ($r.value.corrects -gt 0) { "correction of record " + $r.value.corrects } else { "answer" })'
+           Replace = '"answer"' }
         # --- out: the snapshot ---
         @{ Name = "secret-sent-to-the-phone"
            Find = '        if (@(Find-HordeDecisionSecrets -Value $q).Count -gt 0) {'

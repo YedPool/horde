@@ -74,7 +74,7 @@ $big = Say 2 ("a" * ($most + 1))
 Check ($big.ok -eq $false -and $big.reason -clike ("*'text' is " + ($most + 1) + " characters long; the most is " + $most + "*never cut*") -and @(Get-Thread 2).Count -eq 0) "words one character longer than a text may be are refused with the rule's sentence, and nothing is stored"
 $bridge = New-HordeDecisionWindowBridge
 Check ([long]$bridge.requests["say"].args["text"].most -eq $most -and (@($bridge.requests["say"].args.Keys | Sort-Object) -join ",") -ceq "id,number,text,wording") "the bridge's own bound on the words is that same number, read from the rules and written nowhere else; say takes number, text, wording and id"
-Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,say-part,act,hand-back") "say is the seventh request of the closed list, and with say-part (one part's answer) and act (his park or unpark), each the same operation, the only ones that write"
+Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,say-part,correct,act,hand-back") "say is the seventh request of the closed list, and with say-part (one part's answer), correct (a change to an answer) and act (his park or unpark), each the same operation, the only ones that write"
 
 
 Write-Host ""
@@ -184,6 +184,25 @@ $noPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "to a
 Check (-not $script:sentPart.Contains("part") -and @($script:sentPart.Keys).Count -eq 7) "an empty part is no part: the operation is asked for an answer to the whole question, as say asks"
 $withPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "x"; wording = 1; id = (New-Id); part = "a" } -Invoke { param($Request) $script:sentPart = $Request; return (New-HordeUnknown -Reason "not asked") }
 Check ($script:sentPart["part"] -ceq "a" -and @($script:sentPart.Keys).Count -eq 8 -and $script:sentPart.route -ceq "window" -and $script:sentPart.speaker -ceq "founder") "with a part, the operation is asked for the same and the part: nothing else is added"
+
+Write-Host ""
+Write-Host "--- change my answer: say, with the record of the answer corrected ---" -ForegroundColor Cyan
+Check ((@($bridge.requests["correct"].args.Keys | Sort-Object) -join ",") -ceq "corrects,id,number,part,text,wording" -and "$($bridge.requests['correct'].args['corrects'].type)" -ceq "integer" -and [long]$bridge.requests["correct"].args["corrects"].most -eq (Get-HordeDecisionMaxSequence) -and [long]$bridge.requests["correct"].args["part"].most -eq 1 -and [object]::ReferenceEquals($bridge.requests["say"].run, $bridge.requests["correct"].run)) "correct takes what say-part takes and the record corrected - a whole number no larger than a record can have - and is handled by the very block that handles say"
+$firstOf3 = Say 3 "Yes."
+$fix3 = Invoke-HordeDecisionWindowSay -Arguments @{ number = 3; text = "No, wait."; wording = 1; id = (New-Id); part = ""; corrects = [long]$firstOf3.sequence }
+$t3 = @(Get-Thread 3)
+Check ($firstOf3.ok -and $fix3.ok -eq $true -and $t3.Count -eq 2 -and $t3[1].corrects -eq [long]$firstOf3.sequence -and $t3[1].text -ceq "No, wait." -and $t3[0].text -ceq "Yes." -and $t3[1].part -eq "") ("THE CORRECTION IS HANDED ON: a second record that names the first, which still holds his first words; an empty part is no part (" + $fix3.ok + ")")
+$partFix = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "Tell Orc D first."; wording = 1; id = (New-Id); part = "b"; corrects = [long]$partSaid.sequence }
+$ptf = @(Get-Thread $pn)
+Check ($partFix.ok -eq $true -and $ptf[-1].part -ceq "b" -and $ptf[-1].corrects -eq [long]$partSaid.sequence) "a correction of one part's answer carries the part and the record"
+$badFix = Invoke-HordeDecisionWindowSay -Arguments @{ number = 3; text = "x"; wording = 1; id = (New-Id); part = ""; corrects = 1 }
+Check ($badFix.ok -eq $false -and $badFix.reason -clike "Not saved:*it corrects record 1, which is not something said under question 3*" -and @(Get-Thread 3).Count -eq 2) ("a correction of a record that is no answer of his is refused in the rule's sentence (" + $badFix.reason + ")")
+foreach ($notOne in @(0, -3, "2", 1.5)) {
+    $null = Invoke-HordeDecisionWindowSay -Arguments @{ number = 3; text = "x"; wording = 1; id = (New-Id); part = ""; corrects = $notOne } -Invoke { param($Request) $script:sentFix = $Request; return (New-HordeUnknown -Reason "not asked") }
+    Check (-not $script:sentFix.Contains("corrects") -and @($script:sentFix.Keys).Count -eq 7) ("a corrects of '" + $notOne + "' is no record's number: it is not handed on, and the words are asked for as an answer")
+}
+$null = Invoke-HordeDecisionWindowSay -Arguments @{ number = 3; text = "x"; wording = 1; id = (New-Id); part = ""; corrects = 12 } -Invoke { param($Request) $script:sentFix = $Request; return (New-HordeUnknown -Reason "not asked") }
+Check ($script:sentFix["corrects"] -eq 12 -and $script:sentFix["corrects"] -is [long] -and @($script:sentFix.Keys).Count -eq 8) "a record's number is handed on as it is, and nothing else is added"
 
 } finally {
     $env:HORDE_HOME = $keepHome; $env:WEZFLEET_ROOT = $keepFleet

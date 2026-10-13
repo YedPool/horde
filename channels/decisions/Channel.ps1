@@ -49,6 +49,9 @@
 #     version 2, is refused. THE SNAPSHOT SAYS WHICH VERSIONS THIS MACHINE READS ("answers":2, the
 #     highest), so that a phone sends a part as version 2 only to a machine that takes it, and to an
 #     earlier machine - whose snapshot says nothing - as the words "(b) ..." in version 1.
+#   - A CORRECTION OF AN ANSWER ALREADY GIVEN IS VERSION 3: version 2's members ("part" may be "", for an
+#     answer to the whole question) and "corrects", the record number of the answer corrected. It goes
+#     into the list as a NEW record naming that one; the record corrected is never edited.
 #   - AN ANSWER IS FOR ONE MACHINE (review of 48bc492, finding 2): question 1 of one machine is not
 #     question 1 of another, and one envelope may be sealed to several. machine is the key id of the
 #     machine whose snapshot the founder answered, and snapshot the replay key of that snapshot's
@@ -88,8 +91,10 @@ $script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snap
 # THE ANSWER'S VERSIONS, each with the one member it adds to those above (header, IN). The highest is
 # what a snapshot tells the phone this machine reads. Keyed by the version AS TEXT: an ordered table
 # asked for a whole number answers by position, not by key.
-$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }
-$script:HordeDecisionsChannelAnswerHighest = 2
+# Version 3 is a CORRECTION of an answer already given ("Change my answer"): the part it answered - ""
+# for an answer to the whole question - and "corrects", the record number of the answer corrected.
+$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part"); "3" = @("part", "corrects") }
+$script:HordeDecisionsChannelAnswerHighest = 3
 $script:HordeDecisionsChannelIdDomain = "horde-relay/decisions/v1 answer id"
 # For a test only: the seat and the clock the bell's turn is handed (decisions/Notify.ps1). $null, as it
 # is everywhere but in a suite, means the real warchief's seat and the real time.
@@ -135,11 +140,18 @@ function Read-HordeDecisionsChannelAnswer {
     if (-not (Test-HordeDecisionCount -Value $a.wordingVersion -Most (Get-HordeDecisionMaxNumber))) { $fail.reason = "the answer's wordingVersion is not a wording"; return $fail }
     if ($a.text -isnot [string]) { $fail.reason = "the answer's text is not text"; return $fail }
     $part = ""
+    $corrects = [long]0
     if ($version -ge 2) {
-        if ($a.part -isnot [string] -or $a.part -cnotmatch '\A[a-z]\z') { $fail.reason = "the answer's part is not one lower-case letter"; return $fail }
+        # A correction (version 3) may be of an answer to the whole question: its part is then "".
+        $whole = ($version -ge 3 -and $a.part -is [string] -and $a.part -ceq "")
+        if (-not $whole -and ($a.part -isnot [string] -or $a.part -cnotmatch '\A[a-z]\z')) { $fail.reason = "the answer's part is not one lower-case letter"; return $fail }
         $part = [string]$a.part
     }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ answerId = $a.answerId; machine = $a.machine; snapshot = $a.snapshot; number = [int]$a.number; wordingVersion = [int]$a.wordingVersion; text = [string]$a.text; part = $part } }
+    if ($version -ge 3) {
+        if (-not (Test-HordeDecisionCount -Value $a.corrects -Most (Get-HordeDecisionMaxSequence))) { $fail.reason = "the answer's corrects is not a record's number"; return $fail }
+        $corrects = [long]$a.corrects
+    }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ answerId = $a.answerId; machine = $a.machine; snapshot = $a.snapshot; number = [int]$a.number; wordingVersion = [int]$a.wordingVersion; text = [string]$a.text; part = $part; corrects = $corrects } }
 }
 
 function Invoke-HordeDecisionsChannelAccept {
@@ -164,11 +176,14 @@ function Invoke-HordeDecisionsChannelAccept {
     # THE PART ANSWERED goes on as the request's own member: the list keeps it as the record of that
     # part, signed and proven like any phone answer (the evidence and signedBy above are every answer's).
     if ($r.value.part -cne "") { $request["part"] = $r.value.part }
+    # A CORRECTION names the record of the answer it corrects: the list keeps it as a new record, and
+    # says whether that record is an answer of his under this question.
+    if ($r.value.corrects -gt 0) { $request["corrects"] = $r.value.corrects }
     $a = Invoke-HordeDecision -Operation "say" -Request $request -Root $Context.decisionsRoot
     if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take it now: " + $a.reason) } }
     if ($a.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + $a.reason) } }
     if ($a.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + (@($a.value.findings) -join "; ")) } }
-    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $r.value.number + $(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" }) + ": the founder's answer is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
+    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $r.value.number + $(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" }) + ": the founder's " + $(if ($r.value.corrects -gt 0) { "correction of record " + $r.value.corrects } else { "answer" }) + " is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
 }
 
 function Get-HordeDecisionsChannelFingerprint {

@@ -482,7 +482,7 @@ async function pairedApp(transport, m, opts = {}) {
   const fallback = await lastAnswer(t0, old);
   check(fallback.body.v === 1 && !("part" in fallback.body) && fallback.body.text === "(b) No, keep it." && Object.keys(fallback.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "TO A MACHINE THAT DOES NOT SAY IT READS PARTS the same answer is version 1, the part's letter before the words: an answer it keeps, and its window reads into that part", JSON.stringify(fallback.body));
   // What a snapshot says of answers, read with care.
-  for (const [said, want] of [[2, 2], [5, 5], [1, 1], [undefined, 1], [0, 1], [-2, 1], [1.5, 1], ["2", 1], [null, 1], [true, 1]]) {
+  for (const [said, want] of [[2, 2], [3, 3], [5, 5], [1, 1], [undefined, 1], [0, 1], [-2, 1], [1.5, 1], ["2", 1], [null, 1], [true, 1]]) {
     const tx = R.memoryTransport();
     const mx = await newMachine("work");
     const ax = await pairedApp(tx, mx);
@@ -521,6 +521,44 @@ async function pairedApp(transport, m, opts = {}) {
   const oddPart = await bridge.request("say", { number: 7, text: "x", wording: 1, id: P.hex(P.randomBytes(16)), part: 7 });
   const oddVia = await lastAnswer(t2, m2);
   check(oddPart.ok === true && oddVia.body.v === 1 && oddVia.body.text === "x", "a part that is not text is no part: the words go as an answer to the whole question, never as a part the page did not name");
+}
+
+// --- 6c. "Change my answer": a correction names the record of the answer it corrects ---
+{
+  const lastAnswer = async (t, m) => { const items = (await t.get(m.mailbox, 0, 256)).value.items; return machineOpens(m, items[items.length - 1].text); };
+  const answered = (number) => question(number, "Answered already?", { thread: { count: 1, turn: "warchief", messages: [{ sequence: 12, speaker: "founder", text: "Yes." }] } });
+  for (const [said, version] of [[3, 3], [4, 3], [2, 1], [undefined, 1]]) {
+    const t = R.memoryTransport();
+    const m = await newMachine("work");
+    const a = await pairedApp(t, m);
+    await sendSnapshot(t, m, [a.phoneKey], [answered(4)], said === undefined ? {} : { answers: said });
+    await a.phone.refresh(a.paired.id);
+    await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "No, wait.", answerId: P.hex(P.randomBytes(16)), corrects: 12 });
+    const got = await lastAnswer(t, m);
+    if (version === 3) check(got.body.v === 3 && got.body.corrects === 12 && got.body.part === "" && got.body.text === "No, wait." && Object.keys(got.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text,part,corrects", "to a machine whose snapshot says answers " + said + ", A CORRECTION is a version 3 answer naming the record corrected, with exactly the members the channel reads, in order", JSON.stringify(got.body));
+    else check(got.body.v === 1 && !("corrects" in got.body) && got.body.text === "No, wait.", "to a machine whose snapshot says answers " + JSON.stringify(said) + ", the same words go as a new answer of the version it reads: the change is kept, as his latest answer", JSON.stringify(got.body));
+  }
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  await sendSnapshot(t, m, [a.phoneKey], [answered(4)], { answers: 3 });
+  await a.phone.refresh(a.paired.id);
+  for (const bad of [0, -1, 1.5, "12", null]) {
+    await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "x", answerId: P.hex(P.randomBytes(16)), corrects: bad === null ? undefined : bad });
+    const got = await lastAnswer(t, m);
+    check(got.body.v === 1 && !("corrects" in got.body), "a corrects of " + JSON.stringify(bad) + " is no record's number: the words go as an answer, never as a correction of a record nobody named", JSON.stringify(got.body));
+  }
+  const base = { answerId: P.hex(P.randomBytes(16)), machine: m.keyId, snapshot: m.keyId + "/decisions/1/" + "0".repeat(24), number: 4, wordingVersion: 1, text: "x" };
+  check(JSON.parse(P.fromUtf8(P.answerBody({ ...base, part: "b", corrects: 7 }))).v === 3 && JSON.parse(P.fromUtf8(P.answerBody({ ...base, part: "b", corrects: 7 }))).part === "b" && JSON.parse(P.fromUtf8(P.answerBody({ ...base, corrects: 0 }))).v === 1, "the protocol's body is version 3 with a record corrected - a part's, too - and not otherwise");
+  for (const bad of [-2, 1.5, "7"]) check((await throwsAsync(async () => P.answerBody({ ...base, corrects: bad }))).indexOf("corrects is a record's number") >= 0, "the protocol makes no body for a corrects of " + JSON.stringify(bad));
+  const bridge = createBridge(a.phone, { loadKinds: async () => ({}) });
+  await bridge.request("pick", { id: a.paired.id });
+  const fixed = await bridge.request("say", { number: 4, text: "No.", wording: 1, id: P.hex(P.randomBytes(16)), part: "", corrects: 12 });
+  const via = await lastAnswer(t, m);
+  check(fixed.ok === true && via.body.v === 3 && via.body.corrects === 12 && via.body.part === "", "THE BRIDGE'S say hands the record corrected on", JSON.stringify(via.body));
+  const odd = await bridge.request("say", { number: 4, text: "No.", wording: 1, id: P.hex(P.randomBytes(16)), corrects: "12" });
+  const oddVia = await lastAnswer(t, m);
+  check(odd.ok === true && oddVia.body.v === 1, "and a corrects that is not a whole number is no correction");
 }
 
 // --- 10. the bridge ---

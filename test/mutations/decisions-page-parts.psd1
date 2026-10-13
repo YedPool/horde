@@ -40,8 +40,8 @@
            Find = '          line.parts.forEach(function (p, i) { if (savePart(line, i)) { any = true; } });'
            Replace = '          line.parts.forEach(function (p, i) { if (i === 0 && savePart(line, i)) { any = true; } });' }
         @{ Name = "with-the-keeper-only-his-last-part-is-shown"
-           Find = '      if (mine && textOf(mine.part)) { mine = {'
-           Replace = '      if (false) { mine = {' }
+           Find = '    function piecesText(q, pieces) { return pieces.map('
+           Replace = '    function piecesText(q, pieces) { return pieces.slice(-1).map(' }
         @{ Name = "a-folded-part-cannot-be-brought-back"
            Find = '      rows.forEach(function (r, i) { r.done.addEventListener("click", function (e) { e.stopPropagation(); unfold(drawn, i); }); });'
            Replace = ''

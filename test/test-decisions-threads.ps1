@@ -517,6 +517,32 @@ Check ((Get-Outcome $fromChat) -ceq "done" -and $fromChat.value.message.part -ce
 $joined = Invoke-Op $chat "say" @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "(a) x`n(b) y`n(c) z"; wordingVersion = 1 }
 Check ((Get-Outcome $joined) -ceq "done" -and $joined.value.message.part -eq "" -and $joined.value.question.thread.turn -ceq "warchief") "an answer that names no part - what an earlier window or phone sends for all the parts at once - passes the turn as it always did"
 
+Write-Host ""
+Write-Host "--- change my answer: a correction is a new record that names the answer it corrects ---" -ForegroundColor Cyan
+$s = New-TestStore
+$null = Add-Q $s
+$first = Say $s 1 "Yes, play it." -Route "window" -Actor "founder" -Wording 1
+$null = Reply $s 1 "Done as you said." -Note
+function Correct { param([string]$Store, [long]$Corrects, [string]$Text, [string]$Id = "", [hashtable]$More = @{}) if ($Id -eq "") { $Id = New-Id }; $r = @{ id = $Id; actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = $Text; wordingVersion = 1; corrects = $Corrects }; foreach ($k in $More.Keys) { $r[$k] = $More[$k] }; return (Invoke-Op $Store "say" $r) }
+$idC = New-Id
+$fixed = Correct $s 2 "No - do not play it." -Id $idC
+Check ((Get-Outcome $fixed) -ceq "done" -and $fixed.value.sequence -eq 4 -and $fixed.value.message.corrects -eq 2 -and $fixed.value.message.replaces -eq $true -and (Read-Record $s 4).data.corrects -eq 2 -and (Read-Record $s 4).data.text -ceq "No - do not play it.") ("A CORRECTION IS A NEW RECORD, record 4, naming record 2 (" + (Get-Outcome $fixed) + ")")
+Check ((Read-Record $s 2).data.text -ceq "Yes, play it." -and $null -eq (Read-Record $s 2).data.PSObject.Properties["corrects"] -and (Get-Texts (Get-Thread $s 1)) -ceq "Yes, play it. | Done as you said. | No - do not play it.") "THE ANSWER CORRECTED IS NOT EDITED: record 2 holds his first words still, and the thread holds both"
+Check ((Get-Turn $s) -ceq "warchief/3/2" -and $fixed.value.question.thread.turn -ceq "warchief") "it puts nothing back in front of him: the turn is still the keeper's"
+$box = Inbox $s
+Check (@($box.value.messages | Where-Object { $_.message.corrects -eq 2 -and $_.message.text -ceq "No - do not play it." }).Count -eq 1) "THE KEEPER'S INBOX hands the correction over as a correction, naming the record corrected"
+$again = Correct $s 2 "No - do not play it." -Id $idC
+Check ((Get-Outcome $again) -ceq "replayed" -and $again.value.sequence -eq 4 -and (Get-Count $s) -eq 4) "the same correction sent again under its id is that one record"
+$elsewhere = Invoke-Op $s "say" @{ id = $idC; actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "No - do not play it."; wordingVersion = 1 }
+Check ((Test-Refused $elsewhere "was already used for a different request") -and (Get-Count $s) -eq 4) "the same words under that id WITHOUT naming the answer are a different request: what is corrected is part of what was asked"
+$twice = Correct $s 4 "After all: yes, play it."
+Check ((Get-Outcome $twice) -ceq "done" -and $twice.value.message.corrects -eq 4) "a correction can itself be corrected: it is an answer of his like any other"
+$count = Get-Count $s
+Check ((Test-Refused (Correct $s 3 "x") "it corrects record 3, which is not an answer of the speaker's own under question 1") -and (Test-Refused (Correct $s 99 "x") "it corrects record 99, which is not something said under question 1") -and (Test-Refused (Correct $s 1 "x") "which is not something said under question 1") -and (Get-Count $s) -eq $count) "a correction of the keeper's words, of a record that is not there, or of the question's own record is refused, and nothing is written"
+Check ((Test-Refused (Invoke-Op $s "say" @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "x"; corrects = 2; asks = $false }) "only the founder corrects an answer") -and (Test-Refused (Correct $s 0 "x") "request.corrects") -and (Test-Refused (Correct $s 1e30 "x") "'corrects' is the record number of the answer corrected") -and (Test-Refused (Correct $s 2 "x" -More @{ act = "park" }) "an act corrects no answer") -and (Get-Count $s) -eq $count) "the keeper corrects nothing; record 0, a number no record can have, and a correction with an act are refused"
+$fromChat = Invoke-Op $s "say" @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "founder"; route = "chat-recorded"; text = "He said in chat: no after all."; corrects = 5 }
+Check ((Get-Outcome $fromChat) -ceq "done" -and $fromChat.value.message.corrects -eq 5 -and $fromChat.value.message.routeShown -ceq "recorded by the warchief from chat") "a correction he gave in chat may be recorded by the keeper as one"
+
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-threads-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }
 }

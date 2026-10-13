@@ -124,6 +124,12 @@
 .hd-part.answered .hd-partfield { display: none; }
 .hd-partmark { flex: 0 0 auto; color: var(--muted); font-size: var(--small-px); white-space: nowrap; }
 .hd-part.answered .hd-partmark { color: var(--ok, #1a7f37); font-weight: 600; }
+/* "CHANGE MY ANSWER" (list.js): under an answer that is with the keeper, the three words as a plain
+   pressable line; pressed, his answer in a field again with "Save the change" and "Cancel" under it. */
+.hd-change, .hd-change-save, .hd-change-cancel { font: inherit; font-size: var(--small-px); color: var(--muted); background: none; border: 0; padding: 0; margin: 0 12px 0 0; cursor: pointer; text-decoration: underline; }
+.hd-change-save { color: var(--ink); font-weight: 600; }
+.hd-changebox { display: flex; flex-direction: column; row-gap: 2px; }
+.hd-changekeys { display: flex; }
 .hd-partdone { margin-left: 20px; color: var(--ok, #1a7f37); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; unicode-bidi: plaintext; }
 @media (max-width: 520px) {
   .hd-count { display: none; }

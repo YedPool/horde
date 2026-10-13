@@ -50,8 +50,18 @@
            Find = '      const takesParts = Number(v.answers) >= 2;'
            Replace = '      const takesParts = false;' }
         @{ Name = "the-parts-letter-is-not-sent"
-           Find = 'text: words, part: takesParts ? part : "" });'
-           Replace = 'text: words, part: "" });' }
+           Find = 'text: words, part: takesParts ? part : "", corrects:'
+           Replace = 'text: words, part: "", corrects:' }
+        # --- "Change my answer" (2026-10-13) ---
+        @{ Name = "a-correction-sent-to-a-machine-that-does-not-read-it"
+           Find = '      const takesCorrections = Number(v.answers) >= 3;'
+           Replace = '      const takesCorrections = true;' }
+        @{ Name = "a-correction-never-sent-as-one"
+           Find = '      const takesCorrections = Number(v.answers) >= 3;'
+           Replace = '      const takesCorrections = false;' }
+        @{ Name = "a-corrects-that-is-no-record-is-sent"
+           Find = 'corrects: (takesCorrections && Number.isSafeInteger(corrects) && corrects >= 1) ? corrects : 0 });'
+           Replace = 'corrects: takesCorrections ? corrects : 0 });' }
         @{ Name = "a-part-that-is-not-a-letter-reaches-the-passkey"
            Find = '      if (part !== "" && !/^[a-z]$/.test(part)) throw fail("the part answered is not one of the question''s parts: the answer was not sent.");'
            Replace = '' }

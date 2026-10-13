@@ -458,7 +458,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // A machine whose snapshot says it reads version 2 answers is sent the part as a member of the
     // answer; an earlier machine is sent the words with the letter before them, "(b) ...", as an
     // answer of the version it reads - which it keeps, and its window reads back into that part.
-    async answer(id, { number, wordingVersion, text, answerId, part = "" }) {
+    // corrects: the record number of an answer of his these words CHANGE ("Change my answer"), or 0. A
+    // machine that says it reads version 3 answers is sent it as a correction; an earlier one is sent
+    // the words as a new answer, which it keeps as his latest.
+    async answer(id, { number, wordingVersion, text, answerId, part = "", corrects = 0 }) {
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
@@ -474,7 +477,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const takesParts = Number(v.answers) >= 2;
       // To a machine that does not read a part's answer, the part's letter goes before the words.
       const words = (part !== "" && !takesParts) ? "(" + part + ") " + text : text;
-      const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "" });
+      const takesCorrections = Number(v.answers) >= 3;
+      const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "", corrects: (takesCorrections && Number.isSafeInteger(corrects) && corrects >= 1) ? corrects : 0 });
       const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Press Enter to try again; the same words are never saved twice."); }

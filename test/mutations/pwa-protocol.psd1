@@ -223,5 +223,15 @@
         @{ Name = "every-machine-is-taken-to-read-parts"
            Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };'
            Replace = '      answers: 2 };' }
+        # --- "Change my answer" (2026-10-13) ---
+        @{ Name = "a-correction-says-it-is-version-2"
+           Find = '  if (corrects !== 0) return utf8(JSON.stringify({ v: 3, answerId, machine, snapshot, number, wordingVersion, text, part, corrects }));'
+           Replace = '  if (corrects !== 0) return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part, corrects }));' }
+        @{ Name = "a-correction-leaves-the-record-out"
+           Find = '  if (corrects !== 0) return utf8(JSON.stringify({ v: 3, answerId, machine, snapshot, number, wordingVersion, text, part, corrects }));'
+           Replace = '  if (corrects !== 0) return utf8(JSON.stringify({ v: 3, answerId, machine, snapshot, number, wordingVersion, text, part }));' }
+        @{ Name = "a-corrects-of-any-kind-is-written-into-the-body"
+           Find = "  if (corrects !== 0 && (!Number.isSafeInteger(corrects) || corrects < 1)) throw new Error(`"corrects is a record's number`");"
+           Replace = '' }
     )
 }

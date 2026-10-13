@@ -119,10 +119,12 @@ function New-HordeTestPhoneAnswerBody {
     # machine whose snapshot the founder answered, -Snapshot the replay key of that snapshot's envelope.
     # -Part: the answer is to that one part of the question, and the body is version 2.
     param([string]$AnswerId = "", [int]$Number = 1, [int]$Wording = 1, [string]$Text = "Yes, play it.",
-        [string]$Machine = ("0" * 32), [string]$Snapshot = (("0" * 32) + "/decisions/1/" + ("0" * 24)), [string]$Part = "")
+        [string]$Machine = ("0" * 32), [string]$Snapshot = (("0" * 32) + "/decisions/1/" + ("0" * 24)), [string]$Part = "", [long]$Corrects = 0)
     if ($AnswerId -ceq "") { $AnswerId = [guid]::NewGuid().ToString("N") }
     $members = [ordered]@{ v = 1; answerId = $AnswerId; machine = $Machine; snapshot = $Snapshot; number = $Number; wordingVersion = $Wording; text = $Text }
     if ($Part -cne "") { $members["v"] = 2; $members["part"] = $Part }
+    # -Corrects: the answer is a correction of that record, and the body is version 3 (its part may be "").
+    if ($Corrects -gt 0) { $members["v"] = 3; $members["part"] = $Part; $members["corrects"] = $Corrects }
     $t = ConvertTo-Json -InputObject $members -Compress
     return ,($script:HordeTestPhoneUtf8.GetBytes($t))
 }

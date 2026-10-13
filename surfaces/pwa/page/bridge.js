@@ -19,7 +19,8 @@
 //                         a locked or empty horde answers unknown with the reason
 //   say {number, text, wording, id, part}   the answer, signed and sent: { ok, sequence } or { ok: false,
 //                         reason }; part, when given, is the letter of the one part of the question the
-//                         words answer (the document sends each part by itself: list.js, sayPart)
+//                         words answer (the document sends each part by itself: list.js, sayPart);
+//                         corrects, when given, is the record of an answer of his the words change
 //   act {number, act, wording, id}    park or unpark: KEPT ON THIS PHONE ONLY for the session (the
 //                         decisions channel takes answers, not acts: an open question in the PR)
 //   hordes                every horde on this phone, as phone-core's summaries
@@ -130,7 +131,7 @@ export function createBridge(phone, options = {}) {
     list: async () => listRecord(),
     say: async (a) => {
       try {
-        await phone.answer(picked, { number: Number(a.number), wordingVersion: Number(a.wording), text: String(a.text), answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });
+        await phone.answer(picked, { number: Number(a.number), wordingVersion: Number(a.wording), text: String(a.text), answerId: String(a.id), part: typeof a.part === "string" ? a.part : "", corrects: (Number.isSafeInteger(a.corrects) && a.corrects >= 1) ? a.corrects : 0 });
         return { ok: true, sequence: highestSequence() + 1 };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },

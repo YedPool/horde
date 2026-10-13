@@ -70,7 +70,7 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 /* What is pressed with a finger is at least 44 pixels tall: the order's words, the word a question
    folds to once answered, a folded part, and the line that unfolds the question a follow-up follows. */
 .hd-order { line-height: 44px; }
-.hd-order-btn, .hd-answered, .hd-follow-btn { min-height: 44px; }
+.hd-order-btn, .hd-answered, .hd-follow-btn, .hd-change, .hd-change-save, .hd-change-cancel { min-height: 44px; }
 .hd-partdone { line-height: 44px; }
 
 #keys { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 6; display: flex; gap: 6px; padding: 4px 6px; padding-bottom: calc(4px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }

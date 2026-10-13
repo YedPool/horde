@@ -281,6 +281,10 @@ function Get-HordeDecisionSayContent {
     # THE PART ANSWERED (decisions/Rules.ps1, A QUESTION OF PARTS), recorded only when the request names
     # one. It is part of what makes a request the same: the same words to another part are another answer.
     if ((Test-HordeDecisionMember -Object $Request -Name "part") -and $Request.part -is [string]) { $body["part"] = [string]$Request.part }
+    # THE ANSWER CORRECTED (decisions/Rules.ps1, A CORRECTION), recorded only when the request names one,
+    # and part of what makes a request the same. A number no record can have is the rules' finding,
+    # above, and is never cast.
+    if ((Test-HordeDecisionMember -Object $Request -Name "corrects") -and (Test-HordeDecisionCount -Value $Request.corrects -Most (Get-HordeDecisionMaxSequence))) { $body["corrects"] = [long]$Request.corrects }
     # THE EVIDENCE IS KEPT AND NOT HASHED (the route phone, decisions/Rules.ps1). It is the proof of one
     # DELIVERY - the hash of the relay journal record of the envelope that carried the words - and the
     # same answer can arrive in two envelopes: a phone that heard nothing back sends it again. Hashed,

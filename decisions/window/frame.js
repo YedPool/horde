@@ -51,6 +51,8 @@
     // One part's answer: the request say-part, which is say with the part's letter beside the words
     // (decisions/Window.ps1); it is answered as say is, by the event said.
     sayPart: function (number, letter, text, wording, id) { return asked("say-part", { number: number, text: text, wording: wording, id: id, part: letter }); },
+    // "Change my answer": the request correct - say, with the part and the record of the answer corrected.
+    correct: function (number, text, wording, id, corrects, letter) { return asked("correct", { number: number, text: text, wording: wording, id: id, part: letter || "", corrects: corrects }); },
     act: function (number, what, wording, id) { return asked("act", { number: number, act: what, wording: wording, id: id }); }
   });
 

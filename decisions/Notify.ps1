@@ -233,9 +233,13 @@ function Format-HordeDecisionNotifyCount {
     $n = @($Items | ForEach-Object { [int]$_.question } | Sort-Object -Unique | ForEach-Object {
         $number = $_
         $letters = @($Items | Where-Object { [int]$_.question -eq $number -and $null -ne $_.PSObject.Properties["part"] -and "$($_.part)" -cmatch '\A[a-z]\z' } | ForEach-Object { "$($_.part)" } | Sort-Object -Unique)
-        if ($letters.Count -eq 0) { "" + $number }
-        elseif ($letters.Count -eq 1) { "" + $number + " (part " + $letters[0] + ")" }
-        else { "" + $number + " (parts " + (($letters[0..($letters.Count - 2)]) -join ", ") + " and " + $letters[$letters.Count - 1] + ")" }
+        # A CORRECTION SAYS SO: he changed an answer he gave before, and the keeper may have acted on it.
+        $changed = (@($Items | Where-Object { [int]$_.question -eq $number -and $null -ne $_.PSObject.Properties["corrects"] -and $_.corrects -eq $true }).Count -gt 0)
+        $about = ""
+        if ($letters.Count -eq 1) { $about = "part " + $letters[0] }
+        elseif ($letters.Count -gt 1) { $about = "parts " + (($letters[0..($letters.Count - 2)]) -join ", ") + " and " + $letters[$letters.Count - 1] }
+        if ($changed) { $about = $(if ($about -eq "") { "a correction" } else { $about + ", a correction" }) }
+        if ($about -eq "") { "" + $number } else { "" + $number + " (" + $about + ")" }
     })
     $numbers = "question " + $n[0]
     if ($n.Count -gt 1) { $numbers = "questions " + (($n[0..($n.Count - 2)]) -join ", ") + " and " + $n[$n.Count - 1] }
@@ -274,7 +278,7 @@ function Get-HordeDecisionNotifyUnread {
     $items = @($Answer.value.messages | Where-Object { $null -ne $_ -and "$($_.message.speaker)" -ceq $script:HordeDecisionNotifySpeaker } | ForEach-Object {
         $held = @{}
         foreach ($name in @("route", "evidence", "signedBy", "part")) { $p = $_.message.PSObject.Properties[$name]; $held[$name] = $(if ($null -ne $p -and $p.Value -is [string]) { $p.Value } else { "" }) }
-        [pscustomobject]@{ question = [int]$_.number; message = "" + [long]$_.message.sequence; at = "$($_.message.at)"; route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]; part = $held["part"] }
+        [pscustomobject]@{ question = [int]$_.number; message = "" + [long]$_.message.sequence; at = "$($_.message.at)"; route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]; part = $held["part"]; corrects = [bool]($null -ne $_.message.PSObject.Properties["corrects"] -and ($_.message.corrects -is [int] -or $_.message.corrects -is [long]) -and [long]$_.message.corrects -gt 0) }
     })
     return [pscustomobject]@{ ok = $true; reason = ""; items = $items }
 }

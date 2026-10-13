@@ -78,7 +78,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # THE CONVERSATION UNDER A QUESTION. answer: the session that keeps the list writes down what the
     # founder said in chat, in his words - stored as recorded from chat, never as typed by him.
     # reply: that session speaks. inbox: what the founder has said that it has not read.
-    answer = @{ number = $true;  flags = @("Text", "File", "Part", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Part <letter>] [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
+    answer = @{ number = $true;  flags = @("Text", "File", "Part", "Corrects", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Part <letter>] [-Corrects <record>] [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
     reply  = @{ number = $true;  flags = @("Text", "File", "Note", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Note] [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
     # then: the operation a verb asks for once its lines are out. Every operation is a verb's own, or a verb's "then".
     inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]"; then = "mark-read" }
@@ -215,6 +215,8 @@ function Format-HordeDecisionMessage {
         if ((& $has "partWords") -and "$($Message.partWords)".Trim() -ne "") { $partLine = $partLine + ": " + (Get-HordeDecisionFirstLine -Text "$($Message.partWords)") }
         [void]$lines.Add($Indent + $partLine + ")")
     }
+    # A CORRECTION, said plainly, with the record it replaces: the keeper must not act on the old answer.
+    if ((& $has "corrects") -and [long]$Message.corrects -gt 0) { [void]$lines.Add($Indent + "  (A CORRECTION: he changed his answer. This replaces what he said in record " + $Message.corrects + ")") }
     if ((& $has "act") -and "$($Message.act)" -ne "") { [void]$lines.Add($Indent + "  (" + $(if ("$($Message.act)" -ceq "park") { "he set the question aside: parked" } else { "he brought the question back: unparked" }) + ")") }
     if ($Message.saidToEarlierWording) {
         $now = ""
@@ -649,6 +651,12 @@ function Invoke-HordeDecisionCommand {
             $partLetter = "$($have['Part'])".ToLowerInvariant()
             if ($partLetter -cnotmatch '\A[a-z]\z') { throw ("-Part is the letter of the part answered, as in: -Part b" + $usageNote) }
             $request["part"] = $partLetter
+        }
+        # -Corrects: his words change an answer he gave before, named by its record (decisions/Rules.ps1).
+        if ($have.ContainsKey("Corrects")) {
+            $correctsText = "$($have['Corrects'])"
+            if ($correctsText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-Corrects is the record number of the answer his words correct, as show prints it, as in: -Corrects 12" + $usageNote) }
+            $request["corrects"] = [long]$correctsText
         }
         if ($have.ContainsKey("Wording")) {
             $wording = "$($have['Wording'])"

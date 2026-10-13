@@ -424,13 +424,17 @@ export function phoneKeyBody(agreePublic, vouch) {
 // strict JSON parser that wants exactly these members.
 // AN ANSWER TO ONE PART of a question of parts is version 2: the same members and, last, part - the
 // part's letter. With no part it is version 1, as it always was, which every machine reads.
-export function answerBody({ answerId, machine, snapshot, number, wordingVersion, text, part = "" }) {
+// A CORRECTION of an answer already given is version 3: part ("" for an answer to the whole question)
+// and corrects, the record number of the answer corrected.
+export function answerBody({ answerId, machine, snapshot, number, wordingVersion, text, part = "", corrects = 0 }) {
   if (!/^[0-9a-f]{32}$/.test(answerId)) throw new Error("an answerId is 32 lower-case hex");
   if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
   if (typeof snapshot !== "string" || snapshot.length > 160 || snapshot.indexOf(machine + "/decisions/") !== 0) throw new Error("the snapshot is that machine's envelope's replay key");
   if (!Number.isSafeInteger(number) || number < 1 || !Number.isSafeInteger(wordingVersion) || wordingVersion < 1) throw new Error("number and wordingVersion are whole numbers from 1");
   if (typeof text !== "string") throw new Error("the answer is text");
   if (part !== "" && !/^[a-z]$/.test(part)) throw new Error("a part is one lower-case letter");
+  if (corrects !== 0 && (!Number.isSafeInteger(corrects) || corrects < 1)) throw new Error("corrects is a record's number");
+  if (corrects !== 0) return utf8(JSON.stringify({ v: 3, answerId, machine, snapshot, number, wordingVersion, text, part, corrects }));
   if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part }));
   return utf8(JSON.stringify({ v: 1, answerId, machine, snapshot, number, wordingVersion, text }));
 }

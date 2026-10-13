@@ -87,6 +87,7 @@
         "evidence": {"type": "string", "description": "For words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them; empty for every other message, and for a stored phone record that holds none."},
         "part": {"type": "string", "description": "The letter of the one part of the question these words answer; empty for words said to the whole question."},
         "partWords": {"type": "string", "description": "That part's words as they read when the answer was recorded; empty when no part is named, or the part was no longer in the question."},
+        "corrects": {"type": "integer", "minimum": 0, "description": "The sequence number of the record of the answer these words correct; 0 when they correct none."},
         "signedBy": {"type": "string", "description": "For words answered on the founder's phone: the key id of the passkey the relay channel verified them against, as the record holds it; empty for every other message, and for a record that names none. What the record says, not a verdict: whether that passkey is trusted now is relay's to answer."}
       }
     },

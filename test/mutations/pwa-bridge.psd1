@@ -28,10 +28,17 @@
            Replace = 'const id = newLineId();' }
         # --- one part's answer (2026-10-12) ---
         @{ Name = "the-bridge-drops-the-part"
-           Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });'
-           Replace = 'answerId: String(a.id), part: "" });' }
+           Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "", corrects:'
+           Replace = 'answerId: String(a.id), part: "", corrects:' }
         @{ Name = "the-bridge-hands-on-a-part-that-is-not-text"
-           Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });'
-           Replace = 'answerId: String(a.id), part: a.part === undefined ? "" : String(a.part) });' }
+           Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "", corrects:'
+           Replace = 'answerId: String(a.id), part: a.part === undefined ? "" : String(a.part), corrects:' }
+        # --- "Change my answer" (2026-10-13) ---
+        @{ Name = "the-bridge-drops-the-record-corrected"
+           Find = 'corrects: (Number.isSafeInteger(a.corrects) && a.corrects >= 1) ? a.corrects : 0 });'
+           Replace = 'corrects: 0 });' }
+        @{ Name = "the-bridge-hands-on-a-corrects-that-is-not-a-number"
+           Find = 'corrects: (Number.isSafeInteger(a.corrects) && a.corrects >= 1) ? a.corrects : 0 });'
+           Replace = 'corrects: Number(a.corrects) || 0 });' }
     )
 }

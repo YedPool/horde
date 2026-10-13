@@ -15,9 +15,10 @@
 # None of the four knows another. A later way of showing the list - a file for a phone, a view across
 # a link - is another surface under the same bridge, and nothing here but the choice of surface moves.
 #
-# WHAT THE PAGE MAY ASK is the closed list below, ten requests, and nothing else (surfaces/Port.ps1
+# WHAT THE PAGE MAY ASK is the closed list below, eleven requests, and nothing else (surfaces/Port.ps1
 # checks every message before a handler sees it): setup, kinds, list, fleet, attachment, report, say,
-# say-part, act, hand-back. say-part is say for the answer to ONE PART of a question of parts (the
+# say-part, correct, act, hand-back. correct is say for a CHANGE to an answer already given: the same
+# words, the part, and the record of the answer corrected. say-part is say for the answer to ONE PART of a question of parts (the
 # page sends each part by itself: decisions/page/list.js): the same words and the part's letter. It
 # is a request of its own because a request takes exactly the arguments it declares, and say's are
 # the four it always took.
@@ -333,6 +334,10 @@ function Invoke-HordeDecisionWindowSay {
     # handed on as it came, like the act; the operation's rules say whether the question has it.
     $partLetter = & $get "part"
     if ($partLetter -is [string] -and $partLetter -ne "") { $request["part"] = $partLetter }
+    # The answer his words correct (the request correct: "Change my answer"), by its record number:
+    # handed on as it came; the operation's rules say whether that record is an answer of his.
+    $correctsRecord = & $get "corrects"
+    if (($correctsRecord -is [int] -or $correctsRecord -is [long]) -and [long]$correctsRecord -ge 1) { $request["corrects"] = [long]$correctsRecord }
     $answer = $null
     try { $answer = & $Invoke $request } catch { return (& $no ("Not saved: the list could not be asked: " + $_.Exception.Message)) }
     if ($null -eq $answer) { return (& $no "Not saved: the list gave no answer.") }
@@ -552,6 +557,12 @@ function New-HordeDecisionWindowBridge {
         # question has that part is the operation's to say, like everything else about the words.
         "say-part" = @{
             args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; text = @{ type = "string"; most = $script:HordeDecisionMaxTextChars }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 }; part = @{ type = "string"; most = 1 } }
+            run = $saying
+        }
+        # "CHANGE MY ANSWER": say, with the record of the answer the words correct, and the part it
+        # answered ("" for an answer to the whole question). A new record; nothing is edited.
+        "correct" = @{
+            args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; text = @{ type = "string"; most = $script:HordeDecisionMaxTextChars }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 }; part = @{ type = "string"; most = 1 }; corrects = @{ type = "integer"; most = (Get-HordeDecisionMaxSequence) } }
             run = $saying
         }
         # HIS ACT: Ctrl+B parks a question, and in the Parked fold brings it back. It is the
