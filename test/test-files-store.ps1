@@ -10,7 +10,10 @@
 #   - a file id is made with a key only this machine has: it is made once, readable by the user
 #     alone, in no record; and a key that is gone or damaged refuses the share and is never remade;
 #   - one file has one id however it is named - the long-path prefix, its 8.3 short name, a subst
-#     drive, a share of this machine's own drive - and a device or a stream inside a file is refused;
+#     drive - and that id is the same number under every runtime; a device or a stream inside a
+#     file is refused;
+#   - a network path in every spelling, this machine's own drive share among them, and a file on a
+#     network drive are refused BEFORE anything asks the disk or the network about them;
 #   - the same path from the same session is the next version of the same file; the same bytes under
 #     two titles are kept once; a share made outside any session says so and names nobody;
 #   - a record that is damaged, a link, or not what its name says is listed as unreadable, never as
@@ -879,16 +882,6 @@ try {
     Check (Test-SameFile ($substLetter + ":\a long report name.md")) "by a subst drive it is the next version of the SAME file"
 } finally { $null = & subst.exe ($substLetter + ":") /D }
 Check (-not [System.IO.Directory]::Exists($substLetter + ":\")) "the subst drive is gone again"
-# A share of this machine's own drive. It needs a session that may open the drive's own share.
-$unc = "\\localhost\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2)
-if ([System.IO.File]::Exists($unc)) {
-    Check (Test-SameFile $unc) "by a UNC path to this machine (\\localhost\C$\...) it is the next version of the SAME file"
-    Check (Test-SameFile ("\\127.0.0.1\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2))) "and by this machine's address instead of its name: the server's name is never what decides"
-    Check (Test-SameFile ("\\?\UNC\localhost\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2))) "and by the long-path form of the UNC path"
-    $adminShare = "\\localhost\ADMIN$\win.ini"
-    if ([System.IO.File]::Exists($adminShare)) { Check (Test-Refused $h $adminShare "it is on a network share") "a file on any OTHER share of this machine is refused: nothing proves where it is" }
-    else { Write-Skip "A SHARE THAT IS NOT A DRIVE'S OWN COULD NOT BE TESTED: \\localhost\ADMIN$\win.ini is not there." }
-} else { Write-Skip ("THE UNC FORM COULD NOT BE TESTED: this session cannot open " + $unc + " (the drive's own share needs an administrator's token). Run this suite elevated.") }
 Check (Test-SameFile $named.ToUpperInvariant()) "and by its plain path in capitals"
 $elseFile = Invoke-Share -TestHome $h -Path (New-Source -Name "another long report name.md" -Text "# another file")
 Check ($elseFile.outcome -ceq "shared" -and $elseFile.record.fileId -cne $byName.record.fileId) "CONTROL: another file is another id, so one id for all those names was not one id for everything"
@@ -901,42 +894,116 @@ Check ($longDir.Length -gt 520 -and $longShare -isnot [string] -and $longShare.o
 [System.IO.Directory]::Delete(("\\?\" + (Join-Path $script:work "long")), $true)
 
 Write-Host ""
-Write-Host "--- bringing a network path home: by who the file is, never by the server's name ---" -ForegroundColor Cyan
-$fileA = New-Source -Name "identity-a.md" -Text "a"
-$fileB = New-Source -Name "identity-b.md" -Text "a"
+Write-Host "--- a network path is refused from its text, and a network drive by its type, before anything looks at it ---" -ForegroundColor Cyan
+# TO LOOK AT A NETWORK PATH IS THE HARM: asking whether it exists sends the user's sign-in to the host
+# it names. So "refused" is not enough to check; it must be refused BEFORE anything asked.
+# THE INSTRUMENT is the DNS cache of this machine. A host name nobody has ever used (ten digits made
+# here, one label) is in that cache after anything asks the network about a path under it, and is not
+# there otherwise. Measured 2026-10-13: 12 of 12 after File.Exists, Directory.Exists and an open; 0 of
+# 4 with nothing called. A name with dots in it was no instrument (3 of 36), and neither was time (a
+# lookup of such a name came back in 15 ms).
+function New-NoHost { return ("horde-" + [guid]::NewGuid().ToString("N").Substring(0, 10)) }
+function Get-LookedUp { return ((& ipconfig.exe /displaydns) -join "`n") }
+if (-not ([System.Management.Automation.PSTypeName]"HordeTest.DosDevice").Type) {
+    Add-Type -Namespace HordeTest -Name DosDevice -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool DefineDosDevice(int dwFlags, string lpDeviceName, string lpTargetPath); [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax);'
+}
+function Test-DosDevice { param([string]$Letter) return ([HordeTest.DosDevice]::QueryDosDevice($Letter + ":", (New-Object System.Text.StringBuilder 1024), 1024) -gt 0) }
+function Get-FreeLetter {
+    # A drive letter that names nothing: no drive, no device, and no PowerShell drive.
+    foreach ($candidate in "RSTUVWQPONMLKJ".ToCharArray()) { if (-not (Test-DosDevice ("" + $candidate)) -and $null -eq (Get-PSDrive -Name ("" + $candidate) -ErrorAction SilentlyContinue)) { return ("" + $candidate) } }
+    return ""
+}
+$seenHost = New-NoHost
+$null = [System.IO.File]::Exists("\\" + $seenHost + "\share\x.md")
+$cacheNow = Get-LookedUp
+$canSee = ($cacheNow.Contains($seenHost) -and -not $cacheNow.Contains((New-NoHost)))
+if ($canSee) { Check $true "CONTROL: the instrument can see a lookup: a host asked about is in the DNS cache, and a name nobody asked about is not" }
+else { Write-Skip "WHETHER A NETWORK PATH WAS LOOKED AT COULD NOT BE SEEN: this machine's DNS cache does not show a host that was just asked about. The refusals below are still checked by their reasons." }
+# EVERY SPELLING, each under a host of its own that does not exist. A not-found reason here would mean
+# something asked the network before the text was read.
+$spellings = @(
+    @("two backslashes", "\\{0}\share\x.md"), @("two forward slashes", "//{0}/share/x.md"), @("a backslash and then a forward slash", "\/{0}\share\x.md"),
+    @("a forward slash and then a backslash", "/\{0}/share/x.md"), @("three backslashes", "\\\{0}\share\x.md"),
+    @("the long-path UNC prefix", "\\?\UNC\{0}\share\x.md"), @("the long-path UNC prefix in small letters", "\\?\unc\{0}\share\x.md"), @("the long-path UNC prefix in mixed case", "\\?\uNc\{0}\share\x.md"),
+    @("the long-path UNC prefix with forward slashes", "//?/UNC/{0}/share/x.md"), @("the device-prefix UNC form", "\\.\UNC\{0}\share\x.md"), @("the device-prefix UNC form with forward slashes", "//./unc/{0}/share/x.md"),
+    @("the NT form of a UNC path", "\??\UNC\{0}\share\x.md"), @("a server's own drive share", "\\{0}\C$\x.md"), @("a share with nothing under it", "\\{0}\share"), @("a server and nothing else", "\\{0}"),
+    @("the long-path UNC prefix and nothing else", "\\?\UNC"), @("a device's name on a share", "\\{0}\share\NUL"), @("a stream of a file on a share", "\\{0}\share\x.md:y.txt"), @("a folder on a share", "\\{0}\share\folder\"))
+$askedHosts = New-Object System.Collections.ArrayList
+foreach ($spelling in $spellings) {
+    $noHost = New-NoHost
+    [void]$askedHosts.Add($noHost)
+    Check (Test-Refused $h ($spelling[1] -f $noHost) "is a network path, and only a file on one of this machine's own drives is shared") ("a network path is refused from its text: " + $spelling[0] + " (" + ($spelling[1] -f "<host>") + ")")
+}
+$cacheNow = Get-LookedUp
+$lookedUp = @($askedHosts | Where-Object { $cacheNow.Contains($_) })
+if ($canSee) { Check ($lookedUp.Count -eq 0 -and $askedHosts.Count -eq 19) ("and not one of those " + $askedHosts.Count + " hosts was looked up: nothing asked the disk or the network before the refusal (looked up: " + $lookedUp.Count + ")") }
+# THIS MACHINE'S OWN DRIVE SHARE, where the file really is. Until 2026-10-13 this was shared, as the
+# local file, on the word of two handles compared; every one of the compared values is the server's
+# to say, so it is a network path like any other.
+$ownShare = "\\localhost\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2)
+Check (Test-Refused $h $ownShare "is a network path") "the file by this machine's own drive share (\\localhost\C$\...) is refused: it is named by its local path"
+Check (Test-Refused $h ("\\127.0.0.1\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2)) "is a network path") "and by this machine's address"
+Check (Test-Refused $h ("\\?\UNC\localhost\" + $namedReal.Substring(0, 1) + "$" + $namedReal.Substring(2)) "is a network path") "and by the long-path form of that"
+Check (Test-Refused $h (Split-Path -Parent $ownShare) "is a network path") "a FOLDER by this machine's own drive share is refused as a network path, not as a folder: nothing looked to see what it is"
+# WHAT ONLY THE RESOLVED PATH SHOWS: a PowerShell drive over a share. The drive is made here, which
+# looks its host up, so only the reason can be checked - and a not-found reason would mean the
+# resolved path was looked at instead of read.
+$psLetter = Get-FreeLetter
+$psHost = New-NoHost
+$null = New-PSDrive -Name $psLetter -PSProvider FileSystem -Root ("\\" + $psHost + "\share") -Scope Script
+Check ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($psLetter + ":\x.md") -ceq ("\\" + $psHost + "\share\x.md")) ("CONTROL: a PowerShell drive " + $psLetter + ": was made over a share, and a path on it resolves to the share")
+Check (Test-Refused $h ($psLetter + ":\x.md") "is a network path") "a path that is a network path only once it is resolved is refused as one"
+Remove-PSDrive -Name $psLetter -Scope Script
+$uncFolder = Split-Path -Parent $ownShare
+if ([System.IO.Directory]::Exists($uncFolder)) {
+    Push-Location -LiteralPath $uncFolder
+    try { $relInShare = Test-Refused $h "a long report name.md" "is a network path" } finally { Pop-Location }
+    Check $relInShare "and so is a relative path, named while standing in a folder of a share"
+} else { Write-Skip ("A RELATIVE PATH FROM INSIDE A SHARE COULD NOT BE TESTED: this session cannot stand in " + $uncFolder + " (the drive's own share needs an administrator's token).") }
+# A NETWORK DRIVE: a drive letter aimed at a host that does not exist, which connects to nothing.
+$netLetter = Get-FreeLetter
+$netHost = New-NoHost
+$netTarget = "\??\UNC\" + $netHost + "\share"
+$netMade = [HordeTest.DosDevice]::DefineDosDevice(1, $netLetter + ":", $netTarget)
+try {
+    Check ($netLetter -ne "" -and $netMade -and (New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network) ("CONTROL: the drive letter " + $netLetter + ": was aimed at a share, and its type is Network (if this fails, a network drive was NOT tested)")
+    Check (Test-Refused $h ($netLetter + ":\x.md") ("is on a network drive (" + $netLetter + ":)")) "a file on a network drive is refused by the drive's type"
+    Check (Test-Refused $h ("\\?\" + $netLetter + ":\x.md") "is on a network drive") "and behind the long-path prefix"
+    Check (Test-Refused $h ($netLetter + ":x.md") "is on a network drive") "and named from wherever that drive stands"
+    Check (Test-Refused $h (($netLetter + ":\x.md").ToLowerInvariant()) "is on a network drive") "and with its letter in small"
+    $cacheNow = Get-LookedUp
+    if ($canSee) { Check (-not $cacheNow.Contains($netHost)) "and the drive's host was not looked up: asking a drive's type asks nobody, and nothing resolved or looked at the path" }
+    $null = [System.IO.File]::Exists($netLetter + ":\x.md")
+    if ($canSee) { Check ((Get-LookedUp).Contains($netHost)) "CONTROL: asked whether a file on that drive exists, the host IS looked up - that is what the refusal came before" }
+} finally { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $netLetter + ":", $netTarget) }
+Check (-not (Test-DosDevice $netLetter)) "the network drive letter is gone again"
+Check (Test-SameFile $named) "CONTROL: after all those refusals the file by its local path is still the next version of the SAME file"
+# Others may read the file while it is shared: it is opened so that they can.
+$otherReader = New-Object System.IO.FileStream($named, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+try { $whileRead = Test-SameFile $named } finally { $otherReader.Dispose() }
+Check $whileRead "a file another process holds open for reading is shared all the same"
+
+Write-Host ""
+Write-Host "--- the open handle's own path: on a drive it is the file's one path, and anywhere else it is refused ---" -ForegroundColor Cyan
+$fileA = New-Source -Name "final-path-a.md" -Text "a"
 $realA = Get-RealPath $fileA
-$realB = Get-RealPath $fileB
-# Made at the very same time, as far as the file system says: only the file's own number tells them apart.
-[System.IO.File]::SetCreationTimeUtc($fileB, [System.IO.File]::GetCreationTimeUtc($fileA))
 $handleA = New-Object System.IO.FileStream($fileA, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-$handleA2 = New-Object System.IO.FileStream($fileA, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-$handleB = New-Object System.IO.FileStream($fileB, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
 try {
     $finalA = Get-HordeFilesFinalPath -Stream $handleA
     Check ($finalA -ceq ("\\?\" + $realA)) "the final path of an open file is its path behind \\?\"
-    $whoA = Get-HordeFilesIdentity -Stream $handleA
-    Check ($whoA -cmatch '\A[0-9]+(:[0-9]+){6}\z' -and $whoA -ceq (Get-HordeFilesIdentity -Stream $handleA2)) "two handles on one file say they are the same file"
-    Check ($whoA -cne (Get-HordeFilesIdentity -Stream $handleB)) "and two files of the same size, holding the same byte, made in the same moment, say they are not"
-    Check (@($whoA.Split(":"))[0] -ne "0") "the volume's serial number is read, and is not 0 (it read as 0 when the structure was laid out wrongly)"
-    Check ((Test-HordeFilesSameFile -One $whoA -Other $whoA) -and -not (Test-HordeFilesSameFile -One $whoA -Other ($whoA + "1"))) "one identity twice is one file, and two identities are two"
-    Check (-not (Test-HordeFilesSameFile -One "" -Other "")) "two files that both gave NO identity are not thereby the same file"
-    $local = Resolve-HordeFilesLocalPath -Stream $handleA -Final $finalA
-    Check ($local.ok -and $local.path -ceq $realA) "a final path on a drive is that path, without the prefix"
-    $uncOfA = "\\?\UNC\a-server-that-is-not-there\" + $realA.Substring(0, 1) + "$" + $realA.Substring(2)
-    $proved = Resolve-HordeFilesLocalPath -Stream $handleA -Final $uncOfA
-    Check ($proved.ok -and $proved.path -ceq $realA) "a final path on some server's drive share, whose local file IS the open file, comes home to the local path - whatever the server is called"
-    $uncOfB = "\\?\UNC\localhost\" + $realB.Substring(0, 1) + "$" + $realB.Substring(2)
-    $notProved = Resolve-HordeFilesLocalPath -Stream $handleA -Final $uncOfB
-    Check (-not $notProved.ok -and $notProved.path -ceq "" -and $notProved.reason -like "*it is on a network share ('\\localhost\*") "one whose local file is ANOTHER file is refused, even from localhost: the name proves nothing, the file does"
-    Check (-not (Resolve-HordeFilesLocalPath -Stream $handleA -Final ($uncOfA + ".not-there")).ok) "one with no local file of that path is refused"
-    Check (-not (Resolve-HordeFilesLocalPath -Stream $handleA -Final "\\?\UNC\server\share\folder\x.md").ok) "a share that is not a drive's own is refused"
-    Check (-not (Resolve-HordeFilesLocalPath -Stream $handleA -Final ("\\?\UNC\server\" + $realA.Substring(0, 1) + "$")).ok) "and so is a drive share with nothing after it"
-    $unsaid = Resolve-HordeFilesLocalPath -Stream $handleA -Final ""
-    Check (-not $unsaid.ok -and $unsaid.reason -like "*Windows would not say where the opened file really is*") "when Windows gives no final path at all, the share is refused with that reason"
-} finally { $handleA.Dispose(); $handleA2.Dispose(); $handleB.Dispose() }
+} finally { $handleA.Dispose() }
+$local = Resolve-HordeFilesLocalPath -Final $finalA
+Check ($local.ok -and $local.path -ceq $realA) "a final path on a drive is that path, without the prefix"
+# WHAT THE TEXT AND THE DRIVE'S TYPE DID NOT GIVE AWAY: the handle's own path is a network one.
+$onShare = Resolve-HordeFilesLocalPath -Final "\\?\UNC\server\share\folder\x.md"
+Check (-not $onShare.ok -and $onShare.path -ceq "" -and $onShare.reason -like "it is on a network share ('\\server\share\folder\x.md')*") "a final path on a share is refused, and the reason names the share"
+$onOwnShare = Resolve-HordeFilesLocalPath -Final ("\\?\UNC\localhost\" + $realA.Substring(0, 1) + "$" + $realA.Substring(2))
+Check (-not $onOwnShare.ok -and $onOwnShare.path -ceq "") "and so is one on this machine's own drive share, where a file of that path IS: nothing brings a network path home"
+$unsaid = Resolve-HordeFilesLocalPath -Final ""
+Check (-not $unsaid.ok -and $unsaid.reason -like "*Windows would not say where the opened file really is*") "when Windows gives no final path at all, the share is refused with that reason"
 # A file that was opened and then refused is let go: nothing keeps holding it.
 $script:realResolve = ${function:Resolve-HordeFilesLocalPath}
-function Resolve-HordeFilesLocalPath { param($Stream, [string]$Final) return [pscustomobject]@{ ok = $false; path = ""; reason = "refused by this suite" } }
+function Resolve-HordeFilesLocalPath { param([string]$Final) return [pscustomobject]@{ ok = $false; path = ""; reason = "refused by this suite" } }
 $turnedAway = Open-HordeFilesSource -Path $fileA
 Set-Item -Path function:Resolve-HordeFilesLocalPath -Value $script:realResolve
 $toItself = "held"
@@ -958,7 +1025,7 @@ foreach ($d in $deviceForms) { Check (Test-Refused $h $d "is in the device form"
 foreach ($fine in @("console.md", "nullable.md", "com10.md", "lpt.md", "aux1.md", "conin.md", "the nul file.md", "nul-.md", "falcon.md", "annul.md", "xcom1.md")) {
     Check ((Invoke-Share -TestHome $h -Path (New-Source -Name $fine -Text "words")).outcome -ceq "shared") ("CONTROL: a file whose name only looks like a device's is shared: " + $fine)
 }
-foreach ($fine in @("C:\a\b.md", "\\?\C:\a\b.md", "\\?\UNC\server\share\b.md", "\\server\share\b.md", ".\b.md", "..\b.md", "C:b.md", "b.md", "c:/a/b.md", "")) { Check ((Get-HordeFilesPathRefusal -Path $fine) -ceq "") ("CONTROL: the text of an ordinary path is not refused: '" + $fine + "'") }
+foreach ($fine in @("C:\a\b.md", "\\?\C:\a\b.md", ".\b.md", "..\b.md", "C:b.md", "b.md", "c:/a/b.md", "")) { Check ((Get-HordeFilesPathRefusal -Path $fine) -ceq "") ("CONTROL: the text of an ordinary path is not refused: '" + $fine + "'") }
 # A REAL stream, made behind the long-path prefix (.NET refuses the plain form by itself).
 $streamOf = $named + ":hidden.txt"
 [System.IO.File]::WriteAllText(("\\?\" + $streamOf), "words kept in a stream")
@@ -966,7 +1033,7 @@ Check ([System.IO.File]::ReadAllText(("\\?\" + $streamOf)) -ceq "words kept in a
 Check (Test-Refused $h $streamOf "that names a stream inside a file") "a path naming a stream of a file is refused"
 Check (Test-Refused $h ("\\?\" + $streamOf) "that names a stream inside a file") "and behind the long-path prefix, where it would open"
 Check (Test-Refused $h ($named + "::`$DATA") "that names a stream inside a file") "and the file's own data named as a stream"
-Check (Test-Refused $h ("\\?\UNC\localhost\share\x.md:y.txt") "that names a stream inside a file") "and a stream of a file on a share"
+Check ((Get-HordeFilesPathRefusal -Path "\\?\UNC\server\share\b.md") -like "*is in the device form*" -and (Get-HordeFilesPathRefusal -Path "\\server\share\b.md") -ceq "") "asked by itself about a network path, this look knows only the prefix: a network path is the look before it's to refuse"
 Push-Location (Split-Path -Parent $named)
 try { $relStream = Test-Refused $h "a long report name.md:hidden.txt" "that names a stream inside a file" } finally { Pop-Location }
 Check $relStream "and a relative one, which PowerShell would otherwise read as a drive"

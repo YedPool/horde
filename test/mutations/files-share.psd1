@@ -76,6 +76,20 @@
         @{ Name = "id-made-from-the-written-path"
            Find = '-FullPath $real -Key $keyed.key'
            Replace = '-FullPath $full -Key $keyed.key' }
+        # A network path is refused before anything asks the disk or the network about it: of the
+        # path as written, before it is resolved, and of the path it resolves to, before it is looked at.
+        @{ Name = "written-path-not-asked-whether-it-is-a-network-path"
+           Find = '$unfit = Get-HordeFilesNetworkRefusal -Path $Path'
+           Replace = '$unfit = ""' }
+        @{ Name = "resolved-path-not-asked-whether-it-is-a-network-path"
+           Find = '$network = Get-HordeFilesNetworkRefusal -Path $full'
+           Replace = '$network = ""' }
+        @{ Name = "resolved-network-path-found-and-looked-at-all-the-same"
+           Find = 'if ($network -ne "") { return (& $refuse $network) }'
+           Replace = '' }
+        @{ Name = "device-and-stream-not-asked-about"
+           Find = 'if ($unfit -eq "") { $unfit = Get-HordeFilesPathRefusal -Path $Path }'
+           Replace = '' }
         @{ Name = "path-as-written-not-checked"
            Find = 'if ($unfit -ne "") { return (& $refuse $unfit) }'
            Replace = '' }

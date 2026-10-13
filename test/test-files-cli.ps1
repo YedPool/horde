@@ -207,10 +207,8 @@ $figuresId = $saidFigures.Groups[1].Value
 $r = Invoke-Files2 -Arguments @("share", ("\\?\" + $figures), "-Title", "Numbers, by the long-path prefix")
 Check ($r.code -eq 0 -and $r.out -like ("*shared " + $figuresId + " version 2: *")) ("named with the long-path prefix it is version 2 of the SAME file id (" + $r.out.Trim() + ")")
 $figuresUnc = "\\localhost\" + $figures.Substring(0, 1) + "$" + $figures.Substring(2)
-if ([System.IO.File]::Exists($figuresUnc)) {
-    $r = Invoke-Files2 -Arguments @("share", $figuresUnc, "-Title", "Numbers, by a share of this machine")
-    Check ($r.code -eq 0 -and $r.out -like ("*shared " + $figuresId + " version 3: *")) ("named by a UNC path to this machine it is version 3 of the SAME file id (" + $r.out.Trim() + ")")
-} else { Write-Host ("  [SKIP] THE UNC FORM COULD NOT BE TESTED: this session cannot open " + $figuresUnc + " (the drive's own share needs an administrator's token). Run this suite elevated.") -ForegroundColor Yellow }
+Check (Test-Refused2 @("share", $figuresUnc, "-Title", "Numbers, by a share of this machine") "is a network path") "named by this machine's own drive share it is refused: a network path is never looked at, and the file is named by its local path"
+Check (Test-Refused2 @("share", "\\a-host-that-is-not-there\share\numbers.md", "-Title", "Numbers, from a server") "is a network path") "and so is a path on any other server, with the same reason and not a not-found one"
 
 Write-Host ""
 Write-Host "--- text that is not text, a device, and a stream: a reason on the line, exit 1, nothing written ---" -ForegroundColor Cyan

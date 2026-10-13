@@ -1,12 +1,12 @@
 # Mutations of files/Path.ps1: which file a path really names. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\files-path.psd1
-# Each opens something that must be refused from its text, or takes a path for a file's one path
-# without the proof; test\test-files-store.ps1 must fail for every one, except those declared
-# Expect = "survives".
+# Each opens or looks at something that must be refused from its text or its drive's type, or takes
+# a network path for a file's one path; test\test-files-store.ps1 must fail for every one.
 #
-# WHAT THE BOX MUST BE ABLE TO DO for every mutant to be seen: make 8.3 short names (short-names-kept)
-# and open its own drive share, which needs an administrator's token (file-held-against-every-reader).
+# WHAT THE BOX MUST BE ABLE TO DO for every mutant to be seen: make 8.3 short names (short-names-kept).
 # Where it cannot, the suite prints [SKIP] with the reason and that mutant is reported as not caught.
+# No mutant here needs an administrator's token or a share that can be reached: a network path is
+# refused before anything looks at it, so a host that does not exist is enough to test with.
 @{
     Target = "files\Path.ps1"
     Suite  = "test\test-files-store.ps1"
@@ -26,14 +26,11 @@
            Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/]'''
            Replace = '''\A(?:\\{2}[.?]|\\\?\?)\\''' }
         @{ Name = "prefixed-path-taken-for-a-device"
-           Find = 'elseif ($rest -match ''\A\\\\\?\\[A-Za-z]:\\'') { $rest = $rest.Substring(4) }'
-           Replace = 'elseif ($false) { }' }
+           Find = '    if ($rest -match ''\A\\\\\?\\[A-Za-z]:\\'') { $rest = $rest.Substring(4) }'
+           Replace = '    if ($false) { }' }
         @{ Name = "nothing-looked-for-behind-the-prefix"
-           Find = 'elseif ($rest -match ''\A\\\\\?\\[A-Za-z]:\\'') { $rest = $rest.Substring(4) }'
-           Replace = 'elseif ($rest -match ''\A\\\\\?\\[A-Za-z]:\\'') { return "" }' }
-        @{ Name = "prefixed-unc-path-taken-for-a-device"
-           Find = 'if ($rest -match ''\A\\\\\?\\UNC\\'') { $rest = $rest.Substring(8) }'
-           Replace = 'if ($false) { }' }
+           Find = '    if ($rest -match ''\A\\\\\?\\[A-Za-z]:\\'') { $rest = $rest.Substring(4) }'
+           Replace = '    if ($rest -match ''\A\\\\\?\\[A-Za-z]:\\'') { return "" }' }
         # --- refused from the text: a device's name ---
         @{ Name = "device-names-not-looked-for"
            Find = 'foreach ($part in @($rest -split ''[\\/]'')) {'
@@ -85,31 +82,52 @@
         @{ Name = "final-path-kept-with-its-prefix"
            Find = 'return [pscustomobject]@{ ok = $true; path = $Final.Substring(4); reason = "" }'
            Replace = 'return [pscustomobject]@{ ok = $true; path = $Final; reason = "" }' }
-        # --- a network path is brought home by proof, or refused ---
-        @{ Name = "network-path-used-as-it-is"
-           Find = '\$\\(.+)\z'') { return (& $refuse $network) }'
-           Replace = '\$\\(.+)\z'') { return [pscustomobject]@{ ok = $true; path = $shown; reason = "" } }' }
-        @{ Name = "drive-share-trusted-without-proof"
-           Find = 'if (-not (Test-HordeFilesSameFile -One $mine -Other (Get-HordeFilesIdentity -Stream $beside)) -or $local'
-           Replace = 'if ($local' }
-        @{ Name = "drive-share-with-no-local-file-trusted"
-           Find = '[System.IO.FileShare]::Delete)) } catch { return (& $refuse $network) }'
-           Replace = '[System.IO.FileShare]::Delete)) } catch { return [pscustomobject]@{ ok = $true; path = $candidate; reason = "" } }' }
-        @{ Name = "no-identity-is-the-same-as-no-identity"
-           Find = 'return ($One -ne "" -and $One -ceq $Other)'
-           Replace = 'return ($One -ceq $Other)' }
-        @{ Name = "every-file-is-the-same-file"
-           Find = 'return ($One -ne "" -and $One -ceq $Other)'
-           Replace = 'return ($One -ne "")' }
-        @{ Name = "a-file-is-known-by-its-volume-size-and-time-alone"
-           Find = '@($info.VolumeSerial, $info.IndexHigh, $info.IndexLow, $info.SizeHigh,'
-           Replace = '@($info.VolumeSerial, $info.SizeHigh,' }
-        @{ Name = "file-with-no-index-has-an-identity"
-           Find = 'if ($info.IndexHigh -eq 0 -and $info.IndexLow -eq 0) { return "" }'
-           Replace = ''
-           Expect = "survives"
-           Reason = "NTFS numbers every file, so no test here can make a file whose index is zero. The guard is for a file system that numbers nothing: there, two different files would both read 0:0 and be taken for one. What an empty identity then means is tested by itself (no-identity-is-the-same-as-no-identity)." }
-        # --- the open ---
+        # --- a network path is refused from its text, and a network drive by its type ---
+        @{ Name = "network-path-not-refused-from-its-text"
+           Find = 'if ($unc) { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "only-backslashes-make-a-network-path"
+           Find = '$unc = ($Path -cmatch ''\A[\\/]{2}'' -and'
+           Replace = '$unc = ($Path -cmatch ''\A\\{2}'' -and' }
+        @{ Name = "long-path-prefix-taken-for-a-network-path"
+           Find = '$unc = ($Path -cmatch ''\A[\\/]{2}'' -and $Path -cnotmatch ''\A[\\/]{2}[.?][\\/]'')'
+           Replace = '$unc = ($Path -cmatch ''\A[\\/]{2}'')' }
+        @{ Name = "prefixed-unc-forms-not-network-paths"
+           Find = 'if (-not $unc) { $unc = ($Path -cmatch'
+           Replace = 'if ($false) { $unc = ($Path -cmatch' }
+        @{ Name = "unc-prefix-seen-only-in-capitals"
+           Find = '[\\/][Uu][Nn][Cc](?:[\\/]|\z)'')'
+           Replace = '[\\/]UNC(?:[\\/]|\z)'')' }
+        @{ Name = "unc-prefix-seen-only-with-backslashes"
+           Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc]'
+           Replace = '''\A(?:\\{2}[.?]|\\\?\?)\\[Uu][Nn][Cc]' }
+        @{ Name = "device-prefix-unc-form-missed"
+           Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc]'
+           Replace = '''\A(?:[\\/]{2}[?]|\\\?\?)[\\/][Uu][Nn][Cc]' }
+        @{ Name = "nt-form-unc-missed"
+           Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc]'
+           Replace = '''\A(?:[\\/]{2}[.?])[\\/][Uu][Nn][Cc]' }
+        @{ Name = "unc-prefix-with-nothing-after-it-missed"
+           Find = '[\\/][Uu][Nn][Cc](?:[\\/]|\z)'')'
+           Replace = '[\\/][Uu][Nn][Cc][\\/]'')' }
+        @{ Name = "network-drive-not-refused"
+           Find = 'if ($type -eq [System.IO.DriveType]::Network) { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "every-drive-is-a-network-drive"
+           Find = 'if ($type -eq [System.IO.DriveType]::Network) { return ('
+           Replace = 'if ($true) { return (' }
+        @{ Name = "network-drive-behind-the-prefix-missed"
+           Find = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') {'
+           Replace = 'if ($Path -cmatch ''\A([A-Za-z]):'') {' }
+        @{ Name = "network-drive-with-a-small-letter-missed"
+           Find = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') {'
+           Replace = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Z]):'') {' }
+        @{ Name = "network-final-path-used-as-it-is"
+           Find = 'if ($Final -cnotmatch ''\A\\\\\?\\[A-Za-z]:\\'') { return (& $refuse ('
+           Replace = 'if ($false) { return (& $refuse (' }
+        @{ Name = "own-drive-share-brought-home-on-its-word"
+           Find = 'if ($Final -cnotmatch ''\A\\\\\?\\[A-Za-z]:\\'') { return (& $refuse ('
+           Replace = 'if ($Final -cmatch ''\A\\\\\?\\UNC\\[^\\]+\\([A-Za-z])\$\\(.+)\z'') { return [pscustomobject]@{ ok = $true; path = ($Matches[1] + ":\" + $Matches[2]); reason = "" } }; if ($Final -cnotmatch ''\A\\\\\?\\[A-Za-z]:\\'') { return (& $refuse (' }        # --- the open ---
         @{ Name = "unreadable-file-not-said-so"
            Find = 'reason = ("it cannot be read: " + $_.Exception.GetBaseException().Message) } }'
            Replace = 'reason = "" } }' }

@@ -28,16 +28,20 @@
 #   - THE DIGEST IS KEYED (HMAC-SHA-256) with a key only this machine has: files/Key.ps1 says why a
 #     plain digest gave the path away, and what happens when the key is gone.
 #   - THE PATH IS THE ONE THE OPEN HANDLE HAS, not the one that was written: files/Path.ps1. The
-#     long-path prefix, an 8.3 short name, a subst drive and a share of this machine's own drive all
-#     come to one path, so to one file. THE SAME HANDLE IS THEN READ, so the name that decides the
-#     type and the id is the name of the bytes that are kept.
-#   AN ID IS PERMANENT once its first record exists: what goes into it cannot change afterwards.
+#     long-path prefix, an 8.3 short name and a subst drive all come to one path, so to one file.
+#     THE SAME HANDLE IS THEN READ, so the name that decides the type and the id is the name of the
+#     bytes that are kept.
+#   AN ID IS PERMANENT once its first record exists: what goes into it cannot change afterwards,
+#   and may not depend on the runtime that works it out (Get-HordeFilesId).
 #
 # WHAT IS REFUSED, each with its reason, and nothing is written for any of them:
 #   - a title that is empty, holds a control character, or is longer than the setting maxTitleChars;
 #   - a path that names no file, or names a folder; a path in the device form, one holding a name
 #     Windows keeps for a device, and one naming a stream inside a file (files/Path.ps1);
-#   - a file on a network share that cannot be proved to be a file on one of this machine's drives;
+#   - A NETWORK PATH, in every spelling, and a file on a network drive - this machine's own drive
+#     share too. Refused from the path's text and the drive's type BEFORE anything asks the disk or
+#     the network about it: to look at such a path is to send the user's sign-in to the host it
+#     names (files/Path.ps1);
 #   - A LINK. The file, or any folder on the way to it, that is a link of any kind (a symbolic link, a
 #     junction, any reparse point): the bytes would come from somewhere the caller did not name. This
 #     is the store's own test (decisions/Store.ps1's rule: the entry's own attributes, and an entry
@@ -218,12 +222,21 @@ function Add-HordeFilesShare {
     if ($name.Length -gt $settings.maxTitleChars) { return (& $refuse ("the title is " + $name.Length + " characters; the longest is " + $settings.maxTitleChars + " (the setting maxTitleChars)")) }
 
     if ($Path.Trim() -eq "") { return (& $refuse "no file was named") }
-    # FROM THE TEXT, BEFORE ANYTHING TOUCHES THE DISK: a device opens, and a stream cannot be told later.
-    $unfit = Get-HordeFilesPathRefusal -Path $Path
+    # FROM THE TEXT, BEFORE ANYTHING TOUCHES THE DISK OR THE NETWORK. A network path first: looking at
+    # one sends the user's sign-in to the host it names. Then a device, which opens, and a stream,
+    # which cannot be told later.
+    $unfit = Get-HordeFilesNetworkRefusal -Path $Path
+    if ($unfit -eq "") { $unfit = Get-HordeFilesPathRefusal -Path $Path }
     if ($unfit -ne "") { return (& $refuse $unfit) }
     $full = ""
     # A relative path is the caller's, from where the caller stands; nothing is expanded or searched.
+    # THE NETWORK QUESTION IS ASKED BEFORE THIS LINE TOO, not only after it: handed a network drive's
+    # letter it has not seen, this resolver looked the server up (measured 2026-10-13, 1289 ms).
     try { $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path) } catch { return (& $refuse ("'" + $Path + "' is not a path of a file")) }
+    # AND AGAIN OF WHAT IT RESOLVED TO: a relative path, or a PowerShell drive over a share, shows
+    # that it is a network path only here. Still nothing has asked the disk about it.
+    $network = Get-HordeFilesNetworkRefusal -Path $full
+    if ($network -ne "") { return (& $refuse $network) }
     if ([System.IO.Directory]::Exists($full)) { return (& $refuse ("'" + $full + "' is a folder; one file is shared at a time")) }
     if (-not [System.IO.File]::Exists($full)) { return (& $refuse ("there is no file '" + $full + "'")) }
     # OPENED ONCE. Everything after this is asked of that one handle, or of the path it gives.

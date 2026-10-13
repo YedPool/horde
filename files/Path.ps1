@@ -13,26 +13,38 @@
 #   a drive made with subst           Z:\a long report name.md        the same
 #   a share of this machine           \\localhost\C$\t\...            \\?\UNC\localhost\C$\t\...
 # So THE PATH IS ASKED OF THE OPEN HANDLE, never worked out from the text: the first four come to
-# one path with no code here. It is asked of the SAME handle the bytes are then read from, so the
+# one path with no code here, and the fifth is never opened at all (below). It is asked of the SAME handle the bytes are then read from, so the
 # name that is typed, checked and made into an id is the name of the bytes that are kept.
 #
-# A SHARE OF THIS MACHINE is the one form the handle does not bring home: its final path is still the
-# network one. It is brought home by PROOF, not by its words. For \\<any server>\<letter>$\<rest> the
-# file <letter>:\<rest> is opened beside it and the two open handles are asked who they are: the
-# volume's serial number, the file's index on it, its size and when it was made. The same answers
-# mean one file, and the local handle's own final path is used. The server's name is never looked
-# at: a list of this machine's names always misses one (an address, an alias in a hosts file), and a
-# missed name would give one file two ids.
-#   WHAT IS REFUSED, because nothing here can prove where it is: a file on any other share, of this
-#   machine or another (a mapped network drive is one of those). A network path made into an id
-#   would fork the day the same file is named by an address instead of a name, and an id cannot be
-#   taken back; a refusal can be lifted later.
-#   KNOWN LIMIT: two machines made from one disk image have the same volume serial, and a file
-#   untouched since has the same index, size and time on both. \\<the other>\C$\<that file> would be
-#   taken for the local one. Those two files are then byte for byte the same file.
-#
-# WHAT IS REFUSED FROM THE TEXT, BEFORE ANYTHING IS OPENED, because for these the opening is the harm
-# or the handle cannot tell:
+# A NETWORK PATH IS NEVER OPENED, AND NEVER LOOKED AT. That fifth form is the one the handle does not
+# bring home: its final path is still the network one. Until 2026-10-13 a share of this machine's
+# own drive was brought home by proof - the local file was opened beside it and the two handles
+# compared - and every other network path was refused after it had been looked at and opened. The
+# review of that found two things, and both are why this is now a refusal from the text:
+#   - THE PROOF PROVED THE WRONG THING. All four compared values (the volume's serial number, the
+#     file's index, its size, when it was made) are what the SERVER says, and the bytes were still
+#     read from the network handle: a hostile or cloned server could have its bytes recorded under a
+#     local file's id.
+#   - LOOKING IS ALREADY THE HARM. Asking whether a network path exists, or opening it, sends the
+#     user's sign-in to whatever host the path names.
+# So Get-HordeFilesNetworkRefusal is asked FIRST, and it touches no disk and no network:
+#   - A UNC PATH IN ANY SPELLING is refused from its text: two separators of either kind first
+#     (\\server, //server, \/server; Windows reads them all as one), and the prefixed forms
+#     \\?\UNC\, \\.\UNC\ and \??\UNC\, in either case and with either separator.
+#   - A NETWORK DRIVE is refused by its type, asked of the drive letter. Measured 2026-10-13, on a
+#     letter aimed at a host that does not exist: asking the type answered Network in under 15 ms
+#     and the host was NOT looked up (no entry for it in the DNS cache); the control, asking whether
+#     a file on that drive exists, left the entry. PowerShell's own path resolver, handed that
+#     drive letter, DID look the host up (1289 ms, and the entry): so the question is asked of the
+#     path as written, before anything resolves it, and again of the resolved path, which is where
+#     a relative path or a PowerShell drive over a share shows what it is.
+#   WHAT IS LEFT FOR AFTER THE OPEN: an alias the drive's type does not give away (a subst drive
+#   over a network drive, a volume mount point). Its handle's final path is a network one, and
+#   Resolve-HordeFilesLocalPath refuses it then, as before.
+#   A file on this machine is named by its local path. A refusal can be lifted later; an id made
+#   from a network name could not have been taken back.
+## WHAT ELSE IS REFUSED FROM THE TEXT, BEFORE ANYTHING IS OPENED, because for these the opening is the
+# harm or the handle cannot tell:
 #   - A DEVICE. \\.\ before anything (measured: \\.\C:\t\x.md opens as an ordinary file, and
 #     \\.\pipe\x would connect to a pipe), \\?\ before anything but a drive letter or UNC, the NT
 #     form \??\, and the names DOS kept for devices - CON, PRN, AUX, NUL, COM0 to COM9, LPT0 to LPT9,
@@ -45,14 +57,37 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It loads nothing.
 
+function Get-HordeFilesNetworkRefusal {
+    # Why -Path is a network path, or "" when nothing says it is. THE FIRST QUESTION ASKED OF A PATH,
+    # and it touches no disk and no network: the header has the measurement. Asked of the path as
+    # written and again of the path it resolves to.
+    param([AllowEmptyString()][string]$Path)
+    $local = "only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
+    # Two separators of either kind first, unless what follows is the device or long-path prefix...
+    $unc = ($Path -cmatch '\A[\\/]{2}' -and $Path -cnotmatch '\A[\\/]{2}[.?][\\/]')
+    # ...and that prefix, or the NT one, before UNC. The letters are written out in both cases: an
+    # ignore-case match asks a case table, which is what an id's input must never do.
+    if (-not $unc) { $unc = ($Path -cmatch '\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc](?:[\\/]|\z)') }
+    if ($unc) { return ("'" + $Path + "' is a network path, and " + $local) }
+    if ($Path -cmatch '\A(?:\\\\\?\\)?([A-Za-z]):') {
+        $letter = $Matches[1]
+        $type = $null
+        # A letter whose type cannot be asked is not thereby a network drive: it goes on, and the
+        # open handle's own path decides.
+        try { $type = (New-Object System.IO.DriveInfo($letter)).DriveType } catch { $type = $null }
+        if ($type -eq [System.IO.DriveType]::Network) { return ("'" + $Path + "' is on a network drive (" + $letter + ":), and " + $local) }
+    }
+    return ""
+}
+
 function Get-HordeFilesPathRefusal {
-    # Why the path, AS WRITTEN, is not one a file is opened from, or "" when it may be opened.
+    # Why the path, AS WRITTEN, is not one a file is opened from, or "" when it may be opened. A
+    # network path is not this function's: Get-HordeFilesNetworkRefusal is asked before it.
     param([AllowEmptyString()][string]$Path)
     $rest = $Path
-    # The two prefix forms that still name a file on a drive or a share; every other \\?\ and all of
-    # \\.\ and \??\ is the device namespace. Both slashes: Windows reads //./ as \\.\.
-    if ($rest -match '\A\\\\\?\\UNC\\') { $rest = $rest.Substring(8) }
-    elseif ($rest -match '\A\\\\\?\\[A-Za-z]:\\') { $rest = $rest.Substring(4) }
+    # The one prefix form that still names a file on a drive; every other \\?\ and all of \\.\ and
+    # \??\ is the device namespace. Both slashes: Windows reads //./ as \\.\.
+    if ($rest -match '\A\\\\\?\\[A-Za-z]:\\') { $rest = $rest.Substring(4) }
     elseif ($rest -match '\A(?:[\\/]{2}[.?]|\\\?\?)[\\/]') { return ("'" + $Path + "' is in the device form (\\.\ or \\?\): it names a device, a pipe or a volume, not a file by its path") }
     foreach ($part in @($rest -split '[\\/]')) {
         # The name before its first dot or colon, without the blanks Windows drops: NUL.txt, NUL: and "NUL " are NUL.
@@ -64,13 +99,11 @@ function Get-HordeFilesPathRefusal {
 }
 
 function Initialize-HordeFilesPathNative {
-    # The two things asked of an open handle, defined once a process (core/FileAtomic.ps1's way).
+    # The one thing asked of an open handle, defined once a process (core/FileAtomic.ps1's way).
     # GetFinalPathNameByHandle with flags 0: FILE_NAME_NORMALIZED and VOLUME_NAME_DOS, the long name
-    # of every part, on a drive letter. BY_HANDLE_FILE_INFORMATION is written as thirteen 32-bit
-    # fields: with its three times as 64-bit fields the compiler pads after the first field and every
-    # later one is read four bytes off (measured 2026-10-13: the serial number read as 0).
+    # of every part, on a drive letter.
     if (([System.Management.Automation.PSTypeName]"HordeNative.FilePath").Type) { return }
-    Add-Type -Namespace HordeNative -Name FilePath -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int GetFinalPathNameByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle hFile, System.Text.StringBuilder lpszFilePath, int cchFilePath, int dwFlags); [StructLayout(LayoutKind.Sequential)] public struct Info { public uint Attributes; public uint CreationLow; public uint CreationHigh; public uint AccessLow; public uint AccessHigh; public uint WriteLow; public uint WriteHigh; public uint VolumeSerial; public uint SizeHigh; public uint SizeLow; public uint Links; public uint IndexHigh; public uint IndexLow; } [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle hFile, out Info lpFileInformation);'
+    Add-Type -Namespace HordeNative -Name FilePath -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int GetFinalPathNameByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle hFile, System.Text.StringBuilder lpszFilePath, int cchFilePath, int dwFlags);'
 }
 
 function Get-HordeFilesFinalPath {
@@ -90,49 +123,16 @@ function Get-HordeFilesFinalPath {
     return ""
 }
 
-function Get-HordeFilesIdentity {
-    # Who an open file is, as text two handles on one file agree on: the volume's serial number, the
-    # file's index on that volume, its size and when it was made. "" when Windows would not say, or
-    # gives no index: a file system that numbers nothing cannot prove anything.
-    param([Parameter(Mandatory = $true)]$Stream)
-    Initialize-HordeFilesPathNative
-    $info = New-Object HordeNative.FilePath+Info
-    if (-not [HordeNative.FilePath]::GetFileInformationByHandle($Stream.SafeFileHandle, [ref]$info)) { return "" }
-    if ($info.IndexHigh -eq 0 -and $info.IndexLow -eq 0) { return "" }
-    return (@($info.VolumeSerial, $info.IndexHigh, $info.IndexLow, $info.SizeHigh, $info.SizeLow, $info.CreationHigh, $info.CreationLow) -join ":")
-}
-
-function Test-HordeFilesSameFile {
-    # Are two identities (Get-HordeFilesIdentity) one file's? An identity that could not be read is
-    # nobody's: two files that both gave none are NOT thereby the same file.
-    param([AllowEmptyString()][string]$One, [AllowEmptyString()][string]$Other)
-    return ($One -ne "" -and $One -ceq $Other)
-}
-
 function Resolve-HordeFilesLocalPath {
-    # The one local path (C:\...) of the open file -Stream, whose final path is -Final:
-    # { ok; path; reason }. The header says how a share of this machine is brought home, and why
-    # every other network path is refused.
-    param([Parameter(Mandatory = $true)]$Stream, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Final)
+    # The one local path (C:\...) of an open file whose final path is -Final: { ok; path; reason }.
+    # A final path that is not on a drive letter is a network one that neither its text nor its
+    # drive's type gave away (the header says which), and is refused: nothing brings it home.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Final)
     $refuse = { param([string]$Why) return [pscustomobject]@{ ok = $false; path = ""; reason = $Why } }
     if ($Final -eq "") { return (& $refuse "Windows would not say where the opened file really is: it is on a volume with no drive letter, or is not a file on a disk") }
-    if ($Final -cmatch '\A\\\\\?\\[A-Za-z]:\\') { return [pscustomobject]@{ ok = $true; path = $Final.Substring(4); reason = "" } }
-    $shown = $Final -replace '\A\\\\\?\\UNC\\', '\\'
-    $network = "it is on a network share ('" + $shown + "'), and only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
-    if ($Final -notmatch '\A\\\\\?\\UNC\\[^\\]+\\([A-Za-z])\$\\(.+)\z') { return (& $refuse $network) }
-    # Behind the long-path prefix, so that a path past 260 characters opens too.
-    $candidate = "\\?\" + $Matches[1] + ":\" + $Matches[2]
-    $mine = Get-HordeFilesIdentity -Stream $Stream
-    $beside = $null
-    # Opened for nothing but to be asked who it is: it shares everything, and no byte of it is read.
-    try { $beside = New-Object System.IO.FileStream($candidate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)) } catch { return (& $refuse $network) }
-    try {
-        $local = Get-HordeFilesFinalPath -Stream $beside
-        if (-not (Test-HordeFilesSameFile -One $mine -Other (Get-HordeFilesIdentity -Stream $beside)) -or $local -cnotmatch '\A\\\\\?\\[A-Za-z]:\\') { return (& $refuse $network) }
-        return [pscustomobject]@{ ok = $true; path = $local.Substring(4); reason = "" }
-    } finally { $beside.Dispose() }
+    if ($Final -cnotmatch '\A\\\\\?\\[A-Za-z]:\\') { return (& $refuse ("it is on a network share ('" + ($Final -replace '\A\\\\\?\\UNC\\', '\\') + "'), and only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder")) }
+    return [pscustomobject]@{ ok = $true; path = $Final.Substring(4); reason = "" }
 }
-
 function Open-HordeFilesSource {
     # Open the file at -Path ONCE, for reading: { ok; stream; path; reason }. path is the one local
     # path of what was opened; stream is the handle it was asked of, which THE CALLER CLOSES when ok.
@@ -142,7 +142,7 @@ function Open-HordeFilesSource {
     try { $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read) }
     catch { return [pscustomobject]@{ ok = $false; stream = $null; path = ""; reason = ("it cannot be read: " + $_.Exception.GetBaseException().Message) } }
     $where = $null
-    try { $where = Resolve-HordeFilesLocalPath -Stream $stream -Final (Get-HordeFilesFinalPath -Stream $stream) }
+    try { $where = Resolve-HordeFilesLocalPath -Final (Get-HordeFilesFinalPath -Stream $stream) }
     finally { if ($null -eq $where -or -not $where.ok) { $stream.Dispose() } }
     if (-not $where.ok) { return [pscustomobject]@{ ok = $false; stream = $null; path = ""; reason = $where.reason } }
     return [pscustomobject]@{ ok = $true; stream = $stream; path = $where.path; reason = "" }
