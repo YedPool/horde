@@ -545,7 +545,7 @@ Check $substMade ("CONTROL: subst made " + $substLetter + ": over .ssh (if this 
 Check $bySubst "by a subst drive over .ssh, where the written path names no folder, the file is refused as .ssh"
 Check $bySubstHome "and by a subst drive over a folder of the home, as the home, -Force or not"
 Check ((Get-Target $substLetter) -eq "") "the subst drive is gone again"
-$sshCopy = Join-Path $docs "a-copy-of-the-ssh-notes.txt"
+$sshCopy = Join-Path $docs "a-copy-of-those-notes.txt"
 [System.IO.File]::Copy($sshFile, $sshCopy)
 Check (Test-Shared $h $sshCopy) "CONTROL: after all those refusals the .ssh file can still be read, and a copy of it outside .ssh is shared: they were the list's refusals and not a broken file"
 # WHAT THE HANDLE DOES NOT SAY, pinned so that it is known: a second name (a hard link) outside .ssh
@@ -735,7 +735,7 @@ $keyFiles = [ordered]@{
     "with-crlf.txt" = ("words`r`n" + $keyLine + "`r`n" + $keyBody + "`r`n")
     "account.json" = ('{"type":"dummy","pk":"' + $keyLine.Replace("RSA ", "") + '\n' + $keyBody + '\n"}')
     "page.html" = ("<html><body><pre>" + $keyBlock + "</pre></body></html>")
-    "page.htm" = ("<p>" + $keyLine.Replace("RSA", "OPENSSH") + "</p>")
+    "page.htm" = ("<p>" + $keyLine.Replace("RSA", "EC") + "</p>")
     "encrypted.md" = ("words`n" + $keyLine.Replace("RSA", "ENCRYPTED") + "`n")
     "pgp.txt" = ("words`n" + $keyLine.Replace("RSA PRIV", "PGP PRIV").Replace("KEY-----", "KEY BLOCK-----") + "`n")
     "bare.txt" = ("words`n" + $keyLine.Replace("RSA ", "") + "`n")
