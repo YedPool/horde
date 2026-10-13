@@ -11,7 +11,10 @@
 #    is kept whole and one character more is refused - by the port, and by the relay itself when the
 #    port is bypassed; a watch returns at once when there is something, waits out its timeout when
 #    there is not, and is bounded by it; an ack past the head is refused and an ack does not disturb
-#    a read after it.
+#    a read after it. And, of a relay that hands the port a watch in slices (relays/Port.ps1): the
+#    watch stays open across slices and across a put, a read and an ack made between them; a put into
+#    the watched mailbox from another runspace ends a waiting slice within a second; and a watch
+#    nothing fills runs out by itself.
 # II. EACH CAPABILITY OF THE CLOSED LIST: a "yes" must be DEMONSTRATED by the case below, or the suite
 #    fails; any other word must make a caller that requires it refuse the relay, by name. durable is
 #    shown across a fresh runspace (no state of this one survives into it), and realtime by a put from a
@@ -254,6 +257,65 @@ foreach ($name in $relayNames) {
         Check ($w.state -ceq "known" -and (Seqs $w) -ceq "4,5" -and $w.value.waitedMs -lt 1000) ("[" + $name + "] a watch with something to see returns it at once (" + $w.value.waitedMs + " ms)")
         $w = Wait-HordeRelayItems -Connection $c -Mailbox "conf/watch-empty" -Since 0 -TimeoutMs 0
         Check ($w.state -ceq "known" -and $w.value.waitedMs -lt 1000) ("[" + $name + "] a watch of 0 ms is a read (" + $w.value.waitedMs + " ms)")
+
+        # A WATCH IN SLICES (relays/Port.ps1), for every relay that hands the port the three blocks: the
+        # watch stays open across slices and across a put, a read and an ack made between them on the
+        # same connection; what is put into the watched mailbox ends it at once; and it runs out by
+        # itself. A relay that hands over none is watched by its blocking watch, held to above.
+        if (-not (Test-HordeRelayWatchInSlices $c)) { Write-Host ("  [" + $name + "] does not watch in slices: its blocking watch, above, is all there is to hold it to") -ForegroundColor DarkGray }
+        else {
+            $mbS = "conf/slices"
+            $long = [Math]::Min(20000, $lim.maxWatchMs)
+            $o = Open-HordeRelayWatch -Connection $c -Mailbox $mbS -Since 0 -TimeoutMs $long
+            Check ($o.state -ceq "known") ("[" + $name + "] a watch in slices opens (" + $o.reason + ")")
+            if ($o.state -ceq "known") {
+                try {
+                    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                    $s1 = Wait-HordeRelayWatch -Watch $o.value -WaitMs 400
+                    $took1 = $sw.ElapsedMilliseconds
+                    Check ($s1.state -ceq "known" -and $s1.value.ended -eq $false -and $took1 -ge 300 -and $took1 -lt 2400) ("[" + $name + "] a slice of 400 ms with nothing to see waits it out and comes back with the watch still open (" + $took1 + " ms)")
+                    $putOther = Send-HordeRelayItem -Connection $c -Mailbox "conf/slices-other" -Text "between-slices"
+                    $readOther = Receive-HordeRelayItems -Connection $c -Mailbox "conf/slices-other" -Since 0
+                    $ackOther = Confirm-HordeRelayItems -Connection $c -Mailbox "conf/slices-other" -Through 1
+                    $s2 = Wait-HordeRelayWatch -Watch $o.value -WaitMs 400
+                    Check ($putOther.state -ceq "known" -and $putOther.value.seq -eq 1 -and (Texts $readOther) -ceq "between-slices" -and $ackOther.state -ceq "known" -and $s2.state -ceq "known" -and $s2.value.ended -eq $false) ("[" + $name + "] between two slices a put, a read and an ack on the same connection are all taken, and the watch is still open after them (" + $putOther.state + ", " + $ackOther.state + ", " + $s2.state + ")")
+                    # FROM ANOTHER RUNSPACE, WHILE A SLICE WAITS: the slice ends within a second of the put,
+                    # which is what realtime promises of the blocking watch.
+                    $far = New-Fresh -Name $name -Options $state.options -Arguments @($mbS) -Body {
+                        param($Conn, $Mailbox)
+                        Start-Sleep -Milliseconds 400
+                        $sent = Send-HordeRelayItem -Connection $Conn -Mailbox $Mailbox -Text "slice-1"
+                        return @($sent.state, [datetime]::UtcNow.Ticks)
+                    }
+                    try {
+                        $going = $far.BeginInvoke()
+                        $s3 = Wait-HordeRelayWatch -Watch $o.value -WaitMs ([Math]::Min(15000, $lim.maxWatchMs))
+                        $back = [datetime]::UtcNow.Ticks
+                        $farOut = @($far.EndInvoke($going) | ForEach-Object { "$_" })
+                    } finally { $far.Dispose() }
+                    $lagMs = $(if ($farOut.Count -eq 2) { [Math]::Round(($back - [long]$farOut[1]) / 10000) } else { -1 })
+                    Check ($farOut.Count -eq 2 -and $farOut[0] -ceq "known" -and $s3.state -ceq "known" -and $s3.value.ended -eq $true -and (Texts $s3) -ceq "slice-1" -and $s3.value.next -eq 1 -and $lagMs -lt 1000) ("[" + $name + "] a put from another runspace while a slice waits ends the watch with that item, within a second of the put (" + $lagMs + " ms after it)")
+                    $s4 = Wait-HordeRelayWatch -Watch $o.value -WaitMs 100
+                    Check ($s4.state -ceq "unknown") ("[" + $name + "] and the watch, ended, is not waited on again")
+                } finally { Close-HordeRelayWatch -Watch $o.value }
+            }
+            # ITEMS ALREADY THERE are the first slice's, even one that does not wait; and a watch nobody
+            # fills runs out by itself, in slices, in about its own time.
+            $o = Open-HordeRelayWatch -Connection $c -Mailbox $mbS -Since 0 -TimeoutMs $long
+            $first = Wait-HordeRelayWatch -Watch $o.value -WaitMs 0
+            Close-HordeRelayWatch -Watch $o.value
+            Check ($first.state -ceq "known" -and $first.value.ended -eq $true -and (Texts $first) -ceq "slice-1") ("[" + $name + "] a watch in slices opened on a mailbox that already holds something hands it over in its first slice, even one of 0 ms")
+            $short = [Math]::Min(900, $lim.maxWatchMs)
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $o = Open-HordeRelayWatch -Connection $c -Mailbox "conf/slices-empty" -Since 0 -TimeoutMs $short
+            $slices = 0
+            do { $slices++; $last = Wait-HordeRelayWatch -Watch $o.value -WaitMs 250 } while ($last.state -ceq "known" -and -not $last.value.ended -and $slices -lt 100)
+            Close-HordeRelayWatch -Watch $o.value
+            $tookAll = $sw.ElapsedMilliseconds
+            Check ($last.state -ceq "known" -and $last.value.ended -eq $true -and @($last.value.items).Count -eq 0 -and $slices -ge 3 -and $tookAll -ge ($short - 100) -and $tookAll -lt ($short + 3000)) ("[" + $name + "] a watch in slices that nothing fills runs out by itself after its " + $short + " ms, empty (" + $slices + " slices, " + $tookAll + " ms)")
+            $after = Send-HordeRelayItem -Connection $c -Mailbox "conf/slices-empty" -Text "after-the-watch"
+            Check ($after.state -ceq "known" -and $after.value.seq -eq 1) ("[" + $name + "] and the relay is none the worse for it: the next put is taken")
+        }
 
         $k = Confirm-HordeRelayItems -Connection $c -Mailbox "conf/ordering" -Through 6
         Check ($k.state -ceq "unknown") ("[" + $name + "] an ack past the head (5) is refused")
