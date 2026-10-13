@@ -426,6 +426,23 @@ $lockP = Enter-HordeWakeLock -Mode "proof" -ProcessId 1 -HordeHome $h
 $secondP = "threw"
 try { $secondP = Enter-HordeWakeLock -Mode "proof" -ProcessId 2 -HordeHome $h } catch { $secondP = "threw" }
 try { Check ($null -ne $lockP -and (Test-Path -LiteralPath (Join-Path $h "wake\run-proof.lock")) -and $null -eq $secondP) "a proof run holds a lock of its own, and a second proof run is kept out" } finally { if ($null -ne $lockP) { $lockP.Dispose() }; if ($null -ne $secondP -and $secondP -isnot [string]) { $secondP.Dispose() } }
+# A RUN THAT SENDS RUNS ONLY A PROGRAM A PERSON NAMED: one the waker merely found is refused.
+$script:whence = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $false; how = "the command is in the folder found from the command on PATH, X:\somewhere\tool.cmd" }) }
+$found = Register-HordeWaker -Name "fixture-source" -Folder (Join-Path $root "test\fixtures\waker\caps\fixture-source") -Targets { New-HordeKnown -Value @() } -State { param($id) New-HordeUnknown -Reason "a fixture" } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" } -Source { & $script:whence }
+$foundPick = New-HordeKnown -Value $found
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked $foundPick
+Check ($p.ok -eq $false -and $p.usage -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("was not named in a setting") -and "$($p.reason)".Contains("found from the command on PATH")) "a live run through a waker whose program was only found on PATH is refused, saying where it was found"
+$p = Get-HordeWakeRunPlan -Mode "proof" -Once -Target (Sid 3) -Picked $foundPick
+Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("was not named in a setting")) "and so is a proof run: it types too"
+$p = Get-HordeWakeRunPlan -Picked $foundPick
+Check ($p.ok -and $p.live -eq $false -and [object]::ReferenceEquals($p.waker, $found) -and "$($p.banner)".StartsWith("SHADOW - ") -and "$($p.banner)".Contains("NOT NAMED IN A SETTING") -and "$($p.banner)".Contains("found from the command on PATH")) "a shadow run may read through it, and its banner says the program was not named and where it was found"
+$script:whence = { New-HordeKnown -Value ([pscustomobject]@{ fixed = $true; how = "the command is in the folder set as root in a settings file" }) }
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked $foundPick
+Check ($p.ok -and $p.live -eq $true -and -not "$((Get-HordeWakeRunPlan -Picked $foundPick).banner)".Contains("NOT NAMED")) "named in a setting, the same waker may send, and the shadow banner has nothing to say of it"
+$script:whence = { New-HordeUnknown -Reason "its settings are refused" }
+$p = Get-HordeWakeRunPlan -Mode "live" -Picked $foundPick
+Check ($p.ok -eq $false -and "$($p.reason)".Contains("could not say where its program comes from") -and (Get-HordeWakeRunPlan -Mode "proof" -Once -Target (Sid 3) -Picked $foundPick).ok -eq $false -and (Get-HordeWakeRunPlan -Picked $foundPick).ok) "a waker that cannot say where its program is may be read through in shadow and is refused for a run that sends"
+$script:HordeWakers.Remove("fixture-source")
 $p = Get-HordeWakeRunPlan -Mode "live" -Picked "not an answer"
 Check ($p.ok -eq $false -and $p.live -eq $false) "and an answer about the waker that is not one never makes a live run"
 

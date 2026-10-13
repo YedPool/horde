@@ -181,9 +181,11 @@ function Clear-HordeWezfleetWakerMemory {
 }
 
 function New-HordeWezfleetWakerChoice {
-    # A choice of folder: { ok; root; how; reason }. how finishes "the folder was ...".
-    param([string]$Root = "", [string]$How = "", [string]$Reason = "")
-    return [pscustomobject]@{ ok = ($Reason -eq ""); root = $Root; how = $How; reason = $Reason }
+    # A choice of folder: { ok; root; how; reason; fixed }. how finishes "the folder was ...". fixed says
+    # a person NAMED the folder - the root setting, or a test's own pointer - and is false for one that
+    # was only found, by looking the command up on PATH.
+    param([string]$Root = "", [string]$How = "", [string]$Reason = "", [switch]$Fixed)
+    return [pscustomobject]@{ ok = ($Reason -eq ""); root = $Root; how = $How; reason = $Reason; fixed = [bool]$Fixed }
 }
 
 function Find-HordeWezfleetWakerOnPath {
@@ -219,13 +221,25 @@ function Find-HordeWezfleetWakerOnPath {
 
 function Get-HordeWezfleetWakerChoice {
     # Which folder, and how it was chosen (header, WHERE THE FLEET IS), as a choice. Read on every call.
-    if ("$script:HordeWezfleetWakerRoot" -ne "") { return (New-HordeWezfleetWakerChoice -Root $script:HordeWezfleetWakerRoot -How "set by Set-HordeWezfleetWakerRoot") }
+    if ("$script:HordeWezfleetWakerRoot" -ne "") { return (New-HordeWezfleetWakerChoice -Root $script:HordeWezfleetWakerRoot -How "set by Set-HordeWezfleetWakerRoot" -Fixed) }
     $s = $null
     try { $s = Get-HordeModuleSettings -Declaration $script:HordeWezfleetWakerSettings }
     catch { return (New-HordeWezfleetWakerChoice -Reason ("the wezfleet settings could not be read, so the fleet's command was not run: " + $_.Exception.Message)) }
     if ($s.state -cne "defaults" -and $s.state -cne "read") { return (New-HordeWezfleetWakerChoice -Reason ("the fleet's command was not run, because the wezfleet settings are refused: " + (@($s.findings) -join "; "))) }
-    if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path)) }
+    if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path) -Fixed) }
     return (Find-HordeWezfleetWakerOnPath -SettingsPath $s.path)
+}
+
+function Get-HordeWezfleetWakerSource {
+    # The port's Source: where the fleet's command comes from, and whether a person named it.
+    # A COMMAND FOUND ON PATH IS NOT FIXED: it is whatever answers to the name wezfleet first on PATH at
+    # that moment, and a folder put ahead of it on PATH - by an installer, by another checkout, by
+    # anything that can write an environment variable - becomes the program that types into sessions.
+    # Reading a fleet through it is one thing; a run that SENDS must be told which program, in the
+    # root setting (safety review of PR 220). So this says which it was, and the watcher refuses.
+    $choice = Get-HordeWezfleetWakerChoice
+    if (-not $choice.ok) { return (New-HordeUnknown -Reason $choice.reason) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ fixed = [bool]$choice.fixed; how = (ConvertTo-HordeWezfleetWakerLine ("the fleet's command is in the folder " + $choice.how) -Max 400) }) -ObservedAt (Get-HordeWezfleetWakerTime))
 }
 
 function Test-HordeWezfleetWakerCheckout {
@@ -759,4 +773,5 @@ $null = Register-HordeWaker -Name "wezfleet" `
     -State { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id } `
     -Confirm { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id -Full } `
     -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
+    -Source { Get-HordeWezfleetWakerSource } `
     -Begin { Clear-HordeWezfleetWakerPass }

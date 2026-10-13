@@ -8,6 +8,18 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-run-that-sends-runs-a-program-nobody-named"
+           Find = 'if ($loose -cne "") { return (& $no ("wake run -Mode " + $Mode + " is refused: the program'
+           Replace = 'if ($false) { return (& $no ("wake run -Mode " + $Mode + " is refused: the program' }
+        @{ Name = "a-program-only-found-is-read-as-named"
+           Find = 'if ($null -ne $source -and $source.state -ceq "known" -and $source.value.fixed -ne $true) { $loose = "$($source.value.how)" }'
+           Replace = '' }
+        @{ Name = "a-waker-that-cannot-say-where-its-program-is-may-send"
+           Find = 'if ($null -ne $source -and $source.state -ceq "unknown") { $loose ='
+           Replace = 'if ($false) { $loose =' }
+        @{ Name = "shadow-is-silent-about-a-program-nobody-named"
+           Find = 'if ($loose -cne "" -and $source.state -ceq "known") { $note ='
+           Replace = 'if ($false) { $note =' }
         @{ Name = "the-evidence-does-not-reach-the-pass"
            Find = '-Silent:$silentNow -Only $only -MovedAt $movedAt'
            Replace = '-Silent:$silentNow -Only $only' }

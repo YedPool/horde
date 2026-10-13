@@ -155,6 +155,8 @@ $state = & $fx.New
 $null = Get-HordeWakeTargets -Waker $w
 $null = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
 $null = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+$src = Get-HordeWakerSource -Waker $w
+Check ($src.state -ceq "known" -and $src.value.fixed -eq $true) "CONTROL: a folder a test pointed the waker at is named, so the cases here may run"
 $started = @(& $fx.Runs $state)
 $system = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
 $script = Join-Path $state.dir "wezfleet.ps1"
@@ -465,6 +467,8 @@ try {
     & $fx.Remove @{ dir = ""; home = ""; oldHome = $state.home }
     $a = Get-HordeWakeTargets -Waker $w
     Check ($a.state -ceq "known" -and @($a.value).Count -eq 1) "with no folder set in the process, the fleet is found by root in the home's messenger-wezfleet.json - the setting the messenger reads - over the command on PATH"
+    $src = Get-HordeWakerSource -Waker $w
+    Check ($src.state -ceq "known" -and $src.value.fixed -eq $true -and "$($src.value.how)".Contains("set as root in")) "a folder named by the root setting is a program a person named: fixed"
     Remove-Item -LiteralPath (Join-Path $settingsDir "messenger-wezfleet.json")
     & $fx.Forget $state
     $a = Get-HordeWakeTargets -Waker $w
@@ -473,10 +477,17 @@ try {
     & $fx.Forget $state
     $a = Get-HordeWakeTargets -Waker $w
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("without ..")) "a shim that names a folder through .. is refused, as a configured folder with .. is"
+    $src = Get-HordeWakerSource -Waker $w
+    Check ($src.state -ceq "known" -and $src.value.fixed -eq $false -and "$($src.value.how)".Contains("found from the wezfleet command on PATH")) "a folder found from the command on PATH is NOT a program a person named, whatever it holds: not fixed, and how says it came from PATH"
+    Remove-Item -LiteralPath (Join-Path $bin "wezfleet.cmd")
+    $src = Get-HordeWakerSource -Waker $w
+    Check ($src.state -ceq "unknown" -or ($src.state -ceq "known" -and $src.value.fixed -eq $false)) "with no setting and nothing of this scenario's on PATH, the source is unknown or whatever this machine has on PATH - never fixed"
+    [System.IO.File]::WriteAllText((Join-Path $bin "wezfleet.cmd"), ("@echo off`r`npowershell -NoProfile -File ""%~dp0..\..\" + (Split-Path -Leaf $scratch) + "\checkout\wezfleet.ps1"" %*`r`n"))
     [System.IO.File]::WriteAllText((Join-Path $settingsDir "messenger-wezfleet.json"), "{ not json")
     & $fx.Forget $state
     $a = Get-HordeWakeTargets -Waker $w
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("settings are refused")) "a settings file that is refused is no folder at all: the command on PATH is not asked in its place"
+    Check ((Get-HordeWakerSource -Waker $w).state -ceq "unknown") "and where the program comes from is unknown then"
 } finally {
     $env:PATH = $oldPath
     $env:HORDE_HOME = $state.oldHome

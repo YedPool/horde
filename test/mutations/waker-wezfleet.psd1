@@ -6,6 +6,12 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-command-found-on-path-is-called-named"
+           Find = 'fixed = [bool]$choice.fixed; how ='
+           Replace = 'fixed = $true; how =' }
+        @{ Name = "the-root-setting-is-not-called-named"
+           Find = 'return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path) -Fixed) }'
+           Replace = 'return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path)) }' }
         @{ Name = "a-row-that-does-not-say-reads-as-not-limited"
            Find = '        $word = "unknown"'
            Replace = '        $word = "no"' }
@@ -171,7 +177,7 @@
            Find = 'if ($s.state -cne "defaults" -and $s.state -cne "read") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "path-wins-over-the-setting"
-           Find = 'if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path)) }'
+           Find = 'if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetWakerChoice -Root $s.values.root -How ("set as root in " + $s.path) -Fixed) }'
            Replace = '' }
         @{ Name = "folder-with-dot-dot-accepted"
            Find = '-or @($dir -split ''[\\/]'') -contains "..") {'

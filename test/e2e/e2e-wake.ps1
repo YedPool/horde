@@ -182,6 +182,24 @@ $status = Invoke-Wake $fleetHome @("status")
 Check ($status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -notmatch "LIVE: heartbeat \d+ s ago, STALE") "the same heartbeat from a watcher that beats every 300 s is fresh: stale is three of its ticks"
 
 Write-Host ""
+Write-Host "=== a fleet command only FOUND ON PATH: shadow reads through it and says so; a run that sends is refused ===" -ForegroundColor Cyan
+# A home with no settings at all, and this scenario's fake checkout first on PATH: the waker finds the
+# command by looking, as a shell typing wezfleet would. Nobody named it.
+$pathHome = Join-Path $script:work "home-path-only"
+New-Item -ItemType Directory -Path $pathHome -Force | Out-Null
+$pathEnv = @{ HORDE_HOME = $pathHome; USERPROFILE = $fakeProfile; PATH = ($checkout + ";" + $env:PATH) }
+$typedPath = @(Read-FakeLog "typed.log").Count
+$nudgesPath = @(Read-FakeLog "argv.log" | Where-Object { "$(@($_.argv) -join ' ')" -like "mail nudge*" }).Count
+$shadowPath = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "run", "-Once") -Env $pathEnv
+Check ($shadowPath.code -eq 0 -and $shadowPath.out -like "*wake: SHADOW*through the waker 'wezfleet'*" -and $shadowPath.out -like "*NOT NAMED IN A SETTING*found from the wezfleet command on PATH*" -and $shadowPath.out -like "*would-nudge*") ("a shadow run reads the fleet through a command found on PATH, and its banner says nobody named it" + $(if ($shadowPath.code -ne 0) { ": " + $shadowPath.out } else { "" }))
+$proofPath = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "run", "-Proof", "-Target", $idle, "-Once") -Env $pathEnv
+Check ($proofPath.code -eq 1 -and $proofPath.out -like "*is refused*was not named in a setting*found from the wezfleet command on PATH*" -and $proofPath.out -notlike "*wake: PROOF*") ("a proof run through it is refused, exit 1, saying where the command was found" + $(if ($proofPath.code -ne 1) { ": " + $proofPath.out } else { "" }))
+$livePath = Invoke-HordeCliProcess -Root $root -HordeArgs @("wake", "run", "-Mode", "live", "-Once") -Env $pathEnv
+Check ($livePath.code -eq 1 -and $livePath.out -notlike "*wake: LIVE*") "and so is a live run"
+Check (@(Read-FakeLog "typed.log").Count -eq $typedPath -and @(Read-FakeLog "argv.log" | Where-Object { "$(@($_.argv) -join ' ')" -like "mail nudge*" }).Count -eq $nudgesPath) "nothing was typed and no nudge was asked for by any of the three"
+Check (@(Get-ChildItem -LiteralPath (Join-Path $pathHome "wake") | Where-Object { $_.Name -like "*-proof*" -or $_.Name -like "*-live*" }).Count -eq 0) "and the refused runs wrote no file: no lock, no heartbeat, no ledger"
+
+Write-Host ""
 Write-Host "=== a home pinned to no fleet: it says what it could not read, once, and keeps beating ===" -ForegroundColor Cyan
 $pinnedWake = Join-Path $pinnedHome "wake"
 $beatPath = Join-Path $pinnedWake "heartbeat-shadow.json"

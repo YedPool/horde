@@ -122,13 +122,23 @@ function Get-HordeWakeRunPlan {
     if (Test-HordeAnswer $Picked) { $why = "$($Picked.reason)" }
     $unverified = @()
     if ($null -ne $waker) { $unverified = @(Get-HordeWakerUnverified -Waker $waker) }
+    # WHERE THE WAKER'S PROGRAM COMES FROM (wakers/Port.ps1, Get-HordeWakerSource). A RUN THAT SENDS
+    # REFUSES A PROGRAM NOBODY NAMED: one found on PATH is whatever is first on PATH that day, and it
+    # would be the program typing into sessions. Shadow may read through it, and says where it was found.
+    $source = $null
+    if ($null -ne $waker) { $source = Get-HordeWakerSource -Waker $waker }
+    $loose = ""
+    if ($null -ne $source -and $source.state -ceq "known" -and $source.value.fixed -ne $true) { $loose = "$($source.value.how)" }
+    if ($null -ne $source -and $source.state -ceq "unknown") { $loose = "it could not say where its program comes from (" + $source.reason + ")" }
     if ($Mode -ceq "shadow") {
         $note = ""
-        if ($unverified.Count -gt 0) { $note = ". UNVERIFIED, so nothing this run journals is proof of them: " + ($unverified -join ", ") }
+        if ($loose -cne "" -and $source.state -ceq "known") { $note = ". NOT NAMED IN A SETTING: " + $loose + " - a run that sends would be refused until it is" }
+        if ($unverified.Count -gt 0) { $note = $note + ". UNVERIFIED, so nothing this run journals is proof of them: " + ($unverified -join ", ") }
         if ($null -ne $waker) { return [pscustomobject]@{ ok = $true; usage = $false; mode = "shadow"; target = ""; live = $false; waker = $waker; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted; what would be is journaled. Reading state through the waker '" + $waker.name + "'" + $note) } }
         return [pscustomobject]@{ ok = $true; usage = $false; mode = "shadow"; target = ""; live = $false; waker = $null; reason = ""; banner = ("SHADOW - nothing is nudged and nothing is posted. No waker is installed, so no session is watched for unread mail; the restore source still runs (" + $why + ")") }
     }
     if ($null -eq $waker) { return (& $no ("wake run -Mode " + $Mode + " needs an installed waker to send its nudges through, and there is none: " + $why)) }
+    if ($loose -cne "") { return (& $no ("wake run -Mode " + $Mode + " is refused: the program the waker '" + $waker.name + "' would run was not named in a setting - " + $loose + ". A run that sends real nudges runs only a program a person named: set it in the waker's settings, and start again")) }
     if ($Mode -ceq "proof") {
         if (-not $Once) { return (& $no "wake run -Mode proof makes one pass and ends: add -Once. A proof left running is a live run through a waker nobody has verified") }
         $shows = "every capability of this waker is already yes"
