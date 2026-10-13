@@ -245,8 +245,10 @@ function Test-HordeServiceRevision {
     # stops on it (after the service has been stopped: a restart for nothing, repeated at every retry)
     # or, for an ignored file, writes over it without a word. So it is asked HERE, while the old
     # revision is still running and nothing has been stopped: every path the revision adds must be
-    # free in the working tree.
-    $added = Invoke-HordeServiceGit -Checkout $dir -Arguments @("diff", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision) -TimeoutSeconds $GitSeconds
+    # free in the working tree. --no-renames: with rename detection (the tool's default) a file the
+    # revision MOVES is listed as a rename, not as an addition, and its new path - which the move
+    # writes just the same - would not be asked about at all (second review of the services).
+    $added = Invoke-HordeServiceGit -Checkout $dir -Arguments @("diff", "--no-renames", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision) -TimeoutSeconds $GitSeconds
     if (-not $added.ok) { return (& $fail ("what it adds could not be listed (" + $added.detail + ")")) }
     foreach ($rel in @($added.out -split "`0" | Where-Object { $_ -ne "" })) {
         $there = [System.IO.Path]::Combine($dir, ($rel -replace '/', '\'))

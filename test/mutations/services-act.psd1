@@ -109,6 +109,9 @@
         @{ Name = "file-in-the-way-not-asked"
            Find = 'if ([System.IO.File]::Exists($there) -or [System.IO.Directory]::Exists($there)) { return (& $fail ("it adds "'
            Replace = 'if ($false) { return (& $fail ("it adds "' }
+        @{ Name = "moved-file-not-asked"
+           Find = '@("diff", "--no-renames", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision)'
+           Replace = '@("diff", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision)' }
         @{ Name = "cut-move-says-untouched"
            Find = '{ return (& $fail ("the checkout did not move, or not wholly (" + $moved.detail + ")") $true) }'
            Replace = '{ return (& $fail ("the checkout did not move, or not wholly (" + $moved.detail + ")")) }' }

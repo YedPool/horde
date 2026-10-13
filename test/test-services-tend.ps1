@@ -629,6 +629,26 @@ try {
     $full = Get-HordeServiceCheckoutState -Definition $liveDef -RunningRevision $c1 -Full
     Check ($full.checkout.state -ceq "known" -and $full.checkout.value.spotless -eq $true -and $full.checkout.value.head -ceq $c1) "the full look, with the stray file ignored, finds nothing stray"
     [System.IO.File]::Delete((Join-Path $live "lib.ps1"))
+    # A FILE THE NEW REVISION ONLY MOVES. The tool lists a moved file as a rename unless told not to,
+    # and a rename is not an addition: its new path was never asked about. The revision is made in
+    # the checkout itself, one commit ahead of what is checked out, and the checkout is put back.
+    $movedFrom = @((G $live @("ls-files")) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notlike "*/*" })[0]
+    $null = G $live @("mv", $movedFrom, "moved-here.ps1")
+    $null = G $live @("-c", "user.name=suite", "-c", "user.email=suite@example.invalid", "commit", "-q", "-m", "move one file")
+    $renameTip = G $live @("rev-parse", "HEAD")
+    $null = G $live @("checkout", "-q", "--detach", $c1)
+    Check ($renameTip -cne $c1 -and ((G $live @("diff", "--name-status", $c1, $renameTip)) -like "R*") -and (G $live @("diff", "--no-renames", "--name-only", "--diff-filter=A", $c1, $renameTip)) -ceq "moved-here.ps1") "CONTROL: the tool calls that revision a rename, and lists the new path as added only when told not to look for renames"
+    [System.IO.File]::WriteAllText((Join-Path $live "moved-here.ps1"), "somebody's own untracked file, at the path the new revision moves a file to")
+    # The check takes only what the remote's branch names, so for this one question the checkout's
+    # record of that branch is pointed at the revision, and put back straight after.
+    $tipRef = Get-HordeServiceRemoteRef -Definition $tipDef
+    $tipWas = G $live @("rev-parse", "--verify", $tipRef)
+    $null = G $live @("update-ref", $tipRef, $renameTip)
+    try { $ren = Test-HordeServiceRevision -Definition $tipDef -Revision $renameTip -TempRoot $scratchRoot -CheckSeconds 120 }
+    finally { $null = G $live @("update-ref", $tipRef, $tipWas) }
+    Check (-not $ren.ok -and $ren.detail -like "*it adds moved-here.ps1, and something of that name already lies in the checkout, untracked*") "the check refuses a revision that MOVES a file onto a path where something untracked already lies - a rename's new path is asked about too"
+    [System.IO.File]::Delete((Join-Path $live "moved-here.ps1"))
+    Check ((G $live @("rev-parse", "HEAD")) -ceq $c1 -and (G $live @("status", "--porcelain")) -eq "" -and (G $live @("rev-parse", "--verify", $tipRef)) -ceq $tipWas) "and the checkout, and its record of the remote's branch, are as they were"
     [System.IO.File]::WriteAllText((Join-Path $live "left-by-a-cut-move.txt"), "x")
     $full = Get-HordeServiceCheckoutState -Definition $liveDef -RunningRevision $c1 -Full
     Check ($full.checkout.value.spotless -eq $false -and $full.checkout.value.clean -eq $true -and (Get-HordeServiceCheckoutState -Definition $liveDef -RunningRevision $c1).checkout.value.PSObject.Properties["spotless"] -eq $null) "the full look sees a stray untracked file that the cheap look does not ask about: spotless is not the same as clean"
