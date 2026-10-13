@@ -28,6 +28,7 @@ function Get-HordeCommandGroups {
         hub = "the hub: its nodes and what it mirrors of them"
         decisions = "questions waiting for a person"
         relay = "the founder's phone, through the relay"
+        wake = "waking the sessions that have mail"
     }
 }
 
