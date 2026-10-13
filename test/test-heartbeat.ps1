@@ -31,7 +31,7 @@ try {
     $read = Read-HordeHeartbeat -Path $path
     Check ($read.state -ceq "known" -and $read.value.pid -eq 4242 -and $read.value.tickSeconds -eq 97 -and $read.value.pass -eq 7) "the pid, the tick and the pass come back"
     Check ($read.value.at -eq $t0 -and $read.value.at.Kind -eq [System.DateTimeKind]::Utc) "the time comes back as the same instant, in UTC"
-    Check ($read.value.startedAt.Ticks -eq $born.Ticks) "the process's start comes back to the tick: it is half of the identity"
+    Check ($read.value.startedAt -is [datetime] -and $read.value.startedAt.Ticks -eq $born.Ticks) "the process's start comes back to the tick: it is half of the identity"
     Check (@(Get-ChildItem -LiteralPath (Join-Path $work "sub")).Count -eq 1) "nothing is left beside it: the temporary file became the heartbeat"
     Write-HordeHeartbeat -Path $path -At $t0.AddSeconds(5) -ProcessId 4242 -ProcessStartedAt $born -TickSeconds 97 -Pass 8
     Check ((Read-HordeHeartbeat -Path $path).value.pass -eq 8) "a second beat replaces the first"
@@ -87,7 +87,8 @@ try {
     Write-Host "--- the quiet write never throws ---" -ForegroundColor Cyan
     $blocked = Join-Path $work "afile"
     [System.IO.File]::WriteAllText($blocked, "x")
-    $q = Write-HordeHeartbeatQuietly -Path (Join-Path $blocked "beat.json") -At $t0 -ProcessId 1 -TickSeconds 1
+    $q = $null
+    try { $q = Write-HordeHeartbeatQuietly -Path (Join-Path $blocked "beat.json") -At $t0 -ProcessId 1 -TickSeconds 1 } catch { $q = New-HordeUnknown -Reason ("IT THREW: " + $_.Exception.Message) }
     Check ($q.state -ceq "unknown" -and $q.reason -like "the heartbeat could not be written*") "a heartbeat that cannot be written is an unknown with the reason, not an error"
     $q2 = Write-HordeHeartbeatQuietly -Path (Join-Path $work "quiet.json") -At $t0 -ProcessId 1 -ProcessStartedAt $born -TickSeconds 1
     Check ($q2.state -ceq "known" -and (Read-HordeHeartbeat -Path (Join-Path $work "quiet.json")).state -ceq "known") "and one that can be is written"

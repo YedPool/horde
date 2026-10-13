@@ -63,7 +63,7 @@ function Get-HordeServiceStatePath {
 
 function Get-HordeServiceLogPath {
     param([Parameter(Mandatory = $true)][string]$Name, [string]$HordeHome = "")
-    if ($Name -cnotmatch $script:HordeServiceNamePattern) { throw ("not a service name: '" + $Name + "'") }
+    if ($Name -cnotmatch $script:HordeServiceNamePattern) { throw ("not a service name, so it has no log: '" + $Name + "'") }
     return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "logs", ($Name + ".log"))
 }
 

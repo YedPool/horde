@@ -32,9 +32,8 @@
            Find = 'if ($null -eq $at) { return (New-HordeUnknown -Reason "the heartbeat holds no time") }'
            Replace = 'if ($null -eq $at) { $at = [datetime]::UtcNow }' }
         @{ Name = "zoneless-time-accepted"
-           Find = '    if ($parsed.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }
-    return $parsed.ToUniversalTime()'
-           Replace = '    return $parsed.ToUniversalTime()' }
+           Find = 'if ($parsed.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }'
+           Replace = '' }
         @{ Name = "no-pid-accepted"
            Find = 'if ($processId -eq 0) { return (New-HordeUnknown -Reason "the heartbeat names no process") }'
            Replace = '' }

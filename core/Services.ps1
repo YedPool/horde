@@ -116,8 +116,9 @@ $script:HordeServiceDashes = @([char]0x2D, [char]0x2010, [char]0x2011, [char]0x2
 $script:HordeServiceParameterPattern = '\A[A-Za-z][A-Za-z0-9]{0,39}\z'
 $script:HordeServiceRemotePattern = '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z'
 $script:HordeServiceBranchPattern = '\A[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\z'
-# A heartbeat's place under the home it serves: plain names joined by one separator, so it can neither
-# be rooted nor climb out with "..".
+# A heartbeat's place under the home it serves: plain names joined by one separator. Every name
+# starts with a letter, a digit or an underscore, so the place can neither be rooted (no drive, no
+# leading slash) nor climb out ("." and ".." are not names here).
 $script:HordeServiceRelativePattern = '\A[A-Za-z0-9_][A-Za-z0-9._-]{0,63}([\\/][A-Za-z0-9_][A-Za-z0-9._-]{0,63}){0,7}\z'
 $script:HordeServiceRevisionPattern = '\A[0-9a-f]{40}\z'
 $script:HordeServiceTextCap = 1024
@@ -313,7 +314,7 @@ function ConvertTo-HordeServiceDefinition {
             $tick = Get-HordeServiceWhole -Have $ah -Name "tickSeconds" -Default 60 -Min 1 -Max 3600
             if (-not $tick.ok) { [void]$found.Add($at + ".alive.tickSeconds must be a whole number from 1 to 3600") }
             $relative = ""
-            if ((Test-HordeServiceText -Value $ah["heartbeat"] -Pattern $script:HordeServiceRelativePattern) -and ("" + $ah["heartbeat"]) -notmatch '(\A|[\\/])\.\.?([\\/]|\z)') { $relative = [string]$ah["heartbeat"] }
+            if (Test-HordeServiceText -Value $ah["heartbeat"] -Pattern $script:HordeServiceRelativePattern) { $relative = [string]$ah["heartbeat"] }
             else { [void]$found.Add($at + ".alive.heartbeat must be a file's place under hordeHome: plain names joined by a slash, never rooted and never '..'") }
             if ($servedHome -eq "") { [void]$found.Add($at + ".hordeHome is needed: its heartbeat is under the home it serves") }
             $path = ""
@@ -564,6 +565,15 @@ function New-HordeServiceTrouble {
     return [pscustomobject]@{ key = $Key; text = $Text }
 }
 
+function Get-HordeServiceFailingTrouble {
+    # The trouble of a service that keeps failing to stay up, or $null while it has failed fewer times
+    # in a row than the setting failuresBeforeEscalation. One place, because two branches of the
+    # decision ask it: a service whose liveness cannot be told this pass is still one that has failed.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Policy)
+    if ([int]$State.failures -lt [int]$Policy.failuresBeforeEscalation) { return $null }
+    return (New-HordeServiceTrouble -Key "failing" -Text ("it has not stayed up after " + $State.failures + " starts in a row; it is still tried, slowly"))
+}
+
 function Get-HordeServiceDecision {
     # PURE. The one decision for one service this pass (the header):
     #   { action; step; code; reason; process; revision; notify; notice; live; state }
@@ -678,7 +688,7 @@ function Get-HordeServiceDecision {
 
     # ---- steady ------------------------------------------------------------------------------------
     if ($live.alive -ceq "unknown") {
-        if ($s.failures -ge $Policy.failuresBeforeEscalation) { [void]$troubles.Add((New-HordeServiceTrouble -Key "failing" -Text ("it has not stayed up after " + $s.failures + " starts in a row; it is still tried, slowly"))) }
+        $failing = Get-HordeServiceFailingTrouble -State $s -Policy $Policy; if ($null -ne $failing) { [void]$troubles.Add($failing) }
         return (& $finish "wait" "" "cannot-tell" ("nothing is done: " + $live.why))
     }
     # Settle the restart-loop guard from what is seen.
@@ -691,7 +701,7 @@ function Get-HordeServiceDecision {
         if ($s.proving -and ($null -eq $s.started -or ($at - $s.started.at).TotalSeconds -ge $Policy.stableSeconds)) { $s.proving = $false; $s.failures = 0; $s.nextStartAt = $null }
         if (-not $s.proving -and $s.failures -ne 0) { $s.failures = 0; $s.nextStartAt = $null }
     }
-    if ($s.failures -ge $Policy.failuresBeforeEscalation) { [void]$troubles.Add((New-HordeServiceTrouble -Key "failing" -Text ("it has not stayed up after " + $s.failures + " starts in a row; it is still tried, slowly"))) }
+    $failing = Get-HordeServiceFailingTrouble -State $s -Policy $Policy; if ($null -ne $failing) { [void]$troubles.Add($failing) }
 
     if ($live.alive -ceq "starting") { return (& $finish "wait" "" "starting" $live.why) }
     if ($live.alive -ceq "hung") {
@@ -820,9 +830,9 @@ function Add-HordeServiceNotice {
     # is dropped when more than the cap wait: the newest say what is true now.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Decision, [Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][datetime]$Now)
     if ($Decision.notify -eq "") { return $State }
-    $s = Copy-HordeServiceState -State $State
-    $s.notices = @(@($s.notices) + @([pscustomobject]@{ id = $Id; kind = $Decision.notify; text = $Decision.notice; at = $Now.ToUniversalTime() }) | Select-Object -Last $script:HordeServiceNoticesMost)
-    return $s
+    $next = Copy-HordeServiceState -State $State
+    $next.notices = @(@($next.notices) + @([pscustomobject]@{ id = $Id; kind = $Decision.notify; text = $Decision.notice; at = $Now.ToUniversalTime() }) | Select-Object -Last $script:HordeServiceNoticesMost)
+    return $next
 }
 
 function Test-HordeServiceFetchDue {

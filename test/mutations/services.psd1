@@ -24,12 +24,9 @@
         @{ Name = "relative-checkout-allowed"
            Find = 'if ((Test-HordeServiceText -Value $have["checkout"]) -and (Test-HordeModuleSettingFolder -Path $have["checkout"])) {'
            Replace = 'if (Test-HordeServiceText -Value $have["checkout"]) {' }
-        @{ Name = "heartbeat-may-climb"
-           Find = ' -and ("" + $ah["heartbeat"]) -notmatch ''(\A|[\\/])\.\.?([\\/]|\z)'') { $relative = [string]$ah["heartbeat"] }'
-           Replace = ') { $relative = [string]$ah["heartbeat"] }' }
-        @{ Name = "heartbeat-may-be-rooted"
-           Find = 'if ((Test-HordeServiceText -Value $ah["heartbeat"] -Pattern $script:HordeServiceRelativePattern) -and'
-           Replace = 'if ((Test-HordeServiceText -Value $ah["heartbeat"]) -and' }
+        @{ Name = "heartbeat-may-be-rooted-or-climb"
+           Find = 'if (Test-HordeServiceText -Value $ah["heartbeat"] -Pattern $script:HordeServiceRelativePattern) {'
+           Replace = 'if (Test-HordeServiceText -Value $ah["heartbeat"]) {' }
         @{ Name = "branch-unchecked"
            Find = 'if ((Test-HordeServiceText -Value $b -Pattern $script:HordeServiceBranchPattern) -and $b -notmatch ''\.\.'' -and'
            Replace = 'if ((Test-HordeServiceText -Value $b -Pattern $script:HordeServiceBranchPattern) -and'  }
@@ -91,9 +88,8 @@
            Find = 'if ($s.nextStartAt -is [datetime] -and $at -lt $s.nextStartAt) {'
            Replace = 'if ($false) {' }
         @{ Name = "young-death-not-counted"
-           Find = '        if ($s.proving) { $s.failures = [int]$s.failures + 1; $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy)) }
-        $s.started = $null; $s.proving = $false'
-           Replace = '        $s.started = $null; $s.proving = $false' }
+           Find = 'if ($s.proving) { $s.failures = [int]$s.failures + 1; $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy)) }'
+           Replace = '' }
         @{ Name = "backoff-does-not-double"
            Find = '{ $wait = $wait * 2 }'
            Replace = '{ $wait = $wait }' }
@@ -104,10 +100,11 @@
            Find = 'if ($s.proving -and ($null -eq $s.started -or ($at - $s.started.at).TotalSeconds -ge $Policy.stableSeconds)) {'
            Replace = 'if ($s.proving) {' }
         @{ Name = "never-escalates-failing"
-           Find = '    if ($s.failures -ge $Policy.failuresBeforeEscalation) { [void]$troubles.Add((New-HordeServiceTrouble -Key "failing" -Text ("it has not stayed up after " + $s.failures + " starts in a row; it is still tried, slowly"))) }
-
-    if ($live.alive -ceq "starting")'
-           Replace = '    if ($live.alive -ceq "starting")' }
+           Find = 'if ([int]$State.failures -lt [int]$Policy.failuresBeforeEscalation) { return $null }'
+           Replace = 'if ($true) { return $null }' }
+        @{ Name = "escalates-at-the-first-failure"
+           Find = 'if ([int]$State.failures -lt [int]$Policy.failuresBeforeEscalation) { return $null }'
+           Replace = 'if ([int]$State.failures -lt 1) { return $null }' }
         @{ Name = "escalates-every-pass"
            Find = '$fresh = @($troubles | Where-Object { @($s.told) -cnotcontains $_.key })'
            Replace = '$fresh = @($troubles)' }
@@ -118,9 +115,8 @@
            Find = '    $stable = (-not $s.proving)'
            Replace = '    $stable = $true' }
         @{ Name = "hung-left-alone"
-           Find = '        $s.phase = "stopping"; $s.intent = "heal"; $s.phaseSince = $at
-        return (& $finish "start" "stop" "hung"'
-           Replace = '        return (& $finish "wait" "" "hung"' }
+           Find = 'return (& $finish "start" "stop" "hung"'
+           Replace = 'return (& $finish "wait" "" "hung"' }
         @{ Name = "stop-never-overdue"
            Find = 'if ($asked -lt $Definition.stop.waitSeconds) { return (& $finish "wait" "" "stopping"'
            Replace = 'if ($true) { return (& $finish "wait" "" "stopping"' }
@@ -171,10 +167,8 @@
            Find = '        if ($live.alive -ceq "no") { $rollback = "the new revision''s process ended before it proved itself" }'
            Replace = '' }
         @{ Name = "rollback-not-told"
-           Find = '        $s.phase = "stopping"; $s.intent = "rollback"; $s.phaseSince = $at; $s.confirmBy = $null
-        [void]$troubles.Add('
-           Replace = '        $s.phase = "stopping"; $s.intent = "rollback"; $s.phaseSince = $at; $s.confirmBy = $null
-        [void]@(' }
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart (" + $rollback'
+           Replace = '[void]@((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart (" + $rollback' }
         @{ Name = "bad-revision-not-pinned"
            Find = '            $s.pinnedRevision = $s.target; $s.verifiedRevision = ""'
            Replace = '            $s.verifiedRevision = ""' }
@@ -182,8 +176,7 @@
            Find = '            else { $s.verifiedRevision = ""; $s.refused = [pscustomobject]@{ revision = $Decision.revision; kind = "verify"; reason = $detail; at = $at } }'
            Replace = '            else { $s.verifiedRevision = $Decision.revision }' }
         @{ Name = "failed-start-not-counted"
-           Find = '                $s.failures = [int]$s.failures + 1
-                $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy))'
+           Find = '                $s.failures = [int]$s.failures + 1'
            Replace = '' }
         @{ Name = "new-revision-start-failure-not-rolled-back"
            Find = '                $s.intent = "rollback"; $s.phase = "stopping"; $s.phaseSince = $at; $s.started = $null'
@@ -192,10 +185,8 @@
            Find = 'if ($s.phase -ceq "launching" -and $s.intent -ceq "update") { $s.phase = "confirming"; $s.phaseSince = $at; $s.confirmBy = $at.AddSeconds($Definition.confirmSeconds) }'
            Replace = 'if ($s.phase -ceq "launching" -and $s.intent -ceq "update") { $s.phase = "steady"; $s.intent = ""; $s.runningRevision = $s.target }' }
         @{ Name = "decision-changes-its-input"
-           Find = '    $s = Copy-HordeServiceState -State $State
-    $live = Get-HordeServiceLiveness'
-           Replace = '    $s = $State
-    $live = Get-HordeServiceLiveness' }
+           Find = '    $s = Copy-HordeServiceState -State $State'
+           Replace = '    $s = $State' }
         @{ Name = "notices-unbounded"
            Find = 'at = $Now.ToUniversalTime() }) | Select-Object -Last $script:HordeServiceNoticesMost)'
            Replace = 'at = $Now.ToUniversalTime() }))' }

@@ -50,9 +50,8 @@
            Find = 'told = @($State.told | ForEach-Object { "" + $_ });'
            Replace = 'told = @();' }
         @{ Name = "state-path-from-any-name"
-           Find = '    if ($Name -cnotmatch $script:HordeServiceNamePattern) { throw ("not a service name: ''" + $Name + "''") }
-    return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "state", ($Name + ".json"))'
-           Replace = '    return [System.IO.Path]::Combine((Get-HordeServiceFolder -HordeHome $HordeHome), "state", ($Name + ".json"))' }
+           Find = 'if ($Name -cnotmatch $script:HordeServiceNamePattern) { throw ("not a service name: ''" + $Name + "''") }'
+           Replace = '' }
         @{ Name = "wait-journaled-every-pass"
            Find = '    return ((Get-HordeServiceSaidKey -Decision $Decision) -cne $LastSaid)'
            Replace = '    return $true' }

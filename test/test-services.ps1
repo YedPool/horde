@@ -65,6 +65,8 @@ try {
     Check ($d.stop.kind -ceq "horde" -and ($d.stop.words -join " ") -ceq "relay stop" -and $d.stop.waitSeconds -eq 20) "how it is asked to stop, and for how long"
     Check ($d.alive.heartbeat -ceq "relay\run-heartbeat.json" -and $d.alive.path -ceq "C:\hh\relay\run-heartbeat.json" -and $d.alive.tickSeconds -eq 60) "its heartbeat is a place under the home it serves"
     Check ($d.follow.remote -ceq "origin" -and $d.follow.branch -ceq "main" -and $d.follow.restart -ceq "idle" -and $d.follow.idleSeconds -eq 300) "it follows origin main unless told otherwise, restarted only when the person is idle"
+    $bare = (One ($places + ", " + $startHorde + ", " + $stopHorde + ', "follow": { }')).follow
+    Check ($bare.restart -ceq "idle" -and $bare.remote -ceq "origin" -and $bare.branch -ceq "main" -and $bare.idleSeconds -eq 300) "a follow that says nothing restarts only when the person is idle: the careful rule is the default"
     $p = $r.services[1]
     Check ($p.start.kind -ceq "program" -and $p.start.program -ceq "C:\tools\throttle.exe" -and ($p.start.arguments -join "|") -ceq "-quiet|a b" -and $p.stop.kind -ceq "kill" -and $null -eq $p.alive -and $null -eq $p.follow -and $p.stop.waitSeconds -eq 30 -and $p.confirmSeconds -eq 120) "a service that is not a horde command fits the same shape: a program and its arguments, no heartbeat, nothing followed"
     Check ((Read-HordeServiceDefinitionsText -Text $null).state -ceq "none" -and @((Read-HordeServiceDefinitionsText -Text $null).services).Count -eq 0) "no file is no services, and not an error"
@@ -153,7 +155,8 @@ try {
     $adopt = & $live $svc $st (Obs -Beat (Beat 800 $born $t0.AddSeconds(-5)) -Beater (Proc 800 $born))
     Check ($adopt.alive -ceq "yes" -and -not $adopt.ours -and $adopt.process.pid -eq 800) "a running process found by its heartbeat, started by someone else, is alive and adopted"
     Check ((& $live $svc $held (Obs -Started (New-HordeUnknown -Reason "no table"))).alive -ceq "unknown") "a process that cannot be checked is unknown"
-    Check ((& $live $svc $held (Obs -Running $run -Beat (New-HordeUnknown -Reason "held"))).alive -ceq "unknown") "a heartbeat that cannot be read is unknown"
+    $unread = & $live $svc $held (Obs -Running $run -Beat (New-HordeUnknown -Reason "held"))
+    Check ($unread.alive -ceq "unknown" -and $unread.why -ceq "its heartbeat could not be read: held") "a heartbeat that cannot be read is unknown, and says that it is the heartbeat"
     Check ((& $live $plain $held (Obs -Running $run)).alive -ceq "yes" -and (& $live $plain $held (Obs)).alive -ceq "no") "a service with no heartbeat is alive exactly while its process is"
 
     Write-Host ""
@@ -281,13 +284,18 @@ try {
     Check ((Is $dBranch "wait" "" "on-a-branch") -and $dBranch.notice -like "*feature/x*") "a checkout on a branch is somebody's work: wait and tell"
     $dMended = Decide $up $dDirty.state (Obs -Running $run -Beat (& $fresh $t0) -Checkout (Co $revA) -Wanted (Want $revA)) $t0.AddSeconds(120)
     Check ($dMended.notify -ceq "recovered" -and @($dMended.state.told).Count -eq 0) "when the trouble is gone and the service is well, that is said once"
+    # ...and only once it has stayed up: a service started seconds ago has not recovered from anything yet.
+    $justUp = Copy-HordeServiceState -State $dDirty.state; $justUp.proving = $true; $justUp.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $t0.AddSeconds(100) }
+    $dEarly = Decide $up $justUp (Obs -Running $run -Beat (& $fresh $t0.AddSeconds(120)) -Checkout (Co $revA) -Wanted (Want $revA)) $t0.AddSeconds(120)
+    Check ($dEarly.notify -eq "" -and @($dEarly.state.told).Count -eq 1 -and $dEarly.state.proving) "a service that came up twenty seconds ago is not yet called recovered"
+    Check ((Decide $up $justUp (Obs -Running $run -Beat (& $fresh $t0.AddSeconds(400)) -Checkout (Co $revA) -Wanted (Want $revA)) $t0.AddSeconds(400)).notify -ceq "recovered") "once it has stayed up 300 s, it is"
 
     Write-Host ""
     Write-Host "--- a revision that fails its check is not started; it is tried again later ---" -ForegroundColor Cyan
     $s = New-HordeServiceState -Name "svc"; $s.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }; $s.runningRevision = $revA
     $dV = Decide $up $s (& $seen $t0 $idle) $t0
     $s = Did $up $dV $false $t0 $null "cli/Broken.ps1 does not parse (line 3)"
-    Check ($s.refused.kind -ceq "verify" -and $s.refused.revision -ceq $revB -and $s.verifiedRevision -eq "" -and $s.phase -ceq "steady") "a failed check is recorded against that revision, and nothing was stopped"
+    Check ($null -ne $s.refused -and $s.refused.kind -ceq "verify" -and $s.refused.revision -ceq $revB -and $s.verifiedRevision -eq "" -and $s.phase -ceq "steady") "a failed check is recorded against that revision, and nothing was stopped"
     $dNot = Decide $up $s (& $seen $t0.AddMinutes(1) $idle) $t0.AddMinutes(1)
     Check ((Is $dNot "wait" "" "not-verified") -and $dNot.notify -ceq "escalate" -and $dNot.notice -like "*failed its check*does not parse*old revision keeps running*") "the update waits as not verified, and someone is told why"
     Check ((Decide $up $dNot.state (& $seen $t0.AddMinutes(29) $idle) $t0.AddMinutes(29)).code -ceq "not-verified") "29 minutes later it still waits"
