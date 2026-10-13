@@ -8,6 +8,18 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-silence-is-not-saved"
+           Find = 'if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-silence-is-not-read-back"
+           Find = 'if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }'
+           Replace = 'if ($false) { $run.silence = $savedSilence.value.seen }' }
+        @{ Name = "an-unreadable-silence-is-not-said"
+           Find = 'elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }'
+           Replace = '' }
+        @{ Name = "the-end-of-a-silence-is-not-saved"
+           Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)'
+           Replace = 'return ("" + $since + "|" + $moved)' }
         @{ Name = "the-watchers-own-session-does-not-reach-the-pass"
            Find = '-Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"'
            Replace = '-Only $only -Moves $moves' }

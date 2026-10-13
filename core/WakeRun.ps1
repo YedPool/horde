@@ -97,6 +97,11 @@ function New-HordeWakeRun {
         if ($run.live) { $run.refused = ("its ledger is there and cannot be read (" + $saved.reason + "): a run that sends does not start from a ledger it cannot read, because that would forget every back-off and every session it gave up on. Mend the file, or remove it to start from nothing on purpose: " + (Get-HordeWakeStateFile -Name "ledger" -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome)) }
         else { $run.said = @($run.said) + ("starting from an empty ledger - " + $saved.reason) }
     }
+    # THE SILENCE, read back with the ledger it goes with (core/Wake.ps1, Save-HordeWakeSilence): the
+    # sending runs share one, as they share the ledger whose attempts it forgave.
+    $savedSilence = Read-HordeWakeSilence -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
+    if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }
+    elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }
@@ -174,6 +179,23 @@ function Get-HordeWakeRunPick {
     param([string]$Mode = "shadow")
     if ($Mode -ceq "live") { return (Resolve-HordeProductionWaker) }
     return (Resolve-HordeProductionWaker -AllowUnverified)
+}
+
+function Get-HordeWakeSilenceMark {
+    # One line that changes exactly when what is SAVED of the silence changes: whether, since when, and
+    # who was seen taking mail when. The tick saves on a change of it, not on every pass.
+    param($Seen)
+    if ($null -eq $Seen) { return "" }
+    $since = ""
+    $q = Get-HordeWakeEntryValue $Seen "quietSince"
+    if ($q -is [datetime]) { $since = $q.Ticks }
+    $moved = ""
+    $moves = Get-HordeWakeEntryValue $Seen "moves"
+    if ($moves -is [System.Collections.IDictionary]) { $moved = (@($moves.Keys | Sort-Object | ForEach-Object { "$_" + "@" + $(if ($moves[$_] -is [datetime]) { $moves[$_].Ticks } else { "" }) }) -join ",") }
+    # Nothing to say - not silent, no quiet begun, nobody seen taking mail - is the same as nothing seen:
+    # no file is written for it.
+    if ((Get-HordeWakeEntryValue $Seen "silent") -ne $true -and $since -eq "" -and $moved -eq "") { return "" }
+    return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since + "|" + $moved)
 }
 
 function Get-HordeWakeRunMode {
@@ -318,8 +340,14 @@ function Invoke-HordeWakeTick {
         $heldNow = Update-HordeWakeSaidOnce -Seen $Run.held -Said $result.held -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }
+        $silenceWas = Get-HordeWakeSilenceMark -Seen $Run.silence
         $silence = Update-HordeWakeSilence -Seen $Run.silence -Entries $result.entries -Mail $result.mail -Now $Now -Settings $Settings
         $Run.silence = $silence.seen
+        # SAVED WHEN IT CHANGES - silent or not, since when, who took mail - so a restart goes on from it.
+        if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {
+            try { Save-HordeWakeSilence -Seen $Run.silence -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
+            catch { [void]$failed.Add([pscustomobject]@{ id = "silence"; reason = ("what is known of a silent fleet could not be saved: " + $_.Exception.Message) }) }
+        }
         foreach ($e in @($silence.entries)) { [void]$entries.Add($e) }
         if ($silence.declared -or $silence.moved) {
             if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }

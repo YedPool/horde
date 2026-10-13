@@ -994,3 +994,41 @@ function Read-HordeWakeLedger {
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }
     return (New-HordeKnown -Value ([pscustomobject]@{ ledger = $ledger }))
 }
+
+# ---- the file: <home>\wake\silence-<mode>.json ----
+
+function Save-HordeWakeSilence {
+    # WHETHER THE FLEET IS SILENT, SINCE WHEN, AND WHO WAS LAST SEEN TAKING MAIL, replaced whole. It lived
+    # only in the running watcher: a watcher restarted in a silent fleet forgot the silence, counted
+    # its knocks again from the forgiven ledger, and spent every session's budget a second time before
+    # finding the silence anew (safety review of PR 220). The nudges and the mail it was worked out
+    # from are not saved: they are read afresh, and a silence that is saved needs none of them to last.
+    param($Seen, [string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $since = $null
+    $q = Get-HordeWakeEntryValue $Seen "quietSince"
+    if ($q -is [datetime]) { $since = ConvertTo-HordeWakeTimeText $q }
+    $rows = @()
+    $moves = Get-HordeWakeEntryValue $Seen "moves"
+    if ($moves -is [System.Collections.IDictionary]) { $rows = @($moves.Keys | Sort-Object | Where-Object { $moves[$_] -is [datetime] } | ForEach-Object { [ordered]@{ id = "$_"; at = (ConvertTo-HordeWakeTimeText $moves[$_]) } }) }
+    $doc = [ordered]@{ schemaVersion = 1; silent = ((Get-HordeWakeEntryValue $Seen "silent") -eq $true); quietSince = $since; moves = $rows }
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "silence" -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+}
+
+function Read-HordeWakeSilence {
+    # What Save-HordeWakeSilence wrote, as Update-HordeWakeSilence's -Seen: known { seen }, absent when
+    # there is none, or unknown when it cannot be read - the caller then starts as though the fleet
+    # were not silent, and says so.
+    param([string]$Mode = "", [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name "silence" -Mode $Mode -HordeHome $HordeHome
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "nothing of a silent fleet was saved in this home") }
+    try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
+    catch { return (New-HordeUnknown -Reason "what was saved of a silent fleet could not be read" -ErrorRecord $_) }
+    if ($null -eq $j -or $null -eq $j.PSObject.Properties["silent"] -or $j.silent -isnot [bool]) { return (New-HordeUnknown -Reason "what was saved of a silent fleet does not say whether it was silent") }
+    $since = $null
+    $moves = @{}
+    try {
+        if ($null -ne $j.PSObject.Properties["quietSince"] -and $null -ne $j.quietSince) { $since = ConvertFrom-HordeWakeTimeText $j.quietSince; if ($null -eq $since) { return (New-HordeUnknown -Reason "what was saved of a silent fleet holds a time that is not one") } }
+        if ($null -ne $j.PSObject.Properties["moves"]) { foreach ($row in @($j.moves)) { if ($null -eq $row) { continue }; $at = ConvertFrom-HordeWakeTimeText $row.at; if ($null -eq $at -or "$($row.id)" -eq "") { return (New-HordeUnknown -Reason "what was saved of a silent fleet holds a session with no id or no time") }; $moves["$($row.id)"] = $at } }
+    } catch { return (New-HordeUnknown -Reason "what was saved of a silent fleet holds an entry that is not one" -ErrorRecord $_) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ seen = [pscustomobject]@{ silent = [bool]$j.silent; quietSince = $since; nudges = @(); mail = @{}; moves = $moves } }))
+}
