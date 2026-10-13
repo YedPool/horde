@@ -112,7 +112,8 @@ try {
         }
         $personJob = New-HordeScheduledJob -Name ($testName + " person") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $env:HORDE_HOME } -HordeHome $env:HORDE_HOME -EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson -Disabled
         $personAct = ConvertTo-HordeTaskAction -Job $personJob
-        Check ($personAct.program -ceq "conhost.exe" -and $personAct.arguments -match '\A--headless powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand [A-Za-z0-9+/=]+\z' -and (ConvertTo-HordeTaskAction -Job $job).program -ceq "powershell.exe") "a -WithPerson job is run by the headless console host, so no window flashes in the person's session; any other job by PowerShell itself"
+        $sysDir = [System.Environment]::SystemDirectory
+        Check ($personAct.program -ceq (Join-Path $sysDir "conhost.exe") -and $personAct.arguments.StartsWith('--headless "' + (Join-Path $sysDir "WindowsPowerShell\v1.0\powershell.exe") + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ') -and $personAct.arguments -match ' -EncodedCommand [A-Za-z0-9+/=]+\z' -and (ConvertTo-HordeTaskAction -Job $job).program -ceq "powershell.exe") "a -WithPerson job is run by the headless console host, so no window flashes in the person's session - the console host and the shell it runs both by their FULL paths in the system folder, never a bare name a search path could answer; any other job by PowerShell itself"
         Check ((ConvertTo-HordeTaskAction -Job $job).arguments -match '\A[A-Za-z -]+-EncodedCommand [A-Za-z0-9+/=]+\z') "the arguments are fixed switches and base64 only: no quote, no %, nothing a shell or the scheduler could read"
 
         Write-Host ""
@@ -153,7 +154,7 @@ try {
             Assert-TestName $personJob.name
             & $sch.install $personJob
             $pst = & $sch.status $personJob.name "HordeTest"
-            Check ($pst.state -eq "known" -and $pst.value.logonType -eq "Interactive" -and $pst.value.program -ceq "conhost.exe" -and $pst.value.everyMinutes -eq 1 -and $pst.value.enabled -eq $false -and $pst.value.marked) "a -WithPerson job is installed with an interactive logon, run by the console host, and disabled when asked"
+            Check ($pst.state -eq "known" -and $pst.value.logonType -eq "Interactive" -and $pst.value.program -ceq (Join-Path ([System.Environment]::SystemDirectory) "conhost.exe") -and $pst.value.everyMinutes -eq 1 -and $pst.value.enabled -eq $false -and $pst.value.marked) "a -WithPerson job is installed with an interactive logon, run by the console host, and disabled when asked"
             Check ((& $sch.remove $personJob.name "HordeTest") -eq $true -and (& $sch.status $personJob.name "HordeTest").state -eq "absent") "and removed like any Horde job"
             Check ((@(& $tasksIn "\" | Where-Object { $_.TaskName -ceq $testName -and $_.Description -like "FOREIGN*" })).Count -eq 1) "and the task of the same name outside Horde's folder was never touched"
             $svc = New-Object -ComObject Schedule.Service; $svc.Connect()

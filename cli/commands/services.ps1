@@ -1,11 +1,11 @@
 $HordeCommand = @{
     name    = "services"
     group   = "services"
-    usage   = "services tend | services status [-Json] | services schedule [status] [-TaskName <name>] [-TaskFolder Horde|HordeTest] [-Disabled] | services unschedule [-TaskName <name>] [-TaskFolder Horde|HordeTest]"
-    summary = "the long-lived pieces of Horde on this machine, kept running and kept current. Each service is defined as data in <HORDE_HOME>\settings\service-definitions.json: how it is started and asked to stop, how to tell it is alive (a heartbeat file, and the process), and which revision it follows. tend: one pass over every service - start what is not running, restart what is hung, take a verified update when it may be restarted, roll a failed update back - journaled, and telling the warchief once when something needs a person; schedule: run tend every minute in the person's own session (schedule status shows the job; -Disabled installs it without letting it run); unschedule: remove that job, stopping nothing; status: each service - alive or not and why, heartbeat age, running against wanted revision, last action, failures in a row, whether an escalation is outstanding - and, first, whether tend itself is still coming round; -Json prints one line of data. horde rollout does an update now"
+    usage   = "services tend | services status [-Json] | services stop <name> | services start <name> | services schedule [status] [-TaskName <name>] [-TaskFolder Horde|HordeTest] [-Disabled] | services unschedule [-TaskName <name>] [-TaskFolder Horde|HordeTest]"
+    summary = "the long-lived pieces of Horde on this machine, kept running and kept current. Each service is defined as data in <HORDE_HOME>\settings\service-definitions.json: how it is started and asked to stop, how to tell it is alive (a heartbeat file, and the process), and which revision it follows. tend: one pass over every service - start what is not running, restart what is hung, take a verified update when it may be restarted, roll a failed update back - journaled, and telling the warchief once when something needs a person; stop <name>: ask that service to stop, the way its definition says, and HOLD it - the supervisor then leaves it exactly as it is, not started, not updated, until start <name> lets it go and tends it at once; schedule: run tend every minute in the person's own session (schedule status shows the job; -Disabled installs it without letting it run); unschedule: remove that job, stopping nothing; status: each service - alive or not and why, heartbeat age, running against wanted revision, last action, failures in a row, whether an escalation is outstanding - and, first, whether tend itself is still coming round; -Json prints one line of data. horde rollout does an update now"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("tend", "status", "schedule", "unschedule")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("tend", "status", "stop", "start", "schedule", "unschedule")][string]$Verb,
             [Parameter(Position = 1)][string]$Target = "",
             [switch]$Json,
             [string]$TaskName = "Horde services tend",
@@ -13,7 +13,7 @@ $HordeCommand = @{
             [switch]$Disabled
         )
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
-        $verbFlags = @{ tend = @(); status = @("Json"); schedule = @("Target", "TaskName", "TaskFolder", "Disabled"); unschedule = @("TaskName", "TaskFolder") }
+        $verbFlags = @{ tend = @(); status = @("Json"); stop = @("Target"); start = @("Target"); schedule = @("Target", "TaskName", "TaskFolder", "Disabled"); unschedule = @("TaskName", "TaskFolder") }
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to services " + $Verb) } }
         # Loaded here, in the command's own scope, so the adapters' functions stay visible to the blocks
         # they register (core/ServiceHostPort.ps1, core/Schedule.ps1).
@@ -46,6 +46,18 @@ $HordeCommand = @{
             . (Join-Path $root "messengers\Port.ps1")
             foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
             return (Send-HordeServiceNotices -Notices $Notices -HordeHome $HordeHome -Policy $Policy)
+        }
+        if ($Verb -eq "stop" -or $Verb -eq "start") {
+            if ($Target -eq "") { throw ("services " + $Verb + " needs the name of a service (horde services status lists them)") }
+            $set = Set-HordeServiceHeld -Name $Target -Held:($Verb -eq "stop") -Tools $tools
+            foreach ($l in @($set.lines)) { Write-Output $l }
+            if ($set.problem -ne "") { throw $set.problem }
+            if ($Verb -eq "stop") { return }
+            # Let go: tended at once, by the ordinary pass, for that one service.
+            $done = Invoke-HordeServiceSupervisor -Tools $tools -Only @($Target) -LockWaitSeconds 90
+            foreach ($l in @($done.lines)) { Write-Output $l }
+            if ($done.problem -ne "") { throw $done.problem }
+            return
         }
         $done = Invoke-HordeServiceSupervisor -Tools $tools
         foreach ($l in @($done.lines)) { Write-Output $l }

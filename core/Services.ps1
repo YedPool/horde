@@ -22,6 +22,9 @@
 #                                                             file the window keeps (pid and handle), or
 #                   { kind: "kill"; waitSeconds }             it has no way to be asked.
 #                   After waitSeconds a service that was asked and is still there is ended.
+#                   Any kind may add deliberateExitCodes: a list of whole numbers, the exit codes
+#                   with which the service ends ITSELF on purpose. Ended with one of them it is not
+#                   started again: it is held, and someone is told (DELIBERATE EXITS, below).
 #   alive           { heartbeat; tickSeconds }  a heartbeat file under hordeHome (core/Heartbeat.ps1)
 #                   and the tick to assume when the file names none. Left out: the service writes no
 #                   heartbeat, and is alive for as long as the process the supervisor started is.
@@ -51,6 +54,13 @@
 # action is taken (notify: escalate, or recovered), once per trouble: a trouble already told is not
 # told again while it lasts, and one "recovered" is said when the service is running, stable and has
 # no trouble left.
+#
+# HELD. A service a person stopped with `horde services stop`, or one that ended itself with a
+# deliberate exit code, is held: nothing is done to it - not started, not stopped, not updated - until
+# `horde services start` lets it go. A DELIBERATE EXIT IS NOT A DEATH: the fleet's throttle ends
+# itself with a code that means "I stopped on purpose; tell someone, and do not start me again", and
+# a supervisor that restarted it would undo exactly what it had decided. Only a code that something
+# RECORDED counts (core/ServiceHostPort.ps1, THE EXIT RECORD); an exit nobody saw is an ordinary death.
 #
 # NEVER A RESTART LOOP. A start that does not last stableSeconds counts as a failure; each failure in
 # a row doubles the wait before the next start, up to a cap; after failuresBeforeEscalation of them
@@ -270,6 +280,11 @@ function ConvertTo-HordeServiceDefinition {
             Add-HordeServiceUnknownMembers -Have $sh -Allowed @("kind", "program", "arguments") -Where ($at + ".start") -Findings $found
             $program = ""
             if ((Test-HordeServiceText -Value $sh["program"]) -and (Test-HordeModuleSettingFolder -Path $sh["program"])) { $program = [string]$sh["program"] } else { [void]$found.Add($at + ".start.program must be the absolute path of a program") }
+            # A BATCH FILE IS NOT A PROGRAM HERE. Windows runs a .cmd or .bat by handing the whole
+            # command line to the command interpreter, which reads it AGAIN by its own rules (& | ^ %
+            # and quotes), so an argument could be read as a command. Name the interpreter that should
+            # run a script as the program, and the script as an argument.
+            if ($program -match '\.(cmd|bat)\s*\z') { [void]$found.Add($at + ".start.program is a batch file, whose arguments the command interpreter would read again as commands; name a program") }
             $arguments = @()
             if ($sh.ContainsKey("arguments")) {
                 if ($sh["arguments"] -isnot [array] -or @($sh["arguments"]).Count -gt 32) { [void]$found.Add($at + ".start.arguments must be a list of at most 32 texts") }
@@ -287,20 +302,28 @@ function ConvertTo-HordeServiceDefinition {
         $kind = "" + $th["kind"]
         $wait = Get-HordeServiceWhole -Have $th -Name "waitSeconds" -Default 30 -Min 1 -Max 600
         if (-not $wait.ok) { [void]$found.Add($at + ".stop.waitSeconds must be a whole number from 1 to 600") }
+        # DELIBERATE EXITS (the header): exit codes with which the service says "I stopped myself on
+        # purpose; tell someone, and do not start me again". Whole numbers only, at most 16 of them.
+        $deliberate = @()
+        if ($th.ContainsKey("deliberateExitCodes")) {
+            $listed = $th["deliberateExitCodes"]
+            if ($listed -isnot [array] -or @($listed).Count -gt 16 -or @($listed | Where-Object { ($_ -isnot [int] -and $_ -isnot [long]) -or $_ -lt -2147483648 -or $_ -gt 2147483647 }).Count -gt 0) { [void]$found.Add($at + ".stop.deliberateExitCodes must be a list of at most 16 whole numbers: the exit codes with which it ends itself on purpose") }
+            else { $deliberate = @($listed | ForEach-Object { [int]$_ }) }
+        }
         if ($th["kind"] -isnot [string] -or @("horde", "window", "kill") -cnotcontains $kind) { [void]$found.Add($at + ".stop.kind must be horde, window or kill") }
         elseif ($kind -ceq "horde") {
-            Add-HordeServiceUnknownMembers -Have $th -Allowed @("kind", "words", "named", "switches", "waitSeconds") -Where ($at + ".stop") -Findings $found
+            Add-HordeServiceUnknownMembers -Have $th -Allowed @("kind", "words", "named", "switches", "waitSeconds", "deliberateExitCodes") -Where ($at + ".stop") -Findings $found
             $cmd = Read-HordeServiceCommandWords -Have $th -Where ($at + ".stop") -Findings $found
             if ($checkout -eq "" -or $servedHome -eq "") { [void]$found.Add($at + ".stop of kind horde needs checkout and hordeHome") }
-            $stop = [pscustomobject]@{ kind = "horde"; words = $cmd.words; named = $cmd.named; switches = $cmd.switches; report = ""; waitSeconds = $wait.value }
+            $stop = [pscustomobject]@{ kind = "horde"; words = $cmd.words; named = $cmd.named; switches = $cmd.switches; report = ""; waitSeconds = $wait.value; deliberateExitCodes = [int[]]$deliberate }
         } elseif ($kind -ceq "window") {
-            Add-HordeServiceUnknownMembers -Have $th -Allowed @("kind", "report", "waitSeconds") -Where ($at + ".stop") -Findings $found
+            Add-HordeServiceUnknownMembers -Have $th -Allowed @("kind", "report", "waitSeconds", "deliberateExitCodes") -Where ($at + ".stop") -Findings $found
             $report = ""
             if ((Test-HordeServiceText -Value $th["report"]) -and (Test-HordeModuleSettingFolder -Path $th["report"])) { $report = [string]$th["report"] } else { [void]$found.Add($at + ".stop.report must be the absolute path of the report file its window keeps") }
-            $stop = [pscustomobject]@{ kind = "window"; words = [string[]]@(); named = [ordered]@{}; switches = [string[]]@(); report = $report; waitSeconds = $wait.value }
+            $stop = [pscustomobject]@{ kind = "window"; words = [string[]]@(); named = [ordered]@{}; switches = [string[]]@(); report = $report; waitSeconds = $wait.value; deliberateExitCodes = [int[]]$deliberate }
         } else {
-            Add-HordeServiceUnknownMembers -Have $th -Allowed @("kind", "waitSeconds") -Where ($at + ".stop") -Findings $found
-            $stop = [pscustomobject]@{ kind = "kill"; words = [string[]]@(); named = [ordered]@{}; switches = [string[]]@(); report = ""; waitSeconds = $wait.value }
+            Add-HordeServiceUnknownMembers -Have $th -Allowed @("kind", "waitSeconds", "deliberateExitCodes") -Where ($at + ".stop") -Findings $found
+            $stop = [pscustomobject]@{ kind = "kill"; words = [string[]]@(); named = [ordered]@{}; switches = [string[]]@(); report = ""; waitSeconds = $wait.value; deliberateExitCodes = [int[]]$deliberate }
         }
     }
 
@@ -383,6 +406,19 @@ function Read-HordeServiceDefinitionsText {
         foreach ($f in @($made.findings)) { [void]$problems.Add($f) }
         if ($null -ne $made.definition) { [void]$services.Add($made.definition) }
     }
+    # TWO SERVICES THAT FOLLOW A REVISION MAY NOT SHARE ONE CHECKOUT (safety review of the first build,
+    # item 2). Each would move it under the other: one's roll-back takes the checkout back while the
+    # other is running the new revision, the other then updates it forward again, and the first is
+    # started on the revision it pinned as bad and records it as current. The paths are compared
+    # resolved and without case, as the file system compares them.
+    $owners = @{}
+    foreach ($def in @($services.ToArray())) {
+        if ($null -eq $def.follow -or $def.checkout -eq "") { continue }
+        $key = ""
+        try { $key = [System.IO.Path]::GetFullPath($def.checkout).TrimEnd('\', '/').ToUpperInvariant() } catch { $key = $def.checkout.TrimEnd('\', '/').ToUpperInvariant() }
+        if ($owners.ContainsKey($key)) { [void]$problems.Add("services '" + $owners[$key] + "' and '" + $def.name + "' both follow a revision in the same checkout; each would move it under the other, so each service that follows a revision needs a checkout of its own") }
+        else { $owners[$key] = $def.name }
+    }
     if ($problems.Count -gt 0) { return (& $refuse @($problems.ToArray())) }
     return (& $answer "read" @($services.ToArray()) @())
 }
@@ -436,6 +472,13 @@ function New-HordeServiceState {
     #   lastAction                    { at; action; step; outcome; reason }
     #   lastFetchAt / fetchProblem    when the remote was last asked, and what went wrong
     #   lastSaid                      the last journal line's key, so a wait is written once
+    #   moving                        { from; target; at }: a move of the checkout that was begun and
+    #                                 not seen to end; nothing is started from it until it is proven
+    #                                 to be on one of the two revisions, and clean
+    #   launchingAt                   when a start was begun whose outcome was not yet recorded
+    #   resumedAt                     when the supervisor found it had itself not been running
+    #   held / heldWhy                a person stopped it (horde services stop), or it ended itself
+    #                                 on purpose: it is left exactly as it is until horde services start
     param([Parameter(Mandatory = $true)][string]$Name)
     return [pscustomobject]@{
         PSTypeName = "Horde.ServiceState"; schemaVersion = 1; name = $Name
@@ -443,7 +486,37 @@ function New-HordeServiceState {
         runningRevision = ""; previousRevision = ""; pinnedRevision = ""; verifiedRevision = ""; refused = $null
         started = $null; proving = $false; failures = 0; nextStartAt = $null; confirmBy = $null; stuck = ""
         told = [string[]]@(); notices = @(); lastAction = $null; lastFetchAt = $null; fetchProblem = ""; lastSaid = ""
+        moving = $null; launchingAt = $null; resumedAt = $null; held = $false; heldWhy = ""
     }
+}
+
+function Get-HordeServiceRefusedCount {
+    # How many times in a row the same update has been refused: 1 when the record does not say.
+    param($Refused)
+    if ($null -eq $Refused) { return 0 }
+    $n = $Refused.PSObject.Properties["count"]
+    if ($null -ne $n -and ($n.Value -is [int] -or $n.Value -is [long]) -and $n.Value -ge 1) { return [int][System.Math]::Min([long]$n.Value, 1000) }
+    return 1
+}
+
+function Get-HordeServiceRefusedWaitMinutes {
+    # How long a refused update waits before it is tried again: the setting retryRefusedMinutes,
+    # doubled for each refusal of the same revision past the first, and never more than a day. WHY IT
+    # BACKS OFF: an update that cannot be APPLIED costs the service a stop and a start every time it is
+    # tried (the service is stopped before the checkout is moved), so a checkout that will not move
+    # must not bounce its service every half hour for ever (safety review of the first build, item 4).
+    param([Parameter(Mandatory = $true)][int]$Count, [Parameter(Mandatory = $true)]$Policy)
+    $minutes = [double]$Policy.retryRefusedMinutes
+    for ($i = 1; $i -lt $Count -and $minutes -lt 1440; $i++) { $minutes = $minutes * 2 }
+    return [int][System.Math]::Min($minutes, 1440)
+}
+
+function Get-HordeServiceNoticeWhat {
+    # The fixed words a notice is told by (cli/ServicesTell.ps1): "" when the notice does not say.
+    param($Notice)
+    $w = $Notice.PSObject.Properties["what"]
+    if ($null -ne $w -and $w.Value -is [string]) { return [string]$w.Value }
+    return ""
 }
 
 function Copy-HordeServiceState {
@@ -451,12 +524,13 @@ function Copy-HordeServiceState {
     # handed: the caller persists what the decision returns, or does not.
     param([Parameter(Mandatory = $true)]$State)
     $c = New-HordeServiceState -Name $State.name
-    foreach ($n in @("phase", "intent", "phaseSince", "target", "from", "runningRevision", "previousRevision", "pinnedRevision", "verifiedRevision", "proving", "failures", "nextStartAt", "confirmBy", "stuck", "lastFetchAt", "fetchProblem", "lastSaid")) { $c.$n = $State.$n }
-    if ($null -ne $State.refused) { $c.refused = [pscustomobject]@{ revision = $State.refused.revision; kind = $State.refused.kind; reason = $State.refused.reason; at = $State.refused.at } }
+    foreach ($n in @("phase", "intent", "phaseSince", "target", "from", "runningRevision", "previousRevision", "pinnedRevision", "verifiedRevision", "proving", "failures", "nextStartAt", "confirmBy", "stuck", "lastFetchAt", "fetchProblem", "lastSaid", "launchingAt", "resumedAt", "held", "heldWhy")) { $c.$n = $State.$n }
+    if ($null -ne $State.moving) { $c.moving = [pscustomobject]@{ from = $State.moving.from; target = $State.moving.target; at = $State.moving.at } }
+    if ($null -ne $State.refused) { $c.refused = [pscustomobject]@{ revision = $State.refused.revision; kind = $State.refused.kind; reason = $State.refused.reason; at = $State.refused.at; count = (Get-HordeServiceRefusedCount -Refused $State.refused) } }
     if ($null -ne $State.started) { $c.started = [pscustomobject]@{ pid = $State.started.pid; startedAt = $State.started.startedAt; at = $State.started.at } }
     if ($null -ne $State.lastAction) { $c.lastAction = [pscustomobject]@{ at = $State.lastAction.at; action = $State.lastAction.action; step = $State.lastAction.step; outcome = $State.lastAction.outcome; reason = $State.lastAction.reason } }
     $c.told = [string[]]@($State.told)
-    $c.notices = @($State.notices | ForEach-Object { [pscustomobject]@{ id = $_.id; kind = $_.kind; text = $_.text; at = $_.at } })
+    $c.notices = @($State.notices | ForEach-Object { [pscustomobject]@{ id = $_.id; kind = $_.kind; text = $_.text; at = $_.at; what = (Get-HordeServiceNoticeWhat -Notice $_) } })
     return $c
 }
 
@@ -497,8 +571,12 @@ function New-HordeServiceObserved {
     #   checkout     known { head; detached; clean; branch }
     #   wanted       known { revision; fastForward }; absent when the service follows nothing
     #   idleSeconds  known whole seconds since the person last touched the machine
-    param($Started, $Heartbeat, $Beater, $Checkout, $Wanted, $IdleSeconds)
-    $o = [ordered]@{ started = $Started; heartbeat = $Heartbeat; beater = $Beater; checkout = $Checkout; wanted = $Wanted; idleSeconds = $IdleSeconds }
+    #   exitCode     known whole number: the code the state's own process ended with. Unknown is the
+    #                ordinary case - nothing recorded it - and an unknown exit is an ordinary death.
+    #   checkout's value also carries spotless when it was asked for: no changed tracked file AND no
+    #                untracked one, which is what a checkout must be after a move that was interrupted.
+    param($Started, $Heartbeat, $Beater, $Checkout, $Wanted, $IdleSeconds, $ExitCode = $null)
+    $o = [ordered]@{ started = $Started; heartbeat = $Heartbeat; beater = $Beater; checkout = $Checkout; wanted = $Wanted; idleSeconds = $IdleSeconds; exitCode = $ExitCode }
     foreach ($k in @($o.Keys)) {
         if ($null -eq $o[$k]) { $o[$k] = New-HordeUnknown -Reason ("nobody looked at " + $k) }
         Assert-HordeAnswer $o[$k]
@@ -594,32 +672,105 @@ function Get-HordeServiceDecision {
         [Parameter(Mandatory = $true)]$Observed,
         [Parameter(Mandatory = $true)][datetime]$Now,
         [Parameter(Mandatory = $true)]$Policy,
-        [switch]$IgnoreIdle
+        [switch]$IgnoreIdle,
+        [double]$SupervisorGapSeconds = 0
     )
     $at = $Now.ToUniversalTime()
     $s = Copy-HordeServiceState -State $State
     $live = Get-HordeServiceLiveness -Definition $Definition -State $s -Observed $Observed -Now $at
     $troubles = New-Object System.Collections.ArrayList
     $name = $Definition.name
+    # THE SUPERVISOR ITSELF WAS NOT RUNNING (safety review of the first build, item 3). After the
+    # machine has slept, or its clock has jumped forward, EVERY heartbeat is old and every process is
+    # still there - which is exactly what a hung service looks like. Read that way, each wake would
+    # stop and end every healthy service, and a revision being confirmed would be rolled back and
+    # pinned for having been asleep. -SupervisorGapSeconds is how long the pass's own heartbeat had
+    # been silent beyond its tick: the time nobody was looking. For one stale period of the service's
+    # own heartbeat from that moment a stale heartbeat is "starting", not "hung", and a revision being
+    # confirmed is given the gap back. A service that is truly hung is still hung when that has passed.
+    if ($SupervisorGapSeconds -gt 0) {
+        $s.resumedAt = $at
+        if ($s.confirmBy -is [datetime]) { $s.confirmBy = $s.confirmBy.AddSeconds($SupervisorGapSeconds) }
+    }
+    if ($s.resumedAt -is [datetime]) {
+        $tick = 0
+        if ($null -ne $Definition.alive) { $tick = [int]$Definition.alive.tickSeconds }
+        if ($Observed.heartbeat.state -ceq "known" -and [int]$Observed.heartbeat.value.tickSeconds -gt $tick) { $tick = [int]$Observed.heartbeat.value.tickSeconds }
+        if ($live.alive -ceq "yes" -or ($at - $s.resumedAt).TotalSeconds -ge (Get-HordeHeartbeatStaleSeconds -TickSeconds $tick)) { $s.resumedAt = $null }
+        elseif ($live.alive -ceq "hung") { $live.alive = "starting"; $live.why = "the supervisor itself had not been running (the machine slept, or its clock moved), so an old heartbeat proves nothing yet: " + $live.why }
+    }
+    $unsafe = {
+        # Why nothing may be started from the checkout, or "" (safety review, item 1). A move of the
+        # checkout that was begun and not seen to end - the revision tool passed its time limit, or
+        # the pass was ended under it - can leave files of two revisions side by side. Started from,
+        # that is code nobody wrote. So after such a move the checkout must be PROVEN whole: on one
+        # of the move's two revisions, with no changed file and no stray one.
+        if ($null -eq $s.moving) { return "" }
+        if ($Observed.checkout.state -cne "known") { return ("its checkout could not be read after a move that was interrupted (" + $Observed.checkout.reason + ")") }
+        $seen = $Observed.checkout.value
+        if (@(("" + $s.moving.from), ("" + $s.moving.target)) -cnotcontains ("" + $seen.head)) { return ("after a move that was interrupted its checkout is on " + (ConvertTo-HordeServiceShortRevision ("" + $seen.head)) + ", which is neither revision of the move") }
+        $whole = $seen.PSObject.Properties["spotless"]
+        if ($null -eq $whole -or $whole.Value -ne $true) { return "after a move that was interrupted its checkout holds changed or stray files" }
+        return ""
+    }
     $finish = {
         # Close a decision: settle what is told. A trouble not yet told is told now, once; when none
         # is left and the service is running and stable, one "recovered" is said and the list emptied.
         param([string]$Action, [string]$Step, [string]$Code, [string]$Reason, $Process = $null, [string]$Revision = "", [bool]$Healthy = $false)
-        $notify = ""; $notice = ""
+        # EVERY START PASSES HERE, so no path to a start can skip these two:
+        if ($Step -ceq "start") {
+            $broken = & $unsafe
+            if ($broken -ne "") {
+                # ...a checkout that is not proven whole is never started from; someone is told.
+                [void]$troubles.Add((New-HordeServiceTrouble -Key "half-moved" -Text ($broken + "; nothing is started from it until a person has put it right")))
+                $Action = "wait"; $Step = ""; $Code = "checkout-unsafe"; $Reason = "not started: " + $broken; $Process = $null; $Revision = ""
+            } else {
+                # ...and the state says a start is in flight BEFORE the process is made: a pass ended
+                # between making the process and recording it must not make a second one (item 6).
+                $s.moving = $null; $s.launchingAt = $at
+            }
+        }
+        # freshMove: this decision is what marks the checkout as being moved. A mark that was already
+        # there is an EARLIER move nobody saw end, and a later move refused before it touched anything
+        # proves nothing about that one - so only a fresh mark may be taken off by such a refusal.
+        $freshMove = $false
+        if ($Step -ceq "advance" -or $Step -ceq "retreat") { $freshMove = [bool]($null -eq $s.moving); $s.moving = [pscustomobject]@{ from = "" + $s.from; target = "" + $s.target; at = $at } }
+        $notify = ""; $notice = ""; $what = ""
         $fresh = @($troubles | Where-Object { @($s.told) -cnotcontains $_.key })
         if ($fresh.Count -gt 0) {
             $notify = "escalate"
+            # what: the kind of each trouble, the part of its key before any revision. It is all a
+            # notice is TOLD by (cli/ServicesTell.ps1); the sentence below stays in status and journal.
+            $what = (@($fresh | ForEach-Object { ("" + $_.key).Split(":")[0] } | Select-Object -Unique) -join ",")
             $notice = "service " + $name + ": " + (@($fresh | ForEach-Object { $_.text }) -join "; ")
             $s.told = [string[]]@(@($s.told) + @($fresh | ForEach-Object { $_.key }) | Select-Object -Last $script:HordeServiceToldMost)
         } elseif ($troubles.Count -eq 0 -and @($s.told).Count -gt 0 -and $Healthy) {
-            $notify = "recovered"
+            $notify = "recovered"; $what = "recovered"
             $notice = "service " + $name + ": recovered - " + $Reason
             $s.told = [string[]]@()
         }
-        return [pscustomobject]@{ action = $Action; step = $Step; code = $Code; reason = $Reason; process = $Process; revision = $Revision; notify = $notify; notice = $notice; live = $live; state = $s }
+        return [pscustomobject]@{ action = $Action; step = $Step; code = $Code; reason = $Reason; process = $Process; revision = $Revision; notify = $notify; notice = $notice; what = $what; freshMove = $freshMove; live = $live; state = $s }
+    }
+    $unrecorded = {
+        # A start was begun and its outcome never recorded: the wait for it, or $null when there is
+        # nothing to wait for. A service with a heartbeat shows itself by beating, and is adopted; one
+        # without cannot be seen at all, so whether it runs is a person's to say - a second copy is
+        # never started on a guess.
+        if ($s.launchingAt -isnot [datetime]) { return $null }
+        $ago = [long]($at - $s.launchingAt).TotalSeconds
+        if ($null -eq $Definition.alive) {
+            [void]$troubles.Add((New-HordeServiceTrouble -Key "start-unrecorded" -Text "a start of it was begun and its outcome was never recorded; it keeps no heartbeat, so whether it is running cannot be told"))
+            return (& $finish "wait" "" "start-unrecorded" ("a start of it was begun " + $ago + " s ago and its outcome was never recorded; it keeps no heartbeat, so whether it is running cannot be told, and a second copy is never started on a guess: horde services start " + $name + " once a person has looked"))
+        }
+        if ($ago -lt $Definition.confirmSeconds) { return (& $finish "wait" "" "start-unrecorded" ("a start of it was begun " + $ago + " s ago and its outcome was never recorded; its heartbeat will show whether it came up")) }
+        $s.launchingAt = $null
+        return $null
     }
 
     if (-not $Definition.enabled) { return (& $finish "nothing" "" "disabled" "not supervised: its definition says enabled is false") }
+    # HELD: a person stopped it (horde services stop), or it ended itself on purpose. Nothing is done
+    # to it - not started, not stopped, not updated - until horde services start lets it go.
+    if ($s.held -eq $true) { return (& $finish "nothing" "" "held" ("held, and left as it is" + $(if ("" + $s.heldWhy -ne "") { " (" + $s.heldWhy + ")" } else { "" }) + ": horde services start " + $name + " lets the supervisor tend it again")) }
 
     # A roll-back that could not be done stands as a trouble whatever else is true, for as long as the
     # checkout is still on the revision it could not leave. Once a person has moved it, it is over.
@@ -652,6 +803,16 @@ function Get-HordeServiceDecision {
 
     # ---- launching: the checkout has moved (forward or back); start what is there -------------------
     if ($s.phase -ceq "launching") {
+        if ($s.launchingAt -is [datetime] -and $null -ne $live.process) {
+            # The start that was not recorded did happen: its process is there. It is taken as started.
+            $s.started = [pscustomobject]@{ pid = [int]$live.process.pid; startedAt = $live.process.startedAt; at = $s.launchingAt }
+            $s.launchingAt = $null
+            if ($s.intent -ceq "update") { $s.phase = "confirming"; $s.phaseSince = $at; $s.confirmBy = $at.AddSeconds($Definition.confirmSeconds); return (& $finish "wait" "" "confirming" "the new revision was found running, started by a pass that did not get to record it; it is being confirmed") }
+            $s.phase = "steady"; $s.intent = ""; $s.phaseSince = $null; $s.runningRevision = $s.from; $s.proving = $true
+            return (& $finish "wait" "" "starting" "the previous revision was found running, started by a pass that did not get to record it")
+        }
+        $pending = & $unrecorded
+        if ($null -ne $pending) { return $pending }
         if ($s.intent -ceq "rollback") {
             [void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart and is rolled back to " + (ConvertTo-HordeServiceShortRevision $s.from) + "; it is not tried again until a newer one exists")))
             return (& $finish "roll-back" "start" "start-previous" ("starting the previous revision " + (ConvertTo-HordeServiceShortRevision $s.from)) $null $s.from)
@@ -693,10 +854,22 @@ function Get-HordeServiceDecision {
     }
     # Settle the restart-loop guard from what is seen.
     if ($live.alive -ceq "no" -and $null -ne $s.started) {
+        # A DELIBERATE EXIT IS NOT A DEATH. A service may end itself with a code that means "I stopped
+        # on purpose: tell someone, and do not start me again". Then it is held, as a person's stop
+        # holds it, and told once. Only a code that was RECORDED counts: an exit nobody saw is an
+        # ordinary death, started again with the ordinary back-off.
+        $codes = @($Definition.stop.deliberateExitCodes)
+        if ($codes.Count -gt 0 -and $Observed.exitCode.state -ceq "known" -and $codes -contains [int]$Observed.exitCode.value) {
+            $code = [int]$Observed.exitCode.value
+            $s.started = $null; $s.proving = $false; $s.held = $true; $s.heldWhy = "it ended itself with code " + $code
+            [void]$troubles.Add((New-HordeServiceTrouble -Key "ended-itself" -Text ("it ended itself with code " + $code + ", which its definition says is on purpose; it is not started again until horde services start " + $name)))
+            return (& $finish "nothing" "" "ended-itself" ("it ended itself with code " + $code + ", on purpose; it is held and not started again: horde services start " + $name + " lets the supervisor tend it again"))
+        }
         if ($s.proving) { $s.failures = [int]$s.failures + 1; $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy)) }
         $s.started = $null; $s.proving = $false
     }
     if ($live.alive -ceq "yes") {
+        $s.launchingAt = $null
         if (-not $live.ours) { $s.started = [pscustomobject]@{ pid = [int]$live.process.pid; startedAt = $live.process.startedAt; at = $live.process.startedAt }; $s.proving = $false }
         if ($s.proving -and ($null -eq $s.started -or ($at - $s.started.at).TotalSeconds -ge $Policy.stableSeconds)) { $s.proving = $false; $s.failures = 0; $s.nextStartAt = $null }
         if (-not $s.proving -and $s.failures -ne 0) { $s.failures = 0; $s.nextStartAt = $null }
@@ -710,6 +883,8 @@ function Get-HordeServiceDecision {
         return (& $finish "start" "stop" "hung" ($live.why + "; it is stopped and started again") $live.process)
     }
     if ($live.alive -ceq "no") {
+        $pending = & $unrecorded
+        if ($null -ne $pending) { return $pending }
         if ($s.nextStartAt -is [datetime] -and $at -lt $s.nextStartAt) {
             return (& $finish "wait" "" "backing-off" ($live.why + "; backing off after " + $s.failures + " start(s) in a row that did not last: the next start is in " + [long]($s.nextStartAt - $at).TotalSeconds + " s"))
         }
@@ -746,7 +921,7 @@ function Get-HordeServiceDecision {
         return (& $finish "wait" "" "diverged" ("update to " + $short + " waits: it is not a fast-forward of what is checked out"))
     }
     if ($null -ne $s.refused -and $s.refused.revision -ceq $wanted -and $s.refused.kind -cne "retreat") {
-        $again = $s.refused.at.AddMinutes($Policy.retryRefusedMinutes)
+        $again = $s.refused.at.AddMinutes((Get-HordeServiceRefusedWaitMinutes -Count (Get-HordeServiceRefusedCount -Refused $s.refused) -Policy $Policy))
         if ($at -lt $again) {
             [void]$troubles.Add((New-HordeServiceTrouble -Key ($s.refused.kind + ":" + $wanted) -Text ("revision " + $short + $(if ($s.refused.kind -ceq "verify") { " failed its check before the restart" } else { " could not be applied" }) + " (" + $s.refused.reason + "); the old revision keeps running")))
             return (& $finish "wait" "" "not-verified" ("update not verified: " + $short + $(if ($s.refused.kind -ceq "verify") { " failed its check" } else { " could not be applied" }) + " (" + $s.refused.reason + "); tried again in " + [long]($again - $at).TotalSeconds + " s"))
@@ -775,8 +950,16 @@ function Complete-HordeServiceStep {
     $s = Copy-HordeServiceState -State $Decision.state
     $ok = [bool]$Outcome.ok
     $detail = "" + $Outcome.detail
+    # How many times in a row this update has now been refused in this way (the wait doubles with it).
+    $times = { param([string]$Revision, [string]$Kind) if ($null -ne $s.refused -and $s.refused.revision -ceq $Revision -and $s.refused.kind -ceq $Kind) { return ((Get-HordeServiceRefusedCount -Refused $s.refused) + 1) } return 1 }
+    # A move that failed BEFORE it touched the checkout - it was refused at one of its own questions -
+    # left the checkout as it was, and says so (touched false). Anything else - it failed part way,
+    # passed its time limit, threw, or did not say - may have left files of two revisions, and the
+    # mark stays until a start has proven the checkout whole (Get-HordeServiceDecision).
+    $untouched = { $said = $Outcome.PSObject.Properties["touched"]; $fresh = $Decision.PSObject.Properties["freshMove"]; return [bool]($null -ne $said -and $said.Value -is [bool] -and $said.Value -eq $false -and $null -ne $fresh -and $fresh.Value -eq $true) }
     switch ($Decision.step) {
         "start" {
+            $s.launchingAt = $null
             if ($ok) {
                 $s.started = [pscustomobject]@{ pid = [int]$Outcome.process.pid; startedAt = $Outcome.process.startedAt; at = $at }
                 if ($s.phase -ceq "launching" -and $s.intent -ceq "update") { $s.phase = "confirming"; $s.phaseSince = $at; $s.confirmBy = $at.AddSeconds($Definition.confirmSeconds) }
@@ -798,25 +981,29 @@ function Complete-HordeServiceStep {
         "stop" { if (-not $ok) { $s.stuck = $detail } }
         "kill" { if ($ok) { $s.stuck = "" } else { $s.stuck = $detail } }
         "verify" {
-            if ($ok) { $s.verifiedRevision = $Decision.revision; if ($null -ne $s.refused -and $s.refused.kind -cne "retreat") { $s.refused = $null } }
-            else { $s.verifiedRevision = ""; $s.refused = [pscustomobject]@{ revision = $Decision.revision; kind = "verify"; reason = $detail; at = $at } }
+            # A passed check clears a refusal OF THE CHECK. One of the move stays, with its count,
+            # until the update is through: the check passing again says nothing about the move.
+            if ($ok) { $s.verifiedRevision = $Decision.revision; if ($null -ne $s.refused -and $s.refused.kind -ceq "verify") { $s.refused = $null } }
+            else { $s.verifiedRevision = ""; $s.refused = [pscustomobject]@{ revision = $Decision.revision; kind = "verify"; reason = $detail; at = $at; count = (& $times $Decision.revision "verify") } }
         }
         "advance" {
-            if ($ok) { $s.phase = "launching"; $s.phaseSince = $at; $s.previousRevision = $s.from }
+            if ($ok) { $s.phase = "launching"; $s.phaseSince = $at; $s.previousRevision = $s.from; $s.moving = $null }
             else {
+                if (& $untouched) { $s.moving = $null }
                 # The checkout did not move: the old revision is still there, and is started as a
                 # service that is simply not running. The update is tried again later.
                 $s.phase = "steady"; $s.intent = ""; $s.phaseSince = $null
-                $s.refused = [pscustomobject]@{ revision = $s.target; kind = "apply"; reason = $detail; at = $at }
+                $s.refused = [pscustomobject]@{ revision = $s.target; kind = "apply"; reason = $detail; at = $at; count = (& $times $s.target "apply") }
             }
         }
         "retreat" {
             # The bad revision is pinned whether or not the checkout went back: it is never tried again.
             $s.pinnedRevision = $s.target; $s.verifiedRevision = ""
-            if ($ok) { $s.phase = "launching"; $s.phaseSince = $at }
+            if ($ok) { $s.phase = "launching"; $s.phaseSince = $at; $s.moving = $null }
             else {
+                if (& $untouched) { $s.moving = $null }
                 $s.phase = "steady"; $s.intent = ""; $s.phaseSince = $null
-                $s.refused = [pscustomobject]@{ revision = $s.target; kind = "retreat"; reason = $detail; at = $at }
+                $s.refused = [pscustomobject]@{ revision = $s.target; kind = "retreat"; reason = $detail; at = $at; count = 1 }
             }
         }
     }
@@ -831,7 +1018,7 @@ function Add-HordeServiceNotice {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Decision, [Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][datetime]$Now)
     if ($Decision.notify -eq "") { return $State }
     $next = Copy-HordeServiceState -State $State
-    $next.notices = @(@($next.notices) + @([pscustomobject]@{ id = $Id; kind = $Decision.notify; text = $Decision.notice; at = $Now.ToUniversalTime() }) | Select-Object -Last $script:HordeServiceNoticesMost)
+    $next.notices = @(@($next.notices) + @([pscustomobject]@{ id = $Id; kind = $Decision.notify; text = $Decision.notice; at = $Now.ToUniversalTime(); what = (Get-HordeServiceNoticeWhat -Notice $Decision) }) | Select-Object -Last $script:HordeServiceNoticesMost)
     return $next
 }
 
@@ -865,5 +1052,6 @@ function Get-HordeServiceStatus {
         next = $(if ($d.step -ne "") { $d.action + " (" + $d.step + ")" } else { $d.action }); nextReason = $d.reason
         lastAction = $State.lastAction; failures = [int]$State.failures; escalated = [string[]]@($State.told); untold = @($State.notices).Count
         pinnedRevision = $(if ($State.pinnedRevision -ne "") { $State.pinnedRevision } else { $null }); fetchProblem = "" + $State.fetchProblem
+        held = [bool]($State.held -eq $true); heldWhy = "" + $State.heldWhy
     }
 }

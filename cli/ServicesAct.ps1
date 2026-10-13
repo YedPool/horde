@@ -44,13 +44,18 @@ function Invoke-HordeServiceProgram {
     # arguments are separate texts, joined by the port's quoting (no shell reads them). Both output
     # streams are read as they come, so a program that fills one cannot stall on it. A program that
     # passes -TimeoutSeconds is ended - it alone, by the handle held since it started.
-    param([Parameter(Mandatory = $true)][string]$Program, [string[]]$Arguments = @(), [string]$WorkingDirectory = "", [hashtable]$Environment = @{}, [int]$TimeoutSeconds = 20)
+    # -DropEnvironment: prefixes of environment variables the program must NOT inherit from this
+    # process; they are taken out before -Environment is put in.
+    param([Parameter(Mandatory = $true)][string]$Program, [string[]]$Arguments = @(), [string]$WorkingDirectory = "", [hashtable]$Environment = @{}, [int]$TimeoutSeconds = 20, [string[]]$DropEnvironment = @())
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Program
     $psi.Arguments = (@($Arguments | ForEach-Object { ConvertTo-HordeServiceArgument -Text ("" + $_) }) -join " ")
     if ($WorkingDirectory -ne "") { $psi.WorkingDirectory = $WorkingDirectory }
     $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.RedirectStandardInput = $true
+    if (@($DropEnvironment).Count -gt 0) {
+        foreach ($k in @($psi.EnvironmentVariables.Keys)) { foreach ($prefix in @($DropEnvironment)) { if (("" + $k).StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $psi.EnvironmentVariables.Remove("" + $k); break } } }
+    }
     foreach ($k in @($Environment.Keys)) { $psi.EnvironmentVariables["" + $k] = "" + $Environment[$k] }
     $p = $null
     try { $p = [System.Diagnostics.Process]::Start($psi) }
@@ -71,16 +76,64 @@ function Invoke-HordeServiceProgram {
     } finally { $p.Dispose() }
 }
 
+function Get-HordeServiceGitProgram {
+    # The revision tool BY ITS FULL PATH, found once a process: "" when it is not installed. A bare
+    # name is answered by whatever the search path - and the current folder - offers first; this
+    # program moves checkouts and decides what code runs unattended, so it is named exactly.
+    if ($null -eq (Get-Variable -Name HordeServiceGitProgram -Scope Script -ErrorAction SilentlyContinue)) {
+        $found = ""
+        try { $found = "" + (@(Get-Command -Name "git" -CommandType Application -ErrorAction Stop) | Select-Object -First 1).Source } catch { $found = "" }
+        if ($found -ne "" -and (-not [System.IO.Path]::IsPathRooted($found) -or -not [System.IO.File]::Exists($found))) { $found = "" }
+        $script:HordeServiceGitProgram = $found
+    }
+    return $script:HordeServiceGitProgram
+}
+
+function Test-HordeServiceCheckoutIsItsOwn {
+    # Why -Checkout is not the top of a checkout of its own, or "" when it is (safety review of the
+    # first build, item 5). `git -C <folder>` does not need the folder to be a checkout: it walks UP
+    # until it finds one, so a folder that has lost its .git - or was never one - would have the
+    # revision tool fetch into, check out over and report on the repository ABOVE it. The top the
+    # tool itself names must be this folder. Compared resolved and without case, as the file system
+    # compares; a folder reached through another name (a link, a mapped drive) is refused, which errs
+    # towards doing nothing. An answer of "it is" is remembered for the life of the process.
+    param([Parameter(Mandatory = $true)][string]$Checkout, [int]$TimeoutSeconds = 20)
+    $full = ""
+    try { $full = [System.IO.Path]::GetFullPath($Checkout).TrimEnd('\', '/') } catch { return ("its checkout " + $Checkout + " is not a path") }
+    if ($null -eq (Get-Variable -Name HordeServiceOwnCheckouts -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeServiceOwnCheckouts = @{} }
+    if ($script:HordeServiceOwnCheckouts.ContainsKey($full.ToUpperInvariant())) { return "" }
+    if (-not [System.IO.Directory]::Exists($full)) { return ("its checkout " + $full + " is not there") }
+    $top = Invoke-HordeServiceGit -Checkout $full -Arguments @("rev-parse", "--show-toplevel") -TimeoutSeconds $TimeoutSeconds -Unchecked
+    if (-not $top.ok -or $top.out -eq "") { return ("its checkout " + $full + " is not a checkout" + $(if ($top.detail -ne "") { " (" + $top.detail + ")" } else { "" })) }
+    $named = ""
+    try { $named = [System.IO.Path]::GetFullPath(($top.out -replace '/', '\')).TrimEnd('\', '/') } catch { $named = $top.out }
+    if ($named.ToUpperInvariant() -cne $full.ToUpperInvariant()) { return ("its checkout " + $full + " is not the top of a checkout of its own: the revision tool would act on " + $named) }
+    $script:HordeServiceOwnCheckouts[$full.ToUpperInvariant()] = $true
+    return ""
+}
+
 function Invoke-HordeServiceGit {
     # One call of the revision tool in a checkout: { ok; code; out; detail }. detail is one line for
     # a reason, with anything secret-shaped hidden: the tool's errors can quote a remote's address.
-    param([Parameter(Mandatory = $true)][string]$Checkout, [Parameter(Mandatory = $true)][string[]]$Arguments, [int]$TimeoutSeconds = 20, [hashtable]$Environment = @{})
+    # -Unchecked is for the one call that IS the check below; nothing else passes it.
+    param([Parameter(Mandatory = $true)][string]$Checkout, [Parameter(Mandatory = $true)][string[]]$Arguments, [int]$TimeoutSeconds = 20, [hashtable]$Environment = @{}, [switch]$Unchecked)
+    $git = Get-HordeServiceGitProgram
+    if ($git -eq "") { return [pscustomobject]@{ ok = $false; code = -1; out = ""; detail = "the revision tool (git) was not found on this machine" } }
+    # ON THIS CHECKOUT AND NO OTHER: every call is preceded by the proof that the folder is the top
+    # of a checkout of its own (Test-HordeServiceCheckoutIsItsOwn), so no caller can forget it.
+    if (-not $Unchecked) {
+        $notOwn = Test-HordeServiceCheckoutIsItsOwn -Checkout $Checkout -TimeoutSeconds $TimeoutSeconds
+        if ($notOwn -ne "") { return [pscustomobject]@{ ok = $false; code = -1; out = ""; detail = (Protect-HordeServiceText $notOwn) } }
+    }
     # Never a prompt (header): GIT_TERMINAL_PROMPT=0 makes a credential question a failure.
     $env2 = @{ GIT_TERMINAL_PROMPT = "0"; GCM_INTERACTIVE = "never" }
     foreach ($k in @($Environment.Keys)) { $env2["" + $k] = "" + $Environment[$k] }
     # --no-optional-locks: a read (status, above all) must not rewrite the checkout's index behind a
     # person or a tool working in it; a background reader takes no lock it does not need.
-    $r = Invoke-HordeServiceProgram -Program "git" -Arguments (@("--no-optional-locks", "-C", $Checkout) + @($Arguments)) -Environment $env2 -TimeoutSeconds $TimeoutSeconds
+    # NOTHING OF THE CALLER'S GIT ENVIRONMENT IS INHERITED. GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and
+    # their kin, left in the shell of whoever runs `horde rollout`, would point the tool at another
+    # repository whatever -C says. Every GIT_ variable is taken out; the few this file means are put in.
+    $r = Invoke-HordeServiceProgram -Program $git -Arguments (@("--no-optional-locks", "-C", $Checkout) + @($Arguments)) -Environment $env2 -TimeoutSeconds $TimeoutSeconds -DropEnvironment @("GIT_")
     $detail = ""
     if (-not $r.started -or $r.timedOut -or $r.code -ne 0) { $detail = Protect-HordeServiceText ("git " + $Arguments[0] + ": " + $(if ($r.err.Trim() -ne "") { $r.err } else { "exit " + $r.code })) }
     return [pscustomobject]@{ ok = [bool]($r.started -and -not $r.timedOut -and $r.code -eq 0); code = $r.code; out = ("" + $r.out).Trim(); detail = $detail }
@@ -107,7 +160,10 @@ function Get-HordeServiceCheckoutState {
     # they differ - or the service runs something other than what is wanted - are the three further
     # questions asked (is it detached, is it clean, is the wanted one a fast-forward). A pass runs
     # every minute for every service, and a process start is the dearest thing a pass does.
-    param([Parameter(Mandatory = $true)]$Definition, [string]$RunningRevision = "", [int]$TimeoutSeconds = 20)
+    # -Full: after a move of the checkout that was not seen to end (core/Services.ps1, $unsafe) the
+    # cheap answer is not enough. The value then also says spotless: no changed tracked file AND no
+    # untracked one - a move that was cut short leaves the new revision's files lying untracked.
+    param([Parameter(Mandatory = $true)]$Definition, [string]$RunningRevision = "", [int]$TimeoutSeconds = 20, [switch]$Full)
     $dir = $Definition.checkout
     $ref = Get-HordeServiceRemoteRef -Definition $Definition
     $head = ""; $wanted = ""; $wantedWhy = ""
@@ -116,6 +172,16 @@ function Get-HordeServiceCheckoutState {
     $head = $both.out
     $tip = Invoke-HordeServiceGit -Checkout $dir -Arguments @("rev-parse", "--verify", "--quiet", ($ref + "^{commit}")) -TimeoutSeconds $TimeoutSeconds
     if ($tip.ok -and $tip.out -cmatch '\A[0-9a-f]{40}\z') { $wanted = $tip.out } else { $wantedWhy = "the checkout has no " + $ref + " yet: the remote has not been fetched" }
+    if ($Full) {
+        $all = Invoke-HordeServiceGit -Checkout $dir -Arguments @("status", "--porcelain") -TimeoutSeconds $TimeoutSeconds
+        if (-not $all.ok) { $why = "whether its checkout is whole could not be read (" + $all.detail + ")"; return [pscustomobject]@{ checkout = (New-HordeUnknown -Reason $why); wanted = (New-HordeUnknown -Reason $why) } }
+        $tracked = Invoke-HordeServiceGit -Checkout $dir -Arguments @("status", "--porcelain", "--untracked-files=no") -TimeoutSeconds $TimeoutSeconds
+        $onBranch = Invoke-HordeServiceGit -Checkout $dir -Arguments @("symbolic-ref", "--quiet", "--short", "HEAD") -TimeoutSeconds $TimeoutSeconds
+        $c = New-HordeKnown -Value ([pscustomobject]@{ head = $head; detached = [bool](-not $onBranch.ok); clean = [bool]($tracked.ok -and $tracked.out -eq ""); branch = $(if ($onBranch.ok) { $onBranch.out } else { "" }); spotless = [bool]($all.out -eq "") })
+        if ($wanted -eq "") { return [pscustomobject]@{ checkout = $c; wanted = (New-HordeUnknown -Reason $wantedWhy) } }
+        $ahead = Invoke-HordeServiceGit -Checkout $dir -Arguments @("merge-base", "--is-ancestor", $head, $wanted) -TimeoutSeconds $TimeoutSeconds
+        return [pscustomobject]@{ checkout = $c; wanted = (New-HordeKnown -Value ([pscustomobject]@{ revision = $wanted; fastForward = [bool]$ahead.ok })) }
+    }
     if ($wanted -eq "" -or ($wanted -ceq $head -and ($RunningRevision -eq "" -or $RunningRevision -ceq $wanted))) {
         $c = New-HordeKnown -Value ([pscustomobject]@{ head = $head; detached = $true; clean = $true; branch = "" })
         if ($wanted -eq "") { return [pscustomobject]@{ checkout = $c; wanted = (New-HordeUnknown -Reason $wantedWhy) } }
@@ -173,6 +239,21 @@ function Test-HordeServiceRevision {
     if (-not $tip.ok -or $tip.out -cne $Revision) { return (& $fail ("it is no longer what " + $Definition.follow.remote + "/" + $Definition.follow.branch + " names")) }
     $forward = Invoke-HordeServiceGit -Checkout $dir -Arguments @("merge-base", "--is-ancestor", "HEAD", $Revision) -TimeoutSeconds $GitSeconds
     if (-not $forward.ok) { return (& $fail "it is not a fast-forward of what is checked out") }
+    # A FILE THE NEW REVISION ADDS, ALREADY LYING IN THE CHECKOUT (safety review, item 4). The clean
+    # question the move asks is about tracked files; a file nobody tracks - or one an ignore rule
+    # hides - is invisible to it. If the new revision adds a file of that name, the move either
+    # stops on it (after the service has been stopped: a restart for nothing, repeated at every retry)
+    # or, for an ignored file, writes over it without a word. So it is asked HERE, while the old
+    # revision is still running and nothing has been stopped: every path the revision adds must be
+    # free in the working tree. --no-renames: with rename detection (the tool's default) a file the
+    # revision MOVES is listed as a rename, not as an addition, and its new path - which the move
+    # writes just the same - would not be asked about at all (second review of the services).
+    $added = Invoke-HordeServiceGit -Checkout $dir -Arguments @("diff", "--no-renames", "--name-only", "--diff-filter=A", "-z", "HEAD", $Revision) -TimeoutSeconds $GitSeconds
+    if (-not $added.ok) { return (& $fail ("what it adds could not be listed (" + $added.detail + ")")) }
+    foreach ($rel in @($added.out -split "`0" | Where-Object { $_ -ne "" })) {
+        $there = [System.IO.Path]::Combine($dir, ($rel -replace '/', '\'))
+        if ([System.IO.File]::Exists($there) -or [System.IO.Directory]::Exists($there)) { return (& $fail ("it adds " + $rel + ", and something of that name already lies in the checkout, untracked; the move would stop on it or write over it")) }
+    }
     if ($TempRoot -eq "") { $TempRoot = [System.IO.Path]::GetTempPath() }
     $scratch = [System.IO.Path]::Combine($TempRoot, ("horde-service-check-" + [guid]::NewGuid().ToString("N")))
     try {
@@ -222,12 +303,15 @@ function Move-HordeServiceCheckout {
     # The move is `checkout --detach`, which itself refuses to write over a local change. A checkout
     # already on the revision is done, and nothing is run.
     param([Parameter(Mandatory = $true)]$Definition, [Parameter(Mandatory = $true)][string]$Revision, [switch]$Back, [int]$TimeoutSeconds = 20)
-    $fail = { param([string]$Why) return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText $Why) } }
+    # touched: false for every refusal made BEFORE the checkout is asked to move - the checkout is as
+    # it was; true once it has been asked, whatever then happened - a move that fails or passes its
+    # time limit part way can leave files of two revisions (core/Services.ps1 keeps the mark then).
+    $fail = { param([string]$Why, [bool]$Touched = $false) return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText $Why); touched = $Touched } }
     if ($Revision -cnotmatch '\A[0-9a-f]{40}\z') { return (& $fail "what it would move to is not a revision") }
     $dir = $Definition.checkout
     $head = Invoke-HordeServiceGit -Checkout $dir -Arguments @("rev-parse", "--verify", "--quiet", "HEAD^{commit}") -TimeoutSeconds $TimeoutSeconds
     if (-not $head.ok) { return (& $fail ("its checkout could not be read (" + $head.detail + ")")) }
-    if ($head.out -ceq $Revision) { return [pscustomobject]@{ ok = $true; detail = ("its checkout is already on " + $Revision.Substring(0, 9)) } }
+    if ($head.out -ceq $Revision) { return [pscustomobject]@{ ok = $true; detail = ("its checkout is already on " + $Revision.Substring(0, 9)); touched = $false } }
     $branch = Invoke-HordeServiceGit -Checkout $dir -Arguments @("symbolic-ref", "--quiet", "--short", "HEAD") -TimeoutSeconds $TimeoutSeconds
     if ($branch.ok) { return (& $fail ("its checkout is on the branch " + $branch.out + "; only a detached checkout is moved")) }
     if ($branch.code -ne 1) { return (& $fail ("whether its checkout is on a branch could not be read (" + $branch.detail + ")")) }
@@ -244,10 +328,10 @@ function Move-HordeServiceCheckout {
         if (-not $forward.ok) { return (& $fail "it is not a fast-forward of what is checked out") }
     }
     $moved = Invoke-HordeServiceGit -Checkout $dir -Arguments @("checkout", "--detach", "--quiet", $Revision) -TimeoutSeconds ([System.Math]::Max($TimeoutSeconds, 60))
-    if (-not $moved.ok) { return (& $fail ("the checkout did not move (" + $moved.detail + ")")) }
+    if (-not $moved.ok) { return (& $fail ("the checkout did not move, or not wholly (" + $moved.detail + ")") $true) }
     $now = Invoke-HordeServiceGit -Checkout $dir -Arguments @("rev-parse", "--verify", "--quiet", "HEAD^{commit}") -TimeoutSeconds $TimeoutSeconds
-    if (-not $now.ok -or $now.out -cne $Revision) { return (& $fail "the checkout was moved and is not on the revision asked for") }
-    return [pscustomobject]@{ ok = $true; detail = ("its checkout is on " + $Revision.Substring(0, 9)) }
+    if (-not $now.ok -or $now.out -cne $Revision) { return (& $fail "the checkout was moved and is not on the revision asked for" $true) }
+    return [pscustomobject]@{ ok = $true; detail = ("its checkout is on " + $Revision.Substring(0, 9)); touched = $true }
 }
 
 function Get-HordeServiceProcessEntry {
@@ -276,16 +360,22 @@ function Get-HordeServiceProcessEntry {
 
 function Stop-HordeServiceProcess {
     # End the process -Process names ({ pid; startedAt }): { ok; detail }. THE IDENTITY IS CHECKED
-    # AGAIN, HERE, against the process table as it is this instant, and the kill goes through the
-    # handle that check was made on: a pid that has been given to another process since the pass
-    # looked is never ended (core/Services.ps1, Get-HordeServiceProcessVerdict). A process already
-    # gone is done.
+    # AGAIN, HERE, and the kill goes to the very process that was checked: a pid that has been given
+    # to another process since the pass looked is never ended (core/Services.ps1,
+    # Get-HordeServiceProcessVerdict). A process already gone is done.
+    #   THE HANDLE IS TAKEN FIRST. On .NET Framework a Process object found by its number holds only
+    #   the number: StartTime opens the process, reads, and lets go, and Kill opens it AGAIN - so
+    #   between the proof and the kill the number could pass to another process, and the kill would
+    #   land on that one. The first version's comment said the kill went through the handle the check
+    #   was made on, and it did not (safety review, item 8). Reading .Handle makes the object open
+    #   the process and KEEP it; the start time and the kill then both go through that one handle,
+    #   and Windows does not give a number out again while a handle to its process is held.
     param([Parameter(Mandatory = $true)]$Process)
     $p = $null
     try { $p = [System.Diagnostics.Process]::GetProcessById([int]$Process.pid) } catch { return [pscustomobject]@{ ok = $true; detail = "it had already ended" } }
     try {
         $started = $null
-        try { if ($p.HasExited) { return [pscustomobject]@{ ok = $true; detail = "it had already ended" } }; $started = $p.StartTime.ToUniversalTime() }
+        try { $null = $p.Handle; if ($p.HasExited) { return [pscustomobject]@{ ok = $true; detail = "it had already ended" } }; $started = $p.StartTime.ToUniversalTime() }
         catch { return [pscustomobject]@{ ok = $false; detail = ("process " + $Process.pid + " could not be checked, so it was not ended") } }
         if (-not (Test-HordeHeartbeatSameStart -One $started -Other $Process.startedAt)) { return [pscustomobject]@{ ok = $true; detail = ("process " + $Process.pid + " is another process now; the service's had already ended, and nothing was ended") } }
         try { $p.Kill() } catch { if (-not $p.HasExited) { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("process " + $Process.pid + " could not be ended: " + $_.Exception.GetBaseException().Message)) } } }
@@ -341,6 +431,11 @@ function Request-HordeServiceStop {
     $report = Read-HordeServiceWindowReport -Path $stop.report
     if ($report.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("its window could not be asked to close: " + $report.reason)) } }
     if ([int]$report.value.pid -ne [int]$Process.pid) { return [pscustomobject]@{ ok = $false; detail = ("its window could not be asked to close: the report file is about process " + $report.value.pid + ", not its process " + $Process.pid) } }
+    # THE START TIME TOO, AT THIS MOMENT: the report and the state agree on a number, and a number is
+    # given out again. The process that has it now must have started when the service's did, or the
+    # window belongs to a stranger and nothing is sent.
+    $still = Get-HordeServiceProcessVerdict -Claim $Process -Entry (Get-HordeServiceProcessEntry -ProcessId ([int]$Process.pid))
+    if ($still.state -cne "known") { return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("its window was not asked to close: " + $still.reason)) } }
     $asked = Close-HordeServiceWindow -ProcessId ([int]$Process.pid) -Handle ([long]$report.value.handle)
     if ($asked.state -ceq "known") { return [pscustomobject]@{ ok = $true; detail = "its window was asked to close" } }
     return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText ("its window could not be asked to close: " + $asked.reason)) }
@@ -353,15 +448,26 @@ function Start-HordeServiceNow {
     param([Parameter(Mandatory = $true)]$Definition, [string]$SupervisorHome = "", [int]$TimeoutSeconds = 20)
     $fail = { param([string]$Why) return [pscustomobject]@{ ok = $false; detail = (Protect-HordeServiceText $Why); process = $null; revision = "" } }
     $launch = $null
+    # THE EXIT RECORD is asked for only of a service whose definition lists deliberate exit codes
+    # (core/ServiceHostPort.ps1). The record of the run before is removed first: it is about a process
+    # that is gone, and is refused anyway by its pid and start, but a file that is not there cannot
+    # be misread at all.
+    $exitFile = ""
+    $deliberate = $null
+    if ($null -ne $Definition.PSObject.Properties["stop"] -and $null -ne $Definition.stop) { $deliberate = $Definition.stop.PSObject.Properties["deliberateExitCodes"] }
+    if ($null -ne $deliberate -and @($deliberate.Value).Count -gt 0) {
+        $exitFile = Get-HordeServiceExitPath -Name $Definition.name -HordeHome $SupervisorHome
+        try { if ([System.IO.File]::Exists($exitFile)) { [System.IO.File]::Delete($exitFile) } } catch { }
+    }
     try {
         if ($Definition.start.kind -ceq "horde") {
             $entry = [System.IO.Path]::Combine($Definition.checkout, "horde.ps1")
             if (-not [System.IO.File]::Exists($entry)) { return (& $fail ("there is no horde entry point in its checkout " + $Definition.checkout)) }
             $log = Step-HordeServiceLog -Name $Definition.name -HordeHome $SupervisorHome
-            $launch = New-HordeServiceLaunch -Kind "horde" -Script $entry -Words $Definition.start.words -Named $Definition.start.named -Switches $Definition.start.switches -Environment @{ HORDE_HOME = $Definition.hordeHome } -WorkingDirectory $Definition.checkout -LogFile $log
+            $launch = New-HordeServiceLaunch -Kind "horde" -Script $entry -Words $Definition.start.words -Named $Definition.start.named -Switches $Definition.start.switches -Environment @{ HORDE_HOME = $Definition.hordeHome } -WorkingDirectory $Definition.checkout -LogFile $log -ExitFile $exitFile
         } else {
             if (-not [System.IO.File]::Exists($Definition.start.program)) { return (& $fail ("its program " + $Definition.start.program + " is not there")) }
-            $launch = New-HordeServiceLaunch -Kind "program" -Program $Definition.start.program -Arguments $Definition.start.arguments -WorkingDirectory $Definition.checkout
+            $launch = New-HordeServiceLaunch -Kind "program" -Program $Definition.start.program -Arguments $Definition.start.arguments -WorkingDirectory $Definition.checkout -ExitFile $exitFile
         }
     } catch { return (& $fail ("it could not be made ready to start: " + $_.Exception.Message)) }
     $revision = ""
