@@ -13,8 +13,10 @@
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 
-# After how long with no heartbeat the watcher is called stale: 40 passes at the default tick of 3 s.
+# After how long with no heartbeat the watcher is called stale, at the least: 40 ticks of the default 3 s.
 $script:HordeWakeStaleSeconds = 120
+# How large the journal grows before it is set aside: 4 MiB, about 20,000 lines of 200 bytes.
+$script:HordeWakeJournalMaxBytes = 4194304
 
 function New-HordeWakeEntry {
     # One journal line: { at; kind; id; outcome; reason }, and messageId for a mail.
@@ -59,10 +61,6 @@ function Get-HordeWakeStateFile {
     return (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) $leaf)
 }
 
-function Get-HordeWakeStaleSeconds {
-    return $script:HordeWakeStaleSeconds
-}
-
 function ConvertTo-HordeWakeTimeText {
     # A UTC time as text that reads back as the same instant.
     param([datetime]$At)
@@ -92,9 +90,21 @@ function Write-HordeWakeFile {
     catch { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue; throw }
 }
 
+function Get-HordeWakeStaleSeconds {
+    # After how long with no heartbeat a watcher that ticks every -TickSeconds is stale: three ticks,
+    # and never less than 120 s. The first version said 120 s whatever the tick, while the command took
+    # a tick of up to an hour (review of PR #207; it now takes at most 300 s): such a watcher was "stale" for all but two minutes
+    # of every hour while running perfectly. The tick is written into the heartbeat for this.
+    param([int]$TickSeconds = 0)
+    return [int][System.Math]::Max($script:HordeWakeStaleSeconds, 3 * $TickSeconds)
+}
+
 function Write-HordeWakeJournal {
     # Append each entry to journal.jsonl as one line of JSON. Returns how many lines it wrote.
-    param($Entries, [string]$HordeHome = (Get-HordeHome))
+    # THE JOURNAL IS BOUNDED (review of PR #207: it only grew). When it has reached -MaxBytes it is set
+    # aside as journal.1.jsonl, replacing the one set aside before, and a new one is begun: at most two
+    # files, and the newest lines are never the ones lost.
+    param($Entries, [string]$HordeHome = (Get-HordeHome), [long]$MaxBytes = $script:HordeWakeJournalMaxBytes)
     $lines = New-Object System.Collections.ArrayList
     foreach ($e in @($Entries)) {
         if ($null -eq $e) { continue }
@@ -105,31 +115,39 @@ function Write-HordeWakeJournal {
     if ($lines.Count -eq 0) { return 0 }
     $dir = Get-HordeWakeFolder -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    [System.IO.File]::AppendAllText((Join-Path $dir "journal.jsonl"), (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $path = Join-Path $dir "journal.jsonl"
+    if ((Test-Path -LiteralPath $path -PathType Leaf) -and (New-Object System.IO.FileInfo($path)).Length -ge $MaxBytes) { Move-HordeFileAtomic -From $path -To (Join-Path $dir "journal.1.jsonl") }
+    [System.IO.File]::AppendAllText($path, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
     return $lines.Count
 }
 
 function Read-HordeWakeJournalTail {
-    # The journal's last -Count lines, as they were written; none when there is no journal.
+    # The journal's last -Count lines, as they were written; none when there is no journal. Just after
+    # the journal was set aside the new one is short, so the tail is filled from the one before it.
     param([int]$Count = 10, [string]$HordeHome = (Get-HordeHome))
-    $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "journal.jsonl"
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return @() }
-    $lines = @((Read-HordeSharedText -Path $path) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+    $dir = Get-HordeWakeFolder -HordeHome $HordeHome
+    $lines = @()
+    foreach ($leaf in @("journal.1.jsonl", "journal.jsonl")) {
+        $path = Join-Path $dir $leaf
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $lines = @($lines) + @((Read-HordeSharedText -Path $path) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+    }
     if ($lines.Count -le $Count) { return $lines }
     return @($lines[($lines.Count - $Count)..($lines.Count - 1)])
 }
 
 function Write-HordeWakeHeartbeat {
-    # heartbeat.json, replaced whole every pass: { at; pid; pass; shadow }. It is how anything else
-    # tells a watcher that is running from one that is not.
-    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
-    $beat = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At); pid = $ProcessId; pass = $Pass; shadow = [bool]$Shadow }
+    # heartbeat.json, replaced whole every pass: { at; pid; pass; shadow; tickSeconds }. It is how
+    # anything else tells a watcher that is running from one that is not; tickSeconds is how often this
+    # watcher beats, so a reader knows how long a silence is too long (Get-HordeWakeStaleSeconds).
+    param([Parameter(Mandatory = $true)][datetime]$At, [Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][long]$Pass, [switch]$Shadow, [int]$TickSeconds = 0, [string]$HordeHome = (Get-HordeHome))
+    $beat = [ordered]@{ at = (ConvertTo-HordeWakeTimeText $At); pid = $ProcessId; pass = $Pass; shadow = [bool]$Shadow; tickSeconds = $TickSeconds }
     Write-HordeWakeFile -Path (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "heartbeat.json") -Text (ConvertTo-Json -InputObject $beat -Compress)
 }
 
 function Read-HordeWakeHeartbeat {
-    # The last heartbeat: known { at; pid; pass; shadow }, absent when the watcher never ran here, or
-    # unknown when the file cannot be read as one.
+    # The last heartbeat: known { at; pid; pass; shadow; tickSeconds }, absent when the watcher never ran
+    # here, or unknown when the file cannot be read as one.
     param([string]$HordeHome = (Get-HordeHome))
     $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "heartbeat.json"
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "the wake watcher has never run in this home: there is no heartbeat") }
@@ -138,7 +156,34 @@ function Read-HordeWakeHeartbeat {
     $at = $null
     if ($null -ne $j -and $null -ne $j.PSObject.Properties["at"]) { $at = ConvertFrom-HordeWakeTimeText $j.at }
     if ($null -eq $at) { return (New-HordeUnknown -Reason "the heartbeat holds no time") }
-    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false }
-    foreach ($n in @("pid", "pass", "shadow")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
+    $beat = [ordered]@{ at = $at; pid = 0; pass = [long]0; shadow = $false; tickSeconds = 0 }
+    foreach ($n in @("pid", "pass", "shadow", "tickSeconds")) { if ($null -ne $j.PSObject.Properties[$n]) { $beat[$n] = $j.$n } }
     return (New-HordeKnown -Value ([pscustomobject]$beat) -ObservedAt $at)
+}
+
+function Enter-HordeWakeLock {
+    # ONE WATCHER A HOME AND A MODE. Returns the open lock - the caller keeps it for as long as it runs
+    # and disposes it when it ends - or $null when another process holds it. Two watchers on one home
+    # would nudge one session twice a pass and write over each other's ledger; the first version let a
+    # second one start (review of PR #207).
+    # THE LOCK IS AN OPEN FILE HANDLE, NOT A PID IN A FILE. The file is opened for writing and shared for
+    # reading only, so a second open for writing fails for exactly as long as the first is held, and
+    # the operating system closes the handle when its process ends, however it ends. A pid written in a
+    # file outlives its process, and Windows gives the same pid to another (core/Identity.ps1's second
+    # rule): a lock that trusted one would block for ever after a crash, or never. The pid is written
+    # inside all the same, for a person to read; nothing decides by it.
+    param([switch]$Shadow, [int]$ProcessId = 0, [string]$HordeHome = (Get-HordeHome))
+    $dir = Get-HordeWakeFolder -HordeHome $HordeHome
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $leaf = "run.lock"
+    if ($Shadow) { $leaf = "run-shadow.lock" }
+    try { $held = New-Object System.IO.FileStream((Join-Path $dir $leaf), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }
+    catch [System.IO.IOException] { return $null }
+    try {
+        $held.SetLength(0)
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("" + $ProcessId)
+        $held.Write($bytes, 0, $bytes.Length)
+        $held.Flush()
+    } catch { $held.Dispose(); throw }
+    return $held
 }

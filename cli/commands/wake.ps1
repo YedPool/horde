@@ -9,15 +9,16 @@ $HordeCommand = @{
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "status")][string]$Verb,
             [switch]$Shadow,
             [switch]$Once,
-            [ValidateRange(1, 3600)][int]$TickSeconds = 3
+            [ValidateRange(1, 300)][int]$TickSeconds = 3
         )
+        # -TickSeconds IS AT MOST 300: a watcher that looks less often than every five minutes is not a
+        # doorbell, and stale is three ticks (core/WakeFiles.ps1), so a longer tick is a longer blindness.
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
         if ($Verb -eq "status") { foreach ($flag in @("Shadow", "Once", "TickSeconds")) { if ($PSBoundParameters.ContainsKey($flag)) { throw ("-" + $flag + " belongs to wake run, not wake status") } } }
         # Loaded here, in the command's own scope, so each waker's functions stay visible to the blocks
         # it registers (wakers/Port.ps1, Get-HordeWakerFiles).
         $root = Get-HordeRoot
-        . (Join-Path $root "core\Wake.ps1")
-        . (Join-Path $root "core\RestoreSource.ps1")
+        . (Join-Path $root "core\WakeRun.ps1")
         foreach ($w in @(Get-HordeWakerFiles)) { . $w }
 
         if ($Verb -eq "status") {
@@ -26,7 +27,7 @@ $HordeCommand = @{
             elseif ($beat.state -cne "known") { Write-Output ("heartbeat: unknown - " + $beat.reason) }
             else {
                 $age = [int][System.Math]::Max(0, ([datetime]::UtcNow - $beat.value.at).TotalSeconds)
-                $limit = Get-HordeWakeStaleSeconds
+                $limit = Get-HordeWakeStaleSeconds -TickSeconds ([int]$beat.value.tickSeconds)
                 $word = "fresh"
                 if ($age -gt $limit) { $word = "STALE (over " + $limit + " s): the watcher is not running" }
                 Write-Output ("heartbeat: " + $age + " s ago, " + $word + " (pass " + $beat.value.pass + ", pid " + $beat.value.pid + ", shadow " + ("$($beat.value.shadow)").ToLowerInvariant() + ")")
@@ -38,63 +39,25 @@ $HordeCommand = @{
         }
 
         # SHADOW IS THE ONLY WAY IT RUNS TODAY. No waker that can reach a real session ships yet, and
-        # there is no path from here to a nudge: every pass below is made with -Shadow, literally.
+        # there is no path from here to a nudge: the only tick this command can make is the shadow tick
+        # (core/WakeRun.ps1), which takes no parameter that could make it anything else.
         if (-not $Shadow) { throw "wake run needs -Shadow: live nudging arrives with the first real waker. With -Shadow it journals what it would do and nudges nobody" }
-        $settings = Get-HordeWakeSettings
-        $picked = Resolve-HordeProductionWaker
-        $waker = $null
-        if ($picked.state -ceq "known") { $waker = $picked.value; Write-Output ("wake: shadow run through the waker '" + $waker.name + "'") }
-        else { Write-Output ("wake: no waker is installed, so no session is watched for unread mail; the restore source still runs (" + $picked.reason + ")") }
-        $restoreSettings = Get-HordeRestoreSettings
-        # A SHADOW RUN KEEPS ITS STATE IN FILES OF ITS OWN (core/WakeFiles.ps1, Get-HordeWakeStateFile), so
-        # nothing it only would have done is ever read by a live run as done.
-        $ledger = @{}
-        $posted = @{}
-        $saved = Read-HordeWakeLedger -Shadow
-        if ($saved.state -ceq "known") { $ledger = $saved.value.ledger }
-        elseif ($saved.state -ceq "unknown") { Write-Output ("wake: starting from an empty ledger - " + $saved.reason) }
-        $savedRestore = Read-HordeRestoreState -Shadow
-        $restores = @()
-        if ($savedRestore.state -ceq "known") { $posted = $savedRestore.value.posted; $restores = @($savedRestore.value.known) }
-        elseif ($savedRestore.state -ceq "unknown") { Write-Output ("wake: starting with no mail marked posted - " + $savedRestore.reason) }
-        # THE RESTORE SOURCE RUNS EVERY 30 s, BESIDE THE WAKE PASS, NOT IN IT (core/RestoreSource.ps1: it
-        # is a sender, and the watcher only wakes). Not every pass: it reads the process table, and a
-        # restore is measured in minutes (the first resume is due at once, the stall notice at 300 s).
-        $restoreEvery = 30
-        $restoreAt = [datetime]::MinValue
-        $unknown = @{}
-        $notes = @()
-        $pass = [long]0
-        while ($true) {
-            $pass++
-            $now = [datetime]::UtcNow
-            $sourceEntries = @()
-            if (($now - $restoreAt).TotalSeconds -ge $restoreEvery) {
-                $restoreAt = $now
-                $read = Get-HordeRestoreSessions
-                if ($read.state -ceq "known") {
-                    $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $now -Settings $restoreSettings -Shadow -Posted $posted -Known $restores
-                    $sourceEntries = @($sourced.entries)
-                    if ($sourceEntries.Count -gt 0 -or @($sourced.known).Count -ne $restores.Count) { Save-HordeRestoreState -Posted $sourced.posted -Known $sourced.known -Shadow }
-                    $posted = $sourced.posted
-                    $restores = @($sourced.known)
-                    $notes = @($read.leftOut | ForEach-Object { [pscustomobject]@{ id = ("restore:" + $_.agent); reason = ("the restore source left out the " + $_.agent + " sessions, whose listing is not whole: " + $_.reason) } })
-                } else { $notes = @([pscustomobject]@{ id = "restore"; reason = ("the restore source could not read the sessions: " + $read.reason) }) }
+        # ONE WATCHER A HOME AND A MODE (core/WakeFiles.ps1, Enter-HordeWakeLock): held until this command ends.
+        $lock = Enter-HordeWakeLock -Shadow -ProcessId $PID
+        if ($null -eq $lock) { throw "a shadow wake run is already running in this home; this one has not started" }
+        try {
+            $picked = Resolve-HordeProductionWaker
+            $waker = $null
+            if ($picked.state -ceq "known") { $waker = $picked.value; Write-Output ("wake: shadow run through the waker '" + $waker.name + "'") }
+            else { Write-Output ("wake: no waker is installed, so no session is watched for unread mail; the restore source still runs (" + $picked.reason + ")") }
+            $run = New-HordeWakeShadowRun
+            foreach ($line in @($run.said)) { Write-Output ("wake: " + $line) }
+            while ($true) {
+                $entries = @(Invoke-HordeWakeShadowTick -Run $run -Now ([datetime]::UtcNow) -Waker $waker -TickSeconds $TickSeconds -ProcessId $PID)
+                foreach ($e in $entries) { Write-Output ("wake: " + $e.kind + " " + $e.id + " " + $e.outcome + " - " + $e.reason) }
+                if ($Once) { Write-Output ("wake: pass " + $run.pass + " done, " + $entries.Count + " journal line(s), shadow"); return }
+                Start-Sleep -Seconds $TickSeconds
             }
-            # What the restore source could not read is carried between its readings and offered every
-            # pass, so it is journaled once when it starts and not again every 30 s while it lasts.
-            $extra = @($notes | ForEach-Object { New-HordeWakeEntry -At $now -Kind "skip-unknown" -Id $_.id -Outcome "unknown" -Reason $_.reason })
-            $result = Invoke-HordeWakePass -Waker $waker -Now $now -Settings $settings -Ledger $ledger -Shadow
-            $fresh = Select-HordeWakeNewEntries -Entries (@($result.entries) + $sourceEntries + $extra) -Unknown $unknown
-            $unknown = $fresh.unknown
-            $changed = (@($fresh.entries).Count -gt 0 -or $result.ledger.Count -ne $ledger.Count)
-            $ledger = $result.ledger
-            $null = Write-HordeWakeJournal -Entries $fresh.entries
-            if ($changed) { Save-HordeWakeLedger -Ledger $ledger -Shadow }
-            Write-HordeWakeHeartbeat -At $now -ProcessId $PID -Pass $pass -Shadow
-            foreach ($e in @($fresh.entries)) { Write-Output ("wake: " + $e.kind + " " + $e.id + " " + $e.outcome + " - " + $e.reason) }
-            if ($Once) { Write-Output ("wake: pass " + $pass + " done, " + @($fresh.entries).Count + " journal line(s), shadow"); return }
-            Start-Sleep -Seconds $TickSeconds
-        }
+        } finally { $lock.Dispose() }
     }
 }

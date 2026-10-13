@@ -304,7 +304,25 @@ $beat = Read-HordeWakeHeartbeat
 Check ($beat.value.pass -eq 8 -and $beat.value.shadow -eq $false -and @(Get-ChildItem -LiteralPath $wakeDir -Filter "*.tmp").Count -eq 0) "the next one replaces it whole, and leaves no temporary file"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), "{ not json")
 Check ((Read-HordeWakeHeartbeat).state -ceq "unknown") "a heartbeat that cannot be read is unknown, not absent"
-Check ((Get-HordeWakeStaleSeconds) -eq 120) "a heartbeat is stale after 120 s"
+Check ((Get-HordeWakeStaleSeconds) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 3) -eq 120 -and (Get-HordeWakeStaleSeconds -TickSeconds 40) -eq 120) "a heartbeat is stale after 120 s, for any tick up to 40 s"
+Check ((Get-HordeWakeStaleSeconds -TickSeconds 41) -eq 123 -and (Get-HordeWakeStaleSeconds -TickSeconds 300) -eq 900) "and after three ticks for a slower watcher: stale is relative to how often it beats"
+Write-HordeWakeHeartbeat -At (At 9) -ProcessId 4242 -Pass 9 -TickSeconds 60
+Check ((Read-HordeWakeHeartbeat).value.tickSeconds -eq 60) "the heartbeat carries the tick, so a reader knows what stale is for this watcher"
+[System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), '{"at":"2026-10-12T08:00:05.0000000Z","pid":1,"pass":2,"shadow":true}')
+Check ((Read-HordeWakeHeartbeat).value.tickSeconds -eq 0) "a heartbeat written before it carried one reads as no tick, which is the 120 s floor"
+
+# THE JOURNAL IS BOUNDED: at the cap it is set aside, once, and the tail still reads across the two.
+$small = Join-Path $pinned.home "rotate"
+$line = New-HordeWakeEntry -At (At 1) -Kind "would-nudge" -Id (Sid 1) -Outcome "would-nudge" -Reason ("x" * 100)
+foreach ($n in 1..6) { $null = Write-HordeWakeJournal -Entries @($line) -HordeHome $small -MaxBytes 400 }
+$files = @(Get-ChildItem -LiteralPath (Join-Path $small "wake") | ForEach-Object { $_.Name } | Sort-Object)
+Check (($files -join ",") -ceq "journal.1.jsonl,journal.jsonl") ("past its cap the journal is set aside as journal.1.jsonl, and there are never more than the two (" + ($files -join ",") + ")")
+Check ((Get-Item -LiteralPath (Join-Path $small "wake\journal.jsonl")).Length -lt 800) "the journal that is written to stays under twice the cap"
+$last = New-HordeWakeEntry -At (At 2) -Kind "would-nudge" -Id (Sid 9) -Outcome "would-nudge" -Reason "the newest"
+foreach ($n in 1..3) { $null = Write-HordeWakeJournal -Entries @($line) -HordeHome $small -MaxBytes 400 }
+$null = Write-HordeWakeJournal -Entries @($last) -HordeHome $small -MaxBytes 400
+$tail = @(Read-HordeWakeJournalTail -Count 4 -HordeHome $small)
+Check ($tail.Count -eq 4 -and ($tail[3] | ConvertFrom-Json).reason -ceq "the newest") "the tail is still the newest lines, filled from the journal set aside when the new one is short"
 
 $keep = @{}
 $keep[(Sid 1)] = [pscustomobject]@{ attempts = 4; lastAttemptAt = (At 200); lastOutcome = "busy" }
