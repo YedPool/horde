@@ -162,7 +162,7 @@ Check ($found.Count -eq 1 -and $found[0].at -eq 600) ("fifteen minutes of ticks 
 Check (@($quiet | Where-Object { $_.kind -ceq "would-tell" -and $_.reason.StartsWith("fleet-silent: ") }).Count -eq 1) "and the warchief would be told of it, once"
 Check (@($run.ledger.Values | Where-Object { $_.attempts -ne 0 -or (Get-HordeWakeEntryValue $_ "gaveUp") -eq $true }).Count -eq 0 -and $run.silence.silent -eq $true) "from then no attempt is held against any session - the ones already counted, and already given up on, are forgiven"
 $rungSilent = @(Get-HordeMemoryWakerNudges).Count
-Check (@($quiet | Where-Object { $_.kind -ceq "nudge" -and $_.at -gt 600 }).Count -eq 3) "and in the five minutes after, each session is knocked for once: only at the longest step"
+Check (@($quiet | Where-Object { $_.kind -ceq "nudge" -and $_.at -gt 600 }).Count -eq 1) "and in the five minutes after, ONE session of the three is knocked for, once: a silent fleet is asked by one probe at a time"
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0
 $moved = New-Object System.Collections.ArrayList
 foreach ($n in 301..310) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $tenMinutes -HordeHome $h)) { [void]$moved.Add($e.kind + ":" + $e.id) } }

@@ -6,6 +6,15 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "every-session-of-a-silent-fleet-is-probed"
+           Find = 'if ($lastOfAny -is [datetime] -and ($Now - $lastOfAny).TotalSeconds -lt $longest) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-silent-probe-always-goes-to-the-same-session"
+           Find = '$ready = @($ready | Sort-Object -Property probed, nothing, attempts, rank, oldest, id)'
+           Replace = '$ready = @($ready)' }
+        @{ Name = "the-silent-probe-is-timed-per-session-not-per-fleet"
+           Find = 'if ($p -is [datetime] -and $p -le $Now -and ($null -eq $lastOfAny -or $p -gt $lastOfAny)) { $lastOfAny = $p }'
+           Replace = 'if ($p -is [datetime] -and $p -le $Now -and ($null -eq $lastOfAny -or $p -lt $lastOfAny)) { $lastOfAny = $p }' }
         @{ Name = "a-limit-that-is-over-is-plain-not-limited"
            Find = 'if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "over"; text = ""; until = $until } }'
            Replace = 'if ($until -is [datetime] -and $until -le $Now) { return [pscustomobject]@{ kind = "none"; text = "" } }' }

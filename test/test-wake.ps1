@@ -812,7 +812,12 @@ $r = Hush 100
 Check ((Rang) -eq $before -and @($r.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".StartsWith("the fleet is silent: it is asked only every 300 s") }).Count -eq 3) "in a silent fleet nobody is asked before the longest step has passed since it was last asked"
 $gave = 0; for ($s = 330; $s -le 14400; $s += 3) { $gave += @((Hush $s).entries | Where-Object { $_.kind -ceq "gave-up" }).Count }
 $asked = (Rang) - $before
-Check ($asked -ge 130 -and $asked -le 145 -and $gave -eq 0 -and @($script:ledger.Values | Where-Object { $_.attempts -ne 0 }).Count -eq 0) ("four hours of silence are a knock on each session every five minutes, far more than a mail is allowed, and not one is counted or given up on (" + $asked + " knocks)")
+Check ($asked -ge 44 -and $asked -le 48 -and $gave -eq 0 -and @($script:ledger.Values | Where-Object { $_.attempts -ne 0 }).Count -eq 0) ("four hours of silence are ONE knock every five minutes for the whole fleet of three - not one for each - and not one is counted or given up on (" + $asked + " knocks)")
+$each = @(1, 2, 3 | ForEach-Object { (Rang $_) })
+Check ((($each | Measure-Object -Maximum).Maximum - ($each | Measure-Object -Minimum).Minimum) -le 1) ("and the probe goes round: each of the three was asked as often as the others, within one (" + ($each -join ",") + ")")
+$times = @(Get-HordeMemoryWakerNudges | Where-Object { $_.at -ge (At 330) } | ForEach-Object { $_.at } | Sort-Object)
+$gaps = @(for ($i = 1; $i -lt $times.Count; $i++) { ($times[$i] - $times[$i - 1]).TotalSeconds })
+Check ($gaps.Count -gt 40 -and ($gaps | Measure-Object -Minimum).Minimum -ge 300) ("no two knocks anywhere in the fleet are less than five minutes apart (shortest gap " + ($gaps | Measure-Object -Minimum).Minimum + " s)")
 $r = Pass 14403
 Check (@($r.decisions | Where-Object { $_.action -ceq "nudge" }).Count -eq 1 -and @($script:ledger.Values | Where-Object { $_.attempts -eq 1 }).Count -eq 1) "when the fleet moves again the next nudge is an ordinary one, counted from nothing"
 Start-Case; Seat 1

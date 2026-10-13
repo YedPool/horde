@@ -239,8 +239,9 @@ function Get-HordeWakeHold {
     # A LIMITED SESSION WHOSE LIMIT ENDS AT A KNOWN TIME is wait until then: no knock, no attempt.
     # A PROBE is the nudge of a session that cannot be expected to answer. It is NOT COUNTED: neither the
     # cap nor the back-off's steps are spent on it (Update-HordeWakeLedger). There are two:
-    #   THE FLEET IS SILENT (-Silent; Update-HordeWakeSilence): each session is probed at the longest
-    #   step of the back-off, and the first to take mail ends it.
+    #   THE FLEET IS SILENT (-Silent; Update-HordeWakeSilence): ONE session of the fleet is probed per
+    #   longest step of the back-off, in turn (Get-HordeWakeDecisions), and the first to take mail
+    #   ends it.
     #   LIMITED WITH NO KNOWN END: the session waits. It is NOT knocked on a timer every few minutes -
     #   that is a line typed into a session that cannot answer, twelve times an hour. It is released
     #   - one knock - when a session of the fleet takes mail (the caller then marks its probe due:
@@ -386,7 +387,9 @@ function Get-HordeWakeDecisions {
         if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
         $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Moves $Moves -NoProbe:$NoProbe -Self $Self
-        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
+        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0 }
+        $lastProbe = Get-HordeWakeEntryValue $entry "probeAt"
+        if ($lastProbe -is [datetime]) { $row.probed = $lastProbe.Ticks }
         if ($hold.action -ceq "ready" -or $hold.action -ceq "look") {
             if ($null -ne $entry) { $row.attempts = [int]$entry.attempts }
             if ($null -ne (Get-HordeWakeNothingAt $entry)) { $row.nothing = 1 }
@@ -398,6 +401,27 @@ function Get-HordeWakeDecisions {
     }
     $ready = @($rows | Where-Object { $_.action -ceq "ready" -or $_.action -ceq "look" } | Sort-Object -Property nothing, attempts, rank, oldest, id)
     $allowed = [int]$Settings.maxNudgesPerPass
+    # A SILENT FLEET IS ASKED BY ONE PROBE AT A TIME, FOR THE WHOLE FLEET. Each session was probed at the
+    # longest step by itself, so a fleet of twenty that could not answer had twenty lines typed into
+    # it every five minutes - silence in name only (safety review of PR 220). The question a probe
+    # asks is "can anybody answer yet", and one session can say that as well as twenty: so ONE session
+    # is probed per longest step, counted from the last probe of ANY session, and it is the one that
+    # was probed longest ago - the probe goes round. The first to take mail ends the silence, and
+    # then everybody is knocked for (Update-HordeWakeSilence).
+    if ($Silent) {
+        $steps = @($Settings.backoffSeconds)
+        $longest = 0
+        if ($steps.Count -gt 0) { $longest = [int]$steps[$steps.Count - 1] }
+        $lastOfAny = $null
+        if ($null -ne $Ledger) { foreach ($e in @($Ledger.Values)) { $p = Get-HordeWakeEntryValue $e "probeAt"; if ($p -is [datetime] -and $p -le $Now -and ($null -eq $lastOfAny -or $p -gt $lastOfAny)) { $lastOfAny = $p } } }
+        if ($lastOfAny -is [datetime] -and ($Now - $lastOfAny).TotalSeconds -lt $longest) {
+            foreach ($r in $ready) { $r.action = "wait"; $r.reason = ("the fleet is silent: one session of the fleet is asked every " + $longest + " s, and " + [int][System.Math]::Ceiling($longest - ($Now - $lastOfAny).TotalSeconds) + " s are left") }
+            $ready = @()
+        } else {
+            $ready = @($ready | Sort-Object -Property probed, nothing, attempts, rank, oldest, id)
+            $allowed = [System.Math]::Min($allowed, 1)
+        }
+    }
     for ($i = 0; $i -lt $ready.Count; $i++) {
         if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }
         elseif ($ready[$i].action -ceq "ready") { $ready[$i].action = "nudge"; $ready[$i].reason = "unread mail, idle, empty box" }
