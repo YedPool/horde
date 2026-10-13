@@ -182,6 +182,34 @@ function Get-HordeDecisionsChannelFingerprint {
     return ((@($names) -join ",") + "|" + (@($PhoneKeyIds) -join ","))
 }
 
+function Test-HordeDecisionsChannelGlance {
+    # THE GLANCE (channels/Port.ps1, Glance): has the list of the store's record names changed since the
+    # snapshot Tick last looked? $true then, and the runner runs the Tick now instead of when its watch
+    # of the mailbox ends - so the warchief's reply under a question, or a new question, is on the
+    # founder's phone in about a second and not in up to a minute.
+    #   - THE NAMES ARE LISTED, NOTHING IS OPENED (about 1 ms for a store of 30 questions, measured
+    #     2026-10-13; the fingerprint the Tick itself asks by, WHAT CHANGED IS ASKED CHEAPLY in the header), and the trust store is not
+    #     read: of the Tick's fingerprint - the names, a bar, the phone keys' ids - only what is before
+    #     the bar is compared. So a phone key trusted since is NOT seen here, and waits for the turn's own
+    #     Tick as it always did; a key arrives through the mailbox, which ends the watch at once anyway.
+    #   - NO, UNTIL THE TICK HAS LOOKED ONCE (no fingerprint yet, or no phone to send to), and NO WHILE
+    #     AN ENVELOPE IS RECORDED AND WAITING: the relay would not take it, and putting it again is the
+    #     turn's Tick's, after the runner's backoff.
+    #   - NO WHEN THE STORE CANNOT BE LISTED: the turn's Tick says why, once a turn.
+    param($Context)
+    if (-not $Context.state.ContainsKey("decisions")) { return $false }
+    $mine = $Context.state["decisions"]
+    if (@($mine.pending).Count -ne 0) { return $false }
+    $last = "$($mine.fingerprint)"
+    $bar = $last.LastIndexOf("|")
+    if ($bar -lt 0) { return $false }
+    $root = $Context.decisionsRoot
+    if ($root -ceq "") { $root = Get-HordeDecisionStoreRoot }
+    $names = Get-HordeDecisionsChannelFingerprint -Root $root -PhoneKeyIds @()
+    if ($names -ceq "") { return $false }
+    return ($names -cne $last.Substring(0, $bar + 1))
+}
+
 function ConvertTo-HordeDecisionsChannelQuestion {
     # One question of the list as the phone gets it, as JSON text: the view less what is the warchief's
     # inbox (OUT, in the header).
@@ -338,4 +366,5 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
 
 $null = Register-HordeRelayChannel -Folder $script:HordeDecisionsChannelFolder -Name "decisions" -Kinds @("answer") -Senders "founder" `
     -Accept { param($Context, $Item) return (Invoke-HordeDecisionsChannelAccept -Context $Context -Item $Item) } `
-    -Tick { param($Context) return (Invoke-HordeDecisionsChannelTick -Context $Context) }
+    -Tick { param($Context) return (Invoke-HordeDecisionsChannelTick -Context $Context) } `
+    -Glance { param($Context) return (Test-HordeDecisionsChannelGlance -Context $Context) }
