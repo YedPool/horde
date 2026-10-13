@@ -335,6 +335,31 @@ try {
         Check ($po.state -ceq "known" -and $ro.state -ceq "known" -and @($ro.value.items).Count -eq 1 -and $ro.value.items[0].text -ceq $odd) "quotes and backslashes go through the adapter and come back as they were put"
         $kp = Confirm-HordeRelayItems -Connection $conn -Mailbox "worker-test/odd" -Through 99
         Check ($kp.state -ceq "unknown" -and "$($kp.reason)".Contains("409") -and "$($kp.reason)".Contains("past it")) ("a refusal reaches the caller with the relay's status and words (" + $kp.reason + ")")
+
+        Write-Host ""
+        Write-Host "--- a sender trims its own stream: the adapter's put, and what the Worker asks of one ---" -ForegroundColor Cyan
+        # relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM. The whole contract is the conformance suite's; here,
+        # the adapter's own part - the query it adds and the count it reads back - and the API's checks
+        # of a keepFrom, each provoked on purpose.
+        $tm = "worker-test/trim"
+        $tmPath = "/v1/mailboxes/" + $tm
+        $sk = { param([int]$Seq) return (("d4" * 16) + "/decisions/" + $Seq + "/" + ("0" * 20) + $Seq.ToString("0000")) }
+        $trimTexts = { return (@((Receive-HordeRelayItems -Connection $conn -Mailbox $tm -Since 0).value.items | ForEach-Object { $_.text }) -join ",") }
+        foreach ($i in 1..3) { $null = Send-HordeRelayItem -Connection $conn -Mailbox $tm -Text ("s" + $i) -Key (& $sk $i) }
+        $t4 = Send-HordeRelayItem -Connection $conn -Mailbox $tm -Text "s4" -Key (& $sk 4) -KeepFrom 3
+        Check ($t4.state -ceq "known" -and $t4.value.seq -eq 4 -and $t4.value.trimmed -eq 2 -and (& $trimTexts) -ceq "s3,s4") ("the adapter's put that says to keep from seq 3 is taken, and reads back that the Worker trimmed the 2 before it (" + $t4.reason + "; held " + (& $trimTexts) + ")")
+        $plainAnswer = Send-Raw "POST" ($tmPath + "/items") ('{"key":"' + (& $sk 5) + '","text":"s5"}') $bearer
+        $trimAnswer = Send-Raw "POST" ($tmPath + "/items?keepFrom=5") ('{"key":"' + (& $sk 6) + '","text":"s6"}') $bearer
+        Check ($plainAnswer.code -eq 200 -and -not $plainAnswer.text.Contains("trimmed") -and $trimAnswer.code -eq 200 -and $trimAnswer.text.Contains('"trimmed":2')) ("a put that asks for no trim is answered as it always was, with nothing of one; a put that asks is answered with how many (" + $plainAnswer.text + " / " + $trimAnswer.text + ")")
+        $refusedTrims = @(
+            @{ q = "keepFrom=0"; key = (& $sk 7); why = "a keepFrom of 0" },
+            @{ q = "keepFrom=x"; key = (& $sk 7); why = "a keepFrom that is no number" },
+            @{ q = "keepFrom=07"; key = (& $sk 7); why = "a keepFrom with a leading zero" },
+            @{ q = "keepFrom=8"; key = (& $sk 7); why = "a keepFrom past the key's own seq" },
+            @{ q = "keepFrom=1"; key = "names-no-stream"; why = "a key that names no stream" },
+            @{ q = "keepFrom=1"; key = (("d4" * 16) + "/decisions/07/" + ("0" * 24)); why = "a key whose seq has a leading zero" }
+        ) | ForEach-Object { $r = Send-Raw "POST" ($tmPath + "/items?" + $_.q) ('{"key":"' + $_.key + '","text":"never"}') $bearer; [pscustomobject]@{ code = $r.code; why = $_.why } }
+        Check (@($refusedTrims | Where-Object { $_.code -ne 400 }).Count -eq 0 -and (& $trimTexts) -ceq "s5,s6") ("a put that asks for a trim it may not have is refused, 400, and neither put nor trimmed: " + ((@($refusedTrims | ForEach-Object { $_.why + " " + $_.code }) -join "; ")) + " (held " + (& $trimTexts) + ")")
         $dc = Connect-HordeRelay -Name "cloudflare" -Options @{}
         Check ($dc.state -ceq "known" -and $null -ne $dc.value -and $dc.value.state.origin -ceq (Get-HordeCloudflareRelayDeployment).origin) "with no origin given, the adapter connects to the production origin wrangler.json names"
 

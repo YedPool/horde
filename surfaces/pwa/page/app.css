@@ -62,7 +62,7 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 #scanVideo { width: 100%; max-height: 50vh; background: #000; border-radius: 6px; }
 
 #doc { padding: 4px 8px calc(var(--keys-h) + 24px + var(--kb)) 0; }
-#mode { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); padding: 8px 16px; }
+#mode, #notShown { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); padding: 8px 16px; }
 /* The document's question row hangs its number in a 54 pixel margin made for a desk window; on a
    phone the margin is kept (the number must not move) and the field always goes under the question,
    which list.js does by itself when the line is narrow. */

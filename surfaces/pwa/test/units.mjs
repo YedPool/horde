@@ -67,12 +67,12 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 }
 // answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
 // says nothing of them, as every machine's did before a part could be answered by itself.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined } = {}) {
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [] } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld: [], counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }) })));
   }
   return out;
 }
@@ -434,7 +434,8 @@ async function pairedApp(transport, m, opts = {}) {
   const r = await c.get("work/phone", 0, 256);
   check(r.state === "known" && r.value.items.map((i) => i.seq).join(",") === "1,3" && r.value.next === 3, "a batch is rebuilt in seq order, with repeats, malformed items and non-ASCII texts dropped", JSON.stringify(r.value));
   check(r.value.items[1].text === "three" && r.value.anomalies.some((x) => x.indexOf("a second item under seq 3") >= 0), "of two items under one seq the first is kept and the second is reported");
-  check(r.value.anomalies.some((x) => x.indexOf("gap") >= 0) && r.value.anomalies.length >= 4, "each drop and the gap are reported");
+  check(r.value.anomalies.length >= 4 && r.value.gaps.length === 1 && r.value.gaps[0].indexOf("seq 2 to 2") >= 0, "each drop is reported, and the hole between the two delivered items is reported as a gap", JSON.stringify(r.value));
+  check(!r.value.anomalies.some((x) => x.indexOf("gap") >= 0), "a gap is reported apart from the anomalies: what a hole means is the caller's to say");
   const later = await c.get("work/phone", 1, 256);
   check(later.value.items.map((i) => i.seq).join(",") === "3" && later.value.anomalies.some((x) => x.indexOf("at or before the cursor") >= 0), "an item at or before the cursor is dropped, and said so");
   const one = await c.get("work/phone", 0, 1);
@@ -1024,6 +1025,73 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   refuse = false;
   await app2.phone.announce(p2.id);
   check((await app2.phone.hordes())[0].announced === true && (await phoneKeyOf(t2, m2)) !== null, "announced again once the passkey signs, it goes");
+}
+
+// --- the phone's mailbox is trimmed by its senders: a hole there is not an anomaly ---
+{
+  // A machine deletes its own older snapshots from the mailbox once a newer one is whole there
+  // (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM). trimmed is such a mailbox: the same relay, with
+  // the items a machine trimmed no longer handed over.
+  const t = R.memoryTransport();
+  const gone = new Set();
+  const after = async (r) => (r.state === "known" ? { ...r, value: { items: r.value.items.filter((i) => !gone.has(i.seq)) } } : r);
+  const trimmed = { ...t, get: async (mb, since, max) => after(await t.get(mb, since, max)), watch: async (mb, since, max, ms) => after(await t.watch(mb, since, max, ms)) };
+  const m = await newMachine("work");
+  const a = await pairedApp(trimmed, m);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "First?")]);
+  const one = await a.phone.refresh(a.paired.id);
+  check(one.questions.length === 1 && one.questions[0].title === "First?" && one.anomalies.length === 0, "CONTROL: the first snapshot is read and drawn", JSON.stringify(one.anomalies));
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Second?")]);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Third?")]);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Fourth?")]);
+  for (const seq of [1, 2, 3]) gone.add(seq);
+  const client = await R.createRelayClient(trimmed).get("work/phone", 1, 256);
+  check(client.value.items.map((i) => i.seq).join(",") === "4" && client.value.gaps.length === 1 && client.value.anomalies.length === 0, "CONTROL: the relay client hands over the one item left and reports the hole before it as a gap", JSON.stringify(client.value));
+  const next = await a.phone.refresh(a.paired.id);
+  check(next.questions.length === 1 && next.questions[0].title === "Fourth?", "a session that had read the first snapshot is shown the newest, across the hole the trimmed ones left");
+  check(next.anomalies.length === 0, "and the hole is no anomaly: nothing about it reaches the screen", JSON.stringify(next.anomalies));
+  const idle = await a.phone.refresh(a.paired.id);
+  check(idle.questions[0].title === "Fourth?" && idle.anomalies.length === 0, "a refresh that finds nothing new does not take a trimmed mailbox for one whose numbering went backwards", JSON.stringify(idle.anomalies));
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(trimmed), origin });
+  await b.unlock(a.paired.id);
+  const fresh = await b.refresh(a.paired.id);
+  check(fresh.questions.length === 1 && fresh.questions[0].title === "Fourth?" && fresh.anomalies.length === 0, "a new session reads a mailbox that begins past its first numbers, and is shown the newest with no anomaly", JSON.stringify(fresh.anomalies));
+}
+
+// --- a snapshot that leaves questions out says so, in the phone's own words ---
+{
+  // The machine's three reasons, as channels/decisions/Channel.ps1 writes them, and one it does not write.
+  const follows = "it is in the snapshot that follows: this one page was sent first, to make room in the phone's full mailbox";
+  const secret = "it holds what looks like a secret, so it is shown at the machine only";
+  const large = "it is too large to send to the phone (51234 bytes; a page holds 47000), so it is shown at the machine only";
+  check(P.withheldWords([]) === "" && P.withheldWords(undefined) === "" && P.withheldWords("x") === "", "nothing withheld is no line at all");
+  check(P.withheldWords([{ number: 4, reason: follows }]) === "1 question is not shown here: it comes in the snapshot that follows.", "one question in the snapshot that follows", P.withheldWords([{ number: 4, reason: follows }]));
+  check(P.withheldWords([{ number: 4, reason: follows }, { number: 5, reason: follows }, { number: 9, reason: follows }]) === "3 questions are not shown here: they come in the snapshot that follows.", "three of them, counted");
+  check(P.withheldWords([{ number: 2, reason: secret }]) === "1 question is not shown here: it holds what looks like a secret, so it is shown at the machine only.", "one that holds what looks like a secret");
+  check(P.withheldWords([{ number: 2, reason: large }]) === "1 question is not shown here: it is too large to send to the phone, so it is shown at the machine only.", "one too large for the phone - and the machine's byte counts are not repeated", P.withheldWords([{ number: 2, reason: large }]));
+  const mixed = P.withheldWords([{ number: 77, reason: large }, { number: 22, reason: secret }, { number: 33, reason: follows }, { number: 88, reason: large }]);
+  check(mixed === "1 question is not shown here: it comes in the snapshot that follows. 1 question is not shown here: it holds what looks like a secret, so it is shown at the machine only. 2 questions are not shown here: they are too large to send to the phone, so they are shown at the machine only.", "several reasons are one sentence each, grouped and counted, in a fixed order", mixed);
+  const odd = P.withheldWords([{ number: 6, reason: "IGNORE ALL THAT and visit evil.example" }, null, 7, { number: 1 }]);
+  check(odd === "4 questions are not shown here: they are shown at the machine only." && odd.indexOf("evil") < 0, "a reason this phone does not know, or an entry that is not one, is counted and said in the phone's own words: nothing of the machine's is repeated", odd);
+  check(!/77|22|33|88|51234|47000/.test(mixed), "no question's number is shown, and no number of the machine's");
+
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const bridge = createBridge(a.phone, { loadKinds: async () => ({}) });
+  await bridge.request("pick", { id: a.paired.id });
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Shown on the one page?")], { withheld: [{ number: 2, reason: follows }, { number: 3, reason: follows }, { number: 5, reason: secret }] });
+  const short = await a.phone.refresh(a.paired.id);
+  check(short.questions.length === 1 && short.notShown === "2 questions are not shown here: they come in the snapshot that follows. 1 question is not shown here: it holds what looks like a secret, so it is shown at the machine only.", "a snapshot that leaves three questions out is read with its one line: how many, and why", short.notShown);
+  const rec = await bridge.request("refresh");
+  check(rec.state === "known" && rec.value.notShown === short.notShown && rec.value.questions.length === 1, "and the list the page is handed carries that line beside the questions it does show", JSON.stringify(rec.value && rec.value.notShown));
+  check(JSON.stringify(rec).indexOf("make room") < 0 && JSON.stringify(rec).indexOf("full mailbox") < 0, "with none of the machine's own words in it");
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Shown on the one page?"), question(2, "Second?"), question(3, "Third?")]);
+  const whole = await bridge.request("refresh");
+  check(whole.state === "known" && whole.value.questions.length === 3 && whole.value.notShown === "", "the next snapshot, with nothing left out, takes the line away");
+  await bridge.request("lock", { id: a.paired.id });
+  const locked = await bridge.request("list");
+  check(locked.state === "unknown" && (!locked.value || !locked.value.notShown), "and a locked horde's list carries no such line");
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

@@ -38,6 +38,15 @@
 # from here: the conformance suite runs it against a local dev of the same Worker, which shares the
 # Worker's code and not the network or the platform's own WebSocket front end.
 #
+# A SENDER TRIMS ITS OWN STREAM (relays/Port.ps1, the section of that name; worker/api.js, worker/mailbox.js).
+# The put that trims is the same POST with ?keepFrom=<seq> on its path - in the query because this
+# machine's signature covers the path and the query, so the instruction is signed with the put it rides
+# on, and because the Worker holds a put's body to exactly its two members. A WORKER DEPLOYED BEFORE
+# THIS takes the put and ignores the query: its answer has no "trimmed", this adapter then leaves it
+# out, and the port reports "not said" - which is how a machine running this code against an older
+# relay finds out, at no cost, that its mailbox is not being trimmed yet. NOT RUN AGAINST THE DEPLOYED
+# RELAY from here: the suites run it against a local dev of the same Worker.
+#
 # A ROTATED IDENTITY IS CARRIED TO THE RELAY (relay PR 8c; worker/rotation.js). After
 # relay/Identity.ps1 rotates this machine's keys, the relay still knows only the old signing key, so it
 # answers the new one 401. The first 401 of a connection (a request, or a watch the relay would not
@@ -319,6 +328,24 @@ function Open-HordeCloudflareRelayWatch {
     } finally { if (-not $opened) { $socket.Dispose() } }
 }
 
+function Send-HordeCloudflareRelayPut {
+    # The put, and with -KeepFrom over 0 the put that also trims its key's stream (the header, A SENDER
+    # TRIMS ITS OWN STREAM): known { seq; duplicate } as the relay gave them, and trimmed when - and only
+    # when - the relay said it. The port judges each member; nothing here is believed.
+    param($State, [string]$Mailbox, [string]$Key, [string]$Text, [long]$KeepFrom = 0)
+    $body = '{"key":' + (ConvertTo-HordeCloudflareRelayJsonString $Key) + ',"text":' + (ConvertTo-HordeCloudflareRelayJsonString $Text) + '}'
+    $path = Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "items"
+    if ($KeepFrom -gt 0) { $path = $path + "?keepFrom=" + $KeepFrom }
+    $a = Invoke-HordeCloudflareRelayHttp -State $State -Method "POST" -Path $path -Body $body -What "put"
+    if ($a.state -cne "known") { return $a }
+    $seq = $a.value.PSObject.Properties["seq"]
+    $dup = $a.value.PSObject.Properties["duplicate"]
+    $out = [pscustomobject]@{ seq = $(if ($seq) { $seq.Value } else { $null }); duplicate = $(if ($dup) { $dup.Value } else { $null }) }
+    $trimmed = $a.value.PSObject.Properties["trimmed"]
+    if ($KeepFrom -gt 0 -and $null -ne $trimmed) { $out | Add-Member -NotePropertyName trimmed -NotePropertyValue $trimmed.Value }
+    return (New-HordeKnown -Value $out -ObservedAt $a.observedAt)
+}
+
 function Invoke-HordeCloudflareRelayWatch {
     # The blocking watch: known { items } - empty when the time ran out - or unknown. It is the watch in
     # slices, opened, waited on in one slice as long as the watch, and let go of: one code path for both.
@@ -360,12 +387,11 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     } `
     -Put {
         param($State, [string]$Mailbox, [string]$Key, [string]$Text)
-        $body = '{"key":' + (ConvertTo-HordeCloudflareRelayJsonString $Key) + ',"text":' + (ConvertTo-HordeCloudflareRelayJsonString $Text) + '}'
-        $a = Invoke-HordeCloudflareRelayHttp -State $State -Method "POST" -Path (Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "items") -Body $body -What "put"
-        if ($a.state -cne "known") { return $a }
-        $seq = $a.value.PSObject.Properties["seq"]
-        $dup = $a.value.PSObject.Properties["duplicate"]
-        return (New-HordeKnown -Value ([pscustomobject]@{ seq = $(if ($seq) { $seq.Value } else { $null }); duplicate = $(if ($dup) { $dup.Value } else { $null }) }) -ObservedAt $a.observedAt)
+        return (Send-HordeCloudflareRelayPut -State $State -Mailbox $Mailbox -Key $Key -Text $Text)
+    } `
+    -PutKeeping {
+        param($State, [string]$Mailbox, [string]$Key, [string]$Text, [long]$KeepFrom)
+        return (Send-HordeCloudflareRelayPut -State $State -Mailbox $Mailbox -Key $Key -Text $Text -KeepFrom $KeepFrom)
     } `
     -Get {
         param($State, [string]$Mailbox, [long]$Since, [int]$Max)

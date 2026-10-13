@@ -15,7 +15,8 @@
 //   setup                 the letters and the parked groups, as the window's composer answers it
 //   kinds                 the question kinds (decisions/question-kinds.json, served beside list.js)
 //   list                  the picked horde's snapshot as the list operation's answer
-//                         { state, value: { outcome, questions, counts, unreadable, notUnderstood } };
+//                         { state, value: { outcome, questions, counts, unreadable, notUnderstood } },
+//                         and notShown: the one line for what that snapshot leaves out, "" for nothing;
 //                         a locked or empty horde answers unknown with the reason
 //   say {number, text, wording, id, part}   the answer, signed and sent: { ok, sequence } or { ok: false,
 //                         reason }; part, when given, is the letter of the one part of the question the
@@ -69,7 +70,9 @@ export function createBridge(phone, options = {}) {
   function listRecord() {
     if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
     if (!view) return { state: "unknown", value: null, reason: viewError || "This horde is locked." };
-    return { state: "known", reason: "", value: { outcome: "done", questions: view.questions, counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
+    // notShown: the one line for what the snapshot on screen leaves out, "" for nothing (phone-core.js).
+    // It is a member the document does not read (list.js): the page shows it above the list (app.js).
+    return { state: "known", reason: "", value: { outcome: "done", questions: view.questions, notShown: typeof view.notShown === "string" ? view.notShown : "", counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
   }
   async function chatRecord() {
     if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };

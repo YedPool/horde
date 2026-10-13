@@ -45,6 +45,18 @@
 #     the body is a character and a page is measured exactly.
 #   - RATE. A read is at most readTurns turns from at most readBytes of the conversation, and turns are
 #     sent at most once every sendIntervalMs: a busy Thrall's lines gather into one batch.
+#   - THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes OF THIS CHAT, NO MORE (2026-10-13). Nobody acks
+#     that mailbox (several phones read it), so every envelope of turns and every receipt this machine
+#     ever sent stayed in it for the relay's 30 days, a busy Thrall's day is over a thousand turns
+#     (conversations/Port.ps1, THE CEILINGS), and the hosted relay refuses every put to a mailbox that
+#     holds 2,000 envelopes. So every put of this channel says to keep, of this machine's chat
+#     envelopes, the last keepEnvelopes (channels/Port.ps1, WHAT GOES TO THE PHONE IS TRIMMED BY ITS
+#     SENDER): it rides on the put, and costs the relay no request. WHAT THE PHONE SHOWS IS WHAT THE
+#     MAILBOX HOLDS - it keeps no chat between sessions - so this is also how far back the chat goes
+#     on the phone: 150 envelopes is at least 150 turns and usually several times that (turns written
+#     within sendIntervalMs go together), three times what a phone just paired is sent to pick up the
+#     thread (startTurns), and at the relay's largest envelope (64 KiB) under half of its 20 MiB a
+#     mailbox. A phone paired later is sent its own backfill, sealed to it, as before.
 #   - THE SESSION IS ANNOUNCED: every turns body names the Thrall's session now, and a change of session
 #     is sent even with no turn in it, so the phone always knows which session its lines are for.
 #
@@ -136,6 +148,9 @@ $script:HordeChatChannelSettings = New-HordeModuleSettings -Module "relay-chat" 
     @{ name = "readBytes"; kind = "whole"; default = 1048576; min = 4096; max = 33554432; what = "The most bytes of the Thrall's conversation read in one look." },
     @{ name = "pageBytes"; kind = "whole"; default = 262144; min = 2048; max = 1048576; what = "The largest body of one envelope of turns, in bytes; a longer batch is sent as more envelopes." },
     @{ name = "sendIntervalMs"; kind = "whole"; default = 2000; min = 0; max = 600000; what = "The shortest time between two sends of turns, in milliseconds: turns written meanwhile go together." },
+    # 150: the header, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes. 1,000 is the ceiling because the
+    # hosted relay's mailbox holds 2,000 envelopes for every channel of every machine of the horde.
+    @{ name = "keepEnvelopes"; kind = "whole"; default = 150; min = 1; max = 1000; what = "How many of this machine's newest chat envelopes stay in the phone's mailbox; older ones are deleted from the relay, so this is how far back the chat goes on the phone." },
     # 21,000: three bytes a character at the most, and the header, stay inside the messenger port's 64 KiB.
     @{ name = "lineChars"; kind = "whole"; default = 16000; min = 1; max = 21000; what = "The longest line the founder may send to the Thrall, in characters." },
     @{ name = "ttlSeconds"; kind = "whole"; default = 86400; min = 60; max = 604800; what = "How long a line may wait in the Thrall's mailbox, in seconds." },
@@ -414,6 +429,10 @@ function Send-HordeChatChannelPending {
     $homeDir = Get-HordeChatChannelHome $Context
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
     $trusted = $null
+    # How many envelopes stay (the header, THE PHONE'S MAILBOX HOLDS THE LAST keepEnvelopes): the
+    # setting as the Tick last read it, and its declared default for a put made before any Tick.
+    $keep = [long]@($script:HordeChatChannelSettings.settings | Where-Object { $_.name -ceq "keepEnvelopes" })[0].default
+    if ($Mine.ContainsKey("keepEnvelopes")) { $keep = [long]$Mine["keepEnvelopes"] }
     while (@($Mine.durable.pending).Count -gt 0) {
         $key = @($Mine.durable.pending)[0]
         $rec = Test-HordeRelayJournalSent -Key $key -HordeHome $homeDir
@@ -442,7 +461,7 @@ function Send-HordeChatChannelPending {
                 try { Write-HordeChatChannelState -HordeHome $homeDir -State $Mine.durable } catch { return ("the chat state could not be written: " + $_.Exception.Message) }
                 continue
             }
-            $put = Send-HordeRelayChannelSaved -Context $Context -Saved ([pscustomobject]@{ key = $key; text = $rec.value.text }) -Mailbox $mailbox
+            $put = Send-HordeRelayChannelSaved -Context $Context -Saved ([pscustomobject]@{ key = $key; text = $rec.value.text }) -Mailbox $mailbox -KeepFrom (Get-HordeRelayChannelKeepFrom -Key $key -Keep $keep)
             if ($put.state -cne "known") { return $put.reason }
         }
         # A key the journal does not hold was never recorded (a state written by hand): nothing to put.
@@ -495,6 +514,8 @@ function Invoke-HordeChatChannelTick {
     $set = $set.value
     # For the Glance, which reads no settings itself: how long this Tick leaves between two sends.
     $mine["sendIntervalMs"] = [long]$set.sendIntervalMs
+    # For every put of this run, a receipt's too: how many envelopes stay in the phone's mailbox.
+    $mine["keepEnvelopes"] = [long]$set.keepEnvelopes
     $homeDir = Get-HordeChatChannelHome $Context
     if (@($mine.durable.pending).Count -gt 0) {
         $why = Send-HordeChatChannelPending -Context $Context -Mine $mine

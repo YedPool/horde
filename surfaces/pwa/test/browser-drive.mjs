@@ -322,6 +322,13 @@ const commands = {
     await evaluate("(() => { const f = document.activeElement; f.value = ''; f.dispatchEvent(new Event('input', { bubbles: true })); })()");
     return { value, sent: headOf(c.mailbox) !== before };
   },
+  // The one line above the list for what the snapshot on screen leaves out (app.js): whether it is shown,
+  // its words, and everything the page shows as text - so a suite can see that nothing withheld leaked.
+  async notShown(c) {
+    const want = c.shown ? "!document.getElementById('notShown').hidden" : "document.getElementById('notShown').hidden";
+    await until(shown("doc") + " && " + want, c.ms || 20000);
+    return await evaluate("({ shown: !document.getElementById('notShown').hidden, words: document.getElementById('notShown').textContent, page: document.body.innerText })");
+  },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
     const was = await evaluate(notice);

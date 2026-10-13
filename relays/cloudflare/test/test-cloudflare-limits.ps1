@@ -280,6 +280,76 @@ try {
     Check ($c1.code -eq 200 -and $c2.code -eq 200 -and $c3.code -eq 507 -and (Get-Code $c3) -ceq "mailbox-full" -and $c4.code -eq 200) ("a mailbox of 100 characters takes 80, refuses 40 more, and takes 20 - exactly its most (" + (@($c1.code, $c2.code, $c3.code, $c4.code) -join ",") + ")")
 
     Write-Host ""
+    Write-Host "--- a sender's trim makes the room in a full mailbox; a put that is refused trims nothing ---" -ForegroundColor Cyan
+    # worker/mailbox.js, A SENDER TRIMS ITS OWN STREAM. A mailbox that filled before its senders trimmed
+    # could never be emptied if the put that carries the trim were refused for being one too many.
+    $streamKey = { param([int]$Seq) return (("c3" * 16) + "/decisions/" + $Seq + "/" + ("0" * 20) + $Seq.ToString("0000")) }
+    $trimBox = $O + "/v1/mailboxes/cap/trim"
+    $keysOf = { param([string]$Box) return ((@((Get-Json (Send-To -Url ($Box + "/items?since=0&max=20") -Authorization $bearer)).items) | ForEach-Object { $_.text }) -join ",") }
+    $filled = @(1..8 | ForEach-Object { (Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey $_) + '","text":"t' + $_ + '"}') -Authorization $bearer).code })
+    $ninth = Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 9) + '","text":"t9"}') -Authorization $bearer
+    Check ((@($filled | Sort-Object -Unique) -join ",") -ceq "200" -and $ninth.code -eq 507 -and (Get-Code $ninth) -ceq "mailbox-full") ("CONTROL: a mailbox of eight, full of one sender's stream, refuses that sender's ninth put (" + $ninth.code + ")")
+    $ninthTrims = Send-To -Url ($trimBox + "/items?keepFrom=8") -Method "POST" -Body ('{"key":"' + (& $streamKey 9) + '","text":"t9"}') -Authorization $bearer
+    Check ($ninthTrims.code -eq 200 -and (Get-Json $ninthTrims).seq -eq 9 -and $ninthTrims.text.Contains('"trimmed":7') -and (& $keysOf $trimBox) -ceq "t8,t9") ("the same put, saying to keep from seq 8 of its stream, is TAKEN: what its own trim frees counts before the cap is asked (" + $ninthTrims.text + "; held " + (& $keysOf $trimBox) + ")")
+    $refill = @(10..15 | ForEach-Object { (Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey $_) + '","text":"t' + $_ + '"}') -Authorization $bearer).code })
+    $over = Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 16) + '","text":"t16"}') -Authorization $bearer
+    Check ((@($refill | Sort-Object -Unique) -join ",") -ceq "200" -and $over.code -eq 507) ("and the mailbox's count is exact after the trim: six more make eight, and the ninth is refused again (" + $over.code + ")")
+    $trimChars = $O + "/v1/mailboxes/cap/trimchars"
+    $null = Send-To -Url ($trimChars + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 1) + '","text":"' + ("a" * 40) + '"}') -Authorization $bearer
+    $null = Send-To -Url ($trimChars + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 2) + '","text":"' + ("b" * 40) + '"}') -Authorization $bearer
+    $tooLong = Send-To -Url ($trimChars + "/items?keepFrom=2") -Method "POST" -Body ('{"key":"' + (& $streamKey 3) + '","text":"' + ("c" * 70) + '"}') -Authorization $bearer
+    Check ($tooLong.code -eq 507 -and (& $keysOf $trimChars) -ceq (("a" * 40) + "," + ("b" * 40))) ("A PUT THAT IS REFUSED TRIMS NOTHING: one that would still be past the mailbox's characters after its own trim is refused, and the item it would have trimmed is still there (" + $tooLong.code + ")")
+    $fits = Send-To -Url ($trimChars + "/items?keepFrom=2") -Method "POST" -Body ('{"key":"' + (& $streamKey 3) + '","text":"' + ("c" * 60) + '"}') -Authorization $bearer
+    Check ($fits.code -eq 200 -and $fits.text.Contains('"trimmed":1') -and (& $keysOf $trimChars) -ceq (("b" * 40) + "," + ("c" * 60))) ("and one that fits once its trim is counted - 40 kept and 60 new are exactly the mailbox's 100 - is taken, and trims (" + $fits.text + ")")
+    $again = Send-To -Url ($trimChars + "/items?keepFrom=3") -Method "POST" -Body ('{"key":"' + (& $streamKey 3) + '","text":"' + ("c" * 60) + '"}') -Authorization $bearer
+    Check ($again.code -eq 200 -and (Get-Json $again).duplicate -eq $true -and $again.text.Contains('"trimmed":1') -and (& $keysOf $trimChars) -ceq ("c" * 60)) ("A DUPLICATE STILL TRIMS: the same put made again, keeping from its own seq, is the idempotent yes and deletes the one before it (" + $again.text + ")")
+
+    Write-Host ""
+    Write-Host "--- the decisions channel itself, against this Worker: a mailbox at its cap and a snapshot of three pages ---" -ForegroundColor Cyan
+    # channels/decisions, A FULL MAILBOX IS EMPTIED BY ONE PAGE SENT FIRST (review of PR 232): the case the
+    # whole change exists for, with the real channel and this Worker's own cap (eight here). The mailbox
+    # is full of this machine's old decisions envelopes and the machine remembers nothing, as on the first
+    # run after the change. No messenger is left in this process: the channel's file loads them all.
+    # A dev of its own: eight envelopes a mailbox, and every other limit as it ships - the dev above also
+    # holds a mailbox to 100 characters, which no page of a snapshot is.
+    $capDev = Start-Dev -Name "capd" -Limits '{"mailboxMaxItems":8}'
+    $dOrigin = $capDev.origin
+    $dBearer = "Bearer " + $capDev.token
+    . (Join-Path $root "channels\Port.ps1")
+    . (Join-Path $root "channels\decisions\Channel.ps1")
+    . (Join-Path $root "test\lib\RelayPhone.ps1")
+    foreach ($loaded in @(Get-HordeMessengerNames)) { [void]$script:HordeMessengers.Remove($loaded) }
+    $dm = New-TestHome -Horde "capd"
+    $dPhone = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $dm.home -Phone $dPhone)
+    $dVouch = New-HordeTestPhoneVouch -Phone $dPhone -Horde "capd"
+    $dKey = Add-HordeRelayPhoneKey -HordeHome $dm.home -AgreePublic $dPhone.agreePublic -By $dPhone.keyId -AuthenticatorData $dVouch.authenticatorData -ClientDataJson $dVouch.clientDataJson -Signature $dVouch.signature
+    $dConn = Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $dOrigin; authorization = $dBearer }
+    $dCtx = New-HordeRelayRunContext -HordeHome $dm.home -Connection $dConn.value
+    $dStore = Join-Path $dm.home "store\decisions"
+    $dLong = ("the quiet option " * 1200).Substring(0, 20000)
+    $dAdded = @(1..6 | ForEach-Object { Invoke-HordeDecision -Operation "add" -Root $dStore -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = ("Long question number " + $_); kind = "yes-no"; whatItIs = $dLong; group = "voice"; askedBy = "orc-b" } } } | Where-Object { $_.state -ceq "known" -and $_.value.outcome -ceq "done" })
+    $dBox = $dOrigin + "/v1/mailboxes/capd/phone"
+    $dMe = $dm.identity.sign.keyId
+    # Eight old envelopes of this machine's decisions stream, as the snapshots before the change left them.
+    $dOld = @(1..8 | ForEach-Object { (Send-To -Url ($dBox + "/items") -Method "POST" -Body ('{"key":"' + $dMe + '/decisions/1/' + ("0" * 20) + $_.ToString("0000") + '","text":"old-' + $_ + '"}') -Authorization $dBearer).code })
+    $dNinth = Send-To -Url ($dBox + "/items") -Method "POST" -Body '{"key":"one-more","text":"one more, with no trim"}' -Authorization $dBearer
+    $dHeld = { return @((Get-Json (Send-To -Url ($dBox + "/items?since=0&max=20") -Authorization $dBearer)).items) }
+    Check ($dKey.state -ceq "known" -and $dCtx.state -ceq "known" -and $dAdded.Count -eq 6 -and (@($dOld | Sort-Object -Unique) -join ",") -ceq "200" -and $dNinth.code -eq 507 -and (Get-Code $dNinth) -ceq "mailbox-full" -and @(& $dHeld).Count -eq 8) ("CONTROL: the phone's mailbox holds eight old envelopes of this machine's decisions stream, its cap, and a ninth put is refused, mailbox-full (" + $dNinth.code + ")")
+    try {
+        $dTick = Invoke-HordeDecisionsChannelSnapshotTick -Context $dCtx.value
+        $dText = (@($dTick.lines) -join " | ")
+        $dNow = @(& $dHeld)
+        $dOpened = @($dNow | ForEach-Object { Open-HordeTestPhoneEnvelope -Phone $dPhone -Text $_.text -MachineSignPublic $dm.identity.sign.public } | Where-Object { $_.ok })
+        $dPages = @($dOpened | ForEach-Object { [int]$_.body.pages } | Sort-Object -Unique)
+        $dShown = @($dOpened | ForEach-Object { @($_.body.questions) } | ForEach-Object { [int]$_.number } | Sort-Object)
+        Check ($dText.Contains("would not take a page of it") -and $dText.Contains("one page is sent first to make room")) ("page 1 of the snapshot is refused by the Worker as full, and the channel sends one page first (" + $dText.Substring(0, [Math]::Min(260, $dText.Length)) + ")")
+        Check (-not $dTick.failed -and $dPages.Count -eq 1 -and $dPages[0] -ge 3 -and $dOpened.Count -eq $dPages[0] -and ($dShown -join ",") -ceq "1,2,3,4,5,6") ("AND THE SNAPSHOT LANDS, in the same look: " + $dOpened.Count + " pages of one snapshot, which the phone opens, holding all six questions (" + ($dShown -join ",") + ")")
+        Check ($dNow.Count -eq $dOpened.Count -and $dNow.Count -lt 8 -and @($dNow | Where-Object { "$($_.text)".StartsWith("old-") }).Count -eq 0) ("the mailbox that was at its cap of eight now holds that snapshot and nothing else: " + $dNow.Count + " envelopes, every old one deleted")
+        Check ((Read-HordeDecisionsChannelWhole -Context $dCtx.value) -gt 0 -and $dCtx.value.full.Count -eq 0) "what the relay wholly took is remembered for the next run, and the run was told of no full mailbox"
+    } finally { Close-HordeRelayRunContext -Context $dCtx.value }
+
+    Write-Host ""
     Write-Host "--- refused signatures, per key and address, and per address ---" -ForegroundColor Cyan
     $rs = New-Phone -Dev $R -Sub "100000000000000000501"
     $k = New-Machine -Dev $R -Cookie $rs.cookie -Label "victim-box"

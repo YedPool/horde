@@ -202,6 +202,12 @@ function render(h, rec) {
   };
   $("mode").hidden = !banners[h.mode];
   $("mode").textContent = banners[h.mode] || "";
+  // THE LIST IS SHORTER THAN THE MACHINE'S, AND SAYS SO: one line above it whenever the snapshot on screen
+  // leaves questions out, with how many and why (relay/js/protocol.js, withheldWords). It is the record's
+  // own, so it goes when a snapshot with nothing left out arrives, and with the list when the horde locks.
+  const notShown = rec && rec.state === "known" && rec.value && typeof rec.value.notShown === "string" ? rec.value.notShown : "";
+  $("notShown").hidden = !notShown;
+  $("notShown").textContent = notShown;
   if (!d.kinds) { d.kinds = true; bridge.request("kinds").then((k) => d.doc.setKinds(k)); }
   const did = d.doc.setList(rec);
   say("relay", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");

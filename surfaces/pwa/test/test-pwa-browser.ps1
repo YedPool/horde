@@ -295,7 +295,26 @@ try {
     Check ($goneParts.ok -and $null -eq $goneParts.value -and $folded3.ok -and $folded3.value.found -and -not $folded3.value.shown.Contains($partsTitle)) "AND THEN, all its parts answered, it leaves his list on the phone for the folded With Thrall"
 
     Write-Host ""
-    Write-Host "--- 9. hidden, it locks itself; shown again, nothing opened shows first ---" -ForegroundColor Cyan
+    Write-Host "--- 8c. a snapshot that leaves a question out says so, above the list ---" -ForegroundColor Cyan
+    # relay/js/protocol.js, withheldWords. A record is planted that the machine withholds - it holds what
+    # looks like a secret - as a record written before a pattern was added would be: the snapshot names it
+    # by number, and the page must say the list is short, how many and why, and show nothing of it.
+    $token = "ghp_" + ("Ab3" * 10)
+    $plantSeq = @(Get-ChildItem -LiteralPath $store -Filter "*.json").Count + 1
+    $plantFile = Join-Path $store ($plantSeq.ToString("D10") + ".json")
+    $planted = '{"schemaVersion":1,"sequence":' + $plantSeq + ',"id":"' + [guid]::NewGuid().ToString("N") + '","kind":"question-added","at":"2026-10-14T12:00:00.0000000Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":' + ($n3 + 1) + ',"question":{"title":"Rotate the deploy token please now","kind":"yes-no","whatItIs":"The token is ' + $token + '","group":"ops","askedBy":"orc-a"}}}'
+    [System.IO.File]::WriteAllText($plantFile, $planted, $utf8)
+    $run = Invoke-Run -Turns 1
+    $short = Invoke-Browser @{ cmd = "notShown"; shown = $true }
+    Check ($run.out.Contains("1 withheld") -and $short.ok -and $short.value.shown -and $short.value.words -ceq "1 question is not shown here: it holds what looks like a secret, so it is shown at the machine only.") ("the machine withholds the question, and the app says so in one line above the list: how many, and why (" + $(if ($short.ok) { $short.value.words } else { $short.reason }) + ")")
+    Check ($short.ok -and -not $short.value.page.Contains("Rotate the deploy token") -and -not $short.value.page.Contains("ghp_") -and -not $short.value.page.Contains("The token is")) "and nothing of the withheld question is anywhere on the page: not its title, not its text"
+    Remove-Item -LiteralPath $plantFile
+    $run = Invoke-Run -Turns 1
+    $wholeAgain = Invoke-Browser @{ cmd = "notShown"; shown = $false }
+    Check ($wholeAgain.ok -and -not $wholeAgain.value.shown -and $wholeAgain.value.words -ceq "") ("the next snapshot, with nothing left out, takes the line away (" + $(if ($wholeAgain.ok) { "shown " + $wholeAgain.value.shown } else { $wholeAgain.reason }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 9. hidden, it locks itself; shown again, nothing openedshows first ---" -ForegroundColor Cyan
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
     Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
