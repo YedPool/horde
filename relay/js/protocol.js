@@ -472,6 +472,61 @@ export function newestSnapshot(pages) {
   return best;
 }
 
+// --- times, as the phone shows them ---
+
+// WHEN A THING WAS SAID is shown in the phone's own local time, in a short form ("14:05"), with the day
+// on a divider where the day changes and the exact time one tap away (the founder asked for the time
+// of every message, 2026-10-12). Every function here takes a time in milliseconds and, for the suites,
+// the zone as getTimezoneOffset gives it (minutes, positive WEST of UTC); with none it is the device's
+// own zone at that moment. A time that is not one - 0, none, past what a date can hold - gives "" (or
+// null): what has no time is shown with no time, never a guessed one. The words are fixed English and
+// 24-hour, so one message reads the same on every phone.
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const two = (n) => (n < 10 ? "0" : "") + n;
+// An ISO 8601 time WITH A ZONE, as the conversation port writes a turn's (conversations/Port.ps1), in
+// milliseconds; 0 for anything else. A time with no zone cannot be placed, so it is not one.
+const ISO_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$/;
+export function timeOf(text) {
+  if (typeof text !== "string" || !ISO_TIME.test(text)) return 0;
+  const ms = Date.parse(text);
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : 0;
+}
+export function localParts(ms, offsetMinutes) {
+  if (!Number.isSafeInteger(ms) || ms <= 0) return null;
+  const off = Number.isSafeInteger(offsetMinutes) ? offsetMinutes : new Date(ms).getTimezoneOffset();
+  const d = new Date(ms - off * 60000);
+  if (!Number.isSafeInteger(off) || Number.isNaN(d.getTime())) return null;
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate(), weekday: d.getUTCDay(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds(), offsetMinutes: off };
+}
+// "14:05"
+export function clockTime(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? two(p.hour) + ":" + two(p.minute) : ""; }
+// "2026-10-12": the local day, to tell where the day changes.
+export function dayKey(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? p.year + "-" + two(p.month + 1) + "-" + two(p.day) : ""; }
+// "Mon 12 Oct 2026"
+export function dayLabel(ms, offsetMinutes) { const p = localParts(ms, offsetMinutes); return p ? WEEKDAYS[p.weekday] + " " + p.day + " " + MONTHS[p.month] + " " + p.year : ""; }
+// "Mon 12 Oct 2026, 14:05:09 (UTC+3)": the exact time, with the zone it is told in.
+export function exactTime(ms, offsetMinutes) {
+  const p = localParts(ms, offsetMinutes);
+  if (!p) return "";
+  const east = -p.offsetMinutes, a = Math.abs(east);
+  const zone = "UTC" + (east === 0 ? "" : (east > 0 ? "+" : "-") + Math.floor(a / 60) + (a % 60 ? ":" + two(a % 60) : ""));
+  return dayLabel(ms, p.offsetMinutes) + ", " + two(p.hour) + ":" + two(p.minute) + ":" + two(p.second) + " (" + zone + ")";
+}
+// A list of things that each carry said (milliseconds, or 0 for none), with a { kind: "day", key, label }
+// put before the first of each local day, wherever the day is another than the last one named. What has
+// no time gets no divider and changes none.
+export function withDays(items, offsetMinutes) {
+  const out = [];
+  let last = "";
+  for (const it of items) {
+    const key = dayKey(it.said, offsetMinutes);
+    if (key && key !== last) { out.push({ kind: "day", key, label: dayLabel(it.said, offsetMinutes) }); last = key; }
+    out.push(it);
+  }
+  return out;
+}
+
 // --- the chat channel (channels/chat/Channel.ps1) ---
 
 // The receipt's codes, by status, and the ONE sentence the phone shows for each: what a receipt says is
@@ -547,8 +602,10 @@ export function readChatTurns(bodyBytes, horde, machine) {
   return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped } };
 }
 
-// A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text }.
-// A status or code off the list is refused: the phone never shows a word it did not choose.
+// A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text,
+// sentAt }. A status or code off the list is refused: the phone never shows a word it did not choose.
+// sentAt is when he sent the line, as his passkey signed it (channels/chat, THE RECEIPT), or 0 when the
+// receipt carries none (a machine older than the member): then the line is shown with no time.
 export function readChatReceipt(bodyBytes, horde, machine) {
   const h = chatHead(bodyBytes, "chat-receipt", horde, machine);
   if (h.error) return { ok: false, reason: h.error, value: null };
@@ -556,7 +613,7 @@ export function readChatReceipt(bodyBytes, horde, machine) {
   if (typeof b.messageId !== "string" || !/^[0-9a-f]{32}$/.test(b.messageId)) return { ok: false, reason: "the receipt names no line", value: null };
   if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return { ok: false, reason: "the receipt's status or code is not one this phone knows", value: null };
   if (typeof b.text !== "string") return { ok: false, reason: "the receipt has no words", value: null };
-  return { ok: true, reason: "", value: { session: b.session, messageId: b.messageId, status: b.status, code: b.code, text: b.text } };
+  return { ok: true, reason: "", value: { session: b.session, messageId: b.messageId, status: b.status, code: b.code, text: b.text, sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };
 }
 
 // The chat as the phone shows it, from what it holds in memory:
@@ -564,12 +621,18 @@ export function readChatReceipt(bodyBytes, horde, machine) {
 //   receipts  every receipt read, each with seq and ts (the envelope's)
 //   sent      the lines this phone sent this session: { messageId, text, at, session }
 // -> { session, items } where items are, in order of time, { kind: "turn", id, role, text, time, session,
-// truncated, redactions } and { kind: "line", messageId, text, at, status, code, words }. A turn is shown
+// truncated, redactions, said } and { kind: "line", messageId, text, at, status, code, words, said, saidHow }. A turn is shown
 // once, by id, and only once all its parts are here; a line is shown once, its newest receipt's status
 // on it, or "sending" when there is none yet. A founder turn (the machine found the line delivered) is
 // that line: beside a send or a receipt it is not shown twice, and with neither - after a reload, once
 // the relay dropped the receipt - it is shown as his line, delivered. A user turn that merely QUOTES a
 // line's header is a user turn: nothing in a turn's text makes it the founder's.
+// WHEN IT WAS SAID is each item's said, in milliseconds, or 0 when nothing says: a turn's own time from the
+// conversation port; a line's time as his passkey signed it - this phone's own send, or the receipt's
+// sentAt - and, where neither is left, the time of the machine's founder turn, which is when the line
+// reached the Thrall (saidHow "delivered", so the screen can say which it is). A receipt's own envelope
+// time is the machine's, later than the send by however long the line waited: it orders a line with no
+// better time, and is never shown as when he said it.
 export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
   const byId = new Map();
   for (const t of turns) {
@@ -579,12 +642,13 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
     else g.whole = t;
   }
   const lines = new Map();
-  for (const s of sent) lines.set(s.messageId, { kind: "line", messageId: s.messageId, text: s.text, at: s.at, session: s.session, status: "sending", code: "", words: CHAT_SENDING, seq: -1 });
+  for (const s of sent) lines.set(s.messageId, { kind: "line", messageId: s.messageId, text: s.text, at: s.at, said: Number.isSafeInteger(s.at) && s.at > 0 ? s.at : 0, saidHow: "sent", session: s.session, status: "sending", code: "", words: CHAT_SENDING, seq: -1 });
   for (const r of receipts) {
     const had = lines.get(r.messageId);
     if (had && had.seq > r.seq) continue;
     // The receipt's words are the words posted: what the line shows, whatever the phone kept.
-    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : r.ts, session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
+    const said = r.sentAt || (had ? had.said : 0);
+    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : (r.sentAt || r.ts), said, saidHow: "sent", session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
   }
   const items = [];
   for (const [id, g] of byId) {
@@ -599,12 +663,15 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
     const t = g.whole || g.first;
     if (t.role === "founder") {
       const had = lines.get(t.line);
-      if (had) { if (had.status === "sending") { had.status = "accepted"; had.code = "delivered"; had.words = CHAT_WORDS.accepted.delivered; } }
+      if (had) {
+        if (had.status === "sending") { had.status = "accepted"; had.code = "delivered"; had.words = CHAT_WORDS.accepted.delivered; }
+        if (!had.said) { had.said = timeOf(t.time); had.saidHow = "delivered"; }
+      }
       // Kept as the line, by its id: a messenger that delivers at least once may hand it over twice.
-      else lines.set(t.line, { kind: "line", messageId: t.line, text, at: Date.parse(t.time) || 0, session: t.session, status: "accepted", code: "delivered", words: CHAT_WORDS.accepted.delivered, seq: -1, order: g.seq });
+      else lines.set(t.line, { kind: "line", messageId: t.line, text, at: Date.parse(t.time) || 0, said: timeOf(t.time), saidHow: "delivered", session: t.session, status: "accepted", code: "delivered", words: CHAT_WORDS.accepted.delivered, seq: -1, order: g.seq });
       continue;
     }
-    items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, order: g.seq });
+    items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, said: timeOf(t.time), saidHow: "turn", order: g.seq });
   }
   for (const l of lines.values()) items.push({ ...l, order: l.order === undefined ? Number.MAX_SAFE_INTEGER : l.order });
   items.sort((a, b) => (a.at - b.at) || (a.order - b.order));

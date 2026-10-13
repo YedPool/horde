@@ -299,6 +299,26 @@ const commands = {
   async chatState() {
     return await evaluate("({ mode: document.getElementById('chatMode').hidden ? '' : document.getElementById('chatMode').textContent, disabled: document.getElementById('chatText').disabled, items: document.querySelectorAll('#chatLog .chat-item').length, log: document.getElementById('chatLog').innerText })");
   },
+  // WHEN IT WAS SAID: every item's stamp and the day dividers, as drawn; then a real touch on the first
+  // stamp (the exact time opens), the log drawn again by a refresh meanwhile (it stays open), and a second
+  // touch (the short time is back).
+  async chatStamps() {
+    const read = "({ items: document.querySelectorAll('#chatLog .chat-item').length, stamps: Array.from(document.querySelectorAll('#chatLog .chat-item .stamp')).map((s) => s.textContent), titles: Array.from(document.querySelectorAll('#chatLog .chat-item .stamp')).map((s) => s.title), days: Array.from(document.querySelectorAll('#chatLog .chat-day')).map((d) => d.textContent), first: document.getElementById('chatLog').firstElementChild ? document.getElementById('chatLog').firstElementChild.className : '' })";
+    const before = await evaluate(read);
+    const touch = async () => {
+      const at = await centre("#chatLog .chat-item .stamp");
+      await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+      await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await sleep(400);
+      return await evaluate("document.querySelector('#chatLog .chat-item .stamp').textContent");
+    };
+    const tapped = await touch();
+    await evaluate("window.HordeBridge.request('refresh')");
+    await sleep(400);
+    const kept = await evaluate("document.querySelector('#chatLog .chat-item .stamp').textContent");
+    const again = await touch();
+    return { ...before, tapped, kept, again };
+  },
   async chatNewline(c) {
     const before = headOf(c.mailbox);
     await evaluate("document.getElementById('chatText').focus()", true);

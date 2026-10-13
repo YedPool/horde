@@ -276,6 +276,13 @@ try {
     Check ($posts.Count -eq 1 -and $posts[0].to -ceq $thrall.state.session -and $posts[0].body.EndsWith("Use the second chime.")) ("a run posts it to the Thrall once (" + $posts.Count + ")")
     $w2 = Invoke-Browser @{ cmd = "chatWait"; text = "Sent: the Thrall's mailbox has it." }
     Check ($w2.ok -and $w2.value.found) "its receipt shows under it, in the app's own words"
+    # WHEN IT WAS SAID (the founder asked for the time of every message, 2026-10-12).
+    $stamps = Invoke-Browser @{ cmd = "chatStamps" }
+    $stampList = @(); $dayList = @(); if ($stamps.ok) { $stampList = @($stamps.value.stamps); $dayList = @($stamps.value.days) }
+    Check ($stamps.ok -and $stamps.value.items -ge 3 -and $stampList.Count -eq $stamps.value.items -and @($stampList | Where-Object { $_ -cnotmatch '\A[0-9]{2}:[0-9]{2}\z' }).Count -eq 0) ("every message in the chat - the Thrall's turns and his own line - shows when it was said, as a short local time (" + ($stampList -join ", ") + ")")
+    Check ($stamps.ok -and $dayList.Count -ge 1 -and $stamps.value.first -ceq "chat-day" -and @($dayList | Where-Object { $_ -cnotmatch '\A(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}\z' }).Count -eq 0 -and @($dayList | Select-Object -Unique).Count -eq $dayList.Count) ("the day stands on a line of its own before the first message of each day, once (" + ($dayList -join ", ") + ")")
+    $exactLook = '\A(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}, [0-9]{2}:[0-9]{2}:[0-9]{2} \(UTC[^)]*\)\z'
+    Check ($stamps.ok -and $stamps.value.tapped -cmatch $exactLook -and $stamps.value.titles[0] -ceq $stamps.value.tapped -and $stamps.value.kept -ceq $stamps.value.tapped -and $stamps.value.again -ceq $stampList[0]) ("a touch on a time opens the exact one, to the second and with its zone - also its title; it stays open when the log is drawn again; a second touch closes it (" + $(if ($stamps.ok) { $stamps.value.tapped } else { $stamps.reason }) + ")")
     $shot = Invoke-Browser @{ cmd = "chatShot"; path = (Join-Path $work "phone-chat.png") }
     Check ($shot.ok -and $shot.value.scrollWidth -le $shot.value.innerWidth -and [math]::Abs($shot.value.composeBottom - $shot.value.innerHeight) -le 1) "at phone width nothing scrolls sideways, and the composer stands at the foot of the screen"
     if ($env:HORDE_PWA_SHOTS -and (Test-Path -LiteralPath $env:HORDE_PWA_SHOTS -PathType Container)) { Copy-Item -LiteralPath (Join-Path $work "phone-chat.png") -Destination (Join-Path $env:HORDE_PWA_SHOTS "phone-chat.png") -Force }

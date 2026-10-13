@@ -12,6 +12,45 @@
     Target = "relay\js\protocol.js"
     Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
     Mutations = @(
+        @{ Name = "time-shown-in-utc-not-local"
+           Find = 'const d = new Date(ms - off * 60000);'
+           Replace = 'const d = new Date(ms);' }
+        @{ Name = "time-zone-sign-flipped"
+           Find = 'const east = -p.offsetMinutes, a = Math.abs(east);'
+           Replace = 'const east = p.offsetMinutes, a = Math.abs(east);' }
+        @{ Name = "no-time-shown-as-1970"
+           Find = 'if (!Number.isSafeInteger(ms) || ms <= 0) return null;'
+           Replace = 'if (!Number.isSafeInteger(ms)) return null;' }
+        @{ Name = "time-with-no-zone-taken"
+           Find = 'if (typeof text !== "string" || !ISO_TIME.test(text)) return 0;'
+           Replace = 'if (typeof text !== "string") return 0;' }
+        @{ Name = "day-divider-on-every-item"
+           Find = 'if (key && key !== last) { out.push('
+           Replace = 'if (key) { out.push(' }
+        @{ Name = "day-divider-for-a-thing-with-no-time"
+           Find = 'if (key && key !== last) { out.push({ kind: "day", key, label: dayLabel(it.said, offsetMinutes) }); last = key; }'
+           Replace = 'if (key !== last) { out.push({ kind: "day", key, label: dayLabel(it.said, offsetMinutes) }); last = key; }' }
+        @{ Name = "exact-time-without-seconds"
+           Find = 'two(p.hour) + ":" + two(p.minute) + ":" + two(p.second) + " (" + zone + ")"'
+           Replace = 'two(p.hour) + ":" + two(p.minute) + " (" + zone + ")"' }
+        @{ Name = "turn-time-not-shown"
+           Find = 'said: timeOf(t.time), saidHow: "turn", order: g.seq });'
+           Replace = 'said: 0, saidHow: "turn", order: g.seq });' }
+        @{ Name = "receipt-envelope-time-shown-as-when-he-said-it"
+           Find = 'const said = r.sentAt || (had ? had.said : 0);'
+           Replace = 'const said = r.sentAt || (had ? had.said : 0) || r.ts;' }
+        @{ Name = "signed-send-time-dropped-from-the-receipt"
+           Find = 'sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };'
+           Replace = 'sentAt: 0 } };' }
+        @{ Name = "receipt-time-of-any-shape-taken"
+           Find = 'sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0 } };'
+           Replace = 'sentAt: b.sentAt || 0 } };' }
+        @{ Name = "delivered-time-replaces-the-signed-one"
+           Find = 'if (!had.said) { had.said = timeOf(t.time); had.saidHow = "delivered"; }'
+           Replace = 'had.said = timeOf(t.time); had.saidHow = "delivered";' }
+        @{ Name = "delivered-line-with-no-time"
+           Find = 'said: timeOf(t.time), saidHow: "delivered", session: t.session'
+           Replace = 'said: 0, saidHow: "delivered", session: t.session' }
         @{ Name = "machine-signature-not-checked"
            Find = 'if (!verified) return no("the machine''s signature does not verify");'
            Replace = 'if (false) return no("the machine''s signature does not verify");' }
@@ -46,8 +85,8 @@
            Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
            Replace = 'if (false) return' }
         @{ Name = "chat-receipt-words-not-shown"
-           Find = 'text: r.text, at: had && had.at ? had.at : r.ts'
-           Replace = 'text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts' }
+           Find = 'messageId: r.messageId, text: r.text, at: had'
+           Replace = 'messageId: r.messageId, text: had ? had.text : r.text, at: had' }
         @{ Name = "chat-founder-turn-shown-twice"
            Find = 'if (t.role === "founder") {'
            Replace = 'if (false) {' }

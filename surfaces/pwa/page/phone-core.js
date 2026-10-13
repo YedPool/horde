@@ -73,7 +73,9 @@
 // THE CHAT (channels/chat) comes through the same mailbox and the same refresh: the Thrall's turns and
 // the receipts of the founder's lines are opened with the same key, kept IN MEMORY ONLY for the session
 // like the snapshot, and put together by relay/js/protocol.js's chatTimeline (a turn once by id, a long
-// one only once all its parts are here, the phone's own line once). A line is a command-equivalent: it
+// one only once all its parts are here, the phone's own line once), each with the time it was said: a
+// turn's own, and a line's as the passkey signed it - the time in the line's envelope, which is what
+// this phone keeps for a line it sent, and what the machine's receipt hands back. A line is a command-equivalent: it
 // is sent only from a passkey session, signed by the passkey (user verification), bound to the horde,
 // the machine and the Thrall's session the phone last heard of - the same keys rule as an answer: a
 // recovery or a read-only session reads the chat and never writes to it.
@@ -132,7 +134,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   }
   async function sealAndSign(e, kind, channel, body, assert) {
     const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq: await nextSeq(e.id, channel), ts: now(), recipientPublic: P.unb64u(e.machineAgreePublic), body });
-    return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header) };
+    // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it.
+    return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header), ts: parts.header.ts };
   }
 
   // The PRF wrap from what a passkey get() just gave, while the session still holds the key's bytes
@@ -386,7 +389,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const env = await sealAndSign(e, "line", "chat", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same line is never delivered twice."); }
-      if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: now(), session: s.chat.session });
+      if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });
       return { key: env.key, seq: put.value.seq };
     },
 

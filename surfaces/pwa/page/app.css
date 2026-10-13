@@ -88,6 +88,11 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 .chat-item.assistant { margin-right: 15%; }
 .chat-item.system { color: var(--warn); }
 .chat-who { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.chat-who { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+/* WHEN IT WAS SAID: small, beside who said it; a key only so that a tap can open the exact time, so it
+   takes no more room than its letters (the 44 pixel rule is for keys that act; this one only tells). */
+button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); text-align: right; cursor: pointer; }
+.chat-day { margin: 14px 0 6px; text-align: center; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); border-bottom: 1px solid var(--line); }
 .chat-text { white-space: pre-wrap; }
 .chat-note { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); margin-top: 4px; }
 #chatCompose { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 6; padding: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }

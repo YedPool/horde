@@ -93,9 +93,12 @@
 #   - THE INBOUND CAP: at most linesPerMinute lines (a setting) are posted to the Thrall in any 60
 #     seconds; one past it is held (code too-many) and comes again.
 #   - THE RECEIPT. Every line that names a message id gets one back, kind receipt, sealed to every
-#     trusted phone key: { messageId, status, code, session, text } - status accepted, held or refused,
-#     code from the closed list below, and his words, so a phone that reloads (or another phone of his)
-#     still shows the line. Codes only: the phone shows its own fixed sentence for each (relay/js/
+#     trusted phone key: { messageId, status, code, sentAt, session, text } - status accepted, held or
+#     refused, code from the closed list below, and his words, so a phone that reloads (or another phone
+#     of his) still shows the line. sentAt is WHEN HE SENT IT (the founder asked for the time of every
+#     message, 2026-10-12): the line envelope's own time in milliseconds, which his passkey signed with
+#     the rest - the machine's clock is never put in its place, and a record with no such time gives a
+#     receipt with no sentAt, which the phone shows with no time. Codes only: the phone shows its own fixed sentence for each (relay/js/
 #     protocol.js, CHAT_WORDS), never a word of the relay's or the messenger's.
 #       accepted  queued (the messenger took it), delivered (handed over, or seen by the receiver)
 #       held      thrall-unknown, no-messenger, not-now, too-many (it comes again), not-delivered,
@@ -646,12 +649,12 @@ function Find-HordeChatChannelMessenger {
 function Send-HordeChatChannelReceipt {
     # Record and put the receipt of one line (THE RECEIPT, in the header). "" when sent, else why not -
     # a receipt recorded and not put waits in the state, and the Tick puts it.
-    param($Context, $Mine, [string]$MessageId, [string]$Status, [string]$Code, [string]$Session, [string]$Text)
+    param($Context, $Mine, [string]$MessageId, [string]$Status, [string]$Code, [string]$Session, [string]$Text, [long]$SentAt = 0)
     if ($script:HordeChatChannelCodes[$Status] -cnotcontains $Code) { throw ("'" + $Code + "' is not a " + $Status + " code") }
     $phones = Get-HordeChatChannelPhones -Context $Context
     if ($phones.state -cne "known") { return ("no receipt: " + $phones.reason) }
     if (@($phones.value).Count -eq 0) { return "no receipt: no phone identity key is trusted" }
-    $body = '{"v":1,"kind":"chat-receipt","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"messageId":"' + $MessageId + '","status":"' + $Status + '","code":"' + $Code + '","text":' + (ConvertTo-HordeChatChannelJsonString $Text) + '}'
+    $body = '{"v":1,"kind":"chat-receipt","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"messageId":"' + $MessageId + '","status":"' + $Status + '","code":"' + $Code + '"' + $(if ($SentAt -gt 0) { ',"sentAt":' + $SentAt } else { '' }) + ',"text":' + (ConvertTo-HordeChatChannelJsonString $Text) + '}'
     $saved = Save-HordeChatChannelBodies -Context $Context -Kind "receipt" -Bodies @($body) -Phones @($phones.value)
     if (-not $saved.ok) { return ("no receipt: " + $saved.reason) }
     Add-HordeChatChannelPending -State $Mine.durable -Keys @($saved.keys) -Before $Mine.durable.cursor
@@ -668,13 +671,18 @@ function Invoke-HordeChatChannelAccept {
     $m = Get-HordeChatChannelMemory -Context $Context
     if (-not $m.ok) { return [pscustomobject]@{ outcome = "retry"; reason = ("the chat state cannot be read: " + $m.reason) } }
     $mine = $m.mine
+    # WHEN HE SENT IT: the line envelope's own time, which his passkey signed. An item that carries none
+    # (a record handed over by older code) gives a receipt with no time, never a guessed one.
+    $sentAt = [long]0
+    $signedAt = $Item.PSObject.Properties["ts"]
+    if ($null -ne $signedAt -and [long]$signedAt.Value -gt 0) { $sentAt = [long]$signedAt.Value }
     $answer = {
         param([string]$Outcome, [string]$Status, [string]$Code, [string]$Why, [string]$Session)
         $note = ""
         $heldKey = $line.messageId + "/" + $Code
         if ($Status -cne "held" -or -not $mine.heldSaid.ContainsKey($heldKey)) {
             if ($Status -ceq "held") { $mine.heldSaid[$heldKey] = $true }
-            $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $mine -MessageId $line.messageId -Status $Status -Code $Code -Session $Session -Text $line.text
+            $sent = Send-HordeChatChannelReceipt -Context $Context -Mine $mine -MessageId $line.messageId -Status $Status -Code $Code -Session $Session -Text $line.text -SentAt $sentAt
             if ($sent -cne "") { $note = "; " + $sent }
         }
         return [pscustomobject]@{ outcome = $Outcome; reason = ("line " + $line.messageId + ": " + $Status + " (" + $Code + ") - " + $Why + $note) }

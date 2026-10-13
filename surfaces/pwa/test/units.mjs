@@ -565,6 +565,7 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   c = await a.phone.chat(a.paired.id);
   const mine = c.items.find((x) => x.kind === "line");
   check(mine && mine.words === P.CHAT_SENDING && mine.text === "carry on", "until a receipt comes it is shown as sending");
+  check(mine && mine.said === opened.header.ts && mine.saidHow === "sent" && opened.header.ts > 1700000000000, "and it says when he sent it: the very time his passkey signed in the line's envelope", JSON.stringify({ said: mine && mine.said, ts: opened.header.ts }));
   // The receipt, a forged code, a turn that merely quotes the line's header, and the machine's founder turn.
   await sendChat(t, m, a.phoneKey, receiptBody(m, "sess-1", mid, "held", "your-account-expired", "carry on"), "receipt");
   await a.phone.refresh(a.paired.id);
@@ -641,6 +642,46 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   const r = P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [{ id: "x", role: "tool", session: "s", text: "t" }, { id: "y", role: "user", session: "s", text: "ok" }] })), "work", "a".repeat(32));
   check(r.ok && r.value.turns.length === 1 && r.value.dropped === 1, "a turn with a role off the list is dropped and counted");
   check((await throwsAsync(async () => P.lineBody({ messageId: "x", horde: "work", machine: "a".repeat(32), session: "s", text: "t" }))) !== "", "a line body with a bad message id is refused before anything is signed");
+}
+
+// --- 10c. when it was said: the turn's own time, the line's signed one, and never a guessed one ---
+{
+  const at = Date.parse("2026-10-12T21:30:09.000Z");
+  // The zone is given as getTimezoneOffset gives it: minutes, positive west of UTC.
+  check(P.clockTime(at, -180) === "00:30" && P.clockTime(at, 0) === "21:30" && P.clockTime(at, 270) === "17:00" && P.clockTime(Date.parse("2026-10-12T05:07:00Z"), 0) === "05:07", "a time is shown short, in the phone's own zone, 24-hour, two digits each", [P.clockTime(at, -180), P.clockTime(at, 0), P.clockTime(at, 270)].join(" "));
+  check(P.dayKey(at, -180) === "2026-10-13" && P.dayKey(at, 0) === "2026-10-12" && P.dayLabel(at, -180) === "Tue 13 Oct 2026" && P.dayLabel(at, 0) === "Mon 12 Oct 2026" && P.dayLabel(Date.parse("2026-01-04T12:00:00Z"), 0) === "Sun 4 Jan 2026", "the day is the phone's local day: past midnight there, it is the next day", P.dayLabel(at, -180));
+  check(P.exactTime(at, -180) === "Tue 13 Oct 2026, 00:30:09 (UTC+3)" && P.exactTime(at, 270) === "Mon 12 Oct 2026, 17:00:09 (UTC-4:30)" && P.exactTime(at, 0) === "Mon 12 Oct 2026, 21:30:09 (UTC)", "the exact time names the day, the second and the zone it is told in", P.exactTime(at, 270));
+  check(P.clockTime(0, 0) === "" && P.clockTime(-5, 0) === "" && P.clockTime(undefined, 0) === "" && P.clockTime(1.5, 0) === "" && P.clockTime(8.7e15, 0) === "" && P.exactTime(0, 0) === "" && P.dayKey(0, 0) === "" && P.dayLabel(NaN, 0) === "" && P.localParts("2026", 0) === null, "what is not a time - none, zero, a fraction, past what a date holds - is shown as no time");
+  check(P.clockTime(at) === P.clockTime(at, new Date(at).getTimezoneOffset()) && P.clockTime(at).length === 5, "with no zone given, the device's own");
+  check(P.timeOf("2026-10-12T21:30:09.000Z") === at && P.timeOf("2026-10-13T00:30:09+03:00") === at && P.timeOf("2026-10-12T21:30:09") === 0 && P.timeOf("2026-10-12") === 0 && P.timeOf("yesterday") === 0 && P.timeOf("") === 0 && P.timeOf(at) === 0, "a turn's time is a time only with a zone: one without cannot be placed, and is none");
+  const days = P.withDays([{ id: "a", said: 0 }, { id: "b", said: at - 3600000 }, { id: "c", said: at }, { id: "d", said: 0 }, { id: "e", said: at + 60000 }, { id: "f", said: at + 86400000 }], -180);
+  check(days.map((x) => (x.kind === "day" ? "[" + x.label + "]" : x.id)).join(" ") === "a [Mon 12 Oct 2026] b [Tue 13 Oct 2026] c d e [Wed 14 Oct 2026] f", "the day is named once where it changes, and a thing with no time neither gets a divider nor moves one", days.map((x) => (x.kind === "day" ? "[" + x.label + "]" : x.id)).join(" "));
+  // The timeline: each item's said.
+  const T = (id, role, time, extra = {}) => ({ id, role, session: "s", text: id, time, group: "", part: 0, parts: 0, truncated: false, redactions: 0, line: "", seq: 1, ...extra });
+  const tl = P.chatTimeline({ turns: [T("t1", "assistant", "2026-10-12T21:30:09.000Z"), T("t2", "user", ""), T("t3", "assistant", "2026-10-12T21:31:00")] });
+  check(tl.find((x) => x.id === "t1").said === at && tl.find((x) => x.id === "t1").saidHow === "turn", "a turn says when it was said: its own time from the conversation");
+  check(tl.find((x) => x.id === "t2").said === 0 && tl.find((x) => x.id === "t3").said === 0, "a turn that carries no time, or one with no zone, says none: no stamp, never a guessed one");
+  const L = "a".repeat(32), M = "b".repeat(32), N = "c".repeat(32), O = "d".repeat(32);
+  const lines = P.chatTimeline({
+    sent: [{ messageId: L, text: "mine", at: at + 5, session: "s" }],
+    receipts: [
+      { messageId: L, status: "accepted", code: "queued", text: "mine", session: "s", seq: 2, ts: at + 9000, sentAt: 0 },
+      { messageId: M, status: "accepted", code: "queued", text: "after a reload", session: "s", seq: 3, ts: at + 9000, sentAt: at + 7 },
+      { messageId: N, status: "accepted", code: "queued", text: "from an old machine", session: "s", seq: 4, ts: at + 9000, sentAt: 0 },
+      { messageId: O, status: "accepted", code: "delivered", text: "old machine, then delivered", session: "s", seq: 5, ts: at + 9000, sentAt: 0 }
+    ],
+    turns: [T("f1", "founder", "2026-10-12T21:40:00.000Z", { line: O }), T("f2", "founder", "2026-10-12T21:41:00.000Z", { line: "e".repeat(32) }), T("f3", "founder", "2026-10-12T21:42:00.000Z", { line: M })]
+  });
+  const lineOf = (id) => lines.find((x) => x.kind === "line" && x.messageId === id);
+  check(lineOf(L).said === at + 5 && lineOf(L).saidHow === "sent", "a line this phone sent keeps the time it signed, whatever its receipt carries");
+  check(lineOf(M).said === at + 7 && lineOf(M).saidHow === "sent" && lineOf(M).at === at + 7, "after a reload a line says when he sent it from its receipt's signed time - and the machine's founder turn does not replace it", JSON.stringify(lineOf(M)));
+  check(lineOf(N).said === 0 && lineOf(N).at === at + 9000, "a receipt from a machine that sends no signed time gives the line NO time: the receipt's own envelope time orders it and is never shown as when he said it", JSON.stringify(lineOf(N)));
+  check(lineOf(O).said === Date.parse("2026-10-12T21:40:00.000Z") && lineOf(O).saidHow === "delivered" && lineOf("e".repeat(32)).saidHow === "delivered" && lineOf("e".repeat(32)).said === Date.parse("2026-10-12T21:41:00.000Z"), "with no signed time left, the line says when it reached the Thrall - the founder turn's own time - and that this is what it is", JSON.stringify(lineOf(O)));
+  const m = await newMachine("work");
+  const withTime = P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: at, text: "t" })), "work", m.keyId);
+  const bad = ["soon", -1, 1.5, null, 0].map((v) => P.readChatReceipt(P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: "work", machine: m.keyId, session: "s", messageId: L, status: "accepted", code: "queued", sentAt: v, text: "t" })), "work", m.keyId));
+  const none = P.readChatReceipt(receiptBody(m, "s", L, "accepted", "queued", "t"), "work", m.keyId);
+  check(withTime.ok && withTime.value.sentAt === at && none.ok && none.value.sentAt === 0 && bad.every((r) => r.ok && r.value.sentAt === 0), "a receipt's sentAt is read as a whole number of milliseconds; one with none (an older machine), or with something else in its place, is still read, with no time");
 }
 
 // --- 10b. the hosted relay's transport speaks its mailbox API, and distrusts it like any other ---
