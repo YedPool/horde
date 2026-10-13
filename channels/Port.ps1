@@ -22,6 +22,25 @@
 #             lines are taken as { lines; failed = $false }. It records with
 #             Save-HordeRelayChannelEnvelope and puts with Send-HordeRelayChannelSaved, and keeps what it
 #             recorded and could not put in $Context.state, to put that same envelope again.
+#   Glance    OPTIONAL. param($Context) -> $true or $false: would a Tick, run now, have something to
+#             send? WHY IT EXISTS: the runner's Tick ran once a turn, and a turn is as long as its watch
+#             of the mailbox - 60 s on the hosted relay - so the Thrall's reply under a question, or a
+#             line of chat, written a second into the watch waited out the rest of it (measured
+#             2026-10-13: 6.9 s of an 8 s watch, three times of three). The runner now asks every
+#             channel's Glance about once a second WHILE THE WATCH IS OPEN (cli/RelayRun.ps1, SENDING
+#             DURING THE WATCH), and runs the Tick, then and there, of each channel that says yes.
+#             A GLANCE IS CHEAP, LOCAL AND CHANGES NOTHING: a file's length, the names in a folder, a
+#             few bytes past a cursor. It makes no request of the relay - the hosted one counts them -
+#             and it does not read the trust store: one idle round of the three Ticks was 186 ms on
+#             this box, 134 ms of it the trust store read once by each (measured 2026-10-13), which
+#             once a second is a fifth of a core for nothing; one round of their Glances is about 6 ms.
+#             IT MAY BE WRONG IN ONE DIRECTION ONLY. A yes with nothing behind it costs one Tick that
+#             sends nothing. A no that should have been a yes costs nothing but time: the turn's own
+#             Tick still runs when the watch ends, exactly as it always did. So a channel answers no
+#             for whatever its Glance cannot see cheaply (a phone key trusted since, a cleared
+#             session), and for anything that has already failed: what the relay would not take is
+#             the turn's Tick's to put again, after the runner's backoff, never the Glance's to hurry.
+#             A channel with no Glance is ticked once a turn, as before.
 # This file names no channel, so chat is a new folder and not an edit here (the design's PR plan,
 # item 10).
 #
@@ -90,7 +109,8 @@ function Register-HordeRelayChannel {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Kinds,
         [Parameter(Mandatory = $true)][string]$Senders,
         [Parameter(Mandatory = $true)][scriptblock]$Accept,
-        [scriptblock]$Tick = $null
+        [scriptblock]$Tick = $null,
+        [scriptblock]$Glance = $null
     )
     if ($Name -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("a channel is one lower-case word of up to 32 characters, not '" + $Name + "'") }
     if ((Split-Path -Leaf $Folder) -cne $Name) { throw ("the channel '" + $Name + "' sits in the folder '" + (Split-Path -Leaf $Folder) + "'; a channel's folder is its name") }
@@ -98,7 +118,9 @@ function Register-HordeRelayChannel {
     if ($script:HordeRelayChannelSenders -cnotcontains $Senders) { throw ("a channel takes envelopes from " + ($script:HordeRelayChannelSenders -join " or ") + ", not '" + $Senders + "'") }
     # Once per name: a second registration would silently swap the channel every envelope goes to.
     if ($script:HordeRelayChannels.Contains($Name)) { throw ("the channel '" + $Name + "' is already registered, from " + $script:HordeRelayChannels[$Name].folder + "; the first registration stands") }
-    $c = [pscustomobject]@{ PSTypeName = "Horde.RelayChannel"; name = $Name; folder = $Folder; kinds = @($Kinds); senders = $Senders; accept = $Accept; tick = $Tick }
+    # A Glance asks whether a Tick has something to send: with no Tick there is nothing it could ask about.
+    if ($null -ne $Glance -and $null -eq $Tick) { throw ("the channel '" + $Name + "' has a Glance and no Tick: a Glance says whether its Tick has something to send") }
+    $c = [pscustomobject]@{ PSTypeName = "Horde.RelayChannel"; name = $Name; folder = $Folder; kinds = @($Kinds); senders = $Senders; accept = $Accept; tick = $Tick; glance = $Glance }
     $script:HordeRelayChannels[$Name] = $c
     return $c
 }
@@ -270,9 +292,52 @@ function Receive-HordeRelayInbox {
     # lines for what could not be judged now and comes again; missing: lines for envelopes of a sender
     # that the journal saw skipped (dropped, delayed or withheld by the relay: design Q11, "shown as
     # missing, never as silence"). Unknown when the relay could not be read.
-    param([Parameter(Mandatory = $true)]$Context, [int]$TimeoutMs = 0, $Now = $null)
-    $w = Wait-HordeRelayItems -Connection $Context.connection -Mailbox $Context.mailbox -Since $Context.cursor -TimeoutMs $TimeoutMs
+    #
+    # -Between, WITH -SliceMs, ON A RELAY THAT WATCHES IN SLICES (relays/Port.ps1, A WATCH IN SLICES): the
+    # same one watch, held open and waited on -SliceMs at a time, and after every slice in which nothing
+    # came -Between is run, handed the context and -With (the caller's own, passed through untouched) -
+    # which is where the runner looks for something to send while the watch is still open
+    # (cli/RelayRun.ps1, SENDING DURING THE WATCH). A -Between that answers $true ends the watch there
+    # (the runner was asked to stop); whatever arrived by then is the batch. On a relay that does not
+    # watch in slices, and with no -Between, the watch blocks for its whole time, exactly as it always
+    # did, and -Between is never run.
+    param([Parameter(Mandatory = $true)]$Context, [int]$TimeoutMs = 0, $Now = $null, [int]$SliceMs = 0, [scriptblock]$Between = $null, $With = $null)
+    if ($null -ne $Between -and $SliceMs -gt 0 -and (Test-HordeRelayWatchInSlices $Context.connection)) { $w = Wait-HordeRelayInboxInSlices -Context $Context -TimeoutMs $TimeoutMs -SliceMs $SliceMs -Between $Between -With $With }
+    else { $w = Wait-HordeRelayItems -Connection $Context.connection -Mailbox $Context.mailbox -Since $Context.cursor -TimeoutMs $TimeoutMs }
     if ($w.state -cne "known") { return $w }
+    return (Complete-HordeRelayInbox -Context $Context -Watched $w -Now $Now)
+}
+
+function Wait-HordeRelayInboxInSlices {
+    # Step 1 of THE PATH IN on a relay that watches in slices: the batch Wait-HordeRelayItems would have
+    # handed over, or its unknown - from ONE watch opened at the relay, however many slices it is waited
+    # on in and whatever -Between does between them. The watch is always let go of, also when -Between
+    # throws: that is a fault of the caller's own code, and is the caller's to see.
+    param([Parameter(Mandatory = $true)]$Context, [int]$TimeoutMs, [int]$SliceMs, [Parameter(Mandatory = $true)][scriptblock]$Between, $With = $null)
+    $opened = Open-HordeRelayWatch -Connection $Context.connection -Mailbox $Context.mailbox -Since $Context.cursor -TimeoutMs $TimeoutMs
+    if ($opened.state -cne "known") { return $opened }
+    # A slice no longer than this relay lets a watch be: the port refuses a longer one.
+    $eachMs = [int][System.Math]::Max(1, [System.Math]::Min([double]$SliceMs, [double]$Context.connection.relay.limits.maxWatchMs))
+    try {
+        while ($true) {
+            $slice = Wait-HordeRelayWatch -Watch $opened.value -WaitMs $eachMs
+            if ($slice.state -cne "known" -or $slice.value.ended) { return $slice }
+            $stop = @(& $Between $Context $With) | Select-Object -Last 1
+            # ASKED ONCE MORE, WITHOUT WAITING, BEFORE IT IS LET GO: what arrived while -Between ran is
+            # this batch's, and is journaled and acked now, not left for whoever watches next.
+            if ($stop -is [bool] -and $stop) { return (Wait-HordeRelayWatch -Watch $opened.value -Last) }
+        }
+    } finally { Close-HordeRelayWatch -Watch $opened.value }
+}
+
+function Complete-HordeRelayInbox {
+    # Steps 2 to 5 of THE PATH IN, for a batch somebody has already watched for: -Watched is the known
+    # answer of Wait-HordeRelayItems, or of the Wait-HordeRelayWatch that ended a watch in slices
+    # (relays/Port.ps1) - the same batch either way, so whether the runner blocked on its watch or sent
+    # between slices of it, what arrived is judged, journaled and acked by this one piece of code.
+    # Receive-HordeRelayInbox's answer.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Watched, $Now = $null)
+    $w = $Watched
     $refused = New-Object System.Collections.ArrayList
     $held = New-Object System.Collections.ArrayList
     $taken = New-Object System.Collections.ArrayList
@@ -378,13 +443,17 @@ function Invoke-HordeRelayChannelTicks {
     # againMs: a Tick may say how soon it wants to be turned again (its answer's againMs, over 0) - the
     # decisions channel's bell does, for the end of a quiet period. The soonest of them is returned, 0
     # when none asked, and the run's next watch waits no longer than that (cli/RelayRun.ps1).
-    param([Parameter(Mandatory = $true)]$Context, $Now = $null)
+    #
+    # -Only names the channels to tick, for the runner's look during a watch (Find-HordeRelayChannelsToSend):
+    # the others are left for the turn's own Tick. Not given, every channel is ticked.
+    param([Parameter(Mandatory = $true)]$Context, $Now = $null, [string[]]$Only = $null)
     $out = New-Object System.Collections.ArrayList
     $failed = $false
     $again = 0
     foreach ($name in @(Get-HordeRelayChannelNames)) {
         $ch = Get-HordeRelayChannel -Name $name
         if ($null -eq $ch.tick) { continue }
+        if ($null -ne $Only -and @($Only) -cnotcontains $name) { continue }
         try {
             $got = @(& $ch.tick $Context)
             $lines = $got
@@ -399,4 +468,25 @@ function Invoke-HordeRelayChannelTicks {
         catch { [void]$out.Add($name + ": failed: " + $_.Exception.Message); $failed = $true }
     }
     return [pscustomobject]@{ lines = @($out.ToArray()); failed = $failed; againMs = $again }
+}
+
+function Find-HordeRelayChannelsToSend {
+    # Every channel's Glance (the header), in name order: { due; lines } - due the names of the channels
+    # whose Glance said yes, for Invoke-HordeRelayChannelTicks -Only; lines one for each Glance that
+    # threw. ONLY A PLAIN $true IS A YES: a Glance that throws, or answers with anything else, is a no -
+    # the channel's Tick still runs once a turn, as it would with no Glance at all - so a broken Glance
+    # can cost the speed it was meant to give and nothing more.
+    param([Parameter(Mandatory = $true)]$Context)
+    $due = New-Object System.Collections.ArrayList
+    $lines = New-Object System.Collections.ArrayList
+    foreach ($name in @(Get-HordeRelayChannelNames)) {
+        $ch = Get-HordeRelayChannel -Name $name
+        if ($null -eq $ch.tick -or $null -eq $ch.glance) { continue }
+        try {
+            $said = @(& $ch.glance $Context) | Select-Object -Last 1
+            if ($said -is [bool] -and $said) { [void]$due.Add($name) }
+        }
+        catch { [void]$lines.Add($name + ": could not look for something to send, so it is sent at the end of the watch: " + $_.Exception.Message) }
+    }
+    return [pscustomobject]@{ due = @($due.ToArray()); lines = @($lines.ToArray()) }
 }

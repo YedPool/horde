@@ -151,6 +151,9 @@ $script:HordeChatChannelSessionPattern = '\A[A-Za-z0-9._:-]{1,128}\z'
 # their SHA-256 - enough to know his words again in a delivered turn, never the words themselves.
 $script:HordeChatChannelLineMarkPattern = '\A[0-9a-f]{32}:(0|[1-9][0-9]{0,6}):[0-9a-f]{32}\z'
 $script:HordeChatChannelLineHeader = '\AFOUNDER LINE from the phone \(line ([0-9a-f]{32})\)\n\n'
+# The most bytes of the conversation one Glance looks at (Test-HordeChatChannelGlance): enough to find
+# that there is something, which is all it asks; the Tick then reads what there is.
+$script:HordeChatChannelGlanceBytes = [long]4096
 # The most posted lines the state remembers: a busy day's lines many times over.
 $script:HordeChatChannelLinesKept = 2000
 $script:HordeChatChannelCodes = @{
@@ -490,6 +493,8 @@ function Invoke-HordeChatChannelTick {
     $set = Get-HordeChatChannelSettings -Context $Context
     if ($set.state -cne "known") { return (& $once "settings" ("chat is stopped: " + $set.reason) $true) }
     $set = $set.value
+    # For the Glance, which reads no settings itself: how long this Tick leaves between two sends.
+    $mine["sendIntervalMs"] = [long]$set.sendIntervalMs
     $homeDir = Get-HordeChatChannelHome $Context
     if (@($mine.durable.pending).Count -gt 0) {
         $why = Send-HordeChatChannelPending -Context $Context -Mine $mine
@@ -505,6 +510,8 @@ function Invoke-HordeChatChannelTick {
     if ($src.state -cne "known") { return (& $once "source" ("no turns sent: the Thrall cannot be read now: " + $src.reason) $false) }
     $mine.said.Remove("source"); $mine.said.Remove("phones")
     $source = $src.value
+    # For the Glance, which locates nothing itself: the Thrall as this Tick found it.
+    $mine["source"] = $source
     $d = $mine.durable
     $was = Get-HordeChatChannelStateMark -State $d
     $batches = New-Object System.Collections.ArrayList
@@ -596,6 +603,37 @@ function Invoke-HordeChatChannelTick {
     if ($why -cne "") { [void]$lines.Add($what + " recorded; not delivered yet: " + $why); return [pscustomobject]@{ lines = @($lines.ToArray()); failed = $true } }
     [void]$lines.Add($what + " sent")
     return [pscustomobject]@{ lines = @($lines.ToArray()); failed = $false }
+}
+
+function Test-HordeChatChannelGlance {
+    # THE GLANCE (channels/Port.ps1, Glance): has the Thrall's conversation moved past the cursor? $true
+    # then, and the runner runs the Tick now instead of when its watch of the mailbox ends - so the
+    # Thrall's reply to the founder's line is on his phone in about a second and not in up to a minute.
+    #   - A FEW BYTES PAST THE CURSOR ARE READ, FROM THE THRALL THE LAST TICK FOUND: one turn at the most
+    #     from at most 4,096 bytes, through the conversation port like every read, and nothing is kept
+    #     or moved - the cursor is the Tick's. ANYTHING there is a yes: a turn, more than the bytes
+    #     looked at, a position that moved (lines that are not turns: the Tick then moves the cursor past
+    #     them and sends nothing, so they are not looked at again). The three channels' Glances together
+    #     are about 6 ms a round on this box (measured 2026-10-13; test/test-relay-run-send.ps1 prints it).
+    #   - THE THRALL IS NOT LOCATED AGAIN. Locating reads every session record of the fleet, and the
+    #     trust store is not read either: both are the Tick's, once a turn. So a session cleared since,
+    #     and a phone key trusted since, are NOT seen here and wait for the turn's own Tick, as they
+    #     always did. (A cleared session's old conversation stops growing, so the answer is a quiet no.)
+    #   - NO, UNTIL A TICK HAS FOUND THE THRALL AND SENT ITS FIRST LOOK; NO WHILE AN ENVELOPE IS RECORDED
+    #     AND WAITING (the relay would not take it: putting it again is the turn's Tick's, after the
+    #     runner's backoff); NO INSIDE sendIntervalMs OF THE LAST SEND (the Tick would send nothing: RATE,
+    #     in the header); NO WHEN THE CONVERSATION CANNOT BE READ (the turn's Tick says why).
+    param($Context)
+    if (-not $Context.state.ContainsKey("chat")) { return $false }
+    $mine = $Context.state["chat"]
+    if (-not $mine.loaded -or -not $mine.ContainsKey("source") -or $null -eq $mine["source"]) { return $false }
+    $d = $mine.durable
+    if ($null -eq $d.cursor -or @($d.pending).Count -gt 0) { return $false }
+    if ("$($d.cursor.session)" -cne $mine["source"].session) { return $false }
+    if (([datetime]::UtcNow - $mine.lastSentAt).TotalMilliseconds -lt [long]$mine["sendIntervalMs"]) { return $false }
+    $r = Read-HordeConversationTurns -Source $mine["source"] -Cursor $d.cursor -MaxTurns 1 -MaxBytes $script:HordeChatChannelGlanceBytes
+    if ($r.state -cne "known") { return $false }
+    return (@($r.value.turns).Count -gt 0 -or $r.value.more -or $r.value.reset -cne "none" -or "$($r.value.next.position)" -cne "$($d.cursor.position)")
 }
 
 function Read-HordeChatChannelLine {
@@ -738,4 +776,5 @@ function Invoke-HordeChatChannelAccept {
 
 $null = Register-HordeRelayChannel -Folder $script:HordeChatChannelFolder -Name "chat" -Kinds @("line") -Senders "founder" `
     -Accept { param($Context, $Item) return (Invoke-HordeChatChannelAccept -Context $Context -Item $Item) } `
-    -Tick { param($Context) return (Invoke-HordeChatChannelTick -Context $Context) }
+    -Tick { param($Context) return (Invoke-HordeChatChannelTick -Context $Context) } `
+    -Glance { param($Context) return (Test-HordeChatChannelGlance -Context $Context) }

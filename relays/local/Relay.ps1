@@ -30,6 +30,12 @@
 # a poll needs no event loop in a script. 50 ms is far inside the "within a second" that realtime
 # promises, and a listing of a mailbox of a few hundred names is about a millisecond.
 #
+# THE WATCH IN SLICES (relays/Port.ps1, A WATCH IN SLICES) is that same poll, stopped when the slice is
+# over as well as when the watch is, and taken up again where it stopped. Nothing is held open between
+# two slices - the handle is the folder, the cursor and when the watch began - so a put, a read or an
+# ack between them meets nothing of the watch's. The blocking watch is one slice as long as the watch:
+# the two cannot drift apart, because there is one loop (Wait-HordeLocalRelayWatch).
+#
 # DURABILITY: an item is flushed to disk (FileStream.Flush($true)) before it is renamed into place. The
 # rename itself is not forced to disk, so a power cut can lose the last puts; a crash of the process
 # cannot. That is enough for a relay whose every item the journal also holds.
@@ -119,6 +125,31 @@ function New-HordeLocalRelayItems {
     return (New-HordeKnown -Value ([pscustomobject]@{ items = @($Items) }) -ObservedAt ([datetime]::UtcNow))
 }
 
+function New-HordeLocalRelayWatch {
+    # A watch's handle: where it looks, from which cursor, and how long ago it began (the header, THE
+    # WATCH IN SLICES). Nothing is opened: a handle that is never closed leaks nothing.
+    param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
+    return [pscustomobject]@{ dir = (Get-HordeLocalRelayDir -State $State -Mailbox $Mailbox); since = $Since; max = $Max; timeoutMs = $TimeoutMs; began = [System.Diagnostics.Stopwatch]::StartNew() }
+}
+
+function Wait-HordeLocalRelayWatch {
+    # Poll -Watch's mailbox until something is past its cursor (ended, with the items), its own time is
+    # up (ended, with none) or -WaitMs of this slice have passed (not ended): known { ended; items }.
+    # The mailbox is read BEFORE either clock is asked, so a watch of 0 ms, and a slice of 0 ms, still
+    # see what is already there.
+    param($Watch, [int]$WaitMs)
+    $slice = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $items = @(Read-HordeLocalRelayItems -Dir $Watch.dir -Since $Watch.since -Max $Watch.max)
+        if ($items.Count -gt 0) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = $items }) -ObservedAt ([datetime]::UtcNow)) }
+        $left = $Watch.timeoutMs - $Watch.began.ElapsedMilliseconds
+        if ($left -le 0) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = @() }) -ObservedAt ([datetime]::UtcNow)) }
+        $leftOfSlice = $WaitMs - $slice.ElapsedMilliseconds
+        if ($leftOfSlice -le 0) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $false; items = @() }) -ObservedAt ([datetime]::UtcNow)) }
+        Start-Sleep -Milliseconds ([Math]::Min($script:HordeLocalRelayPollMs, [Math]::Min($left, $leftOfSlice)))
+    }
+}
+
 $null = Register-HordeRelay -Folder $script:HordeLocalRelayFolder `
     -Connect {
         param($Options)
@@ -163,16 +194,18 @@ $null = Register-HordeRelay -Folder $script:HordeLocalRelayFolder `
     } `
     -Watch {
         param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
-        $dir = Get-HordeLocalRelayDir -State $State -Mailbox $Mailbox
-        $clock = [System.Diagnostics.Stopwatch]::StartNew()
-        while ($true) {
-            $items = @(Read-HordeLocalRelayItems -Dir $dir -Since $Since -Max $Max)
-            if ($items.Count -gt 0) { return (New-HordeLocalRelayItems -Items $items) }
-            $left = $TimeoutMs - $clock.ElapsedMilliseconds
-            if ($left -le 0) { return (New-HordeLocalRelayItems -Items @()) }
-            Start-Sleep -Milliseconds ([Math]::Min($script:HordeLocalRelayPollMs, $left))
-        }
+        # One slice as long as the watch: it ends only with items, or with the watch's own time.
+        return (Wait-HordeLocalRelayWatch -Watch (New-HordeLocalRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs) -WaitMs $TimeoutMs)
     } `
+    -WatchOpen {
+        param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
+        return (New-HordeKnown -Value (New-HordeLocalRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs) -ObservedAt ([datetime]::UtcNow))
+    } `
+    -WatchWait {
+        param($State, $Handle, [int]$WaitMs)
+        return (Wait-HordeLocalRelayWatch -Watch $Handle -WaitMs $WaitMs)
+    } `
+    -WatchClose { param($State, $Handle) } `
     -Ack {
         param($State, [string]$Mailbox, [long]$Through)
         $dir = Get-HordeLocalRelayDir -State $State -Mailbox $Mailbox

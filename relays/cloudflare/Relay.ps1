@@ -27,6 +27,17 @@
 # read for what is left of the timeout and never less than 250 ms, so a watch of 0 ms still gets the
 # items that were already there: the relay sends those the moment the socket opens.
 #
+# THE WATCH IN SLICES (relays/Port.ps1, A WATCH IN SLICES). The socket is the watch: opening it is the
+# one request the watch costs the relay (worker/limits.js counts the upgrade and nothing after it), and
+# while it is open the mailbox's Durable Object is hibernating, woken only by a put into THAT mailbox
+# (worker/mailbox.js, wake). So this side can keep the socket open and do other things between looks at
+# it: a put into the phone's mailbox is an ordinary POST to another object, and one into the watched
+# mailbox is answered on the socket as it always was. A slice is therefore a wait of some milliseconds
+# on a receive that stays pending across slices - nothing is sent, nothing is cancelled, no request is
+# made - and the blocking watch is one slice as long as the watch. NOT RUN AGAINST THE DEPLOYED RELAY
+# from here: the conformance suite runs it against a local dev of the same Worker, which shares the
+# Worker's code and not the network or the platform's own WebSocket front end.
+#
 # A ROTATED IDENTITY IS CARRIED TO THE RELAY (relay PR 8c; worker/rotation.js). After
 # relay/Identity.ps1 rotates this machine's keys, the relay still knows only the old signing key, so it
 # answers the new one 401. The first 401 of a connection (a request, or a watch the relay would not
@@ -193,33 +204,74 @@ function ConvertTo-HordeCloudflareRelayItems {
     return (New-HordeKnown -Value ([pscustomobject]@{ items = $items }) -ObservedAt $Answer.observedAt)
 }
 
-function Receive-HordeCloudflareRelaySocketText {
-    # The first whole text message on -Socket within -TimeoutMs: the text, or $null when the time ran out
-    # or the relay closed with nothing to say. Throws when the socket fails.
-    param([System.Net.WebSockets.ClientWebSocket]$Socket, [int]$TimeoutMs)
-    $cts = New-Object System.Threading.CancellationTokenSource($TimeoutMs)
-    $buf = New-Object byte[] 65536
-    $all = New-Object System.IO.MemoryStream
-    try {
-        while ($true) {
-            $seg = New-Object System.ArraySegment[byte] -ArgumentList @(, $buf)
-            try { $r = $Socket.ReceiveAsync($seg, $cts.Token).GetAwaiter().GetResult() }
-            catch [System.OperationCanceledException] { return $null }
-            if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
-                $code = [int]$r.CloseStatus
-                if ($code -ge 4000 -and $code -le 4999) { throw $(if ($script:HordeCloudflareRelayCloseWords.ContainsKey($code)) { $script:HordeCloudflareRelayCloseWords[$code] } else { "the relay closed the watch (" + $code + ")" }) }
-                return $null
-            }
-            $all.Write($buf, 0, $r.Count)
-            if ($all.Length -gt $script:HordeCloudflareRelayAnswerBytes) { throw ("the relay's watch message is over " + $script:HordeCloudflareRelayAnswerBytes + " bytes") }
-            if ($r.EndOfMessage) { return [System.Text.Encoding]::ASCII.GetString($all.ToArray()) }
+function Wait-HordeCloudflareRelayWatch {
+    # Wait up to -WaitMs more on a watch Open-HordeCloudflareRelayWatch opened (the header, THE WATCH IN
+    # SLICES): known { ended; items } - ended with the items once the relay's one message came, ended
+    # with none when the watch's time ran out or the relay closed with nothing to say, not ended when
+    # only this slice is over - or unknown when the socket failed or the relay ended the watch itself.
+    param($Handle, [int]$WaitMs)
+    $slice = [System.Diagnostics.Stopwatch]::StartNew()
+    # THE FIRST SLICE IS NEVER LESS THAN A MOMENT, so items the relay sends at once on opening are read
+    # even by a slice that does not wait: a watch of 0 ms is still a read (the header, THE WIRE).
+    if (-not $Handle.waited) { $Handle.waited = $true; $WaitMs = [int][Math]::Max($WaitMs, [Math]::Min(250, $Handle.leftMs)) }
+    while ($true) {
+        # ONE RECEIVE IS LEFT PENDING ACROSS SLICES, and each slice only waits on it. Cancelling a receive
+        # to end a slice would abort the socket (the platform's rule for a cancelled receive), which
+        # would end the watch and cost a new request to open the next one.
+        if ($null -eq $Handle.pending) {
+            $seg = New-Object System.ArraySegment[byte] -ArgumentList @(, $Handle.buffer)
+            $Handle.pending = $Handle.socket.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
         }
-    } finally { $cts.Dispose(); $all.Dispose() }
+        $leftOfWatch = $Handle.leftMs - $Handle.sinceOpen.ElapsedMilliseconds
+        $leftOfSlice = $WaitMs - $slice.ElapsedMilliseconds
+        $came = $false
+        try { $came = $Handle.pending.Wait([int][Math]::Max(0, [Math]::Min($leftOfWatch, $leftOfSlice))) }
+        catch {
+            $inner = $_.Exception
+            while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
+            return (New-HordeUnknown -Reason ("the relay's watch failed: " + (Get-HordeCloudflareRelayWords $inner.Message)))
+        }
+        if (-not $came) {
+            if ($Handle.leftMs - $Handle.sinceOpen.ElapsedMilliseconds -le 0) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = @() }) -ObservedAt ([datetime]::UtcNow)) }
+            if ($WaitMs - $slice.ElapsedMilliseconds -le 0) { return (New-HordeKnown -Value ([pscustomobject]@{ ended = $false; items = @() }) -ObservedAt ([datetime]::UtcNow)) }
+            continue
+        }
+        $r = $Handle.pending.Result
+        $Handle.pending = $null
+        if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+            $code = [int]$r.CloseStatus
+            if ($code -ge 4000 -and $code -le 4999) { return (New-HordeUnknown -Reason ("the relay's watch failed: " + $(if ($script:HordeCloudflareRelayCloseWords.ContainsKey($code)) { $script:HordeCloudflareRelayCloseWords[$code] } else { "the relay closed the watch (" + $code + ")" }))) }
+            return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = @() }) -ObservedAt ([datetime]::UtcNow))
+        }
+        $Handle.message.Write($Handle.buffer, 0, $r.Count)
+        if ($Handle.message.Length -gt $script:HordeCloudflareRelayAnswerBytes) { return (New-HordeUnknown -Reason ("the relay's watch failed: the relay's watch message is over " + $script:HordeCloudflareRelayAnswerBytes + " bytes")) }
+        if (-not $r.EndOfMessage) { continue }
+        $text = [System.Text.Encoding]::ASCII.GetString($Handle.message.ToArray())
+        $parsed = $null
+        try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
+        if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason "the relay's watch message is not a JSON object") }
+        if ($null -ne $parsed.PSObject.Properties["error"]) { return (New-HordeUnknown -Reason ("the relay ended the watch: " + (Get-HordeCloudflareRelayWords $parsed.error))) }
+        $got = ConvertTo-HordeCloudflareRelayItems -Answer (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow)) -What "watch"
+        if ($got.state -cne "known") { return $got }
+        return (New-HordeKnown -Value ([pscustomobject]@{ ended = $true; items = @($got.value.items) }) -ObservedAt $got.observedAt)
+    }
 }
 
-function Invoke-HordeCloudflareRelayWatch {
-    # The watch over a WebSocket: known { items } - empty when the time ran out - or unknown. A watch the
-    # relay would not open may carry a rotation to it and be opened again, once (the header).
+function Close-HordeCloudflareRelayWatch {
+    # Let go of a watch's socket: this side closing it is how a watch ends when nothing came (the
+    # header, THE WIRE). The receive left pending is then looked at once, so its end is not left
+    # unobserved. Never throws.
+    param($Handle)
+    if ($null -eq $Handle) { return }
+    try { $Handle.socket.Dispose() } catch { }
+    try { if ($null -ne $Handle.pending) { $null = $Handle.pending.Wait(50) } } catch { }
+    try { $Handle.message.Dispose() } catch { }
+}
+
+function Open-HordeCloudflareRelayWatch {
+    # Open the watch's WebSocket - the one request a watch costs the relay: known, the handle
+    # Wait-HordeCloudflareRelayWatch waits on and Close-HordeCloudflareRelayWatch lets go of, or unknown.
+    # A watch the relay would not open may carry a rotation to it and be opened again, once (the header).
     param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs, [switch]$Once)
     $ws = $State.origin -replace '\Ahttp', 'ws'
     $target = (Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "watch") + "?since=" + $Since + "&max=" + $Max + "&timeoutMs=" + $TimeoutMs
@@ -227,6 +279,7 @@ function Invoke-HordeCloudflareRelayWatch {
     if ($auth.state -cne "known") { return $auth }
     $uri = New-Object System.Uri($ws + $target)
     $socket = New-Object System.Net.WebSockets.ClientWebSocket
+    $opened = $false
     try {
         $socket.Options.SetRequestHeader("Authorization", $auth.value)
         # PowerShell 7 keeps a refused upgrade's status and headers only when asked to (.NET 7 and up);
@@ -253,22 +306,31 @@ function Invoke-HordeCloudflareRelayWatch {
                 $code = [int]$socket.HttpStatusCode
                 if ($null -ne $socket.HttpResponseHeaders) { foreach ($h in $socket.HttpResponseHeaders) { if ($h.Key -ieq "Retry-After") { $retryAfter = (@($h.Value) -join ",") } } }
             }
-            if ($why.Contains("401") -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs -Once) }
+            if ($why.Contains("401") -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Open-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs -Once) }
             return (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $why.Trim()))) -Status $code -RetryAfter $retryAfter)
         }
         finally { $cts.Dispose() }
         # What is left of the timeout once the socket is open, and never less than a moment, so items
         # the relay sends at once on opening are still read.
         $left = [int][Math]::Max(250, $TimeoutMs - $clock.ElapsedMilliseconds)
-        try { $text = Receive-HordeCloudflareRelaySocketText -Socket $socket -TimeoutMs $left }
-        catch { return (New-HordeUnknown -Reason ("the relay's watch failed: " + (Get-HordeCloudflareRelayWords $_.Exception.Message))) }
-        if ($null -eq $text) { return (New-HordeKnown -Value ([pscustomobject]@{ items = @() }) -ObservedAt ([datetime]::UtcNow)) }
-        $parsed = $null
-        try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
-        if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason "the relay's watch message is not a JSON object") }
-        if ($null -ne $parsed.PSObject.Properties["error"]) { return (New-HordeUnknown -Reason ("the relay ended the watch: " + (Get-HordeCloudflareRelayWords $parsed.error))) }
-        return (ConvertTo-HordeCloudflareRelayItems -Answer (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow)) -What "watch")
-    } finally { $socket.Dispose() }
+        $opened = $true
+        return (New-HordeKnown -Value ([pscustomobject]@{ socket = $socket; leftMs = $left; sinceOpen = [System.Diagnostics.Stopwatch]::StartNew(); waited = $false
+            buffer = (New-Object byte[] 65536); message = (New-Object System.IO.MemoryStream); pending = $null }) -ObservedAt ([datetime]::UtcNow))
+    } finally { if (-not $opened) { $socket.Dispose() } }
+}
+
+function Invoke-HordeCloudflareRelayWatch {
+    # The blocking watch: known { items } - empty when the time ran out - or unknown. It is the watch in
+    # slices, opened, waited on in one slice as long as the watch, and let go of: one code path for both.
+    param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
+    $o = Open-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs
+    if ($o.state -cne "known") { return $o }
+    try {
+        while ($true) {
+            $w = Wait-HordeCloudflareRelayWatch -Handle $o.value -WaitMs $o.value.leftMs
+            if ($w.state -cne "known" -or $w.value.ended) { return $w }
+        }
+    } finally { Close-HordeCloudflareRelayWatch -Handle $o.value }
 }
 
 $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
@@ -313,6 +375,18 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     -Watch {
         param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
         return (Invoke-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs)
+    } `
+    -WatchOpen {
+        param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
+        return (Open-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs)
+    } `
+    -WatchWait {
+        param($State, $Handle, [int]$WaitMs)
+        return (Wait-HordeCloudflareRelayWatch -Handle $Handle -WaitMs $WaitMs)
+    } `
+    -WatchClose {
+        param($State, $Handle)
+        Close-HordeCloudflareRelayWatch -Handle $Handle
     } `
     -Ack {
         param($State, [string]$Mailbox, [long]$Through)
