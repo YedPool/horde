@@ -30,6 +30,7 @@ $memory = Get-HordeWaker -Name "memory"
 $settings = Get-HordeWakeSettings
 $t0 = New-Object System.DateTime(2026, 10, 12, 8, 0, 0, [System.DateTimeKind]::Utc)
 $script:ledger = @{}
+$script:heard = $null
 
 function At { param([double]$Seconds) return $t0.AddSeconds($Seconds) }
 function Sid { param([int]$N) return ("0a000000-0000-4000-8000-" + $N.ToString("000000000000")) }
@@ -37,6 +38,7 @@ function Start-Case {
     # A clean waker and an empty ledger: no case sees another's sessions or back-off.
     Reset-HordeMemoryWaker
     $script:ledger = @{}
+    $script:heard = $null
 }
 function Seat {
     # One session that qualifies for a nudge - reachable, one unread mail a minute old, idle, empty box,
@@ -866,6 +868,11 @@ $null = Pass 9; $null = Pass 600
 Check ((Rang) -eq 2) "and one knock is all a release is: they wait again"
 $plain = @{}; $plain[(Sid 5)] = New-HordeWakeLedgerRow -Attempts 2 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60)
 Check ($null -eq (Get-HordeWakeEntryValue (Set-HordeWakeLedgerProbesDue -Ledger $plain)[(Sid 5)] "probeAt") -and (Set-HordeWakeLedgerProbesDue -Ledger $plain)[(Sid 5)].attempts -eq 2) "an entry that is no probe's is left as it was"
+$two = @{}; foreach ($n in 1, 2) { $two[(Sid $n)] = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt (At 0) -LastOutcome "limited" -MailAt (At -60) -ProbeAt (At 0) }
+$own = Set-HordeWakeLedgerProbesDue -Ledger $two -Risen @((Sid 1))
+Check ($own[(Sid 1)].probeAt -eq (At 0) -and $own[(Sid 2)].probeAt -lt (At -86400)) "a session's OWN acknowledgement marks its own probe nothing: only another session's taking is evidence for it"
+$both = Set-HordeWakeLedgerProbesDue -Ledger $two -Risen @((Sid 1), (Sid 2))
+Check ($both[(Sid 1)].probeAt -lt (At -86400) -and $both[(Sid 2)].probeAt -lt (At -86400)) "CONTROL: with another session risen beside it, each is marked due"
 # A session that had been given up on, and is then found limited with no end, is probed all the same.
 Start-Case; Seat 1
 $one = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 1 }
@@ -881,14 +888,29 @@ $r = Pass 7400 -Using $one
 Check ((Rang) -eq 2 -and (Kinds $r) -cnotlike "*gave-up*" -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("a probe its waker answers with nothing leaves the session given up on, and gave-up is not said a second time (" + (Kinds $r) + ")")
 # 5. LIMITED UNKNOWN: the waker can tell, and for this session could not. UNKNOWN IS NOT NO.
 function PassM {
-    # One pass at t0 + -Seconds, in a fleet where ANOTHER session (99, with no mail of its own) last
-    # acknowledged mail at -MovedAt, or nobody did; -Moves says who acknowledged when, instead.
-    param([double]$Seconds, $MovedAt = $null, $Moves = $null)
+    # One pass at t0 + -Seconds, in a fleet where ANOTHER session (99, with no mail of its own) acknowledged
+    # mail at -MovedAt SINCE THE LAST PASS, or nobody did; -Moves says who acknowledged when, instead.
+    # The loop's own way: the pass is handed the last pass's reading of acknowledgements (-AcksSeen), and
+    # that reading is carried on by the rule the silence carries it by (Update-HordeWakeAcksRose).
+    # "SINCE THE LAST PASS": a mover the last reading never saw is taken to have been seen then with no
+    # acknowledgement, so what -Moves gives is an increase. -Fresh leaves the reading as it is - for the
+    # first pass after a start there is none - and then a time given is no increase at all.
+    param([double]$Seconds, $MovedAt = $null, $Moves = $null, [switch]$Fresh)
     if ($null -eq $Moves -and $MovedAt -is [datetime]) { $Moves = @{ (Sid 99) = $MovedAt } }
-    if ($null -ne $Moves) { foreach ($who in @($Moves.Keys)) { Set-HordeMemoryWakerAcked -Id $who -At $Moves[$who] } }
+    if ($null -ne $Moves) {
+        if (-not $Fresh) {
+            $was = @{}
+            $before = Get-HordeWakeEntryValue $script:heard "acks"
+            if ($before -is [System.Collections.IDictionary]) { foreach ($k in @($before.Keys)) { $was["$k"] = $before[$k] } }
+            foreach ($who in @($Moves.Keys)) { if (-not $was.ContainsKey("$who")) { $was["$who"] = $null } }
+            $script:heard = [pscustomobject]@{ acks = $was; rose = (Get-HordeWakeEntryValue $script:heard "rose") }
+        }
+        foreach ($who in @($Moves.Keys)) { Set-HordeMemoryWakerAcked -Id $who -At $Moves[$who] }
+    }
     Set-HordeMemoryWakerClock (At $Seconds)
-    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -AcksSeen $script:heard
     $script:ledger = $r.ledger
+    $script:heard = Update-HordeWakeAcksRose -Seen $script:heard -Acks $r.acks -Now (At $Seconds)
     return $r
 }
 Start-Case; Seat 1 @{ Limited = "unknown" }
@@ -923,6 +945,36 @@ Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1) "another session's ta
 Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ Limited = "unknown" }
 $r = PassM 0 -Moves @{ (Sid 1) = (At -5) }
 Check ((Decided $r 2).action -ceq "nudge" -and (Decided $r 1).action -ceq "wait" -and "$((Decided $r 1).reason)".StartsWith("usage limit unknown")) "one session's taking is evidence for the OTHER and not for itself"
+# AN ACKNOWLEDGEMENT SEEN TO INCREASE, NOT ONE THAT IS MERELY RECENT (review of PR 234): a restore stamps
+# every session's acknowledgement to now, and a watcher started after it must not read that as turns taken.
+Start-Case; Seat 1 @{ Limited = "unknown"; LastAckedAt = (At 0) }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 0) }; Seat 3 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 0) }
+$r = PassM 1
+Check ((Test-Held $r "usage limit unknown") -and $r.acks[(Sid 2)] -eq (At 0)) "every session's acknowledgement stamped to now, read on the first pass after a start, releases nobody: there is no reading before it to have changed from"
+$r = PassM 4
+Check ((Test-Held $r "usage limit unknown")) "and read again unchanged, it still does not: an acknowledgement inside the window is not one seen to happen"
+Seat 1 @{ Limited = "unknown"; LastAckedAt = (At 5) }
+$r = PassM 7
+Check ((Test-Held $r "usage limit unknown")) "the judged session's OWN acknowledgement moving forward releases nothing"
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 8) }
+$r = PassM 10
+Check ((Decided $r).action -ceq "nudge" -and (Rang 1) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1) "ANOTHER reachable session's acknowledgement moving forward does: the session is nudged, counted as normal"
+$r = PassM 615
+Check ((Test-Held2 $r "usage limit unknown")) "and that evidence lasts the window from the acknowledgement it rose to, as before, and no longer"
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 0 -MovedAt (At -1) -Fresh
+Check ((Test-Held $r "usage limit unknown")) "a watcher started again carries no reading over: its first pass, over an acknowledgement newer than any it saw, releases nobody"
+$r = PassM 3 -MovedAt (At 2)
+Check ((Decided $r).action -ceq "nudge") "CONTROL: the same acknowledgement moving forward on its next pass does"
+foreach ($gone in @($false, $true)) {
+    Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 3 @{ Limited = "unknown" }
+    $r = PassM 0 -Moves @{ (Sid 2) = (At -1) }
+    $first = @($r.decisions | Where-Object { $_.action -ceq "nudge" }).Count
+    if ($gone) { Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At -1); Reachable = "no" } }
+    $r = PassM 3
+    $second = @($r.decisions | Where-Object { $_.action -ceq "nudge" }).Count
+    if ($gone) { Check ($first -eq 1 -and $second -eq 0) "evidence is only ever a session reachable NOW: one that rose and can no longer be reached releases nobody on the next pass" }
+    else { Check ($first -eq 1 -and $second -eq 1) "CONTROL: while it stays reachable, its rise releases the second limited-unknown session on the next pass, in its turn" }
+}
 # IT IS ONLY ASKED OF A SESSION THAT CAN BE REACHED: the fleet says unknown for every row it cannot reach.
 Start-Case; Seat 1 @{ Limited = "unknown"; Reachable = "no" }
 $r = PassM 0 -MovedAt (At -1)

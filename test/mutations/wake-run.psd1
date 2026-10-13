@@ -32,6 +32,12 @@
         @{ Name = "the-acknowledgements-do-not-reach-the-silence"
            Find = '-Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings'
            Replace = '-Entries $result.entries -Acks @{} -Now $Now -Settings $Settings' }
+        @{ Name = "the-pass-is-not-handed-the-last-reading-of-acknowledgements"
+           Find = ' -AcksSeen $Run.silence'
+           Replace = '' }
+        @{ Name = "a-sessions-own-acknowledgement-releases-its-own-probe"
+           Find = ' -Risen (Get-HordeWakeEntryValue $silence "risen")'
+           Replace = '' }
         @{ Name = "the-silence-is-not-saved"
            Find = 'if ((Get-HordeWakeSilenceMark -Seen $Run.silence) -cne $silenceWas) {'
            Replace = 'if ($false) {' }
