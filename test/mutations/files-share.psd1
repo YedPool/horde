@@ -3,7 +3,8 @@
 # Each lets through something that must be refused, or records or lists something wrongly;
 # test\test-files-store.ps1 must fail for every one, except the one declared Expect = "survives".
 # What the path, the text check and the key each do is in files-path, files-text, files-json and
-# files-key; here are the lines of the share that call them.
+# files-key, and what the fold of A to Z and the network question do is in path-text (core's);
+# here are the lines of the share that call them.
 @{
     Target = "files\Share.ps1"
     Suite  = "test\test-files-store.ps1"
@@ -79,10 +80,10 @@
         # A network path is refused before anything asks the disk or the network about it: of the
         # path as written, before it is resolved, and of the path it resolves to, before it is looked at.
         @{ Name = "written-path-not-asked-whether-it-is-a-network-path"
-           Find = '$unfit = Get-HordeFilesNetworkRefusal -Path $Path'
+           Find = '$unfit = Get-HordeNetworkPathRefusal -Path $Path'
            Replace = '$unfit = ""' }
         @{ Name = "resolved-path-not-asked-whether-it-is-a-network-path"
-           Find = '$network = Get-HordeFilesNetworkRefusal -Path $full'
+           Find = '$network = Get-HordeNetworkPathRefusal -Path $full'
            Replace = '$network = ""' }
         @{ Name = "resolved-network-path-found-and-looked-at-all-the-same"
            Find = 'if ($network -ne "") { return (& $refuse $network) }'
@@ -126,7 +127,7 @@
            Find = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)'
            Replace = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, ([byte[]](1..32)))' }
         @{ Name = "id-in-capitals"
-           Find = 'return ((Get-HordeFilesAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32))'
+           Find = 'return ((ConvertTo-HordeAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32))'
            Replace = 'return (([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", "")).Substring(0, 32))' }
         # --- a file whose versions are used up ---
         @{ Name = "used-up-file-keeps-its-bytes-before-it-is-refused"
@@ -201,34 +202,17 @@
            Find = '$sha = [System.Security.Cryptography.SHA256]::Create()'
            Replace = '$sha = [System.Security.Cryptography.SHA384]::Create()' }
         @{ Name = "path-case-makes-another-file"
-           Find = '+ "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)'
+           Find = '+ "`n" + (ConvertTo-HordeAsciiLower -Text $FullPath)'
            Replace = '+ "`n" + $FullPath' }
         @{ Name = "every-path-is-one-file"
-           Find = '+ "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)'
+           Find = '+ "`n" + (ConvertTo-HordeAsciiLower -Text $FullPath)'
            Replace = '' }
         # The path is folded by the code's own hand, A to Z and nothing else: an id is permanent, and
-        # a runtime's case table is not. The first of these is the defect the review found.
+        # a runtime's case table is not. This is the defect the review found. The mutants of the fold
+        # itself are core's: test\mutations\path-text.psd1.
         @{ Name = "path-folded-by-the-runtimes-case-table-again"
-           Find = '+ "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)'
+           Find = '+ "`n" + (ConvertTo-HordeAsciiLower -Text $FullPath)'
            Replace = '+ "`n" + $FullPath.ToLowerInvariant()' }
-        @{ Name = "own-fold-hands-over-to-the-runtimes-case-table"
-           Find = '    return $folded.ToString()'
-           Replace = '    return $Text.ToLowerInvariant()' }
-        @{ Name = "capital-a-not-folded"
-           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
-           Replace = 'if ($code -ge 66 -and $code -le 90) { $code += 32 }' }
-        @{ Name = "capital-z-not-folded"
-           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
-           Replace = 'if ($code -ge 65 -and $code -le 89) { $code += 32 }' }
-        @{ Name = "character-before-a-folded"
-           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
-           Replace = 'if ($code -ge 64 -and $code -le 90) { $code += 32 }' }
-        @{ Name = "characters-after-z-folded"
-           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
-           Replace = 'if ($code -ge 65 -and $code -le 96) { $code += 32 }' }
-        @{ Name = "every-capital-letter-of-every-alphabet-folded"
-           Find = 'if ($code -ge 65 -and $code -le 90) { $code += 32 }'
-           Replace = 'if ([char]::IsUpper($character)) { $code = [int][char]::ToLowerInvariant($character) }' }
         @{ Name = "every-session-is-one-sharer"
            Find = 'if ($Session.known) { $who = "session:" + $Session.id }'
            Replace = 'if ($Session.known) { $who = "session:" }' }
