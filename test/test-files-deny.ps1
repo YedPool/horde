@@ -125,9 +125,9 @@ Write-Host "--- the list: one place, six words, and what -Force may lift ---" -F
 $list = Get-HordeFilesDenyList
 $anywhereWords = (@($list.words | Where-Object { $_.how -ceq "anywhere" } | ForEach-Object { $_.word }) -join ",")
 $wholeWords = (@($list.words | Where-Object { $_.how -ceq "word" } | ForEach-Object { $_.word }) -join ",")
-Check ($anywhereWords -ceq "credential,secret,key,password,passwd,.env,passphrase,mnemonic,kubeconfig") ("the words looked for anywhere in a name are five of the six first asked for, passwd, and three the second round of the review added (" + $anywhereWords + ")")
+Check ($anywhereWords -ceq "credential,secret,key,password,passwd,.env,passphrase,mnemonic,kubeconfig,accesstoken,refreshtoken,authtoken") ("the words looked for anywhere in a name are five of the six first asked for, passwd, three the second round of the review added and the three token words of the next round (" + $anywhereWords + ")")
 Check ($wholeWords -ceq "token,auth,oauth,cred,private,wallet,cookie,recovery,env,service-account,id_rsa,id_dsa,id_ecdsa,id_ed25519,pem,pfx,p12,ppk,kdbx,jks,netrc,npmrc,pypirc,tfstate,pwd,totp,seed,jwt,vault,2fa") ("the short words, looked for only as whole words, are these, token now among them (" + $wholeWords + ")")
-Check (@($list.words | Where-Object { $_.how -cne "anywhere" -and $_.how -cne "word" }).Count -eq 0 -and @($list.words).Count -eq 39) "every word says which of the two ways it is looked for, and there are 39"
+Check (@($list.words | Where-Object { $_.how -cne "anywhere" -and $_.how -cne "word" }).Count -eq 0 -and @($list.words).Count -eq 42) "every word says which of the two ways it is looked for, and there are 42"
 Check ((@($list.signInFolders) -join ",") -ceq ".aws,.azure,.kube,.docker" -and (@($list.signInNames) -join ",") -ceq "config.json") "a cloud tool's sign-in is config.json in one of four folders"
 Check ($list.secretsFolder -ceq ".horde-secrets" -and $list.sshFolder -ceq ".ssh" -and $list.homeFolder -ceq ".horde") "the three folders of the profile are .horde, .horde-secrets and .ssh"
 $wasHome = $env:HORDE_HOME; $env:HORDE_HOME = ""
@@ -160,7 +160,7 @@ Write-Host "--- a name: each word at the start, in the middle and at the end, in
 $refusedNames = [ordered]@{
     "credential" = @("credentials.json", "my-credential-notes.md", "aws.credential", "CREDENTIALS.TXT", "GoogleCredentials.json", ".git-credentials", "credentials")
     "secret" = @("secret.md", "top-secret-plan.md", "client_secret", "Secrets.json", "MySecretNotes.md", "secretary.txt")
-    "token" = @("token.txt", "my-token-list.md", "access_token", "TOKENS.json", "refreshToken.json", "token-budget-analysis.md", "x.token")
+    "token" = @("token.txt", "my-token-list.md", "access_token", "TOKENS.json", "refresh-token.json", "token-budget-analysis.md", "x.token")
     "key" = @("key.md", "api-key.txt", "id_rsa.key.txt", "keys.json", "KEY.MD", "mykey.txt", "keyed.md", "ApiKey.json", "private-key-notes.md", "x.key", "apikeys.txt", "key2.json", "monkey-api-key.txt", "keyboard.key.md", "turkeykey.md", "release.keystore", "private-key.md")
     "password" = @("password.txt", "my-passwords-old.md", "wifi_password", "PASSWORDS.md", "PassWord.txt", "passwordless.md")
     "passwd" = @("passwd.txt", "htpasswd.txt", ".htpasswd", "PASSWD.md", "etc-passwd-copy.txt")
@@ -200,6 +200,10 @@ $refusedNames = [ordered]@{
     "jwt" = @("jwt.json", "jwts.md", "my-jwt.txt", "JWT.md")
     "vault" = @("vault.json", "vaults.md", "my-vault.txt", "VAULT.md")
     "2fa" = @("2fa.txt", "my-2fa.md", "2FA.md", "2fas.txt")
+    # THE THREE TOKEN WORDS OF THE NEXT ROUND, letters anywhere: run together, as token alone missed.
+    "accesstoken" = @("ACCESSTOKEN.txt", "accesstoken.json", "github-accesstoken.md", "myAccesstokens.txt", "AccessToken.json")
+    "refreshtoken" = @("refreshtoken.txt", "REFRESHTOKEN.json", "old_refreshtoken.md", "refreshToken.json")
+    "authtoken" = @("authtoken.txt", "AUTHTOKEN.md", "ngrok-authtoken.json", "oauthtoken.json", "AuthToken.md")
 }
 Check (@($refusedNames.Keys).Count -eq @($list.words).Count -and @($list.words | Where-Object { -not $refusedNames.Contains($_.word) }).Count -eq 0) ("every word of the list has names here that only it refuses (" + @($refusedNames.Keys).Count + " of " + @($list.words).Count + ")")
 # THE TWELVE NAMES THE REVIEW OF 2026-10-13 MEASURED BEING SHARED: each is refused now.
@@ -229,6 +233,9 @@ Check (((Get-HordeFilesNameWords -Name "oauthCreds.OLD_v2 final-COPY.json") -joi
 Check (@(Get-HordeFilesNameWords -Name "").Count -eq 0 -and @(Get-HordeFilesNameWords -Name "...--__").Count -eq 0) "a name with no letter or digit has no words"
 Check ((Get-HordeFilesDenyWord -Name ("auth" + [char]0xE9 + "x.json")) -ceq "auth" -and (Get-HordeFilesDenyWord -Name ([char]0x05D0 + "cred" + [char]0x05D0 + ".md")) -ceq "cred") "a letter outside ASCII ends a word and never hides one: a short word beside such a letter is still the word"
 # KNOWN LIMITS of the whole-word way, pinned so that changing them is a decision.
+# mytoken.txt IS LET BY, ON PURPOSE (files/Deny.ps1, THE THREE TOKEN WORDS): catching it needs a third
+# way of looking, a word that ends in token, which the review did not ask for.
+Check ((Get-HordeFilesDenyWord -Name "mytoken.txt") -ceq "" -and (Get-HordeFilesDenyWord -Name "githubtoken.json") -ceq "") "DECIDED: a name word that only ENDS in token (mytoken.txt, githubtoken.json) is not found"
 Check ((Get-HordeFilesDenyWord -Name "authfile.json") -ceq "" -and (Get-HordeFilesDenyWord -Name "AUTHFile.json") -ceq "" -and (Get-HordeFilesDenyWord -Name "auth2.json") -ceq "") "KNOWN LIMIT: a short word run into another with no capital between them, or with a digit after it, is not found"
 
 Write-Host ""

@@ -553,5 +553,18 @@
         @{ Name = "token-refusal-does-not-name-the-kind"
            Find = '("what it holds looks like " + $liftedKind + ", by its shape'
            Replace = '("what it holds looks like a secret" + ", by its shape' }
+        # --- the three token words, letters anywhere (the review's next round, 2026-10-13) ---
+        @{ Name = "word-accesstoken-off-the-list"
+           Find = '@{ word = "accesstoken"; how = "anywhere" }, '
+           Replace = '' }
+        @{ Name = "word-refreshtoken-off-the-list"
+           Find = '@{ word = "refreshtoken"; how = "anywhere" }, '
+           Replace = '' }
+        @{ Name = "word-authtoken-off-the-list"
+           Find = ', @{ word = "authtoken"; how = "anywhere" }'
+           Replace = '' }
+        @{ Name = "word-accesstoken-only-as-a-whole-word"
+           Find = '@{ word = "accesstoken"; how = "anywhere" }'
+           Replace = '@{ word = "accesstoken"; how = "word" }' }
     )
 }

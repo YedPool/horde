@@ -52,8 +52,14 @@
 # THE NAMES. A file whose NAME holds one of the list's words is refused unless the caller gives
 # -Force. EACH WORD SAYS WHICH OF TWO WAYS IT IS LOOKED FOR (the list has one entry a word):
 #   anywhere   the letters, wherever they stand in the name: credential, secret, key, password,
-#              passwd, .env, passphrase, mnemonic, kubeconfig. So htpasswd.txt and
-#              MySecretNotes.md are refused.
+#              passwd, .env, passphrase, mnemonic, kubeconfig, accesstoken, refreshtoken,
+#              authtoken. So htpasswd.txt, MySecretNotes.md and ACCESSTOKEN.txt are refused.
+#              THE THREE TOKEN WORDS (the review's next round, 2026-10-13): token is a whole word
+#              (below), and as one it let ACCESSTOKEN.txt through, the three words run together
+#              with no capital between them. Run together, those three are no ordinary word.
+#              NOT CAUGHT, ON PURPOSE: mytoken.txt. Catching it needs a third way of looking (a
+#              word that ENDS in token), and the reviewer's word was for these three entries and
+#              no new way; the content check still looks into such a file for a token's shape.
 #   word       only as a whole word of the name. The name is cut into words at every character
 #              that is not a letter or digit of ASCII and where a small letter meets a capital
 #              (Get-HordeFilesNameWords), and the entry must be one of them, or one of them with a
@@ -155,6 +161,7 @@ function Get-HordeFilesDenyList {
             @{ word = "key"; how = "anywhere" }, @{ word = "password"; how = "anywhere" }, @{ word = "passwd"; how = "anywhere" },
             @{ word = ".env"; how = "anywhere" }, @{ word = "passphrase"; how = "anywhere" }, @{ word = "mnemonic"; how = "anywhere" },
             @{ word = "kubeconfig"; how = "anywhere" },
+            @{ word = "accesstoken"; how = "anywhere" }, @{ word = "refreshtoken"; how = "anywhere" }, @{ word = "authtoken"; how = "anywhere" },
             @{ word = "token"; how = "word" },
             @{ word = "auth"; how = "word" }, @{ word = "oauth"; how = "word" }, @{ word = "cred"; how = "word" },
             @{ word = "private"; how = "word" }, @{ word = "wallet"; how = "word" }, @{ word = "cookie"; how = "word" },
