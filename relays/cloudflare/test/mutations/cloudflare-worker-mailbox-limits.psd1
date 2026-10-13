@@ -16,17 +16,17 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "items-cap-ignored"
-           Find = 'if (size.count + 1 > limits.mailboxMaxItems) return'
+           Find = 'if (count + 1 > limits.mailboxMaxItems) return'
            Replace = 'if (false) return' }
         @{ Name = "items-cap-off-by-one"
-           Find = 'if (size.count + 1 > limits.mailboxMaxItems) return'
-           Replace = 'if (size.count > limits.mailboxMaxItems) return' }
+           Find = 'if (count + 1 > limits.mailboxMaxItems) return'
+           Replace = 'if (count > limits.mailboxMaxItems) return' }
         @{ Name = "chars-cap-ignored"
-           Find = 'if (size.chars + text.length > limits.mailboxMaxChars) return'
+           Find = 'if (chars + text.length > limits.mailboxMaxChars) return'
            Replace = 'if (false) return' }
         @{ Name = "chars-cap-off-by-one"
-           Find = 'if (size.chars + text.length > limits.mailboxMaxChars) return'
-           Replace = 'if (size.chars + text.length >= limits.mailboxMaxChars) return' }
+           Find = 'if (chars + text.length > limits.mailboxMaxChars) return'
+           Replace = 'if (chars + text.length >= limits.mailboxMaxChars) return' }
         @{ Name = "size-not-kept"
            Find = '[SIZE]: { count: size.count + 1, chars: size.chars + text.length } });'
            Replace = '[SIZE]: size });' }
@@ -73,8 +73,8 @@
            Find = 'emptied: left.count === 0,'
            Replace = 'emptied: false,' }
         @{ Name = "put-not-serialized"
-           Find = 'return this.ctx.blockConcurrencyWhile(() => this.putNow(key, text, now, limits, owner));'
-           Replace = 'return this.putNow(key, text, now, limits, owner);'
+           Find = 'return this.ctx.blockConcurrencyWhile(() => this.putNow(key, text, now, limits, owner, keepFrom));'
+           Replace = 'return this.putNow(key, text, now, limits, owner, keepFrom);'
            Expect = "survives"
            Reason = "Only two puts to one mailbox racing while the first waits on its account's charge can interleave without it - a race no suite here places (the conformance suite's concurrent writers are the test principal, charged to no account, so nothing of theirs waits on another object)." }
         @{ Name = "name-without-the-epoch"

@@ -164,6 +164,15 @@ function Get-RecordFile {
     return (Join-Path $World.home ("relay\journal\in\s-" + $Header.from + "\c-" + $Header.channel + "\" + ([long]$Header.seq).ToString("D16") + ".rec"))
 }
 function Get-FileHash256 { param([string]$Path) return (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.IO.File]::ReadAllBytes($Path)))) }
+function Get-PhoneHead {
+    # The relay's number for the newest item in the phone's mailbox, 0 for none. A machine deletes its older
+    # snapshots from that mailbox once a newer one is whole there, so HOW MANY it holds no longer says
+    # whether something was sent: a repeat of the snapshot would leave the count at one. Its newest number does.
+    param($World)
+    $r = Receive-HordeRelayItems -Connection $World.conn -Mailbox "work/phone" -Since 0
+    if ($r.state -cne "known" -or @($r.value.items).Count -eq 0) { return [long]0 }
+    return [long](@($r.value.items | ForEach-Object { $_.seq }) | Measure-Object -Maximum).Maximum
+}
 function Get-PhoneMail {
     # The texts in the horde's phone mailbox.
     param($World)
@@ -334,7 +343,7 @@ try {
     $so = Open-HordeTestPhoneEnvelope -Phone $stranger -Text $mail[0] -MachineSignPublic $W.id.sign.public
     Check (-not $so.ok) "a phone whose key was never vouched for cannot open it"
     $tick = @(Invoke-Tick $W)
-    Check ($tick.Count -eq 0 -and @(Get-PhoneMail $W).Count -eq 1) "a look with nothing changed sends nothing"
+    Check ($tick.Count -eq 0 -and @(Get-PhoneMail $W).Count -eq 1 -and (Get-PhoneHead $W) -eq 1) "a look with nothing changed sends nothing"
     # And reads nothing: with the list made unreadable, a look at an unchanged store says nothing, because
     # the fingerprint - the record names and the phone keys - is all it asked.
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\decisions.json"), "{ not json", $utf8)
@@ -345,7 +354,7 @@ try {
     $tick = @(Invoke-Tick $W)
     $mail = @(Get-PhoneMail $W)
     $o2 = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
-    Check ($mail.Count -eq 2 -and $o2.ok -and $o2.body.questions[0].thread.count -eq 1 -and $o2.body.questions[0].thread.turn -ceq "founder") "a change the window would show sends a new snapshot: the warchief's reply, and the turn is the founder's"
+    Check ($mail.Count -eq 1 -and $o2.ok -and $o2.body.questions[0].thread.count -eq 1 -and $o2.body.questions[0].thread.turn -ceq "founder") "a change the window would show sends a new snapshot: the warchief's reply, and the turn is the founder's - and the snapshot before it is gone from the mailbox, which holds the new one alone"
     # WHAT THE FOUNDER NEEDS TO ANSWER FROM THE PHONE (review of 48bc492, item 9): the question's whole
     # text and context, and the conversation under it with the warchief's replies - the window's view.
     $q1 = $(if ($o2.ok) { $o2.body.questions[0] } else { $null })
@@ -359,10 +368,11 @@ try {
     $null = Invoke-HordeDecision -Operation "say" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "founder"; route = "chat-recorded"; text = "A short one." }
     $tick = @(Invoke-Tick $W)
     $mailBefore = @(Get-PhoneMail $W).Count
+    $headBefore = Get-PhoneHead $W
     $upTo = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json").Count
     $null = Invoke-HordeDecision -Operation "mark-read" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; upTo = $upTo }
     $tick = @(Invoke-Tick $W)
-    Check ($mailBefore -eq 3 -and @(Get-PhoneMail $W).Count -eq $mailBefore) ("a change that shows nothing new (the warchief's read mark) sends nothing: the snapshot is the same (" + $mailBefore + ")")
+    Check ($mailBefore -eq 1 -and @(Get-PhoneMail $W).Count -eq $mailBefore -and $headBefore -gt 0 -and (Get-PhoneHead $W) -eq $headBefore) ("a change that shows nothing new (the warchief's read mark) sends nothing: the snapshot is the same (" + $mailBefore + ")")
     $token = "ghp_" + ("Ab3" * 10)
     $plantSeq = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json").Count + 1
     $plantFile = Join-Path $W.store ($plantSeq.ToString("D10") + ".json")
@@ -388,7 +398,10 @@ try {
     foreach ($i in 1..3) { $null = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = ("Long question number " + $i + " for paging"); kind = "yes-no"; whatItIs = $long; group = "voice"; askedBy = "orc-b" } } }
     $huge = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "A question too large for any page"; kind = "yes-no"; whatItIs = $long; group = "voice"; askedBy = "orc-b" } }
     foreach ($i in 1..3) { $null = Invoke-HordeDecision -Operation "say" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = [int]$huge.value.number; speaker = "warchief"; route = "command"; text = $long } }
-    $before = @(Get-PhoneMail $W).Count
+    # The snapshot before this one is deleted from the mailbox when this one's last page is taken
+    # (channels/decisions, THE SNAPSHOT BEFORE IS DEAD WEIGHT), so what the mailbox then holds is exactly
+    # this snapshot's pages: none is skipped.
+    $before = 0
     $tick = @(Invoke-Tick $W)
     $mail = @(Get-PhoneMail $W)
     $pages = @($mail | Select-Object -Skip $before | ForEach-Object { Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $_ -MachineSignPublic $W.id.sign.public })
@@ -741,6 +754,7 @@ try {
     # Finding 3: the reopen reset the cursor and the channels' memory, and sent the same snapshot again.
     $W = New-World
     $mailBefore = @(Get-PhoneMail $W).Count
+    $headBefore = Get-PhoneHead $W
     $W.ctx.cursor = [long]7; $W.ctx.acked = [long]7
     $re = $null
     try { $re = Update-HordeRelayRunContext -Context $W.ctx } catch { $re = [pscustomobject]@{ state = "threw"; reason = $_.Exception.Message } }
@@ -748,7 +762,7 @@ try {
     if ($re.state -ceq "known") {
         $old = $W.ctx; $W.ctx = $re.value; [void]$script:worlds.Add([pscustomobject]@{ ctx = $old })
         $tick = @(Invoke-Tick $W)
-        Check ($tick.Count -eq 0 -and @(Get-PhoneMail $W).Count -eq $mailBefore) "and the same snapshot is not sent again after it"
+        Check ($tick.Count -eq 0 -and @(Get-PhoneMail $W).Count -eq $mailBefore -and (Get-PhoneHead $W) -eq $headBefore) "and the same snapshot is not sent again after it"
     }
     }
     Write-Host ""

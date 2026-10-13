@@ -434,7 +434,8 @@ async function pairedApp(transport, m, opts = {}) {
   const r = await c.get("work/phone", 0, 256);
   check(r.state === "known" && r.value.items.map((i) => i.seq).join(",") === "1,3" && r.value.next === 3, "a batch is rebuilt in seq order, with repeats, malformed items and non-ASCII texts dropped", JSON.stringify(r.value));
   check(r.value.items[1].text === "three" && r.value.anomalies.some((x) => x.indexOf("a second item under seq 3") >= 0), "of two items under one seq the first is kept and the second is reported");
-  check(r.value.anomalies.some((x) => x.indexOf("gap") >= 0) && r.value.anomalies.length >= 4, "each drop and the gap are reported");
+  check(r.value.anomalies.length >= 4 && r.value.gaps.length === 1 && r.value.gaps[0].indexOf("seq 2 to 2") >= 0, "each drop is reported, and the hole between the two delivered items is reported as a gap", JSON.stringify(r.value));
+  check(!r.value.anomalies.some((x) => x.indexOf("gap") >= 0), "a gap is reported apart from the anomalies: what a hole means is the caller's to say");
   const later = await c.get("work/phone", 1, 256);
   check(later.value.items.map((i) => i.seq).join(",") === "3" && later.value.anomalies.some((x) => x.indexOf("at or before the cursor") >= 0), "an item at or before the cursor is dropped, and said so");
   const one = await c.get("work/phone", 0, 1);
@@ -1024,6 +1025,37 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   refuse = false;
   await app2.phone.announce(p2.id);
   check((await app2.phone.hordes())[0].announced === true && (await phoneKeyOf(t2, m2)) !== null, "announced again once the passkey signs, it goes");
+}
+
+// --- the phone's mailbox is trimmed by its senders: a hole there is not an anomaly ---
+{
+  // A machine deletes its own older snapshots from the mailbox once a newer one is whole there
+  // (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM). trimmed is such a mailbox: the same relay, with
+  // the items a machine trimmed no longer handed over.
+  const t = R.memoryTransport();
+  const gone = new Set();
+  const after = async (r) => (r.state === "known" ? { ...r, value: { items: r.value.items.filter((i) => !gone.has(i.seq)) } } : r);
+  const trimmed = { ...t, get: async (mb, since, max) => after(await t.get(mb, since, max)), watch: async (mb, since, max, ms) => after(await t.watch(mb, since, max, ms)) };
+  const m = await newMachine("work");
+  const a = await pairedApp(trimmed, m);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "First?")]);
+  const one = await a.phone.refresh(a.paired.id);
+  check(one.questions.length === 1 && one.questions[0].title === "First?" && one.anomalies.length === 0, "CONTROL: the first snapshot is read and drawn", JSON.stringify(one.anomalies));
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Second?")]);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Third?")]);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Fourth?")]);
+  for (const seq of [1, 2, 3]) gone.add(seq);
+  const client = await R.createRelayClient(trimmed).get("work/phone", 1, 256);
+  check(client.value.items.map((i) => i.seq).join(",") === "4" && client.value.gaps.length === 1 && client.value.anomalies.length === 0, "CONTROL: the relay client hands over the one item left and reports the hole before it as a gap", JSON.stringify(client.value));
+  const next = await a.phone.refresh(a.paired.id);
+  check(next.questions.length === 1 && next.questions[0].title === "Fourth?", "a session that had read the first snapshot is shown the newest, across the hole the trimmed ones left");
+  check(next.anomalies.length === 0, "and the hole is no anomaly: nothing about it reaches the screen", JSON.stringify(next.anomalies));
+  const idle = await a.phone.refresh(a.paired.id);
+  check(idle.questions[0].title === "Fourth?" && idle.anomalies.length === 0, "a refresh that finds nothing new does not take a trimmed mailbox for one whose numbering went backwards", JSON.stringify(idle.anomalies));
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(trimmed), origin });
+  await b.unlock(a.paired.id);
+  const fresh = await b.refresh(a.paired.id);
+  check(fresh.questions.length === 1 && fresh.questions[0].title === "Fourth?" && fresh.anomalies.length === 0, "a new session reads a mailbox that begins past its first numbers, and is shown the newest with no anomaly", JSON.stringify(fresh.anomalies));
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

@@ -8,7 +8,12 @@
 // a transport gives is checked here as relays/Port.ps1 checks a relay's - the shape of each item,
 // items at or before the cursor dropped, a second item under one seq dropped, the batch put in seq
 // order, holes reported as gaps, and the cursor the caller gets is the last seq DELIVERED, never a
-// number the relay chose. A transport that throws or answers nonsense comes back unknown with the
+// number the relay chose. A HOLE IS REPORTED APART FROM THE ANOMALIES (gaps, beside anomalies): what
+// one means is the caller's to say. In a mailbox its one reader acks, a hole is an item the relay
+// lost. In the phone's mailbox it is what a mailbox that is kept small looks like - its senders trim
+// their own streams there (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM), and an older snapshot
+// deleted from between two chat envelopes leaves exactly such a hole - so the phone says nothing of it
+// (phone-core.js). A transport that throws or answers nonsense comes back unknown with the
 // reason; nothing here throws for the far end.
 //
 // A TRANSPORT is an object of four async functions, each answering { state, value, reason } in
@@ -68,9 +73,10 @@ function checkAnswer(a, what) {
   return null;
 }
 
-// Rebuild a batch as relays/Port.ps1 does: { items, next, anomalies }.
+// Rebuild a batch as relays/Port.ps1 does: { items, next, anomalies, gaps }.
 function rebuild(items, since, max) {
   const anomalies = [];
+  const gaps = [];
   const bySeq = new Map();
   for (const it of Array.isArray(items) ? items : []) {
     if (!it || !Number.isSafeInteger(it.seq) || it.seq < 1 || it.seq > LIMITS.seqMax || typeof it.key !== "string" || typeof it.text !== "string") { anomalies.push("a malformed item was dropped"); continue; }
@@ -82,8 +88,8 @@ function rebuild(items, since, max) {
   const sorted = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
   if (sorted.length > max) { anomalies.push((sorted.length - max) + " item(s) past the batch asked for were dropped"); sorted.length = max; }
   let last = since;
-  for (const it of sorted) { if (it.seq > last + 1) anomalies.push("a gap: seq " + (last + 1) + " to " + (it.seq - 1) + " were not delivered"); last = it.seq; }
-  return { items: sorted, next: last, anomalies };
+  for (const it of sorted) { if (it.seq > last + 1) gaps.push("a gap: seq " + (last + 1) + " to " + (it.seq - 1) + " were not delivered"); last = it.seq; }
+  return { items: sorted, next: last, anomalies, gaps };
 }
 
 export function createRelayClient(transport) {
@@ -115,7 +121,7 @@ export function createRelayClient(transport) {
       const bad = checkAnswer(a, what);
       if (bad) return bad;
       const r = rebuild(a.value.items, since, max);
-      return known({ mailbox, since, next: r.next, items: r.items, anomalies: r.anomalies });
+      return known({ mailbox, since, next: r.next, items: r.items, anomalies: r.anomalies, gaps: r.gaps });
     },
     async ack(mailbox, through) {
       const why = mailboxProblem(mailbox);

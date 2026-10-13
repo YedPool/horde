@@ -47,6 +47,22 @@
 # What a channel asks for with againMs is still the turn's: it shortens the turn's watch when the
 # turn's Tick asks, and is not read from a Tick run during the watch.
 #
+# A FULL MAILBOX IS SAID PLAINLY, AND THE WARCHIEF IS TOLD ONCE (2026-10-13). A put the relay refuses
+# because the mailbox or the account is full (status 507; channels/Port.ps1 keeps it in the context,
+# WHAT A PUT TELLS THE RUN) was one more failed turn: backed off from, tried again, for ever, in a log
+# nobody read, while nothing reached the founder's phone. Now, after every round of Ticks - the turn's
+# own and one run during a watch - the run looks at what the puts told it (Invoke-HordeRelayRunPutNotes):
+#   - the first time a mailbox is refused as full it says so in capitals, with what the relay answered,
+#     and that nothing new reaches the phone until it is put right; and it tells the warchief, once,
+#     through the messenger port (cli/RelayRunTell.ps1, which has why the words are fixed and why a
+#     test's home tells nobody). A notice that could not be posted is tried again a minute later, and
+#     why is said once; when the relay takes mail for that mailbox again the run says that too.
+#   - the first time a put asked the relay to trim and the relay took the put without trimming
+#     (relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM: a relay with no such thing, or the hosted one
+#     deployed before it), it says the mailbox is not being trimmed and will fill. Nothing failed, so
+#     nobody is told: it is the state between two deployments, and the full mailbox it leads to is.
+# The backoff is unchanged: a full mailbox is still a failed turn, and the relay is not asked faster.
+#
 # A MINIMUM TURN (finding 5): a turn whose watch came back at once with nothing - watchMs 0, or a relay
 # that does not wait - is padded to minTurnMs (1000 by default, at least 50), so no setting and no relay
 # makes the loop spin.
@@ -98,6 +114,7 @@
 
 # What this file calls of core beyond what its command loads, loaded here so it works on its own.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Heartbeat.ps1")
+. (Join-Path $PSScriptRoot "RelayRunTell.ps1")
 
 $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Settings @(
     # 25 s is the design's long-poll (Q8, spike S3: PS 5.1 long-polls end cleanly on timeout); 60 s is the
@@ -120,10 +137,20 @@ $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Set
     # milliseconds of local reads (channels/Port.ps1, Glance) - and 60000, the longest watch there is,
     # the ceiling: at the ceiling nothing is looked at during a watch, which is how it was before.
     @{ name = "sendCheckMs"; kind = "whole"; default = 1000; min = 200; max = 60000
-       what = "How often, in milliseconds, the run looks during a watch for something a channel has to send." }
+       what = "How often, in milliseconds, the run looks during a watch for something a channel has to send." },
+    # On unless switched off: a phone that has gone silent because the relay is full looks exactly like
+    # a quiet day (A FULL MAILBOX IS SAID PLAINLY, in the header).
+    @{ name = "tellWarchief"; kind = "truefalse"; default = $true
+       what = "Whether the warchief's session is told when the relay refuses this machine's mail because a mailbox or the account is full." },
+    # SV: the label the supervisor of services wears (core/Services.ps1), which is what keeps this run going.
+    @{ name = "fromLabel"; kind = "label"; default = "SV"
+       what = "The hub label that notice is from." }
 )
 # The longest one sleep of the loop: a stop is asked between slices (A CLEAN STOP, above).
 $script:HordeRelayRunSliceMs = 500
+# How long after a notice of a full mailbox could not be posted it is tried again: a minute, the run's
+# own longest backoff, so a machine with no warchief's session is not asking for one every turn.
+$script:HordeRelayRunTellRetrySeconds = 60
 
 function Get-HordeRelayRunWatchMs {
     # How long one turn's watch waits on -Relay (THE WATCH, in the header): the relay's own run watch
@@ -238,10 +265,52 @@ function New-HordeRelayRunWatching {
     # The run's table for its looks during a watch: what Invoke-HordeRelayRunSendCheck needs, and what
     # it learns. failed is set at the top of every turn's watch; said is the run's, so a Glance that
     # cannot look says so once a run and not once a second.
+    # hordeHome, tell and fromLabel are for the notes below (A FULL MAILBOX IS SAID PLAINLY, in the
+    # header); notes is what the run has already said and told, by mailbox.
     param([Parameter(Mandatory = $true)][scriptblock]$Say, [Parameter(Mandatory = $true)][scriptblock]$Sleep, [Parameter(Mandatory = $true)][string]$StopPath,
-        [Parameter(Mandatory = $true)][long]$StartedMs, [Parameter(Mandatory = $true)][int]$CheckMs)
+        [Parameter(Mandatory = $true)][long]$StartedMs, [Parameter(Mandatory = $true)][int]$CheckMs, [string]$HordeHome = "", [bool]$Tell = $true, [string]$FromLabel = "")
     return @{ say = $Say; sleep = $Sleep; stopPath = $StopPath; startedMs = $StartedMs; checkMs = $CheckMs
-        failed = $false; said = @{}; sinceLook = [System.Diagnostics.Stopwatch]::StartNew() }
+        failed = $false; said = @{}; sinceLook = [System.Diagnostics.Stopwatch]::StartNew()
+        hordeHome = $HordeHome; tell = $Tell; fromLabel = $FromLabel; notes = @{ full = @{}; untrimmed = @{} } }
+}
+
+function Invoke-HordeRelayRunPutNotes {
+    # WHAT THE PUTS TOLD THE RUN, SAID AND ACTED ON (A FULL MAILBOX IS SAID PLAINLY, in the header): run
+    # after every round of Ticks. Each thing is said once - when it begins, and when it is over - and
+    # the warchief is told once of each mailbox that is full. -Seat, -TempRoot and -Now are for a suite.
+    # Returns nothing; never throws for a messenger or a seat (cli/RelayRunTell.ps1 does not).
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][hashtable]$Watching, [scriptblock]$Seat = $null, [string]$TempRoot = "", $Now = $null)
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $notes = $Watching.notes
+    foreach ($box in @($Context.untrimmed.Keys | Sort-Object)) {
+        if ($notes.untrimmed.ContainsKey($box)) { continue }
+        $notes.untrimmed[$box] = $true
+        $null = & $Watching.say ("NOT TRIMMED: the relay took what was sent to " + $box + " and deleted nothing older, though it was asked to (a relay that does not trim, or one deployed before it could). That mailbox is growing, and a full one is refused everything: deploy the relay.")
+    }
+    foreach ($box in @($notes.untrimmed.Keys | Sort-Object)) {
+        if ($Context.untrimmed.ContainsKey($box)) { continue }
+        $notes.untrimmed.Remove($box)
+        $null = & $Watching.say ("the relay now trims " + $box + " as it is asked to")
+    }
+    foreach ($box in @($notes.full.Keys | Sort-Object)) {
+        if ($Context.full.ContainsKey($box)) { continue }
+        $notes.full.Remove($box)
+        $null = & $Watching.say ("the relay takes mail for " + $box + " again: it is no longer full")
+    }
+    foreach ($box in @($Context.full.Keys | Sort-Object)) {
+        if (-not $notes.full.ContainsKey($box)) {
+            $notes.full[$box] = @{ told = $false; problem = ""; nextTry = [datetime]::MinValue }
+            $null = & $Watching.say ("MAILBOX FULL: the relay refuses what this machine sends to " + $box + ", so NOTHING NEW REACHES THE FOUNDER'S PHONE from this machine until that is put right. The run keeps trying. What the relay answered: " + $Context.full[$box].reason)
+            if (-not $Watching.tell) { $null = & $Watching.say ("the warchief is not told of it: telling is switched off (the setting tellWarchief)") }
+        }
+        $mine = $notes.full[$box]
+        if ($mine.told -or -not $Watching.tell -or $Now -lt $mine.nextTry) { continue }
+        $sent = Send-HordeRelayFullNotice -Mailbox $box -HordeHome $Watching.hordeHome -FromLabel $Watching.fromLabel -Seat $Seat -TempRoot $TempRoot -Day $Now
+        if ($sent.told) { $mine.told = $true; $mine.problem = ""; $null = & $Watching.say ("the warchief was told that " + $box + " is full"); continue }
+        # NOT TOLD: tried again later, and why is said only when it is a new reason.
+        $mine.nextTry = $Now.AddSeconds($script:HordeRelayRunTellRetrySeconds)
+        if ($sent.problem -cne $mine.problem) { $mine.problem = $sent.problem; $null = & $Watching.say ("the warchief was NOT told that " + $box + " is full: " + $sent.problem + ". It is tried again.") }
+    }
 }
 
 function Invoke-HordeRelayRunSendCheck {
@@ -262,6 +331,7 @@ function Invoke-HordeRelayRunSendCheck {
         if (@($look.due).Count -eq 0) { return $false }
         $ticked = Invoke-HordeRelayChannelTicks -Context $Context -Only @($look.due)
         foreach ($l in @($ticked.lines)) { $null = & $Watching.say $l }
+        Invoke-HordeRelayRunPutNotes -Context $Context -Watching $Watching
         # A SEND THAT FAILS IS NOT TRIED AGAIN IN THIS WATCH: the turn counts as failed and backs off.
         if ($ticked.failed) { $Watching.failed = $true }
         return $false
@@ -307,7 +377,7 @@ function Invoke-HordeRelayRun {
     $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $HordeHome
     $beatTick = Get-HordeRelayRunTickSeconds -WatchMs $watchMs -Settings $set
     $beatFailed = $false
-    $watching = New-HordeRelayRunWatching -Say $Say -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs -CheckMs ([int]$set.sendCheckMs)
+    $watching = New-HordeRelayRunWatching -Say $Say -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs -CheckMs ([int]$set.sendCheckMs) -HordeHome $HordeHome -Tell ([bool]$set.tellWarchief) -FromLabel ("" + $set.fromLabel)
     try {
         while ($true) {
             if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }
@@ -341,6 +411,7 @@ function Invoke-HordeRelayRun {
                 foreach ($l in @(Get-HordeRelayRunLines -Report $r1.value)) { $null = & $Say $l }
                 $ticks = Invoke-HordeRelayChannelTicks -Context $ctx
                 foreach ($l in @($ticks.lines)) { $null = & $Say $l }
+                Invoke-HordeRelayRunPutNotes -Context $ctx -Watching $watching
                 # A channel that asked to be turned again sooner (the decisions bell, at the end of a
                 # quiet period) is: this watch waits no longer than it asked. A put still ends it at once.
                 $turnWatch = Get-HordeRelayRunTurnWatchMs -WatchMs $watchMs -AgainMs $ticks.againMs
