@@ -89,7 +89,11 @@ $gif87 = [System.Text.Encoding]::ASCII.GetBytes("GIF87a")
 $webp = [byte[]](@(0x52, 0x49, 0x46, 0x46, 0x10, 0x00, 0x00, 0x00) + @(0x57, 0x45, 0x42, 0x50))
 $pdf = [System.Text.Encoding]::ASCII.GetBytes("%PDF-1.7")
 
-try {
+# NOT ONE try AROUND THE CHECKS. After an error no test expected, the suite's trap resumes at the next
+# statement of the script (test/lib/Suite.ps1), and one try around everything is one statement: a
+# broken store that threw early would skip every check after it and be seen as a crash, not as a
+# failed check (measured 2026-10-13: 8 of 152 mutants were not caught for that reason alone). So the
+# sections are plain statements, and the folder is removed by the plain statements at the end.
 
 Write-Host ""
 Write-Host "--- the settings: named, with defaults, and an override that is refused whole ---" -ForegroundColor Cyan
@@ -115,8 +119,8 @@ Check (Throws { Get-HordeFilesRecordName -FileId ("ab" * 16) -Version 1000000 } 
 Check (Throws { Get-HordeFilesRecordName -FileId "..\..\x" -Version 1 } "32 lower-case hex") "a file id that is not 32 hex digits has no name"
 Check (Throws { Get-HordeFilesBytesName -Sha256 "abc" } "64 lower-case hex") "a digest that is not 64 hex digits has no name"
 $first = [System.Text.Encoding]::UTF8.GetBytes('{"n":1}')
-Check ((Add-HordeFilesStoreEntry -Root $st -Name $recName -Bytes $first -LeftoverMinAgeSeconds 600) -ceq "created") "the first write of a name is told 'created'"
-Check ((Add-HordeFilesStoreEntry -Root $st -Name $recName -Bytes ([System.Text.Encoding]::UTF8.GetBytes('{"n":2}')) -LeftoverMinAgeSeconds 600) -ceq "exists") "a second write of the same name is told 'exists'"
+Check ((Get-Safely { Add-HordeFilesStoreEntry -Root $st -Name $recName -Bytes $first -LeftoverMinAgeSeconds 600 }) -ceq "created") "the first write of a name is told 'created'"
+Check ((Get-Safely { Add-HordeFilesStoreEntry -Root $st -Name $recName -Bytes ([System.Text.Encoding]::UTF8.GetBytes('{"n":2}')) -LeftoverMinAgeSeconds 600 }) -ceq "exists") "a second write of the same name is told 'exists'"
 Check ([System.IO.File]::ReadAllText((Join-Path $st $recName)) -ceq '{"n":1}') "and the first entry's bytes are untouched"
 Check ((Get-Names $st) -ceq $recName) "the loser left no temporary file"
 Check (Throws { Add-HordeFilesStoreEntry -Root $st -Name "..\outside.json" -Bytes $first -LeftoverMinAgeSeconds 600 } "not a name the files store keeps") "a name that is not a record's or bytes' is refused"
@@ -469,12 +473,10 @@ function Move-HordeFileNewDurable { param([string]$From, [string]$To, $Open = $n
 Check (Throws { Invoke-Share -TestHome (New-TestHome) -Path $vfile } "has its name, but the system could not confirm") "nor is one whose record could not be confirmed"
 Set-Item -Path function:Move-HordeFileNewDurable -Value $script:realMove
 
-} finally {
-    if ((Split-Path -Leaf $script:work) -match '\Ahorde-files-store-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) {
-        # Links first, by their own entries, so that removing the folder never follows one.
-        foreach ($entry in @(Get-ChildItem -LiteralPath $script:work -Recurse -Force | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 })) { if ($entry.PSIsContainer) { [System.IO.Directory]::Delete($entry.FullName) } else { [System.IO.File]::Delete($entry.FullName) } }
-        Remove-Item -LiteralPath $script:work -Recurse -Force
-    }
+if ((Split-Path -Leaf $script:work) -match '\Ahorde-files-store-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) {
+    # Links first, by their own entries, so that removing the folder never follows one.
+    foreach ($entry in @(Get-ChildItem -LiteralPath $script:work -Recurse -Force | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 })) { if ($entry.PSIsContainer) { [System.IO.Directory]::Delete($entry.FullName) } else { [System.IO.File]::Delete($entry.FullName) } }
+    Remove-Item -LiteralPath $script:work -Recurse -Force
 }
 Check (-not (Test-Path -LiteralPath $script:work)) "the suite's temp folder is removed"
 
