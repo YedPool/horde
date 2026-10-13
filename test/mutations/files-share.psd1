@@ -91,10 +91,10 @@
         # A network path is refused before anything asks the disk or the network about it: of the
         # path as written, before it is resolved, and of the path it resolves to, before it is looked at.
         @{ Name = "written-path-not-asked-whether-it-is-a-network-path"
-           Find = '$unfit = Get-HordeNetworkPathRefusal -Path $Path'
+           Find = '$unfit = Get-HordeFilesPlaceRefusal -Path $Path'
            Replace = '$unfit = ""' }
         @{ Name = "resolved-path-not-asked-whether-it-is-a-network-path"
-           Find = '$network = Get-HordeNetworkPathRefusal -Path $full'
+           Find = '$network = Get-HordeFilesPlaceRefusal -Path $full'
            Replace = '$network = ""' }
         @{ Name = "resolved-network-path-found-and-looked-at-all-the-same"
            Find = 'if ($network -ne "") { return (& $refuse $network) }'

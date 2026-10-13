@@ -27,8 +27,9 @@
 #     local file's id.
 #   - LOOKING IS ALREADY THE HARM. Asking whether a network path exists, or opening it, sends the
 #     user's sign-in to whatever host the path names.
-# So Get-HordeNetworkPathRefusal is asked FIRST, and it touches no disk and no network. It is
-# core/PathText.ps1's, so that there is one copy for every caller (files/Share.ps1 loads it):
+# So whether a path is on this machine's own drives is asked FIRST (Get-HordeFilesPlaceRefusal, below),
+# and the asking touches no disk and no network. The two questions behind it are core/PathText.ps1's,
+# so that there is one copy for every caller: what a drive letter stands for, and then:
 #   - A UNC PATH IN ANY SPELLING is refused from its text: two separators of either kind first
 #     (\\server, //server, \/server; Windows reads them all as one), and the prefixed forms
 #     \\?\UNC\, \\.\UNC\ and \??\UNC\, in either case and with either separator.
@@ -56,7 +57,10 @@
 #     KNOWN COST: a path on a PowerShell drive whose name is not one letter (Temp:\x.md) is refused
 #     by the same rule; a session names files by their paths.
 #
-# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It loads nothing.
+# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
+
+# The questions asked of a path before it is opened: the one copy, core's.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\PathText.ps1")
 
 function Get-HordeFilesPathRefusal {
     # Why the path, AS WRITTEN, is not one a file is opened from, or "" when it may be opened. A
@@ -126,57 +130,27 @@ function Open-HordeFilesSource {
     return [pscustomobject]@{ ok = $true; stream = $stream; path = $where.path; reason = "" }
 }
 
-function Initialize-HordeFilesPlaceNative {
-    # Two more questions for Windows, defined once a process under a name of their own: a loaded
-    # type cannot be given another member, and HordeNative.FilePath may be loaded already.
-    #   QueryDosDevice  what a drive letter stands for, read from the system's own table of names.
-    #   CreateFileW     to open a FOLDER, which .NET's FileStream cannot: Get-HordeFilesFolderFinalPath.
-    if (([System.Management.Automation.PSTypeName]"HordeNative.FilePlace").Type) { return }
-    Add-Type -Namespace HordeNative -Name FilePlace -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax); [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string lpFileName, int dwDesiredAccess, int dwShareMode, System.IntPtr lpSecurityAttributes, int dwCreationDisposition, int dwFlagsAndAttributes, System.IntPtr hTemplateFile);'
-}
-
-function Get-HordeFilesDriveTarget {
-    # What the drive letter -Letter stands for, as Windows keeps it, or "" when it names nothing.
-    # Measured 2026-10-13: C: is \Device\HarddiskVolume3; a subst drive over a folder is
-    # \??\C:\that\folder; a letter aimed at a share is \??\UNC\host\share.
-    param([Parameter(Mandatory = $true)][string]$Letter)
-    Initialize-HordeFilesPlaceNative
-    $text = New-Object System.Text.StringBuilder 1024
-    if ([HordeNative.FilePlace]::QueryDosDevice($Letter + ":", $text, 1024) -le 0) { return "" }
-    return $text.ToString()
-}
-
-function Get-HordeFilesAliasRefusal {
-    # Why -Path is on a drive letter that STANDS FOR a network drive, or "" when nothing says it is.
-    # THE FIRST QUESTION ASKED OF A DRIVE LETTER, before the network question, because that question
-    # is itself the harm here. Measured 2026-10-13, a letter S: defined over R:\, R: being a network
-    # drive aimed at a host that does not exist, one fresh host a step:
-    #   defining S:, and asking the system's table what S: stands for   the host was NOT looked up
-    #   asking the type of R:                                          the host was NOT looked up
-    #   asking the type of S: (it answers NoRootDirectory, not Network) the host WAS looked up
-    # So the type of a letter is asked only of a letter that stands for no other letter. The
-    # system's table of names is read first (it asks no disk and no network), a letter at a time,
-    # and the type is asked of the letter the chain ends in. A letter that stands for itself is the
-    # network question's, and this answers "". Asked of the path as written and again of the path it
-    # resolves to, as the network question is. The open handle's own path is still judged afterwards
-    # (Resolve-HordeFilesLocalPath): that is the second net, not this.
+function Get-HordeFilesPlaceRefusal {
+    # Why -Path is not on one of this machine's own drives, in the words of a share, or "" when
+    # nothing says so. The two questions are core's (core/PathText.ps1), and THE ORDER IS PART OF
+    # THE RULE: what the drive letter stands for is asked first, because for a letter that stands
+    # for a network drive the network question itself looks the host up (core has the
+    # measurement). Core's reasons say only that the path is not on this machine's own drives;
+    # what that means for a share is said here. Asked of the path as written and again of the path
+    # it resolves to, before anything looks at the disk.
     param([AllowEmptyString()][string]$Path)
-    if ($Path -cnotmatch '\A(?:\\\\\?\\)?([A-Za-z]):') { return "" }
-    $first = $Matches[1]
-    $local = "only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
-    $last = $first
-    $ended = $false
-    # Eight letters deep is more than anyone makes; a ring of letters never ends, and is refused.
-    for ($hop = 1; $hop -le 8; $hop++) {
-        $target = Get-HordeFilesDriveTarget -Letter $last
-        # Anything but another drive letter is a volume, a share or nothing: the chain ends here.
-        if ($target -cnotmatch '\A\\\?\?\\([A-Za-z]):') { $ended = $true; break }
-        $last = $Matches[1]
-    }
-    if (-not $ended) { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for another drive letter, and that for another, without end: where it really is cannot be told, and " + $local) }
-    if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) { return "" }
-    if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network drive (" + $last + ":), and " + $local) }
-    return ""
+    $why = Get-HordeDriveAliasRefusal -Path $Path
+    if ($why -eq "") { $why = Get-HordeNetworkPathRefusal -Path $Path }
+    if ($why -eq "") { return "" }
+    return ($why + ". A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder")
+}
+
+function Initialize-HordeFilesPlaceNative {
+    # One more question for Windows, defined once a process under a name of its own (a loaded type
+    # cannot be given another member, and HordeNative.FilePath may be loaded already): CreateFileW,
+    # to open a FOLDER, which .NET's FileStream cannot. Get-HordeFilesFolderFinalPath asks with it.
+    if (([System.Management.Automation.PSTypeName]"HordeNative.FilePlace").Type) { return }
+    Add-Type -Namespace HordeNative -Name FilePlace -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string lpFileName, int dwDesiredAccess, int dwShareMode, System.IntPtr lpSecurityAttributes, int dwCreationDisposition, int dwFlagsAndAttributes, System.IntPtr hTemplateFile);'
 }
 
 function Get-HordeFilesFolderFinalPath {

@@ -135,7 +135,7 @@ function Resolve-HordeFilesDenyPlace {
     if ($whole -cmatch '\A\\\\\?\\[A-Za-z]:\\') { $whole = $whole.Substring(4) }
     # A FOLDER ON THE NETWORK IS NEVER LOOKED AT, here as anywhere (files/Path.ps1), and holds no
     # file of this machine's drives; what is no drive path at all holds none either.
-    if ((Get-HordeFilesAliasRefusal -Path $whole) -ne "" -or (Get-HordeNetworkPathRefusal -Path $whole) -ne "" -or $whole -cnotmatch '\A[A-Za-z]:\\') { return [pscustomobject]@{ paths = @(); unknown = $false } }
+    if ((Get-HordeDriveAliasRefusal -Path $whole) -ne "" -or (Get-HordeNetworkPathRefusal -Path $whole) -ne "" -or $whole -cnotmatch '\A[A-Za-z]:\\') { return [pscustomobject]@{ paths = @(); unknown = $false } }
     $known = New-Object System.Collections.ArrayList
     [void]$known.Add($whole.TrimEnd('\'))
     # Behind the long-path prefix, so a deep folder is opened too; the path is already whole.

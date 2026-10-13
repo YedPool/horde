@@ -2,10 +2,11 @@
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\files-command.psd1
 # Each makes the command take what it must refuse, or say or exit wrongly; test\test-files-cli.ps1,
 # which runs the real command as its own process, must fail for every one. One run of that suite
-# starts about 35 processes (measured 2026-10-13 on a throttled machine: about 25 s).
+# starts about 100 processes (measured 2026-10-13 on a throttled machine: about 100 s).
 @{
     Target = "cli\commands\files.ps1"
     Suite  = "test\test-files-cli.ps1"
+    Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "list-takes-shares-flags-in-silence"
            Find = 'foreach ($flag in @("Path", "Title", "Editable", "Force")) { if ($PSBoundParameters.ContainsKey($flag)) {'

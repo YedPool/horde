@@ -27,14 +27,5 @@
         @{ Name = "force-handed-to-the-deny-list-whatever-was-said"
            Find = '-RepoRoot $RepoRoot -Force:$Force'
            Replace = '-RepoRoot $RepoRoot -Force' }
-        # The letter that stands for a network drive: asked first, of the path as written and of
-        # the path it resolves to. Without the first, the share is still refused, by the second -
-        # but only after the network question asked the letter's type, which looks the host up.
-        @{ Name = "written-path-not-asked-what-its-letter-stands-for"
-           Find = '$unfit = Get-HordeFilesAliasRefusal -Path $Path'
-           Replace = '$unfit = ""' }
-        @{ Name = "resolved-path-not-asked-what-its-letter-stands-for"
-           Find = '$network = Get-HordeFilesAliasRefusal -Path $full'
-           Replace = '$network = ""' }
     )
 }

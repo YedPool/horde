@@ -133,7 +133,7 @@
            Find = ' -or (Get-HordeNetworkPathRefusal -Path $whole) -ne "" -or '
            Replace = ' -or ' }
         @{ Name = "place-on-a-letter-over-a-network-drive-opened"
-           Find = 'if ((Get-HordeFilesAliasRefusal -Path $whole) -ne "" -or '
+           Find = 'if ((Get-HordeDriveAliasRefusal -Path $whole) -ne "" -or '
            Replace = 'if (' }
         @{ Name = "path-that-is-no-path-taken-for-absent"
            Find = 'catch { return [pscustomobject]@{ paths = @(); unknown = $true } }'

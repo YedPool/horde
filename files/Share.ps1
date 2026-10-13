@@ -249,10 +249,9 @@ function Add-HordeFilesShare {
     # FROM THE TEXT, BEFORE ANYTHING TOUCHES THE DISK OR THE NETWORK: looking at a network path sends
     # the user's sign-in to the host it names. A DRIVE LETTER THAT STANDS FOR A NETWORK DRIVE FIRST,
     # from the system's table of names, because the network question asks a letter's type and for
-    # such a letter that alone looks the host up (files/Path.ps1 has the measurement). Then the
+    # such a letter that alone looks the host up (core/PathText.ps1 has the measurement). Then the
     # network question; then a device, which opens, and a stream, which cannot be told later.
-    $unfit = Get-HordeFilesAliasRefusal -Path $Path
-    if ($unfit -eq "") { $unfit = Get-HordeNetworkPathRefusal -Path $Path }
+    $unfit = Get-HordeFilesPlaceRefusal -Path $Path
     if ($unfit -eq "") { $unfit = Get-HordeFilesPathRefusal -Path $Path }
     if ($unfit -ne "") { return (& $refuse $unfit) }
     $full = ""
@@ -264,8 +263,7 @@ function Add-HordeFilesShare {
     # shows that it is a network path only here. Still nothing has asked the disk about it. THE DEVICE
     # AND STREAM QUESTION TOO: measured 2026-10-13, C:NUL.txt passed it as written - its one part
     # reads as "C" before the colon - and is the device name NUL.txt once it is resolved.
-    $network = Get-HordeFilesAliasRefusal -Path $full
-    if ($network -eq "") { $network = Get-HordeNetworkPathRefusal -Path $full }
+    $network = Get-HordeFilesPlaceRefusal -Path $full
     if ($network -eq "") { $network = Get-HordeFilesPathRefusal -Path $full }
     if ($network -ne "") { return (& $refuse $network) }
     if ([System.IO.Directory]::Exists($full)) { return (& $refuse ("'" + $full + "' is a folder; one file is shared at a time")) }

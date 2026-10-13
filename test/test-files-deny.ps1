@@ -372,15 +372,15 @@ Check ($parentGone.state -ceq "absent") "and so is one whose parent is not there
 $badName = Get-HordeFilesFolderFinalPath -Path "C:\a<b>|c"
 Check ($badName.state -ceq "unknown") "a name Windows cannot open for another reason is unknown, never absent"
 $systemLetter = $script:real.Substring(0, 1)
-Check ((Get-HordeFilesDriveTarget -Letter $systemLetter) -like "\Device\*") ("the drive this suite is on stands for a volume (" + (Get-HordeFilesDriveTarget -Letter $systemLetter) + ")")
+Check ((Get-HordeDriveLetterTarget -Letter $systemLetter) -like "\Device\*") ("the drive this suite is on stands for a volume (" + (Get-HordeDriveLetterTarget -Letter $systemLetter) + ")")
 $letters = @(Get-FreeLetters)
 Check ($letters.Count -ge 3) ("CONTROL: three drive letters that name nothing were found (" + $letters.Count + ")")
-Check ((Get-HordeFilesDriveTarget -Letter $letters[0]) -eq "") "a letter that names nothing stands for nothing"
-Check ((Get-HordeFilesAliasRefusal -Path ($systemLetter + ":\x.md")) -eq "" -and (Get-HordeFilesAliasRefusal -Path ($letters[0] + ":\x.md")) -eq "") "an ordinary drive, and a letter that names nothing, are not this question's"
-Check ((Get-HordeFilesAliasRefusal -Path "x.md") -eq "" -and (Get-HordeFilesAliasRefusal -Path "") -eq "" -and (Get-HordeFilesAliasRefusal -Path "\\server\share\x.md") -eq "") "nor is a path with no drive letter"
+Check ((Get-HordeDriveLetterTarget -Letter $letters[0]) -eq "") "a letter that names nothing stands for nothing"
+Check ((Get-HordeDriveAliasRefusal -Path ($systemLetter + ":\x.md")) -eq "" -and (Get-HordeDriveAliasRefusal -Path ($letters[0] + ":\x.md")) -eq "") "an ordinary drive, and a letter that names nothing, are not this question's"
+Check ((Get-HordeDriveAliasRefusal -Path "x.md") -eq "" -and (Get-HordeDriveAliasRefusal -Path "") -eq "" -and (Get-HordeDriveAliasRefusal -Path "\\server\share\x.md") -eq "") "nor is a path with no drive letter"
 $overLocal = ""; $overLocalTarget = ""
 $null = & subst.exe ($letters[0] + ":") $docs
-try { $overLocalTarget = Get-HordeFilesDriveTarget -Letter $letters[0]; $overLocal = Get-HordeFilesAliasRefusal -Path ($letters[0] + ":\plain.md") } finally { $null = & subst.exe ($letters[0] + ":") /D }
+try { $overLocalTarget = Get-HordeDriveLetterTarget -Letter $letters[0]; $overLocal = Get-HordeDriveAliasRefusal -Path ($letters[0] + ":\plain.md") } finally { $null = & subst.exe ($letters[0] + ":") /D }
 Check ($overLocalTarget -ceq ("\??\" + $docs)) ("a subst drive stands for the folder it was made over (" + $overLocalTarget + ")")
 Check ($overLocal -eq "") "a letter that stands for a folder of this machine's own drive is let by"
 
@@ -405,13 +405,13 @@ try {
     $null = [HordeTest.DenyDos]::DefineDosDevice(0, $overLetter + ":", $netLetter + ":\")
     $overMade = Get-Target $overLetter
     $null = [HordeTest.DenyDos]::DefineDosDevice(0, $overOver + ":", $overLetter + ":\")
-    $said = Get-HordeFilesAliasRefusal -Path ($overLetter + ":\x.md")
-    $saidPrefix = ((Get-HordeFilesAliasRefusal -Path ("\\?\" + $overLetter + ":\x.md")) -like "*stands for a network drive*")
-    $saidRelative = ((Get-HordeFilesAliasRefusal -Path ($overLetter + ":x.md")) -like "*stands for a network drive*")
-    $chain = Get-HordeFilesAliasRefusal -Path ($overOver + ":\x.md")
-    $viaShare = Test-Refused $h ($overLetter + ":\x.md") ("is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":)")
+    $said = Get-HordeDriveAliasRefusal -Path ($overLetter + ":\x.md")
+    $saidPrefix = ((Get-HordeDriveAliasRefusal -Path ("\\?\" + $overLetter + ":\x.md")) -like "*stands for a network drive*")
+    $saidRelative = ((Get-HordeDriveAliasRefusal -Path ($overLetter + ":x.md")) -like "*stands for a network drive*")
+    $chain = Get-HordeDriveAliasRefusal -Path ($overOver + ":\x.md")
+    $viaShare = Test-Refused $h ($overLetter + ":\x.md") ("is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder")
     $viaShareChain = Test-Refused $h ($overOver.ToLowerInvariant() + ":\x.md") "that stands for a network drive"
-    $ownNet = Get-HordeFilesAliasRefusal -Path ($netLetter + ":\x.md")
+    $ownNet = Get-HordeDriveAliasRefusal -Path ($netLetter + ":\x.md")
     $viaShareNet = Test-Refused $h ($netLetter + ":\x.md") ("is on a network drive (" + $netLetter + ":)")
     $placeOnNet = Resolve-HordeFilesDenyPlace -Path ($netLetter + ":\home")
     $placeOnAlias = Resolve-HordeFilesDenyPlace -Path ($overLetter + ":\home")
@@ -431,12 +431,12 @@ try {
     }
 } finally { Remove-Letter $overOver; Remove-Letter $overLetter; $null = [HordeTest.DenyDos]::DefineDosDevice(7, $netLetter + ":", $netTarget) }
 Check ($made -and $overMade -ceq ("\??\" + $netLetter + ":\")) ("CONTROL: " + $netLetter + ": was aimed at a share and is a network drive, and " + $overLetter + ": stands for it (" + $overMade + "); if this fails, the case was NOT tested")
-Check ($said -like ("'" + $overLetter + ":\x.md' is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and only a file on one of this machine's own drives is shared*")) "a letter that stands for a network drive is refused, and the reason names both letters"
+Check ($said -like ("'" + $overLetter + ":\x.md' is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and only a path on one of this machine's own drives is taken")) "a letter that stands for a network drive is refused, and the reason names both letters"
 Check $saidPrefix "and behind the long-path prefix"
 Check $saidRelative "and named from wherever that drive stands"
 Check ($chain -like ("*is on a drive (" + $overOver + ":) that stands for a network drive (" + $netLetter + ":)*")) "a letter that stands for a letter that stands for a network drive is refused too: the chain is followed to its end"
 Check ($ownNet -eq "") "a network drive itself is not this question's: the network question refuses it"
-Check $viaShare "through a share, it is refused with that reason"
+Check $viaShare "through a share, it is refused with that reason, and the share adds its own sentence: what to do about it"
 Check $viaShareChain "and so is the chain, with its letter in small"
 Check $viaShareNet "CONTROL: a share from the network drive itself is still refused by the network question, with its own reason"
 Check ($null -ne $placeOnNet -and -not $placeOnNet.unknown -and @($placeOnNet.paths).Count -eq 0) "a folder of the list that is on a network drive is never opened: it holds no file of this machine's drives"
@@ -450,7 +450,7 @@ Check ((Get-Target $netLetter) -eq "" -and (Get-Target $overLetter) -eq "" -and 
 $ring = ""
 $null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[0] + ":", "\??\" + $letters[1] + ":")
 $null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[1] + ":", "\??\" + $letters[0] + ":")
-try { $ring = Get-HordeFilesAliasRefusal -Path ($letters[0] + ":\x.md") } finally { Remove-Letter $letters[0]; Remove-Letter $letters[1] }
+try { $ring = Get-HordeDriveAliasRefusal -Path ($letters[0] + ":\x.md") } finally { Remove-Letter $letters[0]; Remove-Letter $letters[1] }
 Check ($ring -like "*stands for another drive letter, and that for another, without end*") "two letters that stand for each other are refused: where the file is cannot be told"
 Check ((Get-Target $letters[0]) -eq "" -and (Get-Target $letters[1]) -eq "") "and both are gone again"
 # Eight letters deep is followed; this chain of three ended at a folder of this machine's own drive.
@@ -458,7 +458,7 @@ $deep = "?"; $deepShared = $false
 $null = & subst.exe ($letters[0] + ":") $docs
 $null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[1] + ":", "\??\" + $letters[0] + ":")
 $null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[2] + ":", "\??\" + $letters[1] + ":")
-try { $deep = Get-HordeFilesAliasRefusal -Path ($letters[2] + ":\plain.md"); $deepShared = Test-Shared $h ($letters[2] + ":\plain.md") } finally { Remove-Letter $letters[2]; Remove-Letter $letters[1]; $null = & subst.exe ($letters[0] + ":") /D }
+try { $deep = Get-HordeDriveAliasRefusal -Path ($letters[2] + ":\plain.md"); $deepShared = Test-Shared $h ($letters[2] + ":\plain.md") } finally { Remove-Letter $letters[2]; Remove-Letter $letters[1]; $null = & subst.exe ($letters[0] + ":") /D }
 Check ($deep -eq "") "CONTROL: a chain of letters that ends at a folder of this machine's own drive is let by"
 Check $deepShared "and a file named through it is shared"
 Check ((Get-Target $letters[0]) -eq "" -and (Get-Target $letters[1]) -eq "" -and (Get-Target $letters[2]) -eq "") "and those letters are gone again"

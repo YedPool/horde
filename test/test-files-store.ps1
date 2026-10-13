@@ -1003,7 +1003,7 @@ $askedHosts = New-Object System.Collections.ArrayList
 foreach ($spelling in $spellings) {
     $noHost = New-NoHost
     [void]$askedHosts.Add($noHost)
-    Check (Test-Refused $h ($spelling[1] -f $noHost) "is a network path, and only a file on one of this machine's own drives is shared") ("a network path is refused from its text: " + $spelling[0] + " (" + ($spelling[1] -f "<host>") + ")")
+    Check (Test-Refused $h ($spelling[1] -f $noHost) "is a network path, and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder") ("a network path is refused from its text: " + $spelling[0] + " (" + ($spelling[1] -f "<host>") + ")")
 }
 $cacheNow = Get-LookedUp
 $lookedUp = @($askedHosts | Where-Object { $cacheNow.Contains($_) })

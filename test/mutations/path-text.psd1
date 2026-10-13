@@ -1,4 +1,5 @@
-# Mutations of core/PathText.ps1: the fold of A to Z, and the network question. Run:
+# Mutations of core/PathText.ps1: the fold of A to Z, the network question, and what a drive letter
+# stands for. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\path-text.psd1
 # Each folds a character it must not, hands the fold to the runtime's case table, lets a network
 # path through, or refuses a local one; test\test-path-text.ps1 must fail for every one.
@@ -71,5 +72,43 @@
         @{ Name = "network-drive-with-a-small-letter-missed"
            Find = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') {'
            Replace = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Z]):'') {' }
+        # --- the reason is every caller's (2026-10-13): no word of what the caller was doing ---
+        @{ Name = "network-reason-speaks-of-sharing-again"
+           Find = '    $local = "only a path on one of this machine''s own drives is taken"'
+           Replace = '    $local = "only a file on one of this machine''s own drives is shared: name it by its local path, or copy it to a local folder"' }
+        @{ Name = "drive-letter-reason-speaks-of-sharing"
+           Find = '    $ownDrives = "only a path on one of this machine''s own drives is taken"'
+           Replace = '    $ownDrives = "only a file on one of this machine''s own drives is shared"' }
+        # --- what a drive letter stands for ---
+        @{ Name = "no-letter-stands-for-anything"
+           Find = 'if ([HordeNative.DriveName]::QueryDosDevice($Letter + ":", $text, 1024) -le 0) { return "" }'
+           Replace = 'if ($true) { return "" }' }
+        @{ Name = "letter-behind-the-prefix-not-asked-what-it-stands-for"
+           Find = 'if ($Path -cnotmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') { return "" }'
+           Replace = 'if ($Path -cnotmatch ''\A([A-Za-z]):'') { return "" }' }
+        @{ Name = "chain-of-letters-not-followed"
+           Find = '        $last = $Matches[1]'
+           Replace = '        $last = $first' }
+        @{ Name = "chain-followed-one-letter-only"
+           Find = 'for ($hop = 1; $hop -le 8; $hop++) {'
+           Replace = 'for ($hop = 1; $hop -le 1; $hop++) {' }
+        @{ Name = "ring-of-letters-not-refused"
+           Find = 'if (-not $ended) { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "type-of-the-last-letter-not-asked"
+           Find = 'if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "every-letter-over-another-refused"
+           Find = 'if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ('
+           Replace = 'if ($true) { return (' }
+        @{ Name = "type-asked-of-the-first-letter"
+           Find = 'if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ('
+           Replace = 'if ((Get-HordeNetworkPathRefusal -Path ($first + ":\")) -ne "") { return (' }
+        @{ Name = "letter-that-stands-for-itself-is-this-questions"
+           Find = 'if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) { return "" }'
+           Replace = '' }
+        @{ Name = "refusal-does-not-name-the-network-drive"
+           Find = 'that stands for a network drive (" + $last + ":), and "'
+           Replace = 'that stands for a network drive, and "' }
     )
 }

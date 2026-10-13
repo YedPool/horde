@@ -1,8 +1,8 @@
-# ARE A PATH'S LETTERS A TO Z FOLDED BY NO TABLE OF THE RUNTIME'S, AND IS A NETWORK PATH KNOWN FROM
-# ITS TEXT BEFORE ANYTHING LOOKS AT IT?
+# ARE A PATH'S LETTERS A TO Z FOLDED BY NO TABLE OF THE RUNTIME'S, AND IS A NETWORK PATH - OR A DRIVE
+# LETTER THAT STANDS FOR ONE - KNOWN BEFORE ANYTHING LOOKS AT IT?
 #
-# core/PathText.ps1, in this process. Both functions were moved here from the files store on
-# 2026-10-13, unchanged, so that there is one copy for every caller; test/test-files-store.ps1 keeps
+# core/PathText.ps1, in this process. The first two functions were moved here from the files store on
+# 2026-10-13, so that there is one copy for every caller; the third was added the same day; test/test-files-store.ps1 keeps
 # the checks that the share USES them (the pinned file id among them). The suite attacks the rules:
 #   - the fold changes exactly 26 of the 65536 code units there are, and asks no case table: a
 #     capital outside A to Z that some runtime's table lowers is left as it is;
@@ -13,9 +13,14 @@
 #   - what is not a network path is not refused: a local drive, the long-path prefix, the device
 #     form, a relative path, a letter no drive has;
 #   - what the function cannot see, it is shown not to see, so that a caller knows to ask twice:
-#     a PowerShell drive over a share, and the spelling PowerShell's resolver takes for a local path.
+#     a PowerShell drive over a share, and the spelling PowerShell's resolver takes for a local path;
+#   - the reason speaks for every caller: no word of sharing, which is one caller's;
+#   - a drive letter that stands for a network drive is refused from the system's table of names, a
+#     chain of letters to its end and a ring of them too, and the host is NOT looked up - while the
+#     network question, asked of the same letter, refuses nothing and does look it up (the control).
 #
-# Nothing here is written to a disk, and no host that exists is named.
+# Nothing here is written to a disk, no host that exists is named, and every drive letter the suite
+# defines it takes away again.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -30,12 +35,13 @@ function Get-Said {
     param([AllowEmptyString()][string]$Path)
     try { return ("" + (Get-HordeNetworkPathRefusal -Path $Path)) } catch { return ("threw: " + $_.Exception.Message) }
 }
-$sharedOnly = "only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
+# What the reason ends in: true for every caller, with no word of what the caller was doing with the path.
+$ownDrives = "only a path on one of this machine's own drives is taken"
 function Test-NetworkPath {
-    # Is -Path refused as a network path, in exactly the words the function has always used?
+    # Is -Path refused as a network path, in exactly the function's words?
     param([string]$Path)
     $said = Get-Said $Path
-    $ok = ($said -ceq ("'" + $Path + "' is a network path, and " + $sharedOnly))
+    $ok = ($said -ceq ("'" + $Path + "' is a network path, and " + $ownDrives))
     if (-not $ok) { Write-Host ("         got: " + $said) -ForegroundColor Red }
     return $ok
 }
@@ -163,7 +169,7 @@ $netTarget = "\??\UNC\" + $netHost + "\share"
 $netMade = [HordeTest.DosDevice]::DefineDosDevice(1, $netLetter + ":", $netTarget)
 try {
     Check ($netLetter -ne "" -and $netMade -and (New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network) ("CONTROL: the drive letter " + $netLetter + ": was aimed at a share, and its type is Network (if this fails, a network drive was NOT tested)")
-    Check ((Get-Said ($netLetter + ":\x.md")) -ceq ("'" + $netLetter + ":\x.md' is on a network drive (" + $netLetter + ":), and " + $sharedOnly)) "a path on a network drive is refused by the drive's type, in the words it has always used, naming the drive"
+    Check ((Get-Said ($netLetter + ":\x.md")) -ceq ("'" + $netLetter + ":\x.md' is on a network drive (" + $netLetter + ":), and " + $ownDrives)) "a path on a network drive is refused by the drive's type, in every caller's words, naming the drive"
     Check ((Get-Said ("\\?\" + $netLetter + ":\x.md")) -like ("*is on a network drive (" + $netLetter + ":)*")) "and behind the long-path prefix"
     Check ((Get-Said ($netLetter + ":x.md")) -like ("*is on a network drive (" + $netLetter + ":)*")) "and named from wherever that drive stands"
     Check ((Get-Said (($netLetter + ":\x.md").ToLowerInvariant())) -clike ("*is on a network drive (" + $netLetter.ToLowerInvariant() + ":)*")) "and with its letter in small, which the reason gives as it was written"
@@ -201,4 +207,83 @@ try {
     Check ((Test-NotRefused ($psLetter + ":\x.md")) -and (Test-NetworkPath $psResolved)) "asked of the path as written the function says nothing, and asked of what it resolved to it refuses: the question comes after the resolve too"
 } finally { Remove-PSDrive -Name $psLetter -Scope Script }
 
-Complete-HordeSuite -Success "A to Z are folded by the code's own hand and nothing else is touched, and a network path is refused from its text or its drive's type with nobody asked"
+Write-Host ""
+Write-Host "--- the reason is every caller's: it says nothing of what the caller was doing ---" -ForegroundColor Cyan
+$anyReason = Get-Said ("\\" + (New-NoHost) + "\folder\x.md")
+Check ($anyReason -like "*is a network path, and only a path on one of this machine's own drives is taken" -and $anyReason -notlike "*shar*" -and $anyReason -notlike "*file*") "the reason says the path is a network path and that only a path on this machine's own drives is taken: no word of sharing, or of files, which are one caller's"
+
+Write-Host ""
+Write-Host "--- what a drive letter stands for: read from the system's table, and nobody is asked ---" -ForegroundColor Cyan
+function Get-AliasSaid {
+    # What the drive-letter question says of -Path, or "threw: <why>": no path may make it throw.
+    param([AllowEmptyString()][string]$Path)
+    try { return ("" + (Get-HordeDriveAliasRefusal -Path $Path)) } catch { return ("threw: " + $_.Exception.Message) }
+}
+function Get-Stands { param([string]$Letter) $text = New-Object System.Text.StringBuilder 1024; if ([HordeTest.DosDevice]::QueryDosDevice($Letter + ":", $text, 1024) -le 0) { return "" }; return $text.ToString() }
+function Remove-Letter { param([string]$Letter) $was = Get-Stands $Letter; if ($was -ne "") { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $Letter + ":", $was) } }
+$free = @("RSTUVWQPONMLKJ".ToCharArray() | ForEach-Object { "" + $_ } | Where-Object { -not (Test-DosDevice $_) -and -not [System.IO.Directory]::Exists($_ + ":\") -and $null -eq (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) })
+Check ($free.Count -ge 3) ("CONTROL: three drive letters that name nothing were found (" + $free.Count + ")")
+Check ((Get-HordeDriveLetterTarget -Letter $system) -like "\Device\*") ("the system drive stands for a volume (" + (Get-HordeDriveLetterTarget -Letter $system) + ")")
+Check ((Get-HordeDriveLetterTarget -Letter $free[0]) -ceq "") "a letter that names nothing stands for nothing"
+foreach ($plain in @(($system + ":\folder\x.md"), ("\\?\" + $system + ":\folder\x.md"), ($free[0] + ":\x.md"), "x.md", "folder\x.md", "", ("\\" + (New-NoHost) + "\share\x.md"), "\\?\UNC\server\share\x.md", "\\.\pipe\x")) {
+    Check ((Get-AliasSaid $plain) -ceq "") ("not this question's, and not refused by it: '" + $plain + "'")
+}
+# A LETTER OVER A FOLDER OF THIS MACHINE'S OWN DRIVE, which is what subst is for: let by.
+$localFolder = ("" + $env:SystemRoot).TrimEnd('\')
+$overLocal = "?"; $overLocalTarget = ""
+$null = & subst.exe ($free[0] + ":") $localFolder
+try { $overLocalTarget = Get-HordeDriveLetterTarget -Letter $free[0]; $overLocal = Get-AliasSaid ($free[0] + ":\x.md") } finally { $null = & subst.exe ($free[0] + ":") /D }
+Check ($overLocalTarget -ceq ("\??\" + $localFolder)) ("CONTROL: a subst drive stands for the folder it was made over (" + $overLocalTarget + ")")
+Check ($overLocal -ceq "") "a letter that stands for a folder of this machine's own drive is not refused"
+# A LETTER OVER A NETWORK DRIVE, and a letter over that. The network drive is a letter aimed at a host
+# that does not exist; every question below is asked before the cache is read.
+$netLetter = $free[0]; $overLetter = $free[1]; $overOver = $free[2]
+$aliasHost = New-NoHost
+$aliasTarget = "\??\UNC\" + $aliasHost + "\share"
+$netIs = $false; $overIs = ""; $said = "?"; $saidPrefix = "?"; $saidRelative = "?"; $saidSmall = "?"; $saidChain = "?"; $saidNet = "?"; $seenAfter = $true; $typeOver = ""; $controlSeen = $false; $networkSaysOfOver = "?"
+$null = [HordeTest.DosDevice]::DefineDosDevice(1, $netLetter + ":", $aliasTarget)
+try {
+    $netIs = ((New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network)
+    $null = [HordeTest.DosDevice]::DefineDosDevice(0, $overLetter + ":", $netLetter + ":\")
+    $overIs = Get-Stands $overLetter
+    $null = [HordeTest.DosDevice]::DefineDosDevice(1, $overOver + ":", "\??\" + $overLetter + ":")
+    $said = Get-AliasSaid ($overLetter + ":\x.md")
+    $saidPrefix = Get-AliasSaid ("\\?\" + $overLetter + ":\x.md")
+    $saidRelative = Get-AliasSaid ($overLetter + ":x.md")
+    $saidSmall = Get-AliasSaid (($overLetter + ":\x.md").ToLowerInvariant())
+    $saidChain = Get-AliasSaid ($overOver + ":\x.md")
+    $saidNet = Get-AliasSaid ($netLetter + ":\x.md")
+    $seenAfter = (Get-LookedUp).Contains($aliasHost)
+    # THE CONTROL, and why this question comes before the other: the network question asks the
+    # letter's type, the type is not Network, and the asking looks the host up.
+    $typeOver = "" + (New-Object System.IO.DriveInfo($overLetter)).DriveType
+    $networkSaysOfOver = Get-Said ($overLetter + ":\x.md")
+    $controlSeen = (Get-LookedUp).Contains($aliasHost)
+} finally { Remove-Letter $overOver; Remove-Letter $overLetter; $null = [HordeTest.DosDevice]::DefineDosDevice(7, $netLetter + ":", $aliasTarget) }
+Check ($netIs -and $overIs -ceq ("\??\" + $netLetter + ":\")) ("CONTROL: " + $netLetter + ": was aimed at a share and is a network drive, and " + $overLetter + ": stands for it (" + $overIs + "); if this fails, the case was NOT tested")
+Check ($said -ceq ("'" + $overLetter + ":\x.md' is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and " + $ownDrives)) "a letter that stands for a network drive is refused, naming both letters, in every caller's words"
+Check ($saidPrefix -like ("*is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":)*")) "and behind the long-path prefix"
+Check ($saidRelative -like ("*is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":)*")) "and named from wherever that drive stands"
+Check ($saidSmall -clike ("*is on a drive (" + $overLetter.ToLowerInvariant() + ":) that stands for a network drive (" + $netLetter + ":)*")) "and with its letter in small, which the reason gives as it was written"
+Check ($saidChain -like ("*is on a drive (" + $overOver + ":) that stands for a network drive (" + $netLetter + ":)*")) "a letter that stands for a letter that stands for a network drive is refused too: the chain is followed to its end"
+Check ($saidNet -ceq "") "a network drive itself stands for no other letter: this question answers nothing, and the network question refuses it"
+if ($canSee) { Check (-not $seenAfter) "and through all six questions the host was NOT looked up: the system's table was read, and nobody was asked" }
+if ($canSee) { Check ($typeOver -cne "Network" -and $networkSaysOfOver -ceq "" -and $controlSeen) ("CONTROL: the network question, asked of that letter, refuses nothing (its type is " + $typeOver + ", not Network) and the host IS looked up - which is why this question is asked first") }
+else { Write-Skip "WHETHER THE DRIVE-LETTER QUESTION LOOKED A HOST UP COULD NOT BE SEEN on this machine; its answers were still checked." }
+Check (-not (Test-DosDevice $netLetter) -and -not (Test-DosDevice $overLetter) -and -not (Test-DosDevice $overOver)) "all three drive letters are gone again"
+# A RING: two letters that stand for each other never end, and are refused.
+$ring = "?"
+$null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[0] + ":", "\??\" + $free[1] + ":")
+$null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[1] + ":", "\??\" + $free[0] + ":")
+try { $ring = Get-AliasSaid ($free[0] + ":\x.md") } finally { Remove-Letter $free[0]; Remove-Letter $free[1] }
+Check ($ring -ceq ("'" + $free[0] + ":\x.md' is on a drive (" + $free[0] + ":) that stands for another drive letter, and that for another, without end: where it really is cannot be told, and " + $ownDrives)) "two letters that stand for each other are refused: where the path really is cannot be told"
+# A CHAIN THAT ENDS AT HOME: three letters deep, ending at a folder of this machine's own drive.
+$deep = "?"
+$null = & subst.exe ($free[0] + ":") $localFolder
+$null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[1] + ":", "\??\" + $free[0] + ":")
+$null = [HordeTest.DosDevice]::DefineDosDevice(1, $free[2] + ":", "\??\" + $free[1] + ":")
+try { $deep = Get-AliasSaid ($free[2] + ":\x.md") } finally { Remove-Letter $free[2]; Remove-Letter $free[1]; $null = & subst.exe ($free[0] + ":") /D }
+Check ($deep -ceq "") "CONTROL: a chain of three letters that ends at a folder of this machine's own drive is not refused"
+Check (-not (Test-DosDevice $free[0]) -and -not (Test-DosDevice $free[1]) -and -not (Test-DosDevice $free[2])) "and every letter this suite defined is gone again"
+
+Complete-HordeSuite -Success "A to Z are folded by the code's own hand and nothing else is touched, a network path is refused from its text or its drive's type, and a drive letter that stands for a network drive from the system's table, with nobody asked"
