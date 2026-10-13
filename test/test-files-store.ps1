@@ -9,8 +9,8 @@
 #     picture under each text name, and 50 texts a lenient parser calls JSON, are each refused;
 #   - a file id is made with a key only this machine has: it is made once, readable by the user
 #     alone, in no record; and a key that is gone or damaged refuses the share and is never remade;
-#   - one file has one id however it is named - the long-path prefix, its 8.3 short name, a subst
-#     drive - and that id is the same number under every runtime; a device or a stream inside a
+#   - one file has one id however it is named - the long-path prefix, its 8.3 short name, another
+#     case - and that id is the same number under every runtime; a device or a stream inside a
 #     file is refused;
 #   - a network path in every spelling, this machine's own drive share among them, and a file on a
 #     network drive are refused BEFORE anything asks the disk or the network about them;
@@ -869,17 +869,15 @@ if ($shortName -ne "" -and (Split-Path -Leaf $shortName) -cne (Split-Path -Leaf 
     # handle really is opened by the short name.
     Check (Test-SameFile ("\\?\" + $shortName)) "and by its short name behind the long-path prefix, where the handle is opened by the short name itself"
 } else { Write-Skip "THE 8.3 SHORT NAME COULD NOT BE TESTED: this volume gave 'a long report name.md' no short name. Run this suite on a volume that makes them." }
-# A drive made with subst, over the file's folder.
-$substLetter = ""
-foreach ($candidate in "ZYXWVUTSRQPONMLKJ".ToCharArray()) { if (-not [System.IO.Directory]::Exists($candidate + ":\")) { $substLetter = "" + $candidate; break } }
-Check ($substLetter -ne "") "a drive letter nothing uses was found for subst"
-$null = & subst.exe ($substLetter + ":") (Split-Path -Parent $named)
-$substMade = ($LASTEXITCODE -eq 0 -and [System.IO.File]::Exists($substLetter + ":\a long report name.md"))
-try {
-    Check $substMade ("subst made " + $substLetter + ": over the file's folder (if this fails, the subst form was NOT tested)")
-    Check (Test-SameFile ($substLetter + ":\a long report name.md")) "by a subst drive it is the next version of the SAME file"
-} finally { $null = & subst.exe ($substLetter + ":") /D }
-Check (-not [System.IO.Directory]::Exists($substLetter + ":\")) "the subst drive is gone again"
+# BY A DRIVE LETTER THAT STANDS FOR THE FILE'S FOLDER (subst): NOT RUN HERE ANY MORE. Until
+# 2026-10-13 this suite made such a letter and shared the file through it, and the id was the same.
+# A drive letter is seen by every process of the user while it exists, and a suite must not change
+# what other processes see (test/lib/SuiteFiles.ps1, Get-HordeDriveLetterMakers), so no letter is
+# made here. What made that case pass is the rule every check above and below this one holds: the
+# id comes from the open handle's own path, never from the path that was written. The one fact that
+# is Windows' and not this code's - that a handle opened through such a letter has the folder's own
+# path - is asked of Windows once, in test/test-path-text.ps1, the one place a letter is made. What
+# is NOT run any more: a whole share through such a letter.
 Check (Test-SameFile $named.ToUpperInvariant()) "and by its plain path in capitals"
 $elseFile = Invoke-Share -TestHome $h -Path (New-Source -Name "another long report name.md" -Text "# another file")
 Check ($elseFile.outcome -ceq "shared" -and $elseFile.record.fileId -cne $byName.record.fileId) "CONTROL: another file is another id, so one id for all those names was not one id for everything"
@@ -902,13 +900,11 @@ Write-Host "--- a network path is refused from its text, and a network drive by 
 # lookup of such a name came back in 15 ms).
 function New-NoHost { return ("horde-" + [guid]::NewGuid().ToString("N").Substring(0, 10)) }
 function Get-LookedUp { return ((& ipconfig.exe /displaydns) -join "`n") }
-if (-not ([System.Management.Automation.PSTypeName]"HordeTest.DosDevice").Type) {
-    Add-Type -Namespace HordeTest -Name DosDevice -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool DefineDosDevice(int dwFlags, string lpDeviceName, string lpTargetPath); [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax);'
-}
-function Test-DosDevice { param([string]$Letter) return ([HordeTest.DosDevice]::QueryDosDevice($Letter + ":", (New-Object System.Text.StringBuilder 1024), 1024) -gt 0) }
 function Get-FreeLetter {
-    # A drive letter that names nothing: no drive, no device, and no PowerShell drive.
-    foreach ($candidate in "RSTUVWQPONMLKJ".ToCharArray()) { if (-not (Test-DosDevice ("" + $candidate)) -and $null -eq (Get-PSDrive -Name ("" + $candidate) -ErrorAction SilentlyContinue)) { return ("" + $candidate) } }
+    # A letter that names nothing, for a POWERSHELL drive of this process's own (which is no drive
+    # letter of the system's: no other process sees it). Nothing is defined here, only asked.
+    $taken = @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1) })
+    foreach ($candidate in "RSTUVWQPONMLKJ".ToCharArray()) { if ($taken -cnotcontains ("" + $candidate) -and -not [System.IO.Directory]::Exists($candidate + ":\") -and $null -eq (Get-PSDrive -Name ("" + $candidate) -ErrorAction SilentlyContinue)) { return ("" + $candidate) } }
     return ""
 }
 $seenHost = New-NoHost
@@ -958,23 +954,39 @@ if ([System.IO.Directory]::Exists($uncFolder)) {
     try { $relInShare = Test-Refused $h "a long report name.md" "is a network path" } finally { Pop-Location }
     Check $relInShare "and so is a relative path, named while standing in a folder of a share"
 } else { Write-Skip ("A RELATIVE PATH FROM INSIDE A SHARE COULD NOT BE TESTED: this session cannot stand in " + $uncFolder + " (the drive's own share needs an administrator's token).") }
-# A NETWORK DRIVE: a drive letter aimed at a host that does not exist, which connects to nothing.
-$netLetter = Get-FreeLetter
-$netHost = New-NoHost
-$netTarget = "\??\UNC\" + $netHost + "\share"
-$netMade = [HordeTest.DosDevice]::DefineDosDevice(1, $netLetter + ":", $netTarget)
+# A NETWORK DRIVE, known by its type. NO DRIVE IS MADE: a drive letter is seen by every process of
+# the user while it exists, and the one this suite used to aim at a host that does not exist made a
+# fresh powershell of every other session print an error and start slowly (core/PathText.ps1,
+# Get-HordeDriveLetterType, has the measurement). The one function that asks a drive's type is
+# replaced, for these checks, by one that answers Network for the letter R and counts who asked;
+# it is called exactly as the real one is. What Windows itself says of a letter is
+# test/test-path-text.ps1's, in the one place a real letter is made.
+$script:realDriveType = ${function:Get-HordeDriveLetterType}
+$script:driveAsked = New-Object System.Collections.ArrayList
+function Get-HordeDriveLetterType {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    [void]$script:driveAsked.Add($Letter)
+    if ($Letter -ceq "R" -or $Letter -ceq "r") { return "Network" }
+    return (& $script:realDriveType -Letter $Letter)
+}
+$netChecks = New-Object System.Collections.ArrayList
 try {
-    Check ($netLetter -ne "" -and $netMade -and (New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network) ("CONTROL: the drive letter " + $netLetter + ": was aimed at a share, and its type is Network (if this fails, a network drive was NOT tested)")
-    Check (Test-Refused $h ($netLetter + ":\x.md") ("is on a network drive (" + $netLetter + ":)")) "a file on a network drive is refused by the drive's type"
-    Check (Test-Refused $h ("\\?\" + $netLetter + ":\x.md") "is on a network drive") "and behind the long-path prefix"
-    Check (Test-Refused $h ($netLetter + ":x.md") "is on a network drive") "and named from wherever that drive stands"
-    Check (Test-Refused $h (($netLetter + ":\x.md").ToLowerInvariant()) "is on a network drive") "and with its letter in small"
-    $cacheNow = Get-LookedUp
-    if ($canSee) { Check (-not $cacheNow.Contains($netHost)) "and the drive's host was not looked up: asking a drive's type asks nobody, and nothing resolved or looked at the path" }
-    $null = [System.IO.File]::Exists($netLetter + ":\x.md")
-    if ($canSee) { Check ((Get-LookedUp).Contains($netHost)) "CONTROL: asked whether a file on that drive exists, the host IS looked up - that is what the refusal came before" }
-} finally { $null = [HordeTest.DosDevice]::DefineDosDevice(7, $netLetter + ":", $netTarget) }
-Check (-not (Test-DosDevice $netLetter)) "the network drive letter is gone again"
+    [void]$netChecks.Add((Test-Refused $h "R:\x.md" "is on a network drive (R:)"))
+    [void]$netChecks.Add((Test-Refused $h "\\?\R:\x.md" "is on a network drive"))
+    [void]$netChecks.Add((Test-Refused $h "R:x.md" "is on a network drive"))
+    [void]$netChecks.Add((Test-Refused $h "r:\x.md" "is on a network drive"))
+    $askedOfR = @($script:driveAsked | Where-Object { $_ -ceq "R" -or $_ -ceq "r" }).Count
+    $script:driveAsked.Clear()
+    [void]$netChecks.Add((Test-SameFile $named))
+    $askedOfLocal = (@($script:driveAsked) -join ",")
+} finally { Set-Item -Path function:Get-HordeDriveLetterType -Value $script:realDriveType }
+Check $netChecks[0] "a file on a drive whose type is Network is refused by the drive's type"
+Check $netChecks[1] "and behind the long-path prefix"
+Check $netChecks[2] "and named from wherever that drive stands"
+Check $netChecks[3] "and with its letter in small"
+Check ($askedOfR -eq 4) ("each of those four was refused on the first question: the type was asked once for each and nothing after it, so nothing resolved or looked at the path (" + $askedOfR + ")")
+Check ($netChecks[4] -and $askedOfLocal -ceq (($named.Substring(0, 1), $named.Substring(0, 1)) -join ",")) ("CONTROL: with the same answerer in place a file on a local drive is shared, its drive's type asked of the path as written and again of the path it resolves to (" + $askedOfLocal + ")")
+Check ((Get-HordeDriveLetterType -Letter $named.Substring(0, 1)) -ceq "Fixed") "the real question is back, and says this suite's drive is a fixed one"
 Check (Test-SameFile $named) "CONTROL: after all those refusals the file by its local path is still the next version of the SAME file"
 # Others may read the file while it is shared: it is opened so that they can.
 $otherReader = New-Object System.IO.FileStream($named, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
