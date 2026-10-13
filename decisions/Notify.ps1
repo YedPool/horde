@@ -226,9 +226,17 @@ function Get-HordeDecisionNotifyDue {
 
 function Format-HordeDecisionNotifyCount {
     # "1 answer, on question 4" or "4 answers, on questions 3, 5 and 7": each number once, in order.
+    # AN ANSWER TO ONE PART OF A QUESTION SAYS WHICH: "question 28 (part b)", "question 28 (parts a and
+    # c)". The letter is the part's name in the list, not a word of his: the notice still quotes nothing.
     param([object[]]$Items = @(), [string]$On = "on")
     $count = @($Items).Count
-    $n = @($Items | ForEach-Object { [int]$_.question } | Sort-Object -Unique)
+    $n = @($Items | ForEach-Object { [int]$_.question } | Sort-Object -Unique | ForEach-Object {
+        $number = $_
+        $letters = @($Items | Where-Object { [int]$_.question -eq $number -and $null -ne $_.PSObject.Properties["part"] -and "$($_.part)" -cmatch '\A[a-z]\z' } | ForEach-Object { "$($_.part)" } | Sort-Object -Unique)
+        if ($letters.Count -eq 0) { "" + $number }
+        elseif ($letters.Count -eq 1) { "" + $number + " (part " + $letters[0] + ")" }
+        else { "" + $number + " (parts " + (($letters[0..($letters.Count - 2)]) -join ", ") + " and " + $letters[$letters.Count - 1] + ")" }
+    })
     $numbers = "question " + $n[0]
     if ($n.Count -gt 1) { $numbers = "questions " + (($n[0..($n.Count - 2)]) -join ", ") + " and " + $n[$n.Count - 1] }
     return ("" + $count + $(if ($count -eq 1) { " answer, " } else { " answers, " }) + $On + " " + $numbers)
@@ -258,15 +266,15 @@ function Get-HordeDecisionNotifyMessageId {
 
 function Get-HordeDecisionNotifyUnread {
     # The founder's messages the warchief has not read, from an inbox answer: { ok; reason; items },
-    # each item { question; message; at; route; evidence; signedBy } - the last three as the message's
-    # record holds them, "" where it holds none. The inbox only reads (decisions/Operations.ps1).
+    # each item { question; message; at; route; evidence; signedBy; part } - route, evidence and signedBy as the message's
+    # record holds them, "" where it holds none; part the letter of the one part answered, or "". The inbox only reads (decisions/Operations.ps1).
     param($Answer)
     if ($null -eq $Answer -or "$($Answer.state)" -cne "known") { return [pscustomobject]@{ ok = $false; reason = $(if ($null -ne $Answer) { "$($Answer.reason)" } else { "no answer" }); items = @() } }
     if ("$($Answer.value.outcome)" -cne "done") { return [pscustomobject]@{ ok = $false; reason = "$($Answer.value.reason)"; items = @() } }
     $items = @($Answer.value.messages | Where-Object { $null -ne $_ -and "$($_.message.speaker)" -ceq $script:HordeDecisionNotifySpeaker } | ForEach-Object {
         $held = @{}
-        foreach ($name in @("route", "evidence", "signedBy")) { $p = $_.message.PSObject.Properties[$name]; $held[$name] = $(if ($null -ne $p -and $p.Value -is [string]) { $p.Value } else { "" }) }
-        [pscustomobject]@{ question = [int]$_.number; message = "" + [long]$_.message.sequence; at = "$($_.message.at)"; route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"] }
+        foreach ($name in @("route", "evidence", "signedBy", "part")) { $p = $_.message.PSObject.Properties[$name]; $held[$name] = $(if ($null -ne $p -and $p.Value -is [string]) { $p.Value } else { "" }) }
+        [pscustomobject]@{ question = [int]$_.number; message = "" + [long]$_.message.sequence; at = "$($_.message.at)"; route = $held["route"]; evidence = $held["evidence"]; signedBy = $held["signedBy"]; part = $held["part"] }
     })
     return [pscustomobject]@{ ok = $true; reason = ""; items = $items }
 }

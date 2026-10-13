@@ -235,9 +235,14 @@ $r = Send-Steps @((Step "key" -Key " " -Ctrl))
 Check ((Get-Line $r 9).open -eq $false -and $r.drawn.answer.focus -ceq "9") "Ctrl+Space folds it again, the caret still there"
 
 Write-Host ""
-Write-Host "=== a reply made at the command line appears under the question, with no reload ===" -ForegroundColor Cyan
+Write-Host "=== a reply that asks, already in the store, appears under the question, with no reload ===" -ForegroundColor Cyan
+# The real command no longer writes such a reply under a question he has answered (2026-10-12: an
+# answered question is never put back in front of him). A store may already hold one, written before
+# that rule, and the window still shows it as it always did: the record is put there as a file.
 $reply = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "reply", "1", "-Text", "Which branch should it go to?") -Env $cliEnv
-Check ($reply.code -eq 0) "the keeper of the list replies under question 1 with the real command"
+Check ($reply.code -eq 1 -and $reply.out -like "*question 1 has been answered and is off the founder's list*" -and $reply.out -like "*-FollowsUp 1*") "the real command refuses to ask again under the question he answered, and says to ask a follow-up"
+$planted = Add-HordeProbeStoredRecord -Store (Join-Path $hordeHome "store\decisions") -Kind "message-said" -Data ([ordered]@{ number = 1; speaker = "warchief"; route = "command"; text = "Which branch should it go to?" })
+Check ($planted -ge 2) "a reply that asks is in the store all the same, as an earlier version left one"
 $after = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @((@($x.drawn.lines | Where-Object { $_.n -ceq "1" })[0]).th).Count -eq 2 }
 $l1 = Get-Line $after 1
 Check ((@($l1.th) -join " | ") -ceq "You: Yes - commit it as it stands. | Thrall: Which branch should it go to?") ("under question 1 stand his answer and then the reply, speaker and words, newest last (" + (@($l1.th) -join " | ") + ")")

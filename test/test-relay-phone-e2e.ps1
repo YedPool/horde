@@ -157,12 +157,16 @@ try {
     $hash = $(if (Test-Path -LiteralPath $recFile) { ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.IO.File]::ReadAllBytes($recFile))) } else { "(no record)" })
     Check ($run.code -eq 0 -and $said.Count -eq 1 -and $said[0].data.text -ceq $words -and $said[0].data.route -ceq "phone" -and $said[0].data.speaker -ceq "founder" -and $said[0].data.wordingVersion -eq $wording) ("the answer is in the decisions list once, his words exactly, by the route phone, to the wording he saw (" + $said.Count + " record(s))")
     Check ($said.Count -eq 1 -and $said[0].data.evidence -ceq $hash) "its evidence is the hash of the journal record that holds his signed envelope"
-    $null = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A chime it is: which of the three?" }
+    # HE HAS ANSWERED, so the question is off his list and nothing puts it back (2026-10-12): the
+    # warchief's words that ask are refused, and a note - which asks nothing - is what it says there.
+    $asked = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A chime it is: which of the three?" }
+    Check ($asked.state -ceq "known" -and $asked.value.outcome -ceq "refused" -and @(Get-Said).Count -eq 1) "the warchief's words that ask, under the question he answered from his phone, are refused: nothing is written"
+    $null = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A chime it is."; asks = $false }
     $run = Invoke-Run -Turns 1
     $o = Open-Latest $c.value
-    Check ($o.ok -and $o.body.questions[0].thread.count -eq 2 -and $o.body.questions[0].thread.turn -ceq "founder") "the phone's next snapshot shows his answer and the warchief's reply under the question, and the turn back with him"
+    Check ($o.ok -and $o.body.questions[0].thread.count -eq 2 -and $o.body.questions[0].thread.turn -ceq "warchief") "the phone's next snapshot shows his answer and the warchief's note under the question, and the turn still the warchief's: it is not back in front of him"
     $texts = $(if ($o.ok -and $null -ne $o.body.questions[0].thread.PSObject.Properties["messages"]) { @($o.body.questions[0].thread.messages | ForEach-Object { $_.text }) -join " | " } else { "(no messages)" })
-    Check ($texts -ceq ($words + " | A chime it is: which of the three?")) ("and it carries the messages themselves, his and the warchief's, word for word: what he needs to answer from the phone (" + $texts + ")")
+    Check ($texts -ceq ($words + " | A chime it is.")) ("and it carries the messages themselves, his and the warchief's, word for word (" + $texts + ")")
 
     Write-Host ""
     Write-Host "--- 4. delivered again, re-signed, resent: one record; other words: the first answer wins ---" -ForegroundColor Cyan

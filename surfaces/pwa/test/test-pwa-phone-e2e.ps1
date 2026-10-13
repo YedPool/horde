@@ -217,11 +217,11 @@ try {
 
     Write-Host ""
     Write-Host "--- 7. an old snapshot put again is not shown over the newer one ---" -ForegroundColor Cyan
-    $null = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A chime it is." }
+    $null = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A chime it is."; asks = $false }
     $run = Invoke-Run -Turns 1
     $newer = Invoke-App @{ cmd = "refresh"; id = $hid }
     $count = $(if ($newer.ok -and @($newer.value.questions).Count -gt 0) { [int]$newer.value.questions[0].thread.count } else { -1 })
-    Check ($newer.ok -and $count -ge 2 -and $newer.value.questions[0].thread.turn -ceq "founder") ("the newer snapshot shows the warchief's reply and the turn back with him (" + $count + " messages)")
+    Check ($newer.ok -and $count -ge 2 -and $newer.value.questions[0].thread.turn -ceq "warchief") ("the newer snapshot shows the warchief's note under the question he answered, the turn still the warchief's (" + $count + " messages)")
     $phoneBox = Join-Path $mailboxes "work\phone"
     $oldest = @(Get-ChildItem -LiteralPath $phoneBox -Filter "*.item" | Sort-Object Name | Select-Object -First 1)
     $c = Connect-HordeRelay -Name "local" -Options @{ root = $mailboxes }

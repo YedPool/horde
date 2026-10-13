@@ -85,6 +85,8 @@
         "act": {"type": "string", "description": "park or unpark when the founder's words record that act of his; empty otherwise."},
         "replaces": {"type": "boolean", "description": "True when the same speaker's own words were the last said under the question before these (acts left aside): these replace them. Worked out at the record's place."},
         "evidence": {"type": "string", "description": "For words answered on the founder's phone: the SHA-256, in lower-case hex, of the relay journal record that proved them; empty for every other message, and for a stored phone record that holds none."},
+        "part": {"type": "string", "description": "The letter of the one part of the question these words answer; empty for words said to the whole question."},
+        "partWords": {"type": "string", "description": "That part's words as they read when the answer was recorded; empty when no part is named, or the part was no longer in the question."},
         "signedBy": {"type": "string", "description": "For words answered on the founder's phone: the key id of the passkey the relay channel verified them against, as the record holds it; empty for every other message, and for a record that names none. What the record says, not a verdict: whether that passkey is trusted now is relay's to answer."}
       }
     },
@@ -119,7 +121,31 @@
         "turn": {"type": "string", "description": "Whose turn it is: the person asked until he speaks, then the other speaker until it replies; 'nobody' while the question is closed. Never stored."},
         "turnShown": {"type": "string", "description": "That, as a person is told it."},
         "unread": {"type": "array", "items": {"$ref": "#/definitions/unread"}, "description": "For each role that has an inbox: how many of these messages it has not read."},
-        "messages": {"type": "array", "items": {"$ref": "#/definitions/message"}, "description": "The messages, in store order. Present when one question is shown."}
+        "messages": {"type": "array", "items": {"$ref": "#/definitions/message"}, "description": "The messages, in store order. Present when one question is shown."},
+        "parts": {"type": "array", "items": {"$ref": "#/definitions/part"}, "description": "For a question of parts that are answered one by one: each part's letter, and whether the founder has answered it. Absent for any other question."}
+      }
+    },
+    "part": {
+      "type": "object",
+      "required": ["letter", "answered"],
+      "additionalProperties": false,
+      "properties": {
+        "letter": {"type": "string", "pattern": "^[a-z]$"},
+        "answered": {"type": "boolean", "description": "Whether a record answers this part. Never stored: worked out from the order of the records."}
+      }
+    },
+    "followsUp": {
+      "type": "object",
+      "description": "The earlier question a follow-up follows, as context: worked out from the list at the moment of showing, never stored with the new question.",
+      "required": ["number", "state", "title", "answer", "answerCut", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "state": {"type": "string", "description": "The earlier question's state; unreadable or absent when the list cannot show it, and then nothing else is said of it."},
+        "title": {"type": "string"},
+        "answer": {"type": "string", "description": "What the founder answered under it, as one text; empty when he did not."},
+        "answerCut": {"type": "boolean", "description": "True when the answer is longer than is carried here: the whole of it is under the earlier question's own number."},
+        "outcome": {"type": "string", "description": "What it was closed with; empty while it is open."}
       }
     },
     "history": {
@@ -163,7 +189,12 @@
         "updatedAt": {"type": "string", "description": "When the latest record that changed this question was written. Words said under it do not change it."},
         "closedAt": {"type": "string", "description": "Empty while it is open."},
         "history": {"type": "array", "items": {"$ref": "#/definitions/history"}, "description": "Every record that applied to this question, in order."},
-        "thread": {"$ref": "#/definitions/thread"}
+        "thread": {"$ref": "#/definitions/thread"},
+        "importance": {"type": "string", "description": "How much the task the question belongs to matters overall: a label of decisions/Rules.ps1's importances, normal for a question that was given none."},
+        "importanceShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
+        "blocks": {"type": "string", "description": "How much of that task's work stands still until the question is answered: a label of decisions/Rules.ps1's blockings, part for a question that was given none."},
+        "blocksShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
+        "followsUp": {"$ref": "#/definitions/followsUp"}
       }
     }
   }
