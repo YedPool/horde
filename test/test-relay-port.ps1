@@ -504,4 +504,72 @@ $a = Wait-HordeRelayWatch -Watch $fake -WaitMs 10
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not one Open-HordeRelayWatch made") -and $script:waits.Count -eq 1) "a look-alike watch carrying a real one's id is refused, and the relay is not asked"
 Close-HordeRelayWatch -Watch $o.value
 
+Write-Host ""
+Write-Host "--- a sender trims its own stream: asked on a put, checked before the relay sees it, its count never believed ---" -ForegroundColor Cyan
+# relays/Port.ps1, A SENDER TRIMS ITS OWN STREAM. A relay that hands over the put for it is asked through
+# it; one that does not is asked for the plain put, exactly as before.
+$script:keptCalls = New-Object System.Collections.ArrayList
+$script:plainPuts = 0
+$script:keptSays = [pscustomobject]@{ seq = [long]7; duplicate = $false; trimmed = [long]3 }
+$script:HordeRelays.Remove("fixture-good")
+$null = Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { param($o) New-HordeKnown -Value @{ fixture = $true } } -Get {} -Watch {} -Ack {} `
+    -Put { param($s, $m, $k, $t) $script:plainPuts++; New-HordeKnown -Value ([pscustomobject]@{ seq = [long]1; duplicate = $false }) } `
+    -PutKeeping { param($s, $m, $k, $t, $from) [void]$script:keptCalls.Add(@($m, $k, $t, $from)); New-HordeKnown -Value $script:keptSays }
+$trimming = Conn "fixture-good"
+$sender = "0123456789abcdef0123456789abcdef"
+$streamKey = $sender + "/decisions/12/" + ("ab" * 12)
+$named = Read-HordeRelayStreamKey -Key $streamKey
+Check ($null -ne $named -and $named.stream -ceq ($sender + "/decisions/") -and $named.seq -eq 12) "an envelope's replay key names its stream - sender, channel and the slash after them - and its seq in it"
+Check ((Read-HordeRelayStreamKey -Key ($sender + "/decisions/9007199254740991/" + ("ab" * 12))).seq -eq 9007199254740991) "the largest seq there is, 2^53-1, is still a seq"
+foreach ($notOne in @("sha256-" + ("a" * 64), ($sender + "/decisions/012/" + ("ab" * 12)), ($sender + "/decisions/0/" + ("ab" * 12)), ($sender + "/Decisions/12/" + ("ab" * 12)), ($sender.Substring(1) + "/decisions/12/" + ("ab" * 12)), ($sender + "/decisions/12/" + ("ab" * 11)), ($sender + "/decisions/12/" + ("ab" * 12) + "/x"), ($sender + "/decisions/99999999999999999/" + ("ab" * 12)), ($sender + "/decisions/9007199254740992/" + ("ab" * 12)))) {
+    Check ($null -eq (Read-HordeRelayStreamKey -Key $notOne)) ("a key that is not exactly one names no stream: " + $notOne)
+}
+Check ((Test-HordeRelaySenderTrim $trimming) -and -not (Test-HordeRelaySenderTrim "a string") -and -not (Test-HordeRelaySenderTrim $null)) "whether a relay trims is asked of a connection the port made: yes for one whose relay handed over the put for it"
+$a = Send-HordeRelayItem -Connection $trimming -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 10
+Check ($a.state -ceq "known" -and $a.value.seq -eq 7 -and $a.value.trimmed -eq 3 -and $script:keptCalls.Count -eq 1 -and $script:plainPuts -eq 0) "a put that says what to keep from goes to the relay's trimming put, once, and its answer says how many were trimmed"
+Check (($script:keptCalls[0] -join "|") -ceq ($mb + "|" + $streamKey + "|page|10")) ("the relay is handed the mailbox, the key, the text and the seq to keep from (" + ($script:keptCalls[0] -join "|") + ")")
+$a = Send-HordeRelayItem -Connection $trimming -Mailbox $mb -Text "page" -Key $streamKey
+Check ($a.state -ceq "known" -and $a.value.trimmed -eq -1 -and $script:plainPuts -eq 1 -and $script:keptCalls.Count -eq 1) "a put that asks for no trim is the plain put, and says none was made (-1)"
+$a = Send-HordeRelayItem -Connection $trimming -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 12
+Check ($a.state -ceq "known" -and $script:keptCalls.Count -eq 2) "keeping from the key's own seq is the most a put may ask: everything before itself"
+foreach ($case in @(
+        @{ k = $streamKey; f = [long]13; like = "past its own seq"; why = "from past the key's own seq - a put that could delete itself" },
+        @{ k = "plain-key"; f = [long]1; like = "names none"; why = "with a key that names no stream" },
+        @{ k = ""; f = [long]1; like = "names none"; why = "with no key at all (the text's hash names no stream)" },
+        @{ k = $streamKey; f = [long]-1; like = "whole number from 0"; why = "from a negative seq" },
+        @{ k = $streamKey; f = "10"; like = "whole number from 0"; why = "from a seq given as text" })) {
+    $before = $script:keptCalls.Count + $script:plainPuts
+    $a = Send-HordeRelayItem -Connection $trimming -Mailbox $mb -Text "page" -Key $case.k -KeepFrom $case.f
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like) -and ($script:keptCalls.Count + $script:plainPuts) -eq $before) ("a trim refused before the relay sees anything: " + $case.why)
+}
+foreach ($lie in @(
+        @{ v = [pscustomobject]@{ seq = [long]7; duplicate = $false }; why = "nothing of a trim (the hosted relay as deployed before it could)" },
+        @{ v = [pscustomobject]@{ seq = [long]7; duplicate = $false; trimmed = "3" }; why = "a count as text" },
+        @{ v = [pscustomobject]@{ seq = [long]7; duplicate = $false; trimmed = [long]-4 }; why = "a negative count" },
+        @{ v = [pscustomobject]@{ seq = [long]7; duplicate = $false; trimmed = 2.5 }; why = "a count that is not whole" })) {
+    $script:keptSays = $lie.v
+    $a = Send-HordeRelayItem -Connection $trimming -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 10
+    Check ($a.state -ceq "known" -and $a.value.seq -eq 7 -and $a.value.trimmed -eq -1) ("a relay that took the put and answered " + $lie.why + " is read as not having said: the put stands, trimmed is -1")
+}
+$script:keptSays = [pscustomobject]@{ duplicate = $false; trimmed = [long]3 }
+$a = Send-HordeRelayItem -Connection $trimming -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 10
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("without a seq")) "the trimming put's receipt is checked as any put's: one with no seq is unknown"
+# A relay with no such put is asked for the plain one, and the caller is told nothing was trimmed.
+$script:HordeRelays.Remove("fixture-good")
+$null = Reg "fixture-good"
+$plain = Conn "fixture-good"
+Check (-not (Test-HordeRelaySenderTrim $plain)) "CONTROL: a relay registered with no such put does not trim"
+$script:calls = 0
+$script:lastPut = $null
+$a = Send-HordeRelayItem -Connection $plain -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 10
+Check ($a.state -ceq "known" -and $a.value.trimmed -eq -1 -and $script:calls -eq 1 -and ($script:lastPut -join "|") -ceq ($mb + "|" + $streamKey + "|page")) "on a relay that does not trim, a put that asks is made as any other put, and says none was made (-1)"
+$a = Send-HordeRelayItem -Connection $plain -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 13
+Check ($a.state -ceq "unknown" -and $script:calls -eq 1) "and what it asks is still checked first: a relay that does not trim is not handed a put its caller got wrong"
+# A refusal's status reaches the caller from the trimming put as from any other (507: full).
+$script:HordeRelays.Remove("fixture-good")
+$null = Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { param($o) New-HordeKnown -Value @{ fixture = $true } } -Put {} -Get {} -Watch {} -Ack {} `
+    -PutKeeping { param($s, $m, $k, $t, $from) $u = New-HordeUnknown -Reason "the mailbox holds its most"; $u | Add-Member -NotePropertyName status -NotePropertyValue 507; return $u }
+$a = Send-HordeRelayItem -Connection (Conn "fixture-good") -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 10
+Check ($a.state -ceq "unknown" -and $null -ne $a.PSObject.Properties["status"] -and $a.status -eq 507) "a trimming put the relay refuses as full comes back unknown, carrying the relay's status (507)"
+
 Complete-HordeSuite -Success "the relay port refuses what it cannot vouch for, checks every answer, and never believes an item"
