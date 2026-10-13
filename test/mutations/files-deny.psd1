@@ -15,8 +15,65 @@
            Find = '@{ word = "secret"; how = "anywhere" }'
            Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
         @{ Name = "word-token-off-the-list"
-           Find = '@{ word = "token"; how = "anywhere" }'
+           Find = '@{ word = "token"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-token-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "token"; how = "word" }'
+           Replace = '@{ word = "token"; how = "anywhere" }' }
+        @{ Name = "word-passphrase-off-the-list"
+           Find = '@{ word = "passphrase"; how = "anywhere" }'
            Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-passphrase-only-as-a-whole-word"
+           Find = '@{ word = "passphrase"; how = "anywhere" }'
+           Replace = '@{ word = "passphrase"; how = "word" }' }
+        @{ Name = "word-mnemonic-off-the-list"
+           Find = '@{ word = "mnemonic"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-mnemonic-only-as-a-whole-word"
+           Find = '@{ word = "mnemonic"; how = "anywhere" }'
+           Replace = '@{ word = "mnemonic"; how = "word" }' }
+        @{ Name = "word-kubeconfig-off-the-list"
+           Find = '@{ word = "kubeconfig"; how = "anywhere" }'
+           Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
+        @{ Name = "word-kubeconfig-only-as-a-whole-word"
+           Find = '@{ word = "kubeconfig"; how = "anywhere" }'
+           Replace = '@{ word = "kubeconfig"; how = "word" }' }
+        @{ Name = "word-pwd-off-the-list"
+           Find = '@{ word = "pwd"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-pwd-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "pwd"; how = "word" }'
+           Replace = '@{ word = "pwd"; how = "anywhere" }' }
+        @{ Name = "word-totp-off-the-list"
+           Find = '@{ word = "totp"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-totp-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "totp"; how = "word" }'
+           Replace = '@{ word = "totp"; how = "anywhere" }' }
+        @{ Name = "word-seed-off-the-list"
+           Find = '@{ word = "seed"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-seed-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "seed"; how = "word" }'
+           Replace = '@{ word = "seed"; how = "anywhere" }' }
+        @{ Name = "word-jwt-off-the-list"
+           Find = '@{ word = "jwt"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-jwt-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "jwt"; how = "word" }'
+           Replace = '@{ word = "jwt"; how = "anywhere" }' }
+        @{ Name = "word-vault-off-the-list"
+           Find = '@{ word = "vault"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-vault-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "vault"; how = "word" }'
+           Replace = '@{ word = "vault"; how = "anywhere" }' }
+        @{ Name = "word-2fa-off-the-list"
+           Find = '@{ word = "2fa"; how = "word" }'
+           Replace = '@{ word = "zzzzzz"; how = "word" }' }
+        @{ Name = "word-2fa-looked-for-anywhere-in-a-name"
+           Find = '@{ word = "2fa"; how = "word" }'
+           Replace = '@{ word = "2fa"; how = "anywhere" }' }
         @{ Name = "word-key-off-the-list"
            Find = '@{ word = "key"; how = "anywhere" }'
            Replace = '@{ word = "zzzzzz"; how = "anywhere" }' }
@@ -427,23 +484,72 @@
            Find = '$liftedKind = Find-HordeSecretKind -Text $text -Kinds @($list.shapes.lifted)'
            Replace = '$liftedKind = Find-HordeSecretKind -Text $text' }
         @{ Name = "access-token-off-the-shapes"
-           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
-           Replace = 'shapes = @{ never = @("a private key"); lifted = @("a private key", "a signed web token", "a webhook address") }' }
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("a private key", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }' }
         @{ Name = "signed-web-token-off-the-shapes"
-           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
-           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a private key", "a webhook address") }' }
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a private key", "a webhook address", "a secret written under a name such as client_secret or password") }' }
         @{ Name = "webhook-address-off-the-shapes"
-           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
-           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a private key") }' }
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a private key", "a secret written under a name such as client_secret or password") }' }
         @{ Name = "private-key-is-a-shape-force-lifts"
-           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
-           Replace = 'shapes = @{ never = @("a webhook address"); lifted = @("an access token", "a signed web token", "a private key") }' }
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a webhook address"); lifted = @("an access token", "a signed web token", "a private key", "a secret written under a name such as client_secret or password") }' }
         @{ Name = "long-runs-looked-for-in-a-text"
-           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
-           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a long random-looking string, as a key or token is") }' }
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a long random-looking string, as a key or token is", "a secret written under a name such as client_secret or password") }' }
         @{ Name = "name-value-pairs-looked-for-in-a-text"
-           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }'
-           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a password or key written as name=value") }' }
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a password or key written as name=value", "a secret written under a name such as client_secret or password") }' }
+        @{ Name = "named-secret-off-the-shapes"
+           Find = 'lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'lifted = @("an access token", "a signed web token", "a webhook address", "a private key") }' }
+        @{ Name = "named-secret-is-a-shape-force-never-lifts"
+           Find = 'shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }'
+           Replace = 'shapes = @{ never = @("a private key", "a secret written under a name such as client_secret or password"); lifted = @("an access token", "a signed web token", "a webhook address") }' }
+        # --- a harness's own file, and a copy left beside it (the review's second round, 2026-10-13) ---
+        @{ Name = "harness-file-not-looked-for"
+           Find = '$ownFile = Get-HordeFilesHarnessFile -FinalPath $FinalPath -Known @($where.paths)'
+           Replace = '$ownFile = ""' }
+        @{ Name = "force-lifts-a-harness-file"
+           Find = 'if ($ownFile -ne "") {'
+           Replace = 'if ($ownFile -ne "" -and -not $Force) {' }
+        @{ Name = "harness-file-refused-only-with-force"
+           Find = 'if ($ownFile -ne "") {'
+           Replace = 'if ($ownFile -ne "" -and $Force) {' }
+        @{ Name = "harness-file-refusal-says-force-shares-it"
+           Find = '$ownsIt = ". A harness''s own file is never shared, and -Force does not change that"'
+           Replace = '$ownsIt = $insist' }
+        @{ Name = "a-copy-beside-a-harness-file-said-to-be-the-file"
+           Find = 'if ($itself) { return'
+           Replace = 'if ($true) { return' }
+        @{ Name = "a-harness-file-said-to-be-a-copy-beside-it"
+           Find = 'if ($itself) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-root-that-is-a-folder-is-taken-for-a-file"
+           Find = 'if (-not [System.IO.File]::Exists($declared)) { continue }'
+           Replace = '' }
+        @{ Name = "a-root-that-is-not-there-is-taken-for-a-file"
+           Find = 'if (-not [System.IO.File]::Exists($declared)) { continue }'
+           Replace = 'if ([System.IO.Directory]::Exists($declared)) { continue }' }
+        @{ Name = "a-copy-beside-a-harness-file-not-refused"
+           Find = '$nameOfIt.StartsWith((ConvertTo-HordeAsciiLower -Text $declared.Substring($at + 1)), [System.StringComparison]::Ordinal)'
+           Replace = '[string]::Equals($nameOfIt, (ConvertTo-HordeAsciiLower -Text $declared.Substring($at + 1)), [System.StringComparison]::Ordinal)' }
+        @{ Name = "a-name-that-only-holds-a-harness-files-name-refused"
+           Find = '$nameOfIt.StartsWith((ConvertTo-HordeAsciiLower -Text $declared.Substring($at + 1)), [System.StringComparison]::Ordinal)'
+           Replace = '$nameOfIt.Contains((ConvertTo-HordeAsciiLower -Text $declared.Substring($at + 1)))' }
+        @{ Name = "a-harness-files-name-refused-in-any-folder"
+           Find = 'if ($sameFolder -and $nameOfIt.'
+           Replace = 'if ($nameOfIt.' }
+        @{ Name = "everything-beside-a-harness-file-refused"
+           Find = 'if ($sameFolder -and $nameOfIt.StartsWith((ConvertTo-HordeAsciiLower -Text $declared.Substring($at + 1)), [System.StringComparison]::Ordinal)) { return $declared }'
+           Replace = 'if ($sameFolder) { return $declared }' }
+        @{ Name = "harness-file-name-compared-with-its-case"
+           Find = '$nameOfIt = ConvertTo-HordeAsciiLower -Text $FinalPath.Substring($cut + 1)'
+           Replace = '$nameOfIt = $FinalPath.Substring($cut + 1)' }
+        @{ Name = "harness-file-folder-judged-one-level-up"
+           Find = '$folderOfIt = ConvertTo-HordeAsciiLower -Text $FinalPath.Substring(0, $cut)'
+           Replace = '$folderOfIt = ConvertTo-HordeAsciiLower -Text $FinalPath.Substring(0, $FinalPath.Substring(0, $cut).LastIndexOf([char]92))' }
         @{ Name = "token-refusal-does-not-name-the-kind"
            Find = '("what it holds looks like " + $liftedKind + ", by its shape'
            Replace = '("what it holds looks like a secret" + ", by its shape' }

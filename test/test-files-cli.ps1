@@ -369,7 +369,16 @@ $holdsToken = New-Dummy (Join-Path $docs "a-note.md") ("The value is " + $token4
 $before = Get-Store4Names
 $r = Invoke-Deny -Arguments @("share", $holdsToken, "-Title", "A note")
 Check ($r.code -eq 1 -and $r.out -like "*not shared: what it holds looks like an access token, by its shape*share it again with -Force*" -and -not $r.out.Contains("Ab1Ab1") -and (Get-Store4Names) -ceq $before) "a Markdown file holding a token of a known shape is refused, the line names the kind and repeats nothing of what was found"
+
 Check (Test-Allowed @("share", $holdsToken, "-Title", "A note, and no secret", "-Force")) "with -Force it is shared"
+# A SECRET UNDER ITS OWN NAME: the made-up client file of a sign-in provider, under a name that says
+# nothing. Until the second round of the review (2026-10-13) it was shared with no -Force.
+$clientValue4 = "GOC" + "SPX-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1w"
+$holdsClient = New-Dummy (Join-Path $docs "web-client.json") ('{"web":{"client_id":"made-up.apps.example.com","client_' + 'secret":"' + $clientValue4 + '"}}')
+$before = Get-Store4Names
+$r = Invoke-Deny -Arguments @("share", $holdsClient, "-Title", "A client file")
+Check ($r.code -eq 1 -and $r.out -like "*not shared: what it holds looks like a secret written under a name such as client_secret or password*share it again with -Force*" -and -not $r.out.Contains("Ab3dEf6h") -and (Get-Store4Names) -ceq $before) "a JSON file holding a secret under the member name client_secret is refused, and the line names the kind and repeats nothing of the value"
+Check (Test-Allowed @("share", $holdsClient, "-Title", "A client file, and made up", "-Force")) "with -Force it is shared"
 
 Write-Host ""
 Write-Host "--- the deny list judges where the file really is: a junction ---" -ForegroundColor Cyan

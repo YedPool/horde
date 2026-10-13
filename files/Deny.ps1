@@ -19,6 +19,21 @@
 #   (agents/<name>/stores.json, through core/MetricsStore.ps1's Get-HordeAgentStoreRoots): its
 #   folder in the profile, and the folder a variable of its own moves its store to. No harness is
 #   named here (CONTRIBUTING 14), and a new one is covered the day its folder declares its stores.
+#   A HARNESS'S OWN FILE IS NEVER SHARED, whatever the caller says (the review's second round,
+#   2026-10-13). A root an adapter declares may be a FILE and not a folder: the one a harness
+#   keeps beside its folder, in the profile itself, with its account in it. Until then it was a
+#   place like the folder, and -Force shared it. WHETHER A ROOT IS A FILE IS ASKED OF THE DISK,
+#   not of its name, so it holds for any root of any adapter, a root its variable names too; a
+#   root that is a folder stays a place -Force lifts. AND SO IS ANY FILE BESIDE IT WHOSE NAME
+#   BEGINS WITH ITS NAME, in the same folder: measured that day, another tool had left a copy
+#   of such a file there with a suffix after its name, and the next suffix is not known. The
+#   beginning is compared with A to Z folded, by code units. NOT refused by this: a name that
+#   only holds the declared name further on, and the same beginning in any other folder - the
+#   rule is about the place the adapter declares, and a copy carried elsewhere is made on
+#   purpose, as a hard link is (below); what it holds is still looked into.
+#   KNOWN LIMIT: when the declared file is not on the disk, nothing says it is a file, so a copy
+#   of it left beside where it was is an ordinary file. The adapter saying "this root is a file"
+#   would close that; it is core's reader to change.
 #   An adapter that does not say makes the answer unknown, and that is a refusal: a harness nobody
 #   described is not left open. So does an agents folder that is not there at all: core answers
 #   that with an empty list, which here would deny nothing and say nothing.
@@ -36,8 +51,9 @@
 #
 # THE NAMES. A file whose NAME holds one of the list's words is refused unless the caller gives
 # -Force. EACH WORD SAYS WHICH OF TWO WAYS IT IS LOOKED FOR (the list has one entry a word):
-#   anywhere   the letters, wherever they stand in the name: credential, secret, token, key,
-#              password, passwd, .env. So htpasswd.txt and MySecretNotes.md are refused.
+#   anywhere   the letters, wherever they stand in the name: credential, secret, key, password,
+#              passwd, .env, passphrase, mnemonic, kubeconfig. So htpasswd.txt and
+#              MySecretNotes.md are refused.
 #   word       only as a whole word of the name. The name is cut into words at every character
 #              that is not a letter or digit of ASCII and where a small letter meets a capital
 #              (Get-HordeFilesNameWords), and the entry must be one of them, or one of them with a
@@ -47,7 +63,10 @@
 #              together in order, whatever is between them: serviceAccount.json, id-rsa.txt.
 #              THESE WORDS ARE SHORT, and anywhere in a name they would refuse ordinary files
 #              (the review's decision, 2026-10-13: "auth" is in author, "cred" in credits, "pem"
-#              in template).
+#              in template). token IS ONE OF THESE since the second round of that review:
+#              anywhere, it refused tokenizer-comparison.md; as a word it still refuses
+#              token-budget-analysis.md, and that is accepted. So are pwd, totp, seed, jwt, vault
+#              and 2fa (a digit is a letter of a word here, so 2fa is one word).
 #   WHAT THE WORD WAY MISSES: a word run into another with no capital between them (authfile.json,
 #   AUTHFile.json), and digits count as letters (auth2.json is the word auth2).
 #   env IS A WORD AS WELL AS .env ANYWHERE: env.json was shared, because the name has no dot
@@ -74,12 +93,17 @@
 #     the name before "key" is looked for. The rule fails towards refusing: api-key.txt,
 #     id_rsa.key.txt, keys.json, mykey.txt and keyed.md are refused, monkey-api-key.txt is refused
 #     (the word that is left is "key"), and an ordinary word that is not on the list (a surname, a
-#     product) costs its owner a -Force. The other words have no such list: tokenizer.md and
-#     secretary.txt are refused, and -Force shares them.
+#     product) costs its owner a -Force. The other words have no such list: secretary.txt and
+#     passwordless.md are refused, and -Force shares them.
 #
 # -Force IS THE CALLER SAYING "this file holds no secret". It lifts the names and the harness
 # folders, and the shapes of a token in a text. It is never honoured for the Horde home,
-# .horde-secrets, .ssh or a private key in a text, and the refusal says so.
+# .horde-secrets, .ssh, a harness's own file or a private key in a text, and the refusal says so.
+#   BY DESIGN, AND SAID PLAINLY (the review's second round): with -Force NO shape of a token is
+#   looked for at all, only the first line of a private key. And with -Force a file whose name
+#   holds no word of the list is shared even when the agents folder is missing or a harness did
+#   not say where its folders are: what cannot be told then is only whether the file is in a
+#   harness's folder, and that is the thing -Force lifts.
 #   INSIDE A HARNESS'S FOLDER -Force LIFTS THE PLACE AND NEVER THE NAME (the review's decision,
 #   2026-10-13). What sessions said to a harness is there, and a founder may well want one of
 #   those shared; the harness's sign-in is there too, under a name like the ones above. So with
@@ -88,7 +112,9 @@
 #
 # WHAT A TEXT FILE HOLDS IS LOOKED AT TOO, before its bytes are kept
 # (Get-HordeFilesContentRefusal): a private key's first line is refused whatever the caller
-# says, and a token of a known shape unless the caller gives -Force. A picture and a PDF are not
+# says, and a token of a known shape unless the caller gives -Force; and, the same way, a secret
+# written under its own name (client_secret, api_key, password and three more, as a JSON member
+# or as name=value: core/Secrets.ps1 has the rule, and the names). A picture and a PDF are not
 # looked into.
 #
 # EVERY RULE JUDGES THE FINAL PATH OF THE OPEN HANDLE, never the path that was written
@@ -124,16 +150,20 @@ function Get-HordeFilesDenyList {
         secretsFolder = ".horde-secrets"
         sshFolder = ".ssh"
         words = @(
-            @{ word = "credential"; how = "anywhere" }, @{ word = "secret"; how = "anywhere" }, @{ word = "token"; how = "anywhere" },
+            @{ word = "credential"; how = "anywhere" }, @{ word = "secret"; how = "anywhere" },
             @{ word = "key"; how = "anywhere" }, @{ word = "password"; how = "anywhere" }, @{ word = "passwd"; how = "anywhere" },
-            @{ word = ".env"; how = "anywhere" },
+            @{ word = ".env"; how = "anywhere" }, @{ word = "passphrase"; how = "anywhere" }, @{ word = "mnemonic"; how = "anywhere" },
+            @{ word = "kubeconfig"; how = "anywhere" },
+            @{ word = "token"; how = "word" },
             @{ word = "auth"; how = "word" }, @{ word = "oauth"; how = "word" }, @{ word = "cred"; how = "word" },
             @{ word = "private"; how = "word" }, @{ word = "wallet"; how = "word" }, @{ word = "cookie"; how = "word" },
             @{ word = "recovery"; how = "word" }, @{ word = "env"; how = "word" }, @{ word = "service-account"; how = "word" },
             @{ word = "id_rsa"; how = "word" }, @{ word = "id_dsa"; how = "word" }, @{ word = "id_ecdsa"; how = "word" }, @{ word = "id_ed25519"; how = "word" },
             @{ word = "pem"; how = "word" }, @{ word = "pfx"; how = "word" }, @{ word = "p12"; how = "word" }, @{ word = "ppk"; how = "word" },
             @{ word = "kdbx"; how = "word" }, @{ word = "jks"; how = "word" }, @{ word = "netrc"; how = "word" }, @{ word = "npmrc"; how = "word" },
-            @{ word = "pypirc"; how = "word" }, @{ word = "tfstate"; how = "word" }
+            @{ word = "pypirc"; how = "word" }, @{ word = "tfstate"; how = "word" },
+            @{ word = "pwd"; how = "word" }, @{ word = "totp"; how = "word" }, @{ word = "seed"; how = "word" }, @{ word = "jwt"; how = "word" },
+            @{ word = "vault"; how = "word" }, @{ word = "2fa"; how = "word" }
         )
         ordinary = @{ key = @("keyboard", "keybind", "keymap", "keynote", "keyword", "keyframe", "keystroke", "keypad", "hotkey", "monkey", "donkey", "turkey", "hockey", "jockey", "whiskey") }
         # A file of exactly one of these names, in a folder of exactly one of these names, is a
@@ -144,7 +174,7 @@ function Get-HordeFilesDenyList {
         # WHAT A TEXT FILE MAY NOT HOLD, by the names core/Secrets.ps1 gives its kinds: only the
         # kinds that know a credential by its SHAPE (Get-HordeFilesContentRefusal says why only
         # those). never is refused whatever the caller says; lifted is what -Force lifts.
-        shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address") }
+        shapes = @{ never = @("a private key"); lifted = @("an access token", "a signed web token", "a webhook address", "a secret written under a name such as client_secret or password") }
     }
 }
 
@@ -312,6 +342,28 @@ function Resolve-HordeFilesDenyPlace {
     return [pscustomobject]@{ paths = @($known.ToArray()); unknown = $false }
 }
 
+function Get-HordeFilesHarnessFile {
+    # The declared root that makes the file at -FinalPath a harness's own file, or "" when none
+    # does: one of -Known, the paths a root is known by (Resolve-HordeFilesDenyPlace), that IS A
+    # FILE on the disk, with -FinalPath in the same folder under a name that begins with its name
+    # (the header says why, and what this does not see). The root itself is the plainest case of
+    # it. A to Z are folded and nothing else; the comparison is by code units.
+    param([Parameter(Mandatory = $true)][string]$FinalPath, [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Known)
+    $cut = $FinalPath.LastIndexOf('\')
+    if ($cut -lt 0) { return "" }
+    $folderOfIt = ConvertTo-HordeAsciiLower -Text $FinalPath.Substring(0, $cut)
+    $nameOfIt = ConvertTo-HordeAsciiLower -Text $FinalPath.Substring($cut + 1)
+    foreach ($declared in @($Known)) {
+        $at = $declared.LastIndexOf('\')
+        if ($at -lt 0 -or $at -eq ($declared.Length - 1)) { continue }
+        # ASKED OF THE DISK, and only whether a file has that name: nothing is opened.
+        if (-not [System.IO.File]::Exists($declared)) { continue }
+        $sameFolder = [string]::Equals($folderOfIt, (ConvertTo-HordeAsciiLower -Text $declared.Substring(0, $at)), [System.StringComparison]::Ordinal)
+        if ($sameFolder -and $nameOfIt.StartsWith((ConvertTo-HordeAsciiLower -Text $declared.Substring($at + 1)), [System.StringComparison]::Ordinal)) { return $declared }
+    }
+    return ""
+}
+
 function Get-HordeFilesNameRefusal {
     # Why the NAME of the file at -FinalPath is one a file of secrets has, as the start of a
     # sentence, or "" when it is not: a word of the list in the file's own name, or a cloud
@@ -378,6 +430,17 @@ function Get-HordeFilesDenyRefusal {
                 if ($harnessDoubt -eq "") { $harnessDoubt = $untold }
                 continue
             }
+            # A HARNESS'S OWN FILE, AND A COPY LEFT BESIDE IT: never lifted (the header says why),
+            # so it is answered here, before anything -Force lifts is weighed.
+            if ($lifted) {
+                $ownFile = Get-HordeFilesHarnessFile -FinalPath $FinalPath -Known @($where.paths)
+                if ($ownFile -ne "") {
+                    $itself = [string]::Equals((ConvertTo-HordeAsciiLower -Text $FinalPath), (ConvertTo-HordeAsciiLower -Text $ownFile), [System.StringComparison]::Ordinal)
+                    $ownsIt = ". A harness's own file is never shared, and -Force does not change that"
+                    if ($itself) { return ("'" + $FinalPath + "' is an agent harness's own file, the one it keeps beside its folder with its account and its settings in it ('" + $place.path + "')" + $ownsIt) }
+                    return ("'" + $FinalPath + "' is beside an agent harness's own file ('" + $place.path + "') and its name begins with that file's name, as a copy or a backup of it does" + $ownsIt)
+                }
+            }
             foreach ($folder in @($where.paths)) {
                 if (-not (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder)) { continue }
                 if (-not $lifted) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $never) }
@@ -417,7 +480,12 @@ function Get-HordeFilesContentRefusal {
     #     page that explains a setting, a hash, a picture written as base64. A refusal that fires
     #     on ordinary files teaches everyone to type -Force, so they are not asked for at all.
     #     Measured 2026-10-13 on a sample of what sessions write: the pull request has the count.
-    #   - A PRIVATE KEY IS NEVER LIFTED; the other shapes are what -Force lifts.
+    #     ONE KIND GOES BY A NAME AND IS ASKED FOR ALL THE SAME (the review's second round): a
+    #     secret under one of six member names, as a client file of a sign-in provider holds it.
+    #     It is asked for because a placeholder is told from a value there; the pull request
+    #     has its count on the same sample.
+    #   - A PRIVATE KEY IS NEVER LIFTED; the other shapes are what -Force lifts. WITH -Force
+    #     THEY ARE NOT LOOKED FOR AT ALL: that is by design, and the command's help says it.
     #   - THE REFUSAL NAMES THE KIND AND NEVER WHAT WAS FOUND: a reason is printed and logged.
     #   WHAT THIS DOES NOT SEE: a picture or a PDF (never looked into); a credential written in
     #   another encoding of itself (base64 of a key, an escaped form); one cut across two lines;
