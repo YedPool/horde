@@ -289,6 +289,7 @@ try {
     $r = Pass $h9 @{ ForceFetch = $true; IgnoreIdle = $true; SettleSeconds = 60; BudgetSeconds = 60 }
     Check ($r.services[0].code -ceq "updated" -and (Calls "sleep") -ge 1 -and (Read-HordeServiceState -Name "svc" -HordeHome $h9).value.runningRevision -ceq $revB) "with -Now it goes on passing until the new revision has proven itself"
     Check (@(Get-HordeServiceRolloutVerdict -Definitions $defs -Services $r.services).Count -eq 0) "and then the roll-out is complete"
+    Check (@(Get-HordeServiceRolloutVerdict -Definitions $defs -Services @([pscustomobject]@{ name = "svc"; code = "held"; reason = "held" })).Count -eq 0) "a service a person is holding is not a roll-out that failed: it is left as it is, on purpose"
     $tools = New-Tools
     $plain = [pscustomobject]@{ name = "p"; follow = $null }
     Check (@(Get-HordeServiceRolloutVerdict -Definitions @($plain) -Services @([pscustomobject]@{ name = "p"; code = "running"; reason = "r" })).Count -eq 0 -and @(Get-HordeServiceRolloutVerdict -Definitions @($plain) -Services @([pscustomobject]@{ name = "p"; code = "backing-off"; reason = "r" })).Count -eq 1 -and @(Get-HordeServiceRolloutVerdict -Definitions @($plain) -Services @()).Count -eq 1) "a service that follows nothing has nothing to roll out; one that is failing, or was not looked at, is not done"
@@ -758,12 +759,14 @@ try {
     $prog = Start-HordeServiceProcess -Launch $pl
     if ($prog.state -ceq "known") { [void]$children.Add($prog.value) }
     Check ($prog.state -ceq "known") ("a program is started through the adapter, with an exit file asked for (" + $prog.reason + ")")
-    $deadline = (Get-Date).AddSeconds(90)
+    # 40 s: the stub lives 12 s; a run in which no record ever comes must still end in good time.
+    $deadline = (Get-Date).AddSeconds(40)
     while (-not (Test-Path -LiteralPath $exitFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
     $gotArgs = ""; if (Test-Path -LiteralPath $argsFile) { $gotArgs = [System.IO.File]::ReadAllText($argsFile) }
     Check ($gotArgs -ceq "a b|it's|x&y|100%") ("its arguments reached it exactly as the launch gave them, with nothing wrapped round them (" + $gotArgs + ")")
     $recorded = $null
-    if (Test-Path -LiteralPath $exitFile) { $recorded = [System.IO.File]::ReadAllText($exitFile) | ConvertFrom-Json }
+    # A record that is not whole JSON - a watcher that could not read the code writes none - is no record.
+    if (Test-Path -LiteralPath $exitFile) { try { $recorded = [System.IO.File]::ReadAllText($exitFile) | ConvertFrom-Json } catch { $recorded = $null } }
     Check ($null -ne $recorded -and $recorded.code -eq 11 -and $recorded.pid -eq $prog.value.pid -and (Test-HordeHeartbeatSameStart -One (ConvertFrom-HordeHeartbeatTimeText $recorded.startedAt) -Other $prog.value.startedAt)) "the watcher beside it recorded the code it ended with, and whose code it is: the same pid and the same start"
     $watcherText = ConvertTo-HordeWindowsWatcherScript -ProcessId 4321 -StartedAt $t0 -ExitFile "C:\it's & 50% `$(x)\exit.json"
     Check (-not $watcherText.Contains("it's") -and -not $watcherText.Contains("50%") -and $watcherText.Contains("GetProcessById(4321)") -and $watcherText.Contains('$null = $p.Handle') -and $watcherText.IndexOf('$null = $p.Handle') -lt $watcherText.IndexOf("StartTime")) "the watcher's command holds no path as text, and takes the process's handle BEFORE it checks whose process it is"

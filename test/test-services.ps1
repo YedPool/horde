@@ -399,7 +399,10 @@ try {
     Check ((Is $dHalf "wait" "" "checkout-unsafe") -and $dHalf.notify -ceq "escalate" -and $dHalf.what -ceq "half-moved" -and $dHalf.reason -like "*changed or stray files*" -and $null -eq $dHalf.state.launchingAt) "with changed or stray files in it, NOTHING is started from it: wait, and tell someone"
     Check ((Decide $up $dHalf.state (Obs -Checkout (Co $revA $true $false "" $false) -Wanted (Want $revB)) $t0.AddSeconds(130)).notify -eq "") "told once"
     Check ((Decide $up $sHalf (Obs -Checkout (Co $revC $true $true "" $true) -Wanted (Want $revB)) $t0.AddSeconds(70)).code -ceq "checkout-unsafe") "nor when it is spotless but on a revision that is neither end of the move"
-    Check ((Decide $up $sHalf (Obs -Checkout (New-HordeUnknown -Reason "status timed out") -Wanted (Want $revB)) $t0.AddSeconds(70)).code -ceq "checkout-unsafe") "nor when it cannot be read: unknown is never whole"
+    # (Asked so that a decision which THROWS on an unreadable checkout fails this check, not the suite.)
+    $unread = "it threw"
+    try { $unread = (Decide $up $sHalf (Obs -Checkout (New-HordeUnknown -Reason "status timed out") -Wanted (Want $revB)) $t0.AddSeconds(70)).code } catch { $unread = "it threw" }
+    Check ($unread -ceq "checkout-unsafe") "nor when it cannot be read: unknown is never whole"
     Check ((Decide $up $sHalf (Obs -Checkout (Co $revA) -Wanted (Want $revB)) $t0.AddSeconds(70)).code -ceq "checkout-unsafe") "nor on a look that did not ask whether it is spotless"
     $dWholeA = Decide $up $sHalf (Obs -Checkout (Co $revA $true $true "" $true) -Wanted (Want $revB)) $t0.AddSeconds(70)
     Check ((Is $dWholeA "start" "start" "start") -and $null -eq $dWholeA.state.moving) "proven whole on the revision it came from, it is started, and the mark is taken off"
@@ -492,6 +495,7 @@ try {
     Check (($thr.stop.deliberateExitCodes -join ",") -ceq "10,11" -and ($thr.start.arguments -join "|") -ceq "-a|b c" -and @((One $base).stop.deliberateExitCodes).Count -eq 0) "a definition may list the exit codes with which its service ends itself on purpose; its arguments stay exactly as given"
     Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t.exe" }, "stop": { "kind": "kill", "deliberateExitCodes": ["10"] } }') "deliberateExitCodes must be a list") "the codes are whole numbers, not words"
     Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t.exe" }, "stop": { "kind": "kill", "deliberateExitCodes": 10 } }') "deliberateExitCodes must be a list") "and a list"
+    Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t.exe" }, "stop": { "kind": "kill", "deliberateExitCodes": [10.5] } }') "deliberateExitCodes must be a list") "a code with a fraction is not rounded to one that might be meant: it is refused"
     Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t\\run.cmd" }, "stop": { "kind": "kill" } }') "is a batch file") "a batch file is not taken as a program: the command interpreter would read its arguments again as commands"
     Check (Refused ('"svc": { "start": { "kind": "program", "program": "C:\\t\\RUN.BAT" }, "stop": { "kind": "kill" } }') "is a batch file") "in any case of letters"
     $ranThr = New-HordeServiceState -Name "svc"; $ranThr.started = [pscustomobject]@{ pid = 800; startedAt = $born; at = $born }
