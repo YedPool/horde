@@ -8,6 +8,15 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-run-that-sends-starts-over-a-silence-it-cannot-read"
+           Find = 'if ($run.live) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet'
+           Replace = 'if ($false) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet' }
+        @{ Name = "a-shadow-run-is-refused-over-its-silence-file"
+           Find = 'if ($run.live) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet'
+           Replace = 'if ($true) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet' }
+        @{ Name = "the-silence-refusal-hides-the-ledgers"
+           Find = 'if ($run.live) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet'
+           Replace = 'if ($run.live) { if ($true) { $run.refused = ("what was saved of a silent fleet' }
         @{ Name = "the-acknowledgements-do-not-reach-the-silence"
            Find = '-Entries $result.entries -Acks $result.acks -Now $Now -Settings $Settings'
            Replace = '-Entries $result.entries -Acks @{} -Now $Now -Settings $Settings' }
@@ -18,8 +27,8 @@
            Find = 'if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }'
            Replace = 'if ($false) { $run.silence = $savedSilence.value.seen }' }
         @{ Name = "an-unreadable-silence-is-not-said"
-           Find = 'elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }'
-           Replace = '' }
+           Find = 'else { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }'
+           Replace = 'else { }' }
         @{ Name = "the-end-of-a-silence-is-not-saved"
            Find = 'return ("" + ((Get-HordeWakeEntryValue $Seen "silent") -eq $true) + "|" + $since)'
            Replace = 'return ("" + $since)' }

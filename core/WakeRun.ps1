@@ -101,7 +101,15 @@ function New-HordeWakeRun {
     # sending runs share one, as they share the ledger whose attempts it forgave.
     $savedSilence = Read-HordeWakeSilence -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($savedSilence.state -ceq "known") { $run.silence = $savedSilence.value.seen }
-    elseif ($savedSilence.state -ceq "unknown") { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }
+    elseif ($savedSilence.state -ceq "unknown") {
+        # A SILENCE FILE THAT IS THERE AND CANNOT BE READ IS NOT "NOT SILENT", for a run that sends. It
+        # was: a watcher restarted in a silent fleet over a damaged file counted its knocks again from
+        # the forgiven ledger and spent every session's budget a second time - the very thing the file
+        # is kept to prevent (review of PR 230). As for the ledger: a shadow run goes on, saying so; a
+        # run that sends is refused, and the ledger's refusal, when there is one, is said first.
+        if ($run.live) { if ("$($run.refused)" -ceq "") { $run.refused = ("what was saved of a silent fleet is there and cannot be read (" + $savedSilence.reason + "): a run that sends does not start as though the fleet were not silent, because in a silent fleet that spends every session's nudges again. Mend the file, or remove it to start as not silent on purpose: " + (Get-HordeWakeStateFile -Name "silence" -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome)) } }
+        else { $run.said = @($run.said) + ("starting as though the fleet were not silent - " + $savedSilence.reason) }
+    }
     $savedRestore = Read-HordeRestoreState -Name (Get-HordeWakeSenderFile -Run $run -Stem "restore").name -Mode (Get-HordeWakeSenderFile -Run $run -Stem "restore").mode -HordeHome $HordeHome
     if ($savedRestore.state -ceq "known") { $run.posted = $savedRestore.value.posted; $run.restores = @($savedRestore.value.known) }
     elseif ($savedRestore.state -ceq "unknown") { $run.said = @($run.said) + ("starting with no mail marked posted - " + $savedRestore.reason) }

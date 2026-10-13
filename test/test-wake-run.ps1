@@ -216,7 +216,20 @@ $end = @(foreach ($n in 421..423) { Set-HordeMemoryWakerClock (At ($n * 3)); Inv
 Check (@($end | Where-Object { $_ -ceq "fleet-moving" }).Count -eq 1 -and (New-HordeWakeRun -Live -Self "" -HordeHome $h).silence.silent -eq $false) "and when a session takes its mail it says fleet-moving, and that is saved too"
 [System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), "{ not json")
 $unsure = New-HordeWakeRun -Live -Self "" -HordeHome $h
-Check ($null -eq $unsure.silence -and @($unsure.said | Where-Object { "$_".Contains("as though the fleet were not silent") }).Count -eq 1 -and "$($unsure.refused)" -ceq "") "a saved silence that cannot be read is said, and the run starts as though the fleet were not silent"
+Check ("$($unsure.refused)".Contains("cannot be read") -and "$($unsure.refused)".Contains("silence-live.json") -and "$($unsure.refused)".Contains("silent fleet")) "a LIVE run made over a saved silence that cannot be read is refused, naming the file: unreadable is not 'not silent' for a run that sends"
+Reset-HordeMemoryWaker
+foreach ($n in 1..3) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) }
+Set-HordeMemoryWakerClock (At 5000)
+$did = @(Invoke-HordeWakeTick -Run $unsure -Now (At 5000) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@(Get-HordeMemoryWakerAsks).Count -eq 0 -and @($did | Where-Object { $_.kind -ceq "skip-unknown" -and "$($_.reason)".Contains("was refused") }).Count -eq 1 -and [System.IO.File]::ReadAllText((Join-Path $h "wake\silence-live.json")) -ceq "{ not json") "a tick handed that run nudges nobody, and the file is left as it was for a person to mend"
+$proofOver = New-HordeWakeRun -Mode "proof" -Target (Sid 1) -Self "" -HordeHome $h
+Check ("$($proofOver.refused)".Contains("silence-live.json")) "a PROOF run is refused the same way: it sends, and shares that file"
+[System.IO.File]::WriteAllText((Join-Path $h "wake\silence-shadow.json"), "{ not json")
+$softSilence = New-HordeWakeRun -Self "" -HordeHome $h
+Check ("$($softSilence.refused)" -ceq "" -and $null -eq $softSilence.silence -and @($softSilence.said | Where-Object { "$_".Contains("as though the fleet were not silent") }).Count -eq 1) "a SHADOW run over its own unreadable file says so and starts as though the fleet were not silent: it sends nothing"
+[System.IO.File]::WriteAllText((Join-Path $h "wake\ledger-live.json"), "{ not json")
+$both = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Check ("$($both.refused)".Contains("ledger-live.json") -and -not "$($both.refused)".Contains("silence-live.json")) "with the ledger unreadable too, the ledger's refusal is the one said: it was found first"
 $hp = New-Home
 Save-HordeWakeSilence -Seen ([pscustomobject]@{ silent = $true; quietSince = (At 5); nudges = @(1, 2); acks = @{ x = $null } }) -Mode "live" -HordeHome $hp
 $sb = Read-HordeWakeSilence -Mode "live" -HordeHome $hp
