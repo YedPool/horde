@@ -9,7 +9,7 @@
 #   (B) mail state -To <id> -TimeoutSeconds <n> -Json      one session, reading its pane: { at; session: row };
 #       exit 3 { at; to; reason: absent; detail } for a session nobody answers to, exit 1
 #       records-unreadable, exit 2 bad arguments
-#   (C) mail nudge -To <id> -BudgetSeconds <1-300> -Json    { outcome; reason; target; pane; instance; detail;
+#   (C) mail nudge -To <id> -BudgetSeconds <35-300> -Json   { outcome; reason; target; pane; instance; detail;
 #       elapsedMs }, outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an
 #       empty -To or a bad budget. It does not START typing when less than 30 s of its budget is left,
 #       and answers refused, budget-too-small, for that.
@@ -608,12 +608,14 @@ function Send-HordeWezfleetWakerNudge {
     # This waker's deadline used to be 20 s and killed the process tree at it. On a throttled machine a
     # real nudge can run longer, and a kill that falls between the line being typed and Enter being
     # pressed leaves text in the box: the box is then never empty, and that session is never woken
-    # again (review of PR #211). So the command is handed its BUDGET (-BudgetSeconds, 1 to 300) and
+    # again (review of PR #211). So the command is handed its BUDGET (-BudgetSeconds, 35 to 300) and
     # refuses to START typing when less than 30 s of it is left - the worst case of its own type-and-send
     # step, counted from its own process start - answering refused, budget-too-small, which is the
     # port's nothing with its reason: no attempt, and the first step of the back-off. THE BUDGET IS 60 s,
     # twice what the command needs to begin, so a start-up of up to 30 s still leaves it room; and this
-    # waker's own kill is at three times the budget, 180 s, far above it: it is for a process that
+    # waker's own kill is at three times the budget, 180 s, far above it. THE COMMAND'S RULE FOR ITS
+    # CALLERS: never kill mail nudge before its budget + 40 s - 100 s here, which 180 s satisfies,
+    # as three times any budget of 20 s or more does and the command takes none under 35. It is for a process that
     # hung, never a way to hurry one that is typing. Every answer carries elapsedMs, which is passed on
     # so the journal shows what a real nudge takes here.
     # IF THE KILL DOES FIRE, the outcome is killed, and it says so first in its reason: the box may hold
