@@ -623,9 +623,11 @@ $script:realFolderFinal = ${function:Get-HordeFilesFolderFinalPath}
 function Get-HordeFilesFolderFinalPath { param([string]$Path) return [pscustomobject]@{ state = "unknown"; path = "" } }
 $unasked = Test-Refused $h $plainDoc "really is could not be told" -Force
 $unaskedWhy = Test-Refused $h $plainDoc "the Horde home"
+$unaskedNever = Test-Refused $h $plainDoc $never -NotLike "share it again" -Force
 Set-Item -Path function:Get-HordeFilesFolderFinalPath -Value $script:realFolderFinal
 Check $unasked "when Windows will not say where the home really is, an ordinary file is refused, -Force or not: it cannot be told that it is not in it"
 Check $unaskedWhy "and the reason names which place could not be asked"
+Check $unaskedNever "and says -Force does not change that, and nothing of sharing it again: the place is one -Force never lifts"
 Check (Test-Shared $h $plainDoc) "CONTROL: asked again with Windows answering, the file is shared"
 
 Write-Host ""
