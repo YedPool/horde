@@ -264,6 +264,45 @@ Check ($d.Count -eq 1 -and $d[0].action -ceq "wait" -and "$($d[0].reason)".Conta
 Check (Throws { Get-HordeWakeSettings -Overrides @{ maxNudgePerPass = 9 } } "not a wake setting") "a setting that is not one is refused, not silently left at its default"
 
 Write-Host ""
+Write-Host "--- the look comes last: a session's box is read only when it is about to be nudged ---" -ForegroundColor Cyan
+
+# A WAKER WHOSE STATE IS CHEAP: the box and the turn are unknown until it is asked to look.
+Start-Case; Set-HordeMemoryWakerCheap $true
+foreach ($n in 1..5) { Seat $n }
+$r = Pass 0
+Check ((@(Get-HordeMemoryWakerLooks) -join ",") -ceq (Sid 1) -and (Rang 1) -eq 1 -and (Rang) -eq 1) "of five sessions with unread mail, one is looked at - the one that is nudged - and no other"
+Check (@($r.decisions | Where-Object { $_.reason -ceq "rate limit" }).Count -eq 4 -and @($r.decisions | Where-Object { $_.action -ceq "look" }).Count -eq 0) "the other four wait for the rate limit unlooked, and no decision is left as look"
+$r = Pass 3
+Check ((@(Get-HordeMemoryWakerLooks) -join ",") -ceq ((Sid 1) + "," + (Sid 2)) -and (Decided $r 1).action -ceq "wait" -and "$((Decided $r 1).reason)".Contains("back-off")) "on the next pass the session that is backing off is NOT looked at again: the look is the next session's"
+Start-Case; Set-HordeMemoryWakerCheap $true
+Seat 1 -Change @{ Role = "warchief"; BoxEmpty = "no" }; Seat 2 -Change @{ MidTurn = "yes" }; Seat 3; Seat 4
+$r = Pass 0
+Check ((@(Get-HordeMemoryWakerLooks) -join ",") -ceq (@(1, 2, 3 | ForEach-Object { Sid $_ }) -join ",") -and (Rang 3) -eq 1 -and (Rang) -eq 1) "a session the look rules out - text in its box, or mid-turn - gives its place to the next, which is looked at in turn until one is nudged"
+Check ((Decided $r 1).reason -ceq "boxEmpty is no" -and (Decided $r 2).reason -ceq "midTurn is yes" -and (Decided $r 4).reason -ceq "rate limit") "each says why it was not nudged, and the one behind the nudged session was never looked at"
+Start-Case; Set-HordeMemoryWakerCheap $true
+foreach ($n in 1..5) { Seat $n -Change @{ BoxEmpty = "no" } }
+$r = Pass 0
+Check (@(Get-HordeMemoryWakerLooks).Count -eq 3 -and (Rang) -eq 0) "at most maxConfirmsPerPass sessions are looked at in one pass: three of five whose boxes all hold text"
+Check (@($r.decisions | Where-Object { "$($_.reason)".Contains("looks were used up") }).Count -eq 1 -and @($r.decisions | Where-Object { $_.action -ceq "look" }).Count -eq 0 -and @($r.decisions | Where-Object { $_.reason -ceq "rate limit" }).Count -eq 1) "the next in line waits, saying the pass's looks were used up, and is looked at next pass"
+$r = Pass 0 -Using (Get-HordeWakeSettings -Overrides @{ maxConfirmsPerPass = 1 })
+Check (@(Get-HordeMemoryWakerLooks).Count -eq 4) "maxConfirmsPerPass is the limit: with 1, one more look"
+Start-Case; Set-HordeMemoryWakerCheap $true
+Seat 1 -Change @{ Idle = "no" }; Seat 2 -Change @{ Reachable = "no" }; Seat 3 -Change @{ OldestUnreadAt = (At -1) }; Seat 4 -Change @{ UnreadCount = 0; OldestUnreadAt = $null }
+$r = Pass 0
+Check (@(Get-HordeMemoryWakerLooks).Count -eq 0 -and (Rang) -eq 0) "a session that is not idle, out of reach, whose mail is too young or that has none is never looked at: its box decides nothing"
+Start-Case
+Seat 1 -Change @{ BoxEmpty = "no" }; Seat 2 -Change @{ MidTurn = "yes" }
+$r = Pass 0
+Check (@(Get-HordeMemoryWakerLooks).Count -eq 0) "a waker whose state already says the box holds text, or a turn is under way, is not asked to look"
+Start-Case; Set-HordeMemoryWakerCheap $true
+Seat 1
+$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1)) } -Ledger @{} -Now $t0 -Settings $settings)
+Check ($d[0].action -ceq "wait" -and $d[0].reason -ceq "midTurn is unknown") "without a waker that can look, an unread box or turn is wait, as it always was"
+$d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{ (Sid 1) = (Get-HordeWakeState -Waker $memory -Id (Sid 1)) } -Ledger @{} -Now $t0 -Settings $settings -CanLook)
+Check ($d[0].action -ceq "look") "with one, it is look: everything else holds, go and read the session"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- mail nobody can read: said once, when it lasts two passes, and never a reason not to nudge ---" -ForegroundColor Cyan
 
 Start-Case; Seat -Change @{ UnreadableCount = 1 }

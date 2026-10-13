@@ -1,2 +1,2 @@
-test/test-wake-port.ps1 | 12 -> 13 | 2026-10-13 | the port suite reads more of the memory waker's own records for the review's rules
-test/test-wake.ps1 | 12 -> 13 | 2026-10-13 | the watcher's suite drives the memory waker through more of its test helpers for the review's rules
+test/test-wake-port.ps1 | 12 -> 18 | 2026-10-13 | the port suite reads more of the memory waker's own records for the review's rules
+test/test-wake.ps1 | 12 -> 26 | 2026-10-13 | the watcher's suite drives the memory waker through more of its test helpers for the review's rules

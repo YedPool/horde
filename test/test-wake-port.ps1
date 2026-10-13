@@ -147,6 +147,17 @@ Check ((Get-HordeMemoryWakerBegins) -eq 2) "a waker that registered a Begin is t
 $said = "returned"
 try { Start-HordeWakePass -Waker $good; Start-HordeWakePass -Waker $null; Start-HordeWakePass -Waker ([pscustomobject]@{ PSTypeName = "Horde.Waker"; name = "fixture-good"; begin = { throw "a look-alike was called" } }) } catch { $said = "threw: " + $_.Exception.Message }
 Check ($said -ceq "returned") "a waker with no Begin, no waker at all and a look-alike are told nothing, and none of them is a throw"
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id $sid -UnreadCount 1 -OldestUnreadAt $t0 -BoxEmpty "no"
+Set-HordeMemoryWakerCheap $true
+$cheap = Get-HordeWakeState -Waker $memory -Id $sid
+$whole = Get-HordeWakeState -Waker $memory -Id $sid -Full
+Check ($cheap.state -ceq "known" -and $cheap.value.boxEmpty -ceq "unknown" -and $whole.state -ceq "known" -and $whole.value.boxEmpty -ceq "no" -and (@(Get-HordeMemoryWakerLooks) -join ",") -ceq $sid) "-Full is the waker's Confirm, where it registered one: its state said the box unknown, and the full reading says it"
+Check ((Test-HordeWakerConfirms $memory) -and -not (Test-HordeWakerConfirms $good) -and -not (Test-HordeWakerConfirms $null)) "a waker says whether it has a fuller reading than its state; one that registered none, and no waker, have none"
+$script:calls = 0
+$null = Get-HordeWakeState -Waker $good -Id $sid -Full
+Check ($script:calls -eq 1) "for a waker with no Confirm, -Full is its state"
+Reset-HordeMemoryWaker
 $thrower = Reg "fixture-second-begin" -Begin { throw "the fleet fell over" }
 $said = "returned"
 try { Start-HordeWakePass -Waker $thrower } catch { $said = "threw" }

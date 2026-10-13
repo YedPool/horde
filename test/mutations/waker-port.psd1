@@ -38,6 +38,12 @@
         @{ Name = "production-chooses-between-two"
            Find = 'if ($able.Count -gt 1) { return (New-HordeUnknown'
            Replace = 'if ($able.Count -gt 1) { return (New-HordeKnown -Value $able[0]) }; if ($false) { return (New-HordeUnknown' }
+        @{ Name = "full-reading-never-asked"
+           Find = 'if ($Full -and $null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }'
+           Replace = 'if ($false) { $a = & $Waker.confirm $Id }' }
+        @{ Name = "every-reading-is-the-full-one"
+           Find = 'if ($Full -and $null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }'
+           Replace = 'if ($null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }' }
         @{ Name = "begin-never-told"
            Find = 'try { $null = & $Waker.begin } catch { }'
            Replace = '' }

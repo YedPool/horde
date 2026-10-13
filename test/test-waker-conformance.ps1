@@ -89,8 +89,9 @@ $cases = [ordered]@{
         param($W, $Fx, $State)
         $empty = New-Seat; $full = New-Seat @{ boxEmpty = "no" }
         & $Fx.Seat $State $empty; & $Fx.Seat $State $full
-        $a1 = Get-HordeWakeState -Waker $W -Id $empty.id
-        $a2 = Get-HordeWakeState -Waker $W -Id $full.id
+        # THE FULL READING: a waker whose state is cheap says the box only when it is asked to look.
+        $a1 = Get-HordeWakeState -Waker $W -Id $empty.id -Full
+        $a2 = Get-HordeWakeState -Waker $W -Id $full.id -Full
         # BOTH ANSWERS: a waker that always said yes would pass a check that seated only an empty box.
         return ($a1.state -ceq "known" -and $a1.value.boxEmpty -ceq "yes" -and $a2.state -ceq "known" -and $a2.value.boxEmpty -ceq "no")
     }
@@ -101,8 +102,8 @@ $cases = [ordered]@{
         # pane unread and answer unknown there (the wezfleet waker does, to read no pane it need not).
         $resting = New-Seat; $working = New-Seat @{ midTurn = "yes" }
         & $Fx.Seat $State $resting; & $Fx.Seat $State $working
-        $a1 = Get-HordeWakeState -Waker $W -Id $resting.id
-        $a2 = Get-HordeWakeState -Waker $W -Id $working.id
+        $a1 = Get-HordeWakeState -Waker $W -Id $resting.id -Full
+        $a2 = Get-HordeWakeState -Waker $W -Id $working.id -Full
         return ($a1.state -ceq "known" -and $a1.value.midTurn -ceq "no" -and $a2.state -ceq "known" -and $a2.value.midTurn -ceq "yes")
     }
     "reach.unseen" = {
@@ -163,7 +164,7 @@ try {
                     if ($mustBeUnknown.ContainsKey($cap)) {
                         $s = New-Seat
                         & $fx.Seat $state $s
-                        $a = Get-HordeWakeState -Waker $w -Id $s.id
+                        $a = Get-HordeWakeState -Waker $w -Id $s.id -Full
                         # Unknown as a whole, or known with that one word unknown: never a yes or a no.
                         $honest = ($a.state -ceq "unknown" -or ($a.state -ceq "known" -and "$($a.value.($mustBeUnknown[$cap]))" -ceq "unknown"))
                         Check $honest ("[" + $name + "] and it never answers yes or no for " + $mustBeUnknown[$cap] + ", which it cannot read")

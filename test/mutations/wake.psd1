@@ -93,9 +93,27 @@
         @{ Name = "waker-not-told-a-pass-begins"
            Find = 'Start-HordeWakePass -Waker $Waker'
            Replace = '$null = 0' }
+        @{ Name = "every-session-with-mail-is-looked-at"
+           Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
+           Replace = 'if ($i -ge $allowed -and $ready[$i].action -ceq "ready") { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }' }
+        @{ Name = "looks-in-a-pass-not-capped"
+           Find = 'if ($confirmed.Count -ge [int]$Settings.maxConfirmsPerPass) { break }'
+           Replace = '' }
+        @{ Name = "a-known-full-box-is-looked-at-anyway"
+           Find = 'if ($CanLook -and $unseen -and "$($s.midTurn)" -cne "yes" -and "$($s.boxEmpty)" -cne "no") {'
+           Replace = 'if ($CanLook) {' }
+        @{ Name = "never-looks"
+           Find = '$canLook = Test-HordeWakerConfirms $Waker'
+           Replace = '$canLook = $false' }
+        @{ Name = "a-session-already-looked-at-is-looked-at-again"
+           Find = '-CanLook:($CanLook -and -not $looked)'
+           Replace = '-CanLook:$CanLook' }
+        @{ Name = "the-look-is-not-used"
+           Find = 'if ($looked) { $answer = $Confirmed[$id] }'
+           Replace = '' }
         @{ Name = "rate-limit-ignored"
-           Find = 'if ($i -lt $allowed) {'
-           Replace = 'if ($true) {' }
+           Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
+           Replace = '' }
         @{ Name = "role-order-ignored"
            Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
            Replace = 'Sort-Object -Property nothing, attempts, oldest, id' }

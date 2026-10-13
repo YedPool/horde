@@ -18,6 +18,8 @@ $script:HordeMemoryWakerSessions = [ordered]@{}
 $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerBegins = 0
+$script:HordeMemoryWakerLooks = New-Object System.Collections.ArrayList
+$script:HordeMemoryWakerCheap = $false
 $script:HordeMemoryWakerFaults = @{}
 $script:HordeMemoryWakerClock = $null
 # THE ONE LINE A NUDGE TYPES: fixed, the same for every session and every mail, and no part of a body.
@@ -29,6 +31,8 @@ function Reset-HordeMemoryWaker {
     $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
     $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
     $script:HordeMemoryWakerBegins = 0
+    $script:HordeMemoryWakerLooks = New-Object System.Collections.ArrayList
+    $script:HordeMemoryWakerCheap = $false
     $script:HordeMemoryWakerFaults = @{}
     $script:HordeMemoryWakerClock = $null
 }
@@ -89,6 +93,32 @@ function Get-HordeMemoryWakerAsks {
     return @($script:HordeMemoryWakerAsks | ForEach-Object { "$_" })
 }
 
+function Set-HordeMemoryWakerCheap {
+    # Plays a waker whose State is cheap: with -On, State answers the box and the turn unknown whatever
+    # the session holds, and only the full reading (the port's Confirm) says them - as a waker that reads
+    # a whole fleet in one call does. Off, which is how it starts, State says everything.
+    param([bool]$On)
+    $script:HordeMemoryWakerCheap = $On
+}
+
+function Get-HordeMemoryWakerLooks {
+    # The session of every full reading this waker was asked for since the last reset, in order.
+    return @($script:HordeMemoryWakerLooks | ForEach-Object { "$_" })
+}
+
+function Get-HordeMemoryWakerState {
+    # One session's state as an answer; -Full is the full reading, which a cheap waker's State is not.
+    param([string]$Id, [switch]$Full)
+    if (Invoke-HordeMemoryWakerFault "state") { return @{ idle = "yes"; boxEmpty = "yes" } }
+    if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { return (New-HordeUnknown -Reason ("the memory waker has no session " + $Id)) }
+    $s = $script:HordeMemoryWakerSessions[$Id]
+    $value = [ordered]@{ id = $s.id; unreadCount = $s.unreadCount; oldestUnreadAt = $s.oldestUnreadAt; idle = $s.idle; boxEmpty = $s.boxEmpty; midTurn = $s.midTurn }
+    if ($script:HordeMemoryWakerCheap -and -not $Full) { $value["boxEmpty"] = "unknown"; $value["midTurn"] = "unknown" }
+    # Reported only when a test said so: left out, the port reads it as none.
+    if ($null -ne $s.unreadableCount) { $value["unreadableCount"] = $s.unreadableCount }
+    return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt (Get-HordeMemoryWakerTime))
+}
+
 function Get-HordeMemoryWakerBegins {
     # How many times this waker was told a pass begins, since the last reset.
     return $script:HordeMemoryWakerBegins
@@ -109,16 +139,8 @@ $null = Register-HordeWaker -Name "memory" `
         $list = @($script:HordeMemoryWakerSessions.Values | ForEach-Object { [pscustomobject]@{ id = $_.id; label = $_.label; role = $_.role; parent = $_.parent; reachable = $_.reachable } })
         return (New-HordeKnown -Value $list -ObservedAt (Get-HordeMemoryWakerTime))
     } `
-    -State {
-        param([string]$Id)
-        if (Invoke-HordeMemoryWakerFault "state") { return @{ idle = "yes"; boxEmpty = "yes" } }
-        if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { return (New-HordeUnknown -Reason ("the memory waker has no session " + $Id)) }
-        $s = $script:HordeMemoryWakerSessions[$Id]
-        $value = [ordered]@{ id = $s.id; unreadCount = $s.unreadCount; oldestUnreadAt = $s.oldestUnreadAt; idle = $s.idle; boxEmpty = $s.boxEmpty; midTurn = $s.midTurn }
-        # Reported only when a test said so: left out, the port reads it as none.
-        if ($null -ne $s.unreadableCount) { $value["unreadableCount"] = $s.unreadableCount }
-        return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt (Get-HordeMemoryWakerTime))
-    } `
+    -State { param([string]$Id) Get-HordeMemoryWakerState -Id $Id } `
+    -Confirm { param([string]$Id) [void]$script:HordeMemoryWakerLooks.Add($Id); Get-HordeMemoryWakerState -Id $Id -Full } `
     -Nudge {
         param([string]$Id)
         if (Invoke-HordeMemoryWakerFault "nudge") { return $true }

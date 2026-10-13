@@ -62,7 +62,13 @@
 #            and unreadableCount when the waker can count mail it could not read, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
-# and, when it has a use for it, one more:
+# and, when it has a use for them, two more:
+#   Confirm  param([string]$Id)  -> a state, as State answers it, READ AS FULLY AS THE WAKER CAN. For a
+#            waker whose State is cheap - one reading of the whole fleet, with the box and the turn
+#            unknown because they cost a look at the session itself - Confirm is that look. The watcher
+#            asks for it only for a session it is about to nudge (Get-HordeWakeState -Full), so a pass
+#            pays for a look per nudge, not per session. A waker whose State already says everything
+#            registers none, and -Full is then State.
 #   Begin    param()             a pass begins. A waker that answers a pass's many questions from one
 #            reading of the fleet throws that reading away here, and nowhere else by the clock: the
 #            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
@@ -142,6 +148,7 @@ function Register-HordeWaker {
         [Parameter(Mandatory = $true)][scriptblock]$State,
         [Parameter(Mandatory = $true)][scriptblock]$Nudge,
         [scriptblock]$Begin = $null,
+        [scriptblock]$Confirm = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -157,7 +164,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -297,6 +304,14 @@ function ConvertFrom-HordeWakerAnswer {
     return [pscustomobject]@{ ok = $true; answer = $Answer }
 }
 
+function Test-HordeWakerConfirms {
+    # Does this waker have a fuller reading than its State (ADAPTER CONTRACT, Confirm)? The watcher asks,
+    # so that an unknown box is something to look into for such a waker and something to wait on for one
+    # that has already said all it can.
+    param($Waker)
+    return ((Test-HordeWakerRegistered $Waker) -and $null -ne $Waker.confirm)
+}
+
 function Start-HordeWakePass {
     # Tell -Waker a pass begins (ADAPTER CONTRACT, Begin). Returns nothing, and never throws for the far
     # end: a waker with no Begin has nothing to be told, and one whose Begin throws has only failed to
@@ -343,10 +358,15 @@ function Get-HordeWakeTargets {
 function Get-HordeWakeState {
     # One session's state as -Waker sees it: known { id; unreadCount; unreadableCount; oldestUnreadAt;
     # idle; boxEmpty; midTurn }, or unknown with the reason. oldestUnreadAt is UTC, and $null when nothing is unread.
-    param($Waker, [string]$Id)
+    # -Full asks for the waker's fullest reading (ADAPTER CONTRACT, Confirm): the look at the session
+    # itself that says what is in its box and whether it is in a turn. Held to the same checks.
+    param($Waker, [string]$Id, [switch]$Full)
     if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so the state was not asked")) }
     if (-not (Test-HordeWakerSessionId $Id)) { return (New-HordeUnknown -Reason ("'" + $Id + "' is not a session id, so waker '" + $Waker.name + "' was not asked")) }
-    try { $a = & $Waker.state $Id }
+    try {
+        if ($Full -and $null -ne $Waker.confirm) { $a = & $Waker.confirm $Id }
+        else { $a = & $Waker.state $Id }
+    }
     catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to read the state of " + $Id) -ErrorRecord $_) }
     $first = ConvertFrom-HordeWakerAnswer -Answer $a -What ("the state of " + $Id) -Waker $Waker.name
     if (-not $first.ok) { return $first.answer }

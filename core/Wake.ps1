@@ -58,6 +58,9 @@ function Get-HordeWakeSettings {
         # At most this many nudges in one pass over the whole fleet, so a restore of everything is a
         # queue and never a burst of typing into every session at once.
         maxNudgesPerPass = 1
+        # At most this many full readings of a session - a look at its box and its turn - in one pass
+        # (Invoke-HordeWakePass, THE LOOK COMES LAST). Each can take a pane's whole time-out.
+        maxConfirmsPerPass = 3
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a wake setting") }
@@ -99,7 +102,13 @@ function Get-HordeWakeHold {
     # (something to wake it for, and a condition that does not hold), or ready (every condition holds;
     # only the fleet's rate limit can still hold it back). EACH CONDITION IS ITS OWN LINE, and each
     # unknown is wait: the file header says why.
-    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings)
+    # THE BOX AND THE TURN ARE ASKED LAST, after everything that costs nothing to know, and with -CanLook
+    # an unknown there is answered look - "everything else holds; go and read the session" - instead of
+    # wait. A session that is backing off, held, out of reach or not idle is never looked at: its box
+    # decides nothing (review of PR #211: every idle session with unread mail had its pane read on every
+    # pass, even inside a 300 s back-off). A box that is known not empty, or a turn known under way, is
+    # wait at once, with no look.
+    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook)
     if ($null -eq $StateAnswer -or "$($StateAnswer.state)" -cne "known") {
         $why = "nothing answered for it"
         if ($null -ne $StateAnswer) { $why = "$($StateAnswer.reason)" }
@@ -108,9 +117,7 @@ function Get-HordeWakeHold {
     $s = $StateAnswer.value
     if ($s.unreadCount -le 0) { return [pscustomobject]@{ action = "skip"; reason = "no unread mail" } }
     if ("$($Target.reachable)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("reachable is " + $Target.reachable) } }
-    if ("$($s.midTurn)" -cne "no") { return [pscustomobject]@{ action = "wait"; reason = ("midTurn is " + $s.midTurn) } }
     if ("$($s.idle)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("idle is " + $s.idle) } }
-    if ("$($s.boxEmpty)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("boxEmpty is " + $s.boxEmpty) } }
     $age = ($Now - $s.oldestUnreadAt).TotalSeconds
     if ($age -lt $Settings.minUnreadSeconds) { return [pscustomobject]@{ action = "wait"; reason = ("its oldest unread mail is younger than " + $Settings.minUnreadSeconds + " s") } }
     # THE HOLD AFTER "nothing" (Update-HordeWakeLedger says why): out of the ready set for the first
@@ -125,13 +132,24 @@ function Get-HordeWakeHold {
         $since = ($Now - $Entry.lastAttemptAt).TotalSeconds
         if ($since -lt $wait) { return [pscustomobject]@{ action = "wait"; reason = ("back-off: " + [int][System.Math]::Ceiling($wait - $since) + " s left of " + $wait + " after attempt " + $Entry.attempts) } }
     }
+    $unseen = ("$($s.midTurn)" -ceq "unknown" -or "$($s.boxEmpty)" -ceq "unknown")
+    if ($CanLook -and $unseen -and "$($s.midTurn)" -cne "yes" -and "$($s.boxEmpty)" -cne "no") { return [pscustomobject]@{ action = "look"; reason = "its box and its turn have not been read" } }
+    if ("$($s.midTurn)" -cne "no") { return [pscustomobject]@{ action = "wait"; reason = ("midTurn is " + $s.midTurn) } }
+    if ("$($s.boxEmpty)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("boxEmpty is " + $s.boxEmpty) } }
     return [pscustomobject]@{ action = "ready"; reason = "" }
 }
 
 function Get-HordeWakeDecisions {
-    # One decision per target, in the targets' order: { id; action (nudge, wait or skip); reason }.
-    #   -Targets  the port's list (Get-HordeWakeTargets' value)
-    #   -States   session id -> the port's state ANSWER for it (known or unknown; missing is unknown)
+    # One decision per target, in the targets' order: { id; action (nudge, look, wait or skip); reason }.
+    #   -Targets    the port's list (Get-HordeWakeTargets' value)
+    #   -States     session id -> the port's state ANSWER for it (known or unknown; missing is unknown)
+    #   -Confirmed  session id -> the port's FULL state answer, for the sessions already looked at this
+    #               pass; it stands in place of the state
+    #   -CanLook    the waker has a fuller reading than its state (wakers/Port.ps1, Confirm): then a
+    #               session that holds on everything but an unread box or turn is decided look, for the
+    #               pass to read it and decide again. Without it such a session waits.
+    # A LOOK TAKES A PLACE IN THE QUEUE LIKE A NUDGE: only the sessions that would be nudged this pass
+    # are looked at, in the same order, and the rest wait for the rate limit unlooked.
     #   -Ledger   session id -> { attempts; lastAttemptAt; lastOutcome }
     # WHO GOES FIRST when more are ready than one pass may nudge: a session whose waker last answered
     # "nothing" goes behind every other (Update-HordeWakeLedger); then the session asked the fewest times,
@@ -139,7 +157,7 @@ function Get-HordeWakeDecisions {
     # is what makes a restore of everything a fair queue: without it the warchief's second knock, due
     # 5 s after its first, would go ahead of nine sessions nobody had knocked on yet. The rest get wait
     # "rate limit" and are ready again next pass.
-    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
+    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook)
     $roles = @(Get-HordeWakerRoles)
     $rows = New-Object System.Collections.ArrayList
     foreach ($t in @($Targets)) {
@@ -147,10 +165,12 @@ function Get-HordeWakeDecisions {
         $id = "$($t.id)"
         $answer = $null
         if ($null -ne $States -and $States.ContainsKey($id)) { $answer = $States[$id] }
+        $looked = ($null -ne $Confirmed -and $Confirmed.ContainsKey($id))
+        if ($looked) { $answer = $Confirmed[$id] }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id
-        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings
+        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked)
         $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
-        if ($hold.action -ceq "ready") {
+        if ($hold.action -ceq "ready" -or $hold.action -ceq "look") {
             if ($null -ne $entry) { $row.attempts = [int]$entry.attempts }
             if ($null -ne (Get-HordeWakeNothingAt $entry)) { $row.nothing = 1 }
             $at = [System.Array]::IndexOf($roles, "$($t.role)")
@@ -159,11 +179,11 @@ function Get-HordeWakeDecisions {
         }
         [void]$rows.Add($row)
     }
-    $ready = @($rows | Where-Object { $_.action -ceq "ready" } | Sort-Object -Property nothing, attempts, rank, oldest, id)
+    $ready = @($rows | Where-Object { $_.action -ceq "ready" -or $_.action -ceq "look" } | Sort-Object -Property nothing, attempts, rank, oldest, id)
     $allowed = [int]$Settings.maxNudgesPerPass
     for ($i = 0; $i -lt $ready.Count; $i++) {
-        if ($i -lt $allowed) { $ready[$i].action = "nudge"; $ready[$i].reason = "unread mail, idle, empty box" }
-        else { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }
+        if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }
+        elseif ($ready[$i].action -ceq "ready") { $ready[$i].action = "nudge"; $ready[$i].reason = "unread mail, idle, empty box" }
     }
     return @($rows | ForEach-Object { [pscustomobject]@{ id = $_.id; action = $_.action; reason = $_.reason } })
 }
@@ -277,7 +297,26 @@ function Invoke-HordeWakePass {
                 if ($states[$t.id].state -ceq "known" -and $states[$t.id].value.unreadableCount -gt 0) { $unreadable[$t.id] = $states[$t.id].value.unreadableCount }
                 if ($states[$t.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $t.id -Outcome "unknown" -Reason "$($states[$t.id].reason)")) }
             }
-            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings)
+            # THE LOOK COMES LAST, AND ONLY FOR A SESSION ABOUT TO BE NUDGED. The states above are the
+            # waker's cheap reading. A session the decisions would nudge but for its unread box is
+            # looked at - the waker's full reading - and the decisions are made again with it; a session
+            # the look rules out gives its place to the next, which is looked at in turn, up to
+            # maxConfirmsPerPass looks. What is still unlooked then waits for the next pass.
+            $canLook = Test-HordeWakerConfirms $Waker
+            $confirmed = @{}
+            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook)
+            while ($confirmed.Count -lt [int]$Settings.maxConfirmsPerPass) {
+                $toLook = @($decisions | Where-Object { $_.action -ceq "look" })
+                if ($toLook.Count -eq 0) { break }
+                foreach ($d in $toLook) {
+                    if ($confirmed.Count -ge [int]$Settings.maxConfirmsPerPass) { break }
+                    $confirmed[$d.id] = Get-HordeWakeState -Waker $Waker -Id $d.id -Full
+                    if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
+                    else { $states[$d.id] = $confirmed[$d.id] }
+                }
+                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook)
+            }
+            foreach ($d in $decisions) { if ($d.action -ceq "look") { $d.action = "wait"; $d.reason = "its box and its turn were not read this pass: the pass's looks were used up" } }
             $outcomes = @{}
             foreach ($d in $decisions) {
                 if ($d.action -cne "nudge") { continue }

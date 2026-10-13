@@ -19,14 +19,11 @@
            Find = '$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "goblin" }'
            Replace = '$script:HordeWezfleetWakerRoles = @{ "master" = "orc"; "orchestrator" = "orc"; "session" = "goblin" }' }
         @{ Name = "every-state-reads-a-pane"
-           Find = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")'
-           Replace = '$candidate = $true' }
-        @{ Name = "no-state-reads-a-pane"
-           Find = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")'
-           Replace = '$candidate = $false' }
-        @{ Name = "pane-read-for-a-session-that-is-not-idle"
-           Find = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")'
-           Replace = '$candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes")' }
+           Find = '    if ($Full) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "the-full-reading-reads-no-pane"
+           Find = '    if ($Full) {'
+           Replace = '    if ($false) {' }
         @{ Name = "fleet-asked-on-every-call"
            Find = '($now - $kept.at).TotalSeconds -lt $script:HordeWezfleetWakerFleetLifeSeconds) { return $kept.answer }'
            Replace = '$false) { return $kept.answer }' }

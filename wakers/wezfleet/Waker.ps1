@@ -24,10 +24,9 @@
 #   Targets  form A's rows that are not retired, or that have unread mail. role master is warchief,
 #            orchestrator is orc, session is goblin, anything else unknown (core/Roles.ps1's table,
 #            read here from the row's own word); reachable as the row says.
-#   State    from form A's answer of THIS pass. Only for a CANDIDATE - mail known, unread mail, reachable
-#            yes, idle yes - is form B asked, for the box and the turn; for every other session the
-#            answer is form A's, with boxEmpty and midTurn unknown, and the watcher waits, which is
-#            right: it was not going to nudge it. So a pass over a quiet fleet reads no pane at all.
+#   State    from form A's answer of THIS pass, with boxEmpty and midTurn unknown: no pane is read.
+#   Confirm  form B, for the one session the watcher is about to nudge: its box and its turn. So a pass
+#            over a quiet fleet reads no pane at all, and a busy one reads a pane per nudge.
 #   Nudge    form C. refused is the port's nothing (there was nothing to nudge for by then); woken,
 #            busy and unreachable pass through with the fleet's reason.
 #
@@ -546,18 +545,18 @@ function Get-HordeWezfleetWakerTargets {
 }
 
 function Get-HordeWezfleetWakerState {
-    # The port's State (the header): form A's row, and form B only for a candidate.
-    param([Parameter(Mandatory = $true)][string]$Id)
+    # The port's State (the header): form A's row, with no pane read; and, with -Full, the port's
+    # Confirm: form B for that one session. THE WATCHER DECIDES WHO IS LOOKED AT, not this waker: it asks
+    # -Full only for a session it is about to nudge, so a session that is backing off, capped or behind
+    # the rate limit has no pane read at all (review of PR #211; core/Wake.ps1, THE LOOK COMES LAST).
+    param([Parameter(Mandatory = $true)][string]$Id, [switch]$Full)
     $fleet = Read-HordeWezfleetWakerFleet
     if (-not $fleet.ok) { return (New-HordeUnknown -Reason $fleet.reason) }
     if (-not $fleet.rows.Contains($Id)) { return (New-HordeUnknown -Reason ("the fleet's state has no session " + $Id)) }
     $row = $fleet.rows[$Id]
     $state = Read-HordeWezfleetWakerState -Row $row
     if (-not $state.ok) { return (New-HordeUnknown -Reason $state.reason) }
-    # A CANDIDATE, AND ONLY A CANDIDATE, HAS ITS PANE READ: the box and the turn decide nothing for a
-    # session with no unread mail, out of reach, or not idle.
-    $candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")
-    if ($candidate) {
+    if ($Full) {
         $pane = Read-HordeWezfleetWakerPane -Id $Id
         if (-not $pane.ok) { return (New-HordeUnknown -Reason $pane.reason) }
         $state = Read-HordeWezfleetWakerState -Row $pane.row
@@ -602,5 +601,6 @@ function Send-HordeWezfleetWakerNudge {
 $null = Register-HordeWaker -Name "wezfleet" `
     -Targets { Get-HordeWezfleetWakerTargets } `
     -State { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id } `
+    -Confirm { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id -Full } `
     -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
     -Begin { Clear-HordeWezfleetWakerPass }
