@@ -422,12 +422,16 @@ export function phoneKeyBody(agreePublic, vouch) {
 
 // The answer body: JSON.stringify escapes what JSON must and nothing else; the machine reads it with a
 // strict JSON parser that wants exactly these members.
-export function answerBody({ answerId, machine, snapshot, number, wordingVersion, text }) {
+// AN ANSWER TO ONE PART of a question of parts is version 2: the same members and, last, part - the
+// part's letter. With no part it is version 1, as it always was, which every machine reads.
+export function answerBody({ answerId, machine, snapshot, number, wordingVersion, text, part = "" }) {
   if (!/^[0-9a-f]{32}$/.test(answerId)) throw new Error("an answerId is 32 lower-case hex");
   if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
   if (typeof snapshot !== "string" || snapshot.length > 160 || snapshot.indexOf(machine + "/decisions/") !== 0) throw new Error("the snapshot is that machine's envelope's replay key");
   if (!Number.isSafeInteger(number) || number < 1 || !Number.isSafeInteger(wordingVersion) || wordingVersion < 1) throw new Error("number and wordingVersion are whole numbers from 1");
   if (typeof text !== "string") throw new Error("the answer is text");
+  if (part !== "" && !/^[a-z]$/.test(part)) throw new Error("a part is one lower-case letter");
+  if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part }));
   return utf8(JSON.stringify({ v: 1, answerId, machine, snapshot, number, wordingVersion, text }));
 }
 
@@ -446,7 +450,7 @@ export function readSnapshotPage(bodyBytes, horde, machine) {
 }
 
 // The newest COMPLETE snapshot among opened pages: { snapshot, seq, pages, questions (each with the
-// replay key of the page that carried it, as pageKey), withheld, counts } or null. pages is a list of
+// replay key of the page that carried it, as pageKey), withheld, counts, answers } or null. pages is a list of
 // { key, seq, page } from openEnvelope + readSnapshotPage. A snapshot is complete when every page
 // 1..pages is there; the newest is the one whose last page has the highest envelope seq. A page
 // repeated (the relay may repeat) counts once.
@@ -467,7 +471,9 @@ export function newestSnapshot(pages) {
     const questions = [];
     for (const p of ordered) for (const q of p.page.questions) questions.push({ question: q, pageKey: p.key });
     const first = ordered[0].page;
-    best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood };
+    best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood,
+      // The highest version of answer the machine says it reads; 1 for a machine whose snapshot says nothing.
+      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };
   }
   return best;
 }

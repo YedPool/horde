@@ -40,8 +40,21 @@
            Find = 'counts[channel] = (counts[channel] || 0) + 1;'
            Replace = 'counts[channel] = 1;' }
         @{ Name = "answer-bound-to-snapshot-hash-not-page"
-           Find = 'snapshot: q.pageKey, number, wordingVersion, text });'
-           Replace = 'snapshot: e.machine + "/decisions/" + v.snapshot, number, wordingVersion, text });' }
+           Find = 'snapshot: q.pageKey, number, wordingVersion, text: words,'
+           Replace = 'snapshot: e.machine + "/decisions/" + v.snapshot, number, wordingVersion, text: words,' }
+        # --- one part's answer (2026-10-12) ---
+        @{ Name = "a-part-sent-as-version-2-to-a-machine-that-does-not-read-it"
+           Find = '      const takesParts = Number(v.answers) >= 2;'
+           Replace = '      const takesParts = true;' }
+        @{ Name = "a-part-sent-as-words-to-a-machine-that-reads-parts"
+           Find = '      const takesParts = Number(v.answers) >= 2;'
+           Replace = '      const takesParts = false;' }
+        @{ Name = "the-parts-letter-is-not-sent"
+           Find = 'text: words, part: takesParts ? part : "" });'
+           Replace = 'text: words, part: "" });' }
+        @{ Name = "a-part-that-is-not-a-letter-reaches-the-passkey"
+           Find = '      if (part !== "" && !/^[a-z]$/.test(part)) throw fail("the part answered is not one of the question''s parts: the answer was not sent.");'
+           Replace = '' }
         @{ Name = "offer-for-another-origin-paired"
            Find = 'if (o.origins.indexOf(origin) < 0) throw fail('
            Replace = 'if (false) throw fail(' }
