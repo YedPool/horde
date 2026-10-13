@@ -189,6 +189,8 @@ foreach ($case in @(
         @{ what = "an unread count that is a fraction"; block = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = 1.5 }) }; like = "unreadCount" },
         @{ what = "unread mail with no time for the oldest"; block = { param($id) New-HordeKnown -Value (New-State @{ oldestUnreadAt = $null }) }; like = "no time" },
         @{ what = "unread mail whose oldest time is text"; block = { param($id) New-HordeKnown -Value (New-State @{ oldestUnreadAt = "2026-10-12T08:00:00Z" }) }; like = "no time" },
+        @{ what = "unread mail whose oldest time has no zone"; block = { param($id) New-HordeKnown -Value (New-State @{ oldestUnreadAt = (New-Object System.DateTime(2026, 10, 12, 8, 0, 0)) }) }; like = "no zone" },
+        @{ what = "an unread count too large to be one"; block = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = [long]3000000000 }) }; like = "no count of mail" },
         @{ what = "idle given as true"; block = { param($id) New-HordeKnown -Value (New-State @{ idle = $true }) }; like = "idle" },
         @{ what = "idle given as Yes"; block = { param($id) New-HordeKnown -Value (New-State @{ idle = "Yes" }) }; like = "idle" },
         @{ what = "boxEmpty left out"; block = { param($id) New-HordeKnown -Value (New-State @{ boxEmpty = $null }) }; like = "boxEmpty" },
@@ -201,6 +203,13 @@ foreach ($case in @(
 $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = [long]3; oldestUnreadAt = $t0.ToLocalTime() }) }
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 3 -and $a.value.oldestUnreadAt -eq $t0 -and $a.value.oldestUnreadAt.Kind -eq [System.DateTimeKind]::Utc) "state: a local time is carried as the same instant in UTC"
+
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ unreadCount = [long]2147483647 }) }
+$a = Get-HordeWakeState -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 2147483647 -and $a.value.unreadCount -is [int]) "state: the largest count that fits is carried"
+$script:nudgeAnswer = { param($id) New-HordeKnown -Value (New-Rang @{ at = $t0.ToLocalTime() }) }
+$a = Send-HordeWakeNudge -Waker $scripted -Id $sid
+Check ($a.state -ceq "known" -and $a.value.at -eq $t0 -and $a.value.at.Kind -eq [System.DateTimeKind]::Utc) "nudge: a local time is carried as the same instant in UTC"
 
 $script:blindBox = "unknown"; $script:blindTurn = "unknown"
 Check ((Get-HordeWakeState -Waker $blind -Id $sid).state -ceq "known") "state: a waker that cannot read the box or the turn may say unknown of both"
@@ -223,6 +232,7 @@ foreach ($case in @(
         @{ what = "an outcome outside the list"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "sent" }) }; like = "outcome" },
         @{ what = "an outcome given as true"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = $true }) }; like = "outcome" },
         @{ what = "a time that is text"; block = { param($id) New-HordeKnown -Value (New-Rang @{ at = "now" }) }; like = "not a time" },
+        @{ what = "a time with no zone"; block = { param($id) New-HordeKnown -Value (New-Rang @{ at = (New-Object System.DateTime(2026, 10, 12, 8, 0, 0)) }) }; like = "no zone" },
         @{ what = "busy with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy" }) }; like = "without saying why" },
         @{ what = "unreachable with a blank reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "unreachable"; reason = "  " }) }; like = "without saying why" },
         @{ what = "nothing with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "nothing" }) }; like = "without saying why" },

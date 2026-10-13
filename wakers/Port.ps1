@@ -41,8 +41,8 @@
 # THE PORT NEVER GUESSES AND NEVER THROWS FOR THE FAR END. Only a waker registered through
 # Register-HordeWaker is called: a look-alike object is refused. An adapter that throws, answers with
 # something that is not a core/tristate answer, answers about another session than the one asked about,
-# uses a word outside the lists, reports unread mail with no time for the oldest, or lists one session
-# twice, comes back unknown with the reason. A caller reads the answer's state and never has to catch.
+# uses a word outside the lists, reports unread mail with no time for the oldest, gives a time with no
+# zone or a count that is no count, or lists one session twice, comes back unknown with the reason. A caller reads the answer's state and never has to catch.
 #
 # ADAPTER CONTRACT. wakers/<name>/Waker.ps1 is dot-sourced at script level and calls Register-HordeWaker
 # with its name and three script blocks:
@@ -50,7 +50,7 @@
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn }, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
-# 0 or more; oldestUnreadAt is a [datetime], required when unreadCount is above 0. outcome is woken, busy,
+# 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
 # required unless the outcome is woken; at is a [datetime]. A session the waker does not know is unknown,
 # with the reason - never a state of zeros.
@@ -229,6 +229,17 @@ function Get-HordeWakerMember {
     return [pscustomobject]@{ has = $true; value = $p.Value }
 }
 
+function ConvertTo-HordeWakerUtc {
+    # An adapter's time as UTC, or $null when it cannot be placed. A [datetime] whose kind is Unspecified
+    # carries no zone, and ToUniversalTime() silently reads it as LOCAL time: the first version did that
+    # (review of PR #207), so a mail's age was wrong by this machine's offset from UTC - hours - and
+    # "younger than 3 s" or "old enough" was decided on a guess. core/WakeFiles.ps1 refuses the same
+    # thing in text (ConvertFrom-HordeWakeTimeText); a time with no zone is not a time here either.
+    param($Value)
+    if ($Value -isnot [datetime] -or $Value.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }
+    return $Value.ToUniversalTime()
+}
+
 function Test-HordeWakerRecord {
     # Is this something with members: a parsed object or a dictionary?
     param($Value)
@@ -321,9 +332,13 @@ function Get-HordeWakeState {
     if (-not $count.has -or -not ($count.value -is [int] -or $count.value -is [long]) -or $count.value -lt 0) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadCount that is not a whole number, 0 or more")) }
     $oldest = Get-HordeWakerMember $v "oldestUnreadAt"
     $oldestAt = $null
+    # A COUNT THAT DOES NOT FIT IS REFUSED, NOT CAST: [int] of a long past 2,147,483,647 throws, and the
+    # port never throws for the far end (review of PR #207).
+    if ($count.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadCount of " + $count.value + ", which is no count of mail")) }
     if ($count.value -gt 0) {
         if (-not $oldest.has -or $oldest.value -isnot [datetime]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' says " + $Id + " has unread mail and gives no time for the oldest")) }
-        $oldestAt = ([datetime]$oldest.value).ToUniversalTime()
+        $oldestAt = ConvertTo-HordeWakerUtc $oldest.value
+        if ($null -eq $oldestAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' gave the oldest unread mail of " + $Id + " a time with no zone, which cannot be placed")) }
     }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
@@ -359,10 +374,12 @@ function Send-HordeWakeNudge {
     if (-not $outcome.has -or $outcome.value -isnot [string] -or $script:HordeWakerOutcomes -cnotcontains $outcome.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with an outcome that is not one of " + ($script:HordeWakerOutcomes -join ", "))) }
     $at = Get-HordeWakerMember $v "at"
     if (-not $at.has -or $at.value -isnot [datetime]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a time that is not a time")) }
+    $rangAt = ConvertTo-HordeWakerUtc $at.value
+    if ($null -eq $rangAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a time with no zone, which cannot be placed")) }
     $reason = Get-HordeWakerMember $v "reason"
     $why = ""
     if ($reason.has -and $null -ne $reason.value) { $why = "$($reason.value)" }
     if ($why -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " with a reason holding a line break")) }
     if ($script:HordeWakerReasonOutcomes -ccontains $outcome.value -and $why.Trim() -eq "") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the nudge of " + $Id + " " + $outcome.value + " without saying why")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = ([datetime]$at.value).ToUniversalTime() }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = [string]$outcome.value; reason = $why; at = $rangAt }) -ObservedAt $a.observedAt)
 }
