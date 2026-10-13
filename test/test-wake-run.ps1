@@ -114,7 +114,27 @@ Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 2 -OldestUnread
 $run = New-HordeWakeRun -Live -HordeHome $h
 $ret = New-Object System.Collections.ArrayList
 foreach ($n in 0..399) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$ret.Add($e.kind + ":" + $e.id + "@" + ($n * 3)) } }
-Check ((@($ret) -join ",") -ceq ("held:" + (Sid 2) + "@0") -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and $run.ledger.Count -eq 0) ("twenty minutes of live ticks over a retired session with unread mail journal one line - held - and nudge, count, give up on and tell of nobody (" + (@($ret) -join ",") + ")")
+Check ((@($ret) -join ",") -ceq ("never-nudged:" + (Sid 2) + "@0") -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and $run.ledger.Count -eq 0) ("twenty minutes of live ticks over a retired session with unread mail journal one line - never-nudged - and nudge, count, give up on and tell of nobody (" + (@($ret) -join ",") + ")")
+
+# A SESSION THAT MAY BE RETIRED is journaled as held - it waits - and one that IS, as never-nudged.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Retired "unknown"
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$kinds = @(foreach ($n in 0..5) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h | ForEach-Object { $_.kind + ":" + $_.outcome } })
+Check (($kinds -join ",") -ceq "held:held") ("a session that may be retired is journaled once as held: the journal's kind says which rule it was (" + ($kinds -join ",") + ")")
+# THE WATCHER'S OWN SESSION AND A SENDER'S LABEL, through the tick, live: said once, never nudged.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "warchief" -UnreadCount 1 -OldestUnreadAt (At -60)
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -Label "WW" -UnreadCount 1 -OldestUnreadAt (At -60)
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -Label "B" -UnreadCount 1 -OldestUnreadAt (At -60)
+$run = New-HordeWakeRun -Live -Self (Sid 1) -HordeHome $h
+$mine = New-Object System.Collections.ArrayList
+foreach ($n in 0..100) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$mine.Add($e.kind + ":" + $e.id) } }
+Check ($run.self -ceq (Sid 1) -and @(Get-HordeMemoryWakerAsks | Where-Object { $_ -ceq (Sid 1) -or $_ -ceq (Sid 2) }).Count -eq 0 -and @(Get-HordeMemoryWakerAsks | Where-Object { $_ -ceq (Sid 3) }).Count -ge 1) "five minutes of live ticks never nudge the session the watcher was started from, nor the one wearing a sender's label - only the third"
+Check (@($mine | Where-Object { $_ -ceq ("never-nudged:" + (Sid 1)) }).Count -eq 1 -and @($mine | Where-Object { $_ -ceq ("never-nudged:" + (Sid 2)) }).Count -eq 1 -and -not $run.ledger.ContainsKey((Sid 1)) -and -not $run.ledger.ContainsKey((Sid 2))) "each is journaled once, as never-nudged, and nothing is counted against either"
+Check ((New-HordeWakeRun -Self "" -HordeHome $h).self -ceq "") "a watcher told it was started from no session holds nobody back for that"
 
 # A USAGE LIMIT: said once, no nudge until it ends.
 $h = New-Home
@@ -171,7 +191,7 @@ foreach ($n in 0..20) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in 
 Check (@(Get-HordeMemoryWakerNudges).Count -eq 0 -and (@($unk) -join ",") -ceq "usage-limit") ("a session whose limit could not be read is not nudged while nothing shows sessions taking turns, and that is journaled once (" + (@($unk) -join ",") + ")")
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0
 foreach ($n in 21..22) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
-Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger.ContainsKey((Sid 1)) -and $run.ledger[(Sid 1)].attempts -eq 1 -and $run.silence.movedAt -eq (At 63)) "once another session takes its mail it is nudged, as an ordinary counted attempt: there is fresh evidence that sessions can take turns"
+Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger.ContainsKey((Sid 1)) -and $run.ledger[(Sid 1)].attempts -eq 1 -and $run.silence.moves[(Sid 2)] -eq (At 63)) "once another session takes its mail it is nudged, as an ordinary counted attempt: there is fresh evidence that sessions can take turns"
 
 # A FAULT AFTER THE NUDGE MUST NOT FORGET THE NUDGE. What was told cannot be saved - a folder stands where
 # the file belongs - on the very tick a nudge had to be killed, which is a thing the warchief is told of.

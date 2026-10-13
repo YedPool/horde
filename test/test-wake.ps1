@@ -438,7 +438,7 @@ Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
 Start-Case; Seat 1 @{ Retired = "yes" }
 $r = Pass 0
 Check ((Decided $r).action -ceq "skip" -and "$((Decided $r).reason)".StartsWith("retired") -and (Rang) -eq 0 -and $script:ledger.Count -eq 0) "a retired session that is reachable, idle, with old unread mail and an empty box - everything a nudge asks for - is skipped: retired is asked first"
-Check ("$($r.held[(Sid 1)])".StartsWith("retired, with 1 unread") -and @($r.entries).Count -eq 0) "the pass says who it holds for being retired, for the tick to journal once, and journals nothing itself"
+Check ("$($r.never[(Sid 1)])".StartsWith("retired, with 1 unread") -and $r.held.Count -eq 0 -and @($r.entries).Count -eq 0) "the pass says who it holds for being retired, for the tick to journal once, and journals nothing itself"
 $rung = 0; $lines = 0; foreach ($s in 1..400) { $p = Pass ($s * 3); $rung += (Rang); $lines += @($p.entries).Count }
 Check ($rung -eq 0 -and $lines -eq 0 -and $script:ledger.Count -eq 0) "twenty minutes on it has never been nudged, nothing is counted against it, and it is never given up on: it is nothing, not a failure"
 Start-Case; Seat 1 @{ Retired = "unknown" }
@@ -446,7 +446,7 @@ $r = Pass 0
 Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".StartsWith("retired is unknown") -and (Rang) -eq 0 -and $script:ledger.Count -eq 0 -and "$($r.held[(Sid 1)])".StartsWith("it could not be told whether this session is retired")) "a session the waker cannot say is retired or not is held: unknown never reads as permission"
 Start-Case; Seat 1 @{ Retired = "yes"; UnreadCount = 0; OldestUnreadAt = $null }; Seat 2
 $r = Pass 0
-Check ($r.held.Count -eq 0 -and (Rang 2) -eq 1) "a retired session with no mail has nothing to be said of it, and the session beside it is nudged as ever"
+Check ($r.held.Count -eq 0 -and $r.never.Count -eq 0 -and (Rang 2) -eq 1) "a retired session with no mail has nothing to be said of it, and the session beside it is nudged as ever"
 Start-Case; Seat 1 @{ Retired = "yes"; Role = "warchief" }; Seat 2
 Set-HordeMemoryWakerCheap $true
 $r = Pass 0
@@ -484,6 +484,36 @@ if ($null -ne $lk) { $lk.Dispose() }
 $made = @(Get-ChildItem -LiteralPath (Join-Path $hd "wake") | ForEach-Object { $_.Name } | Sort-Object)
 Check (($made -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("a ledger, a heartbeat, a journal and a lock written with no mode named are all the shadow run's: nothing of the sending run is touched by a caller that left a word out (" + ($made -join ",") + ")")
 Check ((Read-HordeWakeLedger -Mode "live" -HordeHome $hd).state -ceq "absent" -and (Read-HordeWakeHeartbeat -Mode "live" -HordeHome $hd).state -ceq "absent" -and (Read-HordeWakeLedger -HordeHome $hd).state -ceq "known") "and read back the same way"
+Reset-HordeMemoryWaker
+
+Write-Host ""
+Write-Host "--- a sender's label and the watcher's own session are never nudged, in any mode ---" -ForegroundColor Cyan
+
+foreach ($label in @("RS", "WW")) {
+    Start-Case; Seat 1 @{ Label = $label; Role = "warchief" }; Seat 2 @{ Label = "A" }
+    Set-HordeMemoryWakerClock $t0
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{}
+    Check ((Rang 1) -eq 0 -and (Rang 2) -eq 1 -and (Decided $r 1).action -ceq "skip" -and "$((Decided $r 1).reason)".Contains("reserved") -and "$($r.never[(Sid 1)])".Contains($label) -and $r.ledger.Count -eq 1) ("a session labelled " + $label + " - ready in every other way, and the warchief - is skipped by a pass that sends, and the session behind it is nudged")
+    $r = Invoke-HordeWakePass -Waker $memory -Now $t0 -Settings $settings -Ledger @{}
+    Check ((Decided $r 1).action -ceq "skip" -and @($r.entries | Where-Object { $_.id -ceq (Sid 1) }).Count -eq 0) "and by a shadow pass: not even a would-nudge is journaled for it"
+    Start-Case; Seat 1 @{ Label = $label }
+    Set-HordeMemoryWakerClock $t0
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1)
+    Check ((Rang) -eq 0 -and (Decided $r 1).action -ceq "skip") "and by a pass given that one session: a proof cannot be aimed at it either"
+}
+Start-Case; Seat 1 @{ Label = "RS1" }; Seat 2 @{ Label = "R" }
+$r = Pass 0
+Check ((Decided $r 1).action -cne "skip" -and (Decided $r 2).action -cne "skip") "RS1 and R are other labels, and ordinary sessions"
+Start-Case; Seat 1 @{ Role = "warchief" }; Seat 2
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Self (Sid 1)
+Check ((Rang 1) -eq 0 -and (Rang 2) -eq 1 -and (Decided $r 1).action -ceq "skip" -and "$((Decided $r 1).reason)".Contains("started from") -and "$($r.never[(Sid 1)])".Contains("started from")) "the session the watcher was started from is skipped, though it is ready and first in the fair order, and the next is nudged"
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Only (Sid 1) -Self (Sid 1)
+Check ((Rang 1) -eq 0) "a pass given that one session does not nudge it either"
+Start-Case; Seat 1
+Set-HordeMemoryWakerClock $t0
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{} -Self ""
+Check ((Rang) -eq 1) "CONTROL: a watcher started from no session holds nobody back for that"
 Reset-HordeMemoryWaker
 
 Write-Host ""
@@ -579,10 +609,12 @@ $r = Pass 7400 -Using $one
 Check ((Rang) -eq 2 -and (Kinds $r) -cnotlike "*gave-up*" -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("a probe its waker answers with nothing leaves the session given up on, and gave-up is not said a second time (" + (Kinds $r) + ")")
 # 5. LIMITED UNKNOWN: the waker can tell, and for this session could not. UNKNOWN IS NOT NO.
 function PassM {
-    # One pass at t0 + -Seconds, told when a session was last seen taking mail (-MovedAt, or $null).
-    param([double]$Seconds, $MovedAt = $null)
+    # One pass at t0 + -Seconds, told that ANOTHER session (99) was seen taking mail at -MovedAt, or
+    # nothing; -Moves hands in the whole table instead.
+    param([double]$Seconds, $MovedAt = $null, $Moves = $null)
+    if ($null -eq $Moves -and $MovedAt -is [datetime]) { $Moves = @{ (Sid 99) = $MovedAt } }
     Set-HordeMemoryWakerClock (At $Seconds)
-    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -MovedAt $MovedAt
+    $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -Moves $Moves
     $script:ledger = $r.ledger
     return $r
 }
@@ -607,6 +639,17 @@ Start-Case; Seat 1 @{ Limited = "unknown" }
 $r = PassM 0 -MovedAt (At 5)
 Check ((Test-Held $r "usage limit unknown")) "and a time that has not come yet is no evidence of anything"
 Check ($settings.movingEvidenceSeconds -eq 600) "the window is a setting, 600 s"
+# THE JUDGED SESSION'S OWN MAILBOX IS NEVER THE EVIDENCE: the fleet's repair moves a mailbox with no turn taken.
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 0 -Moves @{ (Sid 1) = (At -5) }
+Check ((Test-Held $r "usage limit unknown") -and (Rang) -eq 0) "a session whose limit is unknown is NOT released by its own mailbox having changed five seconds ago: that is no evidence anybody took a turn"
+$r = PassM 3 -Moves @{ (Sid 1) = (At -5); (Sid 2) = (At -700) }
+Check ((Test-Held $r "usage limit unknown")) "nor with another session's taking that is too old beside it"
+$r = PassM 6 -Moves @{ (Sid 1) = (At -5); (Sid 2) = (At -100) }
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1) "another session's taking, inside the window, releases it"
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ Limited = "unknown" }
+$r = PassM 0 -Moves @{ (Sid 1) = (At -5) }
+Check ((Decided $r 2).action -ceq "nudge" -and (Decided $r 1).action -ceq "wait" -and "$((Decided $r 1).reason)".StartsWith("usage limit unknown")) "one session's taking is evidence for the OTHER and not for itself"
 # IT IS ONLY ASKED OF A SESSION THAT CAN BE REACHED: the fleet says unknown for every row it cannot reach.
 Start-Case; Seat 1 @{ Limited = "unknown"; Reachable = "no" }
 $r = PassM 0 -MovedAt (At -1)
@@ -623,13 +666,13 @@ Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(S
 # WHAT IS EVIDENCE: a session TAKING MAIL, and never a nudge answered woken.
 $mailA = @{ (Sid 1) = (At -60); (Sid 2) = (At -60) }
 $e1 = Update-HordeWakeSilence -Seen $null -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail $mailA -Now (At 0) -Settings $settings
-Check ($null -eq $e1.seen.movedAt -and -not $e1.moved) "a nudge answered woken is NOT evidence that sessions can take turns: every knock of the incident was answered woken"
+Check ($e1.seen.moves.Count -eq 0 -and -not $e1.moved) "a nudge answered woken is NOT evidence that sessions can take turns: every knock of the incident was answered woken"
 $e2 = Update-HordeWakeSilence -Seen $e1.seen -Entries @() -Mail @{ (Sid 1) = (At -60); (Sid 2) = $null } -Now (At 30) -Settings $settings
-Check ($e2.moved -and $e2.seen.movedAt -eq (At 30)) "a session whose mail was taken is: when it was seen is kept"
+Check ($e2.moved -and $e2.seen.moves.Count -eq 1 -and $e2.seen.moves[(Sid 2)] -eq (At 30)) "a session whose mail was taken is: who it was, and when, is kept"
 $e3 = Update-HordeWakeSilence -Seen $e2.seen -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail @{ (Sid 1) = (At -60) } -Now (At 60) -Settings $settings
-Check ($e3.seen.movedAt -eq (At 30)) "and a later woken does not move it: it is the taking that is evidence, and it ages from when it was seen"
+Check ($e3.seen.moves.Count -eq 1 -and $e3.seen.moves[(Sid 2)] -eq (At 30)) "and a later woken does not move it: it is the taking that is evidence, and it ages from when it was seen"
 $e4 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Mail @{ (Sid 1) = (At 50) } -Now (At 90) -Settings $settings
-Check ($e4.seen.movedAt -eq (At 90)) "the session being judged taking its own mail - its oldest unread becoming another - is evidence too"
+Check ($e4.seen.moves[(Sid 1)] -eq (At 90) -and $e4.seen.moves[(Sid 2)] -eq (At 30)) "each session that took mail is kept under its own id, so nobody is judged by its own"
 
 # THE JOURNAL: once per session per limit.
 $said = Update-HordeWakeLimited -Seen @{} -Limited @{ (Sid 1) = "usage limit until 2026-10-12T08:10:00Z" } -Known @((Sid 1)) -Now (At 0)

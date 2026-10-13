@@ -8,6 +8,18 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-watchers-own-session-does-not-reach-the-pass"
+           Find = '-Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"'
+           Replace = '-Only $only -Moves $moves' }
+        @{ Name = "a-never-nudged-session-is-journaled-every-tick"
+           Find = '$Run.never = $neverNow.seen'
+           Replace = '$Run.never = @{}' }
+        @{ Name = "a-retired-session-is-journaled-as-held"
+           Find = '-Kind "never-nudged" -Outcome "skipped"'
+           Replace = '-Kind "held" -Outcome "held"' }
+        @{ Name = "a-given-own-session-is-ignored"
+           Find = 'if ($PSBoundParameters.ContainsKey("Self")) { $own = $Self }'
+           Replace = '' }
         @{ Name = "a-proof-run-reads-a-ledger-of-its-own"
            Find = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome'
            Replace = '$saved = Read-HordeWakeLedger -Mode (Get-HordeWakeRunMode -Run $run) -HordeHome $HordeHome' }
@@ -48,7 +60,7 @@
            Find = 'if ($loose -cne "" -and $source.state -ceq "known") { $note ='
            Replace = 'if ($false) { $note =' }
         @{ Name = "the-evidence-does-not-reach-the-pass"
-           Find = '-Silent:$silentNow -Only $only -MovedAt $movedAt'
+           Find = '-Silent:$silentNow -Only $only -Moves $moves'
            Replace = '-Silent:$silentNow -Only $only' }
         @{ Name = "a-retired-session-is-journaled-every-tick"
            Find = '$Run.held = $heldNow.seen'

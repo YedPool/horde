@@ -48,6 +48,7 @@
 . (Join-Path $PSScriptRoot "Wake.ps1")
 . (Join-Path $PSScriptRoot "RestoreSource.ps1")
 . (Join-Path $PSScriptRoot "WakeTell.ps1")
+. (Join-Path $PSScriptRoot "Identity.ps1")
 
 # THE ONE SWITCH FOR BOTH SENDERS. While it is $false, the restore source and the tell sender run SHADOW in
 # every mode of the run - they journal would-post, would-stall and would-tell, and post nothing - for the
@@ -70,13 +71,21 @@ function New-HordeWakeRun {
     # header). live says whether real nudges are sent: true for live and for proof. said is what the caller should print once: a saved
     # file that could not be read is started from empty, and says so.
     # -Target is the one session a proof run may nudge; it is kept for a proof run only.
-    param([switch]$Live, [string]$Mode = "", [string]$Target = "", [string]$HordeHome = (Get-HordeHome))
+    param([switch]$Live, [string]$Mode = "", [string]$Target = "", [string]$Self = "", [string]$HordeHome = (Get-HordeHome))
+    # THE SESSION THIS WATCHER WAS STARTED FROM, when there is one and it can be known: the agent's own
+    # export of its session id, which a process started from inside a session inherits
+    # (core/Identity.ps1, Get-HordeSelfSessionId). It is never nudged (core/Wake.ps1, Get-HordeWakeHold).
+    # Started from no session - a service, a plain terminal - there is none, and nothing is held for it.
+    # -Self is for a caller that knows (a test); left out, the environment is asked.
+    $own = ""
+    if ($PSBoundParameters.ContainsKey("Self")) { $own = $Self }
+    else { $mine = Get-HordeSelfSessionId; if ($mine.state -ceq "known") { $own = "$($mine.value)" } }
     $word = $Mode
     if ($word -ceq "" -and $Live) { $word = "live" }
     $word = Get-HordeWakeModeWord -Mode $word
     $aim = ""
     if ($word -ceq "proof") { $aim = $Target }
-    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
+    $run = [pscustomobject]@{ mode = $word; target = $aim; refused = ""; live = ($word -cne "shadow"); ledger = @{}; posted = @{}; restores = @(); unknown = @{}; notes = @(); badMail = @{}; fleetRead = $null; told = @{}; warchief = ""; limited = @{}; held = @{}; never = @{}; self = $own; silence = $null; restoreAt = [datetime]::MinValue; pass = [long]0; said = @() }
     $saved = Read-HordeWakeLedger -Mode (Get-HordeWakeSendWord -Mode (Get-HordeWakeRunMode -Run $run)) -HordeHome $HordeHome
     if ($saved.state -ceq "known") { $run.ledger = $saved.value.ledger }
     elseif ($saved.state -ceq "unknown") {
@@ -273,8 +282,8 @@ function Invoke-HordeWakeTick {
         }
         # WHEN A SESSION WAS LAST SEEN TAKING MAIL: what releases a session whose limit nobody could read
         # (core/Wake.ps1, Get-HordeWakeLimit).
-        $movedAt = Get-HordeWakeEntryValue $Run.silence "movedAt"
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -MovedAt $movedAt
+        $moves = Get-HordeWakeEntryValue $Run.silence "moves"
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Moves $moves -Self "$(Get-HordeWakeEntryValue $Run "self")"
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be
@@ -301,6 +310,11 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($limitedNow.entries)) { [void]$entries.Add($e) }
         # A RETIRED SESSION WITH MAIL (or one that may be retired) is said once, and is nothing else:
         # no attempt, no gave-up, no tell.
+        # THE KIND SAYS WHICH: never-nudged for a session that is skipped for what it is (retired, a
+        # reserved label, the watcher's own session), held for one that waits because it MAY be retired.
+        $neverNow = Update-HordeWakeSaidOnce -Seen $Run.never -Said $result.never -Known @($result.mail.Keys) -Now $Now -Kind "never-nudged" -Outcome "skipped"
+        $Run.never = $neverNow.seen
+        foreach ($e in @($neverNow.entries)) { [void]$entries.Add($e) }
         $heldNow = Update-HordeWakeSaidOnce -Seen $Run.held -Said $result.held -Known @($result.mail.Keys) -Now $Now -Kind "held" -Outcome "held"
         $Run.held = $heldNow.seen
         foreach ($e in @($heldNow.entries)) { [void]$entries.Add($e) }

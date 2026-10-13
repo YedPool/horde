@@ -192,7 +192,7 @@ Check ((Get-Retired 1) -ceq "yes") "retired true is yes whatever else the row sa
 & $fx.SetRow $state (New-Row 1 @{ retired = $true; oldestUnreadAt = "2026-10-12T07:00:00Z" })
 & $fx.Clock $state $t0
 $pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
-Check ((Get-Count $state "mail nudge*") -eq 0 -and (Get-Typed $state) -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "skip" -and "$($_.reason)".StartsWith("retired") }).Count -eq 1 -and $pass.held.Count -eq 1) "a pass over a retired session with unread mail asks for no nudge and types nothing"
+Check ((Get-Count $state "mail nudge*") -eq 0 -and (Get-Typed $state) -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "skip" -and "$($_.reason)".StartsWith("retired") }).Count -eq 1 -and $pass.never.Count -eq 1) "a pass over a retired session with unread mail asks for no nudge and types nothing"
 # THE FLEET'S OWN DOOR: asked all the same, its nudge refuses a retired target, and that is nothing.
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)".StartsWith("retired") -and (Get-Typed $state) -eq 0) "a nudge the fleet refuses because the target is retired is the port's nothing, with the fleet's reason, and nothing was typed"
@@ -218,7 +218,7 @@ foreach ($word in @("no", "unknown")) {
 $pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
 Check ((Get-Count $state "mail nudge*") -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".StartsWith("usage limit unknown") }).Count -eq 1) "a pass over a session whose row says limited unknown asks for no nudge: it waits"
 & $fx.Forget $state
-$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -MovedAt $t0.AddSeconds(-5)
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -Moves @{ (Sid 99) = $t0.AddSeconds(-5) }
 Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1) "with a session seen taking mail five seconds ago, the same session is nudged"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2031-01-01T05:55:00Z" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)

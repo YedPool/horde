@@ -1,3 +1,5 @@
 test/test-wake-port.ps1 | 12 -> 18 | 2026-10-13 | the port suite reads more of the memory waker's own records for the review's rules
 test/test-wake-run.ps1 | 23 -> 97 | 2026-10-13 | the tick's suite seats more sessions in the memory waker for the review's rules
 test/test-wake.ps1 | 12 -> 55 | 2026-10-13 | the watcher's suite drives the memory waker through more of its test helpers for the review's rules
+test/test-wake-run.ps1 | 97 -> 138 | 2026-10-13 | the tick's suite seats more sessions in the memory waker for the review's rules
+test/test-wake.ps1 | 55 -> 67 | 2026-10-13 | the watcher's suite drives the memory waker through more of its test helpers for the review's rules

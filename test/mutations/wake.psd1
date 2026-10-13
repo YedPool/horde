@@ -6,6 +6,42 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "evidence-a-second-inside-the-edge-only"
+           Find = 'if ($latest -is [datetime] -and ($Now - $latest).TotalSeconds -le $window) { return'
+           Replace = 'if ($latest -is [datetime] -and ($Now - $latest).TotalSeconds -lt $window) { return' }
+        @{ Name = "evidence-never-grows-old"
+           Find = 'if ($latest -is [datetime] -and ($Now - $latest).TotalSeconds -le $window) { return'
+           Replace = 'if ($latest -is [datetime]) { return' }
+        @{ Name = "a-time-that-has-not-come-is-evidence"
+           Find = 'if ($when -is [datetime] -and $when -le $Now -and'
+           Replace = 'if ($when -is [datetime] -and' }
+        @{ Name = "a-sessions-own-mailbox-is-evidence-for-itself"
+           Find = 'if ("$who" -ceq $self) { continue }'
+           Replace = '' }
+        @{ Name = "a-woken-answer-is-evidence-that-sessions-take-turns"
+           Find = '$next = [pscustomobject]@{ silent = ($before.silent -eq $true); quietSince = $quietSince;'
+           Replace = 'foreach ($n in @($nudges)) { if ($n.outcome -ceq "woken" -and $n.at -eq $Now) { $movesNow[$n.id] = $Now } }; $next = [pscustomobject]@{ silent = ($before.silent -eq $true); quietSince = $quietSince;' }
+        @{ Name = "mail-taken-leaves-no-evidence"
+           Find = '{ $moved = $true; $movesNow["$id"] = $Now }'
+           Replace = '{ $moved = $true }' }
+        @{ Name = "evidence-forgotten-on-the-next-pass"
+           Find = 'if ($was[$id] -is [datetime] -and ($Now - $was[$id]).TotalSeconds -le 86400) { $movesNow["$id"] = $was[$id] }'
+           Replace = '' }
+        @{ Name = "a-session-wearing-a-senders-label-is-nudged"
+           Find = 'if (Test-HordeLabelReserved $worn) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "the-watchers-own-session-is-nudged"
+           Find = 'if ($Self -cne "" -and "$(Get-HordeWakeEntryValue $Target "id")" -ceq $Self) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-watcher-from-no-session-skips-everybody"
+           Find = 'if ($Self -cne "" -and "$(Get-HordeWakeEntryValue $Target "id")" -ceq $Self) { return'
+           Replace = 'if ($Self -ceq "" -or "$(Get-HordeWakeEntryValue $Target "id")" -ceq $Self) { return' }
+        @{ Name = "the-pass-does-not-say-it-holds-a-senders-label"
+           Find = 'elseif ($a.value.unreadCount -gt 0 -and (Test-HordeLabelReserved "$($t.label)")) { $never[$t.id] ='
+           Replace = 'elseif ($false) { $never[$t.id] =' }
+        @{ Name = "own-session-does-not-reach-the-decisions"
+           Find = '-Moves $Moves -NoProbe:$NoProbe -Self $Self'
+           Replace = '-Moves $Moves -NoProbe:$NoProbe' }
         @{ Name = "a-pass-given-one-session-sends-a-probe"
            Find = 'if ($probe -and $NoProbe) { return'
            Replace = 'if ($false) { return' }
@@ -21,26 +57,8 @@
         @{ Name = "a-limit-nobody-could-read-is-read-as-not-limited"
            Find = 'if ($word -ceq "unknown") {'
            Replace = 'if ($false) {' }
-        @{ Name = "evidence-a-second-inside-the-edge-only"
-           Find = '-and ($Now - $MovedAt).TotalSeconds -le $window) { return'
-           Replace = '-and ($Now - $MovedAt).TotalSeconds -lt $window) { return' }
-        @{ Name = "evidence-never-grows-old"
-           Find = '-and ($Now - $MovedAt).TotalSeconds -le $window) { return'
-           Replace = ') { return' }
-        @{ Name = "a-time-that-has-not-come-is-evidence"
-           Find = 'if ($MovedAt -is [datetime] -and $MovedAt -le $Now -and'
-           Replace = 'if ($MovedAt -is [datetime] -and' }
-        @{ Name = "a-woken-answer-is-evidence-that-sessions-take-turns"
-           Find = 'movedAt = (Get-HordeWakeEntryValue $before "movedAt") }'
-           Replace = 'movedAt = $(if (@($nudges | Where-Object { $_.outcome -ceq "woken" -and $_.at -eq $Now }).Count -gt 0) { $Now } else { Get-HordeWakeEntryValue $before "movedAt" }) }' }
-        @{ Name = "mail-taken-leaves-no-evidence"
-           Find = 'mail = $mailNow; movedAt = $Now }'
-           Replace = 'mail = $mailNow; movedAt = $null }' }
-        @{ Name = "evidence-forgotten-on-the-next-pass"
-           Find = 'movedAt = (Get-HordeWakeEntryValue $before "movedAt") }'
-           Replace = 'movedAt = $null }' }
         @{ Name = "the-evidence-does-not-reach-the-decisions"
-           Find = '-CanLook:($CanLook -and -not $looked) -Silent:$Silent -MovedAt $MovedAt'
+           Find = '-CanLook:($CanLook -and -not $looked) -Silent:$Silent -Moves $Moves'
            Replace = '-CanLook:($CanLook -and -not $looked) -Silent:$Silent' }
         @{ Name = "a-limit-is-said-of-a-session-that-cannot-be-reached"
            Find = 'if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and $limit.kind -cne "none") {'
@@ -58,8 +76,8 @@
            Find = 'if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }'
            Replace = 'if ($retired -ceq "yes") { return [pscustomobject]@{ action = "wait"; reason = "retired: a retired session is never nudged" } }' }
         @{ Name = "the-pass-does-not-say-whom-it-holds-as-retired"
-           Find = 'if ($a.value.unreadCount -gt 0 -and "$($t.retired)" -ceq "yes") { $held[$t.id] ='
-           Replace = 'if ($false) { $held[$t.id] =' }
+           Find = 'if ($a.value.unreadCount -gt 0 -and "$($t.retired)" -ceq "yes") { $never[$t.id] ='
+           Replace = 'if ($false) { $never[$t.id] =' }
         @{ Name = "a-standing-fact-is-journaled-every-pass"
            Find = 'if ($null -ne $Seen -and $Seen.ContainsKey("$id") -and "$($Seen[$id])" -ceq $text) { continue }'
            Replace = '' }
@@ -91,11 +109,11 @@
            Find = 'if (($Now - $last).TotalSeconds -lt $every) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "the-hourly-knock-is-counted"
-           Find = 'if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -MovedAt $MovedAt).kind -ceq "open") {'
+           Find = 'if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {'
            Replace = 'if ($Silent) {' }
         @{ Name = "a-silent-fleets-probes-are-counted"
-           Find = 'if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -MovedAt $MovedAt).kind -ceq "open") {'
-           Replace = 'if ((Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -MovedAt $MovedAt).kind -ceq "open") {' }
+           Find = 'if ($Silent -or (Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {'
+           Replace = 'if ((Get-HordeWakeLimit -State $stateNow -Now $Now -Settings $Settings -Moves $Moves).kind -ceq "open") {' }
         @{ Name = "the-hour-is-two"
            Find = 'limitedUnknownProbeSeconds = 3600'
            Replace = 'limitedUnknownProbeSeconds = 7200' }
@@ -136,14 +154,14 @@
            Find = 'if ($quietSince -is [datetime] -and ($Now - $quietSince).TotalSeconds -ge $window -and $who.Count'
            Replace = 'if ($quietSince -is [datetime] -and $who.Count' }
         @{ Name = "arriving-mail-is-movement"
-           Find = 'if ($had -is [datetime] -and ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had)) { $moved = $true }'
-           Replace = 'if ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had) { $moved = $true }' }
+           Find = 'if ($had -is [datetime] -and ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had)) { $moved = $true; $movesNow["$id"] = $Now }'
+           Replace = 'if ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had) { $moved = $true; $movesNow["$id"] = $Now }' }
         @{ Name = "taken-mail-is-not-movement"
-           Find = 'if ($had -is [datetime] -and ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had)) { $moved = $true }'
+           Find = 'if ($had -is [datetime] -and ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had)) { $moved = $true; $movesNow["$id"] = $Now }'
            Replace = '' }
         @{ Name = "another-mail-becoming-the-oldest-is-not-movement"
-           Find = 'if ($had -is [datetime] -and ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had)) { $moved = $true }'
-           Replace = 'if ($had -is [datetime] -and $Mail[$id] -isnot [datetime]) { $moved = $true }' }
+           Find = 'if ($had -is [datetime] -and ($Mail[$id] -isnot [datetime] -or $Mail[$id] -ne $had)) { $moved = $true; $movesNow["$id"] = $Now }'
+           Replace = 'if ($had -is [datetime] -and $Mail[$id] -isnot [datetime]) { $moved = $true; $movesNow["$id"] = $Now }' }
         @{ Name = "fleet-moving-not-said"
            Find = 'if ($before.silent -eq $true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"'
            Replace = 'if ($false) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"' }
@@ -151,8 +169,8 @@
            Find = 'if ($before.silent -eq $true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"'
            Replace = 'if ($true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"' }
         @{ Name = "the-quiet-is-not-counted-anew-after-movement"
-           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); mail = $mailNow; movedAt = $Now }'
-           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $before.quietSince; nudges = @($before.nudges); mail = $mailNow; movedAt = $Now }' }
+           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); mail = $mailNow; moves = $movesNow }'
+           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $before.quietSince; nudges = @($before.nudges); mail = $mailNow; moves = $movesNow }' }
         @{ Name = "silent-found-again-every-pass"
            Find = 'if ($next.silent) { return [pscustomobject]@{ seen = $next; entries = @(); silent = $true; declared = $false;'
            Replace = 'if ($false) { return [pscustomobject]@{ seen = $next; entries = @(); silent = $true; declared = $false;' }
