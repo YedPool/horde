@@ -35,6 +35,11 @@ function Get-HordeRestoreSettings {
         restoreMinSessions = 3
         restoreShare = 0.6
         restoreWindowSeconds = 600
+        # A session has an earlier life when its registry record was first seen at least this long before
+        # it started. A session writes its record seconds AFTER it starts, so any margin tells a session
+        # that was brought back from one that was just spawned; 60 s is far outside clock jitter and far
+        # inside the hours that lie between a session's first life and its restore.
+        earlierLifeSeconds = 60
         # A restored session that is idle has "moved" once its status changed this long after it started.
         movedSeconds = 60
         # With no session moved this long after the last one started, the warchief is told.
@@ -53,10 +58,23 @@ function Get-HordeRestoreSettings {
 
 function Get-HordeRestoreFinding {
     # Was every session restored? -Sessions is the fleet as it runs now, each { id; role; parent;
-    # startedAt; lastChangeAt }. known { restoreId; windowStart; windowEnd; members; notMoved } when at
-    # least restoreMinSessions of them, and at least restoreShare of all of them, started inside one
-    # window of restoreWindowSeconds; absent, saying why, when not. Sessions do not start together by
-    # chance: a quiet fleet's start times are hours apart, and one restarted session is one session.
+    # startedAt; lastChangeAt; status; firstSeenAt }. known { restoreId; windowStart; windowEnd; members;
+    # notMoved } when at least restoreMinSessions of the sessions that have an earlier life, and at least
+    # restoreShare of them, started inside one window of restoreWindowSeconds; absent, saying why, when
+    # not. Sessions do not start together by chance: a quiet fleet's start times are hours apart, and one
+    # restarted session is one session.
+    #
+    # ONLY A SESSION WITH EVIDENCE OF AN EARLIER LIFE CAN HAVE BEEN RESTORED: its registry record was
+    # first seen (firstSeenAt) at least earlierLifeSeconds BEFORE this start. The first version counted
+    # every session that started in the window, and the review of PR #207 showed what that finds: three
+    # subsessions spawned within ten minutes in a fleet of five are 3 of 5, a "restore", and each would
+    # have been told every session was restored. A freshly spawned session has no earlier life and is
+    # never a member. A session with no record, or a record with no first-seen time, is unknown, and
+    # unknown is not a member and is never mailed. The share is taken among the sessions that have an
+    # earlier life, so new sessions spawned around a real restore neither hide it nor join it.
+    # THIS ALSO SETTLES THE MORNING START. A fleet of EXISTING sessions brought back up has an earlier
+    # life and is handled exactly like a restore, which is wanted, and the resume text says "started or
+    # restored" truthfully. A cold start of new sessions has none, and nothing is sent.
     #
     # THE WINDOW is the one holding the most sessions, the earliest on a tie. windowStart is its first
     # start and windowEnd its last. restoreId is made from windowStart cut to the minute (core/TextUuid.ps1), so every pass
@@ -75,16 +93,17 @@ function Get-HordeRestoreFinding {
     # writes another.
     param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings))
     $all = @(@($Sessions) | Where-Object { $null -ne $_ -and $_.startedAt -is [datetime] -and $_.startedAt -le $Now } | Sort-Object -Property startedAt, id)
-    if ($all.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("" + $all.Count + " sessions are running, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
+    $lived = @($all | Where-Object { $_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds })
+    if ($lived.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("" + $lived.Count + " of the " + $all.Count + " running sessions have an earlier life, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
     $best = @()
-    for ($i = 0; $i -lt $all.Count; $i++) {
-        $from = $all[$i].startedAt
+    for ($i = 0; $i -lt $lived.Count; $i++) {
+        $from = $lived[$i].startedAt
         $until = $from.AddSeconds($Settings.restoreWindowSeconds)
-        $inside = @($all | Where-Object { $_.startedAt -ge $from -and $_.startedAt -le $until })
+        $inside = @($lived | Where-Object { $_.startedAt -ge $from -and $_.startedAt -le $until })
         if ($inside.Count -gt $best.Count) { $best = $inside }
     }
     if ($best.Count -lt $Settings.restoreMinSessions) { return (New-HordeAbsent -Note ("at most " + $best.Count + " sessions started within " + $Settings.restoreWindowSeconds + " s of each other, fewer than the " + $Settings.restoreMinSessions + " a restore takes")) }
-    if (($best.Count / $all.Count) -lt $Settings.restoreShare) { return (New-HordeAbsent -Note ("" + $best.Count + " of " + $all.Count + " sessions started within " + $Settings.restoreWindowSeconds + " s of each other, under the share of " + $Settings.restoreShare + " a restore takes")) }
+    if (($best.Count / $lived.Count) -lt $Settings.restoreShare) { return (New-HordeAbsent -Note ("" + $best.Count + " of the " + $lived.Count + " sessions that have an earlier life started within " + $Settings.restoreWindowSeconds + " s of each other, under the share of " + $Settings.restoreShare + " a restore takes")) }
     $windowStart = $best[0].startedAt
     $windowEnd = $best[$best.Count - 1].startedAt
     if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) { return (New-HordeAbsent -Note ("the sessions were restored more than " + $Settings.restoreMaxAgeSeconds + " s ago, which is history")) }
@@ -177,7 +196,9 @@ function Invoke-HordeRestoreSourcePass {
 
 function Get-HordeRestoreSessions {
     # The running sessions, for Get-HordeRestoreFinding: known, a list of { id; role; parent; startedAt;
-    # lastChangeAt; status } (and leftOut, below), or unknown with the reason. status is the session's
+    # lastChangeAt; status; firstSeenAt } (and leftOut, below), or unknown with the reason. firstSeenAt
+    # is when its registry record was first seen, or $null where it has no record or the record has no
+    # such time: it is the evidence of an earlier life (Get-HordeRestoreFinding), and is never guessed. status is the session's
     # live status word as its agent wrote it (idle, busy, waiting): whether a session has moved since a
     # restore cannot be told from a time alone (Get-HordeRestoreFinding). startedAt is the session's own (core/Identity.ps1);
     # lastChangeAt is when its live status was last written; role and parent are its registry record's
@@ -220,14 +241,17 @@ function Get-HordeRestoreSessions {
         if ("$($status.state)" -cne "known" -or $status.observedAt -isnot [datetime]) { continue }
         $role = "unknown"
         $parent = ""
+        $firstSeenAt = $null
         if ($Registry.records.ContainsKey($id)) {
             $record = $Registry.records[$id].record
             $read = Read-HordeRecordRole -Record $record
             if ("$($read.role.state)" -ceq "known") { $role = "$($read.role.value)" }
             $held = Get-HordeStoredField -Record $record -Name "parent"
             if ("$($held.state)" -ceq "known") { $parent = "$($held.value)" }
+            $seen = Get-HordeStoredField -Record $record -Name "firstSeen"
+            if ("$($seen.state)" -ceq "known") { $firstSeenAt = ConvertFrom-HordeWakeTimeText $seen.value }
         }
-        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt; status = "$($status.value)" })
+        [void]$out.Add([pscustomobject]@{ id = "$id"; role = $role; parent = $parent; startedAt = $started.value; lastChangeAt = $status.observedAt; status = "$($status.value)"; firstSeenAt = $firstSeenAt })
     }
     $answer = New-HordeKnown -Value $out.ToArray() -ObservedAt ([datetime]::UtcNow)
     Add-Member -InputObject $answer -MemberType NoteProperty -Name "leftOut" -Value $leftOut.ToArray()

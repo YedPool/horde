@@ -38,7 +38,7 @@ Write-Host "--- the restore source: a replay of twelve sessions restarted inside
 # One warchief (1), three orcs (2 to 4), eight goblins (5 to 12: 5 to 7 under orc 2, 8 to 10 under orc 3,
 # 11 and 12 under orc 4). Each started 13 s after the last, and wrote its status once, 4 s after starting.
 function New-Restored {
-    param([hashtable]$MovedAfter = @{}, [hashtable]$Status = @{})
+    param([hashtable]$MovedAfter = @{}, [hashtable]$Status = @{}, [hashtable]$FirstSeen = @{})
     $out = @()
     for ($n = 1; $n -le 12; $n++) {
         $role = "goblin"; $parent = ""
@@ -47,7 +47,7 @@ function New-Restored {
         $start = At (($n - 1) * 13)
         $change = $start.AddSeconds(4)
         if ($MovedAfter.ContainsKey($n)) { $change = $start.AddSeconds($MovedAfter[$n]) }
-        $out += [pscustomobject]@{ id = (Sid $n); role = $role; parent = $parent; startedAt = $start; lastChangeAt = $change; status = $(if ($Status.ContainsKey($n)) { $Status[$n] } else { "idle" }) }
+        $out += [pscustomobject]@{ id = (Sid $n); role = $role; parent = $parent; startedAt = $start; lastChangeAt = $change; status = $(if ($Status.ContainsKey($n)) { $Status[$n] } else { "idle" }); firstSeenAt = $(if (-not $FirstSeen.ContainsKey($n)) { $start.AddHours(-1) } elseif ($null -eq $FirstSeen[$n]) { $null } else { $start.AddSeconds(-1 * $FirstSeen[$n]) }) }
     }
     return $out
 }
@@ -59,7 +59,7 @@ Check ($f.state -ceq "known" -and $f.value.windowStart -eq $t0 -and $f.value.win
 Check ($f.state -ceq "known" -and $f.value.restoreId -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') "its id is a lowercase uuid"
 $again = Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 250)) -Settings $settings
 Check ($again.state -ceq "known" -and $again.value.restoreId -ceq $f.value.restoreId) "and the same id on a later pass"
-$shifted = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddMinutes(7); lastChangeAt = $_.lastChangeAt.AddMinutes(7); status = "idle" } })
+$shifted = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddMinutes(7); lastChangeAt = $_.lastChangeAt.AddMinutes(7); status = "idle"; firstSeenAt = ($_.startedAt.AddMinutes(7)).AddHours(-1) } })
 $f7 = Get-HordeRestoreFinding -Sessions $shifted -Now (At 2000) -Settings $settings
 Check ($f7.state -ceq "known" -and $f7.value.restoreId -cne $f.value.restoreId) "a restore that began in another minute has another id"
 
@@ -67,7 +67,7 @@ $plan = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 10)) -Settings $setti
 $orcs = @(2, 3, 4 | ForEach-Object { Sid $_ })
 Check ((@($plan | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",") -and @($plan | Where-Object { $_.kind -cne "resume" }).Count -eq 0) "all three orcs are told to resume at once, and nobody else"
 Check (@($plan | Where-Object { $_.body -cne $settings.resumeText }).Count -eq 0 -and $settings.resumeText.StartsWith("START OR RESTORE. Every session on this machine was started or restored together") -and $settings.resumeText.EndsWith("mail the subsessions you still need: they are not woken unless you ask.")) "each with the resume text, which covers a start as well as a restore and tells an orc its subsessions are not woken unless it asks"
-$unroled = @($fleet | ForEach-Object { if ($_.id -ceq (Sid 12)) { [pscustomobject]@{ id = $_.id; role = "unknown"; parent = $_.parent; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; status = "idle" } } else { $_ } })
+$unroled = @($fleet | ForEach-Object { if ($_.id -ceq (Sid 12)) { [pscustomobject]@{ id = $_.id; role = "unknown"; parent = $_.parent; startedAt = $_.startedAt; lastChangeAt = $_.lastChangeAt; status = "idle"; firstSeenAt = ($_.startedAt).AddHours(-1) } } else { $_ } })
 foreach ($after in @(0, 180, 600)) {
     $planAt = @(Get-HordeResumePlan -Finding $f -Now (At ($end + $after)) -Settings $settings | Where-Object { $_.kind -ceq "resume" })
     Check ((@($planAt | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",")) ("" + $after + " s after the last start, with no orc moved, the orcs are told and no goblin is")
@@ -141,22 +141,46 @@ Check ((Kinds $r6) -ceq "stall" -and $r6.entries[0].outcome -ceq "unposted") "an
 Write-Host ""
 Write-Host "--- no restore: a quiet night, one restarted session, too few, too small a share ---" -ForegroundColor Cyan
 
-$quiet = @(1..10 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "goblin"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 3)); status = "idle" } })
+$quiet = @(1..10 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "goblin"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 3)); status = "idle"; firstSeenAt = ((At ($_ * -7200))).AddHours(-1) } })
 $f = Get-HordeRestoreFinding -Sessions $quiet -Now $t0 -Settings $settings
 Check ($f.state -ceq "absent" -and "$($f.reason)" -ne "") "a quiet night, with start times hours apart, is no restore, and the answer says why"
 Check (@(Get-HordeResumePlan -Finding $f -Now $t0 -Settings $settings).Count -eq 0) "and nothing is planned for it"
 $oneBack = @($quiet | ForEach-Object { $_ })
-$oneBack[4] = [pscustomobject]@{ id = (Sid 5); role = "goblin"; parent = ""; startedAt = (At -30); lastChangeAt = (At -28); status = "idle" }
+$oneBack[4] = [pscustomobject]@{ id = (Sid 5); role = "goblin"; parent = ""; startedAt = (At -30); lastChangeAt = (At -28); status = "idle"; firstSeenAt = ((At -30)).AddHours(-1) }
 Check ((Get-HordeRestoreFinding -Sessions $oneBack -Now $t0 -Settings $settings).state -ceq "absent") "one restarted session among ten is no restore"
-$two = @(1, 2 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -5)); lastChangeAt = (At ($_ * -5 + 1)); status = "idle" } })
+$two = @(1, 2 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -5)); lastChangeAt = (At ($_ * -5 + 1)); status = "idle"; firstSeenAt = ((At ($_ * -5))).AddHours(-1) } })
 Check ((Get-HordeRestoreFinding -Sessions $two -Now $t0 -Settings $settings).state -ceq "absent") "two sessions that started together are fewer than a restore takes"
-$twoOfThree = @($two) + [pscustomobject]@{ id = (Sid 3); role = "orc"; parent = ""; startedAt = (At -90000); lastChangeAt = (At -80000); status = "idle" }
+$twoOfThree = @($two) + [pscustomobject]@{ id = (Sid 3); role = "orc"; parent = ""; startedAt = (At -90000); lastChangeAt = (At -80000); status = "idle"; firstSeenAt = ((At -90000)).AddHours(-1) }
 Check ((Get-HordeRestoreFinding -Sessions $twoOfThree -Now $t0 -Settings $settings).state -ceq "absent") "two of three together is a large share and still fewer than a restore takes"
-function New-Mixed { param([int]$Together) return @(1..10 | ForEach-Object { if ($_ -le $Together) { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At (-100 + $_)); lastChangeAt = (At (-98 + $_)); status = "idle" } } else { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 900)); status = "idle" } } }) }
+
+Write-Host ""
+Write-Host "--- only a session with an earlier life can have been restored ---" -ForegroundColor Cyan
+
+function New-Fresh { param([int]$N, [double]$Start, [string]$Role = "goblin", $SeenAfter = 5) return [pscustomobject]@{ id = (Sid $N); role = $Role; parent = ""; startedAt = (At $Start); lastChangeAt = (At ($Start + 2)); status = "idle"; firstSeenAt = $(if ($null -eq $SeenAfter) { $null } else { At ($Start + $SeenAfter) }) } }
+$old = @(1, 2 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 900)); status = "idle"; firstSeenAt = (At ($_ * -7200 - 3600)) } })
+$spawned = $old + @((New-Fresh 3 -500), (New-Fresh 4 -300), (New-Fresh 5 -100))
+$f = Get-HordeRestoreFinding -Sessions $spawned -Now $t0 -Settings $settings
+Check ($f.state -ceq "absent" -and "$($f.reason)".Contains("earlier life")) "three subsessions spawned within ten minutes in a fleet of five are no restore: none has an earlier life"
+$spawnedOrcs = $old + @((New-Fresh 3 -500 "orc"), (New-Fresh 4 -300 "orc"), (New-Fresh 5 -100 "orc" $null))
+Check ((Get-HordeRestoreFinding -Sessions $spawnedOrcs -Now $t0 -Settings $settings).state -ceq "absent") "nor are three spawned orcs, one of them with no first-seen time at all"
+$around = @($fleet) + @(13..32 | ForEach-Object { New-Fresh $_ ($_ * 5) "orc" })
+$f = Get-HordeRestoreFinding -Sessions $around -Now (At ($end + 100)) -Settings $settings
+$planAround = @(Get-HordeResumePlan -Finding $f -Now (At ($end + 100)) -Settings $settings)
+Check ($f.state -ceq "known" -and @($f.value.members).Count -eq 12) "twenty sessions spawned around a real restore neither hide it nor join it: the share is taken among the sessions that have an earlier life"
+Check ((@($planAround | ForEach-Object { $_.to } | Sort-Object) -join ",") -ceq ($orcs -join ",")) "and no spawned orc is told to resume"
+$noRecord = Get-HordeRestoreFinding -Sessions (New-Restored -FirstSeen @{ 2 = $null }) -Now (At ($end + 100)) -Settings $settings
+Check ($noRecord.state -ceq "known" -and @($noRecord.value.members).Count -eq 11 -and @($noRecord.value.members | Where-Object { $_.id -ceq (Sid 2) }).Count -eq 0) "a session with no first-seen time is unknown: not a member, so never mailed"
+$margin59 = Get-HordeRestoreFinding -Sessions (New-Restored -FirstSeen @{ 2 = 59 }) -Now (At ($end + 100)) -Settings $settings
+$margin60 = Get-HordeRestoreFinding -Sessions (New-Restored -FirstSeen @{ 2 = 60 }) -Now (At ($end + 100)) -Settings $settings
+Check (@($margin59.value.members).Count -eq 11 -and @($margin60.value.members).Count -eq 12) "an earlier life is a record first seen at least 60 s before the start: 59 s is not one, 60 s is"
+$morning = @(1..6 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 20)); lastChangeAt = (At ($_ * 20 + 3)); status = "idle"; firstSeenAt = (At -50000) } })
+Check ((Get-HordeRestoreFinding -Sessions $morning -Now (At 200) -Settings $settings).state -ceq "known") "a fleet of existing sessions brought back up in the morning has an earlier life, and is handled like a restore"
+
+function New-Mixed { param([int]$Together) return @(1..10 | ForEach-Object { if ($_ -le $Together) { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At (-100 + $_)); lastChangeAt = (At (-98 + $_)); status = "idle"; firstSeenAt = ((At (-100 + $_))).AddHours(-1) } } else { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * -7200)); lastChangeAt = (At ($_ * -7200 + 900)); status = "idle"; firstSeenAt = ((At ($_ * -7200))).AddHours(-1) } } }) }
 Check ((Get-HordeRestoreFinding -Sessions (New-Mixed 5) -Now $t0 -Settings $settings).state -ceq "absent") "five of ten together is under the share a restore takes"
 $six = Get-HordeRestoreFinding -Sessions (New-Mixed 6) -Now $t0 -Settings $settings
 Check ($six.state -ceq "known" -and @($six.value.members).Count -eq 6) "six of ten together is a restore, of those six"
-$wide = @(1..4 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 300)); lastChangeAt = (At ($_ * 300 + 1)); status = "idle" } })
+$wide = @(1..4 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At ($_ * 300)); lastChangeAt = (At ($_ * 300 + 1)); status = "idle"; firstSeenAt = ((At ($_ * 300))).AddHours(-1) } })
 $w = Get-HordeRestoreFinding -Sessions $wide -Now (At 2000) -Settings $settings
 Check ($w.state -ceq "known" -and @($w.value.members).Count -eq 3 -and $w.value.windowStart -eq (At 300)) "the window is restoreWindowSeconds long: of four sessions 300 s apart, three fall in one"
 Check ((Get-HordeRestoreFinding -Sessions $fleet -Now (At ($end + 86401)) -Settings $settings).state -ceq "absent") "a restore more than a day old is history"
@@ -216,7 +240,7 @@ $records[(Sid 2)] = New-Record (At 13) (At 80) -Word "busy"
 $records[(Sid 3)] = New-Record (At 26) $null
 $records[(Sid 4)] = New-Record $null (At 30)
 $records[(Sid 5)] = New-Record (At 39) (At 41) "agent-two"
-$registry = New-Registry @{ (Sid 1) = @{ role = "master" }; (Sid 2) = @{ role = "orchestrator"; parent = (Sid 1) }; (Sid 5) = @{ parent = (Sid 2); role = "" } }
+$registry = New-Registry @{ (Sid 1) = @{ role = "master"; firstSeen = "2026-10-11T07:00:00.0000000Z" }; (Sid 2) = @{ role = "orchestrator"; parent = (Sid 1); firstSeen = "yesterday" }; (Sid 5) = @{ parent = (Sid 2); role = "" } }
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records) -Registry $registry
 Check ($a.state -ceq "known" -and @($a.leftOut).Count -eq 0) "with every listing whole nothing is left out"
 $got = @()
@@ -225,13 +249,14 @@ Check ($a.state -ceq "known" -and (@($got | ForEach-Object { $_.id }) -join ",")
 Check ($got.Count -eq 3 -and $got[0].role -ceq "warchief" -and $got[1].role -ceq "orc" -and $got[1].parent -ceq (Sid 1) -and $got[0].parent -ceq "") "role and parent come from the registry record, the stored role names read as Horde's"
 Check ($got.Count -eq 3 -and $got[2].role -ceq "unknown" -and $got[2].parent -ceq (Sid 2)) "a record with no role is unknown, never guessed"
 Check ($got.Count -eq 3 -and $got[1].startedAt -eq (At 13) -and $got[1].lastChangeAt -eq (At 80)) "startedAt is the session's own, and lastChangeAt is when its live status was written"
+Check ($got.Count -eq 3 -and $got[0].firstSeenAt -eq (New-Object System.DateTime(2026, 10, 11, 7, 0, 0, [System.DateTimeKind]::Utc)) -and $null -eq $got[1].firstSeenAt -and $null -eq $got[2].firstSeenAt) "firstSeenAt is the record's first-seen time, and nothing where the record has none or it is not a time"
 Check ($got.Count -eq 3 -and $got[0].status -ceq "idle" -and $got[1].status -ceq "busy") "and each carries its live status word"
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records -Whole (New-HordeUnknown -Reason "one control file could not be read")) -Registry $registry
 $got = @()
 if ($a.state -ceq "known") { $got = @($a.value | Sort-Object id) }
 Check ($a.state -ceq "known" -and (@($got | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2 | ForEach-Object { Sid $_ }) -join ",")) "with one agent's listing whole and the other's not, the answer is known, with the whole one's sessions and none of the other's"
 Check ($a.state -ceq "known" -and @($a.leftOut).Count -eq 1 -and $a.leftOut[0].agent -ceq "agent-two" -and $a.leftOut[0].reason -ceq "one control file could not be read") "and it names the agent it left out, and why"
-Check ((Get-HordeRestoreFinding -Sessions $a.value -Now (At 100) -Settings (Get-HordeRestoreSettings -Overrides @{ restoreMinSessions = 2 })).state -ceq "known") "its value is still the plain list the restore finding takes"
+Check ((Get-HordeRestoreFinding -Sessions $a.value -Now (At 100) -Settings (Get-HordeRestoreSettings -Overrides @{ restoreMinSessions = 1 })).state -ceq "known") "its value is still the plain list the restore finding takes"
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records -Whole (New-HordeUnknown -Reason "one control file could not be read") -WholeOne (New-HordeUnknown -Reason "there is no control directory")) -Registry $registry
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("agent-one: there is no control directory") -and "$($a.reason)".Contains("agent-two: one control file could not be read")) "with no agent's listing whole the answer is unknown, naming each and why"
 $a = Get-HordeRestoreSessions -Identity (New-Listing $records) -Registry (New-Registry @{} -Whole (New-HordeUnknown -Reason "there is no registry"))

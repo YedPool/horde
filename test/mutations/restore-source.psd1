@@ -17,8 +17,20 @@
            Find = 'if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {'
            Replace = 'if ($true) {' }
         @{ Name = "restore-share-ignored"
-           Find = 'if (($best.Count / $all.Count) -lt $Settings.restoreShare) {'
+           Find = 'if (($best.Count / $lived.Count) -lt $Settings.restoreShare) {'
            Replace = 'if ($false) {' }
+        @{ Name = "spawned-session-counted-as-restored"
+           Find = '$_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds }'
+           Replace = '$true }' }
+        @{ Name = "any-record-is-an-earlier-life"
+           Find = '$_.firstSeenAt -is [datetime] -and ($_.startedAt - $_.firstSeenAt).TotalSeconds -ge $Settings.earlierLifeSeconds }'
+           Replace = '$_.firstSeenAt -is [datetime] }' }
+        @{ Name = "share-taken-among-every-session"
+           Find = 'if (($best.Count / $lived.Count) -lt $Settings.restoreShare) {'
+           Replace = 'if (($best.Count / $all.Count) -lt $Settings.restoreShare) {' }
+        @{ Name = "first-seen-not-carried"
+           Find = 'status = "$($status.value)"; firstSeenAt = $firstSeenAt })'
+           Replace = 'status = "$($status.value)"; firstSeenAt = $null })' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }
@@ -35,8 +47,8 @@
            Find = '$resting = ("$($_.status)" -ceq "idle" -and'
            Replace = '$resting = ($true -and' }
         @{ Name = "status-word-not-carried"
-           Find = 'lastChangeAt = $status.observedAt; status = "$($status.value)" })'
-           Replace = 'lastChangeAt = $status.observedAt; status = "idle" })' }
+           Find = 'lastChangeAt = $status.observedAt; status = "$($status.value)";'
+           Replace = 'lastChangeAt = $status.observedAt; status = "idle";' }
         @{ Name = "restore-id-follows-the-clock"
            Find = '$minute.ToString("yyyy-MM-ddTHH:mm", [System.Globalization.CultureInfo]::InvariantCulture))'
            Replace = '$Now.ToString("yyyy-MM-ddTHH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture))' }
