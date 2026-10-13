@@ -116,6 +116,17 @@ $ret = New-Object System.Collections.ArrayList
 foreach ($n in 0..399) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$ret.Add($e.kind + ":" + $e.id + "@" + ($n * 3)) } }
 Check ((@($ret) -join ",") -ceq ("never-nudged:" + (Sid 2) + "@0") -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and $run.ledger.Count -eq 0) ("twenty minutes of live ticks over a retired session with unread mail journal one line - never-nudged - and nudge, count, give up on and tell of nobody (" + (@($ret) -join ",") + ")")
 
+# MAIL HANDED OVER, NONE UNREAD: one held line naming it, and nobody nudged, however many ticks.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -HandedOverCount 2 -OldestHandedOverAt (At -30)
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+$lines = @(foreach ($n in 0..9) { Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h })
+Check ($lines.Count -eq 1 -and $lines[0].kind -ceq "held" -and $lines[0].id -ceq (Sid 2) -and "$($lines[0].reason)".StartsWith("handed-over mail: 2 handed over") -and @(Get-HordeMemoryWakerNudges).Count -eq 0) ("ten live ticks over a session with mail handed over and none unread journal ONE line - held, naming handed-over mail - and nudge nobody (" + (@($lines | ForEach-Object { $_.kind }) -join ",") + ")")
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 2 -OldestUnreadAt (At -30) -HandedOverCount 0
+$lines = @(Invoke-HordeWakeTick -Run $run -Now (At 60) -Waker $memory -ReadSessions $none -HordeHome $h)
+Check (@($lines | Where-Object { $_.kind -ceq "nudge" }).Count -eq 1 -and @(Get-HordeMemoryWakerNudges).Count -eq 1) "when the fleet counts that mail unread again, the session is nudged: the hold was the fleet's, and ended when unreadCount said so"
+
 # A SESSION THAT MAY BE RETIRED is journaled as held - it waits - and one that IS, as never-nudged.
 $h = New-Home
 Reset-HordeMemoryWaker

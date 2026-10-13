@@ -263,6 +263,20 @@ Check ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $null -eq $
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- handed-over mail, through the fleet's command: not nudged for, and held by name ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1 @{ unreadCount = 0; oldestUnreadAt = $null; handedOverCount = 2; oldestHandedOverAt = "2026-10-12T07:59:30Z" })
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ((Get-Count $state "mail nudge*") -eq 0 -and (Get-Count $state "mail state -To *") -eq 0 -and $pass.held.ContainsKey((Sid 1)) -and "$($pass.held[(Sid 1)])".StartsWith("handed-over mail: 2 ")) "a row with two handed over and none unread: no nudge is asked for, its pane is not read, and the pass holds it by name"
+& $fx.SetRow $state (New-Row 1 @{ unreadCount = 0; oldestUnreadAt = $null; handedOverCount = "(none)"; oldestHandedOverAt = "(none)" })
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ($pass.held.Count -eq 0 -and (Get-Count $state "mail nudge*") -eq 0) "a row of the older command, which does not say what was handed over, has nothing said for it"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- retired: true is yes, and false is no only for a row the fleet had a record for ---" -ForegroundColor Cyan
 
 $state = & $fx.New

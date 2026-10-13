@@ -515,6 +515,34 @@ Check ((Rang) -eq 0 -and (Decided $r).action -ceq "wait") "nor one whose box nob
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- mail handed over is not mail to nudge for, and the journal says so ---" -ForegroundColor Cyan
+
+Start-Case; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = 2; OldestHandedOverAt = (At -30) }
+$r = Pass 0
+Check ((Rang) -eq 0 -and (Decided $r).action -ceq "skip" -and (Decided $r).reason -ceq "no unread mail: 2 handed over and not yet acknowledged") "a session with two mails handed over and none unread is not nudged, and the decision names the handed-over mail"
+Check ($r.held.ContainsKey((Sid 1)) -and "$($r.held[(Sid 1)])".StartsWith("handed-over mail: 2 handed over to it and not yet acknowledged, and none unread") -and @($r.entries).Count -eq 0 -and -not $script:ledger.ContainsKey((Sid 1))) "the pass hands it on to be journaled once as held: no attempt is counted for it"
+Start-Case; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = 2; OldestHandedOverAt = (At -3000) }
+$r = Pass 0
+Check ((Rang) -eq 0 -and $r.held.ContainsKey((Sid 1))) "however long ago it was handed over: when handed-over mail counts as unread again is the fleet's to say, by unreadCount, and is not worked out here"
+Start-Case; Seat 1 @{ UnreadCount = 1; HandedOverCount = 2; OldestHandedOverAt = (At -30) }
+$r = Pass 0
+Check ((Rang) -eq 1 -and -not $r.held.ContainsKey((Sid 1))) "CONTROL: one unread beside two handed over is nudged for, and nothing is held"
+Start-Case; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null }
+$r = Pass 0
+Check ((Decided $r).reason -ceq "no unread mail" -and $r.held.Count -eq 0) "CONTROL: nothing unread and nothing handed over is plain no unread mail, with nothing to say"
+Start-Case; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = $null }
+$r = Pass 0
+Check ((Decided $r).reason -ceq "no unread mail" -and $r.held.Count -eq 0) "a waker that cannot say what was handed over has nothing said for it: unknown is not a count"
+foreach ($case in @(@{ what = "a retired session"; seat = @{ Retired = "yes" } }, @{ what = "a reserved label"; seat = @{ Label = "RS" } })) {
+    Start-Case; $seat = @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = 1 }; foreach ($k in $case.seat.Keys) { $seat[$k] = $case.seat[$k] }; Seat 1 $seat
+    Check ((Pass 0).held.Count -eq 0) ("handed-over mail of " + $case.what + " is not said to be held: it would never have been nudged")
+}
+Start-Case; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = 1 }
+$r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $settings -Ledger @{} -Self (Sid 1)
+Check ($r.held.Count -eq 0) "nor that of the watcher's own session"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- a retired session is never nudged ---" -ForegroundColor Cyan
 
 Start-Case; Seat 1 @{ Retired = "yes" }

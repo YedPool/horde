@@ -6,6 +6,27 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "handed-over-mail-is-not-named-in-the-decision"
+           Find = 'if ($handed -gt 0) { return [pscustomobject]@{ action = "skip"; reason = ("no unread mail: " + $handed'
+           Replace = 'if ($false) { return [pscustomobject]@{ action = "skip"; reason = ("no unread mail: " + $handed' }
+        @{ Name = "handed-over-mail-is-not-held-by-name"
+           Find = 'elseif ($a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -gt 0 -and'
+           Replace = 'elseif ($false -and' }
+        @{ Name = "handed-over-mail-is-held-beside-unread-mail"
+           Find = 'elseif ($a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -gt 0 -and'
+           Replace = 'elseif ((Get-HordeWakeHandedOver $a.value) -gt 0 -and' }
+        @{ Name = "a-retired-sessions-handed-over-mail-is-held"
+           Find = '(Get-HordeWakeHandedOver $a.value) -gt 0 -and "$($t.retired)" -ceq "no" -and'
+           Replace = '(Get-HordeWakeHandedOver $a.value) -gt 0 -and' }
+        @{ Name = "a-reserved-labels-handed-over-mail-is-held"
+           Find = '-and "$($t.retired)" -ceq "no" -and -not (Test-HordeLabelReserved "$($t.label)") -and ($Self'
+           Replace = '-and "$($t.retired)" -ceq "no" -and ($Self' }
+        @{ Name = "the-watchers-own-handed-over-mail-is-held"
+           Find = '-and ($Self -ceq "" -or "$($t.id)" -cne $Self)) { $held[$t.id] = "handed-over mail: "'
+           Replace = ') { $held[$t.id] = "handed-over mail: "' }
+        @{ Name = "a-handed-over-count-nobody-knows-is-a-count"
+           Find = 'if (($n -is [int] -or $n -is [long]) -and $n -gt 0) { return [long]$n }'
+           Replace = 'if ($null -eq $n) { return [long]1 }; if (($n -is [int] -or $n -is [long]) -and $n -gt 0) { return [long]$n }' }
         @{ Name = "the-between-turns-rule-is-not-named-in-a-nudges-reason"
            Find = 'if ($ready[$i].between) { $ready[$i].reason ='
            Replace = 'if ($false) { $ready[$i].reason =' }

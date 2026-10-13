@@ -230,6 +230,15 @@ function Get-HordeWakeLimit {
     return [pscustomobject]@{ kind = "open"; text = "usage limit, end unknown" }
 }
 
+function Get-HordeWakeHandedOver {
+    # How much mail a state says was handed over to the session and not yet acknowledged: a whole
+    # number, and 0 when the waker cannot say (the port's $null) - what is not known is not said.
+    param($State)
+    $n = Get-HordeWakeEntryValue $State "handedOverCount"
+    if (($n -is [int] -or $n -is [long]) -and $n -gt 0) { return [long]$n }
+    return [long]0
+}
+
 function Get-HordeWakeHold {
     # Why one session is not nudged now, as { action; reason }: skip (nothing to wake it for), wait
     # (something to wake it for, and a condition that does not hold), or ready (every condition holds;
@@ -283,7 +292,17 @@ function Get-HordeWakeHold {
         return [pscustomobject]@{ action = "wait"; reason = ("its state is unknown: " + $why) }
     }
     $s = $StateAnswer.value
-    if ($s.unreadCount -le 0) { return [pscustomobject]@{ action = "skip"; reason = "no unread mail" } }
+    # ONLY UNREAD MAIL IS NUDGED FOR. Mail HANDED OVER to a session - put before it by its own side and
+    # not yet acknowledged - sits in its inbox and is not unread: the session has it. The fleet's command
+    # holds such mail for a time and counts it unread again itself if it is never acknowledged; that
+    # hold is the fleet's and is NOT worked out again here. Until then there is nothing to knock for,
+    # and the reason says which of the two it was, so a reader sees why a session with mail in its inbox
+    # was not nudged (Invoke-HordeWakePass journals it once, as held).
+    if ($s.unreadCount -le 0) {
+        $handed = Get-HordeWakeHandedOver $s
+        if ($handed -gt 0) { return [pscustomobject]@{ action = "skip"; reason = ("no unread mail: " + $handed + " handed over and not yet acknowledged") } }
+        return [pscustomobject]@{ action = "skip"; reason = "no unread mail" }
+    }
     # REACHABLE IS DECIDED BEFORE THE LIMIT IS ASKED: a session that cannot be reached is held for that,
     # whatever is known or not known of its limit, and whatever evidence there is that others move.
     if ("$($Target.reachable)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("reachable is " + $Target.reachable) } }
@@ -945,6 +964,9 @@ function Invoke-HordeWakePass {
                 elseif ($a.value.unreadCount -gt 0 -and (Test-HordeLabelReserved "$($t.label)")) { $never[$t.id] = "its label, " + $t.label + ", is reserved for a sender that is no session, and it has " + $a.value.unreadCount + " unread: it is never nudged" }
                 elseif ($a.value.unreadCount -gt 0 -and $Self -cne "" -and "$($t.id)" -ceq $Self) { $never[$t.id] = "it is the session this watcher was started from, and it has " + $a.value.unreadCount + " unread: a watcher never nudges itself" }
                 elseif ($a.value.unreadCount -gt 0 -and "$($t.retired)" -cne "no") { $held[$t.id] = "it could not be told whether this session is retired, and it has " + $a.value.unreadCount + " unread: it is not nudged while that is so" }
+                # MAIL HANDED OVER AND NOTHING UNREAD: said once, as held, for a session that would otherwise be
+                # nudged - else its inbox shows mail and the journal shows nothing done about it.
+                elseif ($a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -gt 0 -and "$($t.retired)" -ceq "no" -and -not (Test-HordeLabelReserved "$($t.label)") -and ($Self -ceq "" -or "$($t.id)" -cne $Self)) { $held[$t.id] = "handed-over mail: " + (Get-HordeWakeHandedOver $a.value) + " handed over to it and not yet acknowledged, and none unread. It is not nudged: it has that mail already, and the fleet counts it unread again if it is never acknowledged" }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
                 $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $Acks
                 if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {
