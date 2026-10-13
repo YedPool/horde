@@ -150,5 +150,57 @@
         @{ Name = "retry-after-unbounded"
            Find = '$script:HordeRelayRetryAfterMaxMs = [long]86400000'
            Replace = '$script:HordeRelayRetryAfterMaxMs = [long]::MaxValue' }
+        # --- a watch in slices (the runner sends while its watch is open, 2026-10-13)
+        @{ Name = "slice-blocks-need-not-be-all-three"
+           Find = 'if ($sliceBlocks -ne 0 -and $sliceBlocks -ne 3) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "slices-asked-of-a-relay-without-them"
+           Find = 'if (-not (Test-HordeRelayWatchInSlices $Connection)) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "slices-on-a-look-alike-connection"
+           Find = '    if (-not (Test-HordeRelayConnection $Connection)) { return $false }'
+           Replace = '' }
+        @{ Name = "sliced-watch-longer-than-the-relay-allows"
+           Find = '-or $TimeoutMs -gt $longest) {'
+           Replace = ') {' }
+        @{ Name = "look-alike-watch-waited-on"
+           Find = '    if (-not [object]::ReferenceEquals($script:HordeRelayWatches[$id.Value], $Watch)) { return $false }'
+           Replace = '' }
+        @{ Name = "ended-watch-waited-on-again"
+           Find = '    if ($Watch.ended) { return (New-HordeUnknown -Reason "the wait was not made: the watch has ended") }'
+           Replace = '' }
+        @{ Name = "slice-over-the-longest-watch"
+           Find = '-or $WaitMs -gt $c.relay.limits.maxWatchMs) {'
+           Replace = ') {' }
+        @{ Name = "slice-longer-than-the-watch-has-left"
+           Find = '$sliceMs = [int][System.Math]::Min([double]$WaitMs, [double]$leftMs)'
+           Replace = '$sliceMs = [int]$WaitMs' }
+        @{ Name = "the-watchs-time-left-to-the-relay"
+           Find = '-or $leftMs -le 0)'
+           Replace = ')' }
+        @{ Name = "last-slice-is-not-the-end"
+           Find = '($Last -or $leftMs'
+           Replace = '($false -or $leftMs' }
+        @{ Name = "failed-slice-leaves-the-watch-open"
+           Find = 'if ($a.state -cne "known") { $Watch.ended = $true; return $a }'
+           Replace = 'if ($a.state -cne "known") { return $a }' }
+        @{ Name = "ended-may-be-any-word"
+           Find = 'if (-not $said.has -or $said.value -isnot [bool]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "items-with-not-ended-are-dropped"
+           Find = '$some = ($held.has -and $null -ne $held.value -and @($held.value).Count -gt 0)'
+           Replace = '$some = $false' }
+        @{ Name = "slice-items-believed"
+           Find = '$b = ConvertFrom-HordeRelayBatch -Connection $c -Answer $a -Mailbox $Watch.mailbox -Since $Watch.since -Max $Watch.max -What "watch"'
+           Replace = '$b = New-HordeKnown -Value ([pscustomobject]@{ mailbox = $Watch.mailbox; since = $Watch.since; next = $Watch.since; items = @($a.value.items); anomalies = @() })' }
+        @{ Name = "close-does-not-reach-the-relay"
+           Find = '    try { $null = & $Watch.connection.relay.watchClose $Watch.connection.state $Watch.handle } catch { }'
+           Replace = '' }
+        @{ Name = "close-throws-for-the-relay"
+           Find = 'try { $null = & $Watch.connection.relay.watchClose $Watch.connection.state $Watch.handle } catch { }'
+           Replace = '$null = & $Watch.connection.relay.watchClose $Watch.connection.state $Watch.handle' }
+        @{ Name = "closed-watch-still-a-watch"
+           Find = '    $script:HordeRelayWatches.Remove($Watch.id)'
+           Replace = '' }
     )
 }

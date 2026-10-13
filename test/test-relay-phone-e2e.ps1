@@ -18,6 +18,10 @@
 #      one record; other words under the same answerId: refused, the first answer wins;
 #   5. over the hostile test relay (test/lib/HostileRelay.ps1), in this process because the command
 #      cannot pick a test relay: reordered, repeated, stale and garbage-salted, a new answer lands once;
+#   5c. SENT WHILE THE WATCH IS OPEN (cli/RelayRun.ps1, SENDING DURING THE WATCH): a run that is left
+#      running, with a watch of 30 s; the warchief's reply under a question, written a few seconds into
+#      that watch, is in the phone's mailbox within seconds - not when the watch ends - and the phone
+#      opens it; and `horde relay stop` ends that run inside the same watch, in its first turn;
 #   6. one run per home: a second run started beside a first refuses, plainly, and the first stops
 #      cleanly when `horde relay stop` asks.
 #
@@ -223,6 +227,54 @@ try {
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $again.envelope -Key $again.key)
     $run = Invoke-Run -Turns 1
     Check ($run.out.Contains("(replayed)") -and @(Get-Said | Where-Object { $_.data.number -eq $pn }).Count -eq 1) "the same part's answer resent in a new envelope is the first record answered again: one record"
+
+    Write-Host ""
+    Write-Host "--- 5c. a reply written while the run's watch is open is on the phone in seconds, not at the end of the watch ---" -ForegroundColor Cyan
+    # The founder's complaint, 2026-10-13: he saw his own message go and then nothing for up to a minute,
+    # because the run sent only when its watch of the mailbox ended. MEASURED before the change with this
+    # very scenario and an 8 s watch: 6.9 s, three times of three; after it, under a second. Here the
+    # watch is 30 s, so a pass cannot be the watch happening to end: before the change this took the
+    # rest of the watch, about 27 s, and failed the 8 s allowed.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 30000}}', $utf8)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $hh
+    $liveRun = [System.Diagnostics.Process]::Start($psi)
+    $liveOut = $liveRun.StandardOutput.ReadToEndAsync()
+    $liveErr = $liveRun.StandardError.ReadToEndAsync()
+    try {
+        # A run sends one snapshot at its first look: once that is in the phone's mailbox the run's own
+        # Tick is done, and what follows it is the watch.
+        $hadBefore = @(Get-PhoneMail $c.value).Count
+        $waited = [System.Diagnostics.Stopwatch]::StartNew()
+        while (@(Get-PhoneMail $c.value).Count -le $hadBefore -and $waited.ElapsedMilliseconds -lt 90000) { Start-Sleep -Milliseconds 100 }
+        $hadUp = @(Get-PhoneMail $c.value).Count
+        Check ($hadUp -gt $hadBefore -and -not $liveRun.HasExited) ("CONTROL: the run is up and has made its first look (" + $waited.ElapsedMilliseconds + " ms)")
+        Start-Sleep -Milliseconds 3000
+        $reply = "Written while the watch was open."
+        $wrote = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = $reply; asks = $false }
+        $waited.Restart()
+        while (@(Get-PhoneMail $c.value).Count -le $hadUp -and $waited.ElapsedMilliseconds -lt 60000) { Start-Sleep -Milliseconds 100 }
+        $took = $waited.ElapsedMilliseconds
+        Check ($wrote.state -ceq "known" -and $wrote.value.outcome -ceq "done" -and @(Get-PhoneMail $c.value).Count -gt $hadUp -and $took -lt 8000) ("the warchief's reply, written three seconds into a 30 s watch, is in the phone's mailbox " + $took + " ms later - while the watch is still open, not when it ends")
+        $o = Open-Latest $c.value
+        $shown = $(if ($o.ok) { @(@($o.body.questions | Where-Object { $_.number -eq 1 }) | ForEach-Object { @($_.thread.messages) } | ForEach-Object { $_.text }) } else { @() })
+        Check ($o.ok -and $shown -ccontains $reply) ("and the phone opens it: the reply is under the question (" + (@($shown | Select-Object -Last 1) -join "") + ")")
+        $waited.Restart()
+        $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
+        $ended = $liveRun.WaitForExit(20000)
+        $stopTook = $waited.ElapsedMilliseconds
+        Check ($stop.code -eq 0 -and $ended -and $liveRun.ExitCode -eq 0 -and $liveOut.Result.Contains("stopped after 1 turn(s): stop file")) ("horde relay stop ends that run inside its 30 s watch - " + $stopTook + " ms, where it was the rest of the watch - and it was all one turn: one watch, one request of the relay")
+    } finally {
+        if (-not $liveRun.HasExited) { $liveRun.Kill() }
+        $liveRun.Dispose()
+        [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 200}}', $utf8)
+    }
 
     Write-Host ""
     Write-Host "--- 6. one run per home: a second refuses; the first stops when asked ---" -ForegroundColor Cyan

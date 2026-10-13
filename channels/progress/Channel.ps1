@@ -558,6 +558,8 @@ function Invoke-HordeProgressChannelTick {
     $set = Get-HordeProgressChannelSettings -Context $Context
     if ($set.state -cne "known") { return (& $once "settings" ("progress is stopped: " + $set.reason) $true) }
     $set = $set.value
+    # For the Glance, which reads no settings itself: how long this Tick leaves between two sends.
+    $mine["sendIntervalMs"] = [long]$set.sendIntervalMs
     $homeDir = Get-HordeProgressChannelHome $Context
     $path = Get-HordeProgressChannelFilePath -HordeHome $homeDir -Setting $set.progressFile
     $d = $mine.durable
@@ -702,6 +704,36 @@ function Invoke-HordeProgressChannelTick {
     return [pscustomobject]@{ lines = @($lines.ToArray()); failed = $false }
 }
 
+function Test-HordeProgressChannelGlance {
+    # THE GLANCE (channels/Port.ps1, Glance): has the progress log's length or its last write changed
+    # since the Tick last read it? $true then, and the runner runs the Tick now instead of when its watch
+    # of the mailbox ends - so a new entry is on the founder's phone in about a second and not in up to
+    # a minute.
+    #   - THE FILE IS ASKED ITS LENGTH AND ITS LAST WRITE, AND NOT OPENED: the very two the Tick itself
+    #     goes by to leave a quiet file unopened (the three channels' Glances together are about 6 ms a
+    #     round on this box, measured 2026-10-13; test/test-relay-run-send.ps1 prints it). The file is the
+    #     one the state follows (its path), so no settings are read; the trust store is not read either,
+    #     so a phone key trusted since is NOT seen here and waits for the turn's own Tick, as it always
+    #     did.
+    #   - NO, UNTIL A TICK HAS READ THE FILE ONCE; NO WHILE THE CHANNEL IS STOPPED (A FILE REPLACED OR CUT
+    #     SHORT, in the header: a broken file may go on changing, and nothing is sent of it); NO WHILE AN
+    #     ENVELOPE IS RECORDED AND WAITING (the relay would not take it: putting it again is the turn's
+    #     Tick's, after the runner's backoff); NO INSIDE sendIntervalMs OF THE LAST SEND (the Tick would
+    #     send nothing); NO WHEN THE FILE IS GONE OR CANNOT BE LOOKED AT (the turn's Tick says why).
+    param($Context)
+    if (-not $Context.state.ContainsKey("progress")) { return $false }
+    $mine = $Context.state["progress"]
+    if (-not $mine.loaded -or -not $mine.ContainsKey("sendIntervalMs")) { return $false }
+    $d = $mine.durable
+    if (-not $d.started -or $d.stopped -cne "" -or $d.path -ceq "" -or @($d.pending).Count -gt 0) { return $false }
+    if (([datetime]::UtcNow - $mine.lastSentAt).TotalMilliseconds -lt [long]$mine["sendIntervalMs"]) { return $false }
+    try {
+        $info = New-Object System.IO.FileInfo -ArgumentList $d.path
+        if (-not $info.Exists) { return $false }
+        return ([long]$info.Length -ne $mine.seenLength -or $info.LastWriteTimeUtc -ne $mine.seenWrite)
+    } catch { return $false }
+}
+
 function Invoke-HordeProgressChannelAccept {
     # MACHINE TO PHONE ONLY (in the header): nothing is ever taken in. The port refuses every kind
     # before this is reached; should a record of this channel ever be handed over, it is refused here.
@@ -711,4 +743,5 @@ function Invoke-HordeProgressChannelAccept {
 
 $null = Register-HordeRelayChannel -Folder $script:HordeProgressChannelFolder -Name "progress" -Kinds @() -Senders "founder" `
     -Accept { param($Context, $Item) return (Invoke-HordeProgressChannelAccept -Context $Context -Item $Item) } `
-    -Tick { param($Context) return (Invoke-HordeProgressChannelTick -Context $Context) }
+    -Tick { param($Context) return (Invoke-HordeProgressChannelTick -Context $Context) } `
+    -Glance { param($Context) return (Test-HordeProgressChannelGlance -Context $Context) }

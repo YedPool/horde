@@ -33,7 +33,9 @@
 #   - A NETWORK DRIVE is seen by its type, asked of the drive letter (also behind \\?\, in small
 #     letters, and written R:x). Measured 2026-10-13, on a letter aimed at a host that does not
 #     exist: asking the type took 0 to 13 ms and left NOTHING in the DNS cache for that host; the
-#     control, asking whether a file on that drive exists, left the entry.
+#     control, asking whether a file on that drive exists, left the entry. THAT MEASUREMENT NEEDED
+#     A REAL LETTER, and is not run by any suite any more: the type is asked through one function
+#     (Get-HordeDriveLetterType) that the suites answer themselves, and it says why.
 #   WHAT IT DOES NOT DO:
 #   - It does not resolve anything. A relative path, or a PowerShell drive made over a share, is a
 #     network path only once it is resolved, so a caller asks TWICE: of the path as written, and
@@ -104,6 +106,19 @@ function ConvertTo-HordeAsciiLower {
     return $folded.ToString()
 }
 
+function Get-HordeDriveLetterType {
+    # What kind of drive the letter -Letter is, as Windows names it (Fixed, Network, Removable,
+    # NoRootDirectory for a letter that names nothing, and the rest), or "" when it cannot be asked.
+    # THE ONE PLACE THAT QUESTION IS ASKED, so that a suite can answer it without a drive: a drive
+    # letter is seen by EVERY process of the user while it exists. Until 2026-10-13 the suites made
+    # real letters aimed at a host that does not exist, and while one stood, a fresh powershell of
+    # any other session printed "Attempting to perform the InitializeDefaultDrives operation on
+    # the 'FileSystem' provider failed" and took 1.4 s to start instead of 0.2 (measured that day,
+    # 7 of 8 starts). A suite replaces this function, called exactly as it is here.
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    try { return ("" + (New-Object System.IO.DriveInfo($Letter)).DriveType) } catch { return "" }
+}
+
 function Get-HordeNetworkPathRefusal {
     # Why -Path is a network path, or "" when nothing says it is. THE FIRST QUESTION ASKED OF A PATH,
     # and it touches no disk and no network: the header has the measurement. Asked of the path as
@@ -118,11 +133,10 @@ function Get-HordeNetworkPathRefusal {
     if ($unc) { return ("'" + $Path + "' is a network path, and " + $local) }
     if ($Path -cmatch '\A(?:\\\\\?\\)?([A-Za-z]):') {
         $letter = $Matches[1]
-        $type = $null
         # A letter whose type cannot be asked is not thereby a network drive: it goes on, and the
         # open handle's own path decides.
-        try { $type = (New-Object System.IO.DriveInfo($letter)).DriveType } catch { $type = $null }
-        if ($type -eq [System.IO.DriveType]::Network) { return ("'" + $Path + "' is on a network drive (" + $letter + ":), and " + $local) }
+        $type = Get-HordeDriveLetterType -Letter $letter
+        if ($type -ceq "Network") { return ("'" + $Path + "' is on a network drive (" + $letter + ":), and " + $local) }
     }
     return ""
 }

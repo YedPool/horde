@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "relay": "counting",
+  "capabilities": {
+    "durable": { "support": "declined", "evidence": "A test relay in one process (test/lib/CountingRelay.ps1) that keeps its mailboxes in memory and counts every request made of it: it is never chosen by a caller that requires anything." },
+    "realtime": { "support": "declined", "evidence": "Its watch does wait, and returns within its 20 ms poll of a put; it declines the claim because it exists to be counted, not picked (test/lib/CountingRelay.ps1)." },
+    "reach.remote": { "support": "declined", "evidence": "It lives in the test's own process; nothing else can reach it." },
+    "trim.on.ack": { "support": "declined", "evidence": "An ack is counted, and what it covers is no longer handed over; it declines the claim because it exists to be counted, not picked." }
+  },
+  "limits": { "maxTextChars": 1048576, "maxBatch": 64, "maxWatchMs": 60000, "retentionSeconds": 0 }
+}

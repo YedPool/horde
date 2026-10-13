@@ -61,10 +61,10 @@
            Find = '[\\/][Uu][Nn][Cc](?:[\\/]|\z)'')'
            Replace = '[\\/][Uu][Nn][Cc][\\/]'')' }
         @{ Name = "network-drive-not-refused"
-           Find = 'if ($type -eq [System.IO.DriveType]::Network) { return ('
+           Find = 'if ($type -ceq "Network") { return ('
            Replace = 'if ($false) { return (' }
         @{ Name = "every-drive-is-a-network-drive"
-           Find = 'if ($type -eq [System.IO.DriveType]::Network) { return ('
+           Find = 'if ($type -ceq "Network") { return ('
            Replace = 'if ($true) { return (' }
         @{ Name = "network-drive-behind-the-prefix-missed"
            Find = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') {'
@@ -131,5 +131,20 @@
         @{ Name = "refusal-does-not-name-the-network-drive"
            Find = 'that stands for a network drive (" + $last + ":), and "'
            Replace = 'that stands for a network drive, and "' }
+        @{ Name = "drive-type-compared-without-its-case"
+           Find = 'if ($type -ceq "Network") { return ('
+           Replace = 'if ($type -eq "Network") { return (' }
+        @{ Name = "drive-type-asked-of-no-letter-in-particular"
+           Find = '$type = Get-HordeDriveLetterType -Letter $letter'
+           Replace = '$type = Get-HordeDriveLetterType -Letter "R"' }
+        @{ Name = "drive-type-not-asked"
+           Find = '$type = Get-HordeDriveLetterType -Letter $letter'
+           Replace = '$type = ""' }
+        @{ Name = "every-letter-is-of-one-type"
+           Find = 'try { return ("" + (New-Object System.IO.DriveInfo($Letter)).DriveType) }'
+           Replace = 'try { return "Fixed" }' }
+        @{ Name = "a-letter-that-cannot-be-asked-throws"
+           Find = 'catch { return "" }'
+           Replace = 'catch { throw }' }
     )
 }

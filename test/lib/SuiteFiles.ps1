@@ -112,3 +112,87 @@ function Get-HordeMutationSpecFiles {
     [Array]::Sort([string[]]@($sorted | ForEach-Object { $_.rel }), [object[]]$sorted, [System.StringComparer]::Ordinal)
     return @($sorted | ForEach-Object { $_.file })
 }
+
+# A SUITE MUST NOT CHANGE WHAT OTHER PROCESSES OF THE USER SEE, AND A DRIVE LETTER IS SEEN BY ALL OF
+# THEM. Until 2026-10-13 two suites made real drive letters, one aimed at a host that does not exist.
+# A letter lives in the user's logon session, not in the process that made it: while it stood, a fresh
+# powershell of any other session printed "Attempting to perform the InitializeDefaultDrives operation
+# on the 'FileSystem' provider failed" and took 1.4 s to start where 0.2 is usual (measured that day,
+# 7 of 8 starts), another lane's command-line suite failed on the line, and every mutation run
+# repeated it hundreds of times. So no test file makes a drive letter: the code asks its questions of
+# a drive through one function each (core/PathText.ps1), and a suite answers them itself.
+# ONE FILE IS LET BY, because one question can only be asked of Windows: what it says of a letter
+# that stands for a folder. That file makes its letter over a folder that exists on this machine's
+# own drive, which every other process can reach, and says so where it does.
+# WHAT THIS SEES, in the text of every .ps1 file in a folder that holds a suite, and below it: the
+# name DefineDosDevice outside a comment; a command named subst, or net with use after it, or
+# New-SmbMapping, or New-PSDrive with -Persist; the name MapNetworkDrive outside a comment; and a
+# quoted text that is itself such a command line (for cmd.exe).
+# WHAT IT DOES NOT SEE: a command whose name is put together when the suite runs, and a program
+# of another language that a suite starts. A POWERSHELL DRIVE WITHOUT -Persist IS NOT A DRIVE LETTER:
+# it is the process's own, and no other process sees it.
+$script:HordeDriveLetterFile = "test/test-path-text.ps1"
+
+function Get-HordeDriveLetterMakersIn {
+    # What in the text of one PowerShell file makes a drive letter other processes would see: the
+    # words for each thing found, in the order found, and nothing when there is none.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    # MOST FILES HOLD NONE OF THE WORDS, and are not parsed: parsing every test file took this
+    # guard's suite from 8 s to 23 (measured 2026-10-13). A file that holds a word is read properly.
+    if ($Text -notmatch '(?i)DosDevice|subst|net1?(?:\.exe)?["'']?\s+["'']?use|SmbMapping|-Persist|NetworkDrive') { return @() }
+    $tokens = $null; $problems = $null
+    $tree = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$problems)
+    $found = New-Object System.Collections.ArrayList
+    $say = { param([string]$What) if ($found -cnotcontains $What) { [void]$found.Add($What) } }
+    # The two names are put together here, so that this file, which is a test file too, does not
+    # hold what it looks for.
+    $systemCall = "Define" + "DosDevice"
+    $scriptingCall = "Map" + "NetworkDrive"
+    foreach ($token in @($tokens)) {
+        if ($token.Kind -eq [System.Management.Automation.Language.TokenKind]::Comment) { continue }
+        if ($token.Text.IndexOf($systemCall, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { & $say $systemCall }
+        if ($token.Text.IndexOf($scriptingCall, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { & $say $scriptingCall }
+        # A quoted command line, as one handed to cmd.exe: the program's name and then a drive
+        # letter, a switch or the start of a value - which the words "a subst drive" are not.
+        if ($token -is [System.Management.Automation.Language.StringToken]) {
+            if ($token.Text -match '(?<![A-Za-z0-9_.-])subst(?:\.exe)?["'']?\s+(?:[A-Za-z]:|/[Dd]\b|["''$(])') { & $say "subst" }
+            if ($token.Text -match '(?<![A-Za-z0-9_.-])net1?(?:\.exe)?["'']?\s+use\s+(?:[A-Za-z*]:|/|\\\\|["''$(])') { & $say "net use" }
+        }
+    }
+    foreach ($command in @($tree.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+        $name = "" + $command.GetCommandName()
+        if ($name -eq "") { continue }
+        $leaf = ($name -split '[\\/]')[-1]
+        $rest = @($command.CommandElements | Select-Object -Skip 1 | ForEach-Object { "" + $_.Extent.Text })
+        if ($leaf -match '\Asubst(?:\.exe)?\z') { & $say "subst" }
+        if ($leaf -match '\Anet1?(?:\.exe)?\z' -and @($rest | Where-Object { $_ -match '\A["'']?use["'']?\z' }).Count -gt 0) { & $say "net use" }
+        if ($leaf -match '\ANew-SmbMapping\z') { & $say "New-SmbMapping" }
+        if ($leaf -match '\ANew-PSDrive\z' -and @($rest | Where-Object { $_ -match '\A-Persist' }).Count -gt 0) { & $say "New-PSDrive -Persist" }
+    }
+    return @($found.ToArray())
+}
+
+function Get-HordeDriveLetterMakers {
+    # Every test file under -Root that makes a drive letter, but for the one file that may, as
+    # { file; what }: file relative to -Root with forward slashes, what the words for what was found.
+    # Empty means no suite changes what other processes see. Every .ps1 file in a folder that holds a
+    # suite is read, and every one below such a folder: a helper, a fixture and a racer are run by
+    # suites too.
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $base = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $folders = New-Object System.Collections.ArrayList
+    foreach ($suite in @(Get-HordeSuiteFiles -Root $Root)) { if ($folders -notcontains $suite.DirectoryName) { [void]$folders.Add($suite.DirectoryName) } }
+    $seen = @{}
+    $makers = New-Object System.Collections.ArrayList
+    foreach ($folder in $folders) {
+        foreach ($script in @(Get-ChildItem -LiteralPath $folder -Filter "*.ps1" -File -Recurse -Force | Where-Object { $_.Extension -ceq ".ps1" })) {
+            if ($seen.ContainsKey($script.FullName.ToLowerInvariant())) { continue }
+            $seen[$script.FullName.ToLowerInvariant()] = $true
+            $rel = $script.FullName.Substring($base.Length + 1).Replace('\', '/')
+            if ($rel -ceq $script:HordeDriveLetterFile) { continue }
+            $what = @(Get-HordeDriveLetterMakersIn -Text ([System.IO.File]::ReadAllText($script.FullName)))
+            if ($what.Count -gt 0) { [void]$makers.Add([pscustomobject]@{ file = $rel; what = ($what -join ", ") }) }
+        }
+    }
+    return @($makers.ToArray() | Sort-Object -Property file)
+}
