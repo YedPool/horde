@@ -51,7 +51,7 @@
         "session": { "$ref": "#/definitions/label", "description": "The session that sent." },
         "to": { "$ref": "#/definitions/label", "description": "The session it was sent to." },
         "route": { "type": "string", "enum": ["mail", "keys"], "description": "mail: queued in the receiver's mailbox and handed over by its own hook. keys: typed into its input box." },
-        "outcome": { "type": "string", "enum": ["taken", "woken", "not-woken", "delivered", "not-delivered"], "description": "taken: the receiver confirmed it while the send waited. woken: queued, the receiver was woken, not yet confirmed. not-woken: queued, nobody could be woken. delivered: typed and confirmed. not-delivered: typed and not confirmed, or nothing typed." },
+        "outcome": { "type": "string", "enum": ["taken", "woken", "not-woken", "handed-over", "delivered", "not-delivered"], "description": "taken: the receiver confirmed it while the send waited. woken: queued, the receiver was woken, not yet confirmed. not-woken: queued, nobody could be woken. handed-over: queued, and the receiver's own hook had already handed it over, so nobody was knocked on; not yet confirmed. delivered: typed and confirmed. not-delivered: typed and not confirmed, or nothing typed." },
         "ranMs": { "$ref": "#/definitions/ms", "description": "How long the send command ran, from start to its answer." },
         "queuedMs": { "$ref": "#/definitions/ms", "description": "Optional. When the mail was on disk, from the start of the send." },
         "wokenMs": { "$ref": "#/definitions/ms", "description": "Optional. When the wake notice landed, from the start of the send." },
