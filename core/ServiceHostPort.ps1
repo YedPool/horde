@@ -25,6 +25,19 @@
 # THE LAUNCH (New-HordeServiceLaunch) is the start, as data, in the one shape every adapter takes:
 #   kind horde    script (a checkout's horde entry point), words, named, switches, environment,
 #                 workingDirectory, logFile (where what it prints is kept)
+#   either kind   exitFile: when it is given, the adapter also arranges for THE EXIT RECORD below
+#
+# THE EXIT RECORD. A service may end itself on purpose with a code that means "do not start me
+# again" (core/Services.ps1, DELIBERATE EXITS), and the pass that would read that code is not there
+# when it ends: a pass lasts seconds, and the service was made to outlive it, so no pass holds
+# anything of it afterwards. The honest way to know the code is for something to be holding the
+# process when it ends. So when a launch names an exitFile, the adapter starts, beside the service, a
+# small WATCHER that opens the service's process while it is alive - checking its start time, so it
+# is that process and not another given its number - waits for it to end, and writes
+# { pid; startedAt; code; at } to the file. THE SERVICE ITSELF IS STARTED EXACTLY AS WITHOUT ONE: no
+# wrapper stands between the supervisor and it, its arguments are its definition's and nothing else,
+# and the process the supervisor keeps and stops is the service. A watcher that dies, or that comes
+# too late to open the process, leaves no record; the supervisor then reads an ordinary death.
 #   kind program  program, arguments, workingDirectory
 # How a value reaches the program - which shell, which quoting - is the adapter's business, and no
 # value is ever parsed as code on the way (core/schedule/WindowsTaskScheduler.ps1 holds the same rule
@@ -76,21 +89,27 @@ function New-HordeServiceLaunch {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("horde", "program")][string]$Kind,
         [string]$Script = "", [string[]]$Words = @(), $Named = $null, [string[]]$Switches = @(), [hashtable]$Environment = @{},
-        [string]$Program = "", [string[]]$Arguments = @(), [string]$WorkingDirectory = "", [string]$LogFile = ""
+        [string]$Program = "", [string[]]$Arguments = @(), [string]$WorkingDirectory = "", [string]$LogFile = "", [string]$ExitFile = ""
     )
     $table = [ordered]@{}
     if ($null -ne $Named) { foreach ($k in @($Named.Keys)) { $table["" + $k] = "" + $Named[$k] } }
     foreach ($n in @(@($table.Keys) + @($Switches))) { if ("" + $n -cnotmatch '\A[A-Za-z][A-Za-z0-9]{0,39}\z') { throw ("not a parameter name: '" + $n + "'") } }
     foreach ($k in @($Environment.Keys)) { if ("" + $k -cnotmatch '\A[A-Z_][A-Z0-9_]*\z') { throw ("not an environment variable name: '" + $k + "'") } }
     foreach ($w in @($Words)) { if ("" + $w -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z') { throw ("not a word of a horde command: '" + $w + "'") } }
-    foreach ($v in @(@($Script, $Program, $WorkingDirectory, $LogFile) + @($Arguments) + @($table.Values) + @($Environment.Values))) { if ("" + $v -match '\p{Cc}') { throw "a launch's values cannot hold a line break or any other control character" } }
+    foreach ($v in @(@($Script, $Program, $WorkingDirectory, $LogFile, $ExitFile) + @($Arguments) + @($table.Values) + @($Environment.Values))) { if ("" + $v -match '\p{Cc}') { throw "a launch's values cannot hold a line break or any other control character" } }
     if ($Kind -ceq "horde") {
         if (-not [System.IO.Path]::IsPathRooted($Script) -or @($Words).Count -lt 1) { throw "a horde launch names the absolute path of a horde entry point and at least one word" }
         if ($LogFile -ne "" -and -not [System.IO.Path]::IsPathRooted($LogFile)) { throw "a launch's log file is an absolute path" }
-    } elseif (-not [System.IO.Path]::IsPathRooted($Program)) { throw "a program launch names the absolute path of a program" }
+    } else {
+        if (-not [System.IO.Path]::IsPathRooted($Program)) { throw "a program launch names the absolute path of a program" }
+        # A batch file's arguments are read again by the command interpreter, as commands
+        # (core/Services.ps1 refuses one in a definition; refused here too, for any other caller).
+        if ($Program -match '\.(cmd|bat)\s*\z') { throw "a program launch cannot be a batch file: the command interpreter would read its arguments again" }
+    }
+    if ($ExitFile -ne "" -and -not [System.IO.Path]::IsPathRooted($ExitFile)) { throw "a launch's exit file is an absolute path" }
     if ($WorkingDirectory -ne "" -and -not [System.IO.Path]::IsPathRooted($WorkingDirectory)) { throw "a launch's working directory is an absolute path" }
     return [pscustomobject]@{ PSTypeName = "Horde.ServiceLaunch"; kind = $Kind; script = $Script; words = [string[]]@($Words); named = $table; switches = [string[]]@($Switches); environment = $Environment
-        program = $Program; arguments = [string[]]@($Arguments); workingDirectory = $WorkingDirectory; logFile = $LogFile }
+        program = $Program; arguments = [string[]]@($Arguments); workingDirectory = $WorkingDirectory; logFile = $LogFile; exitFile = $ExitFile }
 }
 
 function ConvertTo-HordeServiceArgument {

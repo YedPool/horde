@@ -54,7 +54,20 @@ function ConvertTo-HordeTaskAction {
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($sb.ToString()))
     $shellArguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded
     # In the person's session a hidden PowerShell window still flashes; the headless console host has none (header).
-    if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { return [pscustomobject]@{ program = "conhost.exe"; arguments = ("--headless powershell.exe " + $shellArguments) } }
+    if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) {
+        # Measured 2026-10-13 on Windows 11 26200: the console host started with the shell's quoted
+        # full path ran the command in 6 of 6 runs when it had no console to inherit, which is how a
+        # scheduled job starts it. (Started from a terminal, WITH a console to inherit, the same
+        # line - and the bare-name line of the first version - failed to run in 5 of 8 tries; that is
+        # not this job's case, and it is why the probe that measured it gave the host none.)
+        # BOTH PROGRAMS BY THEIR FULL PATHS in the system folder, never by a bare name a search path
+        # could answer with another program: this job starts and updates code every minute. A system
+        # that has not got them is refused here, when the job is made, not every minute it fires.
+        $console = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "conhost.exe")
+        $shell = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
+        foreach ($needed in @($console, $shell)) { if (-not [System.IO.File]::Exists($needed)) { throw ("a job that runs in the person's session needs " + $needed + ", which is not there") } }
+        return [pscustomobject]@{ program = $console; arguments = ('--headless "' + $shell + '" ' + $shellArguments) }
+    }
     return [pscustomobject]@{ program = "powershell.exe"; arguments = $shellArguments }
 }
 

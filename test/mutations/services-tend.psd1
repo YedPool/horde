@@ -86,11 +86,11 @@
            Find = 'if ($SettleSeconds -le 0 -or $moving.Count -eq 0 -or (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ge $settleBy) { break }'
            Replace = 'if ($true) { break }' }
         @{ Name = "force-fetch-ignored"
-           Find = '-IgnoreIdle:$IgnoreIdle -ForceFetch:($ForceFetch -and $first) }'
-           Replace = '-IgnoreIdle:$IgnoreIdle }' }
+           Find = '-IgnoreIdle:$IgnoreIdle -ForceFetch:($ForceFetch -and $first) -SupervisorGapSeconds'
+           Replace = '-IgnoreIdle:$IgnoreIdle -SupervisorGapSeconds' }
         @{ Name = "now-not-passed-on"
-           Find = '-IgnoreIdle:$IgnoreIdle -ForceFetch:($ForceFetch -and $first) }'
-           Replace = '-ForceFetch:($ForceFetch -and $first) }' }
+           Find = '-IgnoreIdle:$IgnoreIdle -ForceFetch:($ForceFetch -and $first) -SupervisorGapSeconds'
+           Replace = '-ForceFetch:($ForceFetch -and $first) -SupervisorGapSeconds' }
         @{ Name = "stale-supervisor-reads-as-running"
            Find = '        if ($verdict.value.fresh) { $supervisor.state = "running";'
            Replace = '        if ($true) { $supervisor.state = "running";' }
@@ -104,8 +104,8 @@
            Find = '[void]$lines.Add("definitions: NO SERVICE IS SUPERVISED until that file is mended") }'
            Replace = '}' }
         @{ Name = "job-not-with-person"
-           Find = '-EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson -Disabled:$Disabled'
-           Replace = '-EveryMinutes 1 -TimeLimitMinutes 1 -Disabled:$Disabled' }
+           Find = '-MayOutlastInterval -WithPerson -Disabled:$Disabled'
+           Replace = '-MayOutlastInterval -Disabled:$Disabled' }
         @{ Name = "job-home-not-carried"
            Find = '-Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 }'
            Replace = '-Arguments @("services", "tend") -Environment @{}' }
@@ -121,5 +121,36 @@
         @{ Name = "roll-out-unseen-is-done"
            Find = 'if ($null -eq $one) { [void]$out.Add([pscustomobject]@{ name = $def.name; reason = "it was not looked at" }); continue }'
            Replace = 'if ($null -eq $one) { continue }' }
+        # --- safety review of the first build ---
+        @{ Name = "supervisors-own-gap-not-read"
+           Find = 'if ($own.state -ceq "known" -and -not $own.value.fresh) { $gapSeconds ='
+           Replace = 'if ($false) { $gapSeconds =' }
+        @{ Name = "full-look-never-asked-for"
+           Find = '[bool]($null -ne $s.moving)) }'
+           Replace = '$false) }' }
+        @{ Name = "exit-code-never-asked"
+           Find = 'if ($null -ne $s.started -and $started.state -ceq "absent" -and $null -ne $Tools["ExitCode"] -and @($Definition.stop.deliberateExitCodes).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "held-mark-written-after-the-stop"
+           Find = '$s.held = $true; $s.heldWhy = "a person stopped it with horde services stop"; Write-HordeServiceState -State $s -HordeHome $HordeHome'
+           Replace = '$s.held = $true; $s.heldWhy = "a person stopped it with horde services stop"' }
+        @{ Name = "stubborn-service-left-running"
+           Find = 'try { $ended = Invoke-HordeServiceTool -Tools $Tools -Name "Kill" -With @(, $live.process) }'
+           Replace = 'try { $ended = [pscustomobject]@{ ok = $false; detail = "not ended" } }' }
+        @{ Name = "let-go-stays-held"
+           Find = '            $s.held = $false; $s.heldWhy = ""; $s.launchingAt = $null;'
+           Replace = '            $s.heldWhy = ""; $s.launchingAt = $null;' }
+        @{ Name = "let-go-keeps-the-telling"
+           Find = '$s.told = [string[]]@(@($s.told) | Where-Object { @("ended-itself", "start-unrecorded") -cnotcontains $_ })'
+           Replace = '' }
+        @{ Name = "unreadable-state-held-anyway"
+           Find = 'if ($kept.state -ceq "unknown") { return (& $answer ("nothing was done: " + $kept.reason)) }'
+           Replace = '' }
+        @{ Name = "pass-ended-at-one-minute"
+           Find = '-EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson'
+           Replace = '-EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson' }
+        @{ Name = "held-is-not-done-for-a-roll-out"
+           Find = 'if (@("current", "updated", "disabled", "held") -ccontains $one.code) { continue }'
+           Replace = 'if (@("current", "updated", "disabled") -ccontains $one.code) { continue }' }
     )
 }

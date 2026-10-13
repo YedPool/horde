@@ -90,10 +90,17 @@ function New-HordeScheduledJob {
         [int]$EveryMinutes = 30,
         [int]$TimeLimitMinutes = 20,
         [switch]$Disabled,
-        [switch]$WithPerson
+        [switch]$WithPerson,
+        [switch]$MayOutlastInterval
     )
     Assert-HordeJobName -Name $Name -Folder $Folder
-    if ($EveryMinutes -lt 1 -or $TimeLimitMinutes -lt 1 -or $TimeLimitMinutes -gt $EveryMinutes) { throw "a job runs at least every minute, and stops before its next run" }
+    # -MayOutlastInterval: A JOB THAT ITSELF REFUSES TO RUN TWICE AT ONCE may be given longer than its
+    # interval. The rule "stops before its next run" keeps two runs of a job apart by ending the
+    # first. The supervisor's pass keeps them apart itself - it holds a lock, and the scheduler starts
+    # no second run while one is going - and ending IT at its interval is the harm: a pass ended in
+    # the middle of moving a checkout, or between making a process and recording it, leaves exactly
+    # the half-done state the supervisor exists to prevent (safety review of the first build, item 6).
+    if ($EveryMinutes -lt 1 -or $TimeLimitMinutes -lt 1 -or ($TimeLimitMinutes -gt $EveryMinutes -and -not $MayOutlastInterval)) { throw "a job runs at least every minute, and stops before its next run" }
     foreach ($k in @($Environment.Keys)) { if ("$k" -cnotmatch '\A[A-Z_][A-Z0-9_]*\z') { throw ("not an environment variable name: '" + $k + "'") } }
     # An argument starting with "-" reaches the script as a plain string, never a switch, and the run fails
     # with exit 2 every time it fires (review of #70, NEW-2, measured); refused here, once.

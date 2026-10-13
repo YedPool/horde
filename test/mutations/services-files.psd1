@@ -73,5 +73,33 @@
         @{ Name = "log-never-set-aside"
            Find = 'if ([System.IO.File]::Exists($path) -and (New-Object System.IO.FileInfo($path)).Length -ge $MaxBytes) { Move-HordeFileAtomic -From $path -To ([System.IO.Path]::ChangeExtension($path, ".1.log")) }'
            Replace = '' }
+        # --- safety review of the first build ---
+        @{ Name = "held-not-written"
+           Find = 'held = [bool]($State.held -eq $true); heldWhy'
+           Replace = 'held = $false; heldWhy' }
+        @{ Name = "move-mark-not-written"
+           Find = 'if ($null -ne $State.moving) { $r["moving"] ='
+           Replace = 'if ($false) { $r["moving"] =' }
+        @{ Name = "half-a-move-mark-accepted"
+           Find = ' -or ("" + $m["target"]) -cnotmatch $script:HordeServiceRevisionPattern -or $null -eq $mAt) {'
+           Replace = ') {' }
+        @{ Name = "held-as-a-word-accepted"
+           Find = 'if ($have["held"] -isnot [bool]) { return (& $bad "its held mark is not true or false") }; '
+           Replace = '' }
+        @{ Name = "refusal-count-not-written"
+           Find = 'at = (& $time $State.refused.at); count = (Get-HordeServiceRefusedCount -Refused $State.refused) } }'
+           Replace = 'at = (& $time $State.refused.at); count = 1 } }' }
+        @{ Name = "notice-kind-not-written"
+           Find = 'at = (& $time $_.at); what = (Get-HordeServiceNoticeWhat -Notice $_) } })'
+           Replace = 'at = (& $time $_.at); what = "" } })' }
+        @{ Name = "exit-record-of-another-start-taken"
+           Find = ' -or -not (Test-HordeHeartbeatSameStart -One $started -Other $Process.startedAt)) { return (New-HordeUnknown -Reason "its exit record is about another process") }'
+           Replace = ') { return (New-HordeUnknown -Reason "its exit record is about another process") }' }
+        @{ Name = "exit-record-of-another-pid-taken"
+           Find = ' -or [long]$have["pid"] -ne [long]$Process.pid'
+           Replace = '' }
+        @{ Name = "exit-record-without-a-code-taken"
+           Find = 'if ($have["code"] -isnot [int] -and $have["code"] -isnot [long]) { return (New-HordeUnknown -Reason "its exit record holds no code") }'
+           Replace = 'if ($have["code"] -isnot [int] -and $have["code"] -isnot [long]) { return (New-HordeKnown -Value 0) }' }
     )
 }

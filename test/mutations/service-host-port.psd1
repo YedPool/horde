@@ -57,5 +57,12 @@
         @{ Name = "spaces-not-quoted"
            Find = '    if ($Text.Length -gt 0 -and $Text -notmatch ''[\s"]'') { return $Text }'
            Replace = '    if ($Text.Length -gt 0) { return $Text }' }
+        # --- safety review of the first build ---
+        @{ Name = "batch-file-launched"
+           Find = 'if ($Program -match ''\.(cmd|bat)\s*\z'') { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "relative-exit-file-taken"
+           Find = 'if ($ExitFile -ne "" -and -not [System.IO.Path]::IsPathRooted($ExitFile)) {'
+           Replace = 'if ($false) {' }
     )
 }
