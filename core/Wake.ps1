@@ -58,6 +58,8 @@ function Get-HordeWakeSettings {
         # At most this many nudges in one pass over the whole fleet, so a restore of everything is a
         # queue and never a burst of typing into every session at once.
         maxNudgesPerPass = 1
+        # At most this many nudges for ONE unread mail of one session (Update-HordeWakeGaveUp).
+        maxNudgesPerMail = 6
         # At most this many full readings of a session - a look at its box and its turn - in one pass
         # (Invoke-HordeWakePass, THE LOOK COMES LAST). Each can take a pane's whole time-out.
         maxConfirmsPerPass = 3
@@ -80,10 +82,38 @@ function Get-HordeWakeBackoffSeconds {
 }
 
 function Get-HordeWakeLedgerEntry {
-    # One session's ledger entry, or $null when it has none.
-    param($Ledger, [string]$Id)
+    # One session's ledger entry, or $null when it has none. With -State (the session's state value now)
+    # it is the entry FOR THE MAIL THAT IS NOW ITS OLDEST UNREAD, or $null: an entry counts the nudges
+    # for one mail (its mailAt), and when another mail has become the oldest - the session took the one
+    # it was being asked about - nothing is held against the new one. An entry that records no mail
+    # (one written before entries did) is for whatever mail there is.
+    param($Ledger, [string]$Id, $State = $null)
     if ($null -eq $Ledger -or -not $Ledger.ContainsKey($Id)) { return $null }
-    return $Ledger[$Id]
+    $entry = $Ledger[$Id]
+    $mailAt = Get-HordeWakeEntryValue $entry "mailAt"
+    if ($null -ne $State -and $mailAt -is [datetime] -and $State.oldestUnreadAt -is [datetime] -and $State.oldestUnreadAt -ne $mailAt) { return $null }
+    return $entry
+}
+
+function Get-HordeWakeEntryValue {
+    # A member of a ledger entry, or $null when it has none. Looked up, never dereferenced: entries
+    # written by earlier builds lack the later members, and under strict mode reading one is an error.
+    param($Entry, [string]$Name)
+    if ($null -eq $Entry) { return $null }
+    $p = $Entry.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $null }
+    return $p.Value
+}
+
+function New-HordeWakeLedgerRow {
+    # A ledger entry: { attempts; lastAttemptAt; lastOutcome }, and nothingAt, mailAt and gaveUp when
+    # there is something to say in them.
+    param([int]$Attempts, $LastAttemptAt, [string]$LastOutcome, $NothingAt = $null, $MailAt = $null, [bool]$GaveUp = $false)
+    $row = [ordered]@{ attempts = $Attempts; lastAttemptAt = $LastAttemptAt; lastOutcome = $LastOutcome }
+    if ($NothingAt -is [datetime]) { $row["nothingAt"] = $NothingAt }
+    if ($MailAt -is [datetime]) { $row["mailAt"] = $MailAt }
+    if ($GaveUp) { $row["gaveUp"] = $true }
+    return [pscustomobject]$row
 }
 
 function Get-HordeWakeNothingAt {
@@ -127,6 +157,10 @@ function Get-HordeWakeHold {
         $rest = Get-HordeWakeBackoffSeconds -Attempts 1 -Settings $Settings
         if (($Now - $nothingAt).TotalSeconds -lt $rest) { return [pscustomobject]@{ action = "wait"; reason = ("held " + $rest + " s: its waker found no unread mail to nudge for, while its state still shows some") } }
     }
+    # THE CAP (Update-HordeWakeGaveUp says why): after maxNudgesPerMail nudges for this one mail, nothing
+    # more is tried for it. A session that takes the mail, or whose oldest unread mail becomes another,
+    # starts again from nothing (Get-HordeWakeLedgerEntry).
+    if ($null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail) { return [pscustomobject]@{ action = "wait"; reason = ("gave up after " + $Entry.attempts + " nudges for this mail; nothing more is tried until it is taken or another mail becomes the oldest") } }
     if ($null -ne $Entry) {
         $wait = Get-HordeWakeBackoffSeconds -Attempts $Entry.attempts -Settings $Settings
         $since = ($Now - $Entry.lastAttemptAt).TotalSeconds
@@ -167,7 +201,9 @@ function Get-HordeWakeDecisions {
         if ($null -ne $States -and $States.ContainsKey($id)) { $answer = $States[$id] }
         $looked = ($null -ne $Confirmed -and $Confirmed.ContainsKey($id))
         if ($looked) { $answer = $Confirmed[$id] }
-        $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id
+        $stateNow = $null
+        if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
+        $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
         $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked)
         $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
         if ($hold.action -ceq "ready" -or $hold.action -ceq "look") {
@@ -216,17 +252,24 @@ function Update-HordeWakeLedger {
         if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }
         $id = "$($d.id)"
         if ($null -eq $Outcomes -or -not $Outcomes.ContainsKey($id)) { continue }
+        # THE ENTRY FOR THIS MAIL: the nudges counted are those for the mail that is the oldest unread
+        # now. An entry for another mail is not carried over (Get-HordeWakeLedgerEntry).
+        $stateNow = $null
+        if ($null -ne $States -and $States.ContainsKey($id) -and "$($States[$id].state)" -ceq "known") { $stateNow = $States[$id].value }
+        $mailAt = $null
+        if ($null -ne $stateNow -and $stateNow.oldestUnreadAt -is [datetime]) { $mailAt = $stateNow.oldestUnreadAt }
+        $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $stateNow
         if ("$($Outcomes[$id])" -ceq "nothing") {
-            $kept = [pscustomobject]@{ attempts = 0; lastAttemptAt = $Now; lastOutcome = "nothing"; nothingAt = $Now }
-            if ($next.ContainsKey($id)) { $kept = [pscustomobject]@{ attempts = [int]$next[$id].attempts; lastAttemptAt = $next[$id].lastAttemptAt; lastOutcome = "$($next[$id].lastOutcome)"; nothingAt = $Now } }
+            $kept = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "nothing" -NothingAt $Now -MailAt $mailAt
+            if ($null -ne $had) { $kept = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) }
             $next[$id] = $kept
             continue
         }
         $before = 0
-        if ($next.ContainsKey($id)) { $before = [int]$next[$id].attempts }
+        if ($null -ne $had) { $before = [int]$had.attempts }
         $count = $before + 1
         if ("$($Outcomes[$id])" -ceq "killed") { $count = [System.Math]::Max($count, @($Settings.backoffSeconds).Count) }
-        $next[$id] = [pscustomobject]@{ attempts = $count; lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }
+        $next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -GaveUp ($null -ne $had -and (Get-HordeWakeEntryValue $had "gaveUp") -eq $true)
     }
     foreach ($id in @($next.Keys)) {
         $taken = $false
@@ -235,6 +278,37 @@ function Update-HordeWakeLedger {
         if ($taken -or $old) { $next.Remove($id) }
     }
     return $next
+}
+
+function Update-HordeWakeGaveUp {
+    # WHEN THE WATCHER STOPS ASKING, AND SAYS SO ONCE: { ledger; entries; sessions }.
+    # A session that answers woken and never takes its mail was nudged for ever: about 15 times in its
+    # first hour and 12 an hour after that, each a real line typed into its box (review of PR #211). A
+    # doorbell rung six times that nobody answers is not going to be answered by a seventh ring; what
+    # is needed then is somebody who can look. So after maxNudgesPerMail nudges for ONE mail - the
+    # ledger entry is for the mail that is the session's oldest unread, its mailAt - the watcher gives
+    # up on that mail: ONE entry of kind gave-up, and nothing more for that session (Get-HordeWakeHold)
+    # until the mail is taken or another becomes the oldest. sessions is who was given up on this pass,
+    # each { id; mailAt; attempts }, for the tell sender to tell the warchief (core/WakeTell.ps1).
+    # -Ledger is not changed: the ledger returned has gaveUp set on the entries it was said for.
+    param($Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings))
+    $next = @{}
+    $entries = New-Object System.Collections.ArrayList
+    $sessions = New-Object System.Collections.ArrayList
+    if ($null -ne $Ledger) {
+        foreach ($id in @($Ledger.Keys | Sort-Object)) {
+            $e = $Ledger[$id]
+            $next["$id"] = $e
+            if ([int]$e.attempts -lt [int]$Settings.maxNudgesPerMail -or (Get-HordeWakeEntryValue $e "gaveUp") -eq $true) { continue }
+            $mailAt = Get-HordeWakeEntryValue $e "mailAt"
+            $next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt $mailAt -GaveUp $true
+            $since = ""
+            if ($mailAt -is [datetime]) { $since = " unread since " + $mailAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) }
+            [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "gave-up" -Id "$id" -Outcome "gave-up" -Reason ("" + $e.attempts + " nudges for its mail" + $since + ", the last answered " + $e.lastOutcome + ", and the mail was not taken; it is not nudged again for this mail")))
+            [void]$sessions.Add([pscustomobject]@{ id = "$id"; mailAt = $mailAt; attempts = [int]$e.attempts })
+        }
+    }
+    return [pscustomobject]@{ ledger = $next; entries = $entries.ToArray(); sessions = $sessions.ToArray() }
 }
 
 function Update-HordeWakeBadMail {
@@ -288,6 +362,7 @@ function Invoke-HordeWakePass {
     $nextLedger = $Ledger
     $decisions = @()
     $unreadable = @{}
+    $gaveUp = @()
     if ($null -ne $Waker) {
         # A PASS BEGINS: the waker is told, so what it read of the fleet for the last pass is not reused
         # for this one and is read once for all of this one's questions (wakers/Port.ps1, Begin).
@@ -341,9 +416,14 @@ function Invoke-HordeWakePass {
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }
             $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now -Settings $Settings
+            # THE CAP: a session nudged maxNudgesPerMail times for one mail is given up on, said once.
+            $gave = Update-HordeWakeGaveUp -Ledger $nextLedger -Now $Now -Settings $Settings
+            $nextLedger = $gave.ledger
+            $gaveUp = @($gave.sessions)
+            foreach ($e in @($gave.entries)) { [void]$entries.Add($e) }
         }
     }
-    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable }
+    return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp }
 }
 
 # ---- the file: <home>\wake\ledger.json, or ledger-shadow.json for a shadow run ----
@@ -360,6 +440,9 @@ function Save-HordeWakeLedger {
             $row = [ordered]@{ id = "$id"; attempts = [int]$Ledger[$id].attempts; lastAttemptAt = (ConvertTo-HordeWakeTimeText $Ledger[$id].lastAttemptAt); lastOutcome = "$($Ledger[$id].lastOutcome)" }
             $heldAt = Get-HordeWakeNothingAt $Ledger[$id]
             if ($null -ne $heldAt) { $row["nothingAt"] = ConvertTo-HordeWakeTimeText $heldAt }
+            $mailAt = Get-HordeWakeEntryValue $Ledger[$id] "mailAt"
+            if ($mailAt -is [datetime]) { $row["mailAt"] = ConvertTo-HordeWakeTimeText $mailAt }
+            if ((Get-HordeWakeEntryValue $Ledger[$id] "gaveUp") -eq $true) { $row["gaveUp"] = $true }
             [void]$sessions.Add($row)
         }
     }
@@ -384,6 +467,8 @@ function Read-HordeWakeLedger {
             if ($null -eq $at -or "$($row.id)" -eq "") { return (New-HordeUnknown -Reason "the saved ledger holds an entry with no session or no time") }
             $entry = [ordered]@{ attempts = [int]$row.attempts; lastAttemptAt = $at; lastOutcome = "$($row.lastOutcome)" }
             if ($null -ne $row.PSObject.Properties["nothingAt"]) { $heldAt = ConvertFrom-HordeWakeTimeText $row.nothingAt; if ($null -ne $heldAt) { $entry["nothingAt"] = $heldAt } }
+            if ($null -ne $row.PSObject.Properties["mailAt"]) { $mailAt = ConvertFrom-HordeWakeTimeText $row.mailAt; if ($null -ne $mailAt) { $entry["mailAt"] = $mailAt } }
+            if ($null -ne $row.PSObject.Properties["gaveUp"] -and $row.gaveUp -eq $true) { $entry["gaveUp"] = $true }
             $ledger["$($row.id)"] = [pscustomobject]$entry
         }
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }

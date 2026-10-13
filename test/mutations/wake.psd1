@@ -73,8 +73,8 @@
            Find = 'if ($rang.value.outcome -ceq "nothing" -and $null -ne (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $d.id))) { continue }'
            Replace = '' }
         @{ Name = "hold-outlives-a-real-attempt"
-           Find = '$next[$id] = [pscustomobject]@{ attempts = $count; lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }'
-           Replace = '$next[$id] = [pscustomobject]@{ attempts = $count; lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])"; nothingAt = (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id)) }' }
+           Find = '$next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt'
+           Replace = '$next[$id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "$($Outcomes[$id])" -MailAt $mailAt -NothingAt (Get-HordeWakeNothingAt $had)' }
         @{ Name = "shadow-ledger-written-where-live-reads"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -HordeHome $HordeHome) -Text' }
@@ -120,6 +120,27 @@
         @{ Name = "killed-nudge-journaled-as-a-nudge"
            Find = 'if ($rang.value.outcome -ceq "killed") { $kind = "nudge-killed" }'
            Replace = '' }
+        @{ Name = "no-cap-on-nudges-for-one-mail"
+           Find = 'if ($null -ne $Entry -and [int]$Entry.attempts -ge [int]$Settings.maxNudgesPerMail) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "cap-of-seven"
+           Find = 'maxNudgesPerMail = 6'
+           Replace = 'maxNudgesPerMail = 7' }
+        @{ Name = "gave-up-said-every-pass"
+           Find = '-or (Get-HordeWakeEntryValue $e "gaveUp") -eq $true) { continue }'
+           Replace = ') { continue }' }
+        @{ Name = "gave-up-never-said"
+           Find = '$gave = Update-HordeWakeGaveUp -Ledger $nextLedger -Now $Now -Settings $Settings'
+           Replace = '$gave = [pscustomobject]@{ ledger = $nextLedger; entries = @(); sessions = @() }' }
+        @{ Name = "a-new-oldest-mail-inherits-the-old-count"
+           Find = '-and $State.oldestUnreadAt -ne $mailAt) { return $null }'
+           Replace = '-and $false) { return $null }' }
+        @{ Name = "given-up-on-forgotten-after-nothing"
+           Find = '-NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) }'
+           Replace = '-NothingAt $Now -MailAt $mailAt }' }
+        @{ Name = "who-was-given-up-on-not-handed-on"
+           Find = '$gaveUp = @($gave.sessions)'
+           Replace = '$gaveUp = @()' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -ge $allowed) { $ready[$i].action = "wait"; $ready[$i].reason = "rate limit" }'
            Replace = '' }

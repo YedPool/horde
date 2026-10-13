@@ -108,14 +108,16 @@ Write-Host "--- back-off: 5, 15, 45, 135, then 300 s for good ---" -ForegroundCo
 
 Start-Case; Seat -Change @{ Outcome = "busy"; OutcomeReason = "it began a turn as the nudge arrived" }
 $times = New-Object System.Collections.ArrayList
+# The cap on nudges for one mail is lifted for this one case, which is about the back-off's own shape.
+$uncapped = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 99 }
 for ($s = 0; $s -le 810; $s++) {
-    $r = Pass $s
+    $r = Pass $s -Using $uncapped
     foreach ($e in @($r.entries | Where-Object { $_.kind -ceq "nudge" })) { [void]$times.Add($s) }
 }
 $gaps = @(); for ($i = 1; $i -lt $times.Count; $i++) { $gaps += ($times[$i] - $times[$i - 1]) }
 Check (($gaps -join "/") -ceq "5/15/45/135/300/300") ("a session that answers busy every time is asked again after 5, 15, 45, 135, 300 and 300 s (" + ($gaps -join "/") + ")")
 Check ($script:ledger[(Sid 1)].attempts -eq 7 -and $script:ledger[(Sid 1)].lastOutcome -ceq "busy" -and $script:ledger[(Sid 1)].lastAttemptAt -eq (At 800)) "the ledger holds its attempts, its last outcome and when"
-$r = Pass 811
+$r = Pass 811 -Using $uncapped
 Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".Contains("back-off")) "and between attempts it waits, saying it is backing off"
 Check ((Get-HordeWakeBackoffSeconds -Attempts 0 -Settings $settings) -eq 0 -and (Get-HordeWakeBackoffSeconds -Attempts 1 -Settings $settings) -eq 5 -and (Get-HordeWakeBackoffSeconds -Attempts 5 -Settings $settings) -eq 300 -and (Get-HordeWakeBackoffSeconds -Attempts 99 -Settings $settings) -eq 300) "the wait is none before any attempt, 5 s after the first, and capped at 300 s"
 
@@ -262,6 +264,58 @@ Check ((Decided $r 2).action -ceq "wait" -and (Decided $r 1).action -ceq "nudge"
 $d = @(Get-HordeWakeDecisions -Targets @([pscustomobject]@{ id = (Sid 1); label = ""; role = "orc"; parent = ""; reachable = "yes" }) -States @{} -Ledger @{} -Now $t0 -Settings $settings)
 Check ($d.Count -eq 1 -and $d[0].action -ceq "wait" -and "$($d[0].reason)".Contains("unknown")) "a target with no state answer at all waits: missing is unknown"
 Check (Throws { Get-HordeWakeSettings -Overrides @{ maxNudgePerPass = 9 } } "not a wake setting") "a setting that is not one is refused, not silently left at its default"
+
+Write-Host ""
+Write-Host "--- the cap: six nudges for one mail, then one gave-up line and silence until the mail changes ---" -ForegroundColor Cyan
+
+# A SESSION THAT ANSWERS WOKEN AND NEVER TAKES ITS MAIL.
+Start-Case; Seat -Change @{ OldestUnreadAt = (At -60) }
+$nudges = New-Object System.Collections.ArrayList
+$gave = New-Object System.Collections.ArrayList
+for ($s = 0; $s -le 3600; $s += 3) {
+    $r = Pass $s
+    foreach ($e in @($r.entries)) { if ($e.kind -ceq "nudge") { [void]$nudges.Add($s) } elseif ($e.kind -ceq "gave-up") { [void]$gave.Add($e) } }
+}
+Check ((Rang 1) -eq 6 -and $nudges.Count -eq 6) ("in an hour it is nudged six times, not the fifteen it was before the cap (" + (Rang 1) + ")")
+Check ($gave.Count -eq 1 -and $gave[0].id -ceq (Sid 1) -and $gave[0].outcome -ceq "gave-up" -and "$($gave[0].reason)".StartsWith("6 nudges for its mail unread since 2026-10-12T07:59:00Z") -and "$($gave[0].reason)".Contains("the last answered woken")) "and ONE gave-up line is journaled, on the pass of the sixth nudge, saying how many, for which mail and what the last answered"
+Check ($gave[0].at -eq (At $nudges[5])) "at the time of that sixth nudge"
+$r = Pass 3603
+Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".StartsWith("gave up after 6 nudges") -and @($r.entries).Count -eq 0 -and @($r.gaveUp).Count -eq 0) "after it the session waits, saying it was given up on, and nothing more is journaled"
+Check ($script:ledger[(Sid 1)].gaveUp -eq $true -and $script:ledger[(Sid 1)].mailAt -eq (At -60) -and $script:ledger[(Sid 1)].attempts -eq 6) "the ledger holds that it was given up on, and for which mail"
+# ANOTHER MAIL BECOMES THE OLDEST: the session took the one it was asked about, and a new one waits.
+Seat -Change @{ OldestUnreadAt = (At 3600) }
+$r = Pass 3606
+Check ((Decided $r).action -ceq "nudge" -and (Rang 1) -eq 7 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $script:ledger[(Sid 1)].mailAt -eq (At 3600) -and $null -eq (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp")) "when another mail becomes its oldest unread it is nudged at once, as a first attempt for that mail: nothing is held against the new one"
+# THE MAIL IS TAKEN, AND A LATER ONE ARRIVES.
+Start-Case; Seat -Change @{ Outcome = "busy"; OutcomeReason = "busy" }
+$capOne = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 1 }
+$r = Pass 0 -Using $capOne
+Check ((Kinds $r) -ceq "nudge,gave-up" -and @($r.gaveUp).Count -eq 1 -and $r.gaveUp[0].id -ceq (Sid 1) -and $r.gaveUp[0].attempts -eq 1 -and $r.gaveUp[0].mailAt -eq (At -60)) "maxNudgesPerMail is the cap: with 1, the first nudge is the last, and the pass hands on who was given up on"
+$r = Pass 600 -Using $capOne
+Check ((Rang) -eq 0 -and @($r.entries).Count -eq 0) "ten minutes on it is still not asked, and not said again"
+Seat -Change @{ UnreadCount = 0; OldestUnreadAt = $null }
+$null = Pass 603 -Using $capOne
+Seat
+$r = Pass 606 -Using $capOne
+Check ((Decided $r).action -ceq "nudge") "once the mail is taken the session starts again from nothing"
+# WHAT DOES NOT COUNT. nothing is no attempt, so a session whose waker keeps answering nothing is never given up on.
+Start-Case; Seat -Change @{ Outcome = "nothing"; OutcomeReason = "its mailbox is empty" }
+$gaveLines = 0
+for ($s = 0; $s -le 600; $s += 3) { $r = Pass $s; $gaveLines += @($r.entries | Where-Object { $_.kind -ceq "gave-up" }).Count }
+Check ($gaveLines -eq 0 -and $script:ledger[(Sid 1)].attempts -eq 0) "a session whose waker answers nothing is not given up on: nothing was tried"
+# SHADOW COUNTS WHAT IT WOULD HAVE DONE, so its journal shows the cap too.
+Start-Case; Seat
+$kindsSeen = New-Object System.Collections.ArrayList
+for ($s = 0; $s -le 3600; $s += 3) { $r = Pass $s -Shadow; foreach ($e in @($r.entries)) { [void]$kindsSeen.Add($e.kind) } }
+Check ((@($kindsSeen) -join ",") -ceq "would-nudge,would-nudge,would-nudge,would-nudge,would-nudge,would-nudge,gave-up" -and (Rang) -eq 0) "a shadow run journals six would-nudges and then that it would give up, and rings nobody"
+$gu = Update-HordeWakeGaveUp -Ledger @{ (Sid 1) = [pscustomobject]@{ attempts = 6; lastAttemptAt = (At 0); lastOutcome = "busy" }; (Sid 2) = [pscustomobject]@{ attempts = 5; lastAttemptAt = (At 0); lastOutcome = "busy" } } -Now (At 9) -Settings $settings
+Check (@($gu.entries).Count -eq 1 -and $gu.entries[0].id -ceq (Sid 1) -and $gu.ledger[(Sid 1)].gaveUp -eq $true -and $null -eq (Get-HordeWakeEntryValue $gu.ledger[(Sid 2)] "gaveUp")) "an entry written before entries recorded their mail is capped all the same, and one below the cap is not"
+Save-HordeWakeLedger -Ledger $gu.ledger
+$back = Read-HordeWakeLedger
+Check ($back.state -ceq "known" -and $back.value.ledger[(Sid 1)].gaveUp -eq $true -and $null -eq (Get-HordeWakeEntryValue $back.value.ledger[(Sid 2)] "gaveUp")) "that a session was given up on is saved with the ledger, so a restarted watcher does not say it again"
+Save-HordeWakeLedger -Ledger @{ (Sid 3) = (New-HordeWakeLedgerRow -Attempts 2 -LastAttemptAt (At 1) -LastOutcome "busy" -MailAt (At -60)) }
+Check ((Read-HordeWakeLedger).value.ledger[(Sid 3)].mailAt -eq (At -60)) "and so is the mail an entry is for"
+Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
 
 Write-Host ""
 Write-Host "--- a nudge the waker had to kill: its own loud line, and the longest back-off at once ---" -ForegroundColor Cyan
