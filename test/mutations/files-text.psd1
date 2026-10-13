@@ -50,7 +50,7 @@
            Find = 'if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) { $after = 3 }'
            Replace = 'if ($Bytes.Length -ge 3) { $after = 3 }' }
         @{ Name = "json-read-from-its-first-byte-whatever-is-asked"
-           Find = 'return [HordeFilesJsonV1]::Problem($Bytes, $Offset)'
-           Replace = 'return [HordeFilesJsonV1]::Problem($Bytes, 0)' }
+           Find = 'return [HordeFilesJsonV2]::Problem($Bytes, $Offset)'
+           Replace = 'return [HordeFilesJsonV2]::Problem($Bytes, 0)' }
     )
 }

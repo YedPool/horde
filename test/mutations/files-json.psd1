@@ -72,8 +72,8 @@
            Find = 'e == (byte)''\\'' || e == (byte)''/'' || e == (byte)''b'''
            Replace = 'e == (byte)''\\'' || e == (byte)''b''' }
         @{ Name = "unicode-escape-needs-no-hex-digits"
-           Find = 'if (j + k >= n || !Hex(b[j + k])) {'
-           Replace = 'if (j + k >= n) {' }
+           Find = 'if (j + k >= b.Length || !Hex(b[j + k])) { return -1; }'
+           Replace = 'if (j + k >= b.Length) { return -1; }' }
         @{ Name = "unicode-escape-of-two-digits"
            Find = 'for (int k = 1; k <= 4; k++)'
            Replace = 'for (int k = 1; k <= 2; k++)' }
@@ -102,6 +102,62 @@
         @{ Name = "word-known-by-its-first-letter"
            Find = 'for (int k = 0; k < word.Length; k++)'
            Replace = 'for (int k = 0; k < 1; k++)' }
+        # --- deeper than a reader goes: 512 open at once is the most (review of 2026-10-13) ---
+        @{ Name = "depth-not-capped"
+           Find = 'if ((c == (byte)''{'' || c == (byte)''['') && open.Count >= MaxDepth) { return'
+           Replace = 'if (open.Count < 0) { return' }
+        @{ Name = "cap-is-one-more"
+           Find = 'public const int MaxDepth = 512;'
+           Replace = 'public const int MaxDepth = 513;' }
+        @{ Name = "cap-is-one-less"
+           Find = '&& open.Count >= MaxDepth) { return'
+           Replace = '&& open.Count >= MaxDepth - 1) { return' }
+        @{ Name = "only-arrays-counted-against-the-cap"
+           Find = 'if ((c == (byte)''{'' || c == (byte)''['') && open.Count >= MaxDepth) { return'
+           Replace = 'if ((c == (byte)''['') && open.Count >= MaxDepth) { return' }
+        @{ Name = "only-objects-counted-against-the-cap"
+           Find = 'if ((c == (byte)''{'' || c == (byte)''['') && open.Count >= MaxDepth) { return'
+           Replace = 'if ((c == (byte)''{'') && open.Count >= MaxDepth) { return' }
+        # --- half of a surrogate pair, alone ---
+        @{ Name = "lone-second-half-allowed"
+           Find = 'if (unit >= 0xDC00 && unit <= 0xDFFF) { why'
+           Replace = 'if (unit < 0) { why' }
+        @{ Name = "first-second-half-not-one"
+           Find = 'if (unit >= 0xDC00 && unit <= 0xDFFF) { why'
+           Replace = 'if (unit > 0xDC00 && unit <= 0xDFFF) { why' }
+        @{ Name = "last-second-half-not-one"
+           Find = 'if (unit >= 0xDC00 && unit <= 0xDFFF) { why'
+           Replace = 'if (unit >= 0xDC00 && unit < 0xDFFF) { why' }
+        @{ Name = "lone-first-half-allowed"
+           Find = 'if (next < 0xDC00 || next > 0xDFFF) { why'
+           Replace = 'if (next < -1) { why' }
+        @{ Name = "first-first-half-not-one"
+           Find = 'if (unit >= 0xD800 && unit <= 0xDBFF)'
+           Replace = 'if (unit > 0xD800 && unit <= 0xDBFF)' }
+        @{ Name = "last-first-half-not-one"
+           Find = 'if (unit >= 0xD800 && unit <= 0xDBFF)'
+           Replace = 'if (unit >= 0xD800 && unit < 0xDBFF)' }
+        @{ Name = "first-second-half-not-taken-after-a-first-half"
+           Find = 'if (next < 0xDC00 || next > 0xDFFF) { why'
+           Replace = 'if (next < 0xDC01 || next > 0xDFFF) { why' }
+        @{ Name = "last-second-half-not-taken-after-a-first-half"
+           Find = 'if (next < 0xDC00 || next > 0xDFFF) { why'
+           Replace = 'if (next < 0xDC00 || next > 0xDFFE) { why' }
+        @{ Name = "anything-past-the-first-halves-taken-as-a-second-half"
+           Find = 'if (next < 0xDC00 || next > 0xDFFF) { why'
+           Replace = 'if (next < 0xDC00) { why' }
+        @{ Name = "anything-up-to-the-second-halves-taken-as-one"
+           Find = 'if (next < 0xDC00 || next > 0xDFFF) { why'
+           Replace = 'if (next < 0 || next > 0xDFFF) { why' }
+        @{ Name = "second-half-need-not-start-with-a-backslash"
+           Find = '(j + 1 < n && b[j] == (byte)''\\'' && b[j + 1] == (byte)''u'')'
+           Replace = '(j + 1 < n && b[j + 1] == (byte)''u'')' }
+        @{ Name = "second-half-may-be-any-escape"
+           Find = '(j + 1 < n && b[j] == (byte)''\\'' && b[j + 1] == (byte)''u'')'
+           Replace = '(j + 1 < n && b[j] == (byte)''\\'')' }
+        @{ Name = "capital-hex-digits-given-another-value"
+           Find = '(h | 0x20) - (byte)''a'' + 10'
+           Replace = 'h - (byte)''a'' + 10' }
         @{ Name = "null-is-no-value"
            Find = 'else if (c == (byte)''n'') { i = Word(bytes, i, "null", ref why); }'
            Replace = '' }

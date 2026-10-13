@@ -147,3 +147,81 @@ function Open-HordeFilesSource {
     if (-not $where.ok) { return [pscustomobject]@{ ok = $false; stream = $null; path = ""; reason = $where.reason } }
     return [pscustomobject]@{ ok = $true; stream = $stream; path = $where.path; reason = "" }
 }
+
+function Initialize-HordeFilesPlaceNative {
+    # Two more questions for Windows, defined once a process under a name of their own: a loaded
+    # type cannot be given another member, and HordeNative.FilePath may be loaded already.
+    #   QueryDosDevice  what a drive letter stands for, read from the system's own table of names.
+    #   CreateFileW     to open a FOLDER, which .NET's FileStream cannot: Get-HordeFilesFolderFinalPath.
+    if (([System.Management.Automation.PSTypeName]"HordeNative.FilePlace").Type) { return }
+    Add-Type -Namespace HordeNative -Name FilePlace -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax); [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string lpFileName, int dwDesiredAccess, int dwShareMode, System.IntPtr lpSecurityAttributes, int dwCreationDisposition, int dwFlagsAndAttributes, System.IntPtr hTemplateFile);'
+}
+
+function Get-HordeFilesDriveTarget {
+    # What the drive letter -Letter stands for, as Windows keeps it, or "" when it names nothing.
+    # Measured 2026-10-13: C: is \Device\HarddiskVolume3; a subst drive over a folder is
+    # \??\C:\that\folder; a letter aimed at a share is \??\UNC\host\share.
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    Initialize-HordeFilesPlaceNative
+    $text = New-Object System.Text.StringBuilder 1024
+    if ([HordeNative.FilePlace]::QueryDosDevice($Letter + ":", $text, 1024) -le 0) { return "" }
+    return $text.ToString()
+}
+
+function Get-HordeFilesAliasRefusal {
+    # Why -Path is on a drive letter that STANDS FOR a network drive, or "" when nothing says it is.
+    # THE FIRST QUESTION ASKED OF A DRIVE LETTER, before the network question, because that question
+    # is itself the harm here. Measured 2026-10-13, a letter S: defined over R:\, R: being a network
+    # drive aimed at a host that does not exist, one fresh host a step:
+    #   defining S:, and asking the system's table what S: stands for   the host was NOT looked up
+    #   asking the type of R:                                          the host was NOT looked up
+    #   asking the type of S: (it answers NoRootDirectory, not Network) the host WAS looked up
+    # So the type of a letter is asked only of a letter that stands for no other letter. The
+    # system's table of names is read first (it asks no disk and no network), a letter at a time,
+    # and the type is asked of the letter the chain ends in. A letter that stands for itself is the
+    # network question's, and this answers "". Asked of the path as written and again of the path it
+    # resolves to, as the network question is. The open handle's own path is still judged afterwards
+    # (Resolve-HordeFilesLocalPath): that is the second net, not this.
+    param([AllowEmptyString()][string]$Path)
+    if ($Path -cnotmatch '\A(?:\\\\\?\\)?([A-Za-z]):') { return "" }
+    $first = $Matches[1]
+    $local = "only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
+    $last = $first
+    $ended = $false
+    # Eight letters deep is more than anyone makes; a ring of letters never ends, and is refused.
+    for ($hop = 1; $hop -le 8; $hop++) {
+        $target = Get-HordeFilesDriveTarget -Letter $last
+        # Anything but another drive letter is a volume, a share or nothing: the chain ends here.
+        if ($target -cnotmatch '\A\\\?\?\\([A-Za-z]):') { $ended = $true; break }
+        $last = $Matches[1]
+    }
+    if (-not $ended) { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for another drive letter, and that for another, without end: where it really is cannot be told, and " + $local) }
+    if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) { return "" }
+    if ((Get-HordeFilesNetworkRefusal -Path ($last + ":\")) -ne "") { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network drive (" + $last + ":), and " + $local) }
+    return ""
+}
+
+function Get-HordeFilesFolderFinalPath {
+    # Where the FOLDER at -Path really is: { state: ok | absent | unknown; path }. path is what
+    # Windows says of the open folder (\\?\C:\...), by the same question a shared file's handle is
+    # asked, so a folder and a file inside it are compared like with like. Measured 2026-10-13, one
+    # folder opened by its plain path, a junction, a symbolic link, a subst drive, in capitals, and
+    # with a dot or a blank after its name: one final path for all seven.
+    #   absent   nothing has that name (Win32 2 or 3): no file can be inside it.
+    #   unknown  it is there and could not be opened or asked: the caller must not take it for absent.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    Initialize-HordeFilesPlaceNative
+    # No access is asked for (0): only the name is wanted. Every sharing mode (7), so nobody is kept
+    # out. OPEN_EXISTING (3). FILE_FLAG_BACKUP_SEMANTICS (0x02000000), without which a folder does
+    # not open.
+    $handle = [HordeNative.FilePlace]::CreateFileW($Path, 0, 7, [System.IntPtr]::Zero, 3, 0x02000000, [System.IntPtr]::Zero)
+    $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($handle.IsInvalid) {
+        if ($code -eq 2 -or $code -eq 3) { return [pscustomobject]@{ state = "absent"; path = "" } }
+        return [pscustomobject]@{ state = "unknown"; path = "" }
+    }
+    # Asked as a file's is: the one function, handed the handle the way a stream holds it.
+    try { $final = Get-HordeFilesFinalPath -Stream ([pscustomobject]@{ SafeFileHandle = $handle }) } finally { $handle.Dispose() }
+    if ($final -eq "") { return [pscustomobject]@{ state = "unknown"; path = "" } }
+    return [pscustomobject]@{ state = "ok"; path = $final }
+}

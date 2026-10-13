@@ -41,6 +41,21 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "Store.ps1")
 
+function Get-HordeFilesRuntimeRefusal {
+    # Why a file may not be shared under this runtime, or "" under Windows PowerShell 5.1.
+    # THE KEY FILE IS CREATED WITH ITS ACCESS LIST (New-HordeFilesKey), by a FileStream constructor
+    # that only the .NET Framework has. Measured 2026-10-13 under PowerShell 7.6.6: a first share
+    # threw "Cannot find an overload for FileStream and the argument count: 7", after the keys
+    # folder had been made. Making the key another way there - created first, its list set after -
+    # would leave a moment when it stands under the folder's inherited list, which is what the
+    # constructor is for. So nothing is shared there, and the share says so before it looks at
+    # anything or makes anything (files/Share.ps1 asks this first).
+    # -Edition and -Version are for a test that must ask of a runtime it is not running under.
+    param([string]$Edition = ("" + $PSVersionTable.PSEdition), [string]$Version = ("" + $PSVersionTable.PSVersion))
+    if ($Edition -ceq "Desktop") { return "" }
+    return ("files are shared under Windows PowerShell 5.1 only, and this is PowerShell " + $Version + ": the key that file ids are made with must be created readable by this user alone, which this runtime has no way to do in one step. Nothing was shared and nothing was made; run the command with powershell.exe")
+}
+
 function Get-HordeFilesKeyLength {
     # The length of the key in bytes: HMAC-SHA-256's own block of output, and of the generator's draw.
     return 32
@@ -138,14 +153,18 @@ function Test-HordeFilesStoreHasRecord {
 }
 
 function Get-HordeFilesKey {
-    # The key for the home -HordeHome, for a share into the store -Root: { ok; key; reason }. Made
-    # now if this is the first share; refused, never made again, once the store holds a record.
-    param([string]$HordeHome = "", [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][int]$HeldTries, [Parameter(Mandatory = $true)][int]$HeldWaitMs)
+    # The key for the home -HordeHome: { ok; key; reason }. Made now if this is the home's first
+    # share; refused, never made again, once the home's store holds a record.
+    # THE STORE THAT IS LOOKED IN IS THE HOME'S OWN, never one the caller names. Until 2026-10-13 it
+    # was the caller's -Root: measured that day, a home whose store held records and whose key was
+    # gone, shared into with -Root an empty folder, was given a NEW key in silence - the very thing
+    # the refusal exists to stop. The key belongs to the home, so the home's store answers for it.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)][int]$HeldTries, [Parameter(Mandatory = $true)][int]$HeldWaitMs)
     $path = Get-HordeFilesKeyPath -HordeHome $HordeHome
     $answer = { param($Read) return [pscustomobject]@{ ok = ($Read.state -ceq "ok"); key = $Read.key; reason = $Read.reason } }
     $read = Read-HordeFilesKey -Path $path -HeldTries $HeldTries -HeldWaitMs $HeldWaitMs
     if ($read.state -cne "absent") { return (& $answer $read) }
-    if (Test-HordeFilesStoreHasRecord -Root $Root) {
+    if (Test-HordeFilesStoreHasRecord -Root (Get-HordeFilesStoreRoot -HordeHome $HordeHome)) {
         # ASKED AGAIN, ONCE. Another first share may have made the key and its record between the
         # look above and this one: a record is written only after the key, so if that is what
         # happened the key is there now.

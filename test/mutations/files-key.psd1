@@ -73,8 +73,26 @@
            Replace = 'reason = ("the key that file ids are made with " + $Why) } }' }
         # --- a key that is gone is never made again ---
         @{ Name = "missing-key-made-again-whatever-the-store-holds"
-           Find = 'if (Test-HordeFilesStoreHasRecord -Root $Root) {'
+           Find = 'if (Test-HordeFilesStoreHasRecord -Root (Get-HordeFilesStoreRoot -HordeHome $HordeHome)) {'
            Replace = 'if ($false) {' }
+        # The store that answers is the home's own (review of 2026-10-13): not the home the
+        # environment names, and not a folder that is never there.
+        @{ Name = "another-homes-store-asked-whether-it-holds-a-record"
+           Find = 'if (Test-HordeFilesStoreHasRecord -Root (Get-HordeFilesStoreRoot -HordeHome $HordeHome)) {'
+           Replace = 'if (Test-HordeFilesStoreHasRecord -Root (Get-HordeFilesStoreRoot)) {' }
+        # --- the runtime that cannot make the key ---
+        @{ Name = "every-runtime-may-share"
+           Find = 'if ($Edition -ceq "Desktop") { return "" }'
+           Replace = 'if ($true) { return "" }' }
+        @{ Name = "no-runtime-may-share"
+           Find = 'if ($Edition -ceq "Desktop") { return "" }'
+           Replace = 'if ($false) { return "" }' }
+        @{ Name = "edition-known-in-any-case"
+           Find = 'if ($Edition -ceq "Desktop") { return "" }'
+           Replace = 'if ($Edition -eq "Desktop") { return "" }' }
+        @{ Name = "runtime-refusal-does-not-say-which-runtime"
+           Find = '"files are shared under Windows PowerShell 5.1 only, and this is PowerShell " + $Version + ": the key'
+           Replace = '"files are shared under Windows PowerShell 5.1 only: the key' }
         @{ Name = "store-never-seen-to-hold-a-record"
            Find = 'if ([System.IO.Path]::GetFileName($full) -cmatch $format.record) { return $true }'
            Replace = '' }

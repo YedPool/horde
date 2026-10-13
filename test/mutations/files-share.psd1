@@ -13,10 +13,21 @@
            Find = 'if ($extension -ceq ".svg") {'
            Replace = 'if ($false) {' }
         @{ Name = "extension-compared-with-its-case"
-           Find = '$extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()'
+           Find = '$extension = Get-HordeFilesAsciiLower -Text ([System.IO.Path]::GetExtension($Path))'
            Replace = '$extension = [System.IO.Path]::GetExtension($Path)' }
+        # An extension is one of the list's only code unit for code unit, A to Z folded by the code's
+        # own hand (review of 2026-10-13): not by the runtime's case table, and not by the table's comparer.
+        @{ Name = "extension-lowered-by-the-runtimes-case-table-again"
+           Find = '$extension = Get-HordeFilesAsciiLower -Text ([System.IO.Path]::GetExtension($Path))'
+           Replace = '$extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()' }
+        @{ Name = "extension-looked-up-by-the-tables-own-comparer"
+           Find = 'foreach ($listed in @($types.Keys)) { if ([string]::Equals($listed, $extension, [System.StringComparison]::Ordinal)) { $known = $types[$listed] } }'
+           Replace = 'if ($types.Contains($extension)) { $known = $types[$extension] }' }
+        @{ Name = "extension-compared-by-the-runtimes-own-comparison"
+           Find = 'if ([string]::Equals($listed, $extension, [System.StringComparison]::Ordinal)) { $known = $types[$listed] }'
+           Replace = 'if ($listed -ceq $extension) { $known = $types[$listed] }' }
         @{ Name = "type-not-on-the-list-allowed"
-           Find = 'if (-not $types.Contains($extension)) {'
+           Find = 'if ($null -eq $known) {'
            Replace = 'if ($false) {' }
         @{ Name = "first-bytes-never-checked"
            Find = 'return [bool]($hex -cmatch $Magic)'
@@ -108,17 +119,14 @@
            Find = 'if (-not $keyed.ok) { return (& $refuse $keyed.reason) }'
            Replace = '' }
         @{ Name = "key-of-the-ambient-home-whatever-home-is-given"
-           Find = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root $store'
-           Replace = '$keyed = Get-HordeFilesKey -HordeHome "" -Root $store' }
-        @{ Name = "key-made-whatever-the-store-given-holds"
-           Find = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root $store'
-           Replace = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root (Join-Path $store "no-such-folder")' }
+           Find = '$keyed = Get-HordeFilesKey -HordeHome $HordeHome -HeldTries'
+           Replace = '$keyed = Get-HordeFilesKey -HordeHome "" -HeldTries' }
         @{ Name = "held-key-tried-once-whatever-the-setting"
-           Find = '-Root $store -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs'
-           Replace = '-Root $store -HeldTries 1 -HeldWaitMs $settings.heldReadWaitMs' }
+           Find = '-HordeHome $HordeHome -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs'
+           Replace = '-HordeHome $HordeHome -HeldTries 1 -HeldWaitMs $settings.heldReadWaitMs' }
         @{ Name = "held-key-wait-is-not-the-setting"
-           Find = '-Root $store -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs'
-           Replace = '-Root $store -HeldTries $settings.heldReadTries -HeldWaitMs 50' }
+           Find = '-HordeHome $HordeHome -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs'
+           Replace = '-HordeHome $HordeHome -HeldTries $settings.heldReadTries -HeldWaitMs 50' }
         @{ Name = "id-is-a-plain-digest-again"
            Find = '$mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)'
            Replace = '$mac = [System.Security.Cryptography.SHA256]::Create()' }
@@ -169,8 +177,55 @@
            Find = 'if ($name -eq "") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "title-of-several-lines-allowed"
-           Find = 'if ($name -cmatch ''\p{Cc}'') { return'
+           Find = 'if ($unclear -ne "") { return (& $refuse $unclear) }'
+           Replace = '' }
+        @{ Name = "control-character-in-a-title-allowed"
+           Find = 'if ($Title -cmatch ''\p{Cc}'') { return'
            Replace = 'if ($false) { return' }
+        # What breaks a line without being a control character, and what turns text round (review of 2026-10-13).
+        @{ Name = "line-and-paragraph-separators-in-a-title-allowed"
+           Find = 'if ($Title -cmatch ''[\u2028\u2029]'') { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "line-separator-in-a-title-allowed"
+           Find = '''[\u2028\u2029]'''
+           Replace = '''[\u2029]''' }
+        @{ Name = "paragraph-separator-in-a-title-allowed"
+           Find = '''[\u2028\u2029]'''
+           Replace = '''[\u2028]''' }
+        @{ Name = "characters-that-turn-text-round-allowed"
+           Find = 'if ($Title -cmatch ''[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'') { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "arabic-letter-mark-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u200E\u200F\u202A-\u202E\u2066-\u2069]' }
+        @{ Name = "left-to-right-mark-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u061C\u200F\u202A-\u202E\u2066-\u2069]' }
+        @{ Name = "right-to-left-mark-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u061C\u200E\u202A-\u202E\u2066-\u2069]' }
+        @{ Name = "first-embedding-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u061C\u200E\u200F\u202B-\u202E\u2066-\u2069]' }
+        @{ Name = "right-to-left-override-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u061C\u200E\u200F\u202A-\u202D\u2066-\u2069]' }
+        @{ Name = "first-isolate-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u061C\u200E\u200F\u202A-\u202E\u2067-\u2069]' }
+        @{ Name = "last-isolate-allowed"
+           Find = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]'
+           Replace = '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2068]' }
+        @{ Name = "refusal-does-not-name-the-character"
+           Find = '(U+" + ([int][char]$Matches[0]).ToString("X4") + ")'
+           Replace = '"' }
+        # --- the runtime, the alias, and the look at the resolved path ---
+        @{ Name = "runtime-not-asked"
+           Find = 'if ($runtime -ne "") { return (& $refuse $runtime) }'
+           Replace = '' }
+        @{ Name = "device-and-stream-not-asked-of-the-resolved-path"
+           Find = 'if ($network -eq "") { $network = Get-HordeFilesPathRefusal -Path $full }'
+           Replace = '' }
         @{ Name = "longest-title-refused"
            Find = 'if ($name.Length -gt $settings.maxTitleChars) {'
            Replace = 'if ($name.Length -ge $settings.maxTitleChars) {' }
@@ -281,7 +336,7 @@
         @{ Name = "version-in-the-words-unchecked"; Find = '{ return "its version is not the one in its name" }'; Replace = '{ }' }
         @{ Name = "title-unchecked"; Find = '{ return "its title is not one line of text" }'; Replace = '{ }' }
         @{ Name = "title-with-a-control-character-read"
-           Find = '-or $title.Trim() -eq "" -or $title -cmatch ''\p{Cc}'') {'
+           Find = '-or $title.Trim() -eq "" -or (Get-HordeFilesTitleProblem -Title $title) -ne "") {'
            Replace = '-or $title.Trim() -eq "") {' }
         @{ Name = "type-unchecked"; Find = '{ return "its type is not one that is shared" }'; Replace = '{ }' }
         @{ Name = "size-unchecked"; Find = '{ return "its size is not a count of bytes" }'; Replace = '{ }' }

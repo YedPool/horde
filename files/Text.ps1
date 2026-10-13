@@ -26,7 +26,9 @@
 #     shared. An empty .json is REFUSED: it holds no JSON value.
 #   - A .json FILE MUST BE EXACTLY ONE JSON TEXT, by RFC 8259 and not by any of the platform's three
 #     parsers: files/Json.cs has the measurement of what each wrongly takes and wrongly refuses. A
-#     mark, if there is one, is stepped over; the grammar starts after it.
+#     mark, if there is one, is stepped over; the grammar starts after it. Two things the grammar
+#     allows are refused too, because the readers of a shared file do not take them: more than 512
+#     objects and arrays open at once, and half of a surrogate pair written alone as an escape.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
@@ -34,8 +36,8 @@ function Get-HordeFilesJsonProblem {
     # Why -Bytes, from -Offset, is not exactly one JSON text, or "". The checker is compiled once a
     # process, on first use, from the neighbour file (relay/BackendCng.ps1 does the same for its own).
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes, [int]$Offset = 0)
-    if (-not ([System.Management.Automation.PSTypeName]"HordeFilesJsonV1").Type) { Add-Type -Path (Join-Path $PSScriptRoot "Json.cs") }
-    return [HordeFilesJsonV1]::Problem($Bytes, $Offset)
+    if (-not ([System.Management.Automation.PSTypeName]"HordeFilesJsonV2").Type) { Add-Type -Path (Join-Path $PSScriptRoot "Json.cs") }
+    return [HordeFilesJsonV2]::Problem($Bytes, $Offset)
 }
 
 function Get-HordeFilesTextProblem {
