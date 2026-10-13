@@ -489,7 +489,7 @@ Reset-HordeMemoryWaker
 Write-Host ""
 Write-Host "--- a sender's label and the watcher's own session are never nudged, in any mode ---" -ForegroundColor Cyan
 
-foreach ($label in @("RS", "WW")) {
+foreach ($label in @("RS", "WW", "SV")) {
     Start-Case; Seat 1 @{ Label = $label; Role = "warchief" }; Seat 2 @{ Label = "A" }
     Set-HordeMemoryWakerClock $t0
     $r = Invoke-HordeWakePass -Send -Waker $memory -Now $t0 -Settings $settings -Ledger @{}
