@@ -286,6 +286,25 @@ const commands = {
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
     return { put: headOf(c.mailbox) > before, head: headOf(c.mailbox) };
   },
+  // ONE PART of a question of parts, answered by itself: the caret into that part's field (c.part,
+  // from 0), the words put in, and a real Enter. { put, head, focusPart }: whether an envelope reached
+  // the machine's mailbox, and which part's field has the caret afterwards (-1 for none).
+  async answerPart(c) {
+    const before = headOf(c.mailbox);
+    const row = "Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(c.question || "") + ") >= 0)";
+    await evaluate(row + ".querySelectorAll('textarea.hd-partfield')[" + Number(c.part) + "].focus()", true);
+    await cdp("Input.insertText", { text: c.text });
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    const end = Date.now() + 30000;
+    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
+    const focusPart = await evaluate("(function () { var r = " + row + "; return r ? Array.from(r.querySelectorAll('textarea.hd-partfield')).indexOf(document.activeElement) : -1; }())");
+    return { put: headOf(c.mailbox) > before, head: headOf(c.mailbox), focusPart };
+  },
+  // What a question of parts shows of each part: { marks, folded } as drawn, or null when it is not in the list shown.
+  async parts(c) {
+    return evaluate("(function () { var r = Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-group:not(.folded) .hd-qrow')).find((x) => x.textContent.indexOf(" + JSON.stringify(c.question || "") + ") >= 0); if (!r) { return null; } var rows = Array.from(r.querySelectorAll('.hd-part')); return { marks: rows.map((p) => p.querySelector('.hd-partmark').textContent), folded: rows.map((p) => p.classList.contains('answered')) }; }())");
+  },
   async newline(c) {
     // Shift+Enter, pressed as real keys, then the answering row's New line pressed by touch: two lines added, nothing sent.
     const before = headOf(c.mailbox);

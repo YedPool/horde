@@ -261,6 +261,40 @@ try {
     Check ($seen2.ok -and $seen2.value.found -and $touch.ok -and $touch.value.put -and $said.Count -eq 2 -and @($said | Where-Object { $_.data.text -ceq "The second one." }).Count -eq 1) ("a touch on Send sends the answer in the field with the caret, and it lands (" + $said.Count + " records; seen " + $(if ($seen2.ok) { $seen2.value.found } else { $seen2.reason }) + "; touch " + $(if ($touch.ok) { ConvertTo-Json $touch.value -Compress } else { $touch.reason }) + ")")
 
     Write-Host ""
+    Write-Host "--- 8b. a question of parts: each part is signed and sent by itself, and the question stays until the last ---" -ForegroundColor Cyan
+    # THE FOUNDER, 2026-10-12: sub-questions each send by themselves; the question leaves the list when
+    # all its parts are answered. Before the phone sent a part as a part, it sent "(b) words", the store
+    # kept that as an answer to the WHOLE question, and the question left his phone after one part.
+    $partsTitle = "Two things to settle about the chime, one by one."
+    $q3 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = $partsTitle; kind = "parts"; whatItIs = "Follow-ups."; parts = @("(a) Which of the three chimes?", "(b) How loud should it be?"); group = "voice"; askedBy = "orc-b" } }
+    $n3 = $(if ($q3.state -ceq "known") { [int]$q3.value.number } else { 0 })
+    $run = Invoke-Run -Turns 1
+    $seen3 = Invoke-Browser @{ cmd = "waitText"; text = $partsTitle }
+    Check ($q3.state -ceq "known" -and $q3.value.outcome -ceq "done" -and $seen3.ok -and $seen3.value.found) "CONTROL: a question of two parts is asked, and the app shows it"
+    $pa = Invoke-Browser @{ cmd = "answerPart"; question = $partsTitle; part = 0; text = "The second chime."; mailbox = $mailbox }
+    # Two turns, as for the first answer above: one takes the answer in, the next sends the snapshot that holds it.
+    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 1
+    $saidParts = @(Get-Said | Where-Object { $_.data.number -eq $n3 })
+    Check ($pa.ok -and $pa.value.put -and $saidParts.Count -eq 1 -and $saidParts[0].data.PSObject.Properties["part"] -and $saidParts[0].data.part -ceq "a" -and $saidParts[0].data.text -ceq "The second chime." -and $saidParts[0].data.route -ceq "phone") ("A PART ANSWERED IN THE APP is signed and sent by itself, and lands as the record of THAT PART - his words untouched, no letter put before them (" + $(if ($saidParts.Count) { ConvertTo-Json $saidParts[0].data -Compress } else { "no record; " + $(if ($pa.ok) { ConvertTo-Json $pa.value -Compress } else { $pa.reason }) }) + ")")
+    Check ($pa.ok -and $pa.value.focusPart -eq 1) "and the caret went on to part (b)"
+    $shown3 = Invoke-HordeDecision -Operation "show" -Root $store -Request @{ number = $n3 }
+    Check ($shown3.value.question.thread.turn -ceq "founder" -and (@($shown3.value.question.thread.parts | ForEach-Object { $_.letter + ":" + $_.answered }) -join ",") -ceq "a:True,b:False") "the list says part (a) is answered, part (b) is not, and the question is still his"
+    Start-Sleep -Seconds 6
+    $still = Invoke-Browser @{ cmd = "parts"; question = $partsTitle }
+    Check ($still.ok -and $null -ne $still.value -and (@($still.value.folded) -join ",") -ceq "True,False" -and $still.value.marks[0] -ceq "Answered") ("THE QUESTION IS STILL IN HIS LIST ON THE PHONE after the snapshot that holds part (a): that part folded to Answered, part (b) open (" + $(if ($still.ok) { ConvertTo-Json $still.value -Compress } else { $still.reason }) + ")")
+    $pb = Invoke-Browser @{ cmd = "answerPart"; question = $partsTitle; part = 1; text = "Quiet."; mailbox = $mailbox }
+    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 1
+    $saidParts = @(Get-Said | Where-Object { $_.data.number -eq $n3 })
+    $shown3 = Invoke-HordeDecision -Operation "show" -Root $store -Request @{ number = $n3 }
+    Check ($pb.ok -and $pb.value.put -and $saidParts.Count -eq 2 -and $saidParts[1].data.part -ceq "b" -and $saidParts[1].data.text -ceq "Quiet." -and $shown3.value.question.thread.turn -ceq "warchief") ("part (b), sent by itself, is the second record, and with it the question is the keeper's turn (" + $saidParts.Count + " record(s))")
+    $goneParts = $null
+    for ($i = 0; $i -lt 40; $i++) { $goneParts = Invoke-Browser @{ cmd = "parts"; question = $partsTitle }; if ($goneParts.ok -and $null -eq $goneParts.value) { break }; Start-Sleep -Milliseconds 500 }
+    $folded3 = Invoke-Browser @{ cmd = "waitText"; text = $partsTitle; folded = $true }
+    Check ($goneParts.ok -and $null -eq $goneParts.value -and $folded3.ok -and $folded3.value.found -and -not $folded3.value.shown.Contains($partsTitle)) "AND THEN, all its parts answered, it leaves his list on the phone for the folded With Thrall"
+
+    Write-Host ""
     Write-Host "--- 9. hidden, it locks itself; shown again, nothing opened shows first ---" -ForegroundColor Cyan
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
     Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
