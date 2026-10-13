@@ -252,6 +252,28 @@ try {
     Check ($both.code -eq 2 -and @($both.lines | Where-Object { $_ -match '-Only and -Changed' }).Count -eq 1) "-Only and -Changed together are refused"
     $badRef = Invoke-FxMutate @("-Changed", "no-such-ref-anywhere", "-Plan")
     Check ($badRef.code -eq 2 -and @($badRef.lines | Where-Object { $_ -match 'cannot find the merge-base' }).Count -eq 1) "a base that does not resolve is an error, not an empty diff"
+
+    # A SPEC WHOSE CLOSING BASELINE FAILS IS REPORTED, NOT CRASHED ON. Such a spec run prints no
+    # "mutations: " line, and the round read the missing line as a null and died inside
+    # [regex]::Match before it could say anything. The suite here goes red for good once it has seen
+    # its mutant: it leaves a marker beside itself - in the tool's throwaway copy, never in this
+    # fixture - and fails while the marker is there. So the opening baseline passes, the mutant is
+    # caught, and the closing baseline fails. Last in the suite, and untracked, so that no selection
+    # counted above sees these three files.
+    Write-Fx "late.ps1" @('function Get-Late { return 31 }')
+    Write-Fx "test\late-suite.ps1" @(
+        '. (Join-Path (Split-Path -Parent $PSScriptRoot) "late.ps1")',
+        '$marker = Join-Path $PSScriptRoot "late-seen.txt"',
+        'if ((Get-Late) -ne 31) { [System.IO.File]::WriteAllText($marker, "seen"); Write-Host "  [FAIL] Get-Late returns 31"; exit 1 }',
+        'if (Test-Path -LiteralPath $marker) { Write-Host "  [FAIL] the suite still passes after its mutant"; exit 1 }',
+        'exit 0')
+    Write-Fx "test\mutations\late.psd1" @('@{ Target = "late.ps1"; Suite = "test\late-suite.ps1"; Mutations = @(', '  @{ Name = "late-one"; Find = "return 31"; Replace = "return 32" }', ') }')
+    $late = Invoke-FxMutate @("-Changed", "HEAD", "-Spec", "test\mutations\late.psd1")
+    Check (@($late.lines | Where-Object { $_ -match 'UNMUTATED suite no longer passes after the run' }).Count -eq 1) "CONTROL: the fixture's closing baseline did fail, after its mutant ran"
+    Check ($late.code -eq 2) ("a spec whose closing baseline fails ends the round with exit 2, not a crash (exit " + $late.code + ")")
+    Check (@($late.lines | Where-Object { $_ -match '^mutations: not run - a selected spec could not run' }).Count -eq 1) "and the round says, in the line a gate reads, that it was not run"
+    Check (@($late.lines | Where-Object { $_ -match '^mutations: \d' }).Count -eq 0) "with no count a gate could read as a result"
+    Check (-not (Test-Path -LiteralPath (Join-Path $fx "test\late-seen.txt"))) "and the suite's marker stayed in the throwaway copy"
 } finally {
     if (Test-Path -LiteralPath ($fx + "-shim")) { Remove-Item -LiteralPath ($fx + "-shim") -Recurse -Force -ErrorAction SilentlyContinue }
     if ((Split-Path -Leaf $fx) -match '^horde-mutchg-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $fx)) { Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue }
