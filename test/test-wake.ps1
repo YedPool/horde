@@ -147,7 +147,41 @@ Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "nothing" -and $r
 Check ($script:ledger[(Sid 1)].attempts -eq 1 -and $script:ledger[(Sid 1)].lastOutcome -ceq "busy" -and $script:ledger[(Sid 1)].lastAttemptAt -eq (At 0)) "and it is not an attempt: the ledger's attempts, last outcome and time are as they were"
 Start-Case; Seat -Change @{ Outcome = "nothing"; OutcomeReason = "taken" }
 $null = Pass 0
-Check (-not $script:ledger.ContainsKey((Sid 1))) "a first nudge answered nothing leaves no ledger entry, so no back-off starts"
+Check ($script:ledger[(Sid 1)].attempts -eq 0 -and $script:ledger[(Sid 1)].nothingAt -eq (At 0)) "a first nudge answered nothing is no attempt, and is recorded as a hold"
+
+Write-Host ""
+Write-Host "--- a session that answers nothing while its state still shows unread mail does not hold the slot ---" -ForegroundColor Cyan
+
+Start-Case
+Seat 1 @{ Role = "warchief"; Outcome = "nothing"; OutcomeReason = "its mailbox is empty" }
+$lines = 0
+for ($i = 0; $i -lt 20; $i++) { $r = Pass ($i * 3); $lines += @($r.entries).Count }
+$asked = @(Get-HordeMemoryWakerAsks)
+Check ($asked.Count -eq 10) ("over twenty passes, 3 s apart, it is asked on every other one, not on every one: it is held for the first step of the back-off (" + $asked.Count + ")")
+Check ($lines -eq 1) ("and the run of nothings is journaled once, not every pass (" + $lines + ")")
+Check ($script:ledger[(Sid 1)].attempts -eq 0) "it is still no attempt: nothing escalates"
+$held = Pass 58
+Check ((Decided $held 1).action -ceq "wait" -and "$((Decided $held 1).reason)".Contains("held")) "while it is held it waits, and says it is held"
+# Two others turn up while it is ready again: one never asked, one asked once and past its back-off.
+Seat 2 @{ Role = "goblin" }
+Seat 3 @{ Role = "goblin" }
+$script:ledger[(Sid 3)] = [pscustomobject]@{ attempts = 1; lastAttemptAt = (At 0); lastOutcome = "busy" }
+$r = Pass 63
+Check ((Decided $r 2).action -ceq "nudge" -and (Decided $r 1).reason -ceq "rate limit") "a session never asked goes ahead of it, warchief or not"
+$r = Pass 66
+Check ((Decided $r 3).action -ceq "nudge" -and (Decided $r 1).reason -ceq "rate limit") "and so does one asked before: it is behind every other ready session, so it starves nobody"
+Seat 2 @{ Role = "goblin"; UnreadCount = 0; OldestUnreadAt = $null }
+Seat 3 @{ Role = "goblin"; UnreadCount = 0; OldestUnreadAt = $null }
+Seat 1 @{ Role = "warchief" }
+$r = Pass 69
+Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "woken" -and $null -eq (Get-HordeWakeNothingAt $script:ledger[(Sid 1)]) -and $script:ledger[(Sid 1)].attempts -eq 1) "a real attempt ends the hold, and counts as the first"
+Seat 1 @{ Role = "warchief"; Outcome = "nothing"; OutcomeReason = "its mailbox is empty" }
+$r = Pass 80
+Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "nothing") "and a new run of nothings is journaled again, once"
+Save-HordeWakeLedger -Ledger $script:ledger
+$back = Read-HordeWakeLedger
+Check ($back.state -ceq "known" -and (Get-HordeWakeNothingAt $back.value.ledger[(Sid 1)]) -eq (At 80) -and $back.value.ledger[(Sid 1)].attempts -eq 1 -and -not $back.value.ledger.ContainsKey((Sid 2))) "the hold is saved with the ledger and read back, and a session with none has none"
+Remove-Item -LiteralPath (Get-HordeWakeFolder) -Recurse -Force
 
 $before = @{}; $before[(Sid 1)] = [pscustomobject]@{ attempts = 2; lastAttemptAt = (At 0); lastOutcome = "busy" }
 $after = Update-HordeWakeLedger -Ledger $before -Decisions @([pscustomobject]@{ id = (Sid 1); action = "nudge"; reason = "" }) -Outcomes @{ (Sid 1) = "woken" } -States @{} -Now (At 50)

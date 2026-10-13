@@ -16,6 +16,7 @@
 
 $script:HordeMemoryWakerSessions = [ordered]@{}
 $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
+$script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
 $script:HordeMemoryWakerFaults = @{}
 $script:HordeMemoryWakerClock = $null
 # THE ONE LINE A NUDGE TYPES: fixed, the same for every session and every mail, and no part of a body.
@@ -25,6 +26,7 @@ function Reset-HordeMemoryWaker {
     # Empty the store, the record of nudges, the faults and the clock, so each test starts from nothing.
     $script:HordeMemoryWakerSessions = [ordered]@{}
     $script:HordeMemoryWakerNudges = New-Object System.Collections.ArrayList
+    $script:HordeMemoryWakerAsks = New-Object System.Collections.ArrayList
     $script:HordeMemoryWakerFaults = @{}
     $script:HordeMemoryWakerClock = $null
 }
@@ -78,6 +80,12 @@ function Get-HordeMemoryWakerNudges {
     return $all
 }
 
+function Get-HordeMemoryWakerAsks {
+    # The session of every nudge this waker was ASKED for since the last reset, in order, whatever it
+    # answered: a test of who holds the one nudge a pass allows counts the asks, not the rings.
+    return @($script:HordeMemoryWakerAsks | ForEach-Object { "$_" })
+}
+
 function Invoke-HordeMemoryWakerFault {
     # Throws when -Call is set to throw; returns $true when it is set to answer rubbish.
     param([string]$Call)
@@ -106,6 +114,7 @@ $null = Register-HordeWaker -Name "memory" `
         if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { return (New-HordeUnknown -Reason ("the memory waker has no session " + $Id)) }
         $s = $script:HordeMemoryWakerSessions[$Id]
         $at = Get-HordeMemoryWakerTime
+        [void]$script:HordeMemoryWakerAsks.Add($Id)
         # RECORDED ONLY WHEN IT WOULD HAVE BEEN TYPED: busy, unreachable and nothing are the waker saying
         # it did not ring, so nothing was typed for them.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }

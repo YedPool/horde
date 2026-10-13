@@ -83,6 +83,17 @@ function Get-HordeWakeLedgerEntry {
     return $Ledger[$Id]
 }
 
+function Get-HordeWakeNothingAt {
+    # When a session's waker last answered "nothing" in the run of nothings it is in now, or $null when
+    # it is in none. Looked up, never dereferenced: an entry made before the hold existed has no such
+    # member, and under strict mode reading one that is not there is an error.
+    param($Entry)
+    if ($null -eq $Entry) { return $null }
+    $p = $Entry.PSObject.Properties["nothingAt"]
+    if ($null -eq $p -or $p.Value -isnot [datetime]) { return $null }
+    return $p.Value
+}
+
 function Get-HordeWakeHold {
     # Why one session is not nudged now, as { action; reason }: skip (nothing to wake it for), wait
     # (something to wake it for, and a condition that does not hold), or ready (every condition holds;
@@ -102,6 +113,13 @@ function Get-HordeWakeHold {
     if ("$($s.boxEmpty)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("boxEmpty is " + $s.boxEmpty) } }
     $age = ($Now - $s.oldestUnreadAt).TotalSeconds
     if ($age -lt $Settings.minUnreadSeconds) { return [pscustomobject]@{ action = "wait"; reason = ("its oldest unread mail is younger than " + $Settings.minUnreadSeconds + " s") } }
+    # THE HOLD AFTER "nothing" (Update-HordeWakeLedger says why): out of the ready set for the first
+    # step of the back-off, and never longer - it does not grow, because nothing failed.
+    $nothingAt = Get-HordeWakeNothingAt $Entry
+    if ($null -ne $nothingAt) {
+        $rest = Get-HordeWakeBackoffSeconds -Attempts 1 -Settings $Settings
+        if (($Now - $nothingAt).TotalSeconds -lt $rest) { return [pscustomobject]@{ action = "wait"; reason = ("held " + $rest + " s: its waker found no unread mail to nudge for, while its state still shows some") } }
+    }
     if ($null -ne $Entry) {
         $wait = Get-HordeWakeBackoffSeconds -Attempts $Entry.attempts -Settings $Settings
         $since = ($Now - $Entry.lastAttemptAt).TotalSeconds
@@ -115,7 +133,8 @@ function Get-HordeWakeDecisions {
     #   -Targets  the port's list (Get-HordeWakeTargets' value)
     #   -States   session id -> the port's state ANSWER for it (known or unknown; missing is unknown)
     #   -Ledger   session id -> { attempts; lastAttemptAt; lastOutcome }
-    # WHO GOES FIRST when more are ready than one pass may nudge: the session asked the fewest times,
+    # WHO GOES FIRST when more are ready than one pass may nudge: a session whose waker last answered
+    # "nothing" goes behind every other (Update-HordeWakeLedger); then the session asked the fewest times,
     # then by role (warchief, orc, goblin, unknown), then the oldest unread mail. Fewest attempts first
     # is what makes a restore of everything a fair queue: without it the warchief's second knock, due
     # 5 s after its first, would go ahead of nine sessions nobody had knocked on yet. The rest get wait
@@ -130,16 +149,17 @@ function Get-HordeWakeDecisions {
         if ($null -ne $States -and $States.ContainsKey($id)) { $answer = $States[$id] }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id
         $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings
-        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
+        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue }
         if ($hold.action -ceq "ready") {
             if ($null -ne $entry) { $row.attempts = [int]$entry.attempts }
+            if ($null -ne (Get-HordeWakeNothingAt $entry)) { $row.nothing = 1 }
             $at = [System.Array]::IndexOf($roles, "$($t.role)")
             if ($at -ge 0) { $row.rank = $at }
             $row.oldest = $answer.value.oldestUnreadAt
         }
         [void]$rows.Add($row)
     }
-    $ready = @($rows | Where-Object { $_.action -ceq "ready" } | Sort-Object -Property attempts, rank, oldest, id)
+    $ready = @($rows | Where-Object { $_.action -ceq "ready" } | Sort-Object -Property nothing, attempts, rank, oldest, id)
     $allowed = [int]$Settings.maxNudgesPerPass
     for ($i = 0; $i -lt $ready.Count; $i++) {
         if ($i -lt $allowed) { $ready[$i].action = "nudge"; $ready[$i].reason = "unread mail, idle, empty box" }
@@ -160,6 +180,12 @@ function Update-HordeWakeLedger {
     # unread mail leaves the ledger, so its next message is knocked for at once.
     # "nothing" IS NOT AN ATTEMPT: the waker found the mail already taken and rang nobody, so nothing was
     # tried and nothing failed. It does not advance the back-off and is never counted against the session.
+    # BUT IT MUST NOT HOLD THE SLOT. The first version left the ledger untouched for it, and the review of
+    # PR #207 followed that through: a session whose waker answers nothing while its state still shows
+    # unread mail keeps 0 attempts, sorts first, takes the one nudge a pass allows on every pass, starves
+    # the fleet and journals every 3 s. So a nothing is recorded as a HOLD, nothingAt, beside the attempts
+    # it leaves alone: the session is out of the ready set for the first step of the back-off, and goes
+    # behind every other ready session after that. A real attempt, or the mail being taken, ends the hold.
     param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now)
     $next = @{}
     if ($null -ne $Ledger) { foreach ($k in @($Ledger.Keys)) { $next["$k"] = $Ledger[$k] } }
@@ -167,7 +193,12 @@ function Update-HordeWakeLedger {
         if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }
         $id = "$($d.id)"
         if ($null -eq $Outcomes -or -not $Outcomes.ContainsKey($id)) { continue }
-        if ("$($Outcomes[$id])" -ceq "nothing") { continue }
+        if ("$($Outcomes[$id])" -ceq "nothing") {
+            $kept = [pscustomobject]@{ attempts = 0; lastAttemptAt = $Now; lastOutcome = "nothing"; nothingAt = $Now }
+            if ($next.ContainsKey($id)) { $kept = [pscustomobject]@{ attempts = [int]$next[$id].attempts; lastAttemptAt = $next[$id].lastAttemptAt; lastOutcome = "$($next[$id].lastOutcome)"; nothingAt = $Now } }
+            $next[$id] = $kept
+            continue
+        }
         $before = 0
         if ($next.ContainsKey($id)) { $before = [int]$next[$id].attempts }
         $next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }
@@ -214,7 +245,12 @@ function Invoke-HordeWakePass {
                 # SHADOW: the nudge is journaled and counted, and nothing is asked of the waker.
                 if ($Shadow) { $outcomes[$d.id] = "would-nudge"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-nudge" -Id $d.id -Outcome "would-nudge" -Reason $d.reason)); continue }
                 $rang = Send-HordeWakeNudge -Waker $Waker -Id $d.id
-                if ($rang.state -ceq "known") { $outcomes[$d.id] = $rang.value.outcome; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason)) }
+                if ($rang.state -ceq "known") {
+                    $outcomes[$d.id] = $rang.value.outcome
+                    # A RUN OF NOTHINGS IS JOURNALED ONCE, when it starts: the ledger's hold says one is under way.
+                    if ($rang.value.outcome -ceq "nothing" -and $null -ne (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $d.id))) { continue }
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome $rang.value.outcome -Reason $rang.value.reason))
+                }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }
             $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now
@@ -233,7 +269,10 @@ function Save-HordeWakeLedger {
     $sessions = New-Object System.Collections.ArrayList
     if ($null -ne $Ledger) {
         foreach ($id in @($Ledger.Keys | Sort-Object)) {
-            [void]$sessions.Add([ordered]@{ id = "$id"; attempts = [int]$Ledger[$id].attempts; lastAttemptAt = (ConvertTo-HordeWakeTimeText $Ledger[$id].lastAttemptAt); lastOutcome = "$($Ledger[$id].lastOutcome)" })
+            $row = [ordered]@{ id = "$id"; attempts = [int]$Ledger[$id].attempts; lastAttemptAt = (ConvertTo-HordeWakeTimeText $Ledger[$id].lastAttemptAt); lastOutcome = "$($Ledger[$id].lastOutcome)" }
+            $heldAt = Get-HordeWakeNothingAt $Ledger[$id]
+            if ($null -ne $heldAt) { $row["nothingAt"] = ConvertTo-HordeWakeTimeText $heldAt }
+            [void]$sessions.Add($row)
         }
     }
     $doc = [ordered]@{ schemaVersion = 1; sessions = $sessions.ToArray() }
@@ -255,7 +294,9 @@ function Read-HordeWakeLedger {
             if ($null -eq $row) { continue }
             $at = ConvertFrom-HordeWakeTimeText $row.lastAttemptAt
             if ($null -eq $at -or "$($row.id)" -eq "") { return (New-HordeUnknown -Reason "the saved ledger holds an entry with no session or no time") }
-            $ledger["$($row.id)"] = [pscustomobject]@{ attempts = [int]$row.attempts; lastAttemptAt = $at; lastOutcome = "$($row.lastOutcome)" }
+            $entry = [ordered]@{ attempts = [int]$row.attempts; lastAttemptAt = $at; lastOutcome = "$($row.lastOutcome)" }
+            if ($null -ne $row.PSObject.Properties["nothingAt"]) { $heldAt = ConvertFrom-HordeWakeTimeText $row.nothingAt; if ($null -ne $heldAt) { $entry["nothingAt"] = $heldAt } }
+            $ledger["$($row.id)"] = [pscustomobject]$entry
         }
     } catch { return (New-HordeUnknown -Reason "the saved ledger holds an entry that is not one" -ErrorRecord $_) }
     return (New-HordeKnown -Value ([pscustomobject]@{ ledger = $ledger }))

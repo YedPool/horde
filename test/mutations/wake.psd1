@@ -49,8 +49,8 @@
            Find = 'backoffSeconds = @(5, 15, 45, 135, 300)'
            Replace = 'backoffSeconds = @(5, 15, 45, 135)' }
         @{ Name = "attempts-not-counted"
-           Find = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1);'
-           Replace = '$next[$id] = [pscustomobject]@{ attempts = 1;' }
+           Find = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt'
+           Replace = '$next[$id] = [pscustomobject]@{ attempts = 1; lastAttemptAt' }
         @{ Name = "mail-taken-does-not-reset"
            Find = 'if ($taken -or $old) { $next.Remove($id) }'
            Replace = 'if ($old) { $next.Remove($id) }' }
@@ -61,20 +61,32 @@
            Find = 'if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }'
            Replace = 'if ($null -eq $d) { continue }' }
         @{ Name = "nothing-counted-as-an-attempt"
-           Find = 'if ("$($Outcomes[$id])" -ceq "nothing") { continue }'
+           Find = 'if ("$($Outcomes[$id])" -ceq "nothing") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nothing-holds-the-slot"
+           Find = 'if (($Now - $nothingAt).TotalSeconds -lt $rest) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nothing-goes-first"
+           Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
+           Replace = 'Sort-Object -Property attempts, rank, oldest, id' }
+        @{ Name = "nothing-journaled-every-pass"
+           Find = 'if ($rang.value.outcome -ceq "nothing" -and $null -ne (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $d.id))) { continue }'
            Replace = '' }
+        @{ Name = "hold-outlives-a-real-attempt"
+           Find = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }'
+           Replace = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])"; nothingAt = (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id)) }' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -lt $allowed) {'
            Replace = 'if ($true) {' }
         @{ Name = "role-order-ignored"
-           Find = 'Sort-Object -Property attempts, rank, oldest, id'
-           Replace = 'Sort-Object -Property attempts, oldest, id' }
+           Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
+           Replace = 'Sort-Object -Property nothing, attempts, oldest, id' }
         @{ Name = "fewest-attempts-not-first"
-           Find = 'Sort-Object -Property attempts, rank, oldest, id'
-           Replace = 'Sort-Object -Property rank, oldest, id' }
+           Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
+           Replace = 'Sort-Object -Property nothing, rank, oldest, id' }
         @{ Name = "oldest-mail-not-first"
-           Find = 'Sort-Object -Property attempts, rank, oldest, id'
-           Replace = 'Sort-Object -Property attempts, rank, id' }
+           Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
+           Replace = 'Sort-Object -Property nothing, attempts, rank, id' }
         @{ Name = "shadow-nudges"
            Find = 'if ($Shadow) { $outcomes[$d.id] = "would-nudge";'
            Replace = 'if ($false) { $outcomes[$d.id] = "would-nudge";' }
