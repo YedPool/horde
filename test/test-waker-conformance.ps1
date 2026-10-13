@@ -110,6 +110,22 @@ $cases = [ordered]@{
         $o = & $Fx.Observe $State $s.id
         return ($a.state -ceq "known" -and $a.value.outcome -ceq "woken" -and $o.nudges -eq 1 -and (Test-TypedClean $o $s.body))
     }
+    "nudge.guarded" = {
+        param($W, $Fx, $State)
+        # THE WATCHER IS NOT ASKED: the nudge is sent straight at a session that must not be typed into,
+        # which is the session as it may be by the time a nudge decided a moment ago arrives.
+        $typing = New-Seat @{ boxEmpty = "no" }; $working = New-Seat @{ midTurn = "yes"; idle = "no" }; $resting = New-Seat
+        & $Fx.Seat $State $typing; & $Fx.Seat $State $working; & $Fx.Seat $State $resting
+        $a1 = Send-HordeWakeNudge -Waker $W -Id $typing.id
+        $a2 = Send-HordeWakeNudge -Waker $W -Id $working.id
+        $a3 = Send-HordeWakeNudge -Waker $W -Id $resting.id
+        $o1 = & $Fx.Observe $State $typing.id
+        $o2 = & $Fx.Observe $State $working.id
+        $o3 = & $Fx.Observe $State $resting.id
+        $held = ($a1.state -ceq "known" -and $a1.value.outcome -ceq "busy" -and $o1.nudges -eq 0 -and @($o1.typed).Count -eq 0 -and $a2.state -ceq "known" -and $a2.value.outcome -ceq "busy" -and $o2.nudges -eq 0 -and @($o2.typed).Count -eq 0)
+        # AND IT STILL RINGS: a guard that refused everybody would pass the two above.
+        return ($held -and $a3.state -ceq "known" -and $a3.value.outcome -ceq "woken" -and $o3.nudges -eq 1)
+    }
 }
 # What a waker that does not offer a state capability must say of it instead.
 $mustBeUnknown = @{ "state.box" = "boxEmpty"; "state.turn" = "midTurn" }

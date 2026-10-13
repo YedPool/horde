@@ -6,7 +6,7 @@
 # exact and repeatable:
 #   - REGISTRATION AND CAPABILITIES. A waker folder whose capabilities.json breaks
 #     schema/waker-capabilities.v1, or names another waker, is refused. Only "yes" counts as having a
-#     capability. The production path requires all four, so the in-process test waker, which declines
+#     capability. The production path requires all five, so the in-process test waker, which declines
 #     reach.unseen, is never picked there - and two wakers that both could be are never chosen between.
 #   - THE ADAPTER'S WORD IS CHECKED. An adapter that throws, answers with something that is not a
 #     core/tristate answer, answers about another session, uses a word outside yes, no and unknown,
@@ -64,7 +64,7 @@ Check (@(@(Get-HordeWakerFiles) | Where-Object { "$_" -like "*\memory\Waker.ps1"
 Check ((@(Get-HordeWakerRoles) -join ",") -ceq "warchief,orc,goblin,unknown") "the roles are listed in the order the watcher serves them"
 
 Write-Host ""
-Write-Host "--- only 'yes' is having a capability; the production path requires all four, and never chooses ---" -ForegroundColor Cyan
+Write-Host "--- only 'yes' is having a capability; the production path requires all five, and never chooses ---" -ForegroundColor Cyan
 
 $memory = Get-HordeWaker -Name "memory"
 Check (Test-HordeWakerCapability -Waker $good -Capability "state.box") "yes is having it"
@@ -78,8 +78,12 @@ Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains("reach.unseen") -and
 Check ((Resolve-HordeWaker -Name "memory" -Require @("state.box", "state.turn")).state -ceq "known") "and one that requires only what it offers gets it"
 Check ((Resolve-HordeWaker -Name "fixture-none" -Require @()).state -ceq "unknown") "a waker nobody loaded is unknown, not a throw"
 $p = Resolve-HordeProductionWaker
-Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "the production path picks the one waker that offers all four"
+Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "the production path picks the one waker that offers all five"
 Check ($p.state -ceq "known" -and $p.value.name -cne "memory") "and it is never the memory waker"
+$unguarded = Reg "fixture-unguarded"
+$p = Resolve-HordeProductionWaker
+Check ($p.state -ceq "known" -and [object]::ReferenceEquals($p.value, $good)) "a waker whose nudge does not guard itself is not one the production path can pick: still the one"
+Check ((Resolve-HordeWaker -Name "fixture-unguarded" -Require @("nudge.guarded")).state -ceq "unknown") "and a caller that requires nudge.guarded of it is refused"
 $second = Reg "fixture-second"
 $p = Resolve-HordeProductionWaker
 Check ($p.state -ceq "unknown" -and "$($p.reason)".Contains("never chosen")) "with two that could be picked the production path is unknown: one is never chosen over another"
@@ -120,6 +124,7 @@ $a = Get-HordeWakeState -Waker $memory -Id $other
 Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 0 -and $null -eq $a.value.oldestUnreadAt) "a session with no unread mail has no oldest unread time"
 $a = Get-HordeWakeState -Waker $memory -Id "44444444-5555-4666-8777-888888888888"
 Check ($a.state -ceq "unknown") "a session the waker does not know is unknown, never a state of zeros"
+Set-HordeMemoryWakerSession -Id $sid -UnreadCount 2 -OldestUnreadAt $t0
 Set-HordeMemoryWakerClock $t0.AddSeconds(30)
 $a = Send-HordeWakeNudge -Waker $memory -Id $sid
 Check ($a.state -ceq "known" -and $a.value.id -ceq $sid -and $a.value.outcome -ceq "woken" -and $a.value.at -eq $t0.AddSeconds(30)) "a nudge answers its session, its outcome and when"
@@ -128,6 +133,9 @@ Set-HordeMemoryWakerSession -Id $sid -UnreadCount 1 -OldestUnreadAt $t0 -Outcome
 $a = Send-HordeWakeNudge -Waker $memory -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and $a.value.reason -ceq "it began a turn as the nudge arrived") "busy is carried with its reason"
 
+Set-HordeMemoryWakerSession -Id $sid -UnreadCount 1 -OldestUnreadAt $t0 -BoxEmpty "no"
+$a = Send-HordeWakeNudge -Waker $memory -Id $sid
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)".Contains("input box") -and @(Get-HordeMemoryWakerNudges -Id $sid).Count -eq 1) "the memory waker's nudge guards itself: asked to ring a session whose box is not empty, it answers busy and rings nobody"
 Set-HordeMemoryWakerSession -Id $sid -Outcome "nothing" -OutcomeReason "its mail was taken before the nudge"
 $a = Send-HordeWakeNudge -Waker $memory -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and $a.value.reason -ceq "its mail was taken before the nudge" -and @(Get-HordeMemoryWakerNudges -Id $sid).Count -eq 1) "nothing - the mail was taken before the nudge - is carried with its reason, and nobody was rung for it"

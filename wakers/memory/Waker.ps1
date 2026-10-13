@@ -115,6 +115,10 @@ $null = Register-HordeWaker -Name "memory" `
         $s = $script:HordeMemoryWakerSessions[$Id]
         $at = Get-HordeMemoryWakerTime
         [void]$script:HordeMemoryWakerAsks.Add($Id)
+        # THE NUDGE GUARDS ITSELF (wakers/Port.ps1): the box and the turn as they are NOW, whatever the
+        # watcher read a moment ago. A test changes the session between the two to show it.
+        if ("$($s.boxEmpty)" -cne "yes") { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "busy"; reason = "its input box is not empty, so nothing was typed"; at = $at }) -ObservedAt $at) }
+        if ("$($s.midTurn)" -cne "no") { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "busy"; reason = "it is in the middle of a turn, so nothing was typed"; at = $at }) -ObservedAt $at) }
         # RECORDED ONLY WHEN IT WOULD HAVE BEEN TYPED: busy, unreachable and nothing are the waker saying
         # it did not ring, so nothing was typed for them.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }

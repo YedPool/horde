@@ -35,8 +35,19 @@
 #   state.box           it can read whether a session's input box is empty
 #   state.turn          it can read whether a session is in the middle of a turn
 #   reach.unseen        it can nudge a session that has not taken a turn since a restore
-# The production path (Resolve-HordeProductionWaker) requires all four. The in-process test waker
+#   nudge.guarded       the nudge itself looks again, and rings only a session that still has an empty
+#                       input box and is not mid-turn (below)
+# The production path (Resolve-HordeProductionWaker) requires all five. The in-process test waker
 # declines reach.unseen, so no production path can pick it.
+#
+# THE NUDGE GUARDS ITSELF, BECAUSE THE STATE THE WATCHER READ IS OLD BY THEN. The watcher reads a state,
+# decides, and asks for a nudge; between the read and the keystroke a person can begin to type, or the
+# session can begin a turn. The watcher cannot close that gap from where it stands - only the adapter is
+# next to the session when the line is typed - so the contract puts the last look there (review of
+# PR #207): a waker that offers nudge.guarded checks the box and the turn itself, at the moment it
+# would type, and when the box is not empty or a turn is under way it types nothing and answers busy,
+# with the reason. The watcher's own reading of the state stays: it is what keeps a nudge from being
+# asked for at all, and what an unknown stops.
 #
 # THE PORT NEVER GUESSES AND NEVER THROWS FOR THE FAR END. Only a waker registered through
 # Register-HordeWaker is called: a look-alike object is refused. An adapter that throws, answers with
@@ -48,7 +59,8 @@
 # with its name and three script blocks:
 #   Targets  param()             -> known: a list of { id; label; role; parent; reachable }, or unknown
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn }, or unknown
-#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown
+#   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
+#            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
@@ -62,9 +74,9 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
-$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")
-# What the production path requires: every one. A waker without all four is never picked there.
-$script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen")
+$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
+# What the production path requires: every one. A waker without all five is never picked there.
+$script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
 # Horde's roles as core/Roles.ps1 lists them (core\roles.json), then unknown for a session whose role
 # nobody recorded: one list of roles, not a copy (review of PR #207). It is also the order the watcher
 # serves them in when more qualify than one pass may nudge (core/Wake.ps1).
@@ -185,8 +197,8 @@ function Resolve-HordeWaker {
 
 function Resolve-HordeProductionWaker {
     # THE ONE way the watcher picks the waker it rings through: the one loaded waker that offers all
-    # four capabilities, so the in-process test waker, which declines one, is never chosen.
-    #   known    exactly one loaded waker offers all four
+    # five capabilities, so the in-process test waker, which declines one, is never chosen.
+    #   known    exactly one loaded waker offers all five
     #   absent   none does; the note says, for each loaded waker, the first capability it lacks
     #   unknown  two or more do - one is never chosen over another (core/SessionSeat.ps1 holds the same
     #            rule for two holders of a role)
