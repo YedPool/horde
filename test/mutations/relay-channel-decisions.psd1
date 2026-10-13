@@ -63,7 +63,7 @@
            Find = '    if ($print -cne "" -and $print -ceq $mine.fingerprint) { return [pscustomobject]@{ lines = @(); failed = $false } }'
            Replace = '' }
         @{ Name = "same-snapshot-sent-again"
-           Find = '    if ($pages.hash -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @(); failed = $false } }'
+           Find = '    if ($sentAs -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @(); failed = $false } }'
            Replace = '' }
         @{ Name = "snapshot-of-every-question"
            Find = '-Operation "list" -Request @{ state = "open"; messages = $true }'

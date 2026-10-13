@@ -8,9 +8,9 @@
 # the question it follows up with what he answered there, its wording, and its whole conversation with the warchief's replies and whose turn it
 # is, which is what the founder needs to answer from the phone (review of 48bc492, item 9). It is
 # sealed to every TRUSTED phone identity key of the horde (relay/Trust.ps1, Find-HordeRelayPhoneKeys)
-# and put into the horde's phone mailbox, <horde>/phone - and only when the snapshot itself differs
-# from the last one sent, so a change that shows nothing new (a read mark, a later-kind record) sends
-# nothing.
+# and put into the horde's phone mailbox, <horde>/phone - and only when the snapshot itself, or the set
+# of phones it is sealed to, differs from the last one sent, so a change that shows nothing new (a read
+# mark, a later-kind record) sends nothing.
 #   - WHAT CHANGED IS ASKED CHEAPLY. Reading the list checks every record against its schemas (3.4 s for
 #     81 records, measured 2026-10-06, decisions/Operations.ps1), so it is not done on every turn. The
 #     store's records are write-once and named by their order, so the list of their NAMES changes
@@ -42,8 +42,10 @@
 #     because pages are put in order and each is put only once the one before was taken: while any
 #     page is still waiting, the snapshot before is the newest whole one there is, and it stays. A
 #     PHONE PAIRED LATER LOSES NOTHING by it: what was sent before its key was trusted was never
-#     sealed to it.
-#   - THE LAST SNAPSHOT SENT is remembered in the run's context, as its hash, and so is what is waiting
+#     sealed to it, and its key changes the fingerprint, so a snapshot sealed to it too is sent.
+#   - THE LAST SNAPSHOT SENT is remembered in the run's context, as its hash and the phone keys it was
+#     sealed to (a phone paired while the list stands still is sent the same snapshot, sealed to it:
+#     nothing sent before was), and so is what is waiting
 #     to be put; the context's hourly reopen keeps both (channels/Port.ps1, Update-HordeRelayRunContext).
 #     A new run sends one snapshot at its first look whatever the last run sent: the phone shows the
 #     newest, so a repeat costs one envelope.
@@ -358,7 +360,12 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     if ($list.state -cne "known" -or $list.value.outcome -cne "done") { return [pscustomobject]@{ lines = @("no snapshot: the decisions list could not be read (" + $(if ($list.state -ceq "known") { $list.value.reason } else { $list.reason }) + ")"); failed = $true } }
     $budget = Get-HordeRelayChannelBodyBudget -Context $Context -Recipients $keys.Count
     $pages = New-HordeDecisionsChannelPages -Horde $Context.horde -Machine $Context.signKeyId -List $list.value -Budget $budget
-    if ($pages.hash -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @(); failed = $false } }
+    # THE SAME SNAPSHOT FOR THE SAME PHONES is not sent again; the same snapshot for ANOTHER SET OF
+    # PHONES is. What was sent is remembered as its hash and the keys it was sealed to: until
+    # 2026-10-13 it was the hash alone, so a phone paired while the list stood still was sent nothing
+    # until some record changed - and nothing already in the mailbox was sealed to it.
+    $sentAs = $pages.hash + "|" + (@($keys | ForEach-Object { $_.agreeKeyId }) -join ",")
+    if ($sentAs -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @(); failed = $false } }
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
     $recipients = @($keys | ForEach-Object { , ([byte[]]$_.public) })
     $keysSent = New-Object System.Collections.ArrayList
@@ -378,7 +385,7 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     # be recorded returned above, with no page of it saying anything.
     if ($null -ne $lastPage) { $lastPage | Add-Member -NotePropertyName "keepFrom" -NotePropertyValue $firstSeq }
     # Every page is recorded: this snapshot is the one sent, whatever the relay does next.
-    $mine.sent = $pages.hash
+    $mine.sent = $sentAs
     $mine.fingerprint = $print
     $what = "snapshot of " + $pages.shown + " open question(s)" + $(if ($pages.withheld -gt 0) { ", " + $pages.withheld + " withheld" } else { "" }) + " in " + @($pages.bodies).Count + " page(s) for " + $keys.Count + " phone key(s), as " + ($keysSent -join ", ")
     $why = Send-HordeDecisionsChannelPending -Context $Context -Mine $mine
