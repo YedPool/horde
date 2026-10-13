@@ -24,6 +24,12 @@ Set-StrictMode -Version Latest
 
 $script:work = Join-Path $env:TEMP ("horde-files-store-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $script:work | Out-Null
+# THE SUITE STANDS IN ITS OWN FOLDER. Two checks hand the store a relative folder, which must be
+# refused; a store that wrongly took one would write where the process stands, and under mutation
+# that was the repository (measured 2026-10-13: the mutant that drops the refusal left relative\store
+# in the tree it was run from). Standing here, even that lands in the folder this suite removes.
+[System.IO.Directory]::SetCurrentDirectory($script:work)
+Set-Location -LiteralPath $script:work
 # Whatever a function here is not handed, it must not find the real home.
 $env:HORDE_HOME = Join-Path $script:work "home-nobody-uses"
 $script:n = 0
@@ -473,6 +479,9 @@ function Move-HordeFileNewDurable { param([string]$From, [string]$To, $Open = $n
 Check (Throws { Invoke-Share -TestHome (New-TestHome) -Path $vfile } "has its name, but the system could not confirm") "nor is one whose record could not be confirmed"
 Set-Item -Path function:Move-HordeFileNewDurable -Value $script:realMove
 
+# Out of the folder before it is removed: a folder a process stands in cannot be.
+Set-Location -LiteralPath $root
+[System.IO.Directory]::SetCurrentDirectory($root)
 if ((Split-Path -Leaf $script:work) -match '\Ahorde-files-store-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) {
     # Links first, by their own entries, so that removing the folder never follows one.
     foreach ($entry in @(Get-ChildItem -LiteralPath $script:work -Recurse -Force | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 })) { if ($entry.PSIsContainer) { [System.IO.Directory]::Delete($entry.FullName) } else { [System.IO.File]::Delete($entry.FullName) } }
