@@ -102,6 +102,16 @@ Check ($f3.state -ceq "known" -and $f3.value.restoreId -cne $f.value.restoreId) 
 $fewAgain = @($fleet | ForEach-Object { if (@(8, 9, 10, 11, 12 | ForEach-Object { Sid $_ }) -ccontains $_.id) { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddSeconds(100); lastChangeAt = $_.lastChangeAt.AddSeconds(100); status = "idle"; firstSeenAt = $_.firstSeenAt } } else { $_ } })
 $f4 = Get-HordeRestoreFinding -Sessions $fewAgain -Now (At 300) -Settings $settings -Known @($f.value.anchor)
 Check ($f4.state -ceq "known" -and $f4.value.restoreId -ceq $f.value.restoreId) "when most of the saved members that are still running have the start they had, it is the same restore, whatever a few did since"
+# MOST WERE RESTORED AGAIN: nine of the twelve have a later start, three are the same lives.
+$mostAgain = @($fleet | ForEach-Object { if (@(1, 2, 3 | ForEach-Object { Sid $_ }) -ccontains $_.id) { $_ } else { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddSeconds(100); lastChangeAt = $_.lastChangeAt.AddSeconds(100); status = "idle"; firstSeenAt = $_.firstSeenAt } } })
+$fMost = Get-HordeRestoreFinding -Sessions $mostAgain -Now (At 300) -Settings $settings -Known @($f.value.anchor)
+Check ($fMost.state -ceq "known" -and $fMost.value.restoreId -cne $f.value.restoreId) "when most of them have a later start it is a new restore, though a few are the same lives"
+# THE WINDOW MUST OVERLAP TOO. The twelve are still running, untouched, and a day later twenty other
+# sessions are restored: the saved restore's members are all present with the starts it recorded, and
+# it is still not this restore, whose window is a day away.
+$dayLater = @($fleet) + @(21..40 | ForEach-Object { [pscustomobject]@{ id = (Sid $_); role = "orc"; parent = ""; startedAt = (At (86400 + $_ * 5)); lastChangeAt = (At (86400 + $_ * 5 + 2)); status = "idle"; firstSeenAt = (At -90000) } })
+$fDay = Get-HordeRestoreFinding -Sessions $dayLater -Now (At (86400 + 400)) -Settings $settings -Known @($f.value.anchor)
+Check ($fDay.state -ceq "known" -and @($fDay.value.members).Count -eq 20 -and $fDay.value.restoreId -cne $f.value.restoreId) "a restore whose window does not overlap a saved one is not that restore, even while every member of the saved one is still running as it was"
 $strangers = @($fleet | ForEach-Object { [pscustomobject]@{ id = ("0b" + $_.id.Substring(2)); role = $_.role; parent = ""; startedAt = $_.startedAt.AddSeconds(50); lastChangeAt = $_.lastChangeAt.AddSeconds(50); status = "idle"; firstSeenAt = $_.firstSeenAt } })
 $f5 = Get-HordeRestoreFinding -Sessions $strangers -Now (At 300) -Settings $settings -Known @($f.value.anchor)
 Check ($f5.state -ceq "known" -and $f5.value.restoreId -cne $f.value.restoreId) "a window that overlaps a saved restore none of whose members is still running shares no session with it, and is a new restore"

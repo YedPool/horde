@@ -190,7 +190,9 @@ Write-Host "--- one run a home and a mode: a lock that is a held file, not a pid
 $h = New-Home
 $lock = Enter-HordeWakeLock -Shadow -ProcessId 4242 -HordeHome $h
 Check ($null -ne $lock) "the first run takes the lock"
-$second = Enter-HordeWakeLock -Shadow -ProcessId 4243 -HordeHome $h
+# Caught on purpose: a lock that THREW for a held file must fail this check, not end it.
+$second = "not asked"
+try { $second = Enter-HordeWakeLock -Shadow -ProcessId 4243 -HordeHome $h } catch { $second = "threw: " + $_.Exception.Message }
 Check ($null -eq $second) "a second run in the same home and mode is refused while the first holds it"
 $live = Enter-HordeWakeLock -ProcessId 4244 -HordeHome $h
 Check ($null -ne $live) "a live run's lock is another: shadow and live do not shut each other out"
