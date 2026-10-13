@@ -139,8 +139,8 @@ $starts = @($sites | Where-Object { $_.kind -ceq "method" -and $_.text -clike "*
 Check ($starts.Count -eq 1) ("exactly one process start in the family (" + $starts.Count + ")")
 $setup = @($sites | Where-Object { $_.kind -ceq "type" -and $_.text -clike "*ProcessStartInfo]::new(*" })
 Check ($setup.Count -eq 1 -and $setup[0].text.Contains('[System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"')) "and the program it starts is named once, as the fixed PowerShell in the system folder"
-Check ((@($sites | Where-Object { $_.kind -ceq "call" }).Count -eq 6)) "CONTROL: the port's calls of a registered waker are seen as sites"
-Check ((@($sites | Where-Object { $_.kind -ceq "starter" }).Count -eq 3)) "the start has three callers, one for each form of the fleet's command"
+Check ((@($sites | Where-Object { $_.kind -ceq "call" }).Count -eq 7)) "CONTROL: the port's calls of a registered waker are seen as sites - seven, the one that asks for its fleet's reserved labels among them"
+Check ((@($sites | Where-Object { $_.kind -ceq "starter" }).Count -eq 4)) "the start has four callers: one for each of the three forms of the fleet's mail command, and one that asks for its reserved labels"
 $tree = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-startsites-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
 try {
     Copy-Item -LiteralPath (Join-Path $root "wakers") -Destination (Join-Path $tree "wakers") -Recurse
