@@ -372,7 +372,7 @@ Check ($r.code -eq 1 -and $r.out -like "*not shared: what it holds looks like an
 Check (Test-Allowed @("share", $holdsToken, "-Title", "A note, and no secret", "-Force")) "with -Force it is shared"
 
 Write-Host ""
-Write-Host "--- the deny list judges where the file really is: a junction, and a subst drive ---" -ForegroundColor Cyan
+Write-Host "--- the deny list judges where the file really is: a junction ---" -ForegroundColor Cyan
 $sshJunction = Join-Path $script:work "docs\a-junction"
 $null = & cmd.exe /c ("mklink /J `"" + $sshJunction + "`" `"" + (Join-Path $profile4 ".ssh") + "`" >nul 2>nul")
 Check ([System.IO.File]::Exists((Join-Path $sshJunction "notes.txt"))) "CONTROL: a junction outside .ssh was made to it"
@@ -380,21 +380,15 @@ Check (Test-Denied @("share", (Join-Path $sshJunction "notes.txt"), "-Title", "B
 $homeJunction = Join-Path $script:work "docs\a-junction-to-the-home"
 $null = & cmd.exe /c ("mklink /J `"" + $homeJunction + "`" `"" + $home4 + "`" >nul 2>nul")
 Check (Test-Denied @("share", (Join-Path $homeJunction "settings\notes.json"), "-Title", "By a junction", "-Force") "is under the Horde home") "and a file in the home named through a junction is refused as the home, -Force or not"
-$cliLetter = ""
-foreach ($candidate in "ZYXWVUT".ToCharArray()) { if (-not [System.IO.Directory]::Exists($candidate + ":\")) { $cliLetter = "" + $candidate; break } }
-$bySubst = $false; $bySubstSame = $false; $substOk = $false
-$null = & subst.exe ($cliLetter + ":") (Join-Path $profile4 ".ssh")
-try { $substOk = [System.IO.File]::Exists($cliLetter + ":\notes.txt"); $bySubst = Test-Denied @("share", ($cliLetter + ":\notes.txt"), "-Title", "By a subst drive") "is under the folder the user's SSH keys are kept in" } finally { $null = & subst.exe ($cliLetter + ":") /D }
-Check $substOk ("CONTROL: subst made " + $cliLetter + ": over .ssh (if this fails, the subst form was NOT tested)")
-Check $bySubst "by a subst drive over .ssh, where the path that is typed names no folder at all, the file is refused as .ssh"
-# ONE FILE, BY AN ALIAS: the same file by a subst drive is the next version of the same id.
-$r = Invoke-Deny -Arguments @("share", $plainNote, "-Title", "Before the alias")
-$plainId = [regex]::Match($r.out, '(?m)^shared ([0-9a-f]{32}) version ([0-9]+): ')
-$substOut = ""
-$null = & subst.exe ($cliLetter + ":") $docs
-try { $substOut = (Invoke-Deny -Arguments @("share", ($cliLetter + ":\plain-note.md"), "-Title", "By the alias")).out } finally { $null = & subst.exe ($cliLetter + ":") /D }
-Check ($plainId.Success -and $substOut -like ("*shared " + $plainId.Groups[1].Value + " version " + ([int]$plainId.Groups[2].Value + 1) + ": By the alias*")) ("named by a subst drive over its folder, an ordinary file is the next version of the SAME file id (" + $substOut.Trim() + ")")
-Check (-not [System.IO.Directory]::Exists($cliLetter + ":\")) "the subst drive is gone again"
+# BY A DRIVE LETTER OVER THE FOLDER (subst): NOT RUN THROUGH THE COMMAND ANY MORE. Until 2026-10-13
+# this suite made a subst drive over .ssh, and one over an ordinary folder, and ran the real command
+# on a path on it. A drive letter is seen by every process of the user while it exists, and a suite
+# must not change what other processes see (test/lib/SuiteFiles.ps1, Get-HordeDriveLetterMakers). The
+# command runs in a child process, where nothing of this suite's can answer for Windows, so those
+# two cases cannot be run here without a real letter. WHERE THEY WENT: a drive over .ssh and over the
+# home is test/test-files-deny.ps1's, and one file by a drive over its folder being the next version
+# of the same id is test/test-files-store.ps1's, both with a PowerShell drive of the process's own.
+# WHAT NO SUITE RUNS NOW: the real command, end to end, on a path on a real drive-letter alias.
 
 Write-Host ""
 Write-Host "--- the other refusals of the review, through the command ---" -ForegroundColor Cyan

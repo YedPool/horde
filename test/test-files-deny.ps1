@@ -6,7 +6,7 @@
 #     with a double extension - and, on the other side, every ordinary word that holds "key";
 #   - every place from both sides of its edge: a file in it, a file in a folder whose name only
 #     begins like it, a file beside it;
-#   - a file in a place reached by a link to the file, a link to its folder, a junction, a subst
+#   - a file in a place reached by a link to the file, a link to its folder, a junction, a
 #     drive, an 8.3 short name, the long-path prefix, another case, a dot or a blank after the
 #     folder's name, and a relative path with dot-dot: each is refused AS THE PLACE, which only a
 #     rule that judges the open handle's own path can do;
@@ -102,17 +102,13 @@ function New-FileLink { param([string]$Link, [string]$Target) $null = & cmd.exe 
 function New-FolderLink { param([string]$Link, [string]$Target) $null = & cmd.exe /c ("mklink /D `"" + $Link + "`" `"" + $Target + "`" >nul 2>nul"); return (Test-Link $Link) }
 function New-Junction { param([string]$Link, [string]$Target) $null = & cmd.exe /c ("mklink /J `"" + $Link + "`" `"" + $Target + "`" >nul 2>nul"); return (Test-Link $Link) }
 function Get-ShortPath { param([string]$Path, [switch]$Folder) try { $fso = New-Object -ComObject Scripting.FileSystemObject; if ($Folder) { return $fso.GetFolder($Path).ShortPath }; return $fso.GetFile($Path).ShortPath } catch { return "" } }
-if (-not ([System.Management.Automation.PSTypeName]"HordeTest.DenyDos").Type) {
-    Add-Type -Namespace HordeTest -Name DenyDos -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool DefineDosDevice(int dwFlags, string lpDeviceName, string lpTargetPath); [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern int QueryDosDevice(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax);'
-}
-function Get-Target { param([string]$Letter) $text = New-Object System.Text.StringBuilder 1024; if ([HordeTest.DenyDos]::QueryDosDevice($Letter + ":", $text, 1024) -le 0) { return "" }; return $text.ToString() }
-function Remove-Letter { param([string]$Letter) $was = Get-Target $Letter; if ($was -ne "") { $null = [HordeTest.DenyDos]::DefineDosDevice(7, $Letter + ":", $was) } }
 function Get-FreeLetters {
-    # Drive letters that name nothing: no drive, no device, and no PowerShell drive.
-    return @("RSTUVWQPONMLKJ".ToCharArray() | ForEach-Object { "" + $_ } | Where-Object { (Get-Target $_) -eq "" -and -not [System.IO.Directory]::Exists($_ + ":\") -and $null -eq (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) })
+    # Letters that name nothing, for a POWERSHELL drive of this process's own (which is no drive
+    # letter of the system's: no other process sees it). Nothing is defined here, only asked.
+    $taken = @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1) })
+    return @("QWXYZVUHGFEDBA".ToCharArray() | ForEach-Object { "" + $_ } | Where-Object { $taken -cnotcontains $_ -and -not [System.IO.Directory]::Exists($_ + ":\") -and $null -eq (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) })
 }
 function New-NoHost { return ("horde-" + [guid]::NewGuid().ToString("N").Substring(0, 10)) }
-function Get-LookedUp { return ((& ipconfig.exe /displaydns) -join "`n") }
 
 $never = "Nothing there is ever shared, and -Force does not change that"
 $insist = "share it again with -Force"
@@ -560,21 +556,28 @@ if ($shortKey -ne "" -and (Split-Path -Leaf $shortKey) -like "*~*" -and (Get-Hor
     Check (Test-Refused $h ("\\?\" + $shortKey) "holds 'secret'") ("a name is judged as the disk holds it: opened by a short name with no word in it (" + (Split-Path -Leaf $shortKey) + "), the file is refused for its real name")
 } else { Write-Skip "A NAME OPENED BY ITS 8.3 SHORT NAME COULD NOT BE TESTED: this volume gave the file no short name without the word in it." }
 if ($shortSsh -ne "" -and (Split-Path -Leaf $shortSsh) -cne ".ssh") { Check (Test-Refused $h ("\\?\" + (Join-Path $shortSsh "notes.txt")) $inSsh) "and .ssh by its own short name" }
-# A subst drive over the denied folder: the path that is written names no folder at all.
-$letters = @(Get-FreeLetters)
-$substLetter = $letters[0]
-$bySubst = $false; $bySubstHome = $false; $substMade = $false
-$null = & subst.exe ($substLetter + ":") $sshFolder
+# A PATH THAT NAMES NO DENIED FOLDER AT ALL: a drive over the denied folder. Until 2026-10-13 this was
+# a subst drive, a real drive letter, which every other process of the user sees; no suite makes one
+# any more (test/lib/SuiteFiles.ps1, Get-HordeDriveLetterMakers). A POWERSHELL DRIVE is this
+# process's own, and names the same thing: on it the written path is a letter and a file name, and
+# nothing in it says .ssh or the home.
+# WHAT THIS DOES NOT SHOW, and the subst drive did: that the OPEN HANDLE of a file reached through a
+# real drive letter has the folder's own path. A PowerShell drive is resolved to that path before the
+# open. That fact of Windows' is asked once, of a real letter, in test/test-path-text.ps1; and that
+# the handle's path is what is judged is what the links, the junctions and the short names above show.
+$driveLetter = @(Get-FreeLetters)[0]
+$byDrive = $false; $byDriveHome = $false; $driveMade = $false
+$null = New-PSDrive -Name $driveLetter -PSProvider FileSystem -Root $sshFolder -Scope Script
 try {
-    $substMade = ($LASTEXITCODE -eq 0 -and [System.IO.File]::Exists($substLetter + ":\notes.txt"))
-    $bySubst = Test-Refused $h ($substLetter + ":\notes.txt") $inSsh
-} finally { $null = & subst.exe ($substLetter + ":") /D }
-$null = & subst.exe ($substLetter + ":") (Join-Path $h "settings")
-try { $bySubstHome = Test-Refused $h ($substLetter + ":\notes.json") $inHome -Force } finally { $null = & subst.exe ($substLetter + ":") /D }
-Check $substMade ("CONTROL: subst made " + $substLetter + ": over .ssh (if this fails, the subst form was NOT tested)")
-Check $bySubst "by a subst drive over .ssh, where the written path names no folder, the file is refused as .ssh"
-Check $bySubstHome "and by a subst drive over a folder of the home, as the home, -Force or not"
-Check ((Get-Target $substLetter) -eq "") "the subst drive is gone again"
+    $driveMade = ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($driveLetter + ":\notes.txt") -ceq $sshFile)
+    $byDrive = Test-Refused $h ($driveLetter + ":\notes.txt") $inSsh
+} finally { Remove-PSDrive -Name $driveLetter -Scope Script }
+$null = New-PSDrive -Name $driveLetter -PSProvider FileSystem -Root (Join-Path $h "settings") -Scope Script
+try { $byDriveHome = Test-Refused $h ($driveLetter + ":\notes.json") $inHome -Force } finally { Remove-PSDrive -Name $driveLetter -Scope Script }
+Check $driveMade ("CONTROL: a PowerShell drive " + $driveLetter + ": of this process's own was made over .ssh (if this fails, the form was NOT tested)")
+Check $byDrive "by a drive over .ssh, where the written path names no folder, the file is refused as .ssh"
+Check $byDriveHome "and by a drive over a folder of the home, as the home, -Force or not"
+Check ($null -eq (Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue)) "that drive is gone again"
 $sshCopy = Join-Path $docs "a-copy-of-those-notes.txt"
 [System.IO.File]::Copy($sshFile, $sshCopy)
 Check (Test-Shared $h $sshCopy) "CONTROL: after all those refusals the .ssh file can still be read, and a copy of it outside .ssh is shared: they were the list's refusals and not a broken file"
@@ -655,95 +658,110 @@ $badName = Get-HordeFilesFolderFinalPath -Path "C:\a<b>|c"
 Check ($badName.state -ceq "unknown") "a name Windows cannot open for another reason is unknown, never absent"
 $systemLetter = $script:real.Substring(0, 1)
 Check ((Get-HordeDriveLetterTarget -Letter $systemLetter) -like "\Device\*") ("the drive this suite is on stands for a volume (" + (Get-HordeDriveLetterTarget -Letter $systemLetter) + ")")
-$letters = @(Get-FreeLetters)
-Check ($letters.Count -ge 3) ("CONTROL: three drive letters that name nothing were found (" + $letters.Count + ")")
-Check ((Get-HordeDriveLetterTarget -Letter $letters[0]) -eq "") "a letter that names nothing stands for nothing"
-Check ((Get-HordeDriveAliasRefusal -Path ($systemLetter + ":\x.md")) -eq "" -and (Get-HordeDriveAliasRefusal -Path ($letters[0] + ":\x.md")) -eq "") "an ordinary drive, and a letter that names nothing, are not this question's"
+$noLetters = @(Get-FreeLetters)
+Check ($noLetters.Count -ge 1 -and (Get-HordeDriveLetterTarget -Letter $noLetters[0]) -eq "") "a letter that names nothing stands for nothing"
+Check ((Get-HordeDriveAliasRefusal -Path ($systemLetter + ":\x.md")) -eq "" -and (Get-HordeDriveAliasRefusal -Path ($noLetters[0] + ":\x.md")) -eq "") "an ordinary drive, and a letter that names nothing, are not this question's"
 Check ((Get-HordeDriveAliasRefusal -Path "x.md") -eq "" -and (Get-HordeDriveAliasRefusal -Path "") -eq "" -and (Get-HordeDriveAliasRefusal -Path "\\server\share\x.md") -eq "") "nor is a path with no drive letter"
-$overLocal = ""; $overLocalTarget = ""
-$null = & subst.exe ($letters[0] + ":") $docs
-try { $overLocalTarget = Get-HordeDriveLetterTarget -Letter $letters[0]; $overLocal = Get-HordeDriveAliasRefusal -Path ($letters[0] + ":\plain.md") } finally { $null = & subst.exe ($letters[0] + ":") /D }
-Check ($overLocalTarget -ceq ("\??\" + $docs)) ("a subst drive stands for the folder it was made over (" + $overLocalTarget + ")")
-Check ($overLocal -eq "") "a letter that stands for a folder of this machine's own drive is let by"
 
 Write-Host ""
-Write-Host "--- a drive letter that stands for a network drive is refused before anything looks the host up ---" -ForegroundColor Cyan
-# THE INSTRUMENT is this machine's DNS cache (test/test-files-store.ps1 has its measurement): a host
-# name nobody ever used is in it after anything asks the network about a path under it.
-$seenHost = New-NoHost
-$null = [System.IO.File]::Exists("\\" + $seenHost + "\share\x.md")
-$cacheNow = Get-LookedUp
-$canSee = ($cacheNow.Contains($seenHost) -and -not $cacheNow.Contains((New-NoHost)))
-if ($canSee) { Check $true "CONTROL: the instrument can see a lookup: a host asked about is in the DNS cache, and a name nobody asked about is not" }
-else { Write-Skip "WHETHER A HOST WAS LOOKED UP COULD NOT BE SEEN: this machine's DNS cache does not show a host that was just asked about. The refusals below are still checked by their reasons." }
+Write-Host "--- a drive letter that stands for a network drive is refused on the first question, and no letter is made ---" -ForegroundColor Cyan
+# A SUITE MUST NOT CHANGE WHAT OTHER PROCESSES OF THE USER SEE, and a drive letter is seen by all of
+# them. Until 2026-10-13 this section made real letters - one aimed at a host that does not exist,
+# letters over that, a ring - and while they stood a fresh powershell of any other session printed
+# an error and took 1.4 s to start (core/PathText.ps1, Get-HordeDriveLetterType, has the
+# measurement). NO LETTER IS MADE HERE NOW. The two functions that ask Windows about a drive letter -
+# what it stands for, and what type of drive it is - are replaced, for this section, by two that
+# answer from a table of this suite's for the letters in it and ask the real function for every
+# other, and that count who asked. Each is called exactly as the real one is: one -Letter, a text
+# back. What Windows itself says of a letter is test/test-path-text.ps1's, in the one place a real
+# letter is made.
+#   N  a network drive the system mapped        R  a share, straight (the device prefix and then UNC)
+#   O  the letter N, and P the letter O         J and K each other (a ring)
+#   L  a folder of this suite's own drive, as subst makes; M the letter L, and T the letter M
+$script:realLetterTarget = ${function:Get-HordeDriveLetterTarget}
+$script:realDriveType = ${function:Get-HordeDriveLetterType}
+$script:stands = @{}
+$script:driveTypes = @{}
+$script:targetAsked = New-Object System.Collections.ArrayList
+$script:driveAsked = New-Object System.Collections.ArrayList
+function Get-HordeDriveLetterTarget {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    [void]$script:targetAsked.Add($Letter)
+    if ($script:stands.ContainsKey($Letter.ToUpperInvariant())) { return ("" + $script:stands[$Letter.ToUpperInvariant()]) }
+    return (& $script:realLetterTarget -Letter $Letter)
+}
+function Get-HordeDriveLetterType {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    [void]$script:driveAsked.Add($Letter)
+    if ($script:driveTypes.ContainsKey($Letter.ToUpperInvariant())) { return ("" + $script:driveTypes[$Letter.ToUpperInvariant()]) }
+    return (& $script:realDriveType -Letter $Letter)
+}
 $h = New-TestHome
-$netLetter = $letters[0]; $overLetter = $letters[1]; $overOver = $letters[2]
 $netHost = New-NoHost
-$netTarget = "\??\UNC\" + $netHost + "\share"
-$placeOnNet = $null; $placeOnAlias = $null; $psMade = $false; $resolvedOnly = $false; $made = $false; $overMade = ""; $said = ""; $viaShareChain = $false; $ownNet = "?"; $viaShareNet = $false; $saidPrefix = $false; $saidRelative = $false; $viaShare = $false; $seenAfter = $true; $chain = ""; $typeOver = ""; $controlSeen = $false
-$null = [HordeTest.DenyDos]::DefineDosDevice(1, $netLetter + ":", $netTarget)
+$script:stands = @{ "N" = ("\Device\LanmanRedirector\;N:0000000000012345\" + $netHost + "\share"); "R" = ("\??\UNC\" + $netHost + "\share"); "O" = "\??\N:\"; "P" = "\??\O:\"
+    "J" = "\??\K:"; "K" = "\??\J:"; "L" = ("\??\" + $docs); "M" = "\??\L:"; "T" = "\??\M:" }
+$script:driveTypes = @{ "N" = "Network"; "R" = "Network"; "O" = "NoRootDirectory"; "P" = "NoRootDirectory"; "J" = "NoRootDirectory"; "K" = "NoRootDirectory"; "L" = "Fixed"; "M" = "Fixed"; "T" = "Fixed" }
+$results = @{}
 try {
-    $made = ((New-Object System.IO.DriveInfo($netLetter)).DriveType -eq [System.IO.DriveType]::Network)
-    $null = [HordeTest.DenyDos]::DefineDosDevice(0, $overLetter + ":", $netLetter + ":\")
-    $overMade = Get-Target $overLetter
-    $null = [HordeTest.DenyDos]::DefineDosDevice(0, $overOver + ":", $overLetter + ":\")
-    $said = Get-HordeDriveAliasRefusal -Path ($overLetter + ":\x.md")
-    $saidPrefix = ((Get-HordeDriveAliasRefusal -Path ("\\?\" + $overLetter + ":\x.md")) -like "*stands for a network drive*")
-    $saidRelative = ((Get-HordeDriveAliasRefusal -Path ($overLetter + ":x.md")) -like "*stands for a network drive*")
-    $chain = Get-HordeDriveAliasRefusal -Path ($overOver + ":\x.md")
-    $viaShare = Test-Refused $h ($overLetter + ":\x.md") ("is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder")
-    $viaShareChain = Test-Refused $h ($overOver.ToLowerInvariant() + ":\x.md") "that stands for a network drive"
-    $ownNet = Get-HordeDriveAliasRefusal -Path ($netLetter + ":\x.md")
-    $viaShareNet = Test-Refused $h ($netLetter + ":\x.md") ("is on a drive (" + $netLetter + ":) that stands for a network share, and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives")
-    $placeOnNet = Resolve-HordeFilesDenyPlace -Path ($netLetter + ":\home")
-    $placeOnAlias = Resolve-HordeFilesDenyPlace -Path ($overLetter + ":\home")
-    $seenAfter = (Get-LookedUp).Contains($netHost)
-    # THE CONTROL, and why the order is what it is: asked for its TYPE, the letter over the network
-    # letter is not Network, and asking is what looks the host up.
-    $typeOver = "" + (New-Object System.IO.DriveInfo($overLetter)).DriveType
-    $controlSeen = (Get-LookedUp).Contains($netHost)
-    # WHAT ONLY THE RESOLVED PATH SHOWS: a PowerShell drive over the letter that stands for the network
-    # drive. Making the drive may itself ask the network, so this comes after the look at the cache.
-    $psLetter = @(Get-FreeLetters)[0]
-    $null = New-PSDrive -Name $psLetter -PSProvider FileSystem -Root ($overLetter + ":\") -Scope Script -ErrorAction SilentlyContinue
-    if ($null -ne (Get-PSDrive -Name $psLetter -ErrorAction SilentlyContinue)) {
-        $psMade = ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($psLetter + ":\x.md") -ceq ($overLetter + ":\x.md"))
-        $resolvedOnly = Test-Refused $h ($psLetter + ":\x.md") ("is on a drive (" + $overLetter + ":) that stands for a network drive")
-        Remove-PSDrive -Name $psLetter -Scope Script
-    }
-} finally { Remove-Letter $overOver; Remove-Letter $overLetter; $null = [HordeTest.DenyDos]::DefineDosDevice(7, $netLetter + ":", $netTarget) }
-Check ($made -and $overMade -ceq ("\??\" + $netLetter + ":\")) ("CONTROL: " + $netLetter + ": was aimed at a share and is a network drive, and " + $overLetter + ": stands for it (" + $overMade + "); if this fails, the case was NOT tested")
-Check ($said -like ("'" + $overLetter + ":\x.md' is on a drive (" + $overLetter + ":) that stands for a network drive (" + $netLetter + ":), and only a path on one of this machine's own drives is taken")) "a letter that stands for a network drive is refused, and the reason names both letters"
-Check $saidPrefix "and behind the long-path prefix"
-Check $saidRelative "and named from wherever that drive stands"
-Check ($chain -like ("*is on a drive (" + $overOver + ":) that stands for a network drive (" + $netLetter + ":)*")) "a letter that stands for a letter that stands for a network drive is refused too: the chain is followed to its end"
-Check ($ownNet -like ("*is on a drive (" + $netLetter + ":) that stands for a network share*")) "a letter defined straight over a share is refused by the same question: the table says what it stands for"
-Check $viaShare "through a share, it is refused with that reason, and the share adds its own sentence: what to do about it"
-Check $viaShareChain "and so is the chain, with its letter in small"
-Check $viaShareNet "and a share from that letter is refused with that reason, and the share's own sentence after it"
-Check ($null -ne $placeOnNet -and -not $placeOnNet.unknown -and @($placeOnNet.paths).Count -eq 0) "a folder of the list that is on a network drive is never opened: it holds no file of this machine's drives"
-Check ($null -ne $placeOnAlias -and -not $placeOnAlias.unknown -and @($placeOnAlias.paths).Count -eq 0) "nor is one on a letter that stands for a network drive"
-if ($canSee) { Check (-not $seenAfter) "and through all of those the host was NOT looked up: the system's table of names was read, and nobody was asked" }
-if ($canSee) { Check ($typeOver -cne "Network" -and $controlSeen) ("CONTROL: asked for its type, that letter answers " + $typeOver + ", not Network, and the host IS looked up - which is what the refusal came before") }
-if ($psMade) { Check $resolvedOnly "a path that is on such a letter only once it is resolved (a PowerShell drive over it) is refused the same: the question is asked again of the resolved path" }
-else { Write-Skip "A POWERSHELL DRIVE OVER THE LETTER COULD NOT BE MADE, so the question asked of the RESOLVED path was not tested here." }
-Check ((Get-Target $netLetter) -eq "" -and (Get-Target $overLetter) -eq "" -and (Get-Target $overOver) -eq "") "all three drive letters are gone again"
-# A RING: a letter that stands for itself by way of another never ends, and is refused.
-$ring = ""
-$null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[0] + ":", "\??\" + $letters[1] + ":")
-$null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[1] + ":", "\??\" + $letters[0] + ":")
-try { $ring = Get-HordeDriveAliasRefusal -Path ($letters[0] + ":\x.md") } finally { Remove-Letter $letters[0]; Remove-Letter $letters[1] }
-Check ($ring -like "*stands for another drive letter, and that for another, without end*") "two letters that stand for each other are refused: where the file is cannot be told"
-Check ((Get-Target $letters[0]) -eq "" -and (Get-Target $letters[1]) -eq "") "and both are gone again"
-# Eight letters deep is followed; this chain of three ended at a folder of this machine's own drive.
-$deep = "?"; $deepShared = $false
-$null = & subst.exe ($letters[0] + ":") $docs
-$null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[1] + ":", "\??\" + $letters[0] + ":")
-$null = [HordeTest.DenyDos]::DefineDosDevice(1, $letters[2] + ":", "\??\" + $letters[1] + ":")
-try { $deep = Get-HordeDriveAliasRefusal -Path ($letters[2] + ":\plain.md"); $deepShared = Test-Shared $h ($letters[2] + ":\plain.md") } finally { Remove-Letter $letters[2]; Remove-Letter $letters[1]; $null = & subst.exe ($letters[0] + ":") /D }
-Check ($deep -eq "") "CONTROL: a chain of letters that ends at a folder of this machine's own drive is let by"
-Check $deepShared "and a file named through it is shared"
-Check ((Get-Target $letters[0]) -eq "" -and (Get-Target $letters[1]) -eq "" -and (Get-Target $letters[2]) -eq "") "and those letters are gone again"
+    $results.said = Get-HordeDriveAliasRefusal -Path "O:\x.md"
+    $results.saidPrefix = ((Get-HordeDriveAliasRefusal -Path "\\?\O:\x.md") -like "*stands for a network drive*")
+    $results.saidRelative = ((Get-HordeDriveAliasRefusal -Path "O:x.md") -like "*stands for a network drive*")
+    $results.chain = Get-HordeDriveAliasRefusal -Path "P:\x.md"
+    $script:driveAsked.Clear()
+    $results.viaShare = Test-Refused $h "O:\x.md" "is on a drive (O:) that stands for a network drive (N:), and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder"
+    $results.viaShareChain = Test-Refused $h "p:\x.md" "that stands for a network drive"
+    $results.askedForTheOver = (@($script:driveAsked | Select-Object -Unique) -join ",")
+    $results.straight = Get-HordeDriveAliasRefusal -Path "R:\x.md"
+    $results.viaShareStraight = Test-Refused $h "R:\x.md" "is on a drive (R:) that stands for a network share, and only a path on one of this machine's own drives is taken. A file is shared from one of this machine's own drives"
+    $results.mapped = Get-HordeDriveAliasRefusal -Path "N:\x.md"
+    $results.viaShareMapped = Test-Refused $h "N:\x.md" "is on a network drive (N:)"
+    $results.placeOnNet = Resolve-HordeFilesDenyPlace -Path "N:\home"
+    $results.placeOnAlias = Resolve-HordeFilesDenyPlace -Path "O:\home"
+    $results.placeStraight = Resolve-HordeFilesDenyPlace -Path "R:\home"
+    $results.ring = Get-HordeDriveAliasRefusal -Path "J:\x.md"
+    $results.viaShareRing = Test-Refused $h "J:\x.md" "stands for another drive letter, and that for another, without end"
+    $results.overLocal = Get-HordeDriveAliasRefusal -Path "L:\plain.md"
+    $results.deep = Get-HordeDriveAliasRefusal -Path "T:\plain.md"
+    $script:driveAsked.Clear()
+    $results.ordinary = Test-Shared $h $plainDoc
+    $results.askedForOrdinary = (@($script:driveAsked | Select-Object -Unique) -join ",")
+    # WHAT ONLY THE RESOLVED PATH SHOWS. A PowerShell drive is this process's own - no other process
+    # sees it - and a path on it is a path on its folder's drive only once it is resolved. For this
+    # one share the table says that THIS SUITE'S OWN DRIVE stands for the network drive: the path as
+    # written (on the PowerShell drive, which the table does not know) is let by, and only the second
+    # asking, of the resolved path, can refuse.
+    $psLetter = $noLetters[0]
+    $null = New-PSDrive -Name $psLetter -PSProvider FileSystem -Root $docs -Scope Script
+    try {
+        $results.psResolves = ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($psLetter + ":\plain.md") -ceq $plainDoc)
+        $results.psShared = Test-Shared $h ($psLetter + ":\plain.md")
+        $script:stands[$systemLetter.ToUpperInvariant()] = "\??\N:\"
+        try { $results.resolvedOnly = Test-Refused $h ($psLetter + ":\plain.md") ("is on a drive (" + $systemLetter + ":) that stands for a network drive (N:)") } finally { $script:stands.Remove($systemLetter.ToUpperInvariant()) }
+    } finally { Remove-PSDrive -Name $psLetter -Scope Script }
+} finally {
+    Set-Item -Path function:Get-HordeDriveLetterTarget -Value $script:realLetterTarget
+    Set-Item -Path function:Get-HordeDriveLetterType -Value $script:realDriveType
+}
+Check ($results.said -like "'O:\x.md' is on a drive (O:) that stands for a network drive (N:), and only a path on one of this machine's own drives is taken") "a letter that stands for a network drive is refused, and the reason names both letters"
+Check $results.saidPrefix "and behind the long-path prefix"
+Check $results.saidRelative "and named from wherever that drive stands"
+Check ($results.chain -like "*is on a drive (P:) that stands for a network drive (N:)*") "a letter that stands for a letter that stands for a network drive is refused too: the chain is followed to its end"
+Check $results.viaShare "through a share, it is refused with that reason, and the share adds its own sentence: what to do about it"
+Check $results.viaShareChain "and so is the chain, with its letter in small"
+Check ($results.askedForTheOver -ceq "N") ("and through both shares only the network drive at the end was asked its type, never the letter that stands over it: that asking is what was measured looking the host up, and the refusal comes before it (asked: " + $results.askedForTheOver + ")")
+Check ($results.straight -like "*is on a drive (R:) that stands for a network share*") "a letter that stands straight for a share is refused by the same question: the table says what it stands for"
+Check $results.viaShareStraight "and a share from that letter is refused with that reason, and the share's own sentence after it"
+Check ($results.mapped -eq "" -and $results.viaShareMapped) "CONTROL: a network drive the system mapped is not this question's - its target is not written as a share - and a share from it is refused by the network question, with its own reason"
+Check (-not $results.placeOnNet.unknown -and @($results.placeOnNet.paths).Count -eq 0) "a folder of the list that is on a network drive is never opened: it holds no file of this machine's drives"
+Check (-not $results.placeOnAlias.unknown -and @($results.placeOnAlias.paths).Count -eq 0) "nor is one on a letter that stands for a network drive"
+Check (-not $results.placeStraight.unknown -and @($results.placeStraight.paths).Count -eq 0) "nor one on a letter that stands straight for a share"
+Check ($results.ring -like "*stands for another drive letter, and that for another, without end*" -and $results.viaShareRing) "two letters that stand for each other are refused, asked directly and through a share: where the file is cannot be told"
+Check ($results.overLocal -eq "") "a letter that stands for a folder of this machine's own drive is let by"
+Check ($results.deep -eq "") "CONTROL: and so is a chain of three letters that ends at such a folder"
+Check ($results.ordinary -and $results.askedForOrdinary -ceq $systemLetter) ("CONTROL: with the same answerers in place an ordinary file is shared, and the only drive asked its type was this suite's own (" + $results.askedForOrdinary + ")")
+Check ($results.psResolves -and $results.psShared) "CONTROL: a file named on a PowerShell drive of this process's own, over an ordinary folder, is shared"
+Check $results.resolvedOnly "a path that is on such a letter only once it is resolved is refused the same: the question is asked again of the resolved path"
+Check ((Get-HordeDriveLetterTarget -Letter $systemLetter) -like "\Device\*" -and (Get-HordeDriveLetterType -Letter $systemLetter) -ceq "Fixed" -and (Test-Shared $h $plainDoc)) "the two real questions are back, and an ordinary file is shared"
 
 Write-Host ""
 Write-Host "--- what a text file holds: a private key never, a token of a known shape unless -Force ---" -ForegroundColor Cyan
