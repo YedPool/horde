@@ -515,6 +515,41 @@ Check ((Rang) -eq 0 -and (Decided $r).action -ceq "wait") "nor one whose box nob
 Reset-HordeMemoryWaker
 
 Write-Host ""
+Write-Host "--- a pass that fails AFTER it nudged still counts the nudge ---" -ForegroundColor Cyan
+
+# THE SEAM. A setting that is no number throws where it is read as one. maxNudgesPerMail is read by the
+# decision only for a session that has an entry and is NOT owed a free knock, and by the ledger's
+# update for one that is given up on and IS owed one: so a session given up on, whose limit is over,
+# is nudged - its free knock - and the update of the ledger then throws. After the nudge, in the pass.
+$broken = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = "many" }
+function Seat-Owed { Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At -10) } }
+$owed = @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 6 -LastAttemptAt (At -1000) -LastOutcome "woken" -MailAt (At -60) -GaveUp $true) }
+Seat-Owed
+$r = $null; $threw = ""
+try { $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $broken -Ledger $owed } catch { $threw = "$($_.Exception.Message)" }
+Check ((Rang) -eq 1 -and $threw -eq "" -and $null -ne $r) ("the session was nudged, the ledger's update then threw, and the pass RETURNS: it does not throw the nudge away (" + $threw + ")")
+Check ($null -ne $r -and $r.ledger.ContainsKey((Sid 1)) -and $r.ledger[(Sid 1)].attempts -eq 7 -and $r.ledger[(Sid 1)].lastAttemptAt -eq (At 0) -and (Get-HordeWakeEntryValue $r.ledger[(Sid 1)] "mailAt") -eq (At -60) -and (Get-HordeWakeEntryValue $r.ledger[(Sid 1)] "freeAt") -eq (At 0) -and $owed[(Sid 1)].attempts -eq 6) "the ledger it returns counts that nudge: one attempt more, at this pass, for the mail it was for, and marked as the free knock it was"
+$kindsNow = @($r.entries | ForEach-Object { $_.kind + ":" + $_.id + ":" + $_.outcome })
+Check (@($kindsNow | Where-Object { $_ -ceq ("nudge:" + (Sid 1) + ":woken") }).Count -eq 1 -and @($r.entries | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "pass-after-nudge" -and "$($_.reason)".Contains("many") -and "$($_.reason)".Contains("the attempt is counted") }).Count -eq 1) ("the journal has the nudge, and one line saying the pass failed after it and why (" + ($kindsNow -join ",") + ")")
+$r2 = Invoke-HordeWakePass -Send -Waker $memory -Now (At 3) -Settings $settings -Ledger $r.ledger
+Check ((Rang) -eq 1 -and (Decided $r2 1).action -ceq "wait") ("the next pass, three seconds on, does not nudge it again: the nudge that was counted stands (" + (Decided $r2 1).reason + ")")
+Seat 1 @{ Limited = "yes"; LimitedUntil = (At 3690) }
+$r3 = $null; try { $r3 = Invoke-HordeWakePass -Send -Waker $memory -Now (At 3700) -Settings $broken -Ledger $r.ledger } catch { }
+Check ((Rang) -eq 2 -and $null -ne $r3 -and $r3.ledger[(Sid 1)].attempts -eq 8 -and $r3.ledger[(Sid 1)].lastAttemptAt -eq (At 3700)) "a second nudge, an hour on, that fails the same way is one attempt more: each is added to what was counted before"
+# CONTROL: a throw BEFORE anybody is nudged is thrown on, as it always was. Nothing was typed.
+Start-Case; Seat 1
+$r = $null; $threw = ""
+try { $r = Invoke-HordeWakePass -Send -Waker $memory -Now (At 0) -Settings $broken -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 1 -LastAttemptAt (At -1000) -LastOutcome "woken" -MailAt (At -60)) } } catch { $threw = "$($_.Exception.Message)" }
+Check ($null -eq $r -and $threw.Contains("many") -and (Rang) -eq 0) ("CONTROL: a pass that fails before any nudge throws, and nobody was nudged (" + $threw + ")")
+# The record itself.
+$one = Set-HordeWakeLedgerAsked -Ledger @{} -Id (Sid 1) -Now (At 0) -State ([pscustomobject]@{ oldestUnreadAt = (At -60) })
+$was = @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 3 -LastAttemptAt (At -100) -LastOutcome "woken" -MailAt (At -60) -Probes 2); (Sid 2) = (New-HordeWakeLedgerRow -Attempts 1 -LastAttemptAt (At -9) -LastOutcome "busy") }
+$two = Set-HordeWakeLedgerAsked -Ledger $was -Id (Sid 1) -Now (At 0) -State ([pscustomobject]@{ oldestUnreadAt = (At -60) })
+$new = Set-HordeWakeLedgerAsked -Ledger $was -Id (Sid 1) -Now (At 0) -State ([pscustomobject]@{ oldestUnreadAt = (At -5) })
+Check ($one[(Sid 1)].attempts -eq 1 -and $one[(Sid 1)].lastOutcome -ceq "unknown" -and $two[(Sid 1)].attempts -eq 4 -and (Get-HordeWakeEntryValue $two[(Sid 1)] "probes") -eq 2 -and $two[(Sid 2)].attempts -eq 1 -and $was[(Sid 1)].attempts -eq 3 -and $new[(Sid 1)].attempts -eq 1 -and (Get-HordeWakeEntryValue $new[(Sid 1)] "mailAt") -eq (At -5) -and $null -eq (Get-HordeWakeEntryValue $two[(Sid 1)] "freeAt") -and (Get-HordeWakeEntryValue (Set-HordeWakeLedgerAsked -Ledger $was -Id (Sid 1) -Now (At 0) -Free)[(Sid 1)] "freeAt") -eq (At 0)) "the record: one attempt more for the same mail, the first for another mail, the other sessions and the table handed in left as they were"
+Reset-HordeMemoryWaker
+
+Write-Host ""
 Write-Host "--- mail handed over is not mail to nudge for, and the journal says so ---" -ForegroundColor Cyan
 
 Start-Case; Seat 1 @{ UnreadCount = 0; OldestUnreadAt = $null; HandedOverCount = 2; OldestHandedOverAt = (At -30) }

@@ -418,7 +418,7 @@ function Get-HordeWakeHold {
     if ($CanLook -and $unseen -and "$($s.midTurn)" -cne "yes" -and "$($s.boxEmpty)" -cne "no") { return [pscustomobject]@{ action = "look"; reason = "its box and its turn have not been read" } }
     if ("$($s.midTurn)" -cne "no") { return [pscustomobject]@{ action = "wait"; reason = ("midTurn is " + $s.midTurn) } }
     if ("$($s.boxEmpty)" -cne "yes") { return [pscustomobject]@{ action = "wait"; reason = ("boxEmpty is " + $s.boxEmpty) } }
-    return [pscustomobject]@{ action = "ready"; reason = "" }
+    return [pscustomobject]@{ action = "ready"; reason = ""; free = $free }
 }
 
 function Get-HordeWakeDecisions {
@@ -455,7 +455,7 @@ function Get-HordeWakeDecisions {
         if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
         $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Acks $Acks -NoProbe:$NoProbe -Self $Self -FreeAt $(if ($null -ne $Ledger -and $Ledger.ContainsKey($id)) { Get-HordeWakeEntryValue $Ledger[$id] "freeAt" } else { $null })
-        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0; between = ("$(Get-HordeWakeEntryValue $stateNow "betweenTurns")" -ceq "yes") }
+        $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0; free = ((Get-HordeWakeEntryValue $hold "free") -eq $true); between = ("$(Get-HordeWakeEntryValue $stateNow "betweenTurns")" -ceq "yes") }
         $lastProbe = Get-HordeWakeEntryValue $entry "probeAt"
         if ($lastProbe -is [datetime]) { $row.probed = $lastProbe.Ticks }
         if ($hold.action -ceq "ready" -or $hold.action -ceq "look") {
@@ -509,7 +509,32 @@ function Get-HordeWakeDecisions {
             if ($ready[$i].between) { $ready[$i].reason = "unread mail, idle by the between-turns rule (between-turns-background-work), empty box" }
         }
     }
-    return @($rows | ForEach-Object { [pscustomobject]@{ id = $_.id; action = $_.action; reason = $_.reason } })
+    # free says the nudge decided on is a free knock: the pass marks it so when it counts it beforehand.
+    return @($rows | ForEach-Object { [pscustomobject]@{ id = $_.id; action = $_.action; reason = $_.reason; free = ($_.free -eq $true) } })
+}
+
+function Set-HordeWakeLedgerAsked {
+    # -Ledger with ONE ATTEMPT COUNTED for -Id at -Now, its outcome not yet known, as a new table.
+    # Invoke-HordeWakePass writes this BEFORE it asks the waker to nudge (there, A NUDGE IS COUNTED BEFORE
+    # IT IS ASKED FOR); Update-HordeWakeLedger then works the pass out properly from the ledger as
+    # it was, and this stands only if that never happens. -State is the session's state now: the
+    # attempt is for the mail that is its oldest unread, as every entry is.
+    # -Free: the nudge is a free knock (Get-HordeWakeHold). It is counted as an attempt all the same -
+    # one nudge too few, never one too many - and when it was sent is kept, so the hour's bound on
+    # free knocks holds over a pass that failed.
+    param($Ledger, [Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][datetime]$Now, $State = $null, [switch]$Free)
+    $next = @{}
+    if ($null -ne $Ledger) { foreach ($k in @($Ledger.Keys)) { $next["$k"] = $Ledger[$k] } }
+    $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $Id -State $State
+    $count = 1
+    if ($null -ne $had) { $count = [int]$had.attempts + 1 }
+    $mailAt = Get-HordeWakeEntryValue $State "oldestUnreadAt"
+    if ($mailAt -isnot [datetime]) { $mailAt = Get-HordeWakeEntryValue $had "mailAt" }
+    $freeAt = $null
+    if ($next.ContainsKey($Id)) { $freeAt = Get-HordeWakeEntryValue $next[$Id] "freeAt" }
+    if ($Free) { $freeAt = $Now }
+    $next[$Id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "unknown" -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had -FreeAt $freeAt
+    return $next
 }
 
 function Update-HordeWakeLedger {
@@ -1048,10 +1073,25 @@ function Invoke-HordeWakePass {
                 }
             }
             $outcomes = @{}
+            # A NUDGE IS COUNTED BEFORE IT IS ASKED FOR. The pass nudged, and then worked the ledger out
+            # from what came back; anything that threw in between - in here, not in the tick, which
+            # had been mended - left the function with the ledger as it was before the nudge. The
+            # session had been typed into and nothing said so: the next pass, three seconds on,
+            # typed into it again (review of PR 230). So the attempt is written into the ledger this
+            # pass returns BEFORE the waker is asked, with its outcome unknown; the ordinary update
+            # below replaces that with the whole truth; and if anything throws once a nudge has been
+            # asked for, the pass does not throw it on - it returns, with that ledger, the lines it
+            # has, and one more saying what failed. A probe or a free knock is counted as an attempt
+            # in that case: one nudge too few, never one too many.
+            # A throw BEFORE any nudge is asked for is thrown on as it always was: nothing was typed.
+            $asked = New-Object System.Collections.ArrayList
+            try {
             foreach ($d in $decisions) {
                 if ($d.action -cne "nudge") { continue }
                 # SHADOW: the nudge is journaled and counted, and nothing is asked of the waker.
                 if ($shadowPass) { $outcomes[$d.id] = "would-nudge"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "would-nudge" -Id $d.id -Outcome "would-nudge" -Reason $d.reason)); continue }
+                $nextLedger = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State $(if ($states.ContainsKey($d.id) -and "$($states[$d.id].state)" -ceq "known") { $states[$d.id].value } else { $null }) -Free:((Get-HordeWakeEntryValue $d "free") -eq $true)
+                [void]$asked.Add($d.id)
                 $rang = Send-HordeWakeNudge -Waker $Waker -Id $d.id
                 if ($rang.state -ceq "known") {
                     $outcomes[$d.id] = $rang.value.outcome
@@ -1077,6 +1117,17 @@ function Invoke-HordeWakePass {
             $nextLedger = $gave.ledger
             $gaveUp = @($gave.sessions)
             foreach ($e in @($gave.entries)) { [void]$entries.Add($e) }
+            } catch {
+                if ($asked.Count -eq 0) { throw }
+                $why = "$($_.Exception.Message)"
+                # Nothing here may throw: it would lose the ledger again.
+                try {
+                    foreach ($id in @($asked)) {
+                        if (@($entries | Where-Object { @("nudge", "nudge-killed") -ccontains "$($_.kind)" -and "$($_.id)" -ceq "$id" }).Count -eq 0) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id "$id" -Outcome "unknown" -Reason "a nudge was asked for, and the pass failed before its answer was recorded")) }
+                    }
+                    [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "pass-after-nudge" -Outcome "unknown" -Reason ("the pass failed after a nudge was asked for; the attempt is counted all the same, so the session is not nudged again at once: " + $why)))
+                } catch { }
+            }
         }
     }
     return [pscustomobject]@{ ledger = $nextLedger; entries = $entries.ToArray(); decisions = $decisions; unreadable = $unreadable; gaveUp = $gaveUp; listing = $listing; warchief = $warchief; mail = $mail; limited = $limited; held = $held; never = $never; acks = $Acks }

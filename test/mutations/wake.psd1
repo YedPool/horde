@@ -6,6 +6,36 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "the-attempt-is-not-recorded-before-the-waker-is-asked"
+           Find = '$nextLedger = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State'
+           Replace = '$null = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State' }
+        @{ Name = "a-pass-that-throws-after-a-nudge-throws-the-nudge-away"
+           Find = 'if ($asked.Count -eq 0) { throw }'
+           Replace = 'throw' }
+        @{ Name = "a-throw-before-any-nudge-is-swallowed"
+           Find = 'if ($asked.Count -eq 0) { throw }'
+           Replace = '' }
+        @{ Name = "the-failure-after-a-nudge-is-not-journaled"
+           Find = '[void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "pass-after-nudge"'
+           Replace = '$null = ((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "pass-after-nudge"' }
+        @{ Name = "the-recorded-attempt-forgets-the-ones-before"
+           Find = 'if ($null -ne $had) { $count = [int]$had.attempts + 1 }'
+           Replace = '' }
+        @{ Name = "the-recorded-attempt-is-held-against-another-mail"
+           Find = '$had = Get-HordeWakeLedgerEntry -Ledger $next -Id $Id -State $State'
+           Replace = '$had = Get-HordeWakeLedgerEntry -Ledger $next -Id $Id' }
+        @{ Name = "the-recorded-free-knock-is-not-marked"
+           Find = 'if ($Free) { $freeAt = $Now }'
+           Replace = '' }
+        @{ Name = "the-pass-does-not-say-its-nudge-was-a-free-knock"
+           Find = '-Free:((Get-HordeWakeEntryValue $d "free") -eq $true)'
+           Replace = '' }
+        @{ Name = "the-recorded-attempt-names-no-mail"
+           Find = '    $mailAt = Get-HordeWakeEntryValue $State "oldestUnreadAt"'
+           Replace = '    $mailAt = $null' }
+        @{ Name = "the-record-writes-into-the-table-it-was-handed"
+           Find = '$next[$Id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "unknown"'
+           Replace = 'if ($null -ne $Ledger) { $Ledger[$Id] = $null }; $next[$Id] = New-HordeWakeLedgerRow -Attempts $count -LastAttemptAt $Now -LastOutcome "unknown"' }
         @{ Name = "a-free-knock-is-not-bounded-by-the-hour"
            Find = 'if ($free -and $FreeAt -is [datetime] -and ($Now - $FreeAt).TotalSeconds -lt [double]$Settings.freeKnockSeconds) { $free = $false }'
            Replace = '' }

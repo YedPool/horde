@@ -116,6 +116,24 @@ $ret = New-Object System.Collections.ArrayList
 foreach ($n in 0..399) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$ret.Add($e.kind + ":" + $e.id + "@" + ($n * 3)) } }
 Check ((@($ret) -join ",") -ceq ("never-nudged:" + (Sid 2) + "@0") -and @(Get-HordeMemoryWakerAsks).Count -eq 0 -and $run.ledger.Count -eq 0) ("twenty minutes of live ticks over a retired session with unread mail journal one line - never-nudged - and nudge, count, give up on and tell of nobody (" + (@($ret) -join ",") + ")")
 
+# A THROW INSIDE THE PASS, AFTER THE NUDGE: the tick still keeps and saves the attempt, and the next tick
+# does not nudge the session again.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "yes" -LimitedUntil (At -10)
+# (The seam is test/test-wake.ps1's: a session given up on and owed a free knock, and a setting that is
+# no number where the ledger's update reads it.)
+Save-HordeWakeLedger -Ledger @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 6 -LastAttemptAt (At -1000) -LastOutcome "woken" -MailAt (At -60) -GaveUp $true) } -Mode "live" -HordeHome $h
+$trapped = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = "many" }
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Set-HordeMemoryWakerClock (At 0)
+$first = @(Invoke-HordeWakeTick -Run $run -Now (At 0) -Waker $memory -ReadSessions $none -Settings $trapped -HordeHome $h)
+$onDisk = Read-HordeWakeLedger -Mode "live" -HordeHome $h
+Check (@(Get-HordeMemoryWakerNudges).Count -eq 1 -and @($first | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 1) }).Count -eq 1 -and @($first | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "pass-after-nudge" -and "$($_.reason)".Contains("many") }).Count -eq 1) ("a live tick whose pass throws after it nudged journals the nudge and what failed (" + (@($first | ForEach-Object { $_.kind + ":" + $_.id }) -join ",") + ")")
+Check ($run.ledger.ContainsKey((Sid 1)) -and $run.ledger[(Sid 1)].attempts -eq 7 -and $onDisk.state -ceq "known" -and $onDisk.value.ledger.ContainsKey((Sid 1)) -and $onDisk.value.ledger[(Sid 1)].attempts -eq 7) "the attempt is in the run's ledger AND in the file: a watcher that dies now does not forget it either"
+foreach ($n in 1..1) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges).Count -eq 1) ("and the next tick, three seconds on, types nothing: the nudge was not lost, so it is not sent twice (" + @(Get-HordeMemoryWakerNudges).Count + " typed)")
+
 # MAIL HANDED OVER, NONE UNREAD: one held line naming it, and nobody nudged, however many ticks.
 $h = New-Home
 Reset-HordeMemoryWaker
