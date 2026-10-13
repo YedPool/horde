@@ -202,6 +202,19 @@ Check (Test-Path -LiteralPath (Join-Path $h "wake\run-shadow.lock") -PathType Le
 $after = Enter-HordeWakeLock -Shadow -ProcessId 4245 -HordeHome $h
 Check ($null -ne $after) "a lock left by a run that is gone blocks nobody: it is the open handle that holds, not the file or the pid in it"
 if ($null -ne $after) { $after.Dispose() }
+# ONLY "ANOTHER PROCESS HOLDS IT" IS A HELD LOCK. Every other failure to open it is what it is.
+Check (Test-HordeWakeSharingViolation (New-Object System.IO.IOException("in use", -2147024864))) "a sharing violation (Win32 error 32) is a held lock"
+Check (Test-HordeWakeSharingViolation (New-Object System.IO.IOException("locked", -2147024863))) "and so is a lock violation (33)"
+Check (-not (Test-HordeWakeSharingViolation (New-Object System.IO.IOException("the disk is full", -2147024784)))) "a full disk is not a held lock"
+Check (-not (Test-HordeWakeSharingViolation (New-Object System.IO.IOException("something else")))) "nor is an I/O failure with no such error number"
+Check (-not (Test-HordeWakeSharingViolation (New-Object System.UnauthorizedAccessException("denied")))) "nor a file nobody may open"
+Check (Test-HordeWakeSharingViolation (New-Object System.Exception("wrapped", (New-Object System.IO.IOException("in use", -2147024864))))) "a sharing violation wrapped in another exception is still one"
+Check (-not (Test-HordeWakeSharingViolation $null)) "and nothing at all is not one"
+$h = New-Home
+New-Item -ItemType Directory -Path (Join-Path $h "wake\run-shadow.lock") -Force | Out-Null
+$took = "nothing"
+try { $took = Enter-HordeWakeLock -Shadow -ProcessId 4246 -HordeHome $h; if ($null -eq $took) { $took = "refused as held" } } catch { $took = "threw: " + $_.Exception.Message }
+Check ("$took".StartsWith("threw: ")) ("a lock that cannot be opened for another reason - a folder stands where it belongs - is thrown as what it is, never answered as 'already running' (" + $took + ")")
 
 } finally {
     Reset-HordeMemoryWaker

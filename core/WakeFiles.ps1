@@ -173,9 +173,29 @@ function Read-HordeWakeHeartbeat {
     return (New-HordeKnown -Value ([pscustomobject]$beat) -ObservedAt $at)
 }
 
+function Test-HordeWakeSharingViolation {
+    # Is this failure to open a file the one that means ANOTHER PROCESS HOLDS IT - a sharing violation
+    # (Win32 error 32) or a lock violation (33) - and not any other? Every failure to open the lock was
+    # read as "a run is already running" (review of PR #208): a full disk, a path that is not there or a
+    # file nobody may open said the same, and a person was sent looking for a second watcher that did not
+    # exist while none was running at all. The error number is read from the exception's HResult, whose
+    # low 16 bits are the Win32 error, on the exception itself or the one it wraps.
+    param($Exception)
+    $e = $Exception
+    while ($null -ne $e) {
+        if ($e -is [System.IO.IOException]) {
+            $win32 = ($e.HResult -band 0xFFFF)
+            if ($win32 -eq 32 -or $win32 -eq 33) { return $true }
+        }
+        $e = $e.InnerException
+    }
+    return $false
+}
+
 function Enter-HordeWakeLock {
     # ONE WATCHER A HOME AND A MODE. Returns the open lock - the caller keeps it for as long as it runs
-    # and disposes it when it ends - or $null when another process holds it. Two watchers on one home
+    # and disposes it when it ends - or $null when another process holds it, AND ONLY THEN: any other
+    # failure to open it is thrown as what it is (Test-HordeWakeSharingViolation). Two watchers on one home
     # would nudge one session twice a pass and write over each other's ledger; the first version let a
     # second one start (review of PR #207).
     # THE LOCK IS AN OPEN FILE HANDLE, NOT A PID IN A FILE. The file is opened for writing and shared for
@@ -190,7 +210,10 @@ function Enter-HordeWakeLock {
     $leaf = "run.lock"
     if ($Shadow) { $leaf = "run-shadow.lock" }
     try { $held = New-Object System.IO.FileStream((Join-Path $dir $leaf), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }
-    catch [System.IO.IOException] { return $null }
+    catch [System.IO.IOException] {
+        if (Test-HordeWakeSharingViolation $_.Exception) { return $null }
+        throw
+    }
     try {
         $held.SetLength(0)
         $bytes = [System.Text.Encoding]::ASCII.GetBytes("" + $ProcessId)

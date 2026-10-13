@@ -6,6 +6,18 @@
     Suite  = "test\test-wake-run.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "any-io-failure-is-a-held-lock"
+           Find = 'if ($win32 -eq 32 -or $win32 -eq 33) { return $true }'
+           Replace = 'return $true' }
+        @{ Name = "lock-violation-not-a-held-lock"
+           Find = 'if ($win32 -eq 32 -or $win32 -eq 33) { return $true }'
+           Replace = 'if ($win32 -eq 32) { return $true }' }
+        @{ Name = "wrapped-violation-not-seen"
+           Find = '$e = $e.InnerException'
+           Replace = '$e = $null' }
+        @{ Name = "held-lock-thrown-instead-of-answered"
+           Find = 'if (Test-HordeWakeSharingViolation $_.Exception) { return $null }'
+           Replace = '' }
         @{ Name = "lock-shared-for-writing"
            Find = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read) }'
            Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite) }' }

@@ -54,7 +54,11 @@ $HordeCommand = @{
         if (-not $plan.ok) { throw $plan.reason }
         $waker = $plan.waker
         # ONE WATCHER A HOME AND A MODE (core/WakeFiles.ps1, Enter-HordeWakeLock): held until this command ends.
-        $lock = Enter-HordeWakeLock -Shadow:(-not $plan.live) -ProcessId $PID
+        # Only "another run holds it" is said as that; any other failure to take the lock is said as
+        # what it is, so nobody is sent looking for a second watcher when the disk is full.
+        $lock = $null
+        try { $lock = Enter-HordeWakeLock -Shadow:(-not $plan.live) -ProcessId $PID }
+        catch { throw ("the wake run could not take its lock, so it has not started: " + $_.Exception.Message) }
         if ($null -eq $lock) { throw ("a " + $(if ($plan.live) { "live" } else { "shadow" }) + " wake run is already running in this home; this one has not started") }
         try {
             Write-Output ("wake: " + $plan.banner)
