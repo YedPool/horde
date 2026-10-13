@@ -42,6 +42,15 @@ Set-Location -LiteralPath $script:work
 # Whatever a function here is not handed, it must not find the real home.
 $env:HORDE_HOME = Join-Path $script:work "home-nobody-uses"
 $script:n = 0
+# THE RELAYS A SHARE ASKS ARE ONE OF THIS SUITE'S OWN (files/Deny.ps1, THE RELAYS' OWN SECRET FILES):
+# the real ones are let go and one made-up relay, registered the way a real one registers, is asked and
+# names no file - the ordinary answer - so that no real relay's settings or files are looked at here.
+# test/test-files-deny.ps1 attacks that rule.
+$script:HordeRelays.Clear()
+$storeRelay = Join-Path $script:work "relays\test-relay-store"
+[void][System.IO.Directory]::CreateDirectory($storeRelay)
+[System.IO.File]::WriteAllText((Join-Path $storeRelay "capabilities.json"), '{ "schemaVersion": 1, "relay": "test-relay-store", "capabilities": { "durable": { "support": "yes", "evidence": "fixture" }, "realtime": { "support": "yes", "evidence": "fixture" }, "reach.remote": { "support": "yes", "evidence": "fixture" }, "trim.on.ack": { "support": "yes", "evidence": "fixture" } }, "limits": { "maxTextChars": 4096, "maxBatch": 8, "maxWatchMs": 2000, "retentionSeconds": 0 } }')
+$null = Register-HordeRelay -Folder $storeRelay -Connect {} -Put {} -Get {} -Watch {} -Ack {} -SecretFiles { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) }
 $sessA = New-HordeKnown -Value "session-a"
 $sessB = New-HordeKnown -Value "session-b"
 $noSession = New-HordeUnknown -Reason "this suite names no session"

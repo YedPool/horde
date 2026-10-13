@@ -29,6 +29,22 @@ trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "files\Share.ps1")
 
+# THE RELAYS ARE LOADED BY files/Deny.ps1 ITSELF, once per load (its header, THE RELAYS' OWN SECRET
+# FILES), and a second load in the same scope must not throw the port's "already registered". Asked
+# here, first, before anything below replaces a function of that file: a second load defines its
+# functions again. Only the relays' NAMES are looked at; no real relay is asked for its files.
+Write-Host ""
+Write-Host "--- files/Deny.ps1 loads every relay, once, and loading it again is safe ---" -ForegroundColor Cyan
+$relayFolderNames = (@(Get-HordeRelayFiles | ForEach-Object { Split-Path -Leaf (Split-Path -Parent $_) }) -join ",")
+$loadedRelayNames = (@(Get-HordeRelayNames) -join ",")
+Check ($relayFolderNames -ne "" -and $loadedRelayNames -ceq $relayFolderNames) ("loading the share loads every relay the port finds, by its folder's name (" + $loadedRelayNames + ")")
+$secondLoad = "loaded"
+try { . (Join-Path $root "files\Deny.ps1") } catch { $secondLoad = "threw: " + $_.Exception.Message }
+Check ($secondLoad -ceq "loaded" -and (@(Get-HordeRelayNames) -join ",") -ceq $loadedRelayNames) ("files/Deny.ps1 loaded a second time in the same scope does not throw, and every relay is there once (" + $secondLoad + ")")
+$thirdLoad = "loaded"
+try { . (Join-Path $root "files\Share.ps1") } catch { $thirdLoad = "threw: " + $_.Exception.Message }
+Check ($thirdLoad -ceq "loaded" -and (@(Get-HordeRelayNames) -join ",") -ceq $loadedRelayNames) ("and so does the whole share, loaded again over relays that are already registered (" + $thirdLoad + ")")
+
 $script:work = Join-Path $env:TEMP ("horde-files-deny-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $script:work | Out-Null
 [System.IO.Directory]::SetCurrentDirectory($script:work)
@@ -60,6 +76,31 @@ New-Item -ItemType Directory -Path (Join-Path $repo "agents\harness-y") | Out-Nu
 [System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-y\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-y" }, { "env": "HORDE_TEST_HARNESS_Y_HOME" } ] }')
 $script:n = 0
 $sess = New-HordeKnown -Value "deny-session"
+# THE RELAYS THIS SUITE ASKS ARE ITS OWN (the relays' secret files, further down): the real ones are
+# let go and the port is given relays registered the way a real one registers, through
+# Register-HordeRelay, each with a folder and a capabilities.json of this suite's own. So the share
+# asks the real Get-HordeRelaySecretFiles, and no real relay's settings or files are looked at.
+# Until a section says otherwise, one made-up relay is asked and names no file: the ordinary answer.
+$script:relayFixtures = Join-Path $script:real "relays"
+$script:entriesA = @()
+$script:relayKnownA = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @($script:entriesA) }) }
+function Set-TestRelays {
+    # The port's relays become exactly these: each @{ name; block }, a block of $null registering a
+    # relay with no -SecretFiles at all.
+    param([object[]]$Relays)
+    $script:HordeRelays.Clear()
+    foreach ($r in $Relays) {
+        $folder = Join-Path $script:relayFixtures $r.name
+        if (-not (Test-Path -LiteralPath $folder)) {
+            [void][System.IO.Directory]::CreateDirectory($folder)
+            [System.IO.File]::WriteAllText((Join-Path $folder "capabilities.json"), ('{ "schemaVersion": 1, "relay": "' + $r.name + '", "capabilities": { "durable": { "support": "yes", "evidence": "fixture" }, "realtime": { "support": "yes", "evidence": "fixture" }, "reach.remote": { "support": "yes", "evidence": "fixture" }, "trim.on.ack": { "support": "yes", "evidence": "fixture" } }, "limits": { "maxTextChars": 4096, "maxBatch": 8, "maxWatchMs": 2000, "retentionSeconds": 0 } }'))
+        }
+        if ($null -eq $r.block) { $null = Register-HordeRelay -Folder $folder -Connect {} -Put {} -Get {} -Watch {} -Ack {} }
+        else { $null = Register-HordeRelay -Folder $folder -Connect {} -Put {} -Get {} -Watch {} -Ack {} -SecretFiles $r.block }
+    }
+}
+function Set-OrdinaryRelays { $script:entriesA = @(); Set-TestRelays @(@{ name = "test-relay-a"; block = $script:relayKnownA }, @{ name = "test-relay-quiet"; block = $null }) }
+Set-OrdinaryRelays
 
 function New-TestHome { $script:n++; return (Join-Path $script:real ("home-" + $script:n)) }
 function Get-Names {
@@ -982,11 +1023,13 @@ $described = '{"properties":{"client_' + 'secret":{"type":"string","description"
 Check (Test-Shared $h (New-File (Join-Path $held "client-schema.json") $described)) "CONTROL: a schema, where the member's value is an object that describes it, is shared with no -Force"
 $placeheld = '{"client_' + 'secret":"<paste-the-secret-here>","api_' + 'key":"YOUR_API_KEY_HERE","pass' + 'word":"changeme-before-use"}'
 Check (Test-Shared $h (New-File (Join-Path $held "client-sample.json") $placeheld)) "CONTROL: and a sample whose values are placeholders (angle brackets, the word your, changeme) is shared with no -Force"
-# THE GAP THAT IS STILL LEFT, pinned so that closing it is seen: the same file with its secret under
-# a member name that is none of the six. Nothing knows it for what it is until the setting that
-# names the file is asked (the relay port's question, which is not built).
+# THE GAP THAT IS LEFT FOR A FILE NO RELAY NAMES, pinned so that closing it is seen: the same file
+# with its secret under a member name that is none of the six. Its content says nothing; what closes
+# it is the relay that keeps it naming it (the relays' secret files, below, shares this very file
+# with a made-up relay that names it).
 $otherMember = '{"web":{"client_id":"made-up.apps.example.com","signing_' + 'material":"' + $clientValue + '"}}'
-Check (Test-Shared $h (New-File (Join-Path $held "moved-client.json") $otherMember)) "KNOWN LIMIT: a moved file whose secret sits under another member name is shared, with no -Force"
+$movedClient = New-File (Join-Path $held "moved-client.json") $otherMember
+Check (Test-Shared $h $movedClient) "KNOWN LIMIT: a moved file whose secret sits under another member name, and that no relay names, is shared, with no -Force"
 # THE FUNCTION ITSELF, and the list it reads.
 Check ((@($list.shapes.never) -join ",") -ceq "a private key" -and (@($list.shapes.lifted) -join ",") -ceq "an access token,a signed web token,a webhook address,a secret written under a name such as client_secret or password") "the kinds asked for are one that is never lifted and four that -Force lifts"
 $asBytes = { param([string]$Words) return ,([System.Text.Encoding]::UTF8.GetBytes($Words)) }
@@ -995,6 +1038,91 @@ Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes $keyBlock)) -like ($neve
 Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes $cut)) -like "*an access token*" -and (Get-HordeFilesContentRefusal -Bytes (& $asBytes $cut) -Force) -eq "") "a token is answered without -Force and not with it"
 $everyKind = @(Find-HordeSecretKind -Text $keyBlock -Kinds (@($list.shapes.never) + @($list.shapes.lifted)))
 Check ($everyKind.Count -eq 1 -and $everyKind[0] -ceq "a private key") "CONTROL: every kind the list names is one core/Secrets.ps1 has - it throws for a name it does not have"
+
+Write-Host ""
+Write-Host "--- the relays' own secret files: asked of the port, refused by the handle's path, never lifted ---" -ForegroundColor Cyan
+# files/Deny.ps1's header, THE RELAYS' OWN SECRET FILES. Each answer the port can give is attacked:
+# known with files, known with none, unknown naming a relay, and nobody asked. A file a relay names is
+# reached by its path, in another case, through .., by a link to it and through a junction to its
+# folder, each with and without -Force; and the files beside it are shared. Every relay is this
+# suite's own, and every file holds dummy words.
+$h = New-TestHome
+$relayDir = Join-Path $script:real "relay-kept"
+$clientFile = New-File (Join-Path $relayDir "innocent-name.json") '{"dummy":"content-of-the-client-file-0042"}'
+$besideClient = New-File (Join-Path $relayDir "other.json") '{"dummy":1}'
+$longerName = New-File (Join-Path $relayDir "innocent-name.json.md") "dummy words, and no secret"
+$neverFile = Join-Path $relayDir "not-there-yet.json"
+$saysRelay = "is what the relay 'test-relay-a' calls the sign-in client file"
+$script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+Check (Test-Refused $h $clientFile ($saysRelay + " ('" + $clientFile + "'), a file it keeps a secret in. " + $never) "content-of-the-client") "KNOWN WITH FILES: the file a relay names is refused, the reason naming the relay and what the file is, and nothing it holds"
+Check (Test-Refused $h $clientFile $saysRelay -Force) "and -Force does not lift it"
+Check (Test-Shared $h $besideClient) "CONTROL: a file beside it, in the same folder, is shared"
+Check (Test-Shared $h $longerName -Force) "CONTROL: and so is one whose name only begins with its name, as a path that merely begins like it is not it"
+Check (Test-Refused $h (Join-Path $relayDir "INNOCENT-NAME.JSON") $saysRelay) "the file, reached by its path in other case, is refused"
+Check (Test-Refused $h (Join-Path $relayDir "sub\..\innocent-name.json") $saysRelay -Force) "and by a path with .. in it, with -Force"
+$script:entriesA = @([pscustomobject]@{ path = $clientFile.ToUpperInvariant(); what = "the sign-in client file" })
+Check (Test-Refused $h $clientFile $saysRelay) "a relay that names the file in other case still has it refused"
+Check (Test-Refused $h $clientFile $saysRelay -Force) "and -Force does not lift that either"
+$script:entriesA = @([pscustomobject]@{ path = (Join-Path $relayDir "made-up-sub\..\innocent-name.json"); what = "the sign-in client file" })
+Check (Test-Refused $h $clientFile $saysRelay) "a relay that names the file with .. in its path still has it refused"
+$links = Join-Path $script:work "links"
+[void][System.IO.Directory]::CreateDirectory($links)
+$junction = Join-Path $links "relay-kept-junction"
+if (New-Junction $junction $relayDir) {
+    $script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+    Check (Test-Refused $h (Join-Path $junction "innocent-name.json") $saysRelay) "the file, reached through a junction to its folder, is refused"
+    Check (Test-Refused $h (Join-Path $junction "innocent-name.json") $saysRelay -Force) "and with -Force"
+    # A share never follows a link (files/Path.ps1), so the file beside it is refused through the junction
+    # too - for the link, and not as the relay's file.
+    Check (Test-Refused $h (Join-Path $junction "other.json") "is a link" "the relay") "CONTROL: the file beside it, through the same junction, is refused for the link, not as the relay's file"
+    $script:entriesA = @([pscustomobject]@{ path = (Join-Path $junction "innocent-name.json"); what = "the sign-in client file" })
+    Check (Test-Refused $h $clientFile $saysRelay -Force) "a relay that names the file THROUGH a junction has it refused by its real path, -Force or not"
+} else { Write-Skip "a junction could not be made here, so the junction cases did not run" }
+$fileLink = Join-Path $links "innocent-link.md"
+if (New-FileLink $fileLink $clientFile) {
+    $script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+    Check (Test-Refused $h $fileLink $saysRelay) "the file, reached by a symbolic link to it with another name, is refused"
+    Check (Test-Refused $h $fileLink $saysRelay -Force) "and with -Force"
+} else { Write-Skip "a symbolic link could not be made here (it needs the right to make one), so the file-link cases did not run" }
+$script:entriesA = @([pscustomobject]@{ path = $movedClient; what = "the sign-in client file" })
+Check (Test-Refused $h $movedClient $saysRelay -Force) "THE GAP ABOVE, CLOSED BY THE RELAY: the moved client file whose content says nothing is refused once its relay names it, -Force or not"
+$script:entriesA = @([pscustomobject]@{ path = $neverFile; what = "the sign-in client file" })
+Check (Test-Shared $h $besideClient) "CONTROL: a relay may name a file that is not there yet, and an ordinary file beside it is shared"
+# TWO RELAYS, ONE OF WHICH NAMES NOTHING, and a relay that keeps no secret file: the files of the one
+# that does are still refused, by its name.
+$script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+Set-TestRelays @(@{ name = "test-relay-a"; block = $script:relayKnownA }, @{ name = "test-relay-b"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } }, @{ name = "test-relay-quiet"; block = $null })
+Check (Test-Refused $h $clientFile $saysRelay) "with two relays asked and a third that keeps none, the file one of them names is refused"
+Check (Test-Shared $h $besideClient) "CONTROL: and an ordinary file is shared"
+Write-Host ""
+Write-Host "--- known with none, unknown, and nobody asked ---" -ForegroundColor Cyan
+Set-OrdinaryRelays
+Check (Test-Shared $h $clientFile) "KNOWN, NO FILE NAMED, A RELAY ASKED: the ordinary answer, and the same file is shared"
+# THE RELAYS ARE ASKED OF THE HOME THE SHARE IS GIVEN, not of the user's own: a relay's settings
+# live in a home, and a share made for one home must not be judged by another's.
+$script:askedHome = $h
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($given) if ($given -ceq $script:askedHome) { New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } else { New-HordeUnknown -Reason "asked of another home" } } })
+Check (Test-Shared $h $besideClient) "a relay is asked of the very home the share was given (one that answers only for that home lets the share through)"
+Set-OrdinaryRelays
+$unknownSays = "which files hold the relays' secrets is not known: the relay 'test-relay-a' could not tell"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) New-HordeUnknown -Reason "its made-up settings do not read" } }, @{ name = "test-relay-b"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } })
+Check (Test-Refused $h $besideClient ($unknownSays + " (*" + $never)) "UNKNOWN: an ordinary file is refused, the reason naming the relay that could not tell, and never shared"
+Check (Test-Refused $h $besideClient $unknownSays -Force) "and -Force does not lift it"
+Check (Test-Refused $h $besideClient "made-up settings do not read") "and the reason carries the relay's own why"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) throw "made up" } })
+Check (Test-Refused $h $besideClient $unknownSays -Force) "a relay that throws is one that could not tell: refused, -Force or not"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "relative\file.json"; what = "the sign-in client file" }) }) } })
+Check (Test-Refused $h $besideClient $unknownSays) "a relay that names a file by a path that is not absolute is one that could not tell"
+$nobody = "no relay was asked, so the relays were not loaded"
+Set-TestRelays @()
+Check (Test-Refused $h $besideClient ($nobody + "*" + $never)) "NOBODY ASKED, no relay loaded at all: an ordinary file is refused, and never shared"
+Check (Test-Refused $h $besideClient $nobody -Force) "and -Force does not lift it"
+Set-TestRelays @(@{ name = "test-relay-quiet"; block = $null })
+Check (Test-Refused $h $besideClient $nobody -Force) "NOBODY ASKED, with a relay loaded that keeps no secret file: the same refusal, -Force or not"
+$placesNow = Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repo
+Check ($placesNow.unknownRelays -like ("*" + $nobody + "*") -and @($placesNow.places | Where-Object { $_.kind -ceq "relay" }).Count -eq 0) "and the places say why, with no relay place among them"
+Set-OrdinaryRelays
+Check (Test-Shared $h $besideClient) "CONTROL: with the ordinary answer back, the same file is shared again"
 
 Set-Location -LiteralPath $env:TEMP
 [System.IO.Directory]::SetCurrentDirectory($env:TEMP)

@@ -293,19 +293,19 @@
            Find = 'kind = "agent"; path = ("" + $storeRoot); force = $true'
            Replace = 'kind = "agent"; path = ("" + $storeRoot); force = $false' }
         @{ Name = "home-not-a-place"
-           Find = '[void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false })'
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false; relay = ""; what = "" })'
            Replace = '' }
         @{ Name = "home-is-the-ambient-one-whatever-home-is-given"
            Find = 'if ($base -eq "") { $base = Get-HordeHome }'
            Replace = '$base = Get-HordeHome' }
         @{ Name = "secrets-folder-of-the-profile-not-a-place"
-           Find = '[void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })'
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false; relay = ""; what = "" })'
            Replace = '' }
         @{ Name = "no-place-for-the-profiles-ssh"
-           Find = '[void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false })'
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false; relay = ""; what = "" })'
            Replace = '' }
         @{ Name = "harness-folders-not-places"
-           Find = '[void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true })'
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true; relay = ""; what = "" })'
            Replace = '' }
         @{ Name = "harnesses-read-from-the-real-repository-whatever-is-given"
            Find = 'if ($RepoRoot -ne "") { $from = @{ Root = $RepoRoot } }'
@@ -327,7 +327,7 @@
            Find = '$stores = Get-HordeAgentStoreRoots @from -ProfileRoot $under }'
            Replace = '$stores = Get-HordeAgentStoreRoots @from }' }
         @{ Name = "the-profiles-own-home-folder-not-a-place"
-           Find = '[void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false })'
+           Find = '[void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false; relay = ""; what = "" })'
            Replace = '' }
         @{ Name = "force-lifts-the-profiles-own-home-folder"
            Find = 'path = (Join-Path $profileDir $list.homeFolder); force = $false'
@@ -566,5 +566,54 @@
         @{ Name = "word-accesstoken-only-as-a-whole-word"
            Find = '@{ word = "accesstoken"; how = "anywhere" }'
            Replace = '@{ word = "accesstoken"; how = "word" }' }
+        # --- the relays' own secret files (the relay port's question, 2026-10-13) ---
+        @{ Name = "relays-not-loaded"
+           Find = '    . $hordeFilesRelayFile'
+           Replace = '    $null = $hordeFilesRelayFile' }
+        @{ Name = "a-relay-already-registered-is-loaded-again"
+           Find = 'if (@(Get-HordeRelayNames) -ccontains (Split-Path -Leaf (Split-Path -Parent $hordeFilesRelayFile))) { continue }'
+           Replace = '' }
+        @{ Name = "relays-never-asked"
+           Find = '$relayFiles = Get-HordeRelaySecretFiles -HordeHome $HordeHome'
+           Replace = '$relayFiles = New-HordeKnown -Value ([pscustomobject]@{ files = @(); asked = @("nobody") })' }
+        @{ Name = "relays-asked-of-the-users-own-home"
+           Find = '$relayFiles = Get-HordeRelaySecretFiles -HordeHome $HordeHome'
+           Replace = '$relayFiles = Get-HordeRelaySecretFiles' }
+        @{ Name = "relay-unknown-taken-for-known"
+           Find = 'if ($relayFiles.state -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "relay-unknown-names-no-relay"
+           Find = 'if ($null -ne $relayFiles.PSObject.Properties["relays"]) { $who = @($relayFiles.relays) }'
+           Replace = '' }
+        @{ Name = "relay-unknown-says-not-why"
+           Find = ' + " (" + $relayFiles.reason + ")"'
+           Replace = '' }
+        @{ Name = "nobody-asked-taken-for-none"
+           Find = '} elseif (@($relayFiles.value.asked).Count -eq 0) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "relay-files-not-places"
+           Find = 'foreach ($entry in @($relayFiles.value.files)) {'
+           Replace = 'foreach ($entry in @()) {' }
+        @{ Name = "relay-file-lifted-by-force"
+           Find = 'kind = "relay"; path = ("" + $entry.path); force = $false;'
+           Replace = 'kind = "relay"; path = ("" + $entry.path); force = $true;' }
+        @{ Name = "relay-unknown-not-refused"
+           Find = 'if ($found.unknownRelays -ne "") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "relay-unknown-lifted-by-force"
+           Find = 'if ($found.unknownRelays -ne "") {'
+           Replace = 'if ($found.unknownRelays -ne "" -and -not $Force) {' }
+        @{ Name = "relay-unknown-refusal-says-force-shares-it"
+           Find = '", so whether ''" + $FinalPath + "'' is one of them cannot be told" + $never)'
+           Replace = '", so whether ''" + $FinalPath + "'' is one of them cannot be told" + $insist)' }
+        @{ Name = "relay-refusal-does-not-name-the-relay"
+           Find = '"'' is what the relay ''" + $place.relay + "'' calls " + $place.what'
+           Replace = '"'' is what a relay calls " + $place.what' }
+        @{ Name = "relay-refusal-does-not-say-what-the-file-is"
+           Find = '"'' calls " + $place.what + " (''"'
+           Replace = '"'' calls a file (''"' }
+        @{ Name = "relay-refusal-says-force-shares-it"
+           Find = '"''), a file it keeps a secret in" + $never)'
+           Replace = '"''), a file it keeps a secret in" + $insist)' }
     )
 }

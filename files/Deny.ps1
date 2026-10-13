@@ -134,6 +134,26 @@
 #   inside it: the handle's final path is the name that was opened, and nothing marks the file. A
 #   hard link is made on purpose, as a copy is; the list is for the share nobody meant to make.
 #
+# THE RELAYS' OWN SECRET FILES ARE NEVER SHARED, whatever the caller says (2026-10-13, the relay
+# port's question, PR 235). A hosted relay's deploy reads a sign-in client file from wherever a
+# setting of that relay points, under any name, and its deploy tool keeps a login; measured the
+# day PR 227 was reviewed, that client file moved by its setting and given an innocent name was
+# shared with no -Force at all. This file may not name a relay (CONTRIBUTING 14), so it asks the
+# relay port which files hold relays' secrets (Get-HordeRelaySecretFiles) and refuses each one
+# like the places above: the open handle's final path against the entry's own final path where
+# the file is there, so a link, a junction, another case or a path with .. in it is still the file.
+#   FAIL CLOSED. An unknown answer refuses EVERY share and names the relays that could not tell;
+#   so does an answer with nobody asked, which is what a port with no adapter loaded says - a list
+#   nobody was asked for is not the list. Known, with no file named by relays that were asked, is
+#   the ordinary answer and denies nothing more.
+#   THE RELAYS ARE LOADED HERE, AT SCRIPT LEVEL, ONCE PER LOAD OF THIS FILE (a share), never per
+#   check: measured about 1.8 to 3.6 s on the dev box on 2026-10-13. A relay that is already
+#   registered is not loaded again, so this file may be loaded twice, or after a caller that
+#   loaded the relays itself, without the port's "already registered". The folder's own name is
+#   the relay's name: the port refuses a capabilities.json that says otherwise.
+#   THE REFUSAL NAMES THE RELAY AND WHAT THE FILE IS, in the relay's own few words, never anything
+#   of what the file holds: nothing of it is read.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
@@ -144,6 +164,14 @@
 # What looks like a credential in a text: the one statement of it, core's.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Secrets.ps1")
 . (Join-Path $PSScriptRoot "Path.ps1")
+# Which files hold relays' secrets: the port's question, with every relay loaded to answer it (the
+# header, THE RELAYS' OWN SECRET FILES). Skipping a relay already registered is what makes a second
+# load safe.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "relays\Port.ps1")
+foreach ($hordeFilesRelayFile in @(Get-HordeRelayFiles)) {
+    if (@(Get-HordeRelayNames) -ccontains (Split-Path -Leaf (Split-Path -Parent $hordeFilesRelayFile))) { continue }
+    . $hordeFilesRelayFile
+}
 
 function Get-HordeFilesDenyList {
     # THE LIST, and the only copy of it: test/test-files-deny.ps1 attacks every entry from both sides.
@@ -273,18 +301,21 @@ function Get-HordeFilesDenyProfiles {
 }
 
 function Get-HordeFilesDenyPlaces {
-    # The folders of the list for this user and this home: { places; unknown; unknownNever }.
-    # places is { kind: home | secrets | ssh | agent; path; force }, path as it is written and
-    # force whether -Force lifts it; a folder that two ways of asking both name is there once.
-    # unknown is why the harnesses' folders could not be learned, or "". unknownNever is why a
-    # place -Force never lifts could not be learned, or "".
+    # The folders of the list for this user and this home: { places; unknown; unknownNever;
+    # unknownRelays }. places is { kind: home | secrets | ssh | agent | relay; path; force; relay;
+    # what }, path as it is written and force whether -Force lifts it; a folder that two ways of
+    # asking both name is there once. A relay's entry is a FILE, and relay and what are the
+    # relay's name and its words for the file ("" for every other kind). unknown is why the
+    # harnesses' folders could not be learned, or "". unknownNever is why a place -Force never
+    # lifts could not be learned, or "". unknownRelays is why the relays' secret files could not
+    # be learned, or "" (the header, FAIL CLOSED).
     # -RepoRoot is where the agents folder is read from, for a caller that must not use the real one.
     param([string]$HordeHome = "", [string]$RepoRoot = "")
     $list = Get-HordeFilesDenyList
     $places = New-Object System.Collections.ArrayList
     $base = $HordeHome
     if ($base -eq "") { $base = Get-HordeHome }
-    [void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false })
+    [void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false; relay = ""; what = "" })
     # THE TWO PROFILES (the header says why two). With none in the variable there is no such folder
     # to name: core/Home.ps1 has already refused a home then. THE SYSTEM'S IS NOT LET OFF SO: when it
     # will not say, where the real home, .horde-secrets and .ssh are is not known, and that is a
@@ -294,9 +325,24 @@ function Get-HordeFilesDenyPlaces {
     if ($profiles.system -eq "") { $unknownNever = "the operating system would not say where the user's profile is" }
     foreach ($profileDir in @($profiles.variable, $profiles.system)) {
         if ($profileDir -eq "") { continue }
-        [void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false })
-        [void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })
-        [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false })
+        [void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false; relay = ""; what = "" })
+        [void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false; relay = ""; what = "" })
+        [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false; relay = ""; what = "" })
+    }
+    # THE RELAYS' OWN SECRET FILES, asked of the port (the header says why, and why each of the two
+    # refusals below fails closed). The port folds each path with GetFullPath; where it really is,
+    # is asked below like every other place.
+    $unknownRelays = ""
+    $relayFiles = Get-HordeRelaySecretFiles -HordeHome $HordeHome
+    if ($relayFiles.state -cne "known") {
+        $who = @()
+        if ($null -ne $relayFiles.PSObject.Properties["relays"]) { $who = @($relayFiles.relays) }
+        $named = $(if ($who.Count -gt 0) { "the relay " + (($who | ForEach-Object { "'" + $_ + "'" }) -join ", ") + " could not tell" } else { "the relay port could not tell" })
+        $unknownRelays = "which files hold the relays' secrets is not known: " + $named + " (" + $relayFiles.reason + ")"
+    } elseif (@($relayFiles.value.asked).Count -eq 0) {
+        $unknownRelays = "which files hold the relays' secrets is not known: no relay was asked, so the relays were not loaded"
+    } else {
+        foreach ($entry in @($relayFiles.value.files)) { [void]$places.Add([pscustomobject]@{ kind = "relay"; path = ("" + $entry.path); force = $false; relay = ("" + $entry.relay); what = ("" + $entry.what) }) }
     }
     # THE HARNESSES, ASKED TWICE: under the profile the variable names, with wherever a harness's
     # own variable moved its store, and then under the system's profile.
@@ -315,7 +361,7 @@ function Get-HordeFilesDenyPlaces {
         $stores = $null
         if ($under -eq "") { $stores = Get-HordeAgentStoreRoots @from } else { $stores = Get-HordeAgentStoreRoots @from -ProfileRoot $under }
         if ($stores.state -cne "known") { $unknown = "" + $stores.reason }
-        else { foreach ($storeRoot in @($stores.value)) { [void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true }) } }
+        else { foreach ($storeRoot in @($stores.value)) { [void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true; relay = ""; what = "" }) } }
     }
     # A folder that two ways of asking both name is one place, and is opened and asked once.
     $once = New-Object System.Collections.ArrayList
@@ -324,7 +370,7 @@ function Get-HordeFilesDenyPlaces {
         foreach ($kept in $once) { if ($kept.kind -ceq $place.kind -and [string]::Equals($kept.path, $place.path, [System.StringComparison]::Ordinal)) { $have = $true } }
         if (-not $have) { [void]$once.Add($place) }
     }
-    return [pscustomobject]@{ places = @($once.ToArray()); unknown = $unknown; unknownNever = $unknownNever }
+    return [pscustomobject]@{ places = @($once.ToArray()); unknown = $unknown; unknownNever = $unknownNever; unknownRelays = $unknownRelays }
 }
 
 function Resolve-HordeFilesDenyPlace {
@@ -400,7 +446,7 @@ function Get-HordeFilesDenyRefusal {
     # that a file in the Horde home is refused for that and not for its name.
     param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force)
     $list = Get-HordeFilesDenyList
-    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)" }
+    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)"; relay = "a file a relay keeps a secret in" }
     $never = ". Nothing there is ever shared, and -Force does not change that"
     $insist = ". If this file holds no secret, share it again with -Force"
     $found = Get-HordeFilesDenyPlaces -HordeHome $HordeHome -RepoRoot $RepoRoot
@@ -410,6 +456,7 @@ function Get-HordeFilesDenyRefusal {
     # name, and what is between are the folders.
     $parts = @($FinalPath -split '\\')
     if ($found.unknownNever -ne "") { return ($found.unknownNever + ", so whether '" + $FinalPath + "' is in " + $what.home + " or among the user's own keys cannot be told" + $never) }
+    if ($found.unknownRelays -ne "") { return ($found.unknownRelays + ", so whether '" + $FinalPath + "' is one of them cannot be told" + $never) }
     # The harness folder the file is in, as it is written; and, when that cannot be told, why not.
     $harness = ""
     $harnessDoubt = ""
@@ -451,6 +498,7 @@ function Get-HordeFilesDenyRefusal {
             }
             foreach ($folder in @($where.paths)) {
                 if (-not (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder)) { continue }
+                if (-not $lifted -and $place.kind -ceq "relay") { return ("'" + $FinalPath + "' is what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "'), a file it keeps a secret in" + $never) }
                 if (-not $lifted) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $never) }
                 if ($harness -eq "") { $harness = "" + $place.path }
             }
