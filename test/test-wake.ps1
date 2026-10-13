@@ -319,6 +319,8 @@ Check ((Decided $r).action -ceq "wait" -and "$((Decided $r).reason)".Contains("b
 Save-HordeWakeLedger -Ledger @{}
 $back = Read-HordeWakeLedger
 Check ($back.state -ceq "known" -and $back.value.ledger.Count -eq 0) "an empty ledger saves and reads back empty"
+Save-HordeWakeLedger -Ledger $keep -Shadow
+Check ((Test-Path -LiteralPath (Join-Path $wakeDir "ledger-shadow.json") -PathType Leaf) -and (Read-HordeWakeLedger).value.ledger.Count -eq 0 -and (Read-HordeWakeLedger -Shadow).value.ledger.Count -eq 2) "a shadow run's ledger is a file of its own: saving it leaves the live ledger as it was, and each reads back its own"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "ledger.json"), '{"schemaVersion":1,"sessions":[{"id":"x"}]}')
 Check ((Read-HordeWakeLedger).state -ceq "unknown") "a saved ledger with a broken entry is unknown, never half a ledger"
 

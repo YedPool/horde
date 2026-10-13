@@ -178,30 +178,39 @@ function Invoke-HordeRestoreSourcePass {
     #              says it once, not every pass.
     #   -Post      param($Mail) -> a tristate answer, known when the mail was taken; $Mail is
     #              { kind; to; messageId; body }. Never called in shadow.
-    #   -Posted    messageId -> $true for the mails already posted, from the last pass
+    #   -Posted    messageId -> when it was posted, for the mails already posted, from the last pass
     #   -Known     the restores already found, each { restoreId; windowStart; windowEnd }, from the last
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
     # THE ENTRIES are journal lines of kind post or stall, or would-post and would-stall in shadow.
     param($Sessions, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeRestoreSettings), [switch]$Shadow, [scriptblock]$Post = $null, $Posted = @{}, $Known = @())
     $entries = New-Object System.Collections.ArrayList
+    # WHAT IS OLDER THAN A RESTORE CAN BE IS DROPPED, from both tables: a restore older than
+    # restoreMaxAgeSeconds is history and plans nothing, so neither its mails' ids nor its window can
+    # matter again. The first version never dropped an id (review of PR #207), and the file only grew.
     $nextPosted = @{}
-    if ($null -ne $Posted) { foreach ($k in @($Posted.Keys)) { $nextPosted["$k"] = $true } }
+    if ($null -ne $Posted) {
+        foreach ($k in @($Posted.Keys)) {
+            $when = $Posted[$k]
+            if ($when -isnot [datetime]) { $when = $Now }
+            if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }
+        }
+    }
     $finding = Get-HordeRestoreFinding -Sessions $Sessions -Now $Now -Settings $Settings -Known $Known
-    $nextKnown = @(@($Known) | Where-Object { $null -ne $_ })
+    $nextKnown = @(@($Known) | Where-Object { $null -ne $_ -and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })
     if ($finding.state -ceq "known") { $nextKnown = @(@($nextKnown | Where-Object { "$($_.restoreId)" -cne $finding.value.anchor.restoreId }) + $finding.value.anchor) }
     foreach ($mail in @(Get-HordeResumePlan -Finding $finding -Now $Now -Settings $Settings)) {
         if ($nextPosted.ContainsKey($mail.messageId)) { continue }
         $kind = "post"
         if ($mail.kind -ceq "stall") { $kind = "stall" }
         # SHADOW: the mail is journaled once and marked, and nothing is handed to the poster.
-        if ($Shadow) { $nextPosted[$mail.messageId] = $true; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind ("would-" + $kind) -Id $mail.to -Outcome ("would-" + $kind) -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId)); continue }
+        if ($Shadow) { $nextPosted[$mail.messageId] = $Now; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind ("would-" + $kind) -Id $mail.to -Outcome ("would-" + $kind) -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId)); continue }
         if ($mail.to -ceq "") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Outcome "unposted" -Reason "no restored session is the warchief, so nobody can be told" -MessageId $mail.messageId)); continue }
         if ($null -eq $Post) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "unposted" -Reason "the pass was given nothing to post through" -MessageId $mail.messageId)); continue }
         $took = $null
         try { $took = & $Post $mail } catch { $took = New-HordeUnknown -Reason "the post failed" -ErrorRecord $_ }
         if ((Test-HordeAnswer $took) -and $took.state -ceq "known") {
-            $nextPosted[$mail.messageId] = $true
+            $nextPosted[$mail.messageId] = $Now
             [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind $kind -Id $mail.to -Outcome "posted" -Reason ("restore " + $finding.value.restoreId) -MessageId $mail.messageId))
         } else {
             $why = "the post answered with something that is not an answer"
@@ -276,32 +285,41 @@ function Get-HordeRestoreSessions {
     return $answer
 }
 
-# ---- the file: <home>\wake\restore.json ----
+# ---- the file: <home>\wake\restore.json, or restore-shadow.json for a shadow run ----
 # Kept apart from everything above, which reads and writes none. Only the command's loop calls these.
 
 function Save-HordeRestoreState {
     # restore.json, replaced whole: the ids of the mails already posted and the restores already found,
     # so a source that is restarted neither posts a resume mail a second time nor gives a restore it
-    # had already named a new id.
-    param($Posted = @{}, $Known = @(), [string]$HordeHome = (Get-HordeHome))
+    # had already named a new id. -Shadow names the shadow run's own file (core/WakeFiles.ps1,
+    # Get-HordeWakeStateFile): a mail a shadow run only would have posted is never marked posted where
+    # a live run reads.
+    param($Posted = @{}, $Known = @(), [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
     $ids = @()
-    if ($null -ne $Posted) { $ids = @($Posted.Keys | Sort-Object | ForEach-Object { "$_" }) }
+    if ($null -ne $Posted) { $ids = @($Posted.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; at = $(if ($Posted[$_] -is [datetime]) { ConvertTo-HordeWakeTimeText $Posted[$_] } else { "" }) } }) }
     $restores = @(@($Known) | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ restoreId = "$($_.restoreId)"; windowStart = (ConvertTo-HordeWakeTimeText $_.windowStart); windowEnd = (ConvertTo-HordeWakeTimeText $_.windowEnd) } })
     $doc = [ordered]@{ schemaVersion = 1; posted = $ids; restores = $restores }
-    Write-HordeWakeFile -Path (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "restore.json") -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
+    Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "restore" -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
 
 function Read-HordeRestoreState {
     # What Save-HordeRestoreState wrote: known { posted; known }, absent when there is none, or unknown when it
     # cannot be read - the caller then starts from nothing posted and says so.
-    param([string]$HordeHome = (Get-HordeHome))
-    $path = Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) "restore.json"
+    param([switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    $path = Get-HordeWakeStateFile -Name "restore" -Shadow:$Shadow -HordeHome $HordeHome
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeAbsent -Note "no restore state was saved in this home") }
     try { $j = (Read-HordeSharedText -Path $path) | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason "the saved restore state could not be read" -ErrorRecord $_) }
     if ($null -eq $j -or $null -eq $j.PSObject.Properties["posted"]) { return (New-HordeUnknown -Reason "the saved restore state is not one") }
     $posted = @{}
-    foreach ($id in @($j.posted)) { if ($null -ne $id -and "$id" -ne "") { $posted["$id"] = $true } }
+    try {
+        foreach ($row in @($j.posted)) {
+            if ($null -eq $row) { continue }
+            if ("$($row.id)" -eq "") { return (New-HordeUnknown -Reason "the saved restore state holds a posted mail with no id") }
+            # A mail with no time was posted at a time nobody wrote down; the next pass stamps it.
+            $posted["$($row.id)"] = ConvertFrom-HordeWakeTimeText $row.at
+        }
+    } catch { return (New-HordeUnknown -Reason "the saved restore state holds a posted mail that is not one" -ErrorRecord $_) }
     $restores = New-Object System.Collections.ArrayList
     if ($null -ne $j.PSObject.Properties["restores"]) {
         try {

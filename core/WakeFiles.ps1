@@ -47,6 +47,18 @@ function Get-HordeWakeFolder {
     return (Join-Path $HordeHome "wake")
 }
 
+function Get-HordeWakeStateFile {
+    # The path of one of the state files a run keeps: <home>\wake\<name>.json for a live run, and
+    # <name>-shadow.json for a shadow run. TWO FILES, BECAUSE SHADOW MUST NOT TOUCH WHAT A LIVE RUN
+    # READS. The first version kept one of each, and the review of PR #207 found what a shadow run left
+    # in them: back-offs for nudges it never sent, and - worse - the ids of resume mails it never posted,
+    # marked posted, so a live watcher started later would never have posted them.
+    param([Parameter(Mandatory = $true)][string]$Name, [switch]$Shadow, [string]$HordeHome = (Get-HordeHome))
+    $leaf = $Name + ".json"
+    if ($Shadow) { $leaf = $Name + "-shadow.json" }
+    return (Join-Path (Get-HordeWakeFolder -HordeHome $HordeHome) $leaf)
+}
+
 function Get-HordeWakeStaleSeconds {
     return $script:HordeWakeStaleSeconds
 }

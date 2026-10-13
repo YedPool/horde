@@ -8,8 +8,8 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "shadow-posts"
-           Find = 'if ($Shadow) { $nextPosted[$mail.messageId] = $true;'
-           Replace = 'if ($false) { $nextPosted[$mail.messageId] = $true;' }
+           Find = 'if ($Shadow) { $nextPosted[$mail.messageId] = $Now;'
+           Replace = 'if ($false) { $nextPosted[$mail.messageId] = $Now;' }
         @{ Name = "posted-mail-posted-again"
            Find = 'if ($nextPosted.ContainsKey($mail.messageId)) { continue }'
            Replace = '' }
@@ -40,6 +40,15 @@
         @{ Name = "found-restore-not-handed-back"
            Find = 'if ($finding.state -ceq "known") { $nextKnown ='
            Replace = 'if ($false) { $nextKnown =' }
+        @{ Name = "shadow-state-written-where-live-reads"
+           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "restore" -Shadow:$Shadow -HordeHome $HordeHome) -Text'
+           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "restore" -HordeHome $HordeHome) -Text' }
+        @{ Name = "posted-ids-never-dropped"
+           Find = 'if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }'
+           Replace = '$nextPosted["$k"] = $when' }
+        @{ Name = "saved-restores-never-dropped"
+           Find = '-and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })'
+           Replace = '})' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }

@@ -228,10 +228,29 @@ Write-Host ""
 Write-Host "--- the file: what was posted, under a home of this suite's ---" -ForegroundColor Cyan
 
 Check ((Read-HordeRestoreState).state -ceq "absent") "with nothing saved the state is absent"
-Save-HordeRestoreState -Posted @{ "0d000000-0000-4000-8000-000000000001" = $true } -Known @($f.value.anchor)
+# WHAT A SHADOW RUN WOULD HAVE POSTED IS NOT POSTED FOR A LIVE RUN. The shadow passes above marked four
+# mails; saved as a shadow run saves them, a live run that starts afterwards reads none and posts all.
+Save-HordeRestoreState -Posted $posted -Known $r.known -Shadow
+Check ((Read-HordeRestoreState).state -ceq "absent" -and (Read-HordeRestoreState -Shadow).value.posted.Count -eq 4) "a shadow run's state is a file of its own, and the live state is still absent"
+$liveStart = Read-HordeRestoreState
+$livePosted = @{}
+if ($liveStart.state -ceq "known") { $livePosted = $liveStart.value.posted }
+$script:mails.Clear()
+$live = Invoke-HordeRestoreSourcePass -Sessions $fleet -Now (At ($end + 400)) -Settings $settings -Post $poster -Posted $livePosted
+Check ($script:mails.Count -eq 4 -and @($live.entries | Where-Object { $_.outcome -ceq "posted" }).Count -eq 4) "so a live run started after a shadow run posts every mail the shadow run only would have"
+Save-HordeRestoreState -Posted @{ "0d000000-0000-4000-8000-000000000001" = (At 7); "0d000000-0000-4000-8000-000000000002" = $true } -Known @($f.value.anchor)
 $back = Read-HordeRestoreState
-Check ($back.state -ceq "known" -and $back.value.posted.Count -eq 1 -and $back.value.posted.ContainsKey("0d000000-0000-4000-8000-000000000001")) "the mails already posted save and read back"
+Check ($back.state -ceq "known" -and $back.value.posted.Count -eq 2 -and $back.value.posted["0d000000-0000-4000-8000-000000000001"] -eq (At 7) -and $null -eq $back.value.posted["0d000000-0000-4000-8000-000000000002"]) "the mails already posted save and read back, each with when it was posted where that is known"
+
+$aged = @{ "0d000000-0000-4000-8000-000000000003" = (At -86401); "0d000000-0000-4000-8000-000000000004" = (At -86400); "0d000000-0000-4000-8000-000000000005" = $true }
+$oldRestore = [pscustomobject]@{ restoreId = "0d000000-0000-4000-8000-00000000000a"; windowStart = (At -90000); windowEnd = (At -86401) }
+$recent = [pscustomobject]@{ restoreId = "0d000000-0000-4000-8000-00000000000b"; windowStart = (At -9000); windowEnd = (At -8000) }
+$pruned = Invoke-HordeRestoreSourcePass -Sessions @() -Now $t0 -Settings $settings -Posted $aged -Known @($oldRestore, $recent)
+Check ($pruned.posted.Count -eq 2 -and -not $pruned.posted.ContainsKey("0d000000-0000-4000-8000-000000000003") -and $pruned.posted["0d000000-0000-4000-8000-000000000005"] -eq $t0) "a posted id older than a restore can be is dropped; one with no time is stamped now and kept"
+Check (@($pruned.known).Count -eq 1 -and $pruned.known[0].restoreId -ceq $recent.restoreId) "and so is a saved restore whose window ended longer ago than that"
 Check ($back.state -ceq "known" -and @($back.value.known).Count -eq 1 -and $back.value.known[0].restoreId -ceq $f.value.restoreId -and $back.value.known[0].windowStart -eq $f.value.windowStart -and $back.value.known[0].windowEnd -eq $f.value.windowEnd) "and so do the restores already found, with their ids and windows"
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
+Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved posted mail with no id is unknown"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved restore with no window is unknown, never half a state"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), "{ not json")

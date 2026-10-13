@@ -46,12 +46,14 @@ $HordeCommand = @{
         if ($picked.state -ceq "known") { $waker = $picked.value; Write-Output ("wake: shadow run through the waker '" + $waker.name + "'") }
         else { Write-Output ("wake: no waker is installed, so no session is watched for unread mail; the restore source still runs (" + $picked.reason + ")") }
         $restoreSettings = Get-HordeRestoreSettings
+        # A SHADOW RUN KEEPS ITS STATE IN FILES OF ITS OWN (core/WakeFiles.ps1, Get-HordeWakeStateFile), so
+        # nothing it only would have done is ever read by a live run as done.
         $ledger = @{}
         $posted = @{}
-        $saved = Read-HordeWakeLedger
+        $saved = Read-HordeWakeLedger -Shadow
         if ($saved.state -ceq "known") { $ledger = $saved.value.ledger }
         elseif ($saved.state -ceq "unknown") { Write-Output ("wake: starting from an empty ledger - " + $saved.reason) }
-        $savedRestore = Read-HordeRestoreState
+        $savedRestore = Read-HordeRestoreState -Shadow
         $restores = @()
         if ($savedRestore.state -ceq "known") { $posted = $savedRestore.value.posted; $restores = @($savedRestore.value.known) }
         elseif ($savedRestore.state -ceq "unknown") { Write-Output ("wake: starting with no mail marked posted - " + $savedRestore.reason) }
@@ -73,7 +75,7 @@ $HordeCommand = @{
                 if ($read.state -ceq "known") {
                     $sourced = Invoke-HordeRestoreSourcePass -Sessions @($read.value) -Now $now -Settings $restoreSettings -Shadow -Posted $posted -Known $restores
                     $sourceEntries = @($sourced.entries)
-                    if ($sourceEntries.Count -gt 0 -or @($sourced.known).Count -ne $restores.Count) { Save-HordeRestoreState -Posted $sourced.posted -Known $sourced.known }
+                    if ($sourceEntries.Count -gt 0 -or @($sourced.known).Count -ne $restores.Count) { Save-HordeRestoreState -Posted $sourced.posted -Known $sourced.known -Shadow }
                     $posted = $sourced.posted
                     $restores = @($sourced.known)
                     $notes = @($read.leftOut | ForEach-Object { [pscustomobject]@{ id = ("restore:" + $_.agent); reason = ("the restore source left out the " + $_.agent + " sessions, whose listing is not whole: " + $_.reason) } })
@@ -88,7 +90,7 @@ $HordeCommand = @{
             $changed = (@($fresh.entries).Count -gt 0 -or $result.ledger.Count -ne $ledger.Count)
             $ledger = $result.ledger
             $null = Write-HordeWakeJournal -Entries $fresh.entries
-            if ($changed) { Save-HordeWakeLedger -Ledger $ledger }
+            if ($changed) { Save-HordeWakeLedger -Ledger $ledger -Shadow }
             Write-HordeWakeHeartbeat -At $now -ProcessId $PID -Pass $pass -Shadow
             foreach ($e in @($fresh.entries)) { Write-Output ("wake: " + $e.kind + " " + $e.id + " " + $e.outcome + " - " + $e.reason) }
             if ($Once) { Write-Output ("wake: pass " + $pass + " done, " + @($fresh.entries).Count + " journal line(s), shadow"); return }

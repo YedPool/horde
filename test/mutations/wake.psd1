@@ -75,6 +75,9 @@
         @{ Name = "hold-outlives-a-real-attempt"
            Find = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }'
            Replace = '$next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])"; nothingAt = (Get-HordeWakeNothingAt (Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id)) }' }
+        @{ Name = "shadow-ledger-written-where-live-reads"
+           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -Shadow:$Shadow -HordeHome $HordeHome) -Text'
+           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "ledger" -HordeHome $HordeHome) -Text' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -lt $allowed) {'
            Replace = 'if ($true) {' }
