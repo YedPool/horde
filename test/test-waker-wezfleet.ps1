@@ -226,7 +226,14 @@ $state = & $fx.New
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $a = Get-HordeWakeTargets -Waker $w
 Check ($a.state -ceq "unknown" -and "$($a.reason)".StartsWith("timed-out: ") -and "$($a.reason)".Contains("within 2 s") -and $clock.Elapsed.TotalSeconds -lt 30) ("a whole-fleet call that hangs is stopped at its deadline and answered unknown, timed-out (" + [int]$clock.Elapsed.TotalSeconds + " s for a command that would have hung 60)")
-Check ("$($a.reason)".Contains("was stopped")) "and the answer says the process was stopped"
+Check ("$($a.reason)".Contains("was stopped") -and -not "$($a.reason)".Contains("could not be listed")) "and the answer says the process was stopped"
+# THE PROCESS TABLE DOES NOT ANSWER IN TIME: the stop must not hang on it.
+& $fx.NoSnapshot $state $true
+& $fx.Forget $state
+$clock.Restart()
+$a = Get-HordeWakeTargets -Waker $w
+Check ($a.state -ceq "unknown" -and "$($a.reason)".StartsWith("timed-out: ") -and "$($a.reason)".Contains("was stopped, alone") -and "$($a.reason)".Contains("could not be listed within 5 s") -and $clock.Elapsed.TotalSeconds -lt 30) "when the processes it started cannot be listed in time, the hung command is stopped alone, and the answer says the rest may still be running"
+& $fx.NoSnapshot $state $false
 & $fx.SetMode $state @{ pane = @{ hangSeconds = 60 } }
 & $fx.Forget $state
 $clock.Restart()

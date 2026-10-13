@@ -114,6 +114,10 @@ $script:HordeWezfleetWakerFleet = $null
 $script:HordeWezfleetWakerFleetFailures = @{ count = 0; nextAt = [datetime]::MinValue; reason = "" }
 $script:HordeWezfleetWakerPaneFailures = @{}
 $script:HordeWezfleetWakerClock = $null
+# How long the snapshot of the process table may take when a deadline has passed, and a test's way to
+# play one that could not be had (Set-HordeWezfleetWakerSnapshotFault).
+$script:HordeWezfleetWakerSnapshotSeconds = 5
+$script:HordeWezfleetWakerSnapshotFault = $false
 
 function Set-HordeWezfleetWakerRoot {
     # For tests: name the folder holding the fleet's wezfleet.ps1, over the setting and the command on
@@ -128,6 +132,13 @@ function Set-HordeWezfleetWakerDeadlines {
     param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeSeconds = 20)
     if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeSeconds -lt 1) { throw "a deadline is at least 1 s" }
     $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudge = $NudgeSeconds }
+}
+
+function Set-HordeWezfleetWakerSnapshotFault {
+    # For tests: play a process table that cannot be listed in time, so the stop of a hung command is
+    # seen to stop the child alone and say so.
+    param([bool]$On)
+    $script:HordeWezfleetWakerSnapshotFault = $On
 }
 
 function Set-HordeWezfleetWakerClock {
@@ -255,9 +266,15 @@ function ConvertTo-HordeWezfleetWakerCommandLine {
 function Get-HordeWezfleetWakerDescendants {
     # The processes the started one started, and theirs, from one snapshot of the process table, as
     # { id; start } in UTC; a process counts only if it was created at or after its parent started.
+    # $null WHEN THE SNAPSHOT COULD NOT BE HAD - it failed, or it did not come within its own time limit.
+    # THE SNAPSHOT HAS A TIME LIMIT OF ITS OWN (review of PR #211). It is taken at the moment a deadline
+    # has already passed, to stop a hung command; without a limit a process table that does not answer
+    # hangs the stop itself, and with it the loop the deadline exists to protect. No list is not "no
+    # descendants": the caller then stops the child alone and says so.
     param([Parameter(Mandatory = $true)][int]$RootId, [Parameter(Mandatory = $true)][datetime]$RootStart)
+    if ($script:HordeWezfleetWakerSnapshotFault) { return $null }
     $all = @()
-    try { $all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction Stop) } catch { return @() }
+    try { $all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -OperationTimeoutSec $script:HordeWezfleetWakerSnapshotSeconds -ErrorAction Stop) } catch { return $null }
     $byParent = @{}
     foreach ($q in $all) {
         $k = [int]$q.ParentProcessId
@@ -289,8 +306,10 @@ function Stop-HordeWezfleetWakerProcess {
     # Stop the process this call started, by its handle, and every process it started; a descendant only
     # if the process now holding its pid started when the snapshot said. Says what it stopped.
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
-    $tree = @()
-    try { $tree = @(Get-HordeWezfleetWakerDescendants -RootId $Process.Id -RootStart $Process.StartTime) } catch { $tree = @() }
+    $tree = $null
+    try { $tree = Get-HordeWezfleetWakerDescendants -RootId $Process.Id -RootStart $Process.StartTime } catch { $tree = $null }
+    $listed = ($null -ne $tree)
+    $tree = @($tree | Where-Object { $null -ne $_ })
     try { if (-not $Process.HasExited) { $Process.Kill() } } catch { }
     $stopped = 0
     foreach ($d in $tree) {
@@ -301,6 +320,8 @@ function Stop-HordeWezfleetWakerProcess {
     }
     $null = $Process.WaitForExit(5000)
     $also = $(if ($stopped -gt 0) { ", with " + $stopped + " process(es) it had started" } else { "" })
+    # SAID, NOT HIDDEN: with no list, whatever the child had started may still be running.
+    if (-not $listed) { $also = ", alone: the processes it had started could not be listed within " + $script:HordeWezfleetWakerSnapshotSeconds + " s, so any of them are still running" }
     if ($Process.HasExited) { return ("the process it started was stopped" + $also) }
     return ("the process it started did not stop within 5 s" + $also)
 }

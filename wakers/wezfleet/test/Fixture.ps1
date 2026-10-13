@@ -43,6 +43,7 @@ return [pscustomobject]@{
         Set-HordeWezfleetWakerRoot -Path ""
         Set-HordeWezfleetWakerDeadlines
         Set-HordeWezfleetWakerClock $null
+        Set-HordeWezfleetWakerSnapshotFault $false
         $env:HORDE_HOME = $State.oldHome
         foreach ($d in @($State.dir, $State.home)) { if ($d -and (Test-Path -LiteralPath $d)) { Remove-Item -LiteralPath $d -Recurse -Force } }
     }
@@ -101,6 +102,7 @@ return [pscustomobject]@{
         return @([System.IO.File]::ReadAllLines($p) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_ | ConvertFrom-Json })
     }
     Forget = { param($State) Clear-HordeWezfleetWakerMemory }
+    NoSnapshot = { param($State, [bool]$On) Set-HordeWezfleetWakerSnapshotFault $On }
     Clock = { param($State, $Now) Set-HordeWezfleetWakerClock $Now }
     Deadlines = { param($State, [int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeSeconds = 20) Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds -NudgeSeconds $NudgeSeconds }
 }

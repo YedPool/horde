@@ -75,6 +75,14 @@
         @{ Name = "rule-4-timeout-not-named"
            Find = 'reason = ("timed-out: the fleet''s command did not answer within "'
            Replace = 'reason = ("the fleet''s command did not answer within "' }
+        @{ Name = "snapshot-with-no-time-limit"
+           Find = 'CreationDate -OperationTimeoutSec $script:HordeWezfleetWakerSnapshotSeconds -ErrorAction Stop'
+           Replace = 'CreationDate -ErrorAction Stop'
+           Expect = "survives"
+           Reason = "no suite can make the real process table slow; the limit is the cmdlet's own parameter, and the case it guards is played by Set-HordeWezfleetWakerSnapshotFault" }
+        @{ Name = "no-list-said-as-no-descendants"
+           Find = 'if (-not $listed) { $also ='
+           Replace = 'if ($false) { $also =' }
         @{ Name = "rule-5-two-lines-read-as-one"
            Find = 'if ($lines.Count -ne 1) {'
            Replace = 'if ($lines.Count -lt 1) {' }
