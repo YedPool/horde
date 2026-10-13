@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "waker": "fixture-blind",
+  "capabilities": {
+    "nudge.pointer-only": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.box": {
+      "support": "no",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.turn": {
+      "support": "unverified",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "reach.unseen": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    }
+  }
+}
