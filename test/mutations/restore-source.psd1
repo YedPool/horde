@@ -35,8 +35,26 @@
            Find = 'if ($null -ne $same) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-saved-restore-is-this-one"
-           Find = '-and $_.windowStart -le $windowEnd -and $_.windowEnd -ge $windowStart }'
-           Replace = '}' }
+           Find = 'if ($Saved.windowStart -gt $WindowEnd -or $Saved.windowEnd -lt $WindowStart) { return $false }'
+           Replace = '' }
+        @{ Name = "a-window-alone-makes-it-the-same-restore"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return $true' }
+        @{ Name = "one-unchanged-member-makes-it-the-same-restore"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return ($present -gt 0 -and $unchanged -gt 0)' }
+        @{ Name = "every-member-must-be-unchanged"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return ($present -gt 0 -and $unchanged -eq $present)' }
+        @{ Name = "restore-with-no-member-left-is-the-same"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return (($unchanged * 2) -ge $present)' }
+        @{ Name = "second-restore-in-the-same-minute-shares-the-id"
+           Find = 'if (@(@($Known) | Where-Object { $null -ne $_ -and "$($_.restoreId)" -ceq $restoreId }).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "member-starts-not-saved"
+           Find = 'if ($null -ne $held -and $held.Value -is [System.Collections.IDictionary]) { $row["members"] ='
+           Replace = 'if ($false) { $row["members"] =' }
         @{ Name = "found-restore-not-handed-back"
            Find = 'if ($finding.state -ceq "known") { $nextKnown ='
            Replace = 'if ($false) { $nextKnown =' }

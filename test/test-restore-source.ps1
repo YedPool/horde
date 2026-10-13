@@ -82,6 +82,32 @@ Check ($f7kept.value.anchor.windowStart -eq $f7.value.windowStart -and $f7kept.v
 $idsBefore = (@(Get-HordeResumePlan -Finding $f7 -Now (At 2100) -Settings $settings | Where-Object { $_.kind -ceq "resume" } | Sort-Object to | ForEach-Object { $_.messageId }) -join ",")
 $idsAfter = (@(Get-HordeResumePlan -Finding $f7kept -Now (At 2100) -Settings $settings | Where-Object { $_.kind -ceq "resume" } | Sort-Object to | ForEach-Object { $_.messageId }) -join ",")
 Check ($idsBefore -ceq $idsAfter -and $idsBefore -ne "") "so every resume mail keeps its messageId, and nobody is mailed again"
+
+# A SECOND RESTORE THAT BEGINS INSIDE THE FIRST ONE'S WINDOW: every session is brought back again 100 s
+# after the first restore began, so the new window (100 to 243 s) overlaps the saved one (0 to 143 s).
+$secondTime = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddSeconds(100); lastChangeAt = $_.lastChangeAt.AddSeconds(100); status = "idle"; firstSeenAt = $_.firstSeenAt } })
+$f2 = Get-HordeRestoreFinding -Sessions $secondTime -Now (At 300) -Settings $settings -Known @($f.value.anchor)
+Check ($f2.state -ceq "known" -and $f2.value.restoreId -cne $f.value.restoreId) "a second restore that begins inside the first one's window is a NEW restore: every session it shares with the saved one has a later start"
+$ids2 = (@(Get-HordeResumePlan -Finding $f2 -Now (At 300) -Settings $settings | Where-Object { $_.kind -ceq "resume" } | Sort-Object to | ForEach-Object { $_.messageId }) -join ",")
+$ids1st = (@(Get-HordeResumePlan -Finding $f -Now (At 300) -Settings $settings | Where-Object { $_.kind -ceq "resume" } | Sort-Object to | ForEach-Object { $_.messageId }) -join ",")
+Check ($ids2 -ne "" -and $ids2 -cne $ids1st) "so its resume mails have ids of their own, and the orcs are told again"
+$f2again = Get-HordeRestoreFinding -Sessions $secondTime -Now (At 330) -Settings $settings -Known @($f.value.anchor, $f2.value.anchor)
+Check ($f2again.state -ceq "known" -and $f2again.value.restoreId -ceq $f2.value.restoreId) "and on the next pass, with both saved, it is the second restore and keeps the second one's id"
+$sameMinute = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddSeconds(20); lastChangeAt = $_.lastChangeAt.AddSeconds(20); status = "idle"; firstSeenAt = $_.firstSeenAt } })
+$f3 = Get-HordeRestoreFinding -Sessions $sameMinute -Now (At 300) -Settings $settings -Known @($f.value.anchor)
+Check ($f3.state -ceq "known" -and $f3.value.restoreId -cne $f.value.restoreId) "even a second restore that begins in the first one's minute gets an id of its own"
+# FEWER THAN MOST: five of the twelve were restarted by hand since; the other seven are the same lives.
+$fewAgain = @($fleet | ForEach-Object { if (@(8, 9, 10, 11, 12 | ForEach-Object { Sid $_ }) -ccontains $_.id) { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddSeconds(100); lastChangeAt = $_.lastChangeAt.AddSeconds(100); status = "idle"; firstSeenAt = $_.firstSeenAt } } else { $_ } })
+$f4 = Get-HordeRestoreFinding -Sessions $fewAgain -Now (At 300) -Settings $settings -Known @($f.value.anchor)
+Check ($f4.state -ceq "known" -and $f4.value.restoreId -ceq $f.value.restoreId) "when most of the saved members that are still running have the start they had, it is the same restore, whatever a few did since"
+$strangers = @($fleet | ForEach-Object { [pscustomobject]@{ id = ("0b" + $_.id.Substring(2)); role = $_.role; parent = ""; startedAt = $_.startedAt.AddSeconds(50); lastChangeAt = $_.lastChangeAt.AddSeconds(50); status = "idle"; firstSeenAt = $_.firstSeenAt } })
+$f5 = Get-HordeRestoreFinding -Sessions $strangers -Now (At 300) -Settings $settings -Known @($f.value.anchor)
+Check ($f5.state -ceq "known" -and $f5.value.restoreId -cne $f.value.restoreId) "a window that overlaps a saved restore none of whose members is still running shares no session with it, and is a new restore"
+$legacy = [pscustomobject]@{ restoreId = $f.value.restoreId; windowStart = $f.value.windowStart; windowEnd = $f.value.windowEnd }
+$f6 = Get-HordeRestoreFinding -Sessions $fleet -Now (At 300) -Settings $settings -Known @($legacy)
+Check ($f6.state -ceq "known" -and $f6.value.restoreId -cne $f.value.restoreId) "a restore saved before members were recorded matches nothing: its window alone is not enough"
+Check ($f.value.anchor.members.Count -eq 12 -and $f.value.anchor.members[(Sid 2)] -eq (At 13)) "what is handed back to save holds each member's start"
+
 $nextDay = @($fleet | ForEach-Object { [pscustomobject]@{ id = $_.id; role = $_.role; parent = $_.parent; startedAt = $_.startedAt.AddDays(1); lastChangeAt = $_.lastChangeAt.AddDays(1); status = "idle"; firstSeenAt = $_.firstSeenAt } })
 $fNext = Get-HordeRestoreFinding -Sessions $nextDay -Now (At (86400 + 200)) -Settings $settings -Known @($f.value.anchor)
 Check ($fNext.state -ceq "known" -and $fNext.value.restoreId -cne $f.value.restoreId) "a restore the next day overlaps no saved one, and is a new restore with a new id"
@@ -317,6 +343,11 @@ $pruned = Invoke-HordeRestoreSourcePass -Sessions @() -Now $t0 -Settings $settin
 Check ($pruned.posted.Count -eq 2 -and -not $pruned.posted.ContainsKey("0d000000-0000-4000-8000-000000000003") -and $pruned.posted["0d000000-0000-4000-8000-000000000005"] -eq $t0) "a posted id older than a restore can be is dropped; one with no time is stamped now and kept"
 Check (@($pruned.known).Count -eq 1 -and $pruned.known[0].restoreId -ceq $recent.restoreId) "and so is a saved restore whose window ended longer ago than that"
 Check ($back.state -ceq "known" -and @($back.value.known).Count -eq 1 -and $back.value.known[0].restoreId -ceq $f.value.restoreId -and $back.value.known[0].windowStart -eq $f.value.windowStart -and $back.value.known[0].windowEnd -eq $f.value.windowEnd) "and so do the restores already found, with their ids and windows"
+Check ($back.value.known[0].members.Count -eq 12 -and $back.value.known[0].members[(Sid 12)] -eq (At 143)) "and each member's start"
+$readBack = Get-HordeRestoreFinding -Sessions $fleet -Now (At 300) -Settings $settings -Known $back.value.known
+Check ($readBack.state -ceq "known" -and $readBack.value.restoreId -ceq $f.value.restoreId) "so a source that is restarted reads the restore back and knows it for the same one"
+[System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x","windowStart":"2026-10-12T08:00:00.0000000Z","windowEnd":"2026-10-12T08:02:00.0000000Z","members":[{"id":"y"}]}]}')
+Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved member with no start is unknown, never half a state"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[{"at":"2026-10-12T08:00:00.0000000Z"}],"restores":[]}')
 Check ((Read-HordeRestoreState).state -ceq "unknown") "a saved posted mail with no id is unknown"
 [System.IO.File]::WriteAllText((Join-Path (Get-HordeWakeFolder) "restore.json"), '{"schemaVersion":1,"posted":[],"restores":[{"restoreId":"x"}]}')

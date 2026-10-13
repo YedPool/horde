@@ -117,9 +117,16 @@ function Get-HordeRestoreFinding {
     # review of PR #207 found what follows from deriving the id from it on every pass: when that session
     # closes, the window starts later, the id changes, every mail's id changes with it, and each session
     # that has not moved is mailed again. So the caller hands back what it was given to save: -Known is
-    # the saved restores, each { restoreId; windowStart; windowEnd }, and a window that overlaps a saved
-    # one IS that restore and keeps its id, whoever has left or joined since. The answer's anchor is what
-    # to save: the id, with the window widened to cover both. The function stays pure: it reads no file.
+    # the saved restores, each { restoreId; windowStart; windowEnd; members }, and the answer's anchor is
+    # what to save: the id, the window widened to cover both, and each member's start. The function stays
+    # pure: it reads no file.
+    # THE SAME RESTORE IS ONE WHOSE SESSIONS ARE THE SAME LIVES (Test-HordeRestoreSame). The first anchor
+    # went by the window alone, and the review of PR #208 found what that misses: a SECOND restore that
+    # begins inside the first one's window overlaps it, took its id, and so every mail of it was already
+    # "posted" and nobody was told. A restore gives every session a new start. So a window that overlaps
+    # a saved restore is that restore only if most of the saved members that are still running started
+    # when the saved restore says they did; if most of them started later, they were restored again, and
+    # this is a new restore with an id of its own.
     #
     # THREE ANSWERS TO "HAS IT MOVED", each member's moved being yes, no or neither:
     #   yes      it is busy now, or its status last changed at least movedSeconds after it started
@@ -168,16 +175,51 @@ function Get-HordeRestoreFinding {
         })
     $minute = New-Object System.DateTime($windowStart.Year, $windowStart.Month, $windowStart.Day, $windowStart.Hour, $windowStart.Minute, 0, [System.DateTimeKind]::Utc)
     $restoreId = ConvertTo-HordeTextUuid -Text ("horde-wake-restore`n" + $minute.ToString("yyyy-MM-ddTHH:mm", [System.Globalization.CultureInfo]::InvariantCulture))
-    $anchor = [pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd }
-    $same = @(@($Known) | Where-Object { $null -ne $_ -and $_.windowStart -is [datetime] -and $_.windowEnd -is [datetime] -and $_.windowStart -le $windowEnd -and $_.windowEnd -ge $windowStart } | Sort-Object -Property windowStart) | Select-Object -First 1
+    $starts = New-Object System.Collections.Hashtable ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($b in $best) { $starts["$($b.id)"] = $b.startedAt }
+    $same = @(@($Known) | Where-Object { Test-HordeRestoreSame -Saved $_ -Sessions $all -WindowStart $windowStart -WindowEnd $windowEnd } | Sort-Object -Property windowStart) | Select-Object -First 1
     if ($null -ne $same) {
         $restoreId = "$($same.restoreId)"
         $from = $windowStart; if ($same.windowStart -lt $from) { $from = $same.windowStart }
         $until = $windowEnd; if ($same.windowEnd -gt $until) { $until = $same.windowEnd }
-        $anchor = [pscustomobject]@{ restoreId = $restoreId; windowStart = $from; windowEnd = $until }
+        # Every start the saved restore recorded is kept, and this pass's members are added to them.
+        foreach ($k in @($same.members.Keys)) { $starts["$k"] = $same.members[$k] }
+        $windowOfAnchor = [pscustomobject]@{ from = $from; until = $until }
+    } else {
+        $windowOfAnchor = [pscustomobject]@{ from = $windowStart; until = $windowEnd }
+        # A NEW RESTORE WHOSE ID A SAVED ONE ALREADY HAS: the second restore began in the first one's
+        # minute. It is named from its own start to the second, so the two can never be one message.
+        if (@(@($Known) | Where-Object { $null -ne $_ -and "$($_.restoreId)" -ceq $restoreId }).Count -gt 0) {
+            $restoreId = ConvertTo-HordeTextUuid -Text ("horde-wake-restore`n" + $windowStart.ToString("yyyy-MM-ddTHH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture) + "`nafter " + $restoreId)
+        }
     }
+    $anchor = [pscustomobject]@{ restoreId = $restoreId; windowStart = $windowOfAnchor.from; windowEnd = $windowOfAnchor.until; members = $starts }
     $notMoved = @($members | Where-Object { $_.moved -ceq "no" } | ForEach-Object { $_.id })
     return (New-HordeKnown -Value ([pscustomobject]@{ restoreId = $restoreId; windowStart = $windowStart; windowEnd = $windowEnd; members = $members; notMoved = $notMoved; anchor = $anchor }) -ObservedAt $Now)
+}
+
+function Test-HordeRestoreSame {
+    # Is the restore found now - its window from -WindowStart to -WindowEnd, among the running -Sessions -
+    # the saved restore -Saved? Only when the windows overlap AND most of the saved members that are still
+    # running have the start the saved restore recorded for them (Get-HordeRestoreFinding, THE SAME
+    # RESTORE). A saved restore none of whose members is still running, or one saved before members were
+    # recorded, shares no session with anything, and is not the same as anything.
+    param($Saved, $Sessions, [datetime]$WindowStart, [datetime]$WindowEnd)
+    if ($null -eq $Saved -or $Saved.windowStart -isnot [datetime] -or $Saved.windowEnd -isnot [datetime]) { return $false }
+    if ($Saved.windowStart -gt $WindowEnd -or $Saved.windowEnd -lt $WindowStart) { return $false }
+    $recorded = $null
+    $p = $Saved.PSObject.Properties["members"]
+    if ($null -ne $p) { $recorded = $p.Value }
+    if ($recorded -isnot [System.Collections.IDictionary]) { return $false }
+    $present = 0
+    $unchanged = 0
+    foreach ($s in @($Sessions)) {
+        if ($null -eq $s -or -not $recorded.Contains("$($s.id)")) { continue }
+        $present++
+        # To the second: a start is saved as text and read back, and a fraction must not make a life new.
+        if ([System.Math]::Abs(($s.startedAt - $recorded["$($s.id)"]).TotalSeconds) -lt 1) { $unchanged++ }
+    }
+    return ($present -gt 0 -and ($unchanged * 2) -gt $present)
 }
 
 function Get-HordeResumePlan {
@@ -229,7 +271,7 @@ function Invoke-HordeRestoreSourcePass {
     #   -Post      param($Mail) -> a tristate answer, known when the mail was taken; $Mail is
     #              { kind; to; messageId; body }. Never called in shadow.
     #   -Posted    messageId -> when it was posted, for the mails already posted, from the last pass
-    #   -Known     the restores already found, each { restoreId; windowStart; windowEnd }, from the last
+    #   -Known     the restores already found, each { restoreId; windowStart; windowEnd; members }, from the last
     #              pass: what keeps a restore's id the same (Get-HordeRestoreFinding). What comes back
     #              as known is that list with this pass's restore added or widened.
     # THE ENTRIES are journal lines of kind post or stall, or would-post and would-stall in shadow.
@@ -380,7 +422,12 @@ function Save-HordeRestoreState {
     param($Posted = @{}, $Known = @(), [switch]$Shadow, [string]$Name = "restore", [string]$HordeHome = (Get-HordeHome))
     $ids = @()
     if ($null -ne $Posted) { $ids = @($Posted.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; at = $(if ($Posted[$_] -is [datetime]) { ConvertTo-HordeWakeTimeText $Posted[$_] } else { "" }) } }) }
-    $restores = @(@($Known) | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ restoreId = "$($_.restoreId)"; windowStart = (ConvertTo-HordeWakeTimeText $_.windowStart); windowEnd = (ConvertTo-HordeWakeTimeText $_.windowEnd) } })
+    $restores = @(@($Known) | Where-Object { $null -ne $_ } | ForEach-Object {
+            $row = [ordered]@{ restoreId = "$($_.restoreId)"; windowStart = (ConvertTo-HordeWakeTimeText $_.windowStart); windowEnd = (ConvertTo-HordeWakeTimeText $_.windowEnd); members = @() }
+            $held = $_.PSObject.Properties["members"]
+            if ($null -ne $held -and $held.Value -is [System.Collections.IDictionary]) { $row["members"] = @($held.Value.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = "$_"; startedAt = (ConvertTo-HordeWakeTimeText $held.Value[$_]) } }) }
+            $row
+        })
     $doc = [ordered]@{ schemaVersion = 1; posted = $ids; restores = $restores }
     Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
@@ -411,7 +458,18 @@ function Read-HordeRestoreState {
                 $from = ConvertFrom-HordeWakeTimeText $row.windowStart
                 $until = ConvertFrom-HordeWakeTimeText $row.windowEnd
                 if ($null -eq $from -or $null -eq $until -or "$($row.restoreId)" -eq "") { return (New-HordeUnknown -Reason "the saved restore state holds a restore with no id or no time") }
-                [void]$restores.Add([pscustomobject]@{ restoreId = "$($row.restoreId)"; windowStart = $from; windowEnd = $until })
+                # A restore saved before members were recorded has none: it then matches no later finding
+                # (Test-HordeRestoreSame), which costs at most one resume line posted a second time.
+                $starts = New-Object System.Collections.Hashtable ([System.StringComparer]::OrdinalIgnoreCase)
+                if ($null -ne $row.PSObject.Properties["members"]) {
+                    foreach ($m in @($row.members)) {
+                        if ($null -eq $m) { continue }
+                        $at = ConvertFrom-HordeWakeTimeText $m.startedAt
+                        if ($null -eq $at -or "$($m.id)" -eq "") { return (New-HordeUnknown -Reason "the saved restore state holds a member with no id or no start") }
+                        $starts["$($m.id)"] = $at
+                    }
+                }
+                [void]$restores.Add([pscustomobject]@{ restoreId = "$($row.restoreId)"; windowStart = $from; windowEnd = $until; members = $starts })
             }
         } catch { return (New-HordeUnknown -Reason "the saved restore state holds a restore that is not one" -ErrorRecord $_) }
     }
