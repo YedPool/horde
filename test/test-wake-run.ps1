@@ -174,8 +174,11 @@ $p = Get-HordeWakeRunPlan -Picked $none5
 Check ($p.ok -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.banner)".StartsWith("SHADOW - ") -and "$($p.banner)".Contains("No waker is installed")) "a shadow run with no waker still starts, and says in its banner that none is installed"
 $p = Get-HordeWakeRunPlan -Live -Picked $one
 Check ($p.ok -and $p.live -eq $true -and [object]::ReferenceEquals($p.waker, $memory) -and "$($p.banner)".StartsWith("LIVE - REAL NUDGES") -and "$($p.banner)".Contains("restore source stays shadow")) "asked for by name, with a waker, the run is live, and its banner begins LIVE and says the restore source stays shadow"
-$p = Get-HordeWakeRunPlan -Live -Picked $none5
-Check ($p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("needs an installed waker") -and "$($p.reason)".Contains("no loaded waker offers")) "a live run with no waker installed is refused, saying why"
+# Caught on purpose: a plan that went on with no waker would throw reading its name, and a throw must
+# fail this check rather than end it.
+$p = $null
+try { $p = Get-HordeWakeRunPlan -Live -Picked $none5 } catch { $p = $null }
+Check ($null -ne $p -and $p.ok -eq $false -and $p.live -eq $false -and $null -eq $p.waker -and "$($p.reason)".Contains("needs an installed waker") -and "$($p.reason)".Contains("no loaded waker offers")) "a live run with no waker installed is refused, saying why"
 $p = Get-HordeWakeRunPlan -Live -Picked (New-HordeUnknown -Reason "2 wakers each offer every capability")
 Check ($p.ok -eq $false -and "$($p.reason)".Contains("2 wakers")) "and so is one when two wakers could be picked: one is never chosen"
 $p = Get-HordeWakeRunPlan -Live -Picked "not an answer"

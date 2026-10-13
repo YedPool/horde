@@ -136,15 +136,17 @@ Check (@(Read-Journal $fleetHome "journal-shadow.jsonl" | Where-Object { $_.kind
 Write-Host ""
 Write-Host "=== status shows both modes; a watcher that died is called stale, by its own tick ===" -ForegroundColor Cyan
 $status = Invoke-Wake $fleetHome @("status")
-Check ($status.code -eq 0 -and $status.out -like "*LIVE: heartbeat * s ago, fresh*" -and $status.out -like "*SHADOW: heartbeat * s ago, fresh*") "status shows a fresh heartbeat for each mode"
+Check ($status.code -eq 0 -and $status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -match "SHADOW: heartbeat \d+ s ago, fresh") "status shows a fresh heartbeat for each mode"
 Check ($status.out -like "*LIVE: journal, the last*" -and $status.out -like "*SHADOW: journal, the last*" -and $status.out -like "*would-nudge*" -and $status.out -like "*woken*") "and each mode's last journal lines"
 $stale = [datetime]::UtcNow.AddSeconds(-600).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":3}'), $utf8)
 $status = Invoke-Wake $fleetHome @("status")
-Check ($status.out -like "*LIVE: heartbeat * s ago, STALE*not running*" -and $status.out -like "*SHADOW: heartbeat * s ago, fresh*") "a live heartbeat ten minutes old is STALE while the shadow one is fresh: a shadow run does not make a dead live watcher look alive"
+Check ($status.out -match "LIVE: heartbeat \d+ s ago, STALE[^
+]*not running" -and $status.out -match "SHADOW: heartbeat \d+ s ago, fresh") "a live heartbeat ten minutes old is STALE while the shadow one is fresh: a shadow run does not make a dead live watcher look alive"
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":300}'), $utf8)
 $status = Invoke-Wake $fleetHome @("status")
-Check ($status.out -like "*LIVE: heartbeat * s ago, fresh*") "the same heartbeat from a watcher that beats every 300 s is fresh: stale is three of its ticks"
+# One line at a time: "LIVE ... fresh" must not be satisfied by the shadow line's "fresh" further down.
+Check ($status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -notmatch "LIVE: heartbeat \d+ s ago, STALE") "the same heartbeat from a watcher that beats every 300 s is fresh: stale is three of its ticks"
 
 Write-Host ""
 Write-Host "=== a home pinned to no fleet: it says what it could not read, once, and keeps beating ===" -ForegroundColor Cyan

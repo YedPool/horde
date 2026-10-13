@@ -61,21 +61,21 @@ $state = & $fx.New
 & $fx.SetRow $state (New-Row 1 @{ role = "master"; label = "M" })
 & $fx.SetRow $state (New-Row 2 @{ parent = (Sid 1); unreadCount = 0; oldestUnreadAt = $null })
 & $fx.SetRow $state (New-Row 3 @{ role = "session"; parent = (Sid 2); reachable = "no" })
-& $fx.SetRow $state (New-Row 4 @{ role = "helper"; reachable = "unknown"; idle = "no" })
+& $fx.SetRow $state (New-Row 4 @{ role = "helper"; idle = "no" })
 & $fx.SetRow $state (New-Row 5 @{ retired = $true; unreadCount = 0; oldestUnreadAt = $null })
-& $fx.SetRow $state (New-Row 6 @{ retired = $true })
+& $fx.SetRow $state (New-Row 6 @{ retired = $true; reachable = "unknown"; idle = "no" })
 $a = Get-HordeWakeTargets -Waker $w
 $list = @(); if ($a.state -ceq "known") { $list = @($a.value | Sort-Object id) }
 Check ($a.state -ceq "known" -and (@($list | ForEach-Object { $_.id }) -join ",") -ceq (@(1, 2, 3, 4, 6 | ForEach-Object { Sid $_ }) -join ",")) "the targets are the fleet's rows that are not retired, and a retired one that still has unread mail - not a retired one with none"
 Check ($list.Count -eq 5 -and $list[0].role -ceq "warchief" -and $list[1].role -ceq "orc" -and $list[2].role -ceq "goblin" -and $list[3].role -ceq "unknown") "master is warchief, orchestrator is orc, session is goblin, and a word it does not know is unknown"
-Check ($list.Count -eq 5 -and $list[0].label -ceq "M" -and $list[1].parent -ceq (Sid 1) -and $list[2].reachable -ceq "no" -and $list[3].reachable -ceq "unknown") "label, parent and reachable are carried as the fleet said them"
+Check ($list.Count -eq 5 -and $list[0].label -ceq "M" -and $list[1].parent -ceq (Sid 1) -and $list[2].reachable -ceq "no" -and $list[4].reachable -ceq "unknown") "label, parent and reachable are carried as the fleet said them"
 $s1 = Get-HordeWakeState -Waker $w -Id (Sid 1)
 $s2 = Get-HordeWakeState -Waker $w -Id (Sid 2)
 $s3 = Get-HordeWakeState -Waker $w -Id (Sid 3)
 $s4 = Get-HordeWakeState -Waker $w -Id (Sid 4)
 Check ($s1.state -ceq "known" -and $s1.value.unreadCount -eq 1 -and $s1.value.boxEmpty -ceq "yes" -and $s1.value.midTurn -ceq "no" -and $s1.value.idle -ceq "yes" -and $s1.value.oldestUnreadAt -eq $t0.AddHours(-1)) "a candidate - unread mail, reachable, idle - has its pane read: the box and the turn are answered, and the oldest unread time is the fleet's, in UTC"
 Check ($s2.state -ceq "known" -and $s2.value.unreadCount -eq 0 -and $s2.value.boxEmpty -ceq "unknown" -and $s2.value.midTurn -ceq "unknown") "a session with no unread mail is answered from the whole-fleet call: its box and turn are unknown, never yes"
-Check ($s3.state -ceq "known" -and $s3.value.boxEmpty -ceq "unknown" -and $s4.state -ceq "known" -and $s4.value.boxEmpty -ceq "unknown" -and $s4.value.idle -ceq "no") "and so is one that cannot be reached, and one that is not idle"
+Check ($s3.state -ceq "known" -and $s3.value.boxEmpty -ceq "unknown" -and $s4.state -ceq "known" -and $s4.value.boxEmpty -ceq "unknown" -and $s4.value.idle -ceq "no") "and so is one that cannot be reached, and one that has unread mail and can be reached but is not idle"
 Check ((Get-Count $state "mail state -Json") -eq 1) ("the targets and four states were answered from ONE whole-fleet call (" + (Get-Count $state "mail state -Json") + ")")
 Check ((Get-Count $state "mail state -To *") -eq 1 -and (Get-Count $state ("mail state -To " + (Sid 1) + " -TimeoutSeconds 5 -Json")) -eq 1) "and exactly one pane was read, the candidate's, with the 5 s the fleet's command is given"
 Check ((Get-Typed $state) -eq 0 -and (Get-Count $state "mail nudge*") -eq 0) "reading rings nobody"
@@ -234,7 +234,7 @@ foreach ($case in @(
 foreach ($case in @(
         @{ what = "text"; exit = 0; out = "no such session"; like = "not JSON" },
         @{ what = "an object with no session"; exit = 0; out = '{"at":"x"}'; like = "without a session" },
-        @{ what = "another session's row"; exit = 0; out = ('{"at":"x","session":' + ($good -replace (Sid 1), (Sid 7)) + '}'); like = "answered about" },
+        @{ what = "another session's row"; exit = 0; out = ('{"at":"x","session":' + ($good -replace (Sid 1), (Sid 7)) + '}'); like = "state -To answered about" },
         @{ what = "exit 3, absent"; exit = 3; out = ('{"at":"x","to":"' + (Sid 1) + '","reason":"absent","detail":"nobody answers to it"}'); like = "absent: " },
         @{ what = "exit 2, a bad timeout"; exit = 2; out = '{"at":"x","to":"","reason":"bad-timeout","detail":"not a number"}'; like = "bad-timeout: " })) {
     Set-Answer $state "pane" $case.exit $case.out
