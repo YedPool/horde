@@ -6,6 +6,27 @@
     Target = "surfaces\pwa\page\phone-core.js"
     Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
     Mutations = @(
+        @{ Name = "progress-envelopes-not-read"
+           Find = 'if (o.value.header.channel === "progress") { takeProgress(e, s, o.value, item, anomalies); continue; }'
+           Replace = 'if (o.value.header.channel === "progress") { continue; }' }
+        @{ Name = "progress-dropped-entries-not-said"
+           Find = 'if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " progress entr"'
+           Replace = 'if (false) anomalies.push("item " + item.seq + ": " + r.value.dropped + " progress entr"' }
+        @{ Name = "progress-place-moves-back"
+           Find = 'if (index > log.readIndex) {'
+           Replace = 'if (index !== log.readIndex) {' }
+        @{ Name = "progress-place-moved-to-an-entry-never-sent"
+           Find = 'if (entryId && index < 0) throw fail("That entry is not in the progress log this phone holds.");'
+           Replace = 'if (entryId && index < 0) return { ...log, mode: s.mode };' }
+        @{ Name = "progress-place-not-stored"
+           Find = 'return { ...x, progressRead: read }; });'
+           Replace = 'return { ...x }; });' }
+        @{ Name = "progress-place-not-read-back"
+           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };'
+           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode };' }
+        @{ Name = "progress-notice-not-read"
+           Find = 'g.notices.push({ ...r.value, seq: h.seq });'
+           Replace = '' }
         @{ Name = "sent-line-time-not-the-signed-one"
            Find = 's.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });'
            Replace = 's.chat.sent.push({ messageId, text, at: now() + 1, session: s.chat.session });' }

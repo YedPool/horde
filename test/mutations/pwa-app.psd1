@@ -8,6 +8,51 @@
     Suite  = "surfaces\pwa\test\test-pwa-browser.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "progress-tab-shows-the-questions"
+           Find = 'show(PANES[pane].view);'
+           Replace = 'show(pane === "chat" ? "chat" : "doc");' }
+        @{ Name = "progress-no-line-where-the-new-begin"
+           Find = 'if (i === progressMark + 1 && progressMark >= 0) {'
+           Replace = 'if (false) {' }
+        @{ Name = "progress-not-opened-at-his-place"
+           Find = 'if (mark) window.scrollTo(0, Math.max(0, window.scrollY + mark.getBoundingClientRect().top - $("bar").getBoundingClientRect().bottom - 8));'
+           Replace = 'if (mark) window.scrollTo(0, 0);' }
+        @{ Name = "progress-jump-marks-everything-read"
+           Find = 'if (!seenEntries.has(v.items[i].id)) break;'
+           Replace = 'if (!seenEntries.has(v.items[i].id)) continue;' }
+        @{ Name = "progress-seen-is-not-read"
+           Find = 'if (upTo) bridge.request("progress-read", { id: upTo })'
+           Replace = 'if (false) bridge.request("progress-read", { id: upTo })' }
+        @{ Name = "progress-jump-goes-nowhere"
+           Find = '$("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));'
+           Replace = '$("progressNewest").addEventListener("click", () => window.scrollTo(0, window.scrollY));' }
+        @{ Name = "progress-mark-all-marks-nothing"
+           Find = 'bridge.request("progress-read", { all: true })'
+           Replace = 'bridge.request("progress")' }
+        @{ Name = "progress-no-count-on-the-tab"
+           Find = '$("tabProgress").textContent = "Progress" + (n > 0 ? " (" + n + ")" : "");'
+           Replace = '$("tabProgress").textContent = "Progress";' }
+        @{ Name = "progress-left-on-a-locked-page"
+           Find = 'clearChat(); clearProgress(); showProgressCount(null); openStamps.clear();'
+           Replace = 'clearChat(); showProgressCount(null); openStamps.clear();' }
+        @{ Name = "progress-labels-not-bold"
+           Find = 'if (p.label) { const b = document.createElement("b"); b.textContent = p.label + ": "; line.appendChild(b); }'
+           Replace = 'if (p.label) { line.appendChild(document.createTextNode(p.label + ": ")); }' }
+        @{ Name = "progress-correction-not-drawn-on-its-entry"
+           Find = 'for (const c of it.corrections) {'
+           Replace = 'for (const c of []) {' }
+        @{ Name = "progress-area-not-the-first-chip"
+           Find = 'if (it.area) head.appendChild(chip(it.area, "area"));'
+           Replace = '' }
+        @{ Name = "progress-lane-and-task-not-shown"
+           Find = 'if (it.lane) head.appendChild(chip("Lane " + it.lane, "lane"));'
+           Replace = '' }
+        @{ Name = "progress-entry-without-its-time"
+           Find = 'if (stamp) head.appendChild(stamp);'
+           Replace = '' }
+        @{ Name = "progress-tab-not-reached-by-back"
+           Find = 'pickPane(Object.prototype.hasOwnProperty.call(PANES, p) ? p : "decisions", true);'
+           Replace = 'pickPane("progress", true);' }
         @{ Name = "no-time-on-a-message"
            Find = 'if (stamp) who.appendChild(stamp);'
            Replace = '' }

@@ -187,7 +187,7 @@ const commands = {
   // THE WAY BETWEEN THE VIEWS: with the page made long and scrolled to its end (as a long chat is), the
   // other view's tab is still on the screen, and a real touch at its centre opens that view.
   async navTouch(c) {
-    const tab = c.to === "chat" ? "tabChat" : "tabDecisions";
+    const tab = c.to === "chat" ? "tabChat" : c.to === "progress" ? "tabProgress" : "tabDecisions";
     await evaluate("document.getElementById('chatLog').style.minHeight = '4000px'; document.getElementById('lists').style.minHeight = '4000px'; window.scrollTo(0, document.documentElement.scrollHeight)");
     await sleep(300);
     const r = await evaluate("(() => { const b = document.getElementById('" + tab + "').getBoundingClientRect(); return { top: b.top, bottom: b.bottom, x: b.left + b.width / 2, y: b.top + b.height / 2, scrolled: window.scrollY, h: window.innerHeight }; })()");
@@ -196,7 +196,7 @@ const commands = {
       await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: r.x, y: r.y }] });
       await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     }
-    const opened = !!(await until(shown(c.to === "chat" ? "chat" : "doc"), 10000));
+    const opened = !!(await until(shown(c.to === "chat" ? "chat" : c.to === "progress" ? "progress" : "doc"), 10000));
     await evaluate("document.getElementById('chatLog').style.minHeight = ''; document.getElementById('lists').style.minHeight = ''");
     return { inView, opened, scrolled: r.scrolled, top: r.top, bottom: r.bottom };
   },
@@ -204,7 +204,57 @@ const commands = {
   async back() {
     await evaluate("history.back()");
     await sleep(800);
-    return await evaluate("({ chat: " + shown("chat") + ", doc: " + shown("doc") + " })");
+    return await evaluate("({ chat: " + shown("chat") + ", doc: " + shown("doc") + ", progress: " + shown("progress") + " })");
+  },
+  // THE PROGRESS LOG: its tab, what it draws, and his place in it.
+  async progressState() {
+    return await evaluate(`(() => {
+      const items = Array.from(document.querySelectorAll('#progressLog .progress-item'));
+      const first = items[0], foot = document.getElementById('progressFoot').getBoundingClientRect(), newest = document.getElementById('progressNewest').getBoundingClientRect();
+      const mark = document.getElementById('progressNew');
+      const bar = document.getElementById('bar').getBoundingClientRect().bottom;
+      const onScreen = items.filter((b) => { const r = b.getBoundingClientRect(); return r.bottom > bar && r.top < foot.top; }).map((b) => b.getAttribute('data-id'));
+      return {
+        shown: !document.getElementById('progress').hidden, doc: !document.getElementById('doc').hidden, chat: !document.getElementById('chat').hidden, keys: !document.getElementById('keys').hidden,
+        tab: document.getElementById('tabProgress').textContent, selected: document.getElementById('tabProgress').getAttribute('aria-selected'), count: document.getElementById('progressCount').textContent,
+        items: items.length, ids: items.map((b) => b.getAttribute('data-id')), onScreen,
+        firstChips: first ? Array.from(first.querySelectorAll('.progress-head .chip')).map((c) => c.textContent) : [],
+        firstTime: first && first.querySelector('.stamp') ? first.querySelector('.stamp').textContent : '',
+        firstTitle: first ? first.querySelector('.progress-title').textContent : '', titleWeight: first ? Number(getComputedStyle(first.querySelector('.progress-title')).fontWeight) : 0,
+        firstLabels: first ? Array.from(first.querySelectorAll('.progress-text b')).map((b) => b.textContent) : [], firstParagraphs: first ? Array.from(first.querySelectorAll('.progress-text p')).map((p) => p.textContent) : [],
+        corrections: items.filter((b) => b.querySelector('.progress-correction')).map((b) => b.getAttribute('data-id') + ' <- ' + b.querySelector('.progress-correction .progress-title').textContent),
+        notes: Array.from(document.querySelectorAll('#progressLog .progress-item > .progress-note')).map((n) => n.textContent),
+        mark: mark ? { top: Math.round(mark.getBoundingClientRect().top - bar), before: mark.nextElementSibling ? mark.nextElementSibling.getAttribute('data-id') : '' } : null,
+        note: document.getElementById('progressNote').hidden ? '' : document.getElementById('progressNote').textContent, empty: !document.getElementById('progressEmpty').hidden,
+        footBottom: Math.round(foot.bottom), newestInView: newest.top >= 0 && newest.bottom <= window.innerHeight && newest.width > 0, innerHeight: window.innerHeight, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
+        atEnd: window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2, scrollY: Math.round(window.scrollY)
+      };
+    })()`);
+  },
+  async progressTab() {
+    await evaluate("document.getElementById('tabProgress').click()", true);
+    await until(shown("progress"), 15000);
+    await sleep(900);
+    return await commands.progressState();
+  },
+  async progressWait(c) {
+    const found = await until("document.getElementById('progressLog').innerText.indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
+    await sleep(900);
+    return { found: !!found, ...(await commands.progressState()) };
+  },
+  // He reads on: the page scrolled down by screens, as a thumb does, each entry passing over the screen.
+  async progressReadOn(c) {
+    for (let i = 0; i < c.screens; i++) { await evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.5))"); await sleep(350); }
+    await sleep(900);
+    return await commands.progressState();
+  },
+  // A real touch on one of the foot's keys.
+  async progressTouch(c) {
+    const at = await centre(c.which === "all" ? "#progressAllRead" : "#progressNewest");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(1200);
+    return await commands.progressState();
   },
   async announce() {
     const ticked = await evaluate("document.getElementById('wroteCode').checked");

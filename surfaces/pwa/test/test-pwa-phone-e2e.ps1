@@ -255,6 +255,43 @@ try {
     $chat = Invoke-App @{ cmd = "chat"; id = $hid }
     $lines = @(); if ($chat.ok) { $lines = @($chat.value.items | Where-Object { $_.kind -ceq "line" }) }
     Check ($lines.Count -eq 1 -and $lines[0].text -ceq "Ship the third one." -and $lines[0].status -ceq "accepted" -and $lines[0].words.StartsWith("Sent")) ("the app shows his line once, with the receipt in its own words (" + $(if ($lines.Count) { $lines[0].words } else { "none" }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 9. the progress log: a changelog on the machine, read by the app in the order written, his place kept ---" -ForegroundColor Cyan
+    # A changelog of the suite's own, in the shape the fleet's is, under the suite's home: where a run
+    # with no progressFile set looks for it.
+    $logFile = Join-Path $hh "progress\changelog.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $logFile) -Force | Out-Null
+    $logLines = @(
+        '{"v":1,"id":"20261012T181500Z-01","ts":"2026-10-12T18:15:00Z","kind":"merged","area":"Form fill","title":"Ruled-line fix merged","text":"Asked: keep text off the ink.\nHappened: the fix merged.\nMeans: no overlap.\nNext: the box path."}',
+        '{"v":1,"id":"20261012T170000Z-02","ts":"2026-10-12T17:00:00Z","kind":"blocked","area":"Ask Orah voice","lane":"B","task":"T-0101","title":"Waiting on a quiet room","text":"Happened: the acoustic test was put off \u05e9\u05dc\u05d5\u05dd."}',
+        '{"v":1,"id":"broken","ts":"not a time","title":"left out","text":"x"}',
+        '{"v":1,"id":"20261012T190000Z-03","ts":"2026-10-12T19:00:00Z","kind":"new-kind","area":"Whole fleet","title":"A kind the app does not know","text":"plain words"}'
+    )
+    [System.IO.File]::WriteAllText($logFile, (($logLines | ForEach-Object { $_ + "`n" }) -join ""), $utf8)
+    $run = Invoke-Run -Turns 1
+    Check ($run.code -eq 0 -and $run.out.Contains("3 progress entries in 1 envelope(s) and 1 notice(s) sent") -and $run.out.Contains("left out of the progress sent: line 3: its ts is not a time")) ("a run follows the changelog under its home: three entries sent, the line that does not hold together named by its number (exit " + $run.code + ")")
+    $null = Invoke-App @{ cmd = "refresh"; id = $hid }
+    $pg = Invoke-App @{ cmd = "bridge"; name = "progress" }
+    $items = @(); if ($pg.ok -and $pg.value.state -ceq "known") { $items = @($pg.value.value.items) }
+    Check ($items.Count -eq 3 -and (@($items | ForEach-Object { $_.title }) -join "|") -ceq "Ruled-line fix merged|Waiting on a quiet room|A kind the app does not know") ("the app shows the entries in the order they were written - the second happened before the first - through the bridge (" + (@($items | ForEach-Object { $_.title }) -join "|") + ")")
+    Check ($items.Count -eq 3 -and $items[0].area -ceq "Form fill" -and $items[0].kindWord -ceq "Merged" -and @($items[0].paragraphs).Count -eq 4 -and $items[0].paragraphs[3].label -ceq "Next" -and $items[0].paragraphs[3].text -ceq "the box path." -and $items[1].lane -ceq "B" -and $items[1].task -ceq "T-0101" -and $items[1].text.EndsWith([string][char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD + ".")) "each with its area, its kind in the app's word, its labelled paragraphs, its lane and task, its non-ASCII words exact"
+    Check ($items.Count -eq 3 -and $items[2].kind -ceq "note" -and $pg.value.value.skipped -eq 1 -and $pg.value.value.unread -eq 3) "a kind the app does not know is a note; the app is told one line was left out; all three are unread"
+    $rd = Invoke-App @{ cmd = "bridge"; name = "progress-read"; args = @{ id = "20261012T170000Z-02" } }
+    Check ($rd.ok -and $rd.value.state -ceq "known" -and $rd.value.value.unread -eq 1) "reading as far as the second leaves one unread"
+    $mailHead = Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261012T200000Z-04","ts":"2026-10-12T20:00:00Z","kind":"note","area":"Form fill","title":"Not merged after all","text":"Means: it was reverted.","corrects":"20261012T181500Z-01"}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $null = Invoke-App @{ cmd = "reload" }
+    $null = Invoke-App @{ cmd = "unlock"; id = $hid }
+    $null = Invoke-App @{ cmd = "bridge"; name = "pick"; args = @{ id = $hid } }
+    $pg2 = Invoke-App @{ cmd = "bridge"; name = "progress" }
+    $v2 = $(if ($pg2.ok -and $pg2.value.state -ceq "known") { $pg2.value.value } else { $null })
+    Check ($run.out.Contains("1 progress entry in 1 envelope(s) sent") -and $null -ne $v2 -and @($v2.items).Count -eq 4 -and $v2.readIndex -eq 1 -and $v2.unread -eq 2) ("only the new line is sent; after a reload the app reads the log again and is at his place: two read, two new (" + $(if ($null -ne $v2) { "" + $v2.readIndex + "/" + $v2.unread } else { "none" }) + ")")
+    Check ($null -ne $v2 -and @($v2.items[0].corrections).Count -eq 1 -and $v2.items[0].corrections[0].title -ceq "Not merged after all" -and $v2.items[3].correctsTitle -ceq "Ruled-line fix merged") "the correction is shown on the entry it corrects, and in its own place"
+    $dump = Invoke-App @{ cmd = "dump" }
+    Check ($dump.ok -and -not $dump.value.Contains("Ruled-line") -and -not $dump.value.Contains("quiet room") -and $dump.value.Contains('"progressRead":{"id":"20261012T170000Z-02","n":2}')) "the store holds his place and no word of the log"
+    Check ((Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))) -eq $mailHead) "and the app put nothing into the machine's mailbox for any of it: progress goes one way"
     }
 } finally {
     if ($null -ne (Get-Variable -Name pairRun -ErrorAction SilentlyContinue)) { Stop-HordeCliRun $pairRun }
