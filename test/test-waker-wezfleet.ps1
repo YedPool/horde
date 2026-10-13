@@ -53,7 +53,7 @@ try {
 Write-Host ""
 Write-Host "--- the mapping: targets, roles, one whole-fleet call a pass, a pane read only for a candidate ---" -ForegroundColor Cyan
 
-Check ((Resolve-HordeProductionWaker).state -ceq "absent" -and (@(Get-HordeWakerUnverified -Waker $w) -join ",") -ceq "nudge.pointer-only,state.box,state.turn,reach.unseen,nudge.guarded,state.limit") "this waker says all six of its capabilities are unverified - shown against the fake, never yet against the fleet's real command - so no live run can pick it"
+Check ((Resolve-HordeProductionWaker).state -ceq "absent" -and (@(Get-HordeWakerUnverified -Waker $w) -join ",") -ceq "nudge.pointer-only,state.box,state.turn,reach.unseen,nudge.guarded,state.limit,state.between-turns") "this waker says all seven of its capabilities are unverified - shown against the fake, never yet against the fleet's real command - so no live run can pick it"
 Check ((Resolve-HordeProductionWaker -AllowUnverified).state -ceq "known" -and (Resolve-HordeProductionWaker -AllowUnverified).value.name -ceq "wezfleet") "and a run that may go through unverified capabilities - shadow, proof - picks this one, never the test waker loaded beside it"
 Check (@($w.capabilities.capabilities.PSObject.Properties | Where-Object { -not "$($_.Value.evidence)".Contains("STILL TO BE RUN against the fleet's real command") }).Count -eq 0) "each one's evidence says what is still to be run"
 $away = Get-HordeWakeTargets -Waker $w

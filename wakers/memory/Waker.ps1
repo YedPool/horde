@@ -76,10 +76,15 @@ function Set-HordeMemoryWakerSession {
         [string]$OutcomeReason = "",
         $UnreadableCount = $null,
         [string]$Limited = "no",
-        $LimitedUntil = $null
+        $LimitedUntil = $null,
+        [string]$BetweenTurns = "no",
+        [string]$Acked = "known",
+        $LastAckedAt = $null,
+        $HandedOverCount = 0,
+        $OldestHandedOverAt = $null
     )
     $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; retired = $Retired; unreadCount = $UnreadCount;
-        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil }
+        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt }
 }
 
 function Set-HordeMemoryWakerFault {
@@ -129,6 +134,11 @@ function Get-HordeMemoryWakerState {
     # Reported only when a test said so: left out, the port reads it as none.
     if ($null -ne $s.unreadableCount) { $value["unreadableCount"] = $s.unreadableCount }
     $value["limited"] = $s.limited
+    $value["betweenTurns"] = $s.betweenTurns
+    $value["acked"] = $s.acked
+    if ($null -ne $s.lastAckedAt) { $value["lastAckedAt"] = $s.lastAckedAt }
+    if ($null -ne $s.handedOverCount) { $value["handedOverCount"] = $s.handedOverCount }
+    if ($null -ne $s.oldestHandedOverAt) { $value["oldestHandedOverAt"] = $s.oldestHandedOverAt }
     if ($null -ne $s.limitedUntil) { $value["limitedUntil"] = $s.limitedUntil }
     return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt (Get-HordeMemoryWakerTime))
 }

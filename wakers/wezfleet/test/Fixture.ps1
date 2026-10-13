@@ -58,7 +58,7 @@ return [pscustomobject]@{
         $oldest = $null
         if ($Session.oldestUnreadAt -is [datetime]) { $oldest = $Session.oldestUnreadAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
         $row = [ordered]@{ id = "$($Session.id)"; label = "$($Session.label)"; role = $role; parent = "$($Session.parent)"; retired = $false; reachable = "yes"; mail = "known"
-            unreadCount = [int]$Session.unreadCount; unreadableCount = 0; oldestUnreadAt = $oldest; idle = "$($Session.idle)"; boxEmpty = "$($Session.boxEmpty)"; midTurn = "$($Session.midTurn)"; reason = ""; reasons = @(); limited = "$($Session.limited)"; limitedUntil = $null }
+            unreadCount = [int]$Session.unreadCount; unreadableCount = 0; oldestUnreadAt = $oldest; idle = "$($Session.idle)"; boxEmpty = "$($Session.boxEmpty)"; midTurn = "$($Session.midTurn)"; reason = ""; reasons = @(); limited = "$($Session.limited)"; limitedUntil = $null; handedOverCount = 0; oldestHandedOverAt = $null; acked = "known"; lastAckedAt = $null; betweenTurns = "$($Session.betweenTurns)" }
         $path = Join-Path $State.dir "fleet.json"
         $parsed = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
         $rows = @(@($parsed) | Where-Object { $null -ne $_ -and $_.id -cne $row.id }) + [pscustomobject]$row

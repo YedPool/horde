@@ -39,11 +39,11 @@
            Find = 'reachable = [string]$reach.value; retired = [string]$retired.value })'
            Replace = 'reachable = [string]$reach.value; retired = "no" })' }
         @{ Name = "limited-not-carried"
-           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
-           Replace = 'midTurn = $words["midTurn"]; limited = $false; limitedUntil = $limitedUntil })' }
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns'
+           Replace = 'midTurn = $words["midTurn"]; limited = "no"; limitedUntil = $limitedUntil; betweenTurns' }
         @{ Name = "the-end-of-a-limit-not-carried"
-           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
-           Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null })' }
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns'
+           Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null; betweenTurns' }
         @{ Name = "a-limit-ending-at-a-time-with-no-zone-accepted"
            Find = 'if ($null -eq $limitedUntil) { return (New-HordeUnknown'
            Replace = 'if ($false) { return (New-HordeUnknown' }

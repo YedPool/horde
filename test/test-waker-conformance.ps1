@@ -50,7 +50,7 @@ function New-Seat {
     $script:seq++
     $s = @{
         id = ("0a000000-0000-4000-8000-" + $script:seq.ToString("000000000000")); label = "A"; role = "orc"; parent = ""
-        unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; unseen = $false; limited = "no"
+        unreadCount = 1; oldestUnreadAt = $t0; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; unseen = $false; limited = "no"; betweenTurns = "no"
         # Two lines: a body cut at a newline, or typed, would show its first line.
         body = ("conformance body " + [guid]::NewGuid().ToString("N") + "`nsecond line " + [guid]::NewGuid().ToString("N"))
     }
@@ -117,6 +117,16 @@ $cases = [ordered]@{
         $a3 = Get-HordeWakeState -Waker $W -Id $unread.id
         return ($a1.state -ceq "known" -and $a1.value.limited -ceq "no" -and $a2.state -ceq "known" -and $a2.value.limited -ceq "yes" -and $a3.state -ceq "known" -and $a3.value.limited -ceq "unknown")
     }
+    "state.between-turns" = {
+        param($W, $Fx, $State)
+        # ALL THREE ANSWERS, as for the limit: a waker that always said no would pass a check of one.
+        $plain = New-Seat; $between = New-Seat @{ betweenTurns = "yes" }; $unsure = New-Seat @{ betweenTurns = "unknown" }
+        & $Fx.Seat $State $plain; & $Fx.Seat $State $between; & $Fx.Seat $State $unsure
+        $a1 = Get-HordeWakeState -Waker $W -Id $plain.id
+        $a2 = Get-HordeWakeState -Waker $W -Id $between.id
+        $a3 = Get-HordeWakeState -Waker $W -Id $unsure.id
+        return ($a1.state -ceq "known" -and $a1.value.betweenTurns -ceq "no" -and $a2.state -ceq "known" -and $a2.value.betweenTurns -ceq "yes" -and $a3.state -ceq "known" -and $a3.value.betweenTurns -ceq "unknown")
+    }
     "reach.unseen" = {
         param($W, $Fx, $State)
         $s = New-Seat @{ unseen = $true }
@@ -175,6 +185,12 @@ try {
                     $lacksOne = $true
                     $r = Resolve-HordeWaker -Name $name -Require @($cap)
                     Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains($cap)) ("[" + $name + "] " + $cap + " is " + $support + ", and a caller that requires it is refused, naming it")
+                    if ($support -cne "unverified" -and $cap -ceq "state.between-turns") {
+                        $s = New-Seat
+                        & $fx.Seat $state $s
+                        $a = Get-HordeWakeState -Waker $w -Id $s.id
+                        Check ($a.state -ceq "unknown" -or ($a.state -ceq "known" -and "$($a.value.betweenTurns)" -ceq "no")) ("[" + $name + "] and it never answers betweenTurns yes or unknown, which it cannot tell")
+                    }
                     if ($support -cne "unverified" -and $cap -ceq "state.limit") {
                         $s = New-Seat
                         & $fx.Seat $state $s

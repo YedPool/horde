@@ -25,6 +25,10 @@
     "state.limit": {
       "support": "unverified",
       "evidence": "mail state gives each row limited (yes, no, unknown) and limitedUntil (a time, or null), as the fleet's command has since its main 93df6a2. Against the fake, a row saying yes read limited with its time, no read not limited, and unknown - or a row of a command too old to say - read unknown. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13). STILL TO BE RUN against the fleet's real command, by a person: a session whose last turn ended in a usage-limit error reads limited yes with the reset time the error named, and a working one reads no."
+    },
+    "state.between-turns": {
+      "support": "unverified",
+      "evidence": "mail state gives each row betweenTurns (yes, no, unknown), as the fleet's command has since its main 5224296: yes when the session's status says busy only because background work is running and its own turn has ended. Against the fake, a row saying yes, no and unknown each read as that, and a row of a command too old to say read unknown. UNVERIFIED: shown against the fake only (test/test-waker-conformance.ps1 and test/test-waker-wezfleet.ps1, 2026-10-13). STILL TO BE RUN against the fleet's real command, by a person: a session whose turn has ended while a background agent of its own still runs reads betweenTurns yes with idle yes, and is nudged only once its box has been read empty."
     }
   }
 }

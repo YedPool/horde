@@ -118,7 +118,7 @@ Write-Host "=== with no flag the run is SHADOW: it reads the fleet and types not
 $once = Invoke-Wake $fleetHome @("run", "-Once")
 Check ($once.code -eq 0) ("run -Once makes its pass and exits 0" + $(if ($once.code -ne 0) { ": " + $once.out } else { "" }))
 Check ($once.out -like "*wake: SHADOW - nothing is nudged*" -and $once.out -like "*through the waker 'wezfleet'*" -and $once.out -notlike "*LIVE*") "its first line says SHADOW, loudly, and which waker it reads through"
-Check ($once.out -like "*UNVERIFIED, so nothing this run journals is proof of them: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*") "and names the capabilities of that waker that are unverified"
+Check ($once.out -like "*UNVERIFIED, so nothing this run journals is proof of them: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit, state.between-turns*") "and names the capabilities of that waker that are unverified"
 Check ($once.out -like "*pass 1 done*shadow*") "and its last that its one pass is done, in shadow"
 $lines = @(Read-Journal $fleetHome "journal-shadow.jsonl")
 Check (@($lines | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $idle }).Count -eq 1) "the journal says would-nudge for the idle session with an empty box and old unread mail"
@@ -198,7 +198,7 @@ Check ($refusedRun.code -eq 1 -and $refusedRun.out -like "*has not started*canno
 Remove-Item -LiteralPath $proofLedger -Force
 Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
 $proofRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
-Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
+Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit, state.between-turns*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
 $typedNow = @(Read-FakeLog "typed.log")
 Check ($typedNow.Count -eq 1 -and $typedBefore -eq 0 -and $typedNow[0].id -ceq $idle -and "$($typedNow[0].text)" -cnotmatch '[\x00-\x1F]') "the fleet's record shows one line typed, into the idle session, and no other: a proof run's nudge is real"
 $proofLines = @(Read-Journal $fleetHome "journal-proof.jsonl")

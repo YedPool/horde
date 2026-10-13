@@ -30,7 +30,8 @@
         "state.turn",
         "reach.unseen",
         "nudge.guarded",
-        "state.limit"
+        "state.limit",
+        "state.between-turns"
       ],
       "additionalProperties": false,
       "properties": {
@@ -57,6 +58,10 @@
         "state.limit": {
           "$ref": "#/definitions/capability",
           "description": "It can tell whether a session is under a usage limit - its last turn ended in one - and so cannot answer a knock. A waker without it may only answer limited no, or leave it out; one with it that cannot tell for a session answers unknown, and the watcher then waits."
+        },
+        "state.between-turns": {
+          "$ref": "#/definitions/capability",
+          "description": "It can tell that a session is idle BETWEEN TURNS though its own status still says busy - its turn has ended and only background work holds the status. A waker without it may only answer betweenTurns no, or leave it out."
         }
       }
     }
