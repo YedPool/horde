@@ -60,10 +60,10 @@
            Find = '        if (@(Find-HordeDecisionSecrets -Value $q).Count -gt 0) {'
            Replace = '        if ($false) {' }
         @{ Name = "list-read-on-every-look"
-           Find = '    if ($print -cne "" -and $print -ceq $mine.fingerprint) { return [pscustomobject]@{ lines = @(); failed = $false } }'
+           Find = '    if (-not $onePage -and $print -cne "" -and $print -ceq $mine.fingerprint) { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }'
            Replace = '' }
         @{ Name = "same-snapshot-sent-again"
-           Find = '    if ($sentAs -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @(); failed = $false } }'
+           Find = '    if (-not $onePage -and $sentAs -ceq $mine.sent) { $mine.fingerprint = $print; return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }'
            Replace = '' }
         @{ Name = "snapshot-of-every-question"
            Find = '-Operation "list" -Request @{ state = "open"; messages = $true }'
@@ -88,8 +88,8 @@
            Find = '    if ($mine.pending.Count -gt 0) {'
            Replace = '    if ($false) {' }
         @{ Name = "undelivered-snapshot-not-a-failure"
-           Find = 'return [pscustomobject]@{ lines = @($what + " recorded; not delivered yet: " + $why); failed = $true }'
-           Replace = 'return [pscustomobject]@{ lines = @($what + " recorded; not delivered yet: " + $why); failed = $false }' }
+           Find = 'return [pscustomobject]@{ lines = @(@($said.ToArray()) + @($what + " recorded; not delivered yet: " + $why)); failed = $true }'
+           Replace = 'return [pscustomobject]@{ lines = @(@($said.ToArray()) + @($what + " recorded; not delivered yet: " + $why)); failed = $false }' }
         # --- the Tick turns the bell (the founder's bug of 2026-10-12)
         @{ Name = "tick-does-not-turn-the-bell"
            Find = '$bell = Invoke-HordeDecisionsChannelBell -Context $Context'

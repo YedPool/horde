@@ -305,6 +305,51 @@ try {
     Check ($again.code -eq 200 -and (Get-Json $again).duplicate -eq $true -and $again.text.Contains('"trimmed":1') -and (& $keysOf $trimChars) -ceq ("c" * 60)) ("A DUPLICATE STILL TRIMS: the same put made again, keeping from its own seq, is the idempotent yes and deletes the one before it (" + $again.text + ")")
 
     Write-Host ""
+    Write-Host "--- the decisions channel itself, against this Worker: a mailbox at its cap and a snapshot of three pages ---" -ForegroundColor Cyan
+    # channels/decisions, A FULL MAILBOX IS EMPTIED BY ONE PAGE SENT FIRST (review of PR 232): the case the
+    # whole change exists for, with the real channel and this Worker's own cap (eight here). The mailbox
+    # is full of this machine's old decisions envelopes and the machine remembers nothing, as on the first
+    # run after the change. No messenger is left in this process: the channel's file loads them all.
+    # A dev of its own: eight envelopes a mailbox, and every other limit as it ships - the dev above also
+    # holds a mailbox to 100 characters, which no page of a snapshot is.
+    $capDev = Start-Dev -Name "capd" -Limits '{"mailboxMaxItems":8}'
+    $dOrigin = $capDev.origin
+    $dBearer = "Bearer " + $capDev.token
+    . (Join-Path $root "channels\Port.ps1")
+    . (Join-Path $root "channels\decisions\Channel.ps1")
+    . (Join-Path $root "test\lib\RelayPhone.ps1")
+    foreach ($loaded in @(Get-HordeMessengerNames)) { [void]$script:HordeMessengers.Remove($loaded) }
+    $dm = New-TestHome -Horde "capd"
+    $dPhone = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $dm.home -Phone $dPhone)
+    $dVouch = New-HordeTestPhoneVouch -Phone $dPhone -Horde "capd"
+    $dKey = Add-HordeRelayPhoneKey -HordeHome $dm.home -AgreePublic $dPhone.agreePublic -By $dPhone.keyId -AuthenticatorData $dVouch.authenticatorData -ClientDataJson $dVouch.clientDataJson -Signature $dVouch.signature
+    $dConn = Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $dOrigin; authorization = $dBearer }
+    $dCtx = New-HordeRelayRunContext -HordeHome $dm.home -Connection $dConn.value
+    $dStore = Join-Path $dm.home "store\decisions"
+    $dLong = ("the quiet option " * 1200).Substring(0, 20000)
+    $dAdded = @(1..6 | ForEach-Object { Invoke-HordeDecision -Operation "add" -Root $dStore -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = ("Long question number " + $_); kind = "yes-no"; whatItIs = $dLong; group = "voice"; askedBy = "orc-b" } } } | Where-Object { $_.state -ceq "known" -and $_.value.outcome -ceq "done" })
+    $dBox = $dOrigin + "/v1/mailboxes/capd/phone"
+    $dMe = $dm.identity.sign.keyId
+    # Eight old envelopes of this machine's decisions stream, as the snapshots before the change left them.
+    $dOld = @(1..8 | ForEach-Object { (Send-To -Url ($dBox + "/items") -Method "POST" -Body ('{"key":"' + $dMe + '/decisions/1/' + ("0" * 20) + $_.ToString("0000") + '","text":"old-' + $_ + '"}') -Authorization $dBearer).code })
+    $dNinth = Send-To -Url ($dBox + "/items") -Method "POST" -Body '{"key":"one-more","text":"one more, with no trim"}' -Authorization $dBearer
+    $dHeld = { return @((Get-Json (Send-To -Url ($dBox + "/items?since=0&max=20") -Authorization $dBearer)).items) }
+    Check ($dKey.state -ceq "known" -and $dCtx.state -ceq "known" -and $dAdded.Count -eq 6 -and (@($dOld | Sort-Object -Unique) -join ",") -ceq "200" -and $dNinth.code -eq 507 -and (Get-Code $dNinth) -ceq "mailbox-full" -and @(& $dHeld).Count -eq 8) ("CONTROL: the phone's mailbox holds eight old envelopes of this machine's decisions stream, its cap, and a ninth put is refused, mailbox-full (" + $dNinth.code + ")")
+    try {
+        $dTick = Invoke-HordeDecisionsChannelSnapshotTick -Context $dCtx.value
+        $dText = (@($dTick.lines) -join " | ")
+        $dNow = @(& $dHeld)
+        $dOpened = @($dNow | ForEach-Object { Open-HordeTestPhoneEnvelope -Phone $dPhone -Text $_.text -MachineSignPublic $dm.identity.sign.public } | Where-Object { $_.ok })
+        $dPages = @($dOpened | ForEach-Object { [int]$_.body.pages } | Sort-Object -Unique)
+        $dShown = @($dOpened | ForEach-Object { @($_.body.questions) } | ForEach-Object { [int]$_.number } | Sort-Object)
+        Check ($dText.Contains("would not take a page of it") -and $dText.Contains("one page is sent first to make room")) ("page 1 of the snapshot is refused by the Worker as full, and the channel sends one page first (" + $dText.Substring(0, [Math]::Min(260, $dText.Length)) + ")")
+        Check (-not $dTick.failed -and $dPages.Count -eq 1 -and $dPages[0] -ge 3 -and $dOpened.Count -eq $dPages[0] -and ($dShown -join ",") -ceq "1,2,3,4,5,6") ("AND THE SNAPSHOT LANDS, in the same look: " + $dOpened.Count + " pages of one snapshot, which the phone opens, holding all six questions (" + ($dShown -join ",") + ")")
+        Check ($dNow.Count -eq $dOpened.Count -and $dNow.Count -lt 8 -and @($dNow | Where-Object { "$($_.text)".StartsWith("old-") }).Count -eq 0) ("the mailbox that was at its cap of eight now holds that snapshot and nothing else: " + $dNow.Count + " envelopes, every old one deleted")
+        Check ((Read-HordeDecisionsChannelWhole -Context $dCtx.value) -gt 0 -and $dCtx.value.full.Count -eq 0) "what the relay wholly took is remembered for the next run, and the run was told of no full mailbox"
+    } finally { Close-HordeRelayRunContext -Context $dCtx.value }
+
+    Write-Host ""
     Write-Host "--- refused signatures, per key and address, and per address ---" -ForegroundColor Cyan
     $rs = New-Phone -Dev $R -Sub "100000000000000000501"
     $k = New-Machine -Dev $R -Cookie $rs.cookie -Label "victim-box"

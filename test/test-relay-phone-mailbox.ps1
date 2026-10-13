@@ -134,6 +134,12 @@ function Get-Held {
     if ($World.conn.relay.name -ceq "counting") { return @(Get-HordeCountingRelayHeld -Mailbox "work/phone") }
     return @((Receive-HordeRelayItems -Connection $World.conn -Mailbox "work/phone" -Since 0).value.items)
 }
+function Get-StreamSeqs {
+    # The seqs, in their own stream, of the decisions envelopes of -World's machine that the mailbox
+    # holds, in order: the first is the first page of the oldest snapshot still there.
+    param($World)
+    return @(Get-Held $World | ForEach-Object { $n = Read-HordeRelayStreamKey -Key $_.key; if ($null -ne $n -and $n.stream -ceq ($World.id.sign.keyId + "/decisions/")) { $n.seq } } | Sort-Object)
+}
 function Get-StreamCount {
     # How many of the held items are of -Machine's stream on -Channel.
     param($World, [string]$Machine, [string]$Channel)
@@ -258,6 +264,125 @@ try {
     Check (-not $multi.failed -and (Get-Ops -Requests) -ceq ((@(1..$pagesNow) | ForEach-Object { "put" }) -join ",")) ("a snapshot of " + $pagesNow + " pages costs " + $pagesNow + " puts and not one request more (" + (Get-Ops -Requests) + ")")
 
     Write-Host ""
+    Write-Host "--- every other page keeps from the last snapshot the relay wholly took, and that is remembered across a restart ---" -ForegroundColor Cyan
+    # channels/decisions, EVERY OTHER PAGE KEEPS FROM THE LAST SNAPSHOT THE RELAY WHOLLY TOOK.
+    $statePath = Get-HordeDecisionsChannelStatePath -Context $G.ctx
+    $remembered = Read-HordeDecisionsChannelWhole -Context $G.ctx
+    Check ($remembered -gt 0 -and $remembered -eq (Get-StreamSeqs $G)[0] -and [System.IO.File]::ReadAllText($statePath) -ceq ('{"v":1,"machine":"' + $G.id.sign.keyId + '","whole":' + $remembered + '}')) ("the first seq of the snapshot the relay last wholly took is kept in the channel's own file: the key id and that number (" + $remembered + ")")
+    Clear-HordeCountingRelayLog
+    Add-Note $G "pages that say what to keep from"
+    $told = Send-Snapshot $G
+    $asked = @(Get-HordeCountingRelayLog -Requests | ForEach-Object { [long]$_.keepFrom })
+    $nowFirst = (Get-StreamSeqs $G)[0]
+    Check (-not $told.failed -and $asked.Count -ge 2 -and @($asked | Select-Object -First ($asked.Count - 1) | Where-Object { $_ -ne $remembered }).Count -eq 0 -and $asked[$asked.Count - 1] -eq $nowFirst -and $nowFirst -gt $remembered) ("every page but the last says to keep from the snapshot before (" + $remembered + "), and the last from this one's own first page (" + $nowFirst + "): " + ($asked -join ","))
+    # A restart: a new context on the same home has no memory but the file.
+    $restarted = New-HordeRelayRunContext -HordeHome $G.home -Connection $conn
+    [void]$script:contexts.Add($restarted.value)
+    $G.ctx = $restarted.value
+    Clear-HordeCountingRelayLog
+    Add-Note $G "after a restart"
+    $told = Send-Snapshot $G
+    $asked = @(Get-HordeCountingRelayLog -Requests | ForEach-Object { [long]$_.keepFrom })
+    Check (-not $told.failed -and $asked.Count -ge 2 -and $asked[0] -eq $nowFirst) ("a new run reads it back: its first page says to keep from the snapshot the run before it landed (" + ($asked -join ",") + ")")
+    foreach ($bad in @(
+            @{ text = "{ not the state"; why = "a file that does not read" },
+            @{ text = ('{"v":1,"machine":"' + ("f" * 32) + '","whole":5}'); why = "a memory written under another key (the identity was rotated)" },
+            @{ text = ('{"v":1,"machine":"' + $G.id.sign.keyId + '","whole":900000}'); why = "a memory that names a seq past the page's own" })) {
+        [System.IO.File]::WriteAllText($statePath, $bad.text)
+        $again = New-HordeRelayRunContext -HordeHome $G.home -Connection $conn
+        [void]$script:contexts.Add($again.value)
+        $G.ctx = $again.value
+        Clear-HordeCountingRelayLog
+        Add-Note $G ("with " + $bad.why)
+        $told = Send-Snapshot $G
+        $asked = @(Get-HordeCountingRelayLog -Requests | ForEach-Object { [long]$_.keepFrom })
+        Check (-not $told.failed -and $asked.Count -ge 2 -and @($asked | Select-Object -First ($asked.Count - 1) | Where-Object { $_ -ne 0 }).Count -eq 0 -and $asked[$asked.Count - 1] -eq (Get-StreamSeqs $G)[0]) ($bad.why + " is no memory: the pages before the last ask for nothing, the snapshot still lands, and its last page trims as ever (" + ($asked -join ",") + ")")
+    }
+    Check ((Read-HordeDecisionsChannelWhole -Context $G.ctx) -eq (Get-StreamSeqs $G)[0]) "and the snapshot that landed is remembered again, over whatever was in the file"
+
+    Write-Host ""
+    Write-Host "--- a mailbox at its cap, a snapshot of several pages, nothing remembered: one page first makes the room ---" -ForegroundColor Cyan
+    # channels/decisions, A FULL MAILBOX IS EMPTIED BY ONE PAGE SENT FIRST (review of PR 232). The mailbox is
+    # filled as it was before any of this: snapshot after snapshot with nothing trimmed. Then it is given
+    # the hosted relay's own cap rule at exactly what it holds.
+    Reset-HordeCountingRelay
+    Set-HordeCountingRelayTextChars -Chars 16000
+    $C = New-World -Connection $conn
+    foreach ($i in 1..6) { $null = Invoke-HordeDecision -Operation "add" -Root $C.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = ("Long question number " + $i); kind = "yes-no"; whatItIs = $long; group = "voice"; askedBy = "orc-b" } } }
+    Set-HordeCountingRelayTrim -On $false
+    foreach ($i in 1..3) { Add-Note $C ("piled up " + $i); $null = Send-Snapshot $C }
+    Set-HordeCountingRelayTrim -On $true
+    $piled = @(Get-Held $C).Count
+    $pagesEach = (Read-NewestSnapshot $C $C.phone).pages
+    [System.IO.File]::Delete((Get-HordeDecisionsChannelStatePath -Context $C.ctx))
+    $fresh = New-HordeRelayRunContext -HordeHome $C.home -Connection $conn
+    [void]$script:contexts.Add($fresh.value)
+    $C.ctx = $fresh.value
+    Set-HordeCountingRelayCap -Items $piled
+    $oneMore = Send-HordeRelayItem -Connection $conn -Mailbox "work/phone" -Text "one more, with no trim"
+    Check ($pagesEach -ge 3 -and $piled -eq (3 * $pagesEach) -and $oneMore.state -ceq "unknown" -and $null -ne $oneMore.PSObject.Properties["status"] -and $oneMore.status -eq 507 -and @(Get-Held $C).Count -eq $piled) ("CONTROL: the mailbox holds " + $piled + " envelopes - three snapshots of " + $pagesEach + " pages, none trimmed - and is at its cap: one more put, with no trim, is refused 507")
+    # ONLY A REFUSAL AS FULL: a page refused for a rate (429) is put again as it is, and no page is sent first.
+    Set-HordeCountingRelayCap -Items 0
+    Set-HordeCountingRelayFaults -Faults @("busy")
+    Add-Note $C "written while the relay was busy"
+    $busyPages = Send-Snapshot $C
+    Set-HordeCountingRelayFaults -Faults @()
+    Check ($busyPages.failed -and -not $busyPages.text.Contains("one page") -and @($C.ctx.state["decisions"].pending).Count -eq $pagesEach) ("a page refused for another reason than a full mailbox is no cause for one page first: the pages wait, all " + $pagesEach + " of them")
+    [System.IO.File]::Delete((Get-HordeDecisionsChannelStatePath -Context $C.ctx))
+    $fresh = New-HordeRelayRunContext -HordeHome $C.home -Connection $conn
+    [void]$script:contexts.Add($fresh.value)
+    $C.ctx = $fresh.value
+    Set-HordeCountingRelayCap -Items $piled
+    Add-Note $C "written when the mailbox was at its cap"
+    # Two puts are let through and no more: the page that is refused, and the one page sent first.
+    Set-HordeCountingRelayPutsLeft -Puts 2
+    Clear-HordeCountingRelayLog
+    $firstLook = Send-Snapshot $C
+    $between = Read-NewestSnapshot $C $C.phone
+    $asked = @(Get-HordeCountingRelayLog -Requests | ForEach-Object { [long]$_.keepFrom })
+    Check ($firstLook.text.Contains("would not take a page of it") -and $firstLook.text.Contains("one page is sent first to make room")) ("page 1 of the snapshot is refused as full, and the run says one page is sent first (" + $firstLook.text.Substring(0, [Math]::Min(300, $firstLook.text.Length)) + ")")
+    Check ($asked.Count -ge 2 -and $asked[0] -eq 0 -and $asked[1] -gt 0 -and $asked[1] -eq (Get-StreamSeqs $C)[0]) ("that first page asked for no trim - nothing is remembered - and the one page says to keep from itself (" + ($asked -join ",") + ")")
+    Check (@(Get-Held $C).Count -eq 1 -and $between.pages -eq 1 -and $between.text.Contains("Should the closing sound play") -and -not $between.text.Contains("Long question number 6")) ("THE PHONE IS NEVER WITHOUT A WHOLE SNAPSHOT: with only that one page taken, the mailbox holds it alone, in place of the " + $piled + ", and it is whole - one page of one, with the questions that fit (" + @(Get-Held $C).Count + " held)")
+    $onePageBody = @(Get-Held $C | ForEach-Object { Open-HordeTestPhoneEnvelope -Phone $C.phone -Text $_.text -MachineSignPublic $C.id.sign.public } | Where-Object { $_.ok })
+    Check ($onePageBody.Count -eq 1 -and @($onePageBody[0].body.withheld).Count -ge 1 -and @($onePageBody[0].body.withheld | Where-Object { "$($_.reason)" -cnotlike "it is in the snapshot that follows*" }).Count -eq 0 -and (@($onePageBody[0].body.questions).Count + @($onePageBody[0].body.withheld).Count) -eq 7) ("and it is true: every open question it does not show is withheld by number, saying it is in the snapshot that follows (" + @($onePageBody[0].body.questions).Count + " shown, " + @($onePageBody[0].body.withheld).Count + " withheld, of 7)")
+    Set-HordeCountingRelayPutsLeft -Puts -1
+    $secondLook = Send-Snapshot $C
+    $landed = Read-NewestSnapshot $C $C.phone
+    Check (-not $secondLook.failed -and $landed.pages -ge 3 -and $landed.text.Contains("written when the mailbox was at its cap") -and $landed.text.Contains("Long question number 6")) ("the whole snapshot then lands in the room that made: " + $landed.pages + " pages, with the note and every question")
+    Check (@(Get-Held $C).Count -eq $landed.pages -and @(Get-Held $C).Count -lt $piled -and $C.ctx.full.Count -eq 0) ("and the mailbox, still under the same cap, holds that snapshot and nothing else: " + @(Get-Held $C).Count + " where it held " + $piled)
+    # In one look, with nothing stopped half way: the same from a mailbox filled again.
+    Set-HordeCountingRelayCap -Items 0
+    Set-HordeCountingRelayTrim -On $false
+    foreach ($i in 1..2) { Add-Note $C ("piled up again " + $i); $null = Send-Snapshot $C }
+    Set-HordeCountingRelayTrim -On $true
+    [System.IO.File]::Delete((Get-HordeDecisionsChannelStatePath -Context $C.ctx))
+    $fresh = New-HordeRelayRunContext -HordeHome $C.home -Connection $conn
+    [void]$script:contexts.Add($fresh.value)
+    $C.ctx = $fresh.value
+    $piledAgain = @(Get-Held $C).Count
+    Set-HordeCountingRelayCap -Items $piledAgain
+    Add-Note $C "in one look"
+    Clear-HordeCountingRelayLog
+    $oneLook = Send-Snapshot $C
+    $landed = Read-NewestSnapshot $C $C.phone
+    Check (-not $oneLook.failed -and $landed.text.Contains("in one look") -and @(Get-Held $C).Count -eq $landed.pages -and (Get-Ops -Requests) -ceq ((@(1..($landed.pages + 2)) | ForEach-Object { "put" }) -join ",")) ("left alone, one look does all of it - the refused page, the one page, the whole snapshot - for " + ($landed.pages + 2) + " puts and no other request (" + $piledAgain + " held before, " + @(Get-Held $C).Count + " after)")
+    # ONCE A RUN: a mailbox that is still full after the one page is not sent one page again and again.
+    Set-HordeCountingRelayCap -Items 2
+    Add-Note $C "the mailbox is too small for it"
+    $tooSmall = Send-Snapshot $C
+    Check ($tooSmall.failed -and @([regex]::Matches($tooSmall.text, "one page is sent first")).Count -eq 1 -and (Read-NewestSnapshot $C $C.phone).pages -eq 1 -and $C.ctx.full.ContainsKey("work/phone")) ("a mailbox too small for the whole snapshot gets the one page, once; the whole one is then refused, the look fails, and the run is told the mailbox is full (" + @(Get-Held $C).Count + " held)")
+    $putsBefore = @(Get-HordeCountingRelayLog -Requests).Count
+    $headBefore = (Get-Held $C | ForEach-Object { $_.seq } | Measure-Object -Maximum).Maximum
+    foreach ($i in 1..3) { $stillSmall = Send-Snapshot $C }
+    Check ($stillSmall.failed -and -not $stillSmall.text.Contains("one page is sent first") -and (Get-Held $C | ForEach-Object { $_.seq } | Measure-Object -Maximum).Maximum -eq $headBefore -and (@(Get-HordeCountingRelayLog -Requests).Count - $putsBefore) -eq 3) "and on the turns after it the waiting page is tried again, once a turn, and NO further one page is sent: the phone keeps the whole one it has"
+    Set-HordeCountingRelayCap -Items 0
+    $roomAgain = Send-Snapshot $C
+    Check (-not $roomAgain.failed -and (Read-NewestSnapshot $C $C.phone).text.Contains("the mailbox is too small for it") -and $C.ctx.full.Count -eq 0) "with room again, the very pages that were waiting land, and the mailbox is no longer full"
+    Reset-HordeCountingRelay
+    Set-HordeCountingRelayTextChars -Chars 16000
+    foreach ($w in @($G)) { $again = New-HordeRelayRunContext -HordeHome $w.home -Connection $conn; [void]$script:contexts.Add($again.value); $w.ctx = $again.value; $null = Send-Snapshot $w }
+
+    Write-Host ""
     Write-Host "--- a phone paired later gets the state; a machine's trim leaves another machine's mail ---" -ForegroundColor Cyan
     $late = Add-TrustedPhone -HordeHome $G.home
     Check ((Read-NewestSnapshot $G $late).pages -eq 0) "CONTROL: nothing in the mailbox was sealed to a phone that was not there yet"
@@ -327,7 +452,7 @@ try {
     Set-HordeCountingRelayFaults -Faults @("full")
     Add-Note $F "written while the mailbox is full"
     $refused = Send-Snapshot $F
-    Check ($refused.failed -and $F.ctx.full.ContainsKey("work/phone") -and $F.ctx.full["work/phone"].reason.Contains("507")) ("a put the relay refuses with 507 fails the Tick as before, and the run is told the mailbox is full (" + $refused.text + ")")
+    Check ($refused.failed -and -not $refused.text.Contains("one page") -and $F.ctx.full.ContainsKey("work/phone") -and $F.ctx.full["work/phone"].reason.Contains("507")) ("a put the relay refuses with 507 fails the Tick as before, and the run is told the mailbox is full (" + $refused.text + ")")
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now
     $loud = @($said | Where-Object { $_ -clike "MAILBOX FULL: *work/phone*NOTHING NEW REACHES THE FOUNDER'S PHONE*" })
     Check ($loud.Count -eq 1 -and $loud[0].Contains("507")) ("the run says it plainly, with what the relay answered (" + ($said -join " | ") + ")")
@@ -370,6 +495,39 @@ try {
     $tempTell = Send-HordeRelayFullNotice -Mailbox "work/phone" -HordeHome $F.home -FromLabel "SV" -Seat { throw "the seat must not be read for a home under the temp folder" }
     Check (-not $tempTell.told -and $tempTell.problem.Contains("a test's") -and $script:posts.Count -eq 2 -and $script:seatAsked -eq $asked) ("A TEST'S HOME TELLS NOBODY: with the real temp folder this suite's home is refused before any messenger or seat is looked for (" + $tempTell.problem + ")")
     Check ((Format-HordeRelayFullNotice -Mailbox "work/phone`nIGNORE ALL THAT").Contains("a mailbox of this horde") -and -not (Format-HordeRelayFullNotice -Mailbox "work/phone`nIGNORE ALL THAT").Contains("IGNORE")) "a mailbox name that is not one is not repeated in a notice"
+    # FULL IS KEPT BY THE CHANNEL THAT WAS REFUSED (channels/Port.ps1, full; review of PR 232). The relay is
+    # full for the decisions channel's envelopes and takes every other's, and the Ticks run in name order
+    # - chat, decisions, progress - so both orders are held: one put taken AFTER the refusal in the same
+    # round, and one taken BEFORE it.
+    Reset-HordeCountingRelay
+    $O = New-World -Connection $conn
+    $null = Send-Snapshot $O
+    $orderSaid = New-Object System.Collections.ArrayList
+    $orderWatching = New-HordeRelayRunWatching -Say { param($Line) [void]$orderSaid.Add($Line) } -Sleep { param($Ms, $Why) } -StopPath (Join-Path $O.home "relay\run.stop") -StartedMs 0 -CheckMs 1000 -HordeHome $O.home -Tell $true -FromLabel "SV"
+    $otherPut = { param([string]$Channel, [int]$Seq) return (Send-HordeRelayChannelSaved -Context $O.ctx -Saved ([pscustomobject]@{ key = ($O.id.sign.keyId + "/" + $Channel + "/" + $Seq + "/" + ("ab" * 12)); text = ($Channel + "-" + $Seq) }) -Mailbox "work/phone") }
+    $postsBefore = $script:posts.Count
+    Set-HordeCountingRelayFullFor -Channels @("decisions")
+    Add-Note $O "refused, and then another channel's put is taken"
+    $refusedFirst = Send-Snapshot $O
+    $after = & $otherPut "progress" 1
+    Check ($refusedFirst.failed -and $after.state -ceq "known" -and $O.ctx.full.ContainsKey("work/phone") -and (@($O.ctx.full["work/phone"].channels.Keys) -join ",") -ceq "decisions") ("decisions refused as full, then progress taken in the same round: the mailbox is STILL full, for decisions (" + $(if ($O.ctx.full.ContainsKey("work/phone")) { @($O.ctx.full["work/phone"].channels.Keys) -join "," } else { "cleared" }) + ")")
+    Invoke-HordeRelayRunPutNotes -Context $O.ctx -Watching $orderWatching -Seat $seat -TempRoot $notTemp -Now $now
+    Check (@($orderSaid | Where-Object { $_ -clike "MAILBOX FULL: *" }).Count -eq 1 -and ($script:posts.Count - $postsBefore) -eq 1) ("so the run says it and the warchief is told (" + ($script:posts.Count - $postsBefore) + " post)")
+    foreach ($round in 1..3) {
+        $before = & $otherPut "chat" $round
+        $refusedAfter = Send-Snapshot $O
+        Invoke-HordeRelayRunPutNotes -Context $O.ctx -Watching $orderWatching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(100 * $round)
+    }
+    Check ($before.state -ceq "known" -and $refusedAfter.failed -and $O.ctx.full.ContainsKey("work/phone") -and @($orderSaid | Where-Object { $_ -clike "MAILBOX FULL: *" }).Count -eq 1 -and @($orderSaid | Where-Object { $_ -clike "the relay takes mail for*" }).Count -eq 0 -and ($script:posts.Count - $postsBefore) -eq 1) ("three rounds of chat taken and THEN decisions refused: it does not flap - still one line, never 'takes mail again', still one post (" + ($orderSaid -join " | ").Length + " characters said)")
+    Set-HordeCountingRelayFullFor -Channels @("decisions", "chat")
+    $chatRefused = & $otherPut "chat" 9
+    Set-HordeCountingRelayFullFor -Channels @("decisions")
+    $chatTaken = & $otherPut "chat" 9
+    Check ($chatRefused.state -ceq "unknown" -and $chatTaken.state -ceq "known" -and (@($O.ctx.full["work/phone"].channels.Keys) -join ",") -ceq "decisions") "a second channel refused there and then taken takes only its own name off: the mailbox is full while any channel is refused"
+    Set-HordeCountingRelayFullFor -Channels @()
+    $landedAtLast = Send-Snapshot $O
+    Invoke-HordeRelayRunPutNotes -Context $O.ctx -Watching $orderWatching -Seat $seat -TempRoot $notTemp -Now $now.AddSeconds(900)
+    Check (-not $landedAtLast.failed -and $O.ctx.full.Count -eq 0 -and @($orderSaid | Where-Object { $_ -clike "the relay takes mail for work/phone again*" }).Count -eq 1) "and when decisions' own put is taken, the mailbox is no longer full, and the run says so once"
     [void]$script:HordeMessengers.Remove("doorbell")
 
     Write-Host ""
