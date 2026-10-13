@@ -106,6 +106,12 @@ function Get-HordeWakeSettings {
         silentProbeStretch = 2
         silentProbeMaxSeconds = 3600
         maxSilentProbes = 12
+        # AFTER THE LAST OF THOSE, ONE VERY SLOW PROBE GOES ON: one session, in turn, every this long - six
+        # hours. Stopping for good left mail waiting for ever in a fleet where no session takes a turn
+        # by itself: the silence ends on an acknowledgement, and nothing was left that could bring one
+        # about (review of PR 234). Four lines a day into a whole fleet is what finding out costs; and
+        # when the twelfth has gone unanswered the warchief is told (Update-HordeWakeSilence).
+        silentSlowProbeSeconds = 21600
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a wake setting") }

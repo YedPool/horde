@@ -1096,7 +1096,7 @@ function Long {
     param([double]$Hours, $Using, $AckAt = $null)
     Reset-HordeMemoryWaker
     foreach ($n in 1..3) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) }
-    $ledger = @{}; $seen = $null; $silent = $false; $probes = New-Object System.Collections.ArrayList; $said = New-Object System.Collections.ArrayList; $normal = 0
+    $ledger = @{}; $seen = $null; $silent = $false; $probes = New-Object System.Collections.ArrayList; $said = New-Object System.Collections.ArrayList; $told = New-Object System.Collections.ArrayList; $normal = 0
     for ($t = 0; $t -le [int]($Hours * 3600); $t += 30) {
         if ($null -ne $AckAt -and $t -eq $AckAt) { Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -LastAckedAt (At ($t - 1)) }
         Set-HordeMemoryWakerClock (At $t)
@@ -1109,11 +1109,12 @@ function Long {
         if ($sil.declared) { $ledger = Reset-HordeWakeLedgerAttempts -Ledger $ledger }
         if ($sil.moved) { $ledger = Set-HordeWakeLedgerProbesDue -Ledger $ledger }
         foreach ($e in @($sil.entries)) { [void]$said.Add($e.kind + "@" + $t) }
+        if ($null -ne $sil.condition) { [void]$told.Add($sil.condition) }
         $seen = $sil.seen; $silent = $sil.silent
     }
     $typedAll = @(Get-HordeMemoryWakerNudges).Count
     Reset-HordeMemoryWaker
-    return [pscustomobject]@{ probes = $probes.ToArray(); said = $said.ToArray(); seen = $seen; normal = $normal; typed = $typedAll }
+    return [pscustomobject]@{ probes = $probes.ToArray(); said = $said.ToArray(); told = $told.ToArray(); seen = $seen; normal = $normal; typed = $typedAll }
 }
 $day = Long -Hours 24 -Using $shippedNow
 $gaps = @(for ($i = 1; $i -lt $day.probes.Count; $i++) { $day.probes[$i] - $day.probes[$i - 1] })
@@ -1121,6 +1122,16 @@ Check ($day.probes.Count -eq 12 -and $day.seen.probes -eq 12 -and $day.seen.sile
 Check (($gaps -join ",") -ceq "300,600,1200,2400,3600,3600,3600,3600,3600,3600,3600") ("and they are stretched: 5, 10, 20, 40 minutes apart, then an hour (" + ($gaps -join ",") + ")")
 Check ($day.probes.Count -gt 0 -and ($day.probes[$day.probes.Count - 1] - $day.probes[0]) -le 30000 -and $day.typed -eq ($day.normal + 12)) ("the last is typed within nine hours of the first, and nothing at all is typed in the fifteen hours after it (" + $day.typed + " lines in the day)")
 Check (@($day.said | Where-Object { $_ -clike "silent-probes-ended@*" }).Count -eq 1 -and @($day.said | Where-Object { $_ -clike "fleet-silent@*" }).Count -eq 1) ("the journal says once that the fleet was found silent and once that its probes have ended (" + ($day.said -join ",") + ")")
+# AFTER THE TWELFTH, THE WARCHIEF IS TOLD AND ONE VERY SLOW PROBE GOES ON (review of PR 234): twelve probes,
+# the notice once, then exactly one probe every six hours for two days, and an acknowledgement ends it.
+Check ($shippedNow.silentSlowProbeSeconds -eq 21600) "how slow is a setting of its own: six hours"
+$slow = Long -Hours 60 -Using $shippedNow -AckAt 210000
+$quiet = @($slow.probes | Where-Object { $_ -lt 210000 })
+$after = @(for ($i = 12; $i -lt $quiet.Count; $i++) { $quiet[$i] - $quiet[$i - 1] })
+Check ($quiet.Count -eq 20 -and ($after -join ",") -ceq "21600,21600,21600,21600,21600,21600,21600,21600") ("SIXTY HOURS: the twelve stretched probes, and then exactly ONE every six hours - eight in the two days after the twelfth, never two closer than that (" + $quiet.Count + " probes; after the twelfth " + ($after -join ",") + ")")
+$ended = @($slow.told | Where-Object { $_.kind -ceq "silent-probes-ended" })
+Check ($ended.Count -eq 1 -and $ended[0].subject -ceq "" -and $ended[0].instance -ceq "2026-10-12T08:00:00.0000000Z" -and "$($ended[0].text)".Contains("every 6 hours") -and @($slow.said | Where-Object { $_ -clike "silent-probes-ended@*" }).Count -eq 1) ("the end of the twelve is a notice about the FLEET for the warchief, made once in the sixty hours, and journaled once (" + $ended.Count + " made)")
+Check (@($slow.said | Where-Object { $_ -ceq "fleet-moving@210000" }).Count -eq 1 -and $slow.seen.silent -eq $false -and $slow.seen.probes -eq 0 -and $null -eq (Get-HordeWakeEntryValue $slow.seen "probeAt")) ("and an acknowledgement that increased ends it as before, slow probes or not: the count and the time of the last probe start over (" + (@($slow.said | Where-Object { $_ -clike "fleet-*" }) -join ",") + ")")
 $woke = Long -Hours 14 -Using $shippedNow -AckAt 43200
 Check (@($woke.said | Where-Object { $_ -ceq "fleet-moving@43200" }).Count -eq 1 -and $woke.seen.silent -eq $false -and $woke.seen.probes -eq 0 -and $woke.typed -gt ($woke.normal - 1) -and $woke.normal -gt $day.normal) ("STOPPING LOSES NOTHING: a session that acknowledges mail at twelve hours, long after the last probe, ends the silence at that pass, the count starts over, and the other sessions are nudged again (" + ($woke.said -join ",") + ")")
 $few = Long -Hours 6 -Using (Get-HordeWakeSettings -Overrides @{ maxSilentProbes = 3 })
