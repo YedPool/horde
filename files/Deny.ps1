@@ -53,10 +53,11 @@
 #   inside it: the handle's final path is the name that was opened, and nothing marks the file. A
 #   hard link is made on purpose, as a copy is; the list is for the share nobody meant to make.
 #
-# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, by files/Share.ps1, whose
-# Get-HordeFilesAsciiLower it calls.
+# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+# The fold of A to Z, and the questions asked of a path's text: the one copy, core's.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\PathText.ps1")
 # Where each agent harness keeps its own files: read as data, never named.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\MetricsStore.ps1")
 . (Join-Path $PSScriptRoot "Path.ps1")
@@ -78,7 +79,7 @@ function Get-HordeFilesDenyWord {
     # The word of the list that the file name -Name holds, or "" when it holds none.
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
     $list = Get-HordeFilesDenyList
-    $lowered = Get-HordeFilesAsciiLower -Text $Name
+    $lowered = ConvertTo-HordeAsciiLower -Text $Name
     foreach ($word in $list.words) {
         $rest = $lowered
         # An ordinary word leaves a bar, which no file name holds, so what stood on its two sides
@@ -94,8 +95,8 @@ function Test-HordeFilesPathUnder {
     # the disk holds them; A to Z are folded and nothing else, and the comparison is by code units.
     # The separator is part of it: C:\x\abc is not inside C:\x\ab.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Folder)
-    $inner = Get-HordeFilesAsciiLower -Text $Path
-    $outer = (Get-HordeFilesAsciiLower -Text $Folder).TrimEnd('\')
+    $inner = ConvertTo-HordeAsciiLower -Text $Path
+    $outer = (ConvertTo-HordeAsciiLower -Text $Folder).TrimEnd('\')
     return ([string]::Equals($inner, $outer, [System.StringComparison]::Ordinal) -or $inner.StartsWith(($outer + "\"), [System.StringComparison]::Ordinal))
 }
 
@@ -134,7 +135,7 @@ function Resolve-HordeFilesDenyPlace {
     if ($whole -cmatch '\A\\\\\?\\[A-Za-z]:\\') { $whole = $whole.Substring(4) }
     # A FOLDER ON THE NETWORK IS NEVER LOOKED AT, here as anywhere (files/Path.ps1), and holds no
     # file of this machine's drives; what is no drive path at all holds none either.
-    if ((Get-HordeFilesAliasRefusal -Path $whole) -ne "" -or (Get-HordeFilesNetworkRefusal -Path $whole) -ne "" -or $whole -cnotmatch '\A[A-Za-z]:\\') { return [pscustomobject]@{ paths = @(); unknown = $false } }
+    if ((Get-HordeFilesAliasRefusal -Path $whole) -ne "" -or (Get-HordeNetworkPathRefusal -Path $whole) -ne "" -or $whole -cnotmatch '\A[A-Za-z]:\\') { return [pscustomobject]@{ paths = @(); unknown = $false } }
     $known = New-Object System.Collections.ArrayList
     [void]$known.Add($whole.TrimEnd('\'))
     # Behind the long-path prefix, so a deep folder is opened too; the path is already whole.
@@ -167,7 +168,7 @@ function Get-HordeFilesDenyRefusal {
             # BETWEEN THE TWO ROUNDS: the folder name that is refused wherever it stands, and then
             # everything after this is what -Force lifts.
             for ($at = 1; $at -lt ($parts.Count - 1); $at++) {
-                if ([string]::Equals((Get-HordeFilesAsciiLower -Text $parts[$at]), $list.secretsFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.secrets + $never) }
+                if ([string]::Equals((ConvertTo-HordeAsciiLower -Text $parts[$at]), $list.secretsFolder, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is under " + $what.secrets + $never) }
             }
             if ($Force) { return "" }
             if ($found.unknown -ne "") { return ("which folders the agent harnesses keep their own files in is not known (" + $found.unknown + "), so whether '" + $FinalPath + "' is in one cannot be told" + $insist) }

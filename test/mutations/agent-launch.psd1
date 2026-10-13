@@ -5,6 +5,9 @@
     Target = "core\AgentLaunch.ps1"
     Suite  = "test\test-agent-launch.ps1"
     Mutations = @(
+        @{ Name = "reserved-label-names-a-session"
+           Find = 'if (Test-HordeLabelReserved $Label) { return'
+           Replace = 'if ($false) { return' }
         @{ Name = "preconditions-claimed-not-verified"
            Find = '$verified = @(& $a.preconditions $need | ForEach-Object { "" + $_ } | Where-Object { $need -ccontains $_ })'
            Replace = '$verified = $need' }

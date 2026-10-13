@@ -4,12 +4,15 @@
 # `horde wake status` whether it is still alive and what it has been doing. This scenario is that, with
 # the fleet's command played by a fake in a folder of this scenario's:
 #   - status in a home where it never ran says so, for each mode;
-#   - a wrong command line is refused: -Shadow with -Live, a mistyped flag, a tick too long;
+#   - a wrong command line is refused: every way of reaching a mode but -Mode in full with one of its
+#     three exact values, a mistyped flag, a tick too long;
 #   - WITH NO FLAG THE RUN IS SHADOW: one pass over a fleet with an idle session that has old unread mail,
 #     a busy one and one with text in its box journals would-nudge for the first and nothing for the
 #     others, and the fake's record shows nothing was typed and no nudge was ever asked for;
-#   - -Live sends the real nudge: the same fleet, one line typed into the idle session and no other;
-#   - each mode keeps its own heartbeat and journal, and status shows both;
+#   - -Mode live is REFUSED while the fleet's waker says its capabilities are unverified;
+#   - -Proof -Target <the idle session> -Once sends the real nudge: one line typed into that session and
+#     no other; without -Once it is refused;
+#   - each mode keeps its own heartbeat and journal, and status shows all three;
 #   - in a home pinned to no fleet at all, a run says what it could not read, once, and keeps beating
 #     until it is stopped; a second run on the same home is refused, and once the first is killed - its
 #     lock file left behind - the next one starts.
@@ -75,7 +78,7 @@ foreach ($marker in @("lib\Mail.ps1", "commands\mail.ps1")) {
 }
 $idle = "0a000000-0000-4000-8000-000000000001"; $busy = "0a000000-0000-4000-8000-000000000002"; $typing = "0a000000-0000-4000-8000-000000000003"
 $old = [datetime]::UtcNow.AddMinutes(-10).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
-function New-Row { param([string]$Id, [string]$Idle = "yes", [string]$Box = "yes", [string]$Turn = "no") return [ordered]@{ id = $Id; label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0; oldestUnreadAt = $old; idle = $Idle; boxEmpty = $Box; midTurn = $Turn; reason = ""; reasons = @() } }
+function New-Row { param([string]$Id, [string]$Idle = "yes", [string]$Box = "yes", [string]$Turn = "no") return [ordered]@{ id = $Id; label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0; oldestUnreadAt = $old; idle = $Idle; boxEmpty = $Box; midTurn = $Turn; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null } }
 $rows = @((New-Row $idle), (New-Row $busy -Idle "no" -Turn "yes"), (New-Row $typing -Box "no"))
 [System.IO.File]::WriteAllText((Join-Path $checkout "fleet.json"), ("[" + ((@($rows | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 4 })) -join ",") + "]"), $utf8)
 New-Item -ItemType Directory -Path (Join-Path $fleetHome "settings") -Force | Out-Null
@@ -85,7 +88,7 @@ $wakeDir = Join-Path $fleetHome "wake"
 Write-Host ""
 Write-Host "=== a home where the watcher never ran, and a wrong command line ===" -ForegroundColor Cyan
 $status = Invoke-Wake $fleetHome @("status")
-Check ($status.code -eq 0 -and $status.out -like "*LIVE: it has never run*" -and $status.out -like "*SHADOW: it has never run*" -and $status.out -like "*LIVE: journal empty*" -and $status.out -like "*SHADOW: journal empty*") "status says, for each mode, that the watcher has never run here and its journal is empty"
+Check ($status.code -eq 0 -and $status.out -like "*LIVE: it has never run*" -and $status.out -like "*PROOF: it has never run*" -and $status.out -like "*SHADOW: it has never run*" -and $status.out -like "*LIVE: journal empty*" -and $status.out -like "*SHADOW: journal empty*") "status says, for each mode, that the watcher has never run here and its journal is empty"
 Check (-not (Test-Path -LiteralPath $wakeDir)) "and asking made no wake folder"
 # A HOME THAT EARLIER BUILDS RAN IN: their unsuffixed files, written in shadow, are no mode's history.
 $legacyHome = Join-Path $script:work "home-of-earlier-builds"
@@ -94,16 +97,20 @@ New-Item -ItemType Directory -Path (Join-Path $legacyHome "wake") -Force | Out-N
 [System.IO.File]::WriteAllText((Join-Path $legacyHome "wake\journal.jsonl"), ('{"at":"2026-10-12T07:00:00.0000000Z","kind":"would-nudge","id":"x","outcome":"would-nudge","reason":"an old shadow line"}' + "`n"), $utf8)
 $status = Invoke-Wake $legacyHome @("status")
 Check ($status.code -eq 0 -and $status.out -like "*LIVE: it has never run*" -and $status.out -like "*SHADOW: it has never run*" -and $status.out -notlike "*STALE*" -and $status.out -notlike "*an old shadow line*") "in a home earlier builds ran in, status says neither mode has ever run - not that a live watcher is dead, and not their old shadow lines as a journal"
-$both = Invoke-Wake $fleetHome @("run", "-Shadow", "-Live", "-Once")
-Check ($both.code -eq 2 -and $both.out -like "*usage: horde wake run*" -and -not (Test-Path -LiteralPath $wakeDir)) "-Shadow and -Live together is a usage error: exit 2, the usage, and nothing run"
+# THE MODE IS -Mode, IN FULL, WITH ONE OF THREE VALUES, EXACTLY. Every other way of reaching a mode is
+# a usage error, and nothing runs - above all the ones that used to be, or could be read as, a live run.
+foreach ($bad in @(@("-M", "live"), @("-Mo", "live"), @("-Mod", "live"), @("-L"), @("-Live"), @("-Shadow"), @("-Mode", "LIVE"), @("-Mode", "Live"), @("-Mode", "liv"), @("-Mode", "l"), @("-Mode", "both"), @("-Mode"), @("-Mode", "proof"), @("-M", "proof"), @("-P"), @("-Proof"))) {
+    $r = Invoke-Wake $fleetHome (@("run") + $bad + @("-Once"))
+    Check ($r.code -eq 2 -and $r.out -like "*usage: horde wake run*" -and -not (Test-Path -LiteralPath $wakeDir)) ("run " + ($bad -join " ") + " is a usage error: exit 2, the usage, and nothing run")
+}
 $typo = Invoke-Wake $fleetHome @("run", "-Shadwo")
 Check ($typo.code -eq 2 -and $typo.out -like "*usage: horde wake run*") "a mistyped flag exits 2 with the usage"
 $slow = Invoke-Wake $fleetHome @("run", "-Once", "-TickSeconds", "301")
 Check ($slow.code -eq 2 -and -not (Test-Path -LiteralPath $wakeDir)) "a tick longer than 300 s is refused at the command line"
-$wrongVerb = Invoke-Wake $fleetHome @("status", "-Live")
+$wrongVerb = Invoke-Wake $fleetHome @("status", "-Mode", "live")
 Check ($wrongVerb.code -eq 1 -and $wrongVerb.out -like "*belongs to wake run*") "a flag of run given to status is refused, not ignored"
 $help = Invoke-HordeCliProcess -Root $root -HordeArgs @("--help") -Env @{ HORDE_HOME = $fleetHome }
-Check ($help.code -eq 0 -and $help.out -like "*horde wake run*-Shadow | -Live*") "help lists the command and its two modes"
+Check ($help.code -eq 0 -and $help.out -like "*horde wake run*-Mode shadow|live*" -and $help.out -like "*wake run -Proof -Target <session id> -Once*") "help lists the command, its modes, and that a proof run names its one session"
 Check (@(Read-FakeLog "argv.log").Count -eq 0) "CONTROL: nothing so far started the fleet's command"
 
 Write-Host ""
@@ -111,6 +118,7 @@ Write-Host "=== with no flag the run is SHADOW: it reads the fleet and types not
 $once = Invoke-Wake $fleetHome @("run", "-Once")
 Check ($once.code -eq 0) ("run -Once makes its pass and exits 0" + $(if ($once.code -ne 0) { ": " + $once.out } else { "" }))
 Check ($once.out -like "*wake: SHADOW - nothing is nudged*" -and $once.out -like "*through the waker 'wezfleet'*" -and $once.out -notlike "*LIVE*") "its first line says SHADOW, loudly, and which waker it reads through"
+Check ($once.out -like "*UNVERIFIED, so nothing this run journals is proof of them: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*") "and names the capabilities of that waker that are unverified"
 Check ($once.out -like "*pass 1 done*shadow*") "and its last that its one pass is done, in shadow"
 $lines = @(Read-Journal $fleetHome "journal-shadow.jsonl")
 Check (@($lines | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $idle }).Count -eq 1) "the journal says would-nudge for the idle session with an empty box and old unread mail"
@@ -122,29 +130,47 @@ Check (@($asked | Where-Object { $_ -clike "mail nudge*" }).Count -eq 0 -and @($
 Check (@($asked | Where-Object { $_ -clike ("mail state -To " + $idle + " *") }).Count -eq 1 -and @($asked | Where-Object { $_ -clike ("mail state -To " + $busy + " *") }).Count -eq 0) "a pane was read for the one candidate, and not for the session that is not idle"
 $names = @(Get-ChildItem -LiteralPath $wakeDir | ForEach-Object { $_.Name } | Sort-Object)
 Check (($names -join ",") -ceq "heartbeat-shadow.json,journal-shadow.jsonl,ledger-shadow.json,run-shadow.lock") ("it wrote the shadow run's own files and no file of a live run (" + ($names -join ",") + ")")
-$explicit = Invoke-Wake $fleetHome @("run", "-Shadow", "-Once")
-Check ($explicit.code -eq 0 -and $explicit.out -like "*wake: SHADOW*" -and @(Read-FakeLog "typed.log").Count -eq 0) "-Shadow, the explicit form, is the same shadow run"
+$explicit = Invoke-Wake $fleetHome @("run", "-Mode", "shadow", "-Once")
+Check ($explicit.code -eq 0 -and $explicit.out -like "*wake: SHADOW*" -and @(Read-FakeLog "typed.log").Count -eq 0) "-Mode shadow, the explicit form, is the same shadow run"
 
 Write-Host ""
-Write-Host "=== -Live sends the real nudge, to the one session that should be woken ===" -ForegroundColor Cyan
-$liveRun = Invoke-Wake $fleetHome @("run", "-Live", "-Once")
-Check ($liveRun.code -eq 0) ("run -Live -Once makes its pass and exits 0" + $(if ($liveRun.code -ne 0) { ": " + $liveRun.out } else { "" }))
-Check ($liveRun.out -like "*wake: LIVE - REAL NUDGES*through the waker 'wezfleet'*" -and $liveRun.out -like "*restore source stays shadow*" -and $liveRun.out -like "*pass 1 done*LIVE*") "its first line says LIVE, loudly, and that the restore source stays shadow; its last says LIVE too"
-$typed = @(Read-FakeLog "typed.log")
-Check ($typed.Count -eq 1 -and $typed[0].id -ceq $idle -and "$($typed[0].text)" -cnotmatch '[\x00-\x1F]') "the fleet's record shows one line typed, into the idle session, and no other"
-$liveLines = @(Read-Journal $fleetHome "journal-live.jsonl")
-Check (@($liveLines | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq $idle -and $_.outcome -ceq "woken" }).Count -eq 1 -and @($liveLines | Where-Object { $_.kind -ceq "nudge" }).Count -eq 1) "the live journal says nudge, woken, for that session, and no other nudge"
-Check (@($liveLines | Where-Object { @("post", "stall") -ccontains $_.kind }).Count -eq 0) "and nothing was posted: the restore source is shadow in a live run too"
-$liveBeat = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-live.json")) | ConvertFrom-Json
-$shadowBeat = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-shadow.json")) | ConvertFrom-Json
-Check ($liveBeat.shadow -eq $false -and $liveBeat.pass -eq 1 -and $shadowBeat.shadow -eq $true -and $liveBeat.tickSeconds -eq 3) "each mode has a heartbeat of its own, saying which it is"
-Check (@(Read-Journal $fleetHome "journal-shadow.jsonl" | Where-Object { $_.kind -ceq "nudge" }).Count -eq 0) "and a journal of its own: the shadow journal holds no nudge"
+Write-Host "=== -Mode live is refused: the fleet's waker has not yet been shown against the real command ===" -ForegroundColor Cyan
+$liveRun = Invoke-Wake $fleetHome @("run", "-Mode", "live", "-Once")
+Check ($liveRun.code -eq 1 -and $liveRun.out -notlike "*wake: LIVE*") ("run -Mode live -Once is refused, exit 1" + $(if ($liveRun.code -ne 1) { ": " + $liveRun.out } else { "" }))
+Check ($liveRun.out -like "*needs an installed waker*" -and $liveRun.out -like "*wezfleet: does not offer*(it says unverified)*") "it says why: no waker offers every capability, and the fleet's says unverified"
+Check (@(Read-FakeLog "typed.log").Count -eq 0 -and @(Read-FakeLog "argv.log" | Where-Object { "$($_.argv)" -like "*mail nudge*" }).Count -eq 0) "nothing was typed, and no nudge was asked for"
+Check (@(Get-ChildItem -LiteralPath $wakeDir | Where-Object { $_.Name -like "*-live*" }).Count -eq 0) "and no file of a live run was written: no heartbeat that would make a live watcher look alive, no lock"
+
+Write-Host ""
+Write-Host "=== -Proof -Target <session id> -Once: one pass, one named session, never a loop, with files of its own ===" -ForegroundColor Cyan
+$typedBefore = @(Read-FakeLog "typed.log").Count
+# ONE SESSION, NAMED: every proof command line that does not name a whole session id is a usage error,
+# and so is a target given to a mode that has none. Nothing runs and nothing is typed.
+foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", "A", "-Once"), @("-Proof", "-Target", $idle.Substring(0, 8), "-Once"), @("-Proof", "-Target", $idle.ToUpperInvariant(), "-Once"), @("-Proof", "-Target", "-Once"), @("-Proof", "-Target", $idle), @("-Mode", "shadow", "-Target", $idle, "-Once"), @("-Mode", "live", "-Target", $idle, "-Once"), @("-Mode", "live", "-Proof", "-Target", $idle, "-Once"), @("-Mode", "proof", "-Target", $idle, "-Once"), @("-Proof", "-Target", $idle, "-Once", "-TickSeconds", "3"), @("-Target", $idle, "-Once"), @("-Proof", "-Target", ($idle + "," + $busy), "-Once"))) {
+    $r = Invoke-Wake $fleetHome (@("run") + $bad)
+    Check ($r.code -eq 2 -and $r.out -like "*usage: horde wake run*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and -not (Test-Path -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json"))) ("run " + ($bad -join " ") + " is a usage error: exit 2, the usage, nothing run and nothing typed")
+}
+$stranger = "0a000000-0000-4000-8000-000000000099"
+$astray = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $stranger, "-Once")
+Check ($astray.code -eq 1 -and $astray.out -like "*proof-target-absent*" -and $astray.out -like "*nudged nobody*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) ("a proof run aimed at a session the fleet does not list nudges nobody - not the idle session that is ready - says so, and exits 1" + $(if ($astray.code -ne 1) { ": " + $astray.out } else { "" }))
+$aside = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $busy, "-Once")
+Check ($aside.code -eq 0 -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) "a proof run aimed at the busy session types nothing - and does not type into the idle one instead"
+Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
+$proofRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
+Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
+$typedNow = @(Read-FakeLog "typed.log")
+Check ($typedNow.Count -eq 1 -and $typedBefore -eq 0 -and $typedNow[0].id -ceq $idle -and "$($typedNow[0].text)" -cnotmatch '[\x00-\x1F]') "the fleet's record shows one line typed, into the idle session, and no other: a proof run's nudge is real"
+$proofLines = @(Read-Journal $fleetHome "journal-proof.jsonl")
+Check (@($proofLines | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq $idle -and $_.outcome -ceq "woken" -and $null -ne $_.PSObject.Properties["elapsedMs"] }).Count -eq 1 -and @($proofLines | Where-Object { @("post", "stall", "tell") -ccontains $_.kind }).Count -eq 0) "the proof run's own journal says nudge, woken, with how long the nudge took, and nothing was posted"
+$proofBeat = [System.IO.File]::ReadAllText((Join-Path $wakeDir "heartbeat-proof.json")) | ConvertFrom-Json
+Check ($proofBeat.mode -ceq "proof" -and $proofBeat.shadow -eq $false -and $proofBeat.pass -eq 1 -and $proofBeat.tickSeconds -eq 3) "and a heartbeat of its own, saying proof"
+Check (@(Read-Journal $fleetHome "journal-shadow.jsonl" | Where-Object { $_.kind -ceq "nudge" }).Count -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $wakeDir "heartbeat-live.json"))) "the shadow journal holds no nudge, and the proof run left no live heartbeat"
 
 Write-Host ""
 Write-Host "=== status shows both modes; a watcher that died is called stale, by its own tick ===" -ForegroundColor Cyan
 $status = Invoke-Wake $fleetHome @("status")
-Check ($status.code -eq 0 -and $status.out -match "LIVE: heartbeat \d+ s ago, fresh" -and $status.out -match "SHADOW: heartbeat \d+ s ago, fresh") "status shows a fresh heartbeat for each mode"
-Check ($status.out -like "*LIVE: journal, the last*" -and $status.out -like "*SHADOW: journal, the last*" -and $status.out -like "*would-nudge*" -and $status.out -like "*woken*") "and each mode's last journal lines"
+Check ($status.code -eq 0 -and $status.out -like "*LIVE: it has never run*" -and $status.out -match "PROOF: heartbeat \d+ s ago, fresh" -and $status.out -match "SHADOW: heartbeat \d+ s ago, fresh") "status shows a fresh heartbeat for the two modes that ran, and says the live watcher never has"
+Check ($status.out -like "*LIVE: journal empty*" -and $status.out -like "*PROOF: journal, the last*" -and $status.out -like "*SHADOW: journal, the last*" -and $status.out -like "*would-nudge*" -and $status.out -like "*woken*") "and each mode's last journal lines"
 $stale = [datetime]::UtcNow.AddSeconds(-600).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
 [System.IO.File]::WriteAllText((Join-Path $wakeDir "heartbeat-live.json"), ('{"at":"' + $stale + '","pid":1,"pass":40,"shadow":false,"tickSeconds":3}'), $utf8)
 $status = Invoke-Wake $fleetHome @("status")
@@ -172,6 +198,10 @@ Check ($pass -ge 3 -and $pass -lt 60) ("its heartbeat moves on, pass after pass 
 Check (-not $run.p.HasExited) "and it is still running: it does not stop by itself"
 $second = Invoke-Wake $pinnedHome @("run", "-Once")
 Check ($second.code -eq 1 -and $second.out -like "*shadow wake run is already running*" -and $second.out -notlike "*pass 1 done*") "a second shadow run on the same home is refused at once, saying one is running"
+# A RUN IN ANOTHER MODE IS NOT THE SAME RUN: the lock is per mode. (No fleet here: its one pass can
+# reach nobody.)
+$beside = Invoke-Wake $pinnedHome @("run", "-Proof", "-Target", "0a000000-0000-4000-8000-000000000001", "-Once")
+Check ($beside.code -eq 1 -and $beside.out -like "*pass 1 done*PROOF*" -and $beside.out -like "*nudged nobody*" -and $beside.out -notlike "*already running*" -and (Test-Path -LiteralPath (Join-Path $pinnedWake "run-proof.lock") -PathType Leaf) -and -not $run.p.HasExited) "a proof run beside the running shadow one is not refused: each mode has a lock of its own. (It finds no fleet, so it says it nudged nobody.)"
 $pinnedLines = @(Read-Journal $pinnedHome "journal-shadow.jsonl")
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "" -and "$($_.reason)" -like "*not a wezfleet checkout*" }).Count -eq 1) "with no fleet to read, the journal says once that the targets are unknown, and why - not once a pass"
 Check (@($pinnedLines | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "restore" }).Count -eq 1) "and once that the restore source could not read the sessions of this scenario's empty profile"
@@ -193,4 +223,4 @@ Check ((Get-RealWakeListing) -ceq $realBefore) "the real home's wake folder is a
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-wake-e2e-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-Complete-HordeSuite -Success "horde wake runs at the real command line: shadow by default, typing nothing; live by name, typing one line into the one session to wake; a heartbeat and a journal for each"
+Complete-HordeSuite -Success "horde wake runs at the real command line: shadow by default, typing nothing; proof by name, one pass typing one line into the one session to wake; live refused through an unverified waker; a heartbeat and a journal for each"

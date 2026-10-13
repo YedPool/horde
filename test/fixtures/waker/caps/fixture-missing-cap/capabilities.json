@@ -17,6 +17,10 @@
     "nudge.guarded": {
       "support": "yes",
       "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.limit": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
     }
   }
 }

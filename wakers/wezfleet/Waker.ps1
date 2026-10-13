@@ -9,8 +9,11 @@
 #   (B) mail state -To <id> -TimeoutSeconds <n> -Json      one session, reading its pane: { at; session: row };
 #       exit 3 { at; to; reason: absent; detail } for a session nobody answers to, exit 1
 #       records-unreadable, exit 2 bad arguments
-#   (C) mail nudge -To <id> -Json                           { outcome; reason; target; pane; instance; detail },
-#       outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an empty -To
+#   (C) mail nudge -To <id> -BudgetSeconds <35-300> -Json   { outcome; reason; target; pane; instance; detail;
+#       elapsedMs }, outcome woken, busy, unreachable or refused, exit 0 for every outcome and 2 for an
+#       empty -To or a bad budget. It does not START typing when less than 30 s of its budget is left,
+#       and answers refused, budget-too-small, for that.
+# (A row may also carry limited and limitedUntil - Get-HordeWezfleetWakerLimit.)
 # A row is { id; label; role; parent; retired; reachable; mail; unreadCount; unreadableCount;
 # oldestUnreadAt; idle; boxEmpty; midTurn; reason; reasons }. In form A boxEmpty and midTurn are always
 # unknown: reading them means reading a pane, which is form B's.
@@ -22,12 +25,11 @@
 #
 # THE MAPPING onto the port (wakers/Port.ps1):
 #   Targets  form A's rows that are not retired, or that have unread mail. role master is warchief,
-#            orchestrator is orc, session is goblin, anything else unknown (core/Roles.ps1's table,
+#            orchestrator is orc, session is warg, anything else unknown (core/Roles.ps1's table,
 #            read here from the row's own word); reachable as the row says.
-#   State    from form A's answer of THIS pass. Only for a CANDIDATE - mail known, unread mail, reachable
-#            yes, idle yes - is form B asked, for the box and the turn; for every other session the
-#            answer is form A's, with boxEmpty and midTurn unknown, and the watcher waits, which is
-#            right: it was not going to nudge it. So a pass over a quiet fleet reads no pane at all.
+#   State    from form A's answer of THIS pass, with boxEmpty and midTurn unknown: no pane is read.
+#   Confirm  form B, for the one session the watcher is about to nudge: its box and its turn. So a pass
+#            over a quiet fleet reads no pane at all, and a busy one reads a pane per nudge.
 #   Nudge    form C. refused is the port's nothing (there was nothing to nudge for by then); woken,
 #            busy and unreachable pass through with the fleet's reason.
 #
@@ -41,11 +43,14 @@
 #   3. A FAILURE CAN BE PERMANENT (records-unreadable is, until a person mends the file). The answer is
 #      unknown with the fleet's reason code, and the fleet is not asked again on every pass: after
 #      consecutive failures the next read waits 5, 15, 45, 135, then 300 s, and until then the same
-#      unknown is answered, in the same words, so the journal says it once (core/WakeFiles.ps1).
+#      unknown is answered, in the same words, so the journal says it once (core/WakeFiles.ps1). The
+#      count of failures in a row goes with the answer, and after ten the watcher calls it permanent:
+#      one line, one mail to the warchief, and silence until a read works (core/Wake.ps1).
 #   4. EVERY CALL RUNS UNDER THIS ADAPTER'S OWN DEADLINE: form A 10 s, form B three times the
-#      -TimeoutSeconds it passes (5, so 15 s), form C 20 s. Past it the child and everything it started
-#      are stopped and the answer is unknown, or unreachable for a nudge, with the reason timed-out. The
-#      loop that wakes every session never waits on one.
+#      -TimeoutSeconds it passes (5, so 15 s), form C three times the budget it passes (60, so 180 s).
+#      Past it the child and everything it started are stopped and the answer is unknown with the
+#      reason timed-out - or, for a nudge, the outcome killed (Send-HordeWezfleetWakerNudge says why
+#      that is not just another failure). The loop that wakes every session never waits on one.
 #   5. AN ANSWER THAT IS NOT ONE LINE OF JSON OF THE EXPECTED SHAPE - a binding error prints text - is
 #      unknown, or unreachable for a nudge, with the reason. Never a throw.
 #   6. unreadableCount IS CARRIED, not acted on here: the port's state has it, and the watcher's tick
@@ -71,6 +76,18 @@
 # on the fleet's wezfleet.ps1, which it finds itself, with its arguments as separate elements joined by
 # one quoting function. wakers/start-sites.txt lists the start, each property it sets and each call of
 # it, and test/test-start-sites.ps1 refuses anything else.
+#
+# ALWAYS A CHILD PROCESS, NEVER THE SCRIPT CALLED IN-PROCESS: powershell.exe from the system folder, with
+# -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <checkout>\wezfleet.ps1 and the arguments
+# after it - the .ps1 directly, never the .cmd shim, which is only read to find the checkout. HOW THE
+# FLEET'S SCRIPT IS STARTED CHANGES WHAT IT DOES: its nudge had a fault that showed only when the entry
+# script was called in-process from another PowerShell script (& wezfleet.ps1) - it answered busy for
+# ever - and not when it was started as a process with -File (found on the fleet's side, 2026-10-13).
+# A fault in a script's own scope is invisible to a caller in the same process and to that caller's
+# tests. So the suites start the fake by this same start site, with this same command line - the
+# fixture only copies the fake to wezfleet.ps1 in a folder and names the folder - and
+# test/test-waker-wezfleet.ps1 reads, from the fake's own log, that every run of it was a process of
+# its own started so.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after wakers/Port.ps1.
 
@@ -98,13 +115,15 @@ $script:HordeWezfleetWakerMaxBytes = 1048576
 $script:HordeWezfleetWakerDetailChars = 300
 # RULE 4, the deadlines: form A, the -TimeoutSeconds form B passes (its own deadline is three times
 # that), and form C.
-$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudge = 20 }
+# The budget a nudge is given, in one place: the table below and the function that resets it both read it.
+$script:HordeWezfleetWakerNudgeBudget = 60
+$script:HordeWezfleetWakerDeadlines = @{ fleet = 10; paneFlag = 5; nudgeBudget = $script:HordeWezfleetWakerNudgeBudget }
 # RULE 3, the wait after each consecutive failure of a read.
 $script:HordeWezfleetWakerBackoff = @(5, 15, 45, 135, 300)
-# How long one form A answer serves: a pass asks for the targets and then each session's state within
-# moments, and all of them are answered from one call. The next pass, a tick later, asks again.
+# How long one form A answer serves a caller that never says a pass begins, counted from its arrival.
+# The watcher does say (the port's Begin), and for it an answer serves exactly one pass.
 $script:HordeWezfleetWakerFleetLifeSeconds = 2
-$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "goblin" }
+$script:HordeWezfleetWakerRoles = @{ "master" = "warchief"; "orchestrator" = "orc"; "session" = "warg" }
 $script:HordeWezfleetWakerWords = @("yes", "no", "unknown")
 $script:HordeWezfleetWakerOutcomes = @{ "woken" = "woken"; "busy" = "busy"; "unreachable" = "unreachable"; "refused" = "nothing" }
 $script:HordeWezfleetWakerCodePattern = '\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z'
@@ -115,6 +134,10 @@ $script:HordeWezfleetWakerFleet = $null
 $script:HordeWezfleetWakerFleetFailures = @{ count = 0; nextAt = [datetime]::MinValue; reason = "" }
 $script:HordeWezfleetWakerPaneFailures = @{}
 $script:HordeWezfleetWakerClock = $null
+# How long the snapshot of the process table may take when a deadline has passed, and a test's way to
+# play one that could not be had (Set-HordeWezfleetWakerSnapshotFault).
+$script:HordeWezfleetWakerSnapshotSeconds = 5
+$script:HordeWezfleetWakerSnapshotFault = $false
 
 function Set-HordeWezfleetWakerRoot {
     # For tests: name the folder holding the fleet's wezfleet.ps1, over the setting and the command on
@@ -126,9 +149,16 @@ function Set-HordeWezfleetWakerRoot {
 
 function Set-HordeWezfleetWakerDeadlines {
     # For tests: the deadlines of rule 4, in seconds, so a case that waits one out waits a second or two.
-    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeSeconds = 20)
-    if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeSeconds -lt 1) { throw "a deadline is at least 1 s" }
-    $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudge = $NudgeSeconds }
+    param([int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = $script:HordeWezfleetWakerNudgeBudget)
+    if ($FleetSeconds -lt 1 -or $PaneFlagSeconds -lt 1 -or $NudgeBudgetSeconds -lt 1) { throw "a deadline is at least 1 s" }
+    $script:HordeWezfleetWakerDeadlines = @{ fleet = $FleetSeconds; paneFlag = $PaneFlagSeconds; nudgeBudget = $NudgeBudgetSeconds }
+}
+
+function Set-HordeWezfleetWakerSnapshotFault {
+    # For tests: play a process table that cannot be listed in time, so the stop of a hung command is
+    # seen to stop the child alone and say so.
+    param([bool]$On)
+    $script:HordeWezfleetWakerSnapshotFault = $On
 }
 
 function Set-HordeWezfleetWakerClock {
@@ -256,9 +286,15 @@ function ConvertTo-HordeWezfleetWakerCommandLine {
 function Get-HordeWezfleetWakerDescendants {
     # The processes the started one started, and theirs, from one snapshot of the process table, as
     # { id; start } in UTC; a process counts only if it was created at or after its parent started.
+    # $null WHEN THE SNAPSHOT COULD NOT BE HAD - it failed, or it did not come within its own time limit.
+    # THE SNAPSHOT HAS A TIME LIMIT OF ITS OWN (review of PR #211). It is taken at the moment a deadline
+    # has already passed, to stop a hung command; without a limit a process table that does not answer
+    # hangs the stop itself, and with it the loop the deadline exists to protect. No list is not "no
+    # descendants": the caller then stops the child alone and says so.
     param([Parameter(Mandatory = $true)][int]$RootId, [Parameter(Mandatory = $true)][datetime]$RootStart)
+    if ($script:HordeWezfleetWakerSnapshotFault) { return $null }
     $all = @()
-    try { $all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction Stop) } catch { return @() }
+    try { $all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -OperationTimeoutSec $script:HordeWezfleetWakerSnapshotSeconds -ErrorAction Stop) } catch { return $null }
     $byParent = @{}
     foreach ($q in $all) {
         $k = [int]$q.ParentProcessId
@@ -290,8 +326,10 @@ function Stop-HordeWezfleetWakerProcess {
     # Stop the process this call started, by its handle, and every process it started; a descendant only
     # if the process now holding its pid started when the snapshot said. Says what it stopped.
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
-    $tree = @()
-    try { $tree = @(Get-HordeWezfleetWakerDescendants -RootId $Process.Id -RootStart $Process.StartTime) } catch { $tree = @() }
+    $tree = $null
+    try { $tree = Get-HordeWezfleetWakerDescendants -RootId $Process.Id -RootStart $Process.StartTime } catch { $tree = $null }
+    $listed = ($null -ne $tree)
+    $tree = @($tree | Where-Object { $null -ne $_ })
     try { if (-not $Process.HasExited) { $Process.Kill() } } catch { }
     $stopped = 0
     foreach ($d in $tree) {
@@ -302,6 +340,8 @@ function Stop-HordeWezfleetWakerProcess {
     }
     $null = $Process.WaitForExit(5000)
     $also = $(if ($stopped -gt 0) { ", with " + $stopped + " process(es) it had started" } else { "" })
+    # SAID, NOT HIDDEN: with no list, whatever the child had started may still be running.
+    if (-not $listed) { $also = ", alone: the processes it had started could not be listed within " + $script:HordeWezfleetWakerSnapshotSeconds + " s, so any of them are still running" }
     if ($Process.HasExited) { return ("the process it started was stopped" + $also) }
     return ("the process it started did not stop within 5 s" + $also)
 }
@@ -409,6 +449,10 @@ function Test-HordeWezfleetWakerRow {
         if ($null -ne $v -and -not (($v -is [int] -or $v -is [long]) -and $v -ge 0)) { return ("a row's " + $k + " is neither a whole number, 0 or more, nor null") }
     }
     if ($null -ne $Row.oldestUnreadAt -and $Row.oldestUnreadAt -isnot [string] -and $Row.oldestUnreadAt -isnot [datetime]) { return "a row's oldestUnreadAt is neither a time nor null" }
+    # limited AND limitedUntil ARE READ WHEN A ROW HAS THEM, and a row of a command too old to say
+    # either is still a row (Get-HordeWezfleetWakerLimit).
+    if ($names -ccontains "limited" -and ($Row.limited -isnot [string] -or $script:HordeWezfleetWakerWords -cnotcontains $Row.limited)) { return "a row's limited is not yes, no or unknown" }
+    if ($names -ccontains "limitedUntil" -and $null -ne $Row.limitedUntil -and $Row.limitedUntil -isnot [string] -and $Row.limitedUntil -isnot [datetime]) { return "a row's limitedUntil is neither a time nor null" }
     foreach ($k in @("reachable", "idle", "boxEmpty", "midTurn")) { if ($script:HordeWezfleetWakerWords -cnotcontains $Row.$k) { return ("a row's " + $k + " is '" + (ConvertTo-HordeWezfleetWakerLine $Row.$k -Max 40) + "', not yes, no or unknown") } }
     return ""
 }
@@ -425,6 +469,12 @@ function Read-HordeWezfleetWakerFleet {
     # FORM A, ONCE A PASS: { ok; rows; reason }, rows keyed by session id. One answer serves every call
     # made within its short life; a failing read is not repeated until its back-off has run out, and
     # answers in the same words meanwhile (rule 3).
+    # THE ANSWER IS KEPT FOR THE PASS, AND STAMPED WHEN IT ARRIVES. It was stamped when the call was
+    # MADE (review of PR #211): a fleet that took longer than the answer's 2 s life to reply left an
+    # answer already expired, so every state of that pass asked again - N + 1 process starts a pass on
+    # exactly the machine too slow to bear them. Two things now: the watcher says when a pass begins
+    # (the port's Begin, Clear-HordeWezfleetWakerPass), and that alone ends a kept answer's use by the
+    # watcher; and for a caller that never says so, the life is counted from the answer's arrival.
     $now = Get-HordeWezfleetWakerTime
     $kept = $script:HordeWezfleetWakerFleet
     if ($null -ne $kept -and ($now - $kept.at).TotalSeconds -ge 0 -and ($now - $kept.at).TotalSeconds -lt $script:HordeWezfleetWakerFleetLifeSeconds) { return $kept.answer }
@@ -436,8 +486,14 @@ function Read-HordeWezfleetWakerFleet {
         $count = [int]$fail.count + 1
         $script:HordeWezfleetWakerFleetFailures = @{ count = $count; nextAt = $now.AddSeconds((Get-HordeWezfleetWakerWait -Failures $count)); reason = $answer.reason }
     }
-    $script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = $now; answer = $answer }
+    $script:HordeWezfleetWakerFleet = [pscustomobject]@{ at = (Get-HordeWezfleetWakerTime); answer = $answer }
     return $answer
+}
+
+function Clear-HordeWezfleetWakerPass {
+    # A pass begins: the last pass's reading of the fleet is not this one's. What was counted of
+    # failures is kept - a back-off runs across passes, which is its whole point.
+    $script:HordeWezfleetWakerFleet = $null
 }
 
 function Get-HordeWezfleetWakerFleetAnswer {
@@ -499,6 +555,46 @@ function ConvertTo-HordeWezfleetWakerRole {
     return "unknown"
 }
 
+function Get-HordeWezfleetWakerLimit {
+    # A row's usage limit, as the port's two members: { limited; limitedUntil }.
+    # A session whose last turn ended in a usage-limit error cannot answer a knock until the limit
+    # resets (measured 2026-10-13, 04:36 to 05:55 UTC: every session of the account was stopped for
+    # about 80 minutes, every knock in that window was typed and nobody could answer). The fleet's
+    # command says so in each row: limited (yes, no, unknown) and limitedUntil (a time, or null).
+    #   limited no                                             -> no
+    #   limited unknown, or NO SUCH MEMBER (a command too old  -> unknown. NEVER no: it was read as
+    #   to say)                                                   "not limited" at first, and the
+    #                                                             session was nudged and counted (safety
+    #                                                             review of PR 220). What unknown is
+    #                                                             owed - a wait, and its release - is
+    #                                                             the watcher's (core/Wake.ps1)
+    #   limited yes, with a limitedUntil that can be placed    -> yes, until then. The command keeps a
+    #                                                             reset that has passed in the row,
+    #                                                             still saying yes: whether the time is
+    #                                                             ahead or over is the watcher's to say,
+    #                                                             with the pass's clock
+    #   limited yes, limitedUntil null or not a time           -> yes, and nobody knows until when
+    # The fleet says unknown for every row it cannot reach, and for a session whose last transcript
+    # entry is longer than the tail it reads (1 of 23 reachable sessions, measured on the live fleet).
+    param([Parameter(Mandatory = $true)]$Row)
+    $p = $Row.PSObject.Properties["limited"]
+    if ($null -eq $p -or $p.Value -cne "yes") {
+        $word = "unknown"
+        if ($null -ne $p -and $p.Value -ceq "no") { $word = "no" }
+        return [pscustomobject]@{ limited = $word; limitedUntil = $null }
+    }
+    $until = $null
+    $u = $Row.PSObject.Properties["limitedUntil"]
+    if ($null -ne $u) {
+        if ($u.Value -is [datetime]) { if ($u.Value.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $u.Value.ToUniversalTime() } }
+        elseif ($u.Value -is [string]) {
+            $parsed = [datetime]::MinValue
+            if ([datetime]::TryParse($u.Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }
+        }
+    }
+    return [pscustomobject]@{ limited = "yes"; limitedUntil = $until }
+}
+
 function Read-HordeWezfleetWakerState {
     # A row as the port's state, or why it is none: { ok; value; reason }.
     #   RULE 1: reason and reasons are NOT read. A row with good mail and one corrupt record is a row
@@ -517,35 +613,75 @@ function Read-HordeWezfleetWakerState {
         }
         if ($null -eq $oldest) { return [pscustomobject]@{ ok = $false; value = $null; reason = ("the fleet says " + $Row.id + " has unread mail and gave no time for the oldest that can be placed") } }
     }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn } }
+    $limit = Get-HordeWezfleetWakerLimit -Row $Row
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ id = $Row.id; unreadCount = $Row.unreadCount; unreadableCount = $Row.unreadableCount; oldestUnreadAt = $oldest; idle = $Row.idle; boxEmpty = $Row.boxEmpty; midTurn = $Row.midTurn; limited = $limit.limited; limitedUntil = $limit.limitedUntil } }
+}
+
+function Get-HordeWezfleetWakerRetired {
+    # Is this row's session retired, as the port's word: yes, no or unknown.
+    # THE ROW'S retired IS A BOOLEAN THAT IS FALSE FOR "COULD NOT TELL" (read from the fleet's own code,
+    # 2026-10-13): a session with no readable registry record is listed with retired false, because
+    # there was no record to read it from. So false is "no" only for a row the fleet had a record for:
+    #   retired true                                                    -> yes
+    #   retired false, and the row says its record could not be read
+    #     (record-unreadable in reason or reasons), or shows none of
+    #     what a record gives - no label and a role this waker does
+    #     not know                                                      -> unknown
+    #   retired false otherwise                                         -> no
+    # reason and reasons are read HERE AND ONLY FOR THIS (rule 1 keeps them out of the state): they are
+    # the one place the fleet says the record itself was unreadable.
+    # THE FLEET HOLDS NOTHING BACK FOR A RETIRED SESSION: it works out reachable, idle and mail for one
+    # like any other, and a retired session with a live process reads reachable yes. So the hold is
+    # the watcher's (core/Wake.ps1), and this only reports.
+    param([Parameter(Mandatory = $true)]$Row)
+    if ($Row.retired -eq $true) { return "yes" }
+    $said = New-Object System.Collections.ArrayList
+    foreach ($n in @("reason", "reasons")) {
+        $p = $Row.PSObject.Properties[$n]
+        if ($null -eq $p) { continue }
+        foreach ($v in @($p.Value)) { if ($v -is [string]) { [void]$said.Add($v) } }
+    }
+    if (@($said) -ccontains "record-unreadable") { return "unknown" }
+    if ("$($Row.label)" -ceq "" -and (ConvertTo-HordeWezfleetWakerRole $Row.role) -ceq "unknown") { return "unknown" }
+    return "no"
 }
 
 function Get-HordeWezfleetWakerTargets {
-    # The port's Targets: form A's rows that are not retired, or that have unread mail (the header).
+    # The port's Targets: form A's rows that are not retired, or that have unread mail (the header). A
+    # retired one with mail is LISTED, saying retired, so the watcher can say once that its mail waits
+    # for nobody; it is never nudged (core/Wake.ps1). And should the watcher ever ask, the fleet's own
+    # nudge refuses a retired target too (refused, retired: the port's nothing) - two doors, both shut.
     $fleet = Read-HordeWezfleetWakerFleet
-    if (-not $fleet.ok) { return (New-HordeUnknown -Reason $fleet.reason) }
+    if (-not $fleet.ok) {
+        # HOW MANY READS IN A ROW HAVE FAILED goes with the unknown (wakers/Port.ps1, Targets): this waker
+        # backs its reads off, so only it knows, and the watcher needs it to say when a failure has
+        # stopped being a hiccup. After the fifth the read is already retried only every 300 s.
+        $unknown = New-HordeUnknown -Reason $fleet.reason
+        Add-Member -InputObject $unknown -MemberType NoteProperty -Name "failures" -Value ([int]$script:HordeWezfleetWakerFleetFailures.count)
+        return $unknown
+    }
     $list = New-Object System.Collections.ArrayList
     foreach ($row in @($fleet.rows.Values)) {
         $hasMail = ($null -ne $row.unreadCount -and $row.unreadCount -gt 0)
         if ($row.retired -and -not $hasMail) { continue }
-        [void]$list.Add([pscustomobject]@{ id = $row.id; label = $row.label; role = (ConvertTo-HordeWezfleetWakerRole $row.role); parent = $row.parent; reachable = $row.reachable })
+        [void]$list.Add([pscustomobject]@{ id = $row.id; label = $row.label; role = (ConvertTo-HordeWezfleetWakerRole $row.role); parent = $row.parent; reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })
     }
     return (New-HordeKnown -Value $list.ToArray() -ObservedAt (Get-HordeWezfleetWakerTime))
 }
 
 function Get-HordeWezfleetWakerState {
-    # The port's State (the header): form A's row, and form B only for a candidate.
-    param([Parameter(Mandatory = $true)][string]$Id)
+    # The port's State (the header): form A's row, with no pane read; and, with -Full, the port's
+    # Confirm: form B for that one session. THE WATCHER DECIDES WHO IS LOOKED AT, not this waker: it asks
+    # -Full only for a session it is about to nudge, so a session that is backing off, capped or behind
+    # the rate limit has no pane read at all (review of PR #211; core/Wake.ps1, THE LOOK COMES LAST).
+    param([Parameter(Mandatory = $true)][string]$Id, [switch]$Full)
     $fleet = Read-HordeWezfleetWakerFleet
     if (-not $fleet.ok) { return (New-HordeUnknown -Reason $fleet.reason) }
     if (-not $fleet.rows.Contains($Id)) { return (New-HordeUnknown -Reason ("the fleet's state has no session " + $Id)) }
     $row = $fleet.rows[$Id]
     $state = Read-HordeWezfleetWakerState -Row $row
     if (-not $state.ok) { return (New-HordeUnknown -Reason $state.reason) }
-    # A CANDIDATE, AND ONLY A CANDIDATE, HAS ITS PANE READ: the box and the turn decide nothing for a
-    # session with no unread mail, out of reach, or not idle.
-    $candidate = ($state.value.unreadCount -gt 0 -and $row.reachable -ceq "yes" -and $row.idle -ceq "yes")
-    if ($candidate) {
+    if ($Full) {
         $pane = Read-HordeWezfleetWakerPane -Id $Id
         if (-not $pane.ok) { return (New-HordeUnknown -Reason $pane.reason) }
         $state = Read-HordeWezfleetWakerState -Row $pane.row
@@ -559,11 +695,39 @@ function Send-HordeWezfleetWakerNudge {
     # reason (rules 4 and 5) - nothing is known to have been typed, and the watcher backs off and asks
     # again - except an answer about ANOTHER session, which is unknown: this waker cannot say what
     # happened to the one it was asked about.
+    #
+    # THE FLEET'S COMMAND OWNS THE TYPING, SO IT IS THE ONE THAT DECIDES WHEN THERE IS NO TIME LEFT TO TYPE.
+    # This waker's deadline used to be 20 s and killed the process tree at it. On a throttled machine a
+    # real nudge can run longer, and a kill that falls between the line being typed and Enter being
+    # pressed leaves text in the box: the box is then never empty, and that session is never woken
+    # again (review of PR #211). So the command is handed its BUDGET (-BudgetSeconds, 35 to 300) and
+    # refuses to START typing when less than 30 s of it is left - the worst case of its own type-and-send
+    # step, counted from its own process start - answering refused, budget-too-small, which is the
+    # port's nothing with its reason: no attempt, and the first step of the back-off. THE BUDGET IS 60 s,
+    # twice what the command needs to begin, so a start-up of up to 30 s still leaves it room; and this
+    # waker's own kill is at three times the budget, 180 s, far above it. THE COMMAND'S RULE FOR ITS
+    # CALLERS: never kill mail nudge before its budget + 40 s - 100 s here, which 180 s satisfies,
+    # as three times any budget of 20 s or more does and the command takes none under 35. It is for a process that
+    # hung, never a way to hurry one that is typing. Every answer carries elapsedMs, which is passed on
+    # so the journal shows what a real nudge takes here.
+    # IF THE KILL DOES FIRE, the outcome is killed, and it says so first in its reason: the box may hold
+    # text now, and the watcher puts the session on its longest back-off and tells the warchief.
+    # A COMMAND TOO OLD TO KNOW -BudgetSeconds answers with a usage error, which is not JSON. That is
+    # unreachable, with a reason that says the command is too old. IT IS NEVER ASKED AGAIN WITHOUT THE
+    # FLAG: an unbudgeted nudge is the defect this is here to end. A budget the command refuses (exit 2,
+    # bad-budget) is this waker's own mistake and is said as that, with the command's code.
     param([Parameter(Mandatory = $true)][string]$Id)
     $at = Get-HordeWezfleetWakerTime
-    $run = Start-HordeWezfleetWakerProcess -Argv @("mail", "nudge", "-To", $Id, "-Json") -DeadlineSeconds $script:HordeWezfleetWakerDeadlines.nudge
+    $budget = [int]$script:HordeWezfleetWakerDeadlines.nudgeBudget
+    $run = Start-HordeWezfleetWakerProcess -Argv @("mail", "nudge", "-To", $Id, "-BudgetSeconds", ("" + $budget), "-Json") -DeadlineSeconds (3 * $budget)
+    if ($run.timedOut) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "killed"; reason = ("nudge-killed: the nudge ran past " + (3 * $budget) + " s, three times its budget, and was stopped; its box may now hold the unsent line. " + $run.reason); at = $at }) -ObservedAt $at) }
     $read = Read-HordeWezfleetWakerJson -Run $run -What "wezfleet mail nudge"
-    if (-not $read.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $read.reason; at = $at }) -ObservedAt $at) }
+    $tooOld = "tool-too-old: the fleet's command did not take mail nudge -BudgetSeconds as this waker asks it, so it may be older than the nudge budget, and it is not asked without one: "
+    if (-not $read.ok) {
+        $why = $read.reason
+        if ($run.ok) { $why = $tooOld + $why }
+        return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = $why; at = $at }) -ObservedAt $at)
+    }
     $j = $read.json
     $said = "wezfleet mail nudge exit " + $run.exit
     if ([int]$run.exit -ne 0) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = (Get-HordeWezfleetWakerFailure -Json $j -Said $said); at = $at }) -ObservedAt $at) }
@@ -584,10 +748,15 @@ function Send-HordeWezfleetWakerNudge {
     $mapped = $script:HordeWezfleetWakerOutcomes[$outcome.Value]
     # The port asks every outcome but woken to say why; the fleet's own word stands in when it gave none.
     if ($why -eq "" -and $mapped -cne "woken") { $why = "the fleet answered " + $outcome.Value }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = $mapped; reason = $why; at = $at }) -ObservedAt $at)
+    $answer = [ordered]@{ id = $Id; outcome = $mapped; reason = $why; at = $at }
+    $took = $j.PSObject.Properties["elapsedMs"]
+    if ($null -ne $took -and ($took.Value -is [int] -or $took.Value -is [long]) -and $took.Value -ge 0) { $answer["elapsedMs"] = [long]$took.Value }
+    return (New-HordeKnown -Value ([pscustomobject]$answer) -ObservedAt $at)
 }
 
 $null = Register-HordeWaker -Name "wezfleet" `
     -Targets { Get-HordeWezfleetWakerTargets } `
     -State { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id } `
-    -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id }
+    -Confirm { param([string]$Id) Get-HordeWezfleetWakerState -Id $Id -Full } `
+    -Nudge { param([string]$Id) Send-HordeWezfleetWakerNudge -Id $Id } `
+    -Begin { Clear-HordeWezfleetWakerPass }

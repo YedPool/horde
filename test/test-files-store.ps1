@@ -888,15 +888,13 @@ Write-Host "--- the path in a file id: A to Z folded by the code's own hand, eve
 # AN ID IS PERMANENT, so what goes into it may not depend on the runtime's case table. Measured
 # 2026-10-13 on one machine: ToLowerInvariant leaves U+1E9E, U+2126 and U+A7AE as they are under
 # Windows PowerShell 5.1 and changes all three under PowerShell 7.6 (to U+00DF, U+03C9, U+026A).
-$printable = -join (32..126 | ForEach-Object { [char]$_ })
-Check ((Get-HordeFilesAsciiLower -Text $printable) -ceq ' !"#$%&''()*+,-./0123456789:;<=>?@abcdefghijklmnopqrstuvwxyz[\]^_`abcdefghijklmnopqrstuvwxyz{|}~') "of the 95 printable ASCII characters, exactly the 26 capitals are changed: @ before A and [ after Z are as they were"
-Check ((Get-HordeFilesAsciiLower -Text "") -ceq "") "nothing folded is nothing"
-# Capitals outside A to Z, each with a lower case in some runtime's table: the three of the review,
-# then E acute, I with a dot, the Kelvin sign (whose lower case is the ASCII k), a full-width A,
-# and a Greek and a Cyrillic capital.
-$capitals = @(0x1E9E, 0x2126, 0xA7AE, 0x00C9, 0x0130, 0x212A, 0xFF21, 0x0391, 0x0410)
-$kept = @(foreach ($code in $capitals) { [int][char](Get-HordeFilesAsciiLower -Text ([string][char]$code)) })
-Check (($kept -join ",") -ceq ($capitals -join ",")) ("a capital that is not one of A to Z is left as it is: " + (($kept | ForEach-Object { "U+{0:X4}" -f $_ }) -join " "))
+# THE FOLD ITSELF - which characters it changes, and that it asks no table - is core's
+# (core/PathText.ps1, ConvertTo-HordeAsciiLower) and is attacked in test/test-path-text.ps1. Here:
+# that a file id is made WITH it, and is the number it has always been.
+$foldOf = Get-Command ConvertTo-HordeAsciiLower -CommandType Function -ErrorAction SilentlyContinue
+$askOf = Get-Command Get-HordeNetworkPathRefusal -CommandType Function -ErrorAction SilentlyContinue
+$ownCopies = @(Get-Command -CommandType Function -Name "*-HordeFiles*" | Where-Object { $_.Name -like "*AsciiLower*" -or $_.Name -like "*NetworkRefusal*" -or $_.Name -like "*NetworkPathRefusal*" })
+Check ($null -ne $foldOf -and $null -ne $askOf -and ("" + $foldOf.ScriptBlock.File) -like "*\core\PathText.ps1" -and ("" + $askOf.ScriptBlock.File) -like "*\core\PathText.ps1" -and $ownCopies.Count -eq 0) ("loading the share loads the fold and the network question from core/PathText.ps1, and files has no copy of either under a name of its own (" + $ownCopies.Count + ")")
 $idSession = [ordered]@{ known = $true; id = "s" }
 $oddFolder = "" + [char]0x1E9E + [char]0x2126 + [char]0xA7AE + [char]0x00C9
 $pinned = Get-HordeFilesId -Session $idSession -FullPath ("C:\Dir\" + $oddFolder + "\FILE Z.md") -Key $anyKey

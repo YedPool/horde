@@ -49,7 +49,7 @@
            Find = '$rest = $rest.Replace($plain, "|")'
            Replace = '$rest = $rest.Replace($plain, "")' }
         @{ Name = "name-compared-with-its-case"
-           Find = '$lowered = Get-HordeFilesAsciiLower -Text $Name'
+           Find = '$lowered = ConvertTo-HordeAsciiLower -Text $Name'
            Replace = '$lowered = $Name' }
         @{ Name = "word-looked-for-by-the-runtimes-own-comparison"
            Find = 'if ($rest.Contains($word)) { return $word }'
@@ -74,14 +74,14 @@
            Find = '[string]::Equals($inner, $outer, [System.StringComparison]::Ordinal) -or '
            Replace = '' }
         @{ Name = "path-compared-with-its-case"
-           Find = '$inner = Get-HordeFilesAsciiLower -Text $Path'
+           Find = '$inner = ConvertTo-HordeAsciiLower -Text $Path'
            Replace = '$inner = $Path' }
         @{ Name = "folder-compared-with-its-case"
-           Find = '$outer = (Get-HordeFilesAsciiLower -Text $Folder).TrimEnd(''\'')'
+           Find = '$outer = (ConvertTo-HordeAsciiLower -Text $Folder).TrimEnd(''\'')'
            Replace = '$outer = $Folder.TrimEnd(''\'')' }
         @{ Name = "folder-written-with-its-separator-is-another-folder"
-           Find = '$outer = (Get-HordeFilesAsciiLower -Text $Folder).TrimEnd(''\'')'
-           Replace = '$outer = (Get-HordeFilesAsciiLower -Text $Folder)' }
+           Find = '$outer = (ConvertTo-HordeAsciiLower -Text $Folder).TrimEnd(''\'')'
+           Replace = '$outer = (ConvertTo-HordeAsciiLower -Text $Folder)' }
         # --- the places ---
         @{ Name = "force-lifts-the-home"
            Find = 'kind = "home"; path = $base; force = $false'
@@ -130,7 +130,7 @@
            Find = 'if ($whole -cmatch ''\A\\\\\?\\[A-Za-z]:\\'') { $whole = $whole.Substring(4) }'
            Replace = '' }
         @{ Name = "place-on-a-network-drive-opened"
-           Find = ' -or (Get-HordeFilesNetworkRefusal -Path $whole) -ne "" -or '
+           Find = ' -or (Get-HordeNetworkPathRefusal -Path $whole) -ne "" -or '
            Replace = ' -or ' }
         @{ Name = "place-on-a-letter-over-a-network-drive-opened"
            Find = 'if ((Get-HordeFilesAliasRefusal -Path $whole) -ne "" -or '
@@ -161,7 +161,7 @@
            Find = 'for ($at = 1; $at -lt ($parts.Count - 1); $at++) {'
            Replace = 'for ($at = 1; $at -lt $parts.Count; $at++) {' }
         @{ Name = "secrets-folder-anywhere-compared-with-its-case"
-           Find = '[string]::Equals((Get-HordeFilesAsciiLower -Text $parts[$at]), $list.secretsFolder, [System.StringComparison]::Ordinal)'
+           Find = '[string]::Equals((ConvertTo-HordeAsciiLower -Text $parts[$at]), $list.secretsFolder, [System.StringComparison]::Ordinal)'
            Replace = '[string]::Equals($parts[$at], $list.secretsFolder, [System.StringComparison]::Ordinal)' }
         @{ Name = "harness-that-does-not-say-not-refused"
            Find = 'if ($found.unknown -ne "") { return'

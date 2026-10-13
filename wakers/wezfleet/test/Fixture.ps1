@@ -43,6 +43,7 @@ return [pscustomobject]@{
         Set-HordeWezfleetWakerRoot -Path ""
         Set-HordeWezfleetWakerDeadlines
         Set-HordeWezfleetWakerClock $null
+        Set-HordeWezfleetWakerSnapshotFault $false
         $env:HORDE_HOME = $State.oldHome
         foreach ($d in @($State.dir, $State.home)) { if ($d -and (Test-Path -LiteralPath $d)) { Remove-Item -LiteralPath $d -Recurse -Force } }
     }
@@ -51,13 +52,13 @@ return [pscustomobject]@{
     # nudge could take it from.
     Seat = {
         param($State, $Session)
-        $words = @{ "warchief" = "master"; "orc" = "orchestrator"; "goblin" = "session" }
+        $words = @{ "warchief" = "master"; "orc" = "orchestrator"; "warg" = "session" }
         $role = "unknown"
         if ($words.ContainsKey("$($Session.role)")) { $role = $words["$($Session.role)"] }
         $oldest = $null
         if ($Session.oldestUnreadAt -is [datetime]) { $oldest = $Session.oldestUnreadAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
         $row = [ordered]@{ id = "$($Session.id)"; label = "$($Session.label)"; role = $role; parent = "$($Session.parent)"; retired = $false; reachable = "yes"; mail = "known"
-            unreadCount = [int]$Session.unreadCount; unreadableCount = 0; oldestUnreadAt = $oldest; idle = "$($Session.idle)"; boxEmpty = "$($Session.boxEmpty)"; midTurn = "$($Session.midTurn)"; reason = ""; reasons = @() }
+            unreadCount = [int]$Session.unreadCount; unreadableCount = 0; oldestUnreadAt = $oldest; idle = "$($Session.idle)"; boxEmpty = "$($Session.boxEmpty)"; midTurn = "$($Session.midTurn)"; reason = ""; reasons = @(); limited = "$($Session.limited)"; limitedUntil = $null }
         $path = Join-Path $State.dir "fleet.json"
         $parsed = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
         $rows = @(@($parsed) | Where-Object { $null -ne $_ -and $_.id -cne $row.id }) + [pscustomobject]$row
@@ -101,6 +102,8 @@ return [pscustomobject]@{
         return @([System.IO.File]::ReadAllLines($p) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_ | ConvertFrom-Json })
     }
     Forget = { param($State) Clear-HordeWezfleetWakerMemory }
+    NoSnapshot = { param($State, [bool]$On) Set-HordeWezfleetWakerSnapshotFault $On }
     Clock = { param($State, $Now) Set-HordeWezfleetWakerClock $Now }
-    Deadlines = { param($State, [int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeSeconds = 20) Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds -NudgeSeconds $NudgeSeconds }
+    # With no budget given, the waker's own default is what is set back: this fixture does not say what it is.
+    Deadlines = { param($State, [int]$FleetSeconds = 10, [int]$PaneFlagSeconds = 5, [int]$NudgeBudgetSeconds = 0) if ($NudgeBudgetSeconds -gt 0) { Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds -NudgeBudgetSeconds $NudgeBudgetSeconds } else { Set-HordeWezfleetWakerDeadlines -FleetSeconds $FleetSeconds -PaneFlagSeconds $PaneFlagSeconds } }
 }

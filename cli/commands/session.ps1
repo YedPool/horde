@@ -18,7 +18,7 @@ $HordeCommand = @{
             [int]$TimeoutSeconds = 240
         )
         $root = Get-HordeRoot
-        foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic", "ReservedLabels")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
         . (Join-Path $root "transports\Port.ps1")
         foreach ($t in @(Get-HordeTransportFiles)) { . $t }
         . (Join-Path $root "remote\Protocol.ps1")
@@ -61,6 +61,9 @@ $HordeCommand = @{
                 "spawn" {
                     if ($Node -eq "") { throw "session spawn needs -Node: the node is always named, never defaulted to the hub's own machine" }
                     if ($Label -eq "" -or $Run -eq "" -or $Profile -eq "" -or $Repo -eq "" -or $Prompt -eq "") { throw "session spawn needs -Label, -Run, -Profile, -Repo and -Prompt: the profile is one the node offers, named by the hub" }
+                    # THE HUB HANDS OUT THE LABEL HERE, so this is where a reserved one is stopped: it never
+                    # leaves the hub in a request (core/ReservedLabels.ps1).
+                    if (Test-HordeLabelReserved $Label) { throw ("the label " + $Label + " is reserved: it names a sender that is not a session, so no session may be given it. Choose another label") }
                     $a = [ordered]@{ label = $Label; role = $Role; runId = $Run; profile = $Profile; repoId = $Repo; prompt = [pscustomobject]@{ text = $Prompt }; closeOn = $CloseOn }
                     if ($Title -ne "") { $a["title"] = $Title }
                     if ($Permission -ne "") { $a["permission"] = $Permission }

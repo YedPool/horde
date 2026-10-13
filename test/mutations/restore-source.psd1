@@ -35,35 +35,89 @@
            Find = 'if ($null -ne $same) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-saved-restore-is-this-one"
-           Find = '-and $_.windowStart -le $windowEnd -and $_.windowEnd -ge $windowStart }'
-           Replace = '}' }
+           Find = 'if ($Saved.windowStart -gt $WindowEnd -or $Saved.windowEnd -lt $WindowStart) { return $false }'
+           Replace = '' }
+        @{ Name = "a-window-alone-makes-it-the-same-restore"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return $true' }
+        @{ Name = "one-unchanged-member-makes-it-the-same-restore"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return ($present -gt 0 -and $unchanged -gt 0)' }
+        @{ Name = "every-member-must-be-unchanged"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return ($present -gt 0 -and $unchanged -eq $present)' }
+        @{ Name = "restore-with-no-member-left-is-the-same"
+           Find = 'return ($present -gt 0 -and ($unchanged * 2) -gt $present)'
+           Replace = 'return (($unchanged * 2) -ge $present)' }
+        @{ Name = "second-restore-in-the-same-minute-shares-the-id"
+           Find = 'if (@(@($Known) | Where-Object { $null -ne $_ -and "$($_.restoreId)" -ceq $restoreId }).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "member-starts-not-saved"
+           Find = 'if ($null -ne $held -and $held.Value -is [System.Collections.IDictionary]) { $row["members"] ='
+           Replace = 'if ($false) { $row["members"] =' }
         @{ Name = "found-restore-not-handed-back"
            Find = 'if ($finding.state -ceq "known") { $nextKnown ='
            Replace = 'if ($false) { $nextKnown =' }
         @{ Name = "shadow-state-written-where-live-reads"
-           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -HordeHome $HordeHome) -Text'
-           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -HordeHome $HordeHome) -Text' }
+           Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Shadow:$Shadow -Mode $Mode -HordeHome $HordeHome) -Text'
+           Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -HordeHome $HordeHome) -Text' }
         @{ Name = "posted-ids-never-dropped"
            Find = 'if (($Now - $when).TotalSeconds -le $Settings.restoreMaxAgeSeconds) { $nextPosted["$k"] = $when }'
            Replace = '$nextPosted["$k"] = $when' }
         @{ Name = "saved-restores-never-dropped"
            Find = '-and $_.windowEnd -is [datetime] -and ($Now - $_.windowEnd).TotalSeconds -le $Settings.restoreMaxAgeSeconds })'
            Replace = '})' }
-        @{ Name = "held-mail-marked-posted"
-           Find = 'if ($script:HordeRestoreSourceStages -cnotcontains "$($posted.value.stage)") {'
-           Replace = 'if ($false) {' }
-        @{ Name = "source-picks-a-messenger-production-may-not"
-           Find = '$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post", "receipt.receiver")'
-           Replace = '$script:HordeRestoreSourceMessengerNeeds = @("body.untyped", "idempotent.post")' }
-        @{ Name = "no-messenger-found-is-a-throw"
-           Find = 'if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("there is no messenger to post through: " + $found.reason)) }'
+        @{ Name = "any-status-change-is-a-move"
+           Find = '$late = ($_.lastChangeAt -is [datetime] -and ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)'
+           Replace = '$late = ($_.lastChangeAt -is [datetime] -and ($_.lastChangeAt - $_.startedAt).TotalSeconds -gt 0)' }
+        @{ Name = "moved-seconds-back-to-a-minute"
+           Find = 'movedSeconds = 30'
+           Replace = 'movedSeconds = 60' }
+        @{ Name = "busy-session-not-moved"
+           Find = 'if ("$($_.status)" -ceq "busy") { $moved = "yes" }'
+           Replace = 'if ($false) { $moved = "yes" }' }
+        @{ Name = "idle-session-in-no-turn-read-as-neither"
+           Find = '{ $moved = $(if ($late) { "yes" } else { "no" }) }'
+           Replace = '{ $moved = $(if ($late) { "yes" } else { "neither" }) }' }
+        @{ Name = "waiting-since-its-start-read-as-moved"
+           Find = 'elseif ("$($_.status)" -ceq "waiting" -and $late) { $moved = "yes" }'
+           Replace = 'elseif ("$($_.status)" -ceq "waiting") { $moved = "yes" }' }
+        @{ Name = "ended-session-read-as-moved"
+           Find = '$moved = "neither"'
+           Replace = '$moved = "yes"' }
+        @{ Name = "neither-read-as-not-moved"
+           Find = '$moved = "neither"'
+           Replace = '$moved = "no"' }
+        @{ Name = "neither-suppresses-the-stall-notice"
+           Find = 'if ($m.moved -ceq "yes") { $movedIds[$m.id] = $true }'
+           Replace = 'if ($m.moved -cne "no") { $movedIds[$m.id] = $true }' }
+        @{ Name = "session-that-is-neither-mailed"
+           Find = 'if ($m.moved -cne "no") { continue }'
+           Replace = 'if ($m.moved -ceq "yes") { continue }' }
+        @{ Name = "moved-session-told-to-resume"
+           Find = 'if ($m.moved -cne "no") { continue }'
            Replace = '' }
-        @{ Name = "mail-wears-no-label"
-           Find = 'sessionId = $script:HordeRestoreSourceFrom; label = "$($Settings.fromLabel)" }'
-           Replace = 'sessionId = $script:HordeRestoreSourceFrom; label = "RS" }' }
-        @{ Name = "mail-carries-another-body"
-           Find = 'from = $from; body = "$($Mail.body)";'
-           Replace = 'from = $from; body = "resume";' }
+        @{ Name = "no-settle-time"
+           Find = 'if ($sinceEnd -lt $Settings.restoreSettleSeconds) { continue }'
+           Replace = '' }
+        @{ Name = "settle-time-of-a-minute"
+           Find = 'restoreSettleSeconds = 120'
+           Replace = 'restoreSettleSeconds = 60' }
+        @{ Name = "resume-mail-does-not-say-it-is-automated"
+           Find = 'resumeText = "AUTOMATED, from the restore source: START OR RESTORE.'
+           Replace = 'resumeText = "START OR RESTORE.' }
+        @{ Name = "stall-notice-does-not-say-it-is-automated"
+           Find = 'stallText = "AUTOMATED, from the restore source: STALLED'
+           Replace = 'stallText = "STALLED' }
+        @{ Name = "mail-wears-a-label-a-session-may-have"
+           Find = 'fromLabel = "RS"'
+           Replace = 'fromLabel = "R"' }
+        @{ Name = "resume-mail-not-from-the-restore-source"
+           Find = '-From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)"'
+           Replace = '-From "" -Label "$($Settings.fromLabel)"' }
+        @{ Name = "resume-mail-wears-a-fixed-label"
+           Find = '-From $script:HordeRestoreSourceFrom -Label "$($Settings.fromLabel)"'
+           Replace = '-From $script:HordeRestoreSourceFrom -Label "RS"' }
         @{ Name = "restore-minimum-ignored"
            Find = 'if ($best.Count -lt $Settings.restoreMinSessions) {'
            Replace = 'if ($false) {' }
@@ -73,12 +127,6 @@
         @{ Name = "old-restore-still-planned"
            Find = 'if (($Now - $windowEnd).TotalSeconds -gt $Settings.restoreMaxAgeSeconds) {'
            Replace = 'if ($false) {' }
-        @{ Name = "any-status-change-is-a-move"
-           Find = '-or ($_.lastChangeAt - $_.startedAt).TotalSeconds -ge $Settings.movedSeconds)'
-           Replace = '-or ($_.lastChangeAt - $_.startedAt).TotalSeconds -gt 0)' }
-        @{ Name = "status-not-read-so-a-first-turn-is-not-moved"
-           Find = '$resting = ("$($_.status)" -ceq "idle" -and'
-           Replace = '$resting = ($true -and' }
         @{ Name = "status-word-not-carried"
            Find = 'lastChangeAt = $status.observedAt; status = "$($status.value)";'
            Replace = 'lastChangeAt = $status.observedAt; status = "idle";' }
@@ -109,9 +157,6 @@
         @{ Name = "unknown-role-mailed"
            Find = 'if ($m.role -cne "orc") { continue }'
            Replace = 'if ($m.role -cne "orc" -and $m.role -cne "unknown") { continue }' }
-        @{ Name = "moved-session-told-to-resume"
-           Find = 'if ($m.moved) { continue }'
-           Replace = '' }
         @{ Name = "stall-notice-early"
            Find = 'if ($sinceEnd -ge $Settings.stallSeconds -and $movedIds.Count -eq 0) {'
            Replace = 'if ($movedIds.Count -eq 0) {' }

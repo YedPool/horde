@@ -47,7 +47,7 @@
 #   - A NETWORK PATH, in every spelling, and a file on a network drive - this machine's own drive
 #     share too. Refused from the path's text and the drive's type BEFORE anything asks the disk or
 #     the network about it: to look at such a path is to send the user's sign-in to the host it
-#     names (files/Path.ps1);
+#     names (core/PathText.ps1, Get-HordeNetworkPathRefusal);
 #   - A LINK. The file, or any folder on the way to it, that is a link of any kind (a symbolic link, a
 #     junction, any reparse point): the bytes would come from somewhere the caller did not name. This
 #     is the store's own test (decisions/Store.ps1's rule: the entry's own attributes, and an entry
@@ -80,6 +80,9 @@
 . (Join-Path $PSScriptRoot "Text.ps1")
 # Which session is asking: the one definition, core's.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Identity.ps1")
+# The fold of A to Z that goes into a file id, and the network question asked of a path before
+# anything looks at it: one definition each, core's, shared with whoever else needs them.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\PathText.ps1")
 
 function Get-HordeFilesTypes {
     # THE ALLOWED TYPES: extension (lower case) to { type; magic }. magic is a pattern over the first
@@ -105,14 +108,14 @@ function Get-HordeFilesTypes {
 function Get-HordeFilesType {
     # The type a file's NAME says it is: { ok; type; magic; reason }. No byte is read here.
     # AN EXTENSION IS ONE OF THE TABLE'S ONLY WHEN IT IS THAT, CODE UNIT FOR CODE UNIT, once A to Z
-    # are folded by the code's own hand (Get-HordeFilesAsciiLower). Until 2026-10-13 it was lowered
+    # are folded by the code's own hand (ConvertTo-HordeAsciiLower). Until 2026-10-13 it was lowered
     # by the runtime's case table and looked up in the table by its own comparer, and both let a
     # look-alike in. Measured that day on Windows PowerShell 5.1: a PNG named picture.pn<U+00AD>g was
     # shared as image/png, because the table's comparer (a culture-aware one) does not see a soft
     # hyphen; and under PowerShell 7.6 the case table makes U+212A, the Kelvin sign, a "k". So an
     # extension holding any character outside ASCII is none of the table's.
     param([Parameter(Mandatory = $true)][string]$Path)
-    $extension = Get-HordeFilesAsciiLower -Text ([System.IO.Path]::GetExtension($Path))
+    $extension = ConvertTo-HordeAsciiLower -Text ([System.IO.Path]::GetExtension($Path))
     $types = Get-HordeFilesTypes
     if ($extension -ceq ".svg") { return [pscustomobject]@{ ok = $false; type = ""; magic = ""; reason = "an SVG file is not shared: it is a picture that can carry script" } }
     $known = $null
@@ -185,37 +188,21 @@ function Get-HordeFilesHex {
     try { return ([System.BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace("-", "").ToLowerInvariant()) } finally { $sha.Dispose() }
 }
 
-function Get-HordeFilesAsciiLower {
-    # -Text with the 26 letters A to Z made a to z, and EVERY OTHER CHARACTER AS IT IS. Written out
-    # here, with no case table of the runtime's: a table differs between runtimes and changes with
-    # them. Measured 2026-10-13 on one machine, ToLowerInvariant of U+1E9E, U+2126 and U+A7AE: each
-    # is left as it is by Windows PowerShell 5.1 and changed by PowerShell 7.6, so one path had one
-    # file id under the first and another under the second (review of the files store).
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
-    $folded = New-Object System.Text.StringBuilder $Text.Length
-    foreach ($character in $Text.ToCharArray()) {
-        $code = [int]$character
-        if ($code -ge 65 -and $code -le 90) { $code += 32 }
-        [void]$folded.Append([char]$code)
-    }
-    return $folded.ToString()
-}
-
 function Get-HordeFilesId {
     # The id of the file a session shares from a path: the header says why it is a digest, and why a
     # keyed one. -FullPath is the open handle's own path (files/Path.ps1). -Key is this machine's
     # (files/Key.ps1). The first line of the text makes this digest this file's own.
     # WHAT GOES IN NEVER DEPENDS ON THE RUNTIME: an id is permanent, so the same path must give the
     # same bytes under every runtime and after every update of one. Only A to Z are folded
-    # (Get-HordeFilesAsciiLower), so that a drive letter or a folder written in another case is no
+    # (ConvertTo-HordeAsciiLower, core/PathText.ps1), so that a drive letter or a folder written in another case is no
     # other file; the handle's path already has every name as the disk holds it, in any alphabet.
     # KNOWN COST: a file renamed to another case of a letter outside A to Z is another file.
     param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$FullPath, [Parameter(Mandatory = $true)][byte[]]$Key)
     $who = "no-session"
     if ($Session.known) { $who = "session:" + $Session.id }
-    $text = "horde-files-id.v1`n" + $who + "`n" + (Get-HordeFilesAsciiLower -Text $FullPath)
+    $text = "horde-files-id.v1`n" + $who + "`n" + (ConvertTo-HordeAsciiLower -Text $FullPath)
     $mac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $Key)
-    try { return ((Get-HordeFilesAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32)) } finally { $mac.Dispose() }
+    try { return ((ConvertTo-HordeAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32)) } finally { $mac.Dispose() }
 }
 
 function Get-HordeFilesTitleProblem {
@@ -265,7 +252,7 @@ function Add-HordeFilesShare {
     # such a letter that alone looks the host up (files/Path.ps1 has the measurement). Then the
     # network question; then a device, which opens, and a stream, which cannot be told later.
     $unfit = Get-HordeFilesAliasRefusal -Path $Path
-    if ($unfit -eq "") { $unfit = Get-HordeFilesNetworkRefusal -Path $Path }
+    if ($unfit -eq "") { $unfit = Get-HordeNetworkPathRefusal -Path $Path }
     if ($unfit -eq "") { $unfit = Get-HordeFilesPathRefusal -Path $Path }
     if ($unfit -ne "") { return (& $refuse $unfit) }
     $full = ""
@@ -278,7 +265,7 @@ function Add-HordeFilesShare {
     # AND STREAM QUESTION TOO: measured 2026-10-13, C:NUL.txt passed it as written - its one part
     # reads as "C" before the colon - and is the device name NUL.txt once it is resolved.
     $network = Get-HordeFilesAliasRefusal -Path $full
-    if ($network -eq "") { $network = Get-HordeFilesNetworkRefusal -Path $full }
+    if ($network -eq "") { $network = Get-HordeNetworkPathRefusal -Path $full }
     if ($network -eq "") { $network = Get-HordeFilesPathRefusal -Path $full }
     if ($network -ne "") { return (& $refuse $network) }
     if ([System.IO.Directory]::Exists($full)) { return (& $refuse ("'" + $full + "' is a folder; one file is shared at a time")) }

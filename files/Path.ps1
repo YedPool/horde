@@ -27,7 +27,8 @@
 #     local file's id.
 #   - LOOKING IS ALREADY THE HARM. Asking whether a network path exists, or opening it, sends the
 #     user's sign-in to whatever host the path names.
-# So Get-HordeFilesNetworkRefusal is asked FIRST, and it touches no disk and no network:
+# So Get-HordeNetworkPathRefusal is asked FIRST, and it touches no disk and no network. It is
+# core/PathText.ps1's, so that there is one copy for every caller (files/Share.ps1 loads it):
 #   - A UNC PATH IN ANY SPELLING is refused from its text: two separators of either kind first
 #     (\\server, //server, \/server; Windows reads them all as one), and the prefixed forms
 #     \\?\UNC\, \\.\UNC\ and \??\UNC\, in either case and with either separator.
@@ -57,32 +58,9 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It loads nothing.
 
-function Get-HordeFilesNetworkRefusal {
-    # Why -Path is a network path, or "" when nothing says it is. THE FIRST QUESTION ASKED OF A PATH,
-    # and it touches no disk and no network: the header has the measurement. Asked of the path as
-    # written and again of the path it resolves to.
-    param([AllowEmptyString()][string]$Path)
-    $local = "only a file on one of this machine's own drives is shared: name it by its local path, or copy it to a local folder"
-    # Two separators of either kind first, unless what follows is the device or long-path prefix...
-    $unc = ($Path -cmatch '\A[\\/]{2}' -and $Path -cnotmatch '\A[\\/]{2}[.?][\\/]')
-    # ...and that prefix, or the NT one, before UNC. The letters are written out in both cases: an
-    # ignore-case match asks a case table, which is what an id's input must never do.
-    if (-not $unc) { $unc = ($Path -cmatch '\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc](?:[\\/]|\z)') }
-    if ($unc) { return ("'" + $Path + "' is a network path, and " + $local) }
-    if ($Path -cmatch '\A(?:\\\\\?\\)?([A-Za-z]):') {
-        $letter = $Matches[1]
-        $type = $null
-        # A letter whose type cannot be asked is not thereby a network drive: it goes on, and the
-        # open handle's own path decides.
-        try { $type = (New-Object System.IO.DriveInfo($letter)).DriveType } catch { $type = $null }
-        if ($type -eq [System.IO.DriveType]::Network) { return ("'" + $Path + "' is on a network drive (" + $letter + ":), and " + $local) }
-    }
-    return ""
-}
-
 function Get-HordeFilesPathRefusal {
     # Why the path, AS WRITTEN, is not one a file is opened from, or "" when it may be opened. A
-    # network path is not this function's: Get-HordeFilesNetworkRefusal is asked before it.
+    # network path is not this function's: Get-HordeNetworkPathRefusal (core/PathText.ps1) is asked before it.
     param([AllowEmptyString()][string]$Path)
     $rest = $Path
     # The one prefix form that still names a file on a drive; every other \\?\ and all of \\.\ and
@@ -197,7 +175,7 @@ function Get-HordeFilesAliasRefusal {
     }
     if (-not $ended) { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for another drive letter, and that for another, without end: where it really is cannot be told, and " + $local) }
     if ([string]::Equals($last, $first, [System.StringComparison]::Ordinal)) { return "" }
-    if ((Get-HordeFilesNetworkRefusal -Path ($last + ":\")) -ne "") { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network drive (" + $last + ":), and " + $local) }
+    if ((Get-HordeNetworkPathRefusal -Path ($last + ":\")) -ne "") { return ("'" + $Path + "' is on a drive (" + $first + ":) that stands for a network drive (" + $last + ":), and " + $local) }
     return ""
 }
 

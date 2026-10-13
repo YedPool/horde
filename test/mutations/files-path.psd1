@@ -1,7 +1,9 @@
 # Mutations of files/Path.ps1: which file a path really names. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\files-path.psd1
-# Each opens or looks at something that must be refused from its text or its drive's type, or takes
-# a network path for a file's one path; test\test-files-store.ps1 must fail for every one.
+# Each opens or looks at something that must be refused from its text, or takes a network path for
+# a file's one path; test\test-files-store.ps1 must fail for every one. The refusal of a network
+# path from its text and of a network drive by its type moved to core with its mutants
+# (core\PathText.ps1, test\mutations\path-text.psd1).
 #
 # WHAT THE BOX MUST BE ABLE TO DO for every mutant to be seen: make 8.3 short names (short-names-kept).
 # Where it cannot, the suite prints [SKIP] with the reason and that mutant is reported as not caught.
@@ -82,46 +84,8 @@
         @{ Name = "final-path-kept-with-its-prefix"
            Find = 'return [pscustomobject]@{ ok = $true; path = $Final.Substring(4); reason = "" }'
            Replace = 'return [pscustomobject]@{ ok = $true; path = $Final; reason = "" }' }
-        # --- a network path is refused from its text, and a network drive by its type ---
-        @{ Name = "network-path-not-refused-from-its-text"
-           Find = 'if ($unc) { return ('
-           Replace = 'if ($false) { return (' }
-        @{ Name = "only-backslashes-make-a-network-path"
-           Find = '$unc = ($Path -cmatch ''\A[\\/]{2}'' -and'
-           Replace = '$unc = ($Path -cmatch ''\A\\{2}'' -and' }
-        @{ Name = "long-path-prefix-taken-for-a-network-path"
-           Find = '$unc = ($Path -cmatch ''\A[\\/]{2}'' -and $Path -cnotmatch ''\A[\\/]{2}[.?][\\/]'')'
-           Replace = '$unc = ($Path -cmatch ''\A[\\/]{2}'')' }
-        @{ Name = "prefixed-unc-forms-not-network-paths"
-           Find = 'if (-not $unc) { $unc = ($Path -cmatch'
-           Replace = 'if ($false) { $unc = ($Path -cmatch' }
-        @{ Name = "unc-prefix-seen-only-in-capitals"
-           Find = '[\\/][Uu][Nn][Cc](?:[\\/]|\z)'')'
-           Replace = '[\\/]UNC(?:[\\/]|\z)'')' }
-        @{ Name = "unc-prefix-seen-only-with-backslashes"
-           Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc]'
-           Replace = '''\A(?:\\{2}[.?]|\\\?\?)\\[Uu][Nn][Cc]' }
-        @{ Name = "device-prefix-unc-form-missed"
-           Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc]'
-           Replace = '''\A(?:[\\/]{2}[?]|\\\?\?)[\\/][Uu][Nn][Cc]' }
-        @{ Name = "nt-form-unc-missed"
-           Find = '''\A(?:[\\/]{2}[.?]|\\\?\?)[\\/][Uu][Nn][Cc]'
-           Replace = '''\A(?:[\\/]{2}[.?])[\\/][Uu][Nn][Cc]' }
-        @{ Name = "unc-prefix-with-nothing-after-it-missed"
-           Find = '[\\/][Uu][Nn][Cc](?:[\\/]|\z)'')'
-           Replace = '[\\/][Uu][Nn][Cc][\\/]'')' }
-        @{ Name = "network-drive-not-refused"
-           Find = 'if ($type -eq [System.IO.DriveType]::Network) { return ('
-           Replace = 'if ($false) { return (' }
-        @{ Name = "every-drive-is-a-network-drive"
-           Find = 'if ($type -eq [System.IO.DriveType]::Network) { return ('
-           Replace = 'if ($true) { return (' }
-        @{ Name = "network-drive-behind-the-prefix-missed"
-           Find = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') {'
-           Replace = 'if ($Path -cmatch ''\A([A-Za-z]):'') {' }
-        @{ Name = "network-drive-with-a-small-letter-missed"
-           Find = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Za-z]):'') {'
-           Replace = 'if ($Path -cmatch ''\A(?:\\\\\?\\)?([A-Z]):'') {' }
+        # --- a network path the text and the drive's type did not give away: the handle's own path ---
+        # (The refusal from the text and from the drive's type is core's: test\mutations\path-text.psd1.)
         @{ Name = "network-final-path-used-as-it-is"
            Find = 'if ($Final -cnotmatch ''\A\\\\\?\\[A-Za-z]:\\'') { return (& $refuse ('
            Replace = 'if ($false) { return (& $refuse (' }
