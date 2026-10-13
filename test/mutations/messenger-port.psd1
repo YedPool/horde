@@ -115,5 +115,24 @@
         @{ Name = "verified-key-id-any-case"
            Find = '$script:HordeMessengerVerifiedKeyIdPattern = ''\A[0-9a-f]{32}\z'''
            Replace = '$script:HordeMessengerVerifiedKeyIdPattern = ''\A[0-9a-fA-F]{32}\z''' }
+        # --- the wake word: woken or only queued (the founder's bug of 2026-10-12)
+        @{ Name = "woken-carried-from-a-messenger-without-wake"
+           Find = 'if ($TakeWoken) { $value["woken"] = [bool]$woken.value }'
+           Replace = 'if ($true) { $value["woken"] = [bool]$woken.value }' }
+        @{ Name = "post-never-carries-woken"
+           Find = '-TakeWoken:(Test-HordeMessengerCapability -Messenger $Messenger -Capability "wake"))'
+           Replace = '-TakeWoken:$false)' }
+        @{ Name = "woken-of-any-kind-taken"
+           Find = 'if ($woken.value -isnot [bool]) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "not-woken-said-woken"
+           Find = 'if ($woken.value) { return "woken" }'
+           Replace = 'if ($true) { return "woken" }' }
+        @{ Name = "not-woken-reason-dropped"
+           Find = 'if ($why.has -and "$($why.value)".Trim() -ne "") { return ("queued, NOT woken: " + $why.value) }'
+           Replace = 'if ($false) { return ("queued, NOT woken: " + $why.value) }' }
+        @{ Name = "wake-words-for-what-was-not-said"
+           Find = 'if (-not $woken.has -or $woken.value -isnot [bool]) { return "" }'
+           Replace = 'if ($false) { return "" }' }
     )
 }
