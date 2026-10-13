@@ -62,5 +62,27 @@
         @{ Name = "a-channel-can-lengthen-a-watch"
            Find = '-and $AgainMs -gt 0 -and $AgainMs -lt $WatchMs) { return [int]$AgainMs }'
            Replace = '-and $AgainMs -gt 0) { return [int]$AgainMs }' }
+        # --- the heartbeat (core/Heartbeat.ps1) ---
+        @{ Name = "no-heartbeat"
+           Find = '$beat = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns'
+           Replace = '$beat = New-HordeKnown -Value "written"' }
+        @{ Name = "heartbeat-without-start"
+           Find = '-ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns'
+           Replace = '-ProcessId $beatSelf.pid -TickSeconds $beatTick -Pass $turns' }
+        @{ Name = "heartbeat-failure-ends-the-run"
+           Find = 'if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ('
+           Replace = 'if ($beat.state -cne "known") { throw $beat.reason }; if ($false) { $beatFailed = $true; $null = & $Say (' }
+        @{ Name = "heartbeat-failure-said-every-turn"
+           Find = 'if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ('
+           Replace = 'if ($beat.state -cne "known") { $beatFailed = $true; $null = & $Say (' }
+        @{ Name = "tick-ignores-the-backoff"
+           Find = '    $wait = [double]$Settings.backoffMaxMs * (1 + [double]$Settings.backoffJitterPercent / 100)'
+           Replace = '    $wait = [double]0' }
+        @{ Name = "tick-ignores-the-watch"
+           Find = '    return [int]([System.Math]::Ceiling(([double]$WatchMs + $wait) / 1000) + 5)'
+           Replace = '    return [int]([System.Math]::Ceiling($wait / 1000) + 5)' }
+        @{ Name = "tick-ignores-the-jitter"
+           Find = '    $wait = [double]$Settings.backoffMaxMs * (1 + [double]$Settings.backoffJitterPercent / 100)'
+           Replace = '    $wait = [double]$Settings.backoffMaxMs' }
     )
 }
