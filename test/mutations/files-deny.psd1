@@ -29,7 +29,7 @@
         @{ Name = "secrets-folder-under-another-name"
            Find = 'secretsFolder = ".horde-secrets"'
            Replace = 'secretsFolder = ".horde-secret"' }
-        @{ Name = "ssh-folder-under-another-name"
+        @{ Name = "another-name-for-the-folder-of-ssh"
            Find = 'sshFolder = ".ssh"'
            Replace = 'sshFolder = ".sshx"' }
         @{ Name = "first-ordinary-word-dropped"
@@ -104,7 +104,7 @@
         @{ Name = "secrets-folder-of-the-profile-not-a-place"
            Find = '[void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })'
            Replace = '' }
-        @{ Name = "ssh-not-a-place"
+        @{ Name = "no-place-for-the-profiles-ssh"
            Find = '[void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $true })'
            Replace = '' }
         @{ Name = "harness-folders-not-places"

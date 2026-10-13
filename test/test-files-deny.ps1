@@ -206,7 +206,7 @@ Check (Test-Refused $h $inSshFile $inSsh) "a file under .ssh in the profile is r
 Check (Test-Refused $h $inSshFile $insist -NotLike "does not change") "and the reason says -Force shares it"
 Check (Test-Shared $h $inSshFile -Force) "with -Force it is shared"
 Check (Test-Refused $h (New-File (Join-Path $profileDir ".ssh\deep\er\notes.md")) $inSsh) "and so is a file deeper under it"
-Check (Test-Shared $h (New-File (Join-Path $profileDir ".ssh-backup\notes.txt"))) "CONTROL: a folder whose name only begins with .ssh is shared from"
+Check (Test-Shared $h (New-File (Join-Path $profileDir ".ssh2\notes.txt"))) "CONTROL: a folder whose name only begins with .ssh is shared from"
 Check (Test-Shared $h (New-File (Join-Path $profileDir "notes-beside-ssh.txt"))) "CONTROL: and a file beside it, in the profile, is shared"
 Check (Test-Shared $h (New-File (Join-Path $script:real "not-the-profile\.ssh\notes.txt"))) "CONTROL: a folder named .ssh that is not the profile's is shared from: that place is the user's own, not a name"
 foreach ($agentFolder in @((Join-Path $profileDir ".harness-x"), (Join-Path $profileDir ".harness-y"), $env:HORDE_TEST_HARNESS_X_HOME)) {
@@ -235,8 +235,8 @@ Write-Host ""
 Write-Host "--- every rule judges the open handle's own path: a place reached another way is still the place ---" -ForegroundColor Cyan
 $h = New-TestHome
 $null = Invoke-Share -TestHome $h -Path (New-File (Join-Path $docs "second.md"))
-$sshDir = Join-Path $profileDir ".ssh"
-$sshFile = Join-Path $sshDir "notes.txt"
+$sshFolder = Join-Path $profileDir ".ssh"
+$sshFile = Join-Path $sshFolder "notes.txt"
 $homeFile = New-File (Join-Path $h "settings\notes.json") '{"dummy":1}'
 $links = Join-Path $script:real "links"
 New-Item -ItemType Directory -Path $links | Out-Null
@@ -247,9 +247,9 @@ Check (Test-Refused $h (Join-Path $links "innocent.txt") $inSsh -NotLike "is a l
 Check (Test-Refused $h (Join-Path $links "innocent.txt") "is a link" -Force) "and with -Force it is still not shared: the list is lifted, and a link is never followed"
 Check (New-FileLink (Join-Path $links "innocent.json") $homeFile) "CONTROL: a symbolic link outside the home was made to a file inside it"
 Check (Test-Refused $h (Join-Path $links "innocent.json") $inHome -Force) "a link outside the home to a file inside it is refused as the home, -Force or not"
-Check (New-FolderLink (Join-Path $links "folder-link") $sshDir) "CONTROL: a symbolic link to the .ssh folder was made"
+Check (New-FolderLink (Join-Path $links "folder-link") $sshFolder) "CONTROL: a symbolic link to the .ssh folder was made"
 Check (Test-Refused $h (Join-Path $links "folder-link\notes.txt") $inSsh -NotLike "is a link") "through a symbolic link to the folder"
-Check (New-Junction (Join-Path $links "junction") $sshDir) "CONTROL: a junction to the .ssh folder was made"
+Check (New-Junction (Join-Path $links "junction") $sshFolder) "CONTROL: a junction to the .ssh folder was made"
 Check (Test-Refused $h (Join-Path $links "junction\notes.txt") $inSsh -NotLike "is a link") "through a junction to the folder"
 Check (New-Junction (Join-Path $links "home-junction") $h) "CONTROL: a junction to the home was made"
 Check (Test-Refused $h (Join-Path $links "home-junction\settings\notes.json") $inHome -Force) "through a junction to the home, -Force or not"
@@ -257,9 +257,9 @@ Check (Test-Refused $h ("\\?\" + $sshFile) $inSsh) "behind the long-path prefix"
 Check (Test-Refused $h ("\\?\" + $homeFile) $inHome -Force) "and the home behind it, -Force or not"
 Check (Test-Refused $h $sshFile.ToUpperInvariant() $inSsh) "written in capitals"
 Check (Test-Refused $h $homeFile.ToUpperInvariant() $inHome -Force) "and the home in capitals, -Force or not"
-Check (Test-Refused $h (Join-Path ($sshDir + ".") "notes.txt") $inSsh) "with a dot after the folder's name, which Windows drops"
+Check (Test-Refused $h (Join-Path ($sshFolder + ".") "notes.txt") $inSsh) "with a dot after the folder's name, which Windows drops"
 # A blank after a FOLDER's name is not dropped (measured 2026-10-13): that path names no file, so it is no way in.
-Check (Test-Refused $h (Join-Path ($sshDir + " ") "notes.txt") "there is no file") "with a blank after the folder's name the path names no file at all"
+Check (Test-Refused $h (Join-Path ($sshFolder + " ") "notes.txt") "there is no file") "with a blank after the folder's name the path names no file at all"
 Check (Test-Refused $h (Join-Path $docs "..\profile\.ssh\notes.txt") $inSsh) "by a path that climbs out of another folder with dot-dot"
 Push-Location -LiteralPath $docs
 try { $relative = Test-Refused $h "..\profile\.ssh\notes.txt" $inSsh; $relativeHome = Test-Refused $h ("..\" + (Split-Path -Leaf $h) + "\settings\notes.json") $inHome -Force } finally { Pop-Location }
@@ -267,7 +267,7 @@ Check $relative "by a relative path with dot-dot, from where the caller stands"
 Check $relativeHome "and the home by a relative path, -Force or not"
 # An 8.3 short name, where this volume makes them. Behind the long-path prefix .NET changes nothing,
 # so the handle really is opened by the short name (test/test-files-store.ps1 has the measurement).
-$shortSsh = Get-ShortPath -Path $sshDir -Folder
+$shortSsh = Get-ShortPath -Path $sshFolder -Folder
 $homeLong = New-File (Join-Path $h "a long folder name of the home\notes.md")
 $shortHomeDir = Get-ShortPath -Path (Split-Path -Parent $homeLong) -Folder
 if ($shortHomeDir -ne "" -and (Split-Path -Leaf $shortHomeDir) -like "*~*") {
@@ -284,7 +284,7 @@ if ($shortSsh -ne "" -and (Split-Path -Leaf $shortSsh) -cne ".ssh") { Check (Tes
 $letters = @(Get-FreeLetters)
 $substLetter = $letters[0]
 $bySubst = $false; $bySubstHome = $false; $substMade = $false
-$null = & subst.exe ($substLetter + ":") $sshDir
+$null = & subst.exe ($substLetter + ":") $sshFolder
 try {
     $substMade = ($LASTEXITCODE -eq 0 -and [System.IO.File]::Exists($substLetter + ":\notes.txt"))
     $bySubst = Test-Refused $h ($substLetter + ":\notes.txt") $inSsh
@@ -359,12 +359,12 @@ Check (("C:\x\a" + [char]0xAD + "b\f.md").StartsWith("C:\x\ab\")) "CONTROL: the 
 
 Write-Host ""
 Write-Host "--- where a folder really is, and what a drive letter stands for ---" -ForegroundColor Cyan
-$asked = Get-HordeFilesFolderFinalPath -Path $sshDir
-Check ($asked.state -ceq "ok" -and $asked.path -ceq ("\\?\" + $sshDir)) "the final path of a folder is its path behind \\?\"
+$asked = Get-HordeFilesFolderFinalPath -Path $sshFolder
+Check ($asked.state -ceq "ok" -and $asked.path -ceq ("\\?\" + $sshFolder)) "the final path of a folder is its path behind \\?\"
 $viaJunction = Get-HordeFilesFolderFinalPath -Path (Join-Path $links "junction")
-Check ($viaJunction.state -ceq "ok" -and $viaJunction.path -ceq ("\\?\" + $sshDir)) "asked of a junction, it is the folder the junction leads to"
+Check ($viaJunction.state -ceq "ok" -and $viaJunction.path -ceq ("\\?\" + $sshFolder)) "asked of a junction, it is the folder the junction leads to"
 $viaLink = Get-HordeFilesFolderFinalPath -Path (Join-Path $links "folder-link")
-Check ($viaLink.state -ceq "ok" -and $viaLink.path -ceq ("\\?\" + $sshDir)) "and of a symbolic link, the folder it leads to"
+Check ($viaLink.state -ceq "ok" -and $viaLink.path -ceq ("\\?\" + $sshFolder)) "and of a symbolic link, the folder it leads to"
 $notThere = Get-HordeFilesFolderFinalPath -Path (Join-Path $script:real "no-such-folder")
 Check ($notThere.state -ceq "absent" -and $notThere.path -eq "") "a folder that is not there is absent"
 $parentGone = Get-HordeFilesFolderFinalPath -Path (Join-Path $script:real "no-such-folder\nor-this")
