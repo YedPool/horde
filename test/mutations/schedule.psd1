@@ -14,7 +14,7 @@
            Find = 'marked = ($lines -ccontains $script:HordeJobMarker)'
            Replace = 'marked = $true' }
         @{ Name = "run-may-outlast-interval"
-           Find = ' -or $TimeLimitMinutes -gt $EveryMinutes) {'
+           Find = ' -or ($TimeLimitMinutes -gt $EveryMinutes -and -not $MayOutlastInterval)) {'
            Replace = ') {' }
         @{ Name = "job-name-unchecked"
            Find = "    if (`$Name -notmatch '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,100}\z') {"
@@ -37,5 +37,8 @@
         @{ Name = "with-person-not-carried"
            Find = 'withPerson = [bool]$WithPerson }'
            Replace = 'withPerson = $false }' }
+        @{ Name = "any-job-may-outlast-its-interval"
+           Find = '($TimeLimitMinutes -gt $EveryMinutes -and -not $MayOutlastInterval)'
+           Replace = '($false)' }
     )
 }
