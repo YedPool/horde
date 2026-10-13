@@ -6,6 +6,21 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-nudge-reason-never-seen-is-an-error"
+           Find = 'if ($null -ne $rp -and $rp.Value -is [string]) { $code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 80 }'
+           Replace = 'if ($null -ne $rp -and $rp.Value -is [string]) { if (@("", "woken", "mid-turn", "status-unreadable", "pointer-stale", "sender-busy", "box-not-empty", "no-unread-mail", "retired", "budget-too-small", "no-pane") -cnotcontains $rp.Value) { return (New-HordeUnknown -Reason "a reason this waker does not know") }; $code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 80 }' }
+        @{ Name = "a-row-reason-never-seen-is-an-error"
+           Find = 'foreach ($k in $script:HordeWezfleetWakerRowMembers) { if ($names -cnotcontains $k) { return ("a row has no ''" + $k + "''") } }'
+           Replace = 'if (@("", "mail-unreadable", "record-unreadable", "mid-turn", "status-unreadable") -cnotcontains "$($Row.reason)") { return "a row has a reason this waker does not know" }; foreach ($k in $script:HordeWezfleetWakerRowMembers) { if ($names -cnotcontains $k) { return ("a row has no ''" + $k + "''") } }' }
+        @{ Name = "a-nudge-reason-is-not-cut-short"
+           Find = '$code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 80 }'
+           Replace = '$code = ConvertTo-HordeWezfleetWakerLine $rp.Value -Max 8000 }' }
+        @{ Name = "an-outcome-never-seen-is-taken-for-woken"
+           Find = 'return (New-HordeUnknown -Reason ($said + " answered without an outcome this waker reads'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "woken"; reason = ""; at = $at }) -ObservedAt $at); return (New-HordeUnknown -Reason ($said + " answered without an outcome this waker reads' }
+        @{ Name = "an-outcome-in-another-casing-is-read"
+           Find = '-or @($script:HordeWezfleetWakerOutcomes.Keys) -cnotcontains $outcome.Value) {'
+           Replace = '-or -not $script:HordeWezfleetWakerOutcomes.ContainsKey($outcome.Value)) {' }
         @{ Name = "the-fleets-rule-is-not-passed-on"
            Find = 'if ($null -ne $ruled -and $ruled.Value -is [string] -and $ruled.Value.Trim() -ne "") { $answer["rule"] ='
            Replace = 'if ($false) { $answer["rule"] =' }

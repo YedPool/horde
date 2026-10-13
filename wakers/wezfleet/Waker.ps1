@@ -815,8 +815,17 @@ function Send-HordeWezfleetWakerNudge {
     $said = "wezfleet mail nudge exit " + $run.exit
     if ([int]$run.exit -ne 0) { return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = (Get-HordeWezfleetWakerFailure -Json $j -Said $said); at = $at }) -ObservedAt $at) }
     $outcome = $j.PSObject.Properties["outcome"]
-    if ($null -eq $outcome -or $outcome.Value -isnot [string] -or -not $script:HordeWezfleetWakerOutcomes.ContainsKey($outcome.Value) -or $script:HordeWezfleetWakerOutcomes[$outcome.Value] -isnot [string]) {
-        return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = "unreachable"; reason = ($said + " answered without an outcome this waker reads: not the shape it reads"); at = $at }) -ObservedAt $at)
+    # THE OUTCOME WORDS ARE A CLOSED SET; THE REASON WORDS ARE NOT.
+    # An outcome is what this waker acts on, so one it does not know - or none - is UNKNOWN: it cannot
+    # say whether anything was typed, and unknown is never permission and never "it was not rung".
+    # A reason is what a person reads. The fleet adds reason words as it learns to tell cases apart
+    # (busy / pointer-stale came with its main 680754f, after mid-turn, status-unreadable, sender-busy
+    # and box-not-empty), and a word this waker has never seen must not blind the watcher: whatever
+    # the word, the outcome beside it stands, and the word is passed on as text - its first line,
+    # printable ASCII, at most 80 characters - to be journaled as the fleet said it.
+    # By its exact letters: the table is looked up without regard to case, and "Woken" is not a word of the set.
+    if ($null -eq $outcome -or $outcome.Value -isnot [string] -or @($script:HordeWezfleetWakerOutcomes.Keys) -cnotcontains $outcome.Value) {
+        return (New-HordeUnknown -Reason ($said + " answered without an outcome this waker reads (woken, busy, unreachable, refused): what happened to the session is not known") -ObservedAt $at)
     }
     $target = $j.PSObject.Properties["target"]
     if ($null -ne $target -and $target.Value -is [string] -and $target.Value -cne "" -and $target.Value -cne $Id) { return (New-HordeUnknown -Reason ("wezfleet mail nudge answered about " + (ConvertTo-HordeWezfleetWakerLine $target.Value -Max 60) + ", not " + $Id)) }

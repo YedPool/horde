@@ -36,7 +36,8 @@
 #       unreachable  no such session, or its row says it cannot be reached
 #       refused      it has no unread mail: there is nothing to nudge for; or (reason retired) the
 #                    session is retired - and NOTHING IS TYPED
-#       busy         its box is not empty, it is mid-turn, or it is not idle - and NOTHING IS TYPED
+#       busy         its box is not empty (reason box-not-empty), or it is mid-turn or not idle (reason
+#                    mid-turn, the real command's word) - and NOTHING IS TYPED
 #       woken        the pointer line is "typed": one line appended to typed.log
 #     exit 2 for an empty -To
 param()
@@ -124,6 +125,6 @@ if (Test-Mode $m "slowStartSeconds") { $slowStart = [int]$m.slowStartSeconds }
 if (($argvList -ccontains "-BudgetSeconds") -and ($budget - $slowStart - $fakeClock.Elapsed.TotalSeconds) -lt 30) { Write-FakeNudge "refused" "budget-too-small" ("less than 30 s of the " + $budget + " s budget is left, too little to type and send in") }
 # THE GUARD, at the moment of typing: the pane as it is now.
 if ($row.boxEmpty -cne "yes") { Write-FakeNudge "busy" "box-not-empty" "the input box holds unsent text" }
-if ($row.midTurn -cne "no" -or $row.idle -cne "yes") { Write-FakeNudge "busy" "not-idle" "the session is in a turn" }
+if ($row.midTurn -cne "no" -or $row.idle -cne "yes") { Write-FakeNudge "busy" "mid-turn" "the session says it is not idle; its own turn boundary delivers the mail; nothing typed" }
 [System.IO.File]::AppendAllText((Join-Path $root "typed.log"), ((@{ id = $to; text = "You have unread fleet mail. Read it now." } | ConvertTo-Json -Compress) + "`n"), [System.Text.Encoding]::ASCII)
 Write-FakeNudge "woken" "woken"

@@ -486,13 +486,22 @@ foreach ($case in @(
 }
 foreach ($case in @(
         @{ what = "text"; exit = 1; out = ""; err = "wezfleet.ps1 : A parameter cannot be found that matches parameter name 'To'."; like = "not one line of JSON" },
-        @{ what = "an outcome it does not know"; exit = 0; out = ('{"outcome":"typed","reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}'); like = "without an outcome" },
-        @{ what = "no outcome at all"; exit = 0; out = '{"reason":"x"}'; like = "without an outcome" },
         @{ what = "exit 1, a failure of its own"; exit = 1; out = '{"outcome":"unreachable","reason":"internal-error","target":"","pane":"","instance":"","detail":"it fell over"}'; like = "internal-error: " })) {
     Set-Answer $state "nudge" $case.exit $case.out $(if ($case.ContainsKey("err")) { $case.err } else { "" })
     $a = $null
     try { $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1) } catch { $a = $null }
     Check ($null -ne $a -and $a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a.value.reason)".Contains($case.like)) ("a nudge answering " + $case.what + " is unreachable, saying so: nothing is known to have been typed")
+}
+# THE OUTCOME WORDS ARE A CLOSED SET: one outside it, or none, is unknown - never woken, never "not rung".
+foreach ($case in @(
+        @{ what = "an outcome it does not know"; out = ('{"outcome":"typed","reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}') },
+        @{ what = "an outcome in another casing"; out = ('{"outcome":"Woken","reason":"woken","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}') },
+        @{ what = "an outcome that is not text"; out = ('{"outcome":true,"reason":"x","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}') },
+        @{ what = "no outcome at all"; out = '{"reason":"x"}' })) {
+    Set-Answer $state "nudge" 0 $case.out
+    $a = $null
+    try { $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1) } catch { $a = $null }
+    Check ($null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains("without an outcome")) ("a nudge answering " + $case.what + " is UNKNOWN: an outcome outside the four is never permission, and never taken for one of them")
 }
 Set-Answer $state "nudge" 0 ('{"outcome":"woken","reason":"woken","target":"' + (Sid 7) + '","pane":"1","instance":"i","detail":""}')
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
@@ -540,6 +549,55 @@ Check ($a.state -ceq "known" -and $a.value.outcome -ceq "unreachable" -and "$($a
 Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
 $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)" -ne "") "an outcome the fleet gave no reason for still says why, in the waker's words: the port asks every outcome but woken to"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
+Write-Host "--- a reason word this waker has never seen is text, never an error: a new word from the fleet does not blind the watcher ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+# NUDGE ANSWERS, each printed by the fake started as the fleet's command is. The first four are the
+# real command's words (read 2026-10-13, its main 680754f); the fifth is one nobody has written yet.
+foreach ($word in @("mid-turn", "status-unreadable", "pointer-stale", "sender-busy", "a-word-from-next-year")) {
+    Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"' + $word + '","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":"nothing typed","elapsedMs":12}')
+    $a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+    Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)" -ceq ($word + ": nothing typed")) ("busy / " + $word + " is busy, and the word is passed on as the fleet gave it (" + $(if ($a.state -ceq "known") { $a.value.reason } else { $a.reason }) + ")")
+}
+Set-Answer $state "nudge" 0 ('{"outcome":"refused","reason":"no-unread-mail","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":"mail was waiting when asked first, and by the moment of typing none was"}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)".StartsWith("no-unread-mail: ")) "refused / no-unread-mail from INSIDE the fleet's lock - the mail was handed over or acknowledged between its two looks - is the port's nothing, as the first look's refusal is"
+Set-Answer $state "nudge" 0 ('{"outcome":"refused","reason":"a-refusal-from-next-year","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and "$($a.value.reason)" -ceq "a-refusal-from-next-year") "a refusal for a reason never seen is still nothing, with the word"
+# CLEANED AND CAPPED: a reason is journaled, and may be mailed.
+$long = "Shouting With Spaces " + ("x" * 300)
+Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"' + $long + '\tand a tab\u0007","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)".Length -eq 80 -and "$($a.value.reason)".StartsWith("Shouting With Spaces xxx") -and "$($a.value.reason)" -cmatch '\A[\x20-\x7E]+\z') "a reason that is no tidy word - long, spaced, with control characters - is cut to 80 printable characters and the outcome stands"
+Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":7,"target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":""}')
+$a = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and "$($a.value.reason)" -ceq "the fleet answered busy") "and one that is not text at all is left out: busy is still busy"
+# THE JOURNAL carries the word, through a whole pass.
+Set-Answer $state "nudge" 0 ('{"outcome":"busy","reason":"a-word-from-next-year","target":"' + (Sid 1) + '","pane":"1","instance":"i","detail":"nothing typed"}')
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+$line = @($pass.entries | Where-Object { $_.kind -ceq "nudge" -and $_.id -ceq (Sid 1) })
+Check ($line.Count -eq 1 -and $line[0].outcome -ceq "busy" -and "$($line[0].reason)" -ceq "a-word-from-next-year: nothing typed" -and $pass.ledger[(Sid 1)].lastOutcome -ceq "busy") "the pass journals that nudge as busy with the fleet's new word in the line, and the ledger counts it as any busy"
+# STATE ROWS: reason and reasons with words never seen, in the fleet form and the per-session one.
+& $fx.SetMode $state $null
+& $fx.SetRow $state (New-Row 1 @{ reason = "a-word-from-next-year"; reasons = @("mid-turn", "status-unreadable", "a-word-from-next-year", "Another One, With Spaces") })
+& $fx.SetRow $state (New-Row 2)
+& $fx.Forget $state
+$listing = Get-HordeWakeTargets -Waker $w
+Check ($listing.state -ceq "known" -and @($listing.value).Count -eq 2) "a fleet with a row whose reason and reasons hold words this waker has never seen is listed WHOLE: the listing is not blanked for it"
+$a = Get-HordeWakeState -Waker $w -Id (Sid 1)
+$full = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
+Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.idle -ceq "yes" -and $full.state -ceq "known" -and $full.value.boxEmpty -ceq "yes") "that row's state is known in both readings: what it says of mail, idle and the box is read, and the new word decides nothing"
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Send -Waker $w -Now $t0.AddSeconds(1) -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ($pass.listing.state -ceq "known" -and @($pass.decisions).Count -eq 2 -and @($pass.decisions | Where-Object { $_.id -ceq (Sid 1) -and $_.action -ceq "nudge" }).Count -eq 1 -and (& $fx.Observe $state (Sid 1)).nudges -eq 1 -and @($pass.entries | Where-Object { $_.kind -clike "skip-unknown*" }).Count -eq 0) ("a pass over that fleet decides on both sessions and nudges the one with the new word, which the fleet's record shows typed: the watcher saw all of it (" + (@($pass.decisions | ForEach-Object { $_.action + "/" + $_.reason }) -join ", ") + ")")
+$runs = @(& $fx.Runs $state)
+Check ($runs.Count -gt 0 -and @($runs | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0) "every answer above was printed by the fake started as the fleet's command is: a process of its own"
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
