@@ -7,6 +7,7 @@
     "timestamps": { "support": "yes", "evidence": "Each turn is stamped with the time it was added; test/test-conversation-conformance.ps1 requires a time on every turn." },
     "roles": { "support": "yes", "evidence": "Each turn is added with its role; test/test-conversation-conformance.ps1 compares every role with what was added." },
     "partialTurns": { "support": "no", "evidence": "A turn is added whole and never changed; test/test-conversation-conformance.ps1 never sees one id twice across resumed reads." },
-    "mutableHistory": { "support": "no", "evidence": "Turns are only ever added, except by the fixture's Rotate, which the source reports as a reset; test/test-conversation-conformance.ps1 checks a re-read begins with every turn read before." }
+    "mutableHistory": { "support": "no", "evidence": "Turns are only ever added, except by the fixture's Rotate, which the source reports as a reset; test/test-conversation-conformance.ps1 checks a re-read begins with every turn read before." },
+    "sessionLookup": { "support": "yes", "evidence": "Each horde in a store keeps its sessions by id, with the role, label and parent each was enlisted with; test/test-conversation-conformance.ps1 enlists an orc, its warg and a session with no label and describes each, and test/test-conversation-port.ps1 tells the source to lie about every part of the answer." }
   }
 }

@@ -64,11 +64,33 @@
 #                                 -> known { source; since; next; turns; anomalies; reset; more }
 # reset is "none", "session" (a new session) or "rotated" (the adapter found its history rewritten and
 # read it again from the start). more says the batch or byte limit stopped the read before the end.
+#   Get-HordeConversationSession -Fleet -SessionId [-Vendor] [-Options]
+#                                 -> known { vendor; session; fleet; label; role; parent } | unknown
+#
+# A SESSION DESCRIBED BY ITS ID (the files channel, T-0115: a file is sent by a session, and the reader is
+# shown its label, which only the fleet's own records hold). ANY session of the horde, not only its
+# Thrall, and read-only. It is for an id the caller ALREADY HOLDS: which session is asking is
+# core/Identity.ps1's to say (Get-HordeSelfSessionId), never this port's. The answer is known or unknown,
+# never absent: an id no adapter has a record of is unknown with that reason, because "there is no such
+# session" is more than a store that names no horde can say (the adapter's WHICH HORDE). Inside a known
+# answer, label, role and parent are EACH an answer of their own:
+#   label   known (the fleet's short handle, the shape of schema/session-record.v1's label), absent (the
+#           record holds none: 58 of 92 records of a live registry, 2026-10-13), or unknown (it is there
+#           and is not a label). A session is never given a label it does not hold: a caller shows
+#           the id, or says the label is not known.
+#   role    known (warchief, orc or warg: core/roles.json) or unknown (83 of the same 92 records name no
+#           role, and a missing role is never read as the humblest one: core/Roles.ps1).
+#   parent  known (the parent's session id; describe it with a second call), absent (the record names
+#           none), or unknown.
+# A label is a HANDLE, NEVER IDENTITY: it is reissued by design (schema/session-record.v1), so two
+# answers with one label are two sessions, and the session id is the key. Nothing is kept between calls:
+# every call reads the records again, so a label given since the last call is in the next answer.
 #
 # CAPABILITIES ARE CLAIMS, AND ONLY "yes" COUNTS (the vocabulary of the host, transport, messenger and
 # relay ports). Four are features a caller may -Require: incremental, stableTurnIds, timestamps, roles.
 # Two are HAZARDS a caller that cannot cope with them -Refuses: partialTurns, mutableHistory; a hazard
-# passes -Refuse only when it is a plain "no", so an unverified hazard counts as present.
+# passes -Refuse only when it is a plain "no", so an unverified hazard counts as present. A seventh,
+# sessionLookup, is the claim behind Get-HordeConversationSession: only an adapter that says yes is asked.
 #
 # ADAPTER CONTRACT. agents/<name>/Conversation.ps1 is dot-sourced at script level and calls
 # Register-HordeConversationAdapter with two script blocks, each answering with a core/tristate answer:
@@ -83,6 +105,12 @@
 #          -> known { turns; position; more; reset; anomalies } where each turn is
 #          { role; text; turnId; time (optional, ISO 8601 with a zone); groupId (optional) }, at most
 #          MaxTurns of them, read from at most MaxBytes of new input; reset is "" or "rotated".
+#   Describe param($Request)  OPTIONAL: given by an adapter that declares sessionLookup yes (one that
+#          declares it and gives none makes every lookup unknown, saying so). Request is { fleet; session; options }: the horde, the id asked about, the caller's
+#          options. -> known { session; role; label; parent } for THAT session, where role, label and
+#          parent are each a core/tristate answer holding what the record says, as text; absent when the
+#          adapter read its records whole and has none of that id; unknown when it cannot tell. The port
+#          checks each of the three and rebuilds it (A SESSION DESCRIBED BY ITS ID): an adapter only reads.
 # The adapter reads by allowlist and keeps nothing but what a turn needs (core/Transcript.ps1's rule for
 # metrics forbids keeping text at all; this is the one reader that keeps it, and only these fields).
 #
@@ -92,10 +120,12 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Secrets.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Transcript.ps1")
+# For Get-HordeRoleTable: the roles a described session may hold are core/roles.json's, read, not repeated.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeConversationAdapters -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeConversationAdapters = @{} }
 if ($null -eq (Get-Variable -Name HordeConversationSources -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeConversationSources = @{} }
-$script:HordeConversationCapabilityNames = @("incremental", "stableTurnIds", "timestamps", "roles", "partialTurns", "mutableHistory")
+$script:HordeConversationCapabilityNames = @("incremental", "stableTurnIds", "timestamps", "roles", "partialTurns", "mutableHistory", "sessionLookup")
 $script:HordeConversationHazardNames = @("partialTurns", "mutableHistory")
 $script:HordeConversationRoles = @("user", "assistant", "system", "delivered")
 # THE CEILINGS. maxTurns: a phone shows tens of turns at a time; 1000 is a whole working day of a busy
@@ -116,6 +146,10 @@ $script:HordeConversationIdPattern = '\A[\x21-\x7E]{1,200}\z'
 $script:HordeConversationSessionPattern = '\A[A-Za-z0-9._:-]{1,128}\z'
 $script:HordeConversationFleetPattern = '\A[a-z0-9][a-z0-9-]{0,62}\z'
 $script:HordeConversationPositionPattern = '\A[\x20-\x7E]*\z'
+# THE SAME PATTERN AS schema/session-record.v1's label (one or two capitals, then a number from 1 to 9999
+# or nothing), kept here as the turn patterns are; test/test-conversation-port.ps1 holds the two equal.
+# 34 of 34 labels in a live registry of 92 records have this shape (2026-10-13).
+$script:HordeConversationLabelPattern = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'
 # A message the port passes on from an adapter (an anomaly, an unknown's reason) is cut here: it is a
 # line in a log, not a document.
 $script:HordeConversationNoteChars = 300
@@ -157,7 +191,8 @@ function Register-HordeConversationAdapter {
     param(
         [Parameter(Mandatory = $true)][string]$Folder,
         [Parameter(Mandatory = $true)][scriptblock]$Locate,
-        [Parameter(Mandatory = $true)][scriptblock]$Read
+        [Parameter(Mandatory = $true)][scriptblock]$Read,
+        [scriptblock]$Describe = $null
     )
     $capPath = Join-Path $Folder "conversation.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("adapter folder '" + $Folder + "' has no conversation.json") }
@@ -171,7 +206,7 @@ function Register-HordeConversationAdapter {
     if ($script:HordeConversationAdapters.ContainsKey("$($caps.vendor)")) {
         throw ("conversation adapter '" + $caps.vendor + "' is already registered, from " + $script:HordeConversationAdapters["$($caps.vendor)"].folder + "; the first registration stands")
     }
-    $a = [pscustomobject]@{ PSTypeName = "Horde.ConversationAdapter"; name = "$($caps.vendor)"; folder = $Folder; capabilities = $caps; locate = $Locate; read = $Read }
+    $a = [pscustomobject]@{ PSTypeName = "Horde.ConversationAdapter"; name = "$($caps.vendor)"; folder = $Folder; capabilities = $caps; locate = $Locate; read = $Read; describe = $Describe }
     $script:HordeConversationAdapters[$a.name] = $a
     return $a
 }
@@ -435,4 +470,66 @@ function Read-HordeConversationTurns {
     $value = [pscustomobject]@{ source = [pscustomobject]@{ vendor = $Source.vendor; session = $Source.session; fleet = $Source.fleet }; since = $since; next = $next
         turns = @($out.ToArray()); anomalies = @($anomalies.ToArray()); reset = $reset; more = [bool]$moreM.value }
     return (New-HordeKnown -Value $value -ObservedAt $a.observedAt)
+}
+
+function ConvertTo-HordeConversationSessionFact {
+    # One of the three things an adapter says about a session - its role, label or parent - checked and
+    # rebuilt as an answer of the port's own. A value that is not text of the shape asked for is unknown,
+    # in words that never repeat it: it would be shown on a phone as the session's name.
+    param($Fact, [string]$What, [string]$Pattern, [string]$Shape)
+    if (-not (Test-HordeAnswer $Fact)) { return (New-HordeUnknown -Reason ("the adapter did not say, as an answer, what the session's " + $What + " is")) }
+    if ($Fact.state -ceq "absent") { return (New-HordeAbsent -Note ("the session's record holds no " + $What)) }
+    if ($Fact.state -cne "known") { return (New-HordeUnknown -Reason ("the session's " + $What + " could not be told: " + (Protect-HordeConversationNote $Fact.reason))) }
+    if ($Fact.value -isnot [string] -or $Fact.value -cnotmatch $Pattern) { return (New-HordeUnknown -Reason ("the session's record holds a " + $What + " that is not " + $Shape + "; it is not shown")) }
+    return (New-HordeKnown -Value $Fact.value)
+}
+
+function Get-HordeConversationSession {
+    # The session -SessionId of horde -Fleet, described: known { vendor; session; fleet; label; role;
+    # parent } when exactly one adapter (of those declaring sessionLookup yes, or only -Vendor when given)
+    # has a record of it, and unknown otherwise, with the reason. label, role and parent are each an
+    # answer of their own. See the header, A SESSION DESCRIBED BY ITS ID.
+    param(
+        [Parameter(Mandatory = $true)][string]$Fleet,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$SessionId,
+        [string]$Vendor = "",
+        [System.Collections.IDictionary]$Options = @{}
+    )
+    if ($Fleet -cnotmatch $script:HordeConversationFleetPattern) { return (New-HordeUnknown -Reason "the horde asked about is not named in 1 to 63 of a-z, 0-9 and -, starting with a letter or digit") }
+    if ($SessionId -cnotmatch $script:HordeConversationSessionPattern) { return (New-HordeUnknown -Reason "the session id asked about is not 1 to 128 of A-Z, a-z, 0-9 and . _ : -") }
+    if ($Vendor -ne "") {
+        $one = Resolve-HordeConversationAdapter -Name $Vendor -Require @("sessionLookup") -Refuse @()
+        if ($one.state -cne "known") { return $one }
+        $names = @($Vendor)
+    } else {
+        $fit = Find-HordeConversationAdapter -Require @("sessionLookup") -Refuse @()
+        if ($fit.state -cne "known") { return $fit }
+        $names = @($fit.value)
+    }
+    $request = [pscustomobject]@{ fleet = $Fleet; session = $SessionId; options = $Options }
+    $describers = New-Object System.Collections.ArrayList
+    $doubts = New-Object System.Collections.ArrayList
+    foreach ($n in $names) {
+        $adapter = $script:HordeConversationAdapters[$n]
+        # A CLAIM IT CANNOT KEEP: sessionLookup yes and nothing to ask. Said in the words of the cause, not as a failed call.
+        if ($null -eq $adapter.describe) { [void]$doubts.Add("adapter '" + $n + "' declares sessionLookup yes and gave no Describe to ask"); continue }
+        $a = Invoke-HordeConversationAdapter -Adapter $adapter -Op "describe" -Arguments @($request) -What "session lookup" -AllowAbsent
+        if ($a.state -ceq "absent") { continue }
+        if ($a.state -cne "known") { [void]$doubts.Add($a.reason); continue }
+        # ASKED ABOUT ONE SESSION, ANSWERED ABOUT IT: another id here would put one session's label on
+        # another's file (the rule of A PAST SESSION BY ITS ID).
+        $described = Get-HordeConversationMember $a.value "session"
+        if (-not $described.has -or $described.value -isnot [string] -or $described.value -cne $SessionId) { [void]$doubts.Add("adapter '" + $n + "' was asked about one session and answered about another"); continue }
+        [void]$describers.Add([pscustomobject]@{ adapter = $adapter; value = $a.value; observedAt = $a.observedAt })
+    }
+    if ($describers.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $describers.Count + " adapters each describe session '" + $SessionId + "' (" + (@($describers | ForEach-Object { $_.adapter.name }) -join ", ") + "); one is never chosen over another")) }
+    if ($doubts.Count -gt 0) { return (New-HordeUnknown -Reason ("session '" + $SessionId + "' of horde '" + $Fleet + "' could not be described: " + ($doubts -join "; "))) }
+    if ($describers.Count -eq 0) { return (New-HordeUnknown -Reason ("no adapter has a record of session '" + $SessionId + "' for horde '" + $Fleet + "'")) }
+    $f = $describers[0]
+    $rolePattern = '\A(?:' + (@((Get-HordeRoleTable).native | ForEach-Object { [regex]::Escape($_) }) -join "|") + ')\z'
+    $value = [pscustomobject]@{ vendor = $f.adapter.name; session = $SessionId; fleet = $Fleet
+        label = (ConvertTo-HordeConversationSessionFact -Fact (Get-HordeConversationMember $f.value "label").value -What "label" -Pattern $script:HordeConversationLabelPattern -Shape "one or two capital letters, then a number from 1 to 9999 or nothing")
+        role = (ConvertTo-HordeConversationSessionFact -Fact (Get-HordeConversationMember $f.value "role").value -What "role" -Pattern $rolePattern -Shape "a role of this horde")
+        parent = (ConvertTo-HordeConversationSessionFact -Fact (Get-HordeConversationMember $f.value "parent").value -What "parent" -Pattern $script:HordeConversationSessionPattern -Shape "a session id") }
+    return (New-HordeKnown -Value $value -ObservedAt $f.observedAt)
 }

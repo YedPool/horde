@@ -114,11 +114,14 @@ function New-ClaudeCodeRegistry {
 function Set-ClaudeCodeRecord {
     # Write one session's registry record, in the fields the fleet's registry writes (88 records measured
     # 2026-10-10: claudeSessionId, cwd, firstSeen, lastSeen, pane, instance, role, transcriptPath, ...).
-    param($Registry, [string]$Session, [string]$Role = "master", [bool]$Retired = $false, [string]$TranscriptPath = "")
+    param($Registry, [string]$Session, [string]$Role = "master", [bool]$Retired = $false, [string]$TranscriptPath = "", [string]$Label = "", [string]$Parent = "")
     if ($TranscriptPath -eq "") { $TranscriptPath = Join-Path $Registry.projects ($Session + ".jsonl") }
     $r = [ordered]@{ claudeSessionId = $Session; origin = "user"; fleetSessionId = ""; pane = "10"; instance = "inst-synthetic"; cwd = "C:\work\synthetic"; firstCwd = "C:\work\synthetic"; owner = ""
         firstSeen = "2026-10-10T10:00:00.0000000Z"; lastSeen = "2026-10-10T11:00:00.0000000Z"; lastTool = "Bash"; transcriptPath = $TranscriptPath }
     if ($Role -ne "") { $r["role"] = $Role }
+    # A label and a parent are written only where a session has one (34 and 87 of 92 records, 2026-10-13).
+    if ($Label -ne "") { $r["label"] = $Label; $r["labelCycle"] = 0 }
+    if ($Parent -ne "") { $r["parent"] = $Parent }
     if ($Retired) { $r["retired"] = $true; $r["retiredAt"] = "2026-10-10T11:30:00.0000000Z" }
     [System.IO.File]::WriteAllText((Join-Path $Registry.root ("registry\sessions\" + $Session + ".json")), ($r | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
     return $TranscriptPath

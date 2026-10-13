@@ -11,7 +11,7 @@
     "vendor": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under agents/." },
     "capabilities": {
       "type": "object",
-      "required": ["incremental", "stableTurnIds", "timestamps", "roles", "partialTurns", "mutableHistory"],
+      "required": ["incremental", "stableTurnIds", "timestamps", "roles", "partialTurns", "mutableHistory", "sessionLookup"],
       "additionalProperties": false,
       "properties": {
         "incremental": { "$ref": "#/definitions/capability", "description": "A read resumes from the cursor of the last one and returns only what came after it, without reading the conversation again from its start." },
@@ -19,7 +19,8 @@
         "timestamps": { "$ref": "#/definitions/capability", "description": "Every turn carries the time the harness wrote it." },
         "roles": { "$ref": "#/definitions/capability", "description": "What a person typed is told apart from what the model wrote, and from the harness's own text, by the harness's own marks - never by guessing from the words." },
         "partialTurns": { "$ref": "#/definitions/capability", "description": "HAZARD. A turn already returned may come again later with more text (a response streamed into one record that grows). no: once returned, a turn's text never changes." },
-        "mutableHistory": { "$ref": "#/definitions/capability", "description": "HAZARD. The harness may edit, rewind or remove turns already written (an operation log, a file rewritten in place), so a turn already returned may be withdrawn. no: what was written stays written." }
+        "mutableHistory": { "$ref": "#/definitions/capability", "description": "HAZARD. The harness may edit, rewind or remove turns already written (an operation log, a file rewritten in place), so a turn already returned may be withdrawn. no: what was written stays written." },
+        "sessionLookup": { "$ref": "#/definitions/capability", "description": "A session of the horde - any session, not only its Thrall - is described by its id: the role, the label and the parent its own record holds, each said to be known, absent or unknown and never guessed (Get-HordeConversationSession). Only an adapter that says yes is asked." }
       }
     }
   },
