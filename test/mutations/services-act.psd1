@@ -69,9 +69,7 @@
            Replace = 'if ($false) { return [pscustomobject]@{ ok = $true; detail = ("process " + $Process.pid + " is another process now' }
         @{ Name = "missing-pid-is-unknown"
            Find = '    catch [System.ArgumentException] { return (New-HordeAbsent -Note ("no process has the number " + $ProcessId)) }'
-           Replace = '    catch [System.ArgumentException] { return (New-HordeUnknown -Reason ("no process has the number " + $ProcessId)) }'
-           Expect = "survives"
-           Reason = "PowerShell hands a method's ArgumentException to the general catch below it as often as to this typed one, and that catch answers absent for the same exception; the pair is belt and braces, and the suite's check passes through either" }
+           Replace = '    catch [System.ArgumentException] { return (New-HordeUnknown -Reason ("no process has the number " + $ProcessId)) }' }
         @{ Name = "no-time-limit"
            Find = '        if (-not $p.WaitForExit([System.Math]::Max(1, $TimeoutSeconds) * 1000)) {'
            Replace = '        if (-not $p.WaitForExit(600000)) {' }
