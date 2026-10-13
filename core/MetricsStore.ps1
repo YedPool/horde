@@ -86,7 +86,13 @@ function Get-HordeAgentStores {
     # cannot read declares none. An engine folder with no stores.json, or one that cannot be
     # read, makes the whole answer unknown, and the writer refuses: an engine nobody described is not
     # left unguarded.
-    param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+    # -ProfileRoot is the user profile the "profile" roots are under, for a caller that must ask about
+    # a profile other than the one USERPROFILE names (files/Deny.ps1 asks twice: review of the files
+    # deny list, 2026-10-13, measured that a caller who sets USERPROFILE moves every such root).
+    # Left out, it is USERPROFILE, as it was for every caller before.
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot), [string]$ProfileRoot = "")
+    $profileBase = $ProfileRoot
+    if ($profileBase.Trim() -eq "" -and "$env:USERPROFILE".Trim() -ne "") { $profileBase = "$env:USERPROFILE" }
     $agents = Join-Path $Root "agents"
     $out = New-Object System.Collections.ArrayList
     if (-not (Test-Path -LiteralPath $agents -PathType Container)) { return (New-HordeKnown -Value @()) }
@@ -104,7 +110,7 @@ function Get-HordeAgentStores {
         foreach ($r in @($s["roots"])) {
             if ($r -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($where + " has a root that is not an object")) }
             if ($r["profile"] -is [string] -and $r["profile"] -ne "") {
-                if ("$env:USERPROFILE".Trim() -ne "") { $p = Join-Path "$env:USERPROFILE" $r["profile"]; [void]$roots.Add($p); [void]$labelled.Add([pscustomobject]@{ label = ("profile" + $r["profile"]); path = $p }) }
+                if ($profileBase.Trim() -ne "") { $p = Join-Path $profileBase $r["profile"]; [void]$roots.Add($p); [void]$labelled.Add([pscustomobject]@{ label = ("profile" + $r["profile"]); path = $p }) }
             }
             elseif ($r["env"] -is [string] -and $r["env"] -ne "") {
                 $v = [Environment]::GetEnvironmentVariable($r["env"])
@@ -134,9 +140,10 @@ function Get-HordeAgentStores {
 
 function Get-HordeAgentStoreRoots {
     # The folders every engine keeps its own files in, as an answer: known list of full paths, or
-    # unknown when any engine folder does not say (Get-HordeAgentStores).
-    param([string]$Root = (Split-Path -Parent $PSScriptRoot))
-    $stores = Get-HordeAgentStores -Root $Root
+    # unknown when any engine folder does not say (Get-HordeAgentStores). -ProfileRoot is that
+    # function's: the profile the folders are under, USERPROFILE when it is left out.
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot), [string]$ProfileRoot = "")
+    $stores = Get-HordeAgentStores -Root $Root -ProfileRoot $ProfileRoot
     if ($stores.state -ne "known") { return $stores }
     $out = New-Object System.Collections.ArrayList
     foreach ($s in @($stores.value)) { foreach ($r in @($s.roots)) { [void]$out.Add($r) } }

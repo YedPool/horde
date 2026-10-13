@@ -83,6 +83,16 @@ try {
         $env:HARNESS_X_HOME_TEST = Join-Path $work "x-moved"
         $roots = Get-HordeAgentStoreRoots -Root $fakeRepo
         Check ($roots.state -eq "known" -and @($roots.value) -contains (Join-Path $env:USERPROFILE ".harness-y") -and @($roots.value) -contains $env:HARNESS_X_HOME_TEST) "every engine folder's stores.json is read: profile folders and folders named by a variable"
+        # A CALLER MAY ASK ABOUT ANOTHER PROFILE than the one the variable names (files/Deny.ps1 asks
+        # twice). Left out, the answer is what it always was, which the check above holds.
+        $otherProfile = Join-Path $work "another-profile"
+        $elsewhere = Get-HordeAgentStoreRoots -Root $fakeRepo -ProfileRoot $otherProfile
+        Check ($elsewhere.state -eq "known" -and @($elsewhere.value) -ccontains (Join-Path $otherProfile ".harness-x") -and @($elsewhere.value) -ccontains (Join-Path $otherProfile ".harness-y")) "asked about another profile, every engine's profile folder is under that profile"
+        Check (@($elsewhere.value) -cnotcontains (Join-Path $env:USERPROFILE ".harness-y") -and @($elsewhere.value) -cnotcontains (Join-Path $env:USERPROFILE ".harness-x")) "and not under the one the variable names"
+        Check (@($elsewhere.value) -ccontains $env:HARNESS_X_HOME_TEST -and @($elsewhere.value).Count -eq 3) "a folder an engine's own variable names is the same whichever profile is asked about"
+        $viaStores = Get-HordeAgentStores -Root $fakeRepo -ProfileRoot $otherProfile
+        Check ($viaStores.state -eq "known" -and @(@($viaStores.value | Where-Object { $_.agent -eq "harness-y" })[0].roots) -ccontains (Join-Path $otherProfile ".harness-y")) "and the fuller answer takes the same profile"
+        Check (@((Get-HordeAgentStoreRoots -Root $fakeRepo -ProfileRoot "").value) -ccontains (Join-Path $env:USERPROFILE ".harness-y") -and @($roots.value).Count -eq 3 -and @($roots.value) -ccontains (Join-Path $env:USERPROFILE ".harness-x")) "CONTROL: with no profile named, or an empty one, it is the variable's, as it was for every caller before"
         $env:HORDE_HOME = Join-Path $env:USERPROFILE ".harness-y\home"
         $dy = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo
         Check ($dy.write -eq $false -and $dy.reason -like "*inside a harness*") "a metrics folder inside an engine's folder is refused, adapter or none"
