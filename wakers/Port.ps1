@@ -61,7 +61,7 @@
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn }, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown. It looks at the box
 #            and the turn itself before it types (THE NUDGE GUARDS ITSELF, above).
-# role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
+# role is warchief, orc, warg or unknown; parent is a session id or "". unreadCount is a whole number,
 # 0 or more; oldestUnreadAt is a [datetime] of kind Utc or Local, required when unreadCount is above 0. outcome is woken, busy,
 # unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
 # required unless the outcome is woken; at is a [datetime]. A session the waker does not know is unknown,

@@ -18,10 +18,10 @@
            Find = '"enum": [1],'
            Replace = '"enum": [1, 2],' }
         @{ Name = "role-accepts-old-vocabulary"
-           Find = '"enum": ["warchief", "orc", "goblin"],'
-           Replace = '"enum": ["warchief", "orc", "goblin", "master", "orchestrator", "session"],' }
+           Find = '"enum": ["warchief", "orc", "warg"],'
+           Replace = '"enum": ["warchief", "orc", "warg", "master", "orchestrator", "session"],' }
         @{ Name = "role-any-string"
-           Find = '"role": { "type": "string", "enum": ["warchief", "orc", "goblin"], '
+           Find = '"role": { "type": "string", "enum": ["warchief", "orc", "warg"], '
            Replace = '"role": { "type": "string", ' }
         @{ Name = "parent-any-string"
            Find = '"parent": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", '
@@ -136,7 +136,7 @@
            Replace = '"x-horde-owner": "engine", "description": "THE KEY' }
         @{ Name = "key-repeated-in-text"
            Find = '"properties": {'
-           Replace = '"properties": { "role": { "type": "string", "enum": ["warchief", "orc", "goblin"], "x-horde-owner": "engine", "x-horde-read": "W1 role, then W2 role" },' }
+           Replace = '"properties": { "role": { "type": "string", "enum": ["warchief", "orc", "warg"], "x-horde-owner": "engine", "x-horde-read": "W1 role, then W2 role" },' }
         @{ Name = "label-cycle-negative-allowed"
            Find = '"labelCycle": { "type": "integer", "minimum": 0,'
            Replace = '"labelCycle": { "type": "integer",' }

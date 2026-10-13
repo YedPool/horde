@@ -30,7 +30,7 @@ Their decisions are cited as "hosts decision N" and "lifecycle decision N". Sett
 
 1. **Windows agents only for now** (hosts 1). The tmux adapter proves the port in tests and serves a
    future Linux or macOS Horde. It does not run the live Windows fleet inside WSL.
-2. **psmux is installed with `winget install psmux` when its adapter goblin starts**, because the
+2. **psmux is installed with `winget install psmux` when its adapter warg starts**, because the
    founder asked for psmux support (hosts 2). The founder is told first.
 3. **The shared tmux command language lives in `hosts/tmux/`** (hosts 3). `hosts/psmux` imports it as
    a declared dependency, and the host-name check gains one allowlisted cross-host import. The code is
@@ -45,7 +45,7 @@ Their decisions are cited as "hosts decision N" and "lifecycle decision N". Sett
 
    All four are now written in `core/HostPort.ps1` on `feature/core-projection` (commit 40d457f), which
    has not merged yet.
-6. **Descendants are tied to the goblin's lifetime** (lifecycle 2): a Windows job object with
+6. **Descendants are tied to the warg's lifetime** (lifecycle 2): a Windows job object with
    kill-on-close, or the equivalent on each host. Anything that escapes is found by its ancestry. It
    is reclaimed only when ownership is proven, and reported otherwise.
 
@@ -272,7 +272,7 @@ C. tmux, over WSL (first)
 
 D. psmux (second)
 
-11. **Install** (INSTALL, when its goblin starts). The founder is told first, then
+11. **Install** (INSTALL, when its warg starts). The founder is told first, then
     `winget install psmux` runs (v3.3.8, the latest release when researched). The installed version
     is recorded.
 12. **Measure what the research only read in the docs and source** (after 11). Every psmux capability
@@ -371,7 +371,7 @@ anchor, and how each host proves it.
     `spawn.parent` and `contain.inherited`. Each host's adapter declares them in its
     `capabilities.json`, with evidence from its isolated instance.
 
-    Services a goblin declares, meant to outlive it, go through `horde job run -Service -Until` in a
+    Services a warg declares, meant to outlive it, go through `horde job run -Service -Until` in a
     job of their own that Horde owns, with an expiry (lifecycle step 23, `horde job run`). They never
     break away.
 18. **Per host.** The anchor and its job are the same everywhere a Windows agent runs. Only what the
@@ -427,7 +427,7 @@ In order:
 - **PROJ**: steps 8 and 9 (the tmux adapter), 14 and 15 (the psmux adapter and differential e2e), and
   step 10 once 8 is in.
 - **INSTALL**: steps 11 to 13 (psmux install, measurement and harness). They start when the psmux
-  goblin starts, after tmux step 8.
+  warg starts, after tmux step 8.
 - **SPAWN, and the lifecycle plan's anchor**: steps 17 to 19, the anchor on each host and its e2e.
   The anchor itself is built in the lifecycle plan (steps 21 and 22 there), never here. Step 9 also
   needs SPAWN before it can start a real agent.

@@ -311,8 +311,8 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    `core/role-requirements.json` (the design's 4.3). The built-in layer (L0) is each harness's own
    `agents/<name>/engine.json` - its native provider and profile, and in exactly one of them the
    fleet's default rule - read by `Get-HordeBuiltinLayer`, so core names no harness. Measured on the
-   descriptors of E2: codex can run goblins today and not orcs (delivery-receipt is unverified);
-   gemini-cli cannot yet run goblins either, because resume and report-hook are unverified until G1
+   descriptors of E2: codex can run wargs today and not orcs (delivery-receipt is unverified);
+   gemini-cli cannot yet run wargs either, because resume and report-hook are unverified until G1
    and G3 measure them, and `agents/gemini-cli/test/test-engine-builtin.ps1` pins that refusal.
 6. **E5. `core/Secrets.ps1`.** It resolves `env` and `harness-login` references, and nothing else. It
    answers `set`, `missing` or `unknown (why)`, and it gives the value only to the launch stub. The
@@ -402,10 +402,10 @@ B. Provider profiles through the Claude Code harness (NOW for data and checks; S
       `ANTHROPIC_BASE_URL` is refused; a fixture with `apiKeyHelper` is refused. Control: a settings
       file with neither passes. Whether a spawn-time flag could override those entries instead is not
       measured, so until it is, the refusal stands.
-    - **Goblins keep the memory reaper.** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` is removed from
-      every goblin's environment (lifecycle decision 5, which keeps the reaper on). Test: the parent
-      environment sets it to 1, and the goblin's plan does not carry it. Control: for a role other than
-      goblin the variable is reported, not removed, so the test can see the difference.
+    - **Wargs keep the memory reaper.** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` is removed from
+      every warg's environment (lifecycle decision 5, which keeps the reaper on). Test: the parent
+      environment sets it to 1, and the warg's plan does not carry it. Control: for a role other than
+      warg the variable is reported, not removed, so the test can see the difference.
 
     DeepSeek's recipe adds the `[1m]` model suffix and `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, because an
     unrecognised model id is assumed to have a 200K context. Tests run on data and on that pure
@@ -487,7 +487,7 @@ E. Resume bindings as the single source of truth
     default. The schema edit and the ownership rows land together. The remote split's twin test (a
     binding-record schema computed from the `node`-owned rows) fails if they drift, and so does a
     `node` row appearing in the fleet schema.
-15. **R2. Printing the binding** (PROJ). The command is the lifecycle plan's `horde goblin show`
+15. **R2. Printing the binding** (PROJ). The command is the lifecycle plan's `horde warg show`
     (its step 25), not a second command here. This step supplies its engine half: harness, provider
     profile, pinned model and argv, each in tristate form with provenance, and `-Json`. Any field
     that is unknown refuses the whole answer, with the reason. Its test reads a fixture binding record
@@ -543,7 +543,7 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     child. This step then builds the real launch stub that the anchor runs as its child. The stub:
     - resolves the secret itself, so the job file never holds it (test: no fake secret on disk, with
       a control);
-    - scrubs every owned variable of every adapter, so a goblin spawned on another provider from an
+    - scrubs every owned variable of every adapter, so a warg spawned on another provider from an
       orc holding a provider token inherits none of the orc's variables (test, end to end, including
       P2's missing-token refusal);
     - hands the anchor the final argv and environment over a pipe;
@@ -568,7 +568,7 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     repeated spawns, and sets E9's naming wait from that measurement, citing it in a comment. Until
     then the wait is 5 seconds, marked as an estimate, not a measurement.
 19. **E11. Switch and adoption.** Resume and drift are step 16. The fleet runs a real wave with
-    goblins on one model and orcs on another, set only through `horde config`, and the PR records who
+    wargs on one model and orcs on another, set only through `horde config`, and the PR records who
     used it and what broke.
 20. **E4-host. The capability check reads the real host files** (PROJ; after the merged Phase 3 plan's
     steps 2 and 3, and the hosts plan's step 1). E4's injected host capabilities are replaced by
@@ -592,7 +592,7 @@ G. The gemini-cli adapter
     Then `agents/gemini-cli/agent.json`, which E2 wrote with `protocols: [google-genai]` and
     `nativeProvider: google`, is updated from these measurements. Its events map AfterAgent to turn-ended and BeforeAgent to
     turn-started, and treat SessionEnd as best-effort. `message-inject` stays `unverified` until it is
-    measured, so gemini-cli can run goblins but not orcs or the warchief.
+    measured, so gemini-cli can run wargs but not orcs or the warchief.
 22. **G2. `agents/gemini-cli/Transcript.ps1`** (INSTALL and FOLLOW: after G1 and the lifecycle plan's
     step 7). An adapter to the lifecycle plan's transcript port, over the chats store. It passes the
     port's own conformance tests and the planted-string test with its control.

@@ -242,7 +242,7 @@
         real work before its entry leaves the ratchet.</li>
     <li><strong>Phase 4</strong> - restores shadow on real WezTerm starts, not only in a test instance, and
         the default flips only after a run of clean comparisons on the real layout.</li>
-    <li><strong>Phase 7</strong> - a real Goblin is spawned into a VS Code terminal and does real work.</li>
+    <li><strong>Phase 7</strong> - a real Warg is spawned into a VS Code terminal and does real work.</li>
   </ul>
   <p>
     Alongside that, an <strong>end-to-end suite</strong> drives the real <code>horde</code> command line the
@@ -315,7 +315,7 @@
       <td>Exactly one; two is a finding a person resolves (<code>Hierarchy.ps1:85</code>). Absence is repaired only by the explicit, idempotent ensure command, never as a side effect.</td></tr>
   <tr><td><strong>Orc</strong></td><td><code>orc</code></td><td><code>orchestrator</code></td><td class="c">6</td>
       <td>Parent edges by session id (<code>Set-WfSessionParent</code>).</td></tr>
-  <tr><td><strong>Goblin</strong></td><td><code>goblin</code></td><td><code>session</code></td><td class="c">-</td>
+  <tr><td><strong>Warg</strong></td><td><code>warg</code></td><td><code>session</code></td><td class="c">-</td>
       <td>Parent edge to its Orc; <code>Test-WfMayMessage</code> governs who may message whom.</td></tr>
   <tr><td><strong>Horde</strong></td><td><code>horde</code></td><td><em>none</em></td><td class="c">-</td>
       <td>New: the root of the projection and the command name. The only genuinely new concept here.</td></tr>
@@ -456,7 +456,7 @@
       "label": "D", "cwd": "C:\\Users\\...\\wezfleet",
       "resume": { "kind": "claude-resume", "id": "aaaaaaaa-...",
                   "argv": [ "claude", "--resume", "aaaaaaaa-..." ] } },
-    { "slot": "s2", "sessionId": "bbbbbbbb-...", "agent": "codex", "role": "goblin",
+    { "slot": "s2", "sessionId": "bbbbbbbb-...", "agent": "codex", "role": "warg",
       "label": "D1", "parent": "aaaaaaaa-...", "cwd": "C:\\...",
       "resume": { "kind": "codex-resume", "id": "bbbbbbbb-...",
                   "argv": [ "codex", "UNMEASURED-placeholder-see-plan-step-5.1", "bbbbbbbb-..." ] } }
@@ -562,7 +562,7 @@
   <tr><td>0.5</td><td><strong>The end-to-end harness</strong> (D11): an isolated WezTerm - its own mux, pinned by <code>WEZTERM_UNIX_SOCKET</code>, started with <code>--skip-config</code> - that asserts it cannot see the user's panes before anything runs. Ported from <code>lib/Isolation.ps1</code> with its ledger.</td><td>Its own control: pointed at the live mux, it refuses to run.</td><td class="c sz">M</td></tr>
   <tr><td>0.6</td><td><strong>Ownership and source precedence</strong>, as data: for every field of Horde's session record, its single future owner, and - until that field's switch - which old store it is read from when the old stores disagree. The old system's duplication is recorded here as reading rules, not repaired.</td><td>Every field has exactly one owner and one precedence rule. Expected to cover at least: pane, stored three times in wezfleet and derivable from a fourth.</td><td class="c sz">M</td></tr>
   <tr><td>0.7</td><td><code>core/tristate</code>: known, absent, unknown, stated once - with a ledger, since three-valued answers exist in at least four places in wezfleet and Horde must not silently disagree with any of them.</td><td>Ledger complete; unit suite.</td><td class="c sz">S</td></tr>
-  <tr><td>0.8</td><td><strong>Role vocabulary, on read.</strong> Horde speaks <code>warchief</code>, <code>orc</code>, <code>goblin</code> natively and maps wezfleet's <code>master</code>, <code>orchestrator</code>, <code>session</code> through one alias table as it reads. <strong>wezfleet's records are never rewritten</strong> - so the write path that lost <code>role</code> twice is never exercised by the rename at all.</td><td>Both vocabularies read correctly; a test proves Horde opens no wezfleet file for writing.</td><td class="c sz">S</td></tr>
+  <tr><td>0.8</td><td><strong>Role vocabulary, on read.</strong> Horde speaks <code>warchief</code>, <code>orc</code>, <code>warg</code> natively and maps wezfleet's <code>master</code>, <code>orchestrator</code>, <code>session</code> through one alias table as it reads. <strong>wezfleet's records are never rewritten</strong> - so the write path that lost <code>role</code> twice is never exercised by the rename at all.</td><td>Both vocabularies read correctly; a test proves Horde opens no wezfleet file for writing.</td><td class="c sz">S</td></tr>
   <tr><td>0.9</td><td>The <code>horde</code> entry point, with help generated from a command table - the pattern wezfleet already proved, where help cannot drift from the commands. Its first scenario: the end-to-end harness runs <code>horde --help</code> and <code>horde version</code>.</td><td>First end-to-end scenario green in the isolated terminal.</td><td class="c sz">S</td></tr>
 </table>
 
@@ -613,7 +613,7 @@
 </table>
 
 <h3><span class="phase">PHASE 5</span>Move the writers behind the contract</h3>
-<p>Goblin lifecycle, resource admission and live visibility cut across Phase 3's read half and this phase's writers: admission tiers, process ownership through a job per goblin, automatic close once the resume binding is proven, the transcript port and its one follower, <code>horde watch</code> and <code>horde why</code>. Order of work and each step's tests: <code>planning/execution-plan-lifecycle.md</code> (2026-09-30).</p>
+<p>Warg lifecycle, resource admission and live visibility cut across Phase 3's read half and this phase's writers: admission tiers, process ownership through a job per warg, automatic close once the resume binding is proven, the transcript port and its one follower, <code>horde watch</code> and <code>horde why</code>. Order of work and each step's tests: <code>planning/execution-plan-lifecycle.md</code> (2026-09-30).</p>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
   <tr><td>5.1</td><td>Relaunch decisions move to the AgentPort as <code>resumeCommand</code>. The Lua stops reading <code>pane-sessions</code> at <code>process_handlers.lua:162</code> and runs the command in the plan. The Codex resume command is <strong>to be measured</strong>, not assumed.</td><td>Shadow diff clean on relaunch commands.</td><td class="c sz">M</td></tr>

@@ -175,12 +175,12 @@ try {
         # Rules for every waker, whatever it declares.
         $state = & $fx.New
         try {
-            $s = New-Seat @{ role = "goblin"; parent = "0b000000-0000-4000-8000-000000000001" }
+            $s = New-Seat @{ role = "warg"; parent = "0b000000-0000-4000-8000-000000000001" }
             & $fx.Seat $state $s
             $a = Get-HordeWakeTargets -Waker $w
             $mine = @()
             if ($a.state -ceq "known") { $mine = @(@($a.value) | Where-Object { $_.id -ceq $s.id }) }
-            Check ($mine.Count -eq 1 -and $mine[0].role -ceq "goblin" -and $mine[0].parent -ceq $s.parent) ("[" + $name + "] a session it was given is among its targets, once, with its role and parent")
+            Check ($mine.Count -eq 1 -and $mine[0].role -ceq "warg" -and $mine[0].parent -ceq $s.parent) ("[" + $name + "] a session it was given is among its targets, once, with its role and parent")
             $a = Get-HordeWakeState -Waker $w -Id $s.id
             Check ($a.state -ceq "known" -and $a.value.unreadCount -eq 1 -and $a.value.oldestUnreadAt -eq $t0) ("[" + $name + "] its unread mail is counted, with the time of the oldest")
             $o = & $fx.Observe $state $s.id

@@ -681,7 +681,7 @@
           "enum": [
             "warchief",
             "orc",
-            "goblin"
+            "warg"
           ]
         },
         "observedAt": {

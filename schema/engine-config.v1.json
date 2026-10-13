@@ -75,7 +75,7 @@
       "additionalProperties": false,
       "description": "Every key must match (AND); an empty match matches every target. Ranks for specificity are engines E4's.",
       "properties": {
-        "role": { "type": "string", "enum": ["warchief", "orc", "goblin"] },
+        "role": { "type": "string", "enum": ["warchief", "orc", "warg"] },
         "parent": { "$ref": "#/definitions/uuid" },
         "run": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$" },
         "fleetId": { "type": "string", "pattern": "\\S" },

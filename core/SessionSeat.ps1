@@ -85,7 +85,7 @@ function Get-HordeSeatProcessStart {
 }
 
 function Get-HordeRoleSeat {
-    # The seat of -Role (a Horde role: warchief, orc or goblin) as an answer: known { sessionId; pane;
+    # The seat of -Role (a Horde role: warchief, orc or warg) as an answer: known { sessionId; pane;
     # instance }, absent, or unknown with the reason (header). -Root is the registry's folder, for a
     # caller that names the one it made; -Identity is a reading of who is running (Get-HordeIdentity),
     # for a caller that has one or a test that made one, and is read here when it is not given.

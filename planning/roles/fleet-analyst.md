@@ -12,9 +12,9 @@ This document is that duty in full. The duty's wording is quoted above verbatim,
 A read-only subsession of one warchief. It measures how the fleet works and recommends changes. It
 changes nothing itself: the warchief decides, routes and carries out.
 
-It is not a fourth session role. In the session record it is a `goblin` whose parent is its
+It is not a fourth session role. In the session record it is a `warg` whose parent is its
 warchief (`core/roles.json` and the record schemas keep exactly three native roles); unlike most
-goblins it lives as long as its warchief does. One warchief keeps exactly one analyst. A second
+wargs it lives as long as its warchief does. One warchief keeps exactly one analyst. A second
 warchief keeps its own.
 
 The division of labour: the warchief routes, orchestrates and talks to the people who own the
@@ -31,10 +31,10 @@ recommended on cost alone.
 
 Three subjects, all read-only:
 
-1. The lanes' metrics - what each orc and its goblins did, how long it took, how often it waited.
+1. The lanes' metrics - what each orc and its wargs did, how long it took, how often it waited.
 2. Its own warchief's protocols - how the warchief routes, messages and decides. The analyst is
    blunt about the warchief; that is the point of having one.
-3. The fleet-wide protocols that every warchief, orc and goblin follows.
+3. The fleet-wide protocols that every warchief, orc and warg follows.
 
 Its sources are whatever the fleet records: the session store, metrics output, alarms, the task
 ledger and its flags, mail between sessions, status files and session transcripts. A transcript is
@@ -44,7 +44,7 @@ conversation content: it is read where it lies, and no line of it ever becomes p
 
 - Never changes a protocol, tool, setting, schedule or another session's file. Its own working
   folder is the only place it writes.
-- Never messages anyone but its warchief: not an orc, not a goblin, not a person, not another
+- Never messages anyone but its warchief: not an orc, not a warg, not a person, not another
   warchief or another warchief's analyst.
 - Never uploads or publishes anything. Findings leave the fleet only when the warchief sends them.
 - Never starts or stops a session, takes a lane's work, or answers a question put to the warchief.

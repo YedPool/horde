@@ -981,7 +981,7 @@ function Complete-HordeSession {
     Set-HordeField $S $C "projectCwd" (Resolve-HordeField $pc)
 
     # The engine's own fields: W1, then the guarded claim. A role that is not there is unknown,
-    # never goblin (core/roles).
+    # never warg (core/roles).
     $roleCand = $null
     if ($S.w1Unreadable) { $roleCand = New-HordeCandidate -Store "W1" -Field "role" -Answer (New-HordeUnknown -Reason "the session's registry record could not be read") }
     elseif ($null -eq $S.w1) { $roleCand = Get-HordeNoRecordCandidate -S $S -Store "W1" -Field "role" }

@@ -3,7 +3,7 @@
 #
 # WHY. A link can drop after a request was sent and before its answer came back. The hub cannot tell
 # "never arrived" from "arrived and done", so it resends - and without a journal a resent spawn is a
-# second goblin, a resent close a second kill. Remote plan step R3 (planning/execution-plan-remote.md)
+# second warg, a resent close a second kill. Remote plan step R3 (planning/execution-plan-remote.md)
 # and the remote design, section 6.5.
 #
 # THE RULES, and what makes each one hold:

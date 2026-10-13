@@ -135,7 +135,7 @@ function Get-HordeWakeDecisions {
     #   -Ledger   session id -> { attempts; lastAttemptAt; lastOutcome }
     # WHO GOES FIRST when more are ready than one pass may nudge: a session whose waker last answered
     # "nothing" goes behind every other (Update-HordeWakeLedger); then the session asked the fewest times,
-    # then by role (warchief, orc, goblin, unknown), then the oldest unread mail. Fewest attempts first
+    # then by role (warchief, orc, warg, unknown), then the oldest unread mail. Fewest attempts first
     # is what makes a restore of everything a fair queue: without it the warchief's second knock, due
     # 5 s after its first, would go ahead of nine sessions nobody had knocked on yet. The rest get wait
     # "rate limit" and are ready again next pass.
