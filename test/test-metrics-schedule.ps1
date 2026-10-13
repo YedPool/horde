@@ -34,6 +34,7 @@ try {
     $mark = Read-HordeJobMarker -Description $job.description
     Check ($mark.marked -and $mark.home -eq $env:HORDE_HOME) "its description carries Horde's marker and the home it serves"
     Check (-not (Read-HordeJobMarker -Description "someone's own task").marked) "CONTROL: a description without the marker is not Horde's"
+    Check ($job.withPerson -eq $false -and (New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -WithPerson).withPerson -eq $true) "a job runs where nobody sees it unless it is made -WithPerson, for work that needs the person's own session"
     Check (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -EveryMinutes 30 -TimeLimitMinutes 45 } "stops before") "a job allowed to run longer than its interval is refused"
     Check (Throws { New-HordeScheduledJob -Name "bad\name" -Script "s" -HordeHome "h" } "not a job name") "a job name that is not plain is refused"
     Check (Throws { New-HordeScheduledJob -Name "x" -Folder "Microsoft" -Script "s" -HordeHome "h" } "not one of Horde's scheduler folders") "a folder that is not Horde's is refused"
@@ -109,6 +110,9 @@ try {
             $got = ""; if (Test-Path -LiteralPath $seen) { $got = [System.IO.File]::ReadAllText($seen) }
             Check ($got -ceq ((Join-Path $work $h) + "|metrics,collect") -and -not (Test-Path -LiteralPath (Join-Path $work $pwnedName))) ("the job's program receives the home exactly, and runs nothing it holds: " + $h.Substring(0, [Math]::Min(14, $h.Length)))
         }
+        $personJob = New-HordeScheduledJob -Name ($testName + " person") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $env:HORDE_HOME } -HordeHome $env:HORDE_HOME -EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson -Disabled
+        $personAct = ConvertTo-HordeTaskAction -Job $personJob
+        Check ($personAct.program -ceq "conhost.exe" -and $personAct.arguments -match '\A--headless powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand [A-Za-z0-9+/=]+\z' -and (ConvertTo-HordeTaskAction -Job $job).program -ceq "powershell.exe") "a -WithPerson job is run by the headless console host, so no window flashes in the person's session; any other job by PowerShell itself"
         Check ((ConvertTo-HordeTaskAction -Job $job).arguments -match '\A[A-Za-z -]+-EncodedCommand [A-Za-z0-9+/=]+\z') "the arguments are fixed switches and base64 only: no quote, no %, nothing a shell or the scheduler could read"
 
         Write-Host ""
@@ -145,6 +149,12 @@ try {
             Check ($cs.code -eq 0 -and $cs.out -like "*metrics gate: usage*" -and $cs.out -like "*DISABLED*Horde's*") "horde metrics schedule status shows the gate and the job"
             $cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "schedule", "remove", "-TaskName", $testName, "-TaskFolder", "HordeTest") -Env $envs
             Check ($cr.code -eq 0 -and $cr.out -like "*removed*" -and (& $sch.status $testName "HordeTest").state -eq "absent") "horde metrics schedule remove removes it"
+            # A -WithPerson job (core/Schedule.ps1): the person's own session, and only while logged on.
+            Assert-TestName $personJob.name
+            & $sch.install $personJob
+            $pst = & $sch.status $personJob.name "HordeTest"
+            Check ($pst.state -eq "known" -and $pst.value.logonType -eq "Interactive" -and $pst.value.program -ceq "conhost.exe" -and $pst.value.everyMinutes -eq 1 -and $pst.value.enabled -eq $false -and $pst.value.marked) "a -WithPerson job is installed with an interactive logon, run by the console host, and disabled when asked"
+            Check ((& $sch.remove $personJob.name "HordeTest") -eq $true -and (& $sch.status $personJob.name "HordeTest").state -eq "absent") "and removed like any Horde job"
             Check ((@(& $tasksIn "\" | Where-Object { $_.TaskName -ceq $testName -and $_.Description -like "FOREIGN*" })).Count -eq 1) "and the task of the same name outside Horde's folder was never touched"
             $svc = New-Object -ComObject Schedule.Service; $svc.Connect()
             $folderGone = $false; try { $null = $svc.GetFolder("\HordeTest") } catch { $folderGone = $true }

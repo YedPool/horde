@@ -50,10 +50,22 @@
 # -RunWatchMs: the hosted relay's is 60 s, so an always-on machine is 1,440 requests a day), and that is
 # the run's watch on it; on any other relay, the setting watchMs, never past the relay's maxWatchMs.
 #
+# A HEARTBEAT, ONCE A TURN (core/Heartbeat.ps1): <HORDE_HOME>\relay\run-heartbeat.json, replaced whole
+# at the top of every turn, holding this process and when it started. Until it was added, a run that had
+# died looked exactly like one with nothing to do: its log simply stopped, and the founder found out
+# when his phone went quiet. The supervisor of services (core/Services.ps1) reads it to tell a run that
+# is going from one that is not. THE TICK IT PROMISES IS COMPUTED from this run's own settings - the
+# longest a turn can last between two beats is its watch plus the longest backoff, moved by the jitter -
+# so a run that is waiting out a long backoff, as designed, is never read as dead. A write that fails
+# never ends the loop: it costs the heartbeat and one line said once, nothing else.
+#
 # THE SETTINGS are core/ModuleSettings.ps1's, module relay-run (<HORDE_HOME>\settings\relay-run.json),
 # read when the run starts. A file that fails its checks refuses the run, in its own words.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+
+# What this file calls of core beyond what its command loads, loaded here so it works on its own.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Heartbeat.ps1")
 
 $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Settings @(
     # 25 s is the design's long-poll (Q8, spike S3: PS 5.1 long-polls end cleanly on timeout); 60 s is the
@@ -112,6 +124,21 @@ function Get-HordeRelayRunBackoffMs {
 function Get-HordeRelayRunStopPath {
     param([Parameter(Mandatory = $true)][string]$HordeHome)
     return [System.IO.Path]::Combine($HordeHome, "relay", "run.stop")
+}
+
+function Get-HordeRelayRunHeartbeatPath {
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    return [System.IO.Path]::Combine($HordeHome, "relay", "run-heartbeat.json")
+}
+
+function Get-HordeRelayRunTickSeconds {
+    # How often this run promises to beat, at the least (A HEARTBEAT, in the header): its watch, plus
+    # the longer of the longest backoff with its jitter and the shortest turn, rounded up, plus 5 s for
+    # the turn's own work. A reader calls the run stale after three of these (core/Heartbeat.ps1).
+    param([Parameter(Mandatory = $true)][int]$WatchMs, [Parameter(Mandatory = $true)]$Settings)
+    $wait = [double]$Settings.backoffMaxMs * (1 + [double]$Settings.backoffJitterPercent / 100)
+    $wait = [System.Math]::Max($wait, [double]$Settings.minTurnMs)
+    return [int]([System.Math]::Ceiling(([double]$WatchMs + $wait) / 1000) + 5)
 }
 
 function Get-HordeRelayRunLockPath {
@@ -197,11 +224,20 @@ function Invoke-HordeRelayRun {
     $failures = 0
     $lastCheck = [datetime]::MinValue
     $stoppedBy = "turns"
+    # The heartbeat (header): who this run is, where it beats, and the tick it promises.
+    $beatSelf = Get-HordeHeartbeatSelf
+    $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $HordeHome
+    $beatTick = Get-HordeRelayRunTickSeconds -WatchMs $watchMs -Settings $set
+    $beatFailed = $false
     try {
         while ($true) {
             if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }
             if ($MaxTurns -gt 0 -and $turns -ge $MaxTurns) { $stoppedBy = "turns"; break }
             $turns++
+            # One small write a turn; a failure is said the first time it happens, and when it mends.
+            $beat = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns
+            if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ("the heartbeat could not be written, and the run goes on without it: " + $beat.reason) }
+            elseif ($beat.state -ceq "known" -and $beatFailed) { $beatFailed = $false; $null = & $Say "the heartbeat is being written again" }
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $failed = ""
             $empty = $false

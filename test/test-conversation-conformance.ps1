@@ -30,6 +30,11 @@
 #   Mend    param($State)         - write the rest of the torn record
 #   Clear   param($State)         - the harness's clear: a new session, which the Thrall's record now names
 #   Rotate  param($State, $Turns) - the same session's history rewritten to hold only $Turns
+#   Enlist  param($State, $Member) -> the id of a session of the horde it made beside the Thrall, or
+#                                 rewrote: $Member is { session; role; label; parent }, "" for none, and a
+#                                 session "" asks for a new one. It WRITES the harness's own record of a
+#                                 session and answers nothing about one: the sessionLookup case asks the
+#                                 adapter, through the port.
 #   Remove  param($State)         - removes everything New made
 # A fixture writes nothing outside the temp folder and what it made. It is dot-sourced, so helpers it
 # loads for its blocks stay defined when they run. Every word it is given here is
@@ -84,6 +89,13 @@ function Read-All {
 }
 function Sig { param($Turns) return (@($Turns | ForEach-Object { $_.role + ":" + $_.text }) -join "|") }
 function Ids { param($Turns) return (@($Turns | ForEach-Object { $_.turnId + "=" + $_.text }) -join "|") }
+function Member { param([string]$Role = "", [string]$Label = "", [string]$Parent = "", [string]$Session = "") return [pscustomobject]@{ session = $Session; role = $Role; label = $Label; parent = $Parent } }
+function Get-Described {
+    # One session of the fixture's horde, asked of the subject's adapter by name: an adapter that is not
+    # the subject is never asked, so none reads a store this suite did not make.
+    param($Subject, $State, [string]$Id)
+    return (Get-HordeConversationSession -Fleet $State.fleet -SessionId $Id -Vendor $Subject.name -Options $State.options)
+}
 
 $hebrew = "" + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD
 $emoji = [char]::ConvertFromUtf32(0x1F44B)
@@ -147,6 +159,45 @@ $cases = [ordered]@{
         $S.fixture.Add.Invoke($State, @([pscustomobject]@{ role = "assistant"; text = "history probe" }))
         $later = Read-All -Source $Src -Cursor $null
         return ((Ids $later.turns).StartsWith((Ids $All.turns)))
+    }
+    # A SESSION DESCRIBED BY ITS ID, by the adapter itself over the records its fixture wrote. The cases
+    # are the ones that break a guess: a session with no label, a session of another horde's records, an
+    # id nobody has, and the records changing between two calls.
+    "sessionLookup" = {
+        param($S, $State, $Src, $All)
+        $n = $S.name
+        $orc = & $S.fixture.Enlist $State (Member -Role "orc" -Label "E")
+        $warg = & $S.fixture.Enlist $State (Member -Role "warg" -Label "E3" -Parent $orc)
+        $bare = & $S.fixture.Enlist $State (Member)
+        $w = Get-Described $S $State $warg
+        Check ($w.state -ceq "known") ($n + ": a session is described by its id (" + $w.state + " " + $w.reason + ")")
+        if ($w.state -cne "known") { return $false }
+        Check ((@($w.value.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "vendor,session,fleet,label,role,parent" -and $w.value.vendor -ceq $n -and $w.value.session -ceq $warg -and $w.value.fleet -ceq $State.fleet) ($n + ": the answer is vendor, session, fleet, label, role and parent, for its vendor and its horde")
+        Check ($w.value.label.state -ceq "known" -and $w.value.label.value -ceq "E3" -and $w.value.role.state -ceq "known" -and $w.value.role.value -ceq "warg") ($n + ": a warg's label and role are known, as its record holds them")
+        Check ($w.value.parent.state -ceq "known" -and $w.value.parent.value -ceq $orc) ($n + ": a warg whose parent is an orc: the parent is reported, by its session id")
+        $o = Get-Described $S $State $orc
+        Check ($o.state -ceq "known" -and $o.value.role.value -ceq "orc" -and $o.value.label.value -ceq "E" -and $o.value.parent.state -ceq "absent") ($n + ": described in turn, that parent is the orc E, and has no parent itself")
+        $b = Get-Described $S $State $bare
+        Check ($b.state -ceq "known" -and $b.value.label.state -ceq "absent" -and $b.value.role.state -cne "known" -and $b.value.parent.state -ceq "absent") ($n + ": a session with no label is known, and its label is said to be none - neither it nor its role is guessed")
+        $t = Get-Described $S $State $Src.session
+        Check ($t.state -ceq "known" -and $t.value.role.state -ceq "known" -and $t.value.role.value -ceq "warchief") ($n + ": the Thrall's own session is described too, as the warchief")
+        $never = Get-Described $S $State "never-enlisted-1"
+        Check ($never.state -ceq "unknown" -and $never.reason -like "*never-enlisted-1*") ($n + ": an id no record holds is unknown, with the reason (" + $never.state + ")")
+        $Other = & $S.fixture.New
+        try {
+            $theirs = & $S.fixture.Enlist $Other (Member -Role "warg" -Label "B7")
+            $x = Get-Described $S $State $theirs
+            Check ($x.state -ceq "unknown") ($n + ": a session of another horde's records is unknown here (" + $x.state + ")")
+            $c = Get-Described $S $Other $theirs
+            Check ($c.state -ceq "known" -and $c.value.label.value -ceq "B7") ($n + ": CONTROL: asked of its own horde's records, that session is known")
+        } finally { & $S.fixture.Remove $Other }
+        $null = & $S.fixture.Enlist $State (Member -Session $bare -Role "warg" -Label "E4" -Parent $orc)
+        $b2 = Get-Described $S $State $bare
+        Check ($b2.state -ceq "known" -and $b2.value.label.state -ceq "known" -and $b2.value.label.value -ceq "E4" -and $b2.value.parent.value -ceq $orc) ($n + ": given a label and a parent since the last call, the next call says so")
+        $null = & $S.fixture.Enlist $State (Member -Session $warg -Role "warg" -Parent $orc)
+        $w2 = Get-Described $S $State $warg
+        Check ($w2.state -ceq "known" -and $w2.value.label.state -ceq "absent") ($n + ": a label taken away since is not in the next answer: nothing is kept between calls")
+        return $true
     }
 }
 foreach ($cap in @(Get-HordeConversationCapabilityNames)) { Check ($cases.Contains($cap)) ("the capability " + $cap + " has a conformance case") }
