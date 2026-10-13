@@ -231,6 +231,30 @@ try {
     Check ($p1.state -ceq "known" -and $w1.state -ceq "known" -and @($w1.value.items).Count -eq 1 -and $k1.state -ceq "known") ("and puts, watches over a signed WebSocket, and acks (" + $p1.reason + $w1.reason + $k1.reason + ")")
     $odd = Send-HordeRelayItem -Connection $mc -Mailbox "personal/phone" -Text "x"
     Check ($odd.state -ceq "unknown" -and $odd.reason.Contains("403")) ("but reaches no other horde's mailbox (" + $odd.reason + ")")
+
+    # A SENDER TRIMS ITS OWN STREAM, AND ONLY ITS OWN (worker/api.js). The phone's mailbox of the horde
+    # holds another machine's stream (put here by the phone, which may put under any key - a key is
+    # only a name to the relay - so the other machine need not be registered for this), and this
+    # machine's own. Who may delete what is decided by who signed the request, never by what it names.
+    $nonce = { param([int]$N) return (("0" * 20) + $N.ToString("0000")) }
+    $streamKey = { param([string]$Sender, [int]$Seq) return ($Sender + "/decisions/" + $Seq + "/" + (& $nonce $Seq)) }
+    $heldTexts = { return (@(((Send-To -Url ($mb + "/items?since=0&max=50") -Cookie $A1).text | ConvertFrom-Json).items | ForEach-Object { $_.text }) -join ",") }
+    foreach ($i in 1..2) { $null = Send-To -Url ($mb + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey $other.keyId $i) + '","text":"other-' + $i + '"}') -Cookie $A1 -Origin $O }
+    foreach ($i in 1..3) { $null = Send-HordeRelayItem -Connection $mc -Mailbox "work/phone" -Text ("mine-" + $i) -Key (& $streamKey $kid $i) }
+    Check ((& $heldTexts) -ceq "hello from account a,other-1,other-2,mine-1,mine-2,mine-3") ("CONTROL: the phone's mailbox holds another machine's stream and this machine's own (" + (& $heldTexts) + ")")
+    $theirs = Send-HordeRelayItem -Connection $mc -Mailbox "work/phone" -Text "other-3-forged" -Key (& $streamKey $other.keyId 3) -KeepFrom 3
+    Check ($theirs.state -ceq "unknown" -and $theirs.reason.Contains("403") -and (& $heldTexts) -ceq "hello from account a,other-1,other-2,mine-1,mine-2,mine-3") ("a machine that asks to trim ANOTHER machine's stream is refused, 403: nothing of that stream is deleted, and its put is not made (" + $theirs.reason + ")")
+    $byPhone = Send-To -Url ($mb + "/items?keepFrom=4") -Method "POST" -Body ('{"key":"' + (& $streamKey $kid 4) + '","text":"mine-4-by-the-phone"}') -Cookie $A1 -Origin $O
+    $byPhoneOwn = Send-To -Url ($mb + "/items?keepFrom=1") -Method "POST" -Body '{"key":"a-phone-key","text":"x"}' -Cookie $A1 -Origin $O
+    Check ($byPhone.code -eq 403 -and $byPhoneOwn.code -eq 403 -and (& $heldTexts) -ceq "hello from account a,other-1,other-2,mine-1,mine-2,mine-3") ("A PHONE MAY NEVER TRIM: a signed-in phone that names keepFrom is refused, 403, whatever key it names, and nothing is put or deleted (" + $byPhone.code + ", " + $byPhoneOwn.code + ")")
+    $mine = Send-HordeRelayItem -Connection $mc -Mailbox "work/phone" -Text "mine-4" -Key (& $streamKey $kid 4) -KeepFrom 3
+    Check ($mine.state -ceq "known" -and $mine.value.trimmed -eq 2 -and (& $heldTexts) -ceq "hello from account a,other-1,other-2,mine-3,mine-4") ("the machine trims ITS OWN stream by its signed put: the two before seq 3 go, and the other machine's stream and the phone's item stay (" + (& $heldTexts) + ")")
+    # THE TRIM IS UNDER THE MACHINE'S SIGNATURE: it is in the query, and the query is signed (the check
+    # below, "a signature for one cursor does not read from another"). No request with a refused
+    # signature is made here for it: this key's refusals are counted (worker/limits.js), and the
+    # checks below spend nearly all of a minute's.
+    $past = Send-To -Url ($mb + "/items?keepFrom=9") -Method "POST" -Body ('{"key":"' + (& $streamKey $kid 5) + '","text":"mine-5"}') -Authorization (New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin $O -Method "POST" -Target "/v1/mailboxes/work/phone/items?keepFrom=9" -Body ([System.Text.Encoding]::ASCII.GetBytes('{"key":"' + (& $streamKey $kid 5) + '","text":"mine-5"}')))
+    Check ($past.code -eq 400 -and (& $heldTexts) -ceq "hello from account a,other-1,other-2,mine-3,mine-4") ("and the machine's own signed trim from past the key's seq is refused, 400, with nothing put: a put never deletes itself (" + $past.code + ")")
     Check ((Send-To -Url ($O + "/v1/account") -Authorization (New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin $O -Method "GET" -Target "/v1/account")).code -eq 403) "and may not read the account"
     $bRead = (Send-To -Url ($mb + "/items?since=0&max=10") -Cookie $B1).text | ConvertFrom-Json
     Check (@($bRead.items | Where-Object { $_.text -ceq "from the machine" }).Count -eq 0) "what the machine put is not in the other account"

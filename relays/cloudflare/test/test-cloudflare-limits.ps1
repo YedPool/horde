@@ -280,6 +280,31 @@ try {
     Check ($c1.code -eq 200 -and $c2.code -eq 200 -and $c3.code -eq 507 -and (Get-Code $c3) -ceq "mailbox-full" -and $c4.code -eq 200) ("a mailbox of 100 characters takes 80, refuses 40 more, and takes 20 - exactly its most (" + (@($c1.code, $c2.code, $c3.code, $c4.code) -join ",") + ")")
 
     Write-Host ""
+    Write-Host "--- a sender's trim makes the room in a full mailbox; a put that is refused trims nothing ---" -ForegroundColor Cyan
+    # worker/mailbox.js, A SENDER TRIMS ITS OWN STREAM. A mailbox that filled before its senders trimmed
+    # could never be emptied if the put that carries the trim were refused for being one too many.
+    $streamKey = { param([int]$Seq) return (("c3" * 16) + "/decisions/" + $Seq + "/" + ("0" * 20) + $Seq.ToString("0000")) }
+    $trimBox = $O + "/v1/mailboxes/cap/trim"
+    $keysOf = { param([string]$Box) return ((@((Get-Json (Send-To -Url ($Box + "/items?since=0&max=20") -Authorization $bearer)).items) | ForEach-Object { $_.text }) -join ",") }
+    $filled = @(1..8 | ForEach-Object { (Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey $_) + '","text":"t' + $_ + '"}') -Authorization $bearer).code })
+    $ninth = Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 9) + '","text":"t9"}') -Authorization $bearer
+    Check ((@($filled | Sort-Object -Unique) -join ",") -ceq "200" -and $ninth.code -eq 507 -and (Get-Code $ninth) -ceq "mailbox-full") ("CONTROL: a mailbox of eight, full of one sender's stream, refuses that sender's ninth put (" + $ninth.code + ")")
+    $ninthTrims = Send-To -Url ($trimBox + "/items?keepFrom=8") -Method "POST" -Body ('{"key":"' + (& $streamKey 9) + '","text":"t9"}') -Authorization $bearer
+    Check ($ninthTrims.code -eq 200 -and (Get-Json $ninthTrims).seq -eq 9 -and $ninthTrims.text.Contains('"trimmed":7') -and (& $keysOf $trimBox) -ceq "t8,t9") ("the same put, saying to keep from seq 8 of its stream, is TAKEN: what its own trim frees counts before the cap is asked (" + $ninthTrims.text + "; held " + (& $keysOf $trimBox) + ")")
+    $refill = @(10..15 | ForEach-Object { (Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey $_) + '","text":"t' + $_ + '"}') -Authorization $bearer).code })
+    $over = Send-To -Url ($trimBox + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 16) + '","text":"t16"}') -Authorization $bearer
+    Check ((@($refill | Sort-Object -Unique) -join ",") -ceq "200" -and $over.code -eq 507) ("and the mailbox's count is exact after the trim: six more make eight, and the ninth is refused again (" + $over.code + ")")
+    $trimChars = $O + "/v1/mailboxes/cap/trimchars"
+    $null = Send-To -Url ($trimChars + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 1) + '","text":"' + ("a" * 40) + '"}') -Authorization $bearer
+    $null = Send-To -Url ($trimChars + "/items") -Method "POST" -Body ('{"key":"' + (& $streamKey 2) + '","text":"' + ("b" * 40) + '"}') -Authorization $bearer
+    $tooLong = Send-To -Url ($trimChars + "/items?keepFrom=2") -Method "POST" -Body ('{"key":"' + (& $streamKey 3) + '","text":"' + ("c" * 70) + '"}') -Authorization $bearer
+    Check ($tooLong.code -eq 507 -and (& $keysOf $trimChars) -ceq (("a" * 40) + "," + ("b" * 40))) ("A PUT THAT IS REFUSED TRIMS NOTHING: one that would still be past the mailbox's characters after its own trim is refused, and the item it would have trimmed is still there (" + $tooLong.code + ")")
+    $fits = Send-To -Url ($trimChars + "/items?keepFrom=2") -Method "POST" -Body ('{"key":"' + (& $streamKey 3) + '","text":"' + ("c" * 60) + '"}') -Authorization $bearer
+    Check ($fits.code -eq 200 -and $fits.text.Contains('"trimmed":1') -and (& $keysOf $trimChars) -ceq (("b" * 40) + "," + ("c" * 60))) ("and one that fits once its trim is counted - 40 kept and 60 new are exactly the mailbox's 100 - is taken, and trims (" + $fits.text + ")")
+    $again = Send-To -Url ($trimChars + "/items?keepFrom=3") -Method "POST" -Body ('{"key":"' + (& $streamKey 3) + '","text":"' + ("c" * 60) + '"}') -Authorization $bearer
+    Check ($again.code -eq 200 -and (Get-Json $again).duplicate -eq $true -and $again.text.Contains('"trimmed":1') -and (& $keysOf $trimChars) -ceq ("c" * 60)) ("A DUPLICATE STILL TRIMS: the same put made again, keeping from its own seq, is the idempotent yes and deletes the one before it (" + $again.text + ")")
+
+    Write-Host ""
     Write-Host "--- refused signatures, per key and address, and per address ---" -ForegroundColor Cyan
     $rs = New-Phone -Dev $R -Sub "100000000000000000501"
     $k = New-Machine -Dev $R -Cookie $rs.cookie -Label "victim-box"
