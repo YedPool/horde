@@ -31,6 +31,19 @@ that review:
 - The resume evidence is archival (4.4).
 - There is a shorter path to the first close (section 9).
 
+**Revised 2026-10-13: the founder's rulings** (relayed by C, who holds Horde coordination by the
+founder's word of the same day). They settle decisions (a) and (b) of section 11. They add two pieces:
+the close offer (section 12) and the closed-session pool (section 13). In his words:
+
+> "Cleaning up Orcs, and sessions with Remote Control open, is always brought to the founder - offer
+> him an option to close each, never close them automatically. A closed session's info goes into a
+> separate pool that shows closed Orcs by the last 7 days, last 30 days and last 3 months, with
+> session handles to restart them easily, built as a clean, self-contained, organized, consumable
+> module. Other idle sessions follow the design's leans (report-only first for a day, then closing)."
+
+Where this text and an older paragraph below disagree, this revision wins. The paragraphs it changes
+say so in place.
+
 Planning prose may name terminals and engines. Code may not (CONTRIBUTING 14). Every file path below
 respects that.
 
@@ -302,9 +315,10 @@ session is classified, and again just before each action (section 4.3).
 | P8 | **a pending wake or a live recurring cron** | S4 finds either of these since procStart:<br>- a `ScheduleWakeup` or one-shot `CronCreate` whose time, plus one tick, has not passed;<br>- a `CronCreate` with `recurring: true` and no matching `CronDelete`.<br>A recurring cron has no single due time. A daily one leaves the session idle for 23 h between fires (I-18), so the age rule cannot protect it, and closing the process silently cancels the loop | "a session with a due wake is kept"; "a session with a recurring cron and no CronDelete is kept"; "a CronDelete releases its cron"; "a cron from before this process started does not hold it" |
 | P9 | **not resumable** | the harness's `resume` capability is not `yes`, or the resume check of 4.1 fails | "a session that cannot be resumed is kept" |
 | P10 | **an engine or host flag not `yes`**, or a version not surveyed | 1.4, 1.6, and section 6's host flags | "an unverified flag keeps the session and names the flag"; "an unsurveyed version keeps the session and names the version" |
-| P11 | **a Remote Control link** | S8: the control file has a `bridgeSessionId`. Closing ends the founder's phone and web entry to the session. Resume does not restore the link: `--resume` and `--remote-control` are separate flags, whether they combine is unmeasured (engines E9), and each `/remote-control` issues a new URL (I-16). A draft on the phone is invisible to S6. Kept until the founder decides otherwise (section 11, decision b). If he allows it, the closure record stores the bridge id and the remote name | "a session with a bridgeSessionId is kept"; "a session without one is not held by this rule" (the control is D1) |
+| P11 | **a Remote Control link** | S8: the control file has a `bridgeSessionId`. Closing ends the founder's phone and web entry to the session. Resume does not restore the link: `--resume` and `--remote-control` are separate flags, whether they combine is unmeasured (engines E9), and each `/remote-control` issues a new URL (I-16). A draft on the phone is invisible to S6. **Never closed automatically** (founder, 2026-10-13, section 11 (b)). It is closed only on his answer to a close offer (section 12). The closure record then stores the bridge id and the remote name | "a session with a bridgeSessionId is kept"; "a session without one is not held by this rule" (the control is D1) |
 | P12 | **a live background task** | S4 finds a background Bash, Monitor or agent task opened since procStart and not finished. Measured: on 1,625 of 1,856 turn ends with such a task open, `pendingBackgroundAgentCount` was 0 or absent (I-18), so P2's pending count does not cover them. A non-terminal task-notification of an unrecognised kind (Workflow today) is `unknown`, which also means kept. A task that never reports completion keeps its session forever: safe, and `horde reaper status` lists such sessions | "an unfinished background Bash task holds the session"; "an unfinished Monitor holds the session"; "a task-notification of an unrecognised kind is unknown"; "a completed task releases the session" |
 | P13 | **queued input** | S4 finds a `queue-operation` enqueue since procStart with no dequeue or remove (I-19). It is held in memory and would be lost | "a queued message keeps the session" |
+| P14 | **an Orc** (founder, 2026-10-13) | the session is an orchestrator. That holds if any of these is true:<br>- its registry role is an orchestrator role;<br>- its label is one the registry gives orchestrators;<br>- it is the registry `parent` or `owner` of any other session, live or not.<br>Missing or conflicting role facts count as an Orc (P6's rule: unknown is kept). Never closed automatically, at any pressure level. It is closed only on the founder's answer to a close offer (section 12) | "an orchestrator is never closed automatically"; "a session that owns another session counts as an Orc"; "an unknown role counts as an Orc"; "an accepted offer lifts P14 for that process only" |
 
 ---
 
@@ -480,7 +494,7 @@ file.
 
 | lost on close | why | how the design handles it |
 |---|---|---|
-| the Remote Control link and its URL | `--resume` does not re-enable the bridge, and each `/remote-control` issues a new URL (I-16) | P11 keeps linked sessions until the founder decides; if he allows them, the record stores the bridge id and the remote name |
+| the Remote Control link and its URL | `--resume` does not re-enable the bridge, and each `/remote-control` issues a new URL (I-16) | P11 keeps linked sessions unless the founder accepts a close offer (section 12). Then the record, and the pool entry (section 13), store the bridge id and the remote name, so a restart can ask for a new link under the same name |
 | session crons, `ScheduleWakeup` and Monitors | they live inside the process | P8 and P12 keep any session that holds one |
 | queued input and an unsent box | in memory only | P13 and P3 |
 | the pane and wezfleet's registry mapping | the pane is the host's | recorded in the closure record; section 10 |
@@ -641,8 +655,18 @@ New keys in `core/config-keys.json`, resolved through the existing layers:
 | `reaper.maxClosesPerTick` | L0, L1, L4 | any | 2 in RE, 4 later |
 | `reaper.minIdleHours` | L0, L1, L2, L4 | L2 raise-only | 24 in RE |
 
-`reaper.adopt` (automatic adoption) and any switch for sessions with a Remote Control link are added
-only when the founder answers decisions (a) and (b).
+The founder answered decisions (a) and (b) on 2026-10-13. These keys are added with them:
+
+| key | layers | direction | default (L0) |
+|---|---|---|---|
+| `reaper.adopt` (`manual`, `auto`) | L0, L1, L4 | any | `manual` until RC's trial ends, then `auto`. An automatic adoption lets the reaper report and offer an Orc's workers. It never lifts P14 or P11 |
+| `reaper.offer.enabled` | L0, L1, L4 | any | `true` once RO merges |
+| `reaper.offer.minIdleMinutes` | L0, L1, L2, L4 | L2 raise-only | 120, an **estimate**. An Orc or linked session idle this long is offered |
+| `reaper.offer.snoozeHours` | L0, L1, L4 | any | 24, an **estimate**. After "keep", the same process is not offered again for this long |
+| `pool.retentionDays` | L0, L1 | raise-only | 92, the "last 3 months" window |
+
+**There is deliberately no key that closes an Orc or a linked session without an offer.** The
+founder's ruling is a rule, not a default. A key would let one settings file undo it.
 
 L3 (a run spec) and L5 (a spawn flag) may not set any `reaper.*` key. Memory is a per-machine fact,
 and one run must not change how patient the reaper is with everyone else's sessions (the admission
@@ -660,6 +684,10 @@ tier's rule, lifecycle 1.3). No environment variable changes any of them.
 | `horde reaper adopt <session>` | writes an adopt claim |
 | `horde reaper opt-in <session> [--until]` | writes an opt-in claim for a founder session |
 | `horde reaper schedule install\|remove\|status` | manages the scheduled tick |
+| `horde reaper offers [--json]` | the open close offers and their state (section 12) |
+| `horde pool list [--window 7d\|30d\|3m] [--json]` | the closed-session pool (section 13) |
+| `horde pool show <entry>` | one pool entry, with its restart handle |
+| `horde pool restart <entry>` | resume a closed session from its pool entry (13.4) |
 
 ---
 
@@ -791,7 +819,21 @@ CONTRIBUTING 9.
 | **RB** | **the classifier, claims and pressure** (formerly R5, R6 and R7). `core/Observe.ps1` (lifecycle step 10's first states) with P1 to P13. Store H6 with its schema and ownership row; `horde reaper adopt` (manual only) and `opt-in`. `core/Pressure.ps1` from the counters and the resolved admission tier, with the order and the `reaper.*` keys | RA; lifecycle step 17 (the tier keys); engine-settings Half A | one assertion per row of section 2; "one unknown signal makes the session unknown"; "waiting is waiting-on-human, never idle"; "no claim, never eligible"; "a claim is void when procStart differs at the microsecond"; "an opt-in does not survive a new process"; "adoption refuses conflicting owners"; "standard at 1,227 MB available is constrained"; "a project file may raise a threshold and never lower one"; "a run spec may not set a reaper key"; "the order is idle hours then size" | remove each protection, one mutant per row; turn unknown into idle; accept a claim on pid alone; adopt an owner of founder; swap the sort keys; allow L2 lowering |
 | **RC** | **report mode end to end** (formerly R8). `horde reaper run --report`, `status` and `why`; the decision events; `horde reaper schedule` with its consent refusal; the lock; the sleep and jump handling of F6. **The trial starts when this merges** | RB; metrics M3 (the writer); lifecycle step 4 (`effects`) | "report mode reaches no acting verb" (the `effects` tripwire, with a planted-verb control); "install is refused while the mode is off"; "two ticks, one lock"; "every classified session has a decision event"; "a failed decision write acts on nothing"; "a tick after sleep does not act"; e2e on fixture stores | skip the lock; write no event for keeps; let report reach a terminate; use a tick count that includes sleep |
 | **RD** | **the input box** (formerly R4). `agents/claude-code/InputBox.ps1`, ported from wezfleet with ledger `planning/ledger/agent-claude-code-inputbox.md` (`lib/Delivery.ps1` 588-907, BUG-2026-09-15-unsent-input-box). The typed-text control already exists: wezfleet took it on 2026-09-15 with a scripted typist. This PR re-runs it against the port in the isolated instance and flips `input.box` to `yes`. Also measures the host's `text.read` under the scheduled task's logon | RA; Phase 3 step 3 | "typed text is typed"; "a grey suggestion is empty"; "the cursor at the prompt start overrules screen text"; "an unreadable screen is unreadable"; "two disagreeing reads are typed"; e2e "a scripted typist's text is seen as typed" | treat grey as typed; drop the cursor rule; treat unreadable as empty |
-| **RE** | **narrow act** (the first close). `core/Close.ps1`, rung 2 only: the closure record, the resume and flush checks, the handle terminate with the creation time read from the handle, the post-close verification, reconciliation of `closing` records; `horde reaper mode act` with its evidence gate (5.4), the misread and regret detectors, and the breaker. **Scope**: adopted sessions only; not founder; no Remote Control link; no recurring cron; every flag `yes`; idle at least 24 h; at most 2 per tick. Measures the S4U `OpenProcess(PROCESS_TERMINATE)` question (5.1) on a stand-in. Ledger `planning/ledger/core-closer.md` (shared with lifecycle step 28) | RC, RD, and the trial's evidence | "no record, no close"; "a growing transcript abandons the close"; "a reused pid is never terminated" (guarded killer); "a shorter transcript after close is close-lossy and switches to report"; "a closing record is reconciled"; "act is refused before the evidence gate"; "a misread in act switches to report"; "a session idle under 24 h is not closed in RE"; "no more than 2 closes per tick"; "RE sends no key and closes no pane" | write the record after the terminate; skip the flush check; terminate by pid without the handle's creation time; ignore the misread count; drop the 24-h floor; drop the cap |
+| **RE** | **narrow act** (the first close). `core/Close.ps1`, rung 2 only: the closure record, the resume and flush checks, the handle terminate with the creation time read from the handle, the post-close verification, reconciliation of `closing` records; `horde reaper mode act` with its evidence gate (5.4), the misread and regret detectors, and the breaker. **Scope**: adopted sessions only; not founder; not an Orc (P14); no Remote Control link; no recurring cron; every flag `yes`; idle at least 24 h; at most 2 per tick. Measures the S4U `OpenProcess(PROCESS_TERMINATE)` question (5.1) on a stand-in. Ledger `planning/ledger/core-closer.md` (shared with lifecycle step 28) | RC, RD, and the trial's evidence | "no record, no close"; "a growing transcript abandons the close"; "a reused pid is never terminated" (guarded killer); "a shorter transcript after close is close-lossy and switches to report"; "a closing record is reconciled"; "act is refused before the evidence gate"; "a misread in act switches to report"; "a session idle under 24 h is not closed in RE"; "no more than 2 closes per tick"; "RE sends no key and closes no pane" | write the record after the terminate; skip the flush check; terminate by pid without the handle's creation time; ignore the misread count; drop the 24-h floor; drop the cap |
+
+**Added by the founder's rulings of 2026-10-13** (sections 12 and 13). The pool is its own module,
+so PA can start as soon as this revision merges. It needs nothing from RA to RE:
+
+| # | pull request | depends on | tests first (assertion text) | mutation spec (each must turn red) |
+|---|---|---|---|---|
+| **PA** | **the pool module**: `pool/` with its port (13.2), the entry schema in `schema/`, the store and its ownership row (H7), `horde pool list` and `show`, the retention sweep. Entries are written by an injected source, so a fixture closure record drives every test | this design | "an entry is written once and never rewritten"; "a session closed twice gets two entries"; "the 7-day window holds an entry closed 6 days ago and not one closed 8 days ago"; "an entry older than the retention is swept, its closure record is not"; "an entry holds no transcript text"; "list reads no transcript" | rewrite an entry in place; count windows from the start time; sweep the closure record; copy the last prompt into the entry |
+| **PB** | **restart from the pool** (13.4): `horde pool restart`, the restart record, the live-session refusal and the resumable re-check. The resume itself goes through the agent adapter and the host adapter, tested only in the isolated host instance | PA; the host port's open-pane verb (Phase 3); lifecycle 3.1's binding, or the closure record's resume argv until then | "a restart re-checks the transcript before starting anything"; "a session already running is not started twice"; "a restart on another machine's entry is refused here and routed to that machine"; "a restart writes its record before it starts the process" | skip the re-check; skip the live check; write the record after the start |
+| **RO** | **the close offer** (section 12): the offer builder, the decisions store as the founder's question surface, the accepted-offer claim, and the close through RE's closer | RC (the would-close facts); RE (the closer) | "an Orc is offered and never closed without an accepted offer"; "a linked session is offered and never closed without an accepted offer"; "an answer not signed by the founder's device does not close"; "an accepted offer lifts P1, P11 and P14 for that pid and procStart only"; "every other protection is re-checked at the moment of closing"; "a keep answer silences the same process for the snooze"; "a closed offer leaves a pool entry" | accept an unsigned answer; carry the acceptance to a new process; skip the re-check after acceptance; offer while mid-turn |
+| **PC** | **the pool on the phone** (13.5): the `pool` relay channel, the PWA's Closed tab, and the restart request with its signature check on the machine | PA, PB; the relay's signed-answer path | "the snapshot holds the three windows and nothing older"; "a restart request with a bad signature does nothing"; "a restart request for another machine's entry is ignored here"; "a restart request is used once" | accept an unsigned request; let the relay pick the machine; accept a replayed nonce |
+
+**Order with them:** PA can start at once. RA, RB and RC as before. RO after RE. PB after PA. PC
+last. **Until RO merges, offers are made by hand.** RC's report names each Orc and linked session that
+would be offered, and the coordinator adds it to the decisions list with `decisions add`.
 
 **Later, off the critical path:**
 
@@ -885,7 +927,22 @@ by hand, and why.
   zero misreads), not as days;
 - a session waiting on a human is never closed, only reported.
 
-**Open, for the founder** (each self-contained):
+**Decided by the founder (2026-10-13)**, relayed by C:
+
+- **(a) Orcs are never closed automatically.** The reaper may adopt them automatically, so that it can
+  see them, report them and offer them (`reaper.adopt auto`). An Orc is closed only when the founder
+  accepts a close offer for it (section 12, P14). The twice-the-threshold rule of 5.2 now decides only
+  when an Orc is first **offered**, never when it is closed.
+- **(b) Sessions with a Remote Control link are never closed automatically.** They are offered the
+  same way (P11). This is the recommendation below, made firm.
+- **Other idle sessions** (workers, meaning sessions owned by an Orc that are not Orcs themselves)
+  follow this design's leans: report-only first (RC's trial, at least a day of ticks, 5.4), then
+  closing (RE).
+- **Every closed session goes into the pool** (section 13), whoever closed it.
+
+The original wording of (a) and (b) is kept below for the record.
+
+**Formerly open, for the founder** (each self-contained):
 
 (a) **Adopt M's orchestrators.** Horde started none of today's sessions. Should the reaper adopt
 automatically every session whose wezfleet registry owner is an orchestrator label (not "founder",
@@ -904,12 +961,283 @@ in, as with his own sessions. Today this decides about 2.3 GB: I, E and B, all l
 
 Note for (a): D1 is a worker whose owner, D, is live and busy. No rule holds D1 for that reason,
 because P2 protects a parent from its children, not a child from its parent. If the founder wants an
-idle child of a busy owner to be asked about first, as lifecycle 1.2 words it, that becomes P14.
+idle child of a busy owner to be asked about first, as lifecycle 1.2 words it, that becomes P15 (P14 is now the Orc rule).
 RC's report shows the case.
 
 ---
 
+# 12. The close offer (founder, 2026-10-13)
+
+An Orc (P14), a session with a Remote Control link (P11) and the founder's own session (P1) are never
+closed by a rule. When one is idle, the reaper **offers** it to the founder and acts only on his
+answer. The offer is the per-session opt-in of P1, made easy to give from the phone.
+
+## 12.1 Who is offered
+
+A session is offered only when **all** of these hold:
+
+- every rule of section 1 calls it idle;
+- the only protections holding it are P1, P11 or P14;
+- its idle age has reached the pressure level's threshold (5.2) times `reaper.orchestratorFactor`;
+- that age is never below `reaper.offer.minIdleMinutes`.
+
+If anything else holds it, it is **not offered**:
+
+- P2: it holds running agents;
+- P3 or P13: input is typed or queued;
+- P7: it is waiting on a human;
+- P8 or P12: it has a wake, a cron or a task.
+
+Offering such a session would ask him to approve destroying work, and he could not tell from the
+phone. Report mode (RC) lists these sessions, without offering them.
+
+## 12.2 How it reaches him: the decisions list
+
+The decisions list is already the founder's single place for questions. It reaches the phone through
+the relay's decisions channel and the decisions window, so the reaper adds no new surface for asking.
+
+- **One question per machine at a time**, kind `parts`, one part per offered session. Each part is
+  answered with one of:
+  - **Close**;
+  - **Keep for a day** (`reaper.offer.snoozeHours`);
+  - **Keep while it lives** (this process is never offered again).
+- **Each part says, with no transcript text:**
+  - the label and the name the session carries;
+  - its role (Orc, linked, or his own);
+  - the ledger task id, when the registry has one;
+  - the machine;
+  - how long it has been idle, and the memory it holds (private MB);
+  - what closing loses. For a linked session: "the phone link ends; a restart asks for a new link".
+  - that it lands in the pool and can be restarted from there.
+- **Importance:**
+  - `-Importance normal -Blocks none` normally: nothing waits on it;
+  - `-Importance high` when the pressure level is `constrained` or `critical` (5.2).
+- **A session that stops being idle** before he answers gets its part withdrawn with `decisions
+  update`. Once a question is answered, only `decisions reply -Note` is allowed (the decisions store's
+  rule). New candidates wait for the next question, so an open question is never reshaped under him.
+  The exception is `critical` pressure, when a second question may open.
+
+## 12.3 An accepted part is a command, so its source is checked
+
+Answers are effectively commands (the relay's founding rule). A **Close** acts only when the answer
+record says it came from the founder's own device, by one of:
+
+- the relay's signed answer (device key, single-use nonce, the 60 s skew window);
+- the decisions window on his machine.
+
+An answer an Orc writes down from chat with `decisions answer` is recorded but **does not close**.
+The reaper replies under the question with a note asking him to tap Close himself. This is the same
+line verified answers drew for notifications.
+
+An accepted Close becomes an **offer claim** in H6 (section 3), with source `offer`. The claim names:
+
+- the decision number and part;
+- the session's pid and procStart;
+- an expiry: 30 min after the answer, an **estimate**.
+
+Its effects:
+
+- **It lifts P1, P11 and P14 for that one process, and nothing else.**
+- The closer (RE, rung 2) re-checks every other protection at the moment of acting, as 4.2 already
+  requires. Any change abandons the close.
+
+When the close finishes, the reaper replies under the question:
+
+- "closed, in the pool as `<entry>`"; or
+- "not closed: `<reason>`", for example "it started a new turn at 14:02".
+
+A Keep answer writes nothing but a decision event and the snooze.
+
+## 12.4 What is recorded
+
+Each offer writes a `reaper.offer` event: the session, the question number and part, and the
+protections that caused the offer. Each answer acted on writes `reaper.offer-answer` with the answer
+record's id and its source. An answer whose source does not qualify is recorded with that reason. The
+`reaper.close` of 5.5 names the offer claim it relied on.
+
+---
+
+# 13. The closed-session pool (founder, 2026-10-13)
+
+## 13.1 What it is, and why it is its own module
+
+The pool remembers every session that has been closed and could come back. It shows them by **the
+last 7 days, the last 30 days and the last 3 months**, each with the handle to restart it. It answers
+one question: "what did I close, and how do I get it back?"
+
+It is not the closure record (H3, 4.1):
+
+- **the closure record** is the closer's operational tombstone. It is written before acting, it may
+  end `close-failed` or `close-abandoned`, and it holds full paths and every signal;
+- **a pool entry** exists only for a session that is really closed. It holds only what the founder
+  and a restart need.
+
+**Many writers, one owner.** Several paths can close a session:
+
+- the reaper on its own (RE);
+- the reaper on his answer (RO);
+- the founder by hand;
+- a crash.
+
+All of them land in the one module. The module is self-contained:
+
+- it depends on core (paths, configuration, schema validation, the metrics writer);
+- it depends on the agent and host ports, and never on an adapter;
+- it names no terminal and no harness.
+
+## 13.2 The module
+
+```
+pool/
+  Port.ps1        the contract: Add-HordePoolEntry, Get-HordePoolEntries, Get-HordePoolEntry,
+                  Request-HordePoolRestart. Nothing else is public
+  Store.ps1       write-once entries, restart records, the retention sweep
+  Restart.ps1     13.4, through the agent port (resume argv, Test-AgentResumable) and the host port
+  Snapshot.ps1    the phone's view (13.5): windows, newest first, content-free
+  settings.json   defaults for the pool.* keys
+  test/           suites and mutation specs
+cli/commands/pool.ps1   horde pool list | show | restart
+channels/pool/          the relay channel (PC)
+```
+
+Consumers read the pool **only through `Port.ps1`**: the reaper, the CLI, the relay channel, and
+wezfleet's "reaped" marker (section 10, item 12). Another close path joins by calling
+`Add-HordePoolEntry`. It never writes the store.
+
+## 13.3 The entry
+
+**Where it lives.**
+
+- Entries: `<HordeHome>\store\pool\entries\<yyyy-MM>\<closedAtUtc>-<harness>-<sessionId>.json`,
+  written with `CreateNew` and never rewritten.
+- Restart records: `<HordeHome>\store\pool\restarts\<entryId>-<utc>.json`, also write-once.
+
+The pool is a new store, **H7**. It gets a row in `core/ownership.json` with the pool module as its
+only writer, and a schema in `schema/`.
+
+**What an entry holds** (`schemaVersion` 1):
+
+| field | what |
+|---|---|
+| `entryId` | 32 hex characters, random |
+| `machine` | the Horde machine id and its display name. A horde spans machines, and each machine's pool holds its own sessions |
+| `harness`, `sessionId` | which conversation |
+| `label`, `name`, `role`, `owner`, `parent` | as the registry had them at close: `role` is `orc`, `worker`, `founder` or `unknown` |
+| `taskIds` | fleet ledger task ids from the registry, when it has them |
+| `cwd` | the working directory. The full path stays on the machine, and the phone gets its last segment |
+| `startedAt`, `lastActiveAt`, `closedAt` | procStart, the newest transcript event's time, and the verified close |
+| `closedBy` | one of:<br>- `reaper` (RE);<br>- `offer`, with the decision number and part;<br>- `founder-manual`: he closed it himself;<br>- `ended`: the process is gone and has no closure record, such as a crash or a closed pane |
+| `closureRecord` | the H3 record's path, when there is one |
+| `resume` | the agent adapter's resume argv, plus the transcript's path, file id, length and tail hash, all as recorded at close |
+| `remote` | for a linked session, the remote name. The bridge id is history only, because it cannot be reused (I-16) |
+| `memoryMB` | private MB at close |
+
+**No transcript text, no prompt and no file content** goes in an entry, the same rule as 5.5's
+events. The pool is shown on a phone through a hosted relay.
+
+**How entries are made.**
+
+- The closer calls `Add-HordePoolEntry` after 4.3 verifies the close.
+- Each reaper tick then **reconciles**:
+  - a `closed` closure record without an entry gets one;
+  - a session the registry still lists, whose pid plus procStart is gone and which has no closure
+    record, gets an entry with `closedBy = ended`. It gets `founder-manual` when the wezfleet registry
+    recorded his close.
+
+So **the pool can always be rebuilt** from H3 plus what the tick observes. A failed pool write never
+loses a session: it is retried on the next tick.
+
+**Retention.** The sweep removes entries older than `pool.retentionDays` (92). It never touches
+closure records, which stay as lifecycle's long-term history.
+
+## 13.4 Restarting
+
+`horde pool restart <entry>` (and the phone's Restart button, 13.5) runs these steps in order. Any
+refusal names its reason.
+
+1. **The entry is this machine's.** Another machine's entry is refused here. The phone addresses
+   restarts by machine.
+2. **The session is not already running.** The agent port finds no live process for that session id.
+   If one exists, the restart refuses with "already running as `<label>`", so the conversation is
+   never started twice.
+3. **The conversation is still there and unchanged.** `Test-AgentResumable`, plus the file id, a
+   length at least the recorded one, and the recorded tail hash.
+   - A transcript that grew since the close was resumed somewhere else, so the restart refuses and
+     says where to look.
+   - A missing transcript refuses.
+4. **One restart at a time.** A lock file, `restarts\<entryId>.lock`, created with `CreateNew`. A
+   second request while one runs is refused.
+5. **Record before acting.** The restart record is written with state `starting`.
+6. **Start it.** The host port opens a pane, then:
+   - **where:** in the window of its parent or owner when that one is live (subsessions open in the
+     parent's window), else in the fleet's window;
+   - **what:** the recorded resume argv, from the recorded `cwd`.
+7. **The link.** If the entry has a `remote` name, the restart asks for a new link under that name,
+   once engines E9 measures that `--resume` combines with it. Until then the session restarts
+   without a link, and the outcome says "re-link it from the session".
+8. **Verify.** A live process with that session id appears within 60 s (an **estimate**). The
+   record becomes `restarted` with the new pid and procStart, or `restart-failed` with the reason. The
+   lock is released.
+9. **Tell wezfleet.** It re-registers the label (section 10, item 12), so mail reaches the session
+   again.
+
+**The entry is not deleted** by a restart. The list shows "running again since `<time>`" from the
+restart record, and a later close makes a new entry.
+
+## 13.5 On the phone
+
+**A new relay channel, `pool`,** beside decisions, chat and progress, under `channels/pool/` (PC).
+
+- **Snapshot.** The runner publishes one whole snapshot whenever the pool changes, and when the
+  runner starts. Each machine publishes its own; the phone merges them. A snapshot holds up to 200
+  entries, newest first. Anything older is a count.
+- **Mailbox.** The channel keeps its last 20 envelopes (an **estimate**), using the trim of PR 232.
+- **The Closed tab** in the PWA has three filters, matching his words:
+  - **7 days**;
+  - **30 days**;
+  - **3 months**.
+
+  Each is cumulative: everything closed within that window.
+- **Each row shows:**
+  - the label and name;
+  - the role;
+  - the machine;
+  - when it was closed, and by whom (the reaper, his answer, by hand, or by itself);
+  - how long it ran;
+  - a link badge if it had one;
+  - a **Restart** button.
+
+  A restarted row shows "running again since".
+- **A restart request** is signed like an answer: the device key, a single-use nonce, the 60 s skew
+  window. The machine checks, in order:
+  - the signature;
+  - that the entry is its own;
+  - that the nonce is unused.
+
+  It then runs 13.4 and posts the outcome to the progress channel. The relay never chooses the
+  machine and never acts. It only carries the request.
+- **The decisions page** links to the Closed tab from every close offer's reply.
+
+## 13.6 Failure matrix
+
+| # | failure | what happens |
+|---|---|---|
+| PF1 | the pool write fails after a verified close | the session is closed and its H3 record says so. The next tick's reconciliation writes the entry |
+| PF2 | the phone's snapshot is stale and he restarts a session already running | step 2 refuses, and the outcome says where it runs |
+| PF3 | two restart requests at once (phone and CLI) | the lock of step 4 lets one through |
+| PF4 | a restart request reaches the wrong machine | step 1 ignores it. Only the machine named in the entry acts |
+| PF5 | the transcript changed or moved since the close | step 3 refuses. Nothing is started over a conversation that went on elsewhere |
+| PF6 | the pane opens but the process never appears | `restart-failed` after 60 s. The pane is reported, never killed by the pool |
+| PF7 | a forged or replayed restart request | signature and nonce checks. Nothing runs |
+
+---
+
 # Unproven, and written down
+
+- Whether the founder's own manual close can be told apart from a crash. It can only if the wezfleet
+  registry records his close. Until then, both are `ended` (13.3).
+- Whether the host port can open a pane from the scheduled tick's logon to run a phone restart (PB
+  and PC; the same S4U question as 5.1). A restart from the CLI in his own logon does not need it.
 
 - Why a transcript's modification time moves while no event is appended (I-04). The design does not
   depend on the answer: it never reads mtime as activity.
