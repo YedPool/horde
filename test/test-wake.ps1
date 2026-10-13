@@ -469,7 +469,7 @@ Write-Host ""
 Write-Host "--- a usage limit: a session that cannot answer is not knocked for, and no attempt is spent on it ---" -ForegroundColor Cyan
 
 # 1. THE LIMIT ENDS AT A KNOWN TIME STILL AHEAD: no knock, no attempt, until then.
-Start-Case; Seat 1 @{ Limited = $true; LimitedUntil = (At 600) }
+Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At 600) }
 $r = Pass 0
 Check ((Test-Held $r "usage limit until 2026-10-12T08:10:00Z") -and $script:ledger.Count -eq 0 -and "$($r.limited[(Sid 1)])" -ceq "usage limit until 2026-10-12T08:10:00Z" -and $r.mail[(Sid 1)] -eq (At -60)) "a session limited until a time still ahead is not nudged: it waits, saying until when, and nothing is held against it"
 $rung = 0; foreach ($s in 1..199) { $null = Pass ($s * 3); $rung += (Rang) }
@@ -477,12 +477,12 @@ Check ($rung -eq 0 -and $script:ledger.Count -eq 0) "for the ten minutes of the 
 $r = Pass 600
 Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $r.limited.Count -eq 0) "at the time the limit ends it is nudged, as its first attempt"
 # 2. THE LIMIT IS OVER: the waker still says limited, with a time that has passed. Normal rules.
-Start-Case; Seat 1 @{ Limited = $true; LimitedUntil = (At -10) }
+Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At -10) }
 $r = Pass 0
 Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $null -eq (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt") -and $r.limited.Count -eq 0) "a limit whose time has passed is over, whatever the waker still says: the session is nudged under the normal rules, and the nudge counts"
-Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = $true; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = $true; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = $true; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = $false; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, open with no time, and none when its time has come, when the waker says not limited, or says nothing"
+Check ((Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 0) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = (At 1) }) -Now (At 0)).kind -ceq "until" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "yes"; limitedUntil = $null }) -Now (At 0)).kind -ceq "open" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ limited = "no"; limitedUntil = (At 99) }) -Now (At 0)).kind -ceq "none" -and (Get-HordeWakeLimit -State ([pscustomobject]@{ id = "x" }) -Now (At 0)).kind -ceq "none") "a limit is until a time ahead, open with no time, and none when its time has come, or when the waker says not limited"
 # 3. NO KNOWN END, RELEASED BY THE HOUR: one knock an hour, never counted.
-Start-Case; Seat 1 @{ Limited = $true }
+Start-Case; Seat 1 @{ Limited = "yes" }
 $r = Pass 0
 Check ((Test-Held $r "usage limit, end unknown") -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt") -eq (At 0) -and "$($r.limited[(Sid 1)])" -ceq "usage limit, end unknown") "a session limited with no known end is not nudged, and the pass that first sees it so notes when"
 $rung = 0; foreach ($s in 1..11) { $null = Pass ($s * 300); $rung = (Rang) }
@@ -494,7 +494,7 @@ Check ((Test-Held2 $r "usage limit, end unknown") -and (Rang) -eq 1) "and then i
 foreach ($h in 2..9) { $null = Pass ($h * 3600) }
 Check ((Rang) -eq 9 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -ne $true) "nine hours are nine knocks, more than a mail is allowed, and still none is counted and nothing is given up: the hourly knock is what keeps a lone limited session from being stuck for ever"
 # 4. NO KNOWN END, RELEASED WHEN A SESSION OF THE FLEET TAKES MAIL.
-Start-Case; Seat 1 @{ Limited = $true }; Seat 2 @{ Limited = $true }; Seat 3 @{ UnreadCount = 0; OldestUnreadAt = $null }
+Start-Case; Seat 1 @{ Limited = "yes" }; Seat 2 @{ Limited = "yes" }; Seat 3 @{ UnreadCount = 0; OldestUnreadAt = $null }
 $null = Pass 0
 Check ((Rang) -eq 0 -and $script:ledger.Count -eq 2) "CONTROL: two sessions limited with no known end wait, each noted"
 $script:ledger = Set-HordeWakeLedgerProbesDue -Ledger $script:ledger
@@ -511,14 +511,68 @@ Start-Case; Seat 1
 $one = Get-HordeWakeSettings -Overrides @{ maxNudgesPerMail = 1 }
 $null = Pass 0 -Using $one
 Check ((Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) "CONTROL: with a cap of one, the session is given up on"
-Seat 1 @{ Limited = $true }
+Seat 1 @{ Limited = "yes" }
 $null = Pass 3 -Using $one
 $r = Pass 3700 -Using $one
 Check ((Rang) -eq 2 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 1) "found limited afterwards, it is still knocked for at its hour: the limit explains the silence the cap was spent on"
 # ... and when that knock is answered "nothing", what was said of the session is not forgotten.
-Seat 1 @{ Limited = $true; Outcome = "nothing"; OutcomeReason = "no unread mail" }
+Seat 1 @{ Limited = "yes"; Outcome = "nothing"; OutcomeReason = "no unread mail" }
 $r = Pass 7400 -Using $one
 Check ((Rang) -eq 2 -and (Kinds $r) -cnotlike "*gave-up*" -and $script:ledger.ContainsKey((Sid 1)) -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true) ("a probe its waker answers with nothing leaves the session given up on, and gave-up is not said a second time (" + (Kinds $r) + ")")
+# 5. LIMITED UNKNOWN: the waker can tell, and for this session could not. UNKNOWN IS NOT NO.
+function PassM {
+    # One pass at t0 + -Seconds, told when a session was last seen taking mail (-MovedAt, or $null).
+    param([double]$Seconds, $MovedAt = $null)
+    Set-HordeMemoryWakerClock (At $Seconds)
+    $r = Invoke-HordeWakePass -Waker $memory -Now (At $Seconds) -Settings $settings -Ledger $script:ledger -MovedAt $MovedAt
+    $script:ledger = $r.ledger
+    return $r
+}
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 0
+Check ((Test-Held $r "usage limit unknown") -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 0 -and "$($r.limited[(Sid 1)])".StartsWith("usage limit unknown")) "a session whose limit its waker could not read, with no evidence that sessions are taking turns, waits: unknown is not 'not limited', and nothing is counted"
+$rung = 0; foreach ($s in 1..200) { $null = PassM ($s * 3); $rung = (Rang) }
+Check ($rung -eq 0 -and $script:ledger[(Sid 1)].attempts -eq 0) "ten minutes on it has not been nudged, and nothing is held against it"
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ Role = "warchief" }
+$r = PassM 0 -MovedAt (At -30)
+Check ((Decided $r 2).action -ceq "nudge" -and (Decided $r 1).reason -ceq "rate limit" -and $r.limited.Count -eq 0) "with a session seen taking mail half a minute ago, unknown is read as not limited: it is ready like any other, and waits only for its turn"
+$r = PassM 3 -MovedAt (At -30)
+Check ((Decided $r 1).action -ceq "nudge" -and (Rang 1) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 1 -and $null -eq (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "probeAt")) "and is nudged in its turn, under the normal rules: the nudge counts"
+# THE EDGE of movingEvidenceSeconds (600): evidence exactly that old still counts; a second older does not.
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 600 -MovedAt (At 0)
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1) "mail taken exactly 600 s ago is still evidence: the window is the last 600 s, both ends in"
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 601 -MovedAt (At 0)
+Check ((Test-Held $r "usage limit unknown") -and (Rang) -eq 0) "mail taken 601 s ago is not: the session waits"
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$r = PassM 0 -MovedAt (At 5)
+Check ((Test-Held $r "usage limit unknown")) "and a time that has not come yet is no evidence of anything"
+Check ($settings.movingEvidenceSeconds -eq 600) "the window is a setting, 600 s"
+# IT IS ONLY ASKED OF A SESSION THAT CAN BE REACHED: the fleet says unknown for every row it cannot reach.
+Start-Case; Seat 1 @{ Limited = "unknown"; Reachable = "no" }
+$r = PassM 0 -MovedAt (At -1)
+Check ((Decided $r).action -ceq "wait" -and (Decided $r).reason -ceq "reachable is no" -and (Rang) -eq 0) "a session that cannot be reached, with its limit unknown, is held as unreachable whatever the evidence says"
+$r = PassM 3
+Check ((Decided $r).reason -ceq "reachable is no" -and $r.limited.Count -eq 0 -and $script:ledger.Count -eq 0) "and with no evidence either: nothing is said of its limit, and nothing is noted against it"
+Start-Case; Seat 1 @{ Limited = "yes"; LimitedUntil = (At 600); Reachable = "unknown" }
+Check ((Decided (PassM 0)).reason -ceq "reachable is unknown") "reachable is decided before the limit is asked, for a limit that is known too"
+# ...and it is released like a limit with no known end: by the hour, uncounted.
+Start-Case; Seat 1 @{ Limited = "unknown" }
+$null = PassM 0
+$r = PassM 3600
+Check ((Decided $r).action -ceq "nudge" -and (Rang) -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 0) "with no evidence for an hour, it is knocked for once, uncounted: a lone session is not stuck for ever behind a transcript nobody can read"
+# WHAT IS EVIDENCE: a session TAKING MAIL, and never a nudge answered woken.
+$mailA = @{ (Sid 1) = (At -60); (Sid 2) = (At -60) }
+$e1 = Update-HordeWakeSilence -Seen $null -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail $mailA -Now (At 0) -Settings $settings
+Check ($null -eq $e1.seen.movedAt -and -not $e1.moved) "a nudge answered woken is NOT evidence that sessions can take turns: every knock of the incident was answered woken"
+$e2 = Update-HordeWakeSilence -Seen $e1.seen -Entries @() -Mail @{ (Sid 1) = (At -60); (Sid 2) = $null } -Now (At 30) -Settings $settings
+Check ($e2.moved -and $e2.seen.movedAt -eq (At 30)) "a session whose mail was taken is: when it was seen is kept"
+$e3 = Update-HordeWakeSilence -Seen $e2.seen -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Mail @{ (Sid 1) = (At -60) } -Now (At 60) -Settings $settings
+Check ($e3.seen.movedAt -eq (At 30)) "and a later woken does not move it: it is the taking that is evidence, and it ages from when it was seen"
+$e4 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Mail @{ (Sid 1) = (At 50) } -Now (At 90) -Settings $settings
+Check ($e4.seen.movedAt -eq (At 90)) "the session being judged taking its own mail - its oldest unread becoming another - is evidence too"
+
 # THE JOURNAL: once per session per limit.
 $said = Update-HordeWakeLimited -Seen @{} -Limited @{ (Sid 1) = "usage limit until 2026-10-12T08:10:00Z" } -Known @((Sid 1)) -Now (At 0)
 Check (@($said.entries).Count -eq 1 -and $said.entries[0].kind -ceq "usage-limit" -and $said.entries[0].id -ceq (Sid 1) -and $said.entries[0].outcome -ceq "limited" -and "$($said.entries[0].reason)".StartsWith("usage limit until 2026-10-12T08:10:00Z: it is not nudged before then")) "a session that becomes limited is journaled, with until when"

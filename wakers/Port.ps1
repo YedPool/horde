@@ -41,6 +41,9 @@
 #   reach.unseen        it can nudge a session that has not taken a turn since a restore
 #   nudge.guarded       the nudge itself looks again, and rings only a session that still has an empty
 #                       input box and is not mid-turn (below)
+#   state.limit         it can tell whether a session is under a usage limit, and so cannot answer a
+#                       knock. Not one of the five the production path requires: a waker for a harness
+#                       that has no such thing declares no, and its sessions are read as not limited
 # The production path (Resolve-HordeProductionWaker) requires all five. The in-process test waker
 # declines reach.unseen, so no production path can pick it.
 #
@@ -97,7 +100,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
-$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
+$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded", "state.limit")
 # What the production path requires: every one. A waker without all five is never picked there.
 $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
 # Horde's roles as core/Roles.ps1 lists them (core\roles.json), then unknown for a session whose role
@@ -447,21 +450,32 @@ function Get-HordeWakeState {
         if (-not ($bad.value -is [int] -or $bad.value -is [long]) -or $bad.value -lt 0 -or $bad.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an unreadableCount that is not a whole number, 0 or more")) }
         $unreadable = [int]$bad.value
     }
-    # limited AND limitedUntil ARE OPTIONAL: the session's last turn ended in a usage-limit error, so it
-    # cannot answer a knock until the limit resets - at limitedUntil when the waker knows when, and at
-    # a time nobody knows when it gives none. A waker that cannot tell leaves both out, and that is
-    # not limited. limited is true or false; limitedUntil is a time with a zone, read only beside a
-    # limited that is true. The port only carries them: what a limited session is owed is the
-    # watcher's to say (core/Wake.ps1, Get-HordeWakeLimit).
-    $limited = $false
+    # limited AND limitedUntil: is the session under a usage limit - its last turn ended in one - so that
+    # it cannot answer a knock until the limit resets? limited is yes, no or unknown, LIKE EVERY OTHER
+    # FACT HERE, and UNKNOWN IS NEVER READ AS NO: it was first carried as true or false, and a waker
+    # that could not tell - a row with no such member, a transcript it could not read - was read as
+    # "not limited", so the session was nudged and its nudges counted (safety review of PR 220).
+    #   A waker that claims state.limit and leaves limited out has not said: unknown.
+    #   A WAKER THAT DOES NOT CLAIM state.limit CANNOT TELL AT ALL, and for it alone the answer is no:
+    #   there is nothing to wait for from a harness that has no way to say. It may leave limited out
+    #   or say no; anything else from it is a claim it says it cannot make, and the state is unknown.
+    # limitedUntil is a time with a zone, read only beside limited yes; with none, nobody knows until
+    # when. The port only carries them: what a limited session is owed is the watcher's to say
+    # (core/Wake.ps1, Get-HordeWakeLimit).
+    $limited = "no"
     $limitedUntil = $null
     $lim = Get-HordeWakerMember $v "limited"
-    if ($lim.has) {
-        if ($lim.value -isnot [bool]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limited that is not true or false")) }
-        $limited = [bool]$lim.value
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.limit")) {
+        if ($lim.has -and $null -ne $lim.value -and "$($lim.value)" -cne "no") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.limit and still answered limited " + $lim.value + " for " + $Id)) }
+    } else {
+        $limited = "unknown"
+        if ($lim.has -and $null -ne $lim.value) {
+            if ($lim.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $lim.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limited that is not one of " + ($script:HordeWakerWords -join ", "))) }
+            $limited = [string]$lim.value
+        }
     }
     $until = Get-HordeWakerMember $v "limitedUntil"
-    if ($limited -and $until.has -and $null -ne $until.value) {
+    if ($limited -ceq "yes" -and $until.has -and $null -ne $until.value) {
         $limitedUntil = ConvertTo-HordeWakerUtc $until.value
         if ($null -eq $limitedUntil) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limitedUntil that is not a time with a zone")) }
     }

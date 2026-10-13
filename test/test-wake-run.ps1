@@ -119,7 +119,7 @@ Check ((@($ret) -join ",") -ceq ("held:" + (Sid 2) + "@0") -and @(Get-HordeMemor
 # A USAGE LIMIT: said once, no nudge until it ends.
 $h = New-Home
 Reset-HordeMemoryWaker
-Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited $true -LimitedUntil (At 300)
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "yes" -LimitedUntil (At 300)
 $run = New-HordeWakeRun -Live -HordeHome $h
 $lim = New-Object System.Collections.ArrayList
 foreach ($n in 0..99) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$lim.Add($e.kind + "@" + ($n * 3)) } }
@@ -151,7 +151,7 @@ Check (@($moved | Where-Object { $_ -ceq ("nudge:" + (Sid 1)) }).Count -ge 1 -an
 # A SESSION LIMITED WITH NO KNOWN END is released by that same movement.
 $h = New-Home
 Reset-HordeMemoryWaker
-Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited $true
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "yes"
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -MidTurn "yes"
 $run = New-HordeWakeRun -Live -HordeHome $h
 foreach ($n in 0..20) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
@@ -159,6 +159,19 @@ Check (@(Get-HordeMemoryWakerNudges).Count -eq 0) "CONTROL: a session limited wi
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0
 foreach ($n in 21..24) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
 Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger[(Sid 1)].attempts -eq 0) "when another session takes its mail it is knocked for, once, uncounted: a limit the fleet shares has reset"
+
+# A SESSION WHOSE LIMIT NOBODY COULD READ waits, and is nudged - counted, as normal - once another is seen taking mail.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "unknown"
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -MidTurn "yes"
+$run = New-HordeWakeRun -Live -HordeHome $h
+$unk = New-Object System.Collections.ArrayList
+foreach ($n in 0..20) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h)) { [void]$unk.Add($e.kind) } }
+Check (@(Get-HordeMemoryWakerNudges).Count -eq 0 -and (@($unk) -join ",") -ceq "usage-limit") ("a session whose limit could not be read is not nudged while nothing shows sessions taking turns, and that is journaled once (" + (@($unk) -join ",") + ")")
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0
+foreach ($n in 21..22) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger.ContainsKey((Sid 1)) -and $run.ledger[(Sid 1)].attempts -eq 1 -and $run.silence.movedAt -eq (At 63)) "once another session takes its mail it is nudged, as an ordinary counted attempt: there is fresh evidence that sessions can take turns"
 
 Write-Host ""
 Write-Host "--- the one switch: turned on, a live run posts what both senders have to say, and a shadow run still posts nothing ---" -ForegroundColor Cyan

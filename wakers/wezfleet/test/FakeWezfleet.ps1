@@ -9,7 +9,8 @@
 # WHAT IT KEEPS, all under its own folder and nowhere else:
 #   fleet.json  the sessions, as a test wrote them: a list of rows with every member a row has, their
 #               boxEmpty and midTurn being what the PANE holds (form A hides them, as the real one does)
-#   argv.log    one JSON line per run: the arguments it received, as separate elements, and its pid
+#   argv.log    one JSON line per run: the arguments it received, as separate elements, its pid, the
+#               program running it and that process's command line
 #   typed.log   one JSON line per text "typed" into a session: { id; text } - the fake target. Only the
 #               pointer line is ever written here, the same line whatever the session's mail says
 #   mode.json   optional, per form (fleet | pane | nudge): { exit; stdout; stderr; hangSeconds }. stdout
@@ -41,7 +42,11 @@ $ErrorActionPreference = "Stop"
 $fakeClock = [System.Diagnostics.Stopwatch]::StartNew()
 $root = $PSScriptRoot
 $argvList = @($args | ForEach-Object { "$_" })
-[System.IO.File]::AppendAllText((Join-Path $root "argv.log"), ((@{ argv = $argvList; pid = $PID } | ConvertTo-Json -Compress -Depth 4) + "`n"), [System.Text.Encoding]::ASCII)
+# HOW IT WAS STARTED is logged with what it was handed: the program running it, its pid, and that
+# process's whole command line. A script called in-process from a test would show the test's own pid
+# and command line here; started as the adapter starts the fleet's command, it shows a process of its
+# own, the system PowerShell, with -File and this script.
+[System.IO.File]::AppendAllText((Join-Path $root "argv.log"), ((@{ argv = $argvList; pid = $PID; program = (Get-Process -Id $PID).Path; commandLine = @([System.Environment]::GetCommandLineArgs()) } | ConvertTo-Json -Compress -Depth 4) + "`n"), [System.Text.Encoding]::ASCII)
 
 function Get-FakeArg {
     param([string]$Name)

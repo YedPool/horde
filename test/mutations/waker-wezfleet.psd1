@@ -6,6 +6,15 @@
     Suite  = "test\test-waker-wezfleet.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-row-that-does-not-say-reads-as-not-limited"
+           Find = '        $word = "unknown"'
+           Replace = '        $word = "no"' }
+        @{ Name = "limited-no-is-read-as-unknown"
+           Find = 'if ($null -ne $p -and $p.Value -ceq "no") { $word = "no" }'
+           Replace = '' }
+        @{ Name = "limited-yes-is-read-as-no"
+           Find = 'return [pscustomobject]@{ limited = "yes"; limitedUntil = $until }'
+           Replace = 'return [pscustomobject]@{ limited = "no"; limitedUntil = $until }' }
         @{ Name = "retired-true-read-as-no"
            Find = 'if ($Row.retired -eq $true) { return "yes" }'
            Replace = '' }
@@ -21,12 +30,6 @@
         @{ Name = "the-listing-says-nobody-is-retired"
            Find = 'reachable = $row.reachable; retired = (Get-HordeWezfleetWakerRetired -Row $row) })'
            Replace = 'reachable = $row.reachable; retired = "no" })' }
-        @{ Name = "limited-unknown-holds-waking-back"
-           Find = 'if ($null -eq $p -or $p.Value -cne "yes") { return'
-           Replace = 'if ($null -eq $p -or $p.Value -ceq "no") { return' }
-        @{ Name = "a-rows-limit-is-never-read"
-           Find = 'if ($null -eq $p -or $p.Value -cne "yes") { return'
-           Replace = 'if ($true) { return' }
         @{ Name = "a-reset-with-no-zone-is-read-as-local"
            Find = '[ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }'
            Replace = '[ref]$parsed)) { $until = $parsed.ToUniversalTime() }' }

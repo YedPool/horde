@@ -77,6 +77,18 @@
 # one quoting function. wakers/start-sites.txt lists the start, each property it sets and each call of
 # it, and test/test-start-sites.ps1 refuses anything else.
 #
+# ALWAYS A CHILD PROCESS, NEVER THE SCRIPT CALLED IN-PROCESS: powershell.exe from the system folder, with
+# -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <checkout>\wezfleet.ps1 and the arguments
+# after it - the .ps1 directly, never the .cmd shim, which is only read to find the checkout. HOW THE
+# FLEET'S SCRIPT IS STARTED CHANGES WHAT IT DOES: its nudge had a fault that showed only when the entry
+# script was called in-process from another PowerShell script (& wezfleet.ps1) - it answered busy for
+# ever - and not when it was started as a process with -File (found on the fleet's side, 2026-10-13).
+# A fault in a script's own scope is invisible to a caller in the same process and to that caller's
+# tests. So the suites start the fake by this same start site, with this same command line - the
+# fixture only copies the fake to wezfleet.ps1 in a folder and names the folder - and
+# test/test-waker-wezfleet.ps1 reads, from the fake's own log, that every run of it was a process of
+# its own started so.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after wakers/Port.ps1.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
@@ -549,18 +561,28 @@ function Get-HordeWezfleetWakerLimit {
     # resets (measured 2026-10-13, 04:36 to 05:55 UTC: every session of the account was stopped for
     # about 80 minutes, every knock in that window was typed and nobody could answer). The fleet's
     # command says so in each row: limited (yes, no, unknown) and limitedUntil (a time, or null).
-    #   no row member (a command too old to say), limited no   -> not limited
-    #   limited unknown                                        -> NOT limited: waking is never held
-    #                                                             back on a guess
-    #   limited yes, with a limitedUntil that can be placed    -> limited, until then. The command keeps
-    #                                                             a reset that has passed in the row,
+    #   limited no                                             -> no
+    #   limited unknown, or NO SUCH MEMBER (a command too old  -> unknown. NEVER no: it was read as
+    #   to say)                                                   "not limited" at first, and the
+    #                                                             session was nudged and counted (safety
+    #                                                             review of PR 220). What unknown is
+    #                                                             owed - a wait, and its release - is
+    #                                                             the watcher's (core/Wake.ps1)
+    #   limited yes, with a limitedUntil that can be placed    -> yes, until then. The command keeps a
+    #                                                             reset that has passed in the row,
     #                                                             still saying yes: whether the time is
     #                                                             ahead or over is the watcher's to say,
-    #                                                             with the pass's clock (core/Wake.ps1)
-    #   limited yes, limitedUntil null or not a time           -> limited, and nobody knows until when
+    #                                                             with the pass's clock
+    #   limited yes, limitedUntil null or not a time           -> yes, and nobody knows until when
+    # The fleet says unknown for every row it cannot reach, and for a session whose last transcript
+    # entry is longer than the tail it reads (1 of 23 reachable sessions, measured on the live fleet).
     param([Parameter(Mandatory = $true)]$Row)
     $p = $Row.PSObject.Properties["limited"]
-    if ($null -eq $p -or $p.Value -cne "yes") { return [pscustomobject]@{ limited = $false; limitedUntil = $null } }
+    if ($null -eq $p -or $p.Value -cne "yes") {
+        $word = "unknown"
+        if ($null -ne $p -and $p.Value -ceq "no") { $word = "no" }
+        return [pscustomobject]@{ limited = $word; limitedUntil = $null }
+    }
     $until = $null
     $u = $Row.PSObject.Properties["limitedUntil"]
     if ($null -ne $u) {
@@ -570,7 +592,7 @@ function Get-HordeWezfleetWakerLimit {
             if ([datetime]::TryParse($u.Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed) -and $parsed.Kind -ne [System.DateTimeKind]::Unspecified) { $until = $parsed.ToUniversalTime() }
         }
     }
-    return [pscustomobject]@{ limited = $true; limitedUntil = $until }
+    return [pscustomobject]@{ limited = "yes"; limitedUntil = $until }
 }
 
 function Read-HordeWezfleetWakerState {

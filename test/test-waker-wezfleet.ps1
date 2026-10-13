@@ -38,7 +38,7 @@ function New-Row {
     # -Change laid over it. A member set to "(none)" is left out of the row altogether.
     param([int]$N = 1, [hashtable]$Change = @{})
     $r = [ordered]@{ id = (Sid $N); label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0
-        oldestUnreadAt = "2026-10-12T07:00:00.0000000Z"; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; reason = ""; reasons = @() }
+        oldestUnreadAt = "2026-10-12T07:00:00.0000000Z"; idle = "yes"; boxEmpty = "yes"; midTurn = "no"; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null }
     foreach ($k in $Change.Keys) { if ("$($Change[$k])" -ceq "(none)") { $r.Remove($k) } else { $r[$k] = $Change[$k] } }
     return $r
 }
@@ -53,7 +53,7 @@ try {
 Write-Host ""
 Write-Host "--- the mapping: targets, roles, one whole-fleet call a pass, a pane read only for a candidate ---" -ForegroundColor Cyan
 
-Check ((Resolve-HordeProductionWaker).state -ceq "absent" -and (@(Get-HordeWakerUnverified -Waker $w) -join ",") -ceq "nudge.pointer-only,state.box,state.turn,reach.unseen,nudge.guarded") "this waker says all five of its capabilities are unverified - shown against the fake, never yet against the fleet's real command - so no live run can pick it"
+Check ((Resolve-HordeProductionWaker).state -ceq "absent" -and (@(Get-HordeWakerUnverified -Waker $w) -join ",") -ceq "nudge.pointer-only,state.box,state.turn,reach.unseen,nudge.guarded,state.limit") "this waker says all six of its capabilities are unverified - shown against the fake, never yet against the fleet's real command - so no live run can pick it"
 Check ((Resolve-HordeProductionWaker -AllowUnverified).state -ceq "known" -and (Resolve-HordeProductionWaker -AllowUnverified).value.name -ceq "wezfleet") "and a run that may go through unverified capabilities - shadow, proof - picks this one, never the test waker loaded beside it"
 Check (@($w.capabilities.capabilities.PSObject.Properties | Where-Object { -not "$($_.Value.evidence)".Contains("STILL TO BE RUN against the fleet's real command") }).Count -eq 0) "each one's evidence says what is still to be run"
 $away = Get-HordeWakeTargets -Waker $w
@@ -147,6 +147,25 @@ Check ($pass.unreadable[(Sid 1)] -eq 1) "and the pass hands the unreadable count
 & $fx.Remove $state; $state = $null
 
 Write-Host ""
+Write-Host "--- the fake is started as the fleet's command is: a process of its own, by -File ---" -ForegroundColor Cyan
+
+$state = & $fx.New
+& $fx.SetRow $state (New-Row 1)
+& $fx.Clock $state $t0
+$null = Get-HordeWakeTargets -Waker $w
+$null = Get-HordeWakeState -Waker $w -Id (Sid 1) -Full
+$null = Send-HordeWakeNudge -Waker $w -Id (Sid 1)
+$started = @(& $fx.Runs $state)
+$system = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
+$script = Join-Path $state.dir "wezfleet.ps1"
+Check ($started.Count -eq 3 -and @($started | Where-Object { "$($_.argv[0])" -ceq "mail" }).Count -eq 3) "CONTROL: a listing, a look and a nudge are three runs of the fleet's command"
+Check (@($started | Where-Object { [int]$_.pid -eq $PID }).Count -eq 0 -and @($started | ForEach-Object { [int]$_.pid } | Sort-Object -Unique).Count -eq 3) "each ran in a process of its own - never in this one: the script is not called in-process"
+Check (@($started | Where-Object { "$($_.program)" -ine $system }).Count -eq 0) ("the program running it is the system's own PowerShell (" + (@($started | ForEach-Object { $_.program } | Sort-Object -Unique) -join ", ") + ")")
+$shape = @($started | Where-Object { $c = @($_.commandLine); $at = [System.Array]::IndexOf($c, "-File"); $at -ge 1 -and $c.Count -gt ($at + 1) -and "$($c[$at + 1])" -ieq $script -and ($c -ccontains "-NoProfile") -and ($c -ccontains "-NonInteractive") -and -not ($c -ccontains "-Command") })
+Check ($shape.Count -eq 3) "and its command line is -NoProfile -NonInteractive ... -File <the checkout's wezfleet.ps1>, then the arguments: the script itself, not a shim and not a command string"
+& $fx.Remove $state; $state = $null
+
+Write-Host ""
 Write-Host "--- retired: true is yes, and false is no only for a row the fleet had a record for ---" -ForegroundColor Cyan
 
 $state = & $fx.New
@@ -183,27 +202,36 @@ Write-Host "--- a usage limit is read from the row when the row says it ---" -Fo
 $state = & $fx.New
 & $fx.SetRow $state (New-Row 1)
 # A USAGE LIMIT, as the fleet's rows say it. A row of a command too old to say is a row all the same.
+& $fx.SetRow $state (New-Row 1 @{ limited = "(none)"; limitedUntil = "(none)" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) "a row with no limited member - a command too old to say - is not limited"
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "unknown" -and $null -eq $a.value.limitedUntil) "a row with no limited member - a command too old to say - is unknown, never not limited"
 foreach ($word in @("no", "unknown")) {
     & $fx.SetRow $state (New-Row 1 @{ limited = $word; limitedUntil = "2026-10-13T05:55:00Z" })
     $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
-    Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) ("limited " + $word + " is not limited: waking is never held back on a guess")
+    Check ($a.state -ceq "known" -and $a.value.limited -ceq $word -and $null -eq $a.value.limitedUntil) ("limited " + $word + " is carried as " + $word + ", and the time beside it is not read")
 }
+# THE WATCHER, THROUGH THIS WAKER: a row that cannot say, idle with an empty box and old mail, is not nudged.
+& $fx.SetRow $state (New-Row 1 @{ limited = "unknown" })
+& $fx.Clock $state $t0
+$pass = Invoke-HordeWakePass -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{}
+Check ((Get-Count $state "mail nudge*") -eq 0 -and @($pass.decisions | Where-Object { $_.action -ceq "wait" -and "$($_.reason)".StartsWith("usage limit unknown") }).Count -eq 1) "a pass over a session whose row says limited unknown asks for no nudge: it waits"
+& $fx.Forget $state
+$pass = Invoke-HordeWakePass -Waker $w -Now $t0 -Settings (Get-HordeWakeSettings) -Ledger @{} -MovedAt $t0.AddSeconds(-5)
+Check ((Get-Count $state "mail nudge*") -eq 1 -and (Get-Typed $state) -eq 1) "with a session seen taking mail five seconds ago, the same session is nudged"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2031-01-01T05:55:00Z" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $a.value.limitedUntil -eq (New-Object System.DateTime(2031, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "limited yes with a time is limited until then"
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $a.value.limitedUntil -eq (New-Object System.DateTime(2031, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "limited yes with a time is limited until then"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = "2020-01-01T05:55:00Z" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $a.value.limitedUntil -eq (New-Object System.DateTime(2020, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "a reset that has passed is carried as the fleet gave it - still yes, with the past time: whether it is over is the watcher's to say, with the pass's clock"
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $a.value.limitedUntil -eq (New-Object System.DateTime(2020, 1, 1, 5, 55, 0, [System.DateTimeKind]::Utc))) "a reset that has passed is carried as the fleet gave it - still yes, with the past time: whether it is over is the watcher's to say, with the pass's clock"
 foreach ($until in @($null, "next Tuesday", "2026-10-13 05:55")) {
     & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = $until })
     $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
-    Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $null -eq $a.value.limitedUntil) ("limited yes with a limitedUntil of '" + $until + "' - none, or one that cannot be placed - is limited, and nobody knows until when")
+    Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $null -eq $a.value.limitedUntil) ("limited yes with a limitedUntil of '" + $until + "' - none, or one that cannot be placed - is limited, and nobody knows until when")
 }
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes" })
 $a = Get-HordeWakeState -Waker $w -Id (Sid 1)
-Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $null -eq $a.value.limitedUntil) "and so is limited yes with no limitedUntil member at all"
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $null -eq $a.value.limitedUntil) "and so is limited yes with no limitedUntil member at all"
 & $fx.SetRow $state (New-Row 1 @{ limited = "maybe" })
 Check ((Get-HordeWakeState -Waker $w -Id (Sid 1)).state -ceq "unknown") "a limited that is none of the three words is a row this waker does not read"
 & $fx.SetRow $state (New-Row 1 @{ limited = "yes"; limitedUntil = 5 })

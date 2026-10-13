@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "waker": "fixture-no-limit",
+  "capabilities": {
+    "nudge.pointer-only": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.box": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.turn": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "reach.unseen": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "nudge.guarded": {
+      "support": "yes",
+      "evidence": "A fixture for test/test-wake-port.ps1; nothing was run."
+    },
+    "state.limit": {
+      "support": "no",
+      "evidence": "A fixture for test/test-wake-port.ps1: a harness with no usage limit to report; nothing was run."
+    }
+  }
+}

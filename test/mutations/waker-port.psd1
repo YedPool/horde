@@ -8,6 +8,21 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-waker-that-says-nothing-of-the-limit-reads-as-not-limited"
+           Find = '        $limited = "unknown"'
+           Replace = '        $limited = "no"' }
+        @{ Name = "a-waker-that-cannot-tell-may-say-limited"
+           Find = 'if ($lim.has -and $null -ne $lim.value -and "$($lim.value)" -cne "no") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-waker-that-cannot-tell-is-read-as-unknown"
+           Find = 'if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.limit")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-limited-outside-the-three-words-accepted"
+           Find = 'if ($lim.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $lim.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "an-end-read-beside-a-limit-that-is-not-yes"
+           Find = 'if ($limited -ceq "yes" -and $until.has -and $null -ne $until.value) {'
+           Replace = 'if ($until.has -and $null -ne $until.value) {' }
         @{ Name = "retired-left-out-reads-as-a-listing"
            Find = 'if (-not $retired.has -or $retired.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $retired.value) { return'
            Replace = 'if ($false) { return' }
@@ -20,15 +35,9 @@
         @{ Name = "the-end-of-a-limit-not-carried"
            Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
            Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null })' }
-        @{ Name = "a-limited-of-any-kind-accepted"
-           Find = 'if ($lim.value -isnot [bool]) { return'
-           Replace = 'if ($false) { return' }
         @{ Name = "a-limit-ending-at-a-time-with-no-zone-accepted"
            Find = 'if ($null -eq $limitedUntil) { return (New-HordeUnknown'
            Replace = 'if ($false) { return (New-HordeUnknown' }
-        @{ Name = "an-end-read-beside-not-limited"
-           Find = 'if ($limited -and $until.has -and $null -ne $until.value) {'
-           Replace = 'if ($until.has -and $null -ne $until.value) {' }
         @{ Name = "invalid-capabilities-registered"
            Find = 'if ($findings.Count -gt 0) { throw ("waker ''" + (Split-Path -Leaf $from) + "'' refused: "'
            Replace = 'if ($false) { throw ("waker ''" + (Split-Path -Leaf $from) + "'' refused: "' }

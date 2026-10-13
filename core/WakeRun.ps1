@@ -249,7 +249,10 @@ function Invoke-HordeWakeTick {
             $only = "$(Get-HordeWakeEntryValue $Run "target")"
             if ($only -ceq "") { throw "a proof run was made without the one session it may nudge, so it nudged nobody" }
         }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow -Only $only
+        # WHEN A SESSION WAS LAST SEEN TAKING MAIL: what releases a session whose limit nobody could read
+        # (core/Wake.ps1, Get-HordeWakeLimit).
+        $movedAt = Get-HordeWakeEntryValue $Run.silence "movedAt"
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Shadow:$shadow -Silent:$silentNow -Only $only -MovedAt $movedAt
         # A FLEET THAT CANNOT BE READ (core/Wake.ps1, Update-HordeWakeFleetRead): permanent after ten failures
         # in a row, said once. The pass's own line for each unreadable pass needs no dropping here: an
         # unknown that lasts is journaled once for as long as it lasts (Select-HordeWakeNewEntries, below).

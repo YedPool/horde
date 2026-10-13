@@ -305,27 +305,57 @@ $script:stateAnswer = { param($id) $s = New-State; Add-Member -InputObject $s -M
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unreadableCount")) "state: an unreadableCount of null is 'I could not count', which is unknown and never 0"
 
-# limited and limitedUntil: optional, carried, and held to their kinds.
+# limited and limitedUntil: three-valued like every other fact, and unknown is never read as no.
 $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State) }
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
-Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) "state: a waker that says nothing of a usage limit is read as not limited"
-$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true; limitedUntil = $t0.AddHours(1) }) }
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "unknown" -and $null -eq $a.value.limitedUntil) "state: a waker that claims state.limit and says nothing of the limit has not said: unknown, never not limited"
+foreach ($word in @("yes", "no", "unknown")) {
+    $script:limitWord = $word
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $script:limitWord }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "known" -and $a.value.limited -ceq $word -and $null -eq $a.value.limitedUntil) ("state: limited " + $word + " is carried")
+}
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes"; limitedUntil = $t0.AddHours(1) }) }
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
-Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $a.value.limitedUntil -eq $t0.AddHours(1) -and $a.value.limitedUntil.Kind -eq [System.DateTimeKind]::Utc) "state: limited and the time it ends are carried, the time as UTC"
-$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true }) }
-$a = Get-HordeWakeState -Waker $scripted -Id $sid
-Check ($a.state -ceq "known" -and $a.value.limited -eq $true -and $null -eq $a.value.limitedUntil) "state: limited with no time is limited, and nobody knows until when"
-$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $false; limitedUntil = $t0.AddHours(1) }) }
-$a = Get-HordeWakeState -Waker $scripted -Id $sid
-Check ($a.state -ceq "known" -and $a.value.limited -eq $false -and $null -eq $a.value.limitedUntil) "state: a time beside a limited that is false is not read"
-$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes" }) }
-$a = Get-HordeWakeState -Waker $scripted -Id $sid
-Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limited")) "state: a limited that is not true or false is unknown"
-$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true; limitedUntil = (New-Object System.DateTime(2026, 10, 12, 9, 0, 0)) }) }
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "yes" -and $a.value.limitedUntil -eq $t0.AddHours(1) -and $a.value.limitedUntil.Kind -eq [System.DateTimeKind]::Utc) "state: limited yes and the time it ends are carried, the time as UTC"
+foreach ($word in @("no", "unknown")) {
+    $script:limitWord = $word
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $script:limitWord; limitedUntil = $t0.AddHours(1) }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "known" -and $a.value.limited -ceq $word -and $null -eq $a.value.limitedUntil) ("state: a time beside limited " + $word + " is not read")
+}
+foreach ($bad in @($true, $false, "maybe", 1)) {
+    $script:limitWord = $bad
+    $script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $script:limitWord }) }
+    $a = Get-HordeWakeState -Waker $scripted -Id $sid
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limited")) ("state: a limited of '" + $bad + "' - a boolean, a word outside the list - is unknown")
+}
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes"; limitedUntil = (New-Object System.DateTime(2026, 10, 12, 9, 0, 0)) }) }
 $a = Get-HordeWakeState -Waker $scripted -Id $sid
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("limitedUntil")) "state: a limitedUntil with no zone cannot be placed, and is unknown"
-$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = $true; limitedUntil = "soon" }) }
+$script:stateAnswer = { param($id) New-HordeKnown -Value (New-State @{ limited = "yes"; limitedUntil = "soon" }) }
 Check ((Get-HordeWakeState -Waker $scripted -Id $sid).state -ceq "unknown") "state: and so is one that is no time"
+# A WAKER THAT DOES NOT CLAIM state.limit cannot tell at all, and for it alone the answer is no.
+$script:noLimit = $null
+$deaf = Register-HordeWaker -Name "fixture-no-limit" -Folder (Join-Path $fx "fixture-no-limit") -Targets { New-HordeKnown -Value @() } -Nudge { param($id) New-HordeUnknown -Reason "a fixture" } -State {
+    param($id)
+    $v = [ordered]@{ id = $id; unreadCount = 0; oldestUnreadAt = $null; idle = "yes"; boxEmpty = "yes"; midTurn = "no" }
+    if ($null -ne $script:noLimit) { $v["limited"] = $script:noLimit }
+    New-HordeKnown -Value ([pscustomobject]$v)
+}
+Check (-not (Test-HordeWakerClaims -Waker $deaf -Capability "state.limit") -and (Test-HordeWakerClaims -Waker $scripted -Capability "state.limit")) "CONTROL: one waker says it cannot tell a usage limit at all, and one says it can"
+$a = Get-HordeWakeState -Waker $deaf -Id $sid
+Check ($a.state -ceq "known" -and $a.value.limited -ceq "no") "state: a waker that does not offer state.limit and says nothing of the limit is read as not limited - the one case where saying nothing is no"
+$script:noLimit = "no"
+Check ((Get-HordeWakeState -Waker $deaf -Id $sid).value.limited -ceq "no") "state: and it may say no"
+foreach ($word in @("yes", "unknown")) {
+    $script:noLimit = $word
+    $a = Get-HordeWakeState -Waker $deaf -Id $sid
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("state.limit")) ("state: one that does not offer state.limit and still says limited " + $word + " is unknown: what it cannot read, it cannot claim")
+}
+$script:noLimit = $null
+# It is not one of the five a live run requires: a harness with no usage limit can still be the waker.
+Check ((Resolve-HordeWaker -Name "fixture-no-limit" -Require @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")).state -ceq "known" -and (Resolve-HordeWaker -Name "fixture-no-limit" -Require @("state.limit")).state -ceq "unknown") "state.limit is not one of the five a live run requires, and a caller that requires it of this waker is refused"
 
 $script:blindBox = "unknown"; $script:blindTurn = "unknown"
 Check ((Get-HordeWakeState -Waker $blind -Id $sid).state -ceq "known") "state: a waker that cannot read the box or the turn may say unknown of both"
