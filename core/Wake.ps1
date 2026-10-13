@@ -162,13 +162,15 @@ function Get-HordeWakeDecisions {
 function Update-HordeWakeLedger {
     # The ledger after one pass, as a new table; -Ledger is not changed.
     #   -Decisions  the pass's decisions; only a session decided nudge can have been attempted
-    #   -Outcomes   session id -> what the attempt came to (woken, busy, unreachable, unknown, or
-    #               would-nudge in shadow)
+    #   -Outcomes   session id -> what the attempt came to (woken, busy, unreachable, nothing, unknown,
+    #               or would-nudge in shadow)
     #   -States     session id -> the port's state answer
     # AN ATTEMPT COUNTS WHATEVER IT CAME TO: woken too, because "woken" is the waker's word and the
     # mail is what proves it - a session that was woken and still has unread mail next pass is asked
     # again after its back-off (a missed wake heals). MAIL TAKEN RESETS IT: a session known to have no
     # unread mail leaves the ledger, so its next message is knocked for at once.
+    # "nothing" IS NOT AN ATTEMPT: the waker found the mail already taken and rang nobody, so nothing was
+    # tried and nothing failed. It does not advance the back-off and is never counted against the session.
     param($Ledger, $Decisions, $Outcomes, $States, [Parameter(Mandatory = $true)][datetime]$Now)
     $next = @{}
     if ($null -ne $Ledger) { foreach ($k in @($Ledger.Keys)) { $next["$k"] = $Ledger[$k] } }
@@ -176,6 +178,7 @@ function Update-HordeWakeLedger {
         if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }
         $id = "$($d.id)"
         if ($null -eq $Outcomes -or -not $Outcomes.ContainsKey($id)) { continue }
+        if ("$($Outcomes[$id])" -ceq "nothing") { continue }
         $before = 0
         if ($next.ContainsKey($id)) { $before = [int]$next[$id].attempts }
         $next[$id] = [pscustomobject]@{ attempts = ($before + 1); lastAttemptAt = $Now; lastOutcome = "$($Outcomes[$id])" }

@@ -128,6 +128,10 @@ Set-HordeMemoryWakerSession -Id $sid -UnreadCount 1 -OldestUnreadAt $t0 -Outcome
 $a = Send-HordeWakeNudge -Waker $memory -Id $sid
 Check ($a.state -ceq "known" -and $a.value.outcome -ceq "busy" -and $a.value.reason -ceq "it began a turn as the nudge arrived") "busy is carried with its reason"
 
+Set-HordeMemoryWakerSession -Id $sid -Outcome "nothing" -OutcomeReason "its mail was taken before the nudge"
+$a = Send-HordeWakeNudge -Waker $memory -Id $sid
+Check ($a.state -ceq "known" -and $a.value.outcome -ceq "nothing" -and $a.value.reason -ceq "its mail was taken before the nudge" -and @(Get-HordeMemoryWakerNudges -Id $sid).Count -eq 1) "nothing - the mail was taken before the nudge - is carried with its reason, and nobody was rung for it"
+
 Write-Host ""
 Write-Host "--- an adapter's bad answer is unknown with the reason, never passed on and never a throw ---" -ForegroundColor Cyan
 
@@ -221,6 +225,7 @@ foreach ($case in @(
         @{ what = "a time that is text"; block = { param($id) New-HordeKnown -Value (New-Rang @{ at = "now" }) }; like = "not a time" },
         @{ what = "busy with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy" }) }; like = "without saying why" },
         @{ what = "unreachable with a blank reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "unreachable"; reason = "  " }) }; like = "without saying why" },
+        @{ what = "nothing with no reason"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "nothing" }) }; like = "without saying why" },
         @{ what = "a reason of two lines"; block = { param($id) New-HordeKnown -Value (New-Rang @{ outcome = "busy"; reason = "one`ntwo" }) }; like = "line break" })) {
     $script:nudgeAnswer = $case.block
     $a = Send-HordeWakeNudge -Waker $scripted -Id $sid

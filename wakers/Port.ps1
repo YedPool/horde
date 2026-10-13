@@ -50,9 +50,10 @@
 #   State    param([string]$Id)  -> known { id; unreadCount; oldestUnreadAt; idle; boxEmpty; midTurn }, or unknown
 #   Nudge    param([string]$Id)  -> known { id; outcome; reason; at }, or unknown
 # role is warchief, orc, goblin or unknown; parent is a session id or "". unreadCount is a whole number,
-# 0 or more; oldestUnreadAt is a [datetime], required when unreadCount is above 0. outcome is woken, busy
-# or unreachable; reason is one line and required unless the outcome is woken; at is a [datetime]. A
-# session the waker does not know is unknown, with the reason - never a state of zeros.
+# 0 or more; oldestUnreadAt is a [datetime], required when unreadCount is above 0. outcome is woken, busy,
+# unreachable or nothing (the mail was taken before the nudge, so nobody was rung); reason is one line and
+# required unless the outcome is woken; at is a [datetime]. A session the waker does not know is unknown,
+# with the reason - never a state of zeros.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -66,9 +67,12 @@ $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "sta
 # In the order the watcher serves them when more qualify than one pass may nudge (core/Wake.ps1).
 $script:HordeWakerRoles = @("warchief", "orc", "goblin", "unknown")
 $script:HordeWakerWords = @("yes", "no", "unknown")
-$script:HordeWakerOutcomes = @("woken", "busy", "unreachable")
-# The outcomes that must say why: woken needs no account, and the other two have no other.
-$script:HordeWakerReasonOutcomes = @("busy", "unreachable")
+# nothing: asked to nudge, the waker found the session had no unread mail by then - it was taken between
+# the state read and the nudge - and rang nobody. It is not a failure, and the watcher counts no attempt
+# for it (core/Wake.ps1).
+$script:HordeWakerOutcomes = @("woken", "busy", "unreachable", "nothing")
+# The outcomes that must say why: woken needs no account, and the others have no other.
+$script:HordeWakerReasonOutcomes = @("busy", "unreachable", "nothing")
 $script:HordeWakerTargetMembers = @("id", "label", "role", "parent", "reachable")
 $script:HordeWakerSessionPattern = $null
 

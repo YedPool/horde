@@ -142,6 +142,16 @@ Check ($r0.entries[0].outcome -ceq "woken" -and (Decided $r3).action -ceq "wait"
 $r6 = Pass 6
 Check ((Decided $r6).action -ceq "wait" -and (Rang 1) -eq 2) "and not again before the next step of its back-off"
 
+Start-Case; Seat -Change @{ Outcome = "busy"; OutcomeReason = "busy" }
+$null = Pass 0
+Seat -Change @{ Outcome = "nothing"; OutcomeReason = "its mail was taken before the nudge" }
+$r = Pass 5
+Check ((Kinds $r) -ceq "nudge" -and $r.entries[0].outcome -ceq "nothing" -and $r.entries[0].reason -ceq "its mail was taken before the nudge") "a nudge the waker answers nothing - the mail was taken first - is journaled as a nudge whose outcome is nothing"
+Check ($script:ledger[(Sid 1)].attempts -eq 1 -and $script:ledger[(Sid 1)].lastOutcome -ceq "busy" -and $script:ledger[(Sid 1)].lastAttemptAt -eq (At 0)) "and it is not an attempt: the ledger's attempts, last outcome and time are as they were"
+Start-Case; Seat -Change @{ Outcome = "nothing"; OutcomeReason = "taken" }
+$null = Pass 0
+Check (-not $script:ledger.ContainsKey((Sid 1))) "a first nudge answered nothing leaves no ledger entry, so no back-off starts"
+
 $before = @{}; $before[(Sid 1)] = [pscustomobject]@{ attempts = 2; lastAttemptAt = (At 0); lastOutcome = "busy" }
 $after = Update-HordeWakeLedger -Ledger $before -Decisions @([pscustomobject]@{ id = (Sid 1); action = "nudge"; reason = "" }) -Outcomes @{ (Sid 1) = "woken" } -States @{} -Now (At 50)
 Check ($after[(Sid 1)].attempts -eq 3 -and $before[(Sid 1)].attempts -eq 2) "updating the ledger returns a new one and leaves the one it was given as it was"

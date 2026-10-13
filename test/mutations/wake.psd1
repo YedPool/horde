@@ -61,6 +61,9 @@
         @{ Name = "outcome-counted-without-a-nudge"
            Find = 'if ($null -eq $d -or "$($d.action)" -cne "nudge") { continue }'
            Replace = 'if ($null -eq $d) { continue }' }
+        @{ Name = "nothing-counted-as-an-attempt"
+           Find = 'if ("$($Outcomes[$id])" -ceq "nothing") { continue }'
+           Replace = '' }
         @{ Name = "rate-limit-ignored"
            Find = 'if ($i -lt $allowed) {'
            Replace = 'if ($true) {' }

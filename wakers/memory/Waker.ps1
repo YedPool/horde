@@ -106,8 +106,8 @@ $null = Register-HordeWaker -Name "memory" `
         if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { return (New-HordeUnknown -Reason ("the memory waker has no session " + $Id)) }
         $s = $script:HordeMemoryWakerSessions[$Id]
         $at = Get-HordeMemoryWakerTime
-        # RECORDED ONLY WHEN IT WOULD HAVE BEEN TYPED: busy and unreachable are the waker saying it did
-        # not ring, so nothing was typed for them.
+        # RECORDED ONLY WHEN IT WOULD HAVE BEEN TYPED: busy, unreachable and nothing are the waker saying
+        # it did not ring, so nothing was typed for them.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }
         return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }) -ObservedAt $at)
     }
