@@ -218,9 +218,10 @@ function Invoke-HordeServiceTendOne {
         [void]$lines.Add($name + ": " + $d.action + " (" + $d.step + ") " + $(if ($outcome.ok) { "done" } else { "FAILED" }) + " - " + $said)
         # A failed step is left to the next pass: tried again at once it would fail again at once.
         if (-not $outcome.ok -or $steps -ge $script:HordeServiceStepsMost) { break }
+        # A service asked to stop is watched for as long as the pass has left, so one that stops
+        # promptly is moved on in this pass; then the budget decides whether another step is taken.
         $left = ($Deadline - (Invoke-HordeServiceTool -Tools $Tools -Name "Now")).TotalSeconds
-        if ($left -le 0) { break }
-        if ($d.step -ceq "stop" -and $null -ne $d.process) { $null = Wait-HordeServiceGone -Process $d.process -Tools $Tools -Seconds ([System.Math]::Min([double]$Definition.stop.waitSeconds, $left)) }
+        if ($d.step -ceq "stop" -and $null -ne $d.process -and $left -gt 0) { $null = Wait-HordeServiceGone -Process $d.process -Tools $Tools -Seconds ([System.Math]::Min([double]$Definition.stop.waitSeconds, $left)) }
         if ((Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ge $Deadline) { break }
     }
     return [pscustomobject]@{ name = $name; lines = @($lines.ToArray()); action = $d.action; step = $d.step; code = $d.code; reason = $d.reason; steps = $steps; left = $false }

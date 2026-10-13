@@ -784,7 +784,7 @@ try {
     [System.IO.File]::Delete($beatFile)
     [void][System.IO.Directory]::CreateDirectory($beatFile)
     $said = New-Object System.Collections.ArrayList
-    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 3 -Say { param($Line) [void]$said.Add($Line) }
+    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 3 -Say { param($Line) [void]$said.Add($Line) } } catch { $r = [pscustomobject]@{ turns = -1; stoppedBy = ("threw: " + $_.Exception.Message) } }
     Check ($r.turns -eq 3 -and $r.stoppedBy -ceq "turns" -and @($said | Where-Object { $_ -like "the heartbeat could not be written, and the run goes on without it*" }).Count -eq 1) ("a heartbeat that cannot be written costs the heartbeat and one line, said once - the run turns on (" + (@($said) -join " | ") + ")")
     [System.IO.Directory]::Delete($beatFile)
     if ($script:canDecide) {

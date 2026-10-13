@@ -42,7 +42,7 @@
            Find = '        if (-not $outcome.ok -or $steps -ge $script:HordeServiceStepsMost) { break }'
            Replace = '        if ($steps -ge $script:HordeServiceStepsMost) { break }' }
         @{ Name = "budget-ignored"
-           Find = '        if ($left -le 0) { break }'
+           Find = '        if ((Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ge $Deadline) { break }'
            Replace = '' }
         @{ Name = "notice-not-kept"
            Find = 'if ($d.notify -ne "") { $s = Add-HordeServiceNotice -State $s -Decision $d'

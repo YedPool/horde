@@ -77,6 +77,9 @@ function New-Tools {
     }
 }
 function Pass { param([string]$HordeHome, [hashtable]$More = @{}) return (Invoke-HordeServiceSupervisor -HordeHome $HordeHome -Tools $tools @More) }
+# A call that must not throw: when it does, the answer says so, and the check that reads it FAILS -
+# a suite that merely crashed would not count as having caught anything (tools/Mutate.ps1).
+function Quiet { param([scriptblock]$Block) try { return (@(& $Block) | Select-Object -Last 1) } catch { return [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "threw"; value = $null; reason = ("IT THREW: " + $_.Exception.Message); observedAt = $null; ran = $false; problem = ("IT THREW: " + $_.Exception.Message); lines = @(); services = @() } } }
 function Calls { param([string]$Like) return @($W.calls | Where-Object { $_ -like $Like }).Count }
 function Journal { param([string]$HordeHome) return @(Read-HordeServiceJournalTail -Count 200 -HordeHome $HordeHome | ForEach-Object { $_ | ConvertFrom-Json }) }
 function Running { param([int]$Id, [datetime]$Born, [datetime]$BeatAt) $W.procs[$Id] = $Born; $W.beat = New-HordeKnown -Value ([pscustomobject]@{ at = $BeatAt; pid = $Id; startedAt = $Born; tickSeconds = 60; pass = [long]1 }) -ObservedAt $BeatAt }
@@ -215,14 +218,14 @@ try {
     $r = Invoke-HordeServiceSupervisor -HordeHome $h6 -Tools $noTeller
     Check (($r.lines -join " ") -like "*wait untold: nothing here can tell anyone*") "and with no teller at all, the same"
     $boom = New-Tools; $boom["TellAll"] = { param($Notices, $HordeHome, $Policy) throw "the messenger fell over" }
-    $r = Invoke-HordeServiceSupervisor -HordeHome $h6 -Tools $boom
+    $r = Quiet { Invoke-HordeServiceSupervisor -HordeHome $h6 -Tools $boom }
     Check ($r.ran -and ($r.lines -join " ") -like "*wait untold: the messenger fell over*" -and @((Read-HordeServiceState -Name "svc" -HordeHome $h6).value.notices).Count -eq 1) "a teller that throws costs the telling, not the pass"
 
     Write-Host ""
     Write-Host "--- VIII. what stops a pass, and what does not ---" -ForegroundColor Cyan
     $W = New-World
     $lock = Enter-HordeServiceTendLock -HordeHome $h1
-    try { $r = Pass $h1 } finally { $lock.Dispose() }
+    try { $r = Quiet { Pass $h1 } } finally { $lock.Dispose() }
     Check (-not $r.ran -and $r.problem -eq "" -and ($r.lines -join " ") -like "*another pass is running*" -and (Calls "*") -eq 0) "while another pass holds the home, a pass does nothing, and that is not an error"
     $two = New-Home "h7" ('"bad": { "checkout": "' + $co + '", "hordeHome": "' + $served + '", "start": { "kind": "horde", "words": ["x"] }, "stop": { "kind": "kill" } }, ' + $svcText)
     $throwing = New-Tools; $throwing["ProcessEntry"] = { param($ProcessId) return (New-HordeAbsent -Note "none") }
@@ -230,6 +233,22 @@ try {
     $r = Invoke-HordeServiceSupervisor -HordeHome $two -Tools $throwing
     Check (($r.lines -join " | ") -like "*bad: start (start) FAILED - the start failed: the launcher blew up*" -and (Calls "start svc") -eq 1) "a tool that throws for one service is that service's failed step; the others are still tended"
     Check ((Read-HordeServiceState -Name "bad" -HordeHome $two).value.failures -eq 1) "and the failed start is counted against it"
+    # A start that says it worked and names no process started nothing the supervisor can keep.
+    $W = New-World
+    $nameless = New-Tools; $nameless["Start"] = { param($Definition, $HordeHome, $Policy) [void]$W.calls.Add("start"); return [pscustomobject]@{ ok = $true; detail = "started"; process = $null; revision = "" } }
+    $hN = New-Home "h-nameless" $svcText
+    $r = Invoke-HordeServiceSupervisor -HordeHome $hN -Tools $nameless
+    Check (($r.lines -join " | ") -like "*svc: start (start) FAILED - the start named no process*" -and $null -eq (Read-HordeServiceState -Name "svc" -HordeHome $hN).value.started -and (Read-HordeServiceState -Name "svc" -HordeHome $hN).value.failures -eq 1) "a start that names no process is a failed start: there is no identity to keep or to stop by"
+    # A step that failed is left to the next pass, not tried again at once.
+    $W = New-World
+    Running 500 $t0.AddMinutes(-10) $t0.AddSeconds(-400)
+    $hK = New-Home "h-stuck" $svcText
+    $sK = New-HordeServiceState -Name "svc"; $sK.started = [pscustomobject]@{ pid = 500; startedAt = $t0.AddMinutes(-10); at = $t0.AddMinutes(-10) }; $sK.runningRevision = $revA; $sK.lastFetchAt = $t0
+    $sK.phase = "stopping"; $sK.intent = "heal"; $sK.phaseSince = $t0.AddSeconds(-100)
+    Write-HordeServiceState -State $sK -HordeHome $hK
+    $stuckTools = New-Tools; $stuckTools["Kill"] = { param($Process) [void]$W.calls.Add("kill " + $Process.pid); return [pscustomobject]@{ ok = $false; detail = "access denied" } }
+    $r = Invoke-HordeServiceSupervisor -HordeHome $hK -Tools $stuckTools
+    Check ((Calls "kill*") -eq 1 -and ($r.lines -join " | ") -like "*svc: start (kill) FAILED - access denied*" -and (Read-HordeServiceState -Name "svc" -HordeHome $hK).value.stuck -ceq "access denied") "a step that failed is tried once a pass, not again and again within it"
     $refused = New-Home "h8" '"svc": { "start": { "kind": "horde", "words": ["x"] } }'
     $r = Pass $refused
     Check (-not $r.ran -and $r.problem -like "*is refused*" -and (Calls "start") -eq 0) "a refused definitions file stops the pass with its findings: nothing is supervised on half a file"
@@ -314,7 +333,7 @@ try {
         Check ((@(Invoke-HordeServiceSchedule -Action remove -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde))[0] -like "removed*Nothing that is running was stopped*") "unschedule removes the job and stops nothing"
         Check ((@(Invoke-HordeServiceSchedule -Action status -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde))[0] -like "*is not installed: no service is being supervised") "and then status says nothing is supervised"
         Check ((@(Invoke-HordeServiceSchedule -Action remove -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde))[0] -like "no job*") "removing what is not there says so"
-        Check (Throws { Invoke-HordeServiceSchedule -Action install -TaskName "fake tend" -Folder "Microsoft" -HordeScript $horde } "not one of Horde's scheduler folders") "it acts only in Horde's own scheduler folders"
+        Check ((Throws { Invoke-HordeServiceSchedule -Action install -TaskName "fake tend" -Folder "Microsoft" -HordeScript $horde } "not one of Horde's scheduler folders") -and (Throws { Invoke-HordeServiceSchedule -Action remove -TaskName "fake tend" -Folder "Microsoft" -HordeScript $horde } "not one of Horde's scheduler folders") -and (Throws { Invoke-HordeServiceSchedule -Action status -TaskName "C:\Windows\x" -Folder "HordeTest" -HordeScript $horde } "not a job name")) "it acts only in Horde's own scheduler folders and on plain job names - when removing and showing, as when installing"
         Register-HordeScheduler -Name "fake" -Available { $true } -Install { param($j) } -Remove { param($n, $f) $false } -Status { param($n, $f) New-HordeAbsent -Note "none" }
         Check (Throws { Invoke-HordeServiceSchedule -Action install -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde } "did not keep") "a scheduler that does not keep the job makes install fail"
     } finally {
@@ -341,7 +360,9 @@ try {
     Check ((Get-HordePersonIdleSeconds).state -ceq "unknown") "a negative idle time is not an answer"
     Check ((Start-HordeServiceProcess -Launch $launch).reason -like "*did not say which process it made and when it started*") "a start that names a pid and no start time is not an answer: the pair is the identity"
     Register-HordeServiceHost -Name "standin" -Applies { $true } -IdleSeconds { "idle" } -Start { param($L) throw "boom" } -CloseWindow { param($P, $H) $handed.closed = ("" + $P + ":" + $H); New-HordeKnown -Value "asked" }
-    Check ((Get-HordePersonIdleSeconds).state -ceq "unknown" -and (Start-HordeServiceProcess -Launch $launch).reason -like "*adapter failed*boom*") "an adapter that answers with a word, or throws, is unknown with the reason"
+    Check ((Get-HordePersonIdleSeconds).state -ceq "unknown" -and (Quiet { Start-HordeServiceProcess -Launch $launch }).reason -like "the start: the standin adapter failed*boom*") "an adapter that answers with a word, or throws, is unknown with the reason"
+    Register-HordeServiceHost -Name "standin" -Applies { $true } -IdleSeconds { "idle" } -Start { param($L) New-HordeKnown -Value ([pscustomobject]@{ pid = 9; startedAt = "a moment ago" }) } -CloseWindow { param($P, $H) $handed.closed = ("" + $P + ":" + $H); New-HordeKnown -Value "asked" }
+    Check ((Quiet { Start-HordeServiceProcess -Launch $launch }).reason -like "*did not say which process it made and when it started*") "and a start whose start time is a word, not a time, is not an answer either"
     Check ((Close-HordeServiceWindow -ProcessId 9 -Handle 100).state -ceq "known" -and $handed.closed -ceq "9:100") "a close is handed the process and the window"
     Check ((Close-HordeServiceWindow -ProcessId 9 -Handle 0).state -ceq "unknown") "a close with no window named is refused before any adapter is asked"
     Check (Throws { New-HordeServiceLaunch -Kind "horde" -Script "C:\h.ps1" -Words @("relay") -Switches @("Force; calc") } "not a parameter name") "a launch refuses a switch that is not a name"
@@ -383,7 +404,7 @@ try {
     Check ($script.Contains(" -Relay (& `$d '") -and $script.Contains(" -Hidden") -and $script.Contains("SetEnvironmentVariable('HORDE_HOME', (& `$d '")) "parameter and environment NAMES are written as they are, each value decoded at run time"
     Check ($script.Contains("6>&1") -and -not $script.Contains("*>&1") -and -not $script.Contains("2>&1") -and $script.Contains("[System.Console]::SetError(`$w)")) "the service's lines are logged without redirecting its error stream (CONTRIBUTING 12)"
     $line = ConvertTo-HordeWindowsServiceCommandLine -Launch $l
-    Check ($line -match '\A\S*powershell\.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand [A-Za-z0-9+/=]+\z' -and $line.StartsWith((Get-HordeWindowsServiceShell))) "the command line is the system's own shell, fixed switches and base64"
+    Check ($line -match '\A\S*powershell\.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand [A-Za-z0-9+/=]+\z' -and $line.StartsWith(([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe") + " "))) "the command line is the system's own shell, fixed switches and base64"
     $pl = ConvertTo-HordeWindowsServiceCommandLine -Launch (New-HordeServiceLaunch -Kind "program" -Program "C:\Program Files\t\t.exe" -Arguments @("-q", "a b", 'c"d'))
     Check ($pl -ceq '"C:\Program Files\t\t.exe" -q "a b" "c\"d"') "a program launch is the program and its arguments, each quoted by the one rule"
     Check ((Get-HordeWindowsSessionSeesPerson -Interactive $false -SessionId 1) -like "*not interactive*" -and (Get-HordeWindowsSessionSeesPerson -Interactive $true -SessionId 0) -like "*session 0*" -and (Get-HordeWindowsSessionSeesPerson -Interactive $true -SessionId 2) -eq "") "a process outside the person's own session cannot see their input, and says why"
