@@ -14,6 +14,15 @@
 #     password, and runs in no visible session, so no console window flashes every 30 minutes, which
 #     an Interactive task running powershell.exe -WindowStyle Hidden still does. S4U has no network
 #     credentials; collect reads and writes local files only. Run level Limited: no elevation.
+#   - A JOB MADE -WithPerson (core/Schedule.ps1) IS THE EXCEPTION TO BOTH: logon type Interactive, so
+#     it runs in the person's session and only while they are logged on, and its program is the
+#     console host started headless, which runs PowerShell with no console window at all. Measured
+#     2026-10-13 on Windows 11 26200: `conhost.exe --headless powershell.exe ...` ran the command in
+#     session 1 as an interactive process and made no window. TWO THINGS FOLLOW, also measured then:
+#     the console host exits 0 whatever PowerShell exited with (a command that exited 7 read as 0), so
+#     such a task's last result says nothing about the job - the job must say for itself that it ran;
+#     and the flag is not in Microsoft's documentation, so a Windows that drops it would fail the task
+#     outright, which the job's own silence shows.
 #   - EVERY N MINUTES, from a one-time trigger N minutes after install with an indefinite repetition.
 #   - PRIORITY 7 (below normal; 0 highest, 10 lowest), stopped after the time limit, never two at once
 #     (IgnoreNew), and run on battery as well.
@@ -43,7 +52,10 @@ function ConvertTo-HordeTaskAction {
     [void]$sb.Append((@($Job.arguments | ForEach-Object { '(& $d ''' + (ConvertTo-HordeBase64Text "$_") + ''')' }) -join ', '))
     [void]$sb.Append('); & (& $d ''' + (ConvertTo-HordeBase64Text $Job.script) + ''') @a; exit $LASTEXITCODE')
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($sb.ToString()))
-    return [pscustomobject]@{ program = "powershell.exe"; arguments = ("-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded) }
+    $shellArguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded
+    # In the person's session a hidden PowerShell window still flashes; the headless console host has none (header).
+    if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { return [pscustomobject]@{ program = "conhost.exe"; arguments = ("--headless powershell.exe " + $shellArguments) } }
+    return [pscustomobject]@{ program = "powershell.exe"; arguments = $shellArguments }
 }
 
 function Get-HordeTaskSchedulerTask {
@@ -88,6 +100,7 @@ function Install-HordeTaskSchedulerJob {
     if ($Job.disabled) { $settingArgs["Disable"] = $true }
     $settings = New-ScheduledTaskSettingsSet @settingArgs
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited
+    if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited }
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description $Job.description
     $task.Author = $script:HordeTaskAuthor
     # -Force replaces a task of the same name - only ever Horde's own, checked above.

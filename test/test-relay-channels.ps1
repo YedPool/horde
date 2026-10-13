@@ -772,6 +772,21 @@ try {
     Check ($r.turns -eq 3 -and $r.stoppedBy -ceq "turns" -and $sayText.Contains("watching " + $W.ctx.mailbox) -and $sayText.Contains("stopped after 3 turn(s)")) ("it turns the number asked, watching the machine's mailbox, and says when it stops (" + $sayText + ")")
     if ($script:canDecide) { Check ($sayText.Contains("done ") -and $sayText.Contains("snapshot of 1 open question(s)") -and @(Get-Said $W.store).Count -eq 1) "in those turns the answer landed and the snapshot went out" }
     Check ($script:released -eq 1) ("retired agreement keys are checked when it starts, not on every turn (" + $script:released + ")")
+    # THE HEARTBEAT (cli/RelayRun.ps1, A HEARTBEAT): one write a turn, naming this process by pid and start.
+    $beat = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $W.home)
+    $selfNow = Get-HordeHeartbeatSelf
+    Check ($beat.state -ceq "known" -and $beat.value.pid -eq $PID -and $beat.value.pass -eq 3 -and $beat.value.startedAt -is [datetime] -and $beat.value.startedAt.Ticks -eq $selfNow.startedAt.Ticks) ("a run writes its heartbeat every turn: this process, by pid and start, and the turn it is on (" + $beat.reason + ")")
+    Check ($beat.value.tickSeconds -eq 77 -and (Get-HordeRelayRunHeartbeatPath -HordeHome $W.home) -ceq (Join-Path $W.home "relay\run-heartbeat.json")) "the tick it promises is computed from its own settings: no watch, a 60 s longest backoff moved by 20 percent, and 5 s"
+    $tickOf = { param([int]$Watch, [int]$Max, [int]$Jitter, [int]$Min) return (Get-HordeRelayRunTickSeconds -WatchMs $Watch -Settings ([pscustomobject]@{ backoffMaxMs = $Max; backoffJitterPercent = $Jitter; minTurnMs = $Min })) }
+    Check ((& $tickOf 25000 60000 20 1000) -eq 102 -and (& $tickOf 60000 3600000 0 1000) -eq 3665 -and (& $tickOf 0 0 0 1000) -eq 6) "a longer watch or a longer backoff promises a longer tick, so a run waiting out a backoff as designed is never read as dead"
+    # A heartbeat that cannot be written never ends the loop: a folder stands where the file should be.
+    $beatFile = Get-HordeRelayRunHeartbeatPath -HordeHome $W.home
+    [System.IO.File]::Delete($beatFile)
+    [void][System.IO.Directory]::CreateDirectory($beatFile)
+    $said = New-Object System.Collections.ArrayList
+    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 3 -Say { param($Line) [void]$said.Add($Line) } } catch { $r = [pscustomobject]@{ turns = -1; stoppedBy = ("threw: " + $_.Exception.Message) } }
+    Check ($r.turns -eq 3 -and $r.stoppedBy -ceq "turns" -and @($said | Where-Object { $_ -like "the heartbeat could not be written, and the run goes on without it*" }).Count -eq 1) ("a heartbeat that cannot be written costs the heartbeat and one line, said once - the run turns on (" + (@($said) -join " | ") + ")")
+    [System.IO.Directory]::Delete($beatFile)
     if ($script:canDecide) {
         [void](Send-ToMachine $W (Get-Answer $W -Text "in one turn").text)
         $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) }
