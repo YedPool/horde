@@ -8,6 +8,66 @@
     Suite  = "test\test-wake-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "a-fleet-that-could-not-be-asked-is-a-known-empty-list"
+           Find = 'return (New-HordeAbsent -Note ("waker ''" + $Waker.name + "'' could not ask its fleet which labels it reserves: " + $why.value))'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ labels = @() }))' }
+        @{ Name = "a-waker-with-no-fleet-reserves-nothing-known"
+           Find = 'if ($null -eq $Waker.reserved) { return (New-HordeAbsent -Note'
+           Replace = 'if ($null -eq $Waker.reserved) { return (New-HordeKnown -Value ([pscustomobject]@{ labels = @() })) }; if ($false) { return (New-HordeAbsent -Note' }
+        @{ Name = "an-answer-that-does-not-say-whether-it-asked-is-read"
+           Find = 'if (-not $answered.has -or $answered.value -isnot [bool]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-reserved-label-that-is-no-label-is-carried"
+           Find = 'if ($l -isnot [string] -or $l.Trim() -eq "" -or $l -cmatch "\s") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "reserved-labels-without-a-list-are-read"
+           Find = 'if (-not $labels.has -or $null -eq $labels.value -or $labels.value -is [string] -or $labels.value -is [System.ValueType]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "not-asked-without-a-why-is-absent"
+           Find = 'if (-not $why.has -or $why.value -isnot [string] -or $why.value.Trim() -eq "" -or $why.value -cmatch "[`r`n]") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "the-rule-a-waker-names-is-not-carried"
+           Find = 'if ($ruled.has -and $ruled.value -is [string] -and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] ='
+           Replace = 'if ($false) { $value["rule"] =' }
+        @{ Name = "a-rule-of-two-lines-is-carried"
+           Find = '-and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] ='
+           Replace = '-and $ruled.value.Trim() -ne "") { $value["rule"] =' }
+        @{ Name = "a-waker-that-says-nothing-of-betweenturns-reads-as-no"
+           Find = '        $between = "unknown"'
+           Replace = '        $between = "no"' }
+        @{ Name = "a-waker-that-cannot-tell-may-say-between-turns"
+           Find = 'if ($bt.has -and $null -ne $bt.value -and "$($bt.value)" -cne "no") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-betweenturns-outside-the-three-words-accepted"
+           Find = 'if ($bt.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $bt.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "acked-left-out-reads-as-known"
+           Find = '    $acked = "unknown"'
+           Replace = '    $acked = "known"' }
+        @{ Name = "an-acked-outside-its-two-words-accepted"
+           Find = 'if ($ak.value -isnot [string] -or @("known", "unknown") -cnotcontains $ak.value) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-time-beside-acked-unknown-is-carried"
+           Find = 'if ($acked -ceq "known" -and $la.has -and $null -ne $la.value) {'
+           Replace = 'if ($la.has -and $null -ne $la.value) {' }
+        @{ Name = "a-lastackedat-with-no-zone-accepted"
+           Find = 'if ($null -eq $lastAcked) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "a-handed-over-count-that-is-no-count-accepted"
+           Find = 'if (-not ($ho.value -is [int] -or $ho.value -is [long]) -or $ho.value -lt 0 -or $ho.value -gt [int]::MaxValue) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "an-oldest-handed-over-with-no-zone-accepted"
+           Find = 'if ($null -eq $handedAt) { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "betweenturns-is-not-carried"
+           Find = 'betweenTurns = $between; acked = $acked;'
+           Replace = 'betweenTurns = "no"; acked = $acked;' }
+        @{ Name = "when-it-last-acknowledged-is-not-carried"
+           Find = 'acked = $acked; lastAckedAt = $lastAcked;'
+           Replace = 'acked = $acked; lastAckedAt = $null;' }
+        @{ Name = "what-was-handed-over-is-not-carried"
+           Find = 'handedOverCount = $handed; oldestHandedOverAt = $handedAt })'
+           Replace = 'handedOverCount = $null; oldestHandedOverAt = $handedAt })' }
         @{ Name = "a-source-that-does-not-say-fixed-is-accepted"
            Find = 'if (-not $fixed.has -or $fixed.value -isnot [bool]) { return'
            Replace = 'if ($false) { return' }
@@ -39,11 +99,11 @@
            Find = 'reachable = [string]$reach.value; retired = [string]$retired.value })'
            Replace = 'reachable = [string]$reach.value; retired = "no" })' }
         @{ Name = "limited-not-carried"
-           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
-           Replace = 'midTurn = $words["midTurn"]; limited = $false; limitedUntil = $limitedUntil })' }
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns'
+           Replace = 'midTurn = $words["midTurn"]; limited = "no"; limitedUntil = $limitedUntil; betweenTurns' }
         @{ Name = "the-end-of-a-limit-not-carried"
-           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil })'
-           Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null })' }
+           Find = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns'
+           Replace = 'midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $null; betweenTurns' }
         @{ Name = "a-limit-ending-at-a-time-with-no-zone-accepted"
            Find = 'if ($null -eq $limitedUntil) { return (New-HordeUnknown'
            Replace = 'if ($false) { return (New-HordeUnknown' }

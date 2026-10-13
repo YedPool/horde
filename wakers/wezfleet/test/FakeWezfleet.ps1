@@ -30,13 +30,23 @@
 #                    one that is not a whole number from 35 to 300 is exit 2, bad-budget. mode.json's
 #                    nudge.slowStartSeconds is counted as time this script took to start, without
 #                    waiting it out
-#     every answer carries elapsedMs, a whole number of milliseconds since this script began
+#     every answer carries elapsedMs, a whole number of milliseconds since this script began, and rule:
+#     between-turns-background-work for a woken of a session whose row says betweenTurns yes, else ""
+#     (the real command's shape, read 2026-10-13)
 #       unreachable  no such session, or its row says it cannot be reached
 #       refused      it has no unread mail: there is nothing to nudge for; or (reason retired) the
 #                    session is retired - and NOTHING IS TYPED
-#       busy         its box is not empty, it is mid-turn, or it is not idle - and NOTHING IS TYPED
+#       busy         its box is not empty (reason box-not-empty), or it is mid-turn or not idle (reason
+#                    mid-turn, the real command's word) - and NOTHING IS TYPED
 #       woken        the pointer line is "typed": one line appended to typed.log
 #     exit 2 for an empty -To
+#   labels reserved [-Json]                            exit 0. -Json: one line,
+#                                                      {"schema":"wezfleet.labels.reserved","version":1,"labels":["RS","WW","SV"]};
+#                                                      without it, one label a line. `labels` with
+#                                                      anything else, or nothing, is exit 2. COPIED
+#                                                      FROM THE REAL COMMAND'S OUTPUT (2026-10-13). A
+#                                                      wezfleet from before the verb is played by
+#                                                      mode.json's labels: a non-zero exit
 param()
 $ErrorActionPreference = "Stop"
 $fakeClock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -65,11 +75,12 @@ function Write-FakeAnswer {
 function Get-FakeNow { return [datetime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
 function Test-Mode { param($M, [string]$Name) return ($null -ne $M -and $null -ne $M.PSObject.Properties[$Name]) }
 
-if ($argvList.Count -lt 2 -or $argvList[0] -cne "mail" -or @("state", "nudge") -cnotcontains $argvList[1]) { [Console]::Out.WriteLine("fake wezfleet: only mail state and mail nudge are played"); exit 1 }
+$isLabels = ($argvList.Count -ge 1 -and $argvList[0] -ceq "labels")
+if (-not $isLabels -and ($argvList.Count -lt 2 -or $argvList[0] -cne "mail" -or @("state", "nudge") -cnotcontains $argvList[1])) { [Console]::Out.WriteLine("fake wezfleet: only mail state, mail nudge and labels reserved are played"); exit 1 }
 $to = Get-FakeArg "-To"
 $hasTo = ($argvList -ccontains "-To")
 $form = "fleet"
-if ($argvList[1] -ceq "nudge") { $form = "nudge" } elseif ($hasTo) { $form = "pane" }
+if ($isLabels) { $form = "labels" } elseif ($argvList[1] -ceq "nudge") { $form = "nudge" } elseif ($hasTo) { $form = "pane" }
 
 $mode = $null
 $modePath = Join-Path $root "mode.json"
@@ -81,6 +92,13 @@ if (Test-Mode $m "stdout") {
     [Console]::Out.Write([string]$m.stdout)
     if (Test-Mode $m "stderr") { [Console]::Error.Write([string]$m.stderr) }
     exit ([int]$m.exit)
+}
+
+if ($form -ceq "labels") {
+    if ($argvList.Count -lt 2 -or $argvList[1] -cne "reserved") { [Console]::Error.WriteLine("wezfleet labels: the one thing to ask for is: reserved (wezfleet labels reserved [-Json])"); exit 2 }
+    if ($argvList -ccontains "-Json") { [Console]::Out.WriteLine('{"schema":"wezfleet.labels.reserved","version":1,"labels":["RS","WW","SV"]}') }
+    else { foreach ($l in @("RS", "WW", "SV")) { [Console]::Out.WriteLine($l) } }
+    exit 0
 }
 
 $fleetPath = Join-Path $root "fleet.json"
@@ -109,7 +127,7 @@ if ($form -ceq "pane") {
 # nudge
 if ($to -eq "") { Write-FakeAnswer 2 ([ordered]@{ outcome = "unreachable"; reason = "bad-to"; target = ""; pane = ""; instance = ""; detail = "an empty -To" }) }
 $row = @(@($rows) | Where-Object { $null -ne $_ -and $_.id -ceq $to }) | Select-Object -First 1
-function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds }) }
+function Write-FakeNudge { param([string]$Outcome, [string]$Reason, [string]$Detail = "") Write-FakeAnswer 0 ([ordered]@{ outcome = $Outcome; reason = $Reason; target = $to; pane = "7"; instance = "fake-instance"; detail = $Detail; elapsedMs = [int]$fakeClock.ElapsedMilliseconds; rule = $(if ($Outcome -ceq "woken" -and "$($row.betweenTurns)" -ceq "yes") { "between-turns-background-work" } else { "" }) }) }
 if ($null -eq $row -or $row.reachable -cne "yes") { Write-FakeNudge "unreachable" "no-pane" "no pane of that session was found" }
 if ($row.retired -eq $true) { Write-FakeNudge "refused" "retired" "the session is retired; nothing is typed into a retired session" }
 if ($null -eq $row.unreadCount -or $row.unreadCount -le 0) { Write-FakeNudge "refused" "no-unread-mail" "there is nothing to nudge for" }
@@ -122,6 +140,6 @@ if (Test-Mode $m "slowStartSeconds") { $slowStart = [int]$m.slowStartSeconds }
 if (($argvList -ccontains "-BudgetSeconds") -and ($budget - $slowStart - $fakeClock.Elapsed.TotalSeconds) -lt 30) { Write-FakeNudge "refused" "budget-too-small" ("less than 30 s of the " + $budget + " s budget is left, too little to type and send in") }
 # THE GUARD, at the moment of typing: the pane as it is now.
 if ($row.boxEmpty -cne "yes") { Write-FakeNudge "busy" "box-not-empty" "the input box holds unsent text" }
-if ($row.midTurn -cne "no" -or $row.idle -cne "yes") { Write-FakeNudge "busy" "not-idle" "the session is in a turn" }
+if ($row.midTurn -cne "no" -or $row.idle -cne "yes") { Write-FakeNudge "busy" "mid-turn" "the session says it is not idle; its own turn boundary delivers the mail; nothing typed" }
 [System.IO.File]::AppendAllText((Join-Path $root "typed.log"), ((@{ id = $to; text = "You have unread fleet mail. Read it now." } | ConvertTo-Json -Compress) + "`n"), [System.Text.Encoding]::ASCII)
 Write-FakeNudge "woken" "woken"

@@ -76,10 +76,23 @@ function Set-HordeMemoryWakerSession {
         [string]$OutcomeReason = "",
         $UnreadableCount = $null,
         [string]$Limited = "no",
-        $LimitedUntil = $null
+        $LimitedUntil = $null,
+        [string]$BetweenTurns = "no",
+        [string]$Rule = "",
+        [string]$Acked = "known",
+        $LastAckedAt = $null,
+        $HandedOverCount = 0,
+        $OldestHandedOverAt = $null
     )
     $script:HordeMemoryWakerSessions[$Id] = @{ id = $Id; label = $Label; role = $Role; parent = $Parent; reachable = $Reachable; retired = $Retired; unreadCount = $UnreadCount;
-        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil }
+        oldestUnreadAt = $OldestUnreadAt; idle = $Idle; boxEmpty = $BoxEmpty; midTurn = $MidTurn; outcome = $Outcome; outcomeReason = $OutcomeReason; unreadableCount = $UnreadableCount; limited = $Limited; limitedUntil = $LimitedUntil; betweenTurns = $BetweenTurns; rule = $Rule; acked = $Acked; lastAckedAt = $LastAckedAt; handedOverCount = $HandedOverCount; oldestHandedOverAt = $OldestHandedOverAt }
+}
+
+function Set-HordeMemoryWakerAcked {
+    # Plays a session acknowledging mail at -At: one that is not there is added, with no unread mail.
+    param([Parameter(Mandatory = $true)][string]$Id, $At)
+    if (-not $script:HordeMemoryWakerSessions.Contains($Id)) { Set-HordeMemoryWakerSession -Id $Id -Label "Z" -Role "warg" -UnreadCount 0 }
+    $script:HordeMemoryWakerSessions[$Id].lastAckedAt = $At
 }
 
 function Set-HordeMemoryWakerFault {
@@ -129,6 +142,11 @@ function Get-HordeMemoryWakerState {
     # Reported only when a test said so: left out, the port reads it as none.
     if ($null -ne $s.unreadableCount) { $value["unreadableCount"] = $s.unreadableCount }
     $value["limited"] = $s.limited
+    $value["betweenTurns"] = $s.betweenTurns
+    $value["acked"] = $s.acked
+    if ($null -ne $s.lastAckedAt) { $value["lastAckedAt"] = $s.lastAckedAt }
+    if ($null -ne $s.handedOverCount) { $value["handedOverCount"] = $s.handedOverCount }
+    if ($null -ne $s.oldestHandedOverAt) { $value["oldestHandedOverAt"] = $s.oldestHandedOverAt }
     if ($null -ne $s.limitedUntil) { $value["limitedUntil"] = $s.limitedUntil }
     return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt (Get-HordeMemoryWakerTime))
 }
@@ -170,6 +188,8 @@ $null = Register-HordeWaker -Name "memory" `
         # it did not ring, so nothing was typed for them; killed is a nudge stopped part-way, which a
         # test asks for by name.
         if ("$($s.outcome)" -ceq "woken") { [void]$script:HordeMemoryWakerNudges.Add([pscustomobject]@{ id = $Id; at = $at; text = $script:HordeMemoryWakerPointer }) }
-        return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }) -ObservedAt $at)
+        $rang = [ordered]@{ id = $Id; outcome = $s.outcome; reason = $s.outcomeReason; at = $at }
+        if ("$($s.rule)" -ne "") { $rang["rule"] = $s.rule }
+        return (New-HordeKnown -Value ([pscustomobject]$rang) -ObservedAt $at)
     } `
     -Begin { $script:HordeMemoryWakerBegins++ }

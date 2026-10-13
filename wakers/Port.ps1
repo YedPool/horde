@@ -41,6 +41,8 @@
 #   reach.unseen        it can nudge a session that has not taken a turn since a restore
 #   nudge.guarded       the nudge itself looks again, and rings only a session that still has an empty
 #                       input box and is not mid-turn (below)
+#   state.between-turns it can tell that a session is idle between turns though its own status still
+#                       says busy (background work holds the status). Not required for a live run
 #   state.limit         it can tell whether a session is under a usage limit, and so cannot answer a
 #                       knock. Not one of the five the production path requires: a waker for a harness
 #                       that has no such thing declares no, and its sessions are read as not limited
@@ -86,6 +88,12 @@
 #            fixed is true when a person NAMED the place in a setting, false when the waker found it
 #            by looking (on PATH); how is one line saying which. A waker that runs no program of
 #            anybody's registers none (Get-HordeWakerSource).
+#   Reserved param()             -> known { answered; labels | why }: the labels this waker's fleet
+#            reserves for senders that are no session, ASKED OF THE FLEET, not copied. answered is
+#            true with labels, the list; or false with why, one line, when the fleet could not be
+#            asked - its tool is older than the question, or cannot be found. An answer it could
+#            not read is unknown. Only a suite asks (Get-HordeWakerReservedLabels): it is how
+#            Horde's own copy of the list is held to the fleet's. A waker with no fleet registers none.
 #   Begin    param()             a pass begins. A waker that answers a pass's many questions from one
 #            reading of the fleet throws that reading away here, and nowhere else by the clock: the
 #            watcher says when a pass begins (Start-HordeWakePass), so a reading is never reused across
@@ -104,7 +112,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Roles.ps1")
 
 if ($null -eq (Get-Variable -Name HordeWakers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWakers = @{} }
-$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded", "state.limit")
+$script:HordeWakerCapabilityNames = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded", "state.limit", "state.between-turns")
 # What the production path requires: every one. A waker without all five is never picked there.
 $script:HordeProductionWakerRequires = @("nudge.pointer-only", "state.box", "state.turn", "reach.unseen", "nudge.guarded")
 # Horde's roles as core/Roles.ps1 lists them (core\roles.json), then unknown for a session whose role
@@ -173,6 +181,7 @@ function Register-HordeWaker {
         [scriptblock]$Begin = $null,
         [scriptblock]$Confirm = $null,
         [scriptblock]$Source = $null,
+        [scriptblock]$Reserved = $null,
         [string]$Folder = ""
     )
     $from = $Folder
@@ -188,7 +197,7 @@ function Register-HordeWaker {
     if ($script:HordeWakers.ContainsKey($Name)) {
         throw ("waker '" + $Name + "' is already registered, from " + $script:HordeWakers[$Name].folder + "; the first registration stands")
     }
-    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source }
+    $w = [pscustomobject]@{ PSTypeName = "Horde.Waker"; name = $Name; folder = $from; capabilities = $caps; targets = $Targets; state = $State; nudge = $Nudge; begin = $Begin; confirm = $Confirm; source = $Source; reserved = $Reserved }
     $script:HordeWakers[$Name] = $w
     return $w
 }
@@ -353,6 +362,38 @@ function ConvertFrom-HordeWakerAnswer {
     return [pscustomobject]@{ ok = $true; answer = $Answer }
 }
 
+function Get-HordeWakerReservedLabels {
+    # THE LABELS THIS WAKER'S FLEET RESERVES, as the fleet itself says them (ADAPTER CONTRACT, Reserved):
+    # known { labels }, absent - with why - when there was nothing to ask or no way to ask it, or
+    # unknown when the waker answered something this cannot read, or threw.
+    # ABSENT IS "NOT COMPARED", NEVER "THE SAME": a caller that holds Horde's list to the fleet's
+    # (core/ReservedLabels.ps1) must say so and must not pass the comparison on it.
+    param($Waker)
+    if (-not (Test-HordeWakerRegistered $Waker)) { return (New-HordeUnknown -Reason ("waker '" + (Get-HordeWakerLabel $Waker) + "' is not registered through Register-HordeWaker, so the labels its fleet reserves were not asked for")) }
+    if ($null -eq $Waker.reserved) { return (New-HordeAbsent -Note ("waker '" + $Waker.name + "' has no fleet whose reserved labels could be asked for")) }
+    try { $a = & $Waker.reserved }
+    catch { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' failed to say which labels its fleet reserves") -ErrorRecord $_) }
+    $first = ConvertFrom-HordeWakerAnswer -Answer $a -What "which labels its fleet reserves" -Waker $Waker.name
+    if (-not $first.ok) { return $first.answer }
+    $v = $a.value
+    if (-not (Test-HordeWakerRecord $v)) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered which labels its fleet reserves with something that is not an object")) }
+    $answered = Get-HordeWakerMember $v "answered"
+    if (-not $answered.has -or $answered.value -isnot [bool]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered which labels its fleet reserves without saying, true or false, whether the fleet was asked")) }
+    if (-not $answered.value) {
+        $why = Get-HordeWakerMember $v "why"
+        if (-not $why.has -or $why.value -isnot [string] -or $why.value.Trim() -eq "" -or $why.value -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' said its fleet could not be asked which labels it reserves, without one line saying why")) }
+        return (New-HordeAbsent -Note ("waker '" + $Waker.name + "' could not ask its fleet which labels it reserves: " + $why.value))
+    }
+    $labels = Get-HordeWakerMember $v "labels"
+    if (-not $labels.has -or $null -eq $labels.value -or $labels.value -is [string] -or $labels.value -is [System.ValueType]) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' said its fleet answered which labels it reserves, without the list")) }
+    $list = New-Object System.Collections.ArrayList
+    foreach ($l in @($labels.value)) {
+        if ($l -isnot [string] -or $l.Trim() -eq "" -or $l -cmatch "\s") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered which labels its fleet reserves with one that is not a label")) }
+        [void]$list.Add($l)
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ labels = $list.ToArray() }) -ObservedAt $a.observedAt)
+}
+
 function Get-HordeWakerSource {
     # WHERE THE PROGRAM THIS WAKER RUNS COMES FROM, and whether a person named it (ADAPTER CONTRACT,
     # Source): known { fixed; how }, absent for a waker that runs no program of anybody's (it registered
@@ -508,6 +549,56 @@ function Get-HordeWakeState {
         $limitedUntil = ConvertTo-HordeWakerUtc $until.value
         if ($null -eq $limitedUntil) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a limitedUntil that is not a time with a zone")) }
     }
+    # betweenTurns: is idle "yes" BY THE BETWEEN-TURNS RULE - the session's own status still says busy,
+    # because background work holds it, and its turn has in fact ended? yes, no or unknown, on the rule
+    # of limited: a waker that claims state.between-turns and leaves it out has not said (unknown); one
+    # that does not claim it cannot tell, reads as no, and may not say otherwise. The port only carries
+    # it, so the journal can say which rule let a nudge through (core/Wake.ps1).
+    $between = "no"
+    $bt = Get-HordeWakerMember $v "betweenTurns"
+    if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.between-turns")) {
+        if ($bt.has -and $null -ne $bt.value -and "$($bt.value)" -cne "no") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.between-turns and still answered betweenTurns " + $bt.value + " for " + $Id)) }
+    } else {
+        $between = "unknown"
+        if ($bt.has -and $null -ne $bt.value) {
+            if ($bt.value -isnot [string] -or $script:HordeWakerWords -cnotcontains $bt.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a betweenTurns that is not one of " + ($script:HordeWakerWords -join ", "))) }
+            $between = [string]$bt.value
+        }
+    }
+    # WHAT THE SESSION HAS TAKEN, AND WHAT WAS HANDED TO IT, all optional and all "unknown" when left out
+    # ($null) - never 0, never "never":
+    #   acked, lastAckedAt   could the waker read what the session has acknowledged (known, unknown), and
+    #                        when it last acknowledged any mail (a time with a zone, or $null for never).
+    #                        A session acknowledges mail only by taking a turn, so this is the evidence
+    #                        that it could take one then (core/Wake.ps1). lastAckedAt is read only
+    #                        beside acked known.
+    #   handedOverCount,     mail that is in the session's inbox but was HANDED to it by its own side and
+    #   oldestHandedOverAt   is not yet acknowledged: not waiting for a knock, so not in unreadCount.
+    #                        A whole number, 0 or more, and the time of the oldest; $null for unknown.
+    $acked = "unknown"
+    $lastAcked = $null
+    $ak = Get-HordeWakerMember $v "acked"
+    if ($ak.has -and $null -ne $ak.value) {
+        if ($ak.value -isnot [string] -or @("known", "unknown") -cnotcontains $ak.value) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an acked that is not known or unknown")) }
+        $acked = [string]$ak.value
+    }
+    $la = Get-HordeWakerMember $v "lastAckedAt"
+    if ($acked -ceq "known" -and $la.has -and $null -ne $la.value) {
+        $lastAcked = ConvertTo-HordeWakerUtc $la.value
+        if ($null -eq $lastAcked) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a lastAckedAt that is not a time with a zone")) }
+    }
+    $handed = $null
+    $handedAt = $null
+    $ho = Get-HordeWakerMember $v "handedOverCount"
+    if ($ho.has -and $null -ne $ho.value) {
+        if (-not ($ho.value -is [int] -or $ho.value -is [long]) -or $ho.value -lt 0 -or $ho.value -gt [int]::MaxValue) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with a handedOverCount that is not a whole number, 0 or more")) }
+        $handed = [int]$ho.value
+    }
+    $hoAt = Get-HordeWakerMember $v "oldestHandedOverAt"
+    if ($null -ne $handed -and $handed -gt 0 -and $hoAt.has -and $null -ne $hoAt.value) {
+        $handedAt = ConvertTo-HordeWakerUtc $hoAt.value
+        if ($null -eq $handedAt) { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' answered the state of " + $Id + " with an oldestHandedOverAt that is not a time with a zone")) }
+    }
     $words = [ordered]@{}
     foreach ($n in @("idle", "boxEmpty", "midTurn")) {
         $m = Get-HordeWakerMember $v $n
@@ -519,7 +610,7 @@ function Get-HordeWakeState {
     # nudge typed into somebody's text.
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.box") -and $words["boxEmpty"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.box and still answered boxEmpty " + $words["boxEmpty"] + " for " + $Id)) }
     if (-not (Test-HordeWakerClaims -Waker $Waker -Capability "state.turn") -and $words["midTurn"] -cne "unknown") { return (New-HordeUnknown -Reason ("waker '" + $Waker.name + "' does not offer state.turn and still answered midTurn " + $words["midTurn"] + " for " + $Id)) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil }) -ObservedAt $a.observedAt)
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $Id; unreadCount = [int]$count.value; unreadableCount = $unreadable; oldestUnreadAt = $oldestAt; idle = $words["idle"]; boxEmpty = $words["boxEmpty"]; midTurn = $words["midTurn"]; limited = $limited; limitedUntil = $limitedUntil; betweenTurns = $between; acked = $acked; lastAckedAt = $lastAcked; handedOverCount = $handed; oldestHandedOverAt = $handedAt }) -ObservedAt $a.observedAt)
 }
 
 function Send-HordeWakeNudge {
@@ -555,5 +646,10 @@ function Send-HordeWakeNudge {
     # outcome that is otherwise sound.
     $took = Get-HordeWakerMember $v "elapsedMs"
     if ($took.has -and ($took.value -is [int] -or $took.value -is [long]) -and $took.value -ge 0) { $value["elapsedMs"] = [long]$took.value }
+    # rule IS OPTIONAL: the waker's own name for the rule that let it type, when it was not the plain
+    # one - "the session said idle". One line of text, carried as given (cut to 200 characters);
+    # anything else there is left out. The port does not know the names: a new one is not an error.
+    $ruled = Get-HordeWakerMember $v "rule"
+    if ($ruled.has -and $ruled.value -is [string] -and $ruled.value.Trim() -ne "" -and $ruled.value -cnotmatch "[`r`n]") { $value["rule"] = $(if ($ruled.value.Length -gt 200) { $ruled.value.Substring(0, 200) } else { $ruled.value }) }
     return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $a.observedAt)
 }

@@ -78,7 +78,7 @@ foreach ($marker in @("lib\Mail.ps1", "commands\mail.ps1")) {
 }
 $idle = "0a000000-0000-4000-8000-000000000001"; $busy = "0a000000-0000-4000-8000-000000000002"; $typing = "0a000000-0000-4000-8000-000000000003"
 $old = [datetime]::UtcNow.AddMinutes(-10).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
-function New-Row { param([string]$Id, [string]$Idle = "yes", [string]$Box = "yes", [string]$Turn = "no") return [ordered]@{ id = $Id; label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0; oldestUnreadAt = $old; idle = $Idle; boxEmpty = $Box; midTurn = $Turn; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null } }
+function New-Row { param([string]$Id, [string]$Idle = "yes", [string]$Box = "yes", [string]$Turn = "no") return [ordered]@{ id = $Id; label = "A"; role = "orchestrator"; parent = ""; retired = $false; reachable = "yes"; mail = "known"; unreadCount = 1; unreadableCount = 0; oldestUnreadAt = $old; idle = $Idle; boxEmpty = $Box; midTurn = $Turn; reason = ""; reasons = @(); limited = "no"; limitedUntil = $null; handedOverCount = 0; oldestHandedOverAt = $null; acked = "known"; lastAckedAt = $null; betweenTurns = "no" } }
 $rows = @((New-Row $idle), (New-Row $busy -Idle "no" -Turn "yes"), (New-Row $typing -Box "no"))
 [System.IO.File]::WriteAllText((Join-Path $checkout "fleet.json"), ("[" + ((@($rows | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 4 })) -join ",") + "]"), $utf8)
 New-Item -ItemType Directory -Path (Join-Path $fleetHome "settings") -Force | Out-Null
@@ -118,7 +118,7 @@ Write-Host "=== with no flag the run is SHADOW: it reads the fleet and types not
 $once = Invoke-Wake $fleetHome @("run", "-Once")
 Check ($once.code -eq 0) ("run -Once makes its pass and exits 0" + $(if ($once.code -ne 0) { ": " + $once.out } else { "" }))
 Check ($once.out -like "*wake: SHADOW - nothing is nudged*" -and $once.out -like "*through the waker 'wezfleet'*" -and $once.out -notlike "*LIVE*") "its first line says SHADOW, loudly, and which waker it reads through"
-Check ($once.out -like "*UNVERIFIED, so nothing this run journals is proof of them: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*") "and names the capabilities of that waker that are unverified"
+Check ($once.out -like "*UNVERIFIED, so nothing this run journals is proof of them: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit, state.between-turns*") "and names the capabilities of that waker that are unverified"
 Check ($once.out -like "*pass 1 done*shadow*") "and its last that its one pass is done, in shadow"
 $lines = @(Read-Journal $fleetHome "journal-shadow.jsonl")
 Check (@($lines | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $idle }).Count -eq 1) "the journal says would-nudge for the idle session with an empty box and old unread mail"
@@ -184,6 +184,27 @@ foreach ($bad in @(@("-Proof", "-Once"), @("-Proof", "-Target", $idle), @("-Proo
     Check ($ended -and $code -eq 2 -and $said -like "*usage: horde wake run*" -and $said -notlike "*Supply values*") ("run " + ($bad -join " ") + ", with its input held open, ends by itself as a usage error: it does not ask for what is missing (ended " + $ended + ", exit " + $code + ")")
     $asked.Dispose()
 }
+# AND SO FOR NO VERB AT ALL, AND FOR A PROOF WHOSE SWITCH WAS GIVEN AS FALSE: each ends by itself, with
+# its input held open, as a usage error - exit 2 and the usage, like every other wrong form - and
+# nothing is typed. (The whole command line is written here: the first has no "run" in it.)
+foreach ($line in @("wake", ("wake run -Proof:`$false -Target " + $idle + " -Once"), ("wake run -Proof -Target " + $idle + " -Once:`$false"), ("wake run -Proof:`$false -Target " + $idle + " -Once:`$false"))) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" " + $line
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    foreach ($k in @{ HORDE_HOME = $fleetHome; WEZFLEET_ROOT = $fleetPin.path; USERPROFILE = $fakeProfile }.GetEnumerator()) { $psi.EnvironmentVariables[$k.Key] = $k.Value }
+    $asked = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $asked.StandardOutput.ReadToEndAsync(); $errTask = $asked.StandardError.ReadToEndAsync()
+    $ended = $asked.WaitForExit(120000)
+    if (-not $ended) { try { $asked.Kill() } catch { } }
+    $code = $(if ($ended) { $asked.ExitCode } else { -1 })
+    $said = $(if ($ended) { "$($outTask.Result)" + "$($errTask.Result)" } else { "" })
+    Check ($ended -and $code -eq 2 -and $said -like "*usage: horde wake run*" -and $said -notlike "*Supply values*" -and $said -cnotlike "*Verb:*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and -not (Test-Path -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json"))) ("horde " + $line + ", with its input held open, ends by itself as a usage error, exit 2, with nothing run or typed (ended " + $ended + ", exit " + $code + ": " + $(if ($said.Length -gt 160) { $said.Substring(0, 160) } else { $said }) + ")")
+    $asked.Dispose()
+}
+$wrongFlag = Invoke-Wake $fleetHome @("status", "-Once")
+Check ($wrongFlag.code -eq 1) "CONTROL: a refusal that is not about the form of the command line - a flag of run given to status - is still exit 1"
 $stranger = "0a000000-0000-4000-8000-000000000099"
 $astray = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $stranger, "-Once")
 Check ($astray.code -eq 1 -and $astray.out -like "*proof-target-absent*" -and $astray.out -like "*nudged nobody*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore) ("a proof run aimed at a session the fleet does not list nudges nobody - not the idle session that is ready - says so, and exits 1" + $(if ($astray.code -ne 1) { ": " + $astray.out } else { "" }))
@@ -196,9 +217,16 @@ $proofLedger = Join-Path $wakeDir "ledger-live.json"
 $refusedRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
 Check ($refusedRun.code -eq 1 -and $refusedRun.out -like "*has not started*cannot be read*ledger-live.json*" -and $refusedRun.out -notlike "*pass 1 done*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and [System.IO.File]::ReadAllText($proofLedger) -ceq "{ not json") ("a proof run over a ledger file that cannot be read does not start: exit 1, the file named and left as it was, nothing typed" + $(if ($refusedRun.code -ne 1) { ": " + $refusedRun.out } else { "" }))
 Remove-Item -LiteralPath $proofLedger -Force
+# AND SO FOR WHAT WAS SAVED OF A SILENT FLEET: unreadable, the proof does not start, and types nothing.
+$proofSilence = Join-Path $wakeDir "silence-live.json"
+$silenceWas = $(if (Test-Path -LiteralPath $proofSilence) { [System.IO.File]::ReadAllText($proofSilence) } else { $null })
+[System.IO.File]::WriteAllText($proofSilence, "{ not json", $utf8)
+$refusedSilent = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
+Check ($refusedSilent.code -eq 1 -and $refusedSilent.out -like "*has not started*cannot be read*silence-live.json*" -and $refusedSilent.out -notlike "*pass 1 done*" -and @(Read-FakeLog "typed.log").Count -eq $typedBefore -and [System.IO.File]::ReadAllText($proofSilence) -ceq "{ not json") ("a proof run over a silence file that cannot be read does not start: exit 1, the file named and left as it was, nothing typed" + $(if ($refusedSilent.code -ne 1) { ": " + $refusedSilent.out } else { "" }))
+if ($null -eq $silenceWas) { Remove-Item -LiteralPath $proofSilence -Force } else { [System.IO.File]::WriteAllText($proofSilence, $silenceWas, $utf8) }
 Remove-Item -LiteralPath (Join-Path $wakeDir "heartbeat-proof.json") -Force -ErrorAction SilentlyContinue
 $proofRun = Invoke-Wake $fleetHome @("run", "-Proof", "-Target", $idle, "-Once")
-Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
+Check ($proofRun.code -eq 0 -and $proofRun.out -like ("*wake: PROOF - PROOF - PROOF - ONE PASS, AND AT MOST ONE REAL NUDGE, TO THE SESSION " + $idle + " AND NO OTHER, through the waker 'wezfleet'*") -and $proofRun.out -like "*UNVERIFIED, and what this pass is here to show: nudge.pointer-only, state.box, state.turn, reach.unseen, nudge.guarded, state.limit, state.between-turns*" -and $proofRun.out -like "*pass 1 done*PROOF*") ("run -Mode proof -Once makes its one pass and says PROOF, loudly, first and last" + $(if ($proofRun.code -ne 0) { ": " + $proofRun.out } else { "" }))
 $typedNow = @(Read-FakeLog "typed.log")
 Check ($typedNow.Count -eq 1 -and $typedBefore -eq 0 -and $typedNow[0].id -ceq $idle -and "$($typedNow[0].text)" -cnotmatch '[\x00-\x1F]') "the fleet's record shows one line typed, into the idle session, and no other: a proof run's nudge is real"
 $proofLines = @(Read-Journal $fleetHome "journal-proof.jsonl")
@@ -273,6 +301,22 @@ $third = Invoke-Wake $pinnedHome @("run", "-Once")
 Check ($third.code -eq 0 -and $third.out -like "*pass 1 done*") "and the lock a dead run left blocks nobody: the next run starts"
 Check (@(Read-Journal $pinnedHome "journal-shadow.jsonl" | Where-Object { @("nudge", "post", "stall", "would-nudge") -ccontains $_.kind }).Count -eq 0) "nothing was nudged, or would have been: there was no fleet"
 Check (@(Get-ChildItem -LiteralPath $fleetPin.path -Recurse -File).Count -eq 0) "nothing was written into the fleet's folder"
+
+Write-Host ""
+Write-Host "=== which session a watcher holds as its own is said: in the run's banner, and by status ===" -ForegroundColor Cyan
+# The command is started as it is everywhere here, and inherits this scenario's own environment: so
+# whichever is true of this scenario - it was started from inside a session, or from none - is true
+# of the watcher, and core/Identity.ps1 says which. (Both lines, and that a heartbeat carries either,
+# are held where a run can be handed its session: test/test-wake-run.ps1.)
+. (Join-Path $root "core\Identity.ps1")
+$me = Get-HordeSelfSessionId
+$expect = $(if ($me.state -ceq "known") { "this watcher holds session " + $me.value + " as its own" } else { "this watcher holds no session as its own" })
+$selfHome = Join-Path $script:work "home-self"
+New-Item -ItemType Directory -Path $selfHome | Out-Null
+$held = Invoke-Wake $selfHome @("run", "-Once")
+Check ($held.code -eq 0 -and $held.out -like ("*wake: " + $expect + "*") -and $held.out.IndexOf("wake: " + $expect) -lt $held.out.IndexOf("pass 1 done")) ("a run says, with its banner and before its first pass, which session it holds as its own (" + $expect + ")")
+$heldStatus = Invoke-Wake $selfHome @("status")
+Check ($heldStatus.code -eq 0 -and $heldStatus.out -like ("*SHADOW: " + $expect + "*") -and $heldStatus.out -notlike "*LIVE: this watcher*" -and $heldStatus.out -notlike "*PROOF: this watcher*") "status says it of the watcher that ran, from its heartbeat, and says nothing of the kind for a mode that never ran"
 
 Check ((Get-RealWakeListing) -ceq $realBefore) "the real home's wake folder is as it was"
 

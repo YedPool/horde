@@ -75,6 +75,29 @@ function Get-HordeConstantString {
     return $null
 }
 
+function New-HordeUsageError {
+    # What a command's body throws to say THE COMMAND LINE WAS WRONG: horde prints the message and the
+    # usage and exits 2, as it does when the run block's own arguments do not bind (horde.ps1).
+    # WHY A BODY NEEDS A WORD FOR IT. PowerShell can refuse a wrong command line while it binds - a
+    # value outside a set, two forms mixed - and that is exit 2 with nothing run. What it cannot refuse
+    # there is something LEFT OUT: a parameter declared mandatory is not refused when PowerShell can
+    # ask, it is PROMPTED FOR, and a horde started with its input open waits at that prompt for ever
+    # (found 2026-10-13 on "wake run -Proof -Once", and again on "wake" with no verb: review of
+    # PR 230). So what must be given is left optional and checked first thing in the body - and the
+    # body's refusal has to count as what it is. Anything else a body throws is the command failing:
+    # exit 1.
+    param([Parameter(Mandatory = $true)][string]$Message)
+    $e = New-Object System.ArgumentException($Message)
+    $e.Data["horde.usage"] = $true
+    return $e
+}
+
+function Test-HordeUsageError {
+    # Whether an exception is one New-HordeUsageError made.
+    param($Exception)
+    return ($Exception -is [System.Exception] -and $null -ne $Exception.Data -and $Exception.Data.Contains("horde.usage") -and $Exception.Data["horde.usage"] -eq $true)
+}
+
 function Get-HordeRunProblem {
     # Why a hashtable value is not an acceptable `run` block, or $null if it is.
     #

@@ -25,6 +25,10 @@
     "state.limit": {
       "support": "yes",
       "evidence": "Whether a session is limited, and until when, is whatever the test said it is, read back through the port, in test/test-waker-conformance.ps1 and test/test-wake.ps1."
+    },
+    "state.between-turns": {
+      "support": "yes",
+      "evidence": "Whether a session is between turns is whatever the test said it is, read back through the port, in test/test-waker-conformance.ps1."
     }
   }
 }
