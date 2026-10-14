@@ -19,8 +19,8 @@
            Find = 'foreach ($o in @($owned)) { if ($null -ne $o) { $envMap["" + $o.name] = $null } }'
            Replace = '' }
         @{ Name = "unreadable-mode-kept"
-           Find = 'if ($null -eq $mode) { $why = "the session''s permission mode could not be read back within " + $Context.bounds.modeSeconds + " s, so it is not kept (fail closed)" }'
-           Replace = 'if ($false) { }' }
+           Find = '        $why = "the session''s permission mode could not be read back within " + $Context.bounds.modeSeconds + " s" + $limit + ", so it is not kept (fail closed)"'
+           Replace = '        $why = ""' }
         @{ Name = "other-mode-kept"
            Find = 'elseif ("" + $mode.value -cne $d.level) {'
            Replace = 'elseif ($false) {' }
@@ -145,8 +145,8 @@
            Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpTurn'
            Replace = '$record.noOp = ""; $record.noOpTurn' }
         @{ Name = "prompt-before-mode-kept"
-           Find = '$gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart'
-           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart' }
+           Find = '$gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -eq "not-taken")'
+           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -eq "not-taken")' }
         @{ Name = "raw-prompt-typed"
            Find = '-SessionId $SessionId -Line $line'
            Replace = '-SessionId $SessionId -Line $Prompt' }
@@ -202,5 +202,32 @@
         @{ Name = "receipt-wait-past-the-hub"
            Find = 'receiptSeconds = 20; retrySeconds = 10;'
            Replace = 'receiptSeconds = 120; retrySeconds = 10;' }
+        @{ Name = "not-ready-typed-into"
+           Find = '    if ($ready.state -eq "not-ready") {'
+           Replace = '    if ($false) {' }
+        @{ Name = "ready-not-waited"
+           Find = '$ok = Wait-HordeNodeUntil -Context $Context -Seconds ([double]$Context.bounds.readySeconds)'
+           Replace = '$ok = Wait-HordeNodeUntil -Context $Context -Seconds 0' }
+        @{ Name = "turn-end-not-waited"
+           Find = '    if ($noop.state -eq "taken") { $noopEnd = Wait-HordeNodeTurnEnd'
+           Replace = '    if ($false) { $noopEnd = Wait-HordeNodeTurnEnd' }
+        @{ Name = "unended-turn-typed-into"
+           Find = '    if ($noopEnd.state -eq "not-ended") {'
+           Replace = '    if ($false) {' }
+        @{ Name = "close-text-into-a-stuck-box"
+           Find = '-SkipCloseText:($noop.state -eq "not-taken")'
+           Replace = '-SkipCloseText:$false' }
+        @{ Name = "stuck-noop-not-named"
+           Find = '        if ($noop.state -ne "taken") { $why += '
+           Replace = '        if ($false) { $why += ' }
+        @{ Name = "waits-count-polls"
+           Find = '    if ($null -ne $start) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "spawn-limit-ignored"
+           Find = '        if ($null -ne $Context.PSObject.Properties["deadlineMs"] -and [double]$Context.deadlineMs -lt $until) { $until = [double]$Context.deadlineMs }'
+           Replace = '' }
+        @{ Name = "spawn-limit-past-the-hub"
+           Find = 'spawnSeconds = 150;'
+           Replace = 'spawnSeconds = 200;' }
     )
 }
