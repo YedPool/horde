@@ -868,9 +868,15 @@ export const PHOTO_PARTS_MOST = 64;
 export const PHOTO_WINDOW_MS = 300000;
 const PHOTO_PART_AAD = "horde-relay/chat/v1 photo part";
 
-// The relay key a part is put under: the sender, the kind, the photo and the number. It names no stream
-// (no seq and nonce), so no trim ever reaches it, and a part put twice is the same item.
-export function photoPartKey(from, photoId, n) { return from + "/photo-part/" + photoId + "/" + n; }
+// The relay key a part is put under: the sender, the kind, the photo, the number and the first 16 hex of
+// the part's digest. It names no stream (no seq and nonce), so no trim ever reaches it, and a part put
+// twice is the same item. THE DIGEST IS IN IT because the relay keeps the FIRST text put under a key: by
+// photo and number alone, junk put first under them squatted the real part's slot (review of PR 285).
+// The kind is new with photos, so no older phone puts a part under the old form.
+export function photoPartKey(from, photoId, n, digest) {
+  if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) throw new Error("a part's key names its digest, 64 lower-case hex");
+  return from + "/photo-part/" + photoId + "/" + n + "/" + digest.slice(0, 16);
+}
 
 function photoNonce(n) { const b = new Uint8Array(12); b[8] = (n >>> 24) & 255; b[9] = (n >>> 16) & 255; b[10] = (n >>> 8) & 255; b[11] = n & 255; return b; }
 
@@ -887,7 +893,8 @@ export async function sealPhotoParts(bytes, { from, photoId }) {
   for (let n = 1; n <= count; n++) {
     const chunk = bytes.subarray((n - 1) * PHOTO_CHUNK, Math.min(bytes.length, n * PHOTO_CHUNK));
     const ct = await gcmSeal(key, photoNonce(n), utf8(PHOTO_PART_AAD + "\n" + from + "\n" + photoId + "\n" + n), chunk);
-    parts.push({ n, digest: hex(await sha256(ct)), key: photoPartKey(from, photoId, n), text: '{"v":1,"kind":"photo-part","from":"' + from + '","photo":"' + photoId + '","part":' + n + ',"ct":"' + b64u(ct) + '"}' });
+    const digest = hex(await sha256(ct));
+    parts.push({ n, digest, key: photoPartKey(from, photoId, n, digest), text: '{"v":1,"kind":"photo-part","from":"' + from + '","photo":"' + photoId + '","part":' + n + ',"ct":"' + b64u(ct) + '"}' });
   }
   return { key, sha256: hex(await sha256(bytes)), parts };
 }

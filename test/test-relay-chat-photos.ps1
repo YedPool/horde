@@ -193,6 +193,13 @@ function Get-PartText {
     param([string]$From, [string]$PhotoId, [int]$Number, [byte[]]$Ct)
     return ('{"v":1,"kind":"photo-part","from":"' + $From + '","photo":"' + $PhotoId + '","part":' + $Number + ',"ct":"' + (ConvertTo-HordeRelayBase64Url -Bytes $Ct) + '"}')
 }
+function Get-PartKey {
+    # The relay key the phone puts a part item under (relay/js/protocol.js, photoPartKey): its sender,
+    # photo, number and the first 16 hex of the SHA-256 of its sealed bytes.
+    param([string]$Text)
+    $r = Read-HordeChatPhotoPart -Text $Text
+    return ($r.from + "/photo-part/" + $r.photo + "/" + $r.n + "/" + $r.digest.Substring(0, 16))
+}
 function Test-SameBytes { param([byte[]]$A, [byte[]]$B) return ($A.Length -eq $B.Length -and [System.Linq.Enumerable]::SequenceEqual($A, $B)) }
 
 try {
@@ -435,7 +442,7 @@ try {
     $one = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16)
     for ($jn = 1; $jn -le 49; $jn++) { $null = Send-Part $Q (Get-PartText -From $Q.phone.keyId -PhotoId $one -Number $jn -Ct (Get-HordeRelayRandomBytes -Count 40)) }
     $ofOne = @(Get-ChildItem -LiteralPath $pendQ -File | Where-Object { $_.Name.Split("-")[1] -ceq $one })
-    Check ($ofOne.Count -eq 48 -and @($ofOne | Where-Object { $_.Name.Split("-")[2] -ceq "1.part" }).Count -eq 0 -and @($ofOne | Where-Object { $_.Name.Split("-")[2] -ceq "49.part" }).Count -eq 1) ("PER PHOTO: one photo holds at most 48 waiting parts, its oldest evicted for the newest (" + $ofOne.Count + ")")
+    Check ($ofOne.Count -eq 48 -and @($ofOne | Where-Object { $_.Name.Split("-")[2] -ceq "1" }).Count -eq 0 -and @($ofOne | Where-Object { $_.Name.Split("-")[2] -ceq "49" }).Count -eq 1) ("PER PHOTO: one photo holds at most 48 waiting parts, its oldest evicted for the newest (" + $ofOne.Count + ")")
     $all = @(Get-ChildItem -LiteralPath $pendQ -File)
     Check ($all.Count -le 4 * 48 -and @($all | ForEach-Object { $_.Name.Split("-")[1] } | Select-Object -Unique).Count -le 4) ("THE TOTAL stays bounded: at most 4 photos of 48 parts (" + $all.Count + " parts)")
     Remove-HordeChatPhotoPendingExpired -HordeHome $Q.home -WindowMs 600000 -Now ([datetime]::UtcNow.AddMinutes(11))
@@ -471,7 +478,7 @@ try {
     # manifest is opened, so the parts wait and the manifest takes them.
     $null = Send-Manifest $G $PG
     $i = 0
-    foreach ($p in $PG.parts) { $i++; $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $p -Key ($PG.from + "/photo-part/" + $PG.id + "/" + $i) }
+    foreach ($p in $PG.parts) { $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $p -Key (Get-PartKey $p) }
     Use-World $G
     $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
     Check ($in.state -ceq "known" -and @($in.value.data).Count -eq 3 -and @($in.value.taken).Count -eq 1 -and @($in.value.refused).Count -eq 0 -and $in.value.acked -ge 4) ("the manifest is journaled, the three parts go to the photo sink, and the relay is acked through all four (" + (@($in.value.data) -join "; ") + ")")
@@ -483,6 +490,31 @@ try {
     Check ($fG.Count -eq 1 -and (Test-SameBytes ([System.IO.File]::ReadAllBytes($fG[0].FullName)) $imgG) -and $t.Contains("accepted (delivered)")) ("END TO END through the mailbox: the photo lands whole and the Thrall is told (" + $t + ")")
     $j = Get-HordeRelayJournalUnfinished -Channel "chat" -HordeHome $G.home
     Check ($j.state -ceq "known" -and @($j.value).Count -eq 0) "nothing of the chat is left unfinished in the journal"
+    # JUNK PUT FIRST UNDER THE SAME PHOTO AND NUMBER cannot squat the real part (review of PR 285). The
+    # relay keeps the first text put under a key, so the key names the part's digest, and so does its
+    # pending name: junk lands beside the real part, and the manifest sorts them.
+    $imgS = New-ImageBytes -Type "jpg" -Length 100000
+    $PJ = New-Photo -World $G -Image $imgS
+    $junk = Get-PartText -From $PJ.from -PhotoId $PJ.id -Number 1 -Ct (Get-HordeRelayRandomBytes -Count 48016)
+    $putJunk = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $junk -Key (Get-PartKey $junk)
+    $putReal = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PJ.parts[0] -Key (Get-PartKey $PJ.parts[0])
+    Check ($putJunk.state -ceq "known" -and $putReal.state -ceq "known" -and -not $putReal.value.duplicate -and (Get-PartKey $junk) -cne (Get-PartKey $PJ.parts[0])) "on the relay, the real part 1 put after junk part 1 of the same photo lands under a key of its own"
+    $squat = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PJ.parts[0] -Key (Get-PartKey $junk)
+    Check ($squat.state -ceq "known" -and $squat.value.duplicate) "TWIN: under the junk's own key the relay keeps the junk - the key is what a squatter would hold, so it must name the digest"
+    foreach ($p in $PJ.parts[1..2]) { $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $p -Key (Get-PartKey $p) }
+    $null = Send-Manifest $G $PJ
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    $pendS = @(Get-ChildItem -LiteralPath (Join-Path $G.home "relay\chat\photos\pending") -File | Where-Object { $_.Name.Contains($PJ.id + "-1-") })
+    Check ($pendS.Count -eq 2 -and @($in.value.data | Where-Object { $_.Contains("waits for its manifest") }).Count -eq 4) ("in the pending area, junk and real part 1 wait side by side under their digests (" + $pendS.Count + ")")
+    $un = Invoke-HordeRelayUnfinished -Context $G.ctx
+    Check (@($un.value.done | Where-Object { $_.Contains("3 had come already") }).Count -eq 1) ("opened, the manifest takes the three real parts and drops the junk (" + (@($un.value.done) -join "; ") + ")")
+    $t = Invoke-Tick $G
+    $fS = @(Get-InboxFiles $G | Where-Object { Test-SameBytes ([System.IO.File]::ReadAllBytes($_.FullName)) $imgS })
+    Check ($fS.Count -eq 1) ("JUNK FIRST, THEN THE REAL PART: the photo completes (" + $t + ")")
+    $Pt = New-Photo -World $G -Image (New-ImageBytes -Type "jpg" -Length 1000)
+    Check ((Send-Part $G $Pt.parts[0]).outcome -ceq "pending") "TWIN: a part before its manifest waits"
+    $r = Send-Part $G $Pt.parts[0]
+    Check ($r.outcome -ceq "refused" -and $r.reason.Contains("already waiting")) ("and that very part again - same number, same digest - is refused, not held twice (" + $r.reason + ")")
     # A part put again (the phone tried twice): refused for good, acked, nothing more.
     $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PG.parts[0] -Key ($PG.from + "/photo-part/" + $PG.id + "/1-again")
     $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0

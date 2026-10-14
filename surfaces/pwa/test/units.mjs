@@ -807,7 +807,15 @@ const PH = await load("app/photo.js");
   check(mf.body.expiresAt === mf.header.ts + P.PHOTO_WINDOW_MS && mf.body.sha256 === P.hex(await P.sha256(img)), "and an expiry five minutes after it was signed, and the whole image's SHA-256");
   const partRe = /^\{"v":1,"kind":"photo-part","from":"([0-9a-f]{32})","photo":"([0-9a-f]{32})","part":([1-9][0-9]{0,2}),"ct":"([A-Za-z0-9_-]{1,70000})"\}$/;
   const parts = items.slice(1);
-  check(parts.length === 21 && parts.every((it, i) => partRe.test(it.text) && it.key === P.photoPartKey(mf.body.from, pid, i + 1) && it.text.length <= 65536), "each part is in its one form, under its own key, within the hosted relay's 65,536 characters", String(Math.max(...parts.map((x) => x.text.length))));
+  check(parts.length === 21 && parts.every((it, i) => partRe.test(it.text) && it.key === P.photoPartKey(mf.body.from, pid, i + 1, mf.body.parts[i]) && it.text.length <= 65536), "each part is in its one form, under its own key, within the hosted relay's 65,536 characters", String(Math.max(...parts.map((x) => x.text.length))));
+  // THE KEY NAMES THE DIGEST (review of PR 285): the relay keeps the first text under a key, so junk put
+  // first under the same photo and number must land under a key of its own, not the real part's.
+  const junkDigest = "0".repeat(64);
+  check(parts.every((it, i) => it.key === mf.body.from + "/photo-part/" + pid + "/" + (i + 1) + "/" + mf.body.parts[i].slice(0, 16) && it.key.length <= 160), "each part's relay key ends with the first 16 hex of its digest, within the relay's 160 characters", parts[0].key);
+  check(P.photoPartKey(mf.body.from, pid, 1, junkDigest) !== parts[0].key && P.photoPartKey(mf.body.from, pid, 1, mf.body.parts[0]) === parts[0].key, "junk of the same photo and number has another key; the real part's digest gives its key back exactly");
+  let noDigest = "";
+  try { P.photoPartKey(mf.body.from, pid, 1); } catch (e) { noDigest = e.message; }
+  check(noDigest.includes("digest"), "a part's key cannot be made without its digest", noDigest);
   // The machine's side, in JavaScript: each part's digest is the manifest's at its number, and opened
   // under the manifest's key the parts are the image.
   const key = P.unb64u(mf.body.key);

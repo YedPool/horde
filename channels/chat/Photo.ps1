@@ -22,6 +22,11 @@
 #
 #   THE PARTS are not envelopes and are signed by nobody: each is one relay item, in this exact form,
 #     {"v":1,"kind":"photo-part","from":"<32 hex>","photo":"<32 hex>","part":<n>,"ct":"<base64url>"}
+#   put under the relay key <from>/photo-part/<photo>/<n>/<first 16 hex of SHA-256(ct)>
+#   (relay/js/protocol.js, photoPartKey). The relay keeps the FIRST text put under a key, so a key of
+#   photo and number alone let junk put first squat the real part's slot; with the digest in it, junk
+#   has a key of its own, and the real part still lands (review of PR 285). The same goes for the
+#   pending area's names. This machine never reads the key: what vouches for a part is below.
 #   ct = AES-256-GCM(key, nonce = 8 zero bytes then n as 4 bytes big-endian, aad = PART_AAD, chunk n).
 #   What vouches for a part is its digest in a manifest the passkey signed: a part is TAKEN (written to
 #   its photo's folder - the photo's journal) only when SHA-256(ct) is the manifest's digest AT ITS
@@ -48,7 +53,8 @@
 # THE STORE, under <HORDE_HOME>\relay\chat\photos\ (owner-only, like the rest of the relay's state):
 #   open\<from>-<photoId>\record.json     the accepted manifest, and the stage it is at
 #   open\<from>-<photoId>\part-<n>.bin    each part taken, its sealed bytes, written once
-#   pending\<from>-<photoId>-<n>.part     a part that came before its manifest
+#   pending\<from>-<photoId>-<n>-<16 hex>.part  a part that came before its manifest, by the first 16
+#                                         hex of its digest, so junk of the same number cannot squat it
 #   closed\<from>-<photoId>.json          what became of a photo, kept two days: a part for it is refused
 # THE INBOX is the setting photoInbox, empty meaning <HORDE_HOME>\inbox\photos, made owner-only. Each file
 # is named by this machine - photo-<UTC yyyyMMdd-HHmmss>-<8 random hex>.<jpg|png|webp> - never by the
@@ -88,7 +94,7 @@ $script:HordeChatPhotoPartsMost = 64
 # 9,219,072 bytes.
 $script:HordeChatPhotoPendingPerPhoto = 48
 $script:HordeChatPhotoPendingPhotos = 4
-$script:HordeChatPhotoPendingPattern = '\A([0-9a-f]{32})-([0-9a-f]{32})-([1-9][0-9]{0,2})\.part\z'
+$script:HordeChatPhotoPendingPattern = '\A([0-9a-f]{32})-([0-9a-f]{32})-([1-9][0-9]{0,2})-([0-9a-f]{16})\.part\z'
 # How long what became of a photo is kept, so a part that comes after it is refused, not pending.
 $script:HordeChatPhotoClosedHours = 48
 # How long the Thrall is asked again for a photo already in the inbox, before the phone is told saved.
@@ -317,7 +323,9 @@ function Remove-HordeChatPhotoPendingExpired {
 
 function Add-HordeChatPhotoPending {
     # Hold one part that came before its manifest, in the folder -Pending: { written; evicted } - written
-    # "moved", or "exists" when that very part waits already (nothing is evicted for it).
+    # "moved", or "exists" when that very part - its number AND its digest - waits already (nothing is
+    # evicted for it). The digest is in the name (the header, THE PARTS): junk put first under the same
+    # photo and number is held beside the real part, not in its place, and its manifest sorts them.
     # CAPPED PER PHOTO, OLDEST EVICTED (review of PR 285). Anybody who can put an item in this mailbox can
     # name the founder's passkey, whose key id is no secret; under ONE cap for the whole area, junk under
     # many photo ids filled it, and a genuine photo's early parts were then refused. Now no part is
@@ -326,9 +334,9 @@ function Add-HordeChatPhotoPending {
     # whole, the photo least recently added to. A photo being sent is added to every moment, so junk must
     # outrun it to push it out. "Oldest" is by write time, made strictly increasing below: NTFS times a
     # burst of writes alike, and a tie would leave the order to the names.
-    param([Parameter(Mandatory = $true)][string]$Pending, [string]$From, [string]$PhotoId, [int]$Number, [byte[]]$Ct)
+    param([Parameter(Mandatory = $true)][string]$Pending, [string]$From, [string]$PhotoId, [int]$Number, [byte[]]$Ct, [string]$Digest)
     $mine = $From + "-" + $PhotoId
-    $at = [System.IO.Path]::Combine($Pending, ($mine + "-" + $Number + ".part"))
+    $at = [System.IO.Path]::Combine($Pending, ($mine + "-" + $Number + "-" + $Digest.Substring(0, 16) + ".part"))
     if ([System.IO.File]::Exists($at)) { return [pscustomobject]@{ written = "exists"; evicted = 0 } }
     $groups = @{}
     $newest = [long]0
@@ -395,8 +403,8 @@ function Receive-HordeChatPhotoPart {
         Remove-HordeChatPhotoPendingExpired -HordeHome $homeDir -WindowMs $ps.windowMs -Now $Now
         New-HordeChatPhotoOwnerFolder -Path $root
         [void][System.IO.Directory]::CreateDirectory($pending)
-        $w = Add-HordeChatPhotoPending -Pending $pending -From $p.from -PhotoId $p.photo -Number $p.n -Ct $p.ct
-        if ($w.written -ceq "exists") { return (& $no ($label + ": a part of that number is already waiting")) }
+        $w = Add-HordeChatPhotoPending -Pending $pending -From $p.from -PhotoId $p.photo -Number $p.n -Ct $p.ct -Digest $p.digest
+        if ($w.written -ceq "exists") { return (& $no ($label + ": that very part, its number and digest, is already waiting")) }
         return [pscustomobject]@{ outcome = "pending"; reason = ($label + " waits for its manifest" + $(if ($w.evicted -gt 0) { " (" + $w.evicted + " older pending part(s) evicted to make room)" } else { "" })) }
     }
     $rec = Read-HordeChatPhotoRecord -Path $recordPath

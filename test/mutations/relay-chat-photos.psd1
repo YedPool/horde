@@ -41,6 +41,10 @@
         @{ Name = "photo-pending-evicts-the-newest-photo"
            Find = '$byAge = @($groups.Keys | Sort-Object @{'
            Replace = '$byAge = @($groups.Keys | Sort-Object -Descending @{' }
+        # The pending name carries the part's digest, so junk of the same number cannot squat it.
+        @{ Name = "photo-pending-name-without-its-digest"
+           Find = '($mine + "-" + $Number + "-" + $Digest.Substring(0, 16) + ".part")'
+           Replace = '($mine + "-" + $Number + "-" + "0000000000000000" + ".part")' }
         @{ Name = "photo-pending-evicts-the-newest-part"
            Find = '$own = @($groups[$mine] | Sort-Object at, name)'
            Replace = '$own = @($groups[$mine] | Sort-Object at, name -Descending)' }

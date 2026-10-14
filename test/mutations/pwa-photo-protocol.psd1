@@ -11,8 +11,12 @@
            Find = '  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";'
            Replace = '  if (bytes.length >= 3) return "jpeg";' }
         @{ Name = "part-digest-of-the-plain-bytes"
-           Find = '    parts.push({ n, digest: hex(await sha256(ct)),'
-           Replace = '    parts.push({ n, digest: hex(await sha256(chunk)),' }
+           Find = '    const digest = hex(await sha256(ct));'
+           Replace = '    const digest = hex(await sha256(chunk));' }
+        # The relay key names the part's digest, so junk put first cannot squat it (review of PR 285).
+        @{ Name = "part-key-without-its-digest"
+           Find = '  return from + "/photo-part/" + photoId + "/" + n + "/" + digest.slice(0, 16);'
+           Replace = '  return from + "/photo-part/" + photoId + "/" + n;' }
         @{ Name = "part-aad-without-its-number"
            Find = 'utf8(PHOTO_PART_AAD + "\n" + from + "\n" + photoId + "\n" + n), chunk);'
            Replace = 'utf8(PHOTO_PART_AAD + "\n" + from + "\n" + photoId + "\n" + 1), chunk);' }
