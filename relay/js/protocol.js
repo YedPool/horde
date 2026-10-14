@@ -430,6 +430,56 @@ export function phoneVouchText({ horde, by, agreePublic, vouch }) {
 }
 export function phoneVouchKey(by, phoneKeyId) { return "vouch/" + by + "/" + phoneKeyId; }
 
+// --- phone-started pairing (relay/Join.ps1) ---
+
+// The join request item, in relay/Join.ps1's canonical form (Get-HordeRelayJoinRequestSpec). On the
+// hosted relay its join route writes it (the phone sends the fields); a relay with no accounts takes it
+// from the phone as written here, under the key joinKey(request).
+const JOIN_TEXT = /^[\x20\x21\x23-\x5b\x5d-\x7e]{0,200}$/;
+export function joinRequestText({ request, horde, machine, label, agent, requestKey, country = "", requestedAt, expiresAt }) {
+  if (!/^[0-9a-f]{32}$/.test(request) || !KEY_ID.test(machine)) throw new Error("the request and the machine are ids");
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (!validLabel(label)) throw new Error("name this phone in 1 to 64 plain characters, with no quote or backslash");
+  if (!JOIN_TEXT.test(agent) || !/^[A-Z]{0,2}$/.test(country)) throw new Error("the browser and the country are plain short text");
+  if (!/^[A-Za-z0-9_-]{87}$/.test(requestKey)) throw new Error("the request key is a P-256 point");
+  return '{"v":1,"kind":"horde-relay-join-request","request":"' + request + '","horde":"' + horde + '","machine":"' + machine + '","label":"' + label + '","agent":"' + agent +
+    '","requestKey":"' + requestKey + '","country":"' + country + '","requestedAt":' + requestedAt + ',"expiresAt":' + expiresAt + "}";
+}
+export function joinKey(request) { return "join/" + request; }
+export function joinReplyMailbox(horde, request) { return horde + "/jr-" + request; }
+export const JOIN_TTL_MS = 600000;
+// The machine's answer (relay/Join.ps1, New-HordeRelayJoinOfferSealedText): the offer's text sealed to the
+// request key. The offer text inside, or null when it does not open or is not for this request.
+const JOIN_OFFER = /^\{"v":1,"kind":"horde-relay-join-offer","request":"([0-9a-f]{32})","requestKeyId":"([0-9a-f]{32})","enc":"([A-Za-z0-9_-]{87})","ct":"([A-Za-z0-9_-]{1,8192})"\}$/;
+export async function openJoinOffer(text, { request, horde, privateKey, publicPoint }) {
+  const m = typeof text === "string" ? JOIN_OFFER.exec(text) : null;
+  if (!m || m[1] !== request) return null;
+  const kid = await keyId(publicPoint);
+  if (m[2] !== kid) return null;
+  try {
+    const plain = await hpkeOpen(privateKey, publicPoint, unb64u(m[3]), utf8("horde-relay/join/v1 offer-key"), utf8("horde-relay/join/v1 offer aad\n" + horde + "\n" + request + "\n" + kid), unb64u(m[4]));
+    return fromUtf8(plain);
+  } catch (x) { return null; }
+}
+// The transcript a trusted phone is sent (Get-HordeRelayJoinTranscriptSpec), read: { ok, reason, value }
+// with value its members and text the exact text, which the approval's hash covers.
+const TRANSCRIPT = new RegExp('^\\{"v":1,"kind":"horde-relay-join-transcript","request":"([0-9a-f]{32})","horde":"([a-z0-9][a-z0-9-]{0,62})","machine":"([0-9a-f]{32})","offer":"([0-9a-f]{32})",' +
+  '"challenge":"([A-Za-z0-9_-]{43})","device":"([0-9a-f]{32})","credentialId":"([A-Za-z0-9_-]{1,8192})","publicKey":"([A-Za-z0-9_-]{87})","rpId":"([a-z0-9.-]{1,253})",' +
+  '"label":"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{1,64})","agent":"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{0,512})","country":"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{0,512})","requestedAt":' + RECORD_INT + ',"expiresAt":' + RECORD_INT + '\\}$');
+export function readJoinTranscript(text, horde, machine) {
+  const m = typeof text === "string" ? TRANSCRIPT.exec(text) : null;
+  if (!m) return { ok: false, reason: "a join request's transcript that is not in its canonical form", value: null };
+  if (m[2] !== horde || m[3] !== machine) return { ok: false, reason: "a join transcript for another horde or machine", value: null };
+  return { ok: true, reason: "", value: { text, request: m[1], horde: m[2], machine: m[3], offer: m[4], challenge: m[5], device: m[6], credentialId: m[7], publicKey: m[8], rpId: m[9], label: m[10], agent: m[11], country: m[12], requestedAt: Number(m[13]), expiresAt: Number(m[14]) } };
+}
+// What an approval carries of the transcript: SHA-256 of the domain and its text, base64url.
+export async function joinTranscriptHash(text) { return b64u(await sha256(utf8("horde-relay/join/v1 transcript\n" + text))); }
+// The number the new phone shows, as THIS phone computes it from the transcript (relay/Pairing.ps1's
+// fingerprint over the offer's challenge, the passkey's point, its credential id and the rpId).
+export async function joinNumber(t) { return pairingFingerprint({ challenge: unb64u(t.challenge), publicPoint: unb64u(t.publicKey), credentialId: unb64u(t.credentialId), rpId: t.rpId }); }
+export function joinApproveBody({ request, device, transcript }) { return utf8(JSON.stringify({ v: 1, request, device, transcript })); }
+export function joinRejectBody({ request }) { return utf8(JSON.stringify({ v: 1, request })); }
+
 // relay/Trust.ps1's device id: the first 16 bytes of SHA-256 of the credential id, as hex.
 export async function deviceIdOf(credentialId) { return hex((await sha256(credentialId)).slice(0, 16)); }
 

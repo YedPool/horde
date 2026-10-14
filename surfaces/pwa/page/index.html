@@ -50,6 +50,14 @@
 <div id="pcOffline" role="status"></div>
 </header>
 <div id="notice" hidden></div>
+<div id="joinBox" hidden>
+  <h2>A new phone asks to join</h2>
+  <p id="joinWho" class="hint"></p>
+  <p class="hint">Approve only if it is your phone: type the 12-digit number the NEW phone shows. If this is not your phone, reject it and change your Google password.</p>
+  <input id="joinNumber" type="text" inputmode="numeric" autocomplete="off" placeholder="dddd-dddd-dddd">
+  <div class="row"><button type="button" id="joinApprove" class="primary">Approve</button> <button type="button" id="joinReject">Reject</button></div>
+  <p id="joinStatus" class="status" role="alert" hidden></p>
+</div>
 <div id="announceBox" hidden>
   <p id="announceWords" class="hint"></p>
 </div>
@@ -58,6 +66,15 @@
   <h1>Sign in</h1>
   <p class="hint">This relay lets in only a signed-in phone, and the machines it registers. Sign in with your Google account. The relay learns who may use it; what passes through it stays sealed for your phone and your machines.</p>
   <div class="row"><button type="button" id="signInBtn" class="primary">Sign in with Google</button></div>
+</section>
+
+<section id="joinView" hidden>
+  <h1>Add this phone</h1>
+  <p id="joinTo" class="hint"></p>
+  <label>What to call this phone <input id="joinLabel" type="text" maxlength="64" autocomplete="off"></label>
+  <div class="row"><button type="button" id="joinAsk" class="primary">Add this phone</button> <button type="button" id="joinCancel" class="link">Cancel</button></div>
+  <p id="joinWait" class="hint" role="status" hidden></p>
+  <div class="row"><button type="button" id="joinContinue" class="primary" hidden>Continue: make this phone's passkey</button></div>
 </section>
 
 <section id="accountView" hidden>

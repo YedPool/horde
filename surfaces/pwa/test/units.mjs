@@ -1178,6 +1178,81 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check((await throwsAsync(() => app4.phone.announce(p4.id))).indexOf("reads only") >= 0, "a recovery session cannot announce");
 }
 
+// --- ADD THIS PHONE: the new phone's request, and the machine's sealed answer ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const app = newApp(t);
+  const j = await app.phone.join({ horde: "work", machine: m.keyId, label: "Pixel 9", agent: "Safari \"on\" iPhone" });
+  const items = (await t.get(m.mailbox, 0, 16)).value.items;
+  const q = items.length === 1 ? JSON.parse(items[0].text) : {};
+  check(items.length === 1 && items[0].key === "join/" + j.request && Object.keys(q).join(",") === "v,kind,request,horde,machine,label,agent,requestKey,country,requestedAt,expiresAt", "a request to join is one item in the machine's mailbox under join/<request>, its members in relay/Join.ps1's order", items.length ? items[0].key : "");
+  check(q.agent === "Safari on iPhone" && q.label === "Pixel 9" && /^[A-Za-z0-9_-]{87}$/.test(q.requestKey) && q.expiresAt - q.requestedAt === 600000, "its browser words lose quotes; it carries a request key and lives 10 minutes", items.length ? items[0].text : "");
+  check((await app.phone.joinOffer(j.request)).offerText === "", "before the machine answers there is no offer");
+  // The machine's answer, as relay/Join.ps1 seals it: the offer's text to the request key.
+  const oText = offerText(m);
+  const reqPoint = P.unb64u(q.requestKey);
+  const kid = await P.keyId(reqPoint);
+  const seal = async (to, request) => { const box = await P.hpkeSeal(to, P.utf8("horde-relay/join/v1 offer-key"), P.utf8("horde-relay/join/v1 offer aad\nwork\n" + request + "\n" + kid), P.utf8(oText)); return '{"v":1,"kind":"horde-relay-join-offer","request":"' + request + '","requestKeyId":"' + kid + '","enc":"' + P.b64u(box.enc) + '","ct":"' + P.b64u(box.sealed) + '"}'; };
+  const other = await newMachine("work");
+  await t.put("work/jr-" + j.request, "offer/x", await seal(other.agreePublic, j.request));
+  check((await app.phone.joinOffer(j.request)).offerText === "", "an answer sealed to another key does not open");
+  await t.put("work/jr-" + j.request, "offer/" + j.request, await seal(reqPoint, j.request));
+  const got = await app.phone.joinOffer(j.request);
+  check(got.offerText === oText, "the machine's answer opens with the request key: the offer");
+  const p = await app.phone.pair({ offerText: got.offerText, label: "Pixel 9", joined: true });
+  check(/^[0-9]{4}-[0-9]{4}-[0-9]{4}$/.test(p.fingerprint), "and pairing with it shows the number, as a scanned offer does");
+  // Another machine's offer, sealed rightly, is not the machine this phone asked.
+  const t2 = R.memoryTransport();
+  const app2 = newApp(t2);
+  const j2 = await app2.phone.join({ horde: "work", machine: m.keyId, label: "Pixel 9" });
+  const q2 = JSON.parse((await t2.get(m.mailbox, 0, 16)).value.items[0].text);
+  const box = await P.hpkeSeal(P.unb64u(q2.requestKey), P.utf8("horde-relay/join/v1 offer-key"), P.utf8("horde-relay/join/v1 offer aad\nwork\n" + j2.request + "\n" + (await P.keyId(P.unb64u(q2.requestKey)))), P.utf8(offerText(other)));
+  await t2.put("work/jr-" + j2.request, "offer/" + j2.request, '{"v":1,"kind":"horde-relay-join-offer","request":"' + j2.request + '","requestKeyId":"' + (await P.keyId(P.unb64u(q2.requestKey))) + '","enc":"' + P.b64u(box.enc) + '","ct":"' + P.b64u(box.sealed) + '"}');
+  check((await app2.phone.joinOffer(j2.request)).offerText === "", "an offer of another machine than the one asked is not taken");
+}
+
+// --- A NEW PHONE ASKS TO JOIN, on a trusted phone: the number compared here, only the hash signed ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const challenge = P.randomBytes(32);
+  const cred = P.randomBytes(32);
+  const pub = (await subtle.exportKey("raw", (await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])).publicKey));
+  const request = P.hex(P.randomBytes(16));
+  const device = P.hex(P.randomBytes(16));
+  const nowMs = Date.now();
+  const text = '{"v":1,"kind":"horde-relay-join-transcript","request":"' + request + '","horde":"work","machine":"' + m.keyId + '","offer":"' + P.hex(P.randomBytes(16)) + '","challenge":"' + P.b64u(challenge) +
+    '","device":"' + device + '","credentialId":"' + P.b64u(cred) + '","publicKey":"' + P.b64u(new Uint8Array(pub)) + '","rpId":"relay.example.test","label":"Pixel 9","agent":"Safari on iPhone","country":"IL","requestedAt":' + nowMs + ',"expiresAt":' + (nowMs + 600000) + "}";
+  const e = await machineEnvelope(m, { kind: "request", channel: "join", body: P.utf8(text), phones: [a.phoneKey] });
+  await t.put(m.horde + "/phone", e.key, e.text);
+  await a.phone.refresh(a.paired.id);
+  const list = await a.phone.joinRequests(a.paired.id);
+  check(list.length === 1 && list[0].label === "Pixel 9" && list[0].country === "IL" && JSON.stringify(list).indexOf("challenge") < 0, "the trusted phone lists the request - who, browser, country, time - and no means to the number", JSON.stringify(list));
+  const number = await P.pairingFingerprint({ challenge, publicPoint: new Uint8Array(pub), credentialId: cred, rpId: "relay.example.test" });
+  const head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const wrong = number === "0000-0000-0000" ? "1111-1111-1111" : "0000-0000-0000";
+  const why = await throwsAsync(() => a.phone.approveJoin(a.paired.id, { request, number: wrong }));
+  check(why.indexOf("does not match") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "A WRONG NUMBER is refused here: nothing is signed, nothing sent", why);
+  await a.phone.approveJoin(a.paired.id, { request, number: number.replace(/-/g, " ") });
+  const items = (await t.get(m.mailbox, 0, 256)).value.items;
+  const ap = await machineOpens(m, items[items.length - 1].text);
+  check(ap.header.channel === "join" && ap.header.kind === "approve" && ap.sig.alg === "webauthn.get", "the right number, spaced as typed, sends an approval on channel join, signed by the passkey");
+  check(Object.keys(ap.body).join(",") === "v,request,device,transcript" && ap.body.request === request && ap.body.device === device && ap.body.transcript === P.b64u(await P.sha256(P.utf8("horde-relay/join/v1 transcript\n" + text))), "carrying only the request, the device and the transcript's hash", JSON.stringify(ap.body));
+  check(JSON.stringify(ap.body).indexOf(number.replace(/-/g, "")) < 0, "never the number");
+  await a.phone.rejectJoin(a.paired.id, { request });
+  const rj = await machineOpens(m, (await t.get(m.mailbox, 0, 256)).value.items.slice(-1)[0].text);
+  check(rj.header.kind === "reject" && Object.keys(rj.body).join(",") === "v,request", "a reject is signed the same way, naming only the request");
+  const closed = await machineEnvelope(m, { kind: "closed", channel: "join", body: P.utf8('{"v":1,"request":"' + request + '","outcome":"rejected"}'), phones: [a.phoneKey] });
+  await t.put(m.horde + "/phone", closed.key, closed.text);
+  await a.phone.refresh(a.paired.id);
+  check((await a.phone.joinRequests(a.paired.id)).length === 0, "once the machine says it ended, it is listed no more");
+  a.phone.lock(a.paired.id);
+  await a.phone.recover(a.paired.id, a.paired.recoveryCode);
+  check((await throwsAsync(() => a.phone.approveJoin(a.paired.id, { request, number }))).indexOf("recovery code") >= 0, "a recovery session approves nothing");
+}
+
 // --- the machine's confirmed record: the pairing screen's Finish pairing appears only on the machine's signed word ---
 {
   const t = R.memoryTransport();
