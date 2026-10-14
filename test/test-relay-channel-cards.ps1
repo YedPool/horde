@@ -95,7 +95,7 @@ function Get-CardsMail {
     }
     return @($out.ToArray())
 }
-function Get-Card { param($Body, [string]$Lane) return @($Body.cards | Where-Object { $_.lane -ceq $Lane })[0] }
+function Get-Card { param($Body, [string]$Lane) return (@($Body.cards | Where-Object { $_.lane -ceq $Lane }) | Select-Object -First 1) }
 function Said { param($Tick) return (@($Tick.lines) -join " | ") }
 function Iso { param([datetime]$At) return $At.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) }
 
@@ -257,7 +257,7 @@ try {
     Check ($ids.Count -eq 5 -and @($ids | Select-Object -Unique).Count -eq 5) ("every card of a machine has its own id (" + ($ids -join ",") + ")")
     $f = @($b.cards | Where-Object { $_.lane -ceq "F" })
     $dup = @($b.cards | Where-Object { $_.name -ceq "decisions page too" })[0]
-    Check ($f.Count -eq 1 -and $f[0].now -ceq "the first F" -and $null -ne $dup -and $dup.lane -cne "F" -and $dup.note -like "*(orc-f-first) gives the same id, F,*" -and (Said $t) -like "*orc-f-first and orc-f-second both give the id F*") ("TWO FOLDERS OF ONE ORC: the first by folder name keeps the id, the other gets its own and says why, on the phone and at the machine (" + $dup.lane + ": " + $dup.note + ")")
+    Check ($f.Count -eq 1 -and $f[0].now -ceq "the first F" -and $null -ne $dup -and $dup.lane -cne "F" -and $dup.idNote -like "*(orc-f-first) gives the same id, F,*" -and (Said $t) -like "*orc-f-first and orc-f-second both give the id F*") ("TWO FOLDERS OF ONE ORC: the first by folder name keeps the id, the other gets its own and says why, on the phone and at the machine (" + $dup.lane + ": " + $dup.idNote + ")")
     $bad = @($b.cards | Where-Object { $_.name -like "*bad name*" })
     Check ($bad.Count -eq 2 -and $bad[0].lane -cne $bad[1].lane -and @($bad | Where-Object { $_.lane -cmatch '\Alane-[0-9]+\z' }).Count -eq 2) ("FOLDER NAMES NO ID IS MADE OF: each gets its own id by its place in the list, never one shared 'lane' (" + (@($bad | ForEach-Object { $_.lane }) -join ",") + ")")
 
@@ -280,6 +280,11 @@ try {
     $sb = $snap.body | ConvertFrom-Json
     Check ($hosted -eq 47918 -and $snap.body.Length -le $hosted -and $snap.cards -eq 2 -and $snap.left -eq 0) ("200 AREAS: the body fits the hosted relay's budget for two phones and every card is kept (" + $snap.body.Length + " of " + $hosted + ", cards " + $snap.cards + ")")
     Check (@($sb.areas).Count -gt 0 -and @($sb.areas).Count -lt 200 -and $sb.areasLeftOut -eq (200 - @($sb.areas).Count) -and $sb.areas[0].area.EndsWith("001") -and (@($snap.lines) -join " | ") -like "*area(s) of the map did not fit*") ("the map is cut from its end, the rest counted for the phone and said at the machine (areas " + @($sb.areas).Count + ", left out " + $sb.areasLeftOut + ")")
+    # F, review of PR 244: the map was held to a quarter of the budget even with the rest unused, so two
+    # small cards and 200 areas made a body of 12815 of 47918 bytes (measured before the fix). It now
+    # fills the room the cards leave.
+    $nextArea = ConvertTo-HordeCardsChannelValueText ([pscustomobject]@{ area = ($heb + ("{0:000}" -f (@($sb.areas).Count + 1))); lanes = @("B", "E") })
+    Check ($snap.body.Length + $nextArea.Length + 1 -gt $hosted -and $snap.body.Length -gt [long]($hosted / 2)) ("THE MAP FILLS THE ROOM THE CARDS LEAVE: the next area left out would not have fit (body " + $snap.body.Length + " of " + $hosted + ", next area " + $nextArea.Length + " bytes)")
     # 64 lanes, every text at its full 300 characters: 109185 bytes measured, so most are left out and counted.
     $G = New-World
     foreach ($n in 1..64) { $w = ("w" + $n + " ") * 100; Set-Lane $G ("lane{0:00}" -f $n) (New-Status -Orc ("L" + $n) -Lane $w -Doing $w -Finished $w -Waiting $w -Blocked ("yes " + $w)) }
@@ -338,6 +343,109 @@ try {
         ('{"ts":"' + $ts + '","task":"T-4","event":7,"lane":"E"}')) -join "`n"), $utf8)
     $led = Read-HordeCardsChannelLedger -Path $ledgerE -Now ([datetime]::UtcNow)
     Check ($led.ok -and $led.lanes["E"].open -eq 1 -and $led.skipped -eq 3 -and -not $led.lanes.ContainsKey("@{a=1}") -and -not $led.lanes.ContainsKey("E E")) ("a task, event or lane that is an object, a list or a number is passed over and counted, never read as its printed form (open " + $led.lanes["E"].open + ", skipped " + $led.skipped + ")")
+    Write-Host ""
+    Write-Host "--- 11. the standard form is the fleet status reader's: each rule broken is a card not in the standard form, saying which ---" -ForegroundColor Cyan
+    # E and F, 2026-10-14: standard means what fleet/StatusPanel.ps1's ConvertFrom-HordeFleetStatusBytes
+    # says, the rules the decisions window uses too, never a second copy. One lane a rule, each with its
+    # own orc letter so no id is shared; the problems are the reader's own words.
+    $H = New-World
+    $rec = { param([string]$Orc, [string]$Doing = "plain words", [string]$Finished = "plain words", [string]$Waiting = $null, [string]$Head = "horde-orc-status 1")
+        $t = $Head + "`norc: " + $Orc + "`nlane: lane " + $Orc + "`ndoing: " + $Doing + "`nfinished: " + $Finished + "`nblocked: no`n"
+        if ($null -ne $Waiting -and $Waiting -ne "") { $t += "waiting on: " + $Waiting + "`n" }
+        return $t }
+    $bytesOf = { param([string]$Folder, [byte[]]$Bytes) $dir = Join-Path $H.lanes $Folder; [void][System.IO.Directory]::CreateDirectory($dir); [System.IO.File]::WriteAllBytes((Join-Path $dir "status.txt"), $Bytes) }
+    $ascii = { param([string]$Text) return [System.Text.Encoding]::ASCII.GetBytes($Text) }
+    $wait200 = "x" * (200 - "waiting on: ".Length)
+    $cases = @(
+        @{ f = "a-six-lines"; orc = "A"; bytes = (& $ascii (& $rec "A")); want = "" },
+        @{ f = "b-seven-lines"; orc = "B"; bytes = (& $ascii (& $rec "B" -Waiting "the reviewer, since 2026-10-07 13:00, unblocked by a yes")); want = "" },
+        @{ f = "c-doing-at-120"; orc = "C"; bytes = (& $ascii (& $rec "C" -Doing ("d" * 120))); want = "" },
+        @{ f = "d-waiting-line-at-200"; orc = "D"; bytes = (& $ascii (& $rec "D" -Waiting $wait200)); want = "" },
+        @{ f = "e-bom"; orc = "E"; bytes = ([byte[]](@(0xEF, 0xBB, 0xBF) + @(& $ascii (& $rec "E")))); want = "starts with a byte-order mark" },
+        @{ f = "f-not-ascii"; orc = "F"; bytes = ($utf8.GetBytes((& $rec "F" -Doing ("words " + [char]0x05D0)))); want = "holds bytes that are not ASCII" },
+        @{ f = "g-five-lines"; orc = "G"; bytes = (& $ascii ("horde-orc-status 1`norc: G`nlane: lane G`ndoing: words`nfinished: words`n")); want = "has 5 lines, and a record is 6, or 7 with its waiting-on line" },
+        @{ f = "h-eight-lines"; orc = "H"; bytes = (& $ascii ((& $rec "H" -Waiting "nobody") + "extra: line`n")); want = "line 8 is one too many" },
+        @{ f = "i-no-header"; orc = "I"; bytes = (& $ascii (& $rec "I" -Head "status 2")); want = "does not begin with the line 'horde-orc-status 1'" },
+        @{ f = "j-no-doing-key"; orc = "J"; bytes = (& $ascii ("horde-orc-status 1`norc: J`nlane: lane J`nnow: words`nfinished: words`nblocked: no`n")); want = "line 4 is not 'doing: ...'" },
+        @{ f = "k-orc-two-letters"; orc = "K1"; bytes = (& $ascii (& $rec "K1")); want = "its orc is not one capital letter" },
+        @{ f = "l-doing-at-121"; orc = "L"; bytes = (& $ascii (& $rec "L" -Doing ("d" * 121))); want = "doing is 121 characters, and the most is 120" },
+        @{ f = "m-finished-pr"; orc = "M"; bytes = (& $ascii (& $rec "M" -Finished "merged PR 238")); want = "finished holds a bare reference or a path" },
+        @{ f = "n-doing-issue"; orc = "N"; bytes = (& $ascii (& $rec "N" -Doing "fixing issue 214")); want = "doing holds a bare reference or a path" },
+        @{ f = "o-finished-hash"; orc = "O"; bytes = (& $ascii (& $rec "O" -Finished "closed #12")); want = "finished holds a bare reference or a path" },
+        @{ f = "p-doing-path"; orc = "P"; bytes = (& $ascii (& $rec "P" -Doing "editing C:\work\notes")); want = "doing holds a bare reference or a path" },
+        @{ f = "q-waiting-line-at-201"; orc = "Q"; bytes = (& $ascii (& $rec "Q" -Waiting ($wait200 + "x"))); want = "the waiting on line is 201 characters, and the most is 200" },
+        @{ f = "r-waiting-pr"; orc = "R"; bytes = (& $ascii (& $rec "R" -Waiting "the reviewer of PR 5")); want = "waiting on holds a bare reference or a path" },
+        @{ f = "s-control"; orc = "S"; bytes = (& $ascii (& $rec "S" -Doing ("tab" + [char]9 + "in it"))); want = "holds a control character" },
+        @{ f = "t-seventh-other-key"; orc = "T"; bytes = (& $ascii ((& $rec "T") + "note: something`n")); want = "line 7 is not 'waiting on: ...'" }
+    )
+    foreach ($c in $cases) { & $bytesOf $c.f $c.bytes }
+    $t = Invoke-Tick $H
+    $mail = @(Get-CardsMail $H)
+    $b = $mail[$mail.Count - 1].body
+    foreach ($c in $cases) {
+        $card = @($b.cards | Where-Object { $_.lane -ceq $c.orc })[0]
+        $judged = ConvertFrom-HordeFleetStatusBytes -Bytes $c.bytes
+        if ($c.want -ceq "") {
+            Check ($null -ne $card -and $card.form -ceq "standard" -and $card.problems -ceq "" -and @($judged.problems).Count -eq 0) ("STANDARD: " + $c.f + " is in the standard form, as the status reader says (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
+        } else {
+            Check ($null -ne $card -and $card.form -ceq "other" -and $card.problems.Contains($c.want) -and $card.problems -ceq (Get-HordeCardsChannelPlain (@($judged.problems) -join "; ")) -and $card.note -like "*not in the standard form*") ("NOT STANDARD: " + $c.f + " still gets its card, marked not in the standard form, with the reader's words '" + $c.want + "' (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
+        }
+    }
+    $bw = @($b.cards | Where-Object { $_.lane -ceq "B" })[0]
+    Check ($bw.waitingOn -ceq "the reviewer, since 2026-10-07 13:00, unblocked by a yes" -and $bw.now -ceq "plain words") "a standard record's values, its waiting-on line among them, are the ones the reader hands over"
+    $kc = @($b.cards | Where-Object { $_.lane -ceq "K1" })[0]
+    Check ($null -ne $kc -and $kc.now -ceq "plain words") "and a lane that breaks a rule is still shown as it stands, by the orc it names"
+
+    Write-Host ""
+    Write-Host "--- 12. a retired lane gets no card and is not counted; a folder with no file still gets its card ---" -ForegroundColor Cyan
+    # F, after the merge of PR 244: a lane folder with status.retired.txt and no status.txt is retired, and
+    # leaves the phone as it leaves the panel. A folder with neither file is still "no status file"; one
+    # with both is a lane that came back, and its status.txt is what it says.
+    $R = New-World
+    Set-Lane $R "live" (New-Status -Orc "A" -Lane "live lane")
+    Set-Lane $R "nothing-here" $null
+    Set-Lane $R "old-lane" (New-Status -Orc "Z" -Lane "old lane" -Blocked "yes - on the founder" -Waiting "the founder, since 2026-10-01")
+    Set-Lane $R "came-back" (New-Status -Orc "Y" -Lane "came back" -Doing "back at work")
+    [System.IO.File]::WriteAllText((Join-Path $R.lanes "came-back\status.retired.txt"), (New-Status -Orc "Y" -Lane "came back" -Doing "the retired words"), $utf8)
+    $t = Invoke-Tick $R
+    $mail = @(Get-CardsMail $R)
+    $b = $mail[$mail.Count - 1].body
+    $z = Get-Card $b "Z"
+    Check ($null -ne $z -and $b.thrall.orcs -eq 4 -and $b.thrall.blocked -eq 1) ("CONTROL: before it retires, the lane Z has its card and is counted, blocked (cards " + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; blocked " + $b.thrall.blocked + ")")
+    [System.IO.File]::Move((Join-Path $R.lanes "old-lane\status.txt"), (Join-Path $R.lanes "old-lane\status.retired.txt"))
+    $t = Invoke-Tick $R
+    $mail = @(Get-CardsMail $R)
+    $b = $mail[$mail.Count - 1].body
+    $ids = @($b.cards | ForEach-Object { $_.lane })
+    Check ($null -eq (Get-Card $b "Z") -and @($b.cards | Where-Object { $_.name -ceq "old lane" -or $_.name -ceq "old-lane" }).Count -eq 0 -and $ids.Count -eq 3) ("RETIRED: a folder with status.retired.txt and no status.txt gets no card (cards " + ($ids -join ",") + ")")
+    Check ($b.thrall.orcs -eq 3 -and $b.thrall.blocked -eq 0 -and $b.thrall.waitingFounder -eq 0 -and $b.thrall.unknown -eq 1) ("and it is not counted on the Thrall's card (orcs " + $b.thrall.orcs + ", blocked " + $b.thrall.blocked + ", waiting on the founder " + $b.thrall.waitingFounder + ", not known " + $b.thrall.unknown + ")")
+    $none = @($b.cards | Where-Object { $_.name -ceq "nothing-here" }) | Select-Object -First 1
+    Check ($null -ne $none -and $none.form -ceq "missing" -and $none.note -ceq "This lane has no status file.") "a folder with neither file still gets its 'no status file' card"
+    $y = Get-Card $b "Y"
+    Check ($null -ne $y -and $y.form -ceq "standard" -and $y.now -ceq "back at work") ("a folder with both files is a lane, and its status.txt wins (" + $(if ($null -ne $y) { $y.now } else { "no card" }) + ")")
+    # Retired folders are passed over before the count of folders read, or old lanes would push live ones out.
+    $S = New-World -Settings '{"sendIntervalMs": 0, "machineName": "office-pc", "lanesRead": 2}'
+    foreach ($old in @("a-old", "b-old", "c-old")) { Set-Lane $S $old $null; [System.IO.File]::WriteAllText((Join-Path $S.lanes ($old + "\status.retired.txt")), (New-Status -Orc "Z" -Lane $old), $utf8) }
+    Set-Lane $S "d-live" (New-Status -Orc "D" -Lane "d live")
+    Set-Lane $S "e-live" (New-Status -Orc "E" -Lane "e live")
+    $t = Invoke-Tick $S
+    $mail = @(Get-CardsMail $S)
+    $b = $mail[$mail.Count - 1].body
+    Check ((@($b.cards | ForEach-Object { $_.lane }) -join ",") -ceq "D,E" -and (Said $t) -notlike "*were not read*") ("retired folders do not count against lanesRead: two live lanes behind three retired ones both get their cards (" + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; " + (Said $t) + ")")
+
+    Write-Host ""
+    Write-Host "--- 13. why a card has an id of its own reaches the phone, beside what its form says ---" -ForegroundColor Cyan
+    # F, review of PR 244: the reason a card is named lane-5 was put in the card's note, which the phone
+    # never reads (relay/js/protocol.js makes a card's note from its form), so the founder never saw it.
+    $U = New-World
+    Set-Lane $U "u-first" (New-Status -Orc "U" -Lane "u first")
+    Set-Lane $U "u-second" "LANE: u second (Orc U)`nsome loose words`n"
+    $t = Invoke-Tick $U
+    $mail = @(Get-CardsMail $U)
+    $b = $mail[$mail.Count - 1].body
+    $second = @($b.cards | Where-Object { $_.lane -cne "U" }) | Select-Object -First 1
+    Check ($null -ne $second -and $second.lane -cne "U" -and $second.idNote -like "*(u-first) gives the same id, U,*" -and $second.form -ceq "other" -and $second.note -like "*not in the standard form*" -and $second.problems -cne "") ("A SECOND CARD OF ONE ID says why in idNote, its own field, and keeps what its form says (" + $(if ($null -ne $second) { $second.lane + ": " + $second.idNote + " / " + $second.note } else { "no card" }) + ")")
+    Check ((Get-Card $b "U").idNote -ceq "") "the card that keeps the id says nothing of it"
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin
