@@ -46,6 +46,15 @@
 # character but the ends of its lines: the checker lets one through, and this reader hands a record
 # on to be drawn.
 #
+# A RETIRED LANE HAS NO ROW (C's ruling, 2026-10-14, the rule the cards channel has had since PR 255).
+# A folder that holds status.retired.txt and NO status.txt is a lane that ended: it is given no row at
+# all, is not shown as "no status written", and is not counted - not among the Orcs, not among the
+# folders past the most read (it is passed over before that count, or old lanes would push live ones
+# out). A folder with BOTH files is a lane that came back, read from its status.txt as any other; a
+# folder with NEITHER is "no status written", as it always was. The retired file is never read. The
+# rule is one function, Test-HordeFleetStatusRetired, and channels/cards calls it, so the panel and the
+# phone cannot drift apart on which lanes are gone.
+#
 # WHAT THIS DOES NOT SAY, and the panel must not pretend to: working or idle, or sessions open. Those
 # come from the fleet's activity, not from this file. Waiting on a person is said only as the Orc's own
 # seventh line says it; the questions that wait on the reader are counted from the list of questions.
@@ -80,6 +89,8 @@
 $script:HordeFleetStatusHeader = "horde-orc-status 1"
 $script:HordeFleetStatusKeys = @("orc", "lane", "doing", "finished", "blocked")
 $script:HordeFleetStatusFile = "status.txt"
+# What a lane that ended renames its status.txt to (header: A RETIRED LANE HAS NO ROW).
+$script:HordeFleetStatusRetiredFile = "status.retired.txt"
 # The longest doing and finished may be, in characters (the record's rule 2).
 $script:HordeFleetStatusMostChars = 120
 # The optional seventh line (header): its key, and the longest the whole line may be, in characters.
@@ -207,6 +218,13 @@ function ConvertFrom-HordeFleetStatusBytes {
     return [pscustomobject]@{ problems = @(); fields = $fields }
 }
 
+function Test-HordeFleetStatusRetired {
+    # True when the folder is a retired lane (header): status.retired.txt is there and status.txt is
+    # not. The one statement of the rule; channels/cards/Channel.ps1 calls it too.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return ((-not [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusFile))) -and [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusRetiredFile)))
+}
+
 function Read-HordeFleetStatusFolder {
     # One Orc's folder, as the plain record the panel shows: { folder; written; problems; orc; lane;
     # doing; finished; blocked; blockedBy; ageSeconds }, and waitingOn after them only when the record
@@ -268,6 +286,8 @@ function Get-HordeFleetStatus {
     catch { return (& $none "unreadable" ("the folder of status records could not be listed: " + $_.Exception.Message)) }
     # THE SAME FOLDERS EVERY TIME (header): by name, by code point, letter case set aside.
     [System.Array]::Sort($paths, [System.StringComparer]::OrdinalIgnoreCase)
+    # A RETIRED LANE HAS NO ROW (header), and is passed over before the most read is counted.
+    $paths = [string[]]@($paths | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })
     $most = [int]$Settings.values.statusFoldersRead
     $notRead = [Math]::Max(0, $paths.Length - $most)
     $orcs = @($paths | Select-Object -First $most | ForEach-Object { Read-HordeFleetStatusFolder -Path $_ -Now $Now })

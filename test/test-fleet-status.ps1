@@ -329,6 +329,40 @@ $wrongKind = Get-HordeFleetStatus -HordeHome (New-Home "home-cap" ('{"statusFold
 Check ($wrongKind.state -ceq "refused" -and @($wrongKind.orcs).Count -eq 0 -and @($wrongKind.findings).Count -eq 1 -and $wrongKind.findings[0] -like "*statusFoldersRead*") ("a most that is written as text is refused by name, and 64 is not used in its place (" + (@($wrongKind.findings) -join " / ") + ")")
 
 Write-Host ""
+Write-Host "--- a retired lane has no row (C's ruling, 2026-10-14) ---" -ForegroundColor Cyan
+# A folder with status.retired.txt and no status.txt is a lane that ended: no row, not "no status
+# written", not counted. Both files: a lane that came back, read from status.txt. Neither: no status
+# written, as before. The retired file holds a good record of its own, so a reader that read it would
+# show it.
+function Set-Retired { param([string]$Dir, [string[]]$Lines) [System.IO.File]::WriteAllBytes((Join-Path $Dir "status.retired.txt"), (Bytes $Lines)) }
+$liveA = @("horde-orc-status 1", "orc: A", "lane: live lane", "doing: Working", "finished: Something", "blocked: no")
+$oldZ = @("horde-orc-status 1", "orc: Z", "lane: old lane", "doing: The retired words", "finished: Everything", "blocked: The founder said stop")
+[void](New-Orc "retired" "live" $liveA)
+$oldDir = New-Orc "retired" "old-lane" $oldZ
+$before = Get-HordeFleetStatus -Folder (Join-Path $work "retired") -Settings $defaults -Now $now
+Check (@($before.orcs).Count -eq 2 -and @($before.orcs | Where-Object { $_.orc -ceq "Z" }).Count -eq 1) "CONTROL: before it retires, the old lane has its row"
+[System.IO.File]::Move((Join-Path $oldDir "status.txt"), (Join-Path $oldDir "status.retired.txt"))
+$retired = Get-HordeFleetStatus -Folder (Join-Path $work "retired") -Settings $defaults -Now $now
+Check ($retired.state -ceq "read" -and @($retired.orcs).Count -eq 1 -and @($retired.orcs | Where-Object { $_.folder -ceq "old-lane" }).Count -eq 0 -and $retired.notRead -eq 0) ("a retired lane (status.retired.txt only) has no row and is not counted (" + (@($retired.orcs | ForEach-Object { $_.folder }) -join ",") + "; not read " + $retired.notRead + ")")
+$a = @($retired.orcs)[0]
+Check ($a.folder -ceq "live" -and $a.written -eq $true -and $a.orc -ceq "A" -and $a.doing -ceq "Working" -and $a.ageSeconds -eq 90) "CONTROL: the live lane beside the retired one is read as it was"
+$backDir = New-Orc "retired" "came-back" @("horde-orc-status 1", "orc: Y", "lane: came back", "doing: Back at work", "finished: The return", "blocked: no")
+Set-Retired $backDir (@("horde-orc-status 1", "orc: Y", "lane: came back", "doing: The retired words", "finished: Everything", "blocked: Stopped"))
+$neitherDir = New-Orc "retired" "nothing-here"
+$all = Get-HordeFleetStatus -Folder (Join-Path $work "retired") -Settings $defaults -Now $now
+$y = @($all.orcs | Where-Object { $_.folder -ceq "came-back" })
+Check ($y.Count -eq 1 -and $y[0].written -eq $true -and $y[0].orc -ceq "Y" -and $y[0].doing -ceq "Back at work" -and $y[0].blocked -eq $false) ("a lane with both files is read from status.txt (" + $(if ($y.Count -eq 1) { $y[0].doing } else { "no row" }) + ")")
+$n = @($all.orcs | Where-Object { $_.folder -ceq "nothing-here" })
+Check ($n.Count -eq 1 -and $n[0].written -eq $false -and $n[0].problems[0] -ceq "there is no status.txt") "a lane with neither file is still no status written"
+Check (@($all.orcs).Count -eq 3 -and (@($all.orcs | ForEach-Object { $_.folder }) -join ",") -ceq "live,came-back,nothing-here") ("three rows, the retired lane none of them (" + (@($all.orcs | ForEach-Object { $_.folder }) -join ",") + ")")
+# Retired folders are passed over before the most read is counted, or old lanes would push live ones out.
+foreach ($old in @("a-old", "b-old", "c-old")) { Set-Retired (New-Orc "retired-first" $old) $oldZ }
+[void](New-Orc "retired-first" "d-live" (With 1 "orc: D")); [void](New-Orc "retired-first" "e-live" (With 1 "orc: E"))
+$two = Read-HordeModuleSettingsText -Declaration (Get-HordeFleetSettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"statusFoldersRead":2}}'
+$first = Get-HordeFleetStatus -Folder (Join-Path $work "retired-first") -Settings $two -Now $now
+Check ((@($first.orcs | ForEach-Object { $_.orc }) -join ",") -ceq "D,E" -and $first.notRead -eq 0) ("retired folders do not count against the most read: two live lanes behind three retired ones are both read, none counted unread (" + (@($first.orcs | ForEach-Object { $_.folder }) -join ",") + "; not read " + $first.notRead + ")")
+
+Write-Host ""
 Write-Host "--- the reader writes nothing ---" -ForegroundColor Cyan
 $before = @(Get-ChildItem -LiteralPath $work -Recurse -Force | ForEach-Object { $_.FullName + "|" + $(if ($_.PSIsContainer) { "dir" } else { "" + $_.Length + "|" + $_.LastWriteTimeUtc.Ticks }) }) -join ";"
 [void](Get-HordeFleetStatus -Folder (Join-Path $work "fleet") -Now $now)
