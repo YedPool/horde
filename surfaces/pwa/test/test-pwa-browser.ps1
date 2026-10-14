@@ -272,6 +272,11 @@ try {
     $seen3 = Invoke-Browser @{ cmd = "waitText"; text = $partsTitle }
     Check ($q3.state -ceq "known" -and $q3.value.outcome -ceq "done" -and $seen3.ok -and $seen3.value.found) "CONTROL: a question of two parts is asked, and the app shows it"
     $pa = Invoke-Browser @{ cmd = "answerPart"; question = $partsTitle; part = 0; text = "The second chime."; mailbox = $mailbox }
+    # ON ITS WAY, IT SAYS SO (the founder, 2026-10-14): before any run has taken it, the part folds to
+    # Answered with what became of it - sent - and never to an empty field.
+    $pending = $null
+    for ($i = 0; $i -lt 40; $i++) { $pending = Invoke-Browser @{ cmd = "parts"; question = $partsTitle }; if ($pending.ok -and $null -ne $pending.value -and $pending.value.folded[0] -eq $true) { break }; Start-Sleep -Milliseconds 250 }
+    Check ($pending.ok -and $null -ne $pending.value -and $pending.value.folded[0] -eq $true -and "$($pending.value.marks[0])" -ceq "Answered, sent") ("BEFORE THE PC HAS IT, the part stands answered and says it is sent (" + $(if ($pending.ok) { ConvertTo-Json $pending.value -Compress } else { $pending.reason }) + ")")
     # Two turns, as for the first answer above: one takes the answer in, the next sends the snapshot that holds it.
     $run = Invoke-Run -Turns 1
     $run = Invoke-Run -Turns 1

@@ -60,6 +60,16 @@
 // document keeps the words as the standing answer until a snapshot that holds them arrives (list.js,
 // standingOf). The same words sent again carry the same id, which is the answerId: the machine stores
 // them once (channels/decisions, Get-HordeDecisionsChannelAnswerId).
+//
+// AN ANSWER THE PC HAS NOT APPLIED STANDS ANSWERED (the founder, 2026-10-14): the list handed to the
+// document is the snapshot with the answers this phone keeps drawn in (relay/js/protocol.js,
+// withAnswers) - his words under the question, local, with what became of them: sent, received by PC,
+// applied, refused, and the warning when one waits too long. So a reload, or a snapshot from before
+// the answer, never shows the question as an empty slot while his answer is on its way. After every
+// refresh the phone sends again what the PC reports missing (phone-core.js, resend), and says in its
+// own words what it could not send.
+import { withAnswers } from "../relay/protocol.js";
+
 const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
@@ -74,6 +84,12 @@ export function createBridge(phone, options = {}) {
   let view = null;
   let viewError = "";
   let polling = false;
+  // What became of the answers this phone keeps (phone-core.js, answers), drawn into the list.
+  let answers = [];
+  async function loadAnswers() {
+    if (!picked || locked) { answers = []; return; }
+    try { answers = await phone.answers(picked); } catch (e) { answers = []; }
+  }
   const look = options.look || { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
 
   function emit(name, value) {
@@ -84,7 +100,7 @@ export function createBridge(phone, options = {}) {
     if (!view) return { state: "unknown", value: null, reason: viewError || "This horde is locked." };
     // notShown: the one line for what the snapshot on screen leaves out, "" for nothing (phone-core.js).
     // It is a member the document does not read (list.js): the page shows it above the list (app.js).
-    return { state: "known", reason: "", value: { outcome: "done", questions: view.questions, notShown: typeof view.notShown === "string" ? view.notShown : "", counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
+    return { state: "known", reason: "", value: { outcome: "done", questions: withAnswers(view.questions, answers), notShown: typeof view.notShown === "string" ? view.notShown : "", counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
   }
   async function chatRecord() {
     if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
@@ -119,6 +135,13 @@ export function createBridge(phone, options = {}) {
       view = r.snapshot ? r : null;
       viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, announce this phone again.";
     } catch (e) { view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e); }
+    if (view && !locked) {
+      try {
+        const again = await phone.resend(picked);
+        if (again.problems.length) emit("notice", again.problems.join(" "));
+      } catch (e) { /* the next refresh asks again; the answers stay kept */ }
+    }
+    await loadAnswers();
     const rec = listRecord();
     emit("list-changed", rec);
     emit("chat-changed", await chatRecord());
@@ -158,6 +181,9 @@ export function createBridge(phone, options = {}) {
     say: async (a) => {
       try {
         await phone.answer(picked, { number: Number(a.number), wordingVersion: Number(a.wording), text: String(a.text), answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });
+        // DRAWN AT ONCE: the list with his answer in it, marked sent, before any snapshot comes.
+        await loadAnswers();
+        emit("list-changed", listRecord());
         return { ok: true, sequence: highestSequence() + 1 };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },

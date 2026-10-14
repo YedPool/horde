@@ -34,8 +34,8 @@
            Find = '        var elsewhere = !!line && (now !== line || (partAt >= 0 && line.fields[partAt] !== inField));'
            Replace = '        var elsewhere = !!line && now !== line;' }
         @{ Name = "a-refused-parts-reason-is-not-shown-under-it"
-           Find = '      row.refusal.textContent = (s && s.refusal) ? s.refusal : "";'
-           Replace = '      row.refusal.textContent = "";' }
+           Find = '      row.refusal.textContent = (s && s.refusal) ? s.refusal : (isSaved ? textOf(saved.receiptNote) : "");'
+           Replace = '      row.refusal.textContent = (isSaved ? textOf(saved.receiptNote) : "");' }
         @{ Name = "ctrl-enter-on-the-first-part-sends-only-that-part"
            Find = '          line.parts.forEach(function (p, i) { if (savePart(line, i)) { any = true; } });'
            Replace = '          line.parts.forEach(function (p, i) { if (i === 0 && savePart(line, i)) { any = true; } });' }

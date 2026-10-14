@@ -69,12 +69,12 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 }
 // answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
 // says nothing of them, as every machine's did before a part could be answered by itself.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [] } = {}) {
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(receipts === undefined ? {} : { receipts }) })));
   }
   return out;
 }
@@ -1363,6 +1363,152 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   check(JSON.stringify(NV.noticeTarget({ kind: "progress", lane: "E", entry: "e1", machine: "pc" })) === '{"entry":"e1","lane":"E","machine":"pc"}' && NV.noticeTarget({ kind: "notify", lane: "", entry: "e1" }) === null && NV.noticeTarget({ kind: "cutoff", lane: "" }) === null, "a followed lane's notice opens that lane's stream; a notify line and a cut-off open nothing");
   check(NV.noticesTabWords(0) === "Notices" && NV.noticesTabWords(3) === "Notices (3)", "THE UNREAD COUNT on the tab: none says nothing, three says (3)");
   check(P.noticeList([{ entry: "e", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }, { id: "y", said: 5, n: 2 }, { id: "z", said: 9, n: 3 }] }], new Set(["x"])).items.map((i) => i.id + (i.read ? "r" : "")).join(",") === "z,y,xr" && P.noticeList([{ entry: "e", notices: [{ id: "x", said: 1, n: 1 }] }], new Set()).unread === 1, "the list is newest first by time, then by the machine's number; the count is of unread ones");
+}
+
+// --- 15. what became of each answer: kept until applied, shown answered while on its way, sent again when missing (the founder, 2026-10-14, relay fixes 3 and 4) ---
+{
+  // A phone on a clock of the suite's own, beginning at the real time (the machine's snapshots carry the
+  // real time, and the phone compares them with its own).
+  const clock = { now: Date.now() };
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const store = memoryStore();
+  const auth = softAuthenticator({ origin, prf: true });
+  const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
+  let phone = make();
+  const paired = await phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  await phone.announce(paired.id);
+  const phoneKey = await phoneKeyOf(t, m);
+  const from = (await store.get("horde/" + paired.id)).deviceKeyId;
+  const receipt = (over = {}) => [{ from, through: 0, missing: [], applied: [], refused: [], ...over }];
+  const lastAnswer = async () => { const items = (await t.get(m.mailbox, 0, 256)).value.items; for (let i = items.length - 1; i >= 0; i--) { const o = await machineOpens(m, items[i].text); if (o.header.channel === "decisions") return { ...o, key: items[i].key }; } return null; };
+  const kept = async () => { const x = await store.get("outbox/" + paired.id); return x && Array.isArray(x.items) ? x.items : []; };
+  const stateOf = async (answerId) => { const a = (await phone.answers(paired.id)).find((x) => x.answerId === answerId); return a ? a.state + (a.warning ? "+warning" : "") : "none"; };
+
+  // A MACHINE FROM BEFORE RECEIPTS: nothing would ever confirm an answer, so none is kept.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2 });
+  await phone.refresh(paired.id);
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Old machine.", answerId: P.hex(P.randomBytes(16)) });
+  check((await kept()).length === 0 && (await phone.answers(paired.id)).length === 0, "to a machine whose snapshot has no receipts, an answer is sent as before and nothing is kept");
+
+  // SENT, THEN RECEIVED, THEN APPLIED.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt() });
+  await phone.refresh(paired.id);
+  const id1 = P.hex(P.randomBytes(16));
+  const sentAt = clock.now;
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Yes, kept.", answerId: id1 });
+  const env1 = await lastAnswer();
+  check(env1.body.answerId === id1 && (await stateOf(id1)) === "sent", "AN ANSWER SHOWS SENT once the relay took it", await stateOf(id1));
+  const box = await kept();
+  check(box.length === 1 && box[0].answerId === id1 && box[0].seqs.join(",") === String(env1.header.seq) && box[0].envelope.key === env1.key && JSON.stringify(box).indexOf("Yes, kept.") < 0, "THE OUTBOX KEEPS IT: its ids, the seq and the envelope the relay took, and its words only sealed to the phone's own key - never as text", JSON.stringify(box[0] && { seqs: box[0].seqs, key: box[0].envelope.key }));
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt({ through: env1.header.seq }) });
+  await phone.refresh(paired.id);
+  check((await stateOf(id1)) === "received" && (await kept()).length === 1, "THEN RECEIVED BY PC, when the receipt's through reaches its seq - and still kept", await stateOf(id1));
+
+  // A RELOAD: the words come back from the outbox, and the question stands answered, never empty.
+  phone = make();
+  await phone.unlock(paired.id);
+  const bridge = createBridge(phone, { loadKinds: async () => ({}) });
+  const rec = await bridge.request("pick", { id: paired.id });
+  const q1 = rec.value.questions.find((q) => q.number === 1);
+  const mine = q1.thread.messages[q1.thread.messages.length - 1];
+  check(rec.state === "known" && mine.speaker === "founder" && mine.text === "Yes, kept." && mine.local === true && mine.receipt === "received by PC" && mine.receiptNote === "", "A PENDING ANSWER SHOWS AS ANSWERED, NEVER EMPTY: after a reload the question carries his words as his last message, marked received by PC", JSON.stringify(mine));
+  check(rec.value.questions.find((q) => q.number === 2).thread.messages.length === 0, "CONTROL: a question he did not answer has nothing drawn into it");
+  const said = await bridge.request("say", { number: 2, text: "Only a.", wording: 1, id: P.hex(P.randomBytes(16)), part: "a" });
+  const after = await bridge.request("list");
+  const q2 = after.value.questions.find((q) => q.number === 2);
+  const part = q2.thread.messages[q2.thread.messages.length - 1];
+  check(said.ok === true && part.part === "a" && part.text === "Only a." && part.receipt === "sent" && Number(part.sequence) >= said.sequence, "a part answered by itself is drawn under its part, marked sent, at the sequence the page waits for", JSON.stringify({ said, part }));
+
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { thread: { count: 1, turn: "warchief", messages: [{ sequence: 3, speaker: "founder", text: "Yes, kept." }] } }), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt({ through: env1.header.seq, applied: [id1] }) });
+  await bridge.request("refresh");
+  const rec2 = await bridge.request("list");
+  const msgs = rec2.value.questions.find((q) => q.number === 1).thread.messages;
+  check((await stateOf(id1)) === "applied" && msgs.length === 1 && msgs[0].receipt === "applied" && !msgs[0].local, "THEN APPLIED: the receipt lists its answerId, and his message in the snapshot's own thread is marked applied - drawn once, not twice", JSON.stringify(msgs));
+  check((await kept()).every((i) => i.answerId !== id1) && (await kept()).length === 1, "THE OUTBOX KEEPS AN ANSWER UNTIL APPLIED, and not after: the applied one is gone from it, the part still on its way is not");
+
+  // MISSING: the PC took a later envelope of this phone, so the journal refuses this seq for good.
+  const id3 = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Lost on the way.", answerId: id3 });
+  const env3 = await lastAnswer();
+  const t3 = clock.now;
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt({ through: env3.header.seq + 1, missing: [env3.header.seq], applied: [id1] }) });
+  await phone.refresh(paired.id);
+  clock.now = t3 + 60 * 1000;
+  const early = await phone.resend(paired.id);
+  check(early.resent === 0 && (await lastAnswer()).header.seq === env3.header.seq, "a missing answer is not sent again before the interval since it was sent", JSON.stringify(early));
+  clock.now = t3 + P.ANSWER_RESEND_MS + 1000;
+  const first = await phone.resend(paired.id);
+  const env3b = await lastAnswer();
+  const k3 = (await kept()).find((i) => i.answerId === id3);
+  check(first.resent === 1 && env3b.header.seq > env3.header.seq && env3b.body.answerId === id3 && env3b.body.text === "Lost on the way." && env3b.body.snapshot === env3.body.snapshot && k3.seqs.join(",") === env3.header.seq + "," + env3b.header.seq, "A REPORTED-MISSING ANSWER IS RESENT: a NEW envelope, under a new seq, signed again, with the same answerId and words - the machine applies it once", JSON.stringify({ first, seqs: k3 && k3.seqs }));
+  const again = await phone.resend(paired.id);
+  check(again.resent === 0, "and not again at once");
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env3b.header.seq + 1, missing: [env3.header.seq, env3b.header.seq], applied: [id1] }) });
+  await phone.refresh(paired.id);
+  clock.now = t3 + P.ANSWER_RESEND_MS + 2 * 60 * 1000;
+  const tooSoon = await phone.resend(paired.id);
+  clock.now = t3 + 2 * P.ANSWER_RESEND_MS + 2000;
+  const seqBefore = (await lastAnswer()).header.seq;
+  await bridge.request("refresh");
+  const second = { resent: (await lastAnswer()).header.seq > seqBefore ? 1 : 0 };
+  check(tooSoon.resent === 0 && second.resent === 1, "missing again, it is resent ONCE PER INTERVAL: not two minutes after the last, and again once the interval is out - by the bridge's own refresh", JSON.stringify({ tooSoon, second }));
+
+  // A WARNING after an hour unconfirmed; none before.
+  clock.now = t3 + P.ANSWER_WARN_MS - 1000;
+  const before = await stateOf(id3);
+  clock.now = t3 + P.ANSWER_WARN_MS + 1000;
+  const pastHour = await stateOf(id3);
+  const warned = (await bridge.request("refresh")).value.questions.find((q) => q.number === 1).thread.messages.slice(-1)[0];
+  check(before.indexOf("+warning") < 0 && pastHour.endsWith("+warning") && warned.receiptNote === P.ANSWER_WARNING && warned.text === "Lost on the way.", "AN ANSWER PENDING PAST AN HOUR SHOWS A WARNING, under his words; a minute before the hour it does not", before + " / " + pastHour + " / " + JSON.stringify(warned));
+
+  // LOST AT THE END OF THE STREAM: the PC spoke well after the put and has nothing as late; the same
+  // envelope is put again, and no seq is spent.
+  const id4 = P.hex(P.randomBytes(16));
+  clock.now = Date.now() - 30 * 60 * 1000;
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Lost at the tail.", answerId: id4 });
+  const env4 = await lastAnswer();
+  await t.ack(m.mailbox, (await t.get(m.mailbox, 0, 256)).value.items.slice(-1)[0].seq);
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env3b.header.seq + 1, missing: [env3.header.seq, env3b.header.seq], applied: [id1] }) });
+  await phone.refresh(paired.id);
+  clock.now = Date.now();
+  const tail = await phone.resend(paired.id);
+  const back = (await t.get(m.mailbox, 0, 256)).value.items.find((i) => i.key === env4.key);
+  check(tail.resent >= 1 && !!back && back.text === (await kept()).find((i) => i.answerId === id4).envelope.text, "an answer the PC never saw though it spoke well after is put again as the very envelope it was", JSON.stringify(tail));
+  check((await phone.resend(paired.id)).resent === 0, "and not again within the interval, though no new envelope was made for it");
+
+  // REFUSED: never sent again, and gone from the outbox once shown.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env4.header.seq, applied: [id1], refused: [id4] }) });
+  await phone.refresh(paired.id);
+  check((await stateOf(id4)) === "refused" && (await kept()).every((i) => i.answerId !== id4), "an answer the PC refused says so, and leaves the outbox: it is never sent again");
+
+  // A SESSION THAT CANNOT SIGN sends nothing that needs a new signature; the passkey's session does.
+  const id5 = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Needs a signature.", answerId: id5 });
+  const env5 = await lastAnswer();
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env5.header.seq + 1, missing: [env5.header.seq], applied: [id1], refused: [id4] }) });
+  phone.lock(paired.id);
+  await phone.recover(paired.id, paired.recoveryCode);
+  await phone.refresh(paired.id);
+  clock.now += P.ANSWER_RESEND_MS + 1000;
+  const unsigned = await phone.resend(paired.id);
+  const stillHead = (await lastAnswer()).header.seq;
+  await phone.unlock(paired.id);
+  await phone.refresh(paired.id);
+  const signed = await phone.resend(paired.id);
+  check(unsigned.resent === 0 && stillHead === env5.header.seq && signed.resent === 1 && (await lastAnswer()).header.seq > env5.header.seq, "a missing answer is not sent again from a recovery session, which cannot sign; the passkey's session sends it", JSON.stringify({ unsigned, signed }));
+  check((await kept()).length > 0, "CONTROL: an answer is still kept");
+  await phone.forget(paired.id);
+  check((await store.get("outbox/" + paired.id)) === undefined, "forgetting the horde forgets what it kept to send");
+
+  // THE STATE BY ITSELF.
+  const item = { answerId: id1, seqs: [5], sentAt: 0, lastSentAt: 0, lastResendAt: 0 };
+  const rc = (o) => P.receiptFor([{ from, through: 0, missing: [], applied: [], refused: [], ...o }], from);
+  check(P.answerState(item, rc({ through: 4 }), 0, 1).state === "sent" && P.answerState(item, rc({ through: 5 }), 0, 1).state === "received" && P.answerState(item, rc({ through: 6, missing: [5] }), 0, 1).state === "sent" && P.answerState(item, rc({ through: 6, applied: [id1] }), 0, 1).state === "applied", "answerState: sent below through, received at it, not received when its seq is missing, applied by its id");
+  check(P.answerState(item, rc({ through: 6, missing: [5] }), 0, P.ANSWER_RESEND_MS).resend === "resign" && P.answerState(item, rc({ through: 4 }), P.ANSWER_TAIL_GRACE_MS + 1, P.ANSWER_RESEND_MS).resend === "reput" && P.answerState(item, rc({ through: 4 }), P.ANSWER_TAIL_GRACE_MS - 1, P.ANSWER_RESEND_MS).resend === "", "missing is signed again; unseen past the grace is put again; unseen within it is waited for");
+  const others = P.receiptFor([{ from: "b".repeat(32), through: 9, missing: [], applied: [id1], refused: [] }, { from, through: 1, missing: [], applied: [], refused: [] }], from);
+  check(others.through === 1 && !others.applied.has(id1), "receiptFor reads this passkey's receipt only, never another phone's");
+  check(P.receiptFor(undefined, from) === null && P.receiptFor([{ from, through: -1, missing: [], applied: [], refused: [] }], from) === null && P.receiptFor([{ from, through: 1, missing: [], applied: ["not hex"], refused: [] }], from) === null && P.receiptFor([], from).through === 0, "receiptFor: none from a machine before receipts, none from one that does not hold together, nothing yet from one with no stream for this passkey");
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

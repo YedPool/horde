@@ -24,7 +24,10 @@
 #   7. an old snapshot the relay puts again is not shown over the newer one;
 #   8. the chat: the Thrall's last turns (a synthetic fleet, test/lib/ChatFleet.ps1) reach the app; a
 #      recovery session cannot write; the founder's line, sent through the bridge and signed by the
-#      passkey, is posted to the Thrall once, and the receipt shows in the app's own words.
+#      passkey, is posted to the Thrall once, and the receipt shows in the app's own words;
+#  10. an answer the relay loses (the founder's decisions/16, 2026-10-14): the app shows it answered and
+#      sent; the run reports its seq missing; the app sends it again in a new envelope; it lands once
+#      and the app says applied.
 #
 # NODE IS NEEDED. Without it the suite says so and exits 3, a partial run, never 0. HORDE_HOME is the
 # suite's own for every child and for this process, and is put back.
@@ -292,6 +295,43 @@ try {
     $dump = Invoke-App @{ cmd = "dump" }
     Check ($dump.ok -and -not $dump.value.Contains("Ruled-line") -and -not $dump.value.Contains("quiet room") -and $dump.value.Contains('"progressRead":{"id":"20261012T170000Z-02","n":2}')) "the store holds his place and no word of the log"
     Check ((Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))) -eq $mailHead) "and the app put nothing into the machine's mailbox for any of it: progress goes one way"
+
+    Write-Host ""
+    Write-Host "--- 10. an answer the relay loses is shown answered, reported missing, sent again and applied once ---" -ForegroundColor Cyan
+    $qLost = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime should play when the assistant opens?"; kind = "yes-no"; whatItIs = "A second question."; group = "voice"; askedBy = "orc-b" } }
+    $qNext = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Should the chime be quiet at night?"; kind = "yes-no"; whatItIs = "A third question."; group = "voice"; askedBy = "orc-b" } }
+    $nLost = [int]$qLost.value.number
+    $nNext = [int]$qNext.value.number
+    $run = Invoke-Run -Turns 1
+    $null = Invoke-App @{ cmd = "bridge"; name = "refresh" }
+    $lostId = [guid]::NewGuid().ToString("N")
+    $null = Invoke-App @{ cmd = "lose" }
+    $lostSaid = Invoke-App @{ cmd = "bridge"; name = "say"; args = @{ number = $nLost; text = "The second chime, lost on the way."; wording = 1; id = $lostId } }
+    $nextSaid = Invoke-App @{ cmd = "bridge"; name = "say"; args = @{ number = $nNext; text = "Yes, quiet at night."; wording = 1; id = [guid]::NewGuid().ToString("N") } }
+    Check ($lostSaid.ok -and $lostSaid.value.ok -eq $true -and $nextSaid.ok -and $nextSaid.value.ok -eq $true) ("CONTROL: both answers are taken by the relay, as the app is told - the first of them written nowhere (" + $(if ($lostSaid.ok) { ConvertTo-Json $lostSaid.value -Compress } else { $lostSaid.reason }) + ")")
+    $list = Invoke-App @{ cmd = "bridge"; name = "list" }
+    $shown = $(if ($list.ok -and $list.value.state -ceq "known") { @(@($list.value.value.questions | Where-Object { $_.number -eq $nLost })[0].thread.messages) | Select-Object -Last 1 } else { $null })
+    Check ($null -ne $shown -and $shown.text -ceq "The second chime, lost on the way." -and $shown.receipt -ceq "sent" -and $shown.local -eq $true) ("the app shows the question answered, his words marked sent, not an empty slot (" + $(if ($null -ne $shown) { ConvertTo-Json $shown -Compress } else { "nothing" }) + ")")
+    $run = Invoke-Run -Turns 2
+    Check ($run.code -eq 0 -and $run.out.Contains("missing") -and @(Get-Said | Where-Object { [int]$_.data.number -eq $nNext }).Count -eq 1 -and @(Get-Said | Where-Object { [int]$_.data.number -eq $nLost }).Count -eq 0) ("the run lands the later answer, says an envelope of the phone before it is missing, and has nothing for the lost one (exit " + $run.code + ")")
+    $null = Invoke-App @{ cmd = "bridge"; name = "refresh" }
+    $states = Invoke-App @{ cmd = "answers"; id = $hid }
+    $lostState = $(if ($states.ok) { @($states.value | Where-Object { $_.answerId -ceq $lostId })[0] } else { $null })
+    Check ($null -ne $lostState -and $lostState.state -ceq "sent" -and (Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))) -ge 1) ("the receipt reports it missing and the app keeps it as sent; it is not sent again before the interval (" + $(if ($null -ne $lostState) { $lostState.state } else { "none" }) + ")")
+    $null = Invoke-App @{ cmd = "age"; id = $hid; ms = 11 * 60 * 1000 }
+    $headBefore = Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))
+    $null = Invoke-App @{ cmd = "bridge"; name = "refresh" }
+    $headAfter = Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))
+    Check ($headAfter -eq $headBefore + 1) ("once the interval is out the app sends it again, one new envelope (head " + $headBefore + " -> " + $headAfter + ")")
+    $run = Invoke-Run -Turns 2
+    $landed = @(Get-Said | Where-Object { [int]$_.data.number -eq $nLost })
+    Check ($run.code -eq 0 -and $landed.Count -eq 1 -and $landed[0].data.text -ceq "The second chime, lost on the way.") ("the resent answer lands, once, his words exactly (" + $landed.Count + " record(s))")
+    $null = Invoke-App @{ cmd = "bridge"; name = "refresh" }
+    $states = Invoke-App @{ cmd = "answers"; id = $hid }
+    $lostState = $(if ($states.ok) { @($states.value | Where-Object { $_.answerId -ceq $lostId })[0] } else { $null })
+    $dump = Invoke-App @{ cmd = "dump" }
+    Check ($null -ne $lostState -and $lostState.state -ceq "applied" -and $dump.ok -and -not $dump.value.Contains($lostId)) ("and the app says applied, and keeps it no longer (" + $(if ($null -ne $lostState) { $lostState.state } else { "none" }) + ")")
+    Check ($dump.ok -and -not $dump.value.Contains("lost on the way") -and -not $dump.value.Contains("quiet at night")) "while it was kept, and after, the store never held his words as text"
     }
 } finally {
     if ($null -ne (Get-Variable -Name pairRun -ErrorAction SilentlyContinue)) { Stop-HordeCliRun $pairRun }
