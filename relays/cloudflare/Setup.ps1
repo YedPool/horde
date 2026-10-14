@@ -32,7 +32,8 @@ $script:HordeCloudflareRelaySetupClientWhere = "the Google Cloud console, APIs a
 
 function Get-HordeCloudflareRelayWranglerVersion {
     # The wrangler version package.json pins: what `npx wrangler@<version> login` runs.
-    $pkg = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "package.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $pkg = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "package.json"), [System.Text.Encoding]::UTF8)
+    $pkg = ConvertFrom-HordeJson -Text $pkg
     return ("" + $pkg.devDependencies.wrangler)
 }
 

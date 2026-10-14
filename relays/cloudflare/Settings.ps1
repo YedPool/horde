@@ -19,6 +19,7 @@
 # No Set-StrictMode here: dot-sourced.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 
 $script:HordeCloudflareRelaySettings = New-HordeModuleSettings -Module "relay-cloudflare" -Settings @(
     @{ name = "relayOrigin"; kind = "text"; default = ""; min = 0; max = 200
@@ -71,7 +72,7 @@ function Get-HordeCloudflareRelayDeployment {
         if ($set.state -cne "known") { return $set }
         $Values = $set.value
     }
-    $cfg = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelaySettingsFolder "wrangler.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cfg = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelaySettingsFolder "wrangler.json"), [System.Text.Encoding]::UTF8))
     $origin = "" + $Values.relayOrigin
     $chosen = $origin -ne ""
     $what = $(if ($chosen) { "the hosted relay's setting relayOrigin" } else { "wrangler.json's shipped HORDE_RELAY_ORIGIN" })

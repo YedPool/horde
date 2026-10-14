@@ -37,6 +37,9 @@
 # with the relays, relay/Trust.ps1, cli/RelayDeploy.ps1, cli/RelayRun.ps1, cli/ServicesAct.ps1,
 # cli/ServicesTend.ps1, cli/QrCode.ps1 and cli/RelayPair.ps1, as cli/commands/setup.ps1 does.
 
+# JSON is read through core/JsonText.ps1's one parse, which keeps every string a string (issue 274).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
+
 # The manifest format this code reads, and the newest manifest version it understands.
 $script:HordeSetupManifestSchema = 1
 $script:HordeSetupManifestKnown = 1
@@ -77,7 +80,7 @@ function Read-HordeSetupManifest {
     try {
         $bytes = [System.IO.File]::ReadAllBytes($Path)
         if (@($bytes | Where-Object { $_ -gt 126 }).Count -gt 0) { [void]$problems.Add("it is not ASCII") }
-        $m = [System.Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
+        $m = ConvertFrom-HordeJson -Text ([System.Text.Encoding]::ASCII.GetString($bytes))
     } catch { return (New-HordeUnknown -Reason ("the setup manifest " + $Path + " cannot be read") -ErrorRecord $_) }
     $get = { param($o, [string]$n) if ($null -ne $o -and $null -ne $o.PSObject.Properties[$n]) { $o.$n } else { $null } }
     if ((& $get $m "schemaVersion") -ne $script:HordeSetupManifestSchema) { [void]$problems.Add("its schemaVersion is not " + $script:HordeSetupManifestSchema) }
@@ -385,7 +388,7 @@ function Get-HordeSetupStepCode {
             param($Ctx)
             $r = & $Ctx.probes.decisions $Ctx.home $Ctx.root @("decisions", "list", "-State", "all", "-Json")
             $a = $null
-            try { $a = ("" + $r.out).Trim() | ConvertFrom-Json } catch { $a = $null }
+            try { $a = ConvertFrom-HordeJson -Text (("" + $r.out).Trim()) } catch { $a = $null }
             if ($r.code -ne 0 -or $null -eq $a -or $a.state -cne "known") { return (New-HordeSetupResult $false ("the decisions list cannot be read: " + (("" + $r.err + " " + $r.out).Trim()))) }
             $mine = @(@($a.value.questions) | Where-Object { $_.group -ceq $script:HordeSetupQuestionGroup -and $_.askedBy -ceq $script:HordeSetupQuestionAskedBy })
             if ($mine.Count -eq 0) { return (New-HordeSetupResult $false "the decisions list has no question from horde setup yet") }
@@ -400,7 +403,7 @@ function Get-HordeSetupStepCode {
                 $r = & $Ctx.probes.decisions $Ctx.home $Ctx.root @("decisions", "add", "-File", $file, "-Json")
             } finally { if ([System.IO.File]::Exists($file)) { [System.IO.File]::Delete($file) } }
             $a = $null
-            try { $a = ("" + $r.out).Trim() | ConvertFrom-Json } catch { $a = $null }
+            try { $a = ConvertFrom-HordeJson -Text (("" + $r.out).Trim()) } catch { $a = $null }
             if ($r.code -ne 0 -or $null -eq $a -or $a.state -cne "known") { return (New-HordeSetupResult $false ("the question could not be added: " + (("" + $r.err + " " + $r.out).Trim()))) }
             return (New-HordeSetupResult $true ("added question " + $a.value.number + ": Horde is set up on " + $Ctx.machine + " - does it reach your phone?"))
         } }
