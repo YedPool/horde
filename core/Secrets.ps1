@@ -133,6 +133,8 @@ $script:HordeSecretRunKind = "a long random-looking string, as a key or token is
 #   backtick changes nothing else: a value with a digit and no dot, bracket or , ; ) before it is
 #   still a value (`password = Sup3rS3cret9`.), and so is a letters-only one with nothing but the
 #   backtick after it, as it is without one.
+#   KNOWN LIMIT: a value wrapped in a backtick and a closing parenthesis, (`password = Sup3rS3cret9`),
+#   has a parenthesis in its bare value, so it is taken for code by the parenthesis rule above.
 #   AND AN UNQUOTED YAML VALUE MUST HOLD A DIGIT (the same review): after a colon, code and pages
 #   that explain a setting write words - password: required, api_key: optional, api_key: SecretStr,
 #   password: see-the-vault - and a secret of eight or more random characters almost never lacks
