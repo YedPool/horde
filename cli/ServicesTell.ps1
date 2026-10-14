@@ -72,6 +72,7 @@ $script:HordeServiceTellPageSentences = [ordered]@{
     "check-failed"  = "the supervisor deployed the phone page, but the hosted page did not then serve exactly what was built; it is tried again an hour later at the earliest"
     "worker-changed" = "the relay's Worker changed since the last deploy, so the supervisor did not deploy the phone page; a person reads the change, then runs: horde relay deploy"
     "worker-unmeasured" = "files the relay's Worker shares with the phone page changed, and whether the Worker itself changed could not be measured, so the supervisor did not deploy; a person checks, then runs: horde relay deploy"
+    "not-on-main"   = "the checkout the supervisor runs from is on a commit that is not on origin/main, so it never deploys the phone page from it"
     "no-record"     = "nothing records a clean commit the hosted phone page was deployed from, so the supervisor does not deploy it; one deploy by hand from a clean checkout (horde relay deploy) records it"
     "unreadable"    = "what changed since the phone page was last deployed could not be read, so the supervisor did not deploy it"
     "dirty"         = "the checkout the phone page is built from has changes of its own, so the supervisor did not deploy it"

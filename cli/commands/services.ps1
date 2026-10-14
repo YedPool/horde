@@ -63,10 +63,9 @@ $HordeCommand = @{
         # this block, as the teller is, and refused for a test's home before any real tool is made.
         $tools["PagePublish"] = {
             param($HordeHome, $Policy, $Teller)
-            if (Test-HordeServiceHomeIsATests -HordeHome $HordeHome) { return @("phone page: this Horde home is under the temp folder, so it is a test's: the hosted page is not looked at") }
             . (Join-Path $root "cli\RelayDeploy.ps1")
             . (Join-Path $root "cli\RelayPublish.ps1")
-            return (Invoke-HordeRelayPublishStep -HordeHome $HordeHome -Tools (New-HordeRelayPublishTools) -Policy $Policy -Teller $Teller -Checkout $root)
+            return (Invoke-HordeRelayPublishFromTend -HordeHome $HordeHome -Policy $Policy -Teller $Teller -Root $root)
         }
         $done = Invoke-HordeServiceSupervisor -Tools $tools
         foreach ($l in @($done.lines)) { Write-Output $l }
