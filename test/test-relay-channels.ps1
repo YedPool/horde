@@ -843,11 +843,15 @@ try {
     Set-HordeHostileRelayFaults -Faults @()
     Check ($r.failures -eq 0 -and (@($slept) -join ",") -ceq "100,200") ("once the relay answers again the run goes on, and its failures in a row start again from none (" + (@($slept) -join ",") + ", " + $r.failures + ")")
     # A MINIMUM TURN (finding 5): a watch that returns at once with nothing - watchMs 0, or a relay that
-    # does not wait - is not allowed to spin; the turn is padded to minTurnMs.
-    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 300}}', $utf8)
+    # does not wait - is not allowed to spin; the turn is padded to minTurnMs. 1000, the shipped default,
+    # and not 300: a turn of this suite's six channels took 245 to 277 ms on the measuring box before the
+    # notices channel (pads of 55, 23 and 41 ms), and about 15 to 30 ms more with it (two journal reads
+    # of 5 to 11 ms and a Tick of 2 to 8 ms, measured 2026-10-14), so at 300 no turn was left to pad and
+    # the check failed for want of anything to measure, not for spinning.
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 1000}}', $utf8)
     $paced = New-Object System.Collections.ArrayList
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say { param($Line) } -Sleep { param($Ms, $Why) if ("$Why" -ceq "pace") { [void]$paced.Add($Ms) } }
-    Check ($paced.Count -ge 2 -and @($paced | Where-Object { $_ -gt 300 -or $_ -le 0 }).Count -eq 0) ("turns that found nothing at once are padded to the minimum turn, not spun (" + (@($paced) -join ",") + ")")
+    Check ($paced.Count -ge 2 -and @($paced | Where-Object { $_ -gt 1000 -or $_ -le 0 }).Count -eq 0) ("turns that found nothing at once are padded to the minimum turn, not spun (" + (@($paced) -join ",") + ")")
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 10}}', $utf8)
     $r = $null
     $low = New-Object System.Collections.ArrayList
