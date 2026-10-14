@@ -71,15 +71,22 @@
            Find = '[A-Za-z0-9_]*|\[[^\]]*\])+'
            Replace = '[A-Za-z0-9_]*)+' }
         @{ Name = "an-identifier-before-a-comma-is-a-value"
-           Find = '[,;)]*|[A-Za-z_]+[,;)]+)\z'''
-           Replace = '[,;)]*)\z''' }
+           Find = '[,;)]*|[A-Za-z_]+[,;)]+)`?\z'''
+           Replace = '[,;)]*)`?\z''' }
         @{ Name = "every-bare-identifier-is-a-reference"
-           Find = '|[A-Za-z_]+[,;)]+)\z'''
-           Replace = '|[A-Za-z0-9_]+[,;)]*)\z''' }
+           Find = '|[A-Za-z_]+[,;)]+)`?\z'''
+           Replace = '|[A-Za-z0-9_]+[,;)]*)`?\z''' }
         # --- round 2 of that review (2026-10-14): an identifier before , ; ) holds no digit ---
         @{ Name = "an-identifier-before-a-comma-may-hold-a-digit"
-           Find = '|[A-Za-z_]+[,;)]+)\z'''
-           Replace = '|[A-Za-z_][A-Za-z0-9_]*[,;)]+)\z''' }
+           Find = '|[A-Za-z_]+[,;)]+)`?\z'''
+           Replace = '|[A-Za-z_][A-Za-z0-9_]*[,;)]+)`?\z''' }
+        # --- round 3 of that review (2026-10-14): a reference may end in one backtick ---
+        @{ Name = "a-reference-in-a-code-span-is-a-value"
+           Find = '[,;)]+)`?\z'''
+           Replace = '[,;)]+)\z''' }
+        @{ Name = "any-number-of-backticks-close-a-reference"
+           Find = ')`?\z'''
+           Replace = ')`*\z''' }
         @{ Name = "a-yaml-value-needs-no-digit"
            Find = 'if ($yamlBare.Success -and $yamlBare.Value -cnotmatch ''[0-9]'') { continue }'
            Replace = '' }

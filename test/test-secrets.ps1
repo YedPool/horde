@@ -342,7 +342,16 @@ $attacks += @(
     @{ found = $true; what = "a YAML value in quotes needs no digit"; text = ($six[4] + ": 'lettersonlyvalue'") },
     @{ found = $true; what = "a bare identifier-looking secret with nothing after it is still a value"; text = ($six[5] + " = hunter2xyz") },
     @{ found = $true; what = "a bare value with an ampersand after it, in an address, is no identifier"; text = ("https://example.org/cb?" + $six[3] + "=" + $made + "&state=1") },
-    @{ found = $true; what = "a quoted value that looks like a lookup is still a value"; text = ($six[5] + ' = "config.db_password"') })
+    @{ found = $true; what = "a quoted value that looks like a lookup is still a value"; text = ($six[5] + ' = "config.db_password"') },
+    # --- a markdown code span round a reference (round 3 of the review of PR 238, 2026-10-14) ---
+    @{ found = $false; what = "F3: a lookup in a markdown code span (password = config.db_password)"; text = ('`' + $six[5] + " = config.db_" + $six[5] + '`') },
+    @{ found = $false; what = "a YAML lookup in a code span"; text = ('`' + $six[5] + ": process.env.DB_PASS" + "WORD" + '`') },
+    @{ found = $false; what = "an identifier and its semicolon in a code span"; text = ('`' + $ak + " = theKeyVariable;" + '`') },
+    @{ found = $false; what = "an indexed lookup in a code span, in a sentence"; text = ("set it with " + '`' + $six[5] + " = secrets[0]" + '`' + " and go on") },
+    @{ found = $true; what = "a secret with a digit in a code span is still a secret"; text = ('`' + $six[5] + " = " + $made + '`') },
+    @{ found = $true; what = "a secret with a digit and a semicolon in a code span"; text = ('`' + "export DB_" + "PASS" + "WORD=Sup3r" + "S3cret;" + '`') },
+    @{ found = $true; what = "a letters-only value with only the backtick after it is still a value, as it is without one"; text = ('`' + $six[5] + " = lettersonlyvalue" + '`') },
+    @{ found = $true; what = "two backticks after a lookup are not a code span's one"; text = ($six[5] + " = config.db_" + $six[5] + '``') })
 foreach ($a in $attacks) { Check ((Test-Named $a.text) -eq $a.found) ($(if ($a.found) { "FOUND: " } else { "not found: " }) + $a.what) }
 Check (@($attacks | Where-Object { $_.found }).Count -ge 35 -and @($attacks | Where-Object { -not $_.found }).Count -ge 50) ("the rule was attacked from both sides: " + @($attacks | Where-Object { $_.found }).Count + " texts that must be found and " + @($attacks | Where-Object { -not $_.found }).Count + " that must not")
 # THE DEFAULT KINDS ARE UNCHANGED FOR EVERY CALLER: the folded and YAML forms above are found only
