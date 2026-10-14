@@ -385,12 +385,14 @@ function Update-HordeRelayJoinEnds {
         $outcome = ""
         $why = ""
         if ($null -ne $j.device -and $j.device.state -ceq "trusted") { $outcome = "approved"; $why = "its passkey was confirmed by the number" }
-        elseif ($null -ne $j.device -and ($j.device.state -ceq "revoked" -or $j.device.state -ceq "expired")) { $outcome = "ended"; $why = ("its passkey was " + $j.device.state) }
         elseif ($j.expired) {
+            # Past its 10 minutes the request is expired, whatever its passkey's own confirm window says,
+            # and a passkey it registered is revoked for good: an expired request leaves no trace of trust.
             $outcome = "expired"; $why = "nobody approved it within its 10 minutes"
-            if ($null -ne $j.device -and $j.device.state -ceq "pending") { $null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $j.device.id -Reason "join request expired" -Now $Now }
+            if ($null -ne $j.device -and $j.device.state -cne "revoked") { $null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $j.device.id -Reason "join request expired" -Now $Now }
             if ($j.offer -cne "") { $null = Close-HordeRelayPairingOffer -HordeHome $HordeHome -Offer $j.offer -Now $Now }
         }
+        elseif ($null -ne $j.device -and ($j.device.state -ceq "revoked" -or $j.device.state -ceq "expired")) { $outcome = "ended"; $why = ("its passkey was " + $j.device.state) }
         if ($outcome -ceq "") { continue }
         $c = Close-HordeRelayJoin -HordeHome $HordeHome -Request $id -Outcome $outcome -Reason $why -Now $Now
         if ($c -ceq "moved") { [void]$out.Add([pscustomobject]@{ request = $id; outcome = $outcome }) }

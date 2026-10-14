@@ -175,7 +175,7 @@ try {
     $tx = @(Get-Transcripts | Where-Object { $_.kind -ceq "request" })
     Check ($tx.Count -eq 1 -and $tx[0].text.Contains('"request":"' + $s.request + '"') -and -not $tx[0].text.Contains($s.number) -and -not $tx[0].text.Contains($s.number.Replace("-", ""))) "the trusted phone is sent the transcript - and never the number"
     $notes = @(Get-NoticeTexts)
-    Check (@($notes | Where-Object { $_.Contains("A new phone asks to join this PC: 'Stranger', Chrome on Android, IL") -and $_.Contains("If this is not your phone, reject it") -and $_.Contains("change your Google password") }).Count -eq 1) ("EVERY TRUSTED DEVICE IS TOLD of the request, naming the device, browser, country and time (" + ($notes -join " | ") + ")")
+    Check (@($notes | Where-Object { $_.Contains("A new phone asks to join this PC: 'Stranger', Chrome on Android, IL") -and $_.Contains("If this is not your phone, reject it and change your Google password") }).Count -eq 1) ("EVERY TRUSTED DEVICE IS TOLD of the request, naming the device, browser, country and time (" + ($notes -join " | ") + ")")
     $qs = Invoke-HordeDecision -Operation "list" -Root $script:ctx.decisionsRoot -Request @{}
     $asked = @($(if ($qs.state -ceq "known") { @($qs.value.questions) } else { @() }) | Where-Object { "$($_.title)".StartsWith("A new phone asks to join: 'Stranger'") })
     Check ($asked.Count -eq 1) "and it is a decisions question"
@@ -271,7 +271,8 @@ try {
     Check ((Get-DeviceState $p) -ceq "trusted" -and (Get-Join $p).closed.outcome -ceq "approved") "THE RIGHT APPROVAL from the trusted phone - this request, this device, this transcript's hash - is taken: trusted"
     [void](Send-Approval -Np $p -Transcript $hashP)
     $rp = Invoke-Turn
-    Check (@(@(Get-HordeTestMember -Object $rp.in -Path "value.refused") + @(Get-HordeTestMember -Object $rp.done -Path "value.refused")) | Where-Object { "$_".Contains("approved once") -or "$_".Contains("closed") -or "$_".Contains("already") -or "$_".Contains("replay") }).Count -ge 1 "A REPLAYED approval, after it was taken, changes nothing"
+    $rpRefused = @(@(@(Get-HordeTestMember -Object $rp.in -Path "value.refused") + @(Get-HordeTestMember -Object $rp.done -Path "value.refused")) | Where-Object { "$_".Contains("approved once") -or "$_".Contains("closed") -or "$_".Contains("already") -or "$_".Contains("replay") })
+    Check ($rpRefused.Count -ge 1 -and (Get-DeviceState $p) -ceq "trusted") "A REPLAYED approval, after it was taken, changes nothing"
     $k = New-NewPhone
     [void](Send-Join -Np $k -Key ("join/" + (New-Id)))
     $tk = Invoke-Turn

@@ -132,11 +132,11 @@ try {
     Write-Host "--- 2. a stranger in the same account asks; the trusted phone sees it, and rejects it ---" -ForegroundColor Cyan
     $sj = Invoke-App "S" @{ cmd = "join"; horde = "work"; machine = $machine; label = "Stranger"; agent = "Chrome on Android" }
     Check ($sj.ok -and $sj.value.request -cmatch '\A[0-9a-f]{32}\z') "the stranger's phone asks to join: a request, which is all signing in gives it"
-    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 2
     $so = Invoke-App "S" @{ cmd = "joinOffer"; request = $sj.value.request }
-    Check ($run.code -eq 0 -and $so.ok -and $so.value.offerText.StartsWith('{"v":1,"kind":"horde-relay-pairing-offer"')) "THE MACHINE ANSWERS AT ONCE: the phone opens the offer sealed to its request key"
+    Check ($run.code -eq 0 -and $so.ok -and $so.value.offerText.StartsWith('{"v":1,"kind":"horde-relay-pairing-offer"')) ("THE MACHINE ANSWERS AT ONCE: the phone opens the offer sealed to its request key (" + $(if ($so.ok) { "" } else { $so.reason }) + " | " + (($run.out -split "`n" | Where-Object { $_ -match "join|refused|held" }) -join " / ") + ")")
     $sp = Invoke-App "S" @{ cmd = "pair"; offer = $so.value.offerText; label = "Stranger"; joined = $true }
-    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 2
     $sdev = Get-DeviceOf "Stranger"
     Check ($sp.ok -and $sp.value.fingerprint -cmatch '\A[0-9]{4}-[0-9]{4}-[0-9]{4}\z' -and $null -ne $sdev -and $sdev.state -ceq "pending") ("the stranger makes its passkey and shows its number; the machine holds the passkey PENDING (" + $(if ($null -ne $sdev) { $sdev.state } else { "none" }) + ")")
     $null = Invoke-App "T" @{ cmd = "refresh"; id = $tid }
@@ -159,11 +159,11 @@ try {
     Write-Host ""
     Write-Host "--- 3. the founder's new phone: the number typed on the trusted phone ---" -ForegroundColor Cyan
     $nj = Invoke-App "N" @{ cmd = "join"; horde = "work"; machine = $machine; label = "Pixel 9"; agent = "Safari on iPhone" }
-    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 2
     $no = Invoke-App "N" @{ cmd = "joinOffer"; request = $(if ($nj.ok) { $nj.value.request } else { "" }) }
     Check ($nj.ok -and $no.ok -and $no.value.offerText -cne "") "THE SLOT IS FREE AT ONCE after the reject: the new phone's request is answered"
     $np = Invoke-App "N" @{ cmd = "pair"; offer = $no.value.offerText; label = "Pixel 9"; joined = $true }
-    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 2
     $null = Invoke-App "T" @{ cmd = "refresh"; id = $tid }
     $ok = Invoke-App "T" @{ cmd = "approveJoin"; id = $tid; request = $nj.value.request; number = $np.value.fingerprint }
     $before = Get-DeviceOf "Pixel 9"

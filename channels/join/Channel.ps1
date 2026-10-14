@@ -177,7 +177,7 @@ function Invoke-HordeJoinChannelTick {
                 if ($why -cne "") { & $fail $why } else { [void]$lines.Add("join: answered the request " + $id + " from " + $who + " with an offer") }
             }
             if (-not $j.steps.ContainsKey("noticed")) {
-                $n = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $now -Text ("A new phone asks to join this PC: " + $who + ". To approve, type the number it shows at this PC (horde relay approve " + $id + " <number>) or on a trusted phone. If this is not your phone, reject it (horde relay reject " + $id + ") and change your Google password.")
+                $n = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $now -Text ("A new phone asks to join this PC: " + $who + ". If this is not your phone, reject it and change your Google password. To approve, type the number it shows on a trusted phone, or at this PC (horde relay joins).")
                 if ($n.outcome -ceq "failed") { & $fail ("the notice was not written: " + $n.reason) } else { & $step "noticed" "" }
             }
             if (-not $j.steps.ContainsKey("asked")) {
