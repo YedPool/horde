@@ -35,6 +35,11 @@
 #     the boot trigger, and never as an Interactive task. A failed registration leaves the task that
 #     was there, if any, exactly as it was. S4U also needs the right to log on as a batch job when it
 #     RUNS, which administrators hold by default.
+#   - A JOB MADE -AtLogon HAS A TRIGGER AT THE SIGN-IN OF THE ACCOUNT IT RUNS AS. Measured 2026-10-14
+#     the same way: an Interactive task with one registered elevated and non-elevated alike.
+#   - THE JOB RUNS AS THE ACCOUNT THAT REGISTERS IT. An elevated prompt opened with another
+#     administrator's name would make the job that account's, with that account's profile and keys, so
+#     a refusal and status both name the account (review of PR 249, SHOULD 4).
 #   - THE SHELL BY ITS FULL PATH in the system folder, for every job, never a bare name a search path
 #     could answer with another program: the supervisor's job starts and updates code every minute.
 #   - PRIORITY 7 (below normal; 0 highest, 10 lowest), stopped after the time limit, never two at once
@@ -89,9 +94,24 @@ function ConvertTo-HordeTaskAction {
 }
 
 function Get-HordeTaskSchedulerTask {
-    # The task of that name in that folder, or $null.
+    # The task of that name in that folder, or $null when the scheduler says there is none. A listing
+    # that FAILS is not "none" (review of PR 249, N1): read as none, an install would not check the
+    # task it replaces, and a status would say nothing is supervised. Measured 2026-10-14: a folder or
+    # a name that is not there fails with an error id that begins CmdletizationQuery_NotFound.
     param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Folder)
-    return (Get-ScheduledTask -TaskPath ("\" + $Folder + "\") -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -ceq $Name } | Select-Object -First 1)
+    $found = $null
+    try { $found = @(Get-ScheduledTask -TaskPath ("\" + $Folder + "\") -ErrorAction Stop) }
+    catch {
+        if ("" + $_.FullyQualifiedErrorId -like "CmdletizationQuery_NotFound*") { return $null }
+        throw ("the scheduler's folder \" + $Folder + "\ could not be read: " + $_.Exception.Message)
+    }
+    return ($found | Where-Object { $_.TaskName -ceq $Name } | Select-Object -First 1)
+}
+
+function Test-HordeTaskSchedulerElevated {
+    # Is this process an administrator's, elevated? Only such a one may register a boot trigger (header).
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    try { return (New-Object System.Security.Principal.WindowsPrincipal $id).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator) } finally { $id.Dispose() }
 }
 
 function Test-HordeTaskMarked {
@@ -120,6 +140,7 @@ function New-HordeTaskSchedulerTask {
     $action = New-ScheduledTaskAction -Execute $act.program -Argument $act.arguments
     $triggers = @(New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes($Job.everyMinutes)) -RepetitionInterval (New-TimeSpan -Minutes $Job.everyMinutes))
     if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true) { $triggers += New-ScheduledTaskTrigger -AtStartup }
+    if ($null -ne $Job.PSObject.Properties["atLogon"] -and $Job.atLogon -eq $true) { $triggers += New-ScheduledTaskTrigger -AtLogOn -User $UserId }
     $settingArgs = @{
         Priority = 7; ExecutionTimeLimit = (New-TimeSpan -Minutes $Job.timeLimitMinutes); MultipleInstances = "IgnoreNew"
         StartWhenAvailable = $true; AllowStartIfOnBatteries = $true; DontStopIfGoingOnBatteries = $true
@@ -137,8 +158,9 @@ function Install-HordeTaskSchedulerJob {
     # -Find and -Register are the scheduler, handed in so a suite can install against a stand-in:
     # -Find { param($Name, $Folder) } answers the task there, or $null (Get-HordeTaskSchedulerTask);
     # -Register { param($Task, $Name, $Path) } registers the task under that name, REPLACING one of
-    # the same name. It is called at most once.
-    param([Parameter(Mandatory = $true)]$Job, [scriptblock]$Find = $null, [scriptblock]$Register = $null)
+    # the same name. It is called at most once. -Elevated { } answers whether this process is elevated.
+    param([Parameter(Mandatory = $true)]$Job, [scriptblock]$Find = $null, [scriptblock]$Register = $null, [scriptblock]$Elevated = $null)
+    if ($null -eq $Elevated) { $Elevated = { Test-HordeTaskSchedulerElevated } }
     if ($null -eq $Find) { $Find = { param($Name, $Folder) Get-HordeTaskSchedulerTask -Name $Name -Folder $Folder } }
     # -Force replaces a task of the same name - only ever Horde's own, checked below - so an install
     # over the job that is there is one job, never two, whatever its logon type was.
@@ -158,8 +180,12 @@ function Install-HordeTaskSchedulerJob {
     catch {
         $why = ("" + $_.Exception.Message).Trim()
         $was = $(if ($null -ne $old) { "the task that was there is left exactly as it was" } else { "nothing was registered" })
-        $rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true) { " A job that runs at start-up, whether or not anyone is signed in, can be registered only by an administrator: run this again from an elevated prompt." } else { "" })
-        throw ("Task Scheduler refused to register '" + $Job.name + "' in \" + $Job.folder + "\ (" + $why + "); " + $was + "." + $rights)
+        # The hint only where it is the answer (review of PR 249, SHOULD 2): an elevated process that
+        # was refused was refused for some other reason, which the scheduler's own words say.
+        $up = $true
+        try { $up = (& $Elevated) -eq $true } catch { $up = $true }
+        $rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true -and -not $up) { " A job that runs at start-up, whether or not anyone is signed in, can be registered only by an administrator: run this again from an elevated prompt, signed in as " + $user + ", the account the job runs as." } else { "" })
+        throw ("Task Scheduler refused to register '" + $Job.name + "' in \" + $Job.folder + "\ to run as " + $user + " (" + $why + "); " + $was + "." + $rights)
     }
 }
 
@@ -183,7 +209,9 @@ function Get-HordeTaskSchedulerStatus {
     try { $info = Get-ScheduledTaskInfo -TaskName $Name -TaskPath ("\" + $Folder + "\") -ErrorAction Stop } catch { $info = $null }
     $every = 0
     $boot = @(@($t.Triggers) | Where-Object { $null -ne $_ -and "$($_.CimClass.CimClassName)" -ceq "MSFT_TaskBootTrigger" }).Count -gt 0
-    $rep = @($t.Triggers)[0].Repetition
+    $logon = @(@($t.Triggers) | Where-Object { $null -ne $_ -and "$($_.CimClass.CimClassName)" -ceq "MSFT_TaskLogonTrigger" }).Count -gt 0
+    # The interval of the trigger that repeats, wherever it stands among them (review of PR 249, N2).
+    $rep = @(@($t.Triggers) | Where-Object { $null -ne $_ -and $null -ne $_.Repetition -and "$($_.Repetition.Interval)" -ne "" } | ForEach-Object { $_.Repetition }) | Select-Object -First 1
     # The interval is an ISO 8601 duration such as PT30M or PT1H.
     if ($null -ne $rep -and "$($rep.Interval)" -ne "") { $every = [int][System.Xml.XmlConvert]::ToTimeSpan("$($rep.Interval)").TotalMinutes }
     $last = $null; $next = $null; $result = $null
@@ -195,7 +223,7 @@ function Get-HordeTaskSchedulerStatus {
     $mark = Read-HordeJobMarker -Description $t.Description
     return (New-HordeKnown -Value ([pscustomobject]@{
         enabled = [bool]$t.Settings.Enabled; state = "$($t.State)"; everyMinutes = $every; marked = (Test-HordeTaskMarked $t); home = $mark.home
-        priority = $t.Settings.Priority; timeLimit = "$($t.Settings.ExecutionTimeLimit)"; logonType = "$($t.Principal.LogonType)"; atStartup = $boot; author = "$($t.Author)"
+        priority = $t.Settings.Priority; timeLimit = "$($t.Settings.ExecutionTimeLimit)"; logonType = "$($t.Principal.LogonType)"; atStartup = $boot; atLogon = $logon; runsAs = "$($t.Principal.UserId)"; author = "$($t.Author)"
         lastRunAt = $last; lastResult = $result; nextRunAt = $next; runs = ("" + @($t.Actions)[0].Execute + " -EncodedCommand ...")
         program = "$(@($t.Actions)[0].Execute)"; arguments = "$(@($t.Actions)[0].Arguments)"
     }))

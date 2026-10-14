@@ -104,8 +104,8 @@
            Find = '[void]$lines.Add("definitions: NO SERVICE IS SUPERVISED until that file is mended") }'
            Replace = '}' }
         @{ Name = "job-not-at-start-up"
-           Find = '-MayOutlastInterval -AtStartup -Disabled:$Disabled'
-           Replace = '-MayOutlastInterval -Disabled:$Disabled' }
+           Find = '{ @{ AtStartup = $true } }'
+           Replace = '{ @{} }' }
         @{ Name = "job-home-not-carried"
            Find = '-Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 }'
            Replace = '-Arguments @("services", "tend") -Environment @{}' }
@@ -113,7 +113,7 @@
            Find = 'if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job "'
            Replace = 'if ($false) { throw ("the " + $s.name + " did not keep the job "' }
         @{ Name = "schedule-any-folder"
-           Find = '    Assert-HordeJobName -Name $TaskName -Folder $Folder'
+           Find = '    foreach ($n in @($names.person, $names.startup)) { Assert-HordeJobName -Name $n -Folder $Folder }'
            Replace = '' }
         @{ Name = "roll-out-waiting-is-done"
            Find = '        [void]$out.Add([pscustomobject]@{ name = $def.name; reason = $one.reason })'
@@ -147,15 +147,15 @@
            Find = 'if ($kept.state -ceq "unknown") { return (& $answer ("nothing was done: " + $kept.reason)) }'
            Replace = '' }
         @{ Name = "pass-ended-at-one-minute"
-           Find = '-EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup'
-           Replace = '-EveryMinutes 1 -TimeLimitMinutes 1 -AtStartup' }
+           Find = '-EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where'
+           Replace = '-EveryMinutes 1 -TimeLimitMinutes 1 @where' }
         @{ Name = "held-is-not-done-for-a-roll-out"
            Find = 'if (@("current", "updated", "disabled", "held") -ccontains $one.code) { continue }'
            Replace = 'if (@("current", "updated", "disabled") -ccontains $one.code) { continue }' }
         # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
         @{ Name = "job-back-in-the-persons-session"
-           Find = '-MayOutlastInterval -AtStartup -Disabled:$Disabled'
-           Replace = '-MayOutlastInterval -WithPerson -Disabled:$Disabled' }
+           Find = '{ @{ AtStartup = $true } }'
+           Replace = '{ @{ WithPerson = $true } }' }
         @{ Name = "desktop-never-asked"
            Find = '    if ($null -ne $needs -and $needs.Value -eq $true) {'
            Replace = '    if ($false) {' }
@@ -166,7 +166,26 @@
            Find = '-ExitCode $exit -Desktop $desktop); state = $s }'
            Replace = '-ExitCode $exit); state = $s }' }
         @{ Name = "install-says-the-persons-session"
-           Find = ': at start-up and every minute, whether or not anyone is signed in, with no password stored, for the Horde home '
-           Replace = ': every minute, in the person''s own session, for the Horde home ' }
+           Find = 'says = "at start-up and every minute, whether or not anyone is signed in, with no password stored" }'
+           Replace = 'says = "every minute, in the person''s own session" }' }
+            # --- review of PR 249 ---
+        @{ Name = "person-job-is-a-start-up-job"
+           Find = '-Name $b.name -Folder $Folder -Kind $b.kind -Disabled:$Disabled'
+           Replace = '-Name $b.name -Folder $Folder -Kind "startup" -Disabled:$Disabled' }
+        @{ Name = "person-job-installed-first"
+           Find = '            foreach ($b in @($both)) {'
+           Replace = '            foreach ($b in @(@($both)[1, 0])) {' }
+        @{ Name = "unschedule-leaves-one"
+           Find = '$gone = & $s.remove $b.name $Folder'
+           Replace = '$gone = $(if ($b.kind -ceq "person") { & $s.remove $b.name $Folder } else { $false })' }
+        @{ Name = "missing-job-not-said"
+           Find = 'elseif ($none -eq 1) { [void]$lines.Add("ONE OF THE TWO JOBS IS MISSING'
+           Replace = 'elseif ($false) { [void]$lines.Add("ONE OF THE TWO JOBS IS MISSING' }
+        @{ Name = "person-job-not-at-sign-in"
+           Find = '@{ WithPerson = $true; AtLogon = $true }'
+           Replace = '@{ WithPerson = $true }' }
+        @{ Name = "install-names-no-account"
+           Find = '                $as = $(if ($null -ne $st.value.PSObject.Properties["runsAs"]'
+           Replace = '                $as = ""; $null = $(if ($null -ne $st.value.PSObject.Properties["runsAs"]' }
     )
 }

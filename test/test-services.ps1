@@ -514,6 +514,23 @@ try {
     Check ($n1.notices[0].what -ceq "failing") "and the notice kept in the state carries it"
 
     Write-Host ""
+    Write-Host "--- a runner that beats and cannot work is never alive (review of PR 249, MUST 1) ---" -ForegroundColor Cyan
+    $sickBeat = { param([int]$Id, [datetime]$Born, [datetime]$At) $b = Beat $Id $Born $At; $b.value | Add-Member -NotePropertyName condition -NotePropertyValue "keys-unavailable"; $b.value | Add-Member -NotePropertyName why -NotePropertyValue "Keyset does not exist"; return $b }
+    $sSick = New-HordeServiceState -Name "svc"; $sSick.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
+    $dSick = Decide $svc $sSick (Obs -Running $run -Beat (& $sickBeat 700 $run.startedAt $t0.AddSeconds(-5))) $t0
+    Check ((Is $dSick "start" "stop" "unwell") -and $dSick.live.alive -ceq "unwell" -and $dSick.reason -like "*its process 700 is running and says it cannot work: keys-unavailable (Keyset does not exist)*" -and $dSick.state.phase -ceq "stopping") ("a runner whose fresh heartbeat of its own says keys-unavailable is not alive: it is stopped and started again (" + $dSick.reason + ")")
+    Check ($dSick.notify -ceq "escalate" -and $dSick.what -ceq "keys-unavailable") "and the warchief is told, by the condition it named"
+    $justBorn = Proc 710 $t0.AddSeconds(-20)
+    $sNew = New-HordeServiceState -Name "svc"; $sNew.started = [pscustomobject]@{ pid = 710; startedAt = $justBorn.startedAt; at = $justBorn.startedAt }; $sNew.proving = $true
+    $dYoung = Decide $svc $sNew (Obs -Running $justBorn -Beat (& $sickBeat 710 $justBorn.startedAt $t0.AddSeconds(-2))) $t0
+    Check ((Is $dYoung "wait" "" "starting") -and $dYoung.live.alive -cne "yes") "one that started moments ago has its confirm time to mend itself - and is not alive meanwhile"
+    $dOld = Decide $svc $sNew (Obs -Running $justBorn -Beat (& $sickBeat 710 $justBorn.startedAt $t0.AddSeconds(298))) $t0.AddSeconds(300)
+    Check ((Is $dOld "start" "stop" "unwell") -and $dOld.state.failures -eq 1 -and $dOld.state.nextStartAt -eq $t0.AddSeconds(330)) "a restarted one that still cannot work is a failure in a row, so the next start backs off"
+    $told = $dSick.state; $told.phase = "steady"; $told.intent = ""
+    Check ((Decide $svc $told (Obs -Running $run -Beat (& $sickBeat 700 $run.startedAt $t0.AddSeconds(55))) $t0.AddSeconds(60)).notify -eq "") "told once, not every pass"
+    Check ((Is (Decide $svc $sSick (Obs -Running $run -Beat (Beat 700 $run.startedAt $t0.AddSeconds(-5))) $t0) "nothing" "" "running")) "CONTROL: the same heartbeat with no condition is alive"
+
+    Write-Host ""
     Write-Host "--- a pass that cannot see the person: the supervisor runs whether or not anyone is signed in (2026-10-14) ---" -ForegroundColor Cyan
     # What the Windows adapter answers in such a pass (platform/windows/Services.ps1).
     $blind = New-HordeUnknown -Reason "this process is in session 0, where no person types"
@@ -525,7 +542,7 @@ try {
     Check (Is (Decide $svc (New-HordeServiceState -Name "svc") (Obs -Idle $blind -Desktop $blind) $t0) "start" "start" "start") "and so is one that follows nothing"
     $deskSvc = One ($base + ", " + $beatDef + ', "needsDesktop": true')
     $dNoDesk = Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs -Idle $blind -Desktop $blind) $t0
-    Check ((Is $dNoDesk "wait" "" "no-desktop") -and $dNoDesk.reason -like "not started: it needs the person's desktop, and this pass cannot reach it (this process is in session 0*)*horde services tend, run in the person's own session*" -and $null -eq $dNoDesk.state.launchingAt) ("under a non-interactive session a needsDesktop service is not started, and the reason says so (" + $dNoDesk.reason + ")")
+    Check ((Is $dNoDesk "wait" "" "no-desktop") -and $dNoDesk.reason -like "not started: it needs the person's desktop, and this pass cannot reach it (this process is in session 0*)*a pass in the person's own session does it*" -and $null -eq $dNoDesk.state.launchingAt) ("under a non-interactive session a needsDesktop service is not started, and the reason says so (" + $dNoDesk.reason + ")")
     Check ($dNoDesk.notify -ceq "escalate" -and $dNoDesk.what -ceq "no-desktop" -and (Decide $deskSvc $dNoDesk.state (Obs -Desktop $blind) $t0.AddSeconds(60)).notify -eq "") "someone is told, once"
     Check (Is (Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs -Desktop $here) $t0) "start" "start" "start") "CONTROL: where the desktop can be reached, it is started"
     Check (Is (Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs) $t0) "wait" "" "no-desktop") "and where nobody looked, it is not: unknown is never here"

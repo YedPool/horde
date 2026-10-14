@@ -142,12 +142,39 @@ try {
         $calls.Clear()
         $refuse = { param($Task, $Name, $Path) [void]$calls.Add([pscustomobject]@{ task = $Task; name = $Name; path = $Path; given = 0 }); throw "Access is denied." }
         $said = ""
-        try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldInteractive } -Register $refuse } catch { $said = $_.Exception.Message }
+        try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldInteractive } -Register $refuse -Elevated { $false } } catch { $said = $_.Exception.Message }
         Check ($said -like "*refused to register*Access is denied.*the task that was there is left exactly as it was*run this again from an elevated prompt*") ("a failed S4U registration is reported plainly, with what to do (" + $said + ")")
         Check ($calls.Count -eq 1 -and "$($calls[0].task.Principal.LogonType)" -ceq "S4U") "with no silent fallback to interactive: the scheduler was asked once, for the S4U job, and never for another form"
         $calls.Clear(); $said = ""
         try { Install-HordeTaskSchedulerJob -Job $job -Find $none -Register $refuse } catch { $said = $_.Exception.Message }
         Check ($said -like "*refused to register*nothing was registered.") ("CONTROL: a job that does not run at start-up is not told to need an elevated prompt (" + $said + ")")
+
+        $calls.Clear(); $said = ""
+        try { Install-HordeTaskSchedulerJob -Job $bootJob -Find $none -Register $refuse -Elevated { $true } } catch { $said = $_.Exception.Message }
+        Check ($said -like "*refused to register*Access is denied.*nothing was registered." -and $said -notlike "*elevated prompt*") ("an elevated process that is refused is not told to elevate: the scheduler's own words say why (" + $said + ")")
+        $calls.Clear(); $said = ""
+        try { Install-HordeTaskSchedulerJob -Job $bootJob -Find $none -Register $refuse -Elevated { $false } } catch { $said = $_.Exception.Message }
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        Check ($said -like ("*to run as " + $me + " (Access is denied.)*run this again from an elevated prompt, signed in as " + $me + ", the account the job runs as.")) ("one that is not elevated is told to elevate, and which account the job runs as (" + $said + ")")
+        $logonJob = New-HordeScheduledJob -Name ($testName + " logon") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -HordeHome $env:HORDE_HOME -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson -AtLogon -Disabled
+        $lt = @((New-HordeTaskSchedulerTask -Job $logonJob -UserId "someone").Triggers)
+        Check ($logonJob.atLogon -eq $true -and $lt.Count -eq 2 -and "$($lt[0].Repetition.Interval)" -ceq "PT1M" -and "$($lt[1].CimClass.CimClassName)" -ceq "MSFT_TaskLogonTrigger" -and "$($lt[1].UserId)" -ceq "someone") "a job made -AtLogon also runs when the account it runs as signs in"
+
+        Write-Host ""
+        Write-Host "--- what this machine's scheduler is asked, with its listing stood in for (review of PR 249, N1 and N2) ---" -ForegroundColor Cyan
+        # A function of the cmdlet's name answers in its place, in this scope only, and is removed after.
+        function Get-ScheduledTask { param([string]$TaskPath, [string]$TaskName, $ErrorAction) throw (New-Object System.InvalidOperationException "The RPC server is unavailable.") }
+        $listErr = ""
+        try { $null = Get-HordeTaskSchedulerTask -Name "x" -Folder "HordeTest" } catch { $listErr = $_.Exception.Message }
+        Check ($listErr -like "*could not be read: The RPC server is unavailable.*") ("a listing that fails is an error, never read as no such task (" + $listErr + ")")
+        $bootFirst = New-ScheduledTask -Action (New-ScheduledTaskAction -Execute "cmd.exe") -Trigger @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 7))) -Principal (New-ScheduledTaskPrincipal -UserId "PC\person" -LogonType S4U -RunLevel Limited) -Description $bootJob.description
+        $bootFirst.Author = "Horde"
+        $fakeTask = [pscustomobject]@{ TaskName = "x"; Author = "Horde"; Description = $bootJob.description; Triggers = $bootFirst.Triggers; Settings = $bootFirst.Settings; Principal = $bootFirst.Principal; State = "Ready"; Actions = $bootFirst.Actions }
+        function Get-ScheduledTask { param([string]$TaskPath, [string]$TaskName, $ErrorAction) return $fakeTask }
+        function Get-ScheduledTaskInfo { param([string]$TaskPath, [string]$TaskName, $ErrorAction) return $null }
+        $fst = Get-HordeTaskSchedulerStatus -Name "x" -Folder "HordeTest"
+        Check ($fst.state -ceq "known" -and $fst.value.everyMinutes -eq 7 -and $fst.value.atStartup -eq $true -and $fst.value.runsAs -ceq "PC\person") ("the interval is read from the trigger that repeats, wherever it stands, and status names the account it runs as (" + $fst.value.everyMinutes + ")")
+        Remove-Item Function:\Get-ScheduledTask, Function:\Get-ScheduledTaskInfo
 
         Write-Host ""
         Write-Host "--- this machine's scheduler: Horde's own folder, Horde's own tasks (review of PR #70, F1) ---" -ForegroundColor Cyan

@@ -72,8 +72,8 @@
            Find = 'if ($beat.state -ceq "unknown") { return (& $result "unknown" ("its heartbeat could not be read: "'
            Replace = 'if ($false) { return (& $result "unknown" ("its heartbeat could not be read: "' }
         @{ Name = "young-process-is-hung"
-           Find = '    if ($since -lt $Definition.confirmSeconds) { return (& $result "starting"'
-           Replace = '    if ($false) { return (& $result "starting"' }
+           Find = '    if ($since -lt $Definition.confirmSeconds) { return (& $result "starting" ("its process "'
+           Replace = '    if ($false) { return (& $result "starting" ("its process "' }
         @{ Name = "no-adoption"
            Find = 'if ($Observed.beater.state -ceq "known") { $process = $Observed.beater.value }'
            Replace = '' }
@@ -349,5 +349,21 @@
         @{ Name = "idle-wait-says-nothing-of-rollout"
            Find = ', and unknown is never read as idle; horde rollout -Now takes it")'
            Replace = ', and unknown is never read as idle")' }
+            # --- review of PR 249 ---
+        @{ Name = "unwell-is-alive"
+           Find = 'if ($own -and $verdict.value.fresh -and $null -ne $named -and "" + $named.Value -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unwell-given-no-time"
+           Find = 'if ($since -lt $Definition.confirmSeconds) { return (& $result "starting" ($says'
+           Replace = 'if ($false) { return (& $result "starting" ($says' }
+        @{ Name = "unwell-not-told"
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key ("" + $live.condition)'
+           Replace = '$null = ((New-HordeServiceTrouble -Key ("" + $live.condition)' }
+        @{ Name = "unwell-restarted-without-back-off"
+           Find = 'if ($s.proving -eq $true) { $s.failures = [int]$s.failures + 1;'
+           Replace = 'if ($false) { $s.failures = [int]$s.failures + 1;' }
+        @{ Name = "unwell-left-running"
+           Find = 'return (& $finish "start" "stop" "unwell"'
+           Replace = 'return (& $finish "wait" "" "unwell"' }
     )
 }

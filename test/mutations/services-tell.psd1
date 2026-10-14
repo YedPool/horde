@@ -35,5 +35,9 @@
         @{ Name = "no-desktop-told-as-needs-a-person"
            Find = '    "no-desktop"       = '
            Replace = '    "no-desktop-x"     = ' }
+            # --- review of PR 249 ---
+        @{ Name = "keys-unavailable-told-as-needs-a-person"
+           Find = '    "keys-unavailable" = '
+           Replace = '    "keys-unavailable-x" = ' }
     )
 }

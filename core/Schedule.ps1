@@ -86,6 +86,10 @@ function New-HordeScheduledJob {
     # signed in, and the relay it keeps was down all that time. So it is refused together with
     # -WithPerson, which cannot run until someone signs in. A scheduler may need more rights to
     # register a job that runs at start-up; one that lacks them says so, and installs nothing else.
+    #
+    # -AtLogon: THE JOB ALSO RUNS WHEN THE PERSON IT RUNS AS SIGNS IN, and then every -EveryMinutes.
+    # For a -WithPerson job, which can do nothing until then (review of PR 249: the supervisor keeps a
+    # job in the person's session beside its start-up one, for the services that need their desktop).
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [string]$Folder = "Horde",
@@ -99,6 +103,7 @@ function New-HordeScheduledJob {
         [switch]$Disabled,
         [switch]$WithPerson,
         [switch]$AtStartup,
+        [switch]$AtLogon,
         [switch]$MayOutlastInterval
     )
     Assert-HordeJobName -Name $Name -Folder $Folder
@@ -118,7 +123,7 @@ function New-HordeScheduledJob {
     foreach ($a in @($Arguments)) { if ("$a".Length -gt 0 -and $dashes -contains "$a"[0]) { throw ("a job argument cannot start with '-': '" + $a + "'") } }
     foreach ($v in @(@($Script, $HordeHome) + @($Arguments) + @($Environment.Values))) { if ("$v" -match "[`r`n]") { throw "a job's script, arguments and environment cannot hold a line break" } }
     $text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome
-    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson; atStartup = [bool]$AtStartup }
+    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson; atStartup = [bool]$AtStartup; atLogon = [bool]$AtLogon }
 }
 
 function Read-HordeJobMarker {

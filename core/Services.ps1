@@ -77,8 +77,9 @@
 #     told, and unknown is never idle. It is taken by `horde rollout -Now`, or by a pass that can
 #     see the person. A service that follows restart "any" is updated as before.
 #   - A service that NEEDS THE DESKTOP is not started, and is not stopped to be updated or healed,
-#     by a pass that cannot reach the desktop: it waits, says why, and someone is told once. A pass
-#     run in the person's session - `horde services tend` typed there - starts it.
+#     by a pass that cannot reach the desktop: it waits, says why, and someone is told once. The
+#     supervisor's second job, in the person's own session from sign-in (cli/ServicesTend.ps1), starts
+#     it - as does `horde services tend` typed there.
 
 # NEVER A RESTART LOOP. A start that does not last stableSeconds counts as a failure; each failure in
 # a row doubles the wait before the next start, up to a cap; after failuresBeforeEscalation of them
@@ -614,6 +615,10 @@ function Get-HordeServiceLiveness {
     #            starting  its process is running, started less than confirmSeconds ago, and has not
     #                      beaten yet
     #            hung      its process is running and its heartbeat is stale: it must be restarted
+    #            unwell    its process is running, beats, and its own heartbeat names a condition
+    #                      (core/Heartbeat.ps1): it cannot do its work, so it is NEVER alive, and once
+    #                      it has had confirmSeconds to mend itself it is restarted, at the back-off,
+    #                      and someone is told once (review of PR 249, MUST 1). Until then: starting.
     #            no        no process is the service
     #            unknown   it cannot be told, and why says what could not be read
     #   process  { pid; startedAt } of the process that IS the service, or $null
@@ -647,8 +652,17 @@ function Get-HordeServiceLiveness {
         return (& $result "no" ("it is not running: the process that wrote its last heartbeat, " + $age + " s ago, has ended") $null $false $age)
     }
     $own = ($beat.state -ceq "known" -and [int]$beat.value.pid -eq [int]$process.pid -and (Test-HordeHeartbeatSameStart -One $beat.value.startedAt -Other $process.startedAt))
-    if ($own -and $verdict.value.fresh) { return (& $result "yes" ("its process " + $process.pid + " is running, heartbeat " + $age + " s ago") $process $ours $age) }
     $since = ($Now.ToUniversalTime() - $process.startedAt).TotalSeconds
+    $named = $(if ($own) { $beat.value.PSObject.Properties["condition"] } else { $null })
+    if ($own -and $verdict.value.fresh -and $null -ne $named -and "" + $named.Value -ne "") {
+        $why = $beat.value.PSObject.Properties["why"]
+        $says = "its process " + $process.pid + " is running and says it cannot work: " + $named.Value + $(if ($null -ne $why -and "" + $why.Value -ne "") { " (" + $why.Value + ")" } else { "" })
+        if ($since -lt $Definition.confirmSeconds) { return (& $result "starting" ($says + "; it started " + [long][System.Math]::Max(0, $since) + " s ago and has until " + $Definition.confirmSeconds + " s to mend itself") $process $ours $age) }
+        $r = & $result "unwell" $says $process $ours $age
+        $r | Add-Member -NotePropertyName condition -NotePropertyValue ("" + $named.Value)
+        return $r
+    }
+    if ($own -and $verdict.value.fresh) { return (& $result "yes" ("its process " + $process.pid + " is running, heartbeat " + $age + " s ago") $process $ours $age) }
     if ($since -lt $Definition.confirmSeconds) { return (& $result "starting" ("its process " + $process.pid + " started " + [long][System.Math]::Max(0, $since) + " s ago and has not written a heartbeat of its own yet") $process $ours $age) }
     if ($own) { return (& $result "hung" ("its process " + $process.pid + " is running but its heartbeat is " + $age + " s old (stale after " + $verdict.value.staleAfterSeconds + " s)") $process $ours $age) }
     return (& $result "hung" ("its process " + $process.pid + " is running but has written no heartbeat of its own") $process $ours $age)
@@ -749,8 +763,8 @@ function Get-HordeServiceDecision {
     $noDesktop = {
         # The wait of a service that needs the desktop this pass cannot reach. Told once.
         param([string]$Blind, [string]$What)
-        [void]$troubles.Add((New-HordeServiceTrouble -Key "no-desktop" -Text ($Blind + "; it is not " + $What + " until horde services tend runs in the person's own session")))
-        return ("not " + $What + ": " + $Blind + "; horde services tend, run in the person's own session, does it")
+        [void]$troubles.Add((New-HordeServiceTrouble -Key "no-desktop" -Text ($Blind + "; it is not " + $What + " until a pass of the supervisor runs in the person's own session")))
+        return ("not " + $What + ": " + $Blind + "; a pass in the person's own session does it - the supervisor's job there, from sign-in, or horde services tend typed there")
     }
     $finish = {
         # Close a decision: settle what is told. A trouble not yet told is told now, once; when none
@@ -921,6 +935,17 @@ function Get-HordeServiceDecision {
     $failing = Get-HordeServiceFailingTrouble -State $s -Policy $Policy; if ($null -ne $failing) { [void]$troubles.Add($failing) }
 
     if ($live.alive -ceq "starting") { return (& $finish "wait" "" "starting" $live.why) }
+    if ($live.alive -ceq "unwell") {
+        # Running, beating, and saying it cannot work: told once, by the condition it names, and
+        # restarted as a hung one is, a failure in a row each time it was still proving itself, so
+        # the restarts slow down. Never alive: a phone's answers wait on it.
+        [void]$troubles.Add((New-HordeServiceTrouble -Key ("" + $live.condition) -Text ($live.why + "; it is restarted, more slowly each time, until it works")))
+        $blind = & $deskless
+        if ($blind -ne "") { return (& $finish "wait" "" "no-desktop" (& $noDesktop $blind "restarted")) }
+        if ($s.proving -eq $true) { $s.failures = [int]$s.failures + 1; $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy)); $s.proving = $false }
+        $s.phase = "stopping"; $s.intent = "heal"; $s.phaseSince = $at
+        return (& $finish "start" "stop" "unwell" ($live.why + "; it is stopped and started again") $live.process)
+    }
     if ($live.alive -ceq "hung") {
         # Stopped here, it could not be started again by this pass: it is left as it is.
         $blind = & $deskless

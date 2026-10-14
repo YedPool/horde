@@ -61,7 +61,7 @@
            Find = '        throw ("Task Scheduler refused to register ''" + $Job.name'
            Replace = '        return; throw ("Task Scheduler refused to register ''" + $Job.name' }
         @{ Name = "no-elevation-hint"
-           Find = '$rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true) {'
+           Find = '$rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true -and -not $up) {'
            Replace = '$rights = $(if ($false) {' }
         @{ Name = "old-task-said-gone"
            Find = '$was = $(if ($null -ne $old) { "the task that was there is left exactly as it was" } else {'
@@ -72,5 +72,24 @@
         @{ Name = "status-always-at-start-up"
            Find = 'logonType = "$($t.Principal.LogonType)"; atStartup = $boot;'
            Replace = 'logonType = "$($t.Principal.LogonType)"; atStartup = $true;' }
+            # --- review of PR 249 ---
+        @{ Name = "no-logon-trigger"
+           Find = '{ $triggers += New-ScheduledTaskTrigger -AtLogOn -User $UserId }'
+           Replace = '{ }' }
+        @{ Name = "elevation-hint-for-everyone"
+           Find = '-and $Job.atStartup -eq $true -and -not $up) {'
+           Replace = '-and $Job.atStartup -eq $true) {' }
+        @{ Name = "refusal-names-no-account"
+           Find = '\ to run as " + $user + " (" + $why'
+           Replace = '\ (" + $why' }
+        @{ Name = "listing-failure-read-as-none"
+           Find = '        throw ("the scheduler''s folder \" + $Folder'
+           Replace = '        return $null; throw ("the scheduler''s folder \" + $Folder' }
+        @{ Name = "interval-from-the-first-trigger"
+           Find = '$rep = @(@($t.Triggers) | Where-Object { $null -ne $_ -and $null -ne $_.Repetition -and "$($_.Repetition.Interval)" -ne "" } | ForEach-Object { $_.Repetition }) | Select-Object -First 1'
+           Replace = '$rep = @($t.Triggers)[0].Repetition' }
+        @{ Name = "status-names-no-account"
+           Find = 'atLogon = $logon; runsAs = "$($t.Principal.UserId)";'
+           Replace = 'atLogon = $logon; runsAs = "";' }
     )
 }

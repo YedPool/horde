@@ -3,7 +3,9 @@
 #
 # THE PASS IS THE SUPERVISOR. Nothing here stays running: the scheduler (core/Schedule.ps1) starts a
 # pass at start-up and every minute, whether or not anyone is signed in, and the operating system is
-# what keeps THAT coming round (New-HordeServiceTendJob says why, and what that pass cannot do). A pass looks at each service as it is now and takes the next step towards how it should be
+# what keeps THAT coming round, with a second job in the person's own session beside it
+# (New-HordeServiceTendJob says why two, and what each cannot do). A pass looks at each service as it
+# is now and takes the next step towards how it should be
 # (core/Services.ps1, LEVEL-TRIGGERED), so a pass that was killed, or a machine that slept, costs a
 # minute and nothing else. The pass writes its own heartbeat, and `status` says plainly when no pass
 # has come round lately - the one failure the passes themselves cannot report.
@@ -421,7 +423,7 @@ function Format-HordeServiceStatus {
     elseif ($Report.definitions.state -ceq "none") { [void]$lines.Add("definitions: no service is defined (there is no " + $Report.definitions.path + ")") }
     else { [void]$lines.Add("definitions: " + @($Report.services).Count + " service(s) in " + $Report.definitions.path) }
     foreach ($r in @($Report.services)) {
-        $alive = switch ("" + $r.alive) { "yes" { "alive" } "no" { "NOT RUNNING" } "starting" { "starting" } "hung" { "HUNG" } default { "UNKNOWN" } }
+        $alive = switch ("" + $r.alive) { "yes" { "alive" } "no" { "NOT RUNNING" } "starting" { "starting" } "hung" { "HUNG" } "unwell" { "UNWELL" } default { "UNKNOWN" } }
         [void]$lines.Add("")
         [void]$lines.Add($r.name + ": " + $alive + $(if (-not $r.enabled) { " (not supervised: enabled is false)" } else { "" }) + " - " + $r.why)
         if ($null -ne $r.PSObject.Properties["held"] -and $r.held -eq $true) { [void]$lines.Add("    HELD" + $(if ("" + $r.heldWhy -ne "") { " - " + $r.heldWhy } else { "" }) + ": the supervisor leaves it as it is until horde services start " + $r.name) }
@@ -439,63 +441,104 @@ function Format-HordeServiceStatus {
     return @($lines.ToArray())
 }
 
+function Get-HordeServiceTendJobNames {
+    # The supervisor's TWO jobs (New-HordeServiceTendJob says why two), named from one: -TaskName is
+    # the job in the person's own session - the name the supervisor's one job always had, so an
+    # install updates that job in place - and the job that runs whether or not anyone is signed in
+    # is the same name with " at start-up" after it. Both are checked as job names.
+    param([Parameter(Mandatory = $true)][string]$TaskName, [Parameter(Mandatory = $true)][string]$Folder)
+    $names = [pscustomobject]@{ person = $TaskName; startup = ($TaskName + " at start-up") }
+    foreach ($n in @($names.person, $names.startup)) { Assert-HordeJobName -Name $n -Folder $Folder }
+    return $names
+}
+
 function New-HordeServiceTendJob {
-    # The supervisor's job: this checkout's horde, `services tend`, at start-up and every minute.
-    # WHETHER OR NOT ANYONE IS SIGNED IN (core/Schedule.ps1, -AtStartup). Until 2026-10-14 it ran in
-    # the person's own session (-WithPerson), and so only while they were signed in: after a restart
-    # nobody signed in for 2 h 38 min, the relay it keeps was down all that time, and twenty answers
-    # from a phone waited on it. Where it runs now nobody's input is seen and no window can be shown
-    # (core/Services.ps1, THE PASS THAT CANNOT SEE THE PERSON, says what each rule then does), and
-    # what it starts runs in its logon - the person's own account, with their profile and no stored
-    # password. STOPPED AT FIVE MINUTES, NOT ONE: a pass decides to take a step while it has budget
-    # left, and the step it then takes - the move of a checkout, a self-check - may itself run a
-    # minute; ended at one minute, a pass was being cut down in the middle of exactly the steps that
-    # must not be cut (safety review of the first build, item 6). Two passes never overlap: the
-    # scheduler starts no second run while one is going, and a pass holds the lock - an open file
-    # under the home (core/ServicesFiles.ps1), which keeps a pass of this job and a pass of any other
-    # apart too: the job it replaced, still running as it is replaced, or a person's own tend. The
-    # home travels with it as data, as the metrics job's does.
-    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [switch]$Disabled)
+    # One of the supervisor's two jobs: this checkout's horde, `services tend`, every minute.
+    #   -Kind startup  AT START-UP AND EVERY MINUTE, WHETHER OR NOT ANYONE IS SIGNED IN (core/Schedule.ps1,
+    #                  -AtStartup). Until 2026-10-14 the supervisor had only the job in the person's
+    #                  session, and so ran only while someone was signed in: after a restart nobody
+    #                  signed in for 2 h 38 min, the relay it keeps was down all that time, and twenty
+    #                  answers from a phone waited on it. What it starts runs in its own logon - the
+    #                  person's account, their profile, no stored password - and it cannot see their
+    #                  input or show them a window (core/Services.ps1, THE PASS THAT CANNOT SEE THE
+    #                  PERSON).
+    #   -Kind person   AT SIGN-IN AND EVERY MINUTE, IN THE PERSON'S OWN SESSION (-WithPerson, -AtLogon),
+    #                  as the supervisor's one job always ran. KEPT BESIDE THE OTHER, NOT REPLACED BY IT
+    #                  (review of PR 249, MUST 2): a service that needs the desktop - the decisions
+    #                  window - is started only by a pass that can show it, an update that waits for
+    #                  the person to be idle is taken only by a pass that can see them, and a service
+    #                  started before anyone signed in that could not use the account's keys is
+    #                  started again where it can.
+    # TWO PASSES NEVER OVERLAP: each job's scheduler starts no second run of it while one is going, and
+    # every pass holds the tend lock - an open file under the home (core/ServicesFiles.ps1) - which
+    # keeps a pass of either job, and a person's own tend, apart from every other. STOPPED AT FIVE
+    # MINUTES, NOT ONE: a pass decides to take a step while it has budget left, and the step it then
+    # takes - the move of a checkout, a self-check - may itself run a minute; ended at one minute, a
+    # pass was being cut down in the middle of exactly the steps that must not be cut (safety review
+    # of the first build, item 6). The home travels with it as data, as the metrics job's does.
+    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [ValidateSet("startup", "person")][string]$Kind = "startup", [switch]$Disabled)
     $home2 = Get-HordeHome
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
+    $where = $(if ($Kind -ceq "startup") { @{ AtStartup = $true } } else { @{ WithPerson = $true; AtLogon = $true } })
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
 }
 
 function Invoke-HordeServiceSchedule {
-    # `horde services schedule [status]` and `horde services unschedule`: the one scheduled job that
-    # is the supervisor, through whichever scheduler this machine has (core/Schedule.ps1). Returns the
-    # lines to show; throws when the action cannot be done. Install over, and removal of, a job that
-    # does not carry Horde's marker are refused by the scheduler, as for every Horde job.
+    # `horde services schedule [status]` and `horde services unschedule`: the supervisor's TWO jobs
+    # (New-HordeServiceTendJob), through whichever scheduler this machine has (core/Schedule.ps1).
+    # Returns the lines to show; throws when the action cannot be done. Install over, and removal of,
+    # a job that does not carry Horde's marker are refused by the scheduler, as for every Horde job.
+    # INSTALL IS THE START-UP JOB FIRST: it is the one that may be refused for want of rights, and
+    # refused, nothing else is touched - the job in the person's session stays exactly as it was.
     param([Parameter(Mandatory = $true)][ValidateSet("install", "remove", "status")][string]$Action, [string]$TaskName = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [switch]$Disabled, [Parameter(Mandatory = $true)][string]$HordeScript)
-    Assert-HordeJobName -Name $TaskName -Folder $Folder
+    $names = Get-HordeServiceTendJobNames -TaskName $TaskName -Folder $Folder
     $sched = Get-HordeScheduler
     if ($sched.state -ne "known") { throw ("cannot schedule the supervisor: " + $sched.reason) }
     $s = $sched.value
-    $where = "'" + $TaskName + "' in " + $s.name + " folder " + $Folder
+    $where = { param($n) return ("'" + $n + "' in " + $s.name + " folder " + $Folder) }
+    $both = @([pscustomobject]@{ kind = "startup"; name = $names.startup; says = "at start-up and every minute, whether or not anyone is signed in, with no password stored" },
+              [pscustomobject]@{ kind = "person"; name = $names.person; says = "at sign-in and every minute, in the person's own session, for the services that need their desktop" })
     switch ($Action) {
         "install" {
-            $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $TaskName -Folder $Folder -Disabled:$Disabled
-            # Installed over a job of the same name REPLACES it: one job, never two. A refusal is the
-            # scheduler's to say, and nothing else is installed in its place.
-            & $s.install $job
-            $st = & $s.status $TaskName $Folder
-            if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job " + $where + ": " + $st.reason) }
-            return @("installed " + $where + ": at start-up and every minute, whether or not anyone is signed in, with no password stored, for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }), ("runs: " + $job.script + " " + ($job.arguments -join " ")), "horde services status says whether its passes are coming round")
+            $lines = New-Object System.Collections.ArrayList
+            foreach ($b in @($both)) {
+                $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $b.name -Folder $Folder -Kind $b.kind -Disabled:$Disabled
+                # Installed over a job of the same name REPLACES it: one job of each kind, never two.
+                & $s.install $job
+                $st = & $s.status $b.name $Folder
+                if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job " + (& $where $b.name) + ": " + $st.reason) }
+                $as = $(if ($null -ne $st.value.PSObject.Properties["runsAs"] -and "" + $st.value.runsAs -ne "") { ", as " + $st.value.runsAs } else { "" })
+                [void]$lines.Add("installed " + (& $where $b.name) + ": " + $b.says + $as + ", for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }))
+            }
+            [void]$lines.Add("both run: " + $HordeScript + " services tend; one pass at a time, whichever starts it")
+            [void]$lines.Add("horde services status says whether their passes are coming round")
+            return @($lines.ToArray())
         }
         "remove" {
-            $gone = & $s.remove $TaskName $Folder
-            if ($gone) { return @("removed " + $where + "; no service is supervised until it is scheduled again. Nothing that is running was stopped.") }
-            return @("no job " + $where + "; nothing to remove")
+            $lines = New-Object System.Collections.ArrayList
+            foreach ($b in $both) {
+                $gone = & $s.remove $b.name $Folder
+                [void]$lines.Add($(if ($gone) { "removed " + (& $where $b.name) } else { "no job " + (& $where $b.name) + "; nothing to remove" }))
+            }
+            [void]$lines.Add("no service is supervised until it is scheduled again. Nothing that is running was stopped.")
+            return @($lines.ToArray())
         }
         "status" {
-            $st = & $s.status $TaskName $Folder
-            if ($st.state -ne "known") { return @($where + " is not installed: no service is being supervised") }
-            $v = $st.value
+            $lines = New-Object System.Collections.ArrayList
             $fmt = { param($t) if ($null -eq $t) { "never" } else { $t.ToString("yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture) } }
-            return @(
-                ($where + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", " + $(if ($null -ne $v.PSObject.Properties["atStartup"] -and $v.atStartup -eq $true) { "at start-up and " } else { "" }) + "every " + $v.everyMinutes + " minute(s), logon " + $v.logonType + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" })),
-                ("serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt)),
-                "whether its passes do their work is horde services status's to say"
-            )
+            $none = 0
+            foreach ($b in $both) {
+                $st = & $s.status $b.name $Folder
+                if ($st.state -ne "known") { $none++; [void]$lines.Add((& $where $b.name) + " is not installed"); continue }
+                $v = $st.value
+                $when = $(if ($null -ne $v.PSObject.Properties["atStartup"] -and $v.atStartup -eq $true) { "at start-up and " } elseif ($null -ne $v.PSObject.Properties["atLogon"] -and $v.atLogon -eq $true) { "at sign-in and " } else { "" })
+                $as = $(if ($null -ne $v.PSObject.Properties["runsAs"] -and "" + $v.runsAs -ne "") { ", as " + $v.runsAs } else { "" })
+                [void]$lines.Add((& $where $b.name) + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", " + $when + "every " + $v.everyMinutes + " minute(s), logon " + $v.logonType + $as + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" }))
+                [void]$lines.Add("    serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt))
+            }
+            if ($none -eq 2) { [void]$lines.Add("neither job is installed: no service is being supervised") }
+            elseif ($none -eq 1) { [void]$lines.Add("ONE OF THE TWO JOBS IS MISSING: horde services schedule installs both") }
+            [void]$lines.Add("whether their passes do their work is horde services status's to say")
+            return @($lines.ToArray())
         }
     }
 }

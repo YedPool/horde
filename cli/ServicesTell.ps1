@@ -55,7 +55,9 @@ $script:HordeServiceTellSentences = [ordered]@{
     "apply"            = "a new revision could not be put in place; the old one keeps running"
     "stuck"            = "its process should have ended and could not be ended"
     "start-unrecorded" = "a start of it was interrupted and it keeps no heartbeat, so whether it is running cannot be told"
-    "no-desktop"       = "it needs the person's desktop, which the scheduled pass cannot reach; run horde services tend in the person's own session"
+    "keys-unavailable" = "it is running and cannot use this machine's keys, so nothing from the phone is opened; it is restarted, more slowly each time, and should work once someone has signed in"
+    "unwell"           = "it is running and says it cannot do its work; it is restarted, more slowly each time"
+    "no-desktop"       = "it needs the person's desktop, which the pass that runs before anyone signs in cannot reach; it is started once someone signs in"
 }
 $script:HordeServiceTellNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
 

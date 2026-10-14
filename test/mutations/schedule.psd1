@@ -42,10 +42,14 @@
            Replace = '($false)' }
         # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
         @{ Name = "at-startup-not-carried"
-           Find = 'atStartup = [bool]$AtStartup }'
-           Replace = 'atStartup = $false }' }
+           Find = 'atStartup = [bool]$AtStartup;'
+           Replace = 'atStartup = $false;' }
         @{ Name = "start-up-job-in-the-persons-session"
            Find = 'if ($AtStartup -and $WithPerson) { throw'
            Replace = 'if ($false) { throw' }
+            # --- review of PR 249 ---
+        @{ Name = "at-logon-not-carried"
+           Find = 'atLogon = [bool]$AtLogon }'
+           Replace = 'atLogon = $false }' }
     )
 }
