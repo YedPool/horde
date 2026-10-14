@@ -4,7 +4,7 @@
 //
 // THE SPECIFICATION IS THE POWERSHELL. Each section names the machine-side file whose strings it
 // copies: relay/Envelope.ps1, relay/Hpke.ps1, relay/Pairing.ps1, relay/Trust.ps1 and
-// channels/decisions/Channel.ps1, channels/chat/Channel.ps1 and channels/progress/Channel.ps1. A string here that differs from its twin there is a bug here; the
+// channels/decisions/Channel.ps1, channels/chat/Channel.ps1, channels/progress/Channel.ps1 and channels/cards/Channel.ps1. A string here that differs from its twin there is a bug here; the
 // end-to-end suites (test/test-relay-phone-e2e.ps1, surfaces/pwa/test/test-pwa-phone-e2e.ps1) put
 // what this file makes through the real machine code.
 //
@@ -848,4 +848,128 @@ export function progressLog({ entries = [], notices = [], position = null }) {
   }
   const last = items.length ? items[items.length - 1] : null;
   return { items, unread: items.length - 1 - readIndex, readIndex, newest: last ? { id: last.id, n: last.n } : null, stopped, skipped };
+}
+
+// --- the cards channel (channels/cards/Channel.ps1) ---
+
+// THE FLEET AT A GLANCE, machine to phone only: one whole snapshot per machine - a card per lane and one
+// for the Thrall, with the map of which lanes each area of the progress log belongs to. Only the latest
+// is kept in the mailbox; the phone keeps the newest it opened, by its envelope's seq. A lane's card opens
+// its STREAM: the progress log, filtered to that lane (entryLanes). The phone sends nothing on this channel.
+const CARD_FORMS = ["standard", "other", "missing", "unreadable"];
+const CARD_LANE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/;
+const CARD_TEXT = 400;
+const cardText = (v) => (typeof v === "string" && v.length <= CARD_TEXT && PLAIN.test(v) ? v : "");
+const cardCount = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+const cardList = (v, ok) => (Array.isArray(v) ? v.filter(ok) : []);
+// What the phone says of a card's form, in its own words.
+export const CARD_FORM_WORDS = {
+  standard: "",
+  other: "This lane's status is not in the standard form; it is shown as it stands.",
+  missing: "This lane has no status file.",
+  unreadable: "This lane's status file could not be read."
+};
+// The one sentence the stream page says of how far back it goes (channels/progress/Channel.ps1,
+// keepEnvelopes: the phone holds the last 100 envelopes of the log).
+export const STREAM_LIMIT_WORDS = "This phone holds only the newest part of the progress log (its last 100 sends), so a quiet lane may show few of its older updates here.";
+
+// A cards body, read: { ok, reason, value } with value { snapshot, made, name, thrall, cards, cardsLeftOut,
+// areas }. A card that does not hold together is dropped and counted in value.dropped; a text past its
+// length or holding a control character is shown as none.
+export function readCardsSnapshot(bodyBytes, horde, machine) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return no("the cards body is not JSON"); }
+  if (!b || b.v !== 1 || b.kind !== "cards-snapshot") return no("not a version 1 cards snapshot");
+  if (b.horde !== horde || b.machine !== machine) return no("the cards body names another horde or machine");
+  if (typeof b.snapshot !== "string" || !/^[0-9a-f]{64}$/.test(b.snapshot)) return no("the cards snapshot has no hash");
+  if (!Array.isArray(b.cards) || !b.thrall || typeof b.thrall !== "object" || !Array.isArray(b.areas)) return no("the cards snapshot has no cards, Thrall or areas");
+  const name = cardText(b.name).trim();
+  if (!name) return no("the cards snapshot names no machine");
+  let dropped = 0;
+  const cards = [];
+  // ONE ID IS ONE CARD, and "thrall" is the Thrall's (surfaces/pwa/page/lane-card.js, THRALL_LANE): a lane
+  // card by that id never opened, and a second card of one id was drawn as the first (review of PR 244).
+  const lanesSeen = new Set(["thrall"]);
+  for (const c of b.cards) {
+    if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }
+    lanesSeen.add(c.lane);
+    cards.push({ lane: c.lane, name: cardText(c.name) || c.lane, form: c.form, asOf: timeOf(c.asOf), now: cardText(c.now), lastDone: cardText(c.lastDone), waitingOn: cardText(c.waitingOn),
+      blocked: c.blocked === "yes" || c.blocked === "no" ? c.blocked : "", blockedText: cardText(c.blockedText), note: CARD_FORM_WORDS[c.form],
+      tasksOpen: cardCount(c.tasksOpen), doneWeek: cardCount(c.doneWeek), refused: cardList(c.refused, (x) => typeof x === "string" && WORD.test(x.toLowerCase())) });
+  }
+  const t = b.thrall;
+  const census = t.census && typeof t.census === "object" && cardCount(t.census.running) !== null && cardCount(t.census.waiting) !== null ? { running: t.census.running, waiting: t.census.waiting } : null;
+  const thrall = { asOf: timeOf(t.asOf), now: cardText(t.now), hasStatus: t.hasStatus === true, orcs: cardCount(t.orcs) || 0, working: cardCount(t.working) || 0, waitingFounder: cardCount(t.waitingFounder) || 0,
+    blocked: cardCount(t.blocked) || 0, unknown: cardCount(t.unknown) || 0, waitingFounderLanes: cardList(t.waitingFounderLanes, (x) => typeof x === "string" && CARD_LANE.test(x)), census };
+  const areas = [];
+  for (const a of b.areas) {
+    if (!a || typeof a.area !== "string" || !a.area.trim() || a.area.length > 60 || !PLAIN.test(a.area) || !Array.isArray(a.lanes)) continue;
+    const lanes = a.lanes.filter((x) => typeof x === "string" && CARD_LANE.test(x));
+    if (lanes.length) areas.push({ area: a.area, lanes });
+  }
+  return { ok: true, reason: "", value: { snapshot: b.snapshot, made: timeOf(b.made), name, thrall, cards, cardsLeftOut: cardCount(b.cardsLeftOut) || 0, areas, areasLeftOut: cardCount(b.areasLeftOut) || 0, dropped } };
+}
+
+// The lanes a log entry belongs to: the lanes it names itself (lane, comma separated), which WIN over its
+// area; else the lanes the map gives its area (compared with case and outer spaces set aside); else none -
+// an entry of no lane is shown only in the Thrall's stream.
+export function entryLanes(entry, areas) {
+  const own = String(entry && entry.lane || "").split(",").map((x) => x.trim()).filter((x) => x);
+  if (own.length) return own;
+  const area = String(entry && entry.area || "").trim().toLowerCase();
+  if (!area) return [];
+  for (const a of areas || []) if (a.area.trim().toLowerCase() === area) return a.lanes.slice();
+  return [];
+}
+
+// The cards of every machine the phone holds a snapshot of, MERGED BY MACHINE NAME: per name, the newest
+// snapshot (by when it was made, then by its envelope's seq) stands; two pairings that report one name
+// show it once. snapshots: [{ entry, seq, value }] (value readCardsSnapshot's). -> { machines, thrall,
+// cards }: machines [{ name, entry, made, areas, cardsLeftOut, areasLeftOut }] by name; thrall one card per machine;
+// cards every lane card, each with its machine's name and entry, ordered by lane, then machine.
+export function mergeCards(snapshots) {
+  const byName = new Map();
+  for (const s of snapshots || []) {
+    if (!s || !s.value) continue;
+    const had = byName.get(s.value.name);
+    if (!had || s.value.made > had.value.made || (s.value.made === had.value.made && s.seq > had.seq)) byName.set(s.value.name, s);
+  }
+  const names = [...byName.keys()].sort();
+  const machines = [], thrall = [], cards = [];
+  for (const name of names) {
+    const s = byName.get(name);
+    machines.push({ name, entry: s.entry, made: s.value.made, areas: s.value.areas, cardsLeftOut: s.value.cardsLeftOut, areasLeftOut: s.value.areasLeftOut || 0 });
+    thrall.push({ ...s.value.thrall, machine: name, entry: s.entry });
+    for (const c of s.value.cards) cards.push({ ...c, machine: name, entry: s.entry });
+  }
+  cards.sort((a, b) => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.machine < b.machine ? -1 : a.machine > b.machine ? 1 : 0));
+  return { machines, thrall, cards };
+}
+
+// A lane's stream: the items of a progress log (progressLog's) that belong to the lane, in their order.
+// lane "" is the Thrall's: every item.
+export function laneStream(items, lane, areas) {
+  if (!lane) return items.slice();
+  return items.filter((it) => entryLanes(it, areas).indexOf(lane) >= 0);
+}
+
+// HIS PLACE MOVES ONLY IN THE WHOLE LOG OF THE PICKED HORDE: true for the stream { entry, lane } only when it
+// is the Thrall's (lane "", the whole log) of the picked pairing. A lane's stream skips other lanes'
+// entries, so reading on in it, or "Mark all read" there, would mark those read unseen; another
+// pairing's log keeps no place of the picked one's (surfaces/pwa/page/app.js, readAsSeen).
+export function streamMovesPlace(stream, picked) {
+  return !!stream && stream.lane === "" && stream.entry === picked;
+}
+
+// "4 min ago", "3 h ago", "2 days ago": how old a card's word is, from its time and now (milliseconds);
+// "" for no time. A time ahead of now (a clock off by a little) is "just now".
+export function ageWords(at, nowMs) {
+  if (!(at > 0) || !(nowMs > 0)) return "";
+  const min = Math.floor((nowMs - at) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return min + " min ago";
+  const h = Math.floor(min / 60);
+  if (h < 48) return h + " h ago";
+  return Math.floor(h / 24) + " days ago";
 }
