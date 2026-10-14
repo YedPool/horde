@@ -701,7 +701,12 @@ New-Item -ItemType Directory -Path (Split-Path $oldAtStart), (Split-Path $freshA
 [System.IO.File]::WriteAllText($oldAtStart, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
 [System.IO.File]::WriteAllText($freshAtStart, '{ "takenAt": "2026-10-04T00:00:00Z", "rows": ["fresh"] }')
 $held = Enter-HordeNodeSpawnLock -Dir $cS.records
-try { $lines = @(Invoke-HordeNodeReconcile -Context $cS) } finally { $held.Dispose() }
+# An exception from the code under test is a FAILED CHECK of its own, not a broken suite (the after-merge
+# mutation net of PR 239: with the null-lock guard gone, the sweep went on with no lock and threw, and the
+# suite ended with exit 1 and no failed check, so the mutant was no catch).
+$lines = @(); $thrown = ""
+try { try { $lines = @(Invoke-HordeNodeReconcile -Context $cS) } catch { $thrown = $_.Exception.Message } } finally { $held.Dispose() }
+Check ($thrown -ceq "") ("with the spawn lock held, serve start throws nothing (" + $thrown + ")")
 Check ((Test-Path -LiteralPath $oldAtStart) -and @($lines | Where-Object { $_ -like "ALERT: old screens were not swept at serve start*spawn lock*" }).Count -eq 1) ("with the spawn lock held, serve start sweeps nothing and says so (" + ($lines -join " | ") + ")")
 $lines = @(Invoke-HordeNodeReconcile -Context $cS)
 Check (-not (Test-Path -LiteralPath $oldAtStart) -and (Test-Path -LiteralPath (Split-Path $oldAtStart)) -and @($lines | Where-Object { $_ -like "deleted 1 screen(s)*" }).Count -eq 1) ("serve start deletes a screen past its week, with no spawn, and leaves the folder (" + ($lines -join " | ") + ")")
