@@ -618,7 +618,9 @@ function Invoke-HordeNodeFrame {
             # ConvertTo-HordeNodeViewDocument) is absent with that proof: its control file is still on
             # disk, so "no store holds it" would be false (review of PR #240).
             foreach ($e in @(Get-HordeLinkProp $Data.view "endedSessions")) {
+                # Matched as the sessions above are: the id exactly, and the agent when one is named.
                 if ($null -eq $e -or "$(Get-HordeLinkProp $e 'sessionId')" -cne $want) { continue }
+                if ($wantAgent -ne "" -and "$(Get-HordeLinkProp $e 'agent')" -cne $wantAgent) { continue }
                 return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "absent"; reason = (Limit-HordeNodeReason ("session " + $want + " has ended, proven by its process: " + (Get-HordeLinkProp $e "reason"))); observedAt = $at })))
             }
             # Absent only when the projection read every store; otherwise the session may be in a store
