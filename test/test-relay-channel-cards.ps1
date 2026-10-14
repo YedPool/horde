@@ -167,10 +167,15 @@ try {
     $mail = @(Get-CardsMail $A)
     $b = $mail[$mail.Count - 1].body
     $i = Get-Card $b "I"
-    Check ($null -ne $i -and $i.form -ceq "other" -and $i.name -ceq "stt-cpu-bench (Orc I)" -and $i.now -ceq "measuring more models one at a time" -and $i.waitingOn -ceq "nothing" -and $i.note -like "*not in the standard form*") ("a status file in another form gets a card by the orc it names, from its lines, saying it is not in the standard form (" + ($i | ConvertTo-Json -Compress) + ")")
+    Check ($null -ne $i -and $i.form -ceq "other" -and $i.name -ceq "stt-cpu-bench (Orc I)" -and $i.now -ceq "measuring more models one at a time" -and $i.waitingOn -ceq "nothing" -and $i.problems -cne "") ("a status file in another form gets a card by the orc it names, from its lines, marked form 'other' with the reader's problems (" + ($i | ConvertTo-Json -Compress) + ")")
     $m = Get-Card $b "empty-lane"
     $u = Get-Card $b "huge-lane"
-    Check ($null -ne $m -and $m.form -ceq "missing" -and $m.note -like "*no status file*" -and $null -ne $u -and $u.form -ceq "unreadable" -and $u.note -like "*could not be read*" -and $u.now -ceq "") "a lane with no status file and one whose file cannot be read each get a card that says so - never a missing card"
+    Check ($null -ne $m -and $m.form -ceq "missing" -and $m.problems -ceq "" -and $null -ne $u -and $u.form -ceq "unreadable" -and $u.problems -ceq "" -and $u.now -ceq "") "a lane with no status file and one whose file cannot be read each get a card whose form says so - never a missing card"
+    # The phone makes a card's note from its form (relay/js/protocol.js, cardFormNote) and never read the
+    # machine's note, so the machine sends none: one field, one meaning, fewer bytes (C and F, 2026-10-14).
+    $withNote = @($b.cards | Where-Object { $null -ne $_.PSObject.Properties["note"] } | ForEach-Object { $_.lane })
+    Check (@($b.cards).Count -ge 4 -and $withNote.Count -eq 0) ("NO NOTE: no card - standard, other, missing or unreadable - carries a note member (" + ($withNote -join ",") + "; this snapshot re-serialized: " + (ConvertTo-Json -InputObject $b -Compress -Depth 10).Length + " bytes)")
+    Check (@($b.cards | Where-Object { $null -eq $_.PSObject.Properties["idNote"] }).Count -eq 0) "CONTROL: the same look finds a member every card does carry (idNote)"
     Check ($b.thrall.orcs -eq 6 -and $b.thrall.unknown -eq 2) "and the Thrall's count says two lanes are not known"
 
     Write-Host ""
@@ -285,7 +290,7 @@ try {
     # fills the room the cards leave.
     $nextArea = ConvertTo-HordeCardsChannelValueText ([pscustomobject]@{ area = ($heb + ("{0:000}" -f (@($sb.areas).Count + 1))); lanes = @("B", "E") })
     Check ($snap.body.Length + $nextArea.Length + 1 -gt $hosted -and $snap.body.Length -gt [long]($hosted / 2)) ("THE MAP FILLS THE ROOM THE CARDS LEAVE: the next area left out would not have fit (body " + $snap.body.Length + " of " + $hosted + ", next area " + $nextArea.Length + " bytes)")
-    # 64 lanes, every text at its full 300 characters: 109185 bytes measured, so most are left out and counted.
+    # 64 lanes, every text at its full 300 characters: 122049 bytes measured (128321 with the note), so most are left out and counted.
     $G = New-World
     foreach ($n in 1..64) { $w = ("w" + $n + " ") * 100; Set-Lane $G ("lane{0:00}" -f $n) (New-Status -Orc ("L" + $n) -Lane $w -Doing $w -Finished $w -Waiting $w -Blocked ("yes " + $w)) }
     $setG = (Get-HordeModuleSettings -Declaration (Get-HordeCardsChannelSettingsDeclaration) -HordeHome $G.home).values
@@ -388,7 +393,7 @@ try {
         if ($c.want -ceq "") {
             Check ($null -ne $card -and $card.form -ceq "standard" -and $card.problems -ceq "" -and @($judged.problems).Count -eq 0) ("STANDARD: " + $c.f + " is in the standard form, as the status reader says (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
         } else {
-            Check ($null -ne $card -and $card.form -ceq "other" -and $card.problems.Contains($c.want) -and $card.problems -ceq (Get-HordeCardsChannelPlain (@($judged.problems) -join "; ")) -and $card.note -like "*not in the standard form*") ("NOT STANDARD: " + $c.f + " still gets its card, marked not in the standard form, with the reader's words '" + $c.want + "' (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
+            Check ($null -ne $card -and $card.form -ceq "other" -and $card.problems.Contains($c.want) -and $card.problems -ceq (Get-HordeCardsChannelPlain (@($judged.problems) -join "; ")) -and $null -eq $card.PSObject.Properties["note"]) ("NOT STANDARD: " + $c.f + " still gets its card, marked not in the standard form, with the reader's words '" + $c.want + "' (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
         }
     }
     $bw = @($b.cards | Where-Object { $_.lane -ceq "B" })[0]
@@ -420,7 +425,7 @@ try {
     Check ($null -eq (Get-Card $b "Z") -and @($b.cards | Where-Object { $_.name -ceq "old lane" -or $_.name -ceq "old-lane" }).Count -eq 0 -and $ids.Count -eq 3) ("RETIRED: a folder with status.retired.txt and no status.txt gets no card (cards " + ($ids -join ",") + ")")
     Check ($b.thrall.orcs -eq 3 -and $b.thrall.blocked -eq 0 -and $b.thrall.waitingFounder -eq 0 -and $b.thrall.unknown -eq 1) ("and it is not counted on the Thrall's card (orcs " + $b.thrall.orcs + ", blocked " + $b.thrall.blocked + ", waiting on the founder " + $b.thrall.waitingFounder + ", not known " + $b.thrall.unknown + ")")
     $none = @($b.cards | Where-Object { $_.name -ceq "nothing-here" }) | Select-Object -First 1
-    Check ($null -ne $none -and $none.form -ceq "missing" -and $none.note -ceq "This lane has no status file.") "a folder with neither file still gets its 'no status file' card"
+    Check ($null -ne $none -and $none.form -ceq "missing" -and $null -eq $none.PSObject.Properties["note"]) "a folder with neither file still gets its 'no status file' card"
     $y = Get-Card $b "Y"
     Check ($null -ne $y -and $y.form -ceq "standard" -and $y.now -ceq "back at work") ("a folder with both files is a lane, and its status.txt wins (" + $(if ($null -ne $y) { $y.now } else { "no card" }) + ")")
     # Retired folders are passed over before the count of folders read, or old lanes would push live ones out.
@@ -444,7 +449,7 @@ try {
     $mail = @(Get-CardsMail $U)
     $b = $mail[$mail.Count - 1].body
     $second = @($b.cards | Where-Object { $_.lane -cne "U" }) | Select-Object -First 1
-    Check ($null -ne $second -and $second.lane -cne "U" -and $second.idNote -like "*(u-first) gives the same id, U,*" -and $second.form -ceq "other" -and $second.note -like "*not in the standard form*" -and $second.problems -cne "") ("A SECOND CARD OF ONE ID says why in idNote, its own field, and keeps what its form says (" + $(if ($null -ne $second) { $second.lane + ": " + $second.idNote + " / " + $second.note } else { "no card" }) + ")")
+    Check ($null -ne $second -and $second.lane -cne "U" -and $second.idNote -like "*(u-first) gives the same id, U,*" -and $second.form -ceq "other" -and $second.problems -cne "" -and $null -eq $second.PSObject.Properties["note"]) ("A SECOND CARD OF ONE ID says why in idNote, its own field, and keeps its form and problems (" + $(if ($null -ne $second) { $second.lane + ": " + $second.idNote + " / " + $second.form } else { "no card" }) + ")")
     Check ((Get-Card $b "U").idNote -ceq "") "the card that keeps the id says nothing of it"
 } finally {
     $env:HORDE_HOME = $realHome

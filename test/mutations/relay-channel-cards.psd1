@@ -26,8 +26,8 @@
            Find = 'if (@($judged.problems).Count -eq 0) {'
            Replace = 'if ($true) {' }
         @{ Name = "the-broken-rules-not-sent"
-           Find = '; $card.problems = $s.reason }'
-           Replace = ' }' }
+           Find = '{ $card.problems = $s.reason }'
+           Replace = '{ }' }
         @{ Name = "a-standard-record-read-loosely"
            Find = 'foreach ($k in @($judged.fields.Keys)) { $keys[$k] = $judged.fields[$k] }'
            Replace = 'foreach ($k in @()) { }' }
@@ -89,7 +89,10 @@
            Replace = '' }
         @{ Name = "why-a-card-has-its-own-id-not-sent"
            Find = '$c.idNote = Protect-HordeCardsChannelField'
-           Replace = '$c.note = Protect-HordeCardsChannelField' }
+           Replace = '$null = Protect-HordeCardsChannelField' }
+        @{ Name = "a-card-carries-a-note-the-phone-never-reads"
+           Find = 'blockedText = ""; problems = ""; idNote = "" }'
+           Replace = 'blockedText = ""; note = ""; problems = ""; idNote = "" }' }
         @{ Name = "two-cards-share-one-id"
            Find = 'if ($taken.ContainsKey($c.lane)) {'
            Replace = 'if ($false) {' }
