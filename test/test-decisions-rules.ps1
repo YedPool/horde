@@ -73,7 +73,7 @@ $viewFields = @($defs.resultSchema.definitions.view.properties.PSObject.Properti
 Check (@($tableFields | Where-Object { $viewFields -cnotcontains $_ }).Count -eq 0) "and a question as shown (decision-result.v1) carries every one of them"
 $kindNames = @(Get-HordeDecisionEventKinds)
 $defNames = @($defs.eventSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened,question-ranked,message-said,messages-read") "the event kinds are the five that change a question, and the two of the conversation under it"
+Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened,question-ranked,question-reminded,message-said,messages-read") "the event kinds are the six that change a question, and the two of the conversation under it"
 Check (((Get-HordeDecisionSpeakers) -join ",") -ceq "founder,warchief" -and ((Get-HordeDecisionRoutes) -join ",") -ceq "window,chat-recorded,command,phone" -and ((Get-HordeDecisionReaders) -join ",") -ceq "warchief") "who speaks, by what routes, and who has an inbox are the rules' closed lists"
 Check (@($kindNames | Where-Object { @("question", "list") -cnotcontains (Get-HordeDecisionKindAbout -Kind $_) }).Count -eq 0 -and (Get-HordeDecisionKindAbout -Kind "messages-read") -ceq "list" -and (Get-HordeDecisionKindAbout -Kind "message-said") -ceq "question" -and (Get-HordeDecisionKindAbout -Kind "no-such-kind") -ceq "") "every kind says what it is about: one question, or the whole list"
 Check (((Get-HordeDecisionKindActors -Kind "question-closed").roles -join ",") -ceq "warchief" -and ((Get-HordeDecisionKindActors -Kind "message-said").roles -join ",") -ceq "founder,warchief" -and ((Get-HordeDecisionKindActors -Kind "messages-read").roles -join ",") -ceq "founder,warchief") "a question's own records are written by its keepers, and what is said under it by its speakers"
@@ -586,7 +586,9 @@ $same = $true
 foreach ($n in 1, 2) {
     $was = ConvertTo-HordeDecisionView -Question $before.questions[$n] -State $before
     $is = ConvertTo-HordeDecisionView -Question $st.questions[$n] -State $st
-    foreach ($member in @($was.PSObject.Properties | ForEach-Object { $_.Name } | Where-Object { $_ -cne "thread" })) {
+    # WHEN IT WAS ASKED is left out on purpose: the keeper's reply that asks (record 6) asks question 1
+    # again (decisions/Rules.ps1, WHEN A QUESTION WAS ASKED); test\test-decisions-asked.ps1 holds that.
+    foreach ($member in @($was.PSObject.Properties | ForEach-Object { $_.Name } | Where-Object { @("thread", "asked", "askedCount", "lastAskedAt") -cnotcontains $_ })) {
         if ((ConvertTo-Json -InputObject $was.$member -Compress -Depth 6) -cne (ConvertTo-Json -InputObject $is.$member -Compress -Depth 6)) { $same = $false; Write-Host ("         question " + $n + ": '" + $member + "' changed") -ForegroundColor Red }
     }
 }

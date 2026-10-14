@@ -49,5 +49,18 @@
         @{ Name = "storage-that-throws-breaks-the-page"
            Find = '    try { orderTurned = !!prefs && prefs.getItem(ORDER_TURN_KEY) === "1"; } catch (e) { orderTurned = false; }'
            Replace = '    orderTurned = !!prefs && prefs.getItem(ORDER_TURN_KEY) === "1";' }
+        # NEWEST IS LAST ASKED (list.js): each line says when it was last asked; its context, when first.
+        @{ Name = "no-line-says-when-it-was-asked"
+           Find = '        box.appendChild(drawn.asked);'
+           Replace = '' }
+        @{ Name = "a-line-says-when-it-was-added"
+           Find = '      var lastAsked = askedAt(q);'
+           Replace = '      var lastAsked = timeOf(q.addedAt);' }
+        @{ Name = "the-context-never-says-when-it-was-first-asked"
+           Find = '      if (first && first !== askedAt(q)) { out.push({ label: "First asked", text: whenWords(first) }); }'
+           Replace = '' }
+        @{ Name = "the-context-says-first-asked-even-when-asked-once"
+           Find = '      if (first && first !== askedAt(q)) { out.push({ label: "First asked", text: whenWords(first) }); }'
+           Replace = '      if (first) { out.push({ label: "First asked", text: whenWords(first) }); }' }
     )
 }

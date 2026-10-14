@@ -113,5 +113,24 @@ always([{ number: 2, addedAt: q(0, 10).addedAt }, { addedAt: q(0, 10).addedAt },
 always([{ number: "x" }, { number: 1 }, { number: 5 }], "date", "5,1,x", "and so does a number that is not a number (it was NaN, which leaves the order to the engine)");
 always([{ number: 4 }, {}, { number: 1, importance: "high" }], "importance", "1,4,", "a question with nothing but a number, and one with nothing at all, are sorted and nothing throws");
 
+// --- NEWEST IS LAST ASKED (list.js): the date order sorts by lastAskedAt, an older list by addedAt ---
+// la: a question added at second a and last asked at second l (null: the list says nothing of it).
+const la = (number, a, l, more = {}) => q(number, a, { lastAskedAt: l === null ? undefined : q(0, l).addedAt, ...more });
+const reasked = [la(1, 10, 50), la(2, 20, 20), la(3, 30, 30), la(4, 40, 40)];
+always([la(1, 10, 10), la(2, 20, 20), la(3, 30, 30), la(4, 40, 40)], "date", "4,3,2,1", "CONTROL: asked once each, last asked is when added, and the newest stands first as before");
+always(reasked, "date", "1,4,3,2", "A QUESTION ASKED AGAIN STANDS AS NEW AS THAT MOMENT: added first, asked again last, it leads the date order");
+turned(reasked, "date", "2,3,4,1", "turned over, the one asked longest ago stands first, and the one asked again last stands last");
+always([la(5, 10, 40), la(9, 20, 40), la(7, 30, 40)], "date", "9,7,5", "last asked in the same instant, the higher number stands first, as now");
+turned([la(5, 10, 40), la(9, 20, 40), la(7, 30, 40)], "date", "5,7,9", "and turned over, the lower number first");
+always([la(1, 10, null), la(2, 20, 25), q(3, 30)], "date", "3,2,1", "A LIST FROM AN EARLIER VERSION, with no lastAskedAt, sorts by addedAt; one question that has it sorts by it among them");
+always([q(1, 10, { lastAskedAt: "not a time" }), q(2, 20, { lastAskedAt: "" }), q(3, 5, { lastAskedAt: null })], "date", "2,1,3", "a lastAskedAt that is not a time is none: the question reads as asked when it was added");
+always([{ number: 1, lastAskedAt: q(0, 10).addedAt }, { number: 2 }, { number: 3, lastAskedAt: "x" }], "date", "1,3,2", "with neither time stated the number decides, and a question with a time stands before them");
+always([la(1, 10, 55, { importance: "low" }), la(2, 50, 50, { importance: "low" }), la(3, 40, 40, { importance: "high" })], "importance", "3,1,2", "inside an importance a tie goes to the one asked last, not the one added last");
+const asked = window.HordeDecisionsDocument && window.HordeDecisionsDocument.asked;
+check(!!asked && asked.last(la(1, 10, 50)) === Date.parse(q(0, 50).addedAt) && asked.last(q(2, 20)) === Date.parse(q(0, 20).addedAt), "the page hands out when a question was last asked, and for an older list when it was added");
+check(!!asked && asked.first({ addedAt: q(0, 10).addedAt, asked: [{ at: q(0, 5).addedAt, how: "first" }, { at: q(0, 50).addedAt, how: "remind" }] }) === Date.parse(q(0, 5).addedAt) && asked.first(q(3, 30)) === Date.parse(q(0, 30).addedAt), "and when it was first asked: the first entry of its asked list, or, from an older list, when it was added");
+const t = new Date(2026, 9, 14, 7, 5).getTime();
+check(!!asked && asked.words(t, t) === "14 Oct 07:05" && asked.words(t, new Date(2027, 0, 1).getTime()) === "14 Oct 2026 07:05" && asked.words(0) === "", "a moment in words, in this device's time: day, month, and the year only when it is not this one; no time is no words", asked ? asked.words(t, t) + " | " + asked.words(t, new Date(2027, 0, 1).getTime()) : "");
+
 process.stdout.write("[DONE] " + passed + "\n");
 process.exit(failures === 0 ? 0 : 1);

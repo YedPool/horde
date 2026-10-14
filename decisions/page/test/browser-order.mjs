@@ -227,6 +227,42 @@ try {
   r = await tap("Blocking");
   check(head(r, 1) === "2" && r.firstInView === 2, "CONTROL: a list shorter than the screen re-sorts in view, as it always did", r.order + "; first in view " + r.firstInView);
 
+  // ---------------- 6. NEWEST IS LAST ASKED: each line says when it was last asked, and Date sorts by it ----------------
+  // Question 2 was added second and asked again at minute 50: by date it leads; question 1, asked once,
+  // stands last. Its unfolded context says when it was first asked.
+  const askedList = [1, 2, 3, 4].map((n) => question(n, n === 2
+    ? { lastAskedAt: at(50), askedCount: 2, asked: [{ at: at(2), how: "first", by: "Orc E", note: "" }, { at: at(50), how: "remind", by: "warchief", note: "raised again in chat" }] }
+    : { lastAskedAt: at(n), askedCount: 1, asked: [{ at: at(n), how: "first", by: "Orc E", note: "" }] }));
+  const ASKED = `(() => Array.from(document.querySelectorAll('#list .hd-q')).map((w) => { const t = w.querySelector('.hd-qt'); const m = /Question (\\d+):/.exec(t ? t.textContent : ''); const a = w.querySelector('.hd-asked'); const shown = !!a && a.offsetParent !== null; return { n: m ? Number(m[1]) : 0, asked: a ? a.textContent : '', shown: shown, context: w.textContent }; }).filter((l) => l.n > 0))()`;
+  const words = (iso) => evaluate("window.HordeDecisionsDocument.asked.words(Date.parse(" + JSON.stringify(iso) + "))");
+  await load(origin + "/host.html?prefs=throw");
+  await evaluate("window.hostList(" + JSON.stringify(askedList.map((x) => ({ ...x, lastAskedAt: undefined, asked: undefined, askedCount: undefined }))) + ")");
+  await settle();
+  r = await read();
+  check(head(r, 4) === "4,3,2,1", "CONTROL: the same four from an earlier version, with no last-asked time, stand by when they were added", r.order);
+  await evaluate("window.hostList(" + JSON.stringify(askedList) + ")");
+  await settle();
+  r = await read();
+  check(head(r, 4) === "2,4,3,1", "BY DATE THE QUESTION ASKED AGAIN STANDS FIRST: 2, asked again at minute 50, leads; then 4, 3 and 1 as they were asked", r.order);
+  let lines = await evaluate(ASKED);
+  const want50 = await words(at(50));
+  const want4 = await words(at(4));
+  check(lines.length === 4 && lines.every((l) => l.shown && /^Asked \d+ [A-Z][a-z]{2} \d\d:\d\d$/.test(l.asked)), "EVERY QUESTION SAYS, ON SCREEN, WHEN IT WAS LAST ASKED: \"Asked\", a day, a month and a time", JSON.stringify(lines.map((l) => [l.n, l.asked, l.shown])));
+  check(lines[0].asked === "Asked " + want50 && lines[1].asked === "Asked " + want4, "and the time is the last asking: question 2 says minute 50, not when it was added", JSON.stringify(lines.map((l) => l.asked)));
+  check(lines.every((l) => l.context.indexOf("First asked") < 0), "CONTROL: folded, no question shows when it was first asked", "");
+  await evaluate("(() => { const w = Array.from(document.querySelectorAll('#list .hd-q')).find((x) => /Question 2:/.test(x.querySelector('.hd-qt').textContent)); w.querySelector('.hd-qt').click(); return true; })()");
+  await settle();
+  lines = await evaluate(ASKED);
+  const two = lines.find((l) => l.n === 2);
+  const want2 = await words(at(2));
+  check(!!two && two.context.indexOf("First asked:" + want2) >= 0, "UNFOLDED, the question asked again says when it was first asked (minute 2)", two ? two.context.slice(-200) : "");
+  await evaluate("(() => { const w = Array.from(document.querySelectorAll('#list .hd-q')).find((x) => /Question 3:/.test(x.querySelector('.hd-qt').textContent)); w.querySelector('.hd-qt').click(); return true; })()");
+  await settle();
+  lines = await evaluate(ASKED);
+  check(lines.find((l) => l.n === 3).context.indexOf("First asked") < 0, "and one asked only once says nothing of a first asking: it is the same moment", "");
+  r = await tap("Date");
+  check(head(r, 4) === "1,3,4,2", "Date turned over: the one asked longest ago (1) first, the one asked again last (2) last", r.order);
+
   check(problems.length === 0, "no script error in the page", problems.join(" | "));
 } catch (e) {
   check(false, "the scenario ran to its end", e.message);
