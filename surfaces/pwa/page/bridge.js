@@ -243,10 +243,10 @@ export function createBridge(phone, options = {}) {
     "chat-photo": async (a) => {
       try {
         if (!(a.bytes instanceof Uint8Array)) return { ok: false, reason: "There is no photo to send." };
-        const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
-        const sent = await phone.sendPhoto(picked, { bytes: a.bytes, photoId: id });
+        const photoId = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
+        const sent = await phone.sendPhoto(picked, { bytes: a.bytes, photoId });
         emit("chat-changed", await chatRecord());
-        return { ok: true, id, parts: sent.parts };
+        return { ok: true, id: photoId, parts: sent.parts };
       } catch (e) { emit("chat-changed", await chatRecord()); return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },
     "chat-send": async (a) => {

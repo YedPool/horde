@@ -5,7 +5,7 @@
 # WHY A PHOTO IS NOT JUST A LONG LINE (measured 2026-10-14). Every envelope the phone sends carries its
 # own WebAuthn assertion, user verified (relay/js/protocol.js, signEnvelope; relay/WebAuthn.ps1), so one
 # envelope is one fingerprint or face prompt. The hosted relay holds texts of 65,536 characters
-# (relays/cloudflare/capabilities.json), which leaves 48,143 bytes of body for one recipient
+# (its capabilities.json, maxTextChars), which leaves 48,143 bytes of body for one recipient
 # (channels/Port.ps1, Get-HordeRelayChannelBodyBudget): a photo of 1 MB would be 21 envelopes and 21
 # prompts. So (shape B, agreed by the Horde coordinator and the relay owner, 2026-10-14):
 #

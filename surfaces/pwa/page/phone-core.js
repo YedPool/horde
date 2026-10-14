@@ -639,7 +639,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // page has already shrunk to a JPEG, sent as ONE passkey-signed manifest - the same single prompt
     // as a line - and its sealed parts. Only to a machine whose newest turns body says it takes photos
     // (photoBytes), and no larger than it says. THE PACE: the hosted relay lets one phone put 20 at once
-    // and then one a second (relays/cloudflare/worker/limits.js, putBurst and putsPerMinute), so the
+    // and then one a second (the hosted relay's limits, putBurst and putsPerMinute), so the
     // manifest and the first PHOTO_BURST - 1 parts go at once and the rest a little over a second apart:
     // a 1 MB photo (21 parts) waits about 4 s, the 2 MiB cap (44 parts) about 30 s, and none is refused
     // for its pace. A part the relay does not take is tried again twice, 1.5 s apart.
@@ -648,9 +648,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      if (s.mode === "read-only") throw fail(NO_PRF);
-      if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to send a photo.");
-      if (!s.chat.session) throw fail("Nothing has come from the Thrall yet, so there is no session to send to. Wait for its turns, then send.");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to send a photo."); }
+      if (s.chat.session === "") throw fail("Nothing has come from the Thrall yet, so there is no session to send to. Wait for its turns, then send.");
       if (!s.chat.photoBytes) throw fail(P.PHOTO_PC_OLD);
       if (!/^[0-9a-f]{32}$/.test(photoId)) throw fail("the photo's id is 32 lower-case hex");
       if (!P.sniffImage(bytes)) throw fail(P.PHOTO_NOT_IMAGE);

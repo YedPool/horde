@@ -97,8 +97,8 @@
            Find = 'const had = hadController; hadController = true; tryReload(had);'
            Replace = 'hadController = true; tryReload(true);' }
         @{ Name = "new-version-reloads-over-a-chat-draft"
-           Find = 'if (sending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;'
-           Replace = 'if (sending || sendsInFlight > 0) return true;' }
+           Find = 'if (sending || photoSending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;'
+           Replace = 'if (sending || photoSending || sendsInFlight > 0) return true;' }
         @{ Name = "new-version-never-loads-after-the-draft"
            Find = 'function settleUpdate() { if (updateWaiting) tryReload(true); }'
            Replace = 'function settleUpdate() { }' }
