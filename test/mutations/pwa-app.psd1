@@ -33,8 +33,8 @@
            Find = '$("tabProgress").textContent = "Progress" + (n > 0 ? " (" + n + ")" : "");'
            Replace = '$("tabProgress").textContent = "Progress";' }
         @{ Name = "progress-left-on-a-locked-page"
-           Find = 'clearChat(); clearProgress(); showProgressCount(null); openStamps.clear();'
-           Replace = 'clearChat(); showProgressCount(null); openStamps.clear();' }
+           Find = 'clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear();'
+           Replace = 'clearChat(); showProgressCount(null); clearCards(); openStamps.clear();' }
         @{ Name = "progress-labels-not-bold"
            Find = 'if (p.label) { const b = document.createElement("b"); b.textContent = p.label + ": "; line.appendChild(b); }'
            Replace = 'if (p.label) { line.appendChild(document.createTextNode(p.label + ": ")); }' }
