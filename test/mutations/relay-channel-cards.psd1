@@ -93,7 +93,10 @@
            Replace = ') })' }
         @{ Name = "why-a-card-has-its-own-id-not-sent"
            Find = '$c.idNote = Protect-HordeCardsChannelField'
-           Replace = '$c.note = Protect-HordeCardsChannelField' }
+           Replace = '$null = Protect-HordeCardsChannelField' }
+        @{ Name = "a-card-carries-a-note-the-phone-never-reads"
+           Find = 'blockedText = ""; problems = ""; idNote = "" }'
+           Replace = 'blockedText = ""; note = ""; problems = ""; idNote = "" }' }
         @{ Name = "two-cards-share-one-id"
            Find = 'if ($taken.ContainsKey($c.lane)) {'
            Replace = 'if ($false) {' }

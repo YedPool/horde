@@ -65,8 +65,9 @@
 #     (areasLeftOut): the cards are the glance, and an area left out only sends its entries to
 #     the Thrall's stream. Each text is at most 300 characters, and that is NOT small: a non-ASCII
 #     character is written as 6 bytes (\u05d0), so one 300-character Hebrew field is 1802 bytes, and 64
-#     cards with every text full are 109185 bytes, against 47918 bytes for two phones on a relay whose
-#     text cap is 65536 (review of PR 244, measured 2026-10-14; test/test-relay-channel-cards.ps1, 8).
+#     cards with every text full are 122049 bytes (128321 while each card still carried a note), against
+#     47918 bytes for two phones on a relay whose text cap is 65536 (review of PR 244, measured again
+#     2026-10-14; test/test-relay-channel-cards.ps1, 8).
 #   - NO LANES FOLDER IS "NOTHING YET": nothing is sent, and it is said once.
 #   - MACHINE TO PHONE ONLY: the channel takes nothing in.
 #
@@ -200,7 +201,7 @@ function Protect-HordeCardsChannelField {
 
 function New-HordeCardsChannelLaneCard {
     # One lane's card from its folder (WHAT A CARD SAYS, in the header): { lane; name; form; asOf; now;
-    # lastDone; waitingOn; blocked; blockedText; note; refused }. -Place: the folder's place in the list,
+    # lastDone; waitingOn; blocked; blockedText; problems; idNote; refused }. -Place: the folder's place in the list,
     # from 1, which names a lane no id can be made for ("lane-3"), so no two such lanes share one id.
     param([Parameter(Mandatory = $true)][string]$Folder, [int]$Place = 1)
     $leaf = Split-Path -Leaf $Folder
@@ -220,10 +221,11 @@ function New-HordeCardsChannelLaneCard {
     if ($lane -ceq "thrall") { $lane = $fallback }
     $name = & $get "lane"
     if ($name -ceq "") { $name = Get-HordeCardsChannelClean $leaf }
-    $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; note = ""; problems = ""; idNote = "" }
-    if ($s.form -ceq "missing") { $card.note = "This lane has no status file." }
-    elseif ($s.form -ceq "unreadable") { $card.note = "This lane's status file could not be read: " + $s.reason + "." }
-    else {
+    $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; problems = ""; idNote = "" }
+    # No note on a card: the phone says what each form means (relay/js/protocol.js, cardFormNote) and
+    # never read the machine's sentence, so it was bytes for nobody (C and F, 2026-10-14). A missing or
+    # unreadable file has its form alone; why it could not be read was only ever in that note, and goes.
+    if ($s.form -cne "missing" -and $s.form -cne "unreadable") {
         $card.now = & $get "doing"
         if ($s.form -ceq "other" -and $card.now -ceq "") { $card.now = Get-HordeCardsChannelClean (@($s.first) -join " - ") }
         $card.lastDone = & $get "finished"
@@ -232,7 +234,7 @@ function New-HordeCardsChannelLaneCard {
         if ($b -cne "") {
             if ($b -imatch '\Ano\b') { $card.blocked = "no" } else { $card.blocked = "yes"; $card.blockedText = [regex]::Replace($b, '\A(?i:yes)\b\s*[-:,.]?\s*', '') }
         }
-        if ($s.form -ceq "other") { $card.note = "This lane's status file is not in the standard form; what it says is shown as it stands."; $card.problems = $s.reason }
+        if ($s.form -ceq "other") { $card.problems = $s.reason }
     }
     $refused = New-Object System.Collections.ArrayList
     foreach ($f in @("lane", "name", "now", "lastDone", "waitingOn", "blockedText", "problems")) { $card[$f] = Protect-HordeCardsChannelField -Text $card[$f] -Field $f -Refused $refused }
@@ -468,7 +470,7 @@ function New-HordeCardsChannelSnapshot {
             while ($taken.ContainsKey("lane-" + $k)) { $k++ }
             $c.lane = "lane-" + $k
             $why = New-Object System.Collections.ArrayList
-            # Its own field, idNote, and not the note: the phone makes a card's note from its form alone
+            # Its own field, idNote, and not a note: the phone makes a card's note from its form alone
             # (relay/js/protocol.js, cardFormNote), so a reason put in the note never reached the founder
             # (F, review of PR 244), and a card can be both renamed and not in the standard form.
             $c.idNote = Protect-HordeCardsChannelField -Text ("Another lane folder here (" + $taken[$was] + ") gives the same id, " + $was + ", so this card has its own.") -Field "idNote" -Refused $why
