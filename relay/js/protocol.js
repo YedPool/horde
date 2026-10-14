@@ -418,6 +418,117 @@ export function phoneKeyBody(agreePublic, vouch) {
   return utf8('{"v":1,"agreePublic":"' + b64u(agreePublic) + '","authenticatorData":"' + b64u(vouch.authenticatorData) + '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"}');
 }
 
+// --- the unlocked session (relay/Session.ps1 is the specification; relay/Sessions.ps1 what the PC takes) ---
+
+// ONE PASSKEY PROMPT PER UNLOCK, NOT PER ANSWER. At unlock the page makes a SESSION KEY (ECDSA P-256,
+// extractable: false, page memory only, never stored, never sent) and the unlock's one passkey
+// assertion signs the VOUCH for it: its challenge is SHA-256 of the domain and the vouch text. The
+// session key then signs answers, chat lines and photo manifests with no prompt. The PC decides
+// whether the session is alive by its own clock and records; the phone acts on the refusal codes.
+//
+// THE WIRE, each byte as relay/Session.ps1 writes it:
+//   vouch text   {"v":1,"kind":"horde-relay-session-vouch","sessionPublicKey":"<b64u point>","deviceKeyId":"<hex>",
+//                 "phoneKeyId":"<hex>","horde":"<horde>","machine":"<hex>","mailbox":"<horde>/<machine>",
+//                 "notBefore":<ms>,"notAfter":<ms>,"seq":<n>,"vouchId":"<hex>"}   (no spaces, this order)
+//                vouchId = keyId(sessionPublicKey); notAfter - notBefore at most SESSION_MAX_MS; seq the
+//                device's vouch counter, above its last (a new vouch at or below it is session-stale).
+//   challenge    SHA-256("horde-relay/session/v1 vouch\n" + vouch text): the unlock assertion's challenge.
+//   signed       "horde-relay/session/v1 envelope\n" + vouchId + "\n", then the envelope's signedBytes:
+//                what the session key signs (ECDSA P-256 SHA-256, r || s as WebCrypto gives it).
+//   sig          {"alg":"session","vouchId":"<hex>","value":"<b64u>"}, and on the FIRST envelope of a
+//                session (and after session-unknown) {"alg":"session","vouchId":"<hex>","value":"<b64u>",
+//                "vouch":"<b64u of the vouch text>","authenticatorData":"..","clientDataJSON":"..","signature":".."}.
+//   header       unchanged: from is the PASSKEY's key id (deviceKeyId), seq the same per-channel stream.
+//   opening      right after unlock the page sends ONE envelope on channel trust, kind session, body
+//                sessionOpenBody(vouchId), carrying the vouch: the PC journals the vouch and starts its
+//                idle clock. Any other envelope may carry the vouch too, so none waits for it.
+// WHAT DOES NOT TRAVEL: the away lock (switching away or screen off, 10 minutes by default) is the
+// page's own setting - the PC cannot see it. The idle limit is the PC's setting, enforced by the PC, and
+// told to the phone in sessionStatus (idleMs) so the page can lock at the same moment.
+export const SESSION_VOUCH_DOMAIN = "horde-relay/session/v1 vouch\n";
+export const SESSION_ENVELOPE_DOMAIN = "horde-relay/session/v1 envelope\n";
+export const SESSION_MAX_MS = 8 * 60 * 60 * 1000;
+export const SESSION_IDLE_DEFAULT_MS = 60 * 60 * 1000;
+// The refusal codes (relay/Session.ps1, WHAT THE PC REFUSES): a PC's refusal of a session envelope
+// starts with one of them, and a vouch's state in sessionStatus is "live" or one of them.
+//   session-expired, session-idle, session-ended, session-stale  drop the key; the next send unlocks again
+//   session-unknown   send the vouch with the next envelope
+//   session-refused   never send under that vouch again; unlock again
+//   needs-passkey     answer that question with a fresh passkey assertion (signEnvelope)
+export const SESSION_REFUSALS = ["session-expired", "session-idle", "session-ended", "session-unknown", "session-stale", "session-refused", "needs-passkey"];
+const HORDE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+// A fresh session key: { privateKey (CryptoKey, non-extractable, sign only), publicPoint (65 bytes) }.
+// WebCrypto always lets the PUBLIC half of a key pair be exported; the private half here never can be.
+export async function newSessionKey() {
+  const kp = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  return { privateKey: kp.privateKey, publicPoint: new Uint8Array(await subtle.exportKey("raw", kp.publicKey)) };
+}
+// The canonical vouch text. Throws on a value that is not of its kind or a window the rules refuse.
+export async function sessionVouchText({ sessionPublicKey, deviceKeyId, phoneKeyId, horde, machine, notBefore, notAfter, seq }) {
+  if (!KEY_ID.test(deviceKeyId) || !KEY_ID.test(phoneKeyId) || !KEY_ID.test(machine)) throw new Error("the vouch's key ids are 32 lower-case hex");
+  if (typeof horde !== "string" || !HORDE_NAME.test(horde)) throw new Error("the vouch's horde is not a horde name");
+  for (const n of [notBefore, notAfter, seq]) if (!Number.isSafeInteger(n) || n < 0) throw new Error("the vouch's times and seq are whole numbers from 0 to 2^53-1");
+  if (notAfter <= notBefore || notAfter - notBefore > SESSION_MAX_MS) throw new Error("a session's notAfter is after its notBefore, and at most 8 hours after it");
+  const vouchId = await keyId(sessionPublicKey);
+  return '{"v":1,"kind":"horde-relay-session-vouch","sessionPublicKey":"' + b64u(sessionPublicKey) + '","deviceKeyId":"' + deviceKeyId + '","phoneKeyId":"' + phoneKeyId +
+    '","horde":"' + horde + '","machine":"' + machine + '","mailbox":"' + horde + "/" + machine + '","notBefore":' + notBefore + ',"notAfter":' + notAfter +
+    ',"seq":' + seq + ',"vouchId":"' + vouchId + '"}';
+}
+export async function sessionVouchChallenge(vouchText) { return sha256(utf8(SESSION_VOUCH_DOMAIN + vouchText)); }
+export function sessionSignedBytes(vouchId, ht, rt, ct) { return cat(utf8(SESSION_ENVELOPE_DOMAIN + vouchId + "\n"), signedBytes(ht, rt, ct)); }
+// The sig member's text: { vouchId, value (64 bytes) } and, to carry the vouch, vouch { text,
+// authenticatorData, clientDataJSON, signature } (the assertion's three parts, as WebAuthn gave them).
+export function sessionSigText({ vouchId, value, vouch = null }) {
+  let t = '{"alg":"session","vouchId":"' + vouchId + '","value":"' + b64u(value) + '"';
+  if (vouch) t += ',"vouch":"' + b64u(utf8(vouch.text)) + '","authenticatorData":"' + b64u(vouch.authenticatorData) + '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"';
+  return t + "}";
+}
+// Unlock: ONE passkey assertion (assert, as signEnvelope's) over the vouch for a new session key.
+// { vouchId, privateKey, publicPoint, notBefore, notAfter, seq, vouch: { text, authenticatorData,
+// clientDataJSON, signature } } - kept in page memory only. lifetimeMs is capped at SESSION_MAX_MS.
+export async function openSession({ assert, deviceKeyId, phoneKeyId, horde, machine, now, lifetimeMs = SESSION_MAX_MS, seq, key = null }) {
+  const k = key || await newSessionKey();
+  const notBefore = now, notAfter = now + Math.min(lifetimeMs, SESSION_MAX_MS);
+  const text = await sessionVouchText({ sessionPublicKey: k.publicPoint, deviceKeyId, phoneKeyId, horde, machine, notBefore, notAfter, seq });
+  const a = await assert(await sessionVouchChallenge(text));
+  return { vouchId: await keyId(k.publicPoint), privateKey: k.privateKey, publicPoint: k.publicPoint, notBefore, notAfter, seq,
+    vouch: { text, authenticatorData: a.authenticatorData, clientDataJSON: a.clientDataJSON, signature: a.signature } };
+}
+// Sign sealed parts (sealEnvelope's) with the session key: the envelope's wire text, with the vouch
+// when withVouch. No prompt. The envelope's ts must lie inside [notBefore, notAfter].
+export async function signSessionEnvelope(parts, session, withVouch = false) {
+  const value = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, session.privateKey, sessionSignedBytes(session.vouchId, parts.ht, parts.rt, parts.ctText)));
+  return '{"header":' + parts.ht + ',"recipients":' + parts.rt + ',"ct":"' + parts.ctText + '","sig":' + sessionSigText({ vouchId: session.vouchId, value, vouch: withVouch ? session.vouch : null }) + "}";
+}
+// The body of the opening envelope (channel trust, kind session).
+export function sessionOpenBody(vouchId) {
+  if (!KEY_ID.test(vouchId)) throw new Error("a vouchId is 32 lower-case hex");
+  return utf8('{"v":1,"vouchId":"' + vouchId + '"}');
+}
+// What the PC says of this phone's sessions, from a decisions snapshot's receipts (channels/decisions,
+// WHAT BECAME OF EACH ANSWER): each passkey's receipt may carry
+//   "session":{"idleMs":<the PC's idle limit>,"vouches":[{"vouchId":"<hex>","state":"live"|<a refusal code>}],
+//              "needsPasskey":[<answerIds refused as needs-passkey: answer them again with the passkey>]}
+// { idleMs, vouches (Map vouchId -> state), needsPasskey (Set) }, or null: no receipts, no receipt for
+// this passkey, no session member (a PC from before sessions: it refuses every session envelope, by
+// name, so the phone signs each with the passkey as before), or one that does not hold together.
+const SESSION_STATES = ["live", ...SESSION_REFUSALS];
+export function sessionStatus(receipts, from) {
+  if (!Array.isArray(receipts)) return null;
+  const r = receipts.find((x) => x && typeof x === "object" && x.from === from);
+  const s = r && r.session;
+  if (!s || typeof s !== "object" || !Number.isSafeInteger(s.idleMs) || s.idleMs < 1 || !Array.isArray(s.vouches) || s.vouches.length > 64 ||
+    !Array.isArray(s.needsPasskey) || s.needsPasskey.length > 256) return null;
+  const vouches = new Map();
+  for (const v of s.vouches) {
+    if (!v || typeof v.vouchId !== "string" || !KEY_ID.test(v.vouchId) || !SESSION_STATES.includes(v.state)) return null;
+    vouches.set(v.vouchId, v.state);
+  }
+  if (!s.needsPasskey.every((i) => typeof i === "string" && KEY_ID.test(i))) return null;
+  return { idleMs: s.idleMs, vouches, needsPasskey: new Set(s.needsPasskey) };
+}
+
 // --- the decisions channel (channels/decisions/Channel.ps1) ---
 
 // The answer body: JSON.stringify escapes what JSON must and nothing else; the machine reads it with a

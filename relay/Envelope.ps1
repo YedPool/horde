@@ -9,7 +9,9 @@
 #               canonical header as additional data too.
 #   sig         the sender signs the header, the recipients and the ciphertext: ES256 with a machine's
 #               sign key (relay/Keys.ps1), or a WebAuthn assertion with the founder's passkey, whose
-#               challenge is SHA-256 of the same bytes (relay/WebAuthn.ps1).
+#               challenge is SHA-256 of the same bytes (relay/WebAuthn.ps1), or - alg "session" - ES256 by
+#               a session key a passkey vouched for at unlock (relay/Session.ps1 has its wire, and
+#               relay/Sessions.ps1 what the machine takes).
 # HPKE base mode authenticates nobody, so the signature is what says who sent it; the AEAD's
 # additional data is what ties the header to the body and to every wrapped key.
 #
@@ -62,6 +64,7 @@
 . (Join-Path $PSScriptRoot "P256.ps1")
 . (Join-Path $PSScriptRoot "Hpke.ps1")
 . (Join-Path $PSScriptRoot "WebAuthn.ps1")
+. (Join-Path $PSScriptRoot "Session.ps1")
 
 function Get-HordeRelayEnvelopeLimits {
     # bodyBytes: a decisions snapshot is the largest planned body. Decisions caps one message at
@@ -112,6 +115,12 @@ function ConvertTo-HordeRelayRecipientsText {
 function ConvertTo-HordeRelaySigText {
     param($Sig)
     if ($Sig.alg -ceq "ES256") { return ('{"alg":"ES256","value":"' + $Sig.valueText + '"}') }
+    if ($Sig.alg -ceq "session") {
+        # relay/Session.ps1, THE SESSION SIGNATURE: the vouch and its assertion ride along, or none of them.
+        $text = '{"alg":"session","vouchId":"' + $Sig.vouchId + '","value":"' + $Sig.valueText + '"'
+        if ("" + $Sig.vouchText -cne "") { $text += ',"vouch":"' + $Sig.vouchText + '","authenticatorData":"' + $Sig.authenticatorDataText + '","clientDataJSON":"' + $Sig.clientDataJsonText + '","signature":"' + $Sig.signatureText + '"' }
+        return ($text + "}")
+    }
     return ('{"alg":"webauthn.get","authenticatorData":"' + $Sig.authenticatorDataText + '","clientDataJSON":"' + $Sig.clientDataJsonText + '","signature":"' + $Sig.signatureText + '"}')
 }
 
@@ -175,8 +184,19 @@ function New-HordeRelayEnvelopeDraft {
 function Complete-HordeRelayEnvelope {
     # The wire text of a draft with its signature: -Es256 (64 bytes), or the three parts of a WebAuthn
     # assertion over the draft's challenge.
-    param([Parameter(Mandatory = $true)]$Draft, [byte[]]$Es256 = $null, [byte[]]$AuthenticatorData = $null, [byte[]]$ClientDataJson = $null, [byte[]]$Signature = $null)
-    if ($null -ne $Es256) {
+    # -SessionVouchId with -SessionValue (64 bytes) is a session signature (relay/Session.ps1); with
+    # -VouchText too, the vouch and its assertion (the three WebAuthn parts) ride along.
+    param([Parameter(Mandatory = $true)]$Draft, [byte[]]$Es256 = $null, [byte[]]$AuthenticatorData = $null, [byte[]]$ClientDataJson = $null, [byte[]]$Signature = $null,
+        [string]$SessionVouchId = "", [byte[]]$SessionValue = $null, [string]$VouchText = "")
+    if ($SessionVouchId -cne "") {
+        if ($null -eq $SessionValue -or $SessionValue.Length -ne 64) { throw "a session signature is 64 bytes" }
+        $sig = [pscustomobject]@{ alg = "session"; vouchId = $SessionVouchId; valueText = (ConvertTo-HordeRelayBase64Url -Bytes $SessionValue); vouchText = ""; authenticatorDataText = ""; clientDataJsonText = ""; signatureText = "" }
+        if ($VouchText -cne "") {
+            if ($null -eq $AuthenticatorData -or $null -eq $ClientDataJson -or $null -eq $Signature) { throw "a vouch rides with all three parts of its WebAuthn assertion" }
+            $sig.vouchText = ConvertTo-HordeRelayBase64Url -Bytes (Get-HordeRelayAsciiBytes -Text $VouchText)
+            $sig.authenticatorDataText = ConvertTo-HordeRelayBase64Url -Bytes $AuthenticatorData; $sig.clientDataJsonText = ConvertTo-HordeRelayBase64Url -Bytes $ClientDataJson; $sig.signatureText = ConvertTo-HordeRelayBase64Url -Bytes $Signature
+        }
+    } elseif ($null -ne $Es256) {
         $sig = [pscustomobject]@{ alg = "ES256"; valueText = (ConvertTo-HordeRelayBase64Url -Bytes $Es256) }
     } elseif ($null -ne $AuthenticatorData -and $null -ne $ClientDataJson -and $null -ne $Signature) {
         $sig = [pscustomobject]@{ alg = "webauthn.get"; authenticatorDataText = (ConvertTo-HordeRelayBase64Url -Bytes $AuthenticatorData); clientDataJsonText = (ConvertTo-HordeRelayBase64Url -Bytes $ClientDataJson); signatureText = (ConvertTo-HordeRelayBase64Url -Bytes $Signature) }
@@ -204,6 +224,39 @@ function Get-HordeRelayDecodedField {
         return [pscustomobject]@{ bytes = $null; reason = ($What + " is " + $b.Length + " bytes, not " + $range) }
     }
     return [pscustomobject]@{ bytes = $b; reason = "" }
+}
+
+function Read-HordeRelaySessionSig {
+    # A session signature's members read strictly (relay/Session.ps1, THE SESSION SIGNATURE): the sig
+    # object Read-HordeRelayEnvelope keeps, or the reason it is refused, as a string. The vouch it
+    # carries is read in full here; whether the machine takes it is relay/Sessions.ps1's.
+    param($Sig, [string[]]$Names)
+    $joined = $Names -join ","
+    $bare = ($joined -ceq "alg,vouchId,value")
+    if (-not $bare -and $joined -cne "alg,vouchId,value,vouch,authenticatorData,clientDataJSON,signature") { return "session-refused: a session signature has exactly alg, vouchId and value, and with its vouch also vouch, authenticatorData, clientDataJSON and signature" }
+    if ($Sig.vouchId -isnot [string] -or $Sig.vouchId -cnotmatch '\A[0-9a-f]{32}\z') { return "session-refused: the session signature's vouchId is not 32 lower-case hex" }
+    $v = Get-HordeRelayDecodedField -Text $Sig.value -What "the session signature" -Min 64 -Max 64
+    if ($v.reason -cne "") { return ("session-refused: " + $v.reason) }
+    $out = [pscustomobject]@{ alg = "session"; vouchId = $Sig.vouchId; value = $v.bytes; valueText = $Sig.value; vouch = $null; vouchText = ""
+        authenticatorData = $null; clientDataJson = $null; signature = $null; authenticatorDataText = ""; clientDataJsonText = ""; signatureText = "" }
+    if ($bare) { return $out }
+    $wa = Get-HordeRelayWebAuthnLimits
+    $vb = Get-HordeRelayDecodedField -Text $Sig.vouch -What "the vouch" -Min 1 -Max (Get-HordeRelaySessionLimits).vouchTextChars
+    if ($vb.reason -cne "") { return ("session-refused: " + $vb.reason) }
+    foreach ($b in $vb.bytes) { if ($b -lt 0x20 -or $b -gt 0x7E) { return "session-refused: the vouch is not printable ASCII" } }
+    $vouch = Read-HordeRelaySessionVouch -Text ([System.Text.Encoding]::UTF8.GetString($vb.bytes))
+    if (-not $vouch.ok) { return $vouch.reason }
+    if ($vouch.value.vouchId -cne $Sig.vouchId) { return "session-refused: the vouch carried is not the one the signature names" }
+    $ad = Get-HordeRelayDecodedField -Text $Sig.authenticatorData -What "the vouch's authenticatorData" -Min 37 -Max $wa.authenticatorDataBytes
+    if ($ad.reason -cne "") { return ("session-refused: " + $ad.reason) }
+    $cd = Get-HordeRelayDecodedField -Text $Sig.clientDataJSON -What "the vouch's clientDataJSON" -Min 1 -Max $wa.clientDataJsonBytes
+    if ($cd.reason -cne "") { return ("session-refused: " + $cd.reason) }
+    $der = Get-HordeRelayDecodedField -Text $Sig.signature -What "the vouch's WebAuthn signature" -Min 8 -Max 72
+    if ($der.reason -cne "") { return ("session-refused: " + $der.reason) }
+    $out.vouch = $vouch.value; $out.vouchText = $Sig.vouch
+    $out.authenticatorData = $ad.bytes; $out.clientDataJson = $cd.bytes; $out.signature = $der.bytes
+    $out.authenticatorDataText = $Sig.authenticatorData; $out.clientDataJsonText = $Sig.clientDataJSON; $out.signatureText = $Sig.signature
+    return $out
 }
 
 function Read-HordeRelayEnvelope {
@@ -254,6 +307,9 @@ function Read-HordeRelayEnvelope {
         $v = Get-HordeRelayDecodedField -Text $s.value -What "the ES256 signature" -Min 64 -Max 64
         if ($v.reason -cne "") { return (New-HordeRelayEnvelopeAnswer -Reason $v.reason) }
         $sig = [pscustomobject]@{ alg = "ES256"; value = $v.bytes; valueText = $s.value }
+    } elseif ($s.alg -ceq "session") {
+        $sig = Read-HordeRelaySessionSig -Sig $s -Names $sNames
+        if ($sig -is [string]) { return (New-HordeRelayEnvelopeAnswer -Reason $sig) }
     } else {
         if (($sNames -join ",") -cne "alg,authenticatorData,clientDataJSON,signature") { return (New-HordeRelayEnvelopeAnswer -Reason "a webauthn.get signature has exactly alg, authenticatorData, clientDataJSON and signature") }
         $ad = Get-HordeRelayDecodedField -Text $s.authenticatorData -What "authenticatorData" -Min 37 -Max $wa.authenticatorDataBytes
@@ -306,6 +362,10 @@ function Test-HordeRelayEnvelope {
         if ($sender.proof -cne "es256") { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is signed ES256, but this sender signs with a passkey") }
         if (-not (Test-HordeRelayEs256Signature -Public $sender.public -Bytes $signed -Signature $env.sig.value)) { return (New-HordeRelayEnvelopeAnswer -Reason "the ES256 signature does not verify under the sender's key") }
         return (New-HordeRelayEnvelopeAnswer -Reason "" -Value ([pscustomobject]@{ envelope = $env; header = $h; proof = "es256"; signCount = $null; userVerified = $false }))
+    }
+    if ($env.sig.alg -ceq "session") {
+        if ($sender.proof -cne "webauthn") { return (New-HordeRelayEnvelopeAnswer -Reason "session-refused: the envelope is session-signed, but this sender signs ES256") }
+        return (New-HordeRelayEnvelopeAnswer -Reason "session-refused: this machine takes no session signature yet")
     }
     if ($sender.proof -cne "webauthn") { return (New-HordeRelayEnvelopeAnswer -Reason "the envelope is signed by a passkey, but this sender signs ES256") }
     $wa = Test-HordeRelayWebAuthnAssertion -Public $sender.public -AuthenticatorData $env.sig.authenticatorData -ClientDataJson $env.sig.clientDataJson `
