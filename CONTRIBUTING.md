@@ -311,6 +311,15 @@ its branch can break main when main moved under it").
    on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
+
+   **The net's last step, after its last suite: `tools\SweepTestProfiles.ps1`.** A suite killed
+   outright (its window closed, `taskkill /F`) runs no code, so the browser profile folder it made
+   under `%TEMP%` stays, though its browser dies with it (`test/lib/Browser.ps1`), and so does the
+   empty fleet of `test/lib/FleetPin.ps1`. The sweep removes only those folders of Horde's own
+   suites, by their exact names (the list is in the tool), that are over a day old and
+   that no running process names; it lists what it removed and what it skipped, and `-WhatIf` lists
+   without deleting. Whatever runs the net runs it once every suite has finished. **No suite ever
+   runs it:** a suite beside another could remove that one's folder.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites
