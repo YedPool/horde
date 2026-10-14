@@ -238,7 +238,7 @@ function Read-HordeAnalystMail {
                 $reader = New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false)), $true)
                 $buffer = New-Object char[] $script:HordeAnalystMarkerReadChars
                 $n = $reader.Read($buffer, 0, $buffer.Length)
-                if ($n -gt 0) { $start = New-Object string($buffer, 0, $n) }
+                if ($n -gt 0) { $start = [string]::new($buffer, 0, $n) }
             } finally { $stream.Dispose() }
             [void]$out.Add([pscustomobject]@{ id = [System.IO.Path]::GetFileNameWithoutExtension($name); path = $path; marker = (Get-HordeAnalystMailMarker -Text $start -Markers $Markers) })
         }
