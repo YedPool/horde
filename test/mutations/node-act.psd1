@@ -315,16 +315,30 @@
            Find = 'foreach ($glue in @("`n", "")) {'
            Replace = 'foreach ($glue in @("`n")) {' }
         @{ Name = "screen-secret-never-spaced"
-           Find = 'foreach ($form in @($text, $text.Replace("_", " ").Replace("=", "= "))) {'
-           Replace = 'foreach ($form in @($text)) {' }
-        @{ Name = "screen-secret-underscore-kept"
-           Find = '$text.Replace("_", " ").Replace("=", "= ")'
-           Replace = '$text.Replace("=", "= ")' }
-        @{ Name = "screen-secret-equals-unspaced"
-           Find = '.Replace("_", " ").Replace("=", "= ")'
-           Replace = '.Replace("_", " ")' }
+           Find = 'foreach ($form in @($text, $text.Replace("=", "= "), $text.Replace("_", "-"))) {'
+           Replace = 'foreach ($form in @($text, $text.Replace("_", "-"))) {' }
+        # F's re-check of round 5, SHOULD TWO: an underscore as a DASH, never a space.
+        @{ Name = "screen-secret-never-dashed"
+           Find = ', $text.Replace("_", "-"))) {'
+           Replace = ')) {' }
+        @{ Name = "screen-secret-underscore-as-space"
+           Find = '$text.Replace("_", "-")'
+           Replace = '$text.Replace("_", " ")' }
+        # F's re-check of round 5, SHOULD ONE: rows trimmed of padding and borders, joined under no shallower indent.
+        @{ Name = "screen-secret-never-trimmed"
+           Find = '    [void]$texts.Add($trim.ToString())'
+           Replace = '' }
+        @{ Name = "screen-secret-trim-keeps-spaces"
+           Find = ".Trim(' ', '|')"
+           Replace = ".Trim('|')" }
+        @{ Name = "screen-secret-trim-keeps-bars"
+           Find = ".Trim(' ', '|')"
+           Replace = ".Trim(' ')" }
+        @{ Name = "screen-secret-trim-any-indent"
+           Find = 'if ($lead -lt 0 -or $indent -lt $lead) {'
+           Replace = 'if ($lead -lt 0) {' }
         @{ Name = "screen-secret-named-kind-unasked"
-           Find = '                if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text $form -Kinds @($script:HordeNodeNamedSecretKind) }'
+           Find = '            if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text $form -Kinds @($script:HordeNodeNamedSecretKind) }'
            Replace = '' }
         @{ Name = "screen-secret-finder-unused"
            Find = '    $kind = Find-HordeNodeScreenSecret -Raw ([string[]]@($raw)) -Kept ([string[]]@($rows))'

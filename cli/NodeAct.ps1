@@ -551,10 +551,24 @@ function Find-HordeNodeScreenSecret {
     #   - the raw rows, the raw rows with every character outside printable ASCII REMOVED (a zero-width
     #     space splits a token, and as '?' it still splits it), and the kept rows (a letter outside ASCII
     #     as '?' gives the name=value kind its word boundary: "Note" + U+00E9 + "password=...");
-    #   - each of those as it is, and SPACED: every underscore as a space and a space after every '=',
-    #     because the name=value kind needs a word boundary that DB_PASSWORD's underscore does not give,
-    #     and the look for a key with slashes refuses one with '=' right before it, so
-    #     AWS_SECRET_ACCESS_KEY=<key>, wrapped, read as nothing even joined.
+    #   - each of those as it is; SPACED, a space after every '=', because the look for a key with
+    #     slashes refuses one with '=' right before it (NAME=<key> read as nothing); and DASHED, every
+    #     underscore as a dash, because the name=value kind needs a word boundary that DB_PASSWORD's
+    #     underscore does not give, and api_key and access_key take an underscore, a dash or nothing
+    #     between their words, never a space. Round 5 turned underscores into SPACES, and so showed
+    #     SOME_API_KEY=<value> and AWS_ACCESS_KEY=<value> (F's re-check of round 5, SHOULD TWO); a dash
+    #     gives every name the boundary a space gave it, so the spaced form now spaces '=' alone;
+    #   - and TRIMMED: the raw rows with every character outside printable ASCII removed (a box's
+    #     vertical bars and the tool-output corner among them), each trimmed of spaces and '|' at both
+    #     ends, then joined by nothing: the harness wraps a long token onto an INDENTED row, or inside a
+    #     bordered box, so the gap between its halves is padding the other joins keep (F's re-check of
+    #     round 5, SHOULD ONE: a continuation indented 2, a ghp token's indented 5, a cloud secret in a
+    #     box, all shown on 5b0690c). A row is joined so only to a row above it that is indented no
+    #     deeper - its leading spaces and '|' counted as its indent - because a harness
+    #     puts a wrapped row's rest at its text's own left edge or deeper; a terminal's own wrap starts
+    #     the rest at the left edge with no padding, which the join by nothing already reads. Joining
+    #     every pair fused the suite's ordinary screen - a commit id row indented 2 over a dialog row
+    #     indented 1 - into a long mixed run (measured 2026-10-14).
     # Withholding too much costs a person the screen of one failed spawn; showing a secret cannot be
     # taken back. Rows the 40-row window cuts are checked too, since the raw screen is. WHAT THAT COSTS,
     # measured on the suite's screens: a 40-character commit id ending a row, with a capitalised word
@@ -564,13 +578,23 @@ function Find-HordeNodeScreenSecret {
     param([string[]]$Raw, [string[]]$Kept)
     $ascii = [string[]]@(@($Raw) | ForEach-Object { [regex]::Replace(("" + $_), '[^\x20-\x7E]', '') })
     foreach ($source in @(@{ rows = @($Raw) }, @{ rows = @($ascii) }, @{ rows = @($Kept) })) {
-        foreach ($glue in @("`n", "")) {
-            $text = @($source.rows) -join $glue
-            foreach ($form in @($text, $text.Replace("_", " ").Replace("=", "= "))) {
-                $kind = Find-HordeSecretKind -Text $form
-                if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text $form -Kinds @($script:HordeNodeNamedSecretKind) }
-                if ($kind -cne "") { return $kind }
-            }
+    $texts = New-Object System.Collections.ArrayList
+        foreach ($glue in @("`n", "")) { [void]$texts.Add((@($source.rows) -join $glue)) }
+    }
+    $trim = New-Object System.Text.StringBuilder
+    $lead = -1
+    foreach ($r in @($Raw)) {
+        $indent = [regex]::Match(("" + $r), '\A[\s|]*').Length
+        $t = [regex]::Replace(("" + $r), '[^\x20-\x7E]', '').Trim(' ', '|')
+        if ($lead -lt 0 -or $indent -lt $lead) { [void]$trim.Append("`n") }
+        [void]$trim.Append($t); $lead = $indent
+    }
+    [void]$texts.Add($trim.ToString())
+    foreach ($text in $texts) {
+        foreach ($form in @($text, $text.Replace("=", "= "), $text.Replace("_", "-"))) {
+            $kind = Find-HordeSecretKind -Text $form
+            if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text $form -Kinds @($script:HordeNodeNamedSecretKind) }
+            if ($kind -cne "") { return $kind }
         }
     }
     return ""

@@ -605,6 +605,36 @@ $s = ScreenOf @("export GH_TOKEN=<your token here>")
 Check ("$($s.state)" -ceq "withheld") ("KNOWN LIMIT: GH_TOKEN=<your token here>, a placeholder, is withheld, as token=<...> always was (" + $s.said + ")")
 $s = ScreenOf @(("export AWS_REGION=" + "us-east-1"), ("echo " + "wJalrXUtnFEMI"), "/bPxRfiCYE")
 Check ("$($s.state)" -ceq "shown") ("CONTROL: a short value after a NAME=, and two short pieces that are no key even joined, are shown (" + $s.state + ")")
+# F's re-check of round 5: the harness wraps a token onto an INDENTED row or inside a BORDERED box, and an
+# underscore turned to a space breaks api_key and access_key, which take a dash or nothing, never a space.
+# Each was SHOWN on 5b0690c (F's probe5, 2026-10-14). Made-up values, assembled from pieces.
+$bar = [string][char]0x2502
+$mustWithhold5 = [ordered]@{
+    "a cloud secret wrapped onto a row indented 2 (SHOULD ONE)" = @(("  echo " + $cloud.Substring(0, 20)), ("  " + $cloud.Substring(20)))
+    "a ghp token wrapped onto a row indented 5, under a tool-output corner (SHOULD ONE)" = @(("  " + [char]0x23BF + "  echo " + $gh2.Substring(0, 10)), ("     " + $gh2.Substring(10)))
+    "a cloud secret wrapped inside a box with vertical-bar borders (SHOULD ONE)" = @(($bar + " key " + $cloud.Substring(0, 20) + " " + $bar), ($bar + " " + $cloud.Substring(20) + "     " + $bar))
+    "a ghp token wrapped inside a box drawn with ASCII bars (SHOULD ONE)" = @(("| echo " + $gh2.Substring(0, 10) + " |"), ("|   " + $gh2.Substring(10) + " |"))
+    "SOME_API_KEY=value, whose spaced form breaks api_key (SHOULD TWO)" = @(("SOME_API" + "_KEY=abcd1234efgh"))
+    "AWS_ACCESS_KEY=short value, whose spaced form breaks access_key (SHOULD TWO)" = @(("export AWS_ACCESS" + "_KEY=Zq81mmPxQw2"))
+}
+# GUARDS, withheld on 5b0690c too: each is caught by one of the older readings and NOT by the trimmed one,
+# so each keeps that reading alive. A terminal's own wrap of an INDENTED row starts the rest at the left
+# edge (the trimmed reading breaks there), with or without a zero-width space in it; a key with slashes
+# straight after NAME= (only the '=' spaced shows it to the slash-key look).
+$mustWithhold5["GUARD: a cloud secret on an indented row, wrapped by the terminal to the left edge"] = @(("  echo " + $cloud.Substring(0, 20)), $cloud.Substring(20))
+$mustWithhold5["GUARD: a ghp token wrapped by the terminal to the left edge, split by a zero-width space"] = @(("  echo " + $gh2.Substring(0, 10)), ($gh2.Substring(10, 6) + $zw + $gh2.Substring(16)))
+$mustWithhold5["GUARD: a cloud secret straight after a NAME= that is none of the six names"] = @(("export CLOUD_VALUE=" + $cloud))
+foreach ($k in $mustWithhold5.Keys) {
+    $s = ScreenOf $mustWithhold5[$k]
+    Check ("$($s.state)" -ceq "withheld" -and @($s.rows).Count -eq 0) ("WITHHELD: " + $k + " (" + $s.state + ": " + $s.said + ")")
+}
+# CONTROL: a bordered, indented screen with no secret in it - a welcome box, a tip, a folder path, a short
+# id - is still shown, every row; the trimmed join fuses its rows and finds nothing.
+$boxed = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30) + [char]0x256E), (" " + $bar + " Welcome to the harness!       " + $bar), (" " + $bar + "   /help for help              " + $bar), (" " + $bar + "   cwd: C:\work\code\app       " + $bar), ((" " + [char]0x2570) + ([string][char]0x2500 * 30) + [char]0x256F), ("  " + [char]0x23BF + "  Read 12 lines"),"     id 3f2a9c1e", "| ? for shortcuts |")
+$s = ScreenOf $boxed
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $boxed.Count) ("CONTROL: a bordered and indented screen with no secret is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
+# KNOWN LIMIT (F's nit of round 5): a tip row that STARTS with the spinner's phrase and a comma reads busy.
+# That only makes a not-ready screen look busy - the safe way - and is pinned in the harness's own suite.
 
 # The rows are in the session's own folder, which is this user's alone; the record holds none of them.
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
