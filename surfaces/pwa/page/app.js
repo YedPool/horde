@@ -100,11 +100,16 @@ import { canScan, scanQr } from "./scan.js";
 import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
+import { cardsFallbackLine } from "./cards-why.js";
+import { readFailure, readBanner } from "./read-banner.js";
+import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
 const WATCH_MS = 25000;
-const notices = { boot: "", relay: "", action: "" };
+// relay: what the last refresh said of the relay (bridge.js "notice"), kept until a refresh comes back
+// clean; view: why the picked view could not be drawn, the drawing's own; read: read-banner.js's banner.
+const notices = { boot: "", relay: "", read: "", view: "", action: "", update: "" };
 
 function showNotices() {
   const box = $("notice");
@@ -139,6 +144,29 @@ window.HordeBridge = deferredBridge(made);
 const bridge = window.HordeBridge;
 made.catch((e) => say("boot", "This app cannot start here: " + messageOf(e)));
 
+// --- is the relay being read? (read-banner.js) ---
+// While the reads of the mailbox fail, ONE banner says so, with the time of the last read that worked:
+// the page keeps what it last read, and must not show it as current. A failed read asks the relay's
+// session whether he is still signed in (a watch refused at its socket says nothing of why). On the
+// locked screen the lock is said already, so the banner leaves it out.
+let readLast = null;
+let readSession = null;
+const lastTime = (ms) => (new Date(ms).toDateString() === new Date().toDateString() ? clockTime(ms) : dayTime(ms));
+function showReadBanner() {
+  const kind = readFailure(readLast, readSession);
+  say("read", kind === "locked" && !$("lockedView").hidden ? "" : readBanner(kind, readLast ? readLast.lastGoodAt : 0, lastTime));
+}
+bridge.on("read-changed", async (rec) => {
+  readLast = rec;
+  readSession = null;
+  if (rec && rec.relayDown && account) {
+    const s = await account.session();
+    if (readLast !== rec) return; // a newer read has spoken meanwhile
+    readSession = s;
+  }
+  showReadBanner();
+});
+
 // --- the screens ---
 
 const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress", "notices"];
@@ -150,6 +178,7 @@ function show(view) {
   $("viewTabs").hidden = !Object.keys(PANES).some((p) => PANES[p].view === view);
   // Shown again by render() for an unlocked horde the machine has not answered yet.
   $("announceBox").hidden = true;
+  showReadBanner();
 }
 // Which view of an unlocked horde is up: its questions, its chat, or the progress log.
 let pane = "decisions";
@@ -167,16 +196,17 @@ function docOf(id) {
   const box = document.createElement("div");
   box.className = "horde-list";
   $("lists").appendChild(box);
+  const storage = memoryStorage();
   const doc = window.HordeDecisionsDocument.mount(box, {
     topInset: () => $("bar").getBoundingClientRect().bottom,
     onChange: showCounts,
-    storage: memoryStorage(),
-    say: (number, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId }),
+    storage,
+    say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
     // One part's answer: the same request with the part's letter, signed and sent by itself.
-    sayPart: (number, letter, text, wording, answerId) => bridge.request("say", { number, text, wording, id: answerId, part: letter }),
-    act: (number, what, wording, answerId) => bridge.request("act", { number, act: what, wording, id: answerId })
+    sayPart: (number, letter, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId, part: letter })),
+    act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId }))
   });
-  docs[id] = { box, doc, kinds: false };
+  docs[id] = { box, doc, kinds: false, storage };
   return docs[id];
 }
 function showCounts() {
@@ -219,7 +249,9 @@ function render(h, rec) {
     $("lockedTitle").textContent = h.horde + " is locked";
     $("lockedHint").textContent = h.announced ? "Unlock with your passkey to read and answer." : "This phone has not announced its key to the machine yet: unlock, then announce it.";
     show("lockedView");
-    // The locked screen says it is locked: a notice saying so again is dropped.
+    // The locked screen says it is locked: a notice saying so again is dropped, and nothing opened is shown
+    // to be old, so what the relay said goes too.
+    say("view", "");
     say("relay", "");
     showCounts();
     return;
@@ -245,7 +277,9 @@ function render(h, rec) {
   $("notShown").textContent = notShown;
   if (!d.kinds) { d.kinds = true; bridge.request("kinds").then((k) => d.doc.setKinds(k)); }
   const did = d.doc.setList(rec);
-  say("relay", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");
+  // NOT THE RELAY'S NOTICE (Orc E's reproduction, 2026-10-14): a failed read says so, and the list drawn
+  // next - the old snapshot, kept - cleared those words at once, so a 401 left old content with no sign.
+  say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");
   showCounts();
 }
 
@@ -327,7 +361,7 @@ function timeStamp(ms, before, key, shortForm = clockTime) {
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
 function drawChat(rec) {
   if ($("chat").hidden || !rec) return;
-  if (rec.state !== "known") { clearChat(); $("chatEmpty").hidden = true; say("relay", rec.reason || ""); return; }
+  if (rec.state !== "known") { clearChat(); $("chatEmpty").hidden = true; say("view", rec.reason || ""); return; }
   const v = rec.value;
   const log = $("chatLog");
   const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
@@ -384,7 +418,7 @@ async function sendLine() {
   try {
     const r = await bridge.request("chat-send", { text, id: draftId });
     if (r.ok) { field.value = ""; draftId = ""; } else say("action", r.reason);
-  } catch (e) { say("action", messageOf(e)); } finally { sending = false; }
+  } catch (e) { say("action", messageOf(e)); } finally { sending = false; settleUpdate(); }
 }
 $("chatText").addEventListener("input", () => { if (!$("chatText").value) draftId = ""; });
 $("chatText").addEventListener("keydown", (e) => {
@@ -446,6 +480,7 @@ function showProgressPage() {
   $("streamTitle").textContent = stream ? stream.title : "";
   $("streamLimit").textContent = STREAM_LIMIT_WORDS;
   $("streamLimit").hidden = !stream;
+  $("cardsWhy").hidden = !stream || !stream.fallback;
 }
 function requestStream() {
   showProgressPage();
@@ -466,8 +501,8 @@ function drawCards(rec) {
   const v = rec.value;
   cardsLast = v;
   if ($("progress").hidden) return;
-  // NO MACHINE HAS SENT CARDS: the whole log, as before cards were.
-  if (v.machines.length === 0) { if (!stream) { stream = { entry: current, lane: "", title: "", fallback: true }; requestStream(); } return; }
+  // NO MACHINE HAS SENT CARDS: the whole log, as before cards were, under one plain line saying why (cards-why.js).
+  if (v.machines.length === 0) { $("cardsWhy").textContent = cardsFallbackLine(v); if (!stream) { stream = { entry: current, lane: "", title: "", fallback: true }; requestStream(); } return; }
   if (stream && stream.fallback) { stream = null; progressDrawn = ""; }
   showProgressPage();
   const list = $("cardsList");
@@ -543,7 +578,7 @@ bridge.on("cards-changed", (rec) => drawCards(rec));
 
 function drawProgress(rec, own = true) {
   if (!rec) return;
-  if (rec.state !== "known") { clearProgress(); if (own) showProgressCount(null); if (!$("progress").hidden) { $("progressEmpty").hidden = true; $("progressNote").hidden = true; say("relay", rec.reason || ""); } return; }
+  if (rec.state !== "known") { clearProgress(); if (own) showProgressCount(null); if (!$("progress").hidden) { $("progressEmpty").hidden = true; $("progressNote").hidden = true; say("view", rec.reason || ""); } return; }
   const full = rec.value;
   // The count on the tab is the picked horde's whole log, kept whichever view is up.
   if (own) showProgressCount(full);
@@ -756,6 +791,7 @@ async function openAccount() {
   const a = await account.account();
   if (a.state !== "known") { if (a.status === 401) { showSignIn(); return; } say("action", "The account could not be read just now; try again."); return; }
   $("accountWho").textContent = "Signed in as " + (a.value.account.email || "your Google account") + ".";
+  showVersion();
   presence = presenceOf(a.value);
   drawPresence();
   const list = $("machineList");
@@ -924,7 +960,8 @@ document.addEventListener("visibilitychange", () => {
   clearTimeout(lockTimer);
   const expired = hiddenAt && Date.now() - hiddenAt >= lockAfterMs();
   hiddenAt = 0;
-  (expired ? lockAll() : Promise.resolve()).then(resume);
+  checkForUpdate();
+  (expired ? lockAll() : Promise.resolve()).then(resume).then(settleUpdate, settleUpdate);
 });
 
 // --- the answering keys ---
@@ -949,7 +986,64 @@ if (window.visualViewport) {
 
 // --- start ---
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch((e) => say("boot", "Offline start is not available: " + messageOf(e)));
+// --- a new version of the app (app-update.js) ---
+// The worker takes over at once when a deployment changes it; the page in memory is reloaded ONCE then,
+// never on the first install (no worker before) and never over his unsent words: those wait for the
+// next safe moment - a send done, the page shown again - under UPDATE_READY_WORDS.
+let registration = null;
+let hadController = "serviceWorker" in navigator && !!navigator.serviceWorker.controller;
+let reloaded = false;
+let updateWaiting = false;
+let lastUpdateAt = 0;
+let sendsInFlight = 0;
+function inFlight(p) {
+  sendsInFlight++;
+  const done = () => { sendsInFlight--; settleUpdate(); };
+  p.then(done, done);
+  return p;
+}
+// His unsent words: a send under way, a chat line, a draft the document keeps, a field outside the
+// document with words in it, or the pairing screens (the recovery code is shown only once).
+function unsentWords() {
+  if (sending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;
+  for (const id of Object.keys(docs)) if (draftsHeld(docs[id].storage.getItem(DRAFTS_KEY))) return true;
+  const f = document.activeElement;
+  if (f && (f.tagName === "TEXTAREA" || f.tagName === "INPUT") && f.type !== "checkbox" && f.value && !$("lists").contains(f)) return true;
+  return !$("pairView").hidden || !$("pairedView").hidden;
+}
+function tryReload(had) {
+  const d = reloadDecision({ hadController: had, reloaded, busy: unsentWords() });
+  updateWaiting = d === "wait";
+  say("update", updateWaiting ? UPDATE_READY_WORDS : "");
+  if (d === "reload") { reloaded = true; window.location.reload(); }
+}
+function settleUpdate() { if (updateWaiting) tryReload(true); }
+function checkForUpdate() {
+  const now = Date.now();
+  if (!registration || !updateDue(lastUpdateAt, now)) return;
+  lastUpdateAt = now;
+  registration.update().catch(() => { /* offline: asked again when next shown */ });
+}
+// The worker's own version, asked on a port (sw.js answers it); "" when it does not answer.
+function workerVersion() {
+  const w = (registration && registration.active) || ("serviceWorker" in navigator ? navigator.serviceWorker.controller : null);
+  if (!w || typeof MessageChannel !== "function") return Promise.resolve("");
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    const t = setTimeout(() => resolve(""), 1500);
+    ch.port1.onmessage = (ev) => { clearTimeout(t); resolve(ev.data && typeof ev.data.version === "string" ? ev.data.version : ""); };
+    w.postMessage({ ask: "version" }, [ch.port2]);
+  });
+}
+function showVersion() {
+  const own = config ? config.version : "";
+  $("appVersion").textContent = versionWords(own, "");
+  workerVersion().then((w) => { $("appVersion").textContent = versionWords(own, w); });
+}
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => { const had = hadController; hadController = true; tryReload(had); });
+  navigator.serviceWorker.register("sw.js").then((r) => { registration = r; lastUpdateAt = Date.now(); }).catch((e) => say("boot", "Offline start is not available: " + messageOf(e)));
+}
 // Back to the app: still signed in, the horde it was on; signed out at the relay meanwhile (the session
 // ended, or another tab signed out), every horde locked and the sign-in screen.
 async function resume() {

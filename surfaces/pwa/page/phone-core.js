@@ -165,7 +165,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, notices: newNotices(), outboxText: new Map(), settled: new Map() });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map() });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
@@ -280,9 +280,21 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     if (opened.header.kind !== "snapshot") return;
     if (s.cards && s.cards.seq >= opened.header.seq) return;
     const r = P.readCardsSnapshot(opened.body, e.horde, e.machine);
-    if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+    // A refusal is kept for the Progress tab's one line when no cards stand (cards-why.js); a good one clears it.
+    if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); s.cardsRefused = r.reason; return; }
     if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " card(s) that do not hold together were left out");
     s.cards = { entry: e.id, seq: opened.header.seq, value: r.value };
+    s.cardsRefused = "";
+  }
+  // Whether an envelope that no pairing opened says it is cards from a PC of e's horde that this phone has
+  // NO pairing for (locked or not): only the Progress tab's one line rests on it (cards-why.js), so its
+  // unverified header is enough - a forged one can do no more than show that line.
+  async function cardsFromUnpaired(e, text) {
+    let h = null;
+    try { h = JSON.parse(text).header; } catch (x) { return false; }
+    if (!h || h.channel !== "cards" || typeof h.from !== "string") return false;
+    for (const x of await store.list(ENTRY)) if (x.horde === e.horde && x.machine === h.from) return false;
+    return true;
   }
   // The other unlocked pairings of e's horde, each with its session: who else may open a cards envelope.
   async function siblingsOf(e) {
@@ -502,11 +514,13 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           if (!o.ok) {
             if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") { anomalies.push("item " + item.seq + ": " + o.reason); continue; }
             // ANOTHER MACHINE OF THIS HORDE: its cards, opened by its own pairing (THE CARDS, in the header).
+            let took = false;
             for (const x of siblings) {
               const so = await P.openEnvelope(item.text, { keyId: x.e.machine, signPublic: P.unb64u(x.e.machineSignPublic) }, { privateKey: x.s.privateKey, publicPoint: x.s.publicPoint });
-              if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); break; }
-              if (so.ok && so.value.header.channel === "notices") { takeNotices(x.e, x.s, so.value, item, anomalies); break; }
+              if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); took = true; break; }
+              if (so.ok && so.value.header.channel === "notices") { takeNotices(x.e, x.s, so.value, item, anomalies); took = true; break; }
             }
+            if (!took && o.reason === "not from the machine this phone paired with" && await cardsFromUnpaired(e, item.text)) s.cardsUnpaired = true;
             continue;
           }
           if (o.value.header.channel === "cards") { takeCards(e, s, o.value, item, anomalies); continue; }
@@ -563,8 +577,11 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      const held = [s.cards, ...(await siblingsOf(e)).map((x) => x.s.cards)].filter((x) => x);
-      return { ...P.mergeCards(held), mode: s.mode };
+      const all = [s, ...(await siblingsOf(e)).map((x) => x.s)];
+      const held = all.map((x) => x.cards).filter((x) => x);
+      // Why there are none, when there are none (cards-why.js): a refused snapshot, or cards from a PC not paired.
+      const refused = (all.find((x) => x.cardsRefused) || { cardsRefused: "" }).cardsRefused;
+      return { ...P.mergeCards(held), mode: s.mode, refused, unpaired: all.some((x) => x.cardsUnpaired) };
     },
 
     // He has read as far as the entry entryId (or, with none, to the newest): kept on this device, an id

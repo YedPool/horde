@@ -123,7 +123,22 @@
            Find = 'if (s.cards && s.cards.seq >= opened.header.seq) return;'
            Replace = '' }
         @{ Name = "another-machines-cards-not-opened-by-its-pairing"
-           Find = 'if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); break; }'
+           Find = 'if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); took = true; break; }'
            Replace = '' }
+        @{ Name = "a-refused-cards-snapshot-not-kept"
+           Find = 'anomalies.push("item " + item.seq + ": " + r.reason); s.cardsRefused = r.reason; return; }'
+           Replace = 'anomalies.push("item " + item.seq + ": " + r.reason); return; }' }
+        @{ Name = "a-refusal-outlives-good-cards"
+           Find = '    s.cardsRefused = "";'
+           Replace = '' }
+        @{ Name = "cards-from-an-unpaired-pc-not-noticed"
+           Find = 'if (!took && o.reason === "not from the machine this phone paired with" && await cardsFromUnpaired(e, item.text)) s.cardsUnpaired = true;'
+           Replace = '' }
+        @{ Name = "a-locked-pairing-is-a-stranger"
+           Find = 'for (const x of await store.list(ENTRY)) if (x.horde === e.horde && x.machine === h.from) return false;'
+           Replace = '' }
+        @{ Name = "cards-why-not-handed-to-the-page"
+           Find = 'return { ...P.mergeCards(held), mode: s.mode, refused, unpaired: all.some((x) => x.cardsUnpaired) };'
+           Replace = 'return { ...P.mergeCards(held), mode: s.mode };' }
     )
 }

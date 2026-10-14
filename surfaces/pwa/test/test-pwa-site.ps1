@@ -73,6 +73,7 @@ try {
     $sw = Read-Site $site "app/sw.js"
     $ver = [regex]::Match($sw, 'const VERSION = "([0-9a-f]{16})";').Groups[1].Value
     Check ($ver -ceq $b.value.version) "the worker carries the site's version"
+    Check ($config.version -ceq $b.value.version -and $config.version -cmatch '\A[0-9a-f]{16}\z') "and config.json carries the same version, so the page knows its own (the Account screen says it)"
     $shell = @([regex]::Matches([regex]::Match($sw, 'const SHELL = \[([^\]]*)\];').Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
     Check ((@($shell) -join ",") -ceq (@($expected | Where-Object { $_ -cne "app/sw.js" -and $_ -cne "index.html" } | Sort-Object) -join ",")) ("and its shell is every file but itself and the root's redirect (" + $shell.Count + ")")
     $b2 = New-HordePwaSite -Out (Join-Path $work "site2") -Transport "memory" -RelayOrigin "https://relay.example.test"

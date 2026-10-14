@@ -80,12 +80,15 @@ on("Log.entryAdded", (p) => { if (p.entry.level === "error" || /Content Security
 const relay = folderTransport(relayRoot);
 // The relayFail command: every put refused, as a relay that will not take one (the announcement's failure).
 let failPuts = false;
+// The readFail command: every read and watch refused with the words given, as a relay whose sign-in expired.
+let failReads = "";
 on("Runtime.bindingCalled", async (p) => {
   if (p.name !== "hordeRelayBinding") return;
   let answer;
   try {
     const c = JSON.parse(p.payload);
     if (c.op === "put") answer = failPuts ? { state: "unknown", value: null, reason: "the relay is down (a stand-in)" } : await relay.put(c.mailbox, c.key, c.text);
+    else if ((c.op === "get" || c.op === "watch") && failReads) answer = { state: "unknown", value: null, reason: failReads };
     else if (c.op === "get") answer = await relay.get(c.mailbox, c.since, c.max);
     else if (c.op === "watch") answer = await relay.watch(c.mailbox, c.since, c.max, Math.min(c.timeoutMs, 3000));
     else if (c.op === "ack") answer = await relay.ack(c.mailbox, c.through);
@@ -95,6 +98,9 @@ on("Runtime.bindingCalled", async (p) => {
 });
 
 await cdp("Page.enable");
+// Every page load counted, so a suite can see that a new version reloads the page once and no more.
+let loads = 0;
+on("Page.loadEventFired", () => { loads++; });
 await cdp("Runtime.enable");
 await cdp("Log.enable");
 await cdp("Emulation.setDeviceMetricsOverride", { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true });
@@ -169,6 +175,15 @@ const commands = {
     return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
   },
   async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
+  async readFail(c) { failReads = typeof c.reason === "string" ? c.reason : ""; return { failReads }; },
+  // The notice line, once it holds c.text (or, with c.gone, once it does not).
+  async noticeWait(c) {
+    const has = "(" + notice + ").indexOf(" + JSON.stringify(c.text) + ") >= 0";
+    const ok = await until(c.gone ? "!(" + has + ")" : has, c.ms || 20000);
+    // c.hold: left so for that long first - refreshes and redraws meanwhile - to see that the words stay.
+    if (ok && c.hold) await sleep(c.hold);
+    return { ok: !!ok, notice: await evaluate(notice) };
+  },
   // The next passkey prompt refused, as Chrome refuses one the founder cancels (a NotAllowedError), once.
   // In the page and not by the virtual authenticator: told that user verification fails and then that it
   // succeeds again, Chrome's virtual authenticator kept refusing every prompt after (measured 2026-10-11).
@@ -220,6 +235,7 @@ const commands = {
         shown: !document.getElementById('progress').hidden, doc: !document.getElementById('doc').hidden, chat: !document.getElementById('chat').hidden, keys: !document.getElementById('keys').hidden,
         tab: document.getElementById('tabProgress').textContent, selected: document.getElementById('tabProgress').getAttribute('aria-selected'), count: document.getElementById('progressCount').textContent,
         items: items.length, ids: items.map((b) => b.getAttribute('data-id')), onScreen,
+        cardsWhy: document.getElementById('cardsWhy').hidden ? '' : document.getElementById('cardsWhy').textContent,
         firstChips: first ? Array.from(first.querySelectorAll('.progress-head .chip')).map((c) => c.textContent) : [],
         firstTime: first && first.querySelector('.stamp') ? first.querySelector('.stamp').textContent : '',
         firstTitle: first ? first.querySelector('.progress-title').textContent : '', titleWeight: first ? Number(getComputedStyle(first.querySelector('.progress-title')).fontWeight) : 0,
@@ -328,6 +344,41 @@ const commands = {
     const want = c.shown ? "!document.getElementById('notShown').hidden" : "document.getElementById('notShown').hidden";
     await until(shown("doc") + " && " + want, c.ms || 20000);
     return await evaluate("({ shown: !document.getElementById('notShown').hidden, words: document.getElementById('notShown').textContent, page: document.body.innerText })");
+  },
+  // A NEW VERSION OF THE APP (app-update.js). firstInstall: the page marked, then left until its first
+  // worker controls it - the mark must survive, as the first install never reloads. newWorker: sw.js
+  // changed on the server, as a deployment changes it, and the page told to look (registration.update());
+  // with c.draft, words are left in the chat composer first. { reloaded, loads, notice }.
+  async firstInstall() {
+    await evaluate("window.hordeMark = 1");
+    const controlled = !!(await until("!!navigator.serviceWorker.controller", 15000));
+    await sleep(1500);
+    return { controlled, mark: await evaluate("window.hordeMark === 1"), loads };
+  },
+  async newWorker(c) {
+    await evaluate("window.hordeMark = 1; document.getElementById('chatText').value = " + JSON.stringify(c.draft || ""));
+    const before = loads;
+    const sw = join(siteDir, "app", "sw.js");
+    writeFileSync(sw, readFileSync(sw, "utf8") + "// deployment " + Date.now() + "\n");
+    await evaluate("navigator.serviceWorker.getRegistration().then((r) => r.update()).then(() => true)");
+    const reloaded = !!(await until("window.hordeMark !== 1", c.ms || 10000));
+    if (reloaded) await until(shown("lockedView") + " || " + shown("doc") + " || " + shown("emptyView"), 15000);
+    await sleep(2000);
+    return { reloaded, loads: loads - before, notice: await evaluate(notice) };
+  },
+  // The words left by newWorker taken away, then the page hidden and shown: the safe moment.
+  async finishDraft() {
+    await evaluate("window.hordeMark = 1; document.getElementById('chatText').value = ''");
+    const before = loads;
+    await evaluate("(() => { for (const v of ['hidden', 'visible']) { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => v }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => v === 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); } })()");
+    const reloaded = !!(await until("window.hordeMark !== 1", 10000));
+    if (reloaded) await until(shown("lockedView") + " || " + shown("doc"), 15000);
+    await sleep(2000);
+    return { reloaded, loads: loads - before, notice: await evaluate(notice) };
+  },
+  // The version the worker in control says it is (sw.js answers on a port).
+  async workerVersion() {
+    return await evaluate("new Promise((res) => { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(e.data.version); navigator.serviceWorker.controller.postMessage({ ask: 'version' }, [ch.port2]); setTimeout(() => res(''), 3000); })");
   },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
