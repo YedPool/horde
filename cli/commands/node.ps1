@@ -45,7 +45,7 @@ $HordeCommand = @{
         # Loaded here, in the command's own scope, so the transports' helpers stay visible to the blocks
         # they register (transports/Port.ps1, the adapter contract).
         $root = Get-HordeRoot
-        foreach ($f in @("Tristate", "Home", "Device", "Projection", "Namespace", "NodeDeliverTo")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        foreach ($f in @("Tristate", "Home", "Device", "Projection", "Namespace", "NodeDeliverTo", "NodePolicy")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
         . (Join-Path $root "transports\Port.ps1")
         foreach ($t in @(Get-HordeTransportFiles)) { . $t }
         . (Join-Path $root "remote\NodeServe.ps1")
@@ -92,7 +92,17 @@ $HordeCommand = @{
         # A session whose end is proven - its pid not running, or running with another start time - and
         # that no other store calls live is left out (core/Projection.ps1, ConvertTo-HordeNodeViewDocument):
         # a pane ended by hand leaves its control file, and the hub counted those as the node's sessions.
-        $getView = { ConvertTo-HordeNodeViewDocument -Projection (Get-HordeProjection -Platform $platform) }
+        # The view also carries the session stores the node's owner declares (<HordeHome>\node\
+        # session-stores.json, read again for every view, as a spawn reads the policy): only with them
+        # does sessions.list say its list names every session the node has, so the hub stops carrying
+        # what ended (remote/NodeServe.ps1, ledger core-projection L-101). A file of its own, so a bad
+        # value there takes away only that claim, never the acts the policy allows. Like endedSessions,
+        # the note never crosses the link itself.
+        $getView = {
+            $doc = ConvertTo-HordeNodeViewDocument -Projection (Get-HordeProjection -Platform $platform)
+            $doc["sessionStores"] = Get-HordeNodeSessionStores -Path (Get-HordeNodeSessionStoresPath -HordeHome $hordeHome)
+            $doc
+        }
         $say = { Write-Host ("node " + $node.deviceId + " listening on the local link") }
         # MESSAGING (R21 slice 4). The message journal and the outbox are this node's own, under its home.
         # remote.deliverTo is read from the node's own layers - engine.json (L1) and engine-live.json (L4),

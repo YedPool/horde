@@ -184,8 +184,8 @@
            Replace = 'if ($false) {' }
         # Sources are parameters, and reading writes nothing.
         @{ Name = "injected-process-table-ignored"
-           Find = 'identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir -Processes $Processes'
-           Replace = 'identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir' }
+           Find = 'identity = (Get-HordeIdentity -ClaudeDir $agentDirs.X2 -ProjectsDir $ProjectsDir -CodexDir $agentDirs.W8 -Processes $Processes'
+           Replace = 'identity = (Get-HordeIdentity -ClaudeDir $agentDirs.X2 -ProjectsDir $ProjectsDir -CodexDir $agentDirs.W8' }
         @{ Name = "plain-read-of-a-control-file"
            Find = 'try { return ((Read-HordeSharedText -Path $Record.source) | ConvertFrom-Json) } catch { return $null }'
            Replace = 'try { return ([System.IO.File]::ReadAllText($Record.source) | ConvertFrom-Json) } catch { return $null }' }

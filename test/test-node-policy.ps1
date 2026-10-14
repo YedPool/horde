@@ -106,6 +106,42 @@ try {
 } finally { if ((Split-Path -Leaf $pf) -match '^horde-policy-bytes-[0-9a-f]{32}\.json$') { Remove-Item -LiteralPath $pf -ErrorAction SilentlyContinue } }
 
 Write-Host ""
+Write-Host "--- the session stores a node declares (sessions.list's membershipComplete, ledger core-projection L-101) ---" -ForegroundColor Cyan
+# The node's owner says which stores that NAME sessions this node uses, in a file of its own
+# (<HordeHome>\node\session-stores.json, schema/node-session-stores.v1), so the node can say its list
+# names every session it has. Nothing is inferred from a missing folder: no declaration, no claim. A bad
+# declaration takes away only that claim; the policy, and with it the node's acts, are untouched.
+function BadStores { param([string]$Text, [string]$Like) $s = Read-HordeNodeSessionStoresText -Text $Text; return [bool]($s.state -ceq "unknown" -and $s.reason -like $Like) }
+$ss = Read-HordeNodeSessionStoresText -Text '{ "schemaVersion": 1, "sessionStores": ["X2"] }'
+Check ($ss.state -ceq "known" -and (@($ss.value) -join ",") -ceq "X2") ("the declared session stores are known, as written (" + $ss.reason + ")")
+Check (BadStores '{ "schemaVersion": 1, "sessionStores": [] }' "*names no store*") "an empty declaration is refused: it would claim a list names every session while naming no store"
+Check (BadStores '{ "schemaVersion": 1, "sessionStores": ["X2", "X2"] }' "*declared twice*") "a store declared twice is refused"
+Check (BadStores '{ "schemaVersion": 1, "sessionStores": ["X4"] }' "*X4*") "a store that names no session (the live pane list, X4) cannot be declared, and the refusal names it"
+Check (BadStores '{ "schemaVersion": 1, "sessionStores": ["X1"] }' "*X1*") "X1 cannot be declared"
+Check (BadStores '{ "schemaVersion": 1, "sessionStores": ["x2"] }' "*x2*") "a store id in another case is refused: ids are exact"
+Check (BadStores '{ "schemaVersion": 1, "sessionStores": ["X2"], "sessionStores": ["W1"] }' "*") "a key repeated in one object is refused"
+$sh = Join-Path $env:TEMP ("horde-session-stores-" + [guid]::NewGuid().ToString("N"))
+try {
+    New-Item -ItemType Directory -Path (Join-Path $sh "node") -Force | Out-Null
+    $ssPath = Get-HordeNodeSessionStoresPath -HordeHome $sh
+    Check ($ssPath -ceq (Join-Path $sh "node\session-stores.json")) "the declaration sits beside the policy, in the node folder of the Horde home, in a file of its own"
+    [System.IO.File]::WriteAllBytes((Get-HordeNodePolicyPath -HordeHome $sh), [System.Text.Encoding]::ASCII.GetBytes($policyText))
+    $ss = Get-HordeNodeSessionStores -Path $ssPath
+    $pol = Get-HordeNodePolicy -Path (Get-HordeNodePolicyPath -HordeHome $sh)
+    Check ($ss.state -ceq "absent" -and "$($ss.reason)" -like "*declares no session stores*" -and $pol.state -ceq "known") "a policy without the file is unchanged: it reads, and no session store is declared"
+    [System.IO.File]::WriteAllBytes($ssPath, [System.Text.Encoding]::ASCII.GetBytes('{ "schemaVersion": 1, "sessionStores": ["x2"] }'))
+    $ss = Get-HordeNodeSessionStores -Path $ssPath
+    $pol = Get-HordeNodePolicy -Path (Get-HordeNodePolicyPath -HordeHome $sh)
+    $d = Decide (Resolve @(Ask "ask")) -Pol $pol
+    Check ($ss.state -ceq "unknown" -and "$($ss.reason)" -like "*malformed*" -and $pol.state -ceq "known" -and $d.allowed) "a malformed session-stores file claims nothing and leaves acts on"
+    [System.IO.File]::WriteAllBytes($ssPath, [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes('{ "schemaVersion": 1, "sessionStores": ["X2"] }')))
+    Check ((Get-HordeNodeSessionStores -Path $ssPath).state -ceq "unknown") "a declaration with a byte-order mark is refused, never read past"
+    [System.IO.File]::WriteAllBytes($ssPath, [System.Text.Encoding]::ASCII.GetBytes('{ "schemaVersion": 1, "sessionStores": ["X2", "W5"] }'))
+    $ss = Get-HordeNodeSessionStores -Path $ssPath
+    Check ($ss.state -ceq "known" -and (@($ss.value) -join ",") -ceq "X2,W5") "CONTROL: a well-formed declaration is read from its file"
+} finally { if ((Split-Path -Leaf $sh) -match '^horde-session-stores-[0-9a-f]{32}$') { Remove-Item -LiteralPath $sh -Recurse -Force -ErrorAction SilentlyContinue } }
+
+Write-Host ""
 Write-Host "--- where the session runs (decision 2: no worktree means the registered clone) ---" -ForegroundColor Cyan
 $wd = Resolve-HordeNodeWorkdir -Policy $policy.value -RepoId "github.com/example/app"
 Check ($wd.state -eq "known" -and $wd.value -ceq "C:\code\app") "no worktree: the registered clone"

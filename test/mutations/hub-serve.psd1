@@ -140,5 +140,12 @@
         @{ Name = "aside-copies-uncapped"
            Find = '$old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)'
            Replace = '$old = @()' }
+        # Verbs version 2, sessions.list's membershipComplete (ledger core-projection L-101, review of PR #243).
+        @{ Name = "hub-offers-only-verbs-version-1"
+           Find = '$script:HordeHubVerbsVersions = @(1, 2)'
+           Replace = '$script:HordeHubVerbsVersions = @(1)' }
+        @{ Name = "hub-hears-membership-on-a-version-1-link"
+           Find = 'if ($verbs -lt 2 -and $null -ne $res.list.PSObject.Properties["membershipComplete"]) {'
+           Replace = 'if ($false) {' }
     )
 }
