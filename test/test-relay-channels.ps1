@@ -1219,6 +1219,32 @@ try {
     [void](Send-ToMachine $Y $downC.text)
     $t = Invoke-Turn $Y
     Check (-not (Has $t "superseded: question 2") -and @(Get-Said $Y.store | Where-Object { $_.data.number -eq 2 }).Count -eq 2) ("two answers queued while the runner was down both land: the later-signed one is newer than the one recorded a moment before it (" + $t.text + ")")
+    # THE PART RULE (review of PR 268): an answer is held only to answers to ITS part of the question.
+    $Z = New-World
+    Use-World $Z
+    $zq = Invoke-HordeDecision -Operation "add" -Root $Z.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Two things about the chime, part by part."; kind = "parts"; whatItIs = "Parts."; parts = @("(a) Which chime?", "(b) How loud?"); group = "voice"; askedBy = "orc-b" } }
+    $zn = [int]$zq.value.number
+    $null = Invoke-Tick $Z
+    $zb = Invoke-HordeDecision -Operation "say" -Root $Z.store -Request @{ id = (New-Id); actor = "founder"; number = $zn; speaker = "founder"; route = "window"; text = "Window (b): loud."; wordingVersion = 1; part = "b" }
+    Check ($zq.value.outcome -ceq "done" -and $zb.value.outcome -ceq "done") "CONTROL: a question of two parts, and part (b) answered at the window"
+    $early = [datetime]::UtcNow.AddMinutes(-5)
+    $pa = New-HordeTestPhoneEnvelope -Phone $Z.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number $zn -Part "a" -Text "Phone (a), earlier: the second chime." -Machine $Z.id.sign.keyId -Snapshot (Get-SentKey $Z)) -To $Z.agree -Now $early
+    [void](Send-ToMachine $Z $pa.text)
+    $t = Invoke-Turn $Z
+    Check ((Has $t "done") -and -not (Has $t "superseded") -and @(Get-Said $Z.store | Where-Object { $_.data.text -ceq "Phone (a), earlier: the second chime." }).Count -eq 1) ("A PART (a) ANSWER SIGNED BEFORE THE WINDOW'S PART (b) ANSWER IS TAKEN: another part is no reason to refuse it (" + $t.text + ")")
+    $pb = New-HordeTestPhoneEnvelope -Phone $Z.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number $zn -Part "b" -Text "Phone (b), earlier: quiet." -Machine $Z.id.sign.keyId -Snapshot (Get-SentKey $Z)) -To $Z.agree -Now $early.AddSeconds(1)
+    [void](Send-ToMachine $Z $pb.text)
+    $t = Invoke-Turn $Z
+    Check ((Has $t "superseded") -and @(Get-Said $Z.store | Where-Object { $_.data.text -ceq "Phone (b), earlier: quiet." }).Count -eq 0) ("A PART (b) ANSWER SIGNED BEFORE THE WINDOW'S PART (b) ANSWER IS REFUSED as superseded (" + $t.text + ")")
+    # Two seconds on, then part (a) at the window: an answer to (b) signed between the window's (b) and
+    # its (a) is newer than every answer to (b), and only an older answer to (a) stands after it.
+    Start-Sleep -Seconds 2
+    $za = Invoke-HordeDecision -Operation "say" -Root $Z.store -Request @{ id = (New-Id); actor = "founder"; number = $zn; speaker = "founder"; route = "window"; text = "Window (a): the first chime."; wordingVersion = 1; part = "a" }
+    $between = [System.DateTimeOffset]::Parse("" + (@(Get-Said $Z.store) | Select-Object -Last 1).at, [System.Globalization.CultureInfo]::InvariantCulture).AddMilliseconds(-500).UtcDateTime
+    $pb2 = New-HordeTestPhoneEnvelope -Phone $Z.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number $zn -Part "b" -Text "Phone (b), between: medium." -Machine $Z.id.sign.keyId -Snapshot (Get-SentKey $Z)) -To $Z.agree -Now $between
+    [void](Send-ToMachine $Z $pb2.text)
+    $t = Invoke-Turn $Z
+    Check ($za.value.outcome -ceq "done" -and (Has $t "done") -and -not (Has $t "superseded") -and @(Get-Said $Z.store | Where-Object { $_.data.text -ceq "Phone (b), between: medium." }).Count -eq 1) ("A PART (b) ANSWER SIGNED AFTER THE WINDOW'S (b) BUT BEFORE THE WINDOW'S (a) IS TAKEN (" + $t.text + ")")
     # S2, ATTACKED: 20 passkeys' streams; the most recently active and the one sealed to sort LAST by id.
     $Q = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
     $qroot = Get-HordeRelayJournalRoot -HordeHome $Q.hordeHome

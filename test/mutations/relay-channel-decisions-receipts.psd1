@@ -86,5 +86,8 @@
            Find = 'if ($given -gt $newest) { $newest = $given; $how = "$($m.route)" }'
            Replace = 'if ($newest -lt 0) { $newest = $given; $how = "$($m.route)" }' }
 
+        @{ Name = "part-filter-removed"
+           Find = ' -or "$($m.part)" -cne "$($Answer.part)"'
+           Replace = '' }
     )
 }
