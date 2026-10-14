@@ -336,6 +336,8 @@ $attacks += @(
     @{ found = $true; what = "a bare letters-only value with nothing after it is still a value, as it was"; text = ($six[5] + " = lettersonlyvalue") },
     @{ found = $false; what = "KNOWN COST: a bare secret with a dot in it reads as a lookup"; text = ($six[4] + "=abc123.def456") },
     @{ found = $false; what = "KNOWN LIMIT: a value that ends in a parenthesis is code by the rule"; text = ($six[5] + "=Ab3dEf6hIj9k)") },
+    @{ found = $false; what = "KNOWN COST: a bare value with an open parenthesis inside it is code by the rule"; text = ($six[5] + "=Ab3d(Ef6hIj9k") },
+    @{ found = $true; what = "CONTROL: the same value quoted is a value again, parenthesis or not"; text = ($six[5] + "=""Ab3d(Ef6hIj9k""") },
     @{ found = $false; what = "KNOWN LIMIT: a YAML anchor before the value"; text = ($six[5] + ": &pw " + $made) },
     @{ found = $false; what = "KNOWN LIMIT: a PHP array arrow"; text = ("'" + $six[5] + "' => '" + $made + "'") },
     @{ found = $false; what = "KNOWN LIMIT: an XML element"; text = ("<" + $six[5] + ">" + $made + "</" + $six[5] + ">") },
