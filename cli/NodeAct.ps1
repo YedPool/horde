@@ -521,6 +521,12 @@ function Stop-HordeNodeSession {
 # is for a person looking into a failed spawn the same week, and its rows are the one thing in a record
 # that can hold what the session showed; a week is long enough to look and short enough that a screen
 # nobody looked at does not stay forever.
+# KNOWN LIMIT (F's re-check of round 6, issue 214): a secret wrapped onto a row LESS indented than its
+# head is not joined, so it is still shown. That is how indented content wraps - a tool-output block or a
+# nested bullet (probe6: a head at indent 7 with the rest at 5, a bullet at 4 with the rest at 2). The
+# fix, a reading that joins every adjacent pair trimmed and ignoring indent, judged pair by pair, is a
+# follow-up. Until then the screen stays on this machine only, in an owner-only file kept 7 days, and the
+# same text is already in the session's own transcript in the same profile.
 $script:HordeNodeScreenRows = 40
 $script:HordeNodeScreenChars = 4000
 $script:HordeNodeScreenFile = "screen.json"
