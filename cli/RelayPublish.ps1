@@ -467,10 +467,10 @@ function Invoke-HordeRelayPublishStep {
         }
         if ($d.action -ceq "warn") { & $warn $d.what $d.key $d.reason; return }
         # A TRY THAT FAILS waits an hour (header, THE RULE 5), keeping the id of the record as it is then.
-        $failed = { param([string]$What, [string]$Why)
+        $failed = { param([string]$What, [string]$Why, [string]$Label = "FAILED", [string]$KeyPrefix = "failed:")
             $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = (& $recordId) }
-            & $queue $What ("failed:" + $h.commit) $h.commit
-            & $say ("FAILED - " + $Why + "; tried again an hour from now at the earliest") -Log
+            & $queue $What ($KeyPrefix + $h.commit) $h.commit
+            & $say ($Label + " - " + $Why + "; tried again an hour from now at the earliest") -Log
         }
         # ON ORIGIN/MAIN, fetched now (S1): never a deploy from a branch.
         $on = $null
@@ -517,6 +517,11 @@ function Invoke-HordeRelayPublishStep {
         $s.attempt = $null
         if ((Test-HordeAnswer $r) -and $r.state -ceq "unknown" -and $r.reason -ceq (Get-HordeRelayDeployBusyReason)) { & $say "waits - another deploy is running; the next pass looks again" -Log; return }
         if ((Test-HordeAnswer $r) -and $r.state -ceq "unknown" -and $r.reason -ceq $script:HordeRelayPublishMovedReason) { & $say "waits - the checkout moved off the commit that was checked; the next pass looks again" -Log; return }
+        # MARKED LIVE (relays/Port.ps1, DEPLOYING): it went out and a check after it failed, so the relay
+        # IS running it, broken. Told as its own outcome, never "deploy-failed" (review of PR 275); it
+        # still waits an hour like a failure, and its reason carries the way back.
+        $live = $(if (Test-HordeAnswer $r) { $r.PSObject.Properties["live"] } else { $null })
+        if ($null -ne $live -and $live.Value -eq $true -and $r.state -ceq "unknown") { & $failed "deploy-needs-action" ("deploy-needs-action: " + $r.reason) "NEEDS ACTION" "needs-action:"; return }
         if (-not (Test-HordeAnswer $r) -or $r.state -cne "known") { & $failed "deploy-failed" ("the deploy did not work: " + $(if (Test-HordeAnswer $r) { $r.reason } else { "it did not answer" })); return }
         # The deploy recorded this commit: the base has moved, and what was checked up to is spent.
         $s.checked = $null; $origin = "" + $r.value.origin
