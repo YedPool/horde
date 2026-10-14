@@ -26,6 +26,7 @@
 #         the phone never shows a switch it only wished for.
 #       - Sent when there are notices past the last one sent (by their number n, never by a byte), or
 #         the switches changed; a phone key trusted since is sent the newest backfillNotices, to it alone.
+#         With no notice kept and no switch ever set nothing is sent at all: the phone shows the same.
 #       - Pages within the relay's budget; a notice is never cut (they are at most a few hundred bytes).
 #       - RECORDED, THEN PUT UNTIL TAKEN, from a durable state (<HORDE_HOME>\relay\notices\state.json,
 #         replaced whole in one rename), as the progress channel does: an envelope recorded and not yet
@@ -309,6 +310,9 @@ function Invoke-HordeNoticesChannelTick {
     $oldKeys = @($keys | Where-Object { @($d.phones) -ccontains $_.agreeKeyId })
     $batches = New-Object System.Collections.ArrayList
     $backfill = [int]$set.values.backfillNotices
+    # NOTHING TO SAY, NOTHING SENT: with no notice kept and no switch ever set, the phone shows the same
+    # (none, every switch off) without an envelope, and the mailbox other channels share holds one less.
+    if ($all.Count -eq 0 -and $follows.value.Count -eq 0) { $freshKeys = @(); $oldKeys = @(); $d.phones = $trusted; $d.follows = $followsHash }
     if ($freshKeys.Count -gt 0) { [void]$batches.Add([pscustomobject]@{ to = $freshKeys; notices = @($all | Select-Object -Last $backfill) }) }
     if ($oldKeys.Count -gt 0 -and ($newOnes.Count -gt 0 -or $followsHash -cne $d.follows)) { [void]$batches.Add([pscustomobject]@{ to = $oldKeys; notices = $newOnes }) }
     if ($batches.Count -eq 0) {

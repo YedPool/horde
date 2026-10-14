@@ -134,7 +134,7 @@ try {
     $W = New-World
     $t = Invoke-Tick $W
     $mail = @(Get-NewMail $W)
-    Check ($mail.Count -eq 1 -and $mail[0].ok -and $mail[0].body.kind -ceq "notices" -and @($mail[0].body.notices).Count -eq 0 -and @($mail[0].body.follows.PSObject.Properties).Count -eq 0) ("a phone first seen is sent one envelope it opens: no notices yet, and no switch on (" + (Said $t) + ")")
+    Check ($mail.Count -eq 0 -and -not $t.failed) ("NOTHING TO SAY, NOTHING SENT: with no notice and no switch, the phone's mailbox gets nothing (" + (Said $t) + ")")
     $null = Submit-HordeNotify -Sender (Proven "E") -Text ("the cards are merged " + [char]0x05D0) -HordeHome $W.home
     Check ((Test-HordeNoticesChannelGlance -Context $W.ctx) -eq $true) "THE GLANCE says yes for a notice written since the last look"
     $t = Invoke-Tick $W
