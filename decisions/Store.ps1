@@ -123,6 +123,7 @@
 . (Join-Path $PSScriptRoot "Format.ps1")
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 # Win32 error codes of a READ, from the low 16 bits of an IOException's HResult: 32
 # ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION. (What a move onto a taken name raises is no longer
@@ -296,7 +297,7 @@ function Read-HordeDecisionRecordFile {
         Start-Sleep -Milliseconds $heldWaitMs
     }
     if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty: its writer stopped before writing it" } }
-    try { $data = $text | ConvertFrom-Json } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }
+    try { $data = ConvertFrom-HordeJson $text } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }
     if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not a JSON object" } }
     return [pscustomobject]@{ kind = "ok"; data = $data; reason = "" }
 }
