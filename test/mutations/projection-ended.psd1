@@ -21,6 +21,9 @@
            Find = 'if (-not $C.identity.complete.Contains($agent) -or $C.identity.complete[$agent].state -ne "known") { return "" }'
            Replace = 'if ($false) { return "" }' }
         # The file is older than the table.
+        @{ Name = "table-read-time-taken-after-the-read"
+           Find = 'if ($null -eq $Processes) { $tableAt = [datetime]::UtcNow; $Processes = Read-HordePlatformProcessTable -Platform $Platform }'
+           Replace = 'if ($null -eq $Processes) { $Processes = Read-HordePlatformProcessTable -Platform $Platform; $tableAt = [datetime]::UtcNow }' }
         @{ Name = "table-race-ignored"
            Find = 'if ($born -ge $C.tableAt) { return "" }'
            Replace = 'if ($false) { return "" }' }
@@ -45,6 +48,9 @@
         @{ Name = "orphan-with-no-start-trusted"
            Find = 'if ($null -eq $cr -or ([datetime]$cr) -gt $born.AddHours(-1)) { return "" }'
            Replace = 'if ($null -ne $cr -and ([datetime]$cr) -gt $born.AddHours(-1)) { return "" }' }
+        @{ Name = "host-image-orphan-ignored"
+           Find = '@(@($procs.imagePids.Keys) + @($procs.hostPids.Keys) | Select-Object -Unique)'
+           Replace = '@($procs.imagePids.Keys)' }
         @{ Name = "verified-process-counted-as-orphan"
            Find = 'if ($procs.verifiedPids.ContainsKey($k)) { continue }'
            Replace = '' }
@@ -60,8 +66,14 @@
            Replace = 'if ($true) {' }
         # No other signal.
         @{ Name = "live-handle-ignored"
-           Find = 'if ($Session.fields["pane"].answer.state -eq "known") { return "" }'
-           Replace = 'if ($false) { return "" }' }
+           Find = 'foreach ($row in @($Handles.value)) { if (@($row.sessions) -contains $id -or @($row.claimants) -contains $id) { return "" } }'
+           Replace = '' }
+        @{ Name = "claimed-handle-ignored"
+           Find = 'if (@($row.sessions) -contains $id -or @($row.claimants) -contains $id) { return "" }'
+           Replace = 'if (@($row.sessions) -contains $id) { return "" }' }
+        @{ Name = "handle-rows-not-passed"
+           Find = '$why = Get-HordeSessionEndProof -C $C -Session $s -Handles $Projection.handles'
+           Replace = '$why = Get-HordeSessionEndProof -C $C -Session $s' }
         @{ Name = "other-live-signals-ignored"
            Find = 'if ((Get-HordeLiveSignal -C $C -Id $id -NotItsControlFile) -ne "") { return "" }'
            Replace = 'if ($false) { return "" }' }
@@ -72,7 +84,7 @@
            Find = 'if ($C.paneVerdicts.bySession.ContainsKey($Id)) { return "a guarded pane-sessions file names it" }'
            Replace = ''
            Expect = "survives"
-           Reason = "Defence in depth: a pane-sessions file that passes the guard also makes the session's pane known (X1 answers the pane), so the live-handle rule keeps the session first; the signal stays for the day the pane is answered another way." }
+           Reason = "Defence in depth: a pane-sessions file passes the guard only for a live handle, and then X1 answers the session's pane before claimants are settled, so the session is in that handle's row - as the one answering it, or as a claimant when another session answers it too (the ended-pane-file-claimed case) - and the live-handle rule keeps it first. A W1 answer that comes before X1 needs an unretired registry record, which keeps it as a signal of its own. The signal stays for the day the pane is answered another way." }
         @{ Name = "unretired-record-signal-ignored"
            Find = 'if (-not ($rt.state -eq "known" -and [bool]$rt.value)) { return "its registry record is not retired" }'
            Replace = '' }
@@ -81,10 +93,13 @@
            Replace = '' }
         # What is served.
         @{ Name = "nothing-left-out"
-           Find = 'if ($why -eq "") { [void]$kept.Add($s) } else { [void]$ended.Add([pscustomobject]@{ sessionId = "$($s.sessionId)"; reason = $why }) }'
-           Replace = '[void]$kept.Add($s)' }
+           Find = 'if ($why -eq "") { [void]$kept.Add($s) } else {'
+           Replace = '[void]$kept.Add($s); if ($false) {' }
+        @{ Name = "ended-agent-not-noted"
+           Find = 'agent = "$($s.fields[''agent''].answer.value)"; reason = $why }'
+           Replace = 'agent = ""; reason = $why }' }
         @{ Name = "ended-sessions-not-noted"
-           Find = '$doc["endedSessions"] = @($served.ended | ForEach-Object { [ordered]@{ sessionId = $_.sessionId; reason = $_.reason } })'
+           Find = '$doc["endedSessions"] = @($served.ended | ForEach-Object { [ordered]@{ sessionId = $_.sessionId; agent = $_.agent; reason = $_.reason } })'
            Replace = '$doc["endedSessions"] = @()' }
     )
 }

@@ -128,12 +128,16 @@ function LayoutOf {
     return ({ return , $rows }.GetNewClosure())
 }
 function Project {
-    param([string]$D, $HostPort = $null, $Processes = $null, $Layout = $null, [string]$Scope = "All")
+    # -Platform reads the table through that platform, in the projection's own read order, instead of
+    # handing it a table.
+    param([string]$D, $HostPort = $null, $Processes = $null, $Layout = $null, [string]$Scope = "All", $Platform = $null)
     if ($null -eq $HostPort) { $HostPort = HostOf $D }
-    if ($null -eq $Processes) { $Processes = ProcsOf $D }
+    if ($null -eq $Processes -and $null -eq $Platform) { $Processes = ProcsOf $D }
     if ($null -eq $Layout) { $Layout = LayoutOf $D }
+    $table = @{ Processes = $Processes }
+    if ($null -ne $Platform) { $table = @{ Platform = $Platform } }
     return (Get-HordeProjection -WezfleetRoot (Join-Path $D "wezfleet") -ClaudeDir (Join-Path $D "agent\sessions") -ProjectsDir (Join-Path $D "agent\projects") `
-        -CodexDir (Join-Path $D "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $D "agent\pane-sessions") -Processes $Processes -HostPort $HostPort `
+        -CodexDir (Join-Path $D "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $D "agent\pane-sessions") @table -HostPort $HostPort `
         -LayoutPort $Layout -TtlSeconds 900 -Now $now -Scope $Scope)
 }
 function Ans { param($P, $Id, [string]$Field) if ($Id -is [int]) { $Id = Sid $Id }; foreach ($s in $P.sessions) { if ($s.sessionId -ieq $Id) { return $s.fields[$Field] } }; return $null }
@@ -177,7 +181,7 @@ function ControlFile {
 }
 function Proc { param([int]$ProcId, $Created, $CommandLine = "harness-a", [string]$Name = $agentImage) return [pscustomobject]@{ pid = $ProcId; name = $Name; created = $Created; commandLine = $CommandLine } }
 function Table { param([object[]]$Rows, $At = $null) $t = @{}; foreach ($r in $Rows) { $t[[int]$r.pid] = $r }; return (New-HordeKnown -Value $t -ObservedAt $At) }
-function NodeProject { param([string]$D, $Processes, $HostPort = $null) if ($null -eq $HostPort) { $HostPort = New-HordeUnavailableHostPort -Reason "the node has no host adapter" }; return (Project $D -HostPort $HostPort -Processes $Processes -Layout { return , @() }) }
+function NodeProject { param([string]$D, $Processes, $HostPort = $null, $Platform = $null) if ($null -eq $HostPort) { $HostPort = New-HordeUnavailableHostPort -Reason "the node has no host adapter" }; return (Project $D -HostPort $HostPort -Processes $Processes -Platform $Platform -Layout { return , @() }) }
 function NodeIds { param($P) return @($P.sessions | ForEach-Object { "$($_.sessionId)" }) }
 function Served { param([string]$D, $Processes, $HostPort = $null) return @(NodeIds (Remove-HordeEndedSessions -Projection (NodeProject $D $Processes $HostPort))) }
 function Reg {
@@ -359,6 +363,22 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     # THE FILE IS OLDER THAN THE TABLE: a session started after the table was read has no row yet.
     Check ((@(Served (NodeFleet "ended-race" $one) (Table $quiet -At $t1.AddMinutes(-1))) -join ",") -ceq (Sid 42)) "a control file whose process started after the process table was read is still listed"
     Check (@(Served (NodeFleet "ended-race-control" $one) (Table $quiet -At $t1.AddMinutes(1))).Count -eq 0) "CONTROL: the same file, the table read after its process started, is left out"
+    # The same race through the projection's own read order: a session starts WHILE the table is read,
+    # so its pid is not in the table, and its file is written before the files are listed. The read
+    # time is the one taken before the read, never after it.
+    $rr = NodeFleet "ended-race-read" @()
+    $rrFile = Join-Path $rr "agent\sessions\3007.json"
+    $rrText = ((ControlFile 3007 47 $t1) | ConvertTo-Json -Depth 5)
+    $rrReader = {
+        Start-Sleep -Milliseconds 40
+        $mid = [datetime]::UtcNow
+        [System.IO.File]::WriteAllText($rrFile, $rrText.Replace(("" + $t1.ToFileTimeUtc()), ("" + $mid.ToFileTimeUtc())))
+        Start-Sleep -Milliseconds 40
+        $tb = @{}; $tb[3300] = [pscustomobject]@{ pid = 3300; name = "other.exe"; created = $t0; commandLine = "svc" }
+        return $tb
+    }.GetNewClosure()
+    $rrP = NodeProject $rr $null -Platform (New-HordePlatform -Name "windows" -ProcessSpace "windows" -ProcessTable $rrReader)
+    Check ("$($rrP.inputs.identity.records[(Sid 47)].processCheck)" -ceq "gone" -and (@(NodeIds (Remove-HordeEndedSessions -Projection $rrP)) -join ",") -ceq (Sid 47)) "a session started while the process table was being read is still listed: the read time is taken before the read"
     # NO PROCESS OF THE AGENT IS UNREAD.
     Check ((@(Served (NodeFleet "ended-unread" $one) (Table @((Proc 3200 $t0 $null)))) -join ",") -ceq (Sid 42)) "a stale session is still listed while an agent process's command line cannot be read"
     Check ((@(Served (NodeFleet "ended-unread-host" $one) (Table @((Proc 3200 $t0 $null "node.exe")))) -join ",") -ceq (Sid 42)) "a stale session is still listed while a host-image process's command line cannot be read"
@@ -367,6 +387,7 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     Check ((@(Served (NodeFleet "ended-orphan" $one) (Table @((Proc 3300 $t2)))) -join ",") -ceq (Sid 42)) "a stale session is still listed while an agent process with no control file started after it"
     Check ((@(Served (NodeFleet "ended-orphan-nostart" $one) (Table @((Proc 3300 $null)))) -join ",") -ceq (Sid 42)) "a stale session is still listed while an agent process with no control file has no start time"
     Check (@(Served (NodeFleet "ended-orphan-control" $one) (Table @((Proc 3300 $t0)))).Count -eq 0) "CONTROL: an agent process with no control file that started hours before does not keep it"
+    Check ((@(Served (NodeFleet "ended-orphan-host" $one) (Table @((Proc 3300 $t2 "host-a --continue" "node.exe")))) -join ",") -ceq (Sid 42)) "a stale session is still listed while a host-image process that no control file verifies started after it: the agent may run inside it"
     # THE OTHER STORES ARE WHOLE when wezfleet's root exists.
     $mn = NodeFleet "ended-misnamed" $one
     Reg $mn 42; Move-Item -LiteralPath (Join-Path $mn ("wezfleet\registry\sessions\" + (Sid 42) + ".json")) -Destination (Join-Path $mn ("wezfleet\registry\sessions\" + (Sid 99) + ".json"))
@@ -429,10 +450,36 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     $lhP = NodeProject $lh (Table $quiet) (FakeHost -Live @("22") -Started $started)
     Check ((Val (Ans $lhP 42 "pane")) -eq "22" -and (@(NodeIds (Remove-HordeEndedSessions -Projection $lhP)) -join ",") -ceq (Sid 42)) "a stale session is still listed while a live handle makes its pane known"
     Check (@(Served $lh (Table $quiet) (FakeHost -Live @("23") -Started $started)).Count -eq 0) "CONTROL: the same record's handle not live does not keep it"
+    function ClosedRun {
+        # A closed run whose roster gives each fleet id a handle, written in this instance.
+        param([string]$D, [hashtable]$Panes)
+        $crd = Join-Path $D "wezfleet\repo\runs\20260601-100000-r1"; New-Item -ItemType Directory -Path $crd -Force | Out-Null
+        PutJson (Join-Path $crd "run.json") ([pscustomobject]@{ runId = "20260601-100000-r1"; closedAt = "2026-06-01T11:50:00.0000000Z" })
+        $entries = @($Panes.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; title = $_; cwd = "C:\work\node"; dependsOn = @(); spawned = $true; spawnedAt = $started.AddMinutes(30).ToString("o"); pane = $Panes[$_] } })
+        PutJson (Join-Path $crd "roster.json") ([pscustomobject]@{ sessions = $entries })
+    }
+    # A stale session whose live roster handle another session also claims: its pane is unknown, and
+    # the handle still names it.
+    $cc = NodeFleet "ended-claimed-twice" $one
+    Reg $cc 42 @{ retired = $true; fleetSessionId = "f42" }; Reg $cc 43 @{ retired = $true; fleetSessionId = "f43" }
+    ClosedRun $cc @{ f42 = "22"; f43 = "22" }
+    $ccP = NodeProject $cc (Table $quiet) (FakeHost -Live @("22") -Started $started)
+    Check ((St (Ans $ccP 42 "pane")) -eq "unknown" -and (Has (Remove-HordeEndedSessions -Projection $ccP) 42)) "a stale session is still listed while a live handle it claims is claimed by another session too"
+    # The pane-sessions file's co-claimant (review of bcd060c): a stale session's guarded file names live
+    # handle 21, and another session's roster entry names 21 too, so its pane is unknown.
+    $pc = NodeFleet "ended-pane-file-claimed" $one
+    New-Item -ItemType Directory -Path (Join-Path $pc "agent\pane-sessions") -Force | Out-Null
+    $pcPath = Join-Path $pc "agent\pane-sessions\21.json"; PutJson $pcPath $pfj; [System.IO.File]::SetLastWriteTimeUtc($pcPath, $started.AddMinutes(30))
+    Reg $pc 43 @{ retired = $true; fleetSessionId = "f43" }
+    ClosedRun $pc @{ f43 = "21" }
+    $pcP = NodeProject $pc (Table $quiet) (FakeHost -Live @("21") -Started $started)
+    Check ($pcP.inputs.paneVerdicts.bySession.ContainsKey((Sid 42)) -and (St (Ans $pcP 42 "pane")) -eq "unknown" -and (Has (Remove-HordeEndedSessions -Projection $pcP) 42)) "a stale session is still listed while its guarded pane-sessions file names a live handle another session also claims"
 
     # WHAT THE NODE SERVES, and what the hub counts. remote/ is loaded in a child scope, so its files
     # do not replace this suite's trip wires.
     $nodeDoc = ConvertTo-HordeNodeViewDocument -Projection $nAll
+    # The ended session's agent, from the projection, not from the note under test.
+    $agentOf42 = "$(Val (Ans $nAll 42 'agent'))"
     $nodeCmd = Join-Path $root "cli\commands\node.ps1"
     $wire = & {
         . (Join-Path $root "remote\NodeServe.ps1")
@@ -450,9 +497,10 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
         function FrameLine { param($Frame) $b = ConvertTo-HordeFrameBytes -Frame $Frame; return [System.Text.Encoding]::ASCII.GetString($b.bytes, 0, $b.bytes.Length - 1) }
         $null = Invoke-HordeNodeFrame -State $st -Line (FrameLine $hello) -Data $data
         $get = @{}
-        foreach ($n in @(42, 41)) {
-            $req = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = 2; ts = (Get-HordeLinkTime); verb = "session.get"; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = [pscustomobject]@{ sessionId = (Sid $n) } }
-            $get[$n] = (Invoke-HordeNodeFrame -State $st -Line (FrameLine $req) -Data $data).reply.result
+        foreach ($q in @(@(42, ""), @(41, ""), @(42, $agentOf42), @(42, "another-agent"))) {
+            $qa = [ordered]@{ sessionId = (Sid $q[0]) }; if ($q[1] -ne "") { $qa["agent"] = $q[1] }
+            $req = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = 2; ts = (Get-HordeLinkTime); verb = "session.get"; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = [pscustomobject]$qa }
+            $get["" + $q[0] + "|" + $q[1]] = (Invoke-HordeNodeFrame -State $st -Line (FrameLine $req) -Data $data).reply.result
         }
         # horde node serve's own view block, run as the command runs it, over this projection.
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($nodeCmd, [ref]$null, [ref]$null)
@@ -470,12 +518,14 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
             $served = & $block
         }
         $declared = $null; if ($null -ne $served) { $declared = Get-HordeLinkProp $served "sessionStores" }
-        [pscustomobject]@{ ids = @(@($list["sessions"]) | ForEach-Object { "$(Get-HordeLinkProp $_ 'sessionId')" }); listed = (New-HordeFleetNode -Mirror $mirror -Now $at -TtlSeconds 60).listed; get = $get; commandIds = $(if ($null -ne $served) { @(@($served["sessions"]) | ForEach-Object { "$($_['sessionId'])" }) } else { $null }); getViews = $assign.Count; declared = $declared }
+        [pscustomobject]@{ ids = @(@($list["sessions"]) | ForEach-Object { "$(Get-HordeLinkProp $_ 'sessionId')" }); listed = (New-HordeFleetNode -Mirror $mirror -Now $at -TtlSeconds 60).listed; get = $get; commandIds = $(if ($null -ne $served) { @(@($served["sessions"]) | ForEach-Object { "$($_['sessionId'])" }) } else { $null }); getViews = $assign.Count; declared = $declared; agentOf42 = $agentOf42 }
     }
     Check (@($wire.ids) -notcontains (Sid 42) -and @($wire.ids) -notcontains (Sid 43) -and @($wire.ids) -contains (Sid 44)) "the node's sessions.list carries the sessions it keeps and not the ended ones"
     Check ($wire.listed -eq 3) ("the hub's count matches the live sessions, and the ones whose liveness is unknown (" + $wire.listed + ", want 3)")
-    Check ("$($wire.get[42].state)" -ceq "absent" -and "$($wire.get[42].reason)" -like "*ended, proven by its process*3002 is not running*") ("session.get answers an ended session absent with its proof, not that no store holds it (" + $wire.get[42].reason + ")")
-    Check ("$($wire.get[41].state)" -ceq "known") "CONTROL: session.get finds a live session"
+    Check ("$($wire.get["42|"].state)" -ceq "absent" -and "$($wire.get["42|"].reason)" -like "*ended, proven by its process*3002 is not running*") ("session.get answers an ended session absent with its proof, not that no store holds it (" + $wire.get["42|"].reason + ")")
+    Check ("$($wire.get["41|"].state)" -ceq "known") "CONTROL: session.get finds a live session"
+    Check ($wire.agentOf42 -ne "" -and "$($wire.get["42|$($wire.agentOf42)"].reason)" -like "*ended, proven by its process*") "session.get naming the ended session's own agent still answers with its proof"
+    Check ("$($wire.get['42|another-agent'].reason)" -notlike "*ended, proven*") "session.get naming another agent does not take the ended session's proof as its answer"
     Check ($wire.getViews -eq 1 -and $null -ne $wire.commandIds -and @($wire.commandIds) -notcontains (Sid 42) -and @($wire.commandIds) -contains (Sid 41)) "horde node serve's own view block leaves out the sessions whose end is proven"
     Check ($null -ne $wire.declared -and "$($wire.declared.state)" -ceq "known" -and (@($wire.declared.value) -join ",") -ceq "X2") "horde node serve's own view block carries the session stores the node's policy declares"
 }

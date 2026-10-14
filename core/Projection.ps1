@@ -1384,16 +1384,20 @@ function Get-HordeSessionEndProof {
     #     live agent as a reused pid; a live agent would also have rewritten its own file.
     #   - NO PROCESS OF THE AGENT IS UNREAD: no process of its image or host image has a command line
     #     that cannot be read, since it may be resuming this session.
-    #   - NO UNACCOUNTED AGENT PROCESS: no process of its image that no control file verifies started
-    #     after the stale file's process, or has no start time; it may be this session continued. An hour
-    #     of slack, for the same clock change.
+    #   - NO UNACCOUNTED AGENT PROCESS: no process of its image or host image that no control file
+    #     verifies started after the stale file's process, or has no start time; it may be this session
+    #     continued (an agent under its host image started with --continue names no session id, and
+    #     writes its new control file only later). An hour of slack, for the same clock change.
     #   - THE OTHER STORES ARE WHOLE: when a wezfleet root exists, its registry, runs, rosters and reports
     #     were each read whole; a record under another file name, or a folder that cannot be listed, may
     #     hold the signal below. A machine with no wezfleet root has no such store to hold one.
+    #   - NO LIVE HANDLE NAMES IT: no live handle row lists it, as the session answering the handle or as
+    #     one of several claiming it. Signal 5 itself, not the settled pane: a handle two sessions claim
+    #     leaves both panes unknown, and each may still be the one in it (review of bcd060c).
     #   - NO OTHER SIGNAL: no process resumes it, no guarded pane-sessions file names it, no registry
-    #     record is unretired or unreadable, no run that lists it is open, and no live handle makes its
-    #     pane known.
-    param($C, $Session)
+    #     record is unretired or unreadable, and no run that lists it is open.
+    # -Handles is the projection's handle rows (an answer); unknown rows name no session.
+    param($C, $Session, $Handles)
     $id = "$($Session.sessionId)"
     if (-not $C.identity.records.ContainsKey($id)) { return "" }
     $rec = $C.identity.records[$id]
@@ -1416,7 +1420,7 @@ function Get-HordeSessionEndProof {
     foreach ($k in @(@($procs.imagePids.Keys) + @($procs.hostPids.Keys))) {
         if ($null -eq $C.processes.value[$k].commandLine) { return "" }
     }
-    foreach ($k in @($procs.imagePids.Keys)) {
+    foreach ($k in @(@($procs.imagePids.Keys) + @($procs.hostPids.Keys) | Select-Object -Unique)) {
         if ($procs.verifiedPids.ContainsKey($k)) { continue }
         $cr = $C.processes.value[$k].created
         if ($null -eq $cr -or ([datetime]$cr) -gt $born.AddHours(-1)) { return "" }
@@ -1424,7 +1428,9 @@ function Get-HordeSessionEndProof {
     if ($C.wf.present) {
         foreach ($w in @($C.wf.registry.complete, $C.wf.runs.runsComplete, $C.wf.runs.rostersComplete, $C.wf.runs.reportsComplete)) { if ($w.state -ne "known") { return "" } }
     }
-    if ($Session.fields["pane"].answer.state -eq "known") { return "" }
+    if ($null -ne $Handles -and $Handles.state -eq "known") {
+        foreach ($row in @($Handles.value)) { if (@($row.sessions) -contains $id -or @($row.claimants) -contains $id) { return "" } }
+    }
     if ((Get-HordeLiveSignal -C $C -Id $id -NotItsControlFile) -ne "") { return "" }
     return "$($rec.fields.pid.reason)"
 }
@@ -1448,14 +1454,14 @@ function Remove-HordeEndedSessions {
     # is the node's serving rule. A copy: the projection given is not modified. A kept session is carried
     # exactly as the projection has it; the handles, faults and store completeness are the projection's.
     # A handle row names only sessions whose pane is known, and those are kept. ended lists what was left
-    # out, { sessionId; reason }, so the node can say why when asked for one.
+    # out, { sessionId; agent; reason }, so the node can say why when asked for one.
     param([Parameter(Mandatory = $true)]$Projection)
     $C = $Projection.inputs
     $kept = New-Object System.Collections.ArrayList
     $ended = New-Object System.Collections.ArrayList
     foreach ($s in @($Projection.sessions)) {
-        $why = Get-HordeSessionEndProof -C $C -Session $s
-        if ($why -eq "") { [void]$kept.Add($s) } else { [void]$ended.Add([pscustomobject]@{ sessionId = "$($s.sessionId)"; reason = $why }) }
+        $why = Get-HordeSessionEndProof -C $C -Session $s -Handles $Projection.handles
+        if ($why -eq "") { [void]$kept.Add($s) } else { [void]$ended.Add([pscustomobject]@{ sessionId = "$($s.sessionId)"; agent = "$($s.fields['agent'].answer.value)"; reason = $why }) }
     }
     $out = [pscustomobject]@{
         PSTypeName = "Horde.Projection"; observedAt = $Projection.observedAt; host = $Projection.host
@@ -1477,7 +1483,7 @@ function ConvertTo-HordeNodeViewDocument {
     param([Parameter(Mandatory = $true)]$Projection)
     $served = Remove-HordeEndedSessions -Projection $Projection
     $doc = ConvertTo-HordeSessionViewDocument -Projection $served
-    $doc["endedSessions"] = @($served.ended | ForEach-Object { [ordered]@{ sessionId = $_.sessionId; reason = $_.reason } })
+    $doc["endedSessions"] = @($served.ended | ForEach-Object { [ordered]@{ sessionId = $_.sessionId; agent = $_.agent; reason = $_.reason } })
     return $doc
 }
 
