@@ -1,0 +1,7 @@
+horde-orc-status 1
+orc: K
+lane: garden planning
+doing: Sorting the seed packets by the month each one is sown, and noting which beds still need compost
+finished: The tool shed was cleared and its shelves were put back up
+blocked: no
+waiting on: the neighbour, since 2026-10-13 09:30 UTC, for the loan of the long ladder; the climbing roses wait until it comes, then the arch
