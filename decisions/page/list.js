@@ -58,6 +58,13 @@
 // in its own first direction. Only the order's own word turns: ties still go to the newest. The order
 // in force shows an arrow (down: its first direction, up: turned over) and says it in words; which
 // way it runs is remembered beside which order it is.
+// NEWEST IS LAST ASKED (the founder, 2026-10-14: each question shows when it was last asked, and the
+// Date order sorts by it). A question asked again - the keeper reminded him of it, replied under it
+// with words that ask, or asked a follow-up to it - stands as new as that moment. The list hands the
+// time out as lastAskedAt, worked out by decisions/Rules.ps1 (WHEN A QUESTION WAS ASKED); a list from
+// an earlier version has none, and there a question reads as asked once, when it was added. Each
+// question says "Asked <when>" beside its badges, in this device's own time, and its unfolded context
+// says when it was first asked, when that was another moment.
 // A PRESS RE-SORTS WHAT HE IS LOOKING AT (the founder, 2026-10-14: "the three sort orders sometimes
 // don't work"). A redraw keeps the question at the top of the view where it was (THE VIEW FOLLOWS
 // HIM), which is right for a list that arrives and wrong for a press: in a real browser a tap on
@@ -201,10 +208,24 @@
     var at = words.indexOf(textOf(word));
     return at >= 0 ? at : words.indexOf(fallback);
   }
-  // When a question was asked, as a number; 0 when the list does not say (then its number decides).
-  function askedAt(q) {
-    var t = Date.parse(textOf(q.addedAt));
-    return isNaN(t) ? 0 : t;
+  // When a question was LAST asked (header, NEWEST IS LAST ASKED), as a number; 0 when the list does
+  // not say (then its number decides). A list from an earlier version has no lastAskedAt: its addedAt.
+  function timeOf(text) { var t = Date.parse(textOf(text)); return isNaN(t) ? 0 : t; }
+  function askedAt(q) { return timeOf(q.lastAskedAt) || timeOf(q.addedAt); }
+  // When it was FIRST asked: the first entry of its asked list, or, from an earlier version, addedAt.
+  function firstAskedAt(q) {
+    var first = listOf(q.asked)[0];
+    return (first && timeOf(first.at)) || timeOf(q.addedAt);
+  }
+  // A moment as a person reads it, in this device's own time: "14 Oct 16:05", and the year too when it
+  // is not this one. "" for no time.
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function whenWords(t, now) {
+    if (!t) { return ""; }
+    var d = new Date(t);
+    var two = function (n) { return (n < 10 ? "0" : "") + n; };
+    var year = d.getFullYear() === new Date(now || Date.now()).getFullYear() ? "" : " " + d.getFullYear();
+    return d.getDate() + " " + MONTHS[d.getMonth()] + year + " " + two(d.getHours()) + ":" + two(d.getMinutes());
   }
   // NEWEST FIRST: by when it was asked, and between two asked in the same instant - or with no time
   // stated - the higher number, which was asked later. It is also how every other order breaks a tie.
@@ -584,6 +605,9 @@
         }
       }
       out.push({ label: "Answered with", text: kindWords(q) });
+      // FIRST ASKED, when he was asked again since (header, NEWEST IS LAST ASKED).
+      var first = firstAskedAt(q);
+      if (first && first !== askedAt(q)) { out.push({ label: "First asked", text: whenWords(first) }); }
       return out;
     }
 
@@ -1250,7 +1274,14 @@
     var followShown = Object.create(null);
     function drawTags(q, box) {
       while (box.firstChild) { box.removeChild(box.firstChild); }
-      var drawn = { badges: [], follow: null };
+      var drawn = { badges: [], follow: null, asked: null };
+      // WHEN HE WAS LAST ASKED (header, NEWEST IS LAST ASKED), first on the line: every question has it.
+      var lastAsked = askedAt(q);
+      if (lastAsked) {
+        drawn.asked = make("span", "hd-asked", "Asked " + whenWords(lastAsked));
+        drawn.asked.title = new Date(lastAsked).toString();
+        box.appendChild(drawn.asked);
+      }
       [textOf(q.importanceShown), textOf(q.blocksShown)].forEach(function (words) {
         if (words === "") { return; }
         var badge = make("span", "hd-badge", words);
@@ -2000,5 +2031,6 @@
 
   // order: the one sorting of questions, for a check that holds it without a page (inOrder(list, key,
   // turned), and the orders there are).
-  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };
+  // asked: when a question was last and first asked, and a moment in words, for the same kind of check.
+  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder }, asked: { last: askedAt, first: firstAskedAt, words: whenWords } };
 }());
