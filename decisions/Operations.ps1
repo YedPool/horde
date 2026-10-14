@@ -195,6 +195,16 @@ function Get-HordeDecisionAddContent {
         foreach ($f in @(Test-HordeDecisionRankWord -Name $beside -Word $stated)) { [void]$found.Add($f) }
         $body[$beside] = [string]$stated
     }
+    # NEEDS A PASSKEY, the same way: the asker marks a question that changes something important (a
+    # production deploy) so that from the phone it is answered only with a fresh passkey. It is not a
+    # question field: a field would write needsPasskey false into every new record, and an older
+    # reader would refuse every one. So only true is written; false or absent writes nothing, and the
+    # record is byte for byte what earlier versions wrote.
+    if (Test-HordeDecisionMember -Object $Request -Name "needsPasskey") {
+        $stated = Get-HordeDecisionMember -Object $Request -Name "needsPasskey"
+        if ($stated -isnot [bool]) { [void]$found.Add("'needsPasskey' is '" + $stated + "', not true or false") }
+        elseif ($stated) { $body["needsPasskey"] = $true }
+    }
     if (Test-HordeDecisionMember -Object $Request -Name "followsUp") {
         if (Test-HordeDecisionCount -Value $Request.followsUp -Most (Get-HordeDecisionMaxNumber)) { $body["followsUp"] = [int]$Request.followsUp }
         else { [void]$found.Add("'followsUp' is not a question's number: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }

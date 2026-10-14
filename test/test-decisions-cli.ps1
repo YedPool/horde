@@ -290,6 +290,24 @@ $stillClosed = Get-JsonLine (Invoke-Decisions @("show", "1", "-Json"))
 Check ($null -ne $stillClosed -and $stillClosed.value.question.state -ceq "closed") "and question 1 is still closed: nothing was reopened"
 
 Write-Host ""
+Write-Host "--- add -NeedsPasskey, at a real command line ---" -ForegroundColor Cyan
+# In a home of its own, so the records counted above and below do not move.
+$keyHome = Join-Path $script:work "key-home"
+$keyStore = Join-Path $keyHome "store\decisions"
+$keyEnv = @{ HORDE_HOME = $keyHome }
+$keyFile = Write-Json "key-question.json" '{"title":"Should the production deploy go out tonight?","kind":"yes-no","whatItIs":"It changes the live stack.","group":"deploy","askedBy":"orc-b"}'
+$keyed = Invoke-Decisions @("add", "-File", $keyFile, "-NeedsPasskey", "-Json") $keyEnv
+$j = Get-JsonLine $keyed
+$keyRecord = $null
+$keyRecordPath = Join-Path $keyStore "0000000001.json"
+if (Test-Path -LiteralPath $keyRecordPath) { $keyRecord = [System.IO.File]::ReadAllText($keyRecordPath, $utf8) | ConvertFrom-Json }
+Check ($keyed.code -eq 0 -and $null -ne $j -and $j.value.outcome -ceq "done" -and (Get-HordeTestMember $j "value.question.needsPasskey") -eq $true -and (Get-HordeTestMember $keyRecord "data.needsPasskey") -eq $true) ("add -NeedsPasskey writes needsPasskey true into the record and hands it back in the view (exit " + $keyed.code + ")")
+$keyShow = Invoke-Decisions @("show", "1") $keyEnv
+Check ($keyShow.code -eq 0 -and $keyShow.out -like "*Needs a passkey: yes. From the phone it is answered only with a fresh passkey.*") "show says, in words, that the question needs a passkey"
+# CONTROL: the question above (question 2 of the first home) was added without the switch.
+Check ($null -ne $followed -and $null -eq $followed.value.question.PSObject.Properties["needsPasskey"] -and @((Invoke-Decisions @("show", "2")).lines | Where-Object { $_ -like "*passkey*" }).Count -eq 0) "CONTROL: a question added without -NeedsPasskey has no needsPasskey, and show says nothing of a passkey"
+
+Write-Host ""
 Write-Host "--- a damaged record is named where a person will see it ---" -ForegroundColor Cyan
 # This suite's own store: record 5 is planted cut off, as a crash mid-write would leave it.
 [System.IO.File]::WriteAllText((Join-Path $store "0000000005.json"), '{"schemaVersion":1,"sequence":5,"id":"', $utf8)
