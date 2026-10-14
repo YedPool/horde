@@ -884,6 +884,31 @@ try {
         Set-Item -Path Function:\Find-HordeRelayTrustedSenders -Value $origFind
         Check ($inReads -le 1 -and $openReads -le 2 -and @(Get-Said $W2.store).Count -eq 5) ("five answers in one batch read the trust store once to judge and once a channel to open (" + $inReads + ", " + $openReads + ")")
     }
+    # KEYS PROVED BEFORE A HEALTHY BEAT (review of PR 249, MUST 1): a run started before anyone has
+    # signed in may not be able to use its keys. It beats keys-unavailable, never well, until they open.
+    $WK = New-World
+    [System.IO.File]::WriteAllText((Join-Path $WK.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50, "backoffMinMs": 100, "backoffMaxMs": 100, "backoffJitterPercent": 0}}', $utf8)
+    Check ((Test-HordeRelayRunContextKeys -Context $WK.ctx) -ceq "") "CONTROL: a context whose keys work is proved: each key is used once"
+    Check ((Test-HordeRelayRunContextKeys -Context ([pscustomobject]@{ signKey = $null; signKeyId = "k1"; openingKeys = @{} })) -like "the signing key k1 could not be used*") "a context whose signing key cannot be used is not proved, and says which key"
+    Check ((Test-HordeRelayRunContextKeys -Context ([pscustomobject]@{ signKey = $WK.ctx.signKey; signKeyId = "k1"; openingKeys = @{ "a1" = $null } })) -like "the agreement key a1 could not be used*") "and so is one whose agreement key cannot be used"
+    $origProve = ${function:Test-HordeRelayRunContextKeys}
+    function Test-HordeRelayRunContextKeys { param($Context) return "Keyset does not exist" }
+    $unproved = Open-HordeRelayRunProvenContext -HordeHome $WK.home -Connection $WK.conn
+    Set-Item -Path Function:\Test-HordeRelayRunContextKeys -Value $origProve
+    Check ($unproved.state -ceq "unknown" -and $unproved.reason -like "the keys opened and cannot be used - Keyset does not exist*") "keys that open and cannot be used are not handed to the run: the context is closed again, and why is said"
+    $script:keyOpens = 0
+    $failThenOpen = { param($H, $C, $D) $script:keyOpens++; if ($script:keyOpens -le 2) { return (New-HordeUnknown -Reason "Keyset does not exist") }; return (Open-HordeRelayRunProvenContext -HordeHome $H -Connection $C -DecisionsRoot $D) }
+    $beatsSeen = New-Object System.Collections.ArrayList
+    $sawBeat = { param($Ms, $Why) $b = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $WK.home); [void]$beatsSeen.Add($(if ($b.state -ceq "known") { "" + $b.value.condition + "|" + $b.value.why } else { "none" })) }
+    $said = New-Object System.Collections.ArrayList
+    $r = Invoke-HordeRelayRun -HordeHome $WK.home -Connection $WK.conn -MaxTurns 2 -Say { param($Line) [void]$said.Add($Line) } -Sleep $sawBeat -OpenContext $failThenOpen
+    $after = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $WK.home)
+    Check ($r.failures -eq 2 -and $after.value.condition -ceq "keys-unavailable" -and $after.value.why -like "*relay keys cannot be opened: Keyset does not exist*" -and @($beatsSeen | Where-Object { -not "$_".StartsWith("keys-unavailable|") }).Count -eq 0) ("a run whose keys cannot be opened beats keys-unavailable with why, and never once beats well (" + (@($beatsSeen) -join " / ") + ")")
+    Check ((@($said) -join " ") -like "*this machine's relay keys cannot be opened: Keyset does not exist; waiting 100 ms*") "and backs off, saying why"
+    $r = Invoke-HordeRelayRun -HordeHome $WK.home -Connection $WK.conn -MaxTurns 2 -Say { param($Line) [void]$said.Add($Line) } -OpenContext $failThenOpen
+    $after = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $WK.home)
+    Check ($script:keyOpens -eq 3 -and $r.failures -eq 0 -and $after.value.condition -ceq "" -and (@($said) -join " ").Contains("watching " + $WK.ctx.mailbox)) ("once the keys open - the person has signed in - the next start proves them and beats well (" + $after.value.condition + ")")
+
     Remove-Item Function:\Remove-HordeRelayRetiredAgreeKeys
 
     if ($script:canDecide) {
