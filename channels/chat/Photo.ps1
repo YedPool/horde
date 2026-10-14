@@ -184,7 +184,7 @@ function ConvertTo-HordeChatPhotoRecordText {
 function Read-HordeChatPhotoRecord {
     # A photo's record from its file, or $null when it is not one (never trusted further than it reads).
     param([Parameter(Mandatory = $true)][string]$Path)
-    try { $o = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII)) } catch { return $null }
+    try { $o = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII)) } catch { return $null }
     if ($null -eq $o -or $o -isnot [System.Management.Automation.PSCustomObject]) { return $null }
     foreach ($n in @("from", "photoId", "phoneKey", "sha256", "key", "stage", "code")) { if ($null -eq $o.PSObject.Properties[$n] -or $o.$n -isnot [string]) { return $null } }
     if ($o.from -cnotmatch '\A[0-9a-f]{32}\z' -or $o.photoId -cnotmatch '\A[0-9a-f]{32}\z') { return $null }
@@ -215,7 +215,7 @@ function Read-HordeChatPhotoManifest {
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the photo is not a JSON object"; return $fail }
     $dups = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($dups.Count -gt 0) { $fail.reason = ("the photo has a member more than once: " + $dups[0]); return $fail }
-    try { $a = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the photo is not JSON"; return $fail }
+    try { $a = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the photo is not JSON"; return $fail }
     if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the photo is not a JSON object"; return $fail }
     $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
     if ((@($names | Sort-Object) -join ",") -cne (@($script:HordeChatPhotoMembers | Sort-Object) -join ",")) { $fail.reason = ("the photo's members are " + ($names -join ", ") + ", not " + ($script:HordeChatPhotoMembers -join ", ")); return $fail }
