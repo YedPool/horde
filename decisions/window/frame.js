@@ -47,6 +47,10 @@
     topInset: function () { return topBar.getBoundingClientRect().bottom; },
     onDraw: function () { draws += 1; report(); },
     onChange: function () { showCounts(); report(); },
+    // THE WINDOW OPENS FOLDED, as it always has: its command unfolds the questions it is asked to
+    // (-Unfold), and ROOM IS KEPT (list.js) was measured in this window. The phone opens unfolded;
+    // the button at the end of the order line, or the menu's Unfold all, unfolds them here.
+    expanded: false,
     say: say,
     // One part's answer: the request say-part, which is say with the part's letter beside the words
     // (decisions/Window.ps1); it is answered as say is, by the event said.
