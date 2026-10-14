@@ -76,6 +76,15 @@
         @{ Name = "the-thrall-now-is-cut-before-the-refusal"
            Find = '$now = $(if ($s.keys.ContainsKey("doing")) { $s.keys["doing"] }'
            Replace = '$now = $(if ($s.keys.ContainsKey("doing")) { Get-HordeCardsChannelPlain $s.keys["doing"] }' }
+        @{ Name = "a-retired-lane-gets-a-card"
+           Find = '$folders = @($folders | Where-Object { [System.IO.File]::Exists((Join-Path $_ "status.txt")) -or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })'
+           Replace = '' }
+        @{ Name = "a-folder-with-both-files-is-retired"
+           Find = '[System.IO.File]::Exists((Join-Path $_ "status.txt")) -or -not'
+           Replace = '-not' }
+        @{ Name = "a-folder-with-neither-file-is-retired"
+           Find = '-or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })'
+           Replace = ') })' }
         @{ Name = "two-cards-share-one-id"
            Find = 'if ($taken.ContainsKey($c.lane)) {'
            Replace = 'if ($false) {' }

@@ -13,7 +13,8 @@
 # suite's `horde relay run` on a home of its own never reads a real fleet. THIS CHANNEL ONLY READS.
 #   lanesFolder       <HORDE_HOME>\progress\lanes. Each direct subfolder is one lane, its status.txt what
 #                     the lane says of itself: "horde-orc-status 1", then orc:, lane:, doing:, finished:,
-#                     blocked: and waiting on: lines (waiting on: may be missing). Whether a file is in
+#                     blocked: and waiting on: lines (waiting on: may be missing). A folder with
+#                     status.retired.txt and no status.txt is a retired lane: no card. Whether a file is in
 #                     the standard form is fleet/StatusPanel.ps1's to say, by the record's own rules
 #                     (Read-HordeCardsChannelStatusText); one that breaks them still gets its card.
 #   ledgerFile        <HORDE_HOME>\progress\tasks.jsonl: the fleet's task ledger, one JSON event a line
@@ -441,6 +442,12 @@ function New-HordeCardsChannelSnapshot {
     param($Context, [Parameter(Mandatory = $true)]$Settings, [Parameter(Mandatory = $true)]$Paths, [Parameter(Mandatory = $true)][datetime]$Now, [long]$Budget)
     $lines = New-Object System.Collections.ArrayList
     $folders = @([System.IO.Directory]::GetDirectories($Paths.lanes) | Sort-Object { (Split-Path -Leaf $_).ToLowerInvariant() })
+    # A RETIRED LANE HAS NO CARD (F, after the merge of PR 244): a folder with status.retired.txt and no
+    # status.txt is a lane that ended, and it leaves the phone as it leaves the panel - no card, not
+    # counted on the Thrall's. A folder with neither file is still "no status file"; with both, the lane
+    # came back and its status.txt stands. Passed over before lanesRead counts, or old lanes would push
+    # live ones out of the folders read.
+    $folders = @($folders | Where-Object { [System.IO.File]::Exists((Join-Path $_ "status.txt")) -or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })
     if ($folders.Count -gt [int]$Settings.lanesRead) { [void]$lines.Add("" + ($folders.Count - [int]$Settings.lanesRead) + " lane folder(s) past the first " + $Settings.lanesRead + " were not read"); $folders = @($folders | Select-Object -First ([int]$Settings.lanesRead)) }
     $ledger = Read-HordeCardsChannelLedger -Path $Paths.ledger -Now $Now
     if (-not $ledger.ok) { [void]$lines.Add("the cards show no task counts: " + $ledger.reason) }

@@ -95,7 +95,7 @@ function Get-CardsMail {
     }
     return @($out.ToArray())
 }
-function Get-Card { param($Body, [string]$Lane) return @($Body.cards | Where-Object { $_.lane -ceq $Lane })[0] }
+function Get-Card { param($Body, [string]$Lane) return (@($Body.cards | Where-Object { $_.lane -ceq $Lane }) | Select-Object -First 1) }
 function Said { param($Tick) return (@($Tick.lines) -join " | ") }
 function Iso { param([datetime]$At) return $At.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) }
 
@@ -390,6 +390,44 @@ try {
     Check ($bw.waitingOn -ceq "the reviewer, since 2026-10-07 13:00, unblocked by a yes" -and $bw.now -ceq "plain words") "a standard record's values, its waiting-on line among them, are the ones the reader hands over"
     $kc = @($b.cards | Where-Object { $_.lane -ceq "K1" })[0]
     Check ($null -ne $kc -and $kc.now -ceq "plain words") "and a lane that breaks a rule is still shown as it stands, by the orc it names"
+
+    Write-Host ""
+    Write-Host "--- 12. a retired lane gets no card and is not counted; a folder with no file still gets its card ---" -ForegroundColor Cyan
+    # F, after the merge of PR 244: a lane folder with status.retired.txt and no status.txt is retired, and
+    # leaves the phone as it leaves the panel. A folder with neither file is still "no status file"; one
+    # with both is a lane that came back, and its status.txt is what it says.
+    $R = New-World
+    Set-Lane $R "live" (New-Status -Orc "A" -Lane "live lane")
+    Set-Lane $R "nothing-here" $null
+    Set-Lane $R "old-lane" (New-Status -Orc "Z" -Lane "old lane" -Blocked "yes - on the founder" -Waiting "the founder, since 2026-10-01")
+    Set-Lane $R "came-back" (New-Status -Orc "Y" -Lane "came back" -Doing "back at work")
+    [System.IO.File]::WriteAllText((Join-Path $R.lanes "came-back\status.retired.txt"), (New-Status -Orc "Y" -Lane "came back" -Doing "the retired words"), $utf8)
+    $t = Invoke-Tick $R
+    $mail = @(Get-CardsMail $R)
+    $b = $mail[$mail.Count - 1].body
+    $z = Get-Card $b "Z"
+    Check ($null -ne $z -and $b.thrall.orcs -eq 4 -and $b.thrall.blocked -eq 1) ("CONTROL: before it retires, the lane Z has its card and is counted, blocked (cards " + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; blocked " + $b.thrall.blocked + ")")
+    [System.IO.File]::Move((Join-Path $R.lanes "old-lane\status.txt"), (Join-Path $R.lanes "old-lane\status.retired.txt"))
+    $t = Invoke-Tick $R
+    $mail = @(Get-CardsMail $R)
+    $b = $mail[$mail.Count - 1].body
+    $ids = @($b.cards | ForEach-Object { $_.lane })
+    Check ($null -eq (Get-Card $b "Z") -and @($b.cards | Where-Object { $_.name -ceq "old lane" -or $_.name -ceq "old-lane" }).Count -eq 0 -and $ids.Count -eq 3) ("RETIRED: a folder with status.retired.txt and no status.txt gets no card (cards " + ($ids -join ",") + ")")
+    Check ($b.thrall.orcs -eq 3 -and $b.thrall.blocked -eq 0 -and $b.thrall.waitingFounder -eq 0 -and $b.thrall.unknown -eq 1) ("and it is not counted on the Thrall's card (orcs " + $b.thrall.orcs + ", blocked " + $b.thrall.blocked + ", waiting on the founder " + $b.thrall.waitingFounder + ", not known " + $b.thrall.unknown + ")")
+    $none = @($b.cards | Where-Object { $_.name -ceq "nothing-here" }) | Select-Object -First 1
+    Check ($null -ne $none -and $none.form -ceq "missing" -and $none.note -ceq "This lane has no status file.") "a folder with neither file still gets its 'no status file' card"
+    $y = Get-Card $b "Y"
+    Check ($null -ne $y -and $y.form -ceq "standard" -and $y.now -ceq "back at work") ("a folder with both files is a lane, and its status.txt wins (" + $(if ($null -ne $y) { $y.now } else { "no card" }) + ")")
+    # Retired folders are passed over before the count of folders read, or old lanes would push live ones out.
+    $S = New-World -Settings '{"sendIntervalMs": 0, "machineName": "office-pc", "lanesRead": 2}'
+    foreach ($old in @("a-old", "b-old", "c-old")) { Set-Lane $S $old $null; [System.IO.File]::WriteAllText((Join-Path $S.lanes ($old + "\status.retired.txt")), (New-Status -Orc "Z" -Lane $old), $utf8) }
+    Set-Lane $S "d-live" (New-Status -Orc "D" -Lane "d live")
+    Set-Lane $S "e-live" (New-Status -Orc "E" -Lane "e live")
+    $t = Invoke-Tick $S
+    $mail = @(Get-CardsMail $S)
+    $b = $mail[$mail.Count - 1].body
+    Check ((@($b.cards | ForEach-Object { $_.lane }) -join ",") -ceq "D,E" -and (Said $t) -notlike "*were not read*") ("retired folders do not count against lanesRead: two live lanes behind three retired ones both get their cards (" + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; " + (Said $t) + ")")
+
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin
