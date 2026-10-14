@@ -128,15 +128,14 @@ function Add-Entry {
 }
 function Get-Carried {
     # The switches one opened envelope carries, as text in the machine's own form ({"E":true}), or
-    # "(none)" when it carries no follows member. Never throws: under Set-StrictMode a missing member
-    # is an error, and an error here broke the suite with no failed check (PR 259's after-merge net,
-    # the-switches-are-not-sent) instead of failing the check that names the rule.
+    # "(none)" when it carries no follows member. Read through Get-HordeTestMember (test\lib\Suite.ps1):
+    # under Set-StrictMode a missing member is an error, and an error here broke the suite with no failed
+    # check (PR 259's after-merge net, the-switches-are-not-sent) instead of failing the check that names
+    # the rule.
     param($Mail)
-    try {
-        $f = $Mail.body.follows
-        if ($null -eq $f) { return "(none)" }
-        return ('{' + ((@($f.PSObject.Properties | Sort-Object { $_.Name } -CaseSensitive) | ForEach-Object { (ConvertTo-HordeNoticeJsonString $_.Name) + ':' + $(if ($_.Value -eq $true) { "true" } else { "false" }) }) -join ",") + '}')
-    } catch { return "(none)" }
+    $f = Get-HordeTestMember $Mail "body.follows"
+    if ($null -eq $f) { return "(none)" }
+    return ('{' + ((@($f.PSObject.Properties | Sort-Object { $_.Name } -CaseSensitive) | ForEach-Object { (ConvertTo-HordeNoticeJsonString $_.Name) + ':' + $(if ($_.Value -eq $true) { "true" } else { "false" }) }) -join ",") + '}')
 }
 function Test-CarriesHeld {
     # Every opened notices envelope in -Mail carries exactly the switches -World's machine holds now.
