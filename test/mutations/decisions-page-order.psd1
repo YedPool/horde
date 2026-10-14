@@ -18,11 +18,27 @@
            Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (numberOf(b) - numberOf(a)); }'
            Replace = '  function newestFirst(a, b) { return (numberOf(b) - numberOf(a)); }' }
         @{ Name = "a-question-with-no-time-stands-first"
-           Find = '    return isNaN(t) ? 0 : t;'
-           Replace = '    return isNaN(t) ? 8640000000000000 : t;' }
+           Find = '  function timeOf(text) { var t = Date.parse(textOf(text)); return isNaN(t) ? 0 : t; }'
+           Replace = '  function timeOf(text) { var t = Date.parse(textOf(text)); return isNaN(t) ? 8640000000000000 : t; }' }
         @{ Name = "times-compared-as-text"
-           Find = '    var t = Date.parse(textOf(q.addedAt));'
-           Replace = '    var t = Number(textOf(q.addedAt).replace(/[^0-9]/g, "").slice(0, 15));' }
+           Find = '  function timeOf(text) { var t = Date.parse(textOf(text)); return isNaN(t) ? 0 : t; }'
+           Replace = '  function timeOf(text) { var t = Number(textOf(text).replace(/[^0-9]/g, "").slice(0, 15)); return isNaN(t) ? 0 : t; }' }
+        # NEWEST IS LAST ASKED (list.js): the date order sorts by lastAskedAt, an older list by addedAt.
+        @{ Name = "the-date-order-ignores-when-it-was-last-asked"
+           Find = '  function askedAt(q) { return timeOf(q.lastAskedAt) || timeOf(q.addedAt); }'
+           Replace = '  function askedAt(q) { return timeOf(q.addedAt); }' }
+        @{ Name = "a-list-from-an-earlier-version-has-no-time-at-all"
+           Find = '  function askedAt(q) { return timeOf(q.lastAskedAt) || timeOf(q.addedAt); }'
+           Replace = '  function askedAt(q) { return timeOf(q.lastAskedAt); }' }
+        @{ Name = "first-asked-is-the-last-asking"
+           Find = '    return (first && timeOf(first.at)) || timeOf(q.addedAt);'
+           Replace = '    return askedAt(q);' }
+        @{ Name = "first-asked-from-an-earlier-list-is-no-time"
+           Find = '    return (first && timeOf(first.at)) || timeOf(q.addedAt);'
+           Replace = '    return (first && timeOf(first.at)) || 0;' }
+        @{ Name = "a-moment-in-words-always-says-its-year"
+           Find = '    var year = d.getFullYear() === new Date(now || Date.now()).getFullYear() ? "" : " " + d.getFullYear();'
+           Replace = '    var year = " " + d.getFullYear();' }
         @{ Name = "task-importance-sorts-by-date"
            Find = '    if (key === "importance") { return function (a, b) {'
            Replace = '    if (key === "importance-never") { return function (a, b) {' }
@@ -69,8 +85,8 @@
            Find = '  function inOrder(list, key, turned) { return listOf(list).slice().sort(compareBy(orderOf(key), turned === true)); }'
            Replace = '  function inOrder(list, key, turned) { return list.slice().sort(compareBy(orderOf(key), turned === true)); }' }
         @{ Name = "the-sorting-is-not-handed-out"
-           Find = 'order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };'
-           Replace = 'order: { orders: ORDERS.map(function (o) { return o.key; }) } };' }
+           Find = 'order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder }, asked:'
+           Replace = 'order: { orders: ORDERS.map(function (o) { return o.key; }) }, asked:' }
         @{ Name = "turned-over-is-never-turned"
            Find = '    var way = turned === true ? -1 : 1;'
            Replace = '    var way = 1;' }

@@ -67,6 +67,18 @@
         "blocks": {"type": "string", "enum": ["all", "part", "none"]}
       }
     },
+    "remind": {
+      "type": "object",
+      "description": "Ask an open question again: the keeper raised it again in chat, or reminds the founder of it. One record of its own, which moves the question's last-asked time; a closed or unknown question is refused, and nothing is written.",
+      "required": ["id", "actor", "number"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "note": {"type": "string", "description": "Why it is asked again: at most 200 characters, printable ASCII, not blank."}
+      }
+    },
     "list": {
       "type": "object",
       "additionalProperties": false,

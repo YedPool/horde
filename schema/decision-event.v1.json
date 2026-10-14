@@ -67,6 +67,16 @@
         "blocks": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The blocking from this record on. The closed list is the blockings of decisions/Rules.ps1."}
       }
     },
+    "question-reminded": {
+      "type": "object",
+      "description": "The keeper asked an open question again - raised it in chat, or reminded the founder of it. A record of its own: it adds an entry to the question's asked list, which is derived from the records (decisions/Rules.ps1) and stored nowhere, and changes nothing else. A record of a closed question applies to nothing and is reported as that.",
+      "required": ["number"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "note": {"type": "string", "description": "Why it is asked again, in plain words: at most 200 characters of printable ASCII, a rule of decisions/Rules.ps1 asked of a request."}
+      }
+    },
     "message-said": {
       "type": "object",
       "description": "Someone said something under a question. The record holds what was said and what its speaker was looking at; whether the question was closed by then, whether its wording had moved on, whose turn it now is and whether the other side has read it are DERIVED from the order of the records (decisions/Rules.ps1) and are stored nowhere.",

@@ -148,6 +148,17 @@
         "outcome": {"type": "string", "description": "What it was closed with; empty while it is open."}
       }
     },
+    "asked": {
+      "type": "object",
+      "required": ["at", "how", "by", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "at": {"type": "string", "description": "When, as the record that asked it says: UTC, in the round-trip form."},
+        "how": {"type": "string", "enum": ["first", "remind", "thrall-reply", "follow-up"], "description": "first: the question was added. remind: the keeper asked it again. thrall-reply: the keeper's words under it asked it. follow-up: a new question that follows it was added."},
+        "by": {"type": "string", "description": "Who asked: the question's askedBy for first and follow-up, the role label for remind and thrall-reply."},
+        "note": {"type": "string", "description": "A reminder's note, or which follow-up question; empty when there is none."}
+      }
+    },
     "history": {
       "type": "object",
       "required": ["sequence", "kind", "at", "actor", "note"],
@@ -163,7 +174,7 @@
     "view": {
       "type": "object",
       "description": "One question as it stands now: its words (schema/decision-question.v1, every field present) and what the records say has happened to it.",
-      "required": ["number", "state", "wordingVersion", "title", "kind", "options", "parts", "whatItIs", "yesMeans", "recommendation", "group", "groupNote", "askedBy", "waiting", "files", "references", "needsSecret", "outcome", "reopenReason", "addedAt", "updatedAt", "closedAt", "history", "thread"],
+      "required": ["number", "state", "wordingVersion", "title", "kind", "options", "parts", "whatItIs", "yesMeans", "recommendation", "group", "groupNote", "askedBy", "waiting", "files", "references", "needsSecret", "outcome", "reopenReason", "addedAt", "updatedAt", "closedAt", "history", "thread", "asked", "askedCount", "lastAskedAt"],
       "additionalProperties": false,
       "properties": {
         "number": {"type": "integer", "minimum": 1, "description": "Permanent: given once, never changed, never given to another question."},
@@ -194,7 +205,10 @@
         "importanceShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
         "blocks": {"type": "string", "description": "How much of that task's work stands still until the question is answered: a label of decisions/Rules.ps1's blockings, part for a question that was given none."},
         "blocksShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
-        "followsUp": {"$ref": "#/definitions/followsUp"}
+        "followsUp": {"$ref": "#/definitions/followsUp"},
+        "asked": {"type": "array", "items": {"$ref": "#/definitions/asked"}, "description": "When the question was asked, and every time it was asked again, oldest first: derived from the records (decisions/Rules.ps1), never stored. The first entry is always there; past the cap of decisions/Rules.ps1 only the newest after it are, and askedCount says how many there are in all."},
+        "askedCount": {"type": "integer", "minimum": 1, "description": "How many times the question was asked, the first included; more than the entries of asked when the view cut it."},
+        "lastAskedAt": {"type": "string", "description": "The time of the last entry of asked: when it was last asked. The founder's Date order sorts by it."}
       }
     }
   }
