@@ -9,6 +9,8 @@
 //
 //   var doc = HordeDecisionsDocument.mount(element, { topInset, onDraw, onChange, say, sayPart, storage, prefs });
 //     say(number, text, wording, id)  ->  a promise of { ok: true, sequence, ... } or { ok: false, reason }
+//     rank(number, which, level, id)  ->  a promise of { ok } or { ok: false, reason }: which is
+//                                         "importance" or "blocks" (HIS LITTLE BUTTONS)
 //     sayPart(number, letter, text, wording, id)   the same, for the answer to ONE PART of a question
 //                                         of parts; a host that has none is handed the part through
 //                                         say, as the words "(b) ..." (see A QUESTION OF SEVERAL PARTS)
@@ -101,6 +103,10 @@
 //
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
+//
+// HIS LITTLE BUTTONS (the founder, 2026-10-14): beside each question still on his list, an Importance and
+// a Blocking button saying its two words; a press opens the three levels, and picking one hands it to
+// the host (options.rank). The list re-sorts when a list holding the new level arrives (drawRank).
 //
 // WHAT BECAME OF AN ANSWER, WHEN THE HOST KNOWS (the phone, 2026-10-14). A message may carry receipt:
 // the host's own words for what became of it ("sent", "received by PC", "applied"), and receiptNote: a
@@ -344,6 +350,9 @@
     // request is handed the words through say with the part's letter before them, "(b) ...": one
     // message a part, which a store of any version keeps and an earlier page reads into the part.
     var sayPart = (typeof options.sayPart === "function") ? options.sayPart : function (number, letter, text, wording, id) { return say(number, "(" + letter + ") " + text, wording, id); };
+    // rank(number, "importance" or "blocks", level, id): his little button (HIS LITTLE BUTTONS, at drawRank);
+    // a promise of { ok } or { ok: false, reason }, as say.
+    var rank = (typeof options.rank === "function") ? options.rank : function () { return Promise.resolve({ ok: false, reason: "this page has nobody to change it with." }); };
     var storage = options.storage || null;
     if (!storage) { try { storage = window.localStorage; } catch (e) { storage = null; } }
     // WHERE THE CHOSEN ORDER IS KEPT: its own place, because a host may keep drafts in memory only (the
@@ -1299,6 +1308,118 @@
       box.hidden = !box.firstChild;
       return drawn;
     }
+    // HIS LITTLE BUTTONS (the founder, 2026-10-14: "I want to be able to change importance level and
+    // blockingness level by clicking on a little button next to a decision to change it"). Above what
+    // stands out about a question still on his list, two small buttons say its two words in plain
+    // words - "Importance: High", "Blocking: Part". A press does not change anything by itself: it opens
+    // the three levels under the button, the one in force ticked, so a press that missed changes nothing;
+    // a press on another level asks the host (options.rank) and closes them, and on the one in force
+    // just closes them. Escape, or a press anywhere else, closes them too.
+    // THE ORDER MOVES WHEN THE HOST HAS MADE THE CHANGE, NOT BEFORE: until a list arrives that holds the
+    // new level, the button says it with "(sending)" and the question stays where it stands, so what
+    // he sees in place is never more than what is so. A refusal puts the button back and says why.
+    var RANK_BUTTONS = [
+      { key: "importance", label: "Importance", levels: IMPORTANCES, fallback: DEFAULT_IMPORTANCE, words: { high: "High", normal: "Normal", low: "Low" } },
+      { key: "blocks", label: "Blocking", levels: BLOCKINGS, fallback: DEFAULT_BLOCKS, words: { all: "All", part: "Part", none: "None" } }
+    ];
+    // By "<number>:<key>": the change on its way, { level, id, ok }; and which button's levels are open.
+    var rankPending = Object.create(null);
+    var rankOpen = "";
+    // The tick beside the level in force: a check mark, made from its code so the source stays ASCII.
+    var RANK_TICK = String.fromCharCode(0x2713);
+    function rankWordOf(q, b) { var w = textOf(q[b.key]); return w === "" ? b.fallback : w; }
+    function rankShown(b, level) { return b.words[level] || capital(level); }
+    function redrawRank(number) { var line = lineOf(number); if (line) { drawRank(line.q, line.rankBox); onChange(); } }
+    // A change the list now holds - or one the host said is made, once a list has come since - is done.
+    function settleRanks() {
+      Object.keys(rankPending).forEach(function (k) {
+        var p = rankPending[k];
+        var at = k.indexOf(":");
+        var number = Number(k.slice(0, at));
+        var b = RANK_BUTTONS.filter(function (x) { return x.key === k.slice(at + 1); })[0];
+        var q = questions.filter(function (x) { return x.number === number; })[0];
+        if (!q || !b || rankWordOf(q, b) === p.level || p.ok === true) { delete rankPending[k]; }
+      });
+    }
+    function pickRank(q, b, level) {
+      var k = q.number + ":" + b.key;
+      rankOpen = "";
+      if (level === rankWordOf(q, b) && !rankPending[k]) { redrawRank(q.number); return; }
+      var id = newId();
+      rankPending[k] = { level: level, id: id, ok: false };
+      redrawRank(q.number);
+      Promise.resolve().then(function () { return rank(q.number, b.key, level, id); }).then(function (result) {
+        var p = rankPending[k];
+        if (!p || p.id !== id) { return; }
+        if (result && result.ok === true) {
+          var now = questions.filter(function (x) { return x.number === q.number; })[0];
+          if (now && rankWordOf(now, b) === level) { delete rankPending[k]; } else { p.ok = true; }
+        } else {
+          delete rankPending[k];
+          showToast(b.label + " of question " + q.number + " not changed: " + textOf(result && result.reason ? result.reason : "no reason was given"), null);
+        }
+        redrawRank(q.number);
+      }, function (error) {
+        var p = rankPending[k];
+        if (p && p.id === id) { delete rankPending[k]; }
+        showToast(b.label + " of question " + q.number + " not changed: " + textOf(error && error.message ? error.message : error), null);
+        redrawRank(q.number);
+      });
+    }
+    // The two buttons of -q into -box (emptied first), and the levels of the one that is open. Nothing for
+    // a question that is not on his list: closed, or answered.
+    function drawRank(q, box) {
+      while (box.firstChild) { box.removeChild(box.firstChild); }
+      box.hidden = textOf(q.state) !== LISTED_STATE || stateOf(q).answered;
+      if (box.hidden) { return; }
+      RANK_BUTTONS.forEach(function (b) {
+        var k = q.number + ":" + b.key;
+        var p = rankPending[k];
+        var level = p ? p.level : rankWordOf(q, b);
+        var open = rankOpen === k;
+        var btn = make("button", "hd-rank-btn" + (p ? " pending" : ""), b.label + ": " + rankShown(b, level) + (p ? " (sending)" : ""));
+        btn.type = "button";
+        btn.tabIndex = -1;
+        btn.setAttribute("data-rank", b.key);
+        btn.setAttribute("aria-haspopup", "true");
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        btn.setAttribute("aria-label", b.label + " of question " + q.number + ": " + rankShown(b, level) + (p ? ", being sent" : "") + ". Press to change it.");
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          // One button's levels open at a time: another question's that were open close.
+          var was = rankOpen;
+          rankOpen = was === k ? "" : k;
+          drawRank(q, box);
+          if (was !== "" && Number(was.slice(0, was.indexOf(":"))) !== q.number) { redrawRank(Number(was.slice(0, was.indexOf(":")))); }
+          onChange();
+        });
+        box.appendChild(btn);
+        if (!open) { return; }
+        var pick = make("div", "hd-rank-pick");
+        pick.setAttribute("role", "group");
+        pick.setAttribute("aria-label", b.label + " of question " + q.number);
+        b.levels.forEach(function (w) {
+          var now = w === level;
+          var opt = make("button", "hd-rank-opt" + (now ? " now" : ""), (now ? RANK_TICK + " " : "") + rankShown(b, w));
+          opt.type = "button";
+          opt.setAttribute("data-level", w);
+          opt.setAttribute("aria-pressed", now ? "true" : "false");
+          opt.setAttribute("aria-label", now ? (b.label + ": " + rankShown(b, w) + ", as it is now") : ("Set " + b.label.toLowerCase() + " of question " + q.number + " to " + rankShown(b, w)));
+          opt.addEventListener("click", function (e) { e.stopPropagation(); pickRank(q, b, w); });
+          pick.appendChild(opt);
+        });
+        // ESCAPE CLOSES THE LEVELS AND GOES NO FURTHER: the window's own Escape hands the keyboard back.
+        pick.addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); rankOpen = ""; drawRank(q, box); btn.focus(); onChange(); } });
+        box.appendChild(pick);
+      });
+    }
+    document.addEventListener("pointerdown", function (e) {
+      if (rankOpen === "" || (e.target && e.target.closest && e.target.closest(".hd-rank"))) { return; }
+      var number = Number(rankOpen.slice(0, rankOpen.indexOf(":")));
+      rankOpen = "";
+      redrawRank(number);
+    });
+
     // The context of an unfolded question, its sub-numbered lines, into -box (emptied first).
     function drawSubs(q, box) {
       while (box.firstChild) { box.removeChild(box.firstChild); }
@@ -1344,6 +1465,9 @@
         toggleContext(q);
       });
       var ans = make("div", "hd-ans");
+      var rankBox = make("div", "hd-rank");
+      ans.appendChild(rankBox);
+      drawRank(q, rankBox);
       var tagBox = make("div", "hd-tags");
       ans.appendChild(tagBox);
       var tags = drawTags(q, tagBox);
@@ -1422,7 +1546,7 @@
       var subBox = make("div", "hd-sub");
       wrap.appendChild(subBox);
       var subs = drawSubs(q, subBox);
-      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, rankBox: rankBox, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
       done.addEventListener("click", function (e) { e.stopPropagation(); if (!drawn.parts) { unfold(drawn); } });
       rows.forEach(function (r, i) { r.done.addEventListener("click", function (e) { e.stopPropagation(); unfold(drawn, i); }); });
       fields.forEach(function (f) {
@@ -1450,6 +1574,7 @@
       line.wrap.classList.toggle("open", open);
       line.wrap.classList.toggle("dim", !!(dim && dim(q)));
       line.tri.setAttribute("aria-expanded", open ? "true" : "false");
+      drawRank(q, line.rankBox);
       line.tags = drawTags(q, line.tagBox);
       line.said = drawTalk(q, line.talk, line.ans);
       line.subs = drawSubs(q, line.subBox);
@@ -1835,6 +1960,8 @@
         if (json === lastJson) { return "same"; }
         lastJson = json;
         questions = record.value.questions;
+        // A change of rank the list now holds is done (HIS LITTLE BUTTONS), before the list is drawn.
+        settleRanks();
         // The first list this page is ever handed: every question in it counts as seen (NEW, above).
         if (seen === null) { loadSeen(); }
         if (seen === null) { seen = Object.create(null); questions.forEach(function (q) { seen[q.number] = true; }); keepSeen(); }
