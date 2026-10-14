@@ -345,7 +345,7 @@ $attacks += @(
     @{ found = $true; what = "a quoted value that looks like a lookup is still a value"; text = ($six[5] + ' = "config.db_password"') },
     # --- a markdown code span round a reference (round 3 of the review of PR 238, 2026-10-14) ---
     @{ found = $false; what = "F3: a lookup in a markdown code span (password = config.db_password)"; text = ('`' + $six[5] + " = config.db_" + $six[5] + '`') },
-    @{ found = $false; what = "a YAML lookup in a code span"; text = ('`' + $six[5] + ": process.env.DB_PASS" + "WORD" + '`') },
+    @{ found = $false; what = "a YAML lookup with a digit in a code span (the digit keeps the YAML rule from hiding it)"; text = ('`' + $six[5] + ": settings.v2.db_" + $six[5] + '`') },
     @{ found = $false; what = "an identifier and its semicolon in a code span"; text = ('`' + $ak + " = theKeyVariable;" + '`') },
     @{ found = $false; what = "an indexed lookup in a code span, in a sentence"; text = ("set it with " + '`' + $six[5] + " = secrets[0]" + '`' + " and go on") },
     @{ found = $true; what = "a secret with a digit in a code span is still a secret"; text = ('`' + $six[5] + " = " + $made + '`') },
