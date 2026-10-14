@@ -89,8 +89,9 @@ $devs = New-Object System.Collections.ArrayList
 $script:addressCount = 0
 function New-Address { $script:addressCount++; return ("10.7." + [Math]::Floor($script:addressCount / 250) + "." + (($script:addressCount % 250) + 1)) }
 function New-Phone {
-    param($Dev, [string]$Sub)
-    $r = Invoke-SignIn -Dev $Dev -Provider $fake -Scenario @{ sub = $Sub; email = ($Sub + "@example.test") } -Address (New-Address)
+    param($Dev, [string]$Sub, [string]$Email = "")
+    if ($Email -eq "") { $Email = $Sub + "@example.test" }
+    $r = Invoke-SignIn -Dev $Dev -Provider $fake -Scenario @{ sub = $Sub; email = $Email } -Address (New-Address)
     $r | Add-Member -NotePropertyName cookie -NotePropertyValue ("__Host-horde-session=" + $r.session)
     return $r
 }
@@ -185,10 +186,13 @@ try {
     Check ($built.state -ceq "known") ("the phone app is built as the deploy builds it (" + $built.reason + ")")
     $ownerSub = "100000000000000002101"
     $otherSub = "100000000000000002102"
+    # THE OWNERS as PR 281 names them (worker/budget.js): one by account id, one by email.
+    $ownerEmail = "boss-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + "@example.test"
+    $owners = @{ HORDE_RELAY_OWNER_ACCOUNTS = ('{"emails":["' + $ownerEmail + '"],"subs":["' + $ownerSub + '"]}') }
 
     Write-Host ""
     Write-Host "--- 2. a dev that flushes every request: no text reaches a summary, and the counts are exact ---" -ForegroundColor Cyan
-    $M = Start-Dev -Name "metrics" -Metrics '{"flushCount":1,"summaryEveryMs":1}' -More @{ HORDE_RELAY_OWNER_ACCOUNTS = $ownerSub }
+    $M = Start-Dev -Name "metrics" -Metrics '{"flushCount":1,"summaryEveryMs":1}' -More $owners
     $O = $M.origin
     $day = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
     $expected = @{}
@@ -271,7 +275,7 @@ try {
     Check ($strings.Count -gt 20 -and $odd.Count -eq 0) ("and every string in it is a word of the fixed lists, an hour, a day or a 16-hex account hash (" + $strings.Count + " strings; " + ($odd -join ",") + ")")
     Check (-not (Test-AllowedString $marker) -and -not (Test-AllowedString "work/phone") -and (Test-AllowedString "items.put") -and (Test-AllowedString "0123456789abcdef")) "CONTROL: that check refuses the marker and a mailbox name, and takes a route and a hash"
     $hashes = @(@(Get-HordeTestMember $sum.json "accounts") | ForEach-Object { "" + (Get-HordeTestMember $_ "account") } | Sort-Object -Unique)
-    Check ($hashes.Count -eq 2 -and @($hashes | Where-Object { $_ -cnotmatch '\A[0-9a-f]{16}\z' }).Count -eq 0 -and -not $sum.text.Contains($ownerSub) -and -not $sum.text.Contains($otherSub) -and -not $sum.text.Contains("example.test")) ("two accounts, each under a 16-hex hash: no account id and no email in it (" + ($hashes -join ",") + ")")
+    Check ($hashes.Count -eq 2 -and @($hashes | Where-Object { $_ -cnotmatch '\A[0-9a-f]{16}\z' }).Count -eq 0 -and -not $sum.text.Contains($ownerSub) -and -not $sum.text.Contains($otherSub) -and -not $sum.text.Contains("example.test") -and -not $sum.text.Contains("boss-")) ("two accounts, each under a 16-hex hash: no account id and no email in it (" + ($hashes -join ",") + ")")
 
     Write-Host ""
     Write-Host "--- who reads what: the relay-wide view only for an owner's machine ---" -ForegroundColor Cyan
@@ -340,7 +344,7 @@ try {
 
     Write-Host ""
     Write-Host "--- 3. a metrics object that refuses every flush costs no user anything ---" -ForegroundColor Cyan
-    $F = Start-Dev -Name "failing" -Metrics '{"flushCount":1,"failFlush":1,"summaryEveryMs":1}' -More @{ HORDE_RELAY_OWNER_ACCOUNTS = $ownerSub }
+    $F = Start-Dev -Name "failing" -Metrics '{"flushCount":1,"failFlush":1,"summaryEveryMs":1}' -More $owners
     $O = $F.origin
     $fp = New-Phone -Dev $F -Sub $ownerSub
     $fm = New-Machine -Dev $F -Cookie $fp.cookie -Label "fail-box"
@@ -355,6 +359,17 @@ try {
     $fread = Get-Json (Send-To -Url ($O + "/v1/mailboxes/work/f/items?since=0&max=20") -Cookie $fp.cookie)
     Check ($fp.session -ne "" -and $fm.reg.code -eq 200 -and (@($codes | Sort-Object -Unique) -join ",") -ceq "200" -and @(Get-HordeTestMember $fread "items").Count -eq 10) ("A FAILING METRICS OBJECT NEVER FAILS A USER'S REQUEST: sign-in, pairing, ten puts and ten reads, every one answered and every item kept (" + (@($codes | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
     Check ($slowest -lt 3000) ("nor slows one: the slowest put and read together took " + $slowest + " ms on a local dev")
+    # AN OWNER BY EMAIL (PR 281's pins): its machine reads the relay-wide view once its email is pinned to
+    # its account - which its first mailbox request does - and not before; the summary itself pins nothing.
+    $ep = New-Phone -Dev $F -Sub "100000000000000002103" -Email $ownerEmail
+    $em = New-Machine -Dev $F -Cookie $ep.cookie -Label "email-box"
+    $before = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
+    $again = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
+    $pin = Send-To -Url ($O + "/v1/mailboxes/work/e/items?since=0&max=1") -Cookie $ep.cookie
+    $after = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
+    $asPc = Get-Summary -Dev $F -Machine $em -Day $day
+    Check ($ep.session -ne "" -and $em.reg.code -eq 200 -and $before.code -eq 403 -and $again.code -eq 403) ("AN OWNER BY EMAIL whose email is not yet pinned to its account is refused the relay-wide view, and asking twice pins nothing (" + $before.code + "," + $again.code + ")")
+    Check ($pin.code -eq 200 -and $after.code -eq 200 -and ("" + (Get-HordeTestMember $after.json "scope")) -ceq "relay" -and ("" + (Get-HordeTestMember $asPc.json "scope")) -ceq "relay") ("once its first mailbox request pinned the email to it, its machine reads the relay-wide view, asked by name or as the PC asks (" + $pin.code + "," + $after.code + ")")
     $fs = Get-Summary -Dev $F -Machine $fm -Day $day -Scope "relay"
     Check ($fs.code -eq 200 -and @(Get-HordeTestMember $fs.json "requests").Count -eq 0 -and ((@(@(Get-HordeTestMember $fs.json "own") | ForEach-Object { [long](Get-HordeTestMember $_ "flushes") }) | Measure-Object -Sum).Sum) -eq 0) "CONTROL: the object really refused them all: it holds no row and counted no flush"
     Stop-Dev -Dev $F
@@ -364,7 +379,7 @@ try {
     # An account's day of 6 and a relay's day of 6 (one held back for the owner, leased one at a time):
     # the owner's phone makes 2 mailbox requests, then everything metrics can do happens - a flush on every
     # request, its machine's summary reads, a watch's end - and then exactly 4 more requests are taken.
-    $B = Start-Dev -Name "budget" -Limits '{"requestsPerDay":6,"relayRequestsPerDay":6,"relayOwnerReserve":1,"relayRequestLease":1}' -Metrics '{"flushCount":1,"summaryEveryMs":1}' -More @{ HORDE_RELAY_OWNER_ACCOUNTS = $ownerSub }
+    $B = Start-Dev -Name "budget" -Limits '{"requestsPerDay":6,"relayRequestsPerDay":6,"relayOwnerReserve":1,"relayRequestLease":1}' -Metrics '{"flushCount":1,"summaryEveryMs":1}' -More $owners
     $O = $B.origin
     $bp = New-Phone -Dev $B -Sub $ownerSub
     $bm = New-Machine -Dev $B -Cookie $bp.cookie -Label "budget-box"

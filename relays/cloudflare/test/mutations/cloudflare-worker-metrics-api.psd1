@@ -12,11 +12,17 @@
            Find = '  if (!who || who.kind !== "machine") return refuse(403, "only a registered machine reads the relay''s metrics");'
            Replace = '  if (!who) return refuse(403, "only a registered machine reads the relay''s metrics");' }
         @{ Name = "any-machine-reads-the-relay-wide-view"
-           Find = '  if (scope === "relay" && tierOf(ownersOf(env), who.account) !== "owner") return refuse(403,'
-           Replace = '  if (scope === "relay" && false) return refuse(403,' }
+           Find = '  if (scope === "relay" && !owner) return refuse(403,'
+           Replace = '  if (false) return refuse(403,' }
         @{ Name = "no-scope-is-always-relay-wide"
-           Find = '  const scope = asked || (tierOf(ownersOf(env), who.account) === "owner" ? "relay" : "account");'
+           Find = '  const scope = asked || (owner ? "relay" : "account");'
            Replace = '  const scope = asked || "relay";' }
+        @{ Name = "an-owner-email-makes-any-account-an-owner"
+           Find = '  return (await relayBudgetOf(env).pinnedOwner({ account: who.account, emails })) === true;'
+           Replace = '  return true;' }
+        @{ Name = "an-owner-by-email-never-an-owner"
+           Find = '  if (emails.length === 0 || !env.RELAY_BUDGET) return false;'
+           Replace = '  return false;' }
         @{ Name = "any-day-asked"
            Find = '  if (day === null) return refuse(400, "day must be a date, YYYY-MM-DD");'
            Replace = '' }

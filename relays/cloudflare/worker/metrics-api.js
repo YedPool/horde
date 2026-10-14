@@ -7,8 +7,11 @@
 //
 // WHO MAY READ WHAT. Only a MACHINE, by its signed request (auth.js): a phone, the test principal and
 // anyone else are refused 403. THE RELAY-WIDE VIEW - every route, every account's hours, the metrics
-// object's own line - only for a machine of an OWNER ACCOUNT, by the owners' list the relay-wide budget
-// already reads (budget.js, ownersOf and tierOf: HORDE_RELAY_OWNER_ACCOUNTS). With no owner named,
+// object's own line - only for a machine of an OWNER ACCOUNT, by the relay-wide budget's own rule
+// (budget.js, THE OWNERS): an owner by account id (tierOf), or by email when that email is already
+// PINNED to this account (relay-budget.js, THE PINS - asked read only, pinnedOwner: a summary pins
+// nothing and moves no count; an email not yet pinned to anyone gives its account the account view
+// until its first mailbox request pins it). With no owner named,
 // nobody is an owner here: the relay-wide view is refused to everyone (the budget's tier "everyone" is
 // a share of requests, not a right to read every account's counts). ITS OWN ACCOUNT'S HOURS - count,
 // bytes in and out, under its account hash - for any machine.
@@ -22,7 +25,8 @@
 // WHAT A SUMMARY CAN HOLD is only what metrics.js lets a row hold: an hour, a route, a kind and an outcome
 // from their fixed lists, a 16-hex account hash, and whole numbers. The day asked for is a date, checked.
 import { answer, refuse, refuseWith, CODES } from "./answers.js";
-import { ownersOf, tierOf } from "./budget.js";
+import { ownersOf, tierOf, ownerEmailsOf } from "./budget.js";
+import { relayBudgetOf } from "./relay-budget.js";
 import { metricsSettingsOf, dayOrNull, accountHashOf, SALT_BINDING } from "./metrics.js";
 import { metricsObjectOf, METRICS_SUMMARY_PATH } from "./metrics-request.js";
 
@@ -30,6 +34,15 @@ export { METRICS_SUMMARY_PATH };
 // When each machine key last read a summary from this isolate (the header). Bounded: oldest forgotten.
 const lastRead = new Map();
 const LAST_READ_MAX = 1024;
+
+// Is who's account an owner (the header, WHO MAY READ WHAT)? By id, or by an email already pinned to it.
+async function isOwner(env, who) {
+  const owners = ownersOf(env);
+  if (tierOf(owners, who.account) === "owner") return true;
+  const emails = ownerEmailsOf(owners);
+  if (emails.length === 0 || !env.RELAY_BUDGET) return false;
+  return (await relayBudgetOf(env).pinnedOwner({ account: who.account, emails })) === true;
+}
 
 export async function handleMetricsSummary(request, env, url, who) {
   if (request.method !== "GET") return refuse(405, "the summary is read with GET");
@@ -41,12 +54,13 @@ export async function handleMetricsSummary(request, env, url, who) {
   // a machine that is not an owner's.
   const asked = url.searchParams.get("scope");
   if (asked !== null && asked !== "relay" && asked !== "account") return refuse(400, "scope is relay or account");
-  const scope = asked || (tierOf(ownersOf(env), who.account) === "owner" ? "relay" : "account");
-  if (scope === "relay" && tierOf(ownersOf(env), who.account) !== "owner") return refuse(403, "only a machine of one of the relay's owner accounts reads the relay-wide metrics; ask with scope=account for your own");
   const settings = metricsSettingsOf(env, url);
   const now = Date.now();
   const last = lastRead.get(who.keyId);
   if (last !== undefined && now - last < settings.summaryEveryMs) return refuseWith(429, CODES.rate, "this machine read a summary a moment ago: wait", settings.summaryEveryMs - (now - last));
+  const owner = asked === "account" ? false : await isOwner(env, who);
+  const scope = asked || (owner ? "relay" : "account");
+  if (scope === "relay" && !owner) return refuse(403, "only a machine of one of the relay's owner accounts reads the relay-wide metrics; ask with scope=account for your own");
   const m = metricsObjectOf(env);
   if (!m) return refuse(503, "this relay keeps no metrics");
   let account = null;
