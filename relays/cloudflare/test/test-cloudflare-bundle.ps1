@@ -77,6 +77,58 @@ try {
     $cfg = Join-Path $tested "relays\cloudflare\wrangler.json"
     [System.IO.File]::WriteAllText($cfg, ([System.IO.File]::ReadAllText($cfg)).Replace('"HORDE_RELAY_ORIGIN"', '"HORDE_RELAY_TEST_AUTH": "x", "HORDE_RELAY_ORIGIN"'))
     Check ((Bundle $tested).state -ceq "unknown") "a tree whose config names a test binding is not bundled"
+
+    Write-Host ""
+    Write-Host "--- the supervisor's real tools together: load, shipped, bundle ---" -ForegroundColor Cyan
+    # In a child process (the relays register once a process), on a clone of this checkout's commit in
+    # the suite's folder: the step with the real revision tool, Load, Shipped and Bundle; only whether
+    # the commit is on origin/main, the deploy and the requests are stand-ins, and the deploy only writes
+    # a line. The code under test is this checkout's; the clone is what it looks at.
+    $clone = Join-Path $work "clone"; $hh = Join-Path $work "tend-home"; $out = Join-Path $work "driver-out.txt"
+    [void][System.IO.Directory]::CreateDirectory($hh)
+    $null = & git clone -q --shared --no-checkout $root $clone
+    $head0 = ("" + (& git -C $root rev-parse HEAD)).Trim()
+    $null = & git -C $clone -c advice.detachedHead=false checkout -q $head0
+    $null = & git -C $clone config user.email suite@example.invalid; $null = & git -C $clone config user.name suite
+    $driver = Join-Path $work "driver.ps1"
+    [System.IO.File]::WriteAllText($driver, @'
+param([string]$Root, [string]$Clone, [string]$HordeHome, [string]$Out)
+$ErrorActionPreference = "Stop"
+foreach ($f in @("Tristate", "Home", "ModuleSettings", "Heartbeat", "Services", "ServicesFiles", "ServiceHostPort")) { . (Join-Path $Root ("core\" + $f + ".ps1")) }
+foreach ($f in @("ServicesAct", "ServicesTell", "RelayDeploy", "RelayPublish")) { . (Join-Path $Root ("cli\" + $f + ".ps1")) }
+$t = New-HordeRelayPublishTools
+$t.Upstream = { param($C, $X) return (New-HordeKnown -Value $true) }
+$t.Deploy = { param($H, $S, $C, $X) [System.IO.File]::AppendAllText($Out, ("DEPLOY " + $X + "`n")); return (New-HordeUnknown -Reason "suite: nothing deployed") }
+$t.Http = { param($U) return (New-HordeUnknown -Reason "suite: no request") }
+$t.Sleep = { param($Ms) }
+foreach ($l in @(Invoke-HordeRelayPublishStep -HordeHome $HordeHome -Tools $t -Checkout $Clone)) { [System.IO.File]::AppendAllText($Out, ($l + "`n")) }
+'@)
+    $runStep = {
+        if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force }
+        $null = & ([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell\v1.0\powershell.exe")) -NoProfile -ExecutionPolicy Bypass -File $driver -Root $root -Clone $clone -HordeHome $hh -Out $out
+        if (Test-Path -LiteralPath $out) { return [System.IO.File]::ReadAllText($out) }
+        return ""
+    }
+    $seed = {
+        param([string]$Commit)
+        $rel = Join-Path $hh "relay"; [void][System.IO.Directory]::CreateDirectory($rel)
+        Remove-Item -LiteralPath (Join-Path $rel "publish-state.json") -ErrorAction SilentlyContinue
+        [System.IO.File]::WriteAllText((Join-Path $rel "deployed.json"), ('{"schemaVersion":1,"id":"' + ("0" * 32) + '","commit":"' + $Commit + '","clean":true,"version":"x","relay":"cloudflare","origin":"https://suite.invalid","at":"2026-10-14T00:00:00Z"}'))
+    }
+    Add-Content -LiteralPath (Join-Path $clone "surfaces\pwa\page\app.js") -Value "`n// a page change of this suite's"
+    Add-Content -LiteralPath (Join-Path $clone "relay\js\protocol.js") -Value "`nexport function hordeSuiteUnusedHere(x) { return x; }"
+    $null = & git -C $clone commit -qam "suite: page and protocol"
+    $c1 = ("" + (& git -C $clone rev-parse HEAD)).Trim()
+    & $seed $head0
+    $said = & $runStep
+    Check ($said.Contains("DEPLOY " + $c1) -and $said.Contains(": the same")) ("a page change and an unused protocol change, bundled alike by the real tools, is handed to the deploy (" + ($said -replace "`n", " | ") + ")")
+    $null = & git -C $clone -c advice.detachedHead=false checkout -q $head0
+    Add-Content -LiteralPath (Join-Path $clone "relays\cloudflare\worker\index.js") -Value "`nexport const hordeSuiteMark = 1;"
+    Add-Content -LiteralPath (Join-Path $clone "surfaces\pwa\page\app.js") -Value "`n// and a page change"
+    $null = & git -C $clone commit -qam "suite: worker"
+    & $seed $head0
+    $said = & $runStep
+    Check (-not ($said -cmatch "(?m)^DEPLOY ") -and $said.Contains("Worker changed") -and -not $said.Contains("bundled at")) ("a change to the Worker's own code is warned, and nothing is bundled (" + ($said -replace "`n", " | ") + ")")
 } finally {
     if ($work -like "*horde-cf-bundle-test-*" -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
