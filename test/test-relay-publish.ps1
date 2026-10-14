@@ -37,7 +37,8 @@ $builtPaths = @(@($siteMap.Keys) + @("app/config.json", "app/icon-192.png", "app
 # outside it that its code imports, and the site's sources and builder.
 $shippedHere = [pscustomobject]@{ workerPrefixes = [string[]]@("relays/zorbrelay/"); workerExcept = [string[]]@("relays/zorbrelay/test/")
     workerFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js")
-    pageFiles = [string[]]@(@($siteMap.Values) + @(Get-HordeRelayDeployBuildFiles)); buildFiles = [string[]]@(Get-HordeRelayDeployBuildFiles) }
+    pageFiles = [string[]]@(@($siteMap.Values) + @(Get-HordeRelayDeployBuildFiles)); buildFiles = [string[]]@(Get-HordeRelayDeployBuildFiles)
+    sharedFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js") }
 
 function New-Home { param([string]$Name) $h = Join-Path $work $Name; [void][System.IO.Directory]::CreateDirectory($h); return $h }
 function Sw { param([string]$Version) return ("// the worker`nconst VERSION = `"" + $Version + "`";`nconst SHELL = [];`n") }
@@ -47,7 +48,7 @@ function Hash { param([string]$Path, [string]$Version) return ("h" + $Version + 
 # hosts every file it built (with the hash it answers) unless the suite says a file is hosted otherwise.
 function New-World {
     param([string]$HordeHome)
-    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; diffs = @{}; diffOk = $true; shippedOk = $true
+    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; diffs = @{}; diffOk = $true; shippedOk = $true; bundles = @{}; bundleOk = $true
         deploy = "ok"; built = $v2; serveAfter = $null; deploys = 0; calls = (New-Object System.Collections.ArrayList)
         hosted = @{ "app/sw.js" = [pscustomobject]@{ status = 200; body = (Sw $v1); sha256 = (Hash "app/sw.js" $v1) } }
         otherwise = @{}; changed = @("surfaces/pwa/page/app.js")
@@ -66,6 +67,13 @@ function New-Tools {
         }
         Load    = $null
         Shipped = { param($Checkout) [void]$W.calls.Add("shipped"); if (-not $W.shippedOk) { return (New-HordeUnknown -Reason "no relay loaded") }; return (New-HordeKnown -Value $shippedHere) }
+        # A Worker bundle: the same at every commit unless the suite says otherwise.
+        Bundle  = {
+            param($Checkout, $Commit)
+            [void]$W.calls.Add("bundle " + $Commit.Substring(0, 1))
+            if (-not $W.bundleOk) { return (New-HordeUnknown -Reason "the dry run did not bundle the Worker") }
+            return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $(if ($W.bundles.ContainsKey($Commit)) { $W.bundles[$Commit] } else { "0" * 64 }) }))
+        }
         Deploy  = {
             param($HordeHome, $Say, $Checkout)
             $W.deploys++; [void]$W.calls.Add("deploy")
@@ -152,6 +160,24 @@ try {
     Check ($sh.state -ceq "known" -and (@($sh.value.workerPrefixes) -join ",") -ceq "relays/zorbrelay/" -and (@($sh.value.workerExcept) -join ",") -ceq "relays/zorbrelay/test/") "the deployed relay's folder, from the port, is the Worker's, but its tests"
     Check ((@($sh.value.workerFiles) -join ",") -ceq "relay/js/more.js,relay/js/protocol.js") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
     Check ((@($sh.value.pageFiles) -ccontains "surfaces/pwa/page/app.js") -and (@($sh.value.pageFiles) -ccontains "surfaces/pwa/Site.ps1") -and (@($sh.value.buildFiles) -ccontains "cli/RelayDeploy.ps1")) "the site's sources and its builder are the page"
+    Check ((@($sh.value.sharedFiles) -join ",") -ceq "relay/js/protocol.js") ("shared: the Worker's files the site serves too, and not one it imports that the site does not serve (" + (@($sh.value.sharedFiles) -join ",") + ")")
+
+    Write-Host ""
+    Write-Host "--- the port's bundle ---" -ForegroundColor Cyan
+    $b1 = Get-HordeRelayBundle -Name "zorbrelay" -Tree $repo -Work $work
+    Check ($b1.state -ceq "unknown" -and $b1.reason -like "*cannot bundle*") "a relay that hands in no bundle cannot be measured"
+    $bundleRelay = Join-Path $work "zorbbundle"
+    [void][System.IO.Directory]::CreateDirectory($bundleRelay)
+    [System.IO.File]::WriteAllText((Join-Path $bundleRelay "capabilities.json"), $caps.Replace('"relay": "zorbrelay"', '"relay": "zorbbundle"'))
+    $script:bundleAnswer = $null
+    $null = Register-HordeRelay -Folder $bundleRelay -Connect $none -Put $none -Get $none -Watch $none -Ack $none -Bundle { param($Tree, $Work) return $script:bundleAnswer }
+    $script:bundleAnswer = New-HordeKnown -Value ([pscustomobject]@{ sha256 = ("c" * 64) })
+    $b1 = Get-HordeRelayBundle -Name "zorbbundle" -Tree $repo -Work $work
+    Check ($b1.state -ceq "known" -and $b1.value.sha256 -ceq ("c" * 64)) "CONTROL: a relay's bundle hash is passed on"
+    $script:bundleAnswer = New-HordeKnown -Value ([pscustomobject]@{ sha256 = "short" })
+    Check ((Get-HordeRelayBundle -Name "zorbbundle" -Tree $repo -Work $work).state -ceq "unknown") "a bundle answered without a 64-hex hash is unknown"
+    $script:bundleAnswer = [pscustomobject]@{ state = "known"; value = [pscustomobject]@{ sha256 = ("c" * 64) } }
+    Check ((Get-HordeRelayBundle -Name "zorbbundle" -Tree $repo -Work $work).state -ceq "unknown") "a bundle that is not an answer is unknown"
 
     Write-Host ""
     Write-Host "--- a page change is deployed, checked and told once ---" -ForegroundColor Cyan
@@ -218,14 +244,59 @@ try {
     $W.head = $cC; $W.diffs[$cA + ".." + $cC] = [string[]]@("surfaces/pwa/page/app.js", "relays/zorbrelay/worker/site.js", "relays/zorbrelay/worker/more.js")
     $null = Pass
     Check ($W.told.Count -eq 1) "a later merge with the same mix is not told again"
-    $W = New-World (New-Home "protocol"); Seed
-    Range @("relay/js/protocol.js", "test/test-x.ps1")
+    $W = New-World (New-Home "worker-only"); Seed
+    Range @("relay/js/protocol.js", "relays/zorbrelay/worker/site.js")
     $null = Pass
-    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-changed") "a change to the protocol the Worker imports is a Worker change: warned, not deployed"
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-changed") "a worker-only file warns, shared files beside it or not"
+    Check (@($W.calls | Where-Object { $_ -like "bundle*" }).Count -eq 0) "and nothing is bundled for it"
     $W = New-World (New-Home "worker-ignored"); Seed
     Range @("relays/zorbrelay/deploy-config.json", "core/Services.ps1")
     $null = Pass
     Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-changed") "a Worker change among ignored files is warned"
+
+    Write-Host ""
+    Write-Host "--- a shared file is measured: does the Worker bundle change? ---" -ForegroundColor Cyan
+    $W = New-World (New-Home "protocol-same"); Seed
+    Range @("relay/js/protocol.js", "surfaces/pwa/page/app.js", "test/test-x.ps1")
+    $l = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed") ("a protocol.js change that leaves the worker bundle identical deploys (" + (Whats) + ")")
+    Check (($W.calls -ccontains "bundle a") -and ($W.calls -ccontains "bundle b")) "the Worker was bundled at the deployed commit and at the checkout's"
+    Check (Says $l "the same, so the shared files count as the page") "the pass says what it measured"
+    Check ($W.calls -ccontains "http relay/protocol.js") "the shared file, now the page, is compared after the deploy"
+    $W = New-World (New-Home "protocol-differs"); Seed
+    Range @("relay/js/protocol.js", "surfaces/pwa/page/account-client.js")
+    $W.bundles[$cB] = "1" * 64
+    $l = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-changed") ("one that changes the bundle warns (" + (Whats) + ")")
+    Check (@($W.calls | Where-Object { $_ -like "bundle*" }).Count -eq 2) "each commit is bundled once, and the next pass reads the hashes it kept"
+    $kept = @((Read-HordeRelayPublishState -HordeHome $W.home).value.bundles)
+    Check ($kept.Count -eq 2 -and @($kept | Where-Object { $_.commit -ceq $cB -and $_.sha256 -ceq ("1" * 64) }).Count -eq 1) "the hashes are kept in the state, by commit"
+    $W = New-World (New-Home "protocol-unbuilt"); Seed
+    Range @("relay/js/protocol.js")
+    $W.bundleOk = $false
+    $l = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-unmeasured") ("a bundle that cannot be built warns (" + (Whats) + ")")
+    $body = Format-HordeServiceNoticeBody -Notice $W.told[0]
+    Check ($body.Contains("could not be measured") -and $body.Contains("horde relay deploy")) "and says the Worker could not be measured"
+    $W = New-World (New-Home "protocol-half"); Seed
+    Range @("relay/js/protocol.js")
+    $W.bundles[$cA] = "not a hash"
+    $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-unmeasured") "a bundle answered without a hash is no measurement"
+
+    Write-Host ""
+    Write-Host "--- the measure, alone ---" -ForegroundColor Cyan
+    $k = { param($Sha) return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $Sha })) }
+    $cl = Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("relay/js/protocol.js", "surfaces/pwa/page/app.js")
+    Check (Test-HordeRelayPublishSharedOnly -Classes $cl -Shipped $shippedHere) "shared files alone are measured"
+    Check (-not (Test-HordeRelayPublishSharedOnly -Classes (Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("relay/js/protocol.js", "relays/zorbrelay/deploy-config.json")) -Shipped $shippedHere)) "with a worker-only file beside them, they are not"
+    Check (-not (Test-HordeRelayPublishSharedOnly -Classes (Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("surfaces/pwa/page/app.js")) -Shipped $shippedHere)) "with no Worker file at all, nothing is measured"
+    $m = Get-HordeRelayPublishMeasured -Classes $cl -Base (& $k ("a" * 64)) -Head (& $k ("a" * 64))
+    Check ($m.measured -ceq "same" -and @($m.worker).Count -eq 0 -and (@($m.page) -join ",") -ceq "surfaces/pwa/page/app.js,relay/js/protocol.js") "alike: the shared files join the page"
+    $m = Get-HordeRelayPublishMeasured -Classes $cl -Base (& $k ("a" * 64)) -Head (& $k ("b" * 64))
+    Check ($m.measured -ceq "differs" -and (@($m.worker) -join ",") -ceq "relay/js/protocol.js") "different: they stay the Worker's"
+    $m = Get-HordeRelayPublishMeasured -Classes $cl -Base (& $k ("a" * 64)) -Head (New-HordeUnknown -Reason "no")
+    Check ($m.measured -ceq "unknown" -and @($m.worker).Count -eq 1) "either not made: unknown, and they stay the Worker's"
 
     Write-Host ""
     Write-Host "--- no change does nothing ---" -ForegroundColor Cyan

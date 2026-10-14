@@ -108,5 +108,26 @@
         @{ Name = "test-home-deploys"
            Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $HordeHome) { return (New-HordeUnknown -Reason "this Horde home is under the temp folder, so it is a test''s: nothing is deployed") }'
            Replace = '' }
+        @{ Name = "shared-only-not-measured"
+           Find = 'if (Test-HordeRelayPublishSharedOnly -Classes $classes -Shipped $shipped.value) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "worker-only-measured"
+           Find = 'return [bool](@($Classes.worker | Where-Object { @($Shipped.sharedFiles) -cnotcontains $_ }).Count -eq 0)'
+           Replace = 'return $true' }
+        @{ Name = "differing-bundles-alike"
+           Find = 'if ($Base.value.sha256 -cne $Head.value.sha256) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unmade-bundle-alike"
+           Find = 'if (-not (& $known $Base) -or -not (& $known $Head)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "bundle-not-kept"
+           Find = '$had = @(@($s.bundles) | Where-Object { $_.commit -ceq $Commit }) | Select-Object -First 1'
+           Replace = '$had = $null' }
+        @{ Name = "shared-includes-worker-only-imports"
+           Find = 'sharedFiles = [string[]]@($outside | Where-Object { $page -ccontains $_ })'
+           Replace = 'sharedFiles = [string[]]$outside' }
+        @{ Name = "unmeasured-told-as-changed"
+           Find = 'if ("" + $Classes.measured -ceq "unknown") { return (& $say "warn" "worker-unmeasured"'
+           Replace = 'if ($false) { return (& $say "warn" "worker-unmeasured"' }
     )
 }

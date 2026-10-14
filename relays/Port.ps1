@@ -90,6 +90,12 @@
 #   Deploy  param([string]$Site, [scriptblock]$Say, [string]$HordeHome) -> known { origin }
 # Publish-HordeRelay runs it and checks its answer as it checks every other; Get-HordeRelayDeployable
 # names the relays that have one.
+# A relay that is deployed may also hand -Bundle: what it would deploy as its own code, built from a
+# tree of the repository (any commit's, exported) WITHOUT NETWORK OR LOGIN, as one hash:
+#   Bundle  param([string]$Tree, [string]$Work) -> known { sha256 }
+# Two trees whose bundles hash alike would deploy the same code. The supervisor uses it to tell whether
+# a change to a file the relay's code shares with the phone app changes the relay (cli/RelayPublish.ps1);
+# Get-HordeRelayBundle runs it and checks its answer. -Work is the caller's scratch folder.
 #
 # A RELAY THAT COUNTS REQUESTS (the hosted one: a request a day per account is its limit) may also hand
 # Register-HordeRelay -RunWatchMs: how long a long-running runner's watch waits on it (cli/RelayRun.ps1).
@@ -295,7 +301,8 @@ function Register-HordeRelay {
         [scriptblock]$WatchWait = $null,
         [scriptblock]$WatchClose = $null,
         [scriptblock]$PutKeeping = $null,
-        [scriptblock]$SecretFiles = $null
+        [scriptblock]$SecretFiles = $null,
+        [scriptblock]$Bundle = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -315,7 +322,7 @@ function Register-HordeRelay {
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
         watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles
-        connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
+        bundle = $Bundle; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }
@@ -344,6 +351,22 @@ function Publish-HordeRelay {
     $o = Get-HordeRelayMember $a.value "origin"
     if (-not $o.has -or $o.value -isnot [string] -or $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy without the https origin it answers at")) }
     return (New-HordeKnown -Value ([pscustomobject]@{ relay = $Name; origin = $o.value }) -ObservedAt $a.observedAt)
+}
+
+function Get-HordeRelayBundle {
+    # Relay -Name's code as it would be deployed from the tree -Tree, bundled (header, DEPLOYING): known
+    # { sha256 } or unknown with the reason. Never throws for the relay.
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Tree, [Parameter(Mandatory = $true)][string]$Work)
+    if (-not $script:HordeRelays.ContainsKey($Name)) { return (New-HordeUnknown -Reason ("no relay named '" + $Name + "' is loaded")) }
+    $r = $script:HordeRelays[$Name]
+    if ($null -eq $r.bundle) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' cannot bundle its code")) }
+    try { $a = & $r.bundle $Tree $Work }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to bundle its code") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the bundle with something that is not an answer")) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' did not bundle its code: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
+    $h = Get-HordeRelayMember $a.value "sha256"
+    if (-not $h.has -or $h.value -isnot [string] -or $h.value -cnotmatch '\A[0-9a-f]{64}\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the bundle without its hash")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $h.value }))
 }
 
 function Get-HordeRelay {
