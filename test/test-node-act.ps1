@@ -610,6 +610,14 @@ Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye
 Reset; $script:reportMode = "bypass"; $script:slowModeMs = 4500
 $x = SpawnOnce $lim10
 Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 1) ("CONTROL: with 5.5 s left the close text is typed (" + ((Typed) -join "|") + ")")
+# Bounds with no hostCallSeconds count the first host's 20 s a call, never 0 (F's nit of round 4): with
+# about 25 s left, 2 items x 20 s + 2 s does not fit, so no close text; at 1 s a call it would.
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 35000
+$x = SpawnOnce { param($c) $c.bounds.PSObject.Properties.Remove("hostCallSeconds") }
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("no hostCallSeconds in the bounds, about 25 s left: each call counted at 20 s, so no close text, the host ends the pane (" + ((Typed) -join "|") + ")")
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 35000
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 1) ("CONTROL: the same with hostCallSeconds 1 types the close text (" + ((Typed) -join "|") + ")")
 Reset
 Register-FixtureHarness -Blind
 $script:reportMode = "bypass"

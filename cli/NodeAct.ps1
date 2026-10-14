@@ -719,7 +719,9 @@ function Invoke-HordeNodeSpawn {
     $lineSeconds = [double]$base.bounds.receiptSeconds + [double]$base.bounds.retrySeconds
     # The close text, one host call per item, and the close wait after it are typed and waited only while
     # they fit before the limit; else the host's end, whose calls the sum counts (F's re-check of round 3).
-    $hostCall = 0.0
+    # Bounds without it count the first host's 20 s, never 0: 0 would let the close text be typed 20 s
+    # before the limit, with no time for its own calls (F's re-check of round 4, nit).
+    $hostCall = 20.0
     if ($null -ne $base.bounds.PSObject.Properties["hostCallSeconds"]) { $hostCall = [double]$base.bounds.hostCallSeconds }
     $closeTextSeconds = @($adapter.closeText).Count * $hostCall + [double]$base.bounds.closeSeconds
     $limit = ""

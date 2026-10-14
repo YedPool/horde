@@ -325,5 +325,9 @@
         @{ Name = "screen-box-glyphs-dropped"
            Find = ' -or ($n -ge 0x2500 -and $n -le 0x257F))'
            Replace = ')' }
+        # F's nit of round 4: bounds without hostCallSeconds count 20 s a call.
+        @{ Name = "host-call-default-zero"
+           Find = '    $hostCall = 20.0'
+           Replace = '    $hostCall = 0.0' }
     )
 }
