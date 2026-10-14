@@ -1276,10 +1276,12 @@ function Get-HordeProjection {
     Assert-HordeProcessTable $Processes
     Assert-HordeHostPort $HostPort
     $statics = Get-HordeProjectionStatics
+    # The session-naming stores' folders (storeFolders, below), each named once here.
+    $agentDirs = @{ X2 = $ClaudeDir; W8 = $CodexDir }
     $C = [pscustomobject]@{
         rules = $statics.rules; viewSchema = $statics.viewSchema; valueSchemas = $statics.valueSchemas
         roleTable = $statics.roleTable; now = $Now; processes = $Processes; tableAt = $tableAt
-        identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir -Processes $Processes -TtlSeconds $TtlSeconds -Now $Now)
+        identity = (Get-HordeIdentity -ClaudeDir $agentDirs.X2 -ProjectsDir $ProjectsDir -CodexDir $agentDirs.W8 -Processes $Processes -TtlSeconds $TtlSeconds -Now $Now)
         wf = (Read-HordeWezfleetState -Root $WezfleetRoot)
         paneRead = (Read-HordePaneSessions -Dir $PaneSessionsDir)
         host = $null; paneVerdicts = $null; transcripts = (Get-HordeTranscriptIndex -ProjectsDir $ProjectsDir)
@@ -1292,6 +1294,13 @@ function Get-HordeProjection {
     $C.links = Get-HordeReportLinks -Runs $C.wf.runs
     $C.idSources = Get-HordeSessionIds -Identity $C.identity -Registry $C.wf.registry -PaneVerdicts $C.paneVerdicts -ReportLinks $C.links
     $C | Add-Member -NotePropertyName hostName -NotePropertyValue "$($HostPort.name)"
+    # WHICH SESSION-NAMING STORES HAVE A FOLDER AT ALL, as read now: a node serving its list as naming
+    # every session withdraws that claim for any store it did not declare that has one and was not read
+    # whole (remote/NodeServe.ps1, ledger core-projection L-101). Only ever takes the claim away.
+    $C | Add-Member -NotePropertyName storeFolders -NotePropertyValue ([ordered]@{
+        X2 = (Test-Path -LiteralPath $agentDirs.X2 -PathType Container); W8 = (Test-Path -LiteralPath $agentDirs.W8 -PathType Container)
+        W1 = (Test-Path -LiteralPath $WezfleetRoot -PathType Container); X1 = (Test-Path -LiteralPath $PaneSessionsDir -PathType Container)
+        W5 = (Test-Path -LiteralPath $WezfleetRoot -PathType Container) })
     return (Complete-HordeProjection -C $C -Scope $Scope)
 }
 
@@ -1484,6 +1493,10 @@ function ConvertTo-HordeNodeViewDocument {
     $served = Remove-HordeEndedSessions -Projection $Projection
     $doc = ConvertTo-HordeSessionViewDocument -Projection $served
     $doc["endedSessions"] = @($served.ended | ForEach-Object { [ordered]@{ sessionId = $_.sessionId; agent = $_.agent; reason = $_.reason } })
+    # Which session-naming stores have a folder (Get-HordeProjection), for sessions.list's
+    # membershipComplete; a node note like endedSessions, never sent.
+    $sf = $null; if ($null -ne $Projection.inputs -and $null -ne $Projection.inputs.PSObject.Properties["storeFolders"]) { $sf = $Projection.inputs.storeFolders }
+    $doc["storeFolders"] = $sf
     return $doc
 }
 

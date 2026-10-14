@@ -42,6 +42,15 @@ Set-Location -LiteralPath $script:work
 # Whatever a function here is not handed, it must not find the real home.
 $env:HORDE_HOME = Join-Path $script:work "home-nobody-uses"
 $script:n = 0
+# THE RELAYS A SHARE ASKS ARE ONE OF THIS SUITE'S OWN (files/Deny.ps1, THE RELAYS' OWN SECRET FILES):
+# the real ones are let go and one made-up relay, registered the way a real one registers, is asked and
+# names no file - the ordinary answer - so that no real relay's settings or files are looked at here.
+# test/test-files-deny.ps1 attacks that rule.
+$script:HordeRelays.Clear()
+$storeRelay = Join-Path $script:work "relays\test-relay-store"
+[void][System.IO.Directory]::CreateDirectory($storeRelay)
+[System.IO.File]::WriteAllText((Join-Path $storeRelay "capabilities.json"), '{ "schemaVersion": 1, "relay": "test-relay-store", "capabilities": { "durable": { "support": "yes", "evidence": "fixture" }, "realtime": { "support": "yes", "evidence": "fixture" }, "reach.remote": { "support": "yes", "evidence": "fixture" }, "trim.on.ack": { "support": "yes", "evidence": "fixture" } }, "limits": { "maxTextChars": 4096, "maxBatch": 8, "maxWatchMs": 2000, "retentionSeconds": 0 } }')
+$null = Register-HordeRelay -Folder $storeRelay -Connect {} -Put {} -Get {} -Watch {} -Ack {} -SecretFiles { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) }
 $sessA = New-HordeKnown -Value "session-a"
 $sessB = New-HordeKnown -Value "session-b"
 $noSession = New-HordeUnknown -Reason "this suite names no session"
@@ -627,9 +636,27 @@ foreach ($p in $placed) {
     $said = Get-HordeFilesTextProblem -Bytes $fileBytes -Type "text/plain"
     $found = [regex]::Match($said, $saysWhere)
     $at = -1; if ($found.Success -and $found.Groups["at"].Success) { $at = [int]$found.Groups["at"].Value }
-    Check ($at -ge $p.at -and $at -lt ($p.at + @($p.bad).Count)) ($p.what + ": the reason says where, inside the " + @($p.bad).Count + " byte(s) that are wrong (said " + $at + ", they begin at " + $p.at + ")")
+    # WHERE THE BAD SEQUENCE STARTS, counted from 0 (the review's next round, 2026-10-13): until then
+    # a lead byte with a letter after it was said to be at the letter, one byte late.
+    Check ($at -eq $p.at) ($p.what + ": the reason says where the " + @($p.bad).Count + " byte(s) that are wrong START (said " + $at + ", they begin at " + $p.at + ")")
     $repeated = @($p.bad | ForEach-Object { ([int]$_).ToString("X2") } | Where-Object { $said.Contains($_) })
     Check ($repeated.Count -eq 0 -and $said -notlike "*the bytes*") ("and it holds none of those bytes" + $(if ($repeated.Count) { " (REPEATED: " + ($repeated -join " ") + ")" } else { "" }))
+}
+# THE REVIEWER'S OWN BYTES: 61 62 C3 28 is byte 2, where C3 begins the character 28 breaks; and the
+# controls round it - a lone continuation byte is where it stands, and a whole character before a bad
+# byte does not pull the position back onto it.
+$reviewers = @(
+    @{ what = "61 62 C3 28, the reviewer's bytes"; bytes = @(0x61, 0x62, 0xC3, 0x28); at = 2 },
+    @{ what = "61 62 E2 82 28, a three-byte character broken after two"; bytes = @(0x61, 0x62, 0xE2, 0x82, 0x28); at = 2 },
+    @{ what = "F0 9F 98 28, a four-byte character broken after three"; bytes = @(0xF0, 0x9F, 0x98, 0x28); at = 0 },
+    @{ what = "CONTROL: 61 C3 A9 80, a whole two-byte character and then a lone continuation byte"; bytes = @(0x61, 0xC3, 0xA9, 0x80); at = 3 },
+    @{ what = "CONTROL: 61 62 80, a lone continuation byte after letters"; bytes = @(0x61, 0x62, 0x80); at = 2 },
+    @{ what = "CONTROL: 80 80 80 80 80, continuation bytes with no lead are each wrong where they stand"; bytes = @(0x80, 0x80, 0x80, 0x80, 0x80); at = 0 })
+foreach ($r in $reviewers) {
+    $said = Get-HordeFilesTextProblem -Bytes ([byte[]]$r.bytes) -Type "text/plain"
+    $found = [regex]::Match($said, $saysWhere)
+    $at = -1; if ($found.Success -and $found.Groups["at"].Success) { $at = [int]$found.Groups["at"].Value }
+    Check ($at -eq $r.at) ($r.what + ": said at byte " + $at + ", counted from 0 (" + $r.at + " wanted)")
 }
 foreach ($cutShort in @(@("a lead byte as the last byte", [byte[]]@(0x68, 0x69, 0xC3)), @("a three-byte character cut short after 300 letters", [byte[]](@($letters | Select-Object -First 300) + @(0xE2, 0x82))))) {
     $said = Get-HordeFilesTextProblem -Bytes $cutShort[1] -Type "text/plain"

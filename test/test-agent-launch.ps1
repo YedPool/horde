@@ -144,6 +144,15 @@ Write-Host "--- the port ---" -ForegroundColor Cyan
 Check (Throws { Register-HordeLaunchAdapter -Name "x" -Program "C:\bin\x.exe" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("x") } "never a path") "an adapter names its program by command name, never by path"
 Check (Throws { Register-HordeLaunchAdapter -Name "X" -Program "x" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("x") } "lowercase") "an adapter name is lower case"
 Check (Throws { Register-HordeLaunchAdapter -Name "x" -Program "x" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("") } "no text that ends") "an adapter must say what ends its session"
+# THE OPTIONAL BLOCKS ARE STORED AND RETURNED (issue #214; PR 239 round 2). Each block answers a mark of
+# its own, so a block stored under another's name, or dropped, is caught; a block not given is $null.
+Register-HordeLaunchAdapter -Name "harness-o" -Program "harness-o" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("x") `
+    -TurnMark { "mark" } -TurnSeen { "seen" } -InputHolds { "holds" } -TurnDone { "done" } -InputReady { "ready" }
+$ao = (Get-HordeLaunchAdapter -Name "harness-o").value
+Check ((& $ao.turnMark) -ceq "mark" -and (& $ao.turnSeen) -ceq "seen" -and (& $ao.inputHolds) -ceq "holds" -and (& $ao.turnDone) -ceq "done" -and (& $ao.inputReady) -ceq "ready") "an adapter's optional blocks - TurnMark, TurnSeen, InputHolds, TurnDone, InputReady - are each stored and returned under its own name"
+Register-HordeLaunchAdapter -Name "harness-o" -Program "harness-o" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("x")
+$ao = (Get-HordeLaunchAdapter -Name "harness-o").value
+Check ($null -ne $ao.PSObject.Properties["turnMark"] -and $null -eq $ao.turnMark -and $null -eq $ao.turnSeen -and $null -eq $ao.inputHolds -and $null -eq $ao.turnDone -and $null -eq $ao.inputReady) "an adapter registered without them has each as `$null, which a caller reads as a kind that cannot tell"
 $files = @(Get-HordeLaunchAdapterFiles -Root $root)
 Check ($files.Count -ge 1 -and @($files | Where-Object { $_ -notlike "*\agents\*\Launch.ps1" }).Count -eq 0) ("the adapter files are found by folder, agents\<name>\Launch.ps1 (" + $files.Count + ")")
 

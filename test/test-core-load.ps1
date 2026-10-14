@@ -54,6 +54,24 @@ try {
     Check ($err -eq "" -and $null -ne $g -and ("" + $g.t) -clike "*fixture-t*" -and ("" + $g.s) -clike "*fixture-s*") ("a transcript adapter and a scheduler registered before MetricsCollect.ps1 is loaded again are still registered (" + $(if ($g) { "t=" + $g.t + " s=" + $g.s } else { $err }) + ")")
     Check ($null -ne $g -and ("" + $g.l) -ceq "fixture-l" -and ("" + $g.h) -ceq "fixture-h") ("and so are a launch adapter and a host actor after their files load again (" + $(if ($g) { "l=" + $g.l + " h=" + $g.h } else { $err }) + ")")
 } finally { $ps.Dispose() }
+# The optional blocks of the launch port and the host port (issue #214; PR 239 round 2) are kept through
+# the same second load, each under its own name: registered by the real functions, read back after.
+$ps = [PowerShell]::Create()
+try {
+    [void]$ps.AddScript(
+        ". '" + (Join-Path $core "AgentLaunch.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "HostAct.ps1").Replace("'", "''") + "'`n" +
+        "Register-HordeLaunchAdapter -Name 'fixture-o' -Program 'fixture-o' -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @('x') -TurnMark { 'mark' } -TurnSeen { 'seen' } -InputHolds { 'holds' } -TurnDone { 'done' } -InputReady { 'ready' }`n" +
+        "Register-HordeHostActor -Name 'fixture-o' -Own { 1 } -Resolve { 1 } -Start { 1 } -Send { 1 } -Live { 1 } -Stop { 1 } -Text { 'text' }`n" +
+        ". '" + (Join-Path $core "AgentLaunch.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "HostAct.ps1").Replace("'", "''") + "'`n" +
+        "`$a = (Get-HordeLaunchAdapter -Name 'fixture-o').value; `$h = (Get-HordeHostActor -Name 'fixture-o').value`n" +
+        "@((& `$a.turnMark), (& `$a.turnSeen), (& `$a.inputHolds), (& `$a.turnDone), (& `$a.inputReady), (& `$h.text)) -join ','")
+    $got = @($ps.Invoke())
+    $err = $(if ($ps.Streams.Error.Count -gt 0) { "" + $ps.Streams.Error[0] } else { "" })
+    $line = $(if ($got.Count -gt 0) { "" + $got[-1] } else { "" })
+    Check ($err -eq "" -and $line -ceq "mark,seen,holds,done,ready,text") ("an adapter's TurnMark, TurnSeen, InputHolds, TurnDone and InputReady, and a host's Text, are stored and returned after their files load again (" + $line + $err + ")")
+} finally { $ps.Dispose() }
 
 Write-Host ""
 Write-Host "--- every core file of this tree ---" -ForegroundColor Cyan

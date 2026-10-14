@@ -52,8 +52,14 @@
 # THE NAMES. A file whose NAME holds one of the list's words is refused unless the caller gives
 # -Force. EACH WORD SAYS WHICH OF TWO WAYS IT IS LOOKED FOR (the list has one entry a word):
 #   anywhere   the letters, wherever they stand in the name: credential, secret, key, password,
-#              passwd, .env, passphrase, mnemonic, kubeconfig. So htpasswd.txt and
-#              MySecretNotes.md are refused.
+#              passwd, .env, passphrase, mnemonic, kubeconfig, accesstoken, refreshtoken,
+#              authtoken. So htpasswd.txt, MySecretNotes.md and ACCESSTOKEN.txt are refused.
+#              THE THREE TOKEN WORDS (the review's next round, 2026-10-13): token is a whole word
+#              (below), and as one it let ACCESSTOKEN.txt through, the three words run together
+#              with no capital between them. Run together, those three are no ordinary word.
+#              NOT CAUGHT, ON PURPOSE: mytoken.txt. Catching it needs a third way of looking (a
+#              word that ENDS in token), and the reviewer's word was for these three entries and
+#              no new way; the content check still looks into such a file for a token's shape.
 #   word       only as a whole word of the name. The name is cut into words at every character
 #              that is not a letter or digit of ASCII and where a small letter meets a capital
 #              (Get-HordeFilesNameWords), and the entry must be one of them, or one of them with a
@@ -113,8 +119,9 @@
 # WHAT A TEXT FILE HOLDS IS LOOKED AT TOO, before its bytes are kept
 # (Get-HordeFilesContentRefusal): a private key's first line is refused whatever the caller
 # says, and a token of a known shape unless the caller gives -Force; and, the same way, a secret
-# written under its own name (client_secret, api_key, password and three more, as a JSON member
-# or as name=value: core/Secrets.ps1 has the rule, and the names). A picture and a PDF are not
+# written under its own name (client_secret, api_key, password and three more, in any case, with
+# or without underscores or dashes and after any prefix, as a JSON member, as name=value or as YAML:
+# core/Secrets.ps1 has the rule, and the names). A picture and a PDF are not
 # looked into.
 #
 # EVERY RULE JUDGES THE FINAL PATH OF THE OPEN HANDLE, never the path that was written
@@ -127,6 +134,91 @@
 #   inside it: the handle's final path is the name that was opened, and nothing marks the file. A
 #   hard link is made on purpose, as a copy is; the list is for the share nobody meant to make.
 #
+# THE RELAYS' OWN SECRET FILES ARE NEVER SHARED, whatever the caller says (2026-10-13, the relay
+# port's question, PR 235). A hosted relay's deploy reads a sign-in client file from wherever a
+# setting of that relay points, under any name, and its deploy tool keeps a login; measured the
+# day PR 227 was reviewed, that client file moved by its setting and given an innocent name was
+# shared with no -Force at all. This file may not name a relay (CONTRIBUTING 14), so it asks the
+# relay port which files hold relays' secrets (Get-HordeRelaySecretFiles) and refuses each one
+# like the places above: the open handle's final path against the entry's own final path where
+# the file is there, so a link, a junction, another case or a path with .. in it is still the file.
+#   FAIL CLOSED. An unknown answer refuses EVERY share and names the relays that could not tell;
+#   so does an answer with nobody asked, which is what a port with no adapter loaded says - a list
+#   nobody was asked for is not the list. Known, with no file named by relays that were asked, is
+#   the ordinary answer and denies nothing more.
+#   THE RELAYS ARE LOADED HERE, AT SCRIPT LEVEL, ONCE PER LOAD OF THIS FILE (a share), never per
+#   check: measured about 1.8 to 3.6 s on the dev box on 2026-10-13. A relay that is already
+#   registered is not loaded again, so this file may be loaded twice, or after a caller that
+#   loaded the relays itself, without the port's "already registered". The folder's own name is
+#   the relay's name: the port refuses a capabilities.json that says otherwise.
+#   THE REFUSAL NAMES THE RELAY AND WHAT THE FILE IS, in the relay's own few words, never anything
+#   of what the file holds: nothing of it is read. NOR WHY A RELAY COULD NOT TELL (the review of PR
+#   238): a relay that throws may throw anything, so an unknown answer names only the relay.
+#   A RELAY'S FILE IS ONE FILE, NOT A FOLDER, SO IT IS ALSO KNOWN BY WHICH FILE IT IS (the same
+#   review): measured that day, a hard link to it - a second name, which no path says is the same
+#   file - was shared, -Force or not. So where the named file is there, the volume serial number
+#   and file index of the shared file's open handle are compared with its own, and the same file
+#   under any name is refused. That is the one place a hard link is caught (the places above are
+#   folders, and a folder has no such number for the files in it).
+#   AN ENTRY THAT IS NO PATH ON THIS MACHINE'S OWN DRIVES IS ASKED WHICH FILE IT IS, BY THE PATH IT
+#   WAS NAMED BY (round 2 of that review, 2026-10-14). Measured on 2026-10-13, a relay file named as
+#   \\.\C:\... or \\localhost\C$\... resolved to no path at all, nothing was compared, and the file
+#   was shared by its plain path with -Force. Round 1 then refused EVERY share for such an entry,
+#   which on a machine whose relay file is on a mapped network drive or under a profile folder
+#   redirected to a server blocked all sharing, with no setting to fix it. Measured 2026-10-14, the
+#   loopback UNC, \\127.0.0.1\C$\..., \\?\UNC\localhost\..., the device path and the plain path of
+#   one file give ONE volume serial number and file index. So: the same identity refuses, -Force
+#   or not; an identity that cannot be read refuses every share (a share that is down, a share
+#   that is not there, access denied); nothing there refuses nothing, as for a local entry; and
+#   another identity - another file, or another volume, as every file on a real network share is -
+#   refuses nothing.
+#   ONLY A PATH TO THIS MACHINE IS OPENED; ANOTHER MACHINE'S IS NEVER OPENED AND BLOCKS NOTHING
+#   (round 3 of that review, 2026-10-14). core/PathText.ps1 says why a path is not opened lightly:
+#   opening a network path sends the user's sign-in to the host it names. And there is no need to:
+#   the shared file is always LOCAL - the store refuses every network path, and the open handle's
+#   own path once more (files/Share.ps1, files/Path.ps1) - so a relay file on another machine can
+#   never be the file being shared. So the entry's host is DECIDED BY ADDRESS, NEVER BY NAME, and
+#   without opening anything:
+#   - THE HOST is taken from \\host\..., //host/... and \\?\UNC\host\... (\\.\ and \??\ as well),
+#     cut at its first @ (host@SSL, host@8080: a web share's) and of one trailing dot, and an
+#     ipv6-literal.net name read back as the address it spells ('-' for ':', 's' for '%').
+#   - IT IS RESOLVED with System.Net.Dns GetHostAddresses, the resolver chain the file sharing
+#     client uses too: a name query, and no sign-in. An address written as one is taken as it is
+#     (measured 2026-10-14: GetHostAddresses("0.0.0.0") throws instead of answering).
+#   - IT IS THIS MACHINE when any address is loopback, or unspecified (0.0.0.0, ::), or is a
+#     unicast address of any interface of this machine, up or down. Then the entry is opened and
+#     compared by identity, as above: an identity that cannot be read refuses every share.
+#     WHY NOT BY NAME: round 3's first rule took localhost, the loopback addresses and this
+#     machine's name. The reviewer measured that this machine's own file is reached as well by its
+#     OWN interface addresses (IPv4 and both IPv6), by the ipv6-literal.net form of them, and by
+#     names such as localhost. and <name>.local, all giving the file's one identity - so under a
+#     name rule that file was shared with -Force. Measured 2026-10-14 here: localhost.,
+#     <name>.local and the machine's name all resolve to its own addresses.
+#   - A HOST THAT DOES NOT RESOLVE blocks nothing: the file sharing client cannot reach it either,
+#     so no file of this machine is behind it. A name query that does not answer costs its time
+#     (1.3 s measured for a made-up name), once a relay entry a share.
+#   - A DRIVE LETTER that is a network drive, or stands for one, is read from the system's table
+#     (QueryDosDevice, core/PathText.ps1), following letter to letter: a share written
+#     \??\UNC\host\... or a mapped drive's redirector entry (\Device\<redirector>\;X:<id>\host\...)
+#     is that host, and is judged as above. A network drive whose entry shows no host, and a ring
+#     of letters, refuse every share: which machine they are cannot be told without opening them.
+#   - A DEVICE PATH (\\.\, \\?\ or \??\) IS JUDGED BY AN ALLOW-LIST: UNC\host by the address test
+#     above, a drive letter through the system's table, and Volume{guid} as a volume of this
+#     machine. Every other name refuses every share and is never opened: GLOBALROOT reaches any
+#     device, the network's among them; Global\UNC\host reaches another machine (measured
+#     2026-10-14: Global\UNC\localhost\C$ is the plain path's own file); and a DOS device name
+#     someone defined may stand for a share.
+#   KNOWN LIMITS of the address rule, each a path to this machine that a name and its addresses do
+#   not show: a DFS name, whose referral may lead back here; a Linux subsystem's 9P share, whose
+#   host is no machine on the network; a server that re-exports a share of this machine; NAT, port
+#   forwarding or a portproxy that forwards port 445 back to this machine, whose address is
+#   another's; and a loopback RDP session with drive redirection, whose tsclient drives are this
+#   machine's own, reached over the RDP channel.
+#   KNOWN LIMIT: AN ENTRY THAT NAMES A FOLDER is compared as a place (a file under it is refused)
+#   and its identity is a folder's, which no shared file has: a hard link to a file inside it, or
+#   a network path to that folder, is not caught. A relay names its secret FILES; no relay names
+#   a folder today.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
@@ -137,6 +229,14 @@
 # What looks like a credential in a text: the one statement of it, core's.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Secrets.ps1")
 . (Join-Path $PSScriptRoot "Path.ps1")
+# Which files hold relays' secrets: the port's question, with every relay loaded to answer it (the
+# header, THE RELAYS' OWN SECRET FILES). Skipping a relay already registered is what makes a second
+# load safe.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "relays\Port.ps1")
+foreach ($hordeFilesRelayFile in @(Get-HordeRelayFiles)) {
+    if (@(Get-HordeRelayNames) -ccontains (Split-Path -Leaf (Split-Path -Parent $hordeFilesRelayFile))) { continue }
+    . $hordeFilesRelayFile
+}
 
 function Get-HordeFilesDenyList {
     # THE LIST, and the only copy of it: test/test-files-deny.ps1 attacks every entry from both sides.
@@ -154,6 +254,7 @@ function Get-HordeFilesDenyList {
             @{ word = "key"; how = "anywhere" }, @{ word = "password"; how = "anywhere" }, @{ word = "passwd"; how = "anywhere" },
             @{ word = ".env"; how = "anywhere" }, @{ word = "passphrase"; how = "anywhere" }, @{ word = "mnemonic"; how = "anywhere" },
             @{ word = "kubeconfig"; how = "anywhere" },
+            @{ word = "accesstoken"; how = "anywhere" }, @{ word = "refreshtoken"; how = "anywhere" }, @{ word = "authtoken"; how = "anywhere" },
             @{ word = "token"; how = "word" },
             @{ word = "auth"; how = "word" }, @{ word = "oauth"; how = "word" }, @{ word = "cred"; how = "word" },
             @{ word = "private"; how = "word" }, @{ word = "wallet"; how = "word" }, @{ word = "cookie"; how = "word" },
@@ -265,18 +366,21 @@ function Get-HordeFilesDenyProfiles {
 }
 
 function Get-HordeFilesDenyPlaces {
-    # The folders of the list for this user and this home: { places; unknown; unknownNever }.
-    # places is { kind: home | secrets | ssh | agent; path; force }, path as it is written and
-    # force whether -Force lifts it; a folder that two ways of asking both name is there once.
-    # unknown is why the harnesses' folders could not be learned, or "". unknownNever is why a
-    # place -Force never lifts could not be learned, or "".
+    # The folders of the list for this user and this home: { places; unknown; unknownNever;
+    # unknownRelays }. places is { kind: home | secrets | ssh | agent | relay; path; force; relay;
+    # what }, path as it is written and force whether -Force lifts it; a folder that two ways of
+    # asking both name is there once. A relay's entry is a FILE, and relay and what are the
+    # relay's name and its words for the file ("" for every other kind). unknown is why the
+    # harnesses' folders could not be learned, or "". unknownNever is why a place -Force never
+    # lifts could not be learned, or "". unknownRelays is why the relays' secret files could not
+    # be learned, or "" (the header, FAIL CLOSED).
     # -RepoRoot is where the agents folder is read from, for a caller that must not use the real one.
     param([string]$HordeHome = "", [string]$RepoRoot = "")
     $list = Get-HordeFilesDenyList
     $places = New-Object System.Collections.ArrayList
     $base = $HordeHome
     if ($base -eq "") { $base = Get-HordeHome }
-    [void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false })
+    [void]$places.Add([pscustomobject]@{ kind = "home"; path = $base; force = $false; relay = ""; what = "" })
     # THE TWO PROFILES (the header says why two). With none in the variable there is no such folder
     # to name: core/Home.ps1 has already refused a home then. THE SYSTEM'S IS NOT LET OFF SO: when it
     # will not say, where the real home, .horde-secrets and .ssh are is not known, and that is a
@@ -286,9 +390,24 @@ function Get-HordeFilesDenyPlaces {
     if ($profiles.system -eq "") { $unknownNever = "the operating system would not say where the user's profile is" }
     foreach ($profileDir in @($profiles.variable, $profiles.system)) {
         if ($profileDir -eq "") { continue }
-        [void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false })
-        [void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false })
-        [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false })
+        [void]$places.Add([pscustomobject]@{ kind = "home"; path = (Join-Path $profileDir $list.homeFolder); force = $false; relay = ""; what = "" })
+        [void]$places.Add([pscustomobject]@{ kind = "secrets"; path = (Join-Path $profileDir $list.secretsFolder); force = $false; relay = ""; what = "" })
+        [void]$places.Add([pscustomobject]@{ kind = "ssh"; path = (Join-Path $profileDir $list.sshFolder); force = $false; relay = ""; what = "" })
+    }
+    # THE RELAYS' OWN SECRET FILES, asked of the port (the header says why, and why each of the two
+    # refusals below fails closed). The port folds each path with GetFullPath; where it really is,
+    # is asked below like every other place.
+    $unknownRelays = ""
+    $relayFiles = Get-HordeRelaySecretFiles -HordeHome $HordeHome
+    if ($relayFiles.state -cne "known") {
+        $who = @()
+        if ($null -ne $relayFiles.PSObject.Properties["relays"]) { $who = @($relayFiles.relays) }
+        $named = $(if ($who.Count -gt 0) { "the relay " + (($who | ForEach-Object { "'" + $_ + "'" }) -join ", ") + " could not tell" } else { "the relay port could not tell" })
+        $unknownRelays = "which files hold the relays' secrets is not known: " + $named
+    } elseif (@($relayFiles.value.asked).Count -eq 0) {
+        $unknownRelays = "which files hold the relays' secrets is not known: no relay was asked, so the relays were not loaded"
+    } else {
+        foreach ($entry in @($relayFiles.value.files)) { [void]$places.Add([pscustomobject]@{ kind = "relay"; path = ("" + $entry.path); force = $false; relay = ("" + $entry.relay); what = ("" + $entry.what) }) }
     }
     # THE HARNESSES, ASKED TWICE: under the profile the variable names, with wherever a harness's
     # own variable moved its store, and then under the system's profile.
@@ -307,7 +426,7 @@ function Get-HordeFilesDenyPlaces {
         $stores = $null
         if ($under -eq "") { $stores = Get-HordeAgentStoreRoots @from } else { $stores = Get-HordeAgentStoreRoots @from -ProfileRoot $under }
         if ($stores.state -cne "known") { $unknown = "" + $stores.reason }
-        else { foreach ($storeRoot in @($stores.value)) { [void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true }) } }
+        else { foreach ($storeRoot in @($stores.value)) { [void]$places.Add([pscustomobject]@{ kind = "agent"; path = ("" + $storeRoot); force = $true; relay = ""; what = "" }) } }
     }
     # A folder that two ways of asking both name is one place, and is opened and asked once.
     $once = New-Object System.Collections.ArrayList
@@ -316,7 +435,7 @@ function Get-HordeFilesDenyPlaces {
         foreach ($kept in $once) { if ($kept.kind -ceq $place.kind -and [string]::Equals($kept.path, $place.path, [System.StringComparison]::Ordinal)) { $have = $true } }
         if (-not $have) { [void]$once.Add($place) }
     }
-    return [pscustomobject]@{ places = @($once.ToArray()); unknown = $unknown; unknownNever = $unknownNever }
+    return [pscustomobject]@{ places = @($once.ToArray()); unknown = $unknown; unknownNever = $unknownNever; unknownRelays = $unknownRelays }
 }
 
 function Resolve-HordeFilesDenyPlace {
@@ -340,6 +459,95 @@ function Resolve-HordeFilesDenyPlace {
         if ($real.ok) { [void]$known.Add($real.path.TrimEnd('\')) }
     }
     return [pscustomobject]@{ paths = @($known.ToArray()); unknown = $false }
+}
+
+function Get-HordeFilesHostAddresses {
+    # The addresses the host -Name resolves to, as text, or none when it does not resolve. THE ONE
+    # PLACE A HOST IS RESOLVED (the header): a suite replaces this function, called exactly as it
+    # is here, so that no test sends a name query.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    try { return @([System.Net.Dns]::GetHostAddresses($Name) | ForEach-Object { "" + $_ }) } catch { return @() }
+}
+
+function Get-HordeFilesOwnAddresses {
+    # Every unicast address of every interface of this machine, up or down, as text. Read from the
+    # machine's own table: nothing is sent.
+    $own = New-Object System.Collections.ArrayList
+    foreach ($card in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+        foreach ($one in $card.GetIPProperties().UnicastAddresses) { [void]$own.Add("" + $one.Address) }
+    }
+    return @($own.ToArray())
+}
+
+function ConvertTo-HordeFilesAddress {
+    # The address written -Text, an IPv4 one carried in IPv6 brought back to IPv4, or $null when the
+    # text is no address.
+    param([AllowEmptyString()][string]$Text)
+    $address = $null
+    if (-not [System.Net.IPAddress]::TryParse($Text, [ref]$address)) { return $null }
+    if ($address.IsIPv4MappedToIPv6) { $address = $address.MapToIPv4() }
+    return $address
+}
+
+function Get-HordeFilesHostReach {
+    # Which machine the host -HostName of a UNC path is (the header, DECIDED BY ADDRESS): "self",
+    # "other", or "unresolved" when it resolves to nothing. Nothing is opened.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$HostName)
+    $name = $HostName
+    if ($name.IndexOf('@') -ge 0) { $name = $name.Substring(0, $name.IndexOf('@')) }
+    if ($name.EndsWith(".")) { $name = $name.Substring(0, $name.Length - 1) }
+    $folded = ConvertTo-HordeAsciiLower -Text $name
+    if ($folded.EndsWith(".ipv6-literal.net")) { $name = $folded.Substring(0, $folded.Length - 17).Replace('-', ':').Replace('s', '%') }
+    $addresses = @($(if ($null -ne (ConvertTo-HordeFilesAddress -Text $name)) { $name } else { Get-HordeFilesHostAddresses -Name $name }))
+    if ($addresses.Count -eq 0) { return "unresolved" }
+    # Compared by their bytes: a link-local address is one address whatever zone it is written with.
+    $own = @(Get-HordeFilesOwnAddresses | ForEach-Object { ConvertTo-HordeFilesAddress -Text $_ } | Where-Object { $null -ne $_ } | ForEach-Object { [System.BitConverter]::ToString($_.GetAddressBytes()) })
+    foreach ($text in $addresses) {
+        $address = ConvertTo-HordeFilesAddress -Text $text
+        if ($null -eq $address) { continue }
+        if ([System.Net.IPAddress]::IsLoopback($address)) { return "self" }
+        if ($address.Equals([System.Net.IPAddress]::Any) -or $address.Equals([System.Net.IPAddress]::IPv6Any)) { return "self" }
+        if ($own -ccontains [System.BitConverter]::ToString($address.GetAddressBytes())) { return "self" }
+    }
+    return "other"
+}
+
+function Get-HordeFilesRelayEntryReach {
+    # Whether a relay's entry -Path that is no path on this machine's own drives may be opened (the
+    # header, ONLY A PATH TO THIS MACHINE IS OPENED): "open", "elsewhere" (another machine, or none:
+    # never opened, and it blocks nothing), or "untold" (which machine cannot be told: every share
+    # is refused). Nothing is opened here.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $hostName = $null
+    $letter = ""
+    if ($Path -cmatch '\A(?:[\\/]{2}[.?]|\\\?\?)[\\/](?<rest>.*)\z') {
+        $rest = $Matches["rest"]
+        if ($rest -cmatch '\A[Uu][Nn][Cc](?:[\\/](?<host>[^\\/]*)|\z)') { $hostName = "" + $Matches["host"] }
+        elseif ($rest -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }
+        # A VOLUME BY ITS NAME is a volume of this machine: the system names none on the network.
+        elseif ($rest -cmatch '\A[Vv][Oo][Ll][Uu][Mm][Ee]\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}(?:[\\/]|\z)') { return "open" }
+        # AN ALLOW-LIST (the header): any other device name - GLOBALROOT, Global, a name someone
+        # defined - may stand for a share, and which machine it is cannot be told without opening it.
+        else { return "untold" }
+    }
+    elseif ($Path -cmatch '\A[\\/]{2}(?<host>[^\\/]*)') { $hostName = "" + $Matches["host"] }
+    elseif ($Path -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }
+    # NOTHING IS OPENED BY DEFAULT (F's ruling on round 4): a rooted or relative path is neither a
+    # device, a host nor a letter, so which machine it reaches is not told here, and it is refused.
+    if ($null -eq $hostName -and $letter -eq "") { return "untold" }
+    # A DRIVE LETTER, read from the system's table letter to letter until it says which host, or
+    # that it is a volume of this machine. Eight letters deep, as core/PathText.ps1 follows them.
+    for ($hop = 1; $letter -ne "" -and $null -eq $hostName; $hop++) {
+        if ($hop -gt 8) { return "untold" }
+        $target = Get-HordeDriveLetterTarget -Letter $letter
+        if ($target -cmatch '\A\\\?\?\\[Uu][Nn][Cc]\\(?<host>[^\\]*)') { $hostName = "" + $Matches["host"] }
+        elseif ($target -cmatch '\A\\Device\\[^\\]+\\;[^\\]*\\(?<host>[^\\]*)') { $hostName = "" + $Matches["host"] }
+        elseif ($target -cmatch '\A\\\?\?\\([A-Za-z]):') { $letter = $Matches[1] }
+        elseif ((Get-HordeNetworkPathRefusal -Path ($letter + ":\")) -ne "") { return "untold" }
+        else { return "open" }
+    }
+    if ((Get-HordeFilesHostReach -HostName $hostName) -ceq "self") { return "open" }
+    return "elsewhere"
 }
 
 function Get-HordeFilesHarnessFile {
@@ -390,9 +598,11 @@ function Get-HordeFilesDenyRefusal {
     # Why the file whose open handle's path is -FinalPath is not shared, or "" when the list has
     # nothing against it. The header has every rule. What -Force never lifts is judged first, so
     # that a file in the Horde home is refused for that and not for its name.
-    param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force)
+    # -Handle is the shared file's open handle, which a relay's file is compared with by identity;
+    # without it the file at -FinalPath is opened for its attributes and asked instead.
+    param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force, $Handle = $null)
     $list = Get-HordeFilesDenyList
-    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)" }
+    $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)"; relay = "a file a relay keeps a secret in" }
     $never = ". Nothing there is ever shared, and -Force does not change that"
     $insist = ". If this file holds no secret, share it again with -Force"
     $found = Get-HordeFilesDenyPlaces -HordeHome $HordeHome -RepoRoot $RepoRoot
@@ -401,7 +611,10 @@ function Get-HordeFilesDenyRefusal {
     # cannot be looked at without its prefix. The first part is the drive, the last the file's
     # name, and what is between are the folders.
     $parts = @($FinalPath -split '\\')
+    # Which file the shared one is, asked once and only when a relay's file is there to compare with.
+    $sharedIs = $null
     if ($found.unknownNever -ne "") { return ($found.unknownNever + ", so whether '" + $FinalPath + "' is in " + $what.home + " or among the user's own keys cannot be told" + $never) }
+    if ($found.unknownRelays -ne "") { return ($found.unknownRelays + ", so whether '" + $FinalPath + "' is one of them cannot be told" + $never) }
     # The harness folder the file is in, as it is written; and, when that cannot be told, why not.
     $harness = ""
     $harnessDoubt = ""
@@ -443,8 +656,28 @@ function Get-HordeFilesDenyRefusal {
             }
             foreach ($folder in @($where.paths)) {
                 if (-not (Test-HordeFilesPathUnder -Path $FinalPath -Folder $folder)) { continue }
+                if (-not $lifted -and $place.kind -ceq "relay") { return ("'" + $FinalPath + "' is what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "'), a file it keeps a secret in" + $never) }
                 if (-not $lifted) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $never) }
                 if ($harness -eq "") { $harness = "" + $place.path }
+            }
+            # A RELAY'S FILE BY WHICH FILE IT IS (the header): where it is there, the same file under
+            # another name is refused. An entry with no local path is asked by the path it was
+            # named by when that path leads to THIS machine, and never opened when it leads to
+            # another, which holds no file that is shared: which file it is cannot be told refuses
+            # every share, and another file - on another volume, as a network share's files are -
+            # refuses nothing.
+            if ($place.kind -ceq "relay") {
+                $itsWords = "what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "')"
+                $reach = $(if (@($where.paths).Count -eq 0) { Get-HordeFilesRelayEntryReach -Path $place.path } else { "local" })
+                $entryIs = $(if ($reach -ceq "local") { Get-HordeFilesPathIdentity -Path ("\\?\" + $where.paths[0]) } elseif ($reach -ceq "open") { Get-HordeFilesPathIdentity -Path $place.path } elseif ($reach -ceq "untold") { [pscustomobject]@{ state = "unknown"; id = "" } } else { [pscustomobject]@{ state = "elsewhere"; id = "" } })
+                if ($entryIs.state -ceq "unknown") { return ("which file " + $itsWords + " is could not be told, so whether '" + $FinalPath + "' is that file cannot be told either" + $never) }
+                if ($entryIs.state -ceq "ok") {
+                    if ($null -eq $sharedIs) {
+                        $sharedIs = $(if ($null -ne $Handle) { Get-HordeFilesHandleIdentity -Handle $Handle } else { (Get-HordeFilesPathIdentity -Path ("\\?\" + $FinalPath)).id })
+                    }
+                    if ($sharedIs -eq "") { return ("which file '" + $FinalPath + "' is could not be told, so whether it is " + $itsWords + " cannot be told either" + $never) }
+                    if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is the very file the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "') under another name, as a hard link or a network or device path to it is: a file it keeps a secret in" + $never) }
+                }
             }
         }
     }

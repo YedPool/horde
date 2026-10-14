@@ -124,6 +124,9 @@
       if (!r) { return ": no status written (no folder of status records is this Orc's)"; }
       if (!r.written) { return ": no status written (" + (r.problems || []).join("; ") + ")"; }
       var words = " (" + r.lane + "): " + sentence(r.doing) + " Last finished: " + sentence(r.finished);
+      // THE OPTIONAL SEVENTH LINE of the record (fleet/StatusPanel.ps1): the field is absent when the
+      // Orc wrote none, and then nothing is said of waiting.
+      if (typeof r.waitingOn === "string" && r.waitingOn !== "") { words += " Waiting on: " + sentence(r.waitingOn); }
       if (r.blocked) { words += " Blocked: " + sentence(r.blockedBy); }
       var age = ageWords(r.ageSeconds);
       return words + (age ? " (" + age + ")" : "");
