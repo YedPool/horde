@@ -145,6 +145,14 @@ try {
     Check ((Has $s ("  TO DO Horde home: there is no folder " + $h4)) -and $s.next -ceq ("next: make the folder " + $h4) -and -not (Test-Path -LiteralPath $h4)) "MUST FAIL: -Check fixes nothing, not even the home, and says the manifest's sentence for it"
     $s = Setup $h4 @("-CheckOnly")
     Check ((Has $s ("  TO DO Horde home: there is no folder " + $h4)) -and -not (Test-Path -LiteralPath $h4)) "and -CheckOnly is the same walk"
+    # A DOUBLE QUOTE IN -Label breaks the pairing command setup prints, and the arguments it runs itself
+    # again with under 5.1: refused, in plain words, before anything is made. (My\"PC is how a command
+    # line hands over My"PC.)
+    $s = Setup $h4 @("-Label", 'My\"PC')
+    Check ($s.code -ne 0 -and $s.out.Contains("-Label cannot hold a double quote: name the phone without one") -and -not (Test-Path -LiteralPath $h4)) ("MUST FAIL: a -Label with a double quote is refused, and nothing is made (exit " + $s.code + ")")
+    $threwQ = ""
+    try { $null = Get-HordeSetupReport -HordeHome $h4 -Root $root -Label 'My "PC"' -Check } catch { $threwQ = $_.Exception.Message }
+    Check ($threwQ.Contains("-Label cannot hold a double quote") -and -not (Test-Path -LiteralPath $h4)) "and the same in this process"
     # STARTED FROM POWERSHELL 7, setup runs itself again under Windows PowerShell 5.1 (issue 274).
     $pwsh = @(Get-Command -Name "pwsh" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($pwsh.Count -eq 1) {
@@ -182,11 +190,18 @@ try {
     }
     $probes = @{ identity = $idProbe; makeIdentity = $makeOk; trust = $noPhone; schedule = $schedProbe; elevated = { $false }; installSchedule = { param($HordeHome, $Root) $script:installs++; $script:scheduled = $true } }
     $x = Report $hh $probes
-    Check ($x.states -clike "requirements=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-serving=todo") ("the identity is made, and the relay runner's service written (" + $x.states + ")")
+    Check ($x.states -clike "requirements=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-scheduled=todo") ("the identity is made, the relay runner's service written, and scheduling it is next (" + $x.states + ")")
     $read = Get-HordeServiceDefinitions -HordeHome $hh
     $svc = $(if ($read.state -ceq "read" -and @($read.services).Count -eq 1) { $read.services[0] } else { $null })
     Check ((Test-Ascii $defsPath) -and $null -ne $svc -and $svc.name -ceq "relay-runner" -and (@($svc.start.words) -join " ") -ceq "relay run" -and $svc.start.named["Relay"] -ceq "cloudflare" -and $svc.hordeHome -ceq $hh -and $svc.checkout -ceq $root -and (@($svc.stop.words) -join " ") -ceq "relay stop" -and $svc.alive.path -ceq (Get-HordeRelayRunHeartbeatPath -HordeHome $hh)) ("the file is ASCII, and the real definitions reader takes it: the relay run of this checkout, for this home, alive by the runner's own heartbeat (" + $read.state + " " + (@($read.findings) -join "; ") + ")")
-    Check ((Last-Step $x).said -ceq "the relay runner has never run for this home" -and $x.next -ceq "next: horde relay run -Relay cloudflare, and leave that window open") ("the runner is next, in a window of its own, as the manifest says (" + $x.next + ")")
+    $elev = Get-HordeSetupElevatedCommand -Root $root -HordeHome $hh
+    $b64 = $(if ($elev.line -match "-EncodedCommand ([A-Za-z0-9+/=]+)'\z") { $Matches[1] } else { "" })
+    $decoded = $(if ($b64 -ne "") { [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b64)) } else { "" })
+    Check ((Last-Step $x).id -ceq "runner-scheduled" -and (Last-Step $x).said -clike "*is not installed*" -and $script:installs -eq 0 -and $x.next -ceq ("next: in any PowerShell window, run this one line, and allow it to run as administrator: " + $elev.line)) ("MUST FAIL: from a prompt that is not elevated, setup tries nothing and prints the one elevated line (" + $x.next + ")")
+    Check ($elev.line -clike "Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -EncodedCommand *'" -and $decoded -ceq ("$" + "env:HORDE_HOME = '" + $hh + "'; & '" + (Join-Path $root "horde.ps1") + "' services schedule") -and @((Last-Step $x).notes | Where-Object { $_ -ceq ("it runs, as administrator: " + $decoded) }).Count -eq 1) ("and that line runs exactly horde services schedule for this home, which it says in plain words (" + $decoded + ")")
+    $probes["elevated"] = { $true }
+    $x = Report $hh $probes
+    Check ($script:installs -eq 1 -and @($x.report.steps | Where-Object { $_.id -ceq "runner-scheduled" -and $_.state -ceq "fixed" }).Count -eq 1 -and (Last-Step $x).id -ceq "runner-serving" -and (Last-Step $x).said -ceq "the relay runner has never run for this home" -and $x.next -ceq "next: horde relay run -Relay cloudflare, and leave that window open") ("from an elevated prompt the supervisor is scheduled, once, before the runner is asked to serve (" + $x.next + ")")
     $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $hh
     $self = Get-HordeHeartbeatSelf
     Write-HordeHeartbeat -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds 60 -Condition "keys" -Why "cannot open this machine's keys"
@@ -225,14 +240,7 @@ try {
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
     $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions) | Where-Object { $_.group -ceq "Setup" })
     Check (@($x.report.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" -and $_.said -clike "added question 1: Horde is set up on * - does it reach your phone?" }).Count -eq 1 -and $qs.Count -eq 1 -and $qs[0].title -ceq ("Horde is set up on " + $env:COMPUTERNAME + " - does it reach your phone?") -and $qs[0].askedBy -ceq "horde setup") ("setup adds the test question through the shipped decisions list, once (" + $x.states + ")")
-    $elev = Get-HordeSetupElevatedCommand -Root $root -HordeHome $hh
-    $b64 = $(if ($elev.line -match "-EncodedCommand ([A-Za-z0-9+/=]+)'\z") { $Matches[1] } else { "" })
-    $decoded = $(if ($b64 -ne "") { [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b64)) } else { "" })
-    Check ((Last-Step $x).id -ceq "runner-scheduled" -and (Last-Step $x).said -clike "*is not installed*" -and $script:installs -eq 0 -and $x.next -ceq ("next: in any PowerShell window, run this one line, and allow it to run as administrator: " + $elev.line)) ("MUST FAIL: from a prompt that is not elevated, setup tries nothing and prints the one elevated line (" + $x.next + ")")
-    Check ($elev.line -clike "Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -EncodedCommand *'" -and $decoded -ceq ("$" + "env:HORDE_HOME = '" + $hh + "'; & '" + (Join-Path $root "horde.ps1") + "' services schedule") -and @((Last-Step $x).notes | Where-Object { $_ -ceq ("it runs, as administrator: " + $decoded) }).Count -eq 1) ("and that line runs exactly horde services schedule for this home, which it says in plain words (" + $decoded + ")")
-    $probes["elevated"] = { $true }
-    $x = Report $hh $probes
-    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-serving=done phone-paired=done test-question=done runner-scheduled=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("from an elevated prompt the supervisor is scheduled, once, and every step is done: all set (" + $x.states + ")")
+    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-scheduled=done runner-serving=done phone-paired=done test-question=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("the test question added, every step is done: all set (" + $x.states + ")")
     $before = Get-Tree $hh
     $x = Report $hh $probes
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")

@@ -67,6 +67,15 @@
       "manual": "add the relay-runner entry setup prints to settings\\service-definitions.json"
     },
     {
+      "id": "runner-scheduled",
+      "title": "relay runner kept running",
+      "path": "user",
+      "requirement": "the supervisor scheduled for this home, so the relay runner runs from start-up without a window left open",
+      "checks": "both of the supervisor's jobs are installed, enabled, made by Horde, and serve this home",
+      "fixes": "installs them, as horde services schedule does, when this prompt is elevated; never elevates by itself",
+      "manual": "in any PowerShell window, run this one line, and allow it to run as administrator: {elevated}"
+    },
+    {
       "id": "runner-serving",
       "title": "relay runner serving",
       "path": "user",
@@ -92,15 +101,6 @@
       "checks": "the decisions list holds the question horde setup adds, in the group Setup",
       "fixes": "adds it once: Horde is set up on {machine} - does it reach your phone?",
       "manual": "horde decisions add -File <a question file>, as horde setup would"
-    },
-    {
-      "id": "runner-scheduled",
-      "title": "relay runner kept running",
-      "path": "user",
-      "requirement": "the supervisor scheduled for this home, so the relay runner runs from start-up without a window left open",
-      "checks": "both of the supervisor's jobs are installed, enabled, made by Horde, and serve this home",
-      "fixes": "installs them, as horde services schedule does, when this prompt is elevated; never elevates by itself",
-      "manual": "in any PowerShell window, run this one line, and allow it to run as administrator: {elevated}"
     }
   ]
 }

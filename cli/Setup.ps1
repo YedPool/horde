@@ -449,6 +449,7 @@ function Get-HordeSetupReport {
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$Root, [string]$Relay = "", [switch]$Operator,
         [string]$Horde = "home", [string]$Label = "", [string[]]$NoFix = @(), [switch]$Check, [hashtable]$Probes = @{}, [string]$Manifest = "",
         [scriptblock]$Say = { param($Line) Write-Host $Line }, [string]$InputFile = "", [scriptblock]$OpenPicture = $null)
+    if ($Label.Contains('"')) { throw "-Label cannot hold a double quote: name the phone without one, such as -Label My-phone" }
     if ($Manifest -eq "") { $Manifest = Get-HordeSetupManifestPath -Root $Root }
     $man = Read-HordeSetupManifest -Path $Manifest
     if ($man.state -cne "known") { throw $man.reason }

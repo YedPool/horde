@@ -6,6 +6,9 @@ $HordeCommand = @{
     run     = {
         [CmdletBinding()] param([string]$Horde = "home", [string]$Label = "", [switch]$Operator, [string]$Relay = "", [string[]]$NoFix = @(), [Alias("CheckOnly")][switch]$Check, [string]$InputFile = "", [switch]$NoPicture, [switch]$Json, [switch]$Steps)
         if ($Steps) { foreach ($flag in @($PSBoundParameters.Keys)) { if (@("Steps", "Json") -notcontains $flag) { throw ("-" + $flag + " does not belong to setup -Steps") } } }
+        # Refused before anything, the run under 5.1 included: a double quote would break the pairing
+        # command setup prints, and the arguments it runs itself again with.
+        if ($Label.Contains('"')) { throw "-Label cannot hold a double quote: name the phone without one, such as -Label My-phone" }
         $root = Get-HordeRoot
         # WINDOWS POWERSHELL 5.1, until issue 274 is fixed: under PowerShell 7, `horde decisions add` is
         # refused ('$.at should be string'), so setup's last step would fail there. It runs itself again
