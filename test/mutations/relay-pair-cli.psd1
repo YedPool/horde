@@ -6,7 +6,7 @@
 # NOT HERE: the offer's expiry check at the top of the wait (without it the wait never ends, which is a
 # timeout and not a failed check; Open and Complete refuse an expired offer by themselves, and the
 # suite's expiring offer is held to the reason), and -Label's check before the offer (without it the
-# label is refused by Complete only once a phone answers, after the offer's 300 s).
+# label is refused by Complete only once a phone answers, after the offer's 600 s).
 @{
     Target = "cli\RelayPair.ps1"
     Suite  = "test\test-relay-pair-cli.ps1"
@@ -94,5 +94,42 @@
         @{ Name = "offer-names-no-machine"
            Find = '-Now (& $Clock) -Label (ConvertTo-HordeDeviceName -Text "$env:COMPUTERNAME")'
            Replace = '-Now (& $Clock)' }
+        # --- the offer's life and its countdown (issue #283): each boundary from both sides, the default
+        @{ Name = "ttl-30-refused"
+           Find = 'if ($TtlSeconds -lt $l.minTtlSeconds -or'
+           Replace = 'if ($TtlSeconds -le $l.minTtlSeconds -or' }
+        @{ Name = "ttl-29-taken"
+           Find = 'if ($TtlSeconds -lt $l.minTtlSeconds -or'
+           Replace = 'if ($TtlSeconds -lt ($l.minTtlSeconds - 1) -or' }
+        @{ Name = "ttl-900-refused"
+           Find = '$TtlSeconds -gt $l.maxTtlSeconds) {'
+           Replace = '$TtlSeconds -ge $l.maxTtlSeconds) {' }
+        @{ Name = "ttl-901-taken"
+           Find = '$TtlSeconds -gt $l.maxTtlSeconds) {'
+           Replace = '$TtlSeconds -gt ($l.maxTtlSeconds + 1)) {' }
+        @{ Name = "ttl-not-checked-by-the-command"
+           Find = '    if ($ttlWhy -cne "") { $done.reason = $ttlWhy; return $done }'
+           Replace = '' }
+        @{ Name = "ttl-default-five-minutes"
+           Find = '$script:HordeRelayPairDefaultTtlSeconds = 600'
+           Replace = '$script:HordeRelayPairDefaultTtlSeconds = 300' }
+        @{ Name = "offer-line-without-its-length"
+           Find = ' + " (" + (Format-HordeRelayPairSpan -Ms ([long]$TtlSeconds * 1000)) + ").")'
+           Replace = ' + ".")' }
+        @{ Name = "countdown-never-said"
+           Find = 'if ($mark -ge 0 -and $step -lt $mark -and $leftMs -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "countdown-said-every-look"
+           Find = 'if ($mark -ge 0 -and $step -lt $mark -and $leftMs -gt 0) {'
+           Replace = 'if ($mark -ge 0 -and $leftMs -gt 0) {' }
+        @{ Name = "countdown-said-at-expiry"
+           Find = 'if ($mark -ge 0 -and $step -lt $mark -and $leftMs -gt 0) {'
+           Replace = 'if ($mark -ge 0 -and $step -lt $mark) {' }
+        @{ Name = "countdown-in-minutes-to-the-end"
+           Find = 'if ($LeftMs -gt 60000) {'
+           Replace = 'if ($LeftMs -gt 0) {' }
+        @{ Name = "countdown-late-while-the-relay-waits"
+           Find = '[System.Math]::Min([System.Math]::Min([double]($retryAt - $nowMs), [double]$script:HordeRelayPairWatchMs)'
+           Replace = '[System.Math]::Min([System.Math]::Min([double]($retryAt - $nowMs), [double]$script:HordeRelayPairRetryMostMs)' }
     )
 }

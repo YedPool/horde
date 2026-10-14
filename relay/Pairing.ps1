@@ -141,7 +141,8 @@
 
 function Get-HordeRelayPairingLimits {
     # ttl: long enough to unlock a phone, open the PWA and scan; short enough that a photo of the code
-    # is soon worthless. 300 s is the default and 900 the most a caller may ask for.
+    # is soon worthless. 300 s is this default and 900 the most a caller may ask for; `horde relay pair`
+    # asks for 600 unless told otherwise (cli/RelayPair.ps1, THE OFFER'S LIFE: issue #283).
     # maxResponseChars and maxSealedChars: THE RESPONSE THROUGH THE RELAY, in the header. A sealed text
     # is its ciphertext (the response and a 16-byte tag) in base64url and some 250 characters around it.
     return [pscustomobject]@{ defaultTtlSeconds = 300; minTtlSeconds = 30; maxTtlSeconds = 900; maxResponseChars = 6000; maxSealedChars = 8600 }

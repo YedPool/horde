@@ -5,6 +5,7 @@
 #      phone app - the relay settings pairRpId and pairOrigin, or -RpId and -Origin;
 #   2. shows it: as a QR code in a PNG it writes to the temporary folder and opens locally
 #      (cli/QrCode.ps1 says why a PNG and not text), and as text, for the app's paste box;
+#      The offer lives -TtlSeconds, 30 to 900; 600 (ten minutes) when not given (THE OFFER'S LIFE, below);
 #   3. waits, until the offer expires, for the phone's response: through the relay, in the offer's own
 #      pairing mailbox (Open-HordeRelayPairingSealed refuses everything not sealed for this offer), or
 #      pasted here - a plain response, or the sealed text;
@@ -31,6 +32,12 @@
 # expired needs nothing. A process killed outright runs no finally block, so every
 # pairing that starts first sweeps the pictures older than the longest an offer lives (900 s).
 #
+# THE OFFER'S LIFE AND ITS COUNTDOWN (founder decision 2026-10-14, issue #283: twice that day an offer
+# expired while he copied it by hand). An offer lives 600 s unless -TtlSeconds says otherwise, 30 to 900
+# (relay/Pairing.ps1's limits; the picture sweep above relies on the 900). The offer line says until when
+# and for how long; while it waits, the command says the time left each time it falls past a whole
+# minute, then every 10 s in the last minute - one line a step, never one a look, so a log stays short.
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 # The machine's name for its offer (relay/Pairing.ps1, THE LABEL): the computer's, as a device name.
@@ -54,6 +61,39 @@ $script:HordeRelayPairRetryMostMs = 15000
 # that refusing it trips (429). Said once, as waiting for the phone, never as the relay's raw words.
 $script:HordeRelayPairRefusedStatuses = @(401, 429)
 $script:HordeRelayPairTries = 3
+# How long an offer lives when -TtlSeconds is not given (THE OFFER'S LIFE, in the header).
+$script:HordeRelayPairDefaultTtlSeconds = 600
+
+function Test-HordeRelayPairTtl {
+    # Why -TtlSeconds is refused, or "" when it is 30 to 900 (relay/Pairing.ps1's limits).
+    param([int]$TtlSeconds)
+    $l = Get-HordeRelayPairingLimits
+    if ($TtlSeconds -lt $l.minTtlSeconds -or $TtlSeconds -gt $l.maxTtlSeconds) {
+        return ("-TtlSeconds is how many seconds the offer stays open: " + $l.minTtlSeconds + " to " + $l.maxTtlSeconds + ", not " + $TtlSeconds + " (" + $script:HordeRelayPairDefaultTtlSeconds + ", ten minutes, when not given)")
+    }
+    return ""
+}
+
+function Format-HordeRelayPairSpan {
+    # A length of time in plain words: "10 minutes", "1 minute 30 seconds", "45 seconds".
+    param([long]$Ms)
+    $s = [long][System.Math]::Ceiling([double]$Ms / 1000)
+    $m = [long][System.Math]::Floor([double]$s / 60)
+    $r = $s - $m * 60
+    $parts = @()
+    if ($m -gt 0) { $parts += ("" + $m + $(if ($m -eq 1) { " minute" } else { " minutes" })) }
+    if ($r -gt 0 -or $m -eq 0) { $parts += ("" + $r + $(if ($r -eq 1) { " second" } else { " seconds" })) }
+    return ($parts -join " ")
+}
+
+function Get-HordeRelayPairCountdownMark {
+    # The step of the countdown -LeftMs falls in (THE OFFER'S LIFE, in the header): the whole minute at
+    # or above it while more than a minute is left, then the 10 s at or above it. A new, smaller mark is
+    # a line to say; the same mark is not.
+    param([long]$LeftMs)
+    if ($LeftMs -gt 60000) { return ([long][System.Math]::Ceiling([double]$LeftMs / 60000) * 60000) }
+    return ([long][System.Math]::Ceiling([double]$LeftMs / 10000) * 10000)
+}
 
 function New-HordeRelayPairInput {
     # Where typed lines come from: -InputFile (read as it grows), else the console's keys, else - input
@@ -195,17 +235,24 @@ function Wait-HordeRelayPairResponse {
     # Failed watches in a row, and when (ms) the relay is watched again (the header of this file).
     $failures = 0
     $retryAt = [long]0
+    # The countdown's last step said (THE OFFER'S LIFE, in the header): the offer line said the start.
+    $mark = [long]-1
     try {
         while ($true) {
             $now = & $Clock
             $nowMs = ConvertTo-HordeRelayRecordMs -Time $now
             if ($nowMs -gt $Offer.expiresAt) { return [pscustomobject]@{ ok = $false; reason = ("the offer expired at " + (Get-HordeRelayPairTime -Ms $Offer.expiresAt) + " with no response from the phone; nothing was enrolled. Run horde relay pair again for a new one"); value = $null } }
+            $leftMs = [long]($Offer.expiresAt - $nowMs)
+            $step = Get-HordeRelayPairCountdownMark -LeftMs $leftMs
+            if ($mark -ge 0 -and $step -lt $mark -and $leftMs -gt 0) { $null = & $Say ("The offer is open for " + (Format-HordeRelayPairSpan -Ms $step) + " more, until " + (Get-HordeRelayPairTime -Ms $Offer.expiresAt) + ".") }
+            $mark = $step
             $left = [int][System.Math]::Max(1, [System.Math]::Min([double]$script:HordeRelayPairWatchMs, [double]($Offer.expiresAt - $nowMs)))
             if ($null -ne $Connection -and $nowMs -lt $retryAt) {
                 # Until the relay is watched again, the wait is spent reading the keyboard, so a paste
                 # still lands at once (review of a3cce1c: 6,691 watches in 3 s without a wait), and a
-                # line read early does not bring the next watch forward.
-                $line = Read-HordeRelayPairLine -Source $Source -TimeoutMs ([int][System.Math]::Max(1, [System.Math]::Min([double]($retryAt - $nowMs), [double]($Offer.expiresAt - $nowMs + 1))))
+                # line read early does not bring the next watch forward. A second a read at most, so
+                # the countdown's 10 s steps are said on time while the relay waits 15 s.
+                $line = Read-HordeRelayPairLine -Source $Source -TimeoutMs ([int][System.Math]::Max(1, [System.Math]::Min([System.Math]::Min([double]($retryAt - $nowMs), [double]$script:HordeRelayPairWatchMs), [double]($Offer.expiresAt - $nowMs + 1))))
                 if ($null -ne $line -and $line.Trim() -cne "") {
                     $r = Receive-HordeRelayPairText -HordeHome $HordeHome -Offer $Offer -Text $line -Label $Label -Now (& $Clock)
                     if ($r.ok -or $r.spent) { return $r }
@@ -297,11 +344,14 @@ function Invoke-HordeRelayPair {
     # system's viewer; a suite records the path); -Clock answers the time (a suite moves it).
     # { ok; reason; device; offer }.
     param([string]$HordeHome = "", $Connection = $null, [string]$RpId = "", [string]$Origin = "", [string]$Label = "", [string]$InputFile = "",
-        [Parameter(Mandatory = $true)][scriptblock]$Say, [scriptblock]$OpenPicture = $null, [scriptblock]$Clock = $null, [int]$TtlSeconds = 300, $Source = $null, [string]$PictureDir = "")
+        [Parameter(Mandatory = $true)][scriptblock]$Say, [scriptblock]$OpenPicture = $null, [scriptblock]$Clock = $null, [int]$TtlSeconds = $script:HordeRelayPairDefaultTtlSeconds, $Source = $null, [string]$PictureDir = "")
+    $done = [pscustomobject]@{ ok = $false; reason = ""; device = $null; offer = $null }
+    # Refused before anything is made or read, in the command's words, not the offer maker's.
+    $ttlWhy = Test-HordeRelayPairTtl -TtlSeconds $TtlSeconds
+    if ($ttlWhy -cne "") { $done.reason = $ttlWhy; return $done }
     if ($HordeHome -ceq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Clock) { $Clock = { [datetime]::UtcNow } }
     if ($null -eq $Source) { $Source = New-HordeRelayPairInput -InputFile $InputFile }
-    $done = [pscustomobject]@{ ok = $false; reason = ""; device = $null; offer = $null }
     if ($Label -cne "" -and (Test-HordeRelayRecordValue -Kind "label" -Value $Label) -cne "") { $done.reason = "-Label is 1 to 64 printable ASCII characters, no quote or backslash, no space at either end"; return $done }
     $where = Get-HordeRelayPairOrigin -HordeHome $HordeHome -RpId $RpId -Origin $Origin
     if ($where.state -cne "known") { $done.reason = $where.reason; return $done }
@@ -320,7 +370,7 @@ function Invoke-HordeRelayPair {
     try {
         $code = New-HordeQrCode -Text $offer.text -Level "M"
         [System.IO.File]::WriteAllBytes($png, (ConvertTo-HordeQrPng -Code $code -Scale 6 -Border 4))
-        $null = & $Say ("Pairing offer " + $offer.offer + ", open until " + (Get-HordeRelayPairTime -Ms $offer.expiresAt) + ".")
+        $null = & $Say ("Pairing offer " + $offer.offer + ", open until " + (Get-HordeRelayPairTime -Ms $offer.expiresAt) + " (" + (Format-HordeRelayPairSpan -Ms ([long]$TtlSeconds * 1000)) + ").")
         $null = & $Say ("Scan this QR code with the phone app (Pair with a machine, Scan the QR code): " + $png)
         if ($null -ne $OpenPicture) { $null = & $OpenPicture $png }
         $null = & $Say "Or paste this offer into the app:"

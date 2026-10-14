@@ -14,11 +14,13 @@
 #      the thief's device;
 #   5. no relay named: the response is pasted; a response to another offer is refused without ending
 #      the pairing;
-#   6. the command line's refusals;
+#   6. the command line's refusals; the offer's life (-TtlSeconds, issue #283): 29, 901 and 0 refused,
+#      30 and 900 taken, 600 when not given, and an offer of 30 s run to its end, its countdown said at
+#      20 and 10 s and stopping with the expiry;
 #   7. in this process, because the command cannot pick a test relay or a clock: the hostile test relay
 #      (test/lib/HostileRelay.ps1) reordering, repeating and salting the mailbox; a mailbox flooded past
-#      the refusal cap; an offer that expires; reject typed; and an interruption (Ctrl+C) that still
-#      deletes the picture.
+#      the refusal cap; an offer that expires; the countdown on a moved clock, one line a step; reject
+#      typed; and an interruption (Ctrl+C) that still deletes the picture.
 #
 # NODE IS NEEDED for the phone of section 1. Without it that section is skipped, said so, and the suite
 # exits 3, a partial run, never 0. Every home, relay folder and phone state is the suite's own under
@@ -107,7 +109,7 @@ function Get-OfferOf {
     $r = Read-HordeRelayPairingOffer -Text $line
     if (-not $r.ok) { return $null }
     $pend = Read-HordeRelayRecordText -Text ([System.IO.File]::ReadAllText((Join-Path $hh ("relay\pairing\offers\" + $r.value.offer + ".json")))) -Spec (Get-HordeRelayPendingSpec) -Kind "horde-relay-pairing-pending"
-    return [pscustomobject]@{ text = $line; offer = $r.value.offer; code = $r.value.code; pairMailbox = $r.value.pairMailbox; challenge = $pend.value.challenge; expiresAt = $r.value.expiresAt; label = $r.value.label }
+    return [pscustomobject]@{ text = $line; offer = $r.value.offer; code = $r.value.code; pairMailbox = $r.value.pairMailbox; challenge = $pend.value.challenge; expiresAt = $r.value.expiresAt; issuedAt = $r.value.issuedAt; label = $r.value.label }
 }
 function Get-Fingerprint {
     param($Offer, $Phone)
@@ -276,6 +278,38 @@ try {
     Check ($r6d.code -eq 1 -and $r6d.out.Contains("-Label is 1 to 64")) "a label the trust store cannot keep is refused before any offer"
     Check ((Invoke-Horde @("relay", "identity", "-Relay", "local")).code -eq 1) "relay identity takes no relay"
 
+    # THE OFFER'S LIFE (issue #283, founder decision 2026-10-14): -TtlSeconds 30 to 900, 600 when not
+    # given. Each boundary is held from both sides: 29 and 901 refused, 30 and 900 taken.
+    $offersDir = Join-Path $hh "relay\pairing\offers"
+    $offersBefore = @(Get-ChildItem -LiteralPath $offersDir -Filter "*.json").Count
+    foreach ($bad in @("29", "901", "0")) {
+        $rb = Invoke-Horde @("relay", "pair", "-TtlSeconds", $bad, "-NoPicture")
+        Check ($rb.code -eq 1 -and $rb.out.Contains("-TtlSeconds is how many seconds the offer stays open: 30 to 900, not " + $bad)) ("-TtlSeconds " + $bad + " is refused, saying the range (" + ($rb.out.Trim() -split "`n" | Select-Object -Last 1) + ")")
+    }
+    Check (@(Get-ChildItem -LiteralPath $offersDir -Filter "*.json").Count -eq $offersBefore) "and no refused one made an offer"
+    foreach ($case in @(@{ args = @(); ms = 600000; words = "(10 minutes)" }, @{ args = @("-TtlSeconds", "900"); ms = 900000; words = "(15 minutes)" })) {
+        $run = Start-Pair -More $case.args
+        $lineL = Wait-PairLine -Run $run -Like "Pairing offer *, open until *"
+        $offerL = Get-OfferOf $run
+        Stop-HordeCliRun $run
+        $run = $null
+        $what = $(if ($case.args.Count -eq 0) { "with no -TtlSeconds" } else { "with -TtlSeconds 900" })
+        Check ($null -ne $offerL -and ($offerL.expiresAt - $offerL.issuedAt) -eq $case.ms) ($what + ", the offer lives " + $case.ms + " ms (" + $(if ($null -ne $offerL) { $offerL.expiresAt - $offerL.issuedAt } else { "no offer" }) + ")")
+        Check ($null -ne $lineL -and $lineL -cmatch ('\APairing offer [0-9a-f]{32}, open until [0-9]{2}:[0-9]{2}:[0-9]{2} ' + [regex]::Escape($case.words) + '\.\z')) ("and the offer line says until when, and for how long (" + $lineL + ")")
+    }
+    # 30, the shortest, run to its end: the countdown is said at 20 and 10 s, and stops with the expiry.
+    $run = Start-Pair -More @("-TtlSeconds", "30")
+    $line30 = Wait-PairLine -Run $run -Like "Pairing offer *, open until *"
+    $end30 = Complete-Pair $run
+    $run = $null
+    $lines30 = @($end30.out -split "`r?`n" | Where-Object { $_ -clike "The offer is open for *" })
+    Check ($null -ne $line30 -and $line30.EndsWith(" (30 seconds).")) ("-TtlSeconds 30 is taken: the offer is open for 30 seconds (" + $line30 + ")")
+    Check ((($lines30 | ForEach-Object { [regex]::Match($_, 'open for ([0-9a-z ]+) more').Groups[1].Value }) -join ",") -ceq "20 seconds,10 seconds") ("while it waits, the time left is said at each 10 s of the last minute, once each (" + ($lines30 -join " | ") + ")")
+    $outLines = @($end30.out -split "`r?`n")
+    $lastCount = -1; $expiredAt = -1
+    for ($i = 0; $i -lt $outLines.Count; $i++) { if ($outLines[$i] -clike "The offer is open for *") { $lastCount = $i }; if ($expiredAt -lt 0 -and $outLines[$i].Contains("the offer expired at")) { $expiredAt = $i } }
+    Check ($end30.code -eq 1 -and $expiredAt -gt $lastCount -and $lastCount -ge 0) ("and the countdown stops with the expiry, which ends the command (exit " + $end30.code + ")")
+
     Write-Host ""
     Write-Host "--- 7. in this process: a hostile relay, a flood, an expiry, reject, an interruption ---" -ForegroundColor Cyan
     $hostile = Connect-HordeRelay -Name "hostile"
@@ -310,7 +344,7 @@ try {
     $script:onOffer = { param($Text) $o = Get-PendingOffer $Text; foreach ($i in 1..40) { [void](Send-HordeRelayItem -Connection $hostile.value -Mailbox $o.pairMailbox -Text ("flood " + $i)) } }
     $script:fake = [datetime]::UtcNow
     # Five seconds a look here: the relay hands the flood over a batch at a time, and the cap must be
-    # reached well inside the offer's 300 s.
+    # reached well inside the offer's 600 s.
     $fl = Invoke-HordeRelayPair -HordeHome $hh -Connection $hostile.value -InputFile $typed -Say $say -Clock { $script:fake = $script:fake.AddSeconds(5); $script:fake }
     Check ((-not $fl.ok) -and $fl.reason.Contains("32 refused items") -and @($said | Where-Object { $_ -clike "refused what the relay brought*" }).Count -eq 32) ("a mailbox flooded with junk is given up after 32 refusals, not opened until the offer expires (" + $fl.reason + ")")
 
@@ -337,6 +371,27 @@ try {
     $ex = Invoke-HordeRelayPair -HordeHome $hh -InputFile (Join-Path $work "never-typed.txt") -Say $say -Clock $clock -OpenPicture { param($Path) $script:pic = $Path }
     Check ((-not $ex.ok) -and $ex.reason.Contains("expired") -and $ex.reason.Contains("nothing was enrolled") -and -not (Test-Path -LiteralPath (Join-Path $hh ("relay\pairing\used\" + $ex.offer.offer + ".json")))) ("an offer nobody answers expires cleanly, with nothing enrolled (" + $ex.reason + ")")
     Check ($script:pic -ne "" -and -not (Test-Path -LiteralPath $script:pic)) "and its picture, opened, is deleted"
+    Check ($null -ne $ex.offer -and @($said | Where-Object { $_ -cmatch '\APairing offer [0-9a-f]{32}, open until [0-9:]{8} \(10 minutes\)\.\z' }).Count -ge 1) "with no -TtlSeconds the command's offer lives ten minutes, and says so"
+
+    # THE COUNTDOWN, on a clock that each wait moves by exactly its length: an offer of 130 s says the
+    # time left at 2 minutes, 1 minute, then every 10 s - one line a step, though it looks every second -
+    # and nothing at or after the expiry.
+    $said.Clear()
+    $script:fake = [datetime]::UtcNow
+    $script:onOffer = $null
+    $cd = & {
+        function Read-HordeRelayPairLine { param($Source, [int]$TimeoutMs = 0, [switch]$Block) $script:fake = $script:fake.AddMilliseconds($TimeoutMs); return $null }
+        Invoke-HordeRelayPair -HordeHome $hh -InputFile (Join-Path $work "never-typed.txt") -Say $say -Clock { $script:fake } -TtlSeconds 130
+    }
+    $counted = @($said | Where-Object { $_ -clike "The offer is open for *" } | ForEach-Object { [regex]::Match($_, 'open for ([0-9a-z ]+) more').Groups[1].Value })
+    Check (@($said | Where-Object { $_ -clike "Pairing offer *(2 minutes 10 seconds)." }).Count -eq 1) "an offer of 130 s says so in plain words on its offer line"
+    Check (($counted -join ",") -ceq "2 minutes,1 minute,50 seconds,40 seconds,30 seconds,20 seconds,10 seconds") ("its countdown is one line a step: each minute, then each 10 s of the last (" + ($counted -join ",") + ")")
+    $lastSaid = [string]$said[$said.Count - 1]
+    Check ((-not $cd.ok) -and $cd.reason.Contains("expired") -and $lastSaid -clike "The offer is open for 10 seconds more*") ("and stops at the expiry: nothing after the last 10 s (" + $lastSaid + ")")
+    Check ((Format-HordeRelayPairSpan -Ms 60000) -ceq "1 minute" -and (Format-HordeRelayPairSpan -Ms 61000) -ceq "1 minute 1 second" -and (Format-HordeRelayPairSpan -Ms 45000) -ceq "45 seconds" -and (Format-HordeRelayPairSpan -Ms 900000) -ceq "15 minutes") "a length of time is said in plain words, one and many"
+    Check ((Test-HordeRelayPairTtl -TtlSeconds 30) -ceq "" -and (Test-HordeRelayPairTtl -TtlSeconds 900) -ceq "" -and (Test-HordeRelayPairTtl -TtlSeconds 29) -cne "" -and (Test-HordeRelayPairTtl -TtlSeconds 901) -cne "") "30 and 900 are taken, 29 and 901 refused, in the command itself"
+    $rt = Invoke-HordeRelayPair -HordeHome $hh -InputFile (Join-Path $work "never-typed.txt") -Say $say -Clock $clock -TtlSeconds 901
+    Check ((-not $rt.ok) -and $null -eq $rt.offer -and $rt.reason.StartsWith("-TtlSeconds is how many seconds")) ("a life out of range is refused before any offer is made (" + $rt.reason + ")")
 
     $phoneR = New-HordeTestPhone
     [System.IO.File]::WriteAllText($typed, "", $ascii)
@@ -430,6 +485,11 @@ try {
     # Another failure is said in its own words, once; a refusal after it is said once again.
     $ro = Invoke-RefusedWait -LifeMs 60000 -Answer { param($n) if ($n -le 2) { return (New-HordeUnknown -Reason "connection refused (a stand-in)") }; return (New-Refusal -Status 401) }
     Check (@($ro.said | Where-Object { $_.Contains("connection refused (a stand-in)") }).Count -eq 1 -and @($ro.said | Where-Object { $_.Contains("waiting for the phone to register this machine") }).Count -eq 1) ("a relay that cannot be reached is said in its words once, and the refusal after it once (" + ($ro.said -join " | ") + ")")
+    # The countdown keeps its 10 s steps while the relay is asked only every 15 s (issue #283): the wait
+    # between watches is read a second at a time, so no step is skipped or said late.
+    $rc = Invoke-RefusedWait -LifeMs 70000 -Answer { param($n) return (New-Refusal -Status 401) }
+    $rcSteps = @($rc.said | Where-Object { $_ -clike "The offer is open for *" } | ForEach-Object { [regex]::Match($_, 'open for ([0-9a-z ]+) more').Groups[1].Value })
+    Check (($rcSteps -join ",") -ceq "1 minute,50 seconds,40 seconds,30 seconds,20 seconds,10 seconds") ("while a refusing relay is asked every 15 s, the countdown still says each step of the last minute (" + ($rcSteps -join ",") + ")")
     # A line pasted while it waits is read at once, and does not bring the next watch forward.
     $rp = Invoke-RefusedWait -LifeMs 60000 -Typed @{ 1 = "not a response" } -Answer { param($n) return (New-Refusal -Status 401) }
     Check (@($rp.said | Where-Object { $_.Contains("refused: that is not a pairing response") }).Count -eq 1 -and $rp.gaps[0] -eq 5000) ("a line pasted while it waits is taken at once, and the next watch still waits its 5 s (" + (($rp.gaps | Select-Object -First 3) -join ",") + ", ...)")
