@@ -402,7 +402,7 @@ function Invoke-HordeRelayPublishStep {
     $kept = Read-HordeRelayPublishState -HordeHome $HordeHome
     if ($kept.state -ceq "unknown") { & $say ("LEFT ALONE - " + $kept.reason); return @($lines.ToArray()) }
     $s = $(if ($kept.state -ceq "known") { $kept.value } else { New-HordeRelayPublishState })
-    $queue = { param([string]$What, [string]$Key, [string]$Revision) $null = Add-HordeRelayPublishNotice -State $s -What $What -Key $Key -Revision $Revision -Id (Invoke-HordeRelayPublishTool -Tools $Tools -Name "NewId") -At $now }
+    $queue = { param([string]$What, [string]$Key, [string]$Revision) $null = Add-HordeRelayPublishNotice -State $s -What $What -Key $Key -Revision $Revision -Id (Invoke-HordeRelayPublishTool -Tools $Tools -Name "NewId") -At $relayPublishLogAt }
     # The id of the record as it is now: what a failure keeps (header, THE RULE 5).
     $recordId = { $r = Read-HordeRelayDeployed -HordeHome $HordeHome; if ($r.state -ceq "known") { return ("" + $r.value.id) }; return "" }
     # The look is a block of its own, so each of its ends is a return from IT, and the state is written
@@ -473,8 +473,10 @@ function Invoke-HordeRelayPublishStep {
         }
         if ($d.action -ceq "warn") { & $warn $d.what $d.key $d.reason; return }
         # A TRY THAT FAILS waits an hour (header, THE RULE 5), keeping the id of the record as it is then.
+        # Its time is the log's own name (above, THE LOG'S TIME AND HOME), never $now: it is called right
+        # after the deploy answers, needs-action included, and must not depend on where $now resolves.
         $failed = { param([string]$What, [string]$Why, [string]$Label = "FAILED", [string]$KeyPrefix = "failed:")
-            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = (& $recordId) }
+            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $relayPublishLogAt; what = $What; recordId = (& $recordId) }
             & $queue $What ($KeyPrefix + $h.commit) $h.commit
             & $say ($Label + " - " + $Why + "; tried again an hour from now at the earliest") -Log
         }
