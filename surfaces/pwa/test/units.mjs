@@ -603,7 +603,8 @@ async function pairedApp(transport, m, opts = {}) {
   await b.unlock(a.paired.id);
   const v = await b.refresh(a.paired.id);
   check(!JSON.stringify(v.anomalies).includes("evil.example") && v.relayDown === true && v.anomalies.some((x) => x.indexOf("The relay could not be read") === 0), "a relay's own words are not shown: a fixed sentence is", JSON.stringify(v.anomalies));
-  check(v.diagnostics.length === 1 && v.diagnostics[0].indexOf("the relay said: ") === 0 && v.diagnostics[0].length <= 216, "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
+  // Two of them: the unlock's vouch the relay did not take (the horde not heard from yet), and the read.
+  check(v.diagnostics.length === 2 && v.diagnostics.every((d) => d.indexOf("the relay said: ") === 0 && d.length <= 216), "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
   const why = await throwsAsync(() => b.announce(a.paired.id));
   check(!why.includes("evil.example") && why.length > 0, "a put the relay refuses is said in fixed words too", why);
 }

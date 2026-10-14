@@ -157,7 +157,7 @@ export function createBridge(phone, options = {}) {
       if (!relayDown) lastGoodAt = now();
       emit("read-changed", { locked: false, relayDown, said: relayDown ? r.diagnostics.slice() : [], lastGoodAt });
       view = r.snapshot ? r : null;
-      viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, announce this phone again.";
+      viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, the phone is announced again at its next unlock.";
     } catch (e) {
       view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e);
       emit("read-changed", { locked, relayDown, said: locked ? [] : [viewError], lastGoodAt });
