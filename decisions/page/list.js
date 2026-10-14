@@ -52,6 +52,19 @@
 // remembered on this device. A question's group is still its heading: questions that stand together
 // in the order and share a group share one heading, so a group may be named more than once down the
 // page, and the order is never bent to keep a group in one piece.
+// THE ORDER TURNS OVER (the founder, 2026-10-14: "Decisions page sorts should toggle between ascending
+// and descending"): the order in force, pressed again, turns over - the oldest first, the least
+// important first, the least blocking first - and pressed again turns back; another order is chosen
+// in its own first direction. Only the order's own word turns: ties still go to the newest. The order
+// in force shows an arrow (down: its first direction, up: turned over) and says it in words; which
+// way it runs is remembered beside which order it is.
+// A PRESS RE-SORTS WHAT HE IS LOOKING AT (the founder, 2026-10-14: "the three sort orders sometimes
+// don't work"). A redraw keeps the question at the top of the view where it was (THE VIEW FOLLOWS
+// HIM), which is right for a list that arrives and wrong for a press: in a real browser a tap on
+// "Task importance" re-sorted the list and then scrolled 879 px down the page after the question that
+// had been at the top, so the screen showed the same question and the order line was gone - it
+// "worked" only when the list was too short to scroll (decisions/page/test/browser-order.mjs). A
+// press keeps the order line where it was pressed instead, so the head of the new order is under it.
 //
 // ONCE HE HAS ANSWERED, THE QUESTION LEAVES HIS LIST (the same day: "once he answers a question it
 // goes away from his list"). The words turn green when the host says they are saved; a moment later
@@ -119,13 +132,20 @@
   var RECEIPT_DONE = "applied";
   var DRAFTS_KEY = "horde-decisions-drafts-v1";
   // THE ORDERS HE CAN CHOOSE (header, THE ORDER IS HIS): key, the word on its button, and what the
-  // button says to a screen reader. The first is the one he gets until he chooses.
+  // button says to a screen reader, in its first direction and turned over (THE ORDER TURNS OVER).
+  // The first is the one he gets until he chooses. Which way it runs is kept under a key of its own,
+  // so a page of an earlier version still reads the order it knows from ORDER_KEY.
   var ORDER_KEY = "horde-decisions-order-v1";
+  var ORDER_TURN_KEY = "horde-decisions-order-turned-v1";
   var ORDERS = [
-    { key: "date", label: "Date", says: "Order by date: the newest question first" },
-    { key: "importance", label: "Task importance", says: "Order by how important the task is: the most important first" },
-    { key: "blocks", label: "Blocking", says: "Order by how much the question blocks its task: the most blocking first" }
+    { key: "date", label: "Date", says: "the newest question first", turned: "the oldest question first", what: "date" },
+    { key: "importance", label: "Task importance", says: "the most important first", turned: "the least important first", what: "how important the task is" },
+    { key: "blocks", label: "Blocking", says: "the most blocking first", turned: "the least blocking first", what: "how much the question blocks its task" }
   ];
+  // The arrow beside the order in force: down in its first direction, up turned over. Escapes, so the
+  // source stays ASCII.
+  var ARROW_FIRST = "\u25BC";
+  var ARROW_TURNED = "\u25B2";
   var DEFAULT_ORDER = "date";
   // THE TWO WORDS BESIDE A QUESTION, each list in the order it sorts in, and the word a question
   // reads as when it states none - or states one this page does not know. They are
@@ -188,19 +208,25 @@
   }
   // NEWEST FIRST: by when it was asked, and between two asked in the same instant - or with no time
   // stated - the higher number, which was asked later. It is also how every other order breaks a tie.
-  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (Number(b.number) - Number(a.number)); }
+  // A number that is not a number counts as 0, so a comparison never answers NaN - an answer that
+  // leaves the sort's result to the engine.
+  function numberOf(q) { var n = Number(q.number); return isNaN(n) ? 0 : n; }
+  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (numberOf(b) - numberOf(a)); }
   function orderOf(key) {
     for (var i = 0; i < ORDERS.length; i += 1) { if (ORDERS[i].key === key) { return key; } }
     return DEFAULT_ORDER;
   }
-  // THE ONE COMPARISON of two questions for an order (header, THE ORDER IS HIS).
-  function compareBy(key) {
-    if (key === "importance") { return function (a, b) { return (placeIn(IMPORTANCES, a.importance, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }
-    if (key === "blocks") { return function (a, b) { return (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }
-    return newestFirst;
+  // THE ONE COMPARISON of two questions for an order (header, THE ORDER IS HIS), turned over when
+  // turned is true (header, THE ORDER TURNS OVER): only the order's own word turns, and a tie still
+  // goes to the newest - except by date, where the newest IS the order, so the whole of it turns.
+  function compareBy(key, turned) {
+    var way = turned === true ? -1 : 1;
+    if (key === "importance") { return function (a, b) { return way * (placeIn(IMPORTANCES, a.importance, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }
+    if (key === "blocks") { return function (a, b) { return way * (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }
+    return function (a, b) { return way * newestFirst(a, b); };
   }
   // A list of questions in an order: a new list, the one handed in is not touched.
-  function inOrder(list, key) { return listOf(list).slice().sort(compareBy(orderOf(key))); }
+  function inOrder(list, key, turned) { return listOf(list).slice().sort(compareBy(orderOf(key), turned === true)); }
   function newId() {
     var bytes = new Uint8Array(16);
     window.crypto.getRandomValues(bytes);
@@ -327,7 +353,9 @@
     var prefs = options.prefs || null;
     if (!prefs) { try { prefs = window.localStorage; } catch (e) { prefs = null; } }
     var orderKey = DEFAULT_ORDER;
+    var orderTurned = false;
     try { orderKey = orderOf(prefs ? prefs.getItem(ORDER_KEY) : ""); } catch (e) { orderKey = DEFAULT_ORDER; }
+    try { orderTurned = !!prefs && prefs.getItem(ORDER_TURN_KEY) === "1"; } catch (e) { orderTurned = false; }
     var kinds = Object.create(null);
     var questions = [];
     var lastJson = null;
@@ -632,7 +660,7 @@
       // one by the name and which run it is, so that each keeps its own fold between draws.
       var runs = Object.create(null);
       var run = null;
-      inOrder(mine, orderKey).forEach(function (q) {
+      inOrder(mine, orderKey, orderTurned).forEach(function (q) {
         var name = textOf(q.group);
         if (!run || run.group !== name) {
           runs[name] = (runs[name] || 0) + 1;
@@ -644,8 +672,8 @@
       });
       heads = heads.concat(groupsInOrder);
       // What is with the keeper, and what is set aside, stand in the same order under their folds.
-      folds.thrall = inOrder(folds.thrall, orderKey);
-      folds.parked = inOrder(folds.parked, orderKey);
+      folds.thrall = inOrder(folds.thrall, orderKey, orderTurned);
+      folds.parked = inOrder(folds.parked, orderKey, orderTurned);
       var foldNames = { thrall: "With " + KEEPER, parked: "Parked", history: "History" };
       folds.history.sort(function (a, b) { return textOf(b.closedAt).localeCompare(textOf(a.closedAt)) || (b.number - a.number); });
       FOLDS.forEach(function (f) { if (folds[f].length) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
@@ -1494,36 +1522,63 @@
     orderBar.setAttribute("role", "group");
     orderBar.setAttribute("aria-label", "The order of the questions");
     orderBar.appendChild(make("span", "hd-order-lab", "Order by"));
+    // Each button is its word and, on the order in force, the arrow after it (THE ORDER TURNS OVER).
+    // The arrow is hidden from a screen reader, which is told the direction in words instead.
+    var orderArrows = [];
     var orderButtons = ORDERS.map(function (o) {
       var b = make("button", "hd-order-btn", o.label);
       b.type = "button";
       b.tabIndex = -1;
-      b.setAttribute("aria-label", o.says);
-      b.addEventListener("click", function () { setOrder(o.key); });
+      var arrow = make("span", "hd-order-dir");
+      arrow.setAttribute("aria-hidden", "true");
+      b.appendChild(arrow);
+      orderArrows.push(arrow);
+      b.addEventListener("click", function () { pressOrder(o.key); });
       orderBar.appendChild(b);
       return b;
     });
     function drawOrderBar() {
       orderButtons.forEach(function (b, i) {
-        var on = ORDERS[i].key === orderKey;
+        var o = ORDERS[i];
+        var on = o.key === orderKey;
         b.setAttribute("aria-pressed", on ? "true" : "false");
         b.classList.toggle("on", on);
+        b.classList.toggle("turned", on && orderTurned);
+        orderArrows[i].textContent = on ? " " + (orderTurned ? ARROW_TURNED : ARROW_FIRST) : "";
+        b.setAttribute("aria-label", on
+          ? "Ordered by " + o.what + ": " + (orderTurned ? o.turned : o.says) + ". Press to put " + (orderTurned ? o.says : o.turned)
+          : "Order by " + o.what + ": " + o.says);
       });
     }
-    // He chose an order: it is drawn at once, and kept for the next time the page is opened here.
-    function setOrder(key) {
+    // An order chosen, in its first direction or turned over: drawn at once, and kept for the next
+    // time the page is opened here. The order line stays where it was on the screen (header, A PRESS
+    // RE-SORTS WHAT HE IS LOOKING AT), so what is under it is the head of the new order.
+    function setOrder(key, turned) {
       orderKey = orderOf(key);
-      try { if (prefs) { prefs.setItem(ORDER_KEY, orderKey); } } catch (e) { /* only the remembering is lost */ }
-      if (lastJson !== null) { draw(); } else { drawOrderBar(); }
+      orderTurned = turned === true;
+      try { if (prefs) { prefs.setItem(ORDER_KEY, orderKey); prefs.setItem(ORDER_TURN_KEY, orderTurned ? "1" : "0"); } } catch (e) { /* only the remembering is lost */ }
+      if (lastJson === null) { drawOrderBar(); return; }
+      var barWas = orderBar.parentNode === root ? orderBar.getBoundingClientRect().top : null;
+      draw({ keepBar: true });
+      if (barWas !== null) {
+        var moved = orderBar.getBoundingClientRect().top - barWas;
+        if (moved !== 0) { window.scrollBy(0, moved); }
+      }
+    }
+    // A press on an order's button: the order in force turns over; another is chosen in its first direction.
+    function pressOrder(key) {
+      key = orderOf(key);
+      setOrder(key, key === orderKey ? !orderTurned : false);
     }
     function order(box, want) {
       var wanted = new Set(want);
       Array.prototype.slice.call(box.childNodes).forEach(function (n) { if (!wanted.has(n)) { box.removeChild(n); } });
       for (var i = 0; i < want.length; i += 1) { if (box.childNodes[i] !== want[i]) { box.insertBefore(want[i], box.childNodes[i] || null); } }
     }
-    function draw() {
+    // how.keepBar: a press on an order - the view is not to follow the question at its top (setOrder).
+    function draw(how) {
       var startedAt = window.performance.now();
-      var before = place();
+      var before = (how && how.keepBar === true) ? null : place();
       var had = focusedLine();
       var hadField = had ? document.activeElement : null;
       var caret = had ? { number: had.q.number, part: had.fields.indexOf(hadField), from: hadField.selectionStart, to: hadField.selectionEnd } : null;
@@ -1676,7 +1731,8 @@
     // A CHECK'S STEPS, acted out on the page's own fields and nowhere else: a check cannot press a
     // key, so it hands the page these and the page's own handlers do the rest. Each step is
     //   { do: "focus", q, part }  the caret into that question's field (part: into that part's)
-    //   { do: "order", key }      that order chosen, as a press on its button does
+    //   { do: "order", key, turned }   that order chosen, in its first direction (turned: true, turned
+    //                             over), as setOrder does; { do: "press-order", key } a press on its button
     //   { do: "follow", q }       a press on that question's "Follows up on question N"
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
@@ -1707,7 +1763,8 @@
           if (target && (part !== undefined ? target.fields[part] && target.fields[part].offsetParent === null : !openFields(target).length)) { unfold(target, part); arrived.at = 0; }
           else if (target) { enter(target, part); arrived.at = 0; }
         }
-        else if (step.do === "order") { setOrder(textOf(step.key)); }
+        else if (step.do === "order") { setOrder(textOf(step.key), step.turned === true); }
+        else if (step.do === "press-order") { pressOrder(textOf(step.key)); }
         else if (step.do === "follow") { target = lineOf(Number(step.q)); if (target && target.tags.follow) { target.tags.follow.press.click(); } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
@@ -1819,10 +1876,12 @@
         draw();
       },
       takeKeyboard: takeKeyboard,
-      // The order chosen, by its key (date, importance or blocks); setOrder chooses one, as a press
-      // on its button does.
+      // The order chosen, by its key (date, importance or blocks), and whether it is turned over;
+      // setOrder(key, turned) chooses one; pressOrder(key) is a press on its button (THE ORDER TURNS OVER).
       order: function () { return orderKey; },
+      turned: function () { return orderTurned; },
       setOrder: setOrder,
+      pressOrder: pressOrder,
       drive: drive,
       // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
       // questions are in the run of answering (not parked), toAnswer how many of those have no
@@ -1870,9 +1929,10 @@
       //   left      { lines, sub }                how many were left out by the caller's limits
       // limits is { lines, subLines, lineChars }: the most of each, and the most characters of a text.
       snapshot: function (limits) {
-        // order: the order chosen, by its key, and the word on the button drawn as pressed.
-        var pressed = orderButtons.filter(function (b) { return b.getAttribute("aria-pressed") === "true"; }).map(function (b) { return b.textContent; });
-        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, order: { key: orderKey, pressed: pressed.join(","), shown: orderBar.parentNode === root, words: orderButtons.map(function (b) { return b.textContent; }) } };
+        // order: the order chosen, by its key, whether it is turned over, the word on the button drawn
+        // as pressed (its word alone: the arrow is arrow), and what that button says to a screen reader.
+        var pressedAt = orderButtons.filter(function (b) { return b.getAttribute("aria-pressed") === "true"; }).map(function (b) { return orderButtons.indexOf(b); });
+        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
         drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.kind === "parked", kind: h.head.kind, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
@@ -1938,7 +1998,7 @@
     };
   }
 
-  // order: the one sorting of questions, for a check that holds it without a page (inOrder(list, key),
-  // and the orders there are).
+  // order: the one sorting of questions, for a check that holds it without a page (inOrder(list, key,
+  // turned), and the orders there are).
   window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };
 }());

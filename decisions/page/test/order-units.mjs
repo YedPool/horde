@@ -92,5 +92,26 @@ for (let i = 1; i < big.length; i += 1) {
 }
 check(big.length === 300 && inRank && new Set(big.map((x) => x.number)).size === 300, "three hundred questions come back in order, every one of them, once");
 
+// --- turned over (list.js, THE ORDER TURNS OVER): only the order's own word turns ---
+const turned = (list, key, want, name) => {
+  const got = new Set(shuffles(list, 60).map((s) => numbers(order.inOrder(s, key, true))));
+  check(got.size === 1 && got.has(want), name, "wanted " + want + ", got " + [...got].join(" | "));
+};
+turned(byDate, "date", "4,1,2,3", "by date turned over, the oldest first");
+turned([q(7, 10), q(9, 10), q(8, 10)], "date", "7,8,9", "by date turned over, asked in the same instant, the lower number - asked first - stands first");
+turned([q(5, 10), { number: 6 }, q(4, 30)], "date", "6,5,4", "by date turned over, a question with no time (read as the oldest) stands first");
+turned(ranked, "importance", "5,1,6,3,4,2", "by task importance turned over: low, then normal, then high - and inside each, STILL the newest first");
+turned([q(1, 10), q(2, 20, { importance: "high" }), q(3, 30, { importance: "urgent" })], "importance", "3,1,2", "turned over, a question that states no importance, or an unknown one, still reads as normal");
+turned(blocking, "blocks", "5,1,6,3,4,2", "by blocking turned over: none, then part, then all - ties the newest first");
+turned([q(1, 10, { blocks: "all", importance: "high" }), q(2, 20, { blocks: "all", importance: "low" })], "blocks", "2,1", "by blocking turned over the importance still decides nothing: a tie goes to the newest");
+for (const key of order.orders) turned(old, key, key === "date" ? "3,7,11" : "11,7,3", "an old list turned over by " + key + ": " + (key === "date" ? "the lowest number first" : "nothing but ties, so the newest first as before"));
+check(numbers(order.inOrder(byDate, "date", "yes")) === "3,2,1,4" && numbers(order.inOrder(byDate, "date", 1)) === "3,2,1,4", "only true turns an order over: a word or a number that is not true is the first direction");
+turned(byDate, "no-such-order", "4,1,2,3", "an order the page does not know, turned over, is the date turned over");
+
+// --- a field that is missing or not what it should be never leaves the sort to the engine ---
+always([{ number: 2, addedAt: q(0, 10).addedAt }, { addedAt: q(0, 10).addedAt }, { number: 3, addedAt: q(0, 10).addedAt }], "date", "3,2,", "a question with no number counts as number 0: the order is one answer whatever it is handed");
+always([{ number: "x" }, { number: 1 }, { number: 5 }], "date", "5,1,x", "and so does a number that is not a number (it was NaN, which leaves the order to the engine)");
+always([{ number: 4 }, {}, { number: 1, importance: "high" }], "importance", "1,4,", "a question with nothing but a number, and one with nothing at all, are sorted and nothing throws");
+
 process.stdout.write("[DONE] " + passed + "\n");
 process.exit(failures === 0 ? 0 : 1);
