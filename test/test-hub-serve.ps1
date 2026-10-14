@@ -54,11 +54,12 @@ function Update-FreshView {
 
 function Start-Node {
     # cli/NodeServe.ps1's real loop in a second runspace, on the memory transport (test-node-serve's peer).
-    param([int]$MaxLinks = 1, [switch]$ThrowOnView, [string]$View = $viewPath, [string]$At = $device, [int]$ViewDelayMs = 0)
+    param([int]$MaxLinks = 1, [switch]$ThrowOnView, [string]$View = $viewPath, [string]$At = $device, [int]$ViewDelayMs = 0, [switch]$MembershipOnVersion1)
     $ready = New-Object System.Threading.ManualResetEventSlim($false)
     $ps = [PowerShell]::Create()
     [void]$ps.AddCommand((Join-Path $fx "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $At).AddParameter("ViewPath", $View).AddParameter("ViewDelayMs", $ViewDelayMs).AddParameter("MaxLinks", $MaxLinks).AddParameter("IdleTimeoutMs", 30000).AddParameter("Ready", $ready)
     if ($ThrowOnView) { [void]$ps.AddParameter("ThrowOnView", $true) }
+    if ($MembershipOnVersion1) { [void]$ps.AddParameter("MembershipOnVersion1", $true) }
     $h = $ps.BeginInvoke()
     $up = $ready.Wait(30000)
     return [pscustomobject]@{ ps = $ps; h = $h; up = $up }
@@ -238,6 +239,37 @@ try {
     Check ($p.ok -eq $false -and $p.reason -clike "*could not open a link*" -and ((Utc) - $began).TotalSeconds -lt 20) ("with nobody listening the pull fails at once, saying so (" + $p.reason + ")")
     $p = Invoke-HordeHubPull -Entry (Entry -Transport $null -TransportError "the transport declines auth.peer") -Hub $hub -Contract $contract -TimeoutMs 30000
     Check ($p.ok -eq $false -and $p.reason -clike "*declines auth.peer*") "a node whose transport the hub could not pick fails with that reason"
+
+    Write-Host ""
+    Write-Host "--- membershipComplete over a real pull (verbs version 2, ledger core-projection L-101) ---" -ForegroundColor Cyan
+    # The hub's own hello, from Invoke-HordeHubPull, against the node's real loop: no hand-built offer.
+    # The node declares X2 and has no other session-naming folder; its second view lists one session.
+    $mv = [System.IO.File]::ReadAllText($viewPath) | ConvertFrom-Json
+    $mv | Add-Member -NotePropertyName sessionStores -NotePropertyValue ([pscustomobject][ordered]@{ state = "known"; value = @("X2"); reason = "" })
+    $mv | Add-Member -NotePropertyName storeFolders -NotePropertyValue ([pscustomobject][ordered]@{ X2 = $true; W8 = $false; W1 = $false; X1 = $false; W5 = $false })
+    $mvTwo = Join-Path $work "view-member-two.json"; [System.IO.File]::WriteAllText($mvTwo, ($mv | ConvertTo-Json -Depth 30))
+    $mv.sessions = @(@($mv.sessions)[0])
+    $mvOne = Join-Path $work "view-member-one.json"; [System.IO.File]::WriteAllText($mvOne, ($mv | ConvertTo-Json -Depth 30))
+    $node = Start-Node -View $mvTwo
+    $p1 = Invoke-HordeHubPull -Entry (Entry) -Hub $hub -Contract $contract -TimeoutMs 30000
+    $null = Stop-Node $node
+    $mc = Get-HordeLinkProp $p1.list "membershipComplete"
+    Check ($p1.ok -and "$(Get-HordeLinkProp $mc 'state')" -ceq "known" -and (Get-HordeLinkProp $mc "value") -eq $true -and $p1.list.complete.value -eq $false) ("the hub's own hello offers verbs version 2, so a declaring node's list says it names every session (" + $p1.reason + ")")
+    $node = Start-Node -View $mvOne
+    $p2 = Invoke-HordeHubPull -Entry (Entry) -Hub $hub -Contract $contract -TimeoutMs 30000
+    $null = Stop-Node $node
+    $mm = Update-HordeNodeMirror -Mirror (New-HordeNodeMirror -DeviceId $device -DeviceName "fixture-node") -List $p1.list -NodeSentAt $p1.nodeSentAt -ReceivedAt $p1.receivedAt
+    $mm = Update-HordeNodeMirror -Mirror $mm -List $p2.list -NodeSentAt $p2.nodeSentAt -ReceivedAt $p2.receivedAt
+    $mn = @((Get-HordeFleetView -Mirrors @($mm) -Now (Utc)).nodes)[0]
+    Check ($p2.ok -and $mn.listed -eq 1 -and $mn.carried -eq 0) ("over a real pull, a session a membership-complete list leaves out is dropped by the hub (" + $mn.listed + " listed, " + $mn.carried + " carried)")
+    $mp2 = Write-HordeHubMirror -Root $mirrorRoot -Mirror $mm -Contract $contract
+    Check ((Read-HordeHubMirror -Path $mp2 -DeviceId $device -Contract $contract).state -ceq "known") "a mirror holding membershipComplete is written and read back"
+    Remove-Item -LiteralPath $mp2 -Force
+    # A node that offers only verbs version 1 and sends the member anyway: the link agreed on 1.
+    $node = Start-Node -View $mvTwo -MembershipOnVersion1
+    $p3 = Invoke-HordeHubPull -Entry (Entry) -Hub $hub -Contract $contract -TimeoutMs 30000
+    $null = Stop-Node $node
+    Check ($p3.ok -and $null -eq $p3.list.PSObject.Properties["membershipComplete"]) ("the hub does not hear membershipComplete on a link that agreed on verbs version 1 (" + $p3.reason + ")")
 
     Write-Host ""
     Write-Host "--- the loop: a node heard, then gone ---" -ForegroundColor Cyan

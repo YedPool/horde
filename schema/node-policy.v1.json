@@ -27,11 +27,6 @@
       "description": "The engine profiles a hub may name in a spawn, by name. A profile not listed is refused even if the engine configuration defines it.",
       "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" }
     },
-    "dailySpawnCap": { "type": "integer", "minimum": 0, "description": "Sessions a hub may start on this node per UTC day, counted from the node's own request journal. 0 refuses every remote spawn. Absent: 32 (core/NodePolicy.ps1, the founder's decision of 2026-10-11: generous, not security by limiting power)." },
-    "sessionStores": {
-      "type": "array",
-      "description": "The stores that NAME this node's sessions and that it uses, by store id (core/ownership.json): X2 the agent's control files, W8 the other agent control files core/identity lists, W1 the wezfleet registry, X1 the pane-sessions files, W5 the run reports (read through the runs W3 and rosters W4, which must be whole too). When every store listed here was read whole and the list was not cut, sessions.list says membershipComplete known true (link-verbs v1, verbs version 2) and the hub drops a session the list leaves out instead of carrying it. A store not listed does not count; a store that only gives fields (X3, X4, X5, R1, W2, W6) cannot be listed. Absent: the node claims nothing, and the hub carries as before. Never inferred from a missing folder: the node's owner writes it. At least one store, each once (core/NodePolicy.ps1). Ledger core-projection L-101.",
-      "items": { "type": "string", "enum": ["X2", "W8", "W1", "X1", "W5"] }
-    }
+    "dailySpawnCap": { "type": "integer", "minimum": 0, "description": "Sessions a hub may start on this node per UTC day, counted from the node's own request journal. 0 refuses every remote spawn. Absent: 32 (core/NodePolicy.ps1, the founder's decision of 2026-10-11: generous, not security by limiting power)." }
   }
 }

@@ -210,8 +210,16 @@ Write-Host "--- membershipComplete: the list names every session the node has (v
 # The always-on node's list is never complete: it has no host adapter (X4) and no layouts (R1), so the
 # hub carried every session it left out, forever. membershipComplete splits "every session is listed"
 # from "every field is whole": known true only when every store the node DECLARES it names sessions
-# from (node policy sessionStores) was read whole, and nothing was cut from the list.
-function Declare { param($V, [string[]]$Stores) $V | Add-Member -NotePropertyName sessionStores -NotePropertyValue (New-HordeKnown -Value $Stores) -Force; return $V }
+# from (<HordeHome>\node\session-stores.json) was read whole, every other session-naming store was read
+# whole or has no folder, the view is of every session, and nothing was cut from the list.
+# Declare: the stores declared, and the folders of the session-naming stores, none by default.
+function Declare {
+    param($V, [string[]]$Stores, [string[]]$Folders = @())
+    $V | Add-Member -NotePropertyName sessionStores -NotePropertyValue (New-HordeKnown -Value $Stores) -Force
+    $f = [ordered]@{}; foreach ($k in @("X2", "W8", "W1", "X1", "W5")) { $f[$k] = ($Folders -ccontains $k) }
+    $V | Add-Member -NotePropertyName storeFolders -NotePropertyValue $f -Force
+    return $V
+}
 function Member { param($R) return $R.reply.result.value.membershipComplete }
 $r = Ask "sessions.list" -View (Declare (View) @("X2")) -Verbs @(1, 2)
 $mc = Member $r
@@ -221,9 +229,9 @@ Check ($null -eq $r.reply.result.value.PSObject.Properties["membershipComplete"]
 $r = Ask "sessions.list" -View (View) -Verbs @(1, 2)
 $mc = Member $r
 Check ($mc.state -ceq "known" -and $mc.value -eq $false -and "$($mc.reason)" -clike "*declares no session stores*" -and (Sendable $r.reply)) "a node that declares no stores is unchanged: membership is false, and says why"
-$absentDecl = View; $absentDecl | Add-Member -NotePropertyName sessionStores -NotePropertyValue (New-HordeAbsent -Note "this node has no policy file") -Force
+$absentDecl = View; $absentDecl | Add-Member -NotePropertyName sessionStores -NotePropertyValue (New-HordeAbsent -Note "there is no session-stores.json") -Force
 $mc = Member (Ask "sessions.list" -View $absentDecl -Verbs @(1, 2))
-Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*no policy file*") "a node with no policy file declares nothing, and the reason says so"
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*no session-stores.json*") "a node with no declaration file declares nothing, and the reason says so"
 $notWhole = Declare (View) @("X2")
 $notWhole.complete.X2 = [pscustomobject]@{ state = "unknown"; reason = "a control file is half written" }
 $mc = Member (Ask "sessions.list" -View $notWhole -Verbs @(1, 2))
@@ -232,13 +240,33 @@ $w5 = Declare (View) @("X2", "W5")
 $w5.complete.W4 = [pscustomobject]@{ state = "unknown"; reason = "a roster is locked" }
 $mc = Member (Ask "sessions.list" -View $w5 -Verbs @(1, 2))
 Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*W5*W4*roster is locked*") "a declared report store needs its runs and rosters whole too: reports are found through them"
-$undeclared = Declare (View) @("X2")
-$undeclared.complete.W1 = [pscustomobject]@{ state = "unknown"; reason = "the registry is locked" }
+# AN UNDECLARED STORE ONLY EVER TAKES THE CLAIM AWAY (review of PR #243): a half-written control file of
+# the other agent names nothing while it is half written, and the hub would drop a live session.
+$undeclared = Declare (View) @("X2") @("W8")
+$undeclared.complete.W8 = [pscustomobject]@{ state = "unknown"; reason = "agent-b-1.json is half written" }
 $mc = Member (Ask "sessions.list" -View $undeclared -Verbs @(1, 2))
-Check ($mc.value -eq $true) "a store the node does not declare does not count against membership"
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*W8*not declared*half written*") "an undeclared store with a folder that was not read whole withdraws the claim"
+$noFolder = Declare (View) @("X2")
+$noFolder.complete.W8 = [pscustomobject]@{ state = "unknown"; reason = "agent-b-1.json is half written" }
+$mc = Member (Ask "sessions.list" -View $noFolder -Verbs @(1, 2))
+Check ($mc.value -eq $true) "CONTROL: an undeclared store with no folder takes nothing away"
+$mc = Member (Ask "sessions.list" -View (Declare (View) @("X2") @("W8", "W1")) -Verbs @(1, 2))
+Check ($mc.value -eq $true) "CONTROL: an undeclared store with a folder read whole takes nothing away"
+$mc = Member (Ask "sessions.list" -View (Declare (View) @("X2") @("X1")) -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*X1*folder exists*") "an undeclared pane-sessions folder withdraws the claim, read whole or not: a whole read does not show every session it names"
+$noNote = Declare (View) @("X2"); $noNote.PSObject.Properties.Remove("storeFolders")
+$mc = Member (Ask "sessions.list" -View $noNote -Verbs @(1, 2))
+Check ($mc.value -eq $false) "a view that does not say which store folders exist claims nothing"
+$mc = Member (Ask "sessions.list" -View (Declare (View) @("X1")) -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*X1 cannot back the claim*") "a view that declares X1 is not membership-complete"
 $forged = Declare (View) @("X4")
 $mc = Member (Ask "sessions.list" -View $forged -Verbs @(1, 2))
-Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*X4*names no session*") "a declared store that names no session is not a declaration of membership"
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*X4*not a store this node can vouch*") "a declared store that names no session is not a declaration of membership"
+$mc = Member (Ask "sessions.list" -View (Declare (View) @("x2")) -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*x2*") "a store id in another case is not the store: ids are exact"
+$scoped = Declare (View) @("X2"); $scoped | Add-Member -NotePropertyName scope -NotePropertyValue "current" -Force
+$mc = Member (Ask "sessions.list" -View $scoped -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*current*") "a view of the current sessions only is never membership-complete"
 $mc = Member (Ask "sessions.list" -View (Declare (View) @()) -Verbs @(1, 2))
 Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*names none*") "a declaration that names no store claims nothing"
 $capped = Declare $many @("X2")
@@ -249,8 +277,12 @@ Check (@($r.reply.result.value.sessions).Count -eq 256 -and $mc.value -eq $false
 $r = Ask "sessions.list" -View (Declare $badId @("X2")) -Verbs @(1, 2)
 $mc = Member $r
 Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*ids*" -and (Sendable $r.reply)) "a list that left out an id the link cannot carry is not membership-complete"
-$sv = @(([System.IO.File]::ReadAllText((Join-Path $root "schema\node-policy.v1.json")) | ConvertFrom-Json).properties.sessionStores.items.enum)
-Check ($sv.Count -gt 0 -and (@($sv | Sort-Object) -join ",") -ceq (@($script:HordeNodeSessionStoreReads.Keys | Sort-Object) -join ",")) "the stores a policy may declare are exactly the ones the node knows how to check"
+$sv = @(([System.IO.File]::ReadAllText((Join-Path $root "schema\node-session-stores.v1.json")) | ConvertFrom-Json).properties.sessionStores.items.enum)
+Check ($sv.Count -gt 0 -and (@($sv | Sort-Object) -join ",") -ceq (@($script:HordeNodeDeclarableStores | Sort-Object) -join ",")) "the stores a node may declare are exactly the ones the node knows how to check"
+Check (@($script:HordeNodeDeclarableStores | Where-Object { @($script:HordeNodeSessionStoreReads.Keys) -cnotcontains $_ }).Count -eq 0 -and $script:HordeNodeDeclarableStores -cnotcontains "X1") "every declarable store is a session-naming store, and X1 is not declarable"
+$st = State
+$hr = Invoke-HordeNodeFrame -State $st -Line (Line (Hello -Verbs @(1, 2))) -Data (Data)
+Check ((@($manifest.verbsVersions) -join ",") -ceq (@($hr.reply.hello.verbsVersions) -join ",") -and (@($manifest.verbsVersions) -join ",") -ceq "1,2") "the node's manifest offers the verbs versions its hello offers"
 $st = State
 $null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello -Verbs @(1, 2, 9))) -Data (Data)
 Check ($st.verbsVersion -eq 2) "the verbs version is the highest both ends offer"

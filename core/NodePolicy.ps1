@@ -3,6 +3,9 @@
 # REMOTE PLAN STEP R9, as decided 2026-10-05 for the act path. Two inputs, each owned by the node:
 #   - schema/node-policy.v1, the file <HordeHome>/node/policy.json: the registered clones, the engine
 #     profiles offered, the daily spawn cap. Lists and maps, so a file of its own (see the schema).
+#   Beside it, schema/node-session-stores.v1, <HordeHome>/node/session-stores.json: the stores that name
+#   this node's sessions, for sessions.list's membershipComplete (L-101). Its own file and reader
+#   (Get-HordeNodeSessionStores), so a bad value there never touches the policy or the acts.
 #   - the engine configuration's resolution (core/EngineResolve.ps1) for the session being started:
 #     the requested permission level (key permission) and the node's ceiling (remote.permissionCeiling,
 #     settable only in L1 and L4 and only lowered by L4).
@@ -113,14 +116,6 @@ function Read-HordeNodePolicyText {
     }
     $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($p in @($doc.profiles)) { if ($null -ne $p -and -not $names.Add("" + $p)) { [void]$problems.Add("the profile " + $p + " is offered twice") } }
-    # A DECLARATION NAMES AT LEAST ONE STORE, EACH ONCE: an empty list would say the node's list names
-    # every session while naming no store to read them from (L-101).
-    $ssp = $doc.PSObject.Properties["sessionStores"]
-    if ($null -ne $ssp) {
-        if (@($ssp.Value).Count -eq 0) { [void]$problems.Add("sessionStores names no store; leave it out to declare none") }
-        $seenStores = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-        foreach ($s in @($ssp.Value)) { if ($null -ne $s -and -not $seenStores.Add("" + $s)) { [void]$problems.Add("the session store " + $s + " is declared twice") } }
-    }
     if ($null -ne $doc.PSObject.Properties["dailySpawnCap"] -and $null -eq (ConvertTo-HordeNodeSpawnCap -Value $doc.dailySpawnCap)) { [void]$problems.Add("the daily spawn cap " + $doc.dailySpawnCap + " is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax) }
     if ($problems.Count -gt 0) { return (New-HordeUnknown -Reason ("the node policy is malformed: " + ($problems -join "; "))) }
     return (New-HordeKnown -Value $doc)
@@ -139,19 +134,49 @@ function Get-HordeNodePolicy {
     return (Read-HordeNodePolicyText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)))
 }
 
-function Get-HordeNodeSessionStores {
-    # The stores that name this node's sessions, as its owner declared them in the policy: known with
-    # the list; absent when the policy declares none or there is no policy; unknown when the policy
-    # cannot be read. Only a known list lets sessions.list say membershipComplete (remote/NodeServe.ps1);
-    # nothing here looks at which folders exist (ledger core-projection L-101).
-    param([Parameter(Mandatory = $true)]$Policy)
-    if ($Policy.state -ceq "known") {
-        $p = $Policy.value.PSObject.Properties["sessionStores"]
-        if ($null -eq $p) { return (New-HordeAbsent -Note "the node policy declares no session stores (sessionStores)") }
-        return (New-HordeKnown -Value @(@($p.Value) | ForEach-Object { "" + $_ }))
+function Get-HordeNodeSessionStoresPath {
+    # Where the node's owner declares the stores that name its sessions: <HordeHome>\node\session-stores.json.
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    return (Join-Path (Join-Path $HordeHome "node") "session-stores.json")
+}
+
+function Read-HordeNodeSessionStoresText {
+    # The declaration from its text, as an answer: known with the list of stores, or unknown naming
+    # every problem. Plain ASCII, one key per object, schema/node-session-stores.v1, at least one store,
+    # each once.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    if ($Text -cmatch '[^\x00-\x7F]') { return (New-HordeUnknown -Reason "the session-stores declaration holds a character that is not ASCII (CONTRIBUTING 13)") }
+    $problems = New-Object System.Collections.ArrayList
+    foreach ($d in @(Find-HordeJsonDuplicateKey -Text $Text)) { if ($null -ne $d) { [void]$problems.Add("" + $d) } }
+    $doc = $null
+    try { $doc = $Text | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason "the session-stores declaration is not JSON") }
+    if ($null -eq $doc) { return (New-HordeUnknown -Reason "the session-stores declaration is empty") }
+    foreach ($b in @(Test-HordeSchema -Value $doc -Schema (Get-HordeSchema -Name "node-session-stores.v1"))) { [void]$problems.Add("" + $b) }
+    if ($problems.Count -eq 0) {
+        # AT LEAST ONE STORE, EACH ONCE: an empty list would say the node's list names every session
+        # while naming no store to read them from.
+        $stores = @($doc.sessionStores)
+        if ($stores.Count -eq 0) { [void]$problems.Add("sessionStores names no store; remove the file to declare none") }
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($s in $stores) { if (-not $seen.Add("" + $s)) { [void]$problems.Add("the session store " + $s + " is declared twice") } }
     }
-    if ($Policy.state -ceq "absent") { return (New-HordeAbsent -Note ("this node declares no session stores: " + $Policy.reason)) }
-    return (New-HordeUnknown -Reason ("this node's session stores cannot be read: " + $Policy.reason))
+    if ($problems.Count -gt 0) { return (New-HordeUnknown -Reason ("the session-stores declaration is malformed: " + ($problems -join "; "))) }
+    return (New-HordeKnown -Value @(@($doc.sessionStores) | ForEach-Object { "" + $_ }))
+}
+
+function Get-HordeNodeSessionStores {
+    # The stores that name this node's sessions, as its owner declared them (schema/node-session-stores.v1):
+    # known with the list; absent when there is no file; unknown when it cannot be read or is malformed.
+    # Only a known list lets sessions.list say membershipComplete (remote/NodeServe.ps1). A file of its
+    # own, never a member of the policy: a bad value here takes away only that claim, never the node's
+    # acts, and a Horde that predates it never reads it (review of PR #243). Nothing here looks at which
+    # store folders exist (ledger core-projection L-101).
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("this node declares no session stores: there is no " + $Path)) }
+    $bytes = $null
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path) } catch { return (New-HordeUnknown -Reason ("the session-stores declaration could not be read: " + $_.Exception.Message)) }
+    try { Assert-HordeAsciiBytes -Bytes $bytes -What ("the session-stores declaration at " + $Path) } catch { return (New-HordeUnknown -Reason ("the session-stores declaration is not plain ASCII: " + $_.Exception.Message)) }
+    return (Read-HordeNodeSessionStoresText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)))
 }
 
 function Resolve-HordeNodeWorkdir {

@@ -92,13 +92,15 @@ $HordeCommand = @{
         # A session whose end is proven - its pid not running, or running with another start time - and
         # that no other store calls live is left out (core/Projection.ps1, ConvertTo-HordeNodeViewDocument):
         # a pane ended by hand leaves its control file, and the hub counted those as the node's sessions.
-        # The view also carries the session stores the node's policy declares (sessionStores, read again
-        # for every view, as a spawn reads the policy): only with them does sessions.list say its list
-        # names every session the node has, so the hub stops carrying what ended (remote/NodeServe.ps1,
-        # ledger core-projection L-101). Like endedSessions, the note never crosses the link itself.
+        # The view also carries the session stores the node's owner declares (<HordeHome>\node\
+        # session-stores.json, read again for every view, as a spawn reads the policy): only with them
+        # does sessions.list say its list names every session the node has, so the hub stops carrying
+        # what ended (remote/NodeServe.ps1, ledger core-projection L-101). A file of its own, so a bad
+        # value there takes away only that claim, never the acts the policy allows. Like endedSessions,
+        # the note never crosses the link itself.
         $getView = {
             $doc = ConvertTo-HordeNodeViewDocument -Projection (Get-HordeProjection -Platform $platform)
-            $doc["sessionStores"] = Get-HordeNodeSessionStores -Policy (Get-HordeNodePolicy -Path (Get-HordeNodePolicyPath -HordeHome $hordeHome))
+            $doc["sessionStores"] = Get-HordeNodeSessionStores -Path (Get-HordeNodeSessionStoresPath -HordeHome $hordeHome)
             $doc
         }
         $say = { Write-Host ("node " + $node.deviceId + " listening on the local link") }

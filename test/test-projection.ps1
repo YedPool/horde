@@ -511,11 +511,11 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
             $block = [scriptblock]::Create($assign[0].Right.Expression.ScriptBlock.EndBlock.Extent.Text)
             function Get-HordeProjection { param($Platform) return $nAll }
             $platform = $null
-            # The node's own policy, in a temporary home, declaring the one store it names sessions from.
+            # The node's own declaration, in a temporary home, of the one store it names sessions from.
             . (Join-Path $root "core\NodePolicy.ps1")
             $hordeHome = Join-Path $work ("node-home-" + [guid]::NewGuid().ToString("N"))
             New-Item -ItemType Directory -Path (Join-Path $hordeHome "node") -Force | Out-Null
-            [System.IO.File]::WriteAllText((Get-HordeNodePolicyPath -HordeHome $hordeHome), '{ "schemaVersion": 1, "repos": [], "profiles": [], "sessionStores": ["X2"] }', (New-Object System.Text.ASCIIEncoding))
+            [System.IO.File]::WriteAllText((Get-HordeNodeSessionStoresPath -HordeHome $hordeHome), '{ "schemaVersion": 1, "sessionStores": ["X2"] }', (New-Object System.Text.ASCIIEncoding))
             $served = & $block
         }
         $declared = $null; if ($null -ne $served) { $declared = Get-HordeLinkProp $served "sessionStores" }
@@ -528,13 +528,13 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     Check ($wire.agentOf42 -ne "" -and "$($wire.get["42|$($wire.agentOf42)"].reason)" -like "*ended, proven by its process*") "session.get naming the ended session's own agent still answers with its proof"
     Check ("$($wire.get['42|another-agent'].reason)" -notlike "*ended, proven*") "session.get naming another agent does not take the ended session's proof as its answer"
     Check ($wire.getViews -eq 1 -and $null -ne $wire.commandIds -and @($wire.commandIds) -notcontains (Sid 42) -and @($wire.commandIds) -contains (Sid 41)) "horde node serve's own view block leaves out the sessions whose end is proven"
-    Check ($null -ne $wire.declared -and "$($wire.declared.state)" -ceq "known" -and (@($wire.declared.value) -join ",") -ceq "X2") "horde node serve's own view block carries the session stores the node's policy declares"
+    Check ($null -ne $wire.declared -and "$($wire.declared.state)" -ceq "known" -and (@($wire.declared.value) -join ",") -ceq "X2") "horde node serve's own view block carries the session stores the node declares"
 }
 
 if (Section "membership" "the hub drops a session a membership-complete node list leaves out (remote/NodeServe.ps1, remote/Mirror.ps1)") {
     # THE ALWAYS-ON NODE AFTER PR #240: its list is never complete (no host adapter, X4), so the hub
     # carried every session that ended, forever ("0 session(s), 2 carried"). The node now declares the
-    # stores that name its sessions (node policy sessionStores, here X2 alone) and, when it read them
+    # stores that name its sessions (session-stores.json, here X2 alone) and, when it read them
     # whole, says its list names every session it has (membershipComplete, verbs version 2); the hub then
     # drops what the list leaves out (ledger core-projection L-101). Each poll goes over the real frame
     # path: the node's hello and answer, encoded by the link's writer and decoded by the hub's reader.
@@ -601,10 +601,36 @@ if (Section "membership" "the hub drops a session a membership-complete node lis
         Check ($p2.list.membershipComplete.value -eq $false -and $p2.node.carried -eq 1 -and @($p2.ids) -contains (Sid 52)) ("an unreadable listing drops nothing (" + $p2.list.membershipComplete.reason + ")")
 
         # NO DECLARATION: the node says nothing about membership, and the hub carries as before.
-        $n = Start-Node "member-undeclared" (New-HordeAbsent -Note "the node policy declares no sessionStores")
+        $n = Start-Node "member-undeclared" (New-HordeAbsent -Note "there is no session-stores.json")
         Remove-Item -LiteralPath (Join-Path $n.dir "agent\sessions\5052.json")
-        $p2 = Poll $n.first.mirror $n.dir $live (New-HordeAbsent -Note "the node policy declares no sessionStores")
+        $p2 = Poll $n.first.mirror $n.dir $live (New-HordeAbsent -Note "there is no session-stores.json")
         Check ($p2.list.membershipComplete.value -eq $false -and $p2.node.carried -eq 1 -and @($p2.ids) -contains (Sid 52)) "a node that declares no stores is unchanged: the hub carries what it leaves out"
+
+        # AN UNDECLARED STORE ONLY TAKES THE CLAIM AWAY (review of PR #243). The node declares X2, then
+        # runs the other agent too, whose control file is caught half written: it names nothing this
+        # poll, so the session it would name must be carried, not dropped.
+        # Its control folder, named as the fixture's own record of that agent names it.
+        $otherRec = @($p.inputs.identity.records.Values | Where-Object { "$($_.fields.agent.value)" -cne "$(Val (Ans $p 1 'agent'))" })[0]
+        $otherDir = "wezfleet\" + (Split-Path -Leaf (Split-Path -Parent $otherRec.source))
+        $n = Start-Node "member-other-half"
+        Remove-Item -LiteralPath (Join-Path $n.dir "agent\sessions\5052.json")
+        New-Item -ItemType Directory -Path (Join-Path $n.dir $otherDir) -Force | Out-Null
+        # The rest of the wezfleet root is whole, so only that agent's listing can take the claim away.
+        New-Item -ItemType Directory -Path (Join-Path $n.dir "wezfleet\registry\sessions") -Force | Out-Null
+        $whole = Poll $n.first.mirror $n.dir $live $x2
+        Check ($whole.list.membershipComplete.value -eq $true) ("CONTROL: with that agent's folder empty and the wezfleet root whole, the claim stands (" + $whole.list.membershipComplete.reason + ")")
+        PutText (Join-Path $n.dir ($otherDir + "\thread-9.json")) '{"sessionId":"thr'
+        $p2 = Poll $n.first.mirror $n.dir $live $x2
+        $why = "$($p2.list.membershipComplete.reason)"
+        Check ($p2.list.membershipComplete.value -eq $false -and $why -clike "*W8*" -and $why -cnotlike "*W1*" -and $p2.node.carried -eq 1 -and @($p2.ids) -contains (Sid 52)) ("a half-written control file of an undeclared store keeps the hub carrying (" + $why + ")")
+        # A pane-sessions file with no host to judge it names nothing, and its folder exists.
+        $n = Start-Node "member-pane-file"
+        Remove-Item -LiteralPath (Join-Path $n.dir "agent\sessions\5052.json")
+        New-Item -ItemType Directory -Path (Join-Path $n.dir "agent\pane-sessions") -Force | Out-Null
+        $pj = ReadJson (Join-Path $fx "agent\pane-sessions\17.json"); $pj.session_id = (Sid 52)
+        PutJson (Join-Path $n.dir "agent\pane-sessions\17.json") $pj
+        $p2 = Poll $n.first.mirror $n.dir $live $x2
+        Check ($p2.list.membershipComplete.value -eq $false -and $p2.node.carried -eq 1 -and @($p2.ids) -contains (Sid 52)) ("a pane-sessions folder on the node keeps the hub carrying: its files name sessions only through the host (" + $p2.list.membershipComplete.reason + ")")
     }
 }
 

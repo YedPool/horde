@@ -38,11 +38,13 @@
 # project directory placed by device and space (R11). No transcript path, resume command or other raw
 # worker context. complete is known true only when every store the projection read was readable.
 # membershipComplete (verbs version 2, sent only to a hub that offers it) is known true when the list
-# names every session the node has: every store the node's owner DECLARES names its sessions (node
-# policy sessionStores, carried in the view as sessionStores) was read whole, and nothing was cut. The
-# fields may still be partial - the always-on node has no host adapter, so complete is never true there -
-# and the hub then drops a session the list leaves out instead of carrying it (ledger core-projection
-# L-101). A store not declared does not count; no declaration, no claim.
+# names every session the node has: every store the node's owner DECLARES names its sessions
+# (<HordeHome>\node\session-stores.json, carried in the view as sessionStores) was read whole, every
+# other store that names sessions was read whole or has no folder, the view is of every session (scope
+# All), and nothing was cut. The fields may still be partial - the always-on node has no host adapter,
+# so complete is never true there - and the hub then drops a session the list leaves out instead of
+# carrying it (ledger core-projection L-101). No declaration, no claim; what the folders hold can only
+# take the claim away, never grant it.
 #
 # EVERY ANSWER FITS THE WIRE. A value the link cannot carry becomes an unknown with the reason; a reason
 # is cut to the reasonBytes cap; a session whose id the link cannot carry, or past the list cap, is left
@@ -70,10 +72,15 @@ $script:HordeNodeVerbsVersions = @(1, 2)
 $script:HordeNodeMembershipVerbs = 2
 # THE STORES THAT NAME SESSIONS (core/Projection.ps1, Get-HordeSessionIds), each with the stores that
 # must be read whole for it to have named every session it holds: a report names its session only
-# through its run folder and roster. A node may declare only these (schema/node-policy.v1 sessionStores;
-# test/test-node-serve.ps1 holds the two lists equal). The stores that only give fields - transcripts
-# X3, the live pane list X4, processes X5, layouts R1, claims W2, cmdlog W6 - never count.
+# through its run folder and roster. The stores that only give fields - transcripts X3, the live pane
+# list X4, processes X5, layouts R1, claims W2, cmdlog W6 - never count.
 $script:HordeNodeSessionStoreReads = [ordered]@{ X2 = @("X2"); W8 = @("W8"); W1 = @("W1"); X1 = @("X1"); W5 = @("W3", "W4", "W5") }
+# The ones a node may DECLARE (schema/node-session-stores.v1; test/test-node-serve.ps1 holds the two
+# lists equal). Not X1: a pane-sessions file names its session only through the host's guard
+# (Get-HordePaneFileVerdicts), so a whole read of the folder can name nothing - with no host, or two
+# host instances - and a probe of PR #243 read membershipComplete true with the session unlisted. Not
+# offered until a check of the pane verdicts exists; an X1 folder that exists withdraws the claim.
+$script:HordeNodeDeclarableStores = @("X2", "W8", "W1", "W5")
 # The time pattern of the link (link-frame.v1 "time"), for values taken from the session view.
 $script:HordeNodeTimePattern = '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z\z'
 # answer-token's value pattern (link-verbs v1).
@@ -313,29 +320,59 @@ function Get-HordeNodeMembershipGaps {
     # when every declared store, and every store it is read through, was read whole. No declaration,
     # an unreadable one, or one naming no store is a gap: nothing is inferred from what the view lacks.
     param([Parameter(Mandatory = $true)]$View)
+    # A VIEW OF SOME SESSIONS NAMES SOME SESSIONS: only a view of every session (scope All, which the
+    # document leaves unsaid) can say that what it leaves out has ended.
+    $scope = "$(Get-HordeLinkProp $View 'scope')"
+    if ($scope -ne "" -and $scope -ne "all") { return @("the view holds only the " + $scope + " sessions, not every session") }
     $decl = Get-HordeLinkProp $View "sessionStores"
     if ("$(Get-HordeLinkProp $decl 'state')" -cne "known") {
         $why = "$(Get-HordeLinkProp $decl 'reason')"
         if ($why.Trim() -eq "") { $why = "the node's view carries no declaration" }
-        return @("this node declares no session stores (node policy sessionStores): " + $why)
+        return @("this node declares no session stores (session-stores.json): " + $why)
     }
     $stores = @(@(Get-HordeLinkProp $decl "value") | Where-Object { "$_" -ne "" } | ForEach-Object { "$_" })
-    if ($stores.Count -eq 0) { return @("this node declares no session stores (node policy sessionStores names none)") }
+    if ($stores.Count -eq 0) { return @("this node declares no session stores (session-stores.json names none)") }
     $complete = Get-HordeLinkProp $View "complete"
     $gaps = New-Object System.Collections.ArrayList
+    # Store ids are exact: the table's keys ignore case, so they are compared here, never looked up.
     foreach ($s in $stores) {
-        if (-not $script:HordeNodeSessionStoreReads.Contains($s)) { [void]$gaps.Add("the declared store " + $s + " names no session"); continue }
+        if ($script:HordeNodeDeclarableStores -cnotcontains $s) {
+            if ($s -ceq "X1") { [void]$gaps.Add("the declared store X1 cannot back the claim: a pane-sessions file names its session only through the host's guard, which this check does not read") }
+            else { [void]$gaps.Add("the declared store " + $s + " is not a store this node can vouch names every session") }
+            continue
+        }
         foreach ($r in $script:HordeNodeSessionStoreReads[$s]) {
-            $a = Get-HordeLinkProp $complete $r
-            $v = Get-HordeLinkProp $a "value"
-            if (-not ("$(Get-HordeLinkProp $a 'state')" -ceq "known" -and $v -is [bool] -and $v)) {
-                $why = "$(Get-HordeLinkProp $a 'reason')"
-                if ($why.Trim() -eq "") { $why = "not read" }
-                [void]$gaps.Add("the declared store " + $s + " was not read whole: " + $r + " (" + $why + ")")
-            }
+            $why = Get-HordeNodeStoreGap -Complete $complete -Store $r
+            if ($why -ne "") { [void]$gaps.Add("the declared store " + $s + " was not read whole: " + $r + " (" + $why + ")") }
+        }
+    }
+    # AN UNDECLARED STORE THAT NAMES SESSIONS ONLY EVER TAKES THE CLAIM AWAY (review of PR #243): one
+    # with a folder that was not read whole may have named a live session this time and not the next -
+    # a half-written control file of the other agent names nothing - and the hub would drop it. X1 with a folder
+    # always does: its whole read does not mean it named every session (above).
+    $folders = Get-HordeLinkProp $View "storeFolders"
+    foreach ($s in @($script:HordeNodeSessionStoreReads.Keys)) {
+        if ($stores -ccontains $s) { continue }
+        $has = Get-HordeLinkProp $folders $s
+        if ($has -is [bool] -and -not $has) { continue }
+        if ($s -ceq "X1") { [void]$gaps.Add("the store X1 is not declared and its folder exists: a pane-sessions file may name a session the list does not hold"); continue }
+        foreach ($r in $script:HordeNodeSessionStoreReads[$s]) {
+            $why = Get-HordeNodeStoreGap -Complete $complete -Store $r
+            if ($why -ne "") { [void]$gaps.Add("the store " + $s + " is not declared, has a folder and was not read whole: " + $r + " (" + $why + ")") }
         }
     }
     return $gaps.ToArray()
+}
+
+function Get-HordeNodeStoreGap {
+    # Why one store of the view's complete is not known true - a real boolean true - or "" when it is.
+    param($Complete, [Parameter(Mandatory = $true)][string]$Store)
+    $a = Get-HordeLinkProp $Complete $Store
+    $v = Get-HordeLinkProp $a "value"
+    if ("$(Get-HordeLinkProp $a 'state')" -ceq "known" -and $v -is [bool] -and $v) { return "" }
+    $why = "$(Get-HordeLinkProp $a 'reason')"
+    if ($why.Trim() -eq "") { $why = "not read" }
+    return $why
 }
 
 function Get-HordeNodeSessionList {
