@@ -4,6 +4,8 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\HeavySlot.ps1 -Script <suite, relative to -Worktree> [-Worktree <path>]
 #       [-ScriptArgs <a>,<b>] [-Out <log>] [-MinFreeGB 3] [-WaitSeconds 7200] [-RunSeconds 3600]
+#   -ScriptArgs is split on commas, and an argument with a space is quoted, so an argument may not hold a
+#   comma or a double quote: such a run takes its values from a file or its own settings instead.
 #
 # Development tooling, not part of the engine. test/test-heavy-slot.ps1 is its suite.
 #
