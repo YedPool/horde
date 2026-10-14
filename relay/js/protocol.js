@@ -982,3 +982,58 @@ export function ageWords(at, nowMs) {
   if (h < 48) return h + " h ago";
   return Math.floor(h / 24) + " days ago";
 }
+
+// --- the notices channel (channels/notices/Channel.ps1; notices/Decide.ps1 decides what is one) ---
+
+// The follow switch of one lane, as the phone signs it with the passkey and seals it to that lane's machine:
+// exactly these members, in this order, which the machine reads strictly (Read-HordeNoticesChannelFollow).
+// lane: the card's lane id, or "thrall"; machine: the key id of the machine whose card it is.
+const NOTICE_LANE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/;
+export function followBody({ setId, machine, lane, on }) {
+  if (!/^[0-9a-f]{32}$/.test(setId)) throw new Error("a setId is 32 lower-case hex");
+  if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
+  if (typeof lane !== "string" || !NOTICE_LANE.test(lane)) throw new Error("the lane is a card's lane id");
+  if (on !== true && on !== false) throw new Error("on is true or false");
+  return utf8(JSON.stringify({ v: 1, setId, machine, lane, on }));
+}
+
+// A notices body, read: { ok, reason, value: { follows: { lane: true|false }, notices: [{ n, id, said (ms),
+// kind, from, text, lane, entry }], dropped } }. A notice that does not hold together is dropped and
+// counted; the switches are what the machine holds, as it sent them.
+const NOTICE_KINDS = ["notify", "progress", "cutoff"];
+export function readNotices(bodyBytes, horde, machine) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return no("the notices body is not JSON"); }
+  if (!b || b.v !== 1 || b.kind !== "notices") return no("not a version 1 notices body");
+  if (b.horde !== horde || b.machine !== machine) return no("the notices body names another horde or machine");
+  if (!b.follows || typeof b.follows !== "object" || Array.isArray(b.follows) || !Array.isArray(b.notices)) return no("the notices body has no switches or no notices");
+  const follows = {};
+  for (const k of Object.keys(b.follows)) if (NOTICE_LANE.test(k) && (b.follows[k] === true || b.follows[k] === false)) follows[k] = b.follows[k];
+  const notices = [];
+  let dropped = 0;
+  for (const x of b.notices) {
+    const ok = x && Number.isSafeInteger(x.n) && x.n > 0 && typeof x.id === "string" && /^[0-9a-f]{32}$/.test(x.id) && NOTICE_KINDS.indexOf(x.kind) >= 0 &&
+      typeof x.from === "string" && x.from.length <= 60 && PLAIN.test(x.from) && typeof x.text === "string" && x.text.length <= 2000 && PLAIN.test(x.text) &&
+      typeof x.lane === "string" && (x.lane === "" || NOTICE_LANE.test(x.lane)) && typeof x.entry === "string" && (x.entry === "" || ENTRY_ID.test(x.entry));
+    if (!ok) { dropped++; continue; }
+    notices.push({ n: x.n, id: x.id, said: timeOf(x.ts), kind: x.kind, from: x.from || "Horde", text: x.text, lane: x.lane, entry: x.entry });
+  }
+  return { ok: true, reason: "", value: { follows, notices, dropped } };
+}
+
+// The notices of every machine the phone holds, NEWEST FIRST, each once (by its id), with read or unread:
+// held [{ entry (the pairing), machine (its name, for words), notices }], read a Set of the ids he has read.
+// -> { items: [{ ...notice, entry, machine, read }], unread }. A notice of the same time is ordered by its
+// machine's number for it, newest first.
+export function noticeList(held, read) {
+  const seen = new Set();
+  const items = [];
+  for (const h of held || []) for (const x of h.notices || []) {
+    if (seen.has(x.id)) continue;
+    seen.add(x.id);
+    items.push({ ...x, entry: h.entry, machine: h.machine, read: !!(read && read.has(x.id)) });
+  }
+  items.sort((a, b) => (b.said - a.said) || (b.n - a.n));
+  return { items, unread: items.filter((x) => !x.read).length };
+}
