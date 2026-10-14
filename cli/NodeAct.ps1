@@ -575,7 +575,8 @@ function Find-HordeNodeScreenSecret {
     # measured on the suite's screens: a 40-character commit id ending a row, with a capitalised word
     # starting the next, joins into a long mixed run and is withheld; so is GH_TOKEN=<placeholder>.
     # STILL SHOWN, a known limit of the kinds themselves: a value after a NAME= that holds none of the
-    # six names nor a key's shape, such as MY_API_KEY=short1234.
+    # names the kinds know nor a key's shape, such as SESSION_CODE=short1234. (MY_API_KEY=short1234 and
+    # DB_TOKEN=abc, shown in round 5, are withheld since the dashed form, measured 2026-10-14.)
     param([string[]]$Raw, [string[]]$Kept)
     $ascii = [string[]]@(@($Raw) | ForEach-Object { [regex]::Replace(("" + $_), '[^\x20-\x7E]', '') })
     $texts = New-Object System.Collections.ArrayList
