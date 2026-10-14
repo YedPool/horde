@@ -30,8 +30,10 @@
 #      has that pid AND that start time (to the microsecond both clocks keep); then, before anything is
 #      typed, the session READY for keys - its input box drawn and nothing running, as the harness's
 #      adapter reads the host's screen (Wait-HordeNodeReady). Never ready within readySeconds: the spawn
-#      fails not-ready, nothing typed, the session left running for a person. A kind that cannot tell
-#      goes on, and the turn receipt below still decides;
+#      fails not-ready with nothing typed, and the session is kept only when its mode record already
+#      reads the level asked for; otherwise the host ends it by its process, with no close text
+#      (Complete-HordeNodeNotReady; review of PR 239, S-d). A kind that cannot tell goes on, and the
+#      turn receipt below still decides;
 #   7. the mode the session reports (issue #67, decision 6): exactly the level asked for, or the
 #      session is closed - its close text, then the host's end of the pane, which the host does only
 #      once the process is proven in it - and the spawn refused. Unreadable within the bound: the same.
@@ -41,8 +43,8 @@
 #      Before the readback one fixed line that asks for nothing, "Reply with OK only.", is typed and
 #      submitted, so the harness writes its record of the mode (see $script:HordeNodeNoOpLine), and its
 #      turn is waited for to END (Wait-HordeNodeTurnEnd): a line typed while it runs would be queued,
-#      not a turn (review of PR 239, M1). A no-op line that never became a turn gets no close text: it
-#      would be typed after the stuck line (S1);
+#      not a turn (review of PR 239, M1). A no-op line not proven a turn gets no close text: it could be
+#      typed after the stuck line (S1);
 #   8. only now the work: the session starts with NO prompt, so a session in the wrong mode is closed
 #      before it ever sees work (review of #104, F4: prevent, not detect). The prompt is written to
 #      <records>\<sessionId>\prompt.txt - a folder only this user may open, granted to the session
@@ -57,9 +59,15 @@
 # (modeSeconds), then the prompt line's turn (the same two) or, when it is not kept, its close and the
 # host's end (closeSeconds each). Every wait is measured on the context's clock, by wall time, not by
 # counting polls - a single look at a pane can take up to the host's own call timeout (review of PR 239,
-# S3) - and everything before the close shares ONE limit, spawnSeconds from the pane's start, so the
-# worst case is spawnSeconds, plus the two closes, plus the host calls between waits: at the default
-# bounds 150 + 40 s, inside the hub's 240 s wait (cli/HubAct.ps1). Pings and reads on other links are
+# S3) - and everything before the close shares ONE limit, spawnSeconds from the act's start. Once it has
+# run out no host call starts before the decision, no line is typed unless its whole wait fits before
+# it, and the close types no close text (review of PR 239, S-a and S-b). Counting every host call at its
+# timeout H (20 s for the first host), the longest path is a close that began just inside the limit:
+# spawnSeconds, plus the harness's close text (one call per item), the close wait, the host's end and
+# its wait - at the default bounds 130 + 2 x 20 + 20 + 20 + 20 = 230 s; past the limit it is at most one
+# call in flight plus the host's end and its wait, 130 + 20 + 20 + 20 = 190 s. Both are inside the hub's
+# 240 s wait (cli/HubAct.ps1); test-node-act runs each path with every host call costing 20 s. The
+# harness's own reads (its files, the process table) are not host calls. Pings and reads on other links are
 # not answered meanwhile, so a hub must wait at least that long before judging the node gone (review of
 # #104, F7). Acting asynchronously is later work.
 #
@@ -227,10 +235,11 @@ function Get-HordeNodeClockMs {
 }
 
 function Test-HordeNodeDeadlinePassed {
-    # Has this spawn's own limit (deadlineMs, see A SPAWN HOLDS THE SERVE LOOP) run out?
-    param([Parameter(Mandatory = $true)]$Context)
+    # Has this spawn's own limit (deadlineMs, see A SPAWN HOLDS THE SERVE LOOP) run out, or will it within
+    # -Within seconds from now?
+    param([Parameter(Mandatory = $true)]$Context, [double]$Within = 0)
     $now = Get-HordeNodeClockMs -Context $Context
-    return [bool]($null -ne $now -and $null -ne $Context.PSObject.Properties["deadlineMs"] -and $now -ge [double]$Context.deadlineMs)
+    return [bool]($null -ne $now -and $null -ne $Context.PSObject.Properties["deadlineMs"] -and $now + 1000 * $Within -ge [double]$Context.deadlineMs)
 }
 
 function Wait-HordeNodeUntil {
@@ -356,7 +365,11 @@ function Submit-HordeNodeLine {
     if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.receiptSeconds -Probe $look)) { $out.state = "taken"; return $out }
     $waited = "" + $Context.bounds.receiptSeconds
     $box = New-HordeUnknown -Reason ("the host " + $Actor.name + " cannot show a pane's screen")
-    if ($null -ne $Actor.PSObject.Properties["text"] -and $null -ne $Actor.text) {
+    # Past this spawn's limit no host call starts, so the box is not looked at (review of PR 239, S-a);
+    # and the one extra Enter is pressed only while its whole wait, retrySeconds, still fits before the
+    # limit: an Enter whose turn is not waited for could submit the line while it is reported not taken.
+    if (Test-HordeNodeDeadlinePassed -Context $Context) { $box = New-HordeUnknown -Reason "this spawn's own limit ran out, so the box was not looked at" }
+    elseif ($null -ne $Actor.PSObject.Properties["text"] -and $null -ne $Actor.text) {
         $scr = & $Actor.text $Target $Handle
         if ($null -eq $scr -or $scr.state -ne "known") { $box = New-HordeUnknown -Reason ("the pane's screen could not be read: " + $(if ($null -ne $scr) { "" + $scr.reason } else { "the host gave no answer" })) }
         elseif ($null -eq $Adapter.PSObject.Properties["inputHolds"] -or $null -eq $Adapter.inputHolds) { $box = New-HordeUnknown -Reason ("the harness " + $Adapter.name + " cannot read its input box on a screen") }
@@ -366,6 +379,7 @@ function Submit-HordeNodeLine {
     if ($null -eq $box -or $box.state -ne "known") { $boxSaid = "its input box could not be read (" + $(if ($null -ne $box) { "" + $box.reason } else { "no answer" }) + "), so no other Enter was pressed" }
     elseif ($box.value -ne $true) { $boxSaid = "its input box did not hold the line, so no other Enter was pressed" }
     elseif ($true -eq (& $look)) { $out.state = "taken"; return $out }
+    elseif (Test-HordeNodeDeadlinePassed -Context $Context -Within ([double]$Context.bounds.retrySeconds)) { $boxSaid = "its input box still held the line, but less than " + $Context.bounds.retrySeconds + " s of this spawn's own limit was left to wait for a turn, so no other Enter was pressed" }
     else {
         $e = & $Actor.send $Target $Handle "" $true
         $out.extraEnter = $true
@@ -399,6 +413,9 @@ function Wait-HordeNodeReady {
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)]$Adapter, [Parameter(Mandatory = $true)][string]$Handle)
     if (-not (Test-HordeNodeBlock -Port $Adapter -Name "inputReady")) { return [pscustomobject]@{ state = "cannot-tell"; reason = ("the harness " + $Adapter.name + " cannot tell from a screen whether it is ready") } }
     if (-not (Test-HordeNodeBlock -Port $Actor -Name "text")) { return [pscustomobject]@{ state = "cannot-tell"; reason = ("the host " + $Actor.name + " cannot show a pane's screen") } }
+    # No host call starts once this spawn's limit has run out (review of PR 239, S-a): a look is a host
+    # call, which may take the host's whole call timeout.
+    if (Test-HordeNodeDeadlinePassed -Context $Context) { return [pscustomobject]@{ state = "not-ready"; reason = "this spawn's own limit ran out before the screen was looked at" } }
     $last = @{ reason = "the screen was never looked at" }
     $ok = Wait-HordeNodeUntil -Context $Context -Seconds ([double]$Context.bounds.readySeconds) -Probe {
         $scr = & $Actor.text $Target $Handle
@@ -464,6 +481,36 @@ function Stop-HordeNodeSession {
     return [bool]($gone -eq $true)
 }
 
+# NOT READY, NOTHING TYPED (review of PR 239, S-d). A session the node typed nothing into - never ready
+# for keys, or this spawn's limit too near for a line's wait - is kept only when its mode is PROVEN the
+# level asked for: the harness's mode record is read once, as it stands (nothing typed means nothing to
+# wait for). Otherwise it is ended by the host, by its pid and start time, with no close text: a box that
+# is not ready, or a dialog, would take the close text as its input or its answer. MEASURED 2026-10-14
+# on 2.1.299 (the harness adapter's READBACK note): with no line typed the session has no transcript,
+# so for that harness this path ends the session - fail closed, as round 1 did for any unproven session.
+function Complete-HordeNodeNotReady {
+    # Settle a spawn that typed nothing: returns its outcome. -Why starts "not-ready:" and says why nothing
+    # was typed; -Context carries this spawn's limit, -Base the bounds the close gets after it.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Base, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)]$Adapter,
+        [Parameter(Mandatory = $true)]$Record, [Parameter(Mandatory = $true)][string]$Level, [Parameter(Mandatory = $true)]$Expect, [Parameter(Mandatory = $true)][string]$Why)
+    $sid = "" + $Record.sessionId
+    $m = & $Adapter.readMode $sid $Context.environment
+    if ($null -ne $m -and $m.state -eq "known" -and "" + $m.value -ceq $Level) {
+        $Record.outcome = "not-ready"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $Record
+        & $Context.alert ("ALERT: session " + $sid + " (pane " + $Record.handle + ", pid " + $Record.pid + ") never became ready for keys and is left running; its permission mode reads " + $Level + ", as asked")
+        return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $Expect -Reason ($Why + "; nothing was typed; its permission mode reads " + $Level + ", as asked, so it is LEFT RUNNING: look at pane " + $Record.handle + ", or close it with this process"))
+    }
+    $modeSaid = $(if ($null -eq $m) { "its permission mode could not be read: the harness gave no answer" } elseif ($m.state -ne "known") { "its permission mode could not be read (" + $(if ("" + $m.reason -ne "") { "" + $m.reason } else { "" + $m.note }) + ")" } else { "it reports the level " + $m.value + " and was asked for " + $Level })
+    $gone = Stop-HordeNodeSession -Context $Base -Actor $Actor -Target $Target -Adapter $Adapter -Handle $Record.handle -ProcessId $Record.pid -ProcStart $Record.procStart -SkipCloseText
+    if (-not $gone) {
+        $Record.outcome = "unkept-running"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $Record
+        & $Context.alert ("ALERT: session " + $sid + " (pane " + $Record.handle + ", pid " + $Record.pid + ") never became ready, is not kept, and could not be ended: " + $modeSaid)
+        return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $Expect -Reason ($Why + "; nothing was typed; " + $modeSaid + ", so it is not kept, and it could NOT be ended and is still running: close it again with this process, or end pane " + $Record.handle + " by hand"))
+    }
+    $Record.outcome = "not-ready-closed"; $Record.closedAt = (& $Context.now).ToUniversalTime().ToString("o"); Write-HordeNodeSpawnRecord -Dir $Context.records -Record $Record
+    return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ($Why + "; nothing was typed; " + $modeSaid + ", so it is not kept: the host ended it by its process, with no close text typed"))
+}
+
 function Get-HordeNodeActor {
     # The host actor a session starts in: the one named, or the only one loaded.
     param([string]$Name)
@@ -486,6 +533,8 @@ function Test-HordeNodeOwnLogin {
 function Invoke-HordeNodeSpawn {
     param([Parameter(Mandatory = $true)]$Act, [Parameter(Mandatory = $true)]$Context)
     $a = $Act.args
+    # This spawn's own limit counts from here, so the host calls before the pane starts are inside it.
+    $actStartMs = Get-HordeNodeClockMs -Context $Context
     # The hub that asks is the only one that may close what starts (review of #104, F8).
     $hubId = "" + $Act.hubId
     if ($hubId -eq "") { return (New-HordeNodeOutcome -State "refused" -Reason "the request names no hub, so no hub could close the session; nothing is started") }
@@ -566,14 +615,18 @@ function Invoke-HordeNodeSpawn {
     $record.handle = "" + $pane.value.handle
     Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
     # THIS SPAWN'S OWN LIMIT (see A SPAWN HOLDS THE SERVE LOOP): every wait from here to the decision
-    # ends by spawnSeconds after the pane started. The closes after it get their own bounds, from the
+    # ends by spawnSeconds after the act started. The closes after it get their own bounds, from the
     # context without the limit ($base), so a session that is not kept is still ended.
     $base = $Context
-    $startMs = Get-HordeNodeClockMs -Context $base
-    if ($null -ne $startMs -and $null -ne $base.bounds.PSObject.Properties["spawnSeconds"]) {
+    if ($null -ne $actStartMs -and $null -ne $base.bounds.PSObject.Properties["spawnSeconds"]) {
         $Context = $base.PSObject.Copy()
-        $Context | Add-Member -NotePropertyName deadlineMs -NotePropertyValue ($startMs + 1000 * [double]$base.bounds.spawnSeconds) -Force
+        $Context | Add-Member -NotePropertyName deadlineMs -NotePropertyValue ($actStartMs + 1000 * [double]$base.bounds.spawnSeconds) -Force
     }
+    # A line is typed only while its whole receipt wait still fits before the limit (review of PR 239,
+    # S-b): a line typed later is looked for once, right after its Enter, before the harness can have
+    # written its turn (0.2 s to 0.5 s after it, measured), and a prompt that ran would be reported
+    # not submitted - the double run of issue #214.
+    $lineSeconds = [double]$base.bounds.receiptSeconds + [double]$base.bounds.retrySeconds
     $limit = ""
     $proc = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.identifySeconds -Probe {
         $i = & $adapter.identify $sid $Context.environment
@@ -594,15 +647,15 @@ function Invoke-HordeNodeSpawn {
     $expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = "" + $Context.namespace.device; space = "" + $Context.namespace.space }; pid = [long]$record.pid; procStart = $record.procStart }
     $left = "; session " + $sid + " is LEFT RUNNING in pane " + $record.handle + " at the level asked for: press Enter in that pane, or close it with this process"
     # 6b. Ready for keys before the first one (Wait-HordeNodeReady). Not ready: nothing is typed, and the
-    # session is left running, its mode never read back - a person looks at the pane, or the hub closes
-    # it with its process.
+    # session is kept only when its mode is proven right (Complete-HordeNodeNotReady).
     $ready = Wait-HordeNodeReady -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle
     $record.ready = $ready.state
     if (Test-HordeNodeDeadlinePassed -Context $Context) { $limit = " (this spawn's own limit of " + $base.bounds.spawnSeconds + " s, inside the hub's wait, ran out)" }
     if ($ready.state -eq "not-ready") {
-        $record.outcome = "not-ready"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
-        & $Context.alert ("ALERT: session " + $sid + " (pane " + $record.handle + ", pid " + $record.pid + ") never became ready for keys and is left running; its permission mode was never read back")
-        return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $expect -Reason ("not-ready: session " + $sid + " in pane " + $record.handle + " never showed it was ready for keys within " + $Context.bounds.readySeconds + " s" + $limit + ": " + $ready.reason + "; nothing was typed, and its permission mode was never read back; it is LEFT RUNNING: look at pane " + $record.handle + ", or close it with this process"))
+        return (Complete-HordeNodeNotReady -Context $Context -Base $base -Actor $actor -Target $term -Adapter $adapter -Record $record -Level $d.level -Expect $expect -Why ("not-ready: session " + $sid + " in pane " + $record.handle + " never showed it was ready for keys within " + $Context.bounds.readySeconds + " s" + $limit + ": " + $ready.reason))
+    }
+    if (Test-HordeNodeDeadlinePassed -Context $Context -Within $lineSeconds) {
+        return (Complete-HordeNodeNotReady -Context $Context -Base $base -Actor $actor -Target $term -Adapter $adapter -Record $record -Level $d.level -Expect $expect -Why ("not-ready: session " + $sid + " in pane " + $record.handle + " was ready for keys with less than " + $lineSeconds + " s of this spawn's own limit of " + $base.bounds.spawnSeconds + " s left, too little to wait for a typed line's turn, so the no-op line was not typed"))
     }
     Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
     # 7. The mode, read back. Exactly the level asked for, or the session is not kept. First the fixed
@@ -631,7 +684,11 @@ function Invoke-HordeNodeSpawn {
     }
     elseif ("" + $mode.value -cne $d.level) { $why = "the session reports the level " + $mode.value + " and was asked for " + $d.level + ", so it is not kept" }
     if ($why -ne "") {
-        $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -eq "not-taken")
+        # The close text goes only into a box whose no-op line became a turn: a line not proven taken may
+        # still be in it, and the close text would run on into it (review of PR 239, S1 and its nit on an
+        # unknown no-op); and only before this spawn's limit, since it costs host calls the limit does not
+        # count (S-a). Otherwise the host ends the pane by its process.
+        $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))
         if (-not $gone) {
             # Still running, at a level nobody asked for: never reported as refused or recorded as closed
             # (review of #104, F2). The hub gets the process to close it by, and a person gets an alert.
@@ -653,6 +710,12 @@ function Invoke-HordeNodeSpawn {
     if ($noopEnd.state -eq "not-ended") {
         $record.outcome = "not-ready"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
         return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $expect -Reason ("not-ready: the no-op line's turn did not end within " + $Context.bounds.turnEndSeconds + " s" + $limit + " (" + $noopEnd.reason + "), so the prompt was not typed; session " + $sid + " in pane " + $record.handle + " runs at the level asked for and is LEFT RUNNING: look at that pane, or close it with this process"))
+    }
+    # Too near this spawn's limit for the prompt line's wait: not typed (S-b). The mode is proven, so the
+    # session is kept at the level asked for, without its work.
+    if ($prompt -ne "" -and (Test-HordeNodeDeadlinePassed -Context $Context -Within $lineSeconds)) {
+        $record.outcome = "not-ready"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
+        return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $expect -Reason ("not-ready: less than " + $lineSeconds + " s of this spawn's own limit of " + $base.bounds.spawnSeconds + " s was left to wait for the prompt line's turn, so the prompt was not typed; session " + $sid + " in pane " + $record.handle + " runs at the level asked for, without its work, and is LEFT RUNNING: close it with this process"))
     }
     # 8. The work, now that the mode is proven. Done only when its line is seen as a turn (issue #214).
     $sent = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -PromptDir $pd -Prompt $prompt
@@ -744,9 +807,9 @@ function New-HordeNodeActContext {
         # 2026-10-14 in an isolated terminal: the input box was drawn 2.8 s to 3.5 s after the pane started,
         # a one-line turn ended 1.8 s to 2.4 s after its user line, and a typed line's user row came 0.2 s to
         # 0.5 s after its Enter; each bound is many times that, for a slow or remote machine. spawnSeconds is
-        # the one limit on all of it up to the decision (see A SPAWN HOLDS THE SERVE LOOP), and clock is the
-        # wall clock every wait is measured on.
-        bounds = [pscustomobject]@{ identifySeconds = 60; readySeconds = 60; modeSeconds = 60; closeSeconds = 20; receiptSeconds = 20; retrySeconds = 10; turnEndSeconds = 60; spawnSeconds = 150; pollMs = 500 }
+        # the one limit on all of it up to the decision (see A SPAWN HOLDS THE SERVE LOOP, which sums the
+        # worst case to 230 s), and clock is the wall clock every wait is measured on.
+        bounds = [pscustomobject]@{ identifySeconds = 60; readySeconds = 60; modeSeconds = 60; closeSeconds = 20; receiptSeconds = 20; retrySeconds = 10; turnEndSeconds = 60; spawnSeconds = 130; pollMs = 500 }
         clock = { [double][System.Diagnostics.Stopwatch]::GetTimestamp() * 1000.0 / [double][System.Diagnostics.Stopwatch]::Frequency }
         workdirExists = { param($p) Test-Path -LiteralPath $p -PathType Container }
         note = $note

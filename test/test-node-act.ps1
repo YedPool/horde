@@ -66,6 +66,10 @@ $script:readyAtMs = 0
 $script:neverReady = $false
 $script:slowScreenMs = 0
 $script:noModeLine = $false
+# What each host call costs on the clock, and what one read of the mode record costs (review of PR 239,
+# S-a and S-b): every call counted at the host's own timeout, and a mode read that ends past the limit.
+$script:hostCallMs = 0
+$script:slowModeMs = 0
 $script:alerts = New-Object System.Collections.ArrayList
 # How many texts had been typed when a session's mode was first read, by session id.
 $script:readAt = @{}
@@ -117,7 +121,7 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" @receipt `
     -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "no control file yet" } } `
-    -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode -and -not $script:noModeLine) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
+    -ReadMode { param($id, $view) $script:clockMs += $script:slowModeMs; if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode -and -not $script:noModeLine) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
     -CloseText @("bye", "`r")
 }
 Register-FixtureHarness
@@ -125,9 +129,10 @@ Register-FixtureHarness
 # The fixture terminal: named explicitly by Own, as the real host names the node's own (review of #96).
 $fakeTerm = [pscustomobject]@{ socket = "C:\fake\terminal-1"; guiPid = 1; guiStart = "1" }
 Register-HordeHostActor -Name "fakehost" `
-    -Own { if ($script:noOwn) { New-HordeUnknown -Reason "2 terminals are running; which one is this node's own cannot be told" } else { New-HordeKnown -Value $fakeTerm } } `
-    -Resolve { param($n) if ($n -ceq "harness-a") { New-HordeKnown -Value "C:\bin\harness-a.exe" } else { New-HordeUnknown -Reason ("no " + $n) } } `
+    -Own { $script:clockMs += $script:hostCallMs; if ($script:noOwn) { New-HordeUnknown -Reason "2 terminals are running; which one is this node's own cannot be told" } else { New-HordeKnown -Value $fakeTerm } } `
+    -Resolve { param($n) $script:clockMs += $script:hostCallMs; if ($n -ceq "harness-a") { New-HordeKnown -Value "C:\bin\harness-a.exe" } else { New-HordeUnknown -Reason ("no " + $n) } } `
     -Start { param($term, $prog, $argv, $cwd, $envMap)
+        $script:clockMs += $script:hostCallMs
         $h = "" + (100 + $script:panes.Count)
         [void]$script:panes.Add([pscustomobject]@{ handle = $h; program = $prog; argv = @($argv); cwd = $cwd; env = $envMap; term = $term })
         $sidv = $argv[[array]::IndexOf(@($argv), "--id") + 1]
@@ -142,6 +147,7 @@ Register-HordeHostActor -Name "fakehost" `
         $script:sessions[$sidv] = [pscustomobject]@{ pid = $pidv; procStart = $claimed; name = $nm; mode = $mode; handle = $h }
         New-HordeKnown -Value ([pscustomobject]@{ handle = $h; program = $prog; cwd = $cwd }) } `
     -Send { param($term, $h, $t, $submit)
+        $script:clockMs += $script:hostCallMs
         if ("" + $t -cmatch '[\x00-\x1F]') { return (New-HordeUnknown -Reason "the fixture host, like the real one, types printable text only") }
         if ($script:noOpRefused -and "" + $t -ceq "Reply with OK only.") { return (New-HordeUnknown -Reason "the fixture host refuses this text") }
         if ($script:promptRefused -and "" + $t -ne "" -and "" + $t -cne "bye" -and "" + $t -cne "Reply with OK only.") { return (New-HordeUnknown -Reason "the fixture host refuses this text") }
@@ -164,12 +170,13 @@ Register-HordeHostActor -Name "fakehost" `
         New-HordeKnown -Value $true } `
     -Text { param($term, $h)
         Step-Fixture
-        $script:clockMs += $script:slowScreenMs
+        $script:clockMs += $script:slowScreenMs + $script:hostCallMs
         if ($script:noScreen) { return (New-HordeUnknown -Reason "the fixture host shows no screen") }
         if (-not (Test-FixtureReady)) { return (New-HordeKnown -Value ([string[]]@("STARTING", ""))) }
         New-HordeKnown -Value ([string[]]@(("BOX:" + $script:box[$h]), $(if ($script:busyUntil.ContainsKey($h)) { "BUSY" } else { "IDLE" }))) } `
     -Live { param($term, $h, $expect) New-HordeKnown -Value $true } `
     -Stop { param($term, $h, $expect)
+        $script:clockMs += $script:hostCallMs
         # Like the real host: ends a pane only for the expected process, alive with its start time.
         if ($script:stopDenied -or $null -eq $expect -or -not $script:procs.ContainsKey([int]$expect.pid) -or "" + $script:procs[[int]$expect.pid] -cne "" + $expect.procStart) { $script:stopRefused++; return (New-HordeUnknown -Reason "nothing was ended: the expected process is not proven") }
         [void]$script:stopped.Add($h); foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } }; New-HordeKnown -Value $true }
@@ -211,7 +218,7 @@ function PromptLine { param($Ctx, [string]$Sid) return ("Read " + (PromptFile $C
 function Typed { return @($script:sent | ForEach-Object { $_.text }) }
 function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0; $script:stopDenied = $false; $script:promptRefused = $false; $script:noOpRefused = $false; $script:alerts.Clear(); $script:readAt.Clear()
     $script:box.Clear(); $script:turns.Clear(); $script:loseFirstLike = ""; $script:loseAllLike = ""; $script:dropTurnLike = ""; $script:lateLooks = 0; $script:noTranscript = $false; $script:noScreen = $false
-    $script:clockMs = 0.0; $script:turnMs = 0; $script:busyUntil.Clear(); $script:queued.Clear(); $script:ends.Clear(); $script:readyAtMs = 0; $script:neverReady = $false; $script:slowScreenMs = 0; $script:noModeLine = $false }
+    $script:clockMs = 0.0; $script:turnMs = 0; $script:busyUntil.Clear(); $script:queued.Clear(); $script:ends.Clear(); $script:readyAtMs = 0; $script:neverReady = $false; $script:slowScreenMs = 0; $script:noModeLine = $false; $script:hostCallMs = 0; $script:slowModeMs = 0 }
 
 try {
 Write-Host ""
@@ -392,7 +399,7 @@ Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*prompt could not be ty
 
 Write-Host ""
 Write-Host "--- a typed line counts only once it is a turn in the transcript (issue #214) ---" -ForegroundColor Cyan
-function SpawnOnce { $c = New-Context; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value; line = (PromptLine $c $o.sessionId) } }
+function SpawnOnce { param([scriptblock]$Tune = $null) $c = New-Context; if ($null -ne $Tune) { & $Tune $c }; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value; line = (PromptLine $c $o.sessionId) } }
 function Alive { param($O) return [bool]($null -ne $O.expect -and $script:procs.ContainsKey([int]$O.expect.pid) -and @($script:stopped).Count -eq 0) }
 Reset
 $x = SpawnOnce
@@ -461,6 +468,21 @@ try { $x = SpawnOnce } finally { Register-FixtureHarness }
 Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.ready)" -ceq "cannot-tell") "CONTROL: a kind that cannot tell, ready at once, is done"
 
 Write-Host ""
+Write-Host "--- not ready: kept only when its mode is proven, else ended by its process, nothing typed (review of PR 239, S-d) ---" -ForegroundColor Cyan
+Reset; $script:neverReady = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $x.o.reason -like "*reads edits, as asked*LEFT RUNNING*" -and $script:sent.Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready" -and $script:readAt[$x.o.sessionId] -eq 0) ("never ready, its mode record reading the level asked for: kept, the mode read with nothing typed (" + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $x.o.reason -like "*reports the level bypass and was asked for edits*not kept*ended it by its process*" -and $script:sent.Count -eq 0 -and @($script:stopped).Count -eq 1 -and -not $script:procs.ContainsKey([int]$script:sessions[$x.o.sessionId].pid) -and $null -eq $x.o.expect -and "$($x.rec.outcome)" -ceq "not-ready-closed" -and "$($x.rec.closedAt)" -ne "") ("never ready, its mode wrong: ended by the host by its process, no close text typed into the unready box (" + ((Typed) -join "|") + " / " + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:noModeLine = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*mode could not be read*not kept*ended it by its process*" -and $script:sent.Count -eq 0 -and @($script:stopped).Count -eq 1 -and -not $script:procs.ContainsKey([int]$script:sessions[$x.o.sessionId].pid) -and "$($x.rec.outcome)" -ceq "not-ready-closed") ("never ready, its mode unreadable: ended by the host, nothing typed (" + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:stopDenied = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*could NOT be ended*" -and $script:sent.Count -eq 0 -and $null -ne $x.o.expect -and $script:procs.ContainsKey([int]$x.o.expect.pid) -and "$($x.rec.outcome)" -ceq "unkept-running" -and @($script:alerts | Where-Object { $_ -like "ALERT:*$($x.o.sessionId)*could not be ended*" }).Count -eq 1) ("never ready, its mode wrong, and the host will not end it: failed with its process to close it by, recorded still running, an alert raised (" + $x.o.reason + ")")
+
+Write-Host ""
 Write-Host "--- the prompt is typed only once the no-op's turn has ENDED (review of PR 239, M1) ---" -ForegroundColor Cyan
 Reset; $script:turnMs = 3000
 $x = SpawnOnce
@@ -474,6 +496,63 @@ Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitt
 Reset; $script:turnMs = 600000
 $x = SpawnOnce
 Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready: the no-op line's turn did not end*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready") ("a no-op turn that never ends: failed not-ready, the prompt never typed, the session left running (" + $x.o.reason + ")")
+
+Write-Host ""
+Write-Host "--- no line is typed once too little of the spawn's limit is left for its wait (review of PR 239, S-b) ---" -ForegroundColor Cyan
+# The limit is 10 s; a line's wait is receiptSeconds + retrySeconds, 2 s here.
+$lim10 = { param($c) $c.bounds.spawnSeconds = 10 }
+$lim10r = { param($c) $c.bounds.spawnSeconds = 10; $c.bounds.readySeconds = 60 }
+Reset; $script:slowModeMs = 15000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready: less than 2 s*the prompt was not typed*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready" -and $script:clockMs -ge 10000) ("the limit passed before the prompt (the mode read ended at " + $script:clockMs + " ms): the prompt is not typed, and the session, its mode proven, is left running (" + $x.o.reason + ")")
+Reset; $script:slowModeMs = 9000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready: less than 2 s*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0) ("1 s of the limit left, less than a line's wait: the prompt is not typed (" + $x.o.reason + ")")
+Reset; $script:slowModeMs = 5000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "done" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 1) ("CONTROL: 5 s of the limit left, the prompt is typed and taken (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:readyAtMs = 9500
+$x = SpawnOnce $lim10r
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*so the no-op line was not typed*" -and $script:sent.Count -eq 0 -and (Alive $x.o)) ("ready with 0.5 s of the limit left: not even the no-op line is typed, and the not-ready rule decides the session (" + $x.o.reason + ")")
+Reset; $script:readyAtMs = 5000
+$x = SpawnOnce $lim10r
+Check ("$($x.o.state)" -ceq "done") ("CONTROL: ready with 5 s left, the no-op line and the prompt are typed (" + $x.o.reason + ")")
+Reset; $script:hostCallMs = 3000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $script:sent.Count -eq 0) ("the limit counts from the act's start: three host calls before the pane spent 9 of its 10 s, so nothing is typed (" + $x.o.reason + ")")
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 15000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("a wrong mode found past the limit: no close text, whose calls the limit does not count; the host ends the pane by its process (" + ((Typed) -join "|") + ")")
+Reset
+Register-FixtureHarness -Blind
+$script:reportMode = "bypass"
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("a wrong mode after a no-op line whose turn cannot be told: no close text after it, the host ends the pane (F's nit) (" + ((Typed) -join "|") + ")")
+
+# Inside one line's submit: past the limit the box is not looked at, and the extra Enter needs its wait.
+$script:subLooks = @{ text = 0; enter = 0 }
+$subActor = [pscustomobject]@{ name = "stubhost"
+    send = { param($t, $h, $x, $s) if ("" + $x -eq "") { $script:subLooks.enter++ }; New-HordeKnown -Value $true }
+    text = { param($t, $h) $script:subLooks.text++; New-HordeKnown -Value ([string[]]@("BOX:held")) } }
+$subAdapter = [pscustomobject]@{ name = "stub"; turnMark = { param($i, $v) New-HordeKnown -Value 0 }; turnSeen = { param($i, $v, $m, $l) New-HordeKnown -Value $false }; inputHolds = { param($s, $l) New-HordeKnown -Value $true }
+    inputReady = { param($s) New-HordeKnown -Value $true } }
+function SubmitWith { param($DeadlineIn)
+    $script:subLooks.text = 0; $script:subLooks.enter = 0; $script:clockMs = 0.0
+    $c = New-Context; if ($null -ne $DeadlineIn) { $c | Add-Member -NotePropertyName deadlineMs -NotePropertyValue ([double]$DeadlineIn) -Force }
+    return (Submit-HordeNodeLine -Context $c -Actor $subActor -Target $fakeTerm -Adapter $subAdapter -Handle "1" -SessionId "s" -Line "held") }
+$u = SubmitWith $null
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 1 -and $script:subLooks.enter -eq 1) ("CONTROL: with no limit, a line still in the box gets its box looked at and ONE extra Enter (" + $u.reason + ")")
+$u = SubmitWith 500
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 0 -and $script:subLooks.enter -eq 0 -and $u.reason -like "*limit ran out, so the box was not looked at*") ("the limit passed during the receipt wait: no host call after it - the box is not looked at, no extra Enter (" + $u.reason + ")")
+$u = SubmitWith 1500
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 1 -and $script:subLooks.enter -eq 0 -and $u.reason -like "*less than 1 s of this spawn's own limit*no other Enter*") ("0.5 s of the limit left after the receipt wait: the box is looked at, but no extra Enter whose turn could not be waited for (" + $u.reason + ")")
+$c = New-Context; $script:clockMs = 5000.0; $c | Add-Member -NotePropertyName deadlineMs -NotePropertyValue 4000.0 -Force
+$script:subLooks.text = 0
+$w = Wait-HordeNodeReady -Context $c -Actor $subActor -Target $fakeTerm -Adapter $subAdapter -Handle "1"
+Check ("$($w.state)" -ceq "not-ready" -and $script:subLooks.text -eq 0 -and $w.reason -like "*limit ran out before the screen was looked at*") ("past the limit the readiness wait makes no host call (" + $w.reason + ")")
+$c.deadlineMs = 9000.0
+$w = Wait-HordeNodeReady -Context $c -Actor $subActor -Target $fakeTerm -Adapter $subAdapter -Handle "1"
+Check ("$($w.state)" -ceq "ready" -and $script:subLooks.text -eq 1) "CONTROL: inside the limit it looks, and is ready"
 
 Write-Host ""
 Write-Host "--- a stuck no-op line gets no close text, and the reason names it (review of PR 239, S1 and S2) ---" -ForegroundColor Cyan
@@ -609,16 +688,57 @@ function Real-Context {
     return $c
 }
 $rc = Real-Context
-# THE WAITS FIT THE HUB'S (issue #214; review of PR 239, S3). Every wait before the decision shares ONE
-# limit, spawnSeconds, measured by wall time on the context's clock; then come at most two closes
-# (closeSeconds each), and between the waits a bounded number of host calls, each ended by the host at
-# its own timeout (20 s for the first host). Two such calls' worth is the margin asserted here; the
-# stopwatch tests below show a wait holding its bound however slow each look is.
+# THE WAITS FIT THE HUB'S (issue #214; review of PR 239, S3 and S-a). Every wait before the decision
+# shares ONE limit, spawnSeconds from the act's start, measured by wall time on the context's clock. Past
+# it no host call starts before the decision and the close types no close text, so with every host call
+# counted at its timeout H (20 s for the first host) the longest path is a close begun just inside the
+# limit: spawnSeconds + the close text (one call per item: two for the fixture harness, as for the first
+# harness's /exit then Enter) + closeSeconds + the host's end + closeSeconds. Past the limit: at most one
+# call in flight, then the host's end and closeSeconds. Then every path is RUN below on the fixture with
+# the shipped bounds and every host call costing 20 s on the clock.
 $dctx = New-HordeNodeActContext -Root $root -HordeHome $h1 -Namespace ([pscustomobject]@{ device = $device; space = "windows" })
 $db = $dctx.bounds
+$hostH = 20
+$closeItems = @((Get-HordeLaunchAdapter -Name "harness-a").value.closeText).Count
 $line = [double]$db.receiptSeconds + [double]$db.retrySeconds
-$worst = [double]$db.spawnSeconds + 2 * [double]$db.closeSeconds + 2 * 20
-Check ($line -ge 20 -and $line -le 30 -and $worst -le 240 -and [double]$db.readySeconds -ge 30 -and [double]$db.turnEndSeconds -ge 30) ("a typed line's turn is waited for 20 to 30 s, the session's readiness and the no-op's end each at least 30 s, and a spawn's longest path is " + $worst + " s, inside the hub's 240 s")
+$inside = [double]$db.spawnSeconds + $closeItems * $hostH + [double]$db.closeSeconds + $hostH + [double]$db.closeSeconds
+$past = [double]$db.spawnSeconds + $hostH + $hostH + [double]$db.closeSeconds
+$worst = [math]::Max($inside, $past)
+Check ($closeItems -eq 2 -and $line -ge 20 -and $line -le 30 -and $worst -le 240 -and [double]$db.readySeconds -ge 30 -and [double]$db.turnEndSeconds -ge 30) ("a typed line's turn is waited for 20 to 30 s, the session's readiness and the no-op's end each at least 30 s, and a spawn's longest path, every host call counted at 20 s, is " + $worst + " s (a close begun inside the limit " + $inside + " s, past it " + $past + " s), inside the hub's 240 s")
+function Measure-WorstSpawn {
+    # Run every path of a spawn on the fixture, with -Bounds and every host call costing 20 s; returns the
+    # longest act's milliseconds on the clock, and the case that took it.
+    param($Bounds)
+    $cases = New-Object System.Collections.ArrayList
+    foreach ($rdy in @(0, 90000, 105000, 115000, 120000)) {
+        foreach ($k in @("done", "never-ready", "never-ready-wrong", "never-ready-wrong-denied", "wrong", "wrong-stubborn-denied", "noop-lost-wrong", "prompt-lost", "turn-never-ends", "no-mode-stubborn", "unproven")) { [void]$cases.Add(@($rdy, $k)) }
+    }
+    $most = 0.0; $which = ""
+    foreach ($cs in $cases) {
+        Reset; $script:hostCallMs = 20000; $script:readyAtMs = $cs[0]
+        switch ($cs[1]) {
+            "never-ready" { $script:neverReady = $true }
+            "never-ready-wrong" { $script:neverReady = $true; $script:reportMode = "bypass" }
+            "never-ready-wrong-denied" { $script:neverReady = $true; $script:reportMode = "bypass"; $script:stopDenied = $true }
+            "wrong" { $script:reportMode = "bypass" }
+            "wrong-stubborn-denied" { $script:reportMode = "bypass"; $script:stubborn = $true; $script:stopDenied = $true }
+            "noop-lost-wrong" { $script:loseAllLike = "Reply*"; $script:reportMode = "bypass"; $script:stubborn = $true }
+            "prompt-lost" { $script:loseAllLike = "Read *" }
+            "turn-never-ends" { $script:turnMs = 10000000 }
+            "no-mode-stubborn" { $script:noModeLine = $true; $script:stubborn = $true; $script:stopDenied = $true }
+            "unproven" { $script:noIdentify = $true }
+        }
+        $cw = New-Context; $cw.bounds = $Bounds.PSObject.Copy()
+        $null = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $cw
+        if ($script:clockMs -gt $most) { $most = $script:clockMs; $which = $cs[1] + " ready at " + $cs[0] + " ms" }
+    }
+    return [pscustomobject]@{ ms = $most; case = $which }
+}
+$wm = Measure-WorstSpawn -Bounds $db
+Check ($wm.ms -le 240000 -and $wm.ms -le 1000 * $worst) ("RUN with the shipped bounds and every host call costing 20 s, the longest spawn took " + $wm.ms + " ms on the clock (" + $wm.case + "): inside the sum above and the hub's 240 s (S-a)")
+$wide = $db.PSObject.Copy(); $wide.spawnSeconds = 200
+$wm2 = Measure-WorstSpawn -Bounds $wide
+Check ($wm2.ms -gt 240000) ("THE MEASURE CAN FAIL: with a limit of 200 s the same runs go past the hub's 240 s (" + $wm2.ms + " ms, " + $wm2.case + ")")
 $c1 = & $dctx.clock
 Start-Sleep -Milliseconds 30
 Check ((& $dctx.clock) - $c1 -ge 25) "the node's own clock is wall time in milliseconds, so its waits are bounded by the stopwatch"

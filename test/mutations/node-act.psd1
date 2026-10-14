@@ -145,8 +145,8 @@
            Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpTurn'
            Replace = '$record.noOp = ""; $record.noOpTurn' }
         @{ Name = "prompt-before-mode-kept"
-           Find = '$gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -eq "not-taken")'
-           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -eq "not-taken")' }
+           Find = '$gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
+           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))' }
         @{ Name = "raw-prompt-typed"
            Find = '-SessionId $SessionId -Line $line'
            Replace = '-SessionId $SessionId -Line $Prompt' }
@@ -215,7 +215,7 @@
            Find = '    if ($noopEnd.state -eq "not-ended") {'
            Replace = '    if ($false) {' }
         @{ Name = "close-text-into-a-stuck-box"
-           Find = '-SkipCloseText:($noop.state -eq "not-taken")'
+           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
            Replace = '-SkipCloseText:$false' }
         @{ Name = "stuck-noop-not-named"
            Find = '        if ($noop.state -ne "taken") { $why += '
@@ -227,7 +227,46 @@
            Find = '        if ($null -ne $Context.PSObject.Properties["deadlineMs"] -and [double]$Context.deadlineMs -lt $until) { $until = [double]$Context.deadlineMs }'
            Replace = '' }
         @{ Name = "spawn-limit-past-the-hub"
-           Find = 'spawnSeconds = 150;'
+           Find = 'spawnSeconds = 130;'
            Replace = 'spawnSeconds = 200;' }
+        @{ Name = "prompt-typed-past-the-limit"
+           Find = '    if ($prompt -ne "" -and (Test-HordeNodeDeadlinePassed -Context $Context -Within $lineSeconds)) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "line-typed-without-its-wait"
+           Find = '$lineSeconds = [double]$base.bounds.receiptSeconds + [double]$base.bounds.retrySeconds'
+           Replace = '$lineSeconds = 0' }
+        @{ Name = "limit-within-ignored"
+           Find = '$now + 1000 * $Within -ge [double]$Context.deadlineMs'
+           Replace = '$now -ge [double]$Context.deadlineMs' }
+        @{ Name = "noop-typed-past-the-limit"
+           Find = 'if (Test-HordeNodeDeadlinePassed -Context $Context -Within $lineSeconds) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "not-ready-unproven-kept"
+           Find = 'if ($null -ne $m -and $m.state -eq "known" -and "" + $m.value -ceq $Level) {'
+           Replace = 'if ($null -ne $m) {' }
+        @{ Name = "not-ready-proven-closed"
+           Find = 'if ($null -ne $m -and $m.state -eq "known" -and "" + $m.value -ceq $Level) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "not-ready-close-text-typed"
+           Find = '-ProcessId $Record.pid -ProcStart $Record.procStart -SkipCloseText'
+           Replace = '-ProcessId $Record.pid -ProcStart $Record.procStart' }
+        @{ Name = "ready-look-past-the-limit"
+           Find = '    if (Test-HordeNodeDeadlinePassed -Context $Context) { return [pscustomobject]@{ state = "not-ready"; reason = "this spawn''s own limit ran out before the screen was looked at" } }'
+           Replace = '' }
+        @{ Name = "box-read-past-the-limit"
+           Find = 'if (Test-HordeNodeDeadlinePassed -Context $Context) { $box = '
+           Replace = 'if ($false) { $box = ' }
+        @{ Name = "extra-enter-without-its-wait"
+           Find = 'elseif (Test-HordeNodeDeadlinePassed -Context $Context -Within ([double]$Context.bounds.retrySeconds)) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "close-text-past-the-limit"
+           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
+           Replace = '-SkipCloseText:($noop.state -ne "taken")' }
+        @{ Name = "close-text-after-an-unknown-noop"
+           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
+           Replace = '-SkipCloseText:($noop.state -eq "not-taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))' }
+        @{ Name = "limit-from-the-pane-start"
+           Find = '-NotePropertyValue ($actStartMs + 1000 * [double]$base.bounds.spawnSeconds)'
+           Replace = '-NotePropertyValue ((Get-HordeNodeClockMs -Context $base) + 1000 * [double]$base.bounds.spawnSeconds)' }
     )
 }
