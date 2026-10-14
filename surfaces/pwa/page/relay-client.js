@@ -212,8 +212,19 @@ export function bindingTransport(host, name) {
 // deleted: the hosted relay's mailbox says so), or a close with a code of its own (4000 and up) - is a
 // failed watch, unknown, so the app pauses before it watches again instead of replacing the newer watch
 // in its turn.
+//
+// EVERY FETCH HAS A TIME (REQUEST_MS). The founder's phone heard nothing new from 02:36 on 2026-10-14
+// while the machine kept sending: a fetch with no timeout that never settles - iOS freezes a request in
+// flight when the app goes to the background - held the live refresh (bridge.js, poll) for ever, and
+// every later poll returned at once because one was still running. So the request AND the reading of its
+// body race a timer: when it fires the request is aborted, so the browser lets it go, and the answer is
+// unknown whether or not the fetch ever hears its abort. 20 s: the relay answers a put, a read and an
+// ack at once (only a watch waits, and a watch keeps its own timer), so 20 s is room for a slow phone
+// link, and under the 25 s a watch waits (app.js, WATCH_MS), so a frozen read costs the live refresh no
+// more than one quiet watch would have.
+export const REQUEST_MS = 20000;
 const RELAY_CLOSED = { 4001: "the relay replaced this watch with a newer one of this phone", 4002: "the relay closed the watch: the account was deleted" };
-export function httpTransport(origin, fetchFn, WebSocketCtor) {
+export function httpTransport(origin, fetchFn, WebSocketCtor, { requestMs = REQUEST_MS } = {}) {
   const url = (mailbox, op) => origin + "/v1/mailboxes/" + mailbox + "/" + op;
   const words = (body) => (body && typeof body.error === "string" ? ": " + body.error.slice(0, 200) : "");
   const answerOf = async (response, what) => {
@@ -223,14 +234,20 @@ export function httpTransport(origin, fetchFn, WebSocketCtor) {
     if (!body || typeof body !== "object" || Array.isArray(body)) return unknown("the relay answered the " + what + " with something that is not a JSON object");
     return known(body);
   };
-  const send = (method, address, body) => fetchFn(address, {
-    method, credentials: "same-origin", cache: "no-store", redirect: "error",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
-  const read = async (mailbox, since, max, what) => answerOf(await send("GET", url(mailbox, "items") + "?since=" + since + "&max=" + max), what);
+  const exchange = (method, address, body, what) => {
+    const abort = new AbortController();
+    let timer = null;
+    const late = new Promise((resolve) => { timer = setTimeout(() => { abort.abort(); resolve(unknown("the relay did not answer the " + what + " in " + requestMs + " ms")); }, requestMs); });
+    const asked = (async () => answerOf(await fetchFn(address, {
+      method, credentials: "same-origin", cache: "no-store", redirect: "error", signal: abort.signal,
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }), what))();
+    return Promise.race([asked, late]).finally(() => clearTimeout(timer));
+  };
+  const read = (mailbox, since, max, what) => exchange("GET", url(mailbox, "items") + "?since=" + since + "&max=" + max, undefined, what);
   return {
-    put: async (mailbox, key, text) => answerOf(await send("POST", url(mailbox, "items"), { key, text }), "put"),
+    put: (mailbox, key, text) => exchange("POST", url(mailbox, "items"), { key, text }, "put"),
     get: (mailbox, since, max) => read(mailbox, since, max, "read"),
     // A watch of 0 ms is a read: a socket shut before its first message would lose what is already there.
     watch: (mailbox, since, max, timeoutMs) => (timeoutMs <= 0 ? read(mailbox, since, max, "watch") : new Promise((resolve) => {
@@ -255,7 +272,7 @@ export function httpTransport(origin, fetchFn, WebSocketCtor) {
       socket.onerror = () => finish(unknown("the relay's watch failed"));
       socket.onclose = (event) => finish(event && event.code >= 4000 && event.code <= 4999 ? unknown(RELAY_CLOSED[event.code] || "the relay closed the watch (" + event.code + ")") : known({ items: [] }));
     })),
-    ack: async (mailbox, through) => answerOf(await send("POST", url(mailbox, "ack"), { through }), "ack")
+    ack: (mailbox, through) => exchange("POST", url(mailbox, "ack"), { through }, "ack")
   };
 }
 
