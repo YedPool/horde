@@ -52,6 +52,17 @@
 // of the screen always. A correction is shown on the entry it corrects, and in its own place. The log is
 // taken off the page when the horde locks, like the list and the chat.
 //
+// THE PROGRESS TAB OPENS ON CARDS (the founder asked, 2026-10-13): one card per lane and one for the Thrall,
+// from every unlocked machine of the horde merged by name (phone-core.js, THE CARDS). A lane's card says
+// where it is from and how old its word is, what it is doing now, what it last finished, what it waits on,
+// whether it is blocked, and its tasks open and done this week; the Thrall's says the fleet at large. A tap
+// on a card opens its STREAM: the progress log of that card's machine, filtered to that lane
+// (relay/js/protocol.js, laneStream) - the Thrall's is the whole log - with All cards, and the phone's
+// Back, to return. The stream says in plain words that the phone holds only the newest part of the log.
+// HIS PLACE MOVES ONLY IN THE WHOLE LOG: a lane's stream skips other lanes' entries, and reading on in it
+// must not mark those read unseen. A machine that sends no cards yet (an older one) opens straight on the
+// whole log, as before.
+//
 // EVERY MESSAGE IN THE CHAT SAYS WHEN IT WAS SAID (the founder asked, 2026-10-12): the short local time
 // beside who said it, the day on a line of its own where it changes, the exact time on a tap. The times
 // are the turn's own and the line's signed one (relay/js/protocol.js, chatTimeline); what carries none
@@ -65,7 +76,8 @@ import { accountFromConfig } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
-import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS } from "../relay/protocol.js";
+import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS } from "../relay/protocol.js";
+import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
@@ -195,7 +207,7 @@ function render(h, rec) {
   show(PANES[pane].view);
   showAnnounceBox(h, rec);
   if (pane === "chat") bridge.request("chat").then(drawChat);
-  if (pane === "progress") bridge.request("progress").then(drawProgress);
+  if (pane === "progress") { bridge.request("cards").then(drawCards); requestStream(); }
   const banners = {
     recovery: "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer.",
     "read-only": "Read only: this passkey gives no PRF, so answers are never sent from this phone for this horde. Answer at the machine, or pair again with a passkey that has PRF."
@@ -253,14 +265,19 @@ const CHAT_BANNERS = {
 function pickPane(which, fromHistory = false) {
   // A switch is a history entry, so the phone's Back goes to the other view; Back itself is not one.
   if (!fromHistory && which !== pane) { try { history.pushState({ hordePane: which }, ""); } catch (e) { /* a page with no history keeps working */ } }
-  // The log opens at his place each time its tab is opened, not only the first.
-  if (which === "progress" && pane !== "progress") progressDrawn = "";
+  // The tab opens on its cards, and a stream at his place each time it is opened, not only the first.
+  if (which === "progress" && pane !== "progress") { progressDrawn = ""; stream = null; }
   pane = which;
   for (const p of Object.keys(PANES)) $(PANES[p].tab).setAttribute("aria-selected", which === p ? "true" : "false");
   if (current) pick(current);
 }
 for (const p of Object.keys(PANES)) $(PANES[p].tab).addEventListener("click", () => pickPane(p));
-window.addEventListener("popstate", (e) => { const p = e.state && e.state.hordePane; pickPane(Object.prototype.hasOwnProperty.call(PANES, p) ? p : "decisions", true); });
+window.addEventListener("popstate", (e) => {
+  const p = e.state && e.state.hordePane;
+  // Back from a stream is the cards page again.
+  if (p === "progress" && pane === "progress" && stream && !e.state.stream) { closeStream(); return; }
+  pickPane(Object.prototype.hasOwnProperty.call(PANES, p) ? p : "decisions", true);
+});
 try { history.replaceState({ hordePane: "decisions" }, ""); } catch (e) { /* as above */ }
 // WHEN IT WAS SAID, beside who said it: the short local time, and the exact one as its title and on a
 // tap (a phone has no pointer to rest on it), tapped again for the short one. Nothing for a thing with
@@ -375,6 +392,7 @@ let progressLast = null;
 // The entries that have been on his screen since the horde was unlocked (by id): what "seen" means below.
 const seenEntries = new Set();
 let watcher = null;
+function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; }
 function clearProgress() { const log = $("progressLog"); while (log.firstChild) log.removeChild(log.firstChild); progressDrawn = ""; progressLast = null; seenEntries.clear(); if (watcher) { watcher.disconnect(); watcher = null; } }
 function showProgressCount(v) {
   const n = v ? v.unread : 0;
@@ -391,21 +409,81 @@ function paragraphsInto(box, paragraphs) {
   }
 }
 function chip(words, kind) { const c = document.createElement("span"); c.className = "chip " + kind; c.textContent = words; return c; }
-function drawProgress(rec) {
-  if (!rec) return;
-  if (rec.state !== "known") { clearProgress(); showProgressCount(null); if (!$("progress").hidden) { $("progressEmpty").hidden = true; $("progressNote").hidden = true; say("relay", rec.reason || ""); } return; }
+// --- the cards ---
+
+// The stream on screen: null for the cards page, else { entry, lane, title, fallback } - entry the pairing
+// whose log it is, lane "" for the Thrall's (the whole log), fallback when no machine has sent cards yet.
+let stream = null;
+let cardsLast = null;
+function streamKey() { return stream ? stream.entry + "/" + stream.lane : ""; }
+function showProgressPage() {
+  $("cardsPage").hidden = !!stream;
+  $("streamPage").hidden = !stream;
+  $("streamBack").hidden = !stream || stream.fallback;
+  $("streamTitle").textContent = stream ? stream.title : "";
+  $("streamLimit").textContent = STREAM_LIMIT_WORDS;
+  $("streamLimit").hidden = !stream;
+}
+function requestStream() {
+  showProgressPage();
+  if (!stream) return;
+  const own = stream.entry === current;
+  bridge.request("progress", own ? {} : { of: stream.entry }).then((rec) => drawProgress(rec, own));
+}
+function openStream(next) {
+  try { history.pushState({ hordePane: "progress", stream: true }, ""); } catch (e) { /* a page with no history keeps working */ }
+  stream = next;
+  progressDrawn = "";
+  requestStream();
+}
+function closeStream() { stream = null; progressDrawn = ""; showProgressPage(); if (cardsLast) drawCards({ state: "known", value: cardsLast }); window.scrollTo(0, 0); }
+$("streamBack").addEventListener("click", () => { try { history.back(); } catch (e) { closeStream(); } });
+function drawCards(rec) {
+  if (!rec || rec.state !== "known") return;
   const v = rec.value;
-  progressLast = v;
-  // The count on the tab is kept whichever view is up.
-  showProgressCount(v);
+  cardsLast = v;
   if ($("progress").hidden) return;
+  // NO MACHINE HAS SENT CARDS: the whole log, as before cards were.
+  if (v.machines.length === 0) { if (!stream) { stream = { entry: current, lane: "", title: "", fallback: true }; requestStream(); } return; }
+  if (stream && stream.fallback) { stream = null; progressDrawn = ""; }
+  showProgressPage();
+  const list = $("cardsList");
+  while (list.firstChild) list.removeChild(list.firstChild);
+  const notes = [];
+  for (const m of v.machines) if (m.cardsLeftOut) notes.push(m.cardsLeftOut + " card(s) of " + m.name + " did not fit and are not shown.");
+  $("cardsNote").textContent = notes.join(" ");
+  $("cardsNote").hidden = notes.length === 0;
+  // THE ONE CARD (lane-card.js), its slot left empty here; a tap opens the lane's stream.
+  const open = (o) => openStream({ entry: o.entry, lane: o.lane === THRALL_LANE ? "" : o.lane, title: (o.lane === THRALL_LANE ? "Thrall - the whole fleet" : o.lane) + ", " + o.machine, fallback: false });
+  for (const t of v.thrall) { const box = renderLaneCard(document, v, THRALL_LANE, { machine: t.machine, onOpen: open }); if (box) list.appendChild(box); }
+  for (const c of v.cards) { const box = renderLaneCard(document, v, c.lane, { machine: c.machine, onOpen: open }); if (box) list.appendChild(box); }
+}
+bridge.on("cards-changed", (rec) => drawCards(rec));
+
+// --- a stream: the progress log, or a lane's part of it ---
+
+function drawProgress(rec, own = true) {
+  if (!rec) return;
+  if (rec.state !== "known") { clearProgress(); if (own) showProgressCount(null); if (!$("progress").hidden) { $("progressEmpty").hidden = true; $("progressNote").hidden = true; say("relay", rec.reason || ""); } return; }
+  const full = rec.value;
+  // The count on the tab is the picked horde's whole log, kept whichever view is up.
+  if (own) showProgressCount(full);
+  if ($("progress").hidden || !stream) return;
+  // A LANE'S STREAM, with his place as the last of its entries written at or before the place he read to.
+  const items = laneStream(full.items, stream.lane, full.areas || []);
+  const readN = full.readIndex >= 0 ? full.items[full.readIndex].n : 0;
+  let readIndex = -1;
+  items.forEach((it, i) => { if (it.n <= readN) readIndex = i; });
+  const v = { ...full, items, readIndex, unread: items.length - 1 - readIndex };
+  progressLast = v;
+  $("progressAllRead").hidden = !own;
   const notes = [];
   if (v.stopped) notes.push(PROGRESS_WORDS["file-replaced"]);
   if (v.skipped) notes.push(v.skipped + " " + PROGRESS_WORDS["lines-skipped"]);
   $("progressNote").textContent = notes.join(" ");
   $("progressNote").hidden = notes.length === 0;
   $("progressEmpty").hidden = v.items.length > 0;
-  const sig = current + "/" + v.items.length + "/" + (v.newest ? v.newest.id : "") + "/" + v.items.reduce((n, it) => n + it.corrections.length, 0);
+  const sig = current + "/" + streamKey() + "/" + v.items.length + "/" + (v.newest ? v.newest.id : "") + "/" + v.items.reduce((n, it) => n + it.corrections.length, 0);
   if (sig === progressDrawn) return;
   const opening = progressDrawn === "";
   if (opening) progressMark = v.readIndex;
@@ -482,7 +560,8 @@ function watchEntries() {
 }
 function readAsSeen() {
   const v = progressLast;
-  if (!v || $("progress").hidden || v.unread === 0) return;
+  // His place moves only in the whole log of the picked horde (THE PROGRESS TAB OPENS ON CARDS).
+  if (!v || $("progress").hidden || v.unread === 0 || !stream || stream.lane !== "" || stream.entry !== current) return;
   let upTo = "";
   for (let i = v.readIndex + 1; i < v.items.length; i++) {
     if (!seenEntries.has(v.items[i].id)) break;
@@ -494,7 +573,12 @@ function readAsSeen() {
 window.addEventListener("scroll", () => { if (!watcher) noteSeen(); }, { passive: true });
 $("progressNewest").addEventListener("click", () => window.scrollTo(0, document.documentElement.scrollHeight));
 $("progressAllRead").addEventListener("click", () => { bridge.request("progress-read", { all: true }).then((rec) => { if (rec.state === "known") { progressLast = rec.value; showProgressCount(rec.value); } else say("action", rec.reason || ""); }); });
-bridge.on("progress-changed", (rec) => drawProgress(rec));
+bridge.on("progress-changed", (rec) => {
+  if (!stream || stream.entry === current) { drawProgress(rec, true); return; }
+  // A stream of another machine: the tab's count from this record, the stream from its own log.
+  if (rec && rec.state === "known") showProgressCount(rec.value);
+  requestStream();
+});
 bridge.on("hordes-changed", (list) => { hordes = list; drawTabs(); });
 bridge.on("notice", (words) => say("relay", words));
 
@@ -678,7 +762,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

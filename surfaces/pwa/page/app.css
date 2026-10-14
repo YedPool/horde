@@ -126,3 +126,20 @@ button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: va
 #progressFoot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; align-items: center; gap: 6px; padding: 4px 6px; padding-bottom: calc(4px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
 #progressCount { flex: 1 1 auto; min-width: 0; padding-left: 6px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
 #progressFoot button { flex: 0 0 auto; white-space: nowrap; }
+/* THE CARDS: the Progress tab's first page, one card per lane and one for the Thrall, each a key that opens
+   its stream. A card is read at a glance: its name and where it is from, then a few short lines. */
+#cardsList { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
+.card { display: block; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.card.thrall { border-color: var(--accent); }
+.card.blocked { border-left: 4px solid var(--warn); }
+.card-head { display: flex; align-items: baseline; gap: 8px; }
+.card-name { flex: 1 1 auto; font-weight: 600; }
+.card-badge { flex: 0 0 auto; font-weight: 600; color: var(--accent); }
+.card-from { flex: 0 0 auto; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.card-line { margin: 3px 0 0; }
+.card-line b { font-weight: 600; }
+.card-stats { margin-top: 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.card-note { margin-top: 4px; color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); }
+#streamHead { display: flex; align-items: center; gap: 8px; padding: 2px 0 6px; }
+#streamTitle { flex: 1 1 auto; font-weight: 600; overflow-wrap: anywhere; }
+#streamLimit { padding: 0 0 6px; }

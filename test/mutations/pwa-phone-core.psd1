@@ -22,8 +22,8 @@
            Find = 'return { ...x, progressRead: read }; });'
            Replace = 'return { ...x }; });' }
         @{ Name = "progress-place-not-read-back"
-           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };'
-           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode };' }
+           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };'
+           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };' }
         @{ Name = "progress-notice-not-read"
            Find = 'g.notices.push({ ...r.value, seq: h.seq });'
            Replace = '' }
