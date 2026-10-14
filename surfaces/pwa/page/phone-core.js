@@ -176,25 +176,39 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     if (!e) throw fail("there is no such horde on this phone");
     return e;
   }
-  async function nextSeq(id, channel) {
-    let seq = 0;
+  // THE SEQ IS SPENT ONLY ONCE THE PASSKEY HAS SIGNED (review of PR 262, M1): it was spent before the
+  // prompt, so every prompt cancelled or timed out left a hole the machine reported missing - and a hole
+  // is noise that can push a real loss out of the receipt's list. So the next seq is read, the envelope
+  // signed under it, and only then claimed, in one update that takes it only if no other tab has: one
+  // that lost the race signs again under the next.
+  async function claimSeq(id, channel, seq) {
+    let won = false;
     await store.update(ENTRY + id, (e) => {
       if (!e) throw fail("there is no such horde on this phone");
       const counts = { ...(e.seq || {}) };
-      counts[channel] = (counts[channel] || 0) + 1;
-      seq = counts[channel];
+      if ((counts[channel] || 0) >= seq) return e;
+      counts[channel] = seq;
+      won = true;
       return { ...e, seq: counts };
     });
-    return seq;
+    return won;
   }
   function assertWith(e, prf = false) {
     // relay/js/protocol.js's passkey: user verification required by the authenticator adapter.
     return async (challenge) => authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge, prfInput: prf ? prfInput(e.horde, e.machine) : null });
   }
-  async function sealAndSign(e, kind, channel, body, assert) {
-    const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq: await nextSeq(e.id, channel), ts: now(), recipientPublic: P.unb64u(e.machineAgreePublic), body });
-    // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it.
-    return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header), ts: parts.header.ts, seq: parts.header.seq };
+  // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it - and,
+  // for an answer signed again, when he FIRST sent it (A STALE ANSWER NEVER WINS, in the header).
+  async function sealAndSign(e, kind, channel, body, assert, ts = null) {
+    for (let tries = 0; tries < 3; tries++) {
+      const held = await store.get(ENTRY + e.id);
+      if (!held) throw fail("there is no such horde on this phone");
+      const seq = ((held.seq && held.seq[channel]) || 0) + 1;
+      const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq, ts: ts === null ? now() : ts, recipientPublic: P.unb64u(e.machineAgreePublic), body });
+      const text = await P.signEnvelope(parts, assert);
+      if (await claimSeq(e.id, channel, seq)) return { text, key: P.replayKey(parts.header), ts: parts.header.ts, seq };
+    }
+    throw fail("Another window of this app sent at the same moment, three times over: nothing was sent. Send it again.");
   }
 
   // The PRF wrap from what a passkey get() just gave, while the session still holds the key's bytes
@@ -289,6 +303,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
 
   // THE OUTBOX (the header). Its record: { v: 1, items: [{ answerId, number, part, wordingVersion,
   // snapshot, sealed: { enc, box }, seqs, envelope: { key, text }, sentAt, lastSentAt, lastResendAt }] }.
+  function slotOf(number, part) { return String(number) + ":" + (part || ""); }
   async function outboxOf(id) {
     const x = await store.get(OUTBOX + id);
     return x && Array.isArray(x.items) ? x.items : [];
@@ -305,16 +320,20 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   }
   // One answer into the outbox, or one more envelope of it: his words sealed to this phone's own key, the
   // envelope the relay took kept whole (signed, and sealed to the machine), and its seq added.
-  async function keepAnswer(id, s, a, env) {
+  // A NEW ANSWER TO A QUESTION AND PART TAKES THE PLACE OF EVERY OLDER ONE STILL WAITING THERE (review of
+  // PR 262, M2): kept, an older answer lost on the way would be sent again after the newer one and
+  // stand as his answer. stuck: this send was the one re-sign of an answer stuck at received (S1).
+  async function keepAnswer(id, s, a, env, stuck = false) {
     const sealed = await P.hpkeSeal(s.publicPoint, P.utf8(OUTBOX_INFO), P.utf8(a.answerId), P.utf8(a.text));
     s.outboxText.set(a.answerId, a.text);
     const at = now();
+    const slot = slotOf(a.number, a.part || "");
     await store.update(OUTBOX + id, (x) => {
-      const items = ((x && x.items) || []).slice();
+      const items = ((x && x.items) || []).filter((y) => y.answerId === a.answerId || slotOf(y.number, y.part) !== slot);
       const i = items.findIndex((y) => y.answerId === a.answerId);
-      if (i >= 0) items[i] = { ...items[i], seqs: items[i].seqs.concat([env.seq]), envelope: { key: env.key, text: env.text }, lastSentAt: at };
-      else items.push({ answerId: a.answerId, number: a.number, part: a.part || "", wordingVersion: a.wordingVersion, snapshot: a.snapshot, sealed: { enc: P.b64u(sealed.enc), box: P.b64u(sealed.sealed) }, seqs: [env.seq], envelope: { key: env.key, text: env.text }, sentAt: at, lastSentAt: at, lastResendAt: 0 });
-      return { v: 1, items: items.slice(-OUTBOX_MOST) };
+      if (i >= 0) items[i] = { ...items[i], seqs: items[i].seqs.concat([env.seq]), envelope: { key: env.key, text: env.text }, lastSentAt: at, stuckResent: items[i].stuckResent === true || stuck };
+      else items.push({ answerId: a.answerId, number: a.number, part: a.part || "", wordingVersion: a.wordingVersion, snapshot: a.snapshot, sealed: { enc: P.b64u(sealed.enc), box: P.b64u(sealed.sealed) }, seqs: [env.seq], envelope: { key: env.key, text: env.text }, signedAt: env.ts, sentAt: at, lastSentAt: at, lastResendAt: 0 });
+      return { v: 1, items };
     });
   }
 
@@ -434,7 +453,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
 
     lock(id) { const s = sessions.get(id); if (s) { wipe(s.pkcs8); sessions.delete(id); } },
 
-    async forget(id) { this.lock(id); pairings.delete(id); await store.delete(ENTRY + id); await store.delete(OUTBOX + id); },
+    // The outbox first: an entry gone with its outbox left would leave words no session can open.
+    async forget(id) { this.lock(id); pairings.delete(id); await store.delete(OUTBOX + id); await store.delete(ENTRY + id); },
 
     // Read the horde's phone mailbox and return the newest complete snapshot this phone can open:
     // { snapshot, seq, questions, pageKeyByNumber, withheld, notShown, counts, anomalies, stale, diagnostics }:
@@ -653,6 +673,13 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (Number(q.question.wordingVersion) !== wordingVersion) throw fail("question " + number + " is shown in wording " + q.question.wordingVersion + ", not " + wordingVersion + ": the answer was not sent. Read it again and answer.");
       if (part !== "" && !/^[a-z]$/.test(part)) throw fail("the part answered is not one of the question's parts: the answer was not sent.");
       const takesParts = Number(v.answers) >= 2;
+      // NOTHING UNCONFIRMED IS EVER DROPPED TO MAKE ROOM (review of PR 262): with the outbox full, the
+      // answer is not sent, and he is told why. What this answer replaces does not count.
+      if (Array.isArray(v.receipts)) {
+        const slot = slotOf(number, takesParts ? part : "");
+        const held = (await outboxOf(id)).filter((i) => i.answerId !== answerId && slotOf(i.number, i.part) !== slot);
+        if (held.length >= OUTBOX_MOST) throw fail("Not sent: " + OUTBOX_MOST + " answers are still waiting for the PC to confirm them. Once it is running again they go, and this one can be sent.");
+      }
       // To a machine that does not read a part's answer, the part's letter goes before the words.
       const words = (part !== "" && !takesParts) ? "(" + part + ") " + text : text;
       const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "" });
@@ -678,9 +705,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const settled = [];
       for (const item of await outboxOf(id)) {
         const st = answerStateOf(s, item, receipt, at);
+        // WORDS THAT CANNOT BE READ STILL STAND AS AN ANSWER (review of PR 262, S3): the question shows
+        // answered, pending, with a line that says its words are not readable here - never empty.
         const text = await openKept(s, item);
-        if (text === null) continue;
-        const a = { answerId: item.answerId, number: item.number, part: item.part, text, state: st.state, warning: st.warning, sentAt: item.sentAt };
+        const a = { answerId: item.answerId, number: item.number, part: item.part, text, unreadable: text === null, state: st.state, warning: st.warning, sentAt: item.sentAt };
         out.push(a);
         if (st.state === "applied" || st.state === "refused") { settled.push(item.answerId); s.settled.set(item.answerId, a); }
       }
@@ -694,17 +722,27 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // envelope put again. Each at most once per ANSWER_RESEND_MS, whether it went or not. { resent,
     // problems }: how many went, and the phone's own words for each that did not. Needs an unlocked
     // session; one that cannot sign sends again only what needs no new signature.
-    async resend(id) {
+    // sign: false sends again only what needs no new signature (the page is hidden, or another window
+    // of the app holds the lock: bridge.js). AT MOST ONE ANSWER IS SIGNED AGAIN A CALL (review of PR 262,
+    // S4): one passkey prompt a refresh, never a train of them; the rest wait for the next.
+    async resend(id, { sign = true } = {}) {
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
       const receipt = s.view ? P.receiptFor(s.view.receipts, e.deviceKeyId) : null;
       let resent = 0;
+      let signed = 0;
+      let cannot = 0;
       const problems = [];
-      for (const item of await outboxOf(id)) {
+      const items = await outboxOf(id);
+      for (const item of items) {
         const st = answerStateOf(s, item, receipt, now());
         if (!st.due) continue;
-        if (st.resend === "resign" && s.mode !== "passkey") continue;
+        // NEVER AN ANSWER THAT IS NOT HIS LATEST to its question and part (review of PR 262, M2).
+        if (items.some((i) => i !== item && slotOf(i.number, i.part) === slotOf(item.number, item.part) && Number(i.signedAt || i.sentAt) > Number(item.signedAt || item.sentAt))) continue;
+        if (st.resend === "resign" && s.mode !== "passkey") { cannot += 1; continue; }
+        if (st.resend === "resign" && (!sign || signed >= 1)) continue;
+        if (st.resend === "resign") signed += 1;
         // THE RATE LIMIT IS WRITTEN FIRST: a send that fails, or a page closed half way, is not tried
         // again before the interval is out.
         await store.update(OUTBOX + id, (x) => ({ v: 1, items: ((x && x.items) || []).map((i) => (i.answerId === item.answerId ? { ...i, lastResendAt: now() } : i)) }));
@@ -719,13 +757,15 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           const text = await openKept(s, item);
           if (text === null) { problems.push("The answer to question " + item.number + " cannot be read back on this phone, so it cannot be sent again. Answer it again."); continue; }
           const body = P.answerBody({ answerId: item.answerId, machine: e.machine, snapshot: item.snapshot, number: item.number, wordingVersion: item.wordingVersion, text, part: item.part });
-          const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
+          // Signed under the time he FIRST sent it: an older answer stays the older one at the PC.
+          const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e), Number(item.signedAt || item.sentAt));
           const put = await relay.put(e.machineMailbox, env.key, env.text);
           if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); problems.push(again); continue; }
-          await keepAnswer(id, s, { ...item, text }, env);
+          await keepAnswer(id, s, { ...item, text }, env, st.stuck === true);
           resent += 1;
         } catch (x) { problems.push("The answer to question " + item.number + " was not sent again: the passkey did not sign it. It will be tried again."); }
       }
+      if (cannot) problems.push("Unlocked by the recovery code, this phone cannot sign: " + cannot + " answer" + (cannot === 1 ? " the PC is missing waits" : "s the PC is missing wait") + " until you unlock with the passkey.");
       return { resent, problems };
     }
   };

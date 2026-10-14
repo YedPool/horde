@@ -1108,6 +1108,76 @@ try {
     Check ($kept.applied.Count -eq 64 -and $kept.applied[0] -ceq (7).ToString("x32") -and $kept.applied[63] -ceq (70).ToString("x32") -and $kept.refused.Count -eq 16 -and $kept.refused[15] -ceq (120).ToString("x32") -and $kept.applied -cnotcontains (200).ToString("x32")) ("the ledger keeps the newest 64 applied and 16 refused, and a retry adds nothing (" + $kept.applied.Count + ", " + $kept.refused.Count + ")")
     $receiptBytes = $utf8.GetByteCount((Get-HordeDecisionsChannelReceipts -Context $L).text)
     Check ($receiptBytes -gt 2000 -and $receiptBytes -lt 4096) ("a receipt at its fullest for one passkey is small: " + $receiptBytes + " bytes")
+
+    Write-Host ""
+    Write-Host "--- the review of PR 262: a hole below the missing list is never received, a stale answer never wins ---" -ForegroundColor Cyan
+    # M1, ATTACKED: the journal holds 1..15, 17 and 50 of a passkey - 16 truly lost, 18..49 spent by
+    # prompts that never signed. The newest 32 holes are 18..49; 16 is below them.
+    $H = New-World
+    Use-World $H
+    $hs = (Find-HordeRelayTrustedSenders -HordeHome $H.home).value
+    foreach ($n in (@(1..15) + @(17, 50))) {
+        $e = New-HordeTestPhoneEnvelope -Phone $H.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Machine $H.id.sign.keyId -Snapshot (Get-SentKey $H)) -To $H.agree -Seq $n
+        $null = Register-HordeRelayJournalReceived -Envelope (Read-HordeRelayEnvelope -Text $e.text).value -Senders $hs -RecipientKeyIds @($H.ctx.openingKeys.Keys) -Channel "decisions" -Kind "answer" -HordeHome $H.home
+    }
+    $hr = (Get-HordeDecisionsChannelReceipts -Context $H.ctx).text | ConvertFrom-Json
+    $hp = @($hr | Where-Object { $_.from -ceq $H.phone.keyId })[0]
+    Check ($null -ne $hp -and $hp.through -eq 50 -and @($hp.missing).Count -eq 32 -and @($hp.missing) -notcontains 16 -and $hp.checked -eq 18 -and $hp.checked -gt 16) ("A HOLE BELOW THE MISSING LIST IS NOT PASSED OFF AS RECEIVED: the list holds the newest 32 holes, and checked says it looked no lower than 18 - so 16, below it, is unknown to the phone, never received (" + $(if ($null -ne $hp) { ConvertTo-Json $hp -Compress } else { "none" }) + ")")
+    $hr2 = (Get-HordeDecisionsChannelReceipts -Context $R.ctx).text | ConvertFrom-Json
+    $rp = @($hr2 | Where-Object { $_.from -ceq $R.phone.keyId })[0]
+    Check ($null -ne $rp -and $rp.checked -eq 1) "CONTROL: a stream whose every hole fits the list says it looked down to 1"
+    # M2, ATTACKED: B "do NOT deploy" is applied; A "deploy now", signed BEFORE B to the same question,
+    # arrives after it - a lost answer sent again.
+    $G = New-World
+    Use-World $G
+    $signedA = [datetime]::UtcNow.AddMinutes(-9)
+    $idB = New-Id
+    [void](Send-ToMachine $G (Get-Answer $G -AnswerId $idB -Text "B: do NOT deploy").text)
+    $t = Invoke-Turn $G
+    $idA = New-Id
+    $staleA = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $idA -Text "A: deploy now" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now $signedA
+    [void](Send-ToMachine $G $staleA.text)
+    $t = Invoke-Turn $G
+    $null = Invoke-Tick $G
+    $gr = Get-PhoneReceipts $G
+    $gsaid = @(Get-Said $G.store)
+    Check ((Has $t "superseded") -and $gsaid.Count -eq 1 -and $gsaid[0].data.text -ceq "B: do NOT deploy" -and @($gr.refused) -ccontains $idA -and @($gr.applied) -ccontains $idB) ("A STALE ANSWER NEVER WINS: an answer signed before the one already applied to the same question is refused as superseded, listed refused, and his newer answer stands (" + $t.text + ")")
+    $againB = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $idB -Text "B: do NOT deploy" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now $signedA
+    [void](Send-ToMachine $G $againB.text)
+    $t = Invoke-Turn $G
+    Check ((Has $t "(replayed)") -and -not (Has $t "superseded") -and @(Get-Said $G.store).Count -eq 1) ("CONTROL: the applied answer itself, sent again under an older time, is the record it already is - not superseded (" + $t.text + ")")
+    $null = Invoke-HordeDecision -Operation "add" -Root $G.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Another question for the stale check."; kind = "yes-no"; whatItIs = "Another."; group = "voice"; askedBy = "orc-b" } }
+    $null = Invoke-Tick $G
+    $otherQ = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number 2 -Text "an old answer to another question" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now $signedA
+    [void](Send-ToMachine $G $otherQ.text)
+    $t = Invoke-Turn $G
+    Check ((Has $t "done") -and -not (Has $t "superseded")) ("CONTROL: an older time to ANOTHER question is no reason to refuse it (" + $t.text + ")")
+    $G2ctx = New-HordeRelayRunContext -HordeHome $G.home -Connection $G.conn
+    Close-HordeRelayRunContext -Context $G.ctx
+    $G.ctx = $G2ctx.value
+    $staleC = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "C: older still" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now ([datetime]::UtcNow.AddMinutes(-8))
+    [void](Send-ToMachine $G $staleC.text)
+    $t = Invoke-Turn $G
+    Check ((Has $t "superseded") -and @(Get-Said $G.store | Where-Object { $_.data.number -eq 1 }).Count -eq 1) ("after a restart the newest signing time of each question is still known: a stale answer is still superseded (" + $t.text + ")")
+    # S2, ATTACKED: 20 passkeys' streams; the most recently active and the one sealed to sort LAST by id.
+    $Q = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    $qroot = Get-HordeRelayJournalRoot -HordeHome $Q.hordeHome
+    $qids = @(1..20 | ForEach-Object { $_.ToString("x32") })
+    foreach ($i in 0..19) {
+        $d = Get-HordeRelayJournalStreamDir -Root $qroot -Direction "in" -From $qids[$i] -Channel "decisions"
+        [void][System.IO.Directory]::CreateDirectory($d)
+        [System.IO.Directory]::SetLastWriteTimeUtc($d, [datetime]::UtcNow.AddDays(-30 + $i))
+    }
+    [System.IO.Directory]::SetLastWriteTimeUtc((Get-HordeRelayJournalStreamDir -Root $qroot -Direction "in" -From $qids[18] -Channel "decisions"), [datetime]::UtcNow.AddDays(-400))
+    $qr = @((Get-HordeDecisionsChannelReceipts -Context $Q -Prefer @($qids[18])).text | ConvertFrom-Json | ForEach-Object { $_.from })
+    Check ($qr.Count -eq 16 -and $qr -ccontains $qids[19] -and $qr -ccontains $qids[18] -and $qr -cnotcontains $qids[0]) ("PAST 16 PASSKEYS, the phone sealed to and the most recently active get receipts, the longest idle do not (" + ($qr.Count) + ")")
+    # A FAILED MOVE OF THE LEDGER LEAVES NO TEMP FILE.
+    $T = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    $tpath = Get-HordeDecisionsChannelReceiptsPath -Context $T
+    [void][System.IO.Directory]::CreateDirectory($tpath)
+    $why = Add-HordeDecisionsChannelReceipt -Context $T -From ("c" * 32) -AnswerId ("d" * 32) -Outcome "done"
+    $tmps = @([System.IO.Directory]::GetFiles([System.IO.Path]::GetDirectoryName($tpath), "*.tmp"))
+    Check ($why -cne "" -and $tmps.Count -eq 0) ("a ledger that cannot be moved into place says why and leaves no temp file behind (" + $tmps.Count + ")")
     }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin

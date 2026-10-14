@@ -595,6 +595,10 @@ export const ANSWER_REFUSED_NOTE = "The PC refused this answer. Answer again if 
 export const ANSWER_WARN_MS = 60 * 60 * 1000;
 export const ANSWER_RESEND_MS = 10 * 60 * 1000;
 export const ANSWER_TAIL_GRACE_MS = 10 * 60 * 1000;
+// How long an answer may say received by PC before it is signed again once (answerState, S1).
+export const ANSWER_STUCK_MS = 2 * 60 * 60 * 1000;
+// What stands for his words when this phone cannot read them back (withAnswers): still answered.
+export const ANSWER_UNREADABLE = "(Your answer is kept on this phone, but its words cannot be read here.)";
 const RECEIPT_LIMITS = { streams: 64, ids: 256 };
 
 // The receipt for one passkey (from, its key id) out of a snapshot's receipts member: { through, missing,
@@ -603,14 +607,17 @@ const RECEIPT_LIMITS = { streams: 64, ids: 256 };
 // A machine with receipts and none for this passkey yet is a receipt of nothing: through 0.
 export function receiptFor(receipts, from) {
   if (!Array.isArray(receipts) || receipts.length > RECEIPT_LIMITS.streams) return null;
-  const empty = { through: 0, missing: new Set(), applied: new Set(), refused: new Set() };
+  const empty = { through: 0, checked: 0, missing: new Set(), applied: new Set(), refused: new Set() };
   for (const r of receipts) {
     if (!r || typeof r !== "object" || typeof r.from !== "string" || !KEY_ID.test(r.from)) return null;
     if (r.from !== from) continue;
     const seqs = Array.isArray(r.missing) ? r.missing : null;
     const ids = (x) => Array.isArray(x) && x.length <= RECEIPT_LIMITS.ids && x.every((i) => typeof i === "string" && KEY_ID.test(i));
     if (!Number.isSafeInteger(r.through) || r.through < 0 || !seqs || seqs.length > RECEIPT_LIMITS.ids || !seqs.every((s) => Number.isSafeInteger(s) && s > 0) || !ids(r.applied) || !ids(r.refused)) return null;
-    return { through: r.through, missing: new Set(seqs), applied: new Set(r.applied), refused: new Set(r.refused) };
+    // checked: the lowest seq the machine looked at for holes (channels/decisions, checked). A receipt
+    // that does not say counts as one that looked at nothing below through: every seq under it unknown.
+    const checked = Number.isSafeInteger(r.checked) && r.checked >= 0 && r.checked <= r.through ? r.checked : r.through;
+    return { through: r.through, checked, missing: new Set(seqs), applied: new Set(r.applied), refused: new Set(r.refused) };
   }
   return empty;
 }
@@ -626,22 +633,31 @@ export function receiptFor(receipts, from) {
 // relay or the journal drops it if it was not lost after all). due: a resend is wanted and the last
 // send of it is ANSWER_RESEND_MS behind.
 export function answerState(item, receipt, receiptTs, now) {
-  const r = receipt || { through: 0, missing: new Set(), applied: new Set(), refused: new Set() };
+  const r = receipt || { through: 0, checked: 0, missing: new Set(), applied: new Set(), refused: new Set() };
   const seqs = Array.isArray(item.seqs) ? item.seqs : [];
+  // A SEQ IS KNOWN TO HAVE ARRIVED only between checked and through, and not missing (review of PR 262,
+  // M1: below the cut of the missing list a hole used to read as received, and was never sent again).
+  const arrived = (s) => s <= r.through && s >= r.checked && !r.missing.has(s);
+  const lost = (s) => r.missing.has(s) || (s <= r.through && s < r.checked);
   let state = "sent";
   if (r.applied.has(item.answerId)) state = "applied";
   else if (r.refused.has(item.answerId)) state = "refused";
-  else if (seqs.some((s) => s <= r.through && !r.missing.has(s))) state = "received";
+  else if (seqs.some(arrived)) state = "received";
   let resend = "";
+  let stuck = false;
   if (state === "sent" && receipt && seqs.length) {
     const newest = Math.max(...seqs);
-    if (r.missing.has(newest)) resend = "resign";
+    if (lost(newest)) resend = "resign";
     else if (newest > r.through && Number(receiptTs) > Number(item.lastSentAt) + ANSWER_TAIL_GRACE_MS) resend = "reput";
   }
+  // RECEIVED FOR HOURS AND NEVER LISTED (review of PR 262, S1): more applied in one turn than a receipt
+  // lists, or a refusal pushed out of its list, would say received for ever. Signed again ONCE: the PC
+  // answers the same id as the record it is, and lists it again.
+  if (state === "received" && receipt && item.stuckResent !== true && now - Number(item.sentAt) > ANSWER_STUCK_MS) { resend = "resign"; stuck = true; }
   const last = Math.max(Number(item.lastSentAt) || 0, Number(item.lastResendAt) || 0);
   const due = resend !== "" && now - last >= ANSWER_RESEND_MS;
   const warning = (state === "sent" || state === "received") && now - Number(item.sentAt) > ANSWER_WARN_MS;
-  return { state, resend, due, warning };
+  return { state, resend, due, warning, stuck };
 }
 
 // The snapshot's questions with the answers this phone keeps drawn into them (the bridge's list): an
@@ -661,7 +677,7 @@ export function withAnswers(questions, answers) {
     if (!mine.length) return q;
     const thread = q.thread && typeof q.thread === "object" ? q.thread : { count: 0, turn: "founder", messages: [] };
     const messages = (Array.isArray(thread.messages) ? thread.messages : []).map((m) => ({ ...m }));
-    for (const a of mine.filter((x) => x.state === "applied")) {
+    for (const a of mine.filter((x) => x.state === "applied" && !x.unreadable)) {
       for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
         if (m.speaker === "founder" && m.text === a.text && (m.part || "") === (a.part || "")) { messages[i] = { ...m, receipt: ANSWER_WORDS.applied }; break; }
@@ -670,7 +686,7 @@ export function withAnswers(questions, answers) {
     let k = 0;
     for (const a of mine.filter((x) => x.state !== "applied").sort((x, y) => x.sentAt - y.sentAt)) {
       k += 1;
-      const m = { sequence: top + k, speaker: "founder", route: "phone", text: a.text, at: new Date(Number(a.sentAt) || 0).toISOString(), local: true, receipt: ANSWER_WORDS[a.state] || ANSWER_WORDS.sent,
+      const m = { sequence: top + k, speaker: "founder", route: "phone", text: a.unreadable || typeof a.text !== "string" ? ANSWER_UNREADABLE : a.text, at: new Date(Number(a.sentAt) || 0).toISOString(), local: true, receipt: ANSWER_WORDS[a.state] || ANSWER_WORDS.sent,
         receiptNote: a.state === "refused" ? ANSWER_REFUSED_NOTE : (a.warning ? ANSWER_WARNING : "") };
       if (a.part) m.part = a.part;
       messages.push(m);
