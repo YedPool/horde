@@ -51,12 +51,37 @@
            Find = 'if (-not [regex]::IsMatch($value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }'
            Replace = 'return (-not [regex]::IsMatch($value, $script:HordeSecretNamedPlaceholder, $invariant))' }
         @{ Name = "a-bare-value-is-not-looked-at"
-           Find = '$value = $(if ($bare.Success) { $bare.Value } else { $m.Groups["value"].Value })'
+           Find = '$value = $(if ($null -ne $unquoted) { $unquoted.Value } else { $m.Groups["value"].Value })'
            Replace = '$value = $m.Groups["value"].Value' }
         # --- an unquoted value with a parenthesis is code (the review's next round, 2026-10-13) ---
         @{ Name = "a-bare-value-with-a-parenthesis-is-a-value"
-           Find = 'if ($bare.Success -and $bare.Value.IndexOfAny([char[]]@(''('', '')'')) -ge 0) { continue }'
+           Find = 'if ($null -ne $unquoted -and $unquoted.Value.IndexOfAny([char[]]@(''('', '')'')) -ge 0) { continue }'
            Replace = '' }
+        @{ Name = "a-yaml-value-is-never-unquoted"
+           Find = '$unquoted = $(if ($bare.Success) { $bare } elseif ($yamlBare.Success) { $yamlBare } else { $null })'
+           Replace = '$unquoted = $(if ($bare.Success) { $bare } else { $null })' }
+        # --- a reference in code, and a YAML value with no digit (the review of PR 238, 2026-10-13) ---
+        @{ Name = "a-reference-in-code-is-a-value"
+           Find = 'if ($null -ne $unquoted -and $unquoted.Value -cmatch $script:HordeSecretNamedCodePattern) { continue }'
+           Replace = '' }
+        @{ Name = "a-dotted-lookup-is-a-value"
+           Find = '(?:(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])+'
+           Replace = '(?:(?:\[[^\]]*\])+' }
+        @{ Name = "an-indexed-lookup-is-a-value"
+           Find = '[A-Za-z0-9_]*|\[[^\]]*\])+'
+           Replace = '[A-Za-z0-9_]*)+' }
+        @{ Name = "an-identifier-before-a-comma-is-a-value"
+           Find = '[,;)]*|[,;)]+)\z'''
+           Replace = '[,;)]*)\z''' }
+        @{ Name = "every-bare-identifier-is-a-reference"
+           Find = '[,;)]*|[,;)]+)\z'''
+           Replace = '[,;)]*|[,;)]*)\z''' }
+        @{ Name = "a-yaml-value-needs-no-digit"
+           Find = 'if ($yamlBare.Success -and $yamlBare.Value -cnotmatch ''[0-9]'') { continue }'
+           Replace = '' }
+        @{ Name = "every-unquoted-value-needs-a-digit"
+           Find = 'if ($yamlBare.Success -and $yamlBare.Value -cnotmatch'
+           Replace = 'if ($null -ne $unquoted -and $unquoted.Value -cnotmatch' }
         @{ Name = "only-an-open-parenthesis-makes-code"
            Find = '[char[]]@(''('', '')'')'
            Replace = '[char[]]@(''('')' }
@@ -64,7 +89,7 @@
            Find = '[char[]]@(''('', '')'')'
            Replace = '[char[]]@('')'')' }
         @{ Name = "a-quoted-value-with-a-parenthesis-is-code-too"
-           Find = 'if ($bare.Success -and $bare.Value.IndexOfAny('
+           Find = 'if ($null -ne $unquoted -and $unquoted.Value.IndexOfAny('
            Replace = 'if ($m.Value.IndexOfAny(' }
         @{ Name = "named-secret-name-client-secret-off"
            Find = 'client_secret|private_key|refresh_token|access_token|api_key|password'''
