@@ -526,7 +526,7 @@ $x = SpawnRec
 Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("row 60")) ("the token in a row ABOVE the 40 kept: the screen is still withheld whole, as read, not only as kept (" + $x.rec.screen.state + ")")
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @(("Note" + [char]0x00E9 + "password=s3cretValue1"))
 $x = SpawnRec
-Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("s3cretValue1")) ("a password=value that only reads as one once a letter outside ASCII becomes '?': the rows as kept are checked too, and withheld (" + $x.rec.screen.state + ")")
+Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("s3cretValue1")) ("a password=value right after a letter outside ASCII is withheld; its 12-character value is read by the named kind in every reading, so the kept-only case is the short one among the WITHHELD cases below (" + $x.rec.screen.state + ")")
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", "gh auth login --with-token < your-token-file", $rule)
 $x = SpawnRec
 Check ("$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -like "*--with-token < your-token-file*" -and (ScreenText $x).Contains("your-token-file") -and -not (RecText $x.o).Contains("your-token-file")) "CONTROL: the same screen with no token in its row is shown: its screen file has it, and the record itself holds no row"
@@ -587,6 +587,12 @@ $mustWithhold = [ordered]@{
 # Only the screen as READ shows this one: a no-break space is white space to the sentence kind, removing
 # it joins the words, and its row is above the 40 kept.
 $mustWithhold["a password in a sentence with a no-break space, in a row above the 40 kept"] = @(("pass" + "word" + [char]0x00A0 + "is Hunter22x")) + @(1..60 | ForEach-Object { "row " + $_ })
+# Only the rows as KEPT show this one (the after-merge mutation net of PR 239: screen-secret-kept-unchecked
+# survived). A letter outside ASCII before the name leaves no word boundary as read, nor once removed; as
+# '?' it does. The value is under 8 characters, so the named kind, which reads the name past any prefix,
+# takes it in no reading. Measured 2026-10-14 on 07ed58f with core/Secrets.ps1, each reading in each form:
+# raw none, ASCII-only none, trimmed none, kept "a password or key written as name=value".
+$mustWithhold["a short password=value right after a letter outside ASCII, a word boundary only as kept"] = @(("Note" + [char]0x00E9 + "pass" + "word=s3cr3t"))
 foreach ($k in $mustWithhold.Keys) {
     $s = ScreenOf $mustWithhold[$k]
     Check ("$($s.state)" -ceq "withheld" -and @($s.rows).Count -eq 0) ("WITHHELD: " + $k + " (" + $s.state + ": " + $s.said + ")")
@@ -596,6 +602,8 @@ foreach ($k in $mustWithhold.Keys) {
 $plain = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30)), "Welcome to the harness!", "  cwd: C:\work\code\app-worktrees\act-a3\agents\harness-a", ("  session 3f2a9c1e-" + "7b4d-4e21-9a0c-5d6e7f8a9b0c"), ("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), " Do you trust the files in this folder?", " 1. Yes, proceed", "   2. No, exit", "  ? for shortcuts")
 $s = ScreenOf $plain
 Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $plain.Count -and @($s.rows)[2] -clike "*act-a3\agents\harness-a") ("CONTROL: an ordinary screen with no secret, a path, a session id and a commit id in it, is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
+$s = ScreenOf @(("Note" + [char]0x00E9 + "passwordless sign-in is on"))
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq 1) ("CONTROL: the same letter outside ASCII before a word that is no name=value is shown (" + $s.state + ")")
 # KNOWN LIMIT, on purpose: rows joined by nothing can fuse two harmless rows into one long mixed run, and
 # a placeholder after a NAME= reads as a value once the name is spaced. Both are withheld: a screen lost,
 # never a secret shown. If either is ever shown again, that is a deliberate change to this rule.
@@ -693,7 +701,12 @@ New-Item -ItemType Directory -Path (Split-Path $oldAtStart), (Split-Path $freshA
 [System.IO.File]::WriteAllText($oldAtStart, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
 [System.IO.File]::WriteAllText($freshAtStart, '{ "takenAt": "2026-10-04T00:00:00Z", "rows": ["fresh"] }')
 $held = Enter-HordeNodeSpawnLock -Dir $cS.records
-try { $lines = @(Invoke-HordeNodeReconcile -Context $cS) } finally { $held.Dispose() }
+# An exception from the code under test is a FAILED CHECK of its own, not a broken suite (the after-merge
+# mutation net of PR 239: with the null-lock guard gone, the sweep went on with no lock and threw, and the
+# suite ended with exit 1 and no failed check, so the mutant was no catch).
+$lines = @(); $thrown = ""
+try { try { $lines = @(Invoke-HordeNodeReconcile -Context $cS) } catch { $thrown = $_.Exception.Message } } finally { $held.Dispose() }
+Check ($thrown -ceq "") ("with the spawn lock held, serve start throws nothing (" + $thrown + ")")
 Check ((Test-Path -LiteralPath $oldAtStart) -and @($lines | Where-Object { $_ -like "ALERT: old screens were not swept at serve start*spawn lock*" }).Count -eq 1) ("with the spawn lock held, serve start sweeps nothing and says so (" + ($lines -join " | ") + ")")
 $lines = @(Invoke-HordeNodeReconcile -Context $cS)
 Check (-not (Test-Path -LiteralPath $oldAtStart) -and (Test-Path -LiteralPath (Split-Path $oldAtStart)) -and @($lines | Where-Object { $_ -like "deleted 1 screen(s)*" }).Count -eq 1) ("serve start deletes a screen past its week, with no spawn, and leaves the folder (" + ($lines -join " | ") + ")")
