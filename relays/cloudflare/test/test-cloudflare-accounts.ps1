@@ -25,7 +25,10 @@
 #      - the app itself in headless Chrome (browser-signin.mjs): the sign-in screen, Sign in with Google
 #        through the provider and back, the cookie as Chrome keeps it, the Account screen, Sign out, a
 #        refused sign-in said on the screen - when Chrome is installed; without it that part is skipped
-#        and the suite exits 3;
+#        and the suite exits 3. The suite starts the browser itself (test/lib/Browser.ps1), in a
+#        kill-on-close job of its own, and ends it with its profile in the finally block, however the
+#        driver ends: until 2026-10-14 the driver started it, and every driver killed on its timeout
+#        left a browser running and a horde-cf-accounts-* folder in %TEMP%;
 #   3. A SECOND DEV WITH THE ALLOWLIST SWITCHED ON: the listed account signs in, another does not.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the tree);
@@ -38,6 +41,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "test\lib\Browser.ps1")
 . (Join-Path $root "relays\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 . (Join-Path $root "relay\Pairing.ps1")
@@ -83,6 +87,7 @@ $devs = New-Object System.Collections.ArrayList
 . (Join-Path $here "Harness.ps1")
 
 $partial = $false
+$browser = $null
 try {
     $fake = Start-FakeProvider
     Check ($fake.issuer -cmatch '\Ahttp://127\.0\.0\.1:[0-9]+\z') ("CONTROL: the fake provider listens on this machine (" + $fake.issuer + ")")
@@ -343,17 +348,11 @@ try {
 
     Write-Host ""
     Write-Host "--- the app itself, in headless Chrome ---" -ForegroundColor Cyan
-    $chrome = @(
-        (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
-        (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
-        (Join-Path ${env:LOCALAPPDATA} "Google\Chrome\Application\chrome.exe")
-    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if ($null -eq $chrome) {
+    $chrome = Find-HordeTestChrome
+    if ($chrome -eq "") {
         Write-Host "  [SKIP] Chrome is not installed here, so the app's sign-in is not run in a browser" -ForegroundColor Yellow
         $partial = $true
     } else {
-        $profileDir = Join-Path $work "chrome"
-        [void][System.IO.Directory]::CreateDirectory($profileDir)
         # The first machine again, with a NEW offer - its old grant is spent, a new one is not - so the
         # app's Account screen has one machine to list and to remove.
         $again = Invoke-SignIn -Dev $dev -Provider $fake
@@ -361,7 +360,8 @@ try {
         $back = Send-To -Url ($O + "/v1/account/machines") -Method "POST" -Body (Get-Registration -OfferText $offer3.value.text) -Cookie ("__Host-horde-session=" + $again.session) -Origin $O
         $mc3 = (Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $O; hordeHome = $m1.home }).value
         Check ($back.code -eq 200 -and (Receive-HordeRelayItems -Connection $mc3 -Mailbox "work/phone" -Since 0).state -ceq "known") "a removed machine paired again with a new offer is registered again, and reads"
-        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, $chrome, $profileDir, "build-box") -WorkDir $work -TimeoutSeconds 180
+        $browser = Start-HordeTestBrowser -Chrome $chrome -Parent $work -ExtraArgs @("--window-size=412,915")
+        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, ("" + $browser.port), "build-box") -WorkDir $work -TimeoutSeconds 180
         $lines = @(("" + $r.out) -split "`r?`n" | Where-Object { $_ -ne "" })
         foreach ($l in $lines) { if ($l -clike "[[]PASS[]] *") { Check $true $l.Substring(7) } elseif ($l -clike "[[]FAIL[]] *") { Check $false $l.Substring(7) } }
         Check ($r.code -eq 0 -and @($lines | Where-Object { $_ -ceq "[DONE] 0" }).Count -eq 1 -and @($lines | Where-Object { $_ -clike "[[]PASS[]] *" }).Count -ge 18) ("the browser's checks ran to their end (" + $r.code + "; " + ("" + $r.err).Trim() + ")")
@@ -385,6 +385,12 @@ try {
     }
     Check ($b.session -ne "") "CONTROL: that same account signed in to the first dev, whose allowlist is off: signup is public by default"
 } finally {
+    # The browser first: its whole job ended and its profile removed, whatever the driver did.
+    if ($null -ne $browser) {
+        $bProfile = $browser.profile
+        $bEnd = Stop-HordeTestBrowser -Browser $browser
+        Check ($bEnd.left -eq 0 -and $bEnd.profileGone -and @(Get-HordeTestBrowserProcesses -ProfileDir $bProfile).Count -eq 0) ("the browser the suite started is ended, every process of it, and its profile removed (" + $bEnd.said + ")")
+    }
     foreach ($dv in @($devs)) { Stop-HordeCloudflareRelayDev -Dev $dv }
     foreach ($p in @($script:procs)) { try { if (-not $p.HasExited) { $p.StandardInput.BaseStream.Close(); if (-not $p.WaitForExit(10000)) { $p.Kill() } } } catch { }; $p.Dispose() }
     $http.Dispose()
