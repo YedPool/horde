@@ -47,7 +47,7 @@ if ((Get-HordeRelayKeyStore).state -cne "known") {
 }
 
 function New-TestHome {
-    param([string]$Settings = '{"keepEnvelopes": 100, "backfillNotices": 50}')
+    param([string]$Settings = '{"keepEnvelopes": 100, "backfillNotices": 50, "idleLookMs": 0}')
     $h = Join-Path $env:TEMP ("horde-relay-notices-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path (Join-Path $h "settings") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $h "progress") -Force | Out-Null
@@ -63,7 +63,7 @@ function Add-PhoneKey {
     if ($k.state -cne "known") { throw ("no phone key: " + $k.reason) }
 }
 function New-World {
-    param([string]$Settings = '{"keepEnvelopes": 100, "backfillNotices": 50}')
+    param([string]$Settings = '{"keepEnvelopes": 100, "backfillNotices": 50, "idleLookMs": 0}')
     $h = New-TestHome -Settings $Settings
     $env:HORDE_HOME = $h
     $id = New-HordeRelayMachineIdentity -HordeHome $h -Provider "software"
@@ -150,7 +150,7 @@ try {
     $t = Invoke-Tick $W
     $mail2 = @(Get-NewMail $W -Phone $phone2)
     Check ($mail2.Count -eq 1 -and $mail2[0].ok -and (Get-Texts $mail2) -like "the cards are merged*" -and @($mail2[0].to).Count -eq 1 -and $mail2[0].to[0] -ceq (Get-HordeRelayKeyId -Public $phone2.agreePublic)) ("a phone key trusted since is sent the newest notices, to it alone (" + (Said $t) + ")")
-    $K = New-World -Settings '{"keepEnvelopes": 2, "backfillNotices": 50}'
+    $K = New-World -Settings '{"keepEnvelopes": 2, "backfillNotices": 50, "idleLookMs": 0}'
     foreach ($i in 1..4) { $null = Submit-HordeNotify -Sender (Proven "E") -Text ("n" + $i) -HordeHome $K.home; $null = Invoke-Tick $K }
     $held = @(Get-NewMail $K -All)
     Check ($held.Count -eq 2 -and (Get-Texts $held) -ceq "n3|n4") ("with keepEnvelopes 2 the phone's mailbox holds this machine's last two envelopes of notices (" + (Get-Texts $held) + ")")
@@ -245,6 +245,30 @@ try {
     $P.ctx = (New-HordeRelayRunContext -HordeHome $P.home -Connection $P.conn).value
     $null = Invoke-Tick $P
     Check (@(Get-Notices $P).Count -eq 4 -and @(Get-NewMail $P).Count -eq 0) "a new run on the same home sends nothing again and makes no notice again"
+
+    Write-Host ""
+    Write-Host "--- 4. idle: nothing changed, nothing read; anything to send is a full look ---" -ForegroundColor Cyan
+    $I = New-World -Settings '{"keepEnvelopes": 100, "backfillNotices": 50, "idleLookMs": 600000}'
+    $null = Submit-HordeNotify -Sender (Proven "E") -Text "first" -HordeHome $I.home
+    $null = Invoke-Tick $I
+    $null = @(Get-NewMail $I)
+    $phone3 = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $I.home -Phone $phone3)
+    Add-PhoneKey -HordeHome $I.home -Phone $phone3
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $t = Invoke-Tick $I
+    $sw.Stop()
+    Check (@(Get-NewMail $I -Phone $phone3).Count -eq 0 -and @($t.lines).Count -eq 0) ("IDLE: with nothing changed, a Tick inside idleLookMs reads nothing and sends nothing - a phone key trusted since waits for the next full look (" + $sw.ElapsedMilliseconds + " ms)")
+    $null = Submit-HordeNotify -Sender (Proven "E") -Text "second" -HordeHome $I.home
+    $t = Invoke-Tick $I
+    $mail = @(Get-NewMail $I -Phone $phone3 -All)
+    Check ((Get-Texts $mail) -ceq "first|second" -and (Get-Texts @(Get-NewMail $I)) -ceq "second") ("a new notice is a full look at once: sent to the old key, and the key trusted since gets its backfill (" + (Said $t) + ")")
+    Add-Entry $I "i-1" "an entry" -Lane "E"
+    $null = Set-HordeNoticeFollow -Lane "E" -On $true -At 1000 -Key "k/notices/1/a" -HordeHome $I.home
+    $null = Invoke-Tick $I
+    Add-Entry $I "i-2" "followed while idle" -Lane "E"
+    $null = Invoke-Tick $I
+    Check (@(Get-Notices $I).Count -eq 3 -and @(Get-Notices $I)[-1].entry -ceq "i-2") "a new line in the followed log is a full look at once, and its followed entry a notice"
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin

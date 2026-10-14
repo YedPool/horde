@@ -37,6 +37,9 @@
         @{ Name = "notices-are-sent-again"
            Find = '$newOnes = @($all | Where-Object { $_.n -gt $d.sentN })'
            Replace = '$newOnes = @($all)' }
+        @{ Name = "idle-hides-a-new-notice"
+           Find = 'if ((Get-HordeNoticesChannelFullStamp -Store $mine["store"] -D $d) -ceq $mine.fullStamp) {'
+           Replace = 'if ($true) {' }
         @{ Name = "the-glance-never-sees-a-notice"
            Find = '$changed = ($log -cne $mine.logStamp -or $fol -cne $mine.followStamp)'
            Replace = '$changed = $false' }

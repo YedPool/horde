@@ -52,7 +52,9 @@ $script:HordeNoticesChannelFolder = $PSScriptRoot
 $script:HordeNoticesChannelSettings = New-HordeModuleSettings -Module "relay-notices" -Settings @(
     # 100, as the progress log: what the phone shows is what the mailbox holds.
     @{ name = "keepEnvelopes"; kind = "whole"; default = 100; min = 1; max = 1000; what = "How many of this machine's newest notices envelopes stay in the phone's mailbox." },
-    @{ name = "backfillNotices"; kind = "whole"; default = 50; min = 0; max = 1000; what = "How many of the newest notices a phone key newly trusted is sent." }
+    @{ name = "backfillNotices"; kind = "whole"; default = 50; min = 0; max = 1000; what = "How many of the newest notices a phone key newly trusted is sent." },
+    # 30 s, as the cards look: a phone key trusted since waits at most this for its backfill.
+    @{ name = "idleLookMs"; kind = "whole"; default = 30000; min = 0; max = 600000; what = "How long the channel may go without a full look while nothing it sends has changed, in milliseconds." }
 )
 $script:HordeNoticesChannelFollowMembers = @("lane", "machine", "on", "setId", "v")
 
@@ -258,6 +260,17 @@ function Invoke-HordeNoticesChannelTick {
         $mine.durable = $st.value; $mine.loaded = $true
     }
     $d = $mine.durable
+    # IDLE: NOTHING CHANGED, NOTHING READ. The runner turns about once a second, and a full look reads
+    # three settings files, the trust store, the notices and the switches: with it every turn of
+    # test/test-relay-channels.ps1's run took over its 300 ms minimum turn (measured 2026-10-14, the check
+    # "padded to the minimum turn" failed with no turn padded). So while the notices, the switches and
+    # the followed log are as the last full look found them, and that look is younger than idleLookMs,
+    # the Tick returns at once. What this delays is only a phone key trusted since (its backfill comes at
+    # the next full look); nothing can go to a key revoked since, because a full look - the trust store
+    # read again - comes first whenever there is something to send.
+    if ($mine.ContainsKey("fullStamp") -and @($d.pending).Count -eq 0 -and ([datetime]::UtcNow - $mine.lastFull).TotalMilliseconds -lt $mine.idleLookMs) {
+        if ((Get-HordeNoticesChannelFullStamp -Store $mine["store"] -D $d) -ceq $mine.fullStamp) { return [pscustomobject]@{ lines = @(); failed = $false } }
+    }
     $set = Get-HordeModuleSettings -Declaration $script:HordeNoticesChannelSettings -HordeHome $homeDir
     if ($set.state -ceq "refused") { return (& $once "settings" ("notices are stopped: " + (@($set.findings) -join " ")) $true) }
     $store = Get-HordeNoticeStore -HordeHome $homeDir
@@ -265,6 +278,10 @@ function Invoke-HordeNoticesChannelTick {
     $mine.said.Remove("state"); $mine.said.Remove("settings"); $mine.said.Remove("store")
     $mine.looked = $true
     $mine["store"] = $store.store
+    $mine["idleLookMs"] = [long]$set.values.idleLookMs
+    # What this look starts from: a change after this moment is seen by the next Tick.
+    $mine["fullStamp"] = Get-HordeNoticesChannelFullStamp -Store $store.store -D $d
+    $mine["lastFull"] = [datetime]::UtcNow
     $out = New-Object System.Collections.ArrayList
     $was = ConvertTo-HordeNoticesChannelStateText -State $d
 
@@ -354,6 +371,12 @@ function Get-HordeNoticesChannelStamp {
     # A file's length and last write, as one text: what the Glance compares. "" when it is not there.
     param([string]$Path)
     try { $i = New-Object System.IO.FileInfo -ArgumentList $Path; if (-not $i.Exists) { return "" }; return ("" + $i.Length + "|" + $i.LastWriteTimeUtc.Ticks) } catch { return "" }
+}
+
+function Get-HordeNoticesChannelFullStamp {
+    # The notices, the switches and the followed progress log, as one text (IDLE, in the Tick).
+    param([Parameter(Mandatory = $true)][string]$Store, [Parameter(Mandatory = $true)]$D)
+    return ((Get-HordeNoticesChannelStamp -Path (Get-HordeNoticeLogPath -Store $Store)) + "/" + (Get-HordeNoticesChannelStamp -Path ([System.IO.Path]::Combine($Store, "follows.json"))) + "/" + $(if ("$($D.path)" -cne "") { Get-HordeNoticesChannelStamp -Path $D.path } else { "" }))
 }
 
 function Test-HordeNoticesChannelGlance {
