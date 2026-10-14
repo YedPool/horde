@@ -37,6 +37,10 @@
 #  12. the cards (the founder's phone, 2026-10-14): a real cards envelope from a run is drawn, the Thrall's
 #      card first and one per lane; a touch on the Thrall's card opens the whole log, and on a lane's card
 #      that lane's stream, its area's entries only;
+#  12b. the stream's entries folded (the founder asked, 2026-10-14): each opens as one line, its title and
+#      its day and time, nothing else to be seen and all of one height, a long title cut; a touch opens one
+#      and folds it by its head or title, a button inside does its own thing; one opened stays open while a
+#      new entry redraws the log; leaving the stream forgets; Enter and Space toggle; aria-expanded follows;
 #  13. a relay refusing every read with 401: the entry sent meanwhile is not drawn, and arrives once reads
 #      come back; meanwhile the page says so and keeps saying it, with the sign-in banner and the time of
 #      the last read that worked;
@@ -424,7 +428,10 @@ try {
     $unread0 = $(if ($pw.ok -and $pw.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
     Check ($pw.ok -and $unread0 -gt 20 -and $unread0 -lt 41 -and $pw.value.count -ceq ("" + $unread0 + " new") -and $null -eq $pw.value.mark -and $pw.value.scrollY -eq 0) ("never read before, it opens at its start; what stands on the screen is read, and the tab and the foot count the rest (" + $(if ($pw.ok) { $pw.value.tab } else { "" }) + ")")
     Check ($pw.ok -and [math]::Abs($pw.value.footBottom - $pw.value.innerHeight) -le 1 -and $pw.value.newestInView -and $pw.value.scrollWidth -le $pw.value.innerWidth) "at phone width nothing scrolls sideways, and Jump to newest stands at the foot of the screen"
-    $ro = Invoke-Browser @{ cmd = "progressReadOn"; screens = 5 }
+    # Half a screen, not five halves: folded to one line (section 12b) an entry is about 49 px, so 13 stand on
+    # the first screen and five halves read the whole log, leaving nothing for Jump to newest to jump past
+    # (measured 2026-10-14: 28 new, then 0). The rule of what is seen is unchanged; the entries are shorter.
+    $ro = Invoke-Browser @{ cmd = "progressReadOn"; screens = 1 }
     $unread1 = $(if ($ro.ok -and $ro.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
     Check ($ro.ok -and $unread1 -gt 8 -and $unread1 -lt $unread0 -and $ro.value.newestInView) ("as he reads down, his place moves on with him - " + $unread0 + " new, then " + $unread1 + " - and Jump to newest is still on the screen")
     $jump = Invoke-Browser @{ cmd = "progressTouch"; which = "newest" }
@@ -492,6 +499,89 @@ try {
     $ffTexts = @(); if ($ff.ok) { $ffTexts = @($ff.value.texts) }
     Check ($ff.ok -and $ff.value.streamPage -and $ff.value.title -ceq "F, office-pc" -and $ff.value.items -eq 21 -and @($ffTexts | Where-Object { -not $_.Contains("Form fill") }).Count -eq 0) ("a touch on a lane's card opens that lane's stream: only the entries of its area (" + $(if ($ff.ok) { $ff.value.title + ": " + $ff.value.items + " entries" } else { $ff.reason }) + ")")
     $null = Save-Shot "cards-lane-stream"
+    $null = Invoke-Browser @{ cmd = "streamBack" }
+
+    Write-Host ""
+    Write-Host "--- 12b. a stream's entries start folded to one line, title and time; a tap opens one ---" -ForegroundColor Cyan
+    # The founder, 2026-10-14: "I want the entries in the progress cards to initialize collapsed, showing the
+    # title and the datetime - only expanding if i click on them." Every check of what is shown reads what can
+    # be SEEN (entriesState: checkVisibility and a box of some height): a folded entry still holds its text
+    # and chips in the page, so a check of the DOM alone would pass with everything showing.
+    function Get-PwaEntry($state, $id) { $hit = @(@($state) | Where-Object { $null -ne $_ -and $_.id -ceq $id }); if ($hit.Count -gt 0) { $hit[0] } else { $null } }
+    function Get-PwaEntriesWords($state) { (@($state) | ForEach-Object { $_.id.Substring($_.id.Length - 2) + ":" + $(if ($_.folded) { "folded" } else { "open" }) + "/" + $_.expanded + "/" + $_.height }) -join " " }
+    $null = Invoke-Browser @{ cmd = "cardTouch"; lane = "F" }
+    $es = Invoke-Browser @{ cmd = "entriesState" }
+    $ents = @(); if ($es.ok) { $ents = @($es.value) }
+    Check ($es.ok -and $ents.Count -eq 21 -and @($ents | Where-Object { -not $_.folded -or $_.expanded -cne "false" -or $_.role -cne "button" -or -not $_.focusable }).Count -eq 0) ("the lane's stream opens with every entry folded, its one line a control saying aria-expanded false (" + $(if ($es.ok) { Get-PwaEntriesWords $ents } else { $es.reason }) + ")")
+    Check ($ents.Count -eq 21 -and @($ents | Where-Object { -not $_.titleSeen -or -not $_.whenSeen -or $_.title -ceq "" -or $_.when -cne $_.stamp -or $_.when -cnotmatch '\A[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}\z' }).Count -eq 0) ("each folded line shows its title and the same day and time its head's stamp shows (" + $(if ($ents.Count) { $ents[0].title + " | " + $ents[0].when } else { "" }) + ")")
+    Check ($ents.Count -eq 21 -and @($ents | Where-Object { $_.textSeen -or $_.headSeen }).Count -eq 0) "and nothing else can be seen: no text, no chips"
+    $heights = @($ents | ForEach-Object { $_.height } | Sort-Object -Unique)
+    Check ($ents.Count -eq 21 -and $heights.Count -eq 1 -and $heights[0] -gt 0 -and $heights[0] -le 60) ("every folded entry is one line, all of one height (" + ($heights -join ", ") + " px)")
+    # One entry, touched part by part; its neighbour must not move.
+    $aId = $(if ($ents.Count -ge 4) { $ents[2].id } else { "" })
+    $tw = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "when" }
+    $a = $(if ($tw.ok) { Get-PwaEntry $tw.value $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen -and $a.headSeen) ("CONTROL: the same check of what can be seen finds the text and chips of an entry opened by a touch on its folded line's time (" + $(if ($tw.ok) { Get-PwaEntriesWords @($a) } else { $tw.reason }) + ")")
+    Check ($null -ne $a -and -not $a.whenSeen -and $a.title -ceq $ents[2].title) "open, it is drawn as before: its head's stamp stands for the time, the line's own time is gone"
+    Check ($tw.ok -and @($tw.value | Where-Object { $_.id -cne $aId -and (-not $_.folded -or $_.textSeen) }).Count -eq 0) ("and every other entry stays folded (" + $(if ($tw.ok) { Get-PwaEntriesWords $tw.value } else { "" }) + ")")
+    $stampBefore = $(if ($null -ne $a) { $a.stamp } else { "" })
+    $ts = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "stamp" }
+    $a = $(if ($ts.ok) { Get-PwaEntry $ts.value $aId })
+    Check ($null -ne $a -and $a.stamp -cne $stampBefore -and $a.stamp.Length -gt $stampBefore.Length) ("CONTROL: the touch on the open entry's stamp landed: it shows the exact time (" + $(if ($null -ne $a) { $a.stamp } else { $ts.reason }) + ")")
+    Check ($null -ne $a -and -not $a.folded -and $a.textSeen) "and a button in an open entry does its own thing only: the entry stays open"
+    $null = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "stamp" }
+    $tt = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "text" }
+    $a = $(if ($tt.ok) { Get-PwaEntry $tt.value $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "a touch on an open entry's text leaves it open"
+    $th2 = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "head" }
+    $a = $(if ($th2.ok) { Get-PwaEntry $th2.value $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false" -and -not $a.textSeen -and $a.titleSeen -and $a.whenSeen) "a touch on its head folds it again to its one line"
+    $tl = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "line" }
+    $a = $(if ($tl.ok) { Get-PwaEntry $tl.value $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "a touch on a folded entry's title opens it"
+    $tl = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "line" }
+    $a = $(if ($tl.ok) { Get-PwaEntry $tl.value $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false" -and -not $a.textSeen) "and a touch on an open entry's title folds it"
+    # A NEW ENTRY REBUILDS THE WHOLE LOG (drawProgress): what he opened must survive that.
+    $null = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "line" }
+    $tagged = Invoke-Browser @{ cmd = "entriesTag" }
+    # The longest title an entry may have: a progress title holds 100 characters (channels/progress/Channel.ps1,
+    # relay/js/protocol.js PROGRESS_LIMITS), and a longer one is refused before it reaches the phone (a first
+    # draft of this check wrote 125 and the entry never arrived).
+    $longTitle = "Folded line test: a title of the most a progress entry may hold, far wider than one phone line, okay"
+    Check ($longTitle.Length -eq 100) ("CONTROL: the long title is exactly the most a title may hold (" + $longTitle.Length + " characters)")
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261014T080000Z-78","ts":"2026-10-14T08:00:00Z","kind":"progress","area":"Form fill","title":"' + $longTitle + '","text":"Happened: written while an entry was open."}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $nwe = Invoke-Browser @{ cmd = "progressWait"; text = "Folded line test" }
+    $er = Invoke-Browser @{ cmd = "entriesState" }
+    $after = @(); if ($er.ok) { $after = @($er.value) }
+    $newE = Get-PwaEntry $after "20261014T080000Z-78"
+    $a = Get-PwaEntry $after $aId
+    Check ($run.code -eq 0 -and $nwe.ok -and $nwe.value.found -and $tagged.ok -and $tagged.value -eq 21 -and $after.Count -eq 22 -and $null -ne $newE -and @($after | Where-Object { $_.tagged }).Count -eq 0) ("CONTROL: the new entry arrived and the log was drawn anew: not one entry is a node drawn before it (exit " + $run.code + "; found " + $(if ($nwe.ok) { $nwe.value.found } else { $nwe.reason }) + "; tagged " + $(if ($tagged.ok) { $tagged.value } else { $tagged.reason }) + "; " + $after.Count + " entries)")
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) ("an entry opened before a new entry arrived is still open after the redraw (" + $(if ($er.ok) { Get-PwaEntriesWords $after } else { $er.reason }) + ")")
+    Check ($after.Count -eq 22 -and @($after | Where-Object { $_.id -cne $aId -and (-not $_.folded -or $_.textSeen) }).Count -eq 0) "and the rest, the new one among them, are folded"
+    $shortCut = @($after | Where-Object { $_.folded -and $_.id -cne "20261014T080000Z-78" -and $_.titleCut })
+    Check ($after.Count -eq 22 -and $shortCut.Count -eq 0) "CONTROL: a short title on a folded line is not cut"
+    Check ($null -ne $newE -and $newE.titleCut -and $newE.title -ceq $longTitle -and $newE.whenSeen -and $newE.height -eq $heights[0]) ("a long title is cut at the edge of its one line, its time still shown, and the entry is the height of every other folded one (" + $(if ($null -ne $newE) { "" + $newE.height + " px" } else { "not drawn" }) + ")")
+    $null = Save-Shot "stream-folded"
+    # LEAVING THE STREAM FORGETS: Back to the cards and in again starts folded.
+    $null = Invoke-Browser @{ cmd = "streamBack" }
+    $null = Invoke-Browser @{ cmd = "cardTouch"; lane = "F" }
+    $re = Invoke-Browser @{ cmd = "entriesState" }
+    Check ($re.ok -and @($re.value).Count -eq 22 -and @($re.value | Where-Object { -not $_.folded -or $_.expanded -cne "false" -or $_.textSeen }).Count -eq 0) ("leaving the stream and opening it again starts every entry folded, the one open before as well (" + $(if ($re.ok) { Get-PwaEntriesWords $re.value } else { $re.reason }) + ")")
+    # THE KEYS: Enter and Space on the focused line, as from a keyboard.
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = "Enter" }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "Enter on a folded line opens it, and aria-expanded says true"
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = "Enter" }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false" -and -not $a.textSeen) "Enter again folds it, and aria-expanded says false"
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = " " }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "Space opens it as well"
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = " " }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false") "and folds it"
     $null = Invoke-Browser @{ cmd = "streamBack" }
 
     Write-Host ""
