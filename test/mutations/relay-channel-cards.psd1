@@ -26,8 +26,8 @@
            Find = 'if (@($judged.problems).Count -eq 0) {'
            Replace = 'if ($true) {' }
         @{ Name = "the-broken-rules-not-sent"
-           Find = '; $card.problems = $s.reason }'
-           Replace = ' }' }
+           Find = '{ $card.problems = $s.reason }'
+           Replace = '{ }' }
         @{ Name = "a-standard-record-read-loosely"
            Find = 'foreach ($k in @($judged.fields.Keys)) { $keys[$k] = $judged.fields[$k] }'
            Replace = 'foreach ($k in @()) { }' }
