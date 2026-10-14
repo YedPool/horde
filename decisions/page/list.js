@@ -89,6 +89,12 @@
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
 //
+// WHAT BECAME OF AN ANSWER, WHEN THE HOST KNOWS (the phone, 2026-10-14). A message may carry receipt:
+// the host's own words for what became of it ("sent", "received by PC", "applied"), and receiptNote: a
+// line to show under it (a warning that it waits too long, or a refusal). The mark beside a standing
+// answer says the receipt in place of "saved", and the word a question folds to says it too while the
+// answer is on its way ("Answered, sent"). A host that sends no receipt changes nothing here.
+//
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value). A question or a message may quote
 // anything a session wrote, and none of it is ever read as markup. A message is drawn isolated from
 // the line around it (dir auto), so that direction marks in it cannot reorder anything else.
@@ -109,6 +115,8 @@
     afterClosing: "the question is closed; kept, and it reopens nothing", earlierWording: "said to an earlier wording",
     marks: "this message holds direction or invisible characters"
   };
+  // The receipt that says an answer has arrived for good: folded, it is just Answered.
+  var RECEIPT_DONE = "applied";
   var DRAFTS_KEY = "horde-decisions-drafts-v1";
   // THE ORDERS HE CAN CHOOSE (header, THE ORDER IS HIS): key, the word on its button, and what the
   // button says to a screen reader. The first is the one he gets until he chooses.
@@ -507,6 +515,9 @@
       var s = sent[q.number];
       if (s && s.pending > 0) { return { full: WORDS.saving, short: WORDS.saving, note: "" }; }
       var standing = standingOf(q);
+      if (standing && value === textOf(standing.text) && textOf(standing.receipt)) {
+        return { full: textOf(standing.receipt), short: textOf(standing.receipt), note: textOf(standing.receiptNote) };
+      }
       if (standing && value === textOf(standing.text)) {
         var mark = { full: WORDS.saved, short: WORDS.saved, note: "" };
         if (Array.isArray(standing.unreadBy)) {
@@ -722,18 +733,18 @@
       var isSaved = !!saved && field.value === textOf(saved.text);
       var words = "";
       if (s && s.pending > 0) { words = WORDS.saving; }
-      else if (isSaved) { words = WORDS.saved; }
+      else if (isSaved) { words = textOf(saved.receipt) || WORDS.saved; }
       else if (field.value !== "" && field.value !== partBaseOf(q, { parts: line.parts }, i)) { words = WORDS.draft; }
       var green = isSaved && isGreen(key);
       var folded = isSaved && !green && document.activeElement !== field && !(s && s.pending > 0);
-      row.mark.textContent = folded ? WORDS.answered : words;
+      row.mark.textContent = folded ? foldedWords(saved) : words;
       row.mark.hidden = row.mark.textContent === "";
       row.el.classList.toggle("saved-now", green);
       row.el.classList.toggle("answered", folded);
       row.done.textContent = folded ? textOf(saved.text) : "";
       row.done.hidden = !folded;
-      row.refusal.textContent = (s && s.refusal) ? s.refusal : "";
-      row.refusal.hidden = !(s && s.refusal);
+      row.refusal.textContent = (s && s.refusal) ? s.refusal : (isSaved ? textOf(saved.receiptNote) : "");
+      row.refusal.hidden = row.refusal.textContent === "";
     }
     function refresh(line) {
       // The mark and the refusal of one line, from what is known now. No redraw.
@@ -758,6 +769,13 @@
       line.wrap.classList.toggle("saved-now", green);
       line.wrap.classList.toggle("answered", folded);
       line.done.hidden = !folded;
+      line.done.textContent = line.parts ? WORDS.answered : foldedWords(standingOf(q));
+    }
+    // The word an answered question or part folds to: Answered, and while the host says the answer is
+    // still on its way, what became of it so far (header, WHAT BECAME OF AN ANSWER).
+    function foldedWords(m) {
+      var r = m ? textOf(m.receipt) : "";
+      return (r && r !== RECEIPT_DONE) ? WORDS.answered + ", " + r : WORDS.answered;
     }
     // The caret into a line that is folded to Answered, or into one of its folded parts: unfolded
     // for as long as the caret stays, so that he can still change what he said before it leaves.

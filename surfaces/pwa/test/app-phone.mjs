@@ -28,7 +28,15 @@ const { createBridge } = await load("surface/bridge.js");
 // bridge that do not (a reload drops every unlocked session).
 const store = memoryStore();
 const authenticator = softAuthenticator({ origin, prf: prfFlag === "on" });
-const relay = createRelayClient(folderTransport(relayRoot));
+// A RELAY THAT LOSES ONE PUT (the founder's decisions/16, 2026-10-14): armed by the command lose, the
+// next put is answered as taken and written nowhere - the phone believes it sent, and the machine never
+// sees it.
+const folder = folderTransport(relayRoot);
+let loseNext = false;
+const relay = createRelayClient({ ...folder, put: async (mailbox, key, text) => {
+  if (loseNext) { loseNext = false; return { state: "known", value: { seq: 1, duplicate: false }, reason: "" }; }
+  return folder.put(mailbox, key, text);
+} });
 let phone, bridge;
 function reload() {
   phone = createPhone({ store, authenticator, relay, origin });
@@ -47,6 +55,12 @@ const commands = {
   refresh: (c) => phone.refresh(c.id, { waitMs: c.waitMs || 0 }),
   answer: (c) => phone.answer(c.id, { number: c.number, wordingVersion: c.wordingVersion, text: c.text, answerId: c.answerId }),
   chat: (c) => phone.chat(c.id),
+  answers: (c) => phone.answers(c.id),
+  lose: async () => { loseNext = true; return true; },
+  // Time passing for the outbox only: every kept answer's times moved back by c.ms, so a resend falls
+  // due without the phone's clock running ahead of the machine's (the journal refuses an envelope
+  // more than ten minutes ahead of its own clock).
+  age: async (c) => { await store.update("outbox/" + c.id, (x) => ({ v: 1, items: ((x && x.items) || []).map((i) => ({ ...i, sentAt: i.sentAt - c.ms, lastSentAt: i.lastSentAt - c.ms, lastResendAt: i.lastResendAt ? i.lastResendAt - c.ms : 0 })) })); return true; },
   line: (c) => phone.sendLine(c.id, { text: c.text, messageId: c.messageId }),
   bridge: (c) => bridge.request(c.name, c.args || {}),
   reload: async () => { reload(); return true; },

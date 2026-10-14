@@ -218,10 +218,10 @@
            Find = '  if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part }));'
            Replace = '  if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text }));' }
         @{ Name = "what-a-snapshot-says-of-answers-is-believed-as-it-is"
-           Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };'
-           Replace = '      answers: first.answers };' }
+           Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1,'
+           Replace = '      answers: first.answers,' }
         @{ Name = "every-machine-is-taken-to-read-parts"
-           Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };'
-           Replace = '      answers: 2 };' }
+           Find = '      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1,'
+           Replace = '      answers: 2,' }
     )
 }

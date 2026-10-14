@@ -473,7 +473,10 @@ export function newestSnapshot(pages) {
     const first = ordered[0].page;
     best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood,
       // The highest version of answer the machine says it reads; 1 for a machine whose snapshot says nothing.
-      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };
+      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1,
+      // What became of the founder's answers (receiptFor), as the machine said it; undefined from a
+      // machine before receipts. ts: when the machine signed the snapshot's newest page, 0 if unknown.
+      receipts: first.receipts, ts: Math.max(0, ...ordered.map((p) => (Number.isSafeInteger(p.ts) ? p.ts : 0))) };
   }
   return best;
 }
@@ -569,6 +572,111 @@ export function withDays(items, offsetMinutes) {
     out.push(it);
   }
   return out;
+}
+
+// --- what became of each answer (channels/decisions/Channel.ps1, WHAT BECAME OF EACH ANSWER) ---
+
+// THE FOUNDER'S ANSWERS ARE KEPT ON THE PHONE UNTIL THE PC SAYS THEY ARE APPLIED (the founder, 2026-10-14,
+// relay fixes 3 and 4: the runner was down 2 h 38 min, twenty answers waited, and one never arrived with
+// nothing said). Each answer is in one of these states, shown beside it in these words:
+//   sent       the relay took the put; nothing more is known yet;
+//   received   the PC has journaled an envelope that carried it (its seq at or below the receipt's
+//              through, and not among its missing);
+//   applied    the decisions list wrote the record: the receipt lists its answerId as applied;
+//   refused    the list refused it for good: never sent again.
+// An answer held longer than ANSWER_WARN_MS without being applied or refused carries a warning line.
+export const ANSWER_WORDS = { sent: "sent", received: "received by PC", applied: "applied", refused: "refused by the PC" };
+export const ANSWER_WARNING = "Not confirmed by the PC for over an hour. It stays here, and is sent again until the PC confirms it.";
+export const ANSWER_REFUSED_NOTE = "The PC refused this answer. Answer again if it still stands.";
+// How long an answer may wait unconfirmed before the warning (the outage it answers was 2 h 38 min: an
+// hour says so well inside it); how often one answer is sent again at most; and how long after the
+// answer was last put a receipt from the PC must be before an answer it does not know of counts as
+// lost at the end of the stream (the clocks of the phone and the PC may differ by minutes).
+export const ANSWER_WARN_MS = 60 * 60 * 1000;
+export const ANSWER_RESEND_MS = 10 * 60 * 1000;
+export const ANSWER_TAIL_GRACE_MS = 10 * 60 * 1000;
+const RECEIPT_LIMITS = { streams: 64, ids: 256 };
+
+// The receipt for one passkey (from, its key id) out of a snapshot's receipts member: { through, missing,
+// applied, refused } - missing a Set of seqs, applied and refused Sets of answerIds - or null when the
+// snapshot has no receipts member (a machine from before receipts) or the member does not hold together.
+// A machine with receipts and none for this passkey yet is a receipt of nothing: through 0.
+export function receiptFor(receipts, from) {
+  if (!Array.isArray(receipts) || receipts.length > RECEIPT_LIMITS.streams) return null;
+  const empty = { through: 0, missing: new Set(), applied: new Set(), refused: new Set() };
+  for (const r of receipts) {
+    if (!r || typeof r !== "object" || typeof r.from !== "string" || !KEY_ID.test(r.from)) return null;
+    if (r.from !== from) continue;
+    const seqs = Array.isArray(r.missing) ? r.missing : null;
+    const ids = (x) => Array.isArray(x) && x.length <= RECEIPT_LIMITS.ids && x.every((i) => typeof i === "string" && KEY_ID.test(i));
+    if (!Number.isSafeInteger(r.through) || r.through < 0 || !seqs || seqs.length > RECEIPT_LIMITS.ids || !seqs.every((s) => Number.isSafeInteger(s) && s > 0) || !ids(r.applied) || !ids(r.refused)) return null;
+    return { through: r.through, missing: new Set(seqs), applied: new Set(r.applied), refused: new Set(r.refused) };
+  }
+  return empty;
+}
+
+// What became of one kept answer: { state, resend, due, warning }.
+//   item     { answerId, seqs (the seqs of every envelope that carried it), sentAt, lastSentAt, lastResendAt }
+//   receipt  receiptFor's answer for this phone's passkey
+//   receiptTs  the time the PC signed the snapshot that carried the receipt (its envelope's ts), 0 for none
+// resend says how it is to be sent again, "" for not at all: "resign" - its newest envelope is MISSING
+// (the PC took a later one of this phone, so the journal refuses that seq for good: only a new envelope,
+// signed again, carries it); "reput" - the PC has taken nothing as late as its newest envelope though it
+// spoke well after it was put (lost at the end of the stream: the same envelope is put again, and the
+// relay or the journal drops it if it was not lost after all). due: a resend is wanted and the last
+// send of it is ANSWER_RESEND_MS behind.
+export function answerState(item, receipt, receiptTs, now) {
+  const r = receipt || { through: 0, missing: new Set(), applied: new Set(), refused: new Set() };
+  const seqs = Array.isArray(item.seqs) ? item.seqs : [];
+  let state = "sent";
+  if (r.applied.has(item.answerId)) state = "applied";
+  else if (r.refused.has(item.answerId)) state = "refused";
+  else if (seqs.some((s) => s <= r.through && !r.missing.has(s))) state = "received";
+  let resend = "";
+  if (state === "sent" && receipt && seqs.length) {
+    const newest = Math.max(...seqs);
+    if (r.missing.has(newest)) resend = "resign";
+    else if (newest > r.through && Number(receiptTs) > Number(item.lastSentAt) + ANSWER_TAIL_GRACE_MS) resend = "reput";
+  }
+  const last = Math.max(Number(item.lastSentAt) || 0, Number(item.lastResendAt) || 0);
+  const due = resend !== "" && now - last >= ANSWER_RESEND_MS;
+  const warning = (state === "sent" || state === "received") && now - Number(item.sentAt) > ANSWER_WARN_MS;
+  return { state, resend, due, warning };
+}
+
+// The snapshot's questions with the answers this phone keeps drawn into them (the bridge's list): an
+// answer not yet applied is HIS MESSAGE under its question - so the question shows as answered, with
+// his words, and never as an empty slot (the founder's rule, 2026-10-14) - marked local, with its state
+// in words (receipt) and the warning or the refusal under it (receiptNote). An applied answer is in
+// the snapshot's own thread by then; his last message there with the same words and part is marked
+// applied. answers: [{ number, part, text, state, warning, sentAt }]. Copies; nothing handed in changes.
+export function withAnswers(questions, answers) {
+  const list = Array.isArray(answers) ? answers : [];
+  // Numbered past EVERY message of the list, as the bridge numbers a saved answer (bridge.js, say): the
+  // document then takes a drawn answer for the one it was just told is saved.
+  let top = 0;
+  for (const q of questions || []) for (const m of (q.thread && Array.isArray(q.thread.messages)) ? q.thread.messages : []) { const n = Number(m.sequence); if (Number.isSafeInteger(n) && n > top) top = n; }
+  return (questions || []).map((q) => {
+    const mine = list.filter((a) => a.number === q.number);
+    if (!mine.length) return q;
+    const thread = q.thread && typeof q.thread === "object" ? q.thread : { count: 0, turn: "founder", messages: [] };
+    const messages = (Array.isArray(thread.messages) ? thread.messages : []).map((m) => ({ ...m }));
+    for (const a of mine.filter((x) => x.state === "applied")) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.speaker === "founder" && m.text === a.text && (m.part || "") === (a.part || "")) { messages[i] = { ...m, receipt: ANSWER_WORDS.applied }; break; }
+      }
+    }
+    let k = 0;
+    for (const a of mine.filter((x) => x.state !== "applied").sort((x, y) => x.sentAt - y.sentAt)) {
+      k += 1;
+      const m = { sequence: top + k, speaker: "founder", route: "phone", text: a.text, at: new Date(Number(a.sentAt) || 0).toISOString(), local: true, receipt: ANSWER_WORDS[a.state] || ANSWER_WORDS.sent,
+        receiptNote: a.state === "refused" ? ANSWER_REFUSED_NOTE : (a.warning ? ANSWER_WARNING : "") };
+      if (a.part) m.part = a.part;
+      messages.push(m);
+    }
+    return { ...q, thread: { ...thread, messages } };
+  });
 }
 
 // --- the chat channel (channels/chat/Channel.ps1) ---
