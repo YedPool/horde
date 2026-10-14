@@ -392,7 +392,7 @@ function Get-HordeDecisionWindowFleet {
     # ages every second without changing; compared with its age in whole minutes, the line is redrawn
     # when something was written or a minute turned, not every time it is read.
     $status = Get-HordeFleetStatus
-    $coarse = @($status.orcs | ForEach-Object { "" + $_.folder + "|" + $_.written + "|" + $_.orc + "|" + $_.lane + "|" + $_.doing + "|" + $_.finished + "|" + $_.blocked + "|" + $_.blockedBy + "|" + (@($_.problems) -join ";") + "|" + [Math]::Floor($_.ageSeconds / 60) })
+    $coarse = @($status.orcs | ForEach-Object { "" + $_.folder + "|" + $_.written + "|" + $_.orc + "|" + $_.lane + "|" + $_.doing + "|" + $_.finished + "|" + $(if ($null -ne $_.PSObject.Properties["waitingOn"]) { $_.waitingOn } else { "" }) + "|" + $_.blocked + "|" + $_.blockedBy + "|" + (@($_.problems) -join ";") + "|" + [Math]::Floor($_.ageSeconds / 60) })
     return [pscustomobject]@{ status = $status; signature = ($status.state + "|" + $status.reason + "|" + $status.notRead + "|" + (@($status.findings) -join ";") + "|" + ($coarse -join "`n")) }
 }
 

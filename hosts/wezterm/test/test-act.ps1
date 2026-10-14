@@ -89,6 +89,15 @@ try {
     Check ($r.code -eq 0 -and (Read-HordePaneToolEnv -Path $d4)["HORDE_V"].Length -eq 8192) "CONTROL: a value at the cap arrives whole"
     $r = Invoke-HordeWeztermAct -Rest @("env-dump", (Join-Path $work "n.txt")) -Target $T -Environment @{ "A=B" = "x" }
     Check ($r.code -eq -1 -and $r.err -like "*not an environment variable name*") "a name that is not a variable name is refused"
+
+    Write-Host ""
+    Write-Host "--- a pane's screen is decoded as UTF-8, or no harness finds its box on it (issue #214) ---" -ForegroundColor Cyan
+    $glyphs = ([string][char]0x2500) * 3 + " " + [char]0x276F + " ok"
+    $b64 = [Convert]::ToBase64String((New-Object System.Text.UTF8Encoding($false)).GetBytes($glyphs))
+    $r = Invoke-HordeWeztermAct -Rest @("say", $b64) -Target $T -Utf8
+    Check ($r.code -eq 0 -and $r.out -ceq $glyphs) "with -Utf8 a call's output of U+2500 and U+276F arrives as those characters"
+    $r = Invoke-HordeWeztermAct -Rest @("say", $b64) -Target $T
+    Check ($r.code -eq 0 -and $r.out -cne $glyphs) "CONTROL: without it, the console's code page garbles them (the measured failure)"
 } finally {
     $script:HordeWeztermActExe = $saveExe
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -160,6 +169,28 @@ Check ($r.state -eq "unknown" -and $r.reason -like "*1025 characters*") "a body 
 Check ((Send-HordeWeztermText -Target $T -Handle $H -Text "" -Runner $rec -ProcessStart $alive).state -eq "unknown") "nothing to type and no -Submit is refused"
 $script:calls.Clear()
 Check ((Send-HordeWeztermText -Target $T -Handle "4242.1.17" -Text "x" -Runner $rec -ProcessStart $alive).state -eq "unknown" -and $script:calls.Count -eq 0) "text for a handle of another terminal is refused, and nothing is typed"
+# THE PAUSE BEFORE ENTER (issue #214): between the text and its Enter, never before a lone Enter.
+$script:order = New-Object System.Collections.ArrayList
+$recOrder = { param($rest, $envMap, $target) [void]$script:order.Add("call:" + @($rest)[-1]); $script:reply }
+$napper = { param($ms) [void]$script:order.Add("sleep:" + $ms) }
+$r = Send-HordeWeztermText -Target $T -Handle $H -Text "/exit" -Submit -Runner $recOrder -ProcessStart $alive -Sleep $napper
+Check ($r.state -eq "known" -and ($script:order -join "|") -ceq ("call:/exit|sleep:250|call:" + "`r")) ("the text, then a 250 ms pause, then Enter (" + (($script:order -join "|") -replace "`r", '\r') + ")")
+$script:order.Clear()
+$r = Send-HordeWeztermText -Target $T -Handle $H -Submit -Runner $recOrder -ProcessStart $alive -Sleep $napper
+Check ($r.state -eq "known" -and ($script:order -join "|") -ceq ("call:" + "`r")) "a lone Enter is pressed with no pause"
+
+Write-Host ""
+Write-Host "--- read a pane's screen: in the terminal named, the pane named (issue #214) ---" -ForegroundColor Cyan
+$script:calls.Clear()
+$script:reply = [pscustomobject]@{ code = 0; out = "row one`r`nrow two`n"; err = ""; timedOut = $false }
+$r = Read-HordeWeztermScreen -Target $T -Handle $H -Runner $rec -ProcessStart $alive
+Check ($r.state -eq "known" -and (@($r.value)[0..1] -join "|") -ceq "row one|row two" -and (@($script:calls[0]) -join "|") -ceq "get-text|--pane-id|17" -and $script:targetSeen -eq $T) "the screen is the pane's get-text, one string per row, from the terminal named"
+$script:reply = [pscustomobject]@{ code = 1; out = ""; err = "no such pane"; timedOut = $false }
+$r = Read-HordeWeztermScreen -Target $T -Handle $H -Runner $rec -ProcessStart $alive
+Check ($r.state -eq "unknown" -and $r.reason -like "*no such pane*") "a screen the terminal will not give is unknown, never an empty screen"
+$script:calls.Clear()
+Check ((Read-HordeWeztermScreen -Target $T -Handle "4242.1.17" -Runner $rec -ProcessStart $alive).state -eq "unknown" -and $script:calls.Count -eq 0) "a handle of another terminal is refused, and nothing is called"
+$script:reply = [pscustomobject]@{ code = 0; out = ""; err = ""; timedOut = $false }
 
 Write-Host ""
 Write-Host "--- end and check a pane: only with the expected process proven in this terminal ---" -ForegroundColor Cyan
@@ -286,6 +317,7 @@ Write-Host ""
 Write-Host "--- the port ---" -ForegroundColor Cyan
 $a = Get-HordeHostActor -Name "wezterm"
 Check ($a.state -eq "known" -and $null -ne $a.value.own) "the file registers itself as the wezterm host's actor, with a way to name this node's own terminal"
+Check ($null -ne $a.value.text) "and a way to read a pane's screen (issue #214)"
 Check (@(Get-HordeHostActorFiles -Root $root | Where-Object { $_ -like "*\hosts\wezterm\Act.ps1" }).Count -eq 1) "and is found by folder"
 $pp = Join-Path $env:TEMP ("horde-act-profile-" + [guid]::NewGuid().ToString("N"))
 try {

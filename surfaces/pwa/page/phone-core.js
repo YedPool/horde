@@ -101,6 +101,14 @@
 // id and line number of the last entry read (progressRead) - so the log opens where he left it, with
 // how many are new. An id and a number, never a word of the log; read back guarded (progressPosition),
 // so a damaged record is no position. The position only ever moves forward.
+//
+// THE CARDS (channels/cards) come through the same mailbox and the same refresh, machine to phone only:
+// one whole snapshot per machine, of which the session keeps the newest it opened (by its envelope's seq),
+// in memory only. THE FOUNDER RUNS TWO MACHINES, and each is its own pairing here, opening only its own
+// machine's envelopes. So a refresh also offers a cards envelope it cannot open to every other UNLOCKED
+// pairing of the same horde, and cards() merges what all of them hold, by machine name
+// (relay/js/protocol.js, mergeCards). A card's stream is its own pairing's progress log, filtered on the
+// page to its lane with its own machine's map (progress() hands the map over as areas).
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
@@ -130,7 +138,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress() });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
@@ -211,6 +219,22 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
       g.notices.push({ ...r.value, seq: h.seq });
     }
+  }
+
+  // One opened cards envelope into a session's memory (THE CARDS, in the header): the newest by seq stands.
+  function takeCards(e, s, opened, item, anomalies) {
+    if (opened.header.kind !== "snapshot") return;
+    if (s.cards && s.cards.seq >= opened.header.seq) return;
+    const r = P.readCardsSnapshot(opened.body, e.horde, e.machine);
+    if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+    if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " card(s) that do not hold together were left out");
+    s.cards = { entry: e.id, seq: opened.header.seq, value: r.value };
+  }
+  // The other unlocked pairings of e's horde, each with its session: who else may open a cards envelope.
+  async function siblingsOf(e) {
+    const out = [];
+    for (const x of await store.list(ENTRY)) if (x.id !== e.id && x.horde === e.horde && sessions.has(x.id)) out.push({ e: x, s: sessions.get(x.id) });
+    return out;
   }
 
   // Put a sealed pairing response in its offer's mailbox. true when the relay took it; what the relay
@@ -358,6 +382,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const said = [];
       let first = true;
       let restarted = false;
+      const siblings = await siblingsOf(e);
       for (let round = 0; round < 64; round++) {
         const r = (first && waitMs > 0) ? await relay.watch(mailbox, s.cursor, 256, waitMs) : await relay.get(mailbox, s.cursor, 256);
         first = false;
@@ -382,7 +407,16 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           const o = await P.openEnvelope(item.text, { keyId: e.machine, signPublic: P.unb64u(e.machineSignPublic) }, { privateKey: s.privateKey, publicPoint: s.publicPoint });
           // Another machine's envelope, or one sealed to another phone key, is not an anomaly: the
           // mailbox is the horde's. A forged or broken one from "this" machine is.
-          if (!o.ok) { if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") anomalies.push("item " + item.seq + ": " + o.reason); continue; }
+          if (!o.ok) {
+            if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") { anomalies.push("item " + item.seq + ": " + o.reason); continue; }
+            // ANOTHER MACHINE OF THIS HORDE: its cards, opened by its own pairing (THE CARDS, in the header).
+            for (const x of siblings) {
+              const so = await P.openEnvelope(item.text, { keyId: x.e.machine, signPublic: P.unb64u(x.e.machineSignPublic) }, { privateKey: x.s.privateKey, publicPoint: x.s.publicPoint });
+              if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); break; }
+            }
+            continue;
+          }
+          if (o.value.header.channel === "cards") { takeCards(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "chat") { takeChat(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "progress") { takeProgress(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel !== "decisions" || o.value.header.kind !== "snapshot") continue;
@@ -426,7 +460,17 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };
+      return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
+    },
+
+    // The cards of the horde (THE CARDS, in the header): this pairing's and every other unlocked pairing's
+    // of the same horde, merged by machine name - relay/js/protocol.js's mergeCards. Needs an unlocked session.
+    async cards(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const held = [s.cards, ...(await siblingsOf(e)).map((x) => x.s.cards)].filter((x) => x);
+      return { ...P.mergeCards(held), mode: s.mode };
     },
 
     // He has read as far as the entry entryId (or, with none, to the newest): kept on this device, an id
@@ -442,9 +486,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (index > log.readIndex) {
         const read = { id: log.items[index].id, n: log.items[index].n };
         await store.update(ENTRY + id, (x) => { if (!x) throw fail("there is no such horde on this phone"); return { ...x, progressRead: read }; });
-        return { ...P.progressLog({ ...s.progress, position: read }), mode: s.mode };
+        return { ...P.progressLog({ ...s.progress, position: read }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
       }
-      return { ...log, mode: s.mode };
+      return { ...log, mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
     },
 
     // One line of the founder to the Thrall, signed with the passkey (user verification) and put into the

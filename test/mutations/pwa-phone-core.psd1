@@ -22,8 +22,8 @@
            Find = 'return { ...x, progressRead: read }; });'
            Replace = 'return { ...x }; });' }
         @{ Name = "progress-place-not-read-back"
-           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };'
-           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode };' }
+           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };'
+           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };' }
         @{ Name = "progress-notice-not-read"
            Find = 'g.notices.push({ ...r.value, seq: h.seq });'
            Replace = '' }
@@ -119,5 +119,11 @@
         @{ Name = "passkey-error-message-shown"
            Find = 'const name = x && typeof x.name === "string" && /^[A-Za-z]{1,40}$/.test(x.name) ? x.name : "";'
            Replace = 'const name = x ? x.name + ": " + x.message : "";' }
+        @{ Name = "a-cards-envelope-of-a-lower-seq-replaces-the-held-one"
+           Find = 'if (s.cards && s.cards.seq >= opened.header.seq) return;'
+           Replace = '' }
+        @{ Name = "another-machines-cards-not-opened-by-its-pairing"
+           Find = 'if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); break; }'
+           Replace = '' }
     )
 }

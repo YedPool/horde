@@ -49,7 +49,8 @@
 # TYPED TEXT IS ONE LINE OF PRINTABLE TEXT. send-text --no-paste delivers bytes as keystrokes, so a
 # control character in a body - CR, ESC, Ctrl-C, Ctrl-D, or a C1 control such as U+009B, a one-character
 # CSI - would act in the harness. Send refuses every C0 and C1 control character and DEL, caps the length, passes the text after `--` so a body like --help is
-# text and not a flag, and submits only when told to (-Submit), as a separate keystroke.
+# text and not a flag, and submits only when told to (-Submit), as a separate keystroke - after a
+# pause (issue #214, below).
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
@@ -64,6 +65,13 @@ $script:HordeWeztermEnvValueMax = 8192
 # The longest text typed in one call: a wake notice is one line; a body is delivered by the harness's
 # own message channel, never typed (lifecycle step 13).
 $script:HordeWeztermSendMax = 1024
+# THE PAUSE BETWEEN THE TEXT AND ITS ENTER (issue #214): a second guard, never the proof. On 2026-10-13
+# a spawn typed its lines and their Enters back to back and both lines sat unsent in the harness's box
+# until a person pressed Enter. Why the Enter was lost was not measured; a harness that reads a burst of
+# keys as one paste takes an Enter inside it as text. 250 ms is the gap a delivery ladder already in
+# use on these machines leaves before its own Enter; its cost is a quarter second per typed line. The
+# proof that a line was taken is its turn in the session's transcript (core/AgentLaunch.ps1).
+$script:HordeWeztermSubmitPauseMs = 250
 $script:HordeWeztermSocketLeaf = '\Agui-sock-([1-9][0-9]{0,9})\z'
 $script:HordeWeztermHandlePattern = '\A([1-9][0-9]{0,9})\.([0-9]{1,20})\.([0-9]{1,9})\z'
 
@@ -293,7 +301,8 @@ function Invoke-HordeWeztermAct {
     # Run one cli call against -Target. Returns { code; out; err; timedOut }. REFUSED, with no process
     # started, when no terminal is named (see the header). -Environment changes the call's environment,
     # which a spawned pane inherits; then the target's socket is set last, so nothing overrides it.
-    param([Parameter(Mandatory = $true)][string[]]$Rest, $Target, [int]$TimeoutMs = $script:HordeWeztermActTimeoutMs, [hashtable]$Environment = @{})
+    # -Utf8 decodes the call's output as UTF-8 rather than the console's code page (Read-HordeWeztermScreen).
+    param([Parameter(Mandatory = $true)][string[]]$Rest, $Target, [int]$TimeoutMs = $script:HordeWeztermActTimeoutMs, [hashtable]$Environment = @{}, [switch]$Utf8)
     $bad = Test-HordeWeztermTargetShape -Target $Target
     if ($null -ne $bad) { return [pscustomobject]@{ code = -1; out = ""; err = ("refused: " + $bad); timedOut = $false } }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -303,6 +312,7 @@ function Invoke-HordeWeztermAct {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    if ($Utf8) { $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false) }
     try { Set-HordeWeztermActEnvironment -Psi $psi -Environment $Environment } catch { return [pscustomobject]@{ code = -1; out = ""; err = ("refused: " + $_.Exception.Message); timedOut = $false } }
     $psi.EnvironmentVariables["WEZTERM_UNIX_SOCKET"] = "" + $Target.socket
     $p = $null
@@ -382,9 +392,9 @@ function Test-HordeWeztermSendText {
 
 function Send-HordeWeztermText {
     # Type -Text into the pane -Handle of -Target, as keystrokes (--no-paste), after `--` so it is never
-    # read as a flag; then, with -Submit, press Enter as a keystroke of its own. Known $true when the
-    # terminal took all of it; unknown otherwise.
-    param($Target, [Parameter(Mandatory = $true)][string]$Handle, [AllowEmptyString()][string]$Text = "", [switch]$Submit, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null)
+    # read as a flag; then, with -Submit, press Enter as a keystroke of its own, the pause after text.
+    # Known $true when the terminal took all of it; unknown otherwise. -Sleep stands in for the pause.
+    param($Target, [Parameter(Mandatory = $true)][string]$Handle, [AllowEmptyString()][string]$Text = "", [switch]$Submit, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null, [scriptblock]$Sleep = $null)
     $why = Test-HordeWeztermSendText -Text $Text
     if ($null -ne $why) { return (New-HordeUnknown -Reason $why) }
     if ($Text -eq "" -and -not $Submit) { return (New-HordeUnknown -Reason "nothing to type: no text and no -Submit") }
@@ -395,10 +405,26 @@ function Send-HordeWeztermText {
         if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not take the text (exit " + $r.code + "): " + ("" + $r.err).Trim())) }
     }
     if ($Submit) {
+        if ($Text -ne "") { if ($null -ne $Sleep) { & $Sleep $script:HordeWeztermSubmitPauseMs } else { Start-Sleep -Milliseconds $script:HordeWeztermSubmitPauseMs } }
         $r = Invoke-HordeWeztermCall -Rest @("send-text", "--pane-id", $pane.value, "--no-paste", "--", "`r") -Target $Target -Runner $Runner
         if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not take Enter (exit " + $r.code + "): " + ("" + $r.err).Trim())) }
     }
     return (New-HordeKnown -Value $true)
+}
+
+function Read-HordeWeztermScreen {
+    # The port's Text: the visible screen of pane -Handle of -Target, one string per row, as an answer.
+    # get-text answers in UTF-8, and is decoded as UTF-8 here: decoded with the console's OEM code page
+    # a box rule U+2500 came back as three characters (measured 2026-09-15), so no harness could find
+    # its input box on the screen.
+    param($Target, [Parameter(Mandatory = $true)][string]$Handle, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null)
+    $pane = Resolve-HordeWeztermHandle -Target $Target -Handle $Handle -ProcessStart $ProcessStart
+    if ($pane.state -ne "known") { return $pane }
+    $rest = @("get-text", "--pane-id", $pane.value)
+    $r = $null
+    if ($null -ne $Runner) { $r = & $Runner $rest @{} $Target } else { $r = Invoke-HordeWeztermAct -Rest $rest -Target $Target -Utf8 }
+    if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not give the pane's text (exit " + $r.code + "): " + ("" + $r.err).Trim())) }
+    return (New-HordeKnown -Value ([string[]]@(("" + $r.out) -split "`r?`n")))
 }
 
 function Read-HordeWeztermPaneList {
@@ -587,4 +613,5 @@ Register-HordeHostActor -Name "wezterm" `
     -Start { param($target, $prog, $argv, $cwd, $envMap) if ($null -eq $envMap) { $envMap = @{} }; Start-HordeWeztermPane -Target $target -Program $prog -Argv $argv -Cwd $cwd -Environment $envMap } `
     -Send { param($target, $h, $t, $submit) Send-HordeWeztermText -Target $target -Handle $h -Text $t -Submit:([bool]$submit) } `
     -Live { param($target, $h, $expect) Test-HordeWeztermPaneLive -Target $target -Handle $h -Expect $expect } `
-    -Stop { param($target, $h, $expect) Stop-HordeWeztermPane -Target $target -Handle $h -Expect $expect }
+    -Stop { param($target, $h, $expect) Stop-HordeWeztermPane -Target $target -Handle $h -Expect $expect } `
+    -Text { param($target, $h) Read-HordeWeztermScreen -Target $target -Handle $h }

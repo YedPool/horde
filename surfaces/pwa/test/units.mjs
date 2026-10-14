@@ -21,6 +21,7 @@ const { createPhone } = await load("app/phone-core.js");
 const AC = await load("app/account-client.js");
 const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
+const LC = await load("app/lane-card.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -1129,6 +1130,118 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check(words === "PC build-box (work) offline since T" + m.lastSeenAt + ". Your answers are kept and will be applied when it is back.", "the banner says the PC's name, the time it was last heard in the phone's own local time, and that the answers are kept", words);
   check(!/lost|deleted|not sent|failed/i.test(words), "and nothing that says an answer is lost");
   check(AC.offlineWords(m, () => "T", { waiting: 3 }).endsWith(" 3 answers are waiting.") && AC.offlineWords(m, () => "T", { waiting: 1 }).endsWith(" 1 answer is waiting.") && AC.offlineWords(m, () => "T", { waiting: 0 }) === AC.offlineWords(m, () => "T"), "the hook for later: a count of answers waiting adds one sentence, and none adds nothing");
+}
+
+// --- 10e. the cards: one snapshot per machine, merged by machine name; a card's stream is its lane's part of the log ---
+const cardsBody = (m, { name, made = "2026-10-13T20:00:00Z", cards = [], areas = [], thrall = {}, left = 0, areasLeft = undefined, hash = P.hex(P.randomBytes(32)) }) => P.utf8(JSON.stringify({ v: 1, kind: "cards-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, made, name,
+  thrall: { asOf: "", now: "", hasStatus: false, orcs: cards.length, working: cards.length, waitingFounder: 0, blocked: 0, unknown: 0, waitingFounderLanes: [], census: null, refused: [], ...thrall }, cards, cardsLeftOut: left, areas, areasLeftOut: areasLeft }));
+const card = (lane, extra = {}) => ({ lane, name: "lane " + lane, form: "standard", asOf: "2026-10-13T19:56:00Z", now: "doing " + lane, lastDone: "did " + lane, waitingOn: "nothing", blocked: "no", blockedText: "", note: "", tasksOpen: 3, doneWeek: 2, refused: [], ...extra });
+async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m, { kind: "snapshot", channel: "cards", body, phones: [phone] }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
+{
+  const t = R.memoryTransport();
+  const m1 = await newMachine("work");
+  const m2 = await newMachine("work");
+  const a = await pairedApp(t, m1);
+  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  await a.phone.announce(p2.id);
+  const k2 = await phoneKeyOf(t, m2);
+  await a.phone.refresh(a.paired.id);
+  const none = await a.phone.cards(a.paired.id);
+  check(none.machines.length === 0 && none.cards.length === 0 && none.thrall.length === 0, "CONTROL: before any machine sends cards there are none, and the page falls back to the whole log", JSON.stringify(none));
+  const areas = [{ area: "Form fill", lanes: ["C"] }, { area: "Horde", lanes: ["C", "E"] }];
+  await sendCards(t, m1, a.phoneKey, cardsBody(m1, { name: "office-pc", cards: [card("E"), card("C", { blocked: "yes", blockedText: "waits for a device" })], areas, thrall: { waitingFounderLanes: ["B"] } }));
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "home-pc", cards: [card("G")], areas: [] }));
+  const first = await a.phone.refresh(a.paired.id);
+  let c = await a.phone.cards(a.paired.id);
+  check(first.anomalies.length === 0 && c.machines.map((x) => x.name).join(",") === "home-pc,office-pc", "TWO MACHINES MERGED: one refresh of ONE pairing shows the cards of both machines of the horde, the other's opened by its own pairing", JSON.stringify({ an: first.anomalies, m: c.machines.map((x) => x.name) }));
+  check(c.cards.map((x) => x.lane + "@" + x.machine).join(",") === "C@office-pc,E@office-pc,G@home-pc" && c.cards.find((x) => x.lane === "G").entry === p2.id && c.cards.find((x) => x.lane === "E").entry === a.paired.id, "each card names its machine and the pairing whose log its stream is, ordered by lane", JSON.stringify(c.cards.map((x) => [x.lane, x.machine, x.entry])));
+  check(c.thrall.length === 2 && c.thrall.find((x) => x.machine === "office-pc").waitingFounderLanes.join(",") === "B", "there is a Thrall card per machine, with that machine's fleet");
+  const cc = c.cards.find((x) => x.lane === "C");
+  check(cc.blocked === "yes" && cc.blockedText === "waits for a device" && cc.tasksOpen === 3 && cc.doneWeek === 2 && cc.asOf === Date.parse("2026-10-13T19:56:00Z"), "a card carries blocked, its words, its task counts and the time its status was written", JSON.stringify(cc));
+  // The same machine name from a newer snapshot of the other pairing replaces it; an older replay does not.
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "office-pc", made: "2026-10-13T21:00:00Z", cards: [card("H")] }));
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.cards(a.paired.id);
+  check(c.machines.length === 1 && c.machines[0].name === "office-pc" && c.machines[0].entry === p2.id && c.cards.map((x) => x.lane).join(",") === "H", "MERGED BY NAME: two pairings that report one machine name show it once, the newest snapshot standing", JSON.stringify(c.machines));
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "home-pc", made: "2026-10-13T22:00:00Z", cards: [card("G")] }));
+  const replay = await machineEnvelope(m1, { kind: "snapshot", channel: "cards", body: cardsBody(m1, { name: "office-pc", made: "2026-10-13T23:00:00Z", cards: [card("OLD")] }), phones: [a.phoneKey], seq: 1 });
+  await t.put("work/phone", replay.key, replay.text);
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.cards(a.paired.id);
+  check(c.cards.every((x) => x.lane !== "OLD"), "a cards envelope of a lower seq than one already held is never shown, whatever time it claims", JSON.stringify(c.cards.map((x) => x.lane)));
+  // Streams: the progress log filtered by lane, with the map of its own machine.
+  await sendProgress(t, m1, a.phoneKey, entriesBody(m1, [entry("s1", 1, { area: "Form fill" }), entry("s2", 2, { area: "Horde", lane: "E,F" }), entry("s3", 3, { area: "This PC" }), entry("s4", 4, { area: "Form fill", lane: "E" }), entry("s5", 5, { area: "HORDE " }), entry("s6", 6)]));
+  await a.phone.refresh(a.paired.id);
+  const g = await a.phone.progress(a.paired.id);
+  check(JSON.stringify(g.areas) === JSON.stringify(areas), "the log comes with its machine's area-to-lane map", JSON.stringify(g.areas));
+  const ids = (lane) => P.laneStream(g.items, lane, g.areas).map((x) => x.id).join(",");
+  check(ids("E") === "s2,s4,s5" && ids("F") === "s2", "AN ENTRY TAGGED FOR TWO LANES shows under both (s2: E,F)", ids("E") + " / " + ids("F"));
+  check(ids("C") === "s1,s5" && ids("E").indexOf("s1") < 0, "AN ENTRY'S OWN LANE WINS OVER ITS AREA: s4 is Form fill but names E, so it shows under E and not under C; and an area is matched with case and outer spaces aside (s5)", ids("C"));
+  check(["B", "C", "E", "F", "G"].every((l) => ids(l).split(",").indexOf("s3") < 0 && ids(l).split(",").indexOf("s6") < 0) && ids("") === "s1,s2,s3,s4,s5,s6", "AN UNTAGGED, UNMAPPED ENTRY shows ONLY in the Thrall's stream, which is the whole log", ids(""));
+  check(P.entryLanes({ lane: " E , F ", area: "Form fill" }, areas).join(",") === "E,F" && P.entryLanes({ lane: "", area: "" }, areas).length === 0 && P.entryLanes({ area: "Horde" }, []).length === 0, "a lane list is split on commas and trimmed; no lane and no area, or no map, is no lane");
+  // The body, read strictly.
+  const other = { horde: "work", keyId: "b".repeat(32) };
+  check(!P.readCardsSnapshot(cardsBody(other, { name: "x" }), "work", m1.keyId).ok && !P.readCardsSnapshot(cardsBody({ horde: "personal", keyId: m1.keyId }, { name: "x" }), "work", m1.keyId).ok && !P.readCardsSnapshot(cardsBody(m1, { name: "" }), "work", m1.keyId).ok && !P.readCardsSnapshot(P.utf8("{"), "work", m1.keyId).ok, "a cards body of another machine or horde, with no machine name, or not JSON, is refused");
+  const bad = P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("ok"), card("bad lane!"), card("Z", { form: "made-up" }), card("Y", { now: "a\u0007bell", tasksOpen: -1 })] }), "work", m1.keyId);
+  check(bad.ok && bad.value.dropped === 2 && bad.value.cards.map((x) => x.lane).join(",") === "ok,Y" && bad.value.cards[1].now === "" && bad.value.cards[1].tasksOpen === null, "a card with a bad lane or form is dropped and counted; a text with a control character is shown as none, a count that is no count as not known", JSON.stringify(bad.value && bad.value.cards));
+  check(P.CARD_FORM_WORDS.other.indexOf("not in the standard form") >= 0 && P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("Q", { form: "unreadable", note: "machine words" })] }), "work", m1.keyId).value.cards[0].note === P.CARD_FORM_WORDS.unreadable, "what a card says of its form is the phone's own sentence, never the machine's words");
+  check(P.ageWords(Date.parse("2026-10-13T19:56:00Z"), Date.parse("2026-10-13T20:00:30Z")) === "4 min ago" && P.ageWords(1000, 1000 + 3 * 3600000) === "3 h ago" && P.ageWords(1000, 1000 + 72 * 3600000) === "3 days ago" && P.ageWords(0, 5) === "" && P.ageWords(5000, 1000) === "just now", "a card's age is said in plain words");
+  check(P.STREAM_LIMIT_WORDS.indexOf("last 100") >= 0, "the stream page says how far back the phone's log goes");
+  // Through the bridge: cards, and another machine's log by its pairing.
+  const br = createBridge(a.phone, { loadKinds: async () => ({}) });
+  const evs = [];
+  br.on("cards-changed", (rec) => evs.push(rec));
+  await br.request("pick", { id: a.paired.id });
+  const rec = await br.request("cards");
+  const of = await br.request("progress", { of: p2.id });
+  check(rec.state === "known" && rec.value.machines.length === 2 && evs.length === 1 && evs[0].state === "known" && of.state === "known" && Array.isArray(of.value.items), "the bridge answers cards, pushes cards-changed with every refresh, and opens another pairing's log for that machine's card");
+  // The machine is sent nothing on this channel.
+  const before = (await t.get(m1.mailbox, 0, 256)).value.items.length;
+  await a.phone.refresh(a.paired.id);
+  check((await t.get(m1.mailbox, 0, 256)).value.items.length === before, "the phone sends nothing on the cards channel");
+  // THE ONE CARD (lane-card.js): a pure render of a lane and one slot, the tap the page's.
+  const fake = () => {
+    // appendChild THROWS on what is not a node, as the page's does ("parameter 1 is not of type 'Node'"): a
+    // stand-in that takes anything cannot see a badge handed in as a number (review of PR 244).
+    const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener(n, f) { this.on[n] = f; } });
+    return { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+  };
+  const dump = (n, skipBadge) => (skipBadge && n.className === "card-badge") ? "<badge>" : n.tag + "." + (n.className || "") + "[" + (n.textContent || "") + "]" + (n.attrs && n.attrs["data-lane"] ? "@" + n.attrs["data-lane"] : "") + "(" + (n.kids || []).map((k) => dump(k, skipBadge)).join("") + ")";
+  const lanesDoc = await a.phone.cards(a.paired.id);
+  const nowMs = Date.parse("2026-10-13T20:00:00Z");
+  const plain = LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs });
+  const doc = fake();
+  const badge = doc.createElement("span"); badge.textContent = "2 open";
+  let opened = null;
+  const filled = LC.renderLaneCard(doc, lanesDoc, "G", { nowMs, badge, onOpen: (o) => { opened = o; } });
+  const slotOf = (n) => n.kids[0].kids.find((k) => k.className === "card-badge");
+  check(plain !== null && filled !== null && dump(plain, true) === dump(filled, true) && slotOf(plain).kids.length === 0 && slotOf(filled).kids[0] === badge, "A PAGE FILLS THE ONE SLOT: the card is the same with and without a badge, and the badge is in its slot", dump(filled, false));
+  check(LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: "3" }) !== null && slotOf(LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: "3" })).textContent === "3", "a badge may be a short text");
+  filled.on.click();
+  check(opened && opened.lane === "G" && opened.machine === "home-pc" && opened.entry === p2.id && typeof plain.on.click === "undefined", "the tap does what the page passed in, told the lane, the machine and the pairing; with nothing passed in a tap does nothing", JSON.stringify(opened));
+  const th = LC.renderLaneCard(fake(), lanesDoc, LC.THRALL_LANE, { machine: "home-pc", nowMs });
+  check(LC.THRALL_LANE === "thrall" && th !== null && th.attrs["data-lane"] === "thrall" && th.className.indexOf("thrall") >= 0 && LC.renderLaneCard(fake(), lanesDoc, "NOPE", { nowMs }) === null, "the Thrall's card is lane thrall; a lane the document does not hold renders nothing");
+  const view = LC.laneCardView(lanesDoc, "G", { nowMs });
+  check(view.title === "G - lane G" && view.from === "home-pc, 4 min ago" && view.lines.map((l) => l.label).join(",") === "Now,Last done,Waiting on,Blocked" && view.stats === "Tasks open 3 - done this week 2", "the card's words: its lane and name, its machine and age, now, last done, waiting on, blocked and the task counts", JSON.stringify(view));
+  // Review of PR 244, the round's additions.
+  check((() => { try { fake().createElement("b").appendChild(3); return false; } catch (x) { return true; } })(), "CONTROL: the stand-in document refuses a number where a node goes, as a browser does");
+  const badgeOf = (b) => { try { const box = LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: b }); return slotOf(box).textContent + "/" + slotOf(box).kids.length; } catch (x) { return "threw: " + x.message; } };
+  check(badgeOf(3) === "3/0" && badgeOf(0) === "0/0" && badgeOf(null) === "/0" && badgeOf("") === "/0", "A BADGE THAT IS A NUMBER is shown as its digits, 0 too; null and empty text leave the slot empty", [badgeOf(3), badgeOf(0), badgeOf(null), badgeOf("")].join(" | "));
+  const bare = { machines: [{ name: "pc", made: 0 }], thrall: [{ machine: "pc", entry: "e", orcs: 2, working: 2, waitingFounder: 0, blocked: 0, unknown: 0, hasStatus: false, census: null }], cards: [] };
+  check((() => { try { const tv = LC.laneCardView(bare, LC.THRALL_LANE, { nowMs }); return tv !== null && tv.lines.every((l) => l.label !== "Waiting on the founder"); } catch (x) { return false; } })(), "a Thrall entry with no list of lanes waiting on the founder draws, with no such line");
+  const dupes = P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("thrall"), card("A"), card("A", { now: "the second A" }), card("B")] }), "work", m1.keyId);
+  check(dupes.ok && dupes.value.dropped === 2 && dupes.value.cards.map((x) => x.lane).join(",") === "A,B" && dupes.value.cards[0].now === "doing A", "ONE ID IS ONE CARD: a lane card with the Thrall's id, and a second card of one id, are dropped and counted; the first stands", JSON.stringify(dupes.value && dupes.value.cards.map((x) => [x.lane, x.now])));
+  const lo = P.readCardsSnapshot(cardsBody(m1, { name: "pc", left: 3, areasLeft: 7 }), "work", m1.keyId);
+  const lom = P.mergeCards([{ entry: "e1", seq: 1, value: lo.value }]);
+  check(lo.ok && lo.value.cardsLeftOut === 3 && lo.value.areasLeftOut === 7 && lom.machines[0].cardsLeftOut === 3 && lom.machines[0].areasLeftOut === 7 && P.readCardsSnapshot(cardsBody(m1, { name: "pc", areasLeft: -2 }), "work", m1.keyId).value.areasLeftOut === 0, "CARDS AND AREAS LEFT OUT are read from the snapshot and carried per machine for the page to say; a count that is no count is none", JSON.stringify(lom.machines));
+  check(P.streamMovesPlace({ entry: "e1", lane: "" }, "e1") && !P.streamMovesPlace({ entry: "e1", lane: "E" }, "e1") && !P.streamMovesPlace({ entry: "e2", lane: "" }, "e1") && !P.streamMovesPlace(null, "e1"), "HIS PLACE MOVES ONLY IN THE WHOLE LOG of the picked pairing: never in a lane's stream, never in another pairing's log, never on the cards page");
+  const twin = P.mergeCards([{ entry: "e1", seq: 1, value: { ...lo.value, name: "pc", made: 1 } }, { entry: "e2", seq: 1, value: { ...lo.value, name: "pc", made: 2 } }]);
+  check(twin.machines.length === 1 && twin.machines[0].entry === "e2", "KNOWN LIMIT: two machines that send one name are merged as one, the newest standing - machines are told apart by the name each is given (its machineName setting), so two must be named apart");
+  a.phone.lock(p2.id);
+  c = await a.phone.cards(a.paired.id);
+  check(c.machines.every((x) => x.entry !== p2.id), "a locked pairing's cards are not shown");
+  a.phone.lock(a.paired.id);
+  check((await throwsAsync(() => a.phone.cards(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no cards");
 }
 
 process.stdout.write("[DONE] " + failures + "\n");
