@@ -532,7 +532,9 @@ function Get-HordeFilesRelayEntryReach {
     }
     elseif ($Path -cmatch '\A[\\/]{2}(?<host>[^\\/]*)') { $hostName = "" + $Matches["host"] }
     elseif ($Path -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }
-    else { return "open" }
+    # NOTHING IS OPENED BY DEFAULT (F's ruling on round 4): a rooted or relative path is neither a
+    # device, a host nor a letter, so which machine it reaches is not told here, and it is refused.
+    if ($null -eq $hostName -and $letter -eq "") { return "untold" }
     # A DRIVE LETTER, read from the system's table letter to letter until it says which host, or
     # that it is a volume of this machine. Eight letters deep, as core/PathText.ps1 follows them.
     for ($hop = 1; $letter -ne "" -and $null -eq $hostName; $hop++) {

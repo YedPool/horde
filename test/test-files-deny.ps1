@@ -1290,6 +1290,11 @@ Check ($byReach.realOwnName -ceq "other") "CONTROL: the made-up NIC address is t
 foreach ($form in $elseSeen.Keys) { Check $elseSeen[$form] ("ANOTHER MACHINE, OR NONE: an entry named by " + $form + " is NEVER OPENED and blocks nothing, not even the very file with -Force") }
 Check ($otherVolumeShared -and $otherVolumeOpened -ge 1) ("ANOTHER VOLUME: an entry that is a share of this machine on another volume is opened (" + $otherVolumeOpened + " calls), and blocks neither an ordinary file nor the file it would have been")
 foreach ($form in $untoldSeen.Keys) { Check $untoldSeen[$form] ("CANNOT BE TOLD: an entry named by " + $form + " refuses every share, -Force or not, and is not opened unless it is this machine") }
+# F's ruling on round 4: NOTHING IS OPENED BY DEFAULT. A rooted or a relative path is neither a device,
+# a host nor a letter; the relay port makes such an entry local before it gets here, so the function is
+# asked directly, the one place that would have said "open".
+foreach ($form in @("\horde-rooted\share\innocent-name.json", "horde-relative\share\innocent-name.json", "/horde-rooted/share/innocent-name.json")) { $r = Get-HordeFilesRelayEntryReach -Path $form; Check ($r -ceq "untold") ("NOTHING OPENED BY DEFAULT: an entry " + $form + " that is no device, host or letter is untold, so every share is refused (" + $r + ")") }
+Check ((Get-HordeFilesRelayEntryReach -Path "\\?\Volume{00000000-0000-0000-0000-000000000000}\x.json") -ceq "open") "CONTROL: a volume by its GUID, on the allow-list, is still opened"
 Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames -ccontains "203.0.113.7") -and -not ($resolvedNames -ccontains "2001:db8::10") -and -not ($resolvedNames -ccontains "0.0.0.0")) ("a name is resolved, and an address written as one is not (asked: " + ($resolvedNames -join ",") + ")")
 Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames | Where-Object { $_ -like "*@*" -or $_.EndsWith(".") })) "a host is resolved cut at its @ and without its trailing dot"
 Check ((Get-HordeFilesHostAddresses -Name "203.0.113.7") -ccontains "203.0.113.7") "CONTROL: the real resolver is back, and answers an address with itself, which sends no query"

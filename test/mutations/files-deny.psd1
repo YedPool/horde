@@ -673,6 +673,9 @@
         @{ Name = "a-device-name-off-the-list-is-opened"
            Find = 'else { return "untold" }'
            Replace = 'else { return "open" }' }
+        @{ Name = "a-path-that-is-no-device-host-or-letter-is-opened"
+           Find = 'if ($null -eq $hostName -and $letter -eq "") { return "untold" }'
+           Replace = 'if ($null -eq $hostName -and $letter -eq "") { return "open" }' }
         @{ Name = "a-volume-by-its-name-is-not-opened"
            Find = '{12}\}(?:[\\/]|\z)'') { return "open" }'
            Replace = '{12}\}(?:[\\/]|\z)'') { return "untold" }' }
