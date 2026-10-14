@@ -617,9 +617,76 @@
         @{ Name = "relay-entry-with-no-local-path-is-not-asked"
            Find = '{ Get-HordeFilesPathIdentity -Path $place.path }'
            Replace = '{ [pscustomobject]@{ state = "absent"; id = "" } }' }
-        @{ Name = "relay-entry-with-no-local-path-refuses-every-share"
-           Find = '$entryIs = $(if (@($where.paths).Count -eq 0) { Get-HordeFilesPathIdentity -Path $place.path }'
-           Replace = '$entryIs = $(if (@($where.paths).Count -eq 0) { [pscustomobject]@{ state = "unknown"; id = "" } }' }
+        @{ Name = "relay-entry-to-this-machine-refuses-every-share"
+           Find = 'elseif ($reach -ceq "open") { Get-HordeFilesPathIdentity -Path $place.path }'
+           Replace = 'elseif ($reach -ceq "open") { [pscustomobject]@{ state = "unknown"; id = "" } }' }
+        # --- only a path to THIS machine is opened, decided by address (round 3 of that review, 2026-10-14) ---
+        @{ Name = "another-machine-is-opened"
+           Find = 'if ((Get-HordeFilesHostReach -HostName $hostName) -ceq "self") { return "open" }'
+           Replace = 'if ($true) { return "open" }' }
+        @{ Name = "this-machine-is-never-opened"
+           Find = '-HostName $hostName) -ceq "self") { return "open" }'
+           Replace = '-HostName $hostName) -ceq "never") { return "open" }' }
+        @{ Name = "another-machine-refuses-every-share"
+           Find = 'else { [pscustomobject]@{ state = "elsewhere"; id = "" } }'
+           Replace = 'else { [pscustomobject]@{ state = "unknown"; id = "" } }' }
+        @{ Name = "what-cannot-be-told-is-opened"
+           Find = 'elseif ($reach -ceq "untold") { [pscustomobject]@{ state = "unknown"; id = "" } }'
+           Replace = 'elseif ($reach -ceq "untold") { Get-HordeFilesPathIdentity -Path $place.path }' }
+        @{ Name = "a-loopback-address-is-another-machine"
+           Find = 'if ([System.Net.IPAddress]::IsLoopback($address)) { return "self" }'
+           Replace = 'if ($false) { return "self" }' }
+        @{ Name = "the-unspecified-address-is-another-machine"
+           Find = 'if ($address.Equals([System.Net.IPAddress]::Any) -or $address.Equals([System.Net.IPAddress]::IPv6Any)) { return "self" }'
+           Replace = 'if ($false) { return "self" }' }
+        @{ Name = "an-own-interface-address-is-another-machine"
+           Find = 'if ($own -ccontains [System.BitConverter]::ToString($address.GetAddressBytes())) { return "self" }'
+           Replace = 'if ($false) { return "self" }' }
+        @{ Name = "an-own-address-is-compared-with-its-zone"
+           Find = 'if ($own -ccontains [System.BitConverter]::ToString($address.GetAddressBytes())) {'
+           Replace = 'if (@(Get-HordeFilesOwnAddresses) -ccontains ("" + $address)) {' }
+        @{ Name = "an-ipv4-address-carried-in-ipv6-is-not-brought-back"
+           Find = 'if ($address.IsIPv4MappedToIPv6) { $address = $address.MapToIPv4() }'
+           Replace = '' }
+        @{ Name = "a-host-is-not-cut-at-its-at"
+           Find = 'if ($name.IndexOf(''@'') -ge 0) { $name = $name.Substring(0, $name.IndexOf(''@'')) }'
+           Replace = '' }
+        @{ Name = "a-host-keeps-its-trailing-dot"
+           Find = 'if ($name.EndsWith(".")) { $name = $name.Substring(0, $name.Length - 1) }'
+           Replace = '' }
+        @{ Name = "an-ipv6-literal-name-is-not-read"
+           Find = 'if ($folded.EndsWith(".ipv6-literal.net")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "an-ipv6-literal-zone-is-not-read"
+           Find = '.Replace(''-'', '':'').Replace(''s'', ''%'')'
+           Replace = '.Replace(''-'', '':'')' }
+        @{ Name = "an-address-written-as-one-is-resolved"
+           Find = '$addresses = @($(if ($null -ne (ConvertTo-HordeFilesAddress -Text $name)) { $name }'
+           Replace = '$addresses = @($(if ($false) { $name }' }
+        @{ Name = "a-plain-unc-host-is-not-read"
+           Find = 'elseif ($Path -cmatch ''\A[\\/]{2}(?<host>[^\\/]*)'') { $hostName = "" + $Matches["host"] }'
+           Replace = 'elseif ($false) { }' }
+        @{ Name = "a-long-unc-host-is-not-read"
+           Find = 'if ($rest -cmatch ''\A[Uu][Nn][Cc](?:[\\/](?<host>[^\\/]*)|\z)'') { $hostName = "" + $Matches["host"] }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "globalroot-is-opened"
+           Find = '(?:[\\/]|\z)'') { return "untold" }'
+           Replace = '(?:[\\/]|\z)'') { return "open" }' }
+        @{ Name = "a-letter-over-a-share-is-not-read"
+           Find = 'if ($target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc]\\(?<host>[^\\]*)'') { $hostName = "" + $Matches["host"] }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "a-mapped-letter-is-not-read"
+           Find = 'elseif ($target -cmatch ''\A\\Device\\[^\\]+\\;[^\\]*\\(?<host>[^\\]*)'') { $hostName = "" + $Matches["host"] }'
+           Replace = 'elseif ($false) { }' }
+        @{ Name = "a-letter-over-a-letter-is-not-followed"
+           Find = 'elseif ($target -cmatch ''\A\\\?\?\\([A-Za-z]):'') { $letter = $Matches[1] }'
+           Replace = 'elseif ($false) { }' }
+        @{ Name = "a-network-letter-without-a-host-is-opened"
+           Find = 'elseif ((Get-HordeNetworkPathRefusal -Path ($letter + ":\")) -ne "") { return "untold" }'
+           Replace = 'elseif ($false) { return "untold" }' }
+        @{ Name = "a-ring-of-letters-is-opened"
+           Find = 'if ($hop -gt 8) { return "untold" }'
+           Replace = 'if ($hop -gt 8) { return "open" }' }
         @{ Name = "unreadable-relay-identity-is-shared"
            Find = 'if ($entryIs.state -ceq "unknown") { return'
            Replace = 'if ($false) { return' }

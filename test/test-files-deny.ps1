@@ -127,7 +127,10 @@ function Test-Refused {
     $r = [pscustomobject]@{ outcome = "threw"; reason = "" }
     try { $r = Invoke-Share -TestHome $TestHome -Path $Path -Force:$Force -Repo $Repo } catch { $r.reason = "$($_.Exception.Message)" }
     $ok = ($r.outcome -ceq "refused" -and $r.reason -like ("*" + $Like + "*") -and ($NotLike -eq "" -or $r.reason -notlike ("*" + $NotLike + "*")) -and (Get-Names $TestHome) -ceq $before)
-    if (-not $ok) { Write-Host ("         got: " + $r.outcome + " - " + $r.reason) -ForegroundColor Red }
+    # The store's names before and after are printed when they differ: round 3 of the review of PR
+    # 238 saw this helper fail once with the right outcome and reason, and not again (2026-10-14).
+    $after = Get-Names $TestHome
+    if (-not $ok) { Write-Host ("         got: " + $r.outcome + " - " + $r.reason + $(if ($after -cne $before) { " (the store before: '" + $before + "'; after: '" + $after + "')" } else { "" })) -ForegroundColor Red }
     return $ok
 }
 function Test-Shared {
@@ -1155,6 +1158,120 @@ Check ($otherIs.state -ceq "ok" -and $otherIs.id.Split(":")[0] -cne $clientIs.id
 $script:entriesA = @([pscustomobject]@{ path = $otherVolume; what = "the sign-in client file" })
 Check (Test-Shared $h $besideClient) "ANOTHER VOLUME: an entry on another volume does not block an ordinary file"
 Check (Test-Shared $h $clientFile -Force) "and not even the file it would have been, which is another file"
+# ONLY A PATH TO THIS MACHINE IS OPENED, DECIDED BY ADDRESS (round 3 of the review of PR 238,
+# 2026-10-14; files/Deny.ps1's header). NO NAME IS RESOLVED AND NOTHING ON THE NETWORK IS OPENED
+# HERE: the three questions the rule asks are answered by this suite, each called exactly as the
+# real one is - which addresses a host resolves to (a table; a name not in it resolves to none),
+# which addresses this machine's interfaces have (made-up ones from the documentation ranges), and
+# which file a path is (a path under a share of the table is asked as the real folder it stands
+# for; every path asked is counted, and anything else is answered "absent" without being opened).
+# The drive letters are the suite's own table, as above: no letter is made.
+#   horde-self-name   192.0.2.10, this machine's made-up IPv4     horde-remote   203.0.113.7
+#   horde-self-six    2001:db8::10, its made-up IPv6              horde-mixed    203.0.113.8 and 127.0.0.1
+#   horde-gone        resolves to nothing                        localhost      ::1 and 127.0.0.1, as measured
+$realOwn = @(Get-HordeFilesOwnAddresses)
+Check ($realOwn -ccontains "127.0.0.1" -and $realOwn -ccontains "::1") ("CONTROL: the real reader of this machine's addresses finds the loopback ones (" + $realOwn.Count + " addresses)")
+$script:realResolve = ${function:Get-HordeFilesHostAddresses}
+$script:realOwnAddresses = ${function:Get-HordeFilesOwnAddresses}
+$script:realOpen = ${function:Get-HordeFilesPathIdentity}
+$script:realLetterTarget3 = ${function:Get-HordeDriveLetterTarget}
+$script:realDriveType3 = ${function:Get-HordeDriveLetterType}
+$script:resolves = @{ "horde-self-name" = @("192.0.2.10"); "horde-self-six" = @("2001:db8::10"); "horde-remote" = @("203.0.113.7"); "horde-mixed" = @("203.0.113.8", "127.0.0.1"); "localhost" = @("::1", "127.0.0.1") }
+$script:resolved = New-Object System.Collections.ArrayList
+$script:opened = New-Object System.Collections.ArrayList
+$script:openAs = @{}
+$script:stands3 = @{ "V" = "\Device\LanmanRedirector\;V:0000000000012345\horde-self-name\share"; "W" = "\Device\LanmanRedirector\;W:0000000000012345\horde-remote\share"
+    "U" = "\??\UNC\horde-self-name\share"; "Y" = "\??\V:\"; "Q" = "\Device\SomeRedirector"; "J" = "\??\K:"; "K" = "\??\J:"; "Z" = "\??\W:\" }
+$script:types3 = @{ "V" = "Network"; "W" = "Network"; "U" = "Network"; "Y" = "NoRootDirectory"; "Q" = "Network"; "J" = "NoRootDirectory"; "K" = "NoRootDirectory"; "Z" = "NoRootDirectory" }
+function Get-HordeFilesHostAddresses {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    [void]$script:resolved.Add($Name)
+    $key = ConvertTo-HordeAsciiLower -Text $Name
+    if ($script:resolves.ContainsKey($key)) { return @($script:resolves[$key]) }
+    return @()
+}
+function Get-HordeFilesOwnAddresses { return @("192.0.2.10", "2001:db8::10", "fe80::10%7") }
+$script:madeUpOwn = ${function:Get-HordeFilesOwnAddresses}
+function Get-HordeFilesPathIdentity {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    [void]$script:opened.Add($Path)
+    foreach ($prefix in $script:openAs.Keys) {
+        if (-not $Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($script:openAs[$prefix] -ceq "unreadable") { return [pscustomobject]@{ state = "unknown"; id = "" } }
+        return (& $script:realOpen -Path ($script:openAs[$prefix] + $Path.Substring($prefix.Length)))
+    }
+    # Anything else on the network, or on a letter of the table, is answered without being opened.
+    if ($Path -cmatch '\A[\\/]{2}' -and $Path -cnotmatch '\A\\\\\?\\[A-Za-z]:\\') { return [pscustomobject]@{ state = "absent"; id = "" } }
+    if ($Path -cmatch '\A([A-Za-z]):' -and $script:stands3.ContainsKey($Matches[1].ToUpperInvariant())) { return [pscustomobject]@{ state = "absent"; id = "" } }
+    return (& $script:realOpen -Path $Path)
+}
+function Get-HordeDriveLetterTarget {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    if ($script:stands3.ContainsKey($Letter.ToUpperInvariant())) { return ("" + $script:stands3[$Letter.ToUpperInvariant()]) }
+    return (& $script:realLetterTarget3 -Letter $Letter)
+}
+function Get-HordeDriveLetterType {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    if ($script:types3.ContainsKey($Letter.ToUpperInvariant())) { return ("" + $script:types3[$Letter.ToUpperInvariant()]) }
+    return (& $script:realDriveType3 -Letter $Letter)
+}
+$selfSeen = @{}
+$elseSeen = @{}
+$untoldSeen = @{}
+$byReach = @{}
+try {
+    # Each share root of the table, and each letter, stands for the relay's real folder when opened.
+    foreach ($root in @("\\horde-self-name\share\", "\\horde-self-six\share\", "\\horde-mixed\share\", "\\192.0.2.10\share\", "\\2001-db8--10.ipv6-literal.net\share\", "\\0.0.0.0\share\", "\\fe80--10s3.ipv6-literal.net\share\",
+        "\\horde-self-name@SSL@443\share\", "\\horde-self-name.\share\", "\\?\UNC\horde-self-six\share\", "\\HORDE-SELF-NAME\share\", "V:\", "U:\", "Y:\", "\\horde-remote\share\", "\\horde-gone\share\", "\\203.0.113.7\share\", "W:\", "Z:\", "\\?\UNC\horde-remote\share\", "\\--ffff-c000-20a.ipv6-literal.net\share\")) { $script:openAs[$root] = $relayDir + "\" }
+    $script:openAs["\\horde-self-name\down\"] = "unreadable"
+    $selfForms = [ordered]@{ "own name (its NIC IPv4)" = "\\horde-self-name\share\"; "own name in capitals" = "\\HORDE-SELF-NAME\share\"; "own name with a trailing dot" = "\\horde-self-name.\share\"
+        "own name as a web share (@SSL@443)" = "\\horde-self-name@SSL@443\share\"; "a name resolving to its NIC IPv6" = "\\horde-self-six\share\"; "the long UNC form of that name" = "\\?\UNC\horde-self-six\share\"
+        "a name of which one address of two is loopback" = "\\horde-mixed\share\"; "its NIC IPv4 written as an address" = "\\192.0.2.10\share\"; "its NIC IPv4 carried in IPv6" = "\\--ffff-c000-20a.ipv6-literal.net\share\"
+        "its NIC IPv6 in the ipv6-literal.net form" = "\\2001-db8--10.ipv6-literal.net\share\"; "its link-local address in another zone" = "\\fe80--10s3.ipv6-literal.net\share\"
+        "the unspecified address" = "\\0.0.0.0\share\"; "a mapped drive letter whose host is this machine" = "V:\"; "a letter defined over a share of this machine" = "U:\"; "a letter that stands for that mapped letter" = "Y:\" }
+    foreach ($form in $selfForms.Keys) {
+        $script:entriesA = @([pscustomobject]@{ path = ($selfForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
+        $script:opened.Clear()
+        $refused = Test-Refused $h $clientFile $sameAsLink -Force
+        $wasOpened = @($script:opened | Where-Object { $_.StartsWith($selfForms[$form], [System.StringComparison]::OrdinalIgnoreCase) }).Count -ge 1
+        $selfSeen[$form] = ($refused -and $wasOpened -and (Test-Shared $h $besideClient -Force))
+    }
+    foreach ($form in @("\\localhost\", "\\127.0.0.1\", "\\0--1.ipv6-literal.net\", "\\0-0-0-0-0-0-0-1.ipv6-literal.net\", ("\\" + [System.Environment]::MachineName.ToLowerInvariant() + "\"))) {
+        $byReach[$form] = Get-HordeFilesHostReach -HostName ($form.Trim('\'))
+    }
+    Set-Item -Path function:Get-HordeFilesOwnAddresses -Value $script:realOwnAddresses
+    try { $byReach.realOwnName = Get-HordeFilesHostReach -HostName "192.0.2.10" } finally { Set-Item -Path function:Get-HordeFilesOwnAddresses -Value $script:madeUpOwn }
+    $elseForms = [ordered]@{ "a host that resolves to another machine" = "\\horde-remote\share\"; "another machine written as an address" = "\\203.0.113.7\share\"; "a host that resolves to nothing" = "\\horde-gone\share\"; "a mapped drive letter whose host is another machine" = "W:\"
+        "the long UNC form of another machine" = "\\?\UNC\horde-remote\share\"; "a letter that stands for that letter" = "Z:\" }
+    foreach ($form in $elseForms.Keys) {
+        $script:entriesA = @([pscustomobject]@{ path = ($elseForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
+        $script:opened.Clear()
+        $elseSeen[$form] = ((Test-Shared $h $clientFile -Force) -and (Test-Shared $h $besideClient) -and @($script:opened | Where-Object { $_.StartsWith($elseForms[$form], [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0)
+    }
+    $untoldForms = [ordered]@{ "this machine with its identity unreadable" = "\\horde-self-name\down\"; "a network drive whose entry shows no host" = "Q:\"; "a ring of letters" = "J:\"; "a device path through GLOBALROOT" = "\\?\GLOBALROOT\Device\Mup\horde-remote\share\" }
+    foreach ($form in $untoldForms.Keys) {
+        $script:entriesA = @([pscustomobject]@{ path = ($untoldForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
+        $script:opened.Clear()
+        $refusedAll = Test-Refused $h $besideClient "which file what the relay 'test-relay-a' calls the sign-in client file" -Force
+        $untoldSeen[$form] = ($refusedAll -and ($form -like "this machine*" -or @($script:opened | Where-Object { $_ -like ($untoldForms[$form] + "*") }).Count -eq 0))
+    }
+    $resolvedNames = @($script:resolved | Select-Object -Unique)
+} finally {
+    Set-Item -Path function:Get-HordeFilesHostAddresses -Value $script:realResolve
+    Set-Item -Path function:Get-HordeFilesOwnAddresses -Value $script:realOwnAddresses
+    Set-Item -Path function:Get-HordeFilesPathIdentity -Value $script:realOpen
+    Set-Item -Path function:Get-HordeDriveLetterTarget -Value $script:realLetterTarget3
+    Set-Item -Path function:Get-HordeDriveLetterType -Value $script:realDriveType3
+}
+foreach ($form in $selfSeen.Keys) { Check $selfSeen[$form] ("THIS MACHINE, BY ADDRESS: an entry named by " + $form + " is opened, and the same file is refused with -Force, while an ordinary file is shared") }
+foreach ($form in @("\\localhost\", "\\127.0.0.1\", "\\0--1.ipv6-literal.net\", "\\0-0-0-0-0-0-0-1.ipv6-literal.net\")) { Check ($byReach[$form] -ceq "self") ("a loopback host, " + $form + ", is this machine (" + $byReach[$form] + ")") }
+Check ($byReach[("\\" + [System.Environment]::MachineName.ToLowerInvariant() + "\")] -ceq "unresolved") "CONTROL: a NAME alone makes nothing this machine - this machine's own name, which the table here does not resolve, is not taken for it by its letters"
+Check ($byReach.realOwnName -ceq "other") "CONTROL: the made-up NIC address is this machine only by the made-up interfaces: the real reader does not have it"
+foreach ($form in $elseSeen.Keys) { Check $elseSeen[$form] ("ANOTHER MACHINE, OR NONE: an entry named by " + $form + " is NEVER OPENED and blocks nothing, not even the very file with -Force") }
+foreach ($form in $untoldSeen.Keys) { Check $untoldSeen[$form] ("CANNOT BE TOLD: an entry named by " + $form + " refuses every share, -Force or not, and is not opened unless it is this machine") }
+Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames -ccontains "203.0.113.7") -and -not ($resolvedNames -ccontains "2001:db8::10") -and -not ($resolvedNames -ccontains "0.0.0.0")) ("a name is resolved, and an address written as one is not (asked: " + ($resolvedNames -join ",") + ")")
+Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames | Where-Object { $_ -like "*@*" -or $_.EndsWith(".") })) "a host is resolved cut at its @ and without its trailing dot"
+Check ((Get-HordeFilesHostAddresses -Name "203.0.113.7") -ccontains "203.0.113.7") "CONTROL: the real resolver is back, and answers an address with itself, which sends no query"
 $script:entriesA = @([pscustomobject]@{ path = $movedClient; what = "the sign-in client file" })
 Check (Test-Refused $h $movedClient $saysRelay -Force) "THE GAP ABOVE, CLOSED BY THE RELAY: the moved client file whose content says nothing is refused once its relay names it, -Force or not"
 $script:entriesA = @([pscustomobject]@{ path = $neverFile; what = "the sign-in client file" })

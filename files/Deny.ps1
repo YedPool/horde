@@ -172,10 +172,42 @@
 #   that is not there, access denied); nothing there refuses nothing, as for a local entry; and
 #   another identity - another file, or another volume, as every file on a real network share is -
 #   refuses nothing.
-#     COST: asking a network path is looking at it. core/PathText.ps1 says why a path a CALLER
-#     wrote is never looked at: opening it sends the user's sign-in to the host it names. This
-#     path is not the caller's: it is the relay's own setting, the file its deploy reads from that
-#     same host. And a host that does not answer costs its time-out on every share, and refuses.
+#   ONLY A PATH TO THIS MACHINE IS OPENED; ANOTHER MACHINE'S IS NEVER OPENED AND BLOCKS NOTHING
+#   (round 3 of that review, 2026-10-14). core/PathText.ps1 says why a path is not opened lightly:
+#   opening a network path sends the user's sign-in to the host it names. And there is no need to:
+#   the shared file is always LOCAL - the store refuses every network path, and the open handle's
+#   own path once more (files/Share.ps1, files/Path.ps1) - so a relay file on another machine can
+#   never be the file being shared. So the entry's host is DECIDED BY ADDRESS, NEVER BY NAME, and
+#   without opening anything:
+#   - THE HOST is taken from \\host\..., //host/... and \\?\UNC\host\... (\\.\ and \??\ as well),
+#     cut at its first @ (host@SSL, host@8080: a web share's) and of one trailing dot, and an
+#     ipv6-literal.net name read back as the address it spells ('-' for ':', 's' for '%').
+#   - IT IS RESOLVED with System.Net.Dns GetHostAddresses, the resolver chain the file sharing
+#     client uses too: a name query, and no sign-in. An address written as one is taken as it is
+#     (measured 2026-10-14: GetHostAddresses("0.0.0.0") throws instead of answering).
+#   - IT IS THIS MACHINE when any address is loopback, or unspecified (0.0.0.0, ::), or is a
+#     unicast address of any interface of this machine, up or down. Then the entry is opened and
+#     compared by identity, as above: an identity that cannot be read refuses every share.
+#     WHY NOT BY NAME: round 3's first rule took localhost, the loopback addresses and this
+#     machine's name. The reviewer measured that this machine's own file is reached as well by its
+#     OWN interface addresses (IPv4 and both IPv6), by the ipv6-literal.net form of them, and by
+#     names such as localhost. and <name>.local, all giving the file's one identity - so under a
+#     name rule that file was shared with -Force. Measured 2026-10-14 here: localhost.,
+#     <name>.local and the machine's name all resolve to its own addresses.
+#   - A HOST THAT DOES NOT RESOLVE blocks nothing: the file sharing client cannot reach it either,
+#     so no file of this machine is behind it. A name query that does not answer costs its time
+#     (1.3 s measured for a made-up name), once a relay entry a share.
+#   - A DRIVE LETTER that is a network drive, or stands for one, is read from the system's table
+#     (QueryDosDevice, core/PathText.ps1), following letter to letter: a share written
+#     \??\UNC\host\... or a mapped drive's redirector entry (\Device\<redirector>\;X:<id>\host\...)
+#     is that host, and is judged as above. A network drive whose entry shows no host, a ring of
+#     letters, and a device path through GLOBALROOT (which reaches any device, the network's among
+#     them) refuse every share: which machine they are cannot be told without opening them.
+#   KNOWN LIMITS of the address rule, each a path to this machine that a name and its addresses do
+#   not show: a DFS name, whose referral may lead back here; a Linux subsystem's 9P share, whose
+#   host is no machine on the network; a server that re-exports a share of this machine; and a DOS
+#   device name other than a drive letter (\\.\NAME\...), defined over a share, which is opened as
+#   a device of this machine.
 #   KNOWN LIMIT: AN ENTRY THAT NAMES A FOLDER is compared as a place (a file under it is refused)
 #   and its identity is a folder's, which no shared file has: a hard link to a file inside it, or
 #   a network path to that folder, is not caught. A relay names its secret FILES; no relay names
@@ -423,6 +455,90 @@ function Resolve-HordeFilesDenyPlace {
     return [pscustomobject]@{ paths = @($known.ToArray()); unknown = $false }
 }
 
+function Get-HordeFilesHostAddresses {
+    # The addresses the host -Name resolves to, as text, or none when it does not resolve. THE ONE
+    # PLACE A HOST IS RESOLVED (the header): a suite replaces this function, called exactly as it
+    # is here, so that no test sends a name query.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    try { return @([System.Net.Dns]::GetHostAddresses($Name) | ForEach-Object { "" + $_ }) } catch { return @() }
+}
+
+function Get-HordeFilesOwnAddresses {
+    # Every unicast address of every interface of this machine, up or down, as text. Read from the
+    # machine's own table: nothing is sent.
+    $own = New-Object System.Collections.ArrayList
+    foreach ($card in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+        foreach ($one in $card.GetIPProperties().UnicastAddresses) { [void]$own.Add("" + $one.Address) }
+    }
+    return @($own.ToArray())
+}
+
+function ConvertTo-HordeFilesAddress {
+    # The address written -Text, an IPv4 one carried in IPv6 brought back to IPv4, or $null when the
+    # text is no address.
+    param([AllowEmptyString()][string]$Text)
+    $address = $null
+    if (-not [System.Net.IPAddress]::TryParse($Text, [ref]$address)) { return $null }
+    if ($address.IsIPv4MappedToIPv6) { $address = $address.MapToIPv4() }
+    return $address
+}
+
+function Get-HordeFilesHostReach {
+    # Which machine the host -HostName of a UNC path is (the header, DECIDED BY ADDRESS): "self",
+    # "other", or "unresolved" when it resolves to nothing. Nothing is opened.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$HostName)
+    $name = $HostName
+    if ($name.IndexOf('@') -ge 0) { $name = $name.Substring(0, $name.IndexOf('@')) }
+    if ($name.EndsWith(".")) { $name = $name.Substring(0, $name.Length - 1) }
+    $folded = ConvertTo-HordeAsciiLower -Text $name
+    if ($folded.EndsWith(".ipv6-literal.net")) { $name = $folded.Substring(0, $folded.Length - 17).Replace('-', ':').Replace('s', '%') }
+    $addresses = @($(if ($null -ne (ConvertTo-HordeFilesAddress -Text $name)) { $name } else { Get-HordeFilesHostAddresses -Name $name }))
+    if ($addresses.Count -eq 0) { return "unresolved" }
+    # Compared by their bytes: a link-local address is one address whatever zone it is written with.
+    $own = @(Get-HordeFilesOwnAddresses | ForEach-Object { ConvertTo-HordeFilesAddress -Text $_ } | Where-Object { $null -ne $_ } | ForEach-Object { [System.BitConverter]::ToString($_.GetAddressBytes()) })
+    foreach ($text in $addresses) {
+        $address = ConvertTo-HordeFilesAddress -Text $text
+        if ($null -eq $address) { continue }
+        if ([System.Net.IPAddress]::IsLoopback($address)) { return "self" }
+        if ($address.Equals([System.Net.IPAddress]::Any) -or $address.Equals([System.Net.IPAddress]::IPv6Any)) { return "self" }
+        if ($own -ccontains [System.BitConverter]::ToString($address.GetAddressBytes())) { return "self" }
+    }
+    return "other"
+}
+
+function Get-HordeFilesRelayEntryReach {
+    # Whether a relay's entry -Path that is no path on this machine's own drives may be opened (the
+    # header, ONLY A PATH TO THIS MACHINE IS OPENED): "open", "elsewhere" (another machine, or none:
+    # never opened, and it blocks nothing), or "untold" (which machine cannot be told: every share
+    # is refused). Nothing is opened here.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $hostName = $null
+    $letter = ""
+    if ($Path -cmatch '\A(?:[\\/]{2}[.?]|\\\?\?)[\\/](?<rest>.*)\z') {
+        $rest = $Matches["rest"]
+        if ($rest -cmatch '\A[Uu][Nn][Cc](?:[\\/](?<host>[^\\/]*)|\z)') { $hostName = "" + $Matches["host"] }
+        elseif ($rest -cmatch '\A[Gg][Ll][Oo][Bb][Aa][Ll][Rr][Oo][Oo][Tt](?:[\\/]|\z)') { return "untold" }
+        elseif ($rest -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }
+        else { return "open" }
+    }
+    elseif ($Path -cmatch '\A[\\/]{2}(?<host>[^\\/]*)') { $hostName = "" + $Matches["host"] }
+    elseif ($Path -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }
+    else { return "open" }
+    # A DRIVE LETTER, read from the system's table letter to letter until it says which host, or
+    # that it is a volume of this machine. Eight letters deep, as core/PathText.ps1 follows them.
+    for ($hop = 1; $letter -ne "" -and $null -eq $hostName; $hop++) {
+        if ($hop -gt 8) { return "untold" }
+        $target = Get-HordeDriveLetterTarget -Letter $letter
+        if ($target -cmatch '\A\\\?\?\\[Uu][Nn][Cc]\\(?<host>[^\\]*)') { $hostName = "" + $Matches["host"] }
+        elseif ($target -cmatch '\A\\Device\\[^\\]+\\;[^\\]*\\(?<host>[^\\]*)') { $hostName = "" + $Matches["host"] }
+        elseif ($target -cmatch '\A\\\?\?\\([A-Za-z]):') { $letter = $Matches[1] }
+        elseif ((Get-HordeNetworkPathRefusal -Path ($letter + ":\")) -ne "") { return "untold" }
+        else { return "open" }
+    }
+    if ((Get-HordeFilesHostReach -HostName $hostName) -ceq "self") { return "open" }
+    return "elsewhere"
+}
+
 function Get-HordeFilesHarnessFile {
     # The declared root that makes the file at -FinalPath a harness's own file, or "" when none
     # does: one of -Known, the paths a root is known by (Resolve-HordeFilesDenyPlace), that IS A
@@ -535,12 +651,14 @@ function Get-HordeFilesDenyRefusal {
             }
             # A RELAY'S FILE BY WHICH FILE IT IS (the header): where it is there, the same file under
             # another name is refused. An entry with no local path is asked by the path it was
-            # named by, network and device paths too: which file it is cannot be told refuses every
-            # share, and another file - on another volume, as a network share's files are - refuses
-            # nothing.
+            # named by when that path leads to THIS machine, and never opened when it leads to
+            # another, which holds no file that is shared: which file it is cannot be told refuses
+            # every share, and another file - on another volume, as a network share's files are -
+            # refuses nothing.
             if ($place.kind -ceq "relay") {
                 $itsWords = "what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "')"
-                $entryIs = $(if (@($where.paths).Count -eq 0) { Get-HordeFilesPathIdentity -Path $place.path } else { Get-HordeFilesPathIdentity -Path ("\\?\" + $where.paths[0]) })
+                $reach = $(if (@($where.paths).Count -eq 0) { Get-HordeFilesRelayEntryReach -Path $place.path } else { "local" })
+                $entryIs = $(if ($reach -ceq "local") { Get-HordeFilesPathIdentity -Path ("\\?\" + $where.paths[0]) } elseif ($reach -ceq "open") { Get-HordeFilesPathIdentity -Path $place.path } elseif ($reach -ceq "untold") { [pscustomobject]@{ state = "unknown"; id = "" } } else { [pscustomobject]@{ state = "elsewhere"; id = "" } })
                 if ($entryIs.state -ceq "unknown") { return ("which file " + $itsWords + " is could not be told, so whether '" + $FinalPath + "' is that file cannot be told either" + $never) }
                 if ($entryIs.state -ceq "ok") {
                     if ($null -eq $sharedIs) {
