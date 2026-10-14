@@ -72,12 +72,14 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 }
 // answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
 // says nothing of them, as every machine's did before a part could be answered by itself.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined } = {}) {
+// ranks: 1 from a machine that takes a change of rank from the phone (channels/decisions); left out, as
+// every machine's was before the founder's little buttons.
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined, ranks = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(receipts === undefined ? {} : { receipts }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(ranks === undefined ? {} : { ranks }), ...(receipts === undefined ? {} : { receipts }) })));
   }
   return out;
 }
@@ -1855,6 +1857,60 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
   const full = await throwsAsync(() => phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "One too many.", answerId: P.hex(P.randomBytes(16)) }));
   check(full.indexOf("Not sent") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await kept()).length === 200, "A FULL OUTBOX REFUSES THE NEW ANSWER, saying why, and drops none of the 200 still waiting", full);
+}
+
+// --- 16. HIS LITTLE BUTTONS: a change of rank, signed and sent like an answer, done when the PC says (the founder, 2026-10-14) ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const { phone, paired, phoneKey } = await pairedApp(t, m);
+  const lastToMachine = async () => { const items = (await t.get(m.mailbox, 0, 256)).value.items; const o = await machineOpens(m, items[items.length - 1].text); return { ...o, key: items[items.length - 1].key }; };
+  const base = { rankId: P.hex(P.randomBytes(16)), machine: m.keyId, snapshot: m.keyId + "/decisions/1/" + "0".repeat(24), number: 4 };
+  const body = JSON.parse(P.fromUtf8(P.rankBody({ ...base, which: "blocks", level: "none" })));
+  check(Object.keys(body).join(",") === "v,rankId,machine,snapshot,number,blocks" && body.v === 1 && body.blocks === "none" && !("text" in body) && !("answerId" in body), "the rank body holds a change of rank's members and one word - never an answer's", JSON.stringify(body));
+  for (const [which, level] of [["importance", "urgent"], ["blocks", "high"], ["title", "x"], ["__proto__", "high"], ["importance", ""]]) {
+    check((await throwsAsync(async () => P.rankBody({ ...base, which, level }))).indexOf("importance (high, normal or low) or blocks (all, part or none)") >= 0, "the protocol makes no rank body for " + which + " " + JSON.stringify(level));
+  }
+  // A MACHINE THAT DOES NOT SAY IT TAKES ONE is never sent one: its gate would refuse the kind.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?")], { answers: 2, receipts: [] });
+  await phone.refresh(paired.id);
+  const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const old = await throwsAsync(() => phone.rank(paired.id, { number: 1, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) }));
+  check(old.indexOf("does not take a change of rank") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore, "to a machine whose snapshot does not say ranks, nothing is sent, and he is told to change it at the PC", old);
+  // A MACHINE THAT DOES: one envelope of kind rank, signed by the passkey, bound to the page of the question.
+  const sent = await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?")], { answers: 2, receipts: [], ranks: 1 });
+  await phone.refresh(paired.id);
+  const rid = P.hex(P.randomBytes(16));
+  await phone.rank(paired.id, { number: 2, which: "importance", level: "high", rankId: rid });
+  const got = await lastToMachine();
+  check(got.header.channel === "decisions" && got.header.kind === "rank" && got.sig.alg === "webauthn.get" && got.body.rankId === rid && got.body.number === 2 && got.body.importance === "high" && got.body.machine === m.keyId && got.body.snapshot === sent[0].key, "a tap is one envelope on channel decisions, kind rank, signed by the passkey, naming the snapshot page that carried the question", JSON.stringify(got.body));
+  const notThere = await throwsAsync(() => phone.rank(paired.id, { number: 9, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) }));
+  check(notThere.indexOf("not in the snapshot") >= 0, "a question the snapshot does not hold is not ranked", notThere);
+  // THE BRIDGE answers a tap once the PC has said: applied (the snapshot then shows the new level), or refused.
+  const bridge = createBridge(phone, { loadKinds: async () => ({}) });
+  const lists = [];
+  bridge.on("list-changed", (r) => lists.push(r));
+  await bridge.request("pick", { id: paired.id });
+  let settled = null;
+  const rid2 = P.hex(P.randomBytes(16));
+  const pending = bridge.request("rank", { number: 1, which: "blocks", level: "all", id: rid2 }).then((r) => { settled = r; });
+  await new Promise((r) => setTimeout(r, 30));
+  check(settled === null, "CONTROL: sent, and nothing said by the PC yet, the tap is not answered");
+  // The receipt of this phone's passkey: the key id its envelopes are from.
+  const me = { from: got.header.from, through: 3, checked: 1, missing: [], applied: [rid2], refused: [] };
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [me], ranks: 1 });
+  await bridge.request("refresh", {});
+  await pending;
+  const lastList = lists[lists.length - 1];
+  check(settled && settled.ok === true && lastList.value.questions.find((q) => q.number === 1).blocks === "all", "once the receipt lists it applied, the tap is answered done - and the list pushed before it already holds the new level", JSON.stringify(settled));
+  const rid3 = P.hex(P.randomBytes(16));
+  const refusedP = bridge.request("rank", { number: 2, which: "importance", level: "low", id: rid3 });
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [{ ...me, through: 4, applied: [rid2], refused: [rid3] }], ranks: 1 });
+  await bridge.request("refresh", {});
+  const refused = await refusedP;
+  check(refused.ok === false && refused.reason.indexOf("The PC refused this change") >= 0, "once the receipt lists it refused, the tap is answered not changed, in the phone's own words", JSON.stringify(refused));
+  const oldBridge = await bridge.request("rank", { number: 2, which: "importance", level: "sideways", id: P.hex(P.randomBytes(16)) });
+  check(oldBridge.ok === false && oldBridge.reason.indexOf("importance (high, normal or low)") >= 0, "a level that is none of the list's is refused before anything is signed", JSON.stringify(oldBridge));
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

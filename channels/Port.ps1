@@ -5,7 +5,7 @@
 # channel (relay/Envelope.ps1's header): decisions today, chat later. A channel is a folder,
 # channels/<name>/, holding Channel.ps1, which calls Register-HordeRelayChannel with:
 #   name      the envelope channel it owns, one lower-case word;
-#   kinds     the envelope kinds it takes IN on that channel (decisions: answer). Anything else on it is
+#   kinds     the envelope kinds it takes IN on that channel (decisions: answer, rank). Anything else on it is
 #             refused before the journal records it;
 #   senders   who may send it those kinds: "founder" - the founder's trusted passkeys only - or
 #             "horde" - any trusted sender, passkey or peer machine. relay/Trust.ps1 decides who is

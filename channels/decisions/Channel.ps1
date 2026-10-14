@@ -161,6 +161,35 @@
 # (retry), never pass unguarded.
 # PAST 16 PASSKEYS the phones the snapshot is sealed to come first, then the most recently active.
 #
+# A CHANGE OF RANK FROM THE PHONE IS A COMMAND, AND IS SENT LIKE AN ANSWER (the founder, 2026-10-14: "I
+# want to be able to change importance level and blockingness level by clicking on a little button next
+# to a decision to change it"). IN, kind rank, from the founder's trusted passkeys only - the same gate,
+# the same journal, the same seq and replay rules as an answer (channels/Port.ps1). The body:
+#   {"v":1,"rankId":"<32 hex>","machine":"<32 hex>","snapshot":"<replay key>","number":<question>,
+#    "importance":"<high, normal or low>"}   - or "blocks":"<all, part or none>", or both
+# read strictly - no member repeated, none missing, none added, at least one of the two words, each a
+# word of its closed list (decisions/Rules.ps1). machine and snapshot bind it to THIS machine and a
+# snapshot it sent, as an answer's do.
+#   - A RANK IS NEVER AN ANSWER AND AN ANSWER NEVER A RANK. The kind is in the envelope's signed header
+#     and Accept is chosen by it: a kind this channel does not name is refused by name. The two bodies
+#     cannot pass for each other either: an answer's reader wants answerId and text, a rank's reader
+#     wants rankId and refuses text. The request id has its own domain:
+#       id = the first 16 bytes of SHA-256("horde-relay/decisions/v1 rank id" LF <sender key id> LF <rankId>)
+#     so a rankId that happens to equal an answerId can never name that answer's record.
+#   - IT IS APPLIED BY THE OPERATION rank, AS THE FOUNDER - the one `horde decisions rank` asks - ONLY TO
+#     A QUESTION THAT IS STILL HIS TO ANSWER: open, and his turn. A closed question is refused by the
+#     list itself; one he has answered (the turn is the keeper's, and the question has left his list) is
+#     refused here, by name.
+#   - A STALE RANK NEVER WINS (the rule of PR 268 for answers): a change signed before the newest change
+#     of rank of that question already in the store - whatever its route, the window, the command line or
+#     this phone - is refused as superseded. A change from another route counts at the time the store
+#     recorded it; one from this phone at the time its passkey signed it, which this channel keeps in its
+#     ledger (rankedAt, by the record's sequence: the record itself holds only the words), so two taps
+#     on the phone a moment apart stand in the order he made them.
+#   - WHAT BECAME OF IT goes back in the receipts, by rankId, beside the answers' ids: applied or refused.
+#     The phone shows the new level once the snapshot holds it, and a refusal in its own words.
+# done, refused and retry as for an answer.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Operations.ps1")
@@ -175,6 +204,13 @@ $script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snap
 $script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }
 $script:HordeDecisionsChannelAnswerHighest = 2
 $script:HordeDecisionsChannelIdDomain = "horde-relay/decisions/v1 answer id"
+# A CHANGE OF RANK (the header): its members, its id's own domain, and the words of each of its two
+# members, which are decisions/Rules.ps1's closed lists, asked of the rules and written nowhere here.
+$script:HordeDecisionsChannelRankMembers = @("v", "rankId", "machine", "snapshot", "number")
+$script:HordeDecisionsChannelRankWords = @("importance", "blocks")
+$script:HordeDecisionsChannelRankIdDomain = "horde-relay/decisions/v1 rank id"
+# How many of this phone's changes of rank the ledger keeps the signing time of (rankedAt): the newest 64.
+$script:HordeDecisionsChannelRankedKept = 64
 # For a test only: the seat and the clock the bell's turn is handed (decisions/Notify.ps1). $null, as it
 # is everywhere but in a suite, means the real warchief's seat and the real time.
 $script:HordeDecisionsChannelBellSeat = $null
@@ -190,9 +226,10 @@ $script:HordeDecisionsChannelReceiptsLookBack = 4096
 $script:HordeDecisionsChannelReceiptsStreams = 16
 
 function Get-HordeDecisionsChannelAnswerId {
-    # The decisions request id of one answer (the header): 32 lower-case hex.
-    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$AnswerId)
-    $h = Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ($script:HordeDecisionsChannelIdDomain + "`n" + $From + "`n" + $AnswerId))
+    # The decisions request id of one answer (the header): 32 lower-case hex. -Domain: another kind's own
+    # (a change of rank's), so that two kinds can never share a request id.
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$AnswerId, [string]$Domain = $script:HordeDecisionsChannelIdDomain)
+    $h = Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ($Domain + "`n" + $From + "`n" + $AnswerId))
     $first = New-Object byte[] 16
     [System.Array]::Copy($h, 0, $first, 0, 16)
     return (ConvertTo-HordeRelayHex -Bytes $first)
@@ -238,6 +275,9 @@ function Invoke-HordeDecisionsChannelAccept {
     # One opened answer into the decisions list (IN, in the header), and what became of it into the
     # receipts' ledger by its answerId (WHAT BECAME OF EACH ANSWER). { outcome; reason }.
     param($Context, $Item)
+    # BY THE ENVELOPE'S OWN KIND, which its signature covers (the header, A RANK IS NEVER AN ANSWER).
+    if ("$($Item.kind)" -ceq "rank") { return (Invoke-HordeDecisionsChannelRankAccept -Context $Context -Item $Item) }
+    if ("$($Item.kind)" -cne "answer") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions channel takes an answer or a rank, not a " + $Item.kind) } }
     $r = Read-HordeDecisionsChannelAnswer -Body $Item.body
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = $r.reason } }
     $out = Invoke-HordeDecisionsChannelApply -Context $Context -Item $Item -Answer $r
@@ -247,16 +287,26 @@ function Invoke-HordeDecisionsChannelAccept {
     return $out
 }
 
+function Test-HordeDecisionsChannelBound {
+    # Is what the phone sent bound to THIS machine and a snapshot it sent (the header, AN ANSWER IS FOR ONE
+    # MACHINE)? $null when it is; else the outcome { outcome; reason } - refused, or retry when the journal
+    # cannot say. -What names it in the reason: "the answer", "the change of rank".
+    param($Context, [string]$Machine, [string]$Snapshot, [string]$What)
+    if ($Machine -cne $Context.signKeyId) { return [pscustomobject]@{ outcome = "refused"; reason = ($What + " is for another machine (" + $Machine + "), not this one (" + $Context.signKeyId + ")") } }
+    $made = Test-HordeRelayJournalSent -Key $Snapshot -HordeHome $Context.hordeHome
+    if ($made.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("the journal cannot say whether this machine sent the snapshot " + $What + " names: " + $made.reason) } }
+    if (-not $made.value.sent -or $made.value.kind -cne "snapshot" -or -not $Snapshot.StartsWith($Context.signKeyId + "/decisions/")) {
+        return [pscustomobject]@{ outcome = "refused"; reason = ("the snapshot " + $What + " names (" + $Snapshot + ") is not a snapshot this machine sent") }
+    }
+    return $null
+}
+
 function Invoke-HordeDecisionsChannelApply {
     # The answer -Answer (Read-HordeDecisionsChannelAnswer's, ok) into the decisions list. { outcome; reason }.
     param($Context, $Item, $Answer)
     $r = $Answer
-    if ($r.value.machine -cne $Context.signKeyId) { return [pscustomobject]@{ outcome = "refused"; reason = ("the answer is for another machine (" + $r.value.machine + "), not this one (" + $Context.signKeyId + ")") } }
-    $made = Test-HordeRelayJournalSent -Key $r.value.snapshot -HordeHome $Context.hordeHome
-    if ($made.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("the journal cannot say whether this machine sent the snapshot the answer names: " + $made.reason) } }
-    if (-not $made.value.sent -or $made.value.kind -cne "snapshot" -or -not $r.value.snapshot.StartsWith($Context.signKeyId + "/decisions/")) {
-        return [pscustomobject]@{ outcome = "refused"; reason = ("the snapshot the answer names (" + $r.value.snapshot + ") is not a snapshot this machine sent") }
-    }
+    $unbound = Test-HordeDecisionsChannelBound -Context $Context -Machine $r.value.machine -Snapshot $r.value.snapshot -What "the answer"
+    if ($null -ne $unbound) { return $unbound }
     # A STALE ANSWER NEVER WINS (the header): checked against the store, whatever route answered last.
     $older = Test-HordeDecisionsChannelSuperseded -Context $Context -From $Item.from -Answer $r.value -SignedAt ([long]$Item.ts)
     if ($older.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("whether a newer answer to it is already in the list cannot be said now: " + $older.reason) } }
@@ -277,6 +327,109 @@ function Invoke-HordeDecisionsChannelApply {
     if ($a.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + $a.reason) } }
     if ($a.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + (@($a.value.findings) -join "; ")) } }
     return [pscustomobject]@{ outcome = "done"; reason = ("question " + $r.value.number + $(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" }) + ": the founder's answer is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
+}
+
+# --- A CHANGE OF RANK FROM THE PHONE (the header) ---
+
+function Read-HordeDecisionsChannelRank {
+    # The phone's rank body, read strictly: { ok; reason; value } with value { rankId; machine; snapshot;
+    # number; words } - words an ordered table of the one or two words it changes (importance, blocks).
+    # Never throws for the body, as Read-HordeDecisionsChannelAnswer does not.
+    param([AllowEmptyCollection()][byte[]]$Body)
+    $fail = [pscustomobject]@{ ok = $false; reason = ""; value = $null }
+    $strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
+    try { $text = $strict.GetString($Body) } catch { $fail.reason = "the change of rank is not UTF-8"; return $fail }
+    if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the change of rank is not a JSON object"; return $fail }
+    $dups = @(Find-HordeJsonDuplicateKey -Text $text)
+    if ($dups.Count -gt 0) { $fail.reason = ("the change of rank has a member more than once: " + $dups[0]); return $fail }
+    try { $a = ConvertFrom-HordeJson $text } catch { $fail.reason = "the change of rank is not JSON"; return $fail }
+    if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the change of rank is not a JSON object"; return $fail }
+    $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
+    # EXACTLY ITS MEMBERS: the five every change has, and one or both of the two words - nothing else, so
+    # an answer's body (answerId, text) is never read as one.
+    $words = @($names | Where-Object { $script:HordeDecisionsChannelRankWords -ccontains $_ })
+    $others = @($names | Where-Object { $script:HordeDecisionsChannelRankWords -cnotcontains $_ })
+    if ((@($others | Sort-Object) -join ",") -cne (@($script:HordeDecisionsChannelRankMembers | Sort-Object) -join ",") -or $words.Count -eq 0) {
+        $fail.reason = ("the change of rank's members are " + ($names -join ", ") + ", not " + ($script:HordeDecisionsChannelRankMembers -join ", ") + " and one or both of " + ($script:HordeDecisionsChannelRankWords -join ", ")); return $fail
+    }
+    if (($a.v -isnot [int] -and $a.v -isnot [long]) -or [long]$a.v -ne 1) { $fail.reason = "the change of rank is not a version this machine reads (1)"; return $fail }
+    if ($a.rankId -isnot [string] -or $a.rankId -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = "the change of rank's rankId is not 32 lower-case hex"; return $fail }
+    if ($a.machine -isnot [string] -or $a.machine -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = "the change of rank's machine is not a key id"; return $fail }
+    if ($a.snapshot -isnot [string] -or $a.snapshot.Length -gt 160) { $fail.reason = "the change of rank's snapshot is not an envelope's replay key"; return $fail }
+    if (-not (Test-HordeDecisionCount -Value $a.number -Most (Get-HordeDecisionMaxNumber))) { $fail.reason = "the change of rank's number is not a question number"; return $fail }
+    $changes = [ordered]@{}
+    foreach ($w in $script:HordeDecisionsChannelRankWords) {
+        if ($words -cnotcontains $w) { continue }
+        # THE RULES' OWN CLOSED LISTS, asked here and not only by the operation: a level that is none of
+        # them is refused by its name before anything is asked of the list.
+        if (@(Test-HordeDecisionRankWord -Name $w -Word $a.$w).Count -gt 0) {
+            $fail.reason = ("the change of rank's " + $w + " is not one of: " + (@($(if ($w -ceq "importance") { Get-HordeDecisionImportances } else { Get-HordeDecisionBlockings })) -join ", ")); return $fail
+        }
+        $changes[$w] = [string]$a.$w
+    }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ rankId = $a.rankId; machine = $a.machine; snapshot = $a.snapshot; number = [int]$a.number; words = $changes } }
+}
+
+function Invoke-HordeDecisionsChannelRankAccept {
+    # One opened change of rank into the decisions list (the header), and what became of it into the
+    # receipts' ledger by its rankId. { outcome; reason }.
+    param($Context, $Item)
+    $r = Read-HordeDecisionsChannelRank -Body $Item.body
+    if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = $r.reason } }
+    $out = Invoke-HordeDecisionsChannelRankApply -Context $Context -Item $Item -Rank $r.value
+    $null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.rankId -Outcome $out.outcome
+    return $out
+}
+
+function Invoke-HordeDecisionsChannelRankApply {
+    # The change -Rank (Read-HordeDecisionsChannelRank's value) into the decisions list, by the operation
+    # rank as the founder - only for a question still on his list, and never over a newer change of its
+    # rank (the header). { outcome; reason }.
+    param($Context, $Item, $Rank)
+    $unbound = Test-HordeDecisionsChannelBound -Context $Context -Machine $Rank.machine -Snapshot $Rank.snapshot -What "the change of rank"
+    if ($null -ne $unbound) { return $unbound }
+    $n = $Rank.number
+    $shown = Invoke-HordeDecision -Operation "show" -Request @{ number = $n } -Root $Context.decisionsRoot
+    if ($shown.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not be read now: " + $shown.reason) } }
+    if ($shown.state -cne "known" -or "$($shown.value.outcome)" -cne "done") { return [pscustomobject]@{ outcome = "refused"; reason = ("there is no question " + $n + " to rank") } }
+    $q = $shown.value.question
+    if ("$($q.state)" -cne "open") { return [pscustomobject]@{ outcome = "refused"; reason = ("question " + $n + " is " + $q.state + ": only a question still on his list is ranked") } }
+    if ("$($q.thread.turn)" -cne "founder") { return [pscustomobject]@{ outcome = "refused"; reason = ("question " + $n + " is answered: it is the keeper's turn, the question has left his list, and only a question still on his list is ranked") } }
+    # A STALE RANK NEVER WINS (the header), unless it is this very change already applied.
+    $ledger = Get-HordeDecisionsChannelLedger -Context $Context
+    $signedAt = [long]$Item.ts
+    $mine = $ledger.streams.ContainsKey($Item.from) -and $ledger.streams[$Item.from].applied -ccontains $Rank.rankId
+    if (-not $mine) {
+        $newest = [long]-1
+        foreach ($h in @($q.history)) {
+            if ($null -eq $h -or "$($h.kind)" -cne "question-ranked") { continue }
+            $given = Get-HordeDecisionsChannelRankedAt -Context $Context -Entry $h
+            if ($given -gt $newest) { $newest = $given }
+        }
+        if ($newest -gt $signedAt) { return [pscustomobject]@{ outcome = "refused"; reason = ("superseded: question " + $n + " already has a newer change of its rank (given at " + $newest + " ms) than this one (signed at " + $signedAt + " ms), so this older one is not applied") } }
+    }
+    $request = [ordered]@{ id = (Get-HordeDecisionsChannelAnswerId -From $Item.from -AnswerId $Rank.rankId -Domain $script:HordeDecisionsChannelRankIdDomain); actor = "founder"; number = $n }
+    foreach ($w in @($Rank.words.Keys)) { $request[$w] = $Rank.words[$w] }
+    $a = Invoke-HordeDecision -Operation "rank" -Request $request -Root $Context.decisionsRoot
+    if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take it now: " + $a.reason) } }
+    if ($a.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + $a.reason) } }
+    if ($a.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + (@($a.value.findings) -join "; ")) } }
+    # WHEN HE SIGNED IT, kept by the record's sequence for the next change's stale check. A ledger that
+    # cannot be kept costs only that: the record then counts at the time the store recorded it.
+    $null = Add-HordeDecisionsChannelRanked -Context $Context -Sequence ([long]$a.value.sequence) -SignedAt $signedAt -Evidence "$($Item.evidence)"
+    $said = @(@($Rank.words.Keys) | ForEach-Object { $_ + " " + $Rank.words[$_] }) -join ", "
+    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $n + ": the founder's change of rank (" + $said + ") is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
+}
+
+function Get-HordeDecisionsChannelRankedAt {
+    # When the change of rank in the history entry -Entry was GIVEN (the header, A STALE RANK NEVER WINS):
+    # this phone's own, the time its passkey signed it, from the ledger; any other, the time the store
+    # recorded it. -1 when neither can be read.
+    param($Context, $Entry)
+    $ledger = Get-HordeDecisionsChannelLedger -Context $Context
+    $key = "" + [long]$Entry.sequence
+    if ($ledger.ranked.Contains($key)) { return [long]$ledger.ranked[$key].at }
+    try { return [long][System.DateTimeOffset]::Parse("$($Entry.at)", [System.Globalization.CultureInfo]::InvariantCulture).ToUnixTimeMilliseconds() } catch { return [long]-1 }
 }
 
 function Get-HordeDecisionsChannelFingerprint {
@@ -408,9 +561,64 @@ function Get-HordeDecisionsChannelLedger {
     # The run's ledger, read from its file the first time a run asks.
     param($Context)
     if (-not $Context.state.ContainsKey("decisions-receipts")) {
-        $Context.state["decisions-receipts"] = @{ streams = (Read-HordeDecisionsChannelLedgerFile -Context $Context); problem = "" }
+        $Context.state["decisions-receipts"] = @{ streams = (Read-HordeDecisionsChannelLedgerFile -Context $Context); ranked = (Read-HordeDecisionsChannelRankedFile -Context $Context); problem = "" }
     }
     return $Context.state["decisions-receipts"]
+}
+
+function Read-HordeDecisionsChannelRankedFile {
+    # The ledger's rankedAt (the header, A STALE RANK NEVER WINS): an ordered table, the sequence of a
+    # ranking record this channel wrote (as text) -> { at; evidence } - when the passkey signed it, and the
+    # hash of the journal record that proved it - oldest first. Empty for no file, or a member that does
+    # not read exactly as written: no memory makes those records count at the time the store recorded
+    # them, which is never before they were signed - the guard then errs toward the change in the store.
+    param($Context)
+    $out = [ordered]@{}
+    try {
+        $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
+        if (-not [System.IO.File]::Exists($path)) { return $out }
+        $j = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($path))
+        if ($null -eq $j -or $null -eq $j.PSObject.Properties["ranked"]) { return $out }
+        foreach ($x in @($j.ranked)) {
+            if ($null -eq $x -or "$($x.sequence)" -cnotmatch '\A[1-9][0-9]{0,15}\z' -or "$($x.at)" -cnotmatch '\A[0-9]{1,16}\z' -or "$($x.evidence)" -cnotmatch '\A([0-9a-f]{64})?\z') { return [ordered]@{} }
+            $out["$($x.sequence)"] = [pscustomobject]@{ at = [long]"$($x.at)"; evidence = "$($x.evidence)" }
+        }
+    } catch { return [ordered]@{} }
+    return $out
+}
+
+function Add-HordeDecisionsChannelRanked {
+    # When the passkey signed the change of rank written as record -Sequence, into the ledger and its file
+    # (the newest 64). "" when kept, else why not; never throws.
+    param($Context, [long]$Sequence, [long]$SignedAt, [string]$Evidence = "")
+    $ledger = Get-HordeDecisionsChannelLedger -Context $Context
+    $ledger.ranked["" + $Sequence] = [pscustomobject]@{ at = $SignedAt; evidence = $(if ($Evidence -cmatch '\A[0-9a-f]{64}\z') { $Evidence } else { "" }) }
+    while ($ledger.ranked.Count -gt $script:HordeDecisionsChannelRankedKept) { $ledger.ranked.RemoveAt(0) }
+    return (Save-HordeDecisionsChannelLedger -Context $Context)
+}
+
+function Save-HordeDecisionsChannelLedger {
+    # The whole ledger into its file, written beside itself and moved over the old one in one step. ""
+    # when kept, else why not (kept in the ledger's problem, for the Tick to say); never throws.
+    param($Context)
+    $ledger = Get-HordeDecisionsChannelLedger -Context $Context
+    try {
+        $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
+        $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object { '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].refused) + '}' })
+        $ranked = @($ledger.ranked.Keys | ForEach-Object { '{"sequence":' + $_ + ',"at":' + [long]$ledger.ranked[$_].at + ',"evidence":"' + $ledger.ranked[$_].evidence + '"}' })
+        $temp = $path + "." + $PID + ".tmp"
+        try {
+            [System.IO.File]::WriteAllText($temp, ('{"v":1,"streams":[' + ($streams -join ",") + '],"ranked":[' + ($ranked -join ",") + ']}'), [System.Text.Encoding]::ASCII)
+            Move-HordeFileAtomic -From $temp -To $path
+        } catch {
+            # A FAILED MOVE LEAVES NO TEMP FILE BEHIND (review of PR 262): one is written on every change.
+            try { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } } catch { }
+            throw
+        }
+        $ledger.problem = ""
+        return ""
+    } catch { $ledger.problem = "" + $_.Exception.Message; return $ledger.problem }
 }
 
 function ConvertTo-HordeDecisionsChannelIdList {
@@ -498,22 +706,7 @@ function Add-HordeDecisionsChannelReceipt {
         [void]$mine.refused.Add($AnswerId)
         while ($mine.refused.Count -gt $script:HordeDecisionsChannelReceiptsRefused) { $mine.refused.RemoveAt(0) }
     }
-    try {
-        $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
-        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
-        $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object { '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].refused) + '}' })
-        $temp = $path + "." + $PID + ".tmp"
-        try {
-            [System.IO.File]::WriteAllText($temp, ('{"v":1,"streams":[' + ($streams -join ",") + ']}'), [System.Text.Encoding]::ASCII)
-            Move-HordeFileAtomic -From $temp -To $path
-        } catch {
-            # A FAILED MOVE LEAVES NO TEMP FILE BEHIND (review of PR 262): one is written on every change.
-            try { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } } catch { }
-            throw
-        }
-        $ledger.problem = ""
-        return ""
-    } catch { $ledger.problem = "" + $_.Exception.Message; return $ledger.problem }
+    return (Save-HordeDecisionsChannelLedger -Context $Context)
 }
 
 function Get-HordeDecisionsChannelReceipts {
@@ -592,7 +785,10 @@ function New-HordeDecisionsChannelPages {
     }
     # "answers": the highest version of answer this machine reads (header, IN). A member a phone that
     # does not know it leaves alone; a phone that does sends a part's answer as that version.
-    $tail = ',"counts":' + (ConvertTo-Json -InputObject $List.counts -Compress) + ',"unreadable":' + @($List.unreadable).Count + ',"notUnderstood":' + @($List.notUnderstood).Count + ',"answers":' + $script:HordeDecisionsChannelAnswerHighest + ',"receipts":' + $Receipts + '}'
+    # "ranks": 1, this machine takes a change of rank from the phone (the header, A CHANGE OF RANK FROM
+    # THE PHONE): a phone sends one only to a machine whose snapshot says so, and so never to an earlier
+    # machine, whose gate refuses the kind.
+    $tail = ',"counts":' + (ConvertTo-Json -InputObject $List.counts -Compress) + ',"unreadable":' + @($List.unreadable).Count + ',"notUnderstood":' + @($List.notUnderstood).Count + ',"answers":' + $script:HordeDecisionsChannelAnswerHighest + ',"ranks":1,"receipts":' + $Receipts + '}'
     # The frame of a page with no question: everything but the questions, the withheld ones counted at
     # their largest (every question withheld, each with the longest reason), and the page numbers at
     # nine digits. A question fits a page when its bytes and the frame are within the budget.
@@ -807,7 +1003,7 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false }
 }
 
-$null = Register-HordeRelayChannel -Folder $script:HordeDecisionsChannelFolder -Name "decisions" -Kinds @("answer") -Senders "founder" `
+$null = Register-HordeRelayChannel -Folder $script:HordeDecisionsChannelFolder -Name "decisions" -Kinds @("answer", "rank") -Senders "founder" `
     -Accept { param($Context, $Item) return (Invoke-HordeDecisionsChannelAccept -Context $Context -Item $Item) } `
     -Tick { param($Context) return (Invoke-HordeDecisionsChannelTick -Context $Context) } `
     -Glance { param($Context) return (Test-HordeDecisionsChannelGlance -Context $Context) }

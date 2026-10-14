@@ -708,6 +708,41 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       return { key: env.key, seq: put.value.seq };
     },
 
+    // A CHANGE OF RANK of one question of the snapshot on screen - his tap on its Importance or Blocking
+    // button (decisions/page/list.js) - SENT LIKE AN ANSWER: only from a passkey session, signed with the
+    // passkey (user verification), sealed to the machine of the snapshot, bound to it and to the page
+    // that carried the question (channels/decisions/Channel.ps1, A CHANGE OF RANK FROM THE PHONE). Only to
+    // a machine whose snapshot says it takes one (ranks). Nothing is kept: the snapshot that shows the
+    // new level is its confirmation, and rankState says what the PC said of it. { key, seq }.
+    async rank(id, { number, which, level, rankId }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode === "read-only") throw fail(NO_PRF);
+      if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to change how a question is ranked.");
+      const v = s.view;
+      if (!v || v.ranks !== true) throw fail("Not changed: this PC does not take a change of rank from the phone yet. Change it at the PC.");
+      const q = v.questions.find((x) => x.question.number === number);
+      if (!q) throw fail("question " + number + " is not in the snapshot this phone holds");
+      const body = P.rankBody({ rankId, machine: e.machine, snapshot: q.pageKey, number, which, level });
+      const env = await sealAndSign(e, "rank", "decisions", body, assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not changed: " + RELAY_REFUSED + " Tap it again."); }
+      return { key: env.key, seq: put.value.seq };
+    },
+
+    // What the PC said of a change of rank, from the receipt in the snapshot on screen: "applied",
+    // "refused", or "sent" while it has said neither. Needs an unlocked session.
+    async rankState(id, rankId) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const receipt = s.view ? P.receiptFor(s.view.receipts, e.deviceKeyId) : null;
+      if (receipt && receipt.applied.has(rankId)) return "applied";
+      if (receipt && receipt.refused.has(rankId)) return "refused";
+      return "sent";
+    },
+
     // The answers this phone keeps for the horde, each with what became of it (relay/js/protocol.js,
     // answerState): [{ answerId, number, part, text, state, warning, sentAt }], his words opened with the
     // session's key. An answer the snapshot on screen says is applied or refused leaves the store here, and is

@@ -536,7 +536,7 @@ try {
     [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "line" -Channel "notes" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
     [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "snapshot" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
     $t = Invoke-Turn $W
-    Check ((Has $t "no channel 'notes' is registered") -and (Has $t "takes answer, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
+    Check ((Has $t "no channel 'notes' is registered") -and (Has $t "takes answer, rank, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
     $elsewhere = New-HordeRelayP256Key -Use "ecdh"
     [void](Send-ToMachine $W (Get-Answer $W -To @(, ([byte[]](ConvertTo-HordeRelayP256Public -Key $elsewhere)))).text)
     $t = Invoke-Turn $W

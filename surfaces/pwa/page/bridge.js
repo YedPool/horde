@@ -21,6 +21,10 @@
 //   say {number, text, wording, id, part}   the answer, signed and sent: { ok, sequence } or { ok: false,
 //                         reason }; part, when given, is the letter of the one part of the question the
 //                         words answer (the document sends each part by itself: list.js, sayPart)
+//   rank {number, which, level, id}   his tap on a question's Importance or Blocking button
+//                         (decisions/page/list.js): the change signed with the passkey and sent LIKE AN
+//                         ANSWER (phone-core.js, rank). Answered once the PC has said what became of it
+//                         (THE PC SAYS, below): { ok } or { ok: false, reason }
 //   act {number, act, wording, id}    park or unpark: KEPT ON THIS PHONE ONLY for the session (the
 //                         decisions channel takes answers, not acts: an open question in the PR)
 //   hordes                every horde on this phone, as phone-core's summaries
@@ -70,9 +74,19 @@
 // the answer, never shows the question as an empty slot while his answer is on its way. After every
 // refresh the phone sends again what the PC reports missing (phone-core.js, resend), and says in its
 // own words what it could not send.
+//
+// A CHANGE OF RANK IS DONE WHEN THE PC SAYS (the founder, 2026-10-14: his little buttons). rank answers
+// only once a snapshot's receipt lists the change as applied - that snapshot already shows the new level,
+// and the page re-sorts by it - or as refused, in this phone's own words; or, after RANK_WAIT_MS with
+// neither, that the PC has not confirmed it. Until then the page marks the button pending.
 import { withAnswers } from "../relay/protocol.js";
 
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
+// How long a change of rank waits for the PC to say what became of it before the page is told it is not
+// confirmed: long enough for a PC whose runner is between watches, short of the hour an answer waits.
+const RANK_WAIT_MS = 10 * 60 * 1000;
+const RANK_REFUSED = "The PC refused this change (it may be older than a change made since, or the question has left your list). Nothing was changed.";
+const RANK_UNCONFIRMED = "Not confirmed by the PC yet: it shows the new level once the PC has made the change. Tap again to send it again.";
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -105,6 +119,17 @@ export function createBridge(phone, options = {}) {
     // A READ THAT FAILS KEEPS WHAT WAS LAST READ (review of PR 262, S3): emptied, every question he
     // answered would show as an empty slot until the next read.
     try { answers = await phone.answers(picked); } catch (e) { /* the answers last read stand */ }
+  }
+  // Changes of rank sent and not yet settled (A CHANGE OF RANK IS DONE WHEN THE PC SAYS): rankId -> { entry,
+  // settle(result) }. Each is asked after every refresh; the horde it was sent to, not the one picked now.
+  const ranks = new Map();
+  async function settleRanks() {
+    for (const [rankId, r] of [...ranks]) {
+      let st = "sent";
+      try { st = await phone.rankState(r.entry, rankId); } catch (e) { continue; }
+      if (st === "applied") r.settle({ ok: true });
+      else if (st === "refused") r.settle({ ok: false, reason: RANK_REFUSED });
+    }
   }
   const look = options.look || { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
 
@@ -171,6 +196,8 @@ export function createBridge(phone, options = {}) {
     await loadAnswers();
     const rec = listRecord();
     emit("list-changed", rec);
+    // After the list the page re-sorts by: an applied change is answered with its new level drawn.
+    await settleRanks();
     emit("chat-changed", await chatRecord());
     emit("progress-changed", await progressRecord());
     emit("cards-changed", await cardsRecord());
@@ -213,6 +240,16 @@ export function createBridge(phone, options = {}) {
         emit("list-changed", listRecord());
         return { ok: true, sequence: highestSequence() + 1 };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
+    },
+    rank: async (a) => {
+      const rankId = String(a.id || "");
+      const entry = picked;
+      try { await phone.rank(entry, { number: Number(a.number), which: String(a.which || ""), level: String(a.level || ""), rankId }); }
+      catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => { ranks.delete(rankId); resolve({ ok: false, reason: RANK_UNCONFIRMED }); }, RANK_WAIT_MS);
+        ranks.set(rankId, { entry, settle: (result) => { clearTimeout(timer); ranks.delete(rankId); resolve(result); } });
+      });
     },
     act: async () => ({ ok: true, sequence: LOCAL_ACT_SEQUENCE, local: true }),
     hordes: async () => hordes(),
