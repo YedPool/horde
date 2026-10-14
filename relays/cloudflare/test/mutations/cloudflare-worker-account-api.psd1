@@ -41,5 +41,8 @@
         @{ Name = "machine-removes-another"
            Find = 'if (!authorize(who, "remove", m[1])) return refuse(403,'
            Replace = 'if (false) return refuse(403,' }
+        @{ Name = "account-answer-without-the-relays-now"
+           Find = 'return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones, now });'
+           Replace = 'return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones });' }
     )
 }

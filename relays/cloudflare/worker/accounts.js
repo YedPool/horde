@@ -20,9 +20,10 @@
 //   usage          the characters of unacked mail across all its mailboxes
 //   day            { day, n }: its requests this UTC day (throttle.js)
 //   pairing        its pairing bucket (throttle.js)
+//   s:<key id>     when that machine was last heard from (presence.js): written at most once per 30 s
 //   deleting       { account, epoch }: a deletion under way (remove, alarm)
 // IN MEMORY: each device's put and read buckets. An eviction only refills them, as the idle time
-// would have.
+// would have. And each machine's last heard time, exact; storage's s: is at most 30 s behind it.
 //
 // THE LISTS ARE INDEXES, the keys' and sessions' own objects are the truth: a request is decided by
 // them (auth.js), so a list that missed one could only fail to show it, never let it in. The API claims
@@ -35,6 +36,8 @@
 //     which only needs the account to be there;
 //   - the account's requests this UTC day - the mailbox operations only: its own Account screen, its
 //     phones and machines are still its to manage, and its deletion still its to make, over the day;
+//   - and, first of all once the account is known to be there, A MACHINE IS HEARD (presence.js): its
+//     signature was verified before the gate was asked, so this is where its lastSeenAt is kept;
 // A PUT IS CHARGED, and an ack or an expiry credited, by the mailbox itself (mailbox.js, charge and
 // credit), which knows the text's length: the account refuses a put that would make one mailbox too
 // many (accountMaxMailboxes, 409 mailboxes-cap) or take its unacked characters past accountMaxChars
@@ -61,6 +64,7 @@ import { CODES } from "./answers.js";
 import { machineKeyOf } from "./machines.js";
 import { mailboxOf } from "./mailbox.js";
 import { sessionByObjectId } from "./sessions.js";
+import { noteSeen, lastSeenOf } from "./presence.js";
 import { b64u, randomBytes } from "../../../relay/js/protocol.js";
 
 const PROFILE = "profile";
@@ -71,6 +75,9 @@ const DAY = "day";
 const PAIRING = "pairing";
 const DELETING = "deleting";
 const USAGE = "usage";
+const SEEN = "s:";
+// A machine's device, as auth.js names it: "machine:" and its key id. Only a verified signature makes one.
+const MACHINE_DEVICE = "machine:";
 const MINUTE_MS = 60000;
 const HOUR_MS = 3600000;
 // Mailboxes wiped in one alarm run: few enough that one run's calls stay well inside a Worker's
@@ -82,7 +89,14 @@ const MAILBOX_OPS = new Set(["get", "put", "watch", "ack"]);
 const gone = () => ({ ok: false, status: 401, code: CODES.gone, reason: "this account was deleted" });
 
 export class Account extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.devices = new Map(); }
+  constructor(ctx, env) { super(ctx, env); this.devices = new Map(); this.seen = new Map(); }
+
+  // A machine of this account was heard at now (presence.js): kept in memory, written when due.
+  async heard(keyId, now) {
+    const n = noteSeen(this.seen.get(keyId), now);
+    this.seen.set(keyId, n.held);
+    if (n.write) await this.ctx.storage.put(SEEN + keyId, n.held.at);
+  }
 
   // Is there an account? { exists, deleting }.
   async status() {
@@ -123,6 +137,7 @@ export class Account extends DurableObject {
     const storage = this.ctx.storage;
     const p = await storage.get(PROFILE);
     if (!p || p.epoch !== epoch) return gone();
+    if (device.startsWith(MACHINE_DEVICE)) await this.heard(device.slice(MACHINE_DEVICE.length), now);
     if (op === "delete") return { ok: true };
     const put = op === "put";
     const held = this.devices.get(device) || {};
@@ -194,22 +209,26 @@ export class Account extends DurableObject {
     return { ok: true };
   }
 
-  async unlistMachine(keyId) { return this.ctx.storage.delete(MACHINE + keyId); }
+  async unlistMachine(keyId) { this.seen.delete(keyId); await this.ctx.storage.delete(SEEN + keyId); return this.ctx.storage.delete(MACHINE + keyId); }
 
   // A rotation moved a machine's registration from one key to its successor (rotation.js).
   async moveMachine({ from, entry }) {
     const storage = this.ctx.storage;
     await storage.delete(MACHINE + from);
+    await storage.delete(SEEN + from);
+    this.seen.delete(from);
     await storage.put(MACHINE + entry.keyId, entry);
     return true;
   }
 
-  // The Account screen's view: { email, machines, phones }, or null when there is no account.
+  // The Account screen's view: { email, machines, phones }, or null when there is no account. Each
+  // machine carries lastSeenAt (presence.js): the second it was last heard from, or null for never.
   async view(now) {
     const p = await this.ctx.storage.get(PROFILE);
     if (!p) return null;
     const machines = [];
-    for (const [, entry] of await this.ctx.storage.list({ prefix: MACHINE })) machines.push(entry);
+    const stored = await this.ctx.storage.list({ prefix: SEEN });
+    for (const [, entry] of await this.ctx.storage.list({ prefix: MACHINE })) machines.push({ ...entry, lastSeenAt: lastSeenOf(this.seen.get(entry.keyId), stored.get(SEEN + entry.keyId)) });
     return { email: p.email, machines, phones: await this.livePhones(now) };
   }
 
@@ -233,10 +252,12 @@ export class Account extends DurableObject {
     await storage.delete(PROFILE);
     const phones = await storage.list({ prefix: PHONE });
     const machines = await storage.list({ prefix: MACHINE });
+    const seen = await storage.list({ prefix: SEEN });
     for (const [, ph] of phones) { const s = sessionByObjectId(this.env, ph.id); if (s) await s.end(); }
     for (const [, m] of machines) await machineKeyOf(this.env, m.keyId).release(account);
-    await storage.delete([...phones.keys(), ...machines.keys(), DAY, PAIRING, USAGE]);
+    await storage.delete([...phones.keys(), ...machines.keys(), ...seen.keys(), DAY, PAIRING, USAGE]);
     this.devices.clear();
+    this.seen.clear();
     await storage.setAlarm(Date.now());
     return { ok: true };
   }
