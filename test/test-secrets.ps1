@@ -356,6 +356,31 @@ $attacks += @(
     @{ found = $false; what = "a code span with a comma after it (no parenthesis, which the older rule would skip on its own)"; text = ("as " + '`' + $six[5] + " = config.db_" + $six[5] + '`' + ", and more") },
     @{ found = $true; what = "a secret with a digit in a code span is still a secret with a full stop after it"; text = ("use " + '`' + $six[5] + " = " + $made + '`' + ". Then go on") },
     @{ found = $true; what = "a lookup with a word after its backtick is no code span's end"; text = ($six[5] + " = config.db_" + $six[5] + '`' + "x9") })
+# FIVE GUARDS NO LINE ABOVE PINNED (the mutation net after PR 238 merged, 2026-10-14: secrets.psd1 69 of
+# 74, each survivor a guard of this kind that could be removed with the suite still green). Each is
+# pinned by a pair on its boundary: a quiet line the guard alone keeps quiet, and the same line just
+# across it, which must be found. The mutant each pair turns red is named in its first line.
+$attacks += @(
+    # only-a-close-parenthesis-makes-code: every parenthesis line above holds a ')' after the equals
+    # sign, so the open one was never looked at alone. A call whose arguments go on the next line has
+    # only the '(' on its own.
+    @{ found = $false; what = "a call whose arguments start on the next line: the OPEN parenthesis alone makes it code"; text = ($six[4] + " = load_key(" + $nl + '    "the-vault")') },
+    @{ found = $true; what = "and the same identifier with no parenthesis after it is a value"; text = ($six[4] + " = load_key") },
+    # named-secret-yaml-value-need-not-end-its-line: every YAML line above that is quiet is quiet for
+    # another reason too (no digit, a placeholder, a short word). This value has a digit and its length.
+    @{ found = $false; what = "a YAML value with a digit and more words after it on its line is prose, not a value"; text = ($six[5] + ": 12characters or more, with a digit") },
+    @{ found = $true; what = "and the same value ending its line is a value"; text = ($six[5] + ": 12characters") },
+    # named-secret-bare-yaml-value-of-any-length: 7 and 8 characters, both with digits, so only the
+    # length decides (the 7-and-8 pairs above are a member and name=value, never bare YAML).
+    @{ found = $false; what = "a bare YAML value of 7 characters with a digit"; text = ($six[5] + ": Ab3dEf6") },
+    @{ found = $true; what = "a bare YAML value of exactly 8 characters with a digit"; text = ($six[5] + ": Ab3dEf6h") },
+    # named-secret-quoted-yaml-value-of-any-length: the same boundary, in quotes.
+    @{ found = $false; what = "a quoted YAML value of 7 characters"; text = ($six[5] + ": 'Ab3dEf6'") },
+    @{ found = $true; what = "a quoted YAML value of exactly 8 characters"; text = ($six[5] + ": 'Ab3dEf6h'") },
+    # named-secret-a-comparison-is-a-pair: the comparison line above ends in ')', so the parenthesis
+    # rule kept it quiet with this guard gone. With nothing after the value, only this guard does.
+    @{ found = $false; what = "a comparison with two equals signs and no parenthesis round it"; text = ("if " + $six[5] + "==" + $made + " then") },
+    @{ found = $true; what = "and the pair it borders, one equals sign, is a value"; text = ("if " + $six[5] + "=" + $made + " then") })
 foreach ($a in $attacks) { Check ((Test-Named $a.text) -eq $a.found) ($(if ($a.found) { "FOUND: " } else { "not found: " }) + $a.what) }
 Check (@($attacks | Where-Object { $_.found }).Count -ge 35 -and @($attacks | Where-Object { -not $_.found }).Count -ge 50) ("the rule was attacked from both sides: " + @($attacks | Where-Object { $_.found }).Count + " texts that must be found and " + @($attacks | Where-Object { -not $_.found }).Count + " that must not")
 # THE DEFAULT KINDS ARE UNCHANGED FOR EVERY CALLER: the folded and YAML forms above are found only
