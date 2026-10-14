@@ -489,10 +489,16 @@ function Invoke-HordeRelayPublishStep {
             }
             return $a
         }
-        $classes = Get-HordeRelayPublishMeasured -Classes $classes -Base (& $bundleOf $b.base) -Head (& $bundleOf $h.commit)
+        $headBundle = & $bundleOf $h.commit
+        $classes = Get-HordeRelayPublishMeasured -Classes $classes -Base (& $bundleOf $b.base) -Head $headBundle
         & $say ("the Worker, bundled at " + (ConvertTo-HordeRelayPublishShort $b.base) + " and " + (ConvertTo-HordeRelayPublishShort $h.commit) + ": " + $(switch ($classes.measured) { "same" { "the same" } "differs" { "different" } default { "could not be measured" } })) -Log
         if ($classes.measured -ceq "unknown") { & $failed "worker-unmeasured" "whether the relay's Worker changed could not be measured"; return }
-        if ($classes.measured -cne "same") { & $warn "worker-changed" ("held:" + $b.base + ":bundle:" + $h.commit) "the relay's Worker bundle changed, so the supervisor does not deploy"; return }
+        # TOLD AGAIN ONLY WHEN THE WORKER THAT WOULD SHIP CHANGES (review of PR 264): keyed by the base and
+        # the checkout's bundle, not its commit. An index.html change makes every later bundle differ from
+        # the deployed one (header, INDEX.HTML ALWAYS DIFFERS), and keyed by commit every later merge was a
+        # new notice until someone deployed by hand. By the base alone, a second, real Worker change on
+        # top of the first would never be told; by the bundle's hash it is, and nothing else is.
+        if ($classes.measured -cne "same") { & $warn "worker-changed" ("held:" + $b.base + ":bundle:" + $headBundle.value.sha256) "the relay's Worker bundle changed, so the supervisor does not deploy"; return }
         # THE DEPLOY, of exactly this commit (S2). The VERSION served before it is read from the origin
         # the last deploy answered with; the attempt is written down first, so a pass ended part way is
         # counted (above).
@@ -663,14 +669,25 @@ function Get-HordeRelayTendHomePointerPath {
 }
 
 function Read-HordeRelayTendHomePointer {
-    # The home the pointer at -Path names, or "" when there is none, or it is not an absolute folder.
-    param([Parameter(Mandatory = $true)][string]$Path)
+    # The supervisor's home, as the pointer at -Path names it (cli/RelayDeploy.ps1, THE SUPERVISOR'S HOME
+    # TOO): known (the home), absent (no pointer), or unknown with why it is refused (review of PR 264).
+    # A deploy by hand writes a record into that folder, so it must be exactly a supervisor's home:
+    #   - a full local path: a drive letter, a backslash, and no . or .. part - never a share, a device
+    #     path, or one relative to a drive's current folder;
+    #   - not under the temp folder (-TempRoot replaces it, for a suite): a test's home is no one's;
+    #   - a Horde home the supervisor runs in: its settings\service-definitions.json is there, the file
+    #     every pass of the supervisor reads first. A bare folder - C:\Windows, the temp folder - is not.
+    param([Parameter(Mandatory = $true)][string]$Path, [string]$TempRoot = "")
+    $t = ""
     try {
-        if (-not [System.IO.File]::Exists($Path)) { return "" }
+        if (-not [System.IO.File]::Exists($Path)) { return (New-HordeAbsent -Note "no supervisor has said where its home is") }
         $t = ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII)).Trim()
-        if ($t -eq "" -or -not [System.IO.Path]::IsPathRooted($t) -or -not [System.IO.Directory]::Exists($t)) { return "" }
-        return $t
-    } catch { return "" }
+    } catch { return (New-HordeUnknown -Reason "the supervisor's pointer could not be read" -ErrorRecord $_) }
+    if ($t -cnotmatch '\A[A-Za-z]:\\[^\\/:*?"<>|]' -or $t -match '(\A|\\)\.{1,2}(\\|\z)' -or $t -match '[/*?"<>|]' -or $t.IndexOf(':', 2) -ge 0) { return (New-HordeUnknown -Reason ("the supervisor's pointer names '" + $t + "', which is not a full local path")) }
+    $full = $t.TrimEnd('\')
+    if (Test-HordeServiceHomeIsATests -HordeHome $full -TempRoot $TempRoot) { return (New-HordeUnknown -Reason ("the supervisor's pointer names " + $full + ", under the temp folder: a test's home")) }
+    if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($full, "settings", "service-definitions.json"))) { return (New-HordeUnknown -Reason ("the supervisor's pointer names " + $full + ", which is not a Horde home the supervisor runs in (it has no settings\service-definitions.json)")) }
+    return (New-HordeKnown -Value $full)
 }
 
 function Write-HordeRelayTendHomePointer {
@@ -679,10 +696,25 @@ function Write-HordeRelayTendHomePointer {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$HordeHome)
     try {
         $full = [System.IO.Path]::GetFullPath($HordeHome).TrimEnd('\', '/')
-        if ((Read-HordeRelayTendHomePointer -Path $Path) -eq $full) { return }
+        if ([System.IO.File]::Exists($Path) -and ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII)).Trim() -ceq $full) { return }
         [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Path))
         [System.IO.File]::WriteAllText($Path, $full, [System.Text.Encoding]::ASCII)
     } catch { }
+}
+
+function Get-HordeRelayDeployAlsoRecordIn {
+    # For `horde relay deploy` (cli/commands/relay.ps1): the supervisor's home to record in as well, and
+    # the line to say: { also; note }. also is "" - this deploy records only in its own home, -Mine - when
+    # Mine is a test's (under -TempRoot), when the pointer at -PointerPath names Mine itself or nothing,
+    # and when it is refused (Read-HordeRelayTendHomePointer), which the note then says plainly.
+    param([Parameter(Mandatory = $true)][string]$Mine, [Parameter(Mandatory = $true)][string]$PointerPath, [string]$TempRoot = "")
+    $mineFull = [System.IO.Path]::GetFullPath($Mine).TrimEnd('\', '/')
+    if (Test-HordeServiceHomeIsATests -HordeHome $mineFull -TempRoot $TempRoot) { return [pscustomobject]@{ also = ""; note = "" } }
+    $p = Read-HordeRelayTendHomePointer -Path $PointerPath -TempRoot $TempRoot
+    if ($p.state -ceq "absent") { return [pscustomobject]@{ also = ""; note = "" } }
+    if ($p.state -cne "known") { return [pscustomobject]@{ also = ""; note = ("note: this deploy is recorded only in " + $mineFull + ": " + $p.reason) } }
+    if ($p.value.Equals($mineFull, [System.StringComparison]::OrdinalIgnoreCase)) { return [pscustomobject]@{ also = ""; note = "" } }
+    return [pscustomobject]@{ also = $p.value; note = ("note: the supervisor keeps its record in " + $p.value + "; this deploy is recorded there as well as here") }
 }
 
 function Invoke-HordeRelayPublishFromTend {

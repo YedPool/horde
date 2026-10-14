@@ -82,10 +82,9 @@ $HordeCommand = @{
             foreach ($f in @("ServicesAct", "ServicesTell", "RelayPublish")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
             # THE SUPERVISOR'S HOME TOO (cli/RelayDeploy.ps1): from another home, the record is written in
             # the one the supervisor reads as well. Never from a test's home (one under the temp folder).
-            $mine = [System.IO.Path]::GetFullPath((Get-HordeHome)).TrimEnd('\', '/')
-            $tendHome = Read-HordeRelayTendHomePointer -Path (Get-HordeRelayTendHomePointerPath)
-            $also = $(if ($tendHome -ne "" -and -not $tendHome.Equals($mine, [System.StringComparison]::OrdinalIgnoreCase) -and -not (Test-HordeServiceHomeIsATests -HordeHome $mine)) { $tendHome } else { "" })
-            if ($also -ne "") { Write-Host ("note: the supervisor keeps its record in " + $also + "; this deploy is recorded there as well as here") }
+            $choice = Get-HordeRelayDeployAlsoRecordIn -Mine (Get-HordeHome) -PointerPath (Get-HordeRelayTendHomePointerPath)
+            $also = $choice.also
+            if ($choice.note -ne "") { Write-Host $choice.note }
             $rev = Get-HordeRelayPublishRevision -Checkout $root
             if ($rev.state -cne "known") { Write-Host ("note: " + $rev.reason + "; this deploy is recorded with no commit, so the supervisor does not deploy the phone page by itself until a deploy records one") }
             elseif (-not $rev.value.clean) { Write-Host "note: this checkout has changes of its own; the deploy is recorded as not clean, so the supervisor does not deploy the phone page by itself until a deploy from a clean checkout" }
