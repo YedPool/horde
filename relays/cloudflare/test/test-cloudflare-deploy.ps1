@@ -188,10 +188,16 @@ try {
     $cliEnv = @{ HORDE_HOME = $hh; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = "" }
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
     Check ($r.code -eq 0 -and $r.out.Contains("deployed relay cloudflare: it answers at " + $dep.origin) -and @(Read-Log).Count -eq 4 -and -not (Holds-Value $r.out)) ("horde relay deploy deploys, says where, and prints no value (exit " + $r.code + ")")
+    # WHAT IS DEPLOYED IS RECORDED (cli/RelayDeploy.ps1): the commit of the checkout the command ran from,
+    # which the supervisor compares with its own (cli/RelayPublish.ps1).
+    $headNow = ("" + (& git -C $root rev-parse HEAD)).Trim()
+    $rec = Read-HordeRelayDeployed -HordeHome $hh
+    Check ($headNow -cmatch '\A[0-9a-f]{40}\z' -and $rec.state -ceq "known" -and $rec.value.commit -ceq $headNow -and $rec.value.origin -ceq $dep.origin -and $rec.value.relay -ceq "cloudflare") ("horde relay deploy records the commit it was deployed from, the relay and its origin (" + $(if ($rec.state -ceq "known") { $rec.value.commit } else { $rec.reason }) + ")")
     Clear-Log
     $cliEnv["HORDE_FAKE_WRANGLER_FAIL"] = "secret"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-Relay", "cloudflare") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("the relay was not deployed") -and -not (Holds-Value $r.out)) ("a failed deploy exits non-zero, says so, and prints no value (exit " + $r.code + ")")
+    Check ((Read-HordeRelayDeployed -HordeHome $hh).value.at -eq $rec.value.at) "a failed deploy leaves the record of the last one that worked"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-Relay", "local") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("cannot be deployed")) "relay deploy -Relay local is refused"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-MaxTurns", "1") -Env $cliEnv
