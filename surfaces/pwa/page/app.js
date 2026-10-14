@@ -76,7 +76,7 @@ import { accountFromConfig } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
-import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS } from "../relay/protocol.js";
+import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 
 const $ = (id) => document.getElementById(id);
@@ -451,6 +451,7 @@ function drawCards(rec) {
   while (list.firstChild) list.removeChild(list.firstChild);
   const notes = [];
   for (const m of v.machines) if (m.cardsLeftOut) notes.push(m.cardsLeftOut + " card(s) of " + m.name + " did not fit and are not shown.");
+  for (const m of v.machines) if (m.areasLeftOut) notes.push(m.areasLeftOut + " area(s) of " + m.name + "'s map did not fit, so their updates show only in the Thrall's stream.");
   $("cardsNote").textContent = notes.join(" ");
   $("cardsNote").hidden = notes.length === 0;
   // THE ONE CARD (lane-card.js), its slot left empty here; a tap opens the lane's stream.
@@ -476,7 +477,8 @@ function drawProgress(rec, own = true) {
   items.forEach((it, i) => { if (it.n <= readN) readIndex = i; });
   const v = { ...full, items, readIndex, unread: items.length - 1 - readIndex };
   progressLast = v;
-  $("progressAllRead").hidden = !own;
+  // Mark all read moves his place, so it is offered only where his place moves (review of PR 244).
+  $("progressAllRead").hidden = !streamMovesPlace(stream, current);
   const notes = [];
   if (v.stopped) notes.push(PROGRESS_WORDS["file-replaced"]);
   if (v.skipped) notes.push(v.skipped + " " + PROGRESS_WORDS["lines-skipped"]);
@@ -561,7 +563,7 @@ function watchEntries() {
 function readAsSeen() {
   const v = progressLast;
   // His place moves only in the whole log of the picked horde (THE PROGRESS TAB OPENS ON CARDS).
-  if (!v || $("progress").hidden || v.unread === 0 || !stream || stream.lane !== "" || stream.entry !== current) return;
+  if (!v || $("progress").hidden || v.unread === 0 || !streamMovesPlace(stream, current)) return;
   let upTo = "";
   for (let i = v.readIndex + 1; i < v.items.length; i++) {
     if (!seenEntries.has(v.items[i].id)) break;

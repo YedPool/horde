@@ -1096,8 +1096,8 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
 }
 
 // --- 10e. the cards: one snapshot per machine, merged by machine name; a card's stream is its lane's part of the log ---
-const cardsBody = (m, { name, made = "2026-10-13T20:00:00Z", cards = [], areas = [], thrall = {}, left = 0, hash = P.hex(P.randomBytes(32)) }) => P.utf8(JSON.stringify({ v: 1, kind: "cards-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, made, name,
-  thrall: { asOf: "", now: "", hasStatus: false, orcs: cards.length, working: cards.length, waitingFounder: 0, blocked: 0, unknown: 0, waitingFounderLanes: [], census: null, refused: [], ...thrall }, cards, cardsLeftOut: left, areas }));
+const cardsBody = (m, { name, made = "2026-10-13T20:00:00Z", cards = [], areas = [], thrall = {}, left = 0, areasLeft = undefined, hash = P.hex(P.randomBytes(32)) }) => P.utf8(JSON.stringify({ v: 1, kind: "cards-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, made, name,
+  thrall: { asOf: "", now: "", hasStatus: false, orcs: cards.length, working: cards.length, waitingFounder: 0, blocked: 0, unknown: 0, waitingFounderLanes: [], census: null, refused: [], ...thrall }, cards, cardsLeftOut: left, areas, areasLeftOut: areasLeft }));
 const card = (lane, extra = {}) => ({ lane, name: "lane " + lane, form: "standard", asOf: "2026-10-13T19:56:00Z", now: "doing " + lane, lastDone: "did " + lane, waitingOn: "nothing", blocked: "no", blockedText: "", note: "", tasksOpen: 3, doneWeek: 2, refused: [], ...extra });
 async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m, { kind: "snapshot", channel: "cards", body, phones: [phone] }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
 {
@@ -1164,7 +1164,9 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check((await t.get(m1.mailbox, 0, 256)).value.items.length === before, "the phone sends nothing on the cards channel");
   // THE ONE CARD (lane-card.js): a pure render of a lane and one slot, the tap the page's.
   const fake = () => {
-    const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, appendChild(k) { this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener(n, f) { this.on[n] = f; } });
+    // appendChild THROWS on what is not a node, as the page's does ("parameter 1 is not of type 'Node'"): a
+    // stand-in that takes anything cannot see a badge handed in as a number (review of PR 244).
+    const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener(n, f) { this.on[n] = f; } });
     return { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
   };
   const dump = (n, skipBadge) => (skipBadge && n.className === "card-badge") ? "<badge>" : n.tag + "." + (n.className || "") + "[" + (n.textContent || "") + "]" + (n.attrs && n.attrs["data-lane"] ? "@" + n.attrs["data-lane"] : "") + "(" + (n.kids || []).map((k) => dump(k, skipBadge)).join("") + ")";
@@ -1184,6 +1186,20 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(LC.THRALL_LANE === "thrall" && th !== null && th.attrs["data-lane"] === "thrall" && th.className.indexOf("thrall") >= 0 && LC.renderLaneCard(fake(), lanesDoc, "NOPE", { nowMs }) === null, "the Thrall's card is lane thrall; a lane the document does not hold renders nothing");
   const view = LC.laneCardView(lanesDoc, "G", { nowMs });
   check(view.title === "G - lane G" && view.from === "home-pc, 4 min ago" && view.lines.map((l) => l.label).join(",") === "Now,Last done,Waiting on,Blocked" && view.stats === "Tasks open 3 - done this week 2", "the card's words: its lane and name, its machine and age, now, last done, waiting on, blocked and the task counts", JSON.stringify(view));
+  // Review of PR 244, the round's additions.
+  check((() => { try { fake().createElement("b").appendChild(3); return false; } catch (x) { return true; } })(), "CONTROL: the stand-in document refuses a number where a node goes, as a browser does");
+  const badgeOf = (b) => { try { const box = LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: b }); return slotOf(box).textContent + "/" + slotOf(box).kids.length; } catch (x) { return "threw: " + x.message; } };
+  check(badgeOf(3) === "3/0" && badgeOf(0) === "0/0" && badgeOf(null) === "/0" && badgeOf("") === "/0", "A BADGE THAT IS A NUMBER is shown as its digits, 0 too; null and empty text leave the slot empty", [badgeOf(3), badgeOf(0), badgeOf(null), badgeOf("")].join(" | "));
+  const bare = { machines: [{ name: "pc", made: 0 }], thrall: [{ machine: "pc", entry: "e", orcs: 2, working: 2, waitingFounder: 0, blocked: 0, unknown: 0, hasStatus: false, census: null }], cards: [] };
+  check((() => { try { const tv = LC.laneCardView(bare, LC.THRALL_LANE, { nowMs }); return tv !== null && tv.lines.every((l) => l.label !== "Waiting on the founder"); } catch (x) { return false; } })(), "a Thrall entry with no list of lanes waiting on the founder draws, with no such line");
+  const dupes = P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("thrall"), card("A"), card("A", { now: "the second A" }), card("B")] }), "work", m1.keyId);
+  check(dupes.ok && dupes.value.dropped === 2 && dupes.value.cards.map((x) => x.lane).join(",") === "A,B" && dupes.value.cards[0].now === "doing A", "ONE ID IS ONE CARD: a lane card with the Thrall's id, and a second card of one id, are dropped and counted; the first stands", JSON.stringify(dupes.value && dupes.value.cards.map((x) => [x.lane, x.now])));
+  const lo = P.readCardsSnapshot(cardsBody(m1, { name: "pc", left: 3, areasLeft: 7 }), "work", m1.keyId);
+  const lom = P.mergeCards([{ entry: "e1", seq: 1, value: lo.value }]);
+  check(lo.ok && lo.value.cardsLeftOut === 3 && lo.value.areasLeftOut === 7 && lom.machines[0].cardsLeftOut === 3 && lom.machines[0].areasLeftOut === 7 && P.readCardsSnapshot(cardsBody(m1, { name: "pc", areasLeft: -2 }), "work", m1.keyId).value.areasLeftOut === 0, "CARDS AND AREAS LEFT OUT are read from the snapshot and carried per machine for the page to say; a count that is no count is none", JSON.stringify(lom.machines));
+  check(P.streamMovesPlace({ entry: "e1", lane: "" }, "e1") && !P.streamMovesPlace({ entry: "e1", lane: "E" }, "e1") && !P.streamMovesPlace({ entry: "e2", lane: "" }, "e1") && !P.streamMovesPlace(null, "e1"), "HIS PLACE MOVES ONLY IN THE WHOLE LOG of the picked pairing: never in a lane's stream, never in another pairing's log, never on the cards page");
+  const twin = P.mergeCards([{ entry: "e1", seq: 1, value: { ...lo.value, name: "pc", made: 1 } }, { entry: "e2", seq: 1, value: { ...lo.value, name: "pc", made: 2 } }]);
+  check(twin.machines.length === 1 && twin.machines[0].entry === "e2", "KNOWN LIMIT: two machines that send one name are merged as one, the newest standing - machines are told apart by the name each is given (its machineName setting), so two must be named apart");
   a.phone.lock(p2.id);
   c = await a.phone.cards(a.paired.id);
   check(c.machines.every((x) => x.entry !== p2.id), "a locked pairing's cards are not shown");

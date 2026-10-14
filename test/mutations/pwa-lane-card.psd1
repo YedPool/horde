@@ -10,8 +10,8 @@
            Find = '  head.appendChild(slot);'
            Replace = '  if (slot.textContent || badge) head.appendChild(slot);' }
         @{ Name = "the-badge-is-dropped"
-           Find = 'if (typeof badge === "string") slot.textContent = badge; else slot.appendChild(badge);'
-           Replace = 'if (typeof badge === "string") slot.textContent = badge;' }
+           Find = 'slot.textContent = String(badge); else slot.appendChild(badge);'
+           Replace = 'slot.textContent = String(badge);' }
         @{ Name = "the-tap-is-not-the-pages"
            Find = 'box.addEventListener("click", () => onOpen({ lane: v.lane, machine: v.machine, entry: v.entry }));'
            Replace = 'box.addEventListener("click", () => onOpen({ lane: v.lane, machine: v.machine }));' }
@@ -21,5 +21,11 @@
         @{ Name = "the-thrall-is-not-lane-thrall"
            Find = 'export const THRALL_LANE = "thrall";'
            Replace = 'export const THRALL_LANE = "Thrall";' }
+        @{ Name = "a-number-badge-is-appended-as-a-node"
+           Find = 'if (typeof badge === "string" || typeof badge === "number") slot.textContent = String(badge);'
+           Replace = 'if (typeof badge === "string") slot.textContent = String(badge);' }
+        @{ Name = "a-thrall-with-no-founder-lanes-throws"
+           Find = 'words: (t.waitingFounderLanes || []).join(", ") }'
+           Replace = 'words: t.waitingFounderLanes.join(", ") }' }
     )
 }

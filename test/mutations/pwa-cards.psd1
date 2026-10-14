@@ -32,8 +32,8 @@
            Find = 'if (b.horde !== horde || b.machine !== machine) return no("the cards body names another horde or machine");'
            Replace = '' }
         @{ Name = "a-bad-lane-id-shown"
-           Find = 'if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0) { dropped++; continue; }'
-           Replace = 'if (!c || typeof c !== "object") { dropped++; continue; }' }
+           Find = 'if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }'
+           Replace = 'if (!c || typeof c !== "object" || lanesSeen.has(c.lane)) { dropped++; continue; }' }
         @{ Name = "the-machines-note-words-shown"
            Find = 'blockedText: cardText(c.blockedText), note: CARD_FORM_WORDS[c.form],'
            Replace = 'blockedText: cardText(c.blockedText), note: cardText(c.note) || CARD_FORM_WORDS[c.form],' }
@@ -43,5 +43,23 @@
         @{ Name = "the-stream-limit-not-said"
            Find = 'export const STREAM_LIMIT_WORDS = "This phone holds only the newest part of the progress log (its last 100 sends), so a quiet lane may show few of its older updates here.";'
            Replace = 'export const STREAM_LIMIT_WORDS = "";' }
+        @{ Name = "a-lane-card-may-be-the-thralls"
+           Find = 'const lanesSeen = new Set(["thrall"]);'
+           Replace = 'const lanesSeen = new Set();' }
+        @{ Name = "two-cards-of-one-id-both-kept"
+           Find = '    lanesSeen.add(c.lane);'
+           Replace = '' }
+        @{ Name = "areas-left-out-not-read"
+           Find = 'areasLeftOut: cardCount(b.areasLeftOut) || 0, dropped } };'
+           Replace = 'areasLeftOut: 0, dropped } };' }
+        @{ Name = "areas-left-out-not-carried-per-machine"
+           Find = 'cardsLeftOut: s.value.cardsLeftOut, areasLeftOut: s.value.areasLeftOut || 0 });'
+           Replace = 'cardsLeftOut: s.value.cardsLeftOut, areasLeftOut: 0 });' }
+        @{ Name = "the-place-moves-in-a-lanes-stream"
+           Find = 'return !!stream && stream.lane === "" && stream.entry === picked;'
+           Replace = 'return !!stream && stream.entry === picked;' }
+        @{ Name = "the-place-moves-in-another-pairings-log"
+           Find = 'return !!stream && stream.lane === "" && stream.entry === picked;'
+           Replace = 'return !!stream && stream.lane === "";' }
     )
 }

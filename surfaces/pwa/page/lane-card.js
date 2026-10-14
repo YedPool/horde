@@ -10,9 +10,11 @@
 //     laneId   the lane: an Orc's letter as its lane file says it ("A", "B", "F1", ...), or "thrall"
 //     machine  which machine's card, by name, when the lane is on more than one; left out, the first by
 //              name. A Thrall card is always one machine's
-//     badge    THE ONE OPEN SLOT: an element, or a short text, put in the card's head beside its name -
-//              the Progress tab leaves it empty; the decisions page fills it with the lane's open
-//              questions. The slot is in every card, empty or not, so a card is the same either way
+//     badge    THE ONE OPEN SLOT: an element, a short text or a number, put in the card's head beside
+//              its name - the Progress tab leaves it empty; the decisions page fills it with the lane's
+//              open questions. A number is shown as its digits, 0 too (review of PR 244: a number was
+//              handed to appendChild and threw); null, undefined or "" leave the slot empty. The slot is
+//              in every card, empty or not, so a card is the same either way
 //     onOpen   called with { lane, machine, entry } when the card is tapped - entry the phone's pairing
 //              whose machine sent it; no onOpen, and a tap does nothing
 //     nowMs    the time the card's age is said against; left out, now
@@ -26,7 +28,8 @@
 //     waitingFounderLanes: [lane], census: { running, waiting } | null, refused: [field] },
 //     cards: [{ lane, name, form (standard|other|missing|unreadable), asOf, now, lastDone, waitingOn,
 //     blocked (yes|no|""), blockedText, note, tasksOpen, doneWeek, refused: [field] }],
-//     cardsLeftOut, areas: [{ area, lanes: [lane] }] }
+//     cardsLeftOut, areas: [{ area, lanes: [lane] }], areasLeftOut }. Within one snapshot no two cards
+//     share a lane, and none is "thrall": readCardsSnapshot drops such a card and counts it
 //
 // EVERY TEXT IS SET AS TEXT (textContent): nothing from a machine is read as markup.
 import { ageWords } from "../relay/protocol.js";
@@ -46,7 +49,7 @@ export function laneCardView(lanes, laneId, { machine = "", nowMs = Date.now() }
       lines: [
         { label: "Now", words: t.now || (t.hasStatus ? "" : "The Thrall keeps no status of its own yet; this card is made from the lanes.") },
         { label: "Fleet", words: t.orcs + " Orcs - " + t.working + " working, " + t.waitingFounder + " waiting on the founder, " + t.blocked + " blocked" + (t.unknown ? ", " + t.unknown + " not known" : "") },
-        { label: "Waiting on the founder", words: t.waitingFounderLanes.join(", ") }
+        { label: "Waiting on the founder", words: (t.waitingFounderLanes || []).join(", ") }
       ].filter((l) => l.words),
       stats: t.census ? "Sessions running " + t.census.running + " - waiting on a person " + t.census.waiting : "Sessions: not known on this machine",
       note: ""
@@ -78,7 +81,7 @@ export function renderLaneCard(doc, lanes, laneId, { machine = "", badge = null,
   head.appendChild(el("span", "card-name", v.title));
   // THE ONE OPEN SLOT, the page's to fill.
   const slot = el("span", "card-badge");
-  if (badge !== null && badge !== undefined && badge !== "") { if (typeof badge === "string") slot.textContent = badge; else slot.appendChild(badge); }
+  if (badge !== null && badge !== undefined && badge !== "") { if (typeof badge === "string" || typeof badge === "number") slot.textContent = String(badge); else slot.appendChild(badge); }
   head.appendChild(slot);
   head.appendChild(el("span", "card-from", v.from));
   box.appendChild(head);

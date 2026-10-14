@@ -888,8 +888,12 @@ export function readCardsSnapshot(bodyBytes, horde, machine) {
   if (!name) return no("the cards snapshot names no machine");
   let dropped = 0;
   const cards = [];
+  // ONE ID IS ONE CARD, and "thrall" is the Thrall's (surfaces/pwa/page/lane-card.js, THRALL_LANE): a lane
+  // card by that id never opened, and a second card of one id was drawn as the first (review of PR 244).
+  const lanesSeen = new Set(["thrall"]);
   for (const c of b.cards) {
-    if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0) { dropped++; continue; }
+    if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }
+    lanesSeen.add(c.lane);
     cards.push({ lane: c.lane, name: cardText(c.name) || c.lane, form: c.form, asOf: timeOf(c.asOf), now: cardText(c.now), lastDone: cardText(c.lastDone), waitingOn: cardText(c.waitingOn),
       blocked: c.blocked === "yes" || c.blocked === "no" ? c.blocked : "", blockedText: cardText(c.blockedText), note: CARD_FORM_WORDS[c.form],
       tasksOpen: cardCount(c.tasksOpen), doneWeek: cardCount(c.doneWeek), refused: cardList(c.refused, (x) => typeof x === "string" && WORD.test(x.toLowerCase())) });
@@ -904,7 +908,7 @@ export function readCardsSnapshot(bodyBytes, horde, machine) {
     const lanes = a.lanes.filter((x) => typeof x === "string" && CARD_LANE.test(x));
     if (lanes.length) areas.push({ area: a.area, lanes });
   }
-  return { ok: true, reason: "", value: { snapshot: b.snapshot, made: timeOf(b.made), name, thrall, cards, cardsLeftOut: cardCount(b.cardsLeftOut) || 0, areas, dropped } };
+  return { ok: true, reason: "", value: { snapshot: b.snapshot, made: timeOf(b.made), name, thrall, cards, cardsLeftOut: cardCount(b.cardsLeftOut) || 0, areas, areasLeftOut: cardCount(b.areasLeftOut) || 0, dropped } };
 }
 
 // The lanes a log entry belongs to: the lanes it names itself (lane, comma separated), which WIN over its
@@ -922,7 +926,7 @@ export function entryLanes(entry, areas) {
 // The cards of every machine the phone holds a snapshot of, MERGED BY MACHINE NAME: per name, the newest
 // snapshot (by when it was made, then by its envelope's seq) stands; two pairings that report one name
 // show it once. snapshots: [{ entry, seq, value }] (value readCardsSnapshot's). -> { machines, thrall,
-// cards }: machines [{ name, entry, made, areas, cardsLeftOut }] by name; thrall one card per machine;
+// cards }: machines [{ name, entry, made, areas, cardsLeftOut, areasLeftOut }] by name; thrall one card per machine;
 // cards every lane card, each with its machine's name and entry, ordered by lane, then machine.
 export function mergeCards(snapshots) {
   const byName = new Map();
@@ -935,7 +939,7 @@ export function mergeCards(snapshots) {
   const machines = [], thrall = [], cards = [];
   for (const name of names) {
     const s = byName.get(name);
-    machines.push({ name, entry: s.entry, made: s.value.made, areas: s.value.areas, cardsLeftOut: s.value.cardsLeftOut });
+    machines.push({ name, entry: s.entry, made: s.value.made, areas: s.value.areas, cardsLeftOut: s.value.cardsLeftOut, areasLeftOut: s.value.areasLeftOut || 0 });
     thrall.push({ ...s.value.thrall, machine: name, entry: s.entry });
     for (const c of s.value.cards) cards.push({ ...c, machine: name, entry: s.entry });
   }
@@ -948,6 +952,14 @@ export function mergeCards(snapshots) {
 export function laneStream(items, lane, areas) {
   if (!lane) return items.slice();
   return items.filter((it) => entryLanes(it, areas).indexOf(lane) >= 0);
+}
+
+// HIS PLACE MOVES ONLY IN THE WHOLE LOG OF THE PICKED HORDE: true for the stream { entry, lane } only when it
+// is the Thrall's (lane "", the whole log) of the picked pairing. A lane's stream skips other lanes'
+// entries, so reading on in it, or "Mark all read" there, would mark those read unseen; another
+// pairing's log keeps no place of the picked one's (surfaces/pwa/page/app.js, readAsSeen).
+export function streamMovesPlace(stream, picked) {
+  return !!stream && stream.lane === "" && stream.entry === picked;
 }
 
 // "4 min ago", "3 h ago", "2 days ago": how old a card's word is, from its time and now (milliseconds);
