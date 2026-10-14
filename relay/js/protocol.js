@@ -417,6 +417,41 @@ export async function vouchChallenge(horde, agreePublic) { return sha256(utf8("h
 export function phoneKeyBody(agreePublic, vouch) {
   return utf8('{"v":1,"agreePublic":"' + b64u(agreePublic) + '","authenticatorData":"' + b64u(vouch.authenticatorData) + '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"}');
 }
+// relay/Trust.ps1's PHONE VOUCH ITEM (THE VOUCH TRAVELS BY ITSELF): the vouch, by itself, put into the
+// machine's mailbox - ONE passkey assertion announces the phone, so it can ride the unlock's prompt.
+// Its one canonical text (Get-HordeRelayPhoneVouchSpec: these members, in this order), and the relay
+// key it goes under: one per passkey and phone key, so a put made again stores once.
+export function phoneVouchText({ horde, by, agreePublic, vouch }) {
+  if (typeof horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (!KEY_ID.test(by)) throw new Error("the voucher is a key id");
+  if (!(agreePublic instanceof Uint8Array) || agreePublic.length !== 65) throw new Error("the phone key is a 65-byte point");
+  return '{"v":1,"kind":"horde-relay-phone-vouch","horde":"' + horde + '","by":"' + by + '","agreePublic":"' + b64u(agreePublic) + '","authenticatorData":"' + b64u(vouch.authenticatorData) +
+    '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"}';
+}
+export function phoneVouchKey(by, phoneKeyId) { return "vouch/" + by + "/" + phoneKeyId; }
+
+// relay/Trust.ps1's device id: the first 16 bytes of SHA-256 of the credential id, as hex.
+export async function deviceIdOf(credentialId) { return hex((await sha256(credentialId)).slice(0, 16)); }
+
+// relay/Pairing.ps1's CONFIRMED RECORD (TELLING THE PHONE IT IS CONFIRMED): the machine's word, in the
+// offer's pairing mailbox, that the founder typed this phone's number there. It grants nothing; it only
+// says a passkey prompt now is worth showing. { ok, reason, value: { confirmedAt } }; never throws.
+export const CONFIRMED_DOMAIN = "horde-relay/pairing/v1 confirmed\n";
+export function confirmedBytes({ horde, offer, device, confirmedAt }) { return utf8(CONFIRMED_DOMAIN + horde + "\n" + offer + "\n" + device + "\n" + confirmedAt); }
+export function pairingConfirmedKey(offer) { return "confirmed/" + offer; }
+const CONFIRMED = /^\{"v":1,"kind":"horde-relay-pairing-confirmed","horde":"([a-z0-9][a-z0-9-]{0,62})","offer":"([0-9a-f]{32})","device":"([0-9a-f]{32})","confirmedAt":(0|[1-9][0-9]{0,15}),"sig":"([A-Za-z0-9_-]{86})"\}$/;
+export async function readPairingConfirmed(text, { horde, offer, device, signPublic }) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  const m = typeof text === "string" && text.length < 1024 ? CONFIRMED.exec(text) : null;
+  if (!m) return no("not a confirmed record in its canonical form");
+  if (m[1] !== horde || m[2] !== offer || m[3] !== device) return no("a confirmed record for another horde, offer or device");
+  const confirmedAt = Number(m[4]);
+  if (!Number.isSafeInteger(confirmedAt)) return no("its time is not a whole number");
+  let sig;
+  try { sig = unb64u(m[5]); } catch (x) { return no("its signature is not base64url"); }
+  if (!(await verifyMachineSignature(signPublic, confirmedBytes({ horde, offer, device, confirmedAt }), sig))) return no("its signature is not the machine's");
+  return { ok: true, reason: "", value: { confirmedAt } };
+}
 
 // --- the decisions channel (channels/decisions/Channel.ps1) ---
 
