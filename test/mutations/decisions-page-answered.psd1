@@ -19,22 +19,22 @@
            Find = '      if (st.answered) { return (st.local || lingers(q)) ? "main" : "thrall"; }'
            Replace = '      if (st.answered && false) { return (st.local || lingers(q)) ? "main" : "thrall"; }' }
         @{ Name = "the-list-is-not-sorted"
-           Find = '      inOrder(mine, orderKey).forEach(function (q) {'
+           Find = '      inOrder(mine, orderKey, orderTurned).forEach(function (q) {'
            Replace = '      mine.forEach(function (q) {' }
         @{ Name = "what-is-with-the-keeper-is-not-sorted"
-           Find = '      folds.thrall = inOrder(folds.thrall, orderKey);'
+           Find = '      folds.thrall = inOrder(folds.thrall, orderKey, orderTurned);'
            Replace = '' }
         @{ Name = "the-chosen-order-is-not-kept"
-           Find = '      try { if (prefs) { prefs.setItem(ORDER_KEY, orderKey); } } catch (e) { /* only the remembering is lost */ }'
+           Find = '      try { if (prefs) { prefs.setItem(ORDER_KEY, orderKey); prefs.setItem(ORDER_TURN_KEY, orderTurned ? "1" : "0"); } } catch (e) { /* only the remembering is lost */ }'
            Replace = '' }
         @{ Name = "an-order-that-is-none-of-the-three-is-taken"
            Find = '    return DEFAULT_ORDER;'
            Replace = '    return key;' }
         @{ Name = "choosing-an-order-draws-nothing"
-           Find = '      if (lastJson !== null) { draw(); } else { drawOrderBar(); }'
-           Replace = '      drawOrderBar();' }
+           Find = '      if (lastJson === null) { drawOrderBar(); return; }'
+           Replace = '      drawOrderBar(); return;' }
         @{ Name = "the-button-pressed-is-always-the-first"
-           Find = '        var on = ORDERS[i].key === orderKey;'
+           Find = '        var on = o.key === orderKey;'
            Replace = '        var on = i === 0;' }
         @{ Name = "only-the-importance-is-said-in-plain-words"
            Find = '      [textOf(q.importanceShown), textOf(q.blocksShown)].forEach(function (words) {'
