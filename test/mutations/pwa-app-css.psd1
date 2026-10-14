@@ -16,5 +16,15 @@
         @{ Name = "bar-scrolls-away"
            Find = '#bar { position: sticky;'
            Replace = '#bar { position: static;' }
+        # A stream's entries folded to one line (the founder asked, 2026-10-14; test-pwa-browser section 12b).
+        @{ Name = "progress-folded-entry-shows-everything"
+           Find = '.progress-item.collapsed > :not(.progress-line) { display: none; }'
+           Replace = '' }
+        @{ Name = "progress-folded-long-title-wraps"
+           Find = 'margin: 0; white-space: nowrap;'
+           Replace = 'margin: 0; white-space: normal;' }
+        @{ Name = "progress-open-entry-shows-two-times"
+           Find = '.progress-item:not(.collapsed) .progress-when { display: none; }'
+           Replace = '' }
     )
 }
