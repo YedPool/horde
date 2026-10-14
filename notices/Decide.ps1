@@ -27,7 +27,12 @@
 #      area's). An entry is ONE notice when ANY of its lanes is followed - however many are - and never
 #      again, however often it is offered. An entry of no lane is the Thrall's: it shows only in the
 #      Thrall's stream on the phone, so following the Thrall follows those.
-#   3. NOTHING ELSE. No chat line, no decisions question (the decisions switch and push are later work).
+#   3. A TRUST EVENT OF THIS MACHINE (Submit-HordeSystemNotice; phone-started pairing, relay/Join.ps1 and
+#      threat 4 of its design: "every trusted device is told"): a new phone asked to join, and what became
+#      of it - approved, rejected, expired. From "Horde", never muted, and with NO HOURLY CAP: the relay
+#      already holds join requests to one pending and a few an hour, and a security event is never held
+#      back. The same secret check and cut as rule 1.
+#   4. NOTHING ELSE. No chat line, no decisions question (the decisions switch and push are later work).
 #
 # THE FOLLOW SWITCHES (Set-HordeNoticeFollow) are set on the phone and reach the machine SEALED, signed by
 # the founder's passkey, the way an answer does (channels/notices/Channel.ps1); the machine keeps them
@@ -131,6 +136,27 @@ function Submit-HordeNotify {
         if ($said.refused) { return [pscustomobject]@{ outcome = "sent-refused"; reason = "the text looked like it held a secret, so the founder was sent a notice saying so, not the text"; notice = $written[0] } }
         return [pscustomobject]@{ outcome = "sent"; reason = ""; notice = $written[0] }
     }
+    if ($null -ne $answer.notice) { Invoke-HordeNoticeHook -Notices @($answer.notice) }
+    return $answer
+}
+
+function Submit-HordeSystemNotice {
+    # A trust event of this machine (rule 3 of the header), from "Horde". { outcome; reason; notice }:
+    # "sent", "sent-refused" (it looked like a secret: the fixed sentence went) or "failed".
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [string]$HordeHome = "", $Now = $null)
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $fail = { param([string]$Why) return [pscustomobject]@{ outcome = "failed"; reason = $Why; notice = $null } }
+    if ($Text.Trim() -eq "" -or $Text -cmatch "[\r\n]") { return (& $fail "no notice was sent: the text is not one line") }
+    $st = Get-HordeNoticeStore -HordeHome $HordeHome
+    if (-not $st.ok) { return (& $fail ("no notice was sent: " + $st.reason)) }
+    $said = Get-HordeNoticeText -Text $Text -Chars ([int]$st.settings.textChars)
+    try {
+        $answer = Use-HordeNoticeLock -Store $st.store -Body {
+            $one = [pscustomobject]@{ id = (New-HordeNoticeId); ts = (Get-HordeNoticeTime -Now $Now); kind = "notify"; from = "Horde"; text = $said.text; lane = ""; entry = "" }
+            $written = @(Add-HordeNoticeLines -Store $st.store -Notices @($one) -Keep ([int]$st.settings.keepNotices))
+            return [pscustomobject]@{ outcome = $(if ($said.refused) { "sent-refused" } else { "sent" }); reason = ""; notice = $written[0] }
+        }
+    } catch { return (& $fail ("no notice was sent: " + $_.Exception.Message)) }
     if ($null -ne $answer.notice) { Invoke-HordeNoticeHook -Notices @($answer.notice) }
     return $answer
 }
