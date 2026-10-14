@@ -51,6 +51,25 @@
 # every record here, and the key is trusted again. A vouch is never answered "already there" unless the
 # key IS trusted by that very vouch.
 # A phone key has no revocation of its own yet: rotating the phone key is the PWA's later pull request.
+#
+# THE VOUCH TRAVELS BY ITSELF (the founder, 2026-10-14: "that piece should happen automatically on
+# login - I don't see why I should press a button"). An iPhone starts a passkey prompt only from a tap,
+# one prompt a tap, so the announcement must cost ONE assertion, and ride a prompt the phone shows
+# anyway: the unlock, or the one "Finish pairing" tap. The vouch is that assertion - its challenge is
+# Get-HordeRelayPhoneKeyChallenge, fixed for a horde and a key, so the unlock's PRF get() can carry it
+# - and it needs no envelope around it: it is a public statement (a public key, a public signature),
+# it is verified under a TRUSTED device's key on arrival and again on every read, and adding it twice is
+# the same record. So the phone puts it into the machine's mailbox as a PHONE VOUCH ITEM, kind
+# horde-relay-phone-vouch (Get-HordeRelayPhoneVouchSpec): horde, by (the passkey's key id), agreePublic,
+# and the assertion. Receive-HordeRelayPhoneVouch takes it in (channels/Port.ps1 hands it over before it
+# reads an envelope). WHY NOT ONE ASSERTION OVER BOTH THE ENVELOPE AND THE VOUCH: an envelope's
+# signature is over its own bytes (seq, nonce, ciphertext) and the stored vouch must verify by itself
+# forever after the envelope is gone; one challenge cannot be both without changing what
+# relay/Envelope.ps1 verifies and what every stored phone record means. An envelope signed by the
+# passkey still takes a vouch in (channels/trust): an older phone keeps working.
+# NOTHING IS TRUSTED THAT WAS NOT BEFORE: a vouch item by a pending, expired, revoked or unknown
+# device, for another horde, by another key than it names, or with no signature, is refused and changes
+# nothing; the phone sends it again only at its next unlock, never in a loop.
 # Each vouch is kept in its record and verified again on every read, like a countersignature.
 #
 # EVERY READ RE-CHECKS EVERY RECORD: canonical form, key ids that are their keys', public keys that are
@@ -580,4 +599,46 @@ function Find-HordeRelayPhoneKeys {
     }
     $out = @($out.ToArray())
     return (New-HordeKnown -Value $out)
+}
+
+function Get-HordeRelayPhoneVouchSpec {
+    # THE PHONE VOUCH ITEM (THE VOUCH TRAVELS BY ITSELF, in the header). relay/js/protocol.js's
+    # phoneVouchText writes the same text.
+    return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "horde", "name", "by", "hex32", "agreePublic", "point",
+        "authenticatorData", "b64u", "clientDataJSON", "b64u", "signature", "b64u"))
+}
+
+function Test-HordeRelayPhoneVouchText {
+    # Does -Text say it is a phone vouch item (its first members)? Only a routing question: what it holds
+    # is judged by Receive-HordeRelayPhoneVouch.
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    return ($null -ne $Text -and $Text.StartsWith('{"v":1,"kind":"horde-relay-phone-vouch",'))
+}
+
+function Receive-HordeRelayPhoneVouch {
+    # One phone vouch item from the machine's mailbox into the trust store (the header). { outcome;
+    # reason }: done (the key is trusted by this vouch, now or already), refused (never will be: the
+    # item, the device or the vouch) or held (the trust store cannot be read now: the item comes again).
+    # Never throws.
+    param([string]$HordeHome = "", [AllowNull()][AllowEmptyString()][string]$Text, $Now = $null)
+    $no = { param($Why) [pscustomobject]@{ outcome = "refused"; reason = $Why } }
+    if ($null -eq $Text) { $Text = "" }
+    # The three base64url parts of a WebAuthn assertion are a few hundred characters; 16384 is room.
+    if ($Text.Length -gt 16384) { return (& $no ("the phone vouch is " + $Text.Length + " characters, over the 16384 one may be; it is not read")) }
+    $r = Read-HordeRelayRecordText -Text $Text -Spec (Get-HordeRelayPhoneVouchSpec) -Kind "horde-relay-phone-vouch" -What "the phone vouch"
+    if (-not $r.ok) { return (& $no $r.reason) }
+    $v = $r.value
+    if ($v.signature -ceq "" -or $v.authenticatorData -ceq "" -or $v.clientDataJSON -ceq "") { return (& $no "the phone vouch carries no signature: an unsigned announcement is never taken") }
+    $horde = Get-HordeRelayHorde -HordeHome $HordeHome
+    if ($horde.state -cne "known") { return [pscustomobject]@{ outcome = "held"; reason = ("this machine's horde is not named: " + $horde.reason) } }
+    if ($v.horde -cne $horde.value) { return (& $no ("the phone vouch is for the horde " + $v.horde + ", not this one (" + $horde.value + ")")) }
+    $s = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
+    if (-not $s.ok) { return [pscustomobject]@{ outcome = "held"; reason = ("the trust store cannot be read: " + $s.reason) } }
+    try {
+        $added = Add-HordeRelayPhoneKey -HordeHome $HordeHome -AgreePublic (ConvertFrom-HordeRelayBase64Url -Text $v.agreePublic) -By $v.by `
+            -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $v.authenticatorData) -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $v.clientDataJSON) `
+            -Signature (ConvertFrom-HordeRelayBase64Url -Text $v.signature) -Now $Now
+    } catch { return (& $no ("the phone vouch could not be read: " + $_.Exception.Message)) }
+    if ($added.state -cne "known") { return (& $no ("the phone key is refused: " + $added.reason)) }
+    return [pscustomobject]@{ outcome = "done"; reason = ("the phone key " + $added.value.record.agreeKeyId + " is " + $(if ($added.value.duplicate) { "already" } else { "now" }) + " in the trust store, vouched for by " + $added.value.record.by + " (a phone vouch item)") }
 }
