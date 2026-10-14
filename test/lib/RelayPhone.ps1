@@ -85,14 +85,15 @@ function New-HordeTestPhoneEnvelope {
     # An envelope from the phone: -Body sealed to -To (65-byte agreement keys), signed with the passkey.
     # -Seq picks the sequence number; without it the phone's next on that channel. -From signs as
     # another key id than the passkey's (a forgery). { text; key; header }.
-    param($Phone, [string]$Kind, [string]$Channel, [byte[]]$Body, [object[]]$To, [long]$Seq = -1, [string]$From = "")
+    # -Now: the time the envelope says it was signed (a UTC DateTime), for an answer sent again late.
+    param($Phone, [string]$Kind, [string]$Channel, [byte[]]$Body, [object[]]$To, [long]$Seq = -1, [string]$From = "", $Now = $null)
     if ($Seq -lt 0) {
         if (-not $Phone.seq.ContainsKey($Channel)) { $Phone.seq[$Channel] = [long]0 }
         $Phone.seq[$Channel] = [long]$Phone.seq[$Channel] + 1
         $Seq = $Phone.seq[$Channel]
     }
     $who = $(if ($From -cne "") { $From } else { $Phone.keyId })
-    $draft = New-HordeRelayEnvelopeDraft -Kind $Kind -Channel $Channel -From $who -Seq $Seq -Body $Body -Recipients $To
+    $draft = New-HordeRelayEnvelopeDraft -Kind $Kind -Channel $Channel -From $who -Seq $Seq -Body $Body -Recipients $To -Now $Now
     $a = New-HordeTestPhoneAssertion -Phone $Phone -Challenge $draft.challenge
     $text = Complete-HordeRelayEnvelope -Draft $draft -AuthenticatorData $a.authenticatorData -ClientDataJson $a.clientDataJson -Signature $a.signature
     return [pscustomobject]@{ text = $text; key = (Get-HordeRelayReplayKey -Header $draft.header); header = $draft.header; draft = $draft }

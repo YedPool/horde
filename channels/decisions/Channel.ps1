@@ -135,6 +135,10 @@
 #             phone put under a seq at or below it, and not missing, is RECEIVED BY THE PC;
 #   missing   the seqs below through the journal never recorded (the newest 32, within 4096): the
 #             phone resends an answer it put under one of them, as a new envelope;
+#   checked   the lowest seq the missing list looked at (review of PR 262, M1: the list is cut at its
+#             newest 32, and a seq below the cut used to read as received): from checked to through,
+#             what is not missing was recorded; below checked nothing is said, and the phone counts a
+#             seq there as missing - sending an answer twice costs nothing, losing it costs everything;
 #   applied   the answerIds the list took (Accept done: the store holds the record), newest 64;
 #   refused   the answerIds refused for good, newest 16; an id applied is never listed refused.
 # IDS AND NUMBERS ONLY, NEVER AN ANSWER'S WORDS. The journal answers through and missing by listing its
@@ -143,6 +147,11 @@
 # The receipts are asked on every look, and a change of them sends a snapshot as a change of the list
 # does. A RESENT ANSWER IS APPLIED ONCE: its request id is derived from the passkey and the answerId
 # (above), so the second envelope is the first record answered again.
+# A STALE ANSWER NEVER WINS (review of PR 262, M2): the ledger also keeps, for each passkey and each
+# question and part, when the passkey signed the newest answer applied there; an answer under another
+# answerId signed before that is refused as superseded, and listed refused. The phone resends an answer
+# under the time it was first signed, so a lost older answer sent again is still the older one.
+# PAST 16 PASSKEYS the phones the snapshot is sealed to come first, then the most recently active.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -171,6 +180,9 @@ $script:HordeDecisionsChannelReceiptsRefused = 16
 $script:HordeDecisionsChannelReceiptsMissing = 32
 $script:HordeDecisionsChannelReceiptsLookBack = 4096
 $script:HordeDecisionsChannelReceiptsStreams = 16
+# The question-and-part slots whose newest applied answer's signing time is kept, for each passkey
+# (A STALE ANSWER NEVER WINS): about 25 bytes each in the ledger file, never in a receipt.
+$script:HordeDecisionsChannelReceiptsSlots = 512
 
 function Get-HordeDecisionsChannelAnswerId {
     # The decisions request id of one answer (the header): 32 lower-case hex.
@@ -226,7 +238,7 @@ function Invoke-HordeDecisionsChannelAccept {
     $out = Invoke-HordeDecisionsChannelApply -Context $Context -Item $Item -Answer $r
     # A ledger that cannot be kept costs the phone its word "applied" for this answer, never the answer:
     # it is in the list, and the Tick says the ledger's trouble.
-    $null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.answerId -Outcome $out.outcome
+    $null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.answerId -Outcome $out.outcome -Slot (Get-HordeDecisionsChannelSlot -Answer $r.value) -SignedAt ([long]$Item.ts)
     return $out
 }
 
@@ -240,6 +252,12 @@ function Invoke-HordeDecisionsChannelApply {
     if (-not $made.value.sent -or $made.value.kind -cne "snapshot" -or -not $r.value.snapshot.StartsWith($Context.signKeyId + "/decisions/")) {
         return [pscustomobject]@{ outcome = "refused"; reason = ("the snapshot the answer names (" + $r.value.snapshot + ") is not a snapshot this machine sent") }
     }
+    # A STALE ANSWER NEVER WINS (review of PR 262, M2): an answer signed BEFORE one this passkey already
+    # had applied to the same question and part is refused as superseded - else a lost older answer,
+    # sent again, would be appended after the newer one and stand as his answer. The same answerId sent
+    # again is not stale: the list answers it as the record it already is.
+    $older = Test-HordeDecisionsChannelSuperseded -Context $Context -From $Item.from -Answer $r.value -SignedAt ([long]$Item.ts)
+    if ($older -cne "") { return [pscustomobject]@{ outcome = "refused"; reason = $older } }
     $request = @{
         id = (Get-HordeDecisionsChannelAnswerId -From $Item.from -AnswerId $r.value.answerId); actor = "founder"; number = $r.value.number
         speaker = "founder"; route = "phone"; text = $r.value.text; wordingVersion = $r.value.wordingVersion; evidence = $Item.evidence
@@ -369,7 +387,13 @@ function Read-HordeDecisionsChannelLedgerFile {
         if ($null -eq $j -or $j.v -ne 1) { return @{} }
         foreach ($s in @($j.streams)) {
             if ("$($s.from)" -cnotmatch '\A[0-9a-f]{32}\z') { return @{} }
-            $entry = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList) }
+            $entry = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList); latest = @{} }
+            if ($null -ne $s.PSObject.Properties["latest"]) {
+                foreach ($pr in @($s.latest.PSObject.Properties)) {
+                    if ("$($pr.Name)" -cnotmatch '\A[1-9][0-9]{0,8}(:[a-z])?\z' -or -not ($pr.Value -is [int] -or $pr.Value -is [long]) -or [long]$pr.Value -lt 0) { return @{} }
+                    $entry.latest["$($pr.Name)"] = [long]$pr.Value
+                }
+            }
             foreach ($list in @("applied", "refused")) {
                 foreach ($id in @($s.$list)) {
                     if ("$id" -cnotmatch '\A[0-9a-f]{32}\z') { return @{} }
@@ -397,6 +421,25 @@ function ConvertTo-HordeDecisionsChannelIdList {
     return ("[" + ((@($Ids) | ForEach-Object { '"' + $_ + '"' }) -join ",") + "]")
 }
 
+function Get-HordeDecisionsChannelSlot {
+    # The question and part an answer is to, as one key: "7", or "7:b" for part (b).
+    param($Answer)
+    return ("" + $Answer.number + $(if ("$($Answer.part)" -cne "") { ":" + $Answer.part } else { "" }))
+}
+
+function Test-HordeDecisionsChannelSuperseded {
+    # "" when -Answer may be applied; else the refusal: an answer this passkey signed LATER to the same
+    # question and part is already applied (the ledger's latest), and this answerId is not that one.
+    param($Context, [string]$From, $Answer, [long]$SignedAt)
+    $ledger = Get-HordeDecisionsChannelLedger -Context $Context
+    if (-not $ledger.streams.ContainsKey($From)) { return "" }
+    $mine = $ledger.streams[$From]
+    if ($mine.applied -ccontains $Answer.answerId) { return "" }
+    $slot = Get-HordeDecisionsChannelSlot -Answer $Answer
+    if (-not $mine.latest.ContainsKey($slot) -or [long]$mine.latest[$slot] -le $SignedAt) { return "" }
+    return ("superseded: question " + $Answer.number + $(if ("$($Answer.part)" -cne "") { " part (" + $Answer.part + ")" } else { "" }) + " already has an answer from this passkey signed later (at " + $mine.latest[$slot] + " ms) than this one (" + $SignedAt + " ms), so this older one is not applied")
+}
+
 function Add-HordeDecisionsChannelReceipt {
     # What Accept did with the answer -AnswerId from -From, into the ledger and its file: done is
     # applied, refused is refused, retry is nothing (the journal already says it is received). APPLIED
@@ -404,14 +447,22 @@ function Add-HordeDecisionsChannelReceipt {
     # is refused by the list (THE FIRST ANSWER WINS), and the phone must still see its first answer
     # applied. Each list keeps its newest (64 applied, 16 refused), so a receipt stays small. "" when
     # kept, else why not; never throws.
-    param($Context, [string]$From, [string]$AnswerId, [string]$Outcome)
+    # -Slot and -SignedAt: the question and part answered, and when the passkey signed the envelope;
+    # an applied answer raises the slot's latest to it (Test-HordeDecisionsChannelSuperseded).
+    param($Context, [string]$From, [string]$AnswerId, [string]$Outcome, [string]$Slot = "", [long]$SignedAt = 0)
     if ($Outcome -cne "done" -and $Outcome -cne "refused") { return "" }
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
-    if (-not $ledger.streams.ContainsKey($From)) { $ledger.streams[$From] = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList) } }
+    if (-not $ledger.streams.ContainsKey($From)) { $ledger.streams[$From] = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList); latest = @{} } }
     $mine = $ledger.streams[$From]
     if ($Outcome -ceq "done") {
-        if ($mine.applied -ccontains $AnswerId) { return "" }
-        [void]$mine.applied.Add($AnswerId)
+        $raised = ($Slot -cne "" -and (-not $mine.latest.ContainsKey($Slot) -or [long]$mine.latest[$Slot] -lt $SignedAt))
+        if ($raised) {
+            $mine.latest[$Slot] = $SignedAt
+            # The newest slots only: an answer to a question this old is refused by the list anyway.
+            while ($mine.latest.Count -gt $script:HordeDecisionsChannelReceiptsSlots) { $mine.latest.Remove((@($mine.latest.GetEnumerator() | Sort-Object Value | Select-Object -First 1)[0].Key)) }
+        }
+        if ($mine.applied -ccontains $AnswerId -and -not $raised) { return "" }
+        if ($mine.applied -cnotcontains $AnswerId) { [void]$mine.applied.Add($AnswerId) }
         while ($mine.applied.Count -gt $script:HordeDecisionsChannelReceiptsApplied) { $mine.applied.RemoveAt(0) }
         if ($mine.refused -ccontains $AnswerId) { $mine.refused.Remove($AnswerId) }
     } else {
@@ -422,10 +473,20 @@ function Add-HordeDecisionsChannelReceipt {
     try {
         $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
         [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
-        $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object { '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].refused) + '}' })
+        $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object {
+            $l = $ledger.streams[$_].latest
+            $latest = "{" + ((@($l.Keys | Sort-Object) | ForEach-Object { '"' + $_ + '":' + $l[$_] }) -join ",") + "}"
+            '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].refused) + ',"latest":' + $latest + '}'
+        })
         $temp = $path + "." + $PID + ".tmp"
-        [System.IO.File]::WriteAllText($temp, ('{"v":1,"streams":[' + ($streams -join ",") + ']}'), [System.Text.Encoding]::ASCII)
-        Move-HordeFileAtomic -From $temp -To $path
+        try {
+            [System.IO.File]::WriteAllText($temp, ('{"v":1,"streams":[' + ($streams -join ",") + ']}'), [System.Text.Encoding]::ASCII)
+            Move-HordeFileAtomic -From $temp -To $path
+        } catch {
+            # A FAILED MOVE LEAVES NO TEMP FILE BEHIND (review of PR 262): one is written on every change.
+            try { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } } catch { }
+            throw
+        }
         $ledger.problem = ""
         return ""
     } catch { $ledger.problem = "" + $_.Exception.Message; return $ledger.problem }
@@ -437,7 +498,8 @@ function Get-HordeDecisionsChannelReceipts {
     # one for each founder passkey that has sent this machine an answer. { text; problem }: problem is a
     # stream the journal could not list, which is left out and said by the Tick. NAMES ARE LISTED, ONE
     # RECORD IS READ: the journal's own stream listing, as every verdict uses it.
-    param($Context)
+    # -Prefer: the passkeys of the phones the snapshot is sealed to, always in it (review of PR 262, S2).
+    param($Context, [string[]]$Prefer = @())
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
     $root = Get-HordeRelayJournalRoot -HordeHome $Context.hordeHome
     $inDir = [System.IO.Path]::Combine($root, "in")
@@ -453,22 +515,36 @@ function Get-HordeDecisionsChannelReceipts {
     } catch { return [pscustomobject]@{ text = "[]"; problem = ("the journal's received streams could not be listed: " + $_.Exception.Message) } }
     $parts = New-Object System.Collections.ArrayList
     $problem = ""
-    foreach ($from in @($froms.Keys | Sort-Object | Select-Object -First $script:HordeDecisionsChannelReceiptsStreams)) {
+    # PAST THE CAP, THE NEWEST ACTIVITY FIRST, and the phones sealed to before them all (review of PR 262,
+    # S2: in key id order a newer passkey could get no receipt at all). A stream's activity is when its
+    # folder last changed: a record or a done mark written into it.
+    $when = @{}
+    foreach ($k in @($froms.Keys)) {
+        $when[$k] = [long]0
+        try { $d = Get-HordeRelayJournalStreamDir -Root $root -Direction "in" -From $k -Channel "decisions"; if ([System.IO.Directory]::Exists($d)) { $when[$k] = [System.IO.Directory]::GetLastWriteTimeUtc($d).Ticks } } catch { }
+    }
+    $chosen = @(@($froms.Keys) | Sort-Object @{ Expression = { if (@($Prefer) -ccontains $_) { 0 } else { 1 } } }, @{ Expression = { $when[$_] }; Descending = $true }, @{ Expression = { $_ } } | Select-Object -First $script:HordeDecisionsChannelReceiptsStreams)
+    foreach ($from in @($chosen | Sort-Object)) {
         $st = Get-HordeRelayJournalStream -Dir (Get-HordeRelayJournalStreamDir -Root $root -Direction "in" -From $from -Channel "decisions") -Direction "in" -From $from -Channel "decisions"
         if (-not $st.ok) { $problem = $st.reason; continue }
         $through = [long][System.Math]::Max([long]0, [long]$st.last)
         # THE MISSING: seqs below the highest that the journal never recorded - a hole the next envelope
         # of that phone showed (relay/Journal.ps1, gapBefore), and that it now never will take (out of
         # order). The newest of them, looked for no further back than the window below.
+        # CHECKED (review of PR 262, M1): the lowest seq looked at. Every seq from it to through that is
+        # not listed missing WAS recorded; below it nothing is said, and the phone counts a seq there as
+        # missing - a list cut at its newest 32 can never pass for a whole one.
         $missing = New-Object System.Collections.ArrayList
         $lowest = [long][System.Math]::Max([long]1, $through - $script:HordeDecisionsChannelReceiptsLookBack)
+        $checked = $through
         for ($s = $through - 1; $s -ge $lowest -and $missing.Count -lt $script:HordeDecisionsChannelReceiptsMissing; $s--) {
+            $checked = $s
             if (-not $st.seqs.ContainsKey("" + $s)) { [void]$missing.Add($s) }
         }
         [void]$missing.Reverse()
         $applied = @(); $refused = @()
         if ($ledger.streams.ContainsKey($from)) { $applied = @($ledger.streams[$from].applied); $refused = @($ledger.streams[$from].refused) }
-        [void]$parts.Add('{"from":"' + $from + '","through":' + $through + ',"missing":[' + (@($missing) -join ",") + '],"applied":' + (ConvertTo-HordeDecisionsChannelIdList $applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $refused) + '}')
+        [void]$parts.Add('{"from":"' + $from + '","through":' + $through + ',"checked":' + $checked + ',"missing":[' + (@($missing) -join ",") + '],"applied":' + (ConvertTo-HordeDecisionsChannelIdList $applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $refused) + '}')
     }
     return [pscustomobject]@{ text = ("[" + (@($parts) -join ",") + "]"); problem = $problem }
 }
@@ -647,7 +723,7 @@ function Invoke-HordeDecisionsChannelSnapshotTick {
     $print = Get-HordeDecisionsChannelFingerprint -Root $root -PhoneKeyIds @($keys | ForEach-Object { $_.agreeKeyId })
     # THE RECEIPTS ARE ASKED EVERY LOOK, as cheaply as the names (the header, WHAT BECAME OF EACH ANSWER):
     # an answer refused, or a hole in a phone's stream, changes them and no record name.
-    $receipts = Get-HordeDecisionsChannelReceipts -Context $Context
+    $receipts = Get-HordeDecisionsChannelReceipts -Context $Context -Prefer @($keys | ForEach-Object { "$($_.by)" })
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
     foreach ($trouble in @($receipts.problem, $ledger.problem)) { if ("$trouble" -cne "" -and "$trouble" -cne "$($mine.receiptsProblem)") { [void]$said.Add("the receipts of the founder's answers are short: " + $trouble); $mine.receiptsProblem = "$trouble" } }
     if ("$($receipts.problem)$($ledger.problem)" -ceq "") { $mine.receiptsProblem = "" }

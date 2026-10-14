@@ -25,8 +25,8 @@
            Find = 'if ($Outcome -cne "done" -and $Outcome -cne "refused") { return "" }'
            Replace = 'if ($Outcome -ceq "") { return "" }' }
         @{ Name = "a-resent-answer-is-listed-twice"
-           Find = 'if ($mine.applied -ccontains $AnswerId) { return "" }'
-           Replace = 'if ($false) { return "" }' }
+           Find = 'if ($mine.applied -cnotcontains $AnswerId) { [void]$mine.applied.Add($AnswerId) }'
+           Replace = '[void]$mine.applied.Add($AnswerId)' }
         @{ Name = "a-refusal-overrides-an-applied-answer"
            Find = 'if ($mine.applied -ccontains $AnswerId -or $mine.refused -ccontains $AnswerId) { return "" }'
            Replace = 'if ($mine.refused -ccontains $AnswerId) { return "" }' }
@@ -53,5 +53,33 @@
            Replace = '$mine.fingerprint = $print; return'
            Expect = "survives"
            Reason = "That path is a look whose snapshot is the very one already sent: forgetting its receipts there costs the next look a reading of the list and sends nothing, as list-read-on-every-look's cost does in relay-channel-decisions.psd1 - nothing a phone can see. The suite does not time a look." }
+        # --- the review of PR 262
+        @{ Name = "the-receipt-does-not-say-how-far-down-it-looked"
+           Find = ''',"checked":'' + $checked + '''
+           Replace = "'" }
+        @{ Name = "checked-claims-every-seq-was-looked-at"
+           Find = '            $checked = $s'
+           Replace = '            $checked = [long]1' }
+        @{ Name = "a-stale-answer-is-applied"
+           Find = 'if ($older -cne "") { return [pscustomobject]@{ outcome = "refused"; reason = $older } }'
+           Replace = '' }
+        @{ Name = "the-applied-answer-sent-again-is-called-stale"
+           Find = 'if ($mine.applied -ccontains $Answer.answerId) { return "" }'
+           Replace = '' }
+        @{ Name = "the-newest-signing-time-is-never-raised"
+           Find = '$mine.latest[$Slot] = $SignedAt'
+           Replace = '$null = $SignedAt' }
+        @{ Name = "the-newest-signing-times-are-not-read-back-after-a-restart"
+           Find = '$entry.latest["$($pr.Name)"] = [long]$pr.Value'
+           Replace = '' }
+        @{ Name = "the-phone-sealed-to-is-not-preferred"
+           Find = 'if (@($Prefer) -ccontains $_) { 0 } else { 1 }'
+           Replace = '1' }
+        @{ Name = "past-the-cap-key-order-not-activity"
+           Find = '@{ Expression = { $when[$_] }; Descending = $true }, '
+           Replace = '' }
+        @{ Name = "a-failed-move-leaves-its-temp-file"
+           Find = 'try { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } } catch { }'
+           Replace = '' }
     )
 }
