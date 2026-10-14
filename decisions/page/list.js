@@ -15,6 +15,8 @@
 //     storage                             where drafts are kept (default: this page's own localStorage)
 //     prefs                               where the chosen order is kept (default: the same; a host
 //                                         that keeps drafts in memory only still keeps the order)
+//     expanded                            false: every question opens folded (the window); left out,
+//                                         unfolded (header, EVERY QUESTION STARTS UNFOLDED)
 //   doc.setKinds(record)     the answer of the kinds operation, as { state, value, reason }
 //   doc.setList(record)      the answer of the list operation; says what it did: "drawn", "same"
 //                            (the very answer already drawn: nothing is touched) or "unread" (the
@@ -25,6 +27,7 @@
 //   doc.reveal(number)       that question brought into view, if it is not wholly in it already
 //   doc.takeKeyboard()       the caret into the first unanswered question's field
 //   doc.order(), doc.setOrder(key)   the order chosen (date, importance or blocks), and choosing one
+//   doc.expanded(), doc.setExpanded(open)   every question unfolded or folded, as the one button does
 //   doc.drive(steps)         a check's steps acted out on the page's own fields (see drive below)
 //   doc.counts()             { open, waiting, other }
 //   doc.snapshot(limits)     WHAT IS DRAWN, read back from the page's own elements; see snapshot below
@@ -106,6 +109,15 @@
 // it, it is whole. Unfolding the question's context (the triangle, F2, or a press on a cut line)
 // shows every message whole. THE QUESTION ITSELF IS NEVER CUT, and neither is a draft.
 //
+// EVERY QUESTION STARTS UNFOLDED (the founder, 2026-10-14: "I also want a collapse all button on the
+// questions even though they should start expanded"): each question of his list opens with its
+// context under it, and one button, on a short line just under the order line, folds them all
+// ("Collapse all"), then says "Expand all" and unfolds them all again. A press drops what he chose for single questions
+// and touches neither the order nor his place on the page (THE VIEW FOLLOWS HIM). What he folds or
+// unfolds is kept, question by question, through every list that arrives; a question that arrives
+// later opens as the button last left them. Rows that are only read (With Thrall, History) stay one
+// line each until he unfolds one. A host may open folded instead (expanded: false - the window).
+//
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
 //
@@ -151,6 +163,12 @@
   ];
   // The arrow beside the order in force: down in its first direction, up turned over. Escapes, so the
   // source stays ASCII.
+  // THE ONE BUTTON THAT FOLDS OR UNFOLDS EVERY QUESTION (header, EVERY QUESTION STARTS UNFOLDED): its
+  // word for what a press does, and what it says to a screen reader.
+  var FOLD_WORDS = {
+    collapse: "Collapse all", collapseSays: "Fold the context of every question",
+    expand: "Expand all", expandSays: "Unfold the context of every question"
+  };
   var ARROW_FIRST = "\u25BC";
   var ARROW_TURNED = "\u25B2";
   var DEFAULT_ORDER = "date";
@@ -382,7 +400,18 @@
     var lastJson = null;
     var dim = null;
     // Keyed by a question's number and by a heading's key: maps with no prototype (header).
+    // unfolded: what he chose for ONE question, true (unfolded) or false (folded); a question he has
+    // not chosen for follows openFirst (header, EVERY QUESTION STARTS UNFOLDED).
     var unfolded = Object.create(null);
+    var openFirst = options.expanded !== false;
+    // Is this question's context unfolded? His own choice for it first; else, for a question of his
+    // list, the page's (openFirst); a row that is only read (With Thrall, History) stays one line
+    // until he unfolds it, or Unfold all does.
+    function isOpen(q, readOnly) {
+      var mine = unfolded[q.number];
+      if (mine === true || mine === false) { return mine; }
+      return readOnly ? false : openFirst;
+    }
     var headFolded = Object.create(null);
     // Which headings have their note of background shown. FOLDED UNTIL ASKED FOR (seen 2026-10-07 in
     // a picture of the real window: two notes took 13 of the 26 lines in view).
@@ -1106,8 +1135,8 @@
     }
 
     function toggleContext(q) {
-      var opening = unfolded[q.number] !== true;
-      if (opening) { unfolded[q.number] = true; } else { delete unfolded[q.number]; }
+      var opening = !isOpen(q, !lineOf(q.number) && !!rowOf(q.number));
+      unfolded[q.number] = opening;
       draw();
       // Unfolded, the question goes to the top of the view, so that the most of its context shows.
       var line = lineOf(q.number) || rowOf(q.number);
@@ -1331,10 +1360,11 @@
       return drawn;
     }
     // The context of an unfolded question, its sub-numbered lines, into -box (emptied first).
-    function drawSubs(q, box) {
+    // readOnly: a row of With Thrall or History (isOpen).
+    function drawSubs(q, box, readOnly) {
       while (box.firstChild) { box.removeChild(box.firstChild); }
       var subs = [];
-      box.hidden = unfolded[q.number] !== true;
+      box.hidden = !isOpen(q, readOnly === true);
       if (box.hidden) { return subs; }
       var lines = subLinesOf(q);
       for (var i = 0; i < lines.length; i += 1) {
@@ -1354,7 +1384,7 @@
     }
 
     function drawQuestion(q) {
-      var open = unfolded[q.number] === true;
+      var open = isOpen(q, false);
       var wrap = make("div", "hd-q" + (open ? " open" : "") + (dim && dim(q) ? " dim" : ""));
       var row = make("div", "hd-qrow");
       var qt = make("div", "hd-qt");
@@ -1477,10 +1507,11 @@
       line.q = q;
       line.txt.textContent = textOf(q.title);
       line.letter.textContent = letterOf(q.askedBy);
-      var open = unfolded[q.number] === true;
+      var open = isOpen(q, false);
       line.wrap.classList.toggle("open", open);
       line.wrap.classList.toggle("dim", !!(dim && dim(q)));
       line.tri.setAttribute("aria-expanded", open ? "true" : "false");
+      line.tri.setAttribute("aria-label", (open ? "Fold the context of question " : "Unfold the context of question ") + q.number);
       line.tags = drawTags(q, line.tagBox);
       line.said = drawTalk(q, line.talk, line.ans);
       line.subs = drawSubs(q, line.subBox);
@@ -1493,7 +1524,7 @@
     var drawnRows = [];
     function rowOf(number) { for (var i = 0; i < drawnRows.length; i += 1) { if (drawnRows[i].q.number === number) { return drawnRows[i]; } } return null; }
     function drawDone(q, kind) {
-      var open = unfolded[q.number] === true;
+      var open = isOpen(q, true);
       var wrap = make("div", "hd-q hd-done" + (open ? " open" : ""));
       var row = make("div", "hd-qrow");
       var qt = make("div", "hd-qt");
@@ -1535,7 +1566,7 @@
       wrap.appendChild(row);
       var subBox = make("div", "hd-sub");
       wrap.appendChild(subBox);
-      drawSubs(q, subBox);
+      drawSubs(q, subBox, true);
       var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said, tags: tags };
       drawnRows.push(drawn);
       return drawn;
@@ -1568,6 +1599,31 @@
       orderBar.appendChild(b);
       return b;
     });
+    // ONE BUTTON FOLDS OR UNFOLDS EVERY QUESTION (header, EVERY QUESTION STARTS UNFOLDED), on a short
+    // line of its own just under the order line: its word says what a press does, and flips once it
+    // is done. NOT ON THE ORDER LINE ITSELF: at a phone's 412 px that line then wrapped to two, and a
+    // page scrolled 18 px put the order buttons above the screen (measured 2026-10-14 in
+    // decisions/page/test/browser-order.mjs: the tap on Blocking missed).
+    var foldLine = make("div", "hd-foldline");
+    var foldButton = make("button", "hd-foldall");
+    foldButton.type = "button";
+    foldButton.tabIndex = -1;
+    foldButton.addEventListener("click", function () { setExpanded(!openFirst); });
+    foldLine.appendChild(foldButton);
+    drawFoldButton();
+    function drawFoldButton() {
+      foldButton.textContent = openFirst ? FOLD_WORDS.collapse : FOLD_WORDS.expand;
+      foldButton.setAttribute("aria-label", openFirst ? FOLD_WORDS.collapseSays : FOLD_WORDS.expandSays);
+    }
+    // Every question folded (false) or unfolded (true), his choices for single questions dropped, and
+    // the page drawn as any redraw is: THE VIEW FOLLOWS HIM keeps the question at the top of the view
+    // where it was, and the order is not touched.
+    function setExpanded(open) {
+      openFirst = open === true;
+      unfolded = Object.create(null);
+      if (lastJson === null) { drawFoldButton(); return; }
+      draw();
+    }
     function drawOrderBar() {
       orderButtons.forEach(function (b, i) {
         var o = ORDERS[i];
@@ -1717,7 +1773,8 @@
       });
       Object.keys(headEls).forEach(function (k) { if (!used[k]) { delete headEls[k]; } });
       drawOrderBar();
-      order(root, [orderBar].concat(groups));
+      drawFoldButton();
+      order(root, [orderBar, foldLine].concat(groups));
       // In the page now, so what is folded can be told from what is shown: each line's state again.
       drawnLines.forEach(function (line) { refresh(line); fit(line); });
       if (before) {
@@ -1764,6 +1821,7 @@
     //   { do: "focus", q, part }  the caret into that question's field (part: into that part's)
     //   { do: "order", key, turned }   that order chosen, in its first direction (turned: true, turned
     //                             over), as setOrder does; { do: "press-order", key } a press on its button
+    //   { do: "press-fold" }      a press on the one button that folds or unfolds every question
     //   { do: "follow", q }       a press on that question's "Follows up on question N"
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
@@ -1796,6 +1854,7 @@
         }
         else if (step.do === "order") { setOrder(textOf(step.key), step.turned === true); }
         else if (step.do === "press-order") { pressOrder(textOf(step.key)); }
+        else if (step.do === "press-fold") { foldButton.click(); }
         else if (step.do === "follow") { target = lineOf(Number(step.q)); if (target && target.tags.follow) { target.tags.follow.press.click(); } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
@@ -1895,12 +1954,16 @@
         var box = line.wrap.getBoundingClientRect();
         if (box.height > 0 && (box.top < topInset() || box.bottom > window.innerHeight)) { window.scrollBy(0, box.top - topInset()); }
       },
+      // The window's menu (decisions/window): every question, and every heading, unfolded or folded -
+      // and the one button says so (openFirst).
       unfoldAll: function () {
+        openFirst = true;
         questions.forEach(function (q) { unfolded[q.number] = true; });
         sectionsOf().forEach(function (head) { headFolded[head.key] = false; if (head.note) { noteShown[head.key] = true; } });
         draw();
       },
       foldAll: function () {
+        openFirst = false;
         unfolded = Object.create(null);
         headFolded = Object.create(null);
         noteShown = Object.create(null);
@@ -1913,6 +1976,10 @@
       turned: function () { return orderTurned; },
       setOrder: setOrder,
       pressOrder: pressOrder,
+      // Whether the questions are unfolded unless he chose otherwise for one, and choosing it, as the
+      // one button does (header, EVERY QUESTION STARTS UNFOLDED).
+      expanded: function () { return openFirst; },
+      setExpanded: setExpanded,
       drive: drive,
       // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
       // questions are in the run of answering (not parked), toAnswer how many of those have no
@@ -1963,7 +2030,7 @@
         // order: the order chosen, by its key, whether it is turned over, the word on the button drawn
         // as pressed (its word alone: the arrow is arrow), and what that button says to a screen reader.
         var pressedAt = orderButtons.filter(function (b) { return b.getAttribute("aria-pressed") === "true"; }).map(function (b) { return orderButtons.indexOf(b); });
-        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
+        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, fold: { expanded: openFirst, word: foldButton.textContent, says: foldButton.getAttribute("aria-label") }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
         drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.kind === "parked", kind: h.head.kind, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {

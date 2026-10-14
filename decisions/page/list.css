@@ -103,8 +103,11 @@
    by" and a word for each order, the chosen one in the page's own ink with the accent under it. The
    words are buttons with no box: an underline inside, as a field has. */
 .hd-order { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; padding: 0 0 4px 14px; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
-.hd-order-btn { font: inherit; color: var(--muted); background: none; border: 0; border-radius: 0; margin: 0; padding: 0 2px; min-height: var(--line-px); cursor: pointer; box-shadow: inset 0 -1px 0 var(--line); }
+.hd-order-btn, .hd-foldall { font: inherit; color: var(--muted); background: none; border: 0; border-radius: 0; margin: 0; padding: 0 2px; min-height: var(--line-px); cursor: pointer; box-shadow: inset 0 -1px 0 var(--line); }
 .hd-order-btn.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+/* The one button that folds or unfolds every question (list.js, EVERY QUESTION STARTS UNFOLDED): on a
+   short line of its own under the order line, at its right end, so it is never read as a fourth order. */
+.hd-foldline { display: flex; justify-content: flex-end; padding: 0 14px 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
 /* WHAT STANDS OUT ABOUT A QUESTION (list.js, drawTags): a small line above what was said under it -
    "Important", "Blocks all work" in the page's own ink, and for a follow-up the pressable words
    "Follows up on question 7", which unfold that question and what he answered under them. */
