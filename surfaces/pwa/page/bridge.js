@@ -43,8 +43,16 @@
 //                         { state, value } as phone-core's cards answers it
 //   progress-read {id}    he has read as far as that entry - or, with all: true, to the newest - kept on
 //                         this phone: the same record as progress, with the new count
+//   notices               the notices of the picked horde, every unlocked machine of it, newest first,
+//                         with read or unread and each machine's follow switches: { state, value } as
+//                         phone-core's notices answers it
+//   notices-read {ids}    he has read those notices (ids), or with all: true every one: kept on this phone,
+//                         the same record as notices
+//   follow {entry, lane, on}  the follow switch of a lane of the card of that pairing's machine, signed
+//                         with the passkey and sent: { ok } or { ok: false, reason }
 // EVENTS: list-changed (the list record), chat-changed (the chat record), progress-changed (the progress
-// record), cards-changed (the cards record), hordes-changed (the summaries), notice (a sentence).
+// record), cards-changed (the cards record), notices-changed (the notices record), hordes-changed (the
+// summaries), notice (a sentence).
 //
 // "SAVED" MEANS SENT AND SIGNED. say answers ok once the relay has taken the signed envelope; the
 // machine stores it when its runner next turns, and the next snapshot shows it under the question. The
@@ -52,7 +60,7 @@
 // document keeps the words as the standing answer until a snapshot that holds them arrives (list.js,
 // standingOf). The same words sent again carry the same id, which is the answerId: the machine stores
 // them once (channels/decisions, Get-HordeDecisionsChannelAnswerId).
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -93,6 +101,11 @@ export function createBridge(phone, options = {}) {
     try { return { state: "known", reason: "", value: await phone.cards(picked) }; }
     catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
   }
+  async function noticesRecord(read = null) {
+    if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
+    try { return { state: "known", reason: "", value: read ? await read() : await phone.notices(picked) }; }
+    catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
+  }
   async function hordes() { const h = await phone.hordes(); emit("hordes-changed", h); return h; }
   let locked = true;
   let relayDown = false;
@@ -111,6 +124,7 @@ export function createBridge(phone, options = {}) {
     emit("chat-changed", await chatRecord());
     emit("progress-changed", await progressRecord());
     emit("cards-changed", await cardsRecord());
+    emit("notices-changed", await noticesRecord());
     return rec;
   }
   // The live refresh: one long-poll at a time, for whichever horde is picked, while it is unlocked and
@@ -163,6 +177,12 @@ export function createBridge(phone, options = {}) {
     chat: async () => chatRecord(),
     progress: async (a) => progressRecord(null, typeof a.of === "string" ? a.of : ""),
     cards: async () => cardsRecord(),
+    notices: async () => noticesRecord(),
+    "notices-read": async (a) => noticesRecord(() => phone.markNoticesRead(picked, a.all === true ? null : (Array.isArray(a.ids) ? a.ids.map(String) : []))),
+    follow: async (a) => {
+      try { await phone.follow(picked, { entry: String(a.entry || picked), lane: String(a.lane || ""), on: a.on === true }); return { ok: true }; }
+      catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
+    },
     "progress-read": async (a) => progressRecord(() => phone.markProgressRead(picked, a.all === true ? "" : String(a.id || "-"))),
     "chat-send": async (a) => {
       try {

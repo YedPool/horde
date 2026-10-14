@@ -63,6 +63,13 @@
 // must not mark those read unseen. A machine that sends no cards yet (an older one) opens straight on the
 // whole log, as before.
 //
+// THE NOTICES are the horde's fourth view (the founder asked, 2026-10-13 and 14): what a machine decided he
+// should be told - a session's `horde notify` line, a new progress entry of a lane he follows, a session
+// cut off for the hour - newest first, each with who it is from, when in plain words, and read or unread;
+// the count of unread on the tab. EACH CARD ON THE PROGRESS TAB CARRIES A FOLLOW SWITCH in its one slot,
+// off by default, showing what the machine holds (followSwitch, below). No buzz yet: that is Web Push,
+// later, and it hooks in on the machine (notices/Decide.ps1, Invoke-HordeNoticeHook), not here.
+//
 // EVERY MESSAGE IN THE CHAT SAYS WHEN IT WAS SAID (the founder asked, 2026-10-12): the short local time
 // beside who said it, the day on a line of its own where it changes, the exact time on a tap. The times
 // are the turn's own and the line's signed one (relay/js/protocol.js, chatTimeline); what carries none
@@ -78,6 +85,7 @@ import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
 import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
+import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
@@ -119,9 +127,9 @@ made.catch((e) => say("boot", "This app cannot start here: " + messageOf(e)));
 
 // --- the screens ---
 
-const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress"];
+const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress", "notices"];
 // The views of an unlocked horde, each a tab of the bar: the pane's name, and the view and the tab it is.
-const PANES = { decisions: { view: "doc", tab: "tabDecisions" }, chat: { view: "chat", tab: "tabChat" }, progress: { view: "progress", tab: "tabProgress" } };
+const PANES = { decisions: { view: "doc", tab: "tabDecisions" }, chat: { view: "chat", tab: "tabChat" }, progress: { view: "progress", tab: "tabProgress" }, notices: { view: "notices", tab: "tabNotices" } };
 function show(view) {
   for (const v of VIEWS) $(v).hidden = v !== view;
   $("keys").hidden = view !== "doc";
@@ -208,6 +216,7 @@ function render(h, rec) {
   showAnnounceBox(h, rec);
   if (pane === "chat") bridge.request("chat").then(drawChat);
   if (pane === "progress") { bridge.request("cards").then(drawCards); requestStream(); }
+  if (pane === "notices") bridge.request("notices").then(drawNotices);
   const banners = {
     recovery: "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer.",
     "read-only": "Read only: this passkey gives no PRF, so answers are never sent from this phone for this horde. Answer at the machine, or pair again with a passkey that has PRF."
@@ -454,11 +463,66 @@ function drawCards(rec) {
   for (const m of v.machines) if (m.areasLeftOut) notes.push(m.areasLeftOut + " area(s) of " + m.name + "'s map did not fit, so their updates show only in the Thrall's stream.");
   $("cardsNote").textContent = notes.join(" ");
   $("cardsNote").hidden = notes.length === 0;
-  // THE ONE CARD (lane-card.js), its slot left empty here; a tap opens the lane's stream.
-  const open = (o) => openStream({ entry: o.entry, lane: o.lane === THRALL_LANE ? "" : o.lane, title: (o.lane === THRALL_LANE ? "Thrall - the whole fleet" : o.lane) + ", " + o.machine, fallback: false });
-  for (const t of v.thrall) { const box = renderLaneCard(document, v, THRALL_LANE, { machine: t.machine, onOpen: open }); if (box) list.appendChild(box); }
-  for (const c of v.cards) { const box = renderLaneCard(document, v, c.lane, { machine: c.machine, onOpen: open }); if (box) list.appendChild(box); }
+  // THE ONE CARD (lane-card.js), its one slot holding the FOLLOW SWITCH; a tap elsewhere opens the lane's stream.
+  for (const t of v.thrall) { const box = renderLaneCard(document, v, THRALL_LANE, { machine: t.machine, badge: followSwitch(t.entry, THRALL_LANE), onOpen: openLane }); if (box) list.appendChild(box); }
+  for (const c of v.cards) { const box = renderLaneCard(document, v, c.lane, { machine: c.machine, badge: followSwitch(c.entry, c.lane), onOpen: openLane }); if (box) list.appendChild(box); }
 }
+function openLane(o) { openStream({ entry: o.entry, lane: o.lane === THRALL_LANE ? "" : o.lane, title: (o.lane === THRALL_LANE ? "Thrall - the whole fleet" : o.lane) + (o.machine ? ", " + o.machine : ""), fallback: false }); }
+
+// --- following a lane, and the notices ---
+
+// THE FOLLOW SWITCH of a card (the founder, 2026-10-14: "notify me of progress postings for lane/orc x"),
+// OFF BY DEFAULT. It shows WHAT THE MACHINE HOLDS (the newest notices envelope of that card's machine,
+// phone-core.js, THE NOTICES); a tap signs the change with the passkey and sends it to that machine, and
+// the switch says "Sending..." until the machine's next envelope carries it. It sits in the card's one slot
+// (lane-card.js, badge), and a tap on it is ITS OWN: it never also opens the card.
+let noticesLast = null;
+const followWish = new Map();
+function followSwitch(entry, lane) {
+  const held = !!(noticesLast && noticesLast.follows && noticesLast.follows[entry] && noticesLast.follows[entry][lane] === true);
+  const key = entry + "/" + lane;
+  if (followWish.has(key) && followWish.get(key) === held) followWish.delete(key);
+  return renderFollowSwitch(document, { held, sending: followWish.has(key), onToggle: (want) => {
+    followWish.set(key, want);
+    if (cardsLast) drawCards({ state: "known", value: cardsLast });
+    bridge.request("follow", { entry, lane, on: want }).then((r) => {
+      if (!r || !r.ok) { followWish.delete(key); say("action", (r && r.reason) || ""); }
+      if (cardsLast) drawCards({ state: "known", value: cardsLast });
+    });
+  } });
+}
+function showNoticesCount(v) {
+  const n = v ? v.unread : 0;
+  $("tabNotices").textContent = noticesTabWords(n);
+}
+// THE NOTICES, NEWEST FIRST: who it is from, when in plain words (the exact time as its title), its words,
+// and whether he has read it. A tap marks it read; a notice of a lane's progress also opens that lane's
+// stream on the Progress tab.
+function drawNotices(rec) {
+  if (!rec) return;
+  if (rec.state !== "known") { noticesLast = null; showNoticesCount(null); const l = $("noticesList"); while (l.firstChild) l.removeChild(l.firstChild); return; }
+  const v = rec.value;
+  const wasFollows = JSON.stringify(noticesLast ? noticesLast.follows : null);
+  noticesLast = v;
+  showNoticesCount(v);
+  if (cardsLast && wasFollows !== JSON.stringify(v.follows) && !$("progress").hidden && !stream) drawCards({ state: "known", value: cardsLast });
+  if ($("notices").hidden) return;
+  $("noticesCount").textContent = v.items.length === 0 ? "" : v.unread > 0 ? v.unread + " unread" : "All read";
+  $("noticesAllRead").disabled = v.unread === 0;
+  $("noticesEmpty").hidden = v.items.length > 0;
+  const list = $("noticesList");
+  while (list.firstChild) list.removeChild(list.firstChild);
+  const nowMs = Date.now();
+  for (const it of v.items) {
+    list.appendChild(renderNoticeItem(document, it, { nowMs, onOpen: (x) => {
+      if (!x.read) bridge.request("notices-read", { ids: [x.id] }).then(drawNotices);
+      const to = noticeTarget(x);
+      if (to) { pickPane("progress"); openLane(to); }
+    } }));
+  }
+}
+$("noticesAllRead").addEventListener("click", () => { bridge.request("notices-read", { all: true }).then((rec) => { if (rec.state === "known") drawNotices(rec); else say("action", rec.reason || ""); }); });
+bridge.on("notices-changed", (rec) => drawNotices(rec));
 bridge.on("cards-changed", (rec) => drawCards(rec));
 
 // --- a stream: the progress log, or a lane's part of it ---

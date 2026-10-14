@@ -112,6 +112,15 @@
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
+// THE NOTICES (channels/notices) come through the same mailbox and the same refresh: what the machine
+// decided the founder should be told (notices/Decide.ps1 - a session's `horde notify` line, a followed
+// lane's new progress entry, a session cut off for the hour), each with the FOLLOW SWITCHES that machine
+// holds. The phone keeps the notices by id (one notice, however many envelopes carry it) and each
+// machine's switches from its newest envelope: THE PHONE SHOWS WHAT THE MACHINE HOLDS, never a switch it
+// only asked for. A cards envelope of another machine is opened by that machine's own pairing, and so is
+// its notices envelope. Read or unread is this phone's own (noticesRead on the stored entry: ids, the
+// newest 500), and goes nowhere. A SWITCH IS SENT LIKE AN ANSWER: the passkey signs it (user
+// verification), it is sealed to the machine of the card, and only a passkey session sends one.
 const ENTRY = "horde/";
 const RELAY_DOWN = "The relay could not be read just now; the phone will try again.";
 const RELAY_REFUSED = "The relay did not take it just now.";
@@ -138,9 +147,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, notices: newNotices() });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
+  const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
 
   async function entryOf(id) {
@@ -221,6 +231,18 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     }
   }
 
+  // One opened notices envelope into a session's memory (THE NOTICES, in the header): each notice once by
+  // its id; the switches of the envelope of the highest seq stand.
+  function takeNotices(e, s, opened, item, anomalies) {
+    const g = s.notices;
+    if (opened.header.kind !== "notices" || g.keys.has(opened.key)) return;
+    g.keys.add(opened.key);
+    const r = P.readNotices(opened.body, e.horde, e.machine);
+    if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+    if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " notice(s) that do not hold together were left out");
+    for (const x of r.value.notices) if (!g.byId.has(x.id)) g.byId.set(x.id, x);
+    if (opened.header.seq > g.followsSeq) { g.follows = r.value.follows; g.followsSeq = opened.header.seq; }
+  }
   // One opened cards envelope into a session's memory (THE CARDS, in the header): the newest by seq stands.
   function takeCards(e, s, opened, item, anomalies) {
     if (opened.header.kind !== "snapshot") return;
@@ -398,6 +420,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
             s.seen.clear();
             s.chat.ids.clear();
             s.progress.ids.clear();
+            s.notices.keys.clear();
             restarted = true;
             continue;
           }
@@ -413,10 +436,12 @@ export function createPhone({ store, authenticator, relay, account = null, origi
             for (const x of siblings) {
               const so = await P.openEnvelope(item.text, { keyId: x.e.machine, signPublic: P.unb64u(x.e.machineSignPublic) }, { privateKey: x.s.privateKey, publicPoint: x.s.publicPoint });
               if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); break; }
+              if (so.ok && so.value.header.channel === "notices") { takeNotices(x.e, x.s, so.value, item, anomalies); break; }
             }
             continue;
           }
           if (o.value.header.channel === "cards") { takeCards(e, s, o.value, item, anomalies); continue; }
+          if (o.value.header.channel === "notices") { takeNotices(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "chat") { takeChat(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "progress") { takeProgress(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel !== "decisions" || o.value.header.kind !== "snapshot") continue;
@@ -510,6 +535,52 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same line is never delivered twice."); }
       if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });
       return { key: env.key, seq: put.value.seq };
+    },
+
+    // The notices of the horde (THE NOTICES, in the header): this pairing's and every other unlocked pairing's
+    // of the same horde, newest first, read or unread as this phone keeps it, and each machine's switches:
+    // { items, unread, follows: { <pairing id>: { <lane>: true|false } } }. Needs an unlocked session.
+    async notices(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const all = [{ e, s }, ...(await siblingsOf(e))];
+      const read = new Set(e.noticesRead || []);
+      const held = all.map((x) => ({ entry: x.e.id, machine: x.e.label || x.e.machine, notices: [...x.s.notices.byId.values()] }));
+      const list = P.noticeList(held, read);
+      const follows = {};
+      for (const x of all) follows[x.e.id] = { ...x.s.notices.follows };
+      return { ...list, follows };
+    },
+
+    // He has read these notices (ids), or with none given every notice the phone holds: kept on this phone
+    // only, the newest 500 ids. The notices, as notices() answers them.
+    async markNoticesRead(id, ids = null) {
+      const now = await this.notices(id);
+      const want = ids === null ? now.items.map((x) => x.id) : ids.filter((x) => typeof x === "string" && /^[0-9a-f]{32}$/.test(x));
+      await store.update(ENTRY + id, (x) => {
+        if (!x) throw fail("there is no such horde on this phone");
+        const kept = (x.noticesRead || []).filter((k) => want.indexOf(k) < 0);
+        return { ...x, noticesRead: kept.concat(want).slice(-500) };
+      });
+      return this.notices(id);
+    },
+
+    // The FOLLOW SWITCH of one lane of one machine's card (THE NOTICES, in the header): entry is the pairing
+    // whose machine sent the card, lane its lane id or "thrall". Signed with the passkey and put into that
+    // machine's mailbox; the switch shows as set once the machine's next notices envelope carries it. { key }.
+    async follow(id, { entry = id, lane, on }) {
+      const owner = await entryOf(id);
+      const e = await entryOf(entry);
+      if (e.horde !== owner.horde) throw fail("that card is of another horde");
+      const s = sessions.get(e.id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode !== "passkey") throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to change what you follow.");
+      const body = P.followBody({ setId: P.hex(P.randomBytes(16)), machine: e.machine, lane: String(lane), on: on === true });
+      const env = await sealAndSign(e, "follow", "notices", body, assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Tap the switch again."); }
+      return { key: env.key };
     },
 
     // The founder's answer to one question of the snapshot on screen, signed with the passkey (user
