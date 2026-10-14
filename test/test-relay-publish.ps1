@@ -379,10 +379,10 @@ try {
     Range @("surfaces/pwa/page/app.js")
     $null = Pass
     Write-HordeRelayDeployed -HordeHome $W.home -Revision ([pscustomobject]@{ commit = $cC; clean = $true }) -Version $v2 -Relay "zorbrelay" -Origin $origin -At $t0.AddMinutes(20)
-    $W.diffs[$cC + ".." + $cB] = [string[]]@("relays/zorbrelay/worker/site.js"); $W.deploy = "ok"
+    $W.diffs[$cC + ".." + $cB] = [string[]]@("surfaces/pwa/page/app.js"); $W.deploy = "ok"
     $W.now = $t0.AddMinutes(25); $l = Pass
     Check ($W.calls -ccontains "diff c..b") "a deploy by hand of another commit after the failure is the base"
-    Check ($W.deploys -eq 1 -and (Says $l "settles it")) "it settles the failure, and what it changed is judged from there (here: the Worker, not deployed)"
+    Check ($W.deploys -eq 2 -and (Says $l "settles it") -and (Read-HordeRelayDeployed -HordeHome $W.home).value.commit -ceq $cB) "it settles the failure at once: what changed since it is deployed, with no hour to wait"
     $hand = New-World (New-Home "hand-settles"); $W = $hand; Seed; $W.serveAfter = $v1
     Range @("surfaces/pwa/page/app.js")
     $null = Pass
@@ -547,6 +547,9 @@ try {
         Check ($a.state -ceq "unknown" -and $a.reason -ceq (Get-HordeRelayDeployBusyReason) -and $a2.state -ceq "unknown") "a deploy while another process holds the lock is refused as busy, from any home"
         Check ($script:relayDeploys -eq 0) "and the relay's deploy was never called"
         Check (-not [System.IO.File]::Exists((Get-HordeRelayDeployedPath -HordeHome $hh))) "and nothing was recorded"
+        # A handle of this suite's own keeps the lock alive when its holder dies, so it is ABANDONED,
+        # not gone - as when the tend is killed while another process waits on the same lock.
+        $keep = New-Object System.Threading.Mutex -ArgumentList $false, $lockName
     } finally { if (-not $child.HasExited) { $child.Kill() }; $child.WaitForExit(10000) | Out-Null; $child.Dispose() }
     # The holder ended without letting go: the lock is abandoned, and the next deploy takes it.
     $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -LockName $lockName -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
@@ -554,6 +557,7 @@ try {
     $again = Enter-HordeRelayDeployLock -Name $lockName
     Check ($null -ne $again) "a deploy lets go of the lock when it ends"
     Exit-HordeRelayDeployLock -Lock $again
+    $keep.Dispose()
     $W = New-World (New-Home "busy-step"); Seed; $W.deploy = "busy"; Range @("surfaces/pwa/page/app.js")
     $l = Pass
     Check ($W.deploys -eq 1 -and $W.told.Count -eq 0 -and (Says $l "another deploy is running")) "a pass that finds a deploy running tells nobody and counts no failure"
@@ -580,6 +584,12 @@ try {
     Check ((Read-HordeRelayDeployed -HordeHome $hh).value.commit -ceq "") "a deploy whose commit was not read records none"
     $W = New-World $hh; $null = Pass
     Check ($W.deploys -eq 0 -and (Whats) -ceq "no-record") "and the supervisor does not take that for a base"
+    $hh = New-Home "hand-same-second"
+    Write-HordeRelayDeployed -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true }) -Version $v1 -Relay "zorbrelay" -Origin $origin -At $t0
+    $id1 = (Read-HordeRelayDeployed -HordeHome $hh).value.id
+    Write-HordeRelayDeployed -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true }) -Version $v1 -Relay "zorbrelay" -Origin $origin -At $t0
+    $id2 = (Read-HordeRelayDeployed -HordeHome $hh).value.id
+    Check ($id1 -cmatch '\A[0-9a-f]{32}\z' -and $id2 -cmatch '\A[0-9a-f]{32}\z' -and $id1 -cne $id2) "two deploys recorded in the same second are told apart, by their ids"
     $hh = New-Home "hand-two-homes"; $tendHome = New-Home "hand-tend-home"
     $null = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -AlsoRecordIn $tendHome -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
     $r1 = Read-HordeRelayDeployed -HordeHome $hh; $r2 = Read-HordeRelayDeployed -HordeHome $tendHome
@@ -632,8 +642,9 @@ try {
     $ch = Get-HordeRelayPublishChanged -Checkout $git -Base $c1 -Head $c2
     Check ($ch.state -ceq "known" -and (@($ch.value.paths) -ccontains "relays/zorb/a.js") -and (@($ch.value.paths) -ccontains "other/a.js")) "a file moved out of a folder is both its old path and its new one"
     Check ((Get-HordeRelayPublishChanged -Checkout $git -Base "--output=x" -Head $c2).state -ceq "unknown") "a base that is not a commit id never reaches the revision tool"
-    Check ((Get-HordeRelayPublishUrl -Url "http://zorbrelay.example/app/sw.js").state -ceq "unknown") "an address that is not https is never asked"
-    Check ((Get-HordeRelayPublishUrl -Url "https://zorbrelay.example@evil.example/").state -ceq "unknown") "an https address with a user in it is never asked"
+    # Refused by their words, before any request: the addresses are this machine's closed port.
+    Check ((Get-HordeRelayPublishUrl -Url "http://127.0.0.1:9/app/sw.js").reason -like "only an https address*") "an address that is not https is never asked"
+    Check ((Get-HordeRelayPublishUrl -Url "https://127.0.0.1:9@evil.invalid/").reason -like "only an https address*") "an https address with a user in it is never asked"
 
     Write-Host ""
     Write-Host "--- the pass looks at the page on a whole pass only ---" -ForegroundColor Cyan
