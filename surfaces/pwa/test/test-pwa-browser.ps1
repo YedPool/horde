@@ -42,11 +42,15 @@
 #      the last read that worked;
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
+# The suite starts the browser itself (test/lib/Browser.ps1), in a kill-on-close job of its own, and
+# ends it with its profile in the finally block, however the driver ends: until 2026-10-14 the driver
+# started it, and a driver that died first left the browser running.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "test\lib\Browser.ps1")
 # No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
 . (Join-Path $root "test\lib\FleetPin.ps1")
 $fleetPin = Enter-HordeTestEmptyFleet
@@ -60,12 +64,8 @@ foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
 Set-StrictMode -Version Latest
 
 $node = Get-Command -Name "node" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-$chrome = @(
-    (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
-    (Join-Path ${env:LOCALAPPDATA} "Google\Chrome\Application\chrome.exe")
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-if ($null -eq $node -or $null -eq $chrome) {
+$chrome = Find-HordeTestChrome
+if ($null -eq $node -or $chrome -eq "") {
     Write-Host ("  [SKIP] " + $(if ($null -eq $node) { "node" } else { "Chrome" }) + " is not installed here, so the app is not run in a browser") -ForegroundColor Yellow
     Check ($true) "CONTROL: the suite reached its skip honestly"
     Complete-HordeSuite -Success "skipped: no node or no Chrome" -PassCode 3
@@ -81,10 +81,10 @@ $work = Join-Path $env:TEMP ("horde-pwa-browser-" + [guid]::NewGuid().ToString("
 $hh = Join-Path $work "home"
 $mailboxes = Join-Path $work "relay"
 $site = Join-Path $work "site"
-$profile = Join-Path $work "chrome"
-New-Item -ItemType Directory -Path (Join-Path $hh "settings"), $mailboxes, $profile -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $hh "settings"), $mailboxes -Force | Out-Null
 $keysMade = @()
 $drv = $null
+$browser = $null
 $canDecide = $false
 $thrall = $null
 $fake = Join-Path $work "fleet-messenger"
@@ -140,9 +140,10 @@ try {
     $canDecide = ($q.state -ceq "known" -and $q.value.outcome -ceq "done")
     if (-not $canDecide) { Write-Host "  [SKIP] the decisions list cannot add a question under this runtime (issue #173): the scenario is not run" -ForegroundColor Yellow }
     if ($canDecide -and $built.state -ceq "known") {
+    $browser = Start-HordeTestBrowser -Chrome $chrome -Parent $work -ExtraArgs @("--host-resolver-rules=MAP localhost 127.0.0.1", "--window-size=412,915")
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $node.Source
-    $psi.Arguments = '"' + (Join-Path $here "browser-drive.mjs") + '" "' + $site + '" "' + $mailboxes + '" "' + $chrome + '" "' + $profile + '"'
+    $psi.Arguments = '"' + (Join-Path $here "browser-drive.mjs") + '" "' + $site + '" "' + $mailboxes + '" ' + $browser.port
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
@@ -522,6 +523,11 @@ try {
     Remove-HordeTestChatThrall -Thrall $thrall
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     if ($null -ne $drv) { try { $drv.p.StandardInput.WriteLine('{"cmd":"exit"}'); if (-not $drv.p.WaitForExit(20000)) { $drv.p.Kill() } } catch { } ; $drv.p.Dispose() }
+    if ($null -ne $browser) {
+        $bProfile = $browser.profile
+        $bEnd = Stop-HordeTestBrowser -Browser $browser
+        Check ($bEnd.left -eq 0 -and $bEnd.profileGone -and @(Get-HordeTestBrowserProcesses -ProfileDir $bProfile).Count -eq 0) ("the browser the suite started is ended, every process of it, and its profile removed (" + $bEnd.said + ")")
+    }
     $env:HORDE_HOME = $realHome
     foreach ($k in @($keysMade)) { try { [void](Remove-HordeRelayKey -Name $k.n -Scope $k.s) } catch { } }
     $left = @($keysMade | Where-Object { (Find-HordeRelayCngKey -Name $_.n -Scope $_.s) -cne "" })
