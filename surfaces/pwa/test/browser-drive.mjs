@@ -80,12 +80,16 @@ on("Log.entryAdded", (p) => { if (p.entry.level === "error" || /Content Security
 const relay = folderTransport(relayRoot);
 // The relayFail command: every put refused, as a relay that will not take one (the announcement's failure).
 let failPuts = false;
+// The readFail command: every read and watch refused with the reason given, as a relay that answers 401
+// to a phone whose sign-in it no longer takes; "" reads again.
+let failReads = "";
 on("Runtime.bindingCalled", async (p) => {
   if (p.name !== "hordeRelayBinding") return;
   let answer;
   try {
     const c = JSON.parse(p.payload);
     if (c.op === "put") answer = failPuts ? { state: "unknown", value: null, reason: "the relay is down (a stand-in)" } : await relay.put(c.mailbox, c.key, c.text);
+    else if (failReads && (c.op === "get" || c.op === "watch")) answer = { state: "unknown", value: null, reason: failReads };
     else if (c.op === "get") answer = await relay.get(c.mailbox, c.since, c.max);
     else if (c.op === "watch") answer = await relay.watch(c.mailbox, c.since, c.max, Math.min(c.timeoutMs, 3000));
     else if (c.op === "ack") answer = await relay.ack(c.mailbox, c.through);
@@ -169,6 +173,7 @@ const commands = {
     return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
   },
   async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
+  async readFail(c) { failReads = String(c.reason || ""); return { failReads }; },
   // The next passkey prompt refused, as Chrome refuses one the founder cancels (a NotAllowedError), once.
   // In the page and not by the virtual authenticator: told that user verification fails and then that it
   // succeeds again, Chrome's virtual authenticator kept refusing every prompt after (measured 2026-10-11).
@@ -249,6 +254,50 @@ const commands = {
     for (let i = 0; i < c.screens; i++) { await evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.5))"); await sleep(350); }
     await sleep(900);
     return await commands.progressState();
+  },
+  // THE CARDS of the Progress tab: which page stands (the cards, or a stream), the cards drawn, and the
+  // stream's title and entries.
+  async cardsState() {
+    return await evaluate(`(() => {
+      const $ = (id) => document.getElementById(id);
+      const flat = (e) => e.innerText.replace(/\\s+/g, " ").trim();
+      const cards = Array.from(document.querySelectorAll("#cardsList .card")).map((c) => ({ lane: c.getAttribute("data-lane"), thrall: c.classList.contains("thrall"), text: flat(c) }));
+      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map(flat);
+      return { progress: !$("progress").hidden, cardsPage: !$("cardsPage").hidden, streamPage: !$("streamPage").hidden, title: $("streamTitle").textContent, cards, items: items.length, texts: items, notice: ${notice} };
+    })()`);
+  },
+  async cardsWait(c) {
+    const found = await until("document.querySelectorAll('#cardsList .card').length >= " + Number(c.count), c.timeoutMs || 30000);
+    await sleep(500);
+    return { found: !!found, ...(await commands.cardsState()) };
+  },
+  // A real touch on a card's line, away from its follow switch: it opens that lane's stream.
+  async cardTouch(c) {
+    const at = await centre(c.thrall ? "#cardsList .card.thrall .card-line" : "#cardsList .card[data-lane=" + JSON.stringify(c.lane) + "] .card-line");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await until(shown("streamPage") + " && document.querySelectorAll('#progressLog .progress-item').length > 0", 10000);
+    await sleep(900);
+    return await commands.cardsState();
+  },
+  async streamBack() {
+    await evaluate("document.getElementById('streamBack').click()", true);
+    await until(shown("cardsPage"), 10000);
+    await sleep(500);
+    return await commands.cardsState();
+  },
+  // Whether the page says the words given anywhere a line about the relay stands (the notice), in time.
+  async noticeWait(c) {
+    const found = await until("(" + notice + ").indexOf(" + JSON.stringify(c.text) + ") >= 0 && !document.getElementById('notice').hidden", c.timeoutMs || 15000);
+    return { found: !!found, notice: await evaluate(notice) };
+  },
+  // The instrument's control: words put in the notice as the page's say() puts them, found by noticeWait,
+  // then the notice put back as it was.
+  async noticeProbe(c) {
+    await evaluate("(() => { const n = document.getElementById('notice'); n.dataset.was = n.textContent; n.textContent = " + JSON.stringify(c.text) + "; n.hidden = false; })()");
+    const seen = await commands.noticeWait({ text: c.text, timeoutMs: 2000 });
+    await evaluate("(() => { const n = document.getElementById('notice'); n.textContent = n.dataset.was || ''; n.hidden = !n.textContent; delete n.dataset.was; })()");
+    return seen;
   },
   // A real touch on one of the foot's keys.
   async progressTouch(c) {

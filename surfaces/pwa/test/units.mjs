@@ -970,6 +970,80 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check(calls[calls.length - 1].address === "https://relay.example.test/v1/mailboxes/work/phone/items?since=0&max=1", "with no relay origin it speaks to the page's own origin", calls[calls.length - 1].address);
 }
 
+// --- 10c. A HUNG REQUEST CANNOT FREEZE THE PHONE (the founder's phone heard nothing new from 02:36 on
+// 2026-10-14: a fetch with no timeout that never settles inside the live refresh left the poll loop
+// waiting for ever, and every later poll returned at once because one was "still running") ---
+{
+  // Every wait here is bounded, so the code before the fix FAILS these checks instead of hanging the suite.
+  const within = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r("still waiting"), ms))]);
+  const signals = [];
+  // A fetch that never answers and never hears its abort: the worst a frozen request can do.
+  const deaf = (address, init) => { signals.push(init && init.signal); return new Promise(() => {}); };
+  class NoSocket { constructor() { throw new Error("no socket in this check"); } }
+  const t = R.httpTransport("https://relay.example.test", deaf, NoSocket, { requestMs: 100 });
+  const g = await within(t.get("work/phone", 0, 5), 2000);
+  check(g !== "still waiting" && g.state === "unknown" && g.reason.indexOf("did not answer") >= 0, "A READ THE RELAY NEVER ANSWERS comes back unknown when its time is up, though the fetch never heard its abort", JSON.stringify(g));
+  const p = await within(t.put("work/phone", "k-1", "text"), 2000);
+  const k = await within(t.ack("work/phone", 3), 2000);
+  const w0 = await within(t.watch("work/phone", 0, 5, 0), 2000);
+  check([p, k, w0].every((x) => x !== "still waiting" && x.state === "unknown"), "and so does a put, an ack and a watch of 0 ms (a read): every request the transport makes by fetch", JSON.stringify([p, k, w0]));
+  check(signals.length === 4 && signals.every((s) => s && s.aborted === true), "each of them handed fetch a signal, and aborted it, so a real browser lets the request go", String(signals.map((s) => s && s.aborted)));
+  // A response whose headers came but whose body never ends is the same freeze, one step later.
+  const tb = R.httpTransport("https://relay.example.test", async () => ({ status: 200, json: () => new Promise(() => {}) }), NoSocket, { requestMs: 100 });
+  const gb = await within(tb.get("work/phone", 0, 5), 2000);
+  check(gb !== "still waiting" && gb.state === "unknown", "a body that never ends is cut by the same time", JSON.stringify(gb));
+  const seen = [];
+  const prompt = async (address, init) => { seen.push(init.signal); return { status: 200, json: async () => ({ items: [] }) }; };
+  const tp = R.httpTransport("https://relay.example.test", prompt, NoSocket, { requestMs: 100 });
+  const ok = await tp.get("work/phone", 0, 5);
+  await new Promise((r) => setTimeout(r, 250));
+  check(ok.state === "known" && seen[0] && seen[0].aborted === false, "a read answered in time is known, and its timer goes with it: nothing is aborted after", JSON.stringify(ok));
+  check(R.REQUEST_MS === 20000, "a request is given 20 s, under the 25 s a watch waits", String(R.REQUEST_MS));
+  const td = R.httpTransport("https://relay.example.test", prompt, NoSocket);
+  await td.get("work/phone", 0, 5);
+  check(seen.length === 2 && seen[1] && typeof seen[1].aborted === "boolean", "and the transport a deployment makes (no time given) has the timeout too");
+
+  // THROUGH THE LIVE REFRESH: the bridge's poll loop over the real relay client and phone. Reads go by
+  // fetch through the http transport (the shipped path); the rest of the relay is a memory one.
+  const mem = R.memoryTransport();
+  let hang = false;
+  let reads = 0;
+  const fetchFn = async (address, init) => {
+    reads++;
+    if (hang) return new Promise(() => {});
+    const u = new URL(address);
+    const box = u.pathname.split("/").slice(3, 5).join("/");
+    const r = await mem.get(box, Number(u.searchParams.get("since")), Number(u.searchParams.get("max")));
+    return { status: 200, json: async () => r.value };
+  };
+  const ht = R.httpTransport("https://relay.example.test", fetchFn, NoSocket, { requestMs: 100 });
+  const mixed = { put: mem.put, ack: mem.ack, watch: mem.watch, get: ht.get };
+  const m = await newMachine("work");
+  const a = await pairedApp(mixed, m);
+  await sendSnapshot(mem, m, [a.phoneKey], [question(1, "One?")]);
+  const notices = [];
+  const br = createBridge(a.phone, { loadKinds: async () => ({}), waitMs: 50 });
+  br.on("notice", (words) => notices.push(words));
+  const picked = await within(br.request("pick", { id: a.paired.id }), 3000);
+  check(picked !== "still waiting" && picked.state === "known" && reads >= 1, "CONTROL: with a relay that answers, the horde is picked and its list read through fetch", JSON.stringify(picked).slice(0, 200));
+  await new Promise((r) => setTimeout(r, 400));
+  const healthy = reads;
+  check(healthy >= 3, "CONTROL: the live refresh polls again and again while the relay answers (" + healthy + " reads)");
+  hang = true;
+  const hungAt = reads;
+  await new Promise((r) => setTimeout(r, 1500));
+  check(reads >= hungAt + 3, "A READ THAT NEVER ANSWERS NO LONGER STOPS THE LIVE REFRESH: it is given up, and the next polls run (" + (reads - hungAt) + " reads after the relay froze)");
+  // The error path: a refresh whose first read hangs says the relay could not be read, and returns.
+  const r1 = await within(br.request("refresh"), 3000);
+  check(r1 !== "still waiting" && notices.some((n) => n.indexOf("could not be read") >= 0), "and a refresh whose read never answers ends, saying the relay could not be read", JSON.stringify(notices.slice(-2)));
+  hang = false;
+  // A relay that could not be read is asked again after the loop's pause (5 s), not in a busy loop.
+  const back = reads;
+  for (let i = 0; i < 70 && reads < back + 3; i++) await new Promise((r) => setTimeout(r, 100));
+  check(reads >= back + 3, "once the relay answers again the loop carries on reading (" + (reads - back) + " reads)");
+  await br.request("lock", { id: a.paired.id });
+}
+
 // --- 11. the icons the build draws are whole PNGs ---
 {
   const { inflateSync, crc32 } = await import("node:zlib");

@@ -41,5 +41,18 @@
         @{ Name = "http-watch-relay-close-read-as-nothing"
            Find = 'finish(event && event.code >= 4000 && event.code <= 4999 ?'
            Replace = 'finish(false ?' }
+        # A HUNG REQUEST CANNOT FREEZE THE PHONE (2026-10-14): every fetch races its time.
+        @{ Name = "http-request-waits-for-ever"
+           Find = 'return Promise.race([asked, late])'
+           Replace = 'return Promise.race([asked])' }
+        @{ Name = "http-request-not-aborted-when-late"
+           Find = 'abort.abort(); resolve(unknown("the relay did not answer'
+           Replace = 'resolve(unknown("the relay did not answer' }
+        @{ Name = "http-request-timer-outlives-its-answer"
+           Find = '.finally(() => clearTimeout(timer));'
+           Replace = ';' }
+        @{ Name = "http-request-time-not-20-s"
+           Find = 'export const REQUEST_MS = 20000;'
+           Replace = 'export const REQUEST_MS = 60000;' }
     )
 }
