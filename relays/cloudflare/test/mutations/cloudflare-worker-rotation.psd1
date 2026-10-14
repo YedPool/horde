@@ -49,5 +49,8 @@
         @{ Name = "account-list-not-moved"
            Find = 'await accountOf(env, owner.account).moveMachine('
            Replace = 'await Promise.resolve(' }
+        @{ Name = "rotation-not-heard-under-the-new-key"
+           Find = 'registeredAt: now }, now });'
+           Replace = 'registeredAt: now } });' }
     )
 }

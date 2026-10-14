@@ -1,14 +1,22 @@
 // relays/cloudflare/worker/account-api.js - a signed-in account: the account API, behind the same
 // authentication as the mailboxes (api.js asks auth.js first, and hands over only a principal).
 //
-//   GET    /v1/account                     -> 200 { account: { email }, machines: [{ keyId, horde, label, registeredAt }],
-//                                                   phones: [{ id, signedInAt, expiresAt, current }] }
+//   GET    /v1/account                     -> 200 { account: { email }, machines: [{ keyId, horde, label, registeredAt, lastSeenAt }],
+//                                                   phones: [{ id, signedInAt, expiresAt, current }], now }
 //   POST   /v1/account/machines            { horde, offer, machine, label, signPublic, expiresAt, grant }
 //                                          -> 200 { keyId, horde, duplicate }
 //   DELETE /v1/account/machines/<key id>   -> 200 { removed: <key id> }
 //   DELETE /v1/account/phones/<phone id>   -> 200 { signedOut: <phone id> }
 //   DELETE /v1/account                     { confirm: "delete this account" } -> 200 { deleted: true }
 // A phone may do all of these (auth.js); a machine may only remove its own key, and see nothing.
+//
+// WHEN EACH MACHINE WAS LAST HEARD FROM rides on the account's own answer (presence.js): lastSeenAt, to
+// the second, or null for a machine not heard from yet; and now, THE RELAY'S OWN CLOCK at the answer, so
+// the phone measures "two minutes without the PC" between two times of this one clock, and a phone whose
+// clock is wrong cannot make a machine look offline or online (account-client.js, presenceOf). No new
+// route: the phone reads this answer on a timer while it is open, held to the same read bucket as every
+// other request of that phone (limits.js, readsPerMinute), and, as the Account screen, not counted in the
+// account's day.
 //
 // REGISTERING is how a machine gets in at all, and it needs the machine's consent: the phone, while it
 // pairs, hands over the offer's fields and its ACCOUNT GRANT (relay/Pairing.ps1), and the key is taken
@@ -129,10 +137,11 @@ export async function handleAccountApi(request, env, url, who, limits) {
     if (!authorize(who, "account", "")) return refuse(403, "you may not read this account");
     const held = await gate(env, who, "account", limits);
     if (held) return held;
-    const v = await accountOf(env, who.account).view(Date.now());
+    const now = Date.now();
+    const v = await accountOf(env, who.account).view(now);
     if (!v) return refuse(401, "this account was deleted");
     const phones = v.phones.map((p) => ({ id: p.id, signedInAt: p.signedInAt, expiresAt: p.expiresAt, current: p.id === who.phone }));
-    return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones });
+    return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones, now });
   }
   const ph = PHONES.exec(url.pathname);
   if (ph) {

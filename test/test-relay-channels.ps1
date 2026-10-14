@@ -775,6 +775,24 @@ try {
     Check ((@(1..4 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures $_ -Settings $flat -Random $rnd }) -join ",") -ceq "500,1000,1500,1500" -and (Get-HordeRelayRunBackoffMs -Failures 0 -Settings $flat -Random $rnd) -eq 0) "with no jitter it is exactly 500, 1000, then the cap of 1500; and no wait after no failure"
     $spread = @(1..200 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures 1 -Settings $set -Random $rnd } | Sort-Object -Unique)
     Check ($spread.Count -gt 50) ("CONTROL: the jitter does vary (" + $spread.Count + " distinct waits in 200)")
+    # THE CAP (cli/RelayRun.ps1, BACKOFF): a live PC must not look offline on the founder's phone, which
+    # says so after 120 s without a request from it (2026-10-14).
+    $cap = $script:HordeRelayRunBackoffCapMs
+    $hi = New-Object psobject; $hi | Add-Member -MemberType ScriptMethod -Name NextDouble -Value { 0.9999999 }
+    $capped = @(foreach ($s in @($set, [pscustomobject]@{ backoffMinMs = 1000; backoffMaxMs = 3600000; backoffJitterPercent = 100 }, [pscustomobject]@{ backoffMinMs = 60000; backoffMaxMs = 3600000; backoffJitterPercent = 0 })) { foreach ($f in 1..40) { Get-HordeRelayRunBackoffMs -Failures $f -Settings $s -Random $hi -CapMs $cap; foreach ($k in 1..5) { Get-HordeRelayRunBackoffMs -Failures $f -Settings $s -Random $rnd -CapMs $cap } } })
+    $most = ($capped | Measure-Object -Maximum).Maximum
+    Check ($cap -eq 45000 -and $most -le $cap) ("the backoff never exceeds the cap at any failure count, its jitter included, whatever the settings (" + $most + " ms at most, cap " + $cap + ")")
+    Check (($script:HordeRelayWatchMsMax + $cap) -lt 110000 -and ($script:HordeRelayWatchMsMax + $most) -lt 120000) ("watch plus the largest backoff stays under the offline line: the port's longest watch " + $script:HordeRelayWatchMsMax + " ms plus " + $most + " ms is under 110 s, inside the phone's 120 s")
+    $capSpread = @(1..200 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures 12 -Settings $set -Random $rnd -CapMs $cap } | Sort-Object -Unique)
+    Check ($capSpread.Count -gt 50 -and ($capSpread | Measure-Object -Minimum).Minimum -ge 30000) ("and capped, the waits still spread, so machines that lost one relay together do not come back together (" + $capSpread.Count + " distinct)")
+    Check ((Get-HordeRelayRunBackoffMs -Failures 8 -Settings $set -Random $hi) -gt 70000) "CONTROL: uncapped, the seventh doubling's wait is over 70 s, as the review measured"
+    $refusedWith = { param([int]$Status) $u = New-HordeUnknown -Reason "refused"; $u | Add-Member -NotePropertyName status -NotePropertyValue $Status; return $u }
+    Check ((Get-HordeRelayRunBackoffCap -Inbox (& $refusedWith 429) -Context $null) -eq 0 -and (Get-HordeRelayRunBackoffCap -Inbox (& $refusedWith 507) -Context $null) -eq 0) "a watch the relay refused with 429 or 507 keeps the settings' own longest backoff: the relay asked to be left"
+    Check ((Get-HordeRelayRunBackoffCap -Inbox $null -Context ([pscustomobject]@{ full = @{}; refusedWith = @{ 507 = $true } })) -eq 0 -and (Get-HordeRelayRunBackoffCap -Inbox $null -Context ([pscustomobject]@{ full = @{}; refusedWith = @{ 429 = $true } })) -eq 0) "and so does a turn one of whose own puts the relay refused with 507 or 429"
+    # Review of PR 252: the full mark stays set while the mailbox stays full, so judging by it made one
+    # dropped watch socket wait the long backoff, and the relay heard the machine only every 132 s.
+    Check ((Get-HordeRelayRunBackoffCap -Inbox (New-HordeUnknown -Reason "the watch socket dropped") -Context ([pscustomobject]@{ full = @{ "work/phone" = [pscustomobject]@{ mailbox = "work/phone" } }; refusedWith = @{} })) -eq $cap -and (Get-HordeRelayRunBackoffCap -Inbox $null -Context ([pscustomobject]@{ full = @{ "work/phone" = $true }; refusedWith = @{ 500 = $true } })) -eq $cap) "with the mailbox full, a local failure is still capped: only this turn's own refusal lifts the cap"
+    Check ((Get-HordeRelayRunBackoffCap -Inbox (New-HordeUnknown -Reason "unreachable") -Context ([pscustomobject]@{ full = @{} })) -eq $cap -and (Get-HordeRelayRunBackoffCap -Inbox (& $refusedWith 500) -Context $null) -eq $cap -and (Get-HordeRelayRunBackoffCap -Inbox $null -Context $null) -eq $cap) "a turn whose trouble is its own, or a relay that is down, is capped"
     $W = New-World
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50}}', $utf8)
     [void](Send-ToMachine $W (Get-Answer $W).text)
@@ -837,6 +855,14 @@ try {
     $hostileConn = Connect-HordeRelay -Name "hostile" -Options @{}
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 4 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms, $Why) if ("$Why" -cne "pace") { [void]$slept.Add($Ms) } }
     Check ($r.failures -eq 4 -and (@($slept) -join ",") -ceq "100,200,400" -and (@($said) -join " ").Contains("the mailbox could not be read")) ("a relay that keeps failing is waited for 100, 200, 400 ms - doubled, capped - and said each time (" + (@($slept) -join ",") + ")")
+    # The run itself holds a failing relay to the cap (BACKOFF): settings that would wait 60 s on the
+    # second failure wait 45 s, so the relay still hears this machine inside the phone's offline line.
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50, "backoffMinMs": 30000, "backoffMaxMs": 3600000, "backoffJitterPercent": 0}}', $utf8)
+    $said.Clear()
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 3 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms, $Why) }
+    $waitsSaid = (@($said | Where-Object { $_ -match "; waiting [0-9]+ ms" } | ForEach-Object { [regex]::Match($_, "waiting ([0-9]+) ms").Groups[1].Value }) -join ",")
+    Check ($r.failures -eq 3 -and $waitsSaid -ceq "30000,45000,45000") ("and a run whose relay cannot be read waits 30 s, then 45 s, never the 60 s its settings would give (" + $waitsSaid + ")")
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50, "backoffMinMs": 100, "backoffMaxMs": 400, "backoffJitterPercent": 0}}', $utf8)
     $slept.Clear()
     $heal = { param($Ms, $Why) if ("$Why" -ceq "pace") { return }; [void]$slept.Add($Ms); if ($slept.Count -ge 2) { Set-HordeHostileRelayFaults -Faults @() } }
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 4 -Say { param($Line) [void]$said.Add($Line) } -Sleep $heal

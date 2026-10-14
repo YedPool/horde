@@ -45,5 +45,8 @@
            Replace = ''
            Expect = "survives"
            Reason = "The run's context is opened again once an hour, and no suite here waits an hour or reopens a context while a mailbox is full: what would be lost is one repeat of a line already said and, for a full mailbox, nothing - the next refused put records it again." }
+        @{ Name = "put-refusal-status-not-told-to-the-run"
+           Find = 'if ($null -ne $Context.PSObject.Properties["refusedWith"]) { $Context.refusedWith[[int]$status.Value] = $true }'
+           Replace = '' }
     )
 }

@@ -449,9 +449,11 @@ try {
     Add-Note $F "written while the relay is busy"
     $busy = Send-Snapshot $F
     Check ($busy.failed -and $F.ctx.full.Count -eq 0) ("CONTROL: a put refused for another reason (429, a rate) fails the Tick and is NOT a full mailbox (" + $busy.text + ")")
+    Check ($F.ctx.refusedWith.ContainsKey(429) -and -not $F.ctx.refusedWith.ContainsKey(507)) ("and the run is told this turn's put was refused with 429, for its backoff (cli/RelayRun.ps1, BACKOFF) (" + (@($F.ctx.refusedWith.Keys) -join ",") + ")")
     Set-HordeCountingRelayFaults -Faults @("full")
     Add-Note $F "written while the mailbox is full"
     $refused = Send-Snapshot $F
+    Check ($F.ctx.refusedWith.ContainsKey(507)) "and that its put was refused with 507"
     Check ($refused.failed -and -not $refused.text.Contains("one page") -and $F.ctx.full.ContainsKey("work/phone") -and $F.ctx.full["work/phone"].reason.Contains("507")) ("a put the relay refuses with 507 fails the Tick as before, and the run is told the mailbox is full (" + $refused.text + ")")
     Invoke-HordeRelayRunPutNotes -Context $F.ctx -Watching $watching -Seat $seat -TempRoot $notTemp -Now $now
     $loud = @($said | Where-Object { $_ -clike "MAILBOX FULL: *work/phone*NOTHING NEW REACHES THE FOUNDER'S PHONE*" })

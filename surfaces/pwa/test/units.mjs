@@ -1096,6 +1096,43 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check(locked.state === "unknown" && (!locked.value || !locked.value.notShown), "and a locked horde's list carries no such line");
 }
 
+// --- 14. is the PC there? the offline banner, by the relay's clock (the founder, 2026-10-14, fix 2) ---
+{
+  const t0 = 1760000000000;
+  const mach = (keyId, lastSeenAt, label = "build-box", horde = "work") => ({ keyId, horde, label, registeredAt: t0 - 86400000, lastSeenAt });
+  const k1 = "1".repeat(32), k2 = "2".repeat(32), k3 = "3".repeat(32);
+  const offline = (answer) => AC.presenceOf(answer).filter((m) => m.state === "offline");
+  const at = (age) => ({ now: t0, machines: [mach(k1, t0 - age)] });
+  check(AC.OFFLINE_AFTER_MS === 120000, "two minutes is the line");
+  check(offline(at(121000)).length === 1 && offline(at(121000))[0].keyId === k1, "the banner appears after 120 s by the relay's clock");
+  check(offline(at(119000)).length === 0 && AC.presenceOf(at(119000))[0].state === "online", "not before");
+  check(offline(at(120000)).length === 0 && offline(at(120001)).length === 1, "and exactly 120 s is not yet over it: over means over");
+  const realNow = Date.now;
+  let skewed;
+  try {
+    Date.now = () => t0 + 3 * 86400000;
+    skewed = [AC.presenceOf(at(30000))[0].state, AC.presenceOf(at(121000))[0].state];
+    Date.now = () => t0 - 3 * 86400000;
+    skewed.push(AC.presenceOf(at(30000))[0].state, AC.presenceOf(at(121000))[0].state);
+  } finally { Date.now = realNow; }
+  check(skewed.join(",") === "online,offline,online,offline", "a wrong phone clock, days fast or days slow, does not change it: only the relay's now and lastSeenAt count", skewed.join(","));
+  check(AC.presenceOf({ now: t0, machines: [mach(k1, t0 - 2000)] })[0].state === "online" && offline({ now: t0 + 300000, machines: [mach(k1, t0 - 2000)] }).length === 1 && offline({ now: t0 + 301000, machines: [mach(k1, t0 + 300000)] }).length === 0, "it clears when heard again: the next answer with a fresh lastSeenAt has no banner");
+  const many = AC.presenceOf({ now: t0, machines: [mach(k1, t0 - 600000, "build-box"), mach(k2, t0 - 5000, "laptop"), mach(k3, t0 - 900000, "", "personal")] });
+  const off = many.filter((m) => m.state === "offline");
+  check(off.length === 2 && off[0].name === "build-box (work)" && off[1].name === "machine " + k3.slice(0, 12) + " (personal)", "one banner per offline machine, by its name: its label and horde, or its key id's start when it has no label", JSON.stringify(off.map((m) => m.name)));
+  const bare = AC.presenceOf({ now: t0, machines: [{ keyId: k1, label: "build-box", lastSeenAt: t0 - 600000 }, { keyId: k2, label: "", horde: "", lastSeenAt: t0 - 600000 }] });
+  check(bare[0].name === "build-box" && bare[1].name === "machine " + k2.slice(0, 12), "a machine whose answer names no horde is named without one: never '(undefined)'", JSON.stringify(bare.map((m) => m.name)));
+  const never = AC.presenceOf({ now: t0, machines: [mach(k1, null)] });
+  check(never.length === 1 && never[0].state === "never" && never[0].lastSeenAt === null, "a never-seen machine gets no offline banner: it is 'never', quietly");
+  check(AC.presenceOf({ now: t0, machines: [{ keyId: k1, horde: "work", label: "x" }] })[0].state === "never" && AC.presenceOf({ now: t0, machines: [mach(k1, 0)] })[0].state === "never", "and so is one whose answer carries no lastSeenAt at all (a relay from before this), or a zero");
+  check(AC.presenceOf({ machines: [mach(k1, t0 - 600000)] }).length === 0 && AC.presenceOf({ now: "1760000000000", machines: [mach(k1, t0 - 600000)] }).length === 0 && AC.presenceOf(null).length === 0 && AC.presenceOf({ now: t0, machines: "x" }).length === 0, "an answer without the relay's own now as a whole number says nothing about anyone: no clock, no banner");
+  const m = off[0];
+  const words = AC.offlineWords(m, (ms) => "T" + ms);
+  check(words === "PC build-box (work) offline since T" + m.lastSeenAt + ". Your answers are kept and will be applied when it is back.", "the banner says the PC's name, the time it was last heard in the phone's own local time, and that the answers are kept", words);
+  check(!/lost|deleted|not sent|failed/i.test(words), "and nothing that says an answer is lost");
+  check(AC.offlineWords(m, () => "T", { waiting: 3 }).endsWith(" 3 answers are waiting.") && AC.offlineWords(m, () => "T", { waiting: 1 }).endsWith(" 1 answer is waiting.") && AC.offlineWords(m, () => "T", { waiting: 0 }) === AC.offlineWords(m, () => "T"), "the hook for later: a count of answers waiting adds one sentence, and none adds nothing");
+}
+
 // --- 10e. the cards: one snapshot per machine, merged by machine name; a card's stream is its lane's part of the log ---
 const cardsBody = (m, { name, made = "2026-10-13T20:00:00Z", cards = [], areas = [], thrall = {}, left = 0, areasLeft = undefined, hash = P.hex(P.randomBytes(32)) }) => P.utf8(JSON.stringify({ v: 1, kind: "cards-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, made, name,
   thrall: { asOf: "", now: "", hasStatus: false, orcs: cards.length, working: cards.length, waitingFounder: 0, blocked: 0, unknown: 0, waitingFounderLanes: [], census: null, refused: [], ...thrall }, cards, cardsLeftOut: left, areas, areasLeftOut: areasLeft }));
