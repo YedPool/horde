@@ -9,6 +9,13 @@
     Suite  = "test\test-relay-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        # --- a network or device path is no path on this machine (the review of PR 238, 2026-10-13) ---
+        @{ Name = "a-network-or-device-path-is-taken"
+           Find = 'if ($path.value -cmatch ''\A[\\/]{2}'') { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "only-a-backslash-pair-is-refused"
+           Find = '$path.value -cmatch ''\A[\\/]{2}'''
+           Replace = '$path.value -cmatch ''\A\\{2}''' }
         @{ Name = "relay-that-cannot-tell-left-out"
            Find = 'if ($a.state -cne "known") { [void]$cannot.Add($n); [void]$why.Add($a.reason); continue }'
            Replace = 'if ($a.state -cne "known") { continue }' }

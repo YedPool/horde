@@ -822,6 +822,11 @@ function Read-HordeRelaySecretFiles {
         $at = "relay '" + $name + "' named secret file " + $n + " of " + $raw.Count
         $path = Get-HordeRelayMember $it "path"
         if (-not $path.has -or -not (Test-HordeRelayAbsolutePath $path.value)) { return (New-HordeUnknown -Reason ($at + " by something that is not an absolute path")) }
+        # A PATH ON THIS MACHINE'S OWN DRIVES, NOT A NETWORK OR DEVICE ONE (the review of PR 238,
+        # 2026-10-13): measured that day, files/ could place neither \\.\C:\... nor
+        # \\localhost\C$\... and compared nothing, so a file named so was shared. Two separators at
+        # the start is every such form, the long-path prefix \\?\ among them.
+        if ($path.value -cmatch '\A[\\/]{2}') { return (New-HordeUnknown -Reason ($at + " by a network or device path, not one on this machine's own drives")) }
         $whole = ""
         try { $whole = [System.IO.Path]::GetFullPath($path.value) } catch { $whole = "" }
         if ($whole -eq "") { return (New-HordeUnknown -Reason ($at + " by a path that cannot be read as one")) }
