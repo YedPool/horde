@@ -205,6 +205,21 @@
 # is how a caller sees who was. test/test-relay-conformance.ps1 holds every relay that hands the block
 # over to what is written here.
 #
+# A RELAY THAT COUNTS ITS OWN REQUESTS MAY SAY SO, ONCE A DAY (2026-10-14; the design note of that day,
+# "relay request metrics"). The founder asked for a metrics system that shows how requests are made and
+# whether batching, longer watches or other methods would be cheaper, faster or more stable. The hosted
+# relay counts every request it answers - by hour, route, client kind and outcome, nothing of what they
+# carried - and a machine reads a day of it once a day. Which relay keeps such counts, and how they are
+# read, is the relay's own (CONTRIBUTING rule 14), so a relay that does hands Register-HordeRelay
+#   DaySummary param($State, [string]$Day) -> known <summary object> | absent | unknown
+#              the relay's summary of the UTC day "YYYY-MM-DD", as a JSON object the relay defined;
+#              absent when it keeps none (now); unknown, with why, when it could not be read. ONE
+#              REQUEST: the caller asks once a day, and the block must not ask more than once a call.
+# and Get-HordeRelayDaySummary -Connection -Day asks it: known { day; summary }, absent for a relay with
+# no such block (or one that keeps none), unknown otherwise. Nothing in the summary is believed or
+# opened here: the caller writes it for a reader (cli/RelayMetrics.ps1), held to printable ASCII.
+# AN OPTIONAL BLOCK, NOT A CAPABILITY OF THE CLOSED LIST, for the reason the watch in slices is not.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -302,7 +317,8 @@ function Register-HordeRelay {
         [scriptblock]$WatchClose = $null,
         [scriptblock]$PutKeeping = $null,
         [scriptblock]$SecretFiles = $null,
-        [scriptblock]$Bundle = $null
+        [scriptblock]$Bundle = $null,
+        [scriptblock]$DaySummary = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -321,7 +337,7 @@ function Register-HordeRelay {
     }
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
-        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles
+        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles; daySummary = $DaySummary
         bundle = $Bundle; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
@@ -892,4 +908,22 @@ function Get-HordeRelaySecretFiles {
         return $u
     }
     return (New-HordeKnown -Value ([pscustomobject]@{ files = @($files.ToArray()); asked = @($asked.ToArray()) }))
+}
+
+function Get-HordeRelayDaySummary {
+    # The relay's own summary of the UTC day -Day, "YYYY-MM-DD" (the header, A RELAY THAT COUNTS ITS OWN
+    # REQUESTS): known { day; summary }; absent when the relay keeps none; unknown with why. Never throws.
+    param($Connection, [string]$Day)
+    if (-not (Test-HordeRelayConnection $Connection)) { return (New-HordeUnknown -Reason "the day's summary was not asked: the connection is not one Connect-HordeRelay made") }
+    $when = [datetime]::MinValue
+    if ($Day -cnotmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z' -or -not [datetime]::TryParseExact($Day, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$when)) { return (New-HordeUnknown -Reason ("the day's summary was not asked: '" + $Day + "' is not a day, YYYY-MM-DD")) }
+    $r = $Connection.relay
+    if ($null -eq $r.daySummary) { return (New-HordeAbsent -Note ("relay '" + $r.name + "' keeps no summary of its requests")) }
+    try { $a = & $r.daySummary $Connection.state $Day }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' failed the day's summary") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' answered the day's summary with something that is not an answer")) }
+    if ("absent" -ceq $a.state) { return (New-HordeAbsent -Note $a.reason) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' could not give the day's summary: " + $a.reason)) }
+    if ($a.value -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' answered the day's summary with something that is not an object")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ day = $Day; summary = $a.value }) -ObservedAt $a.observedAt)
 }

@@ -18,6 +18,11 @@
 #   - THE TURN IS NO LONGER THAN ITS WATCH, so the heartbeat's tick still says how often the run beats;
 #   - A GLANCE THAT THROWS, or answers anything but a plain true, costs speed only: its channel is
 #     ticked once a turn as before, and the fault is said once a run, not once a second;
+#   - THE RELAY'S REQUEST METRICS (cli/RelayMetrics.ps1): on a relay that keeps a summary of its days,
+#     a run asks for yesterday's ONCE - three turns, one request; a restarted run that day, none - and
+#     writes it to <HORDE_HOME>\metrics with this machine's own counts of the day; it counts its polls,
+#     its empty polls, its retries and its backoffs by the hour; and on a relay that keeps none it asks
+#     nothing and writes nothing;
 #   - EACH REAL CHANNEL'S GLANCE - decisions, chat, progress - says yes exactly when its Tick has
 #     something to send, and no for what it does not look at; and through a real turn the warchief's
 #     note, the Thrall's reply and a progress entry written during the watch are each opened by the
@@ -186,6 +191,47 @@ try {
     Check ($b.r.turns -eq 3 -and $blocking -ceq "watch,watch,watch" -and @(Get-HordeCountingRelayLog -Requests).Count -eq @($sliced -split ",").Count) ("over the blocking watch the same three idle turns are the same three requests (" + $blocking + "): looking during the watch added none")
     Check ($script:probe.glances -eq 0 -and $script:probe.ticks -eq 3 -and @(Get-HordeCountingRelayLog | Where-Object { $_.op -ceq "wait" }).Count -eq 0) ("and a relay that does not watch in slices is watched exactly as before: nothing is looked at during its watch (" + $script:probe.glances + " looks)")
     Set-HordeCountingRelaySlices -On $true
+
+    Write-Host ""
+    Write-Host "--- the relay's request metrics: yesterday's summary asked once a day, and this machine's own counts ---" -ForegroundColor Cyan
+    $metricsDir = Join-Path $P.home "metrics"
+    Check (-not (Test-Path -LiteralPath $metricsDir)) "CONTROL: over a relay that keeps no summary, the six turns above asked nothing and wrote no metrics at all"
+    Set-HordeCountingRelaySummary -On $true
+    Set-RunSettings $P '{"watchMs": 300, "sendCheckMs": 200, "minTurnMs": 50}'
+    Clear-HordeCountingRelayLog
+    Reset-Probe
+    $m1 = Invoke-Run $P -Turns 3
+    $today = [datetime]::UtcNow.ToString("yyyy-MM-dd")
+    $yesterday = [datetime]::UtcNow.AddDays(-1).ToString("yyyy-MM-dd")
+    $asked = @(Get-HordeCountingRelayLog -Requests | Where-Object { $_.op -ceq "summary" })
+    $dayFile = Join-Path $metricsDir ("relay-" + $yesterday + ".json")
+    Check ($m1.r.turns -eq 3 -and $asked.Count -eq 1 -and (@(Get-HordeCountingRelaySummaryDays) -join ",") -ceq $yesterday -and (Test-Path -LiteralPath $dayFile)) ("THREE TURNS ASK THE RELAY FOR YESTERDAY'S SUMMARY ONCE, and write it to " + $dayFile + " (" + $asked.Count + " request(s): " + (Get-Ops -Requests) + ")")
+    Check ($m1.text.Contains("the relay's summary of " + $yesterday + " and this machine's own counts were written to " + $dayFile)) "and the run says so in one line"
+    $dj = $null
+    try { $dj = [System.IO.File]::ReadAllText($dayFile) | ConvertFrom-Json } catch { $dj = $null }
+    Check (("" + (Get-HordeTestMember $dj "relay.state")) -ceq "known" -and ("" + (Get-HordeTestMember $dj "relay.summary.day")) -ceq $yesterday -and @(Get-HordeTestMember $dj "pc.hours").Count -eq 0) "holding the relay's summary as it gave it, beside this machine's counts of that day (none: it did not run then)"
+    Clear-HordeCountingRelayLog
+    $m2 = Invoke-Run $P -Turns 2
+    Check ($m2.r.turns -eq 2 -and @(Get-HordeCountingRelayLog -Requests | Where-Object { $_.op -ceq "summary" }).Count -eq 0) ("a run started again the same day asks nothing: yesterday's file is there (" + (Get-Ops -Requests) + ")")
+    $pcFile = Join-Path $metricsDir ("pc-" + $today + ".json")
+    $pj = $null
+    try { $pj = [System.IO.File]::ReadAllText($pcFile) | ConvertFrom-Json } catch { $pj = $null }
+    $pcHours = @(Get-HordeTestMember $pj "hours")
+    $sumOf = { param($Name) [long](@($pcHours | ForEach-Object { [long](Get-HordeTestMember $_ $Name) }) | Measure-Object -Sum).Sum }
+    Check ((& $sumOf "polls") -eq 5 -and (& $sumOf "emptyPolls") -eq 5 -and (& $sumOf "retries") -eq 0 -and (& $sumOf "backoffWaits") -eq 0) ("this machine's own counts of today are kept across both runs, by the hour: five polls, all five empty, no retry, no backoff (" + ($pcHours | ConvertTo-Json -Compress) + ")")
+    # A TURN THAT FAILS: its backoff is counted, and the turn after it is a retry.
+    Set-HordeCountingRelayFaults -Faults @("refuse-put")
+    Reset-Probe
+    $script:probe.has = $true
+    $m3 = Invoke-Run $P -Turns 2
+    Set-HordeCountingRelayFaults -Faults @()
+    $pj = $null
+    try { $pj = [System.IO.File]::ReadAllText($pcFile) | ConvertFrom-Json } catch { $pj = $null }
+    $pcHours = @(Get-HordeTestMember $pj "hours")
+    $backoffMs = @($m3.slept | Where-Object { $_.why -ceq "backoff" } | ForEach-Object { $_.ms } | Measure-Object -Sum).Sum
+    Check ($m3.r.failures -eq 2 -and (& $sumOf "retries") -eq 1 -and (& $sumOf "backoffWaits") -eq 1 -and (& $sumOf "backoffMs") -ge 1 -and (& $sumOf "polls") -eq 7) ("two failed turns: the backoff between them counted, and the second a retry (" + ($pcHours | ConvertTo-Json -Compress) + "; slept " + $backoffMs + " ms)")
+    Set-HordeCountingRelaySummary -On $false
+    Reset-Probe
 
     Write-Host ""
     Write-Host "--- a change during the watch is sent in that watch, within the interval, for the cost of the send alone ---" -ForegroundColor Cyan

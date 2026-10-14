@@ -138,6 +138,12 @@
 # beats well again. Keys that were opened and proved stay open for the run's life; the hourly reopen
 # that fails keeps them (it says so) and is not a condition.
 #
+# THE RELAY'S REQUEST METRICS (cli/RelayMetrics.ps1; the design note of 2026-10-14). On a relay that keeps
+# a summary of its own requests, the run counts its side - each turn's watch, the ones that brought
+# nothing, the turns begun after a failure, the backoffs waited - per hour, and on the first turn of each
+# UTC day asks the relay ONCE for yesterday's summary and writes both into <HORDE_HOME>\metrics, for
+# the fleet analyst. Neither ever ends or slows a turn beyond that one request a day.
+#
 # THE SETTINGS are core/ModuleSettings.ps1's, module relay-run (<HORDE_HOME>\settings\relay-run.json),
 # read when the run starts. A file that fails its checks refuses the run, in its own words.
 #
@@ -146,6 +152,7 @@
 # What this file calls of core beyond what its command loads, loaded here so it works on its own.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Heartbeat.ps1")
 . (Join-Path $PSScriptRoot "RelayRunTell.ps1")
+. (Join-Path $PSScriptRoot "RelayMetrics.ps1")
 
 $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Settings @(
     # 25 s is the design's long-poll (Q8, spike S3: PS 5.1 long-polls end cleanly on timeout); 60 s is the
@@ -457,6 +464,7 @@ function Invoke-HordeRelayRun {
     $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $HordeHome
     $beatTick = Get-HordeRelayRunTickSeconds -WatchMs $watchMs -Settings $set
     $beatFailed = $false
+    $metrics = New-HordeRelayRunMetrics -HordeHome $HordeHome -Connection $Connection
     $watching = New-HordeRelayRunWatching -Say $Say -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs -CheckMs ([int]$set.sendCheckMs) -HordeHome $HordeHome -Tell ([bool]$set.tellWarchief) -FromLabel ("" + $set.fromLabel)
     try {
         while ($true) {
@@ -464,6 +472,15 @@ function Invoke-HordeRelayRun {
             if ($MaxTurns -gt 0 -and $turns -ge $MaxTurns) { $stoppedBy = "turns"; break }
             $turns++
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
+            # THE RELAY'S REQUEST METRICS (the header): a turn after a failed one is a retry; the counts
+            # go to their file once the hour has turned; and on a new UTC day, the one summary request.
+            if ($failures -gt 0) { Add-HordeRelayRunMetric -Metrics $metrics -Name "retries" }
+            Save-HordeRelayRunMetrics -Metrics $metrics -IfHourTurned
+            $pulled = Invoke-HordeRelayRunMetricsDay -Metrics $metrics -Connection $Connection
+            if ($null -ne $pulled) {
+                if ($pulled.state -ceq "known") { $null = & $Say ("the relay's summary of " + $pulled.day + " and this machine's own counts were written to " + $pulled.path) }
+                else { $null = & $Say ("the relay's summary of " + $pulled.day + " could not be read (" + $pulled.reason + "); this machine's own counts were written to " + $pulled.path) }
+            }
             $failed = ""
             $in = $null
             # What the relay refused THIS turn's puts with: begun empty each turn (BACKOFF, in the header).
@@ -507,6 +524,7 @@ function Invoke-HordeRelayRun {
                 # not send begins its watch as failed: nothing more is sent before the turn's backoff.
                 $watching.failed = [bool]$ticks.failed; $watching.sinceLook.Restart()
                 $in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $turnWatch -SliceMs ([int]$set.sendCheckMs) -Between $script:HordeRelayRunBetweenSlices -With $watching
+                Add-HordeRelayRunMetric -Metrics $metrics -Name "polls"
                 if ($in.state -cne "known") { $failed = "the mailbox could not be read: " + $in.reason }
                 else {
                     foreach ($l in @($in.value.refused)) { $null = & $Say ("refused " + $l) }
@@ -514,6 +532,7 @@ function Invoke-HordeRelayRun {
                     foreach ($l in @($in.value.missing)) { $null = & $Say ("missing " + $l) }
                     foreach ($l in @($in.value.anomalies)) { $null = & $Say ("relay: " + $l) }
                     $empty = (@($in.value.taken).Count + @($in.value.refused).Count + @($in.value.held).Count + @($in.value.missing).Count + @($in.value.anomalies).Count -eq 0)
+                    if ($empty) { Add-HordeRelayRunMetric -Metrics $metrics -Name "emptyPolls" }
                     $r2 = Invoke-HordeRelayUnfinished -Context $ctx
                     foreach ($l in @(Get-HordeRelayRunLines -Report $r2.value)) { $null = & $Say $l }
                 }
@@ -527,7 +546,11 @@ function Invoke-HordeRelayRun {
                 $failures++
                 $wait = Get-HordeRelayRunBackoffMs -Failures $failures -Settings $set -Random $Random -CapMs (Get-HordeRelayRunBackoffCap -Inbox $in -Context $ctx)
                 $null = & $Say ($failed + "; waiting " + $wait + " ms (failure " + $failures + " in a row)")
-                if (-not $last) { $null = Wait-HordeRelayRunSliced -Ms $wait -Why "backoff" -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs }
+                if (-not $last) {
+                    Add-HordeRelayRunMetric -Metrics $metrics -Name "backoffWaits"
+                    Add-HordeRelayRunMetric -Metrics $metrics -Name "backoffMs" -By $wait
+                    $null = Wait-HordeRelayRunSliced -Ms $wait -Why "backoff" -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs
+                }
             } else {
                 $failures = 0
                 $left = [long]$set.minTurnMs - $clock.ElapsedMilliseconds
@@ -536,6 +559,7 @@ function Invoke-HordeRelayRun {
         }
     } finally {
         Close-HordeRelayRunContext -Context $ctx
+        if ($null -ne $metrics) { Save-HordeRelayRunMetrics -Metrics $metrics }
         $lock.Dispose()
     }
     $null = & $Say ("stopped after " + $turns + " turn(s): " + $stoppedBy)

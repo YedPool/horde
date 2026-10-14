@@ -23,6 +23,9 @@
 #     watch        one blocking watch, begun
 #     watch-open   one watch in slices, opened: THE ONE REQUEST THE WHOLE WATCH COSTS
 #     ack          one ack
+#     summary      one day's summary asked for (relays/Port.ps1, A RELAY THAT COUNTS ITS OWN REQUESTS) - only
+#                  while Set-HordeCountingRelaySummary -On $true; otherwise the relay keeps none (absent)
+#                  and is asked nothing, as a relay with no such block
 #   NOT A REQUEST - what happens on this side of the wire, and costs the relay nothing:
 #     wait         one slice of an open watch waited on
 #     watch-close  an open watch let go of
@@ -85,7 +88,10 @@ $script:HordeCountingRelayLog = New-Object System.Collections.ArrayList
 $script:HordeCountingRelayHook = $null
 $script:HordeCountingRelayFaults = @()
 $script:HordeCountingRelayPollMs = 20
-$script:HordeCountingRelayRequests = @("put", "get", "watch", "watch-open", "ack")
+$script:HordeCountingRelayRequests = @("put", "get", "watch", "watch-open", "ack", "summary")
+# Whether the relay keeps a summary of its days (Set-HordeCountingRelaySummary), and the days asked for.
+$script:HordeCountingRelaySummaryOn = $false
+$script:HordeCountingRelaySummaryDays = New-Object System.Collections.ArrayList
 # The three slice blocks, kept so a suite can take them away from the registered relay and put them back.
 $script:HordeCountingRelaySliceBlocks = $null
 
@@ -102,8 +108,19 @@ function Reset-HordeCountingRelay {
     $script:HordeCountingRelayPutsLeft = -1
     $script:HordeCountingRelayCap = 0
     $script:HordeCountingRelayFullFor = @()
+    $script:HordeCountingRelaySummaryOn = $false
+    $script:HordeCountingRelaySummaryDays = New-Object System.Collections.ArrayList
     if ($script:HordeCountingRelayDeclaredTextChars -gt 0) { (Get-HordeRelay -Name "counting").limits.maxTextChars = $script:HordeCountingRelayDeclaredTextChars }
 }
+
+function Set-HordeCountingRelaySummary {
+    # Whether the relay keeps a summary of its days: on, each one asked for is a request, logged, and
+    # answered { day; requests } with the day it was asked; off (the default), it keeps none.
+    param([Parameter(Mandatory = $true)][bool]$On)
+    $script:HordeCountingRelaySummaryOn = $On
+}
+
+function Get-HordeCountingRelaySummaryDays { return @($script:HordeCountingRelaySummaryDays.ToArray()) }
 
 function Set-HordeCountingRelayPutsLeft {
     param([Parameter(Mandatory = $true)][int]$Puts)
@@ -311,4 +328,11 @@ $null = Register-HordeRelay -Folder $script:HordeCountingRelayFolder `
     -WatchClose {
         param($State, $Handle)
         Add-HordeCountingRelayEntry -Op "watch-close" -Mailbox $Handle.mailbox
+    } `
+    -DaySummary {
+        param($State, [string]$Day)
+        if (-not $script:HordeCountingRelaySummaryOn) { return (New-HordeAbsent -Note "the counting relay keeps no summary now") }
+        Add-HordeCountingRelayEntry -Op "summary"
+        [void]$script:HordeCountingRelaySummaryDays.Add($Day)
+        return (New-HordeKnown -Value ([pscustomobject]@{ day = $Day; requests = @([pscustomobject]@{ hour = ($Day + "T00"); route = "watch"; kind = "machine"; outcome = "ok"; count = 1 }) }) -ObservedAt ([datetime]::UtcNow))
     }

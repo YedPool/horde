@@ -73,6 +73,17 @@
 # WHICH FILES HERE HOLD THIS RELAY'S SECRETS (relays/Port.ps1, the section of that name) is
 # SecretFiles.ps1's to say: the Google client file the settings name, and the deploy tool's login.
 #
+# WHICH ATTEMPT EACH REQUEST IS (the relay's request metrics: worker/metrics.js, THE RETRY HEADER). Every
+# request and every watch carries x-horde-attempt: 1, plus the requests of this connection in a row before
+# it that came back unknown - so the one after a failure (the runner's next turn after its backoff, or a
+# request made again after a rotation) says it is a retry, and the first after an answer says 1 again.
+# The relay only counts it. It is a header, not part of what is signed, so it changes no signature.
+#
+# THE DAY'S SUMMARY (relays/Port.ps1, A RELAY THAT COUNTS ITS OWN REQUESTS; worker/metrics-api.js): one
+# signed GET of /v1/metrics/summary?day=<day>. The relay answers an owner account's machine with the
+# relay-wide view, and any other machine with its own account's hours; this side asks once and takes
+# whichever it is given.
+#
 # Runs on Windows PowerShell 5.1 and PowerShell 7 alike: System.Net.Http and System.Net.WebSockets.
 
 $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
@@ -98,6 +109,10 @@ $script:HordeCloudflareRelayRunWatchMs = 60000
 # The most one answer may be: the Worker's batch budget (worker/rules.js, BATCH_CHARS) and the JSON
 # around it, with room. A longer answer is not this Worker's.
 $script:HordeCloudflareRelayAnswerBytes = 2097152
+# The attempt header (the header, WHICH ATTEMPT), and the most it says: the most the Worker reads.
+$script:HordeCloudflareRelayAttemptHeader = "x-horde-attempt"
+$script:HordeCloudflareRelayAttemptMax = 999
+$script:HordeCloudflareRelaySummaryPath = "/v1/metrics/summary"
 
 function Get-HordeCloudflareRelayWords {
     # The far end's words, made safe to show: printable ASCII only, at most 200 characters.
@@ -142,6 +157,20 @@ function Get-HordeCloudflareRelayMailboxPath {
     return ("/v1/mailboxes/" + $Mailbox + "/" + $Op)
 }
 
+function Get-HordeCloudflareRelayAttempt {
+    # The attempt this connection's next request is (the header, WHICH ATTEMPT), as the header's text.
+    param($State)
+    return ([string][Math]::Min($script:HordeCloudflareRelayAttemptMax, [int]$State.failedInARow + 1))
+}
+
+function Set-HordeCloudflareRelayAttemptOutcome {
+    # A request of -State's came back -Answer: known puts the count of failures in a row back to 0, and
+    # anything else adds one. -Answer, for the return.
+    param($State, $Answer)
+    if ($null -ne $Answer -and $Answer.state -ceq "known") { $State.failedInARow = 0 } else { $State.failedInARow = [int]$State.failedInARow + 1 }
+    return $Answer
+}
+
 function Get-HordeCloudflareRelayAuthorization {
     # The Authorization value for one request: the suite's given one, or this machine's signature over
     # it (the header). Known text, or unknown when there is no key to sign with.
@@ -182,6 +211,7 @@ function Invoke-HordeCloudflareRelayHttp {
     if ($auth.state -cne "known") { return $auth }
     $req = New-Object System.Net.Http.HttpRequestMessage((New-Object System.Net.Http.HttpMethod($Method)), ($State.origin + $Path))
     [void]$req.Headers.TryAddWithoutValidation("Authorization", $auth.value)
+    [void]$req.Headers.TryAddWithoutValidation($script:HordeCloudflareRelayAttemptHeader, (Get-HordeCloudflareRelayAttempt -State $State))
     if ($bytes.Length -gt 0) {
         $req.Content = New-Object System.Net.Http.ByteArrayContent(, $bytes)
         $req.Content.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
@@ -193,17 +223,18 @@ function Invoke-HordeCloudflareRelayHttp {
             $code = [int]$res.StatusCode
             $retryAfter = $(if ($null -ne $res.Headers.RetryAfter) { "" + $res.Headers.RetryAfter } else { "" })
         } finally { $res.Dispose() }
-    } catch { return (New-HordeUnknown -Reason ("the relay at " + $State.origin + " could not be reached for the " + $What) -ErrorRecord $_) }
+    } catch { return (Set-HordeCloudflareRelayAttemptOutcome -State $State -Answer (New-HordeUnknown -Reason ("the relay at " + $State.origin + " could not be reached for the " + $What) -ErrorRecord $_)) }
     finally { $req.Dispose() }
     $parsed = $null
     try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
-    if ($code -eq 401 -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayHttp -State $State -Method $Method -Path $Path -Body $Body -What $What -Once) }
+    # The refused request is one failure, so the request made again after a rotation says it is a retry.
+    if ($code -eq 401 -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { $State.failedInARow = [int]$State.failedInARow + 1; return (Invoke-HordeCloudflareRelayHttp -State $State -Method $Method -Path $Path -Body $Body -What $What -Once) }
     if ($code -ne 200) {
         $words = $(if ($null -ne $parsed -and $parsed -is [System.Management.Automation.PSCustomObject] -and $null -ne $parsed.PSObject.Properties["error"]) { $parsed.error } else { $text })
-        return (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words))) -Status $code -RetryAfter $retryAfter)
+        return (Set-HordeCloudflareRelayAttemptOutcome -State $State -Answer (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words))) -Status $code -RetryAfter $retryAfter))
     }
-    if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ("the relay answered the " + $What + " with something that is not a JSON object")) }
-    return (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow))
+    if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (Set-HordeCloudflareRelayAttemptOutcome -State $State -Answer (New-HordeUnknown -Reason ("the relay answered the " + $What + " with something that is not a JSON object"))) }
+    return (Set-HordeCloudflareRelayAttemptOutcome -State $State -Answer (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow)))
 }
 
 function ConvertTo-HordeCloudflareRelayItems {
@@ -219,6 +250,16 @@ function ConvertTo-HordeCloudflareRelayItems {
 }
 
 function Wait-HordeCloudflareRelayWatch {
+    # Wait-HordeCloudflareRelayWatchSlice, and the watch's end counted for the next request's attempt (the
+    # header, WHICH ATTEMPT): a failed watch is a failure, a watch that ended is not; a slice that only
+    # ran out says nothing yet.
+    param($Handle, [int]$WaitMs)
+    $w = Wait-HordeCloudflareRelayWatchSlice -Handle $Handle -WaitMs $WaitMs
+    if ($null -ne $Handle.conn -and ($w.state -cne "known" -or $w.value.ended)) { $null = Set-HordeCloudflareRelayAttemptOutcome -State $Handle.conn -Answer $w }
+    return $w
+}
+
+function Wait-HordeCloudflareRelayWatchSlice {
     # Wait up to -WaitMs more on a watch Open-HordeCloudflareRelayWatch opened (the header, THE WATCH IN
     # SLICES): known { ended; items } - ended with the items once the relay's one message came, ended
     # with none when the watch's time ran out or the relay closed with nothing to say, not ended when
@@ -296,6 +337,7 @@ function Open-HordeCloudflareRelayWatch {
     $opened = $false
     try {
         $socket.Options.SetRequestHeader("Authorization", $auth.value)
+        $socket.Options.SetRequestHeader($script:HordeCloudflareRelayAttemptHeader, (Get-HordeCloudflareRelayAttempt -State $State))
         # PowerShell 7 keeps a refused upgrade's status and headers only when asked to (.NET 7 and up);
         # Windows PowerShell 5.1 has no such option, and keeps them on the inner WebException's response.
         $collect = $socket.Options.PSObject.Properties["CollectHttpResponseDetails"]
@@ -320,8 +362,8 @@ function Open-HordeCloudflareRelayWatch {
                 $code = [int]$socket.HttpStatusCode
                 if ($null -ne $socket.HttpResponseHeaders) { foreach ($h in $socket.HttpResponseHeaders) { if ($h.Key -ieq "Retry-After") { $retryAfter = (@($h.Value) -join ",") } } }
             }
-            if ($why.Contains("401") -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Open-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs -Once) }
-            return (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $why.Trim()))) -Status $code -RetryAfter $retryAfter)
+            if ($why.Contains("401") -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { $State.failedInARow = [int]$State.failedInARow + 1; return (Open-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs -Once) }
+            return (Set-HordeCloudflareRelayAttemptOutcome -State $State -Answer (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $why.Trim()))) -Status $code -RetryAfter $retryAfter))
         }
         finally { $cts.Dispose() }
         # What is left of the timeout once the socket is open, and never less than a moment, so items
@@ -329,7 +371,7 @@ function Open-HordeCloudflareRelayWatch {
         $left = [int][Math]::Max(250, $TimeoutMs - $clock.ElapsedMilliseconds)
         $opened = $true
         return (New-HordeKnown -Value ([pscustomobject]@{ socket = $socket; leftMs = $left; sinceOpen = [System.Diagnostics.Stopwatch]::StartNew(); waited = $false
-            buffer = (New-Object byte[] 65536); message = (New-Object System.IO.MemoryStream); pending = $null }) -ObservedAt ([datetime]::UtcNow))
+            buffer = (New-Object byte[] 65536); message = (New-Object System.IO.MemoryStream); pending = $null; conn = $State }) -ObservedAt ([datetime]::UtcNow))
     } finally { if (-not $opened) { $socket.Dispose() } }
 }
 
@@ -349,6 +391,13 @@ function Send-HordeCloudflareRelayPut {
     $trimmed = $a.value.PSObject.Properties["trimmed"]
     if ($KeepFrom -gt 0 -and $null -ne $trimmed) { $out | Add-Member -NotePropertyName trimmed -NotePropertyValue $trimmed.Value }
     return (New-HordeKnown -Value $out -ObservedAt $a.observedAt)
+}
+
+function Get-HordeCloudflareRelayDaySummary {
+    # The relay's summary of the UTC day -Day (the header, THE DAY'S SUMMARY): known, the summary object
+    # as the relay gave it, or unknown. One request.
+    param($State, [string]$Day)
+    return (Invoke-HordeCloudflareRelayHttp -State $State -Method "GET" -Path ($script:HordeCloudflareRelaySummaryPath + "?day=" + $Day) -What "day's summary")
 }
 
 function Invoke-HordeCloudflareRelayWatch {
@@ -388,7 +437,7 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
         $http = New-Object System.Net.Http.HttpClient
         $http.Timeout = [TimeSpan]::FromSeconds($script:HordeCloudflareRelayRequestSeconds)
         $http.MaxResponseContentBufferSize = $script:HordeCloudflareRelayAnswerBytes
-        return (New-HordeKnown -Value ([pscustomobject]@{ origin = $origin; authorization = $auth; hordeHome = $hordeHome; signer = $null; http = $http; rotationTried = $false }))
+        return (New-HordeKnown -Value ([pscustomobject]@{ origin = $origin; authorization = $auth; hordeHome = $hordeHome; signer = $null; http = $http; rotationTried = $false; failedInARow = 0 }))
     } `
     -Put {
         param($State, [string]$Mailbox, [string]$Key, [string]$Text)
@@ -433,6 +482,10 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     -Bundle {
         param([string]$Tree, [string]$Work)
         return (Get-HordeCloudflareRelayBundleHash -Tree $Tree -Work $Work)
+    } `
+    -DaySummary {
+        param($State, [string]$Day)
+        return (Get-HordeCloudflareRelayDaySummary -State $State -Day $Day)
     } `
     -RunWatchMs $script:HordeCloudflareRelayRunWatchMs `
     -SecretFiles {
