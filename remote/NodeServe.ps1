@@ -614,6 +614,15 @@ function Invoke-HordeNodeFrame {
                 $summary = ConvertTo-HordeNodeSessionSummary -Session $found[0] -ViewObservedAt $at -Namespace $Data.namespace
                 return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "known"; value = $summary; reason = ""; observedAt = $at })))
             }
+            # A session the node left out because its end is proven (core/Projection.ps1,
+            # ConvertTo-HordeNodeViewDocument) is absent with that proof: its control file is still on
+            # disk, so "no store holds it" would be false (review of PR #240).
+            foreach ($e in @(Get-HordeLinkProp $Data.view "endedSessions")) {
+                # Matched as the sessions above are: the id exactly, and the agent when one is named.
+                if ($null -eq $e -or "$(Get-HordeLinkProp $e 'sessionId')" -cne $want) { continue }
+                if ($wantAgent -ne "" -and "$(Get-HordeLinkProp $e 'agent')" -cne $wantAgent) { continue }
+                return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "absent"; reason = (Limit-HordeNodeReason ("session " + $want + " has ended, proven by its process: " + (Get-HordeLinkProp $e "reason"))); observedAt = $at })))
+            }
             # Absent only when the projection read every store; otherwise the session may be in a store
             # it could not read, and the answer is unknown (design 7.1).
             $unread = @(Get-HordeNodeUnreadable (Get-HordeLinkProp $Data.view "complete"))

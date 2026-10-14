@@ -272,6 +272,18 @@ function Read-HordeClaudeControlFiles {
     $verifiedPids = @{}
     $vanished = New-Object System.Collections.ArrayList
     $uncheckablePids = @{}
+    # WHICH PROCESSES MAY BE THIS AGENT, by image, read once: imagePids its own image, hostPids an image
+    # it can run inside. The orphan answer below reads them, and so does a node deciding whether a stale
+    # file's end is proven (core/Projection.ps1, Get-HordeSessionEndProof), so the image names stay
+    # here, in the one reader that already holds them.
+    $imagePids = @{}
+    $hostPids = @{}
+    if ($Processes.state -eq "known") {
+        foreach ($p in $Processes.value.Values) {
+            if ($script:HordeClaudeProcessNames -icontains "$($p.name)") { $imagePids[[int]$p.pid] = $true }
+            elseif ($script:HordeClaudeHostNames -icontains "$($p.name)") { $hostPids[[int]$p.pid] = $true }
+        }
+    }
     foreach ($f in (Get-HordeControlFiles -Dir $Dir -Agent "claude" -Gaps $gaps)) {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
         # THE FILE IS NAMED BY ITS PID, and one that disagrees with its own pid is refused: 10 of 10
@@ -406,15 +418,19 @@ function Read-HordeClaudeControlFiles {
         foreach ($p in $Processes.value.Values) {
             $pp = [int]$p.pid
             if ($verifiedPids.ContainsKey($pp) -or $vanishedPids.ContainsKey($pp)) { continue }
-            if ($script:HordeClaudeProcessNames -icontains "$($p.name)") {
+            if ($imagePids.ContainsKey($pp)) {
                 if ($uncheckablePids.ContainsKey($pp)) { [void]$unsure.Add($pp) } else { [void]$list.Add($pp) }
-            } elseif ($script:HordeClaudeHostNames -icontains "$($p.name)") { [void]$hosts.Add($pp) }
+            } elseif ($hostPids.ContainsKey($pp)) { [void]$hosts.Add($pp) }
         }
         if ($unsure.Count -gt 0) { $orphans = New-HordeUnknown -Reason ("claude process " + (@($unsure | Sort-Object) -join ", ") + " has a control file that cannot be checked, so whether it is that file's process is unknown") }
         elseif ($hosts.Count -gt 0) { $orphans = New-HordeUnknown -Reason ("" + $hosts.Count + " node process(es) that no control file verifies are running (" + (@($hosts | Sort-Object) -join ", ") + "), and Claude Code can run under node, so a claude process with no file may be among them") }
         else { $orphans = New-HordeKnown -Value @($list | Sort-Object) }
     }
-    return (New-HordeAgentRead -Agent "claude" -Entries $entries -Gaps $gaps -Verified $verified -Orphans $orphans -Findings $findings)
+    $read = New-HordeAgentRead -Agent "claude" -Entries $entries -Gaps $gaps -Verified $verified -Orphans $orphans -Findings $findings
+    $read | Add-Member -NotePropertyName imagePids -NotePropertyValue $imagePids
+    $read | Add-Member -NotePropertyName hostPids -NotePropertyValue $hostPids
+    $read | Add-Member -NotePropertyName verifiedPids -NotePropertyValue $verifiedPids
+    return $read
 }
 
 function Read-HordeCodexControlFiles {
@@ -565,8 +581,12 @@ function Get-HordeIdentity {
     if ($Processes.state -ne "known") { $verifiedLive = New-HordeUnknown -Reason ("the process table could not be read (" + $Processes.reason + ")") }
     elseif ($complete["claude"].state -ne "known") { $verifiedLive = New-HordeUnknown -Reason ("the claude listing is incomplete: " + $complete["claude"].reason) }
     else { $verifiedLive = New-HordeKnown -Value @($claudeRead.verified | Where-Object { $records.ContainsKey($_) }) }
+    # agent -> { imagePids; hostPids; verifiedPids }, for each agent whose reader matches processes by
+    # image (an agent that writes no pid has none).
+    $processes = @{}
+    foreach ($rd in $reads) { if ($null -ne $rd.PSObject.Properties["imagePids"]) { $processes[$rd.agent] = [pscustomobject]@{ imagePids = $rd.imagePids; hostPids = $rd.hostPids; verifiedPids = $rd.verifiedPids } } }
     return [pscustomobject]@{ PSTypeName = "Horde.Identity"; records = $records; complete = $complete; duplicates = @($duplicates)
-                              verifiedLive = $verifiedLive; orphanProcesses = $claudeRead.orphans; findings = @($findings)
+                              verifiedLive = $verifiedLive; orphanProcesses = $claudeRead.orphans; findings = @($findings); agentProcesses = $processes
                               provisional = @{ orphanProcesses = $script:HordeOrphanProvisional } }
 }
 
