@@ -111,7 +111,11 @@ function Get-SentKey {
 }
 function Send-ToMachine {
     param($World, [string]$Text, [string]$Key = "-")
-    if ($Key -ceq "-") { $Key = (Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $Text).value.header) }
+    if ($Key -ceq "-") {
+        # An envelope the reader refuses (a vouch over 8 hours) has no replay key: any key carries it.
+        $read = Read-HordeRelayEnvelope -Text $Text
+        $Key = $(if ($read.ok) { Get-HordeRelayReplayKey -Header $read.value.header } else { "unreadable-" + (New-Id) })
+    }
     return (Send-HordeRelayItem -Connection $World.conn -Mailbox $World.ctx.mailbox -Text $Text -Key $Key)
 }
 function Invoke-Turn {
