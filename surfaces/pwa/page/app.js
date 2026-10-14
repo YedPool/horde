@@ -46,7 +46,8 @@
 // entries, oldest at the top, in the order they were written, to be read on from wherever he stopped.
 // Each shows its time, its title in bold, its text as short paragraphs with their labels (Asked, Happened,
 // Means, Next) in bold, and small chips: the area's plain name first, the kind, and the lane and task only
-// when the entry names them. HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
+// when the entry names them. EACH STARTS FOLDED to one line, its title and its day and time, and a tap opens
+// it to all of that (the founder asked, 2026-10-14; openEntries, below). HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
 // opens under the last entry he read, with a line where the new ones begin and their count on the tab;
 // the place moves on as he reads down, entry by entry; Jump to newest and Mark all read stand at the foot
 // of the screen always. A correction is shown on the entry it corrects, and in its own place. The log is
@@ -488,6 +489,11 @@ let progressMark = -1;
 let progressLast = null;
 // The entries that have been on his screen since the horde was unlocked (by id): what "seen" means below.
 const seenEntries = new Set();
+// EVERY ENTRY STARTS FOLDED to one line, its title and its day and time (the founder asked, 2026-10-14: "to
+// be able to see a swath of progress at once without all the details"); a tap opens one. The ones he opened
+// (by id) stay open while the stream is redrawn under him - a new entry rebuilds the whole log - and are
+// forgotten when a stream is opened anew (drawProgress, opening). Kept in memory only: nothing stored, nothing sent.
+const openEntries = new Set();
 let watcher = null;
 function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; }
 function clearProgress() { const log = $("progressLog"); while (log.firstChild) log.removeChild(log.firstChild); progressDrawn = ""; progressLast = null; seenEntries.clear(); if (watcher) { watcher.disconnect(); watcher = null; } }
@@ -504,6 +510,17 @@ function paragraphsInto(box, paragraphs) {
     line.appendChild(document.createTextNode(p.text));
     box.appendChild(line);
   }
+}
+// An entry folded or open: its class (app.css hides all but the one line) and its line's aria-expanded.
+function foldEntry(box, open) {
+  box.classList.toggle("collapsed", !open);
+  box.querySelector(".progress-line").setAttribute("aria-expanded", open ? "true" : "false");
+}
+function toggleEntry(box) {
+  const id = box.getAttribute("data-id");
+  const open = !openEntries.has(id);
+  if (open) openEntries.add(id); else openEntries.delete(id);
+  foldEntry(box, open);
 }
 function chip(words, kind) { const c = document.createElement("span"); c.className = "chip " + kind; c.textContent = words; return c; }
 // --- the cards ---
@@ -641,7 +658,7 @@ function drawProgress(rec, own = true) {
   const sig = current + "/" + streamKey() + "/" + v.items.length + "/" + (v.newest ? v.newest.id : "") + "/" + v.items.reduce((n, it) => n + it.corrections.length, 0);
   if (sig === progressDrawn) return;
   const opening = progressDrawn === "";
-  if (opening) progressMark = v.readIndex;
+  if (opening) { progressMark = v.readIndex; openEntries.clear(); }
   progressDrawn = sig;
   const log = $("progressLog");
   while (log.firstChild) log.removeChild(log.firstChild);
@@ -661,8 +678,23 @@ function drawProgress(rec, own = true) {
     const stamp = timeStamp(it.said, "", "progress/" + it.id, dayTime);
     if (stamp) head.appendChild(stamp);
     box.appendChild(head);
-    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; box.appendChild(title);
-    const text = document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
+    // THE ONE LINE: the title, and - shown only while folded (app.css), the head standing for it when open -
+    // the same day and time the head's stamp shows. It is the entry's control: Enter or Space toggles it.
+    const line = document.createElement("div"); line.className = "progress-line";
+    line.setAttribute("role", "button"); line.tabIndex = 0;
+    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; line.appendChild(title);
+    const when = dayTime(it.said);
+    if (when) { const w = document.createElement("span"); w.className = "progress-when"; w.textContent = when; line.appendChild(w); }
+    box.appendChild(line);
+    line.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleEntry(box); } });
+    // Folded, a tap anywhere on it opens it. Open, a tap on its head or its title folds it; a button or a
+    // link anywhere in it (the stamp, say) does its own thing only.
+    box.addEventListener("click", (e) => {
+      const t = e.target instanceof Element ? e.target : e.target.parentElement;
+      if (!box.classList.contains("collapsed") && (!t || t.closest("button, a") || !t.closest(".progress-head, .progress-line"))) return;
+      toggleEntry(box);
+    });
+    const text =document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
     if (it.corrects) { const n = document.createElement("div"); n.className = "progress-note"; n.textContent = it.correctsTitle ? "This corrects: " + it.correctsTitle : "This corrects an earlier entry that is not on this phone."; box.appendChild(n); }
     // A CORRECTION IS SHOWN ON THE ENTRY IT CORRECTS, as well as in its own place further down.
     for (const c of it.corrections) {
@@ -672,6 +704,7 @@ function drawProgress(rec, own = true) {
       const cx = document.createElement("div"); cx.className = "progress-text"; paragraphsInto(cx, c.paragraphs); cb.appendChild(cx);
       box.appendChild(cb);
     }
+    foldEntry(box, openEntries.has(it.id));
     log.appendChild(box);
   });
   if (opening) {

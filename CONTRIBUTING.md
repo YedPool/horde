@@ -352,3 +352,7 @@ its branch can break main when main moved under it").
    through it, so a gate that is wrong is wrong everywhere at once: the remote gate's first pruning
    rule, keep the newest 10 runs, deleted other agents' finished runs from the shared folder
    (2026-10-01).
+9. **`test\test-host-names.ps1` and `test\test-mutation-specs.ps1` are part of EVERY pull request's
+   targeted set**, and run on the final head, in a clean tree, before every merge, by any Orc. They
+   are light and read the whole repository, so any pull request can break them: on 2026-10-14 PRs
+   278, 279 and 288 each merged green on their own suites and left `main` red on both.
