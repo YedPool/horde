@@ -280,6 +280,11 @@ try {
     $sb = $snap.body | ConvertFrom-Json
     Check ($hosted -eq 47918 -and $snap.body.Length -le $hosted -and $snap.cards -eq 2 -and $snap.left -eq 0) ("200 AREAS: the body fits the hosted relay's budget for two phones and every card is kept (" + $snap.body.Length + " of " + $hosted + ", cards " + $snap.cards + ")")
     Check (@($sb.areas).Count -gt 0 -and @($sb.areas).Count -lt 200 -and $sb.areasLeftOut -eq (200 - @($sb.areas).Count) -and $sb.areas[0].area.EndsWith("001") -and (@($snap.lines) -join " | ") -like "*area(s) of the map did not fit*") ("the map is cut from its end, the rest counted for the phone and said at the machine (areas " + @($sb.areas).Count + ", left out " + $sb.areasLeftOut + ")")
+    # F, review of PR 244: the map was held to a quarter of the budget even with the rest unused, so two
+    # small cards and 200 areas made a body of 12815 of 47918 bytes (measured before the fix). It now
+    # fills the room the cards leave.
+    $nextArea = ConvertTo-HordeCardsChannelValueText ([pscustomobject]@{ area = ($heb + ("{0:000}" -f (@($sb.areas).Count + 1))); lanes = @("B", "E") })
+    Check ($snap.body.Length + $nextArea.Length + 1 -gt $hosted -and $snap.body.Length -gt [long]($hosted / 2)) ("THE MAP FILLS THE ROOM THE CARDS LEAVE: the next area left out would not have fit (body " + $snap.body.Length + " of " + $hosted + ", next area " + $nextArea.Length + " bytes)")
     # 64 lanes, every text at its full 300 characters: 109185 bytes measured, so most are left out and counted.
     $G = New-World
     foreach ($n in 1..64) { $w = ("w" + $n + " ") * 100; Set-Lane $G ("lane{0:00}" -f $n) (New-Status -Orc ("L" + $n) -Lane $w -Doing $w -Finished $w -Waiting $w -Blocked ("yes " + $w)) }

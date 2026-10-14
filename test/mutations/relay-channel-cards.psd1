@@ -59,8 +59,14 @@
            Find = "`$card.blockedText = [regex]::Replace("
            Replace = "`$card.blockedText = `$b; `$null = [regex]::Replace(" }
         @{ Name = "the-map-is-not-sent"
-           Find = '$areasText = "[" + (@($areaTexts | Select-Object -First $areasKept) -join ",") + "]"'
-           Replace = '$areasText = "[]"' }
+           Find = '(@($areaTexts | Select-Object -First $AreasKept) -join ",")'
+           Replace = '""' }
+        @{ Name = "the-map-does-not-fill-the-room-left"
+           Find = 'while ($areasKept -lt $areaTexts.Count) {'
+           Replace = 'while ($false) {' }
+        @{ Name = "the-map-fills-past-the-budget"
+           Find = 'if ($more.body.Length -gt $Budget) { break }'
+           Replace = '' }
         @{ Name = "no-lanes-folder-sends-an-empty-snapshot"
            Find = 'if (-not [System.IO.Directory]::Exists($paths.lanes)) { return (& $once "lanes"'
            Replace = 'if ($false) { return (& $once "lanes"' }
@@ -101,8 +107,8 @@
            Find = 'elseif ($areasKept -gt 0) { $areasKept-- }'
            Replace = 'elseif ($false) { }' }
         @{ Name = "cards-left-out-not-counted"
-           Find = 'if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1); $left++ }'
-           Replace = 'if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1) }' }
+           Find = '$left = $cardTexts.Count - $cardsKept'
+           Replace = '$left = 0' }
         @{ Name = "one-bad-run-wipes-the-census"
            Find = '} catch { $answer.skipped++ }'
            Replace = '} catch { throw }' }

@@ -60,8 +60,9 @@
 #   - RECORDED ONCE, PUT UNTIL IT IS TAKEN: the same envelope is put again next turn, and no new snapshot
 #     is made while one waits (as channels/decisions).
 #   - TOO LARGE FOR ONE ENVELOPE: the last cards are left out until it fits, and the snapshot says how
-#     many (cardsLeftOut). The map is held to a quarter of the budget, its last areas left out and
-#     counted (areasLeftOut): the cards are the glance, and an area left out only sends its entries to
+#     many (cardsLeftOut). The map is held to a quarter of the budget while cards are cut, and fills
+#     the room the cards leave once every card is in; its last areas are left out and counted
+#     (areasLeftOut): the cards are the glance, and an area left out only sends its entries to
 #     the Thrall's stream. Each text is at most 300 characters, and that is NOT small: a non-ASCII
 #     character is written as 6 bytes (\u05d0), so one 300-character Hebrew field is 1802 bytes, and 64
 #     cards with every text full are 109185 bytes, against 47918 bytes for two phones on a relay whose
@@ -495,23 +496,39 @@ function New-HordeCardsChannelSnapshot {
     $areaTexts = @(@($areas.areas) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ })
     $areasKept = 0; $areaBytes = 2
     while ($areasKept -lt $areaTexts.Count -and $areaBytes + $areaTexts[$areasKept].Length + 1 -le [long]($Budget / 4)) { $areaBytes += $areaTexts[$areasKept].Length + 1; $areasKept++ }
-    $kept = New-Object System.Collections.ArrayList -ArgumentList (, @($cards.ToArray()))
-    $left = 0
+    # Each card is written once; what follows only joins the texts.
+    $cardTexts = @(@($cards.ToArray()) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ })
+    $thrallText = ConvertTo-HordeCardsChannelValueText $thrall
+    $made = $Now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    $build = {
+        param([int]$CardsKept, [int]$AreasKept)
+        $content = '"name":' + (ConvertTo-HordeCardsChannelJsonString $name) + ',"thrall":' + $thrallText + ',"cards":[' + (@($cardTexts | Select-Object -First $CardsKept) -join ",") + '],"cardsLeftOut":' + ($cardTexts.Count - $CardsKept) + ',"areas":[' + (@($areaTexts | Select-Object -First $AreasKept) -join ",") + '],"areasLeftOut":' + ($areaTexts.Count - $AreasKept)
+        $h = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::ASCII.GetBytes($content)))
+        return [pscustomobject]@{ hash = $h; body = ('{"v":1,"kind":"cards-snapshot","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","snapshot":"' + $h + '","made":"' + $made + '",' + $content + '}') }
+    }
+    $cardsKept = $cardTexts.Count
     while ($true) {
-        $cardsText = $(if ($kept.Count -eq 0) { "[]" } else { "[" + ((@($kept.ToArray()) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ }) -join ",") + "]" })
-        $areasText = "[" + (@($areaTexts | Select-Object -First $areasKept) -join ",") + "]"
-        $content = '"name":' + (ConvertTo-HordeCardsChannelJsonString $name) + ',"thrall":' + (ConvertTo-HordeCardsChannelValueText $thrall) + ',"cards":' + $cardsText + ',"cardsLeftOut":' + $left + ',"areas":' + $areasText + ',"areasLeftOut":' + ($areaTexts.Count - $areasKept)
-        $hash = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::ASCII.GetBytes($content)))
-        $body = '{"v":1,"kind":"cards-snapshot","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","snapshot":"' + $hash + '","made":"' + $Now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) + '",' + $content + '}'
-        if ($body.Length -le $Budget) { break }
+        $made1 = & $build $cardsKept $areasKept
+        if ($made1.body.Length -le $Budget) { break }
         # Cards first, from the end; with none left, the rest of the map.
-        if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1); $left++ }
+        if ($cardsKept -gt 0) { $cardsKept-- }
         elseif ($areasKept -gt 0) { $areasKept-- }
         else { break }
     }
+    # THE MAP THEN FILLS THE ROOM THE CARDS LEAVE (F, review of PR 244: two small cards and 200 areas
+    # made a body of 12815 of 47918 bytes, measured; test/test-relay-channel-cards.ps1, 8). Cards were cut
+    # first, so what is left is less than the next card.
+    if ($made1.body.Length -le $Budget) {
+        while ($areasKept -lt $areaTexts.Count) {
+            $more = & $build $cardsKept ($areasKept + 1)
+            if ($more.body.Length -gt $Budget) { break }
+            $made1 = $more; $areasKept++
+        }
+    }
+    $hash = $made1.hash; $body = $made1.body; $left = $cardTexts.Count - $cardsKept
     if ($left -gt 0) { [void]$lines.Add("" + $left + " card(s) did not fit one envelope and were left out; the phone is told how many") }
     if ($areasKept -lt $areaTexts.Count) { [void]$lines.Add("" + ($areaTexts.Count - $areasKept) + " area(s) of the map did not fit one envelope and were left out; on the phone their entries show only in the Thrall's stream") }
-    return [pscustomobject]@{ hash = $hash; body = $body; cards = $kept.Count; left = $left; lines = @($lines.ToArray()) }
+    return [pscustomobject]@{ hash = $hash; body = $body; cards = $cardsKept; left = $left; lines = @($lines.ToArray()) }
 }
 
 function Send-HordeCardsChannelPending {
