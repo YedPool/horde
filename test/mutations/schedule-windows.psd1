@@ -15,8 +15,8 @@
            Find = '-LogonType S4U -RunLevel Limited'
            Replace = '-LogonType Interactive -RunLevel Limited' }
         @{ Name = "second-install-fails"
-           Find = '-TaskPath ("\" + $Job.folder + "\") -Force -ErrorAction Stop'
-           Replace = '-TaskPath ("\" + $Job.folder + "\") -ErrorAction Stop' }
+           Find = '-TaskName $Name -TaskPath $Path -Force -ErrorAction Stop'
+           Replace = '-TaskName $Name -TaskPath $Path -ErrorAction Stop' }
         @{ Name = "foreign-task-overwritten"
            Find = '        if (-not (Test-HordeTaskMarked $old)) { throw'
            Replace = '        if ($false) { throw' }
@@ -39,7 +39,7 @@
            Find = '[void]$sb.Append(''[System.Environment]::SetEnvironmentVariable('''''' + $k + '''''', (& $d '''''' + (ConvertTo-HordeBase64Text "$($Job.environment[$k])") + ''''''), ''''Process''''); '')'
            Replace = '[void]$sb.Append(''$env:'' + $k + '' = '''''' + "$($Job.environment[$k])" + ''''''; '')' }
         @{ Name = "with-person-job-runs-unseen"
-           Find = '{ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited }'
+           Find = '{ $principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited }'
            Replace = '{ }' }
         @{ Name = "with-person-job-flashes-a-window"
            Find = '        return [pscustomobject]@{ program = $console; arguments = (''--headless "'' + $shell + ''" '' + $shellArguments) }'
@@ -50,5 +50,27 @@
         @{ Name = "with-person-job-by-bare-names"
            Find = '        return [pscustomobject]@{ program = $console; arguments = (''--headless "'' + $shell + ''" '' + $shellArguments) }'
            Replace = '        return [pscustomobject]@{ program = "conhost.exe"; arguments = ("--headless powershell.exe " + $shellArguments) }' }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "no-boot-trigger"
+           Find = '{ $triggers += New-ScheduledTaskTrigger -AtStartup }'
+           Replace = '{ }' }
+        @{ Name = "refused-registration-falls-back-to-interactive"
+           Find = '        throw ("Task Scheduler refused to register ''" + $Job.name'
+           Replace = '        & $Register (New-ScheduledTask -Action $task.Actions -Trigger $task.Triggers -Settings $task.Settings -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited)) $Job.name ("\" + $Job.folder + "\"); return; throw ("Task Scheduler refused to register ''" + $Job.name' }
+        @{ Name = "refused-registration-silent"
+           Find = '        throw ("Task Scheduler refused to register ''" + $Job.name'
+           Replace = '        return; throw ("Task Scheduler refused to register ''" + $Job.name' }
+        @{ Name = "no-elevation-hint"
+           Find = '$rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true) {'
+           Replace = '$rights = $(if ($false) {' }
+        @{ Name = "old-task-said-gone"
+           Find = '$was = $(if ($null -ne $old) { "the task that was there is left exactly as it was" } else {'
+           Replace = '$was = $(if ($false) { "the task that was there is left exactly as it was" } else {' }
+        @{ Name = "unseen-job-shell-by-bare-name"
+           Find = '    return [pscustomobject]@{ program = $shell; arguments = $shellArguments }'
+           Replace = '    return [pscustomobject]@{ program = "powershell.exe"; arguments = $shellArguments }' }
+        @{ Name = "status-always-at-start-up"
+           Find = 'logonType = "$($t.Principal.LogonType)"; atStartup = $boot;'
+           Replace = 'logonType = "$($t.Principal.LogonType)"; atStartup = $true;' }
     )
 }

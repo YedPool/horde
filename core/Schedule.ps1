@@ -75,10 +75,17 @@ function New-HordeScheduledJob {
     #
     # -WithPerson: THE JOB RUNS IN THE PERSON'S OWN LOGON SESSION, AND ONLY WHILE THEY ARE LOGGED ON.
     # A job is otherwise run where nobody sees it, logged on or not, which is right for work on files.
-    # The supervisor of services (core/Services.ps1) cannot run there: a window it opens must be on
-    # the person's desktop, whether the person is idle is a fact of their session alone
-    # (core/ServiceHostPort.ps1), and what it starts must be able to open the keys of their logon.
-    # How a scheduler runs a job there without a window flashing every minute is the scheduler's.
+    # It is for a job that must open windows on the person's desktop or see their input. The
+    # supervisor of services was such a job until 2026-10-14, and is not any more (-AtStartup below;
+    # cli/ServicesTend.ps1 says what it gives up and how it copes). How a scheduler runs a job in the
+    # person's session without a window flashing every minute is the scheduler's.
+    #
+    # -AtStartup: THE JOB ALSO RUNS WHEN THE MACHINE STARTS, before anyone has signed in, and then
+    # every -EveryMinutes as before. It is for a job that keeps something running: after a restart on
+    # 2026-10-14 the supervisor, then a -WithPerson job, did not run for 2 h 38 min because nobody
+    # signed in, and the relay it keeps was down all that time. So it is refused together with
+    # -WithPerson, which cannot run until someone signs in. A scheduler may need more rights to
+    # register a job that runs at start-up; one that lacks them says so, and installs nothing else.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [string]$Folder = "Horde",
@@ -91,9 +98,11 @@ function New-HordeScheduledJob {
         [int]$TimeLimitMinutes = 20,
         [switch]$Disabled,
         [switch]$WithPerson,
+        [switch]$AtStartup,
         [switch]$MayOutlastInterval
     )
     Assert-HordeJobName -Name $Name -Folder $Folder
+    if ($AtStartup -and $WithPerson) { throw "a job that runs in the person's own session cannot run at start-up, before anyone has signed in" }
     # -MayOutlastInterval: A JOB THAT ITSELF REFUSES TO RUN TWICE AT ONCE may be given longer than its
     # interval. The rule "stops before its next run" keeps two runs of a job apart by ending the
     # first. The supervisor's pass keeps them apart itself - it holds a lock, and the scheduler starts
@@ -109,7 +118,7 @@ function New-HordeScheduledJob {
     foreach ($a in @($Arguments)) { if ("$a".Length -gt 0 -and $dashes -contains "$a"[0]) { throw ("a job argument cannot start with '-': '" + $a + "'") } }
     foreach ($v in @(@($Script, $HordeHome) + @($Arguments) + @($Environment.Values))) { if ("$v" -match "[`r`n]") { throw "a job's script, arguments and environment cannot hold a line break" } }
     $text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome
-    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson }
+    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled; withPerson = [bool]$WithPerson; atStartup = [bool]$AtStartup }
 }
 
 function Read-HordeJobMarker {

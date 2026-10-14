@@ -113,8 +113,41 @@ try {
         $personJob = New-HordeScheduledJob -Name ($testName + " person") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $env:HORDE_HOME } -HordeHome $env:HORDE_HOME -EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson -Disabled
         $personAct = ConvertTo-HordeTaskAction -Job $personJob
         $sysDir = [System.Environment]::SystemDirectory
-        Check ($personAct.program -ceq (Join-Path $sysDir "conhost.exe") -and $personAct.arguments.StartsWith('--headless "' + (Join-Path $sysDir "WindowsPowerShell\v1.0\powershell.exe") + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ') -and $personAct.arguments -match ' -EncodedCommand [A-Za-z0-9+/=]+\z' -and (ConvertTo-HordeTaskAction -Job $job).program -ceq "powershell.exe") "a -WithPerson job is run by the headless console host, so no window flashes in the person's session - the console host and the shell it runs both by their FULL paths in the system folder, never a bare name a search path could answer; any other job by PowerShell itself"
+        Check ($personAct.program -ceq (Join-Path $sysDir "conhost.exe") -and $personAct.arguments.StartsWith('--headless "' + (Join-Path $sysDir "WindowsPowerShell\v1.0\powershell.exe") + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ') -and $personAct.arguments -match ' -EncodedCommand [A-Za-z0-9+/=]+\z' -and (ConvertTo-HordeTaskAction -Job $job).program -ceq (Join-Path $sysDir "WindowsPowerShell\v1.0\powershell.exe")) "a -WithPerson job is run by the headless console host, so no window flashes in the person's session - the console host and the shell it runs both by their FULL paths in the system folder, never a bare name a search path could answer; any other job by PowerShell itself, by its full path too"
         Check ((ConvertTo-HordeTaskAction -Job $job).arguments -match '\A[A-Za-z -]+-EncodedCommand [A-Za-z0-9+/=]+\z') "the arguments are fixed switches and base64 only: no quote, no %, nothing a shell or the scheduler could read"
+
+        Write-Host ""
+        Write-Host "--- a job that runs at start-up, whether or not anyone is signed in: built, and registered only through a stand-in ---" -ForegroundColor Cyan
+        # Nothing here reaches the real scheduler: the task is built and read, and -Find and -Register
+        # are this suite's own blocks, which record what they were handed.
+        Check (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -AtStartup -WithPerson } "cannot run at start-up") "a job in the person's own session cannot also run at start-up, before anyone has signed in"
+        $bootJob = New-HordeScheduledJob -Name ($testName + " boot") -Folder "HordeTest" -Script $stub -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $env:HORDE_HOME } -HordeHome $env:HORDE_HOME -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled
+        Check ($bootJob.atStartup -eq $true -and $bootJob.withPerson -eq $false -and $job.atStartup -eq $false) "-AtStartup is carried on the job; a job made without it has none"
+        $bootTask = New-HordeTaskSchedulerTask -Job $bootJob -UserId "someone"
+        $trig = @($bootTask.Triggers)
+        Check ($trig.Count -eq 2 -and "$($trig[0].CimClass.CimClassName)" -ceq "MSFT_TaskTimeTrigger" -and "$($trig[0].Repetition.Interval)" -ceq "PT1M" -and "$($trig[1].CimClass.CimClassName)" -ceq "MSFT_TaskBootTrigger") "schedule registers the tend job with a startup trigger and a one-minute repetition - the repetition first, where status reads the interval"
+        Check ("$($bootTask.Principal.LogonType)" -ceq "S4U" -and "$($bootTask.Principal.RunLevel)" -ceq "Limited" -and "$($bootTask.Principal.UserId)" -ceq "someone") "logon type S4U, run level Limited, as the user named: it runs whether or not anyone is signed in, and no password is stored"
+        Check ("$(@($bootTask.Actions)[0].Execute)" -ceq (Join-Path ([System.Environment]::SystemDirectory) "WindowsPowerShell\v1.0\powershell.exe") -and "$(@($bootTask.Actions)[0].Arguments)" -match '\A-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand [A-Za-z0-9+/=]+\z') "it runs PowerShell itself, by its full path, hidden and non-interactive: no console host, which would answer 0 whatever the pass did"
+        Check (@((New-HordeTaskSchedulerTask -Job $job -UserId "someone").Triggers).Count -eq 1) "CONTROL: a job not made -AtStartup has the repetition alone"
+        $calls = New-Object System.Collections.ArrayList
+        $none = { param($Name, $Folder) return $null }
+        $keep = { param($Task, $Name, $Path) [void]$calls.Add([pscustomobject]@{ task = $Task; name = $Name; path = $Path; given = $args.Count }) }
+        Install-HordeTaskSchedulerJob -Job $bootJob -Find $none -Register $keep
+        Check ($calls.Count -eq 1 -and $calls[0].name -ceq $bootJob.name -and $calls[0].path -ceq "\HordeTest\" -and "$($calls[0].task.Principal.LogonType)" -ceq "S4U" -and $calls[0].given -eq 0 -and @($calls[0].task.Triggers).Count -eq 2) "install registers the task once, by its name in Horde's folder, S4U, with nothing else handed over - no password"
+        # The job that was there: Horde's, for this home, made in the person's session.
+        $oldInteractive = [pscustomobject]@{ Author = "Horde"; Description = $bootJob.description; Principal = [pscustomobject]@{ LogonType = "Interactive" } }
+        $calls.Clear()
+        Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldInteractive } -Register $keep
+        Check ($calls.Count -eq 1 -and $calls[0].name -ceq $bootJob.name -and $calls[0].path -ceq "\HordeTest\" -and "$($calls[0].task.Principal.LogonType)" -ceq "S4U") "schedule replaces an existing interactive tend job, never two: one registration, under the very name and folder it had"
+        $calls.Clear()
+        $refuse = { param($Task, $Name, $Path) [void]$calls.Add([pscustomobject]@{ task = $Task; name = $Name; path = $Path; given = 0 }); throw "Access is denied." }
+        $said = ""
+        try { Install-HordeTaskSchedulerJob -Job $bootJob -Find { param($Name, $Folder) return $oldInteractive } -Register $refuse } catch { $said = $_.Exception.Message }
+        Check ($said -like "*refused to register*Access is denied.*the task that was there is left exactly as it was*run this again from an elevated prompt*") ("a failed S4U registration is reported plainly, with what to do (" + $said + ")")
+        Check ($calls.Count -eq 1 -and "$($calls[0].task.Principal.LogonType)" -ceq "S4U") "with no silent fallback to interactive: the scheduler was asked once, for the S4U job, and never for another form"
+        $calls.Clear(); $said = ""
+        try { Install-HordeTaskSchedulerJob -Job $job -Find $none -Register $refuse } catch { $said = $_.Exception.Message }
+        Check ($said -like "*refused to register*nothing was registered.") ("CONTROL: a job that does not run at start-up is not told to need an elevated prompt (" + $said + ")")
 
         Write-Host ""
         Write-Host "--- this machine's scheduler: Horde's own folder, Horde's own tasks (review of PR #70, F1) ---" -ForegroundColor Cyan
@@ -136,7 +169,7 @@ try {
             Check ($i1 -eq "installed") ("install succeeds and sees its own job afterwards (" + $i1 + ")")
             $st = & $sch.status $testName "HordeTest"
             Check ($st.state -eq "known" -and $st.value.marked -and $st.value.author -eq "Horde" -and $st.value.enabled -eq $false -and $st.value.home -eq $env:HORDE_HOME) "install makes the job in Horde's folder, marked as Horde's, for this home, disabled"
-            Check ($st.value.everyMinutes -eq 30 -and "$($st.value.priority)" -eq "7" -and $st.value.timeLimit -eq "PT20M" -and $st.value.logonType -eq "S4U") "every 30 minutes, priority 7, stopped after 20 minutes, as the current user with no window"
+            Check ($st.value.everyMinutes -eq 30 -and "$($st.value.priority)" -eq "7" -and $st.value.timeLimit -eq "PT20M" -and $st.value.logonType -eq "S4U" -and $st.value.atStartup -eq $false) "every 30 minutes, priority 7, stopped after 20 minutes, as the current user with no window, and not at start-up"
             $again = "installed"
             try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } catch { $again = $_.Exception.Message }
             Check ($again -eq "installed" -and @(& $tasksIn "\HordeTest\").Count -eq 1) ("installing again replaces Horde's own job: one job, not two (" + $again + ")")

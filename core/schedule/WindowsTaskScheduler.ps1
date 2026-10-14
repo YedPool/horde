@@ -24,6 +24,19 @@
 #     and the flag is not in Microsoft's documentation, so a Windows that drops it would fail the task
 #     outright, which the job's own silence shows.
 #   - EVERY N MINUTES, from a one-time trigger N minutes after install with an indefinite repetition.
+#     That trigger is the task's FIRST, so status reads the interval from it.
+#   - A JOB MADE -AtStartup (core/Schedule.ps1) HAS A SECOND TRIGGER, AT BOOT. RIGHTS, measured
+#     2026-10-14 on Windows 11 26200 by registering disabled probe tasks in \HordeTest\ as an
+#     administrator: an S4U task with only the time trigger registered from both an elevated and a
+#     non-elevated token (runas /trustlevel:0x20000); with a boot trigger added it registered elevated
+#     and was REFUSED non-elevated, "Access is denied" (Task Scheduler lets only an administrator make
+#     a boot trigger). So a refused registration of such a job is said as what it is - run it again
+#     from an elevated prompt - and the job is never registered in another form instead: not without
+#     the boot trigger, and never as an Interactive task. A failed registration leaves the task that
+#     was there, if any, exactly as it was. S4U also needs the right to log on as a batch job when it
+#     RUNS, which administrators hold by default.
+#   - THE SHELL BY ITS FULL PATH in the system folder, for every job, never a bare name a search path
+#     could answer with another program: the supervisor's job starts and updates code every minute.
 #   - PRIORITY 7 (below normal; 0 highest, 10 lowest), stopped after the time limit, never two at once
 #     (IgnoreNew), and run on battery as well.
 #
@@ -53,6 +66,7 @@ function ConvertTo-HordeTaskAction {
     [void]$sb.Append('); & (& $d ''' + (ConvertTo-HordeBase64Text $Job.script) + ''') @a; exit $LASTEXITCODE')
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($sb.ToString()))
     $shellArguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + $encoded
+    $shell = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
     # In the person's session a hidden PowerShell window still flashes; the headless console host has none (header).
     if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) {
         # Measured 2026-10-13 on Windows 11 26200: the console host started with the shell's quoted
@@ -64,11 +78,14 @@ function ConvertTo-HordeTaskAction {
         # could answer with another program: this job starts and updates code every minute. A system
         # that has not got them is refused here, when the job is made, not every minute it fires.
         $console = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "conhost.exe")
-        $shell = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
         foreach ($needed in @($console, $shell)) { if (-not [System.IO.File]::Exists($needed)) { throw ("a job that runs in the person's session needs " + $needed + ", which is not there") } }
         return [pscustomobject]@{ program = $console; arguments = ('--headless "' + $shell + '" ' + $shellArguments) }
     }
-    return [pscustomobject]@{ program = "powershell.exe"; arguments = $shellArguments }
+    # A job that runs where nobody sees it (S4U) is in session 0, with no desktop to flash a window
+    # on, so it needs no console host - and without one the task's last result is the job's own exit
+    # code again (header: the console host answers 0 whatever the job did).
+    if (-not [System.IO.File]::Exists($shell)) { throw ("a job needs " + $shell + ", which is not there") }
+    return [pscustomobject]@{ program = $shell; arguments = $shellArguments }
 }
 
 function Get-HordeTaskSchedulerTask {
@@ -93,31 +110,57 @@ function Remove-HordeTaskFolderIfEmpty {
     if ($f.GetTasks(1).Count -eq 0 -and $f.GetFolders(0).Count -eq 0) { $svc.GetFolder("\").DeleteFolder($Folder, 0) }
 }
 
-function Install-HordeTaskSchedulerJob {
-    param([Parameter(Mandatory = $true)]$Job)
-    Assert-HordeJobName -Name $Job.name -Folder $Job.folder
-    $old = Get-HordeTaskSchedulerTask -Name $Job.name -Folder $Job.folder
-    if ($null -ne $old) {
-        if (-not (Test-HordeTaskMarked $old)) { throw ("a task named '" + $Job.name + "' in \" + $Job.folder + "\ was not made by Horde; it was left alone") }
-        $oldHome = (Read-HordeJobMarker -Description $old.Description).home
-        if ($oldHome -cne $Job.hordeHome) { throw ("the task '" + $Job.name + "' serves the Horde home " + $oldHome + "; remove it first to serve " + $Job.hordeHome) }
-    }
-    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+function New-HordeTaskSchedulerTask {
+    # The task for -Job, as the scheduler's own object, made and NOT registered: the action, the
+    # triggers (the repetition first; then the boot trigger of a job made -AtStartup), the settings
+    # and the principal - S4U, with no password, or Interactive for a -WithPerson job. -UserId is the
+    # account it runs as. Nothing here touches the scheduler, so a suite can read every property.
+    param([Parameter(Mandatory = $true)]$Job, [Parameter(Mandatory = $true)][string]$UserId)
     $act = ConvertTo-HordeTaskAction -Job $Job
     $action = New-ScheduledTaskAction -Execute $act.program -Argument $act.arguments
-    $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes($Job.everyMinutes)) -RepetitionInterval (New-TimeSpan -Minutes $Job.everyMinutes)
+    $triggers = @(New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes($Job.everyMinutes)) -RepetitionInterval (New-TimeSpan -Minutes $Job.everyMinutes))
+    if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true) { $triggers += New-ScheduledTaskTrigger -AtStartup }
     $settingArgs = @{
         Priority = 7; ExecutionTimeLimit = (New-TimeSpan -Minutes $Job.timeLimitMinutes); MultipleInstances = "IgnoreNew"
         StartWhenAvailable = $true; AllowStartIfOnBatteries = $true; DontStopIfGoingOnBatteries = $true
     }
     if ($Job.disabled) { $settingArgs["Disable"] = $true }
     $settings = New-ScheduledTaskSettingsSet @settingArgs
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited
-    if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited }
-    $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description $Job.description
+    $principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType S4U -RunLevel Limited
+    if ($null -ne $Job.PSObject.Properties["withPerson"] -and $Job.withPerson -eq $true) { $principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited }
+    $task = New-ScheduledTask -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Description $Job.description
     $task.Author = $script:HordeTaskAuthor
-    # -Force replaces a task of the same name - only ever Horde's own, checked above.
-    $null = Register-ScheduledTask -InputObject $task -TaskName $Job.name -TaskPath ("\" + $Job.folder + "\") -Force -ErrorAction Stop
+    return $task
+}
+
+function Install-HordeTaskSchedulerJob {
+    # -Find and -Register are the scheduler, handed in so a suite can install against a stand-in:
+    # -Find { param($Name, $Folder) } answers the task there, or $null (Get-HordeTaskSchedulerTask);
+    # -Register { param($Task, $Name, $Path) } registers the task under that name, REPLACING one of
+    # the same name. It is called at most once.
+    param([Parameter(Mandatory = $true)]$Job, [scriptblock]$Find = $null, [scriptblock]$Register = $null)
+    if ($null -eq $Find) { $Find = { param($Name, $Folder) Get-HordeTaskSchedulerTask -Name $Name -Folder $Folder } }
+    # -Force replaces a task of the same name - only ever Horde's own, checked below - so an install
+    # over the job that is there is one job, never two, whatever its logon type was.
+    if ($null -eq $Register) { $Register = { param($Task, $Name, $Path) $null = Register-ScheduledTask -InputObject $Task -TaskName $Name -TaskPath $Path -Force -ErrorAction Stop } }
+    Assert-HordeJobName -Name $Job.name -Folder $Job.folder
+    $old = & $Find $Job.name $Job.folder
+    if ($null -ne $old) {
+        if (-not (Test-HordeTaskMarked $old)) { throw ("a task named '" + $Job.name + "' in \" + $Job.folder + "\ was not made by Horde; it was left alone") }
+        $oldHome = (Read-HordeJobMarker -Description $old.Description).home
+        if ($oldHome -cne $Job.hordeHome) { throw ("the task '" + $Job.name + "' serves the Horde home " + $oldHome + "; remove it first to serve " + $Job.hordeHome) }
+    }
+    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $task = New-HordeTaskSchedulerTask -Job $Job -UserId $user
+    # ONE TRY, AND NO OTHER FORM (header, RIGHTS): a refusal is said, and never answered by
+    # registering the job some other way.
+    try { & $Register $task $Job.name ("\" + $Job.folder + "\") }
+    catch {
+        $why = ("" + $_.Exception.Message).Trim()
+        $was = $(if ($null -ne $old) { "the task that was there is left exactly as it was" } else { "nothing was registered" })
+        $rights = $(if ($null -ne $Job.PSObject.Properties["atStartup"] -and $Job.atStartup -eq $true) { " A job that runs at start-up, whether or not anyone is signed in, can be registered only by an administrator: run this again from an elevated prompt." } else { "" })
+        throw ("Task Scheduler refused to register '" + $Job.name + "' in \" + $Job.folder + "\ (" + $why + "); " + $was + "." + $rights)
+    }
 }
 
 function Remove-HordeTaskSchedulerJob {
@@ -139,6 +182,7 @@ function Get-HordeTaskSchedulerStatus {
     $info = $null
     try { $info = Get-ScheduledTaskInfo -TaskName $Name -TaskPath ("\" + $Folder + "\") -ErrorAction Stop } catch { $info = $null }
     $every = 0
+    $boot = @(@($t.Triggers) | Where-Object { $null -ne $_ -and "$($_.CimClass.CimClassName)" -ceq "MSFT_TaskBootTrigger" }).Count -gt 0
     $rep = @($t.Triggers)[0].Repetition
     # The interval is an ISO 8601 duration such as PT30M or PT1H.
     if ($null -ne $rep -and "$($rep.Interval)" -ne "") { $every = [int][System.Xml.XmlConvert]::ToTimeSpan("$($rep.Interval)").TotalMinutes }
@@ -151,7 +195,7 @@ function Get-HordeTaskSchedulerStatus {
     $mark = Read-HordeJobMarker -Description $t.Description
     return (New-HordeKnown -Value ([pscustomobject]@{
         enabled = [bool]$t.Settings.Enabled; state = "$($t.State)"; everyMinutes = $every; marked = (Test-HordeTaskMarked $t); home = $mark.home
-        priority = $t.Settings.Priority; timeLimit = "$($t.Settings.ExecutionTimeLimit)"; logonType = "$($t.Principal.LogonType)"; author = "$($t.Author)"
+        priority = $t.Settings.Priority; timeLimit = "$($t.Settings.ExecutionTimeLimit)"; logonType = "$($t.Principal.LogonType)"; atStartup = $boot; author = "$($t.Author)"
         lastRunAt = $last; lastResult = $result; nextRunAt = $next; runs = ("" + @($t.Actions)[0].Execute + " -EncodedCommand ...")
         program = "$(@($t.Actions)[0].Execute)"; arguments = "$(@($t.Actions)[0].Arguments)"
     }))
