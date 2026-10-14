@@ -1,4 +1,4 @@
-# core/JsonText - what Horde checks in JSON text before it parses it.
+# core/JsonText - what Horde checks in JSON text before it parses it, and the parse itself.
 #
 # ONE SCANNER, SHARED. ConvertFrom-Json in Windows PowerShell 5.1 keeps one of two repeated keys and
 # reports nothing, so text can show its reader one value and give Horde another. core/Ownership.ps1
@@ -17,6 +17,50 @@
 # THE BYTE CHECK lives here too (review of #109): every reader of a Horde data file runs it before it
 # decodes, and every one of them already loads this file, so no reader can call it without loading it
 # (core/NodePolicy.ps1 once called it from a file it never loaded; tools/CoreLoad.ps1 now guards that).
+
+# THE ONE PARSE, the same under both PowerShells (issue #274). PowerShell 7's ConvertFrom-Json reads a
+# date-shaped string as a [datetime]; Windows PowerShell 5.1 never does. Measured 2026-10-14 on 7.6.6:
+# '{"at":"2026-10-14T12:00:00.0000000Z"}' gave $o.at as System.DateTime under pwsh and System.String
+# under 5.1 ("2026-10-14" alone stayed a string under both). So every Horde record read under 7 carried
+# its timestamps as dates, and `horde decisions add` refused its own new record before writing it:
+# "it is not a decision-event.v1 record: $.at should be string". ConvertFrom-HordeJson is the parse a
+# Horde reader uses instead of ConvertFrom-Json, so a string in the text is a string in the result.
+#   - 7.5 and later: -DateKind String, which leaves every string exactly as written.
+#   - 7.0 to 7.4 have no -DateKind: the parsed value is walked and each [datetime] is written back as
+#     round-trip ("o") text. Exact for every timestamp Horde writes itself (UTC, "o"); a date-shaped
+#     string written another way ("...T12:00:00Z", or with an offset) comes back as the same instant in
+#     "o" form, not as typed. OWED: an exact reader for 7.0 to 7.4.
+#   - 5.1 never converts, so the text is parsed as it is.
+# The output is ConvertFrom-Json's own, passed on unchanged (a function body that is the pipeline
+# re-wraps nothing), so a caller sees the same arrays and objects as from the cmdlet itself.
+$script:HordeJsonDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")
+$script:HordeJsonMakesDates = ("" + $PSVersionTable.PSEdition) -ceq "Core"
+
+function ConvertFrom-HordeJson {
+    # -Text parsed as JSON, with every string left a string. Throws as ConvertFrom-Json throws on text
+    # that is not JSON.
+    param($Text)
+    if ($script:HordeJsonDateKind) { $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop }
+    elseif ($script:HordeJsonMakesDates) { $Text | ConvertFrom-Json -ErrorAction Stop | ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }
+    else { $Text | ConvertFrom-Json -ErrorAction Stop }
+}
+
+function ConvertTo-HordeJsonDateText {
+    # -Value with every [datetime] or [datetimeoffset] in it, at any depth, turned back into round-trip
+    # ("o") text: in place for objects and lists, and returned. For PowerShell 7.0 to 7.4 (above).
+    param($Value)
+    if ($Value -is [datetime] -or $Value -is [datetimeoffset]) { return $Value.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($p in @($Value.PSObject.Properties)) { $p.Value = ConvertTo-HordeJsonDateText -Value $p.Value }
+        return $Value
+    }
+    if ($Value -is [System.Collections.IList]) {
+        for ($i = 0; $i -lt $Value.Count; $i++) { $Value[$i] = ConvertTo-HordeJsonDateText -Value $Value[$i] }
+        # The comma keeps a list one value on the way out, as ConvertFrom-Json gave it.
+        return , $Value
+    }
+    return $Value
+}
 
 function Assert-HordeAsciiBytes {
     # Throw unless the bytes are plain ASCII with no byte-order mark and no control byte but tab, CR and

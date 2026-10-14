@@ -67,6 +67,7 @@
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Settings.ps1")
 . (Join-Path $PSScriptRoot "Store.ps1")
 . (Join-Path $PSScriptRoot "Rules.ps1")
@@ -582,7 +583,7 @@ function Invoke-HordeDecisionWrite {
             actor = $actor; requestHash = $requestHash; data = $data
         }
         $text = ConvertTo-Json -InputObject $envelope -Compress -Depth 12
-        $record = [pscustomobject]@{ sequence = $sequence; file = (Get-HordeDecisionRecordName -Sequence $sequence); kind = "ok"; data = ($text | ConvertFrom-Json); reason = "" }
+        $record = [pscustomobject]@{ sequence = $sequence; file = (Get-HordeDecisionRecordName -Sequence $sequence); kind = "ok"; data = (ConvertFrom-HordeJson $text); reason = "" }
         # The list's problems as they stood, kept for a refusal: applying the record below adds the
         # unwritten record itself to them when it does not apply.
         $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays); notUnderstood = $list.notUnderstood }
@@ -639,7 +640,7 @@ function Invoke-HordeDecision {
     # Named $plain, not $request: variable names ignore case, so that would be the parameter itself.
     $plain = $null
     try {
-        if ($null -ne $Request) { $plain = (ConvertTo-Json -InputObject $Request -Compress -Depth 12) | ConvertFrom-Json }
+        if ($null -ne $Request) { $plain = ConvertFrom-HordeJson (ConvertTo-Json -InputObject $Request -Compress -Depth 12) }
     } catch {
         $why = "the request is not plain data that can be written as JSON: " + $_.Exception.Message
         return (& $refuse $Operation $why @($why))

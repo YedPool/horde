@@ -61,5 +61,32 @@
         @{ Name = "tab-refused"
            Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
            Replace = '        if ($b -lt 0x20 -and $b -ne 0x0A -and $b -ne 0x0D) {' }
+        # The one parse (issue #274). Caught under pwsh by the suite's child-process probe.
+        @{ Name = "date-kind-not-asked"
+           Find = '{ $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop }'
+           Replace = '{ $Text | ConvertFrom-Json -ErrorAction Stop }' }
+        @{ Name = "fallback-not-walked"
+           Find = '| ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }'
+           Replace = '}' }
+        @{ Name = "date-not-written-back"
+           Find = '[datetimeoffset]) { return $Value.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }'
+           Replace = '[datetimeoffset]) { return $Value }' }
+        @{ Name = "date-written-in-another-form"
+           Find = '$Value.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)'
+           Replace = '$Value.ToString("s", [System.Globalization.CultureInfo]::InvariantCulture)' }
+        @{ Name = "objects-not-walked"
+           Find = 'foreach ($p in @($Value.PSObject.Properties)) { $p.Value = ConvertTo-HordeJsonDateText -Value $p.Value }'
+           Replace = '' }
+        @{ Name = "lists-not-walked"
+           Find = 'for ($i = 0; $i -lt $Value.Count; $i++) { $Value[$i] = ConvertTo-HordeJsonDateText -Value $Value[$i] }'
+           Replace = '' }
+        @{ Name = "list-unrolled-on-return"
+           Find = 'return , $Value'
+           Replace = 'return $Value' }
+        @{ Name = "parse-error-swallowed"
+           Find = 'else { $Text | ConvertFrom-Json -ErrorAction Stop }'
+           Replace = 'else { $Text | ConvertFrom-Json -ErrorAction SilentlyContinue }'
+           Expect = "survives"
+           Reason = "ConvertFrom-Json raises a terminating error on text that is not JSON whatever -ErrorAction says, so the caller's catch fires either way; -ErrorAction Stop states the intent" }
     )
 }
