@@ -118,8 +118,8 @@
            Find = '        if ($body -cmatch ''\A\s*[0-9]+\.\s'') { return (New-HordeUnknown'
            Replace = '        if ($false) { return (New-HordeUnknown' }
         @{ Name = "busy-read-as-ready"
-           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))'
-           Replace = '    foreach ($r in @()) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))' }
+           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
+           Replace = '    foreach ($r in @()) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)' }
         @{ Name = "box-not-anchored"
            Find = '        foreach ($r in $below) { if ('
            Replace = '        foreach ($r in @()) { if (' }
@@ -130,7 +130,14 @@
            Find = '("" + $r).IndexOf($script:ClaudeCodePromptGlyph) -ge 0 -or '
            Replace = '' }
         @{ Name = "busy-read-only-below"
-           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))'
-           Replace = '    foreach ($r in @($b.value.below)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))' }
+           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
+           Replace = '    foreach ($r in @($b.value.below)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)' }
+        # F's nit of round 3: the mark as a status item, never inside a sentence.
+        @{ Name = "busy-read-in-a-sentence"
+           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
+           Replace = '    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))' }
+        @{ Name = "busy-last-item-missed"
+           Find = '(?:\)|\u00B7|\z)'
+           Replace = '(?:\)|\u00B7)' }
     )
 }

@@ -318,6 +318,13 @@ function Test-ClaudeCodeTurnDone {
 $script:ClaudeCodeBoxRule = [char]0x2500
 $script:ClaudeCodePromptGlyph = [char]0x276F
 $script:ClaudeCodeBusyMark = "esc to interrupt"
+# The mark as a STATUS ITEM, never inside a sentence (F's re-check of round 3: a start-up tip such as
+# "press esc to interrupt a turn" read anywhere on the screen would end the session as not ready): the
+# phrase stands alone on its row, or between the separators a footer or spinner row puts round its
+# items - "(" or a middle dot before it, ")" or a middle dot after it. Both measured forms are that:
+# the 2.1.299 footer "... manual mode on, a middle dot, esc to interrupt, a middle dot ..." and the spinner
+# "* Thinking... (esc to interrupt)".
+$script:ClaudeCodeBusyItem = '(?:\A|[(\u00B7])\s*esc to interrupt\s*(?:\)|\u00B7|\z)'
 
 function Test-ClaudeCodeRuleRow {
     # Is a screen row a rule: trimmed, at least 8 U+2500 first and one last, a label allowed between?
@@ -374,7 +381,7 @@ function Test-ClaudeCodeInputReady {
     param([AllowEmptyCollection()][string[]]$Screen = @())
     $b = Find-ClaudeCodeInputBox -Screen $Screen
     if ($b.state -ne "known") { return $b }
-    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark)) { return (New-HordeUnknown -Reason "the input box is drawn but a turn or hook is running (the screen says esc to interrupt)") } }
+    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem) { return (New-HordeUnknown -Reason "the input box is drawn but a turn or hook is running (the screen says esc to interrupt)") } }
     return (New-HordeKnown -Value $true)
 }
 

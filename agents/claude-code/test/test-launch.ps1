@@ -298,6 +298,10 @@ $ir = Test-ClaudeCodeInputReady -Screen @($named, ($glyph + $nb), $r120, (" " + 
 Check ($ir.state -eq "unknown") "NOT READY: an unnumbered choice list, the glyph on its first row, under the box"
 $ir = Test-ClaudeCodeInputReady -Screen @("* Thinking... (esc to interrupt)", $named, ($glyph + $nb), $r120, $idleFoot)
 Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") "NOT READY: esc to interrupt on a spinner row ABOVE the box, as other versions draw it (F's probe r3)"
+$ir = Test-ClaudeCodeInputReady -Screen (@(" Tip: press esc to interrupt a turn, twice to go back", "") + $atStart)
+Check ($ir.state -eq "known" -and $ir.value -eq $true) ("READY: a start-up tip that says esc to interrupt in a sentence is not a status item (F's nit of round 3: " + $ir.state + " " + $ir.reason + ")")
+$ir = Test-ClaudeCodeInputReady -Screen ($atStart[0..($atStart.Count - 2)] + @(("  " + [char]0x23F8 + " manual mode on " + $dot + " esc to interrupt")))
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") "CONTROL: the mark as the LAST item of the footer row is busy"
 $ir = Test-ClaudeCodeInputReady -Screen ($atStart + @(("  " + [char]0x23F8 + " manual mode on   context 12% left " + $dot + " v2.1.299"), ""))
 Check ($ir.state -eq "known" -and $ir.value -eq $true) "CONTROL: footer rows with numbers in them - a count, a percentage, a version - are footer rows: ready"
 
