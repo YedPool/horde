@@ -105,6 +105,9 @@ $script:HordeSecretRunKind = "a long random-looking string, as a key or token is
 #   password = get_password_from_vault() and login(password=user_password) are a call and an
 #   argument. EITHER parenthesis, open or close: the second of those two holds only the closing
 #   one in what follows the equals sign. A value in quotes is still a value, parenthesis or not.
+#   KNOWN COST (pinned by the open-parenthesis mutant's net, 2026-10-14): a real secret written
+#   bare with an open parenthesis anywhere in it (password=Ab3d(Ef6hIj9k) is taken for code, the
+#   same as the closing-parenthesis limit below; quote it and it is a value again.
 #   NOR IS AN UNQUOTED VALUE THAT IS A REFERENCE IN CODE (the review of PR 238, 2026-10-13): an
 #   identifier with a comma, a semicolon or a closing parenthesis after it, as an argument list or
 #   a statement ends one (login(password=user_password, timeout=5), clientSecret: SecretString;),
