@@ -593,9 +593,9 @@ foreach ($k in $mustWithhold.Keys) {
 }
 # CONTROL: the same instrument shows an ordinary screen: a welcome box, a long folder path, a session id,
 # a commit id, a numbered dialog and a footer - nothing in it a secret - every row of it, as kept.
-$plain = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30)), "Welcome to the harness!", "  cwd: C:\work\code\app-worktrees\act-a3\agents\claude-code", ("  session 3f2a9c1e-" + "7b4d-4e21-9a0c-5d6e7f8a9b0c"), ("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), " Do you trust the files in this folder?", " 1. Yes, proceed", "   2. No, exit", "  ? for shortcuts")
+$plain = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30)), "Welcome to the harness!", "  cwd: C:\work\code\app-worktrees\act-a3\agents\harness-a", ("  session 3f2a9c1e-" + "7b4d-4e21-9a0c-5d6e7f8a9b0c"), ("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), " Do you trust the files in this folder?", " 1. Yes, proceed", "   2. No, exit", "  ? for shortcuts")
 $s = ScreenOf $plain
-Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $plain.Count -and @($s.rows)[2] -clike "*act-a3\agents\claude-code") ("CONTROL: an ordinary screen with no secret, a path, a session id and a commit id in it, is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $plain.Count -and @($s.rows)[2] -clike "*act-a3\agents\harness-a") ("CONTROL: an ordinary screen with no secret, a path, a session id and a commit id in it, is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
 # KNOWN LIMIT, on purpose: rows joined by nothing can fuse two harmless rows into one long mixed run, and
 # a placeholder after a NAME= reads as a value once the name is spaced. Both are withheld: a screen lost,
 # never a secret shown. If either is ever shown again, that is a deliberate change to this rule.
