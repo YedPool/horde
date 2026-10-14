@@ -145,8 +145,8 @@
            Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpTurn'
            Replace = '$record.noOp = ""; $record.noOpTurn' }
         @{ Name = "prompt-before-mode-kept"
-           Find = '$gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
-           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))' }
+           Find = '$gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context -Within $closeTextSeconds))'
+           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -SessionId $sid -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $base -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart -SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context -Within $closeTextSeconds))' }
         @{ Name = "raw-prompt-typed"
            Find = '-SessionId $SessionId -Line $line'
            Replace = '-SessionId $SessionId -Line $Prompt' }
@@ -188,8 +188,8 @@
            Find = '    if ($null -eq $box -or $box.state -ne "known") { $boxSaid ='
            Replace = '    if ($false) { $boxSaid =' }
         @{ Name = "second-extra-enter"
-           Find = '            if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.retrySeconds -Probe $look)) { $out.state = "taken"; return $out }'
-           Replace = '            $null = & $Actor.send $Target $Handle "" $true; if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.retrySeconds -Probe $look)) { $out.state = "taken"; return $out }' }
+           Find = '            if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.retrySeconds -Probe $look -Whole)) { $out.state = "taken"; return $out }'
+           Replace = '            $null = & $Actor.send $Target $Handle "" $true; if ($true -eq (Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.retrySeconds -Probe $look -Whole)) { $out.state = "taken"; return $out }' }
         @{ Name = "mark-from-the-start"
            Find = '    if ($canTell) { $mark = & $Adapter.turnMark $SessionId $Context.environment }'
            Replace = '    if ($canTell) { $mark = New-HordeKnown -Value ([pscustomobject]@{ n = 0; size = [long]0 }) }' }
@@ -215,7 +215,7 @@
            Find = '    if ($noopEnd.state -eq "not-ended") {'
            Replace = '    if ($false) {' }
         @{ Name = "close-text-into-a-stuck-box"
-           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
+           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context -Within $closeTextSeconds))'
            Replace = '-SkipCloseText:$false' }
         @{ Name = "stuck-noop-not-named"
            Find = '        if ($noop.state -ne "taken") { $why += '
@@ -224,7 +224,7 @@
            Find = '    if ($null -ne $start) {'
            Replace = '    if ($false) {' }
         @{ Name = "spawn-limit-ignored"
-           Find = '        if ($null -ne $Context.PSObject.Properties["deadlineMs"] -and [double]$Context.deadlineMs -lt $until) { $until = [double]$Context.deadlineMs }'
+           Find = '        if (-not $Whole -and $null -ne $Context.PSObject.Properties["deadlineMs"] -and [double]$Context.deadlineMs -lt $until) { $until = [double]$Context.deadlineMs }'
            Replace = '' }
         @{ Name = "spawn-limit-past-the-hub"
            Find = 'spawnSeconds = 130;'
@@ -256,17 +256,74 @@
         @{ Name = "box-read-past-the-limit"
            Find = 'if (Test-HordeNodeDeadlinePassed -Context $Context) { $box = '
            Replace = 'if ($false) { $box = ' }
-        @{ Name = "extra-enter-without-its-wait"
-           Find = 'elseif (Test-HordeNodeDeadlinePassed -Context $Context -Within ([double]$Context.bounds.retrySeconds)) {'
-           Replace = 'elseif ($false) {' }
+        @{ Name = "extra-enter-past-the-limit"
+           Find = 'elseif (Test-HordeNodeDeadlinePassed -Context $Context) { $boxSaid = '
+           Replace = 'elseif ($false) { $boxSaid = ' }
         @{ Name = "close-text-past-the-limit"
-           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
+           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context -Within $closeTextSeconds))'
            Replace = '-SkipCloseText:($noop.state -ne "taken")' }
         @{ Name = "close-text-after-an-unknown-noop"
-           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))'
-           Replace = '-SkipCloseText:($noop.state -eq "not-taken" -or (Test-HordeNodeDeadlinePassed -Context $Context))' }
+           Find = '-SkipCloseText:($noop.state -ne "taken" -or (Test-HordeNodeDeadlinePassed -Context $Context -Within $closeTextSeconds))'
+           Replace = '-SkipCloseText:($noop.state -eq "not-taken" -or (Test-HordeNodeDeadlinePassed -Context $Context -Within $closeTextSeconds))' }
         @{ Name = "limit-from-the-pane-start"
            Find = '-NotePropertyValue ($actStartMs + 1000 * [double]$base.bounds.spawnSeconds)'
            Replace = '-NotePropertyValue ((Get-HordeNodeClockMs -Context $base) + 1000 * [double]$base.bounds.spawnSeconds)' }
+        # PR 239 round 4 (F's re-check of round 3): a typed line's waits run whole; the close text only
+        # while it and its wait fit; the sum counts terminal calls.
+        @{ Name = "receipt-wait-cut-at-the-limit"
+           Find = '-Seconds $Context.bounds.receiptSeconds -Probe $look -Whole)'
+           Replace = '-Seconds $Context.bounds.receiptSeconds -Probe $look)' }
+        @{ Name = "retry-wait-cut-at-the-limit"
+           Find = '-Seconds $Context.bounds.retrySeconds -Probe $look -Whole)'
+           Replace = '-Seconds $Context.bounds.retrySeconds -Probe $look)' }
+        @{ Name = "whole-wait-ignored"
+           Find = 'if (-not $Whole -and $null -ne $Context.PSObject.Properties["deadlineMs"]'
+           Replace = 'if ($null -ne $Context.PSObject.Properties["deadlineMs"]' }
+        @{ Name = "close-text-without-its-wait"
+           Find = '$closeTextSeconds = @($adapter.closeText).Count * $hostCall + [double]$base.bounds.closeSeconds'
+           Replace = '$closeTextSeconds = 0' }
+        @{ Name = "host-call-uncounted"
+           Find = 'hostCallSeconds = 20;'
+           Replace = 'hostCallSeconds = 0;' }
+        # PR 239 round 4 (issue 214): the screen of a session that was not ready, into its record.
+        @{ Name = "screen-not-on-never-ready"
+           Find = '    $Why += "; " + (Save-HordeNodeScreenReport -Context $Context -Actor $Actor -Target $Target -Record $Record)'
+           Replace = '' }
+        @{ Name = "screen-not-on-noop-end"
+           Find = '        $screenSaid = Save-HordeNodeScreenReport -Context $Context -Actor $actor -Target $term -Record $record'
+           Replace = '        $screenSaid = ""' }
+        @{ Name = "screen-on-done"
+           Find = '    $record.outcome = "running"; Write-HordeNodeSpawnRecord'
+           Replace = '    $null = Save-HordeNodeScreenReport -Context $Context -Actor $actor -Target $term -Record $record; $record.outcome = "running"; Write-HordeNodeSpawnRecord' }
+        @{ Name = "screen-past-the-limit"
+           Find = '    if (Test-HordeNodeDeadlinePassed -Context $Context) { return [pscustomobject]@{ state = "skipped";'
+           Replace = '    if ($false) { return [pscustomobject]@{ state = "skipped";' }
+        @{ Name = "screen-secret-shown"
+           Find = 'if ($kind -cne "") { return [pscustomobject]@{ state = "withheld";'
+           Replace = 'if ($false) { return [pscustomobject]@{ state = "withheld";' }
+        @{ Name = "screen-secret-raw-unchecked"
+           Find = '$kind = Find-HordeSecretKind -Text ($raw -join "`n")'
+           Replace = '$kind = ""' }
+        @{ Name = "screen-secret-kept-unchecked"
+           Find = 'if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text (@($rows) -join "`n") }'
+           Replace = '' }
+        @{ Name = "screen-rows-uncut"
+           Find = '    while ($rows.Count -gt $script:HordeNodeScreenRows) { $rows.RemoveAt(0) }'
+           Replace = '' }
+        @{ Name = "screen-kept-from-the-top"
+           Find = '    while ($rows.Count -gt $script:HordeNodeScreenRows) { $rows.RemoveAt(0) }'
+           Replace = '    while ($rows.Count -gt $script:HordeNodeScreenRows) { $rows.RemoveAt($rows.Count - 1) }' }
+        @{ Name = "screen-chars-uncut"
+           Find = '    while ($rows.Count -gt 1 -and ((@($rows) -join "`n").Length -gt $script:HordeNodeScreenChars)) { $rows.RemoveAt(0) }'
+           Replace = '' }
+        @{ Name = "screen-blank-runs-kept"
+           Find = 'if ($c -eq "" -and ($rows.Count -eq 0 -or $rows[$rows.Count - 1] -eq "")) { continue }'
+           Replace = 'if ($false) { continue }' }
+        @{ Name = "screen-other-characters-kept"
+           Find = '        else { [void]$sb.Append(''?'') }'
+           Replace = '        else { [void]$sb.Append($ch) }' }
+        @{ Name = "screen-box-glyphs-dropped"
+           Find = ' -or ($n -ge 0x2500 -and $n -le 0x257F))'
+           Replace = ')' }
     )
 }
