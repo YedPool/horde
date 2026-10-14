@@ -43,7 +43,10 @@
 #
 # NO SECRET LEAVES THE MACHINE. Every text that goes out is put through core/Secrets.ps1's refusal, the
 # one the log's entries get. A text that trips it is replaced by a fixed sentence, and the card is still
-# sent, with the field's name in its refused list: never the text, never what tripped it.
+# sent, with the field's name in its refused list: never the text, never what tripped it. THE REFUSAL
+# LOOKS AT THE WHOLE TEXT, AND ONLY THEN IS IT CUT to 300 characters: review of PR 244 (2026-10-14)
+# measured the other order letting 23 characters of a token and 31 of a 40-character key out, since a
+# token across the cut loses its tail and then matches no pattern.
 #
 # OUT (the Tick), sealed to every TRUSTED phone identity key, exactly as the log is (channels/Port.ps1):
 #   - ONE ENVELOPE, REPLACED WHOLE, ONLY THE LATEST KEPT. A snapshot is one envelope; its put says to keep,
@@ -57,7 +60,12 @@
 #   - RECORDED ONCE, PUT UNTIL IT IS TAKEN: the same envelope is put again next turn, and no new snapshot
 #     is made while one waits (as channels/decisions).
 #   - TOO LARGE FOR ONE ENVELOPE: the last cards are left out until it fits, and the snapshot says how
-#     many (cardsLeftOut). Each text is at most 300 characters, so 64 lanes fit any relay this runs on.
+#     many (cardsLeftOut). The map is held to a quarter of the budget, its last areas left out and
+#     counted (areasLeftOut): the cards are the glance, and an area left out only sends its entries to
+#     the Thrall's stream. Each text is at most 300 characters, and that is NOT small: a non-ASCII
+#     character is written as 6 bytes (\u05d0), so one 300-character Hebrew field is 1802 bytes, and 64
+#     cards with every text full are 109185 bytes, against 47918 bytes for two phones on a relay whose
+#     text cap is 65536 (review of PR 244, measured 2026-10-14; test/test-relay-channel-cards.ps1, 8).
 #   - NO LANES FOLDER IS "NOTHING YET": nothing is sent, and it is said once.
 #   - MACHINE TO PHONE ONLY: the channel takes nothing in.
 #
@@ -85,6 +93,7 @@ $script:HordeCardsChannelTextChars = 300
 $script:HordeCardsChannelStatusBytes = 16384
 $script:HordeCardsChannelLedgerBytes = 33554432
 $script:HordeCardsChannelAreasMost = 200
+$script:HordeCardsChannelTailBytes = 65536
 $script:HordeCardsChannelRecentHours = 24
 $script:HordeCardsChannelDoneDays = 7
 $script:HordeCardsChannelSecretWords = "Not shown: this line looks like it holds a secret, so it stays at the machine."
@@ -117,11 +126,17 @@ function ConvertTo-HordeCardsChannelJsonString {
     return ('"' + [regex]::Replace($Text, '[^\x20\x21\x23-\x5B\x5D-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") }) + '"')
 }
 
-function Get-HordeCardsChannelPlain {
-    # A text as a card holds it: control characters as spaces, trimmed, and at most 300 characters - a
-    # card is a glance, and the whole story is the lane's stream.
+function Get-HordeCardsChannelClean {
+    # A text with its control characters as spaces, trimmed, and WHOLE: what the secret refusal looks at.
     param([AllowEmptyString()][string]$Text)
-    $t = ([regex]::Replace($Text, '\p{Cc}', ' ')).Trim()
+    return ([regex]::Replace($Text, '\p{Cc}', ' ')).Trim()
+}
+
+function Get-HordeCardsChannelPlain {
+    # A text as a card holds it: clean, and at most 300 characters - a card is a glance, and the whole
+    # story is the lane's stream. Never handed to the refusal: cut, a secret may no longer look like one.
+    param([AllowEmptyString()][string]$Text)
+    $t = Get-HordeCardsChannelClean $Text
     if ($t.Length -gt $script:HordeCardsChannelTextChars) { $t = $t.Substring(0, $script:HordeCardsChannelTextChars - 3).TrimEnd() + "..." }
     return $t
 }
@@ -156,38 +171,43 @@ function Read-HordeCardsChannelStatusText {
 }
 
 function Protect-HordeCardsChannelField {
-    # NO SECRET LEAVES THE MACHINE (the header): the text, or the fixed sentence in its place, and the
-    # field's name added to -Refused.
+    # NO SECRET LEAVES THE MACHINE (the header): -Text WHOLE, as read, and what goes out - the text cut
+    # as a card holds it, or the fixed sentence in its place with the field's name added to -Refused.
+    # The refusal looks at the whole text first; only a text it lets through is cut.
     param([AllowEmptyString()][string]$Text, [string]$Field, [System.Collections.ArrayList]$Refused)
-    if ((Find-HordeSecretKind -Text $Text) -cne "") { [void]$Refused.Add($Field); return $script:HordeCardsChannelSecretWords }
-    return $Text
+    $whole = Get-HordeCardsChannelClean $Text
+    if ((Find-HordeSecretKind -Text $whole) -cne "") { [void]$Refused.Add($Field); return $script:HordeCardsChannelSecretWords }
+    return (Get-HordeCardsChannelPlain $whole)
 }
 
 function New-HordeCardsChannelLaneCard {
     # One lane's card from its folder (WHAT A CARD SAYS, in the header): { lane; name; form; asOf; now;
-    # lastDone; waitingOn; blocked; blockedText; note; refused }.
-    param([Parameter(Mandatory = $true)][string]$Folder)
+    # lastDone; waitingOn; blocked; blockedText; note; refused }. -Place: the folder's place in the list,
+    # from 1, which names a lane no id can be made for ("lane-3"), so no two such lanes share one id.
+    param([Parameter(Mandatory = $true)][string]$Folder, [int]$Place = 1)
     $leaf = Split-Path -Leaf $Folder
     $s = Read-HordeCardsChannelStatusText -Path (Join-Path $Folder "status.txt")
     $k = $s.keys
-    $get = { param($name) if ($k.ContainsKey($name)) { return (Get-HordeCardsChannelPlain $k[$name]) }; return "" }
+    # Every text WHOLE here: Protect-HordeCardsChannelField refuses on it, and only then cuts it.
+    $get = { param($name) if ($k.ContainsKey($name)) { return (Get-HordeCardsChannelClean $k[$name]) }; return "" }
     $orc = & $get "orc"
     if ($orc -cnotmatch $script:HordeCardsChannelOrcPattern) {
         # Another form may still say whose lane it is: "LANE: stt-cpu-bench (Orc I)".
         $orc = ""
         foreach ($v in @($k.Values) + @($s.first)) { $m = [regex]::Match("$v", '\(Orc ([A-Z][A-Z0-9]{0,3})\)'); if ($m.Success) { $orc = $m.Groups[1].Value; break } }
     }
-    $lane = $(if ($orc -cne "") { $orc } elseif ($leaf -cmatch $script:HordeCardsChannelLanePattern) { $leaf } else { "lane" })
+    $fallback = "lane-" + $Place
+    $lane = $(if ($orc -cne "") { $orc } elseif ($leaf -cmatch $script:HordeCardsChannelLanePattern) { $leaf } else { $fallback })
     # "thrall" is the Thrall card's id on every page of the phone (surfaces/pwa/page/lane-card.js): no lane takes it.
-    if ($lane -ceq "thrall") { $lane = "lane" }
+    if ($lane -ceq "thrall") { $lane = $fallback }
     $name = & $get "lane"
-    if ($name -ceq "") { $name = Get-HordeCardsChannelPlain $leaf }
+    if ($name -ceq "") { $name = Get-HordeCardsChannelClean $leaf }
     $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; note = "" }
     if ($s.form -ceq "missing") { $card.note = "This lane has no status file." }
     elseif ($s.form -ceq "unreadable") { $card.note = "This lane's status file could not be read: " + $s.reason + "." }
     else {
         $card.now = & $get "doing"
-        if ($s.form -ceq "other" -and $card.now -ceq "") { $card.now = Get-HordeCardsChannelPlain (@($s.first) -join " - ") }
+        if ($s.form -ceq "other" -and $card.now -ceq "") { $card.now = Get-HordeCardsChannelClean (@($s.first) -join " - ") }
         $card.lastDone = & $get "finished"
         $card.waitingOn = & $get "waiting on"
         $b = & $get "blocked"
@@ -199,7 +219,7 @@ function New-HordeCardsChannelLaneCard {
     $refused = New-Object System.Collections.ArrayList
     foreach ($f in @("lane", "name", "now", "lastDone", "waitingOn", "blockedText")) { $card[$f] = Protect-HordeCardsChannelField -Text $card[$f] -Field $f -Refused $refused }
     # A refused id cannot name a stream: the lane is then its folder's place in the list, said plainly.
-    if (@($refused) -ccontains "lane") { $card.lane = "lane" }
+    if (@($refused) -ccontains "lane") { $card.lane = $fallback }
     $card["refused"] = @($refused.ToArray())
     return [pscustomobject]$card
 }
@@ -238,9 +258,14 @@ function Read-HordeCardsChannelLedger {
         if ($null -eq $r -or $r -isnot [System.Management.Automation.PSCustomObject]) { $answer.skipped++; continue }
         # A member a line does not have is "": under -Version Latest a missing member read bare throws.
         $field = @{}
-        foreach ($name in @("ts", "task", "event", "lane", "to")) { $pp = $r.PSObject.Properties[$name]; $field[$name] = $(if ($null -ne $pp) { $pp.Value } else { $null }) }
+        # Assigned bare: $( ) would unroll a one-item list ["E"] into the text "E".
+        foreach ($name in @("ts", "task", "event", "lane", "to")) { $pp = $r.PSObject.Properties[$name]; $field[$name] = $null; if ($null -ne $pp) { $field[$name] = $pp.Value } }
         $when = ConvertFrom-HordeCardsChannelTime $field["ts"]
-        if ($null -eq $when -or "$($field['task'])" -ceq "" -or "$($field['event'])" -ceq "") { $answer.skipped++; continue }
+        # A task, event, lane or to that is not text is no line: printed, an object is "@{a=1}" and a
+        # list its items joined, each read as a task or a lane that is not one (review of PR 244).
+        $typed = $true
+        foreach ($name in @("task", "event", "lane", "to")) { if ($null -ne $field[$name] -and $field[$name] -isnot [string]) { $typed = $false } }
+        if ($null -eq $when -or -not $typed -or "$($field['task'])" -ceq "" -or "$($field['event'])" -ceq "") { $answer.skipped++; continue }
         $i++
         $e = [pscustomobject]@{ task = "$($field['task'])"; event = "$($field['event'])"; at = $when; lane = "$($field['lane'])"; to = "$($field['to'])"; i = $i }
         if ($e.event -ceq "opened") { [void]$opened.Add($e) } else { [void]$events.Add($e) }
@@ -301,16 +326,19 @@ function Read-HordeCardsChannelAreas {
 
 function Read-HordeCardsChannelCensus {
     # The sessions running and waiting on a person (runsFolder, in the header): { ok; reason; running;
-    # waiting }. Only the last bytes of each events file are read: its last line is all that is asked.
+    # waiting; skipped }. ONE RUN THAT DOES NOT READ SKIPS ONLY ITSELF, counted in skipped: a run.json
+    # that was JSON null wiped the whole count (review of PR 244, 2026-10-14).
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][datetime]$Now)
-    $answer = [pscustomobject]@{ ok = $false; reason = ""; running = 0; waiting = 0 }
+    $answer = [pscustomobject]@{ ok = $false; reason = ""; running = 0; waiting = 0; skipped = 0 }
     if (-not [System.IO.Directory]::Exists($Path)) { $answer.reason = "there is no runs folder at " + $Path; return $answer }
     $recent = $Now.ToUniversalTime().AddHours(-$script:HordeCardsChannelRecentHours)
-    try {
-        foreach ($run in @([System.IO.Directory]::GetDirectories($Path))) {
+    try { $runs = @([System.IO.Directory]::GetDirectories($Path)) } catch { $answer.reason = "the runs folder " + $Path + " could not be read"; return $answer }
+    foreach ($run in $runs) {
+        try {
             $manifest = Join-Path $run "run.json"
             if (-not [System.IO.File]::Exists($manifest)) { continue }
-            try { $m = ConvertFrom-Json -InputObject (Read-HordeSharedText -Path $manifest) } catch { continue }
+            $m = ConvertFrom-Json -InputObject (Read-HordeSharedText -Path $manifest)
+            if ($m -isnot [System.Management.Automation.PSCustomObject]) { $answer.skipped++; continue }
             $closed = $m.PSObject.Properties["closedAt"]
             if ($null -ne $closed -and "$($closed.Value)" -cne "") { continue }
             $sessions = Join-Path $run "sessions"
@@ -319,17 +347,41 @@ function Read-HordeCardsChannelCensus {
                 $events = Join-Path $s "events.jsonl"
                 $info = New-Object System.IO.FileInfo -ArgumentList $events
                 if (-not $info.Exists -or $info.LastWriteTimeUtc -lt $recent) { continue }
-                $last = @((Read-HordeSharedText -Path $events) -split "\r?\n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1)
-                if ($last.Count -eq 0) { continue }
+                $last = Read-HordeCardsChannelLastLine -Path $events
+                if ($last -ceq "") { continue }
                 $event = ""
-                try { $ev = (ConvertFrom-Json -InputObject $last[0]).PSObject.Properties["event"]; if ($null -ne $ev) { $event = "$($ev.Value)" } } catch { continue }
+                try { $r = ConvertFrom-Json -InputObject $last } catch { continue }
+                if ($r -isnot [System.Management.Automation.PSCustomObject]) { continue }
+                $ev = $r.PSObject.Properties["event"]
+                if ($null -ne $ev -and $ev.Value -is [string]) { $event = $ev.Value }
                 if ($event -ceq "started" -or $event -ceq "progress") { $answer.running++ }
                 elseif ($event -ceq "blocked") { $answer.waiting++ }
             }
-        }
-    } catch { $answer.reason = "the runs folder " + $Path + " could not be read"; return $answer }
+        } catch { $answer.skipped++ }
+    }
     $answer.ok = $true
     return $answer
+}
+
+function Read-HordeCardsChannelLastLine {
+    # The last line that holds words of a file, read FROM ITS END, at most 64 KiB of it: the census asks
+    # only that line, every 30 s, of every recent session (review of PR 244: each events file was read
+    # whole). A last line longer than that is "" - not read, never half read. Throws if the file cannot
+    # be read; the caller counts that run as skipped.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = Open-HordeSharedStream -Path $Path
+    try {
+        $from = [long][System.Math]::Max(0, $stream.Length - $script:HordeCardsChannelTailBytes)
+        [void]$stream.Seek($from, [System.IO.SeekOrigin]::Begin)
+        $bytes = New-Object byte[] ($stream.Length - $from)
+        $got = 0
+        while ($got -lt $bytes.Length) { $n = $stream.Read($bytes, $got, $bytes.Length - $got); if ($n -le 0) { break }; $got += $n }
+    } finally { $stream.Dispose() }
+    $pieces = @(([System.Text.Encoding]::UTF8.GetString($bytes, 0, $got)) -split "\r?\n")
+    # Read from the middle of the file, the first piece is the tail of a line, not a line.
+    $start = $(if ($from -gt 0) { 1 } else { 0 })
+    for ($i = $pieces.Count - 1; $i -ge $start; $i--) { if ($pieces[$i].Trim() -ne "") { return $pieces[$i] } }
+    return ""
 }
 
 function New-HordeCardsChannelThrallCard {
@@ -339,7 +391,8 @@ function New-HordeCardsChannelThrallCard {
     param([object[]]$Cards, $Census, [string]$StatusPath)
     $s = Read-HordeCardsChannelStatusText -Path $StatusPath
     $now = ""
-    if ($s.form -ceq "standard" -or $s.form -ceq "other") { $now = $(if ($s.keys.ContainsKey("doing")) { Get-HordeCardsChannelPlain $s.keys["doing"] } else { Get-HordeCardsChannelPlain (@($s.first) -join " - ") }) }
+    # WHOLE here, refused below, and only then cut (NO SECRET LEAVES THE MACHINE, in the header).
+    if ($s.form -ceq "standard" -or $s.form -ceq "other") { $now = $(if ($s.keys.ContainsKey("doing")) { $s.keys["doing"] } else { @($s.first) -join " - " }) }
     $blocked = 0; $founder = New-Object System.Collections.ArrayList; $working = 0; $unknown = 0
     foreach ($c in @($Cards)) {
         if ($c.form -ceq "missing" -or $c.form -ceq "unreadable") { $unknown++ }
@@ -377,8 +430,25 @@ function New-HordeCardsChannelSnapshot {
     if (-not $ledger.ok) { [void]$lines.Add("the cards show no task counts: " + $ledger.reason) }
     elseif ($ledger.skipped -gt 0) { [void]$lines.Add("" + $ledger.skipped + " line(s) of the task ledger could not be read and were passed over") }
     $cards = New-Object System.Collections.ArrayList
+    # ONE ID IS ONE CARD: the phone finds a card by its machine and its id, so two cards of one id drew the
+    # first twice and the second never (review of PR 244, 2026-10-14). The first folder by name keeps the
+    # id; a later one gets the first free "lane-<place>", and both the card and the machine say why.
+    $taken = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    $place = 0
     foreach ($f in $folders) {
-        $c = New-HordeCardsChannelLaneCard -Folder $f
+        $place++
+        $c = New-HordeCardsChannelLaneCard -Folder $f -Place $place
+        if ($taken.ContainsKey($c.lane)) {
+            $was = $c.lane
+            $k = $place
+            while ($taken.ContainsKey("lane-" + $k)) { $k++ }
+            $c.lane = "lane-" + $k
+            $why = New-Object System.Collections.ArrayList
+            $c.note = Protect-HordeCardsChannelField -Text ("Another lane folder here (" + $taken[$was] + ") gives the same id, " + $was + ", so this card has its own.") -Field "note" -Refused $why
+            if ($why.Count -gt 0) { $c.refused = @(@($c.refused) + "note") }
+            [void]$lines.Add("the lane folders " + $taken[$was] + " and " + (Split-Path -Leaf $f) + " both give the id " + $was + ": the card of " + (Split-Path -Leaf $f) + " is " + $c.lane + " on the phone")
+        }
+        $taken[$c.lane] = (Split-Path -Leaf $f)
         $count = $(if ($ledger.ok -and $ledger.lanes.ContainsKey($c.lane)) { $ledger.lanes[$c.lane] } elseif ($ledger.ok) { [pscustomobject]@{ open = 0; doneWeek = 0 } } else { $null })
         $c | Add-Member -NotePropertyName "tasksOpen" -NotePropertyValue $(if ($null -ne $count) { [int]$count.open } else { $null })
         $c | Add-Member -NotePropertyName "doneWeek" -NotePropertyValue $(if ($null -ne $count) { [int]$count.doneWeek } else { $null })
@@ -388,25 +458,33 @@ function New-HordeCardsChannelSnapshot {
     $areas = Read-HordeCardsChannelAreas -Path $Paths.areas
     if ($areas.reason -cne "") { [void]$lines.Add($areas.reason) }
     $census = Read-HordeCardsChannelCensus -Path $Paths.runs -Now $Now
+    if ($census.skipped -gt 0) { [void]$lines.Add("" + $census.skipped + " run(s) of " + $Paths.runs + " could not be read and were passed over in the count of sessions") }
     $thrall = New-HordeCardsChannelThrallCard -Cards @($cards.ToArray()) -Census $census -StatusPath $Paths.thrall
     $name = $(if ("$($Settings.machineName)" -cne "") { $Settings.machineName } else { [System.Environment]::MachineName })
     $nameRefused = New-Object System.Collections.ArrayList
-    $name = Protect-HordeCardsChannelField -Text (Get-HordeCardsChannelPlain $name) -Field "name" -Refused $nameRefused
+    $name = Protect-HordeCardsChannelField -Text $name -Field "name" -Refused $nameRefused
     if ($nameRefused.Count -gt 0) { $name = "this machine" }
-    $areasText = ConvertTo-HordeCardsChannelValueText @($areas.areas)
-    if (@($areas.areas).Count -eq 0) { $areasText = "[]" }
+    # THE MAP IS HELD TO A QUARTER OF THE BUDGET (TOO LARGE FOR ONE ENVELOPE, in the header): it was never
+    # cut, and 200 areas left no card and a body still too large to save (review of PR 244, 2026-10-14).
+    $areaTexts = @(@($areas.areas) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ })
+    $areasKept = 0; $areaBytes = 2
+    while ($areasKept -lt $areaTexts.Count -and $areaBytes + $areaTexts[$areasKept].Length + 1 -le [long]($Budget / 4)) { $areaBytes += $areaTexts[$areasKept].Length + 1; $areasKept++ }
     $kept = New-Object System.Collections.ArrayList -ArgumentList (, @($cards.ToArray()))
     $left = 0
     while ($true) {
         $cardsText = $(if ($kept.Count -eq 0) { "[]" } else { "[" + ((@($kept.ToArray()) | ForEach-Object { ConvertTo-HordeCardsChannelValueText $_ }) -join ",") + "]" })
-        $content = '"name":' + (ConvertTo-HordeCardsChannelJsonString $name) + ',"thrall":' + (ConvertTo-HordeCardsChannelValueText $thrall) + ',"cards":' + $cardsText + ',"cardsLeftOut":' + $left + ',"areas":' + $areasText
+        $areasText = "[" + (@($areaTexts | Select-Object -First $areasKept) -join ",") + "]"
+        $content = '"name":' + (ConvertTo-HordeCardsChannelJsonString $name) + ',"thrall":' + (ConvertTo-HordeCardsChannelValueText $thrall) + ',"cards":' + $cardsText + ',"cardsLeftOut":' + $left + ',"areas":' + $areasText + ',"areasLeftOut":' + ($areaTexts.Count - $areasKept)
         $hash = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::ASCII.GetBytes($content)))
         $body = '{"v":1,"kind":"cards-snapshot","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","snapshot":"' + $hash + '","made":"' + $Now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) + '",' + $content + '}'
-        if ($body.Length -le $Budget -or $kept.Count -eq 0) { break }
-        $kept.RemoveAt($kept.Count - 1)
-        $left++
+        if ($body.Length -le $Budget) { break }
+        # Cards first, from the end; with none left, the rest of the map.
+        if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1); $left++ }
+        elseif ($areasKept -gt 0) { $areasKept-- }
+        else { break }
     }
     if ($left -gt 0) { [void]$lines.Add("" + $left + " card(s) did not fit one envelope and were left out; the phone is told how many") }
+    if ($areasKept -lt $areaTexts.Count) { [void]$lines.Add("" + ($areaTexts.Count - $areasKept) + " area(s) of the map did not fit one envelope and were left out; on the phone their entries show only in the Thrall's stream") }
     return [pscustomobject]@{ hash = $hash; body = $body; cards = $kept.Count; left = $left; lines = @($lines.ToArray()) }
 }
 
@@ -463,7 +541,9 @@ function Invoke-HordeCardsChannelTick {
     $sentAs = $snap.hash + "|" + (@($keys | ForEach-Object { $_.agreeKeyId }) -join ",")
     if ($sentAs -ceq $mine.sent) { return [pscustomobject]@{ lines = @($said.ToArray()); failed = $false } }
     $saved = Save-HordeRelayChannelEnvelope -Context $Context -Channel "cards" -Kind "snapshot" -Body ([System.Text.Encoding]::ASCII.GetBytes($snap.body)) -Recipients @($keys | ForEach-Object { , ([byte[]]$_.public) })
-    if ($saved.state -cne "known") { return [pscustomobject]@{ lines = @(@($said.ToArray()) + @("no cards sent: " + $saved.reason)); failed = $true } }
+    # Said once while it stays the same: a save refused every 30 s wrote a fresh line each time (review of PR 244).
+    if ($saved.state -cne "known") { $r = & $once "save" ("no cards sent: " + $saved.reason) $true; return [pscustomobject]@{ lines = @(@($said.ToArray()) + @($r.lines)); failed = $true } }
+    $mine.said.Remove("save")
     $mine.pending = $saved.value
     $mine.sent = $sentAs
     $what = "cards of " + $snap.cards + " lane(s) and the Thrall for " + $keys.Count + " phone key(s), as " + $saved.value.key

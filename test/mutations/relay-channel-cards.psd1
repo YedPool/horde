@@ -14,7 +14,7 @@
            Find = 'if ($sentAs -ceq $mine.sent) {'
            Replace = 'if ($false) {' }
         @{ Name = "a-secret-in-a-status-line-is-sent"
-           Find = 'if ((Find-HordeSecretKind -Text $Text) -cne "") { [void]$Refused.Add($Field); return $script:HordeCardsChannelSecretWords }'
+           Find = 'if ((Find-HordeSecretKind -Text $whole) -cne "") { [void]$Refused.Add($Field); return $script:HordeCardsChannelSecretWords }'
            Replace = '' }
         @{ Name = "a-lane-with-no-status-file-gets-no-card"
            Find = '        $c = New-HordeCardsChannelLaneCard -Folder $f'
@@ -61,5 +61,47 @@
         @{ Name = "a-relative-default-is-not-under-the-home"
            Find = '[System.IO.Path]::Combine($HordeHome, "progress", $Leaf)'
            Replace = '[System.IO.Path]::Combine("progress", $Leaf)' }
+        @{ Name = "the-refusal-looks-at-the-cut-text"
+           Find = '$whole = Get-HordeCardsChannelClean $Text'
+           Replace = '$whole = Get-HordeCardsChannelPlain $Text' }
+        @{ Name = "a-lane-field-is-cut-before-the-refusal"
+           Find = '$get = { param($name) if ($k.ContainsKey($name)) { return (Get-HordeCardsChannelClean $k[$name]) }; return "" }'
+           Replace = '$get = { param($name) if ($k.ContainsKey($name)) { return (Get-HordeCardsChannelPlain $k[$name]) }; return "" }' }
+        @{ Name = "the-thrall-now-is-cut-before-the-refusal"
+           Find = '$now = $(if ($s.keys.ContainsKey("doing")) { $s.keys["doing"] }'
+           Replace = '$now = $(if ($s.keys.ContainsKey("doing")) { Get-HordeCardsChannelPlain $s.keys["doing"] }' }
+        @{ Name = "two-cards-share-one-id"
+           Find = 'if ($taken.ContainsKey($c.lane)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "every-unnamed-lane-is-lane"
+           Find = '$fallback = "lane-" + $Place'
+           Replace = '$fallback = "lane"' }
+        @{ Name = "the-map-is-never-capped"
+           Find = '-le [long]($Budget / 4)) {'
+           Replace = '-le [long]::MaxValue) {' }
+        @{ Name = "with-no-card-left-the-map-is-not-cut"
+           Find = 'elseif ($areasKept -gt 0) { $areasKept-- }'
+           Replace = 'elseif ($false) { }' }
+        @{ Name = "cards-left-out-not-counted"
+           Find = 'if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1); $left++ }'
+           Replace = 'if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1) }' }
+        @{ Name = "one-bad-run-wipes-the-census"
+           Find = '} catch { $answer.skipped++ }'
+           Replace = '} catch { throw }' }
+        @{ Name = "a-run-json-list-is-read-as-a-run"
+           Find = 'if ($m -isnot [System.Management.Automation.PSCustomObject]) { $answer.skipped++; continue }'
+           Replace = '' }
+        @{ Name = "the-whole-events-file-is-read"
+           Find = '$from = [long][System.Math]::Max(0, $stream.Length - $script:HordeCardsChannelTailBytes)'
+           Replace = '$from = [long]0' }
+        @{ Name = "the-tail-of-a-line-is-read-as-a-line"
+           Find = '$start = $(if ($from -gt 0) { 1 } else { 0 })'
+           Replace = '$start = 0' }
+        @{ Name = "a-ledger-object-is-read-as-text"
+           Find = 'if ($null -ne $field[$name] -and $field[$name] -isnot [string]) { $typed = $false }'
+           Replace = '' }
+        @{ Name = "a-one-item-list-is-unrolled-to-text"
+           Find = '$field[$name] = $null; if ($null -ne $pp) { $field[$name] = $pp.Value }'
+           Replace = '$field[$name] = $(if ($null -ne $pp) { $pp.Value } else { $null })' }
     )
 }

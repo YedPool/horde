@@ -185,6 +185,33 @@ try {
     Check (-not $last.raw.Contains("A1b2C3d4") -and -not $last.raw.Contains("ghp_") -and (Said $t) -like "*research*now*notice in its place*" -and -not (Said $t).Contains("A1b2C3d4")) "and neither the secret nor its start is in what the phone opens, nor in the machine's own line"
 
     Write-Host ""
+    Write-Host "--- 4b. a secret that straddles the 300-character cut: refused on the whole text, before the cut ---" -ForegroundColor Cyan
+    # Review of PR 244 (F, 2026-10-14): the refusal ran on the text already cut to 297 characters and "...",
+    # so a token across character 297 lost its tail, matched nothing, and its first part went out. Made-up
+    # values: a 36-character token after its prefix, and a 40-character key with slashes in it.
+    $pad = ("word " * 57).Substring(0, 285)
+    $straddle = $pad + "ghp_" + "Zq7Xw2Lp9Rt4Vn6Bk1Mc8Hy3Jd5Fs0Ga2Ke7" + " and more words after it"
+    $slashKey = "Qm9vX2Fy/Zk3LpT8vW2nB6cR1dY4hJ7sE0gU5aMx"
+    $straddle2 = ("more " * 57).Substring(0, 280) + $slashKey + " then the end"
+    Check ((Find-HordeSecretKind -Text $straddle) -cne "" -and (Find-HordeSecretKind -Text $straddle2) -cne "" -and (Find-HordeSecretKind -Text (Get-HordeCardsChannelPlain $straddle)) -ceq "" -and (Find-HordeSecretKind -Text (Get-HordeCardsChannelPlain $straddle2)) -ceq "" -and (Get-HordeCardsChannelPlain $straddle).Contains("ghp_Zq7")) "CONTROL: both texts are refused whole, and once cut to 300 characters neither is - the cut alone hides each from the refusal, and the token's start survives it"
+    Set-Lane $A "research" (New-Status -Orc "E" -Lane "research" -Doing $straddle -Finished $straddle2)
+    [System.IO.File]::WriteAllText((Join-Path $A.progress "thrall-status.txt"), (New-Status -Orc "M" -Lane "thrall" -Doing $straddle), $utf8)
+    $t = Invoke-Tick $A
+    $mail = @(Get-CardsMail $A)
+    $last = $mail[$mail.Count - 1]
+    $e = Get-Card $last.body "E"
+    Check ($null -ne $e -and (@($e.refused) -join ",") -ceq "now,lastDone" -and $e.now -like "Not shown:*" -and $e.lastDone -like "Not shown:*") ("A LANE CARD: a token and a key that straddle the cut are refused, each field named (" + (@($e.refused) -join ",") + ")")
+    Check ($last.body.thrall.hasStatus -and (@($last.body.thrall.refused) -join ",") -ceq "now" -and $last.body.thrall.now -like "Not shown:*") ("THE THRALL CARD: the same token in its own status is refused (" + (@($last.body.thrall.refused) -join ",") + ")")
+    Check (-not $last.raw.Contains("ghp_") -and -not $last.raw.Contains("Zq7Xw2") -and -not $last.raw.Contains("Qm9vX2Fy") -and -not (Said $t).Contains("Zq7Xw2")) "and no first part of either goes to the phone or into the machine's own lines"
+    $long = ("plain " * 80)
+    Set-Lane $A "research" (New-Status -Orc "E" -Lane "research" -Doing $long -Finished "fine words")
+    Remove-Item -LiteralPath (Join-Path $A.progress "thrall-status.txt")
+    $t = Invoke-Tick $A
+    $mail = @(Get-CardsMail $A)
+    $e = Get-Card $mail[$mail.Count - 1].body "E"
+    Check ($e.now.Length -eq 300 -and $e.now.EndsWith("...") -and @($e.refused).Count -eq 0) ("CONTROL: a long text with no secret is still cut to 300 characters and not refused (" + $e.now.Length + ")")
+
+    Write-Host ""
     Write-Host "--- 5. replaced whole, only the latest kept; the same snapshot is not sent again ---" -ForegroundColor Cyan
     $before = @(Get-CardsMail $A)
     $t = Invoke-Tick $A
@@ -213,6 +240,104 @@ try {
     $B = New-World -Settings ('{"sendIntervalMs": 0, "lanesFolder": "' + (Join-Path $env:TEMP ("horde-relay-cards-elsewhere-" + [guid]::NewGuid().ToString("N"))).Replace("\", "\\") + '"}')
     $t = Invoke-Tick $B
     Check ((Said $t) -like "*horde-relay-cards-elsewhere-*") "a lanesFolder setting is the folder read"
+
+    Write-Host ""
+    Write-Host "--- 7. one id is one card: two folders of one orc, and folder names no id can be made of ---" -ForegroundColor Cyan
+    # Review of PR 244: two lanes with one id drew one card twice on the phone and the other never.
+    $C = New-World
+    Set-Lane $C "orc-f-first" (New-Status -Orc "F" -Lane "decisions page" -Doing "the first F")
+    Set-Lane $C "orc-f-second" (New-Status -Orc "F" -Lane "decisions page too" -Doing "the second F")
+    Set-Lane $C "!bad name one!" "just some words`n"
+    Set-Lane $C "~bad name two~" "other words`n"
+    Set-Lane $C "lane-4" "a folder named like a fallback id`n"
+    $t = Invoke-Tick $C
+    $mail = @(Get-CardsMail $C)
+    $b = $mail[$mail.Count - 1].body
+    $ids = @($b.cards | ForEach-Object { $_.lane })
+    Check ($ids.Count -eq 5 -and @($ids | Select-Object -Unique).Count -eq 5) ("every card of a machine has its own id (" + ($ids -join ",") + ")")
+    $f = @($b.cards | Where-Object { $_.lane -ceq "F" })
+    $dup = @($b.cards | Where-Object { $_.name -ceq "decisions page too" })[0]
+    Check ($f.Count -eq 1 -and $f[0].now -ceq "the first F" -and $null -ne $dup -and $dup.lane -cne "F" -and $dup.note -like "*(orc-f-first) gives the same id, F,*" -and (Said $t) -like "*orc-f-first and orc-f-second both give the id F*") ("TWO FOLDERS OF ONE ORC: the first by folder name keeps the id, the other gets its own and says why, on the phone and at the machine (" + $dup.lane + ": " + $dup.note + ")")
+    $bad = @($b.cards | Where-Object { $_.name -like "*bad name*" })
+    Check ($bad.Count -eq 2 -and $bad[0].lane -cne $bad[1].lane -and @($bad | Where-Object { $_.lane -cmatch '\Alane-[0-9]+\z' }).Count -eq 2) ("FOLDER NAMES NO ID IS MADE OF: each gets its own id by its place in the list, never one shared 'lane' (" + (@($bad | ForEach-Object { $_.lane }) -join ",") + ")")
+
+    Write-Host ""
+    Write-Host "--- 8. a map too large for the envelope is cut too, and the cards still go ---" -ForegroundColor Cyan
+    # Review of PR 244: 200 areas against the budget left no card and a body still too large, so the save
+    # was refused and retried every 30 s. The budget is the hosted relay's, for two phones: its text cap of
+    # 65536 characters through the channel's own budget sum (47918). The local relay here allows about a
+    # MiB, so the snapshot is made at that budget directly. A Hebrew letter is 6 bytes once written.
+    $D = New-World
+    Set-Lane $D "research" (New-Status -Orc "E" -Lane "research")
+    Set-Lane $D "voice" (New-Status -Orc "B" -Lane "voice")
+    $heb = -join (1..56 | ForEach-Object { [char](0x05D0 + ($_ % 27)) })
+    $areaJson = (@(1..200 | ForEach-Object { '"' + $heb + ("{0:000}" -f $_) + '":"B,E"' }) -join ",")
+    [System.IO.File]::WriteAllText((Join-Path $D.progress "area-lanes.json"), ('{"v":1,"areas":{' + $areaJson + '}}'), $utf8)
+    $hosted = Get-HordeRelayChannelBodyBudget -Context ([pscustomobject]@{ connection = [pscustomobject]@{ relay = [pscustomobject]@{ limits = [pscustomobject]@{ maxTextChars = 65536 } } } }) -Recipients 2
+    $setD = (Get-HordeModuleSettings -Declaration (Get-HordeCardsChannelSettingsDeclaration) -HordeHome $D.home).values
+    $pathsD = Get-HordeCardsChannelPaths -HordeHome $D.home -Settings $setD
+    $snap = New-HordeCardsChannelSnapshot -Context $D.ctx -Settings $setD -Paths $pathsD -Now ([datetime]::UtcNow) -Budget $hosted
+    $sb = $snap.body | ConvertFrom-Json
+    Check ($hosted -eq 47918 -and $snap.body.Length -le $hosted -and $snap.cards -eq 2 -and $snap.left -eq 0) ("200 AREAS: the body fits the hosted relay's budget for two phones and every card is kept (" + $snap.body.Length + " of " + $hosted + ", cards " + $snap.cards + ")")
+    Check (@($sb.areas).Count -gt 0 -and @($sb.areas).Count -lt 200 -and $sb.areasLeftOut -eq (200 - @($sb.areas).Count) -and $sb.areas[0].area.EndsWith("001") -and (@($snap.lines) -join " | ") -like "*area(s) of the map did not fit*") ("the map is cut from its end, the rest counted for the phone and said at the machine (areas " + @($sb.areas).Count + ", left out " + $sb.areasLeftOut + ")")
+    # 64 lanes, every text at its full 300 characters: 109185 bytes measured, so most are left out and counted.
+    $G = New-World
+    foreach ($n in 1..64) { $w = ("w" + $n + " ") * 100; Set-Lane $G ("lane{0:00}" -f $n) (New-Status -Orc ("L" + $n) -Lane $w -Doing $w -Finished $w -Waiting $w -Blocked ("yes " + $w)) }
+    $setG = (Get-HordeModuleSettings -Declaration (Get-HordeCardsChannelSettingsDeclaration) -HordeHome $G.home).values
+    $pathsG = Get-HordeCardsChannelPaths -HordeHome $G.home -Settings $setG
+    $whole = New-HordeCardsChannelSnapshot -Context $G.ctx -Settings $setG -Paths $pathsG -Now ([datetime]::UtcNow) -Budget 1048576
+    $snap = New-HordeCardsChannelSnapshot -Context $G.ctx -Settings $setG -Paths $pathsG -Now ([datetime]::UtcNow) -Budget $hosted
+    $sb = $snap.body | ConvertFrom-Json
+    Check ($whole.left -eq 0 -and $whole.body.Length -gt 100000 -and $snap.body.Length -le $hosted -and $snap.cards -gt 0 -and $snap.cards + $snap.left -eq 64 -and $sb.cardsLeftOut -eq $snap.left -and @($sb.cards).Count -eq $snap.cards -and (@($snap.lines) -join " | ") -like "*card(s) did not fit one envelope*") ("64 FULL CARDS do not fit the hosted budget: the last are left out, the phone told how many (whole " + $whole.body.Length + " bytes; kept " + $snap.cards + ", left out " + $snap.left + ")")
+    # The map is cut further once no card is left: at every budget from 700 to 2000 bytes the body fits,
+    # unless nothing but the Thrall's card and the name is left to cut.
+    [System.IO.File]::WriteAllText((Join-Path $D.progress "area-lanes.json"), ('{"v":1,"areas":{' + (@(1..50 | ForEach-Object { '"area ' + $_ + '":"B"' }) -join ",") + '}}'), $utf8)
+    $over = New-Object System.Collections.ArrayList
+    foreach ($bud in @(700..2000 | Where-Object { $_ % 25 -eq 0 })) {
+        $sn = New-HordeCardsChannelSnapshot -Context $D.ctx -Settings $setD -Paths $pathsD -Now ([datetime]::UtcNow) -Budget $bud
+        $sj = $sn.body | ConvertFrom-Json
+        if ($sn.body.Length -gt $bud -and ($sn.cards -gt 0 -or @($sj.areas).Count -gt 0)) { [void]$over.Add($bud) }
+    }
+    Check ($over.Count -eq 0) ("WITH NO CARD LEFT THE MAP IS CUT TOO: no budget leaves a body over it while a card or an area could still go (over at: " + ($over -join ",") + ")")
+
+    Write-Host ""
+    Write-Host "--- 9. the census: one bad run skips only itself; only the tail of an events file is read ---" -ForegroundColor Cyan
+    $runsE = Join-Path $env:TEMP ("horde-relay-cards-" + [guid]::NewGuid().ToString("N"))
+    [void]$script:homes.Add($runsE)
+    $mk = { param([string]$Run, [string]$Manifest, [string]$Session, [string]$Events)
+        $d = Join-Path $runsE $Run; [void][System.IO.Directory]::CreateDirectory((Join-Path $d ("sessions\" + $Session)))
+        [System.IO.File]::WriteAllText((Join-Path $d "run.json"), $Manifest, $utf8)
+        [System.IO.File]::WriteAllText((Join-Path $d ("sessions\" + $Session + "\events.jsonl")), $Events, $utf8) }
+    & $mk "run-a-null" "null" "s1" ('{"event":"progress"}' + "`n")
+    & $mk "run-b-list" "[1,2]" "s1" ('{"event":"progress"}' + "`n")
+    & $mk "run-c-good" '{"runId":"c","closedAt":null}' "s1" ('{"event":"progress"}' + "`n")
+    & $mk "run-d-good" '{"runId":"d"}' "s1" ('{"event":"blocked"}' + "`n")
+    $cen = Read-HordeCardsChannelCensus -Path $runsE -Now ([datetime]::UtcNow)
+    Check ($cen.ok -and $cen.running -eq 1 -and $cen.waiting -eq 1 -and $cen.skipped -eq 2) ("A RUN.JSON THAT IS NULL OR A LIST skips only that run: the good runs are still counted (ok " + $cen.ok + ", running " + $cen.running + ", waiting " + $cen.waiting + ", skipped " + $cen.skipped + ")")
+    # A last line longer than the tail read is not read: what proves only the tail is read. Before it, a
+    # megabyte of lines the census never needs.
+    $bulk = ('{"event":"progress","pad":"' + ("p" * 200) + '"}' + "`n") * 5000
+    & $mk "run-e-long" '{"runId":"e"}' "s1" ($bulk + '{"event":"blocked","pad":"' + ("q" * 70000) + '"}' + "`n")
+    & $mk "run-f-big" '{"runId":"f"}' "s1" ($bulk + '{"event":"blocked"}' + "`n")
+    # The tail begins inside a last line at exactly a JSON object's first byte: that piece is the end of a
+    # line, not a line, and must not be read as one. 65536 bytes is the tail: the object and its newline.
+    $obj = '{"event":"blocked","pad":"' + ("r" * (65535 - 28)) + '"}'
+    Check ($obj.Length -eq 65535) "CONTROL: the crafted object and its newline are exactly the tail"
+    & $mk "run-g-cut" '{"runId":"g"}' "s1" ($bulk + ("z" * 5000) + $obj + "`n")
+    $cen = Read-HordeCardsChannelCensus -Path $runsE -Now ([datetime]::UtcNow)
+    Check ($cen.ok -and $cen.running -eq 1 -and $cen.waiting -eq 2) ("ONLY THE TAIL IS READ: a megabyte file's last line is read from its end; a last line longer than the tail is not read at all (running " + $cen.running + ", waiting " + $cen.waiting + ")")
+
+    Write-Host ""
+    Write-Host "--- 10. a ledger field that is not text is no task ---" -ForegroundColor Cyan
+    $ledgerE = Join-Path $runsE "tasks.jsonl"
+    $ts = Iso ([datetime]::UtcNow.AddDays(-1))
+    [System.IO.File]::WriteAllText($ledgerE, (@(
+        ('{"ts":"' + $ts + '","task":"T-1","event":"opened","lane":"E"}'),
+        ('{"ts":"' + $ts + '","task":{"a":1},"event":"opened","lane":"E"}'),
+        ('{"ts":"' + $ts + '","task":"T-3","event":"opened","lane":["E"]}'),
+        ('{"ts":"' + $ts + '","task":"T-4","event":7,"lane":"E"}')) -join "`n"), $utf8)
+    $led = Read-HordeCardsChannelLedger -Path $ledgerE -Now ([datetime]::UtcNow)
+    Check ($led.ok -and $led.lanes["E"].open -eq 1 -and $led.skipped -eq 3 -and -not $led.lanes.ContainsKey("@{a=1}") -and -not $led.lanes.ContainsKey("E E")) ("a task, event or lane that is an object, a list or a number is passed over and counted, never read as its printed form (open " + $led.lanes["E"].open + ", skipped " + $led.skipped + ")")
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin
