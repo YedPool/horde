@@ -37,6 +37,17 @@
 #   InputHolds     ($screenLines, $line) -> known $true when the pane's screen shows the harness's
 #                  input box holding exactly that line, unsent; known $false when the box holds
 #                  anything else; unknown when no input box can be read on the screen.
+#   TurnDone       ($sessionId, $environment, $mark) -> known $true once the harness has recorded the
+#                  END of a turn after the mark, known $false while it has not, unknown when it cannot
+#                  tell. The caller types its next line only after the turn of the last one ended: a
+#                  line typed while a turn runs is queued, not yet a turn (review of PR 239, M1).
+#   InputReady     ($screenLines) -> known $true when the pane's screen shows the harness ready to take
+#                  a typed line - its input box drawn and nothing running; unknown, with why, otherwise.
+#                  The caller types nothing before it: a key typed while a harness starts can be lost
+#                  (measured 2026-10-14 in an isolated terminal, the PR 239 live check). Needs the
+#                  host's Text block.
+# An adapter that lacks TurnDone or InputReady cannot tell; the caller then goes on without that wait,
+# and its turn receipt still decides whether the line was taken.
 #
 # THE PROGRAM IS AN ABSOLUTE .EXE, NEVER A NAME LOOKED UP AT SPAWN TIME, NEVER A SCRIPT SHIM (review
 # of PR #98, F3). A .cmd or .bat is run by cmd.exe, which re-parses the whole command line, so a prompt
@@ -81,13 +92,15 @@ function Register-HordeLaunchAdapter {
         [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][string[]]$CloseText,
         [scriptblock]$TurnMark = $null,
         [scriptblock]$TurnSeen = $null,
-        [scriptblock]$InputHolds = $null
+        [scriptblock]$InputHolds = $null,
+        [scriptblock]$TurnDone = $null,
+        [scriptblock]$InputReady = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     if ($Program -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z') { throw ("a launch adapter names its program by command name, never a path: '" + $Program + "'") }
     foreach ($a in $script:HordeLaunchAdapters) { if ($a.name -ceq $Name) { $script:HordeLaunchAdapters.Remove($a); break } }
     if (@($CloseText | Where-Object { "" + $_ -ne "" }).Count -eq 0) { throw ("the adapter " + $Name + " gives no text that ends its session") }
-    [void]$script:HordeLaunchAdapters.Add([pscustomobject]@{ name = $Name; program = $Program; argv = $Argv; preconditions = $Preconditions; identify = $Identify; readMode = $ReadMode; closeText = [string[]]@($CloseText); turnMark = $TurnMark; turnSeen = $TurnSeen; inputHolds = $InputHolds })
+    [void]$script:HordeLaunchAdapters.Add([pscustomobject]@{ name = $Name; program = $Program; argv = $Argv; preconditions = $Preconditions; identify = $Identify; readMode = $ReadMode; closeText = [string[]]@($CloseText); turnMark = $TurnMark; turnSeen = $TurnSeen; inputHolds = $InputHolds; turnDone = $TurnDone; inputReady = $InputReady })
 }
 
 function Get-HordeLaunchAdapter {
