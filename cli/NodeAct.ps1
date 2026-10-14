@@ -515,8 +515,9 @@ function Stop-HordeNodeSession {
 # WHERE THE ROWS ARE KEPT (F's re-check of round 4, REQUIRED): not in the record, whose folder takes the
 # permissions of the node's home, but in <records>\<sid>\screen.json, inside the session's own folder,
 # which is this user's alone (Set-HordeNodeOwnerOnly, F10). The record says only the state, the clause
-# and that file. HOW LONG: 7 days from the look, by the node's clock; every spawn, under the spawn lock,
-# deletes the screen files older than that, and any it cannot read (Remove-HordeNodeOldScreens). A screen
+# and that file. HOW LONG: 7 days from the look, by the node's clock; every spawn, and every start of
+# `horde node serve` (Invoke-HordeNodeServeSweep), under the spawn lock, deletes the screen files older
+# than that, and any it cannot read (Remove-HordeNodeOldScreens). A screen
 # is for a person looking into a failed spawn the same week, and its rows are the one thing in a record
 # that can hold what the session showed; a week is long enough to look and short enough that a screen
 # nobody looked at does not stay forever.
@@ -577,8 +578,8 @@ function Find-HordeNodeScreenSecret {
     # six names nor a key's shape, such as MY_API_KEY=short1234.
     param([string[]]$Raw, [string[]]$Kept)
     $ascii = [string[]]@(@($Raw) | ForEach-Object { [regex]::Replace(("" + $_), '[^\x20-\x7E]', '') })
-    foreach ($source in @(@{ rows = @($Raw) }, @{ rows = @($ascii) }, @{ rows = @($Kept) })) {
     $texts = New-Object System.Collections.ArrayList
+    foreach ($source in @(@{ rows = @($Raw) }, @{ rows = @($ascii) }, @{ rows = @($Kept) })) {
         foreach ($glue in @("`n", "")) { [void]$texts.Add((@($source.rows) -join $glue)) }
     }
     $trim = New-Object System.Text.StringBuilder
@@ -662,7 +663,7 @@ function Save-HordeNodeScreenReport {
 }
 
 function Remove-HordeNodeOldScreens {
-    # Delete every screen file under -Dir taken more than HordeNodeScreenKeepDays before -Now, and every
+    # Delete every screen file under -Dir taken more than HordeNodeScreenKeepDays before or after -Now, and every
     # one whose time cannot be read (see WHERE THE ROWS ARE KEPT). Only a session's own folder is looked
     # in - a session id for a name, no junction or link - and only its screen file is deleted. Returns
     # how many were.
@@ -676,7 +677,9 @@ function Remove-HordeNodeOldScreens {
         $old = $true
         try {
             $at = [datetime]::Parse(("" + ([System.IO.File]::ReadAllText($f) | ConvertFrom-Json).takenAt), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
-            $old = (($Now.ToUniversalTime() - $at).TotalDays -gt $script:HordeNodeScreenKeepDays)
+            # A takenAt AFTER the clock (the clock was set back) counts its distance too, so a screen is
+            # never kept more than a week from the time it names, whichever way the clock moved.
+            $old = ([Math]::Abs(($Now.ToUniversalTime() - $at).TotalDays) -gt $script:HordeNodeScreenKeepDays)
         } catch { $old = $true }
         if ($old) { Remove-Item -LiteralPath $f -Force; $n++ }
     }
@@ -1032,18 +1035,37 @@ function New-HordeNodeActContext {
     }
 }
 
+function Invoke-HordeNodeServeSweep {
+    # At serve start: delete the screens past their week (WHERE THE ROWS ARE KEPT), as a spawn does, so
+    # a node that never spawns again does not keep them (F's re-check of round 5). The same folder rule
+    # (Remove-HordeNodeOldScreens) under the same lock; a held lock or a failed sweep is an ALERT line and
+    # stops nothing, since the next spawn sweeps again. Returns the lines for the serve log.
+    param([Parameter(Mandatory = $true)]$Context)
+    $lock = Enter-HordeNodeSpawnLock -Dir $Context.records
+    if ($null -eq $lock) { return @("ALERT: old screens were not swept at serve start: another act holds the spawn lock; the next spawn sweeps them") }
+    try {
+        $n = Remove-HordeNodeOldScreens -Dir $Context.records -Now (& $Context.now)
+        if ($n -gt 0) { return @("deleted " + $n + " screen(s) of sessions that were not ready, past their " + $script:HordeNodeScreenKeepDays + " days") }
+        return @()
+    } catch {
+        return @("ALERT: this node could not delete its old screens of sessions that were not ready: " + $_.Exception.Message)
+    } finally { $lock.Dispose() }
+}
+
 function Invoke-HordeNodeReconcile {
     # At serve start: settle every record a stopped node left "starting" (review of #104, F5). Its
     # process is looked for by pid and start time - the record's, or, when the node stopped before it
     # was proven, the harness's own record of the session, believed only when the live process has that
     # start time - and the record is marked running, with an ALERT (its mode was never read back), or
-    # failed. Returns one line per record settled, for the serve log.
+    # failed. First the screens past their week are swept (Invoke-HordeNodeServeSweep). Returns one line
+    # per record settled, and one for the sweep when it deleted or failed, for the serve log.
     param([Parameter(Mandatory = $true)]$Context)
     $lines = New-Object System.Collections.ArrayList
     $dir = $Context.records
     $chain = Test-HordeNodeRecordsChain -HordeHome $Context.home -Dir $dir
     if ($chain -ne "") { [void]$lines.Add("ALERT: the spawn records were not reconciled: " + $chain); return $lines.ToArray() }
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $lines.ToArray() }
+    foreach ($l in @(Invoke-HordeNodeServeSweep -Context $Context)) { [void]$lines.Add($l) }
     foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter "*.json" -File)) {
         if ($f.Name.StartsWith(".")) { continue }
         $r = $null

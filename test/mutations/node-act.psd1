@@ -372,8 +372,12 @@
            Find = ' -or $dir -cne $own -or '
            Replace = ' -or ' }
         @{ Name = "screen-kept-forever"
-           Find = '            $old = (($Now.ToUniversalTime() - $at).TotalDays -gt $script:HordeNodeScreenKeepDays)'
+           Find = '            $old = ([Math]::Abs(($Now.ToUniversalTime() - $at).TotalDays) -gt $script:HordeNodeScreenKeepDays)'
            Replace = '            $old = $false' }
+        # F's nit of round 5: a takenAt after the clock counts its distance too.
+        @{ Name = "screen-future-kept"
+           Find = '[Math]::Abs(($Now.ToUniversalTime() - $at).TotalDays)'
+           Replace = '($Now.ToUniversalTime() - $at).TotalDays' }
         @{ Name = "screen-kept-six-days"
            Find = '$script:HordeNodeScreenKeepDays = 7'
            Replace = '$script:HordeNodeScreenKeepDays = 6' }
@@ -386,6 +390,16 @@
         @{ Name = "screen-sweep-deletes-the-folder"
            Find = '        if ($old) { Remove-Item -LiteralPath $f -Force; $n++ }'
            Replace = '        if ($old) { Remove-Item -LiteralPath $d.FullName -Recurse -Force; $n++ }' }
+        # F's re-check of round 5: the sweep at serve start, under the spawn lock.
+        @{ Name = "screen-not-swept-at-serve-start"
+           Find = '    foreach ($l in @(Invoke-HordeNodeServeSweep -Context $Context)) { [void]$lines.Add($l) }'
+           Replace = '' }
+        @{ Name = "screen-serve-sweep-ignores-the-lock"
+           Find = '    if ($null -eq $lock) { return @("ALERT: old screens were not swept at serve start'
+           Replace = '    if ($false) { return @("ALERT: old screens were not swept at serve start' }
+        @{ Name = "screen-serve-sweep-unsaid"
+           Find = '        if ($n -gt 0) { return @("deleted " + $n'
+           Replace = '        if ($false) { return @("deleted " + $n' }
         @{ Name = "screen-never-swept"
            Find = '        try { $null = Remove-HordeNodeOldScreens -Dir $Context.records -Now (& $Context.now) }'
            Replace = '        try { }' }

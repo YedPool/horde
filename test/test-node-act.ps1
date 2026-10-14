@@ -676,6 +676,28 @@ New-Item -ItemType Directory -Path (Split-Path $oldInRec) -Force | Out-Null
 [System.IO.File]::WriteAllText($oldInRec, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
 $null = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $cR
 Check (-not (Test-Path -LiteralPath $oldInRec) -and (Test-Path -LiteralPath (Split-Path $oldInRec))) "a spawn deletes a screen file past its week from its records, and leaves the folder"
+# A takenAt AFTER the clock (the clock was set back): more than a week ahead is deleted, as a week behind is
+# (F's nit of round 5: it was kept until the clock caught up).
+$futF = PlantScreen "55555555-5555-4555-8555-555555555555" '{ "takenAt": "2026-10-12T12:01:00.0000000Z", "rows": ["ahead"] }'
+$nearF = PlantScreen "66666666-6666-4666-8666-666666666666" '{ "takenAt": "2026-10-12T11:59:00.0000000Z", "rows": ["near"] }'
+$swept = Remove-HordeNodeOldScreens -Dir $ret -Now ([datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime())
+Check ($swept -eq 1 -and -not (Test-Path -LiteralPath $futF)) ("a screen whose takenAt is 7 days and a minute AFTER the clock is deleted (" + $swept + " deleted)")
+Check (Test-Path -LiteralPath $nearF) "CONTROL: one 6 days 23 h 59 min after the clock is kept"
+# AT SERVE START (F's re-check of round 5): a node that never spawns again still sweeps, when it starts,
+# by the same rule and under the same lock.
+Reset
+$cS = New-Context
+$oldAtStart = Join-Path (Join-Path $cS.records "77777777-7777-4777-8777-777777777777") "screen.json"
+$freshAtStart = Join-Path (Join-Path $cS.records "88888888-8888-4888-8888-888888888888") "screen.json"
+New-Item -ItemType Directory -Path (Split-Path $oldAtStart), (Split-Path $freshAtStart) -Force | Out-Null
+[System.IO.File]::WriteAllText($oldAtStart, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
+[System.IO.File]::WriteAllText($freshAtStart, '{ "takenAt": "2026-10-04T00:00:00Z", "rows": ["fresh"] }')
+$held = Enter-HordeNodeSpawnLock -Dir $cS.records
+try { $lines = @(Invoke-HordeNodeReconcile -Context $cS) } finally { $held.Dispose() }
+Check ((Test-Path -LiteralPath $oldAtStart) -and @($lines | Where-Object { $_ -like "ALERT: old screens were not swept at serve start*spawn lock*" }).Count -eq 1) ("with the spawn lock held, serve start sweeps nothing and says so (" + ($lines -join " | ") + ")")
+$lines = @(Invoke-HordeNodeReconcile -Context $cS)
+Check (-not (Test-Path -LiteralPath $oldAtStart) -and (Test-Path -LiteralPath (Split-Path $oldAtStart)) -and @($lines | Where-Object { $_ -like "deleted 1 screen(s)*" }).Count -eq 1) ("serve start deletes a screen past its week, with no spawn, and leaves the folder (" + ($lines -join " | ") + ")")
+Check (Test-Path -LiteralPath $freshAtStart) "CONTROL: a screen within its week is kept at serve start"
 
 Write-Host ""
 Write-Host "--- the prompt is typed only once the no-op's turn has ENDED (review of PR 239, M1) ---" -ForegroundColor Cyan
