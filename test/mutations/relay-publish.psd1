@@ -27,12 +27,6 @@
         @{ Name = "relay-tests-shipped"
            Find = '-and -not $rel.StartsWith($prefix + "test/", [System.StringComparison]::Ordinal)'
            Replace = '' }
-        @{ Name = "worker-change-deployed"
-           Find = '    if (@($Classes.worker).Count -gt 0) {'
-           Replace = '    if ($false) {' }
-        @{ Name = "ignored-only-deployed"
-           Find = 'if (@($Classes.page).Count -eq 0) { return (& $say "ignore"'
-           Replace = 'if ($false) { return (& $say "ignore"' }
         @{ Name = "checked-range-read-again"
            Find = 'if ($s.checked.through -ceq $h.commit) { & $say ("current - nothing the deploy ships changed since "'
            Replace = 'if ($false) { & $say ("current - nothing the deploy ships changed since "' }
@@ -51,15 +45,9 @@
         @{ Name = "failed-check-base-forgotten"
            Find = '{ $base = $f.base }'
            Replace = '{ }' }
-        @{ Name = "hand-deploy-does-not-settle"
-           Find = '-and -not ($r.commit -ceq $Head.commit -and $r.at -gt $f.at)'
-           Replace = '' }
         @{ Name = "retry-within-the-hour"
            Find = '$Now -lt $State.failure.at.AddSeconds($script:HordeRelayPublishRetrySeconds)'
            Replace = '$false' }
-        @{ Name = "told-every-pass"
-           Find = '    if (@($State.told) -ccontains $Key) { return $State }'
-           Replace = '' }
         @{ Name = "version-unchanged-accepted"
            Find = 'if ($Before -ne "" -and $Built -cne $Before -and $now -ceq $Before) {'
            Replace = 'if ($false) {' }
@@ -108,26 +96,119 @@
         @{ Name = "test-home-deploys"
            Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $HordeHome) { return (New-HordeUnknown -Reason "this Horde home is under the temp folder, so it is a test''s: nothing is deployed") }'
            Replace = '' }
-        @{ Name = "shared-only-not-measured"
-           Find = 'if (Test-HordeRelayPublishSharedOnly -Classes $classes -Shipped $shipped.value) {'
-           Replace = 'if ($false) {' }
-        @{ Name = "worker-only-measured"
-           Find = 'return [bool](@($Classes.worker | Where-Object { @($Shipped.sharedFiles) -cnotcontains $_ }).Count -eq 0)'
-           Replace = 'return $true' }
         @{ Name = "differing-bundles-alike"
            Find = 'if ($Base.value.sha256 -cne $Head.value.sha256) {'
            Replace = 'if ($false) {' }
         @{ Name = "unmade-bundle-alike"
            Find = 'if (-not (& $known $Base) -or -not (& $known $Head)) {'
            Replace = 'if ($false) {' }
-        @{ Name = "bundle-not-kept"
-           Find = '$had = @(@($s.bundles) | Where-Object { $_.commit -ceq $Commit }) | Select-Object -First 1'
-           Replace = '$had = $null' }
         @{ Name = "shared-includes-worker-only-imports"
            Find = 'sharedFiles = [string[]]@($outside | Where-Object { $page -ccontains $_ })'
            Replace = 'sharedFiles = [string[]]$outside' }
-        @{ Name = "unmeasured-told-as-changed"
-           Find = 'if ("" + $Classes.measured -ceq "unknown") { return (& $say "warn" "worker-unmeasured"'
-           Replace = 'if ($false) { return (& $say "warn" "worker-unmeasured"' }
+        @{ Name = "worker-own-file-deployed"
+           Find = 'if ($own.Count -gt 0) { return (& $say "warn" "worker-changed"'
+           Replace = 'if ($false) { return (& $say "warn" "worker-changed"' }
+        @{ Name = "ignored-only-deployed"
+           Find = 'if (@($Classes.page).Count -eq 0 -and @($Classes.worker).Count -eq 0) { return (& $say "ignore"'
+           Replace = 'if ($false) { return (& $say "ignore"' }
+        @{ Name = "settled-by-time-must-1"
+           Find = 'if (("" + $f.recordId) -ceq ("" + $r.id)) {'
+           Replace = 'if (-not ($r.at -gt $f.at)) {' }
+        @{ Name = "other-record-ignored-must-2"
+           Find = '        else { $settles = $true }'
+           Replace = '        else { if ($f.base -cmatch $script:HordeRelayPublishCommitPattern) { $base = $f.base } }' }
+        @{ Name = "settled-failure-kept"
+           Find = 'if ($b.settles) { $s.failure = $null;'
+           Replace = 'if ($b.settles) {' }
+        @{ Name = "failure-keeps-no-record-id"
+           Find = '            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = (& $recordId) }'
+           Replace = '            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = "" }' }
+        @{ Name = "told-every-pass"
+           Find = '    if (@($State.told) -ccontains $k) { return $State }'
+           Replace = '' }
+        @{ Name = "episode-never-ends"
+           Find = '    if ($State.troubled -eq $true) { $State.episode = [int]$State.episode + 1; $State.troubled = $false }'
+           Replace = '' }
+        @{ Name = "pending-uncapped"
+           Find = ' | Select-Object -Last $script:HordeRelayPublishPendingMost)'
+           Replace = ')' }
+        @{ Name = "off-main-deployed"
+           Find = 'if ($on.value -ne $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "main-unknown-deployed"
+           Find = 'if (-not (Test-HordeAnswer $on) -or $on.state -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "page-only-not-bundled"
+           Find = '$classes = Get-HordeRelayPublishMeasured -Classes $classes -Base (& $bundleOf $b.base) -Head $headBundle'
+           Replace = '$classes = [pscustomobject]@{ worker = @(); page = @(@($classes.page) + @($classes.worker)); ignored = $classes.ignored; measured = "same" }' }
+        @{ Name = "bundle-not-kept"
+           Find = '$had = @(@($s.bundles) | Where-Object { $_.commit -ceq $Commit -and ("" + $_.sha256) -cmatch'
+           Replace = '$had = @(@() | Where-Object { $_.commit -ceq $Commit -and ("" + $_.sha256) -cmatch' }
+        @{ Name = "failed-bundle-kept"
+           Find = '            if ((Test-HordeAnswer $a) -and $a.state -ceq "known" -and ("" + $a.value.sha256) -cmatch'
+           Replace = '            if ($true -or ("" + $a.value.sha256) -cmatch' }
+        @{ Name = "unmeasured-not-a-failure"
+           Find = 'if ($classes.measured -ceq "unknown") { & $failed "worker-unmeasured"'
+           Replace = 'if ($classes.measured -ceq "unknown") { & $warn "worker-unmeasured" "unmeasured"' }
+        @{ Name = "different-bundle-deployed"
+           Find = 'if ($classes.measured -cne "same") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "moved-is-a-failure"
+           Find = 'if ((Test-HordeAnswer $r) -and $r.state -ceq "unknown" -and $r.reason -ceq $script:HordeRelayPublishMovedReason) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "deploy-not-handed-the-commit"
+           Find = '-Name "Deploy" -With @($HordeHome, $log, $Checkout, $h.commit)'
+           Replace = '-Name "Deploy" -With @($HordeHome, $log, $Checkout, ("f" * 40))' }
+        @{ Name = "check-not-waited-for"
+           Find = 'if ($check.ok -or (Invoke-HordeRelayPublishTool -Tools $Tools -Name "Now") -ge $until) { break }'
+           Replace = 'break' }
+        @{ Name = "check-waits-for-ever"
+           Find = 'if ($check.ok -or (Invoke-HordeRelayPublishTool -Tools $Tools -Name "Now") -ge $until) { break }'
+           Replace = 'if ($check.ok -or $W.sleeps -gt 40) { break }' }
+        @{ Name = "machinery-not-the-worker"
+           Find = ' + @(Get-HordeRelayDeployMachineryFiles) | Sort-Object -Unique)'
+           Replace = ' | Sort-Object -Unique)' }
+        @{ Name = "tend-test-home-looked-at"
+           Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $HordeHome -TempRoot $TempRoot) { return @("phone page: this Horde home is under the temp folder'
+           Replace = 'if ($false) { return @("phone page: this Horde home is under the temp folder' }
+        @{ Name = "tend-home-not-pointed"
+           Find = '    Write-HordeRelayTendHomePointer -Path $PointerPath -HordeHome $HordeHome'
+           Replace = '' }
+        @{ Name = "http-allowed"
+           Find = 'if ($Url -cnotmatch ''\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?/'') {'
+           Replace = 'if ($Url -cnotmatch ''\Ahttps?://'') {' }
+        @{ Name = "renames-folded"
+           Find = '@("diff", "--name-only", "--no-renames", $Base, $Head)'
+           Replace = '@("diff", "--name-only", "-M", $Base, $Head)' }
+        @{ Name = "dirty-read-as-clean"
+           Find = 'clean = [bool]($st.out -eq "")'
+           Replace = 'clean = $true' }
+        @{ Name = "worker-notice-keyed-by-commit"
+           Find = '("held:" + $b.base + ":bundle:" + $headBundle.value.sha256)'
+           Replace = '("held:" + $b.base + ":bundle:" + $h.commit)' }
+        @{ Name = "worker-notice-keyed-by-base-alone"
+           Find = '("held:" + $b.base + ":bundle:" + $headBundle.value.sha256)'
+           Replace = '("held:" + $b.base + ":bundle")' }
+        @{ Name = "pointer-any-path-accepted"
+           Find = 'if ($t -cnotmatch ''\A[A-Za-z]:\\[^\\/:*?"<>|]'' -or $t -match'
+           Replace = 'if ($false -and $t -match' }
+        @{ Name = "pointer-dot-parts-accepted"
+           Find = ' -or $t -match ''(\A|\\)\.{1,2}(\\|\z)'' -or'
+           Replace = ' -or' }
+        @{ Name = "pointer-temp-accepted"
+           Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $full -TempRoot $TempRoot) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "pointer-bare-folder-accepted"
+           Find = 'if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($full, "settings", "service-definitions.json"))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "also-from-a-test-home"
+           Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $mineFull -TempRoot $TempRoot) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refused-pointer-silent"
+           Find = 'note = ("note: this deploy is recorded only in " + $mineFull + ": " + $p.reason) }'
+           Replace = 'note = "" }' }
+        @{ Name = "also-own-home"
+           Find = 'if ($p.value.Equals($mineFull, [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($false) {' }
     )
 }

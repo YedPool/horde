@@ -28,7 +28,7 @@ foreach ($f in @("ServicesAct", "ServicesTend", "ServicesTell")) { . (Join-Path 
 $work = Join-Path $env:TEMP ("horde-relay-publish-" + [guid]::NewGuid().ToString("N"))
 [void][System.IO.Directory]::CreateDirectory($work)
 $t0 = [datetime]::new(2026, 10, 14, 12, 0, 0, [System.DateTimeKind]::Utc)
-$cA = "a" * 40; $cB = "b" * 40; $cC = "c" * 40
+$cA = "a" * 40; $cB = "b" * 40; $cC = "c" * 40; $cD = "d" * 40; $cE = "e" * 40
 $origin = "https://zorbrelay.example"
 $v1 = "1111111111111111"; $v2 = "2222222222222222"
 $siteMap = Get-HordeRelayDeploySiteSources
@@ -36,9 +36,9 @@ $builtPaths = @(@($siteMap.Keys) + @("app/config.json", "app/icon-192.png", "app
 # What the deploy ships, as this suite's relay would have it: its folder but its tests, the two files
 # outside it that its code imports, and the site's sources and builder.
 $shippedHere = [pscustomobject]@{ workerPrefixes = [string[]]@("relays/zorbrelay/"); workerExcept = [string[]]@("relays/zorbrelay/test/")
-    workerFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js")
+    workerFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js", "surfaces/pwa/page/index.html", "cli/RelayDeploy.ps1", "relays/Port.ps1")
     pageFiles = [string[]]@(@($siteMap.Values) + @(Get-HordeRelayDeployBuildFiles)); buildFiles = [string[]]@(Get-HordeRelayDeployBuildFiles)
-    sharedFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js") }
+    sharedFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js", "surfaces/pwa/page/index.html") }
 
 function New-Home { param([string]$Name) $h = Join-Path $work $Name; [void][System.IO.Directory]::CreateDirectory($h); return $h }
 function Sw { param([string]$Version) return ("// the worker`nconst VERSION = `"" + $Version + "`";`nconst SHELL = [];`n") }
@@ -48,7 +48,7 @@ function Hash { param([string]$Path, [string]$Version) return ("h" + $Version + 
 # hosts every file it built (with the hash it answers) unless the suite says a file is hosted otherwise.
 function New-World {
     param([string]$HordeHome)
-    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; diffs = @{}; diffOk = $true; shippedOk = $true; bundles = @{}; bundleOk = $true
+    return @{ home = $HordeHome; now = $t0; head = $cB; clean = $true; headOk = $true; diffs = @{}; diffOk = $true; shippedOk = $true; bundles = @{}; bundleOk = $true; onMain = $true; movedTo = ""; propagateAfter = 0; sleeps = 0; staged = $null
         deploy = "ok"; built = $v2; serveAfter = $null; deploys = 0; calls = (New-Object System.Collections.ArrayList)
         hosted = @{ "app/sw.js" = [pscustomobject]@{ status = 200; body = (Sw $v1); sha256 = (Hash "app/sw.js" $v1) } }
         otherwise = @{}; changed = @("surfaces/pwa/page/app.js")
@@ -57,6 +57,13 @@ function New-World {
 function New-Tools {
     return @{
         Now     = { return $W.now }
+        # A sleep moves the clock; a deploy staged to propagate shows after the sleeps the suite says.
+        Sleep   = {
+            param($Ms)
+            $W.sleeps++; $W.now = $W.now.AddMilliseconds($Ms)
+            if ($null -ne $W.staged -and $W.sleeps -ge $W.propagateAfter) { foreach ($k in @($W.staged.Keys)) { $W.hosted[$k] = $W.staged[$k] }; $W.staged = $null }
+        }
+        Upstream = { param($Checkout, $Commit) [void]$W.calls.Add("upstream " + $Commit.Substring(0, 1)); if ($null -eq $W.onMain) { return (New-HordeUnknown -Reason "origin could not be reached") }; return (New-HordeKnown -Value ([bool]$W.onMain)) }
         NewId   = { return [guid]::NewGuid().ToString() }
         Head    = { param($Checkout) [void]$W.calls.Add("head"); if (-not $W.headOk) { return (New-HordeUnknown -Reason "no revision tool") }; return (New-HordeKnown -Value ([pscustomobject]@{ commit = $W.head; clean = $W.clean })) }
         Diff    = {
@@ -75,17 +82,21 @@ function New-Tools {
             return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $(if ($W.bundles.ContainsKey($Commit)) { $W.bundles[$Commit] } else { "0" * 64 }) }))
         }
         Deploy  = {
-            param($HordeHome, $Say, $Checkout)
-            $W.deploys++; [void]$W.calls.Add("deploy")
+            param($HordeHome, $Say, $Checkout, $Commit)
+            $W.deploys++; [void]$W.calls.Add("deploy " + $Commit.Substring(0, 1))
+            if ($W.movedTo -ne "") { return (New-HordeUnknown -Reason "the checkout moved off the commit that was checked; nothing was deployed") }
             & $Say "a line the deploy said"
             if ($W.deploy -ceq "busy") { return (New-HordeUnknown -Reason (Get-HordeRelayDeployBusyReason)) }
             if ($W.deploy -ceq "fail") { return (New-HordeUnknown -Reason "a secret could not be stored: not logged in") }
-            Write-HordeRelayDeployed -HordeHome $HordeHome -Revision ([pscustomobject]@{ commit = $W.head; clean = $true }) -Version $W.built -Relay "zorbrelay" -Origin $origin -At $W.now
+            # As a real deploy does, the record is written when it ENDS: minutes after the pass began.
+            Write-HordeRelayDeployed -HordeHome $HordeHome -Revision ([pscustomobject]@{ commit = $Commit; clean = $true }) -Version $W.built -Relay "zorbrelay" -Origin $origin -At $W.now.AddMinutes(3)
             # Each build differs from the last by the files that changed; sw.js always does.
             $hashes = @{}
             foreach ($p in $builtPaths) { $hashes[$p] = $(if ($p -ceq "app/sw.js" -or @($W.changed) -ccontains ("" + $siteMap[$p])) { Hash $p ($W.built + $W.head) } else { Hash $p "same" }) }
-            foreach ($p in $builtPaths) { $W.hosted[$p] = [pscustomobject]@{ status = 200; body = $(if ($p -ceq "app/sw.js") { Sw $(if ($null -ne $W.serveAfter) { $W.serveAfter } else { $W.built }) } else { "" }); sha256 = $hashes[$p] } }
-            foreach ($p in @($W.otherwise.Keys)) { $W.hosted[$p] = $W.otherwise[$p] }
+            $new = @{}
+            foreach ($p in $builtPaths) { $new[$p] = [pscustomobject]@{ status = 200; body = $(if ($p -ceq "app/sw.js") { Sw $(if ($null -ne $W.serveAfter) { $W.serveAfter } else { $W.built }) } else { "" }); sha256 = $hashes[$p] } }
+            foreach ($p in @($W.otherwise.Keys)) { $new[$p] = $W.otherwise[$p] }
+            if ($W.propagateAfter -gt 0) { $W.sleeps = 0; $W.staged = $new } else { foreach ($k in @($new.Keys)) { $W.hosted[$k] = $new[$k] } }
             return (New-HordeKnown -Value ([pscustomobject]@{ relay = "zorbrelay"; origin = $origin; version = $W.built; hashes = $hashes }))
         }
         Http    = {
@@ -111,21 +122,21 @@ function Show { param($Lines) foreach ($l in @($Lines)) { Write-Host ("         
 try {
     Write-Host ""
     Write-Host "--- the classes: by what the deploy ships ---" -ForegroundColor Cyan
-    $c = Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("surfaces/pwa/page/app.js", "surfaces/pwa/Site.ps1", "cli/RelayDeploy.ps1", "decisions/page/list.js",
+    $c = Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("surfaces/pwa/page/app.js", "surfaces/pwa/Site.ps1", "cli/RelayDeploy.ps1", "cli/RelayPublish.ps1", "decisions/page/list.js",
         "relays/zorbrelay/worker/site.js", "relays/zorbrelay/deploy-config.json", "relay/js/protocol.js", "surfaces/pwa/page/account-client.js",
         "relays/zorbrelay/test/test-x.ps1", "surfaces/pwa/test/test-pwa-site.ps1", "test/test-x.ps1", "core/Services.ps1", "relays/Port.ps1", "relays/other/Relay.ps1", "planning/x.md", "Surfaces/pwa/page/app.js")
-    Check ((@($c.page) -join ",") -ceq "surfaces/pwa/page/app.js,surfaces/pwa/Site.ps1,cli/RelayDeploy.ps1,decisions/page/list.js") ("the site's served sources and the code that builds it are the page (" + (@($c.page) -join ",") + ")")
-    Check ((@($c.worker) -join ",") -ceq "relays/zorbrelay/worker/site.js,relays/zorbrelay/deploy-config.json,relay/js/protocol.js,surfaces/pwa/page/account-client.js") ("the relay's folder and what its code imports are the Worker, the shared protocol included (" + (@($c.worker) -join ",") + ")")
-    Check (@($c.ignored).Count -eq 8) ("tests, core, the port, another relay, planning and another case are ignored (" + (@($c.ignored) -join ",") + ")")
+    Check ((@($c.page) -join ",") -ceq "surfaces/pwa/page/app.js,surfaces/pwa/Site.ps1,decisions/page/list.js") ("the site's served sources and the code that builds it are the page (" + (@($c.page) -join ",") + ")")
+    Check ((@($c.worker) -join ",") -ceq "cli/RelayDeploy.ps1,relays/zorbrelay/worker/site.js,relays/zorbrelay/deploy-config.json,relay/js/protocol.js,surfaces/pwa/page/account-client.js,relays/Port.ps1") ("the relay's folder, what its code imports and the deploy's own code are the Worker (" + (@($c.worker) -join ",") + ")")
+    Check (@($c.ignored).Count -eq 8 -and (@($c.ignored) -ccontains "cli/RelayPublish.ps1")) ("tests, core, another relay, planning, another case, and this step's own code are ignored (" + (@($c.ignored) -join ",") + ")")
 
     Write-Host ""
     Write-Host "--- what the deploy ships is derived, not listed ---" -ForegroundColor Cyan
     # The build's own list: every file the builder dot-sources is in it.
-    foreach ($bf in @(Get-HordeRelayDeployBuildFiles)) {
+    foreach ($bf in @(@(Get-HordeRelayDeployBuildFiles) + "cli/RelayDeploy.ps1")) {
         $text = [System.IO.File]::ReadAllText((Join-Path $root ($bf -replace '/', '\')))
         foreach ($m in [regex]::Matches($text, '(?m)^\. \(Join-Path .*"([A-Za-z]+\\[^"]+\.ps1)"\)')) {
             $dep = $m.Groups[1].Value -replace '\\', '/'
-            Check (@(Get-HordeRelayDeployBuildFiles) -ccontains $dep) ("the builder's " + $dep + ", dot-sourced by " + $bf + ", is counted as the page")
+            Check (@(@(Get-HordeRelayDeployBuildFiles) + @(Get-HordeRelayDeployMachineryFiles)) -ccontains $dep) ("the builder's " + $dep + ", dot-sourced by " + $bf + ", is counted as the page or the deploy's own code")
         }
     }
     # The Worker's imports, followed through this repository's own relays' code (no relay named): the
@@ -158,8 +169,8 @@ try {
     }
     $sh = Get-HordeRelayPublishShipped -Checkout $repo
     Check ($sh.state -ceq "known" -and (@($sh.value.workerPrefixes) -join ",") -ceq "relays/zorbrelay/" -and (@($sh.value.workerExcept) -join ",") -ceq "relays/zorbrelay/test/") "the deployed relay's folder, from the port, is the Worker's, but its tests"
-    Check ((@($sh.value.workerFiles) -join ",") -ceq "relay/js/more.js,relay/js/protocol.js") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
-    Check ((@($sh.value.pageFiles) -ccontains "surfaces/pwa/page/app.js") -and (@($sh.value.pageFiles) -ccontains "surfaces/pwa/Site.ps1") -and (@($sh.value.buildFiles) -ccontains "cli/RelayDeploy.ps1")) "the site's sources and its builder are the page"
+    Check ((@($sh.value.workerFiles) -join ",") -ceq "cli/RelayDeploy.ps1,relay/js/more.js,relay/js/protocol.js,relays/Port.ps1") ("what its code imports outside it, through every import, is the Worker's too, and not what only its tests import (" + (@($sh.value.workerFiles) -join ",") + ")")
+    Check ((@($sh.value.pageFiles) -ccontains "surfaces/pwa/page/app.js") -and (@($sh.value.pageFiles) -ccontains "surfaces/pwa/Site.ps1") -and -not (@($sh.value.pageFiles) -ccontains "cli/RelayDeploy.ps1")) "the site's sources and its builder are the page, and the deploy's own code is not"
     Check ((@($sh.value.sharedFiles) -join ",") -ceq "relay/js/protocol.js") ("shared: the Worker's files the site serves too, and not one it imports that the site does not serve (" + (@($sh.value.sharedFiles) -join ",") + ")")
 
     Write-Host ""
@@ -189,6 +200,8 @@ try {
     if (-not (Says $l "DEPLOYED")) { Show $l }
     Check (($W.calls -ccontains "http app/sw.js") -and ($W.calls -ccontains "http app/app.js")) "the worker and the changed file were asked for, at the origin the deploy answered with"
     Check (-not ($W.calls -ccontains "http app/store.js")) "a file that did not change is not asked for"
+    Check (($W.calls -ccontains "bundle a") -and ($W.calls -ccontains "bundle b") -and ($W.calls -ccontains "upstream b")) "before any deploy: on origin/main, and the Worker bundled alike at both commits"
+    Check ($W.calls -ccontains "deploy b") "the deploy is handed the commit that was checked"
     $rec = Read-HordeRelayDeployed -HordeHome $W.home
     Check ($rec.state -ceq "known" -and $rec.value.commit -ceq $cB) "the record names the commit deployed"
     Check ((Whats) -ceq "deployed") ("the warchief was told once, that it was deployed (" + (Whats) + ")")
@@ -216,7 +229,7 @@ try {
     Write-Host ""
     Write-Host "--- a range of only tests and core does nothing ---" -ForegroundColor Cyan
     $W = New-World (New-Home "ignored"); Seed
-    Range @("test/test-relay-publish.ps1", "core/Services.ps1", "surfaces/pwa/test/test-pwa-site.ps1", "relays/zorbrelay/test/test-x.ps1", "relays/Port.ps1", "planning/notes.md")
+    Range @("test/test-relay-publish.ps1", "core/Services.ps1", "surfaces/pwa/test/test-pwa-site.ps1", "relays/zorbrelay/test/test-x.ps1", "relays/other/Relay.ps1", "cli/RelayPublish.ps1", "planning/notes.md")
     $l = Pass
     Check ($W.deploys -eq 0 -and $W.told.Count -eq 0) "nothing deployed, nobody told"
     Check (Says $l "nothing the deploy ships changed") "the pass says why"
@@ -261,7 +274,7 @@ try {
     $l = Pass
     Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed") ("a protocol.js change that leaves the worker bundle identical deploys (" + (Whats) + ")")
     Check (($W.calls -ccontains "bundle a") -and ($W.calls -ccontains "bundle b")) "the Worker was bundled at the deployed commit and at the checkout's"
-    Check (Says $l "the same, so the shared files count as the page") "the pass says what it measured"
+    Check (Says $l ": the same") "the pass says what it measured"
     Check ($W.calls -ccontains "http relay/protocol.js") "the shared file, now the page, is compared after the deploy"
     $W = New-World (New-Home "protocol-differs"); Seed
     Range @("relay/js/protocol.js", "surfaces/pwa/page/account-client.js")
@@ -276,6 +289,10 @@ try {
     $W.bundleOk = $false
     $l = Pass; $null = Pass
     Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-unmeasured") ("a bundle that cannot be built warns (" + (Whats) + ")")
+    Check (@($W.calls | Where-Object { $_ -like "bundle*" }).Count -eq 2) "and is not tried again within the hour"
+    Check (@((Read-HordeRelayPublishState -HordeHome $W.home).value.bundles).Count -eq 0) "a bundle that was not made is not kept"
+    $W.bundleOk = $true; $W.now = $t0.AddMinutes(61); $null = Pass
+    Check (@($W.calls | Where-Object { $_ -like "bundle*" }).Count -eq 4 -and $W.deploys -eq 1) "an hour later it is bundled again, and deployed once both are made alike"
     $body = Format-HordeServiceNoticeBody -Notice $W.told[0]
     Check ($body.Contains("could not be measured") -and $body.Contains("horde relay deploy")) "and says the Worker could not be measured"
     $W = New-World (New-Home "protocol-half"); Seed
@@ -288,9 +305,12 @@ try {
     Write-Host "--- the measure, alone ---" -ForegroundColor Cyan
     $k = { param($Sha) return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $Sha })) }
     $cl = Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("relay/js/protocol.js", "surfaces/pwa/page/app.js")
-    Check (Test-HordeRelayPublishSharedOnly -Classes $cl -Shipped $shippedHere) "shared files alone are measured"
-    Check (-not (Test-HordeRelayPublishSharedOnly -Classes (Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("relay/js/protocol.js", "relays/zorbrelay/deploy-config.json")) -Shipped $shippedHere)) "with a worker-only file beside them, they are not"
-    Check (-not (Test-HordeRelayPublishSharedOnly -Classes (Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths @("surfaces/pwa/page/app.js")) -Shipped $shippedHere)) "with no Worker file at all, nothing is measured"
+    $dd = { param([string[]]$Paths) return (Get-HordeRelayPublishDecision -Classes (Get-HordeRelayPublishClasses -Shipped $shippedHere -Paths $Paths) -Shipped $shippedHere -State (New-HordeRelayPublishState) -Now $t0 -Base $cA).action }
+    Check ((& $dd @("relay/js/protocol.js", "surfaces/pwa/page/app.js")) -ceq "measure") "shared files and page files are measured"
+    Check ((& $dd @("surfaces/pwa/page/app.js")) -ceq "measure") "page files alone are measured too: every deploy is"
+    Check ((& $dd @("relay/js/protocol.js", "relays/zorbrelay/deploy-config.json")) -ceq "warn") "with a worker-only file beside them, they are warned outright"
+    Check ((& $dd @("cli/RelayDeploy.ps1", "surfaces/pwa/page/app.js")) -ceq "warn") "a change to the deploy's own code is warned outright"
+    Check ((& $dd @("core/Services.ps1")) -ceq "ignore") "nothing shipped: ignored"
     $m = Get-HordeRelayPublishMeasured -Classes $cl -Base (& $k ("a" * 64)) -Head (& $k ("a" * 64))
     Check ($m.measured -ceq "same" -and @($m.worker).Count -eq 0 -and (@($m.page) -join ",") -ceq "surfaces/pwa/page/app.js,relay/js/protocol.js") "alike: the shared files join the page"
     $m = Get-HordeRelayPublishMeasured -Classes $cl -Base (& $k ("a" * 64)) -Head (& $k ("b" * 64))
@@ -341,12 +361,45 @@ try {
     Check ($W.deploys -eq 2) "it is tried again from the base it failed from, though the record already names the commit"
     Check ($W.calls -ccontains "diff a..b") "the retry compares with the base before the failed check"
     Check ((Whats) -ceq "check-failed,deployed") "and once the page serves what was built, that is told"
+    # MUST 1 (review of PR 263): the real deploy writes its record when it ENDS, after the failure's
+    # time; the record is still the failing deploy's own, so the failure stands and is retried.
+    $failRec = (Read-HordeRelayDeployed -HordeHome $W.home).value
+    Check ($failRec.commit -ceq $cB) "CONTROL: the record the retried deploy wrote names its commit"
+    $W = New-World (New-Home "must1"); Seed; $W.serveAfter = $v1
+    Range @("surfaces/pwa/page/app.js")
+    $null = Pass
+    $st = (Read-HordeRelayPublishState -HordeHome $W.home).value
+    Check ((Read-HordeRelayDeployed -HordeHome $W.home).value.at -gt $st.failure.at) "CONTROL: the failing deploy's record is later than the failure"
+    $W.now = $t0.AddMinutes(30); $null = Pass
+    Check ($W.deploys -eq 1) "within the hour it is not tried again"
+    $W.now = $t0.AddMinutes(61); $null = Pass
+    Check ($W.deploys -eq 2) "a failed check is tried again an hour later, though its own deploy's record is later than the failure"
+    # MUST 2: a deploy by hand of ANOTHER commit after a failure is the base from then on.
+    $W = New-World (New-Home "must2"); Seed; $W.deploy = "fail"
+    Range @("surfaces/pwa/page/app.js")
+    $null = Pass
+    Write-HordeRelayDeployed -HordeHome $W.home -Revision ([pscustomobject]@{ commit = $cC; clean = $true }) -Version $v2 -Relay "zorbrelay" -Origin $origin -At $t0.AddMinutes(20)
+    $W.diffs[$cC + ".." + $cB] = [string[]]@("surfaces/pwa/page/app.js"); $W.deploy = "ok"
+    $W.now = $t0.AddMinutes(25); $l = Pass
+    Check ($W.calls -ccontains "diff c..b") "a deploy by hand of another commit after the failure is the base"
+    Check ($W.deploys -eq 2 -and (Says $l "settles it") -and (Read-HordeRelayDeployed -HordeHome $W.home).value.commit -ceq $cB) "it settles the failure at once: what changed since it is deployed, with no hour to wait"
     $hand = New-World (New-Home "hand-settles"); $W = $hand; Seed; $W.serveAfter = $v1
     Range @("surfaces/pwa/page/app.js")
     $null = Pass
     Write-HordeRelayDeployed -HordeHome $W.home -Revision ([pscustomobject]@{ commit = $cB; clean = $true }) -Version $v2 -Relay "zorbrelay" -Origin $origin -At $t0.AddMinutes(10)
     $W.now = $t0.AddMinutes(70); $l = Pass
-    Check ($W.deploys -eq 1 -and (Says $l "settled")) "a deploy by hand after the failure settles it: no retry"
+    Check ($W.deploys -eq 1 -and (Says $l "settles it")) "a deploy by hand after the failure settles it: no retry"
+
+    Write-Host ""
+    Write-Host "--- the check waits for the hosted page to change, up to 60 s ---" -ForegroundColor Cyan
+    $W = New-World (New-Home "propagate"); Seed; $W.propagateAfter = 3
+    Range @("surfaces/pwa/page/app.js")
+    $l = Pass
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deployed" -and $W.sleeps -ge 3) ("a page that changes three looks after the deploy passes (" + (Whats) + ", " + $W.sleeps + " sleeps)")
+    $W = New-World (New-Home "never-propagates"); Seed; $W.propagateAfter = 1000
+    Range @("surfaces/pwa/page/app.js")
+    $l = Pass
+    Check ((Whats) -ceq "check-failed" -and ($W.now - $t0).TotalSeconds -ge 60 -and ($W.now - $t0).TotalSeconds -le 70) ("a page that never changes fails after about 60 s (" + ($W.now - $t0).TotalSeconds + " s)")
 
     Write-Host ""
     Write-Host "--- an sw.js-only change passes by content ---" -ForegroundColor Cyan
@@ -437,6 +490,85 @@ try {
     Check ($W.deploys -eq 0 -and (Says $l "LEFT ALONE")) "a state that cannot be read is never begun again as new"
 
     Write-Host ""
+    Write-Host "--- only what is on origin/main, and only the commit checked ---" -ForegroundColor Cyan
+    $W = New-World (New-Home "off-main"); Seed; $W.onMain = $false; Range @("surfaces/pwa/page/app.js")
+    $l = Pass; $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "not-on-main") ("a commit that is not on origin/main is never deployed, and that is told once (" + (Whats) + ")")
+    Check (@($W.calls | Where-Object { $_ -like "bundle*" }).Count -eq 0) "and nothing is bundled for it"
+    $W = New-World (New-Home "main-unknown"); Seed; $W.onMain = $null; Range @("surfaces/pwa/page/app.js")
+    $null = Pass; $W.now = $t0.AddMinutes(30); $null = Pass
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "unreadable" -and @($W.calls | Where-Object { $_ -like "upstream*" }).Count -eq 1) "origin/main that cannot be asked: not deployed, told once, asked again an hour later"
+    $W = New-World (New-Home "moved"); Seed; $W.movedTo = $cC; Range @("surfaces/pwa/page/app.js")
+    $l = Pass
+    Check ($W.deploys -eq 1 -and $W.told.Count -eq 0 -and (Says $l "moved off the commit")) "a checkout that moved off the commit checked: nothing deployed, no failure, the next pass looks again"
+    Check ($null -eq (Read-HordeRelayPublishState -HordeHome $W.home).value.failure) "and no failure is kept"
+
+    Write-Host ""
+    Write-Host "--- a trouble that comes back is told again ---" -ForegroundColor Cyan
+    $W = New-World (New-Home "episodes"); Seed; Range @("relays/zorbrelay/worker/site.js")
+    $null = Pass; $null = Pass
+    Check ((Whats) -ceq "worker-changed") "a Worker change is told once"
+    Write-HordeRelayDeployed -HordeHome $W.home -Revision ([pscustomobject]@{ commit = $cB; clean = $true }) -Version $v2 -Relay "zorbrelay" -Origin $origin -At $t0.AddMinutes(5)
+    $null = Pass
+    Write-HordeRelayDeployed -HordeHome $W.home -Revision ([pscustomobject]@{ commit = $cA; clean = $true }) -Version $v1 -Relay "zorbrelay" -Origin $origin -At $t0.AddMinutes(6)
+    $null = Pass
+    Check ((Whats) -ceq "worker-changed,worker-changed") "after the page was current again, the same trouble is told again"
+    $W = New-World (New-Home "pending-cap"); Seed
+    $s0 = New-HordeRelayPublishState
+    foreach ($n in 1..25) { $null = Add-HordeRelayPublishNotice -State $s0 -What "dirty" -Key ("k" + $n) -Id ("id" + $n) -At $t0 }
+    Check (@($s0.pending).Count -eq 20 -and $s0.pending[19].id -ceq "id25") "at most the last 20 notices wait"
+
+    Write-Host ""
+    Write-Host "--- a Worker that differs is told again only when it changes ---" -ForegroundColor Cyan
+    # An index.html change: the Worker imports it as text, so the bundle differs from the deployed one,
+    # and stays so through every later merge that changes only the page.
+    $W = New-World (New-Home "index-html"); Seed
+    $W.bundles[$cB] = "9" * 64; $W.bundles[$cC] = "9" * 64; $W.bundles[$cD] = "9" * 64; $W.bundles[$cE] = "8" * 64
+    Range @("surfaces/pwa/page/index.html")
+    $null = Pass
+    foreach ($c in @($cC, $cD)) { $W.head = $c; $W.diffs[$cA + ".." + $c] = [string[]]@("surfaces/pwa/page/index.html", "surfaces/pwa/page/app.js"); $W.now = $W.now.AddMinutes(10); $null = Pass }
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-changed") ("three page merges after an index.html change send one notice (" + (Whats) + ")")
+    $W.head = $cE; $W.diffs[$cA + ".." + $cE] = [string[]]@("surfaces/pwa/page/index.html", "relay/js/protocol.js"); $null = Pass
+    Check ((Whats) -ceq "worker-changed,worker-changed") "a later change that changes the Worker that would ship is told again"
+
+    Write-Host ""
+    Write-Host "--- the supervisor's pointer names only a supervisor's home ---" -ForegroundColor Cyan
+    # This suite's folders are under the temp folder, so a temp root of its own stands for it.
+    $notTemp = Join-Path $work "not-the-temp"
+    $tend = New-Home "pointed-home"
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $tend "settings"))
+    [System.IO.File]::WriteAllText((Join-Path $tend "settings\service-definitions.json"), '{ "schemaVersion": 1, "settings": { } }')
+    $bare = New-Home "pointed-bare"
+    $pf = Join-Path $work "pointer-cases.txt"
+    $read = { param([string]$Text, [string]$TempRoot = $notTemp) [System.IO.File]::WriteAllText($pf, $Text); return (Read-HordeRelayTendHomePointer -Path $pf -TempRoot $TempRoot) }
+    $ok = & $read $tend
+    Check ($ok.state -ceq "known" -and $ok.value -ceq $tend.TrimEnd('\')) "CONTROL: a full local path to a home the supervisor runs in is taken"
+    $r = & $read $tend ""
+    Check ($r.state -ceq "unknown" -and $r.reason -like "*under the temp folder*") "a home under the temp folder is refused"
+    $r = & $read $bare
+    Check ($r.state -ceq "unknown" -and $r.reason -like "*not a Horde home*") "a folder that is not a supervisor's home is refused"
+    foreach ($bad in @("relative\home", "C:home", "\\server\share\home", "\\?\C:\home", ($tend + "\..\pointed-home"), "C:\home:stream", "\home")) {
+        $r = & $read $bad
+        Check ($r.state -ceq "unknown" -and $r.reason -like "*not a full local path*") ("'" + $bad + "' is not a full local path, and is refused")
+    }
+
+    Write-Host ""
+    Write-Host "--- the hand deploy's second home ---" -ForegroundColor Cyan
+    $mine = New-Home "hand-mine"
+    [System.IO.File]::WriteAllText($pf, $tend)
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath $pf -TempRoot $notTemp
+    Check ($ch.also -ceq $tend.TrimEnd('\') -and $ch.note -like "*recorded there as well as here*") "from a home that is not a test's, the supervisor's home is recorded in too, and said"
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $tend -PointerPath $pf -TempRoot $notTemp
+    Check ($ch.also -ceq "" -and $ch.note -ceq "") "from the supervisor's own home, once is enough"
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath $pf
+    Check ($ch.also -ceq "" -and $ch.note -ceq "") "from a test's home, nothing else is written to"
+    [System.IO.File]::WriteAllText($pf, $bare)
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath $pf -TempRoot $notTemp
+    Check ($ch.also -ceq "" -and $ch.note -like "*recorded only in*not a Horde home*") "a refused pointer: recorded only in its own home, and it says so"
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath (Join-Path $work "no-such-pointer.txt") -TempRoot $notTemp
+    Check ($ch.also -ceq "" -and $ch.note -ceq "") "no pointer: its own home only, nothing to say"
+
+    Write-Host ""
     Write-Host "--- telling ---" -ForegroundColor Cyan
     $W = New-World (New-Home "tell-off")
     $l = Pass -Policy ([pscustomobject]@{ tellWarchief = $false })
@@ -446,21 +578,36 @@ try {
     Check ($W.tellCalls -eq 1 -and $W.told.Count -eq 1) "the next pass that may tell tells it, once"
 
     Write-Host ""
-    Write-Host "--- the lock stops a second deploy ---" -ForegroundColor Cyan
-    $hh = New-Home "lock"
-    $held = Enter-HordeRelayDeployLock -HordeHome $hh
+    Write-Host "--- the lock stops a second deploy, whatever its home ---" -ForegroundColor Cyan
+    # The machine's lock, held by another process: a child of this suite, under a name of this suite's
+    # own, so the real one is never touched. It writes a file once it holds the lock.
+    $lockName = "Global\HordeRelayDeploySuite-" + [guid]::NewGuid().ToString("N")
+    Check ((Get-HordeRelayDeployLockName -Relay "zorbrelay") -ceq "Global\HordeRelayDeploy-zorbrelay") "the real lock is the machine's, named by the relay, not by a home"
+    $marker = Join-Path $work "lock-held.txt"
+    $holder = Join-Path $work "hold-lock.ps1"
+    [System.IO.File]::WriteAllText($holder, ('$m = New-Object System.Threading.Mutex -ArgumentList $false, "' + $lockName + '"; [void]$m.WaitOne(); [System.IO.File]::WriteAllText("' + $marker + '", "held"); Start-Sleep -Seconds 60'))
+    $child = Start-Process -FilePath ([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell\v1.0\powershell.exe")) -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $holder) -WindowStyle Hidden -PassThru
     try {
-        Check ($null -ne $held) "CONTROL: the lock can be taken"
-        Check ($null -eq (Enter-HordeRelayDeployLock -HordeHome $hh)) "a second taker is refused while it is held"
-        $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
-        Check ($a.state -ceq "unknown" -and $a.reason -ceq (Get-HordeRelayDeployBusyReason)) "a deploy while another holds the lock is refused as busy"
+        $deadline = [datetime]::UtcNow.AddSeconds(30)
+        while (-not [System.IO.File]::Exists($marker) -and [datetime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+        Check ([System.IO.File]::Exists($marker)) "CONTROL: another process holds the lock"
+        $hh = New-Home "lock"; $hh2 = New-Home "lock-other-home"
+        $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -LockName $lockName -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
+        $a2 = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh2 -LockName $lockName -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
+        Check ($a.state -ceq "unknown" -and $a.reason -ceq (Get-HordeRelayDeployBusyReason) -and $a2.state -ceq "unknown") "a deploy while another process holds the lock is refused as busy, from any home"
         Check ($script:relayDeploys -eq 0) "and the relay's deploy was never called"
         Check (-not [System.IO.File]::Exists((Get-HordeRelayDeployedPath -HordeHome $hh))) "and nothing was recorded"
-    } finally { if ($null -ne $held) { $held.Dispose() } }
-    $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
-    Check ($a.state -ceq "known" -and $script:relayDeploys -eq 1) "CONTROL: with the lock let go, the deploy runs"
-    Check ($null -ne ($again = Enter-HordeRelayDeployLock -HordeHome $hh)) "a deploy lets go of the lock when it ends"
-    if ($null -ne $again) { $again.Dispose() }
+        # A handle of this suite's own keeps the lock alive when its holder dies, so it is ABANDONED,
+        # not gone - as when the tend is killed while another process waits on the same lock.
+        $keep = New-Object System.Threading.Mutex -ArgumentList $false, $lockName
+    } finally { if (-not $child.HasExited) { $child.Kill() }; $child.WaitForExit(10000) | Out-Null; $child.Dispose() }
+    # The holder ended without letting go: the lock is abandoned, and the next deploy takes it.
+    $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -LockName $lockName -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
+    Check ($a.state -ceq "known" -and $script:relayDeploys -eq 1) "a lock left by a process that ended is taken, and the deploy runs"
+    $again = Enter-HordeRelayDeployLock -Name $lockName
+    Check ($null -ne $again) "a deploy lets go of the lock when it ends"
+    Exit-HordeRelayDeployLock -Lock $again
+    $keep.Dispose()
     $W = New-World (New-Home "busy-step"); Seed; $W.deploy = "busy"; Range @("surfaces/pwa/page/app.js")
     $l = Pass
     Check ($W.deploys -eq 1 -and $W.told.Count -eq 0 -and (Says $l "another deploy is running")) "a pass that finds a deploy running tells nobody and counts no failure"
@@ -487,6 +634,20 @@ try {
     Check ((Read-HordeRelayDeployed -HordeHome $hh).value.commit -ceq "") "a deploy whose commit was not read records none"
     $W = New-World $hh; $null = Pass
     Check ($W.deploys -eq 0 -and (Whats) -ceq "no-record") "and the supervisor does not take that for a base"
+    $hh = New-Home "hand-same-second"
+    Write-HordeRelayDeployed -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true }) -Version $v1 -Relay "zorbrelay" -Origin $origin -At $t0
+    $id1 = (Read-HordeRelayDeployed -HordeHome $hh).value.id
+    Write-HordeRelayDeployed -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true }) -Version $v1 -Relay "zorbrelay" -Origin $origin -At $t0
+    $id2 = (Read-HordeRelayDeployed -HordeHome $hh).value.id
+    Check ($id1 -cmatch '\A[0-9a-f]{32}\z' -and $id2 -cmatch '\A[0-9a-f]{32}\z' -and $id1 -cne $id2) "two deploys recorded in the same second are told apart, by their ids"
+    $hh = New-Home "hand-two-homes"; $tendHome = New-Home "hand-tend-home"
+    $null = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -AlsoRecordIn $tendHome -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
+    $r1 = Read-HordeRelayDeployed -HordeHome $hh; $r2 = Read-HordeRelayDeployed -HordeHome $tendHome
+    Check ($r1.state -ceq "known" -and $r2.state -ceq "known" -and $r1.value.id -ceq $r2.value.id -and $r2.value.commit -ceq $cC) "a deploy from another home records it in the supervisor's home too, as one deploy"
+    $ptr = Join-Path $work "pointer\relay-tend-home.txt"
+    Write-HordeRelayTendHomePointer -Path $ptr -HordeHome $tendHome
+    Check (([System.IO.File]::ReadAllText($ptr)).Trim() -ceq [System.IO.Path]::GetFullPath($tendHome).TrimEnd('\')) "the supervisor's pointer names its home"
+    Check ((Read-HordeRelayTendHomePointer -Path (Join-Path $work "no-pointer.txt")).state -ceq "absent") "no pointer names no home"
     $hh = New-Home "hand-failed"; $script:relayAnswer = "fail"
     $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
     Check ($a.state -ceq "unknown" -and -not [System.IO.File]::Exists((Get-HordeRelayDeployedPath -HordeHome $hh))) "a deploy that failed records nothing"
@@ -500,6 +661,40 @@ try {
     $a = $null
     try { $a = & $real.Deploy (New-Home "real-tools") { param($Line) } $work } catch { $a = $null }
     Check ($null -ne $a -and $a.state -ceq "unknown" -and $a.reason -like "*a test's*" -and $script:relayDeploys -eq $before) "a home under the temp folder deploys nothing"
+
+    Write-Host ""
+    Write-Host "--- the tend's own call, past the test-home guard ---" -ForegroundColor Cyan
+    $W = New-World (New-Home "from-tend"); Seed; Range @("surfaces/pwa/page/app.js")
+    $ptr = Join-Path $work "from-tend-pointer\relay-tend-home.txt"
+    $l = @(Invoke-HordeRelayPublishFromTend -HordeHome $W.home -Teller $teller -Root $work -Tools (New-Tools) -TempRoot (Join-Path $work "not-the-temp") -PointerPath $ptr)
+    Check ($W.deploys -eq 1 -and (Says $l "DEPLOYED")) "a home that is not a test's takes the step, with the tools handed in"
+    Check ([System.IO.File]::Exists($ptr) -and ([System.IO.File]::ReadAllText($ptr)).Trim() -ceq [System.IO.Path]::GetFullPath($W.home).TrimEnd('\')) "and points the machine at its home"
+    $l = @(Invoke-HordeRelayPublishFromTend -HordeHome $W.home -Teller $teller -Root $work -Tools (New-Tools) -PointerPath (Join-Path $work "p2.txt"))
+    Check ((Says $l "it is a test's") -and -not [System.IO.File]::Exists((Join-Path $work "p2.txt"))) "a home under the temp folder looks at nothing and points nowhere"
+
+    Write-Host ""
+    Write-Host "--- the revision tool's answers, on a repository of this suite's own ---" -ForegroundColor Cyan
+    $git = Join-Path $work "gitrepo"
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $git "relays\zorb"))
+    $gitRun = { param([string[]]$GitArgs) $null = & git -C $git @GitArgs }
+    & $gitRun @("init", "-q"); & $gitRun @("config", "user.email", "suite@example.invalid"); & $gitRun @("config", "user.name", "suite")
+    [System.IO.File]::WriteAllText((Join-Path $git "relays\zorb\a.js"), "export const a = 1;`n")
+    & $gitRun @("add", "-A"); & $gitRun @("commit", "-q", "-m", "one")
+    $c1 = ("" + (& git -C $git rev-parse HEAD)).Trim()
+    $rv = Get-HordeRelayPublishRevision -Checkout $git
+    Check ($rv.state -ceq "known" -and $rv.value.commit -ceq $c1 -and $rv.value.clean -eq $true) "CONTROL: a clean checkout reads as clean"
+    [System.IO.File]::AppendAllText((Join-Path $git "relays\zorb\a.js"), "// a change of its own`n")
+    Check ((Get-HordeRelayPublishRevision -Checkout $git).value.clean -eq $false) "a checkout with a changed tracked file is not clean"
+    & $gitRun @("checkout", "-q", "--", ".")
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $git "other"))
+    & $gitRun @("mv", "relays/zorb/a.js", "other/a.js"); & $gitRun @("commit", "-q", "-m", "move")
+    $c2 = ("" + (& git -C $git rev-parse HEAD)).Trim()
+    $ch = Get-HordeRelayPublishChanged -Checkout $git -Base $c1 -Head $c2
+    Check ($ch.state -ceq "known" -and (@($ch.value.paths) -ccontains "relays/zorb/a.js") -and (@($ch.value.paths) -ccontains "other/a.js")) "a file moved out of a folder is both its old path and its new one"
+    Check ((Get-HordeRelayPublishChanged -Checkout $git -Base "--output=x" -Head $c2).state -ceq "unknown") "a base that is not a commit id never reaches the revision tool"
+    # Refused by their words, before any request: the addresses are this machine's closed port.
+    Check ((Get-HordeRelayPublishUrl -Url "http://127.0.0.1:9/app/sw.js").reason -like "only an https address*") "an address that is not https is never asked"
+    Check ((Get-HordeRelayPublishUrl -Url "https://127.0.0.1:9@evil.invalid/").reason -like "only an https address*") "an https address with a user in it is never asked"
 
     Write-Host ""
     Write-Host "--- the pass looks at the page on a whole pass only ---" -ForegroundColor Cyan
