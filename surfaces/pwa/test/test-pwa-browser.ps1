@@ -38,7 +38,8 @@
 #      card first and one per lane; a touch on the Thrall's card opens the whole log, and on a lane's card
 #      that lane's stream, its area's entries only;
 #  13. a relay refusing every read with 401: the entry sent meanwhile is not drawn, and arrives once reads
-#      come back; the page saying so is a PENDING check until the notice fix lands (it says why).
+#      come back; meanwhile the page says so and keeps saying it, with the sign-in banner and the time of
+#      the last read that worked;
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 
@@ -158,6 +159,8 @@ try {
     Write-Host "--- 1. the app loads under its policy, and pairs with Chrome's passkey ---" -ForegroundColor Cyan
     $open = Invoke-Browser @{ cmd = "open" }
     Check ($open.ok -and $open.value.empty) "the app starts, shows that it holds no horde yet"
+    $fi = Invoke-Browser @{ cmd = "firstInstall" }
+    Check ($fi.ok -and $fi.value.controlled -and $fi.value.mark) ("THE FIRST INSTALL DOES NOT RELOAD: the first worker takes control of the page and the page stays as it was (" + $(if ($fi.ok) { ConvertTo-Json $fi.value -Compress } else { $fi.reason }) + ")")
     $offer = New-HordeRelayPairingOffer -HordeHome $hh -RpId "localhost" -Origins @($origin)
     $paired = Invoke-Browser @{ cmd = "pair"; offer = $offer.value.text; label = "Founder phone" }
     Check ($paired.ok -and $paired.value.paired -and $paired.value.fingerprint -cmatch '\A[0-9]{4}-[0-9]{4}-[0-9]{4}\z') ("Chrome makes the passkey and the app shows a fingerprint (" + $(if ($paired.ok) { $paired.value.fingerprint + $paired.value.notice } else { $paired.reason }) + ")")
@@ -238,6 +241,17 @@ try {
     $shellPaths = @($built.value.shell | ForEach-Object { "/" + $_ })
     $extra = @($paths | Where-Object { $shellPaths -cnotcontains $_ })
     Check ($cached.ok -and $paths.Count -ge 10 -and $extra.Count -eq 0) ("the worker's cache holds the shell and nothing else (" + $paths.Count + " files; not shell: " + ($extra -join ", ") + ")")
+
+    Write-Host ""
+    Write-Host "--- 6b. a new version: the page reloads once, never over his words ---" -ForegroundColor Cyan
+    $wv = Invoke-Browser @{ cmd = "workerVersion" }
+    Check ($wv.ok -and $wv.value -ceq $built.value.version) ("the worker in control says its version, the site's (" + $(if ($wv.ok) { $wv.value } else { $wv.reason }) + ")")
+    $held = Invoke-Browser @{ cmd = "newWorker"; draft = "half a line to the Thrall"; ms = 6000 }
+    Check ($held.ok -and -not $held.value.reloaded -and $held.value.loads -eq 0 -and $held.value.notice.Contains("A new version is ready - it loads when you finish.")) ("WITH A DRAFT OPEN a new worker does not reload the page; it says a new version is ready (" + $(if ($held.ok) { ConvertTo-Json $held.value -Compress } else { $held.reason }) + ")")
+    $fin = Invoke-Browser @{ cmd = "finishDraft" }
+    Check ($fin.ok -and $fin.value.reloaded -and $fin.value.loads -eq 1) ("the draft gone, the page hidden and shown again loads the new version, once (" + $(if ($fin.ok) { ConvertTo-Json $fin.value -Compress } else { $fin.reason }) + ")")
+    $nw = Invoke-Browser @{ cmd = "newWorker" }
+    Check ($nw.ok -and $nw.value.reloaded -and $nw.value.loads -eq 1 -and -not $nw.value.notice.Contains("new version")) ("A NEW WORKER TAKING CONTROL reloads the page once, and no more (" + $(if ($nw.ok) { ConvertTo-Json $nw.value -Compress } else { $nw.reason }) + ")")
 
     Write-Host ""
     Write-Host "--- 7. the recovery code reads, and never answers ---" -ForegroundColor Cyan
@@ -324,6 +338,15 @@ try {
     Check ($wholeAgain.ok -and -not $wholeAgain.value.shown -and $wholeAgain.value.words -ceq "") ("the next snapshot, with nothing left out, takes the line away (" + $(if ($wholeAgain.ok) { "shown " + $wholeAgain.value.shown } else { $wholeAgain.reason }) + ")")
 
     Write-Host ""
+    Write-Host "--- 8d. reads that fail are said, with the time of the last that worked ---" -ForegroundColor Cyan
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "the relay answered the read with 401: not signed in" }
+    $nb = Invoke-Browser @{ cmd = "noticeHeld"; text = "Not signed in to the relay - sign in again."; hold = 8000 }
+    Check ($nb.ok -and $nb.value.ok -and $nb.value.notice -cmatch 'Not signed in to the relay - sign in again\. Last updated [0-9]{2}:[0-9]{2}\.' -and $nb.value.notice.Contains("The relay could not be read just now")) ("A 401 ON THE MAILBOX READ shows the sign-in banner and the last-updated time, and it stays (" + $(if ($nb.ok) { $nb.value.notice } else { $nb.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "" }
+    $ng = Invoke-Browser @{ cmd = "noticeHeld"; text = "Not signed in to the relay"; gone = $true }
+    Check ($ng.ok -and $ng.value.ok -and -not $ng.value.notice.Contains("Not signed in")) ("a successful read clears it (" + $(if ($ng.ok) { $ng.value.notice } else { $ng.reason }) + ")")
+
+    Write-Host ""
     Write-Host "--- 9. hidden, it locks itself; shown again, nothing openedshows first ---" -ForegroundColor Cyan
     $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
     Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
@@ -390,6 +413,7 @@ try {
     $pt = Invoke-Browser @{ cmd = "progressTab" }
     Check ($pt.ok -and $pt.value.shown -and -not $pt.value.doc -and -not $pt.value.chat -and -not $pt.value.keys -and $pt.value.selected -ceq "true") "a third tab, Progress, beside Decisions and Chat, shows the log, and the other views and the answering row go"
     $pw = Invoke-Browser @{ cmd = "progressWait"; text = "Progress entry 40" }
+    Check ($pw.ok -and $pw.value.cardsWhy -ceq "No cards from your PC yet.") ("WITH NO CARDS the tab falls back to the whole log under one plain line saying why (" + $(if ($pw.ok) { $pw.value.cardsWhy } else { $pw.reason }) + ")")
     $ids = @(); if ($pw.ok) { $ids = @($pw.value.ids) }
     Check ($pw.ok -and $pw.value.found -and $pw.value.items -eq 41 -and $ids[0].EndsWith("-01") -and $ids[39].EndsWith("-40") -and $ids[40].EndsWith("-41")) ("the entries are drawn oldest to newest in the order they were written, though their times are not in order (" + $(if ($pw.ok) { "" + $pw.value.items } else { $pw.reason }) + ")")
     Check ($pw.ok -and (@($pw.value.firstChips) -join "|") -ceq "Form fill|Started|Lane F|T-0096") ("an entry's chips: the area's plain name first, its kind in a plain word, and the lane and task when it names them (" + $(if ($pw.ok) { @($pw.value.firstChips) -join "|" } else { "" }) + ")")
@@ -481,13 +505,11 @@ try {
     $nw = Invoke-Browser @{ cmd = "noticeWait"; text = "could not be read"; timeoutMs = 15000 }
     $during = Invoke-Browser @{ cmd = "cardsState" }
     Check ($run.code -eq 0 -and $during.ok -and $during.value.streamPage -and $during.value.items -ge 41 -and -not (@($during.value.texts) -join " ").Contains("Written while the relay refused")) ("CONTROL: while every read is refused, the entry the run sent is not drawn: the refusal is in force (exit " + $run.code + "; " + $(if ($during.ok) { "stream " + $during.value.streamPage + ", " + $during.value.items + " entries, title '" + $during.value.title + "'" } else { $during.reason }) + ")")
-    # PENDING, NAMED: a failed read is said by the bridge, and the next draw of the list wipes the line
-    # (app.js, render: say("relay", ...) on every render). Orc F's notice fix makes the page keep it. This
-    # check pins TODAY'S behaviour so it is reported on every run, and goes red the day the line shows:
-    # F's pull request flips it to require the line.
+    # THE NOTICE FIX (it was PENDING): a failed read used to be said by the bridge and wiped by the next draw of
+    # the list (app.js, render). Now the relay's line stays until a read comes back clean, and the read banner
+    # (read-banner.js) says he must sign in again, with the time of the last read that worked.
     $readSaid = $nw.ok -and $nw.value.found
-    if (-not $readSaid) { Write-Host "  [PENDING] the page does not yet say the relay could not be read: the notice is cleared by the next render (app.js). Orc F's notice fix flips the check below." -ForegroundColor Yellow }
-    Check (-not $readSaid) ("PENDING until the notice fix: a relay refusing every read with 401 is NOT yet said on the page (notice now '" + $(if ($nw.ok) { $nw.value.notice } else { $nw.reason }) + "')")
+    Check ($readSaid -and $nw.value.notice -cmatch 'Not signed in to the relay - sign in again\. Last updated [0-9]{2}:[0-9]{2}\.') ("a relay refusing every read with 401 IS said on the page: the line stays, with the sign-in banner and the last-updated time (notice now '" + $(if ($nw.ok) { $nw.value.notice } else { $nw.reason }) + "')")
     $null = Invoke-Browser @{ cmd = "readFail"; reason = "" }
     $rw = Invoke-Browser @{ cmd = "progressWait"; text = "Written while the relay refused" }
     Check ($rw.ok -and $rw.value.found) ("once the relay is read again, the entry written meanwhile arrives with no reload (" + $(if ($rw.ok) { "" + $rw.value.items + " entries" } else { $rw.reason }) + ")")

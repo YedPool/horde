@@ -23,6 +23,12 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(caches.keys().then((names) => Promise.all(names.filter((n) => n.indexOf("horde-shell-") === 0 && n !== CACHE).map((n) => caches.delete(n)))).then(() => self.clients.claim()));
 });
 
+// The page asks which version this worker is (surfaces/pwa/page/app.js, the Account screen): it answers on
+// the port it was handed, and with nothing else.
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.ask === "version" && event.ports && event.ports[0]) event.ports[0].postMessage({ version: VERSION });
+});
+
 // A shell file: the network first, so a deployment shows at once when online, and the cache when the
 // network fails. Anything else: not touched - the browser fetches it as if this worker were not here.
 self.addEventListener("fetch", (event) => {

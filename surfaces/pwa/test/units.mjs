@@ -23,6 +23,9 @@ const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
 const LC = await load("app/lane-card.js");
 const NV = await load("app/notices-view.js");
+const CW = await load("app/cards-why.js");
+const AU = await load("app/app-update.js");
+const RB = await load("app/read-banner.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -1322,6 +1325,102 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(c.machines.every((x) => x.entry !== p2.id), "a locked pairing's cards are not shown");
   a.phone.lock(a.paired.id);
   check((await throwsAsync(() => a.phone.cards(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no cards");
+}
+
+// --- 10e2. WHY THERE ARE NO CARDS: the one line the Progress tab's fallback shows (cards-why.js) ---
+{
+  const t = R.memoryTransport();
+  const m1 = await newMachine("work");
+  const a = await pairedApp(t, m1);
+  await a.phone.refresh(a.paired.id);
+  const none = await a.phone.cards(a.paired.id);
+  check(none.refused === "" && none.unpaired === false && CW.cardsFallbackLine(none) === "No cards from your PC yet.", "NO SNAPSHOT YET: the fallback says no cards have come from the PC", JSON.stringify(none));
+  // A snapshot from the paired PC that does not read: the reason, short, in the phone's own words.
+  await sendCards(t, m1, a.phoneKey, P.utf8("{"));
+  const bad = await a.phone.refresh(a.paired.id);
+  const refused = await a.phone.cards(a.paired.id);
+  check(bad.anomalies.length === 1 && refused.machines.length === 0 && refused.refused === "the cards body is not JSON" && CW.cardsFallbackLine(refused) === "Cards could not be read: the cards body is not JSON.", "A REFUSED SNAPSHOT: the fallback says the cards could not be read, and why", JSON.stringify(refused));
+  // A PC of the horde this phone has no pairing for sends cards: the phone can tell, by who sent them.
+  const t2 = R.memoryTransport();
+  const p1 = await newMachine("home");
+  const stranger = await newMachine("home");
+  const b = await pairedApp(t2, p1);
+  await sendCards(t2, stranger, b.phoneKey, cardsBody(stranger, { name: "other-pc", cards: [card("E")] }));
+  await b.phone.refresh(b.paired.id);
+  const unp = await b.phone.cards(b.paired.id);
+  check(unp.machines.length === 0 && unp.unpaired === true && unp.refused === "" && CW.cardsFallbackLine(unp) === "This phone is not paired to the PC that sends cards.", "CARDS FROM A PC THIS PHONE IS NOT PAIRED TO: the fallback says so", JSON.stringify(unp));
+  // A PC this phone IS paired to, its pairing locked: its cards are not opened, and it is no stranger.
+  const m2 = await newMachine("work");
+  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  await a.phone.announce(p2.id);
+  const k2 = await phoneKeyOf(t, m2);
+  a.phone.lock(p2.id);
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "home-pc", cards: [card("G")] }));
+  await a.phone.refresh(a.paired.id);
+  const lockedSib = await a.phone.cards(a.paired.id);
+  check(lockedSib.machines.length === 0 && lockedSib.unpaired === false, "CONTROL: cards from a PC this phone is paired to, its pairing locked, are not said to come from a PC it is not paired to", JSON.stringify(lockedSib));
+  // CONTROL: cards present, no line at all; and a refusal a later good snapshot replaces is not said.
+  await sendCards(t, m1, a.phoneKey, cardsBody(m1, { name: "office-pc", cards: [card("E")] }));
+  await a.phone.refresh(a.paired.id);
+  const good = await a.phone.cards(a.paired.id);
+  check(good.machines.length === 1 && good.refused === "" && CW.cardsFallbackLine(good) === "", "CONTROL: with cards present there is no line", JSON.stringify(good));
+  check(CW.cardsFallbackLine({ machines: [], refused: "x".repeat(500) + "\u0007" }).length <= 140 && CW.cardsFallbackLine({ machines: [], refused: "a\u0007bell" }) === "Cards could not be read: abell." && CW.cardsFallbackLine({ machines: [], refused: "ok", unpaired: true }).indexOf("Cards could not be read") === 0 && CW.cardsFallbackLine(null) === "No cards from your PC yet.", "the reason is cut short and plain ASCII; a refusal is said before a stranger PC; nothing known is no cards yet");
+}
+
+// --- 10g. A NEW VERSION OF THE APP (app-update.js): reload once, never on the first install, never over his words ---
+{
+  const d = (o) => AU.reloadDecision({ hadController: true, reloaded: false, busy: false, ...o });
+  check(d({}) === "reload", "a new worker taking over a page that had one reloads it");
+  check(d({ hadController: false }) === "none", "THE FIRST INSTALL never reloads: there was no worker before");
+  check(d({ reloaded: true }) === "none" && d({ reloaded: true, busy: true }) === "none", "ONCE: a page that has reloaded (or begun to) never reloads again");
+  check(d({ busy: true }) === "wait", "WITH UNSENT WORDS it waits, and the page says a new version is ready");
+  check(AU.UPDATE_READY_WORDS === "A new version is ready - it loads when you finish.", "the waiting line is the founder's words");
+  check(AU.draftsHeld(null) === false && AU.draftsHeld("{}") === false && AU.draftsHeld("not json") === false && AU.draftsHeld('{"3":"half an answer"}') === true && AU.draftsHeld('{"3":""}') === true, "a draft kept by the document counts as unsent words; none, or an empty keeping, does not");
+  const T = 1000000000;
+  check(AU.updateDue(0, T) === true && AU.updateDue(T, T + 599999) === false && AU.updateDue(T, T + 600000) === true && AU.updateDue(T, T - 5) === true && AU.UPDATE_EVERY_MS === 600000, "THE UPDATE CHECK, at most once in 10 minutes: first time due, again only after 10 minutes, and a clock set back is due");
+  const v = "0123456789abcdef", w = "fedcba9876543210";
+  check(AU.versionWords(v, v) === "Version " + v + "." && AU.versionWords(v, "") === "Version " + v + "." && AU.versionWords(v, w) === "Version " + v + " - update pending (" + w + ")." && AU.versionWords("", "") === "Version not known." && AU.versionWords("<b>", w) === "Version not known.", "THE ACCOUNT SCREEN SAYS THE VERSION the page was built as; a worker of another says update pending; anything that is not a version is not shown");
+}
+
+// --- 10h. A READ THAT FAILS IS SAID, WITH THE TIME OF THE LAST ONE THAT WORKED (read-banner.js, bridge.js read-changed) ---
+{
+  const base = R.memoryTransport();
+  let fault = null; // null: the relay answers; else the reason every read and watch answers with
+  const t = { ...base, get: (...x) => (fault ? Promise.resolve({ state: "unknown", value: null, reason: fault }) : base.get(...x)), watch: (...x) => (fault ? Promise.resolve({ state: "unknown", value: null, reason: fault }) : base.watch(...x)) };
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  let clockNow = Date.parse("2026-10-14T02:36:00Z");
+  const br = createBridge(a.phone, { loadKinds: async () => ({}), now: () => clockNow });
+  const reads = [];
+  br.on("read-changed", (rec) => reads.push(rec));
+  const notes = [];
+  br.on("notice", (w) => notes.push(w));
+  const at = (ms) => (ms === Date.parse("2026-10-14T02:36:00Z") ? "02:36" : "other " + ms);
+  const bannerOf = (rec, session = null) => RB.readBanner(RB.readFailure(rec, session), rec.lastGoodAt, at);
+  await br.request("pick", { id: a.paired.id });
+  const good = reads[reads.length - 1];
+  check(reads.length === 1 && good.relayDown === false && good.lastGoodAt === clockNow && bannerOf(good) === "", "CONTROL: a read that works says so, with its time, and there is no banner", JSON.stringify(reads));
+  fault = "the relay answered the read with 401: not signed in";
+  clockNow += 3 * 3600000;
+  await br.request("refresh");
+  const r401 = reads[reads.length - 1];
+  check(notes[notes.length - 1].indexOf("could not be read") >= 0, "the failed read is said as a notice", JSON.stringify(notes));
+  check(r401.relayDown === true && RB.readFailure(r401) === "signed-out" && bannerOf(r401) === "Not signed in to the relay - sign in again. Last updated 02:36.", "A 401 ON THE MAILBOX READ shows the sign-in banner and the last-updated time - the time of the last read that worked, not of the failure", bannerOf(r401));
+  fault = "the relay's watch failed";
+  await br.request("refresh");
+  const rNet = reads[reads.length - 1];
+  check(RB.readFailure(rNet) === "unreachable" && bannerOf(rNet) === "Cannot reach the relay. Last updated 02:36." && RB.readFailure(rNet, { state: "unknown", status: 401 }) === "signed-out" && RB.readFailure(rNet, { state: "known", status: 200, value: { signedIn: false } }) === "signed-out" && RB.readFailure(rNet, { state: "known", status: 200, value: { signedIn: true } }) === "unreachable" && RB.readFailure(rNet, { state: "unknown", status: 0 }) === "unreachable", "A WATCH THAT FAILS is the relay out of reach - unless the relay's session says he is signed out (an expired sign-in refused at the socket)");
+  fault = null;
+  clockNow += 60000;
+  await br.request("refresh");
+  const back = reads[reads.length - 1];
+  check(notes[notes.length - 1] === "", "and a clean read says a notice of nothing, so the page clears the old one only then", JSON.stringify(notes));
+  check(back.relayDown === false && back.lastGoodAt === clockNow && bannerOf(back) === "", "A SUCCESSFUL READ CLEARS IT, and is the new last-updated time", JSON.stringify(back));
+  await br.request("lock", { id: a.paired.id });
+  await br.request("refresh");
+  const lk = reads[reads.length - 1];
+  check(lk.locked === true && RB.readFailure(lk) === "locked" && bannerOf(lk).indexOf("This horde is locked - unlock to read.") === 0, "a read of a locked horde says it is locked", bannerOf(lk));
+  check(RB.readBanner("", 5, at) === "" && RB.readBanner("unreachable", 0, at) === "Cannot reach the relay." && RB.readFailure(null) === "", "no failure is no banner; with no read that ever worked there is no time to say");
 }
 
 // --- 10f. the notices: each once, newest first, read kept on the phone; the follow switch sent like an answer ---

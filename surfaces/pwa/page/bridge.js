@@ -52,7 +52,9 @@
 //                         with the passkey and sent: { ok } or { ok: false, reason }
 // EVENTS: list-changed (the list record), chat-changed (the chat record), progress-changed (the progress
 // record), cards-changed (the cards record), notices-changed (the notices record), hordes-changed (the
-// summaries), notice (a sentence).
+// summaries), notice (a sentence), read-changed (how the last read of the mailbox went:
+// { locked, relayDown, said, lastGoodAt } - said the relay's words, lastGoodAt the time of the last read
+// that worked for the picked horde, 0 for none; the page's banner is read-banner.js's).
 //
 // "SAVED" MEANS SENT AND SIGNED. say answers ok once the relay has taken the signed envelope; the
 // machine stores it when its runner next turns, and the next snapshot shows it under the question. The
@@ -77,13 +79,16 @@ function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new U
 const LOCAL_ACT_SEQUENCE = Number.MAX_SAFE_INTEGER;
 
 // The bridge over a phone (phone-core.js). options: { loadKinds() -> promise of the kinds table,
-// look: the letters, waitMs: the long-poll of the live refresh (0: none), visible() -> boolean }.
+// look: the letters, waitMs: the long-poll of the live refresh (0: none), visible() -> boolean,
+// now() -> ms: the clock of lastGoodAt (Date.now) }.
 export function createBridge(phone, options = {}) {
   const listeners = Object.create(null);
   let picked = "";
   let view = null;
   let viewError = "";
   let polling = false;
+  let lastGoodAt = 0;
+  const now = typeof options.now === "function" ? options.now : () => Date.now();
   // The lock one window of the app holds while it sends answers again: options.lock(name, fn), where fn
   // is handed true when the lock is held; by default the browser's navigator.locks, asked not to wait,
   // and with no such thing (the suites under Node) the one window there is holds it.
@@ -142,10 +147,18 @@ export function createBridge(phone, options = {}) {
       const r = await phone.refresh(picked, { waitMs });
       locked = false;
       relayDown = r.relayDown === true;
-      if (r.anomalies.length) emit("notice", r.anomalies.join(" "));
+      // Said every time, "" when clean: a notice stands until a refresh comes back without one (read-banner.js, WHY).
+      emit("notice", r.anomalies.join(" "));
+      // A READ THAT FAILED IS SAID UNTIL ONE WORKS (read-banner.js): the old snapshot below is kept, so the
+      // page must be told it is old.
+      if (!relayDown) lastGoodAt = now();
+      emit("read-changed", { locked: false, relayDown, said: relayDown ? r.diagnostics.slice() : [], lastGoodAt });
       view = r.snapshot ? r : null;
       viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, announce this phone again.";
-    } catch (e) { view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e); }
+    } catch (e) {
+      view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e);
+      emit("read-changed", { locked, relayDown, said: locked ? [] : [viewError], lastGoodAt });
+    }
     if (view && !locked) {
       try {
         // A NEW SIGNATURE ONLY WHILE HE CAN SEE THE PAGE, AND FROM ONE WINDOW OF THE APP AT A TIME (review
@@ -203,7 +216,7 @@ export function createBridge(phone, options = {}) {
     },
     act: async () => ({ ok: true, sequence: LOCAL_ACT_SEQUENCE, local: true }),
     hordes: async () => hordes(),
-    pick: async (a) => { picked = String(a.id || ""); view = null; viewError = ""; const rec = await refresh(); poll(); return rec; },
+    pick: async (a) => { if (String(a.id || "") !== picked) lastGoodAt = 0; picked = String(a.id || ""); view = null; viewError = ""; const rec = await refresh(); poll(); return rec; },
     pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || "") }); await hordes(); return r; },
     sendPairing: async (a) => ({ relayed: await phone.sendPairing(String(a.id || "")) }),
     announce: async (a) => { const r = await phone.announce(String(a.id)); await hordes(); return r; },

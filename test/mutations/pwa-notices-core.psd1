@@ -11,7 +11,7 @@
            Find = 'if (opened.header.seq > g.followsSeq) { g.follows = r.value.follows; g.followsSeq = opened.header.seq; }'
            Replace = 'g.follows = r.value.follows; g.followsSeq = opened.header.seq;' }
         @{ Name = "another-machines-notices-are-not-read"
-           Find = '              if (so.ok && so.value.header.channel === "notices") { takeNotices(x.e, x.s, so.value, item, anomalies); break; }'
+           Find = '              if (so.ok && so.value.header.channel === "notices") { takeNotices(x.e, x.s, so.value, item, anomalies); took = true; break; }'
            Replace = '' }
         @{ Name = "a-recovery-session-sends-a-switch"
            Find = 'if (s.mode !== "passkey") throw fail(s.mode === "read-only" ? NO_PRF :'
