@@ -58,6 +58,7 @@ function New-HordeServiceTools {
         Heartbeat    = { param($Path) return (Read-HordeHeartbeat -Path $Path) }
         Idle         = { return (Get-HordePersonIdleSeconds) }
         Desktop      = { return (Get-HordeServiceDesktop) }
+        PersonPass   = { return (Test-HordeServicePersonJob) }
         Fetch        = { param($Definition, $Policy) return (Update-HordeServiceRemote -Definition $Definition -TimeoutSeconds $Policy.gitSeconds) }
         Checkout     = { param($Definition, $RunningRevision, $Policy, $Full) return (Get-HordeServiceCheckoutState -Definition $Definition -RunningRevision $RunningRevision -TimeoutSeconds $Policy.gitSeconds -Full:($Full -eq $true)) }
         ExitCode     = { param($Definition, $HordeHome, $Process) return (Read-HordeServiceExitRecord -Name $Definition.name -Process $Process -HordeHome $HordeHome) }
@@ -137,6 +138,12 @@ function Get-HordeServiceObservation {
         try { $desktop = Invoke-HordeServiceTool -Tools $Tools -Name "Desktop" } catch { $desktop = New-HordeUnknown -Reason "whether the person's desktop can be reached could not be read" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $desktop) -or $desktop.state -ceq "absent") { $desktop = New-HordeUnknown -Reason "nothing answered whether the person's desktop can be reached" }
     }
+    # Whether a job in the person's session will start it, asked only when this pass cannot.
+    $personPass = New-HordeUnknown -Reason "nobody looked: this pass can start it, or it needs no desktop"
+    if ($desktop.state -ceq "unknown" -and $null -ne $needs -and $needs.Value -eq $true -and $null -ne $Tools["PersonPass"]) {
+        try { $personPass = Invoke-HordeServiceTool -Tools $Tools -Name "PersonPass" } catch { $personPass = New-HordeUnknown -Reason "whether the person's job is scheduled could not be read" -ErrorRecord $_ }
+        if (-not (Test-HordeAnswer $personPass)) { $personPass = New-HordeUnknown -Reason "nothing answered whether the person's job is scheduled" }
+    }
     # The code its process ended with is asked only when it could matter: the definition lists
     # deliberate exit codes, and the process the state names has just been found gone.
     $exit = New-HordeUnknown -Reason "nobody looked: it has not just ended, or no exit code of its is deliberate"
@@ -144,7 +151,7 @@ function Get-HordeServiceObservation {
         try { $exit = Invoke-HordeServiceTool -Tools $Tools -Name "ExitCode" -With @($Definition, $HordeHome, $s.started) } catch { $exit = New-HordeUnknown -Reason "the code it ended with could not be read" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $exit) -or $exit.state -ceq "absent" -or ($exit.state -ceq "known" -and $exit.value -isnot [int] -and $exit.value -isnot [long])) { $exit = New-HordeUnknown -Reason "nothing recorded the code it ended with" }
     }
-    return [pscustomobject]@{ observed = (New-HordeServiceObserved -Started $started -Heartbeat $beat -Beater $beater -Checkout $checkout -Wanted $wanted -IdleSeconds $idle -ExitCode $exit -Desktop $desktop); state = $s }
+    return [pscustomobject]@{ observed = (New-HordeServiceObserved -Started $started -Heartbeat $beat -Beater $beater -Checkout $checkout -Wanted $wanted -IdleSeconds $idle -ExitCode $exit -Desktop $desktop -PersonPass $personPass); state = $s }
 }
 
 function Invoke-HordeServiceStep {
@@ -441,6 +448,27 @@ function Format-HordeServiceStatus {
     return @($lines.ToArray())
 }
 
+# Where the start-up job finds the job in the person's session: <folder>\<name>, carried in its
+# environment, so a pass of it can ask whether that job is scheduled (Test-HordeServicePersonJob).
+$script:HordeServicePersonJobVariable = "HORDE_SERVICES_PERSON_JOB"
+
+function Test-HordeServicePersonJob {
+    # Is the supervisor's job in the person's own session scheduled, marked as Horde's and enabled?
+    # known $true; unknown, with why, otherwise - including a pass that was not told its name, which
+    # then tells as it always did.
+    $named = "" + [System.Environment]::GetEnvironmentVariable($script:HordeServicePersonJobVariable)
+    if ($named -cnotmatch '\A(Horde|HordeTest)\\(.+)\z') { return (New-HordeUnknown -Reason "this pass was not told which job of the supervisor's runs in the person's session") }
+    $folder = $Matches[1]; $name = $Matches[2]
+    try {
+        foreach ($f in @(Get-HordeSchedulerFiles)) { . $f }
+        $sched = Get-HordeScheduler
+        if ($sched.state -cne "known") { return (New-HordeUnknown -Reason $sched.reason) }
+        $st = & $sched.value.status $name $folder
+        if ($st.state -ceq "known" -and $st.value.marked -eq $true -and $st.value.enabled -eq $true) { return (New-HordeKnown -Value $true) }
+        return (New-HordeUnknown -Reason ("the job " + $name + " in the person's session is not scheduled and enabled"))
+    } catch { return (New-HordeUnknown -Reason "whether the job in the person's session is scheduled could not be read" -ErrorRecord $_) }
+}
+
 function Get-HordeServiceTendJobNames {
     # The supervisor's TWO jobs (New-HordeServiceTendJob says why two), named from one: -TaskName is
     # the job in the person's own session - the name the supervisor's one job always had, so an
@@ -476,10 +504,13 @@ function New-HordeServiceTendJob {
     # takes - the move of a checkout, a self-check - may itself run a minute; ended at one minute, a
     # pass was being cut down in the middle of exactly the steps that must not be cut (safety review
     # of the first build, item 6). The home travels with it as data, as the metrics job's does.
-    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [ValidateSet("startup", "person")][string]$Kind = "startup", [switch]$Disabled)
+    # -PersonJob, for the start-up job: the name of the job in the person's session beside it.
+    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [ValidateSet("startup", "person")][string]$Kind = "startup", [string]$PersonJob = "", [switch]$Disabled)
     $home2 = Get-HordeHome
     $where = $(if ($Kind -ceq "startup") { @{ AtStartup = $true } } else { @{ WithPerson = $true; AtLogon = $true } })
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
+    $environment = @{ HORDE_HOME = $home2 }
+    if ($Kind -ceq "startup" -and $PersonJob -ne "") { $environment[$script:HordeServicePersonJobVariable] = $Folder + "\" + $PersonJob }
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment $environment -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval @where -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
 }
 
 function Invoke-HordeServiceSchedule {
@@ -501,7 +532,7 @@ function Invoke-HordeServiceSchedule {
         "install" {
             $lines = New-Object System.Collections.ArrayList
             foreach ($b in @($both)) {
-                $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $b.name -Folder $Folder -Kind $b.kind -Disabled:$Disabled
+                $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $b.name -Folder $Folder -Kind $b.kind -PersonJob $names.person -Disabled:$Disabled
                 # Installed over a job of the same name REPLACES it: one job of each kind, never two.
                 & $s.install $job
                 $st = & $s.status $b.name $Folder
@@ -514,11 +545,16 @@ function Invoke-HordeServiceSchedule {
             return @($lines.ToArray())
         }
         "remove" {
+            # BOTH ARE TRIED, whatever the first does (review of PR 249, round 2), and both results said.
             $lines = New-Object System.Collections.ArrayList
+            $failed = 0
             foreach ($b in $both) {
-                $gone = & $s.remove $b.name $Folder
-                [void]$lines.Add($(if ($gone) { "removed " + (& $where $b.name) } else { "no job " + (& $where $b.name) + "; nothing to remove" }))
+                try {
+                    $gone = & $s.remove $b.name $Folder
+                    [void]$lines.Add($(if ($gone) { "removed " + (& $where $b.name) } else { "no job " + (& $where $b.name) + "; nothing to remove" }))
+                } catch { $failed++; [void]$lines.Add("COULD NOT REMOVE " + (& $where $b.name) + ": " + $_.Exception.Message) }
             }
+            if ($failed -gt 0) { throw ($lines -join "; ") }
             [void]$lines.Add("no service is supervised until it is scheduled again. Nothing that is running was stopped.")
             return @($lines.ToArray())
         }

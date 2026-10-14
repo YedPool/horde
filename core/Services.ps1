@@ -81,6 +81,18 @@
 #     supervisor's second job, in the person's own session from sign-in (cli/ServicesTend.ps1), starts
 #     it - as does `horde services tend` typed there.
 
+# AN UPDATE IS NEVER JUDGED BY ITS ENVIRONMENT (review of PR 249, round 2). A restarted service that
+# beats, and says in its own heartbeat that it cannot work (a condition, core/Heartbeat.ps1), has not
+# proved the new revision good, and has not proved it bad either: the relay runner started before
+# anyone has signed in says keys-unavailable on ANY revision. So while an update is being confirmed,
+# such a beat HOLDS it - neither confirmed nor rolled back, past the confirm time - until the beat is
+# well (confirmed) or gone or stale (rolled back, as ever). Someone is told once that it waits.
+# THE HOLD IS CAPPED at $script:HordeServiceHoldHours hours past the confirm time. Held for ever,
+# a runner that will never mend where it is - started in a logon whose keys cannot open - would stay
+# unwell with nothing restarting it, because the restart of an unwell service is a steady-state rule.
+# At the cap the update is WITHDRAWN: rolled back to the revision before, but NOT pinned - the fault
+# was never shown to be the revision's - so it is taken again later, from scratch.
+
 # NEVER A RESTART LOOP. A start that does not last stableSeconds counts as a failure; each failure in
 # a row doubles the wait before the next start, up to a cap; after failuresBeforeEscalation of them
 # someone is told once, and the starts go on at the capped pace. One start that lasts resets it.
@@ -160,6 +172,9 @@ $script:HordeServicePhases = @("steady", "stopping", "launching", "confirming")
 # bounded like every other file Horde writes.
 $script:HordeServiceToldMost = 8
 $script:HordeServiceNoticesMost = 10
+# How long past its confirm time an update is held while its new revision beats a condition (the
+# header): twelve hours covers a machine restarted in the evening and signed into the next morning.
+$script:HordeServiceHoldHours = 12
 
 function Get-HordeServiceSettingsDeclaration { return $script:HordeServiceSettings }
 
@@ -600,8 +615,11 @@ function New-HordeServiceObserved {
     #                untracked one, which is what a checkout must be after a move that was interrupted.
     #   desktop      known when this pass can open a window on the person's desktop; unknown, with
     #                why, when it cannot. Asked only of a service that needs the desktop.
-    param($Started, $Heartbeat, $Beater, $Checkout, $Wanted, $IdleSeconds, $ExitCode = $null, $Desktop = $null)
-    $o = [ordered]@{ started = $Started; heartbeat = $Heartbeat; beater = $Beater; checkout = $Checkout; wanted = $Wanted; idleSeconds = $IdleSeconds; exitCode = $ExitCode; desktop = $Desktop }
+    #   personPass   known $true when the supervisor's job in the person's own session is scheduled,
+    #                so a pass there will start what this one cannot. Asked only when this pass cannot
+    #                reach the desktop of a service that needs it.
+    param($Started, $Heartbeat, $Beater, $Checkout, $Wanted, $IdleSeconds, $ExitCode = $null, $Desktop = $null, $PersonPass = $null)
+    $o = [ordered]@{ started = $Started; heartbeat = $Heartbeat; beater = $Beater; checkout = $Checkout; wanted = $Wanted; idleSeconds = $IdleSeconds; exitCode = $ExitCode; desktop = $Desktop; personPass = $PersonPass }
     foreach ($k in @($o.Keys)) {
         if ($null -eq $o[$k]) { $o[$k] = New-HordeUnknown -Reason ("nobody looked at " + $k) }
         Assert-HordeAnswer $o[$k]
@@ -657,8 +675,7 @@ function Get-HordeServiceLiveness {
     if ($own -and $verdict.value.fresh -and $null -ne $named -and "" + $named.Value -ne "") {
         $why = $beat.value.PSObject.Properties["why"]
         $says = "its process " + $process.pid + " is running and says it cannot work: " + $named.Value + $(if ($null -ne $why -and "" + $why.Value -ne "") { " (" + $why.Value + ")" } else { "" })
-        if ($since -lt $Definition.confirmSeconds) { return (& $result "starting" ($says + "; it started " + [long][System.Math]::Max(0, $since) + " s ago and has until " + $Definition.confirmSeconds + " s to mend itself") $process $ours $age) }
-        $r = & $result "unwell" $says $process $ours $age
+        $r = $(if ($since -lt $Definition.confirmSeconds) { & $result "starting" ($says + "; it started " + [long][System.Math]::Max(0, $since) + " s ago and has until " + $Definition.confirmSeconds + " s to mend itself") $process $ours $age } else { & $result "unwell" $says $process $ours $age })
         $r | Add-Member -NotePropertyName condition -NotePropertyValue ("" + $named.Value)
         return $r
     }
@@ -761,9 +778,12 @@ function Get-HordeServiceDecision {
         return ("it needs the person's desktop, and this pass cannot reach it (" + $Observed.desktop.reason + ")")
     }
     $noDesktop = {
-        # The wait of a service that needs the desktop this pass cannot reach. Told once.
+        # The wait of a service that needs the desktop this pass cannot reach. Told once - and only
+        # when no job in the person's session will do it: when one is scheduled, the window comes
+        # back as they sign in, which is what it was always going to do (review of PR 249, round 2).
         param([string]$Blind, [string]$What)
-        [void]$troubles.Add((New-HordeServiceTrouble -Key "no-desktop" -Text ($Blind + "; it is not " + $What + " until a pass of the supervisor runs in the person's own session")))
+        $covered = ($Observed.personPass.state -ceq "known" -and $Observed.personPass.value -eq $true)
+        if (-not $covered) { [void]$troubles.Add((New-HordeServiceTrouble -Key "no-desktop" -Text ($Blind + "; it is not " + $What + " until a pass of the supervisor runs in the person's own session, and no job of the supervisor's runs there"))) }
         return ("not " + $What + ": " + $Blind + "; a pass in the person's own session does it - the supervisor's job there, from sign-in, or horde services tend typed there")
     }
     $finish = {
@@ -799,7 +819,9 @@ function Get-HordeServiceDecision {
             $notify = "escalate"
             # what: the kind of each trouble, the part of its key before any revision. It is all a
             # notice is TOLD by (cli/ServicesTell.ps1); the sentence below stays in status and journal.
-            $what = (@($fresh | ForEach-Object { ("" + $_.key).Split(":")[0] } | Select-Object -Unique) -join ",")
+            # A condition's trouble (unwell:<word>) is told by its word and as unwell, so a teller that
+            # does not know the word still says what kind of trouble it is (cli/ServicesTell.ps1).
+            $what = (@($fresh | ForEach-Object { $k = ("" + $_.key).Split(":"); if ($k[0] -ceq "unwell" -and $k.Count -gt 1) { $k[1]; "unwell" } else { $k[0] } } | Select-Object -Unique) -join ",")
             $notice = "service " + $name + ": " + (@($fresh | ForEach-Object { $_.text }) -join "; ")
             $s.told = [string[]]@(@($s.told) + @($fresh | ForEach-Object { $_.key }) | Select-Object -Last $script:HordeServiceToldMost)
         } elseif ($troubles.Count -eq 0 -and @($s.told).Count -gt 0 -and $Healthy) {
@@ -835,7 +857,7 @@ function Get-HordeServiceDecision {
     if ($null -ne $s.refused -and $s.refused.kind -ceq "retreat" -and $Observed.checkout.state -ceq "known" -and ("" + $Observed.checkout.value.head) -cne $s.refused.revision) { $s.refused = $null }
     if ($null -ne $s.refused -and $s.refused.kind -ceq "retreat") { [void]$troubles.Add((New-HordeServiceTrouble -Key ("retreat:" + $s.refused.revision) -Text ("its roll-back from " + (ConvertTo-HordeServiceShortRevision $s.refused.revision) + " could not be done (" + $s.refused.reason + "); its checkout needs a person"))) }
 
-    $by = @{ update = "restart-for-update"; rollback = "roll-back"; heal = "start" }
+    $by = @{ update = "restart-for-update"; rollback = "roll-back"; withdraw = "roll-back"; heal = "start" }
 
     # ---- stopping: something asked it to stop; wait for the process to go, then end it -------------
     if ($s.phase -ceq "stopping") {
@@ -850,8 +872,8 @@ function Get-HordeServiceDecision {
         }
         $s.started = $null; $s.stuck = ""
         if ($s.intent -ceq "update") { return (& $finish "restart-for-update" "advance" "advance" ("it has stopped; its checkout moves to " + (ConvertTo-HordeServiceShortRevision $s.target)) $null $s.target) }
-        if ($s.intent -ceq "rollback") {
-            [void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart and is rolled back to " + (ConvertTo-HordeServiceShortRevision $s.from) + "; it is not tried again until a newer one exists")))
+        if ($s.intent -ceq "rollback" -or $s.intent -ceq "withdraw") {
+            if ($s.intent -ceq "rollback") { [void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart and is rolled back to " + (ConvertTo-HordeServiceShortRevision $s.from) + "; it is not tried again until a newer one exists"))) }
             return (& $finish "roll-back" "retreat" "retreat" ("it has stopped; its checkout goes back to " + (ConvertTo-HordeServiceShortRevision $s.from)) $null $s.from)
         }
         # heal: it is gone, and the ordinary rules for a service that is not running take over.
@@ -871,8 +893,8 @@ function Get-HordeServiceDecision {
         }
         $pending = & $unrecorded
         if ($null -ne $pending) { return $pending }
-        if ($s.intent -ceq "rollback") {
-            [void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart and is rolled back to " + (ConvertTo-HordeServiceShortRevision $s.from) + "; it is not tried again until a newer one exists")))
+        if ($s.intent -ceq "rollback" -or $s.intent -ceq "withdraw") {
+            if ($s.intent -ceq "rollback") { [void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart and is rolled back to " + (ConvertTo-HordeServiceShortRevision $s.from) + "; it is not tried again until a newer one exists"))) }
             return (& $finish "roll-back" "start" "start-previous" ("starting the previous revision " + (ConvertTo-HordeServiceShortRevision $s.from)) $null $s.from)
         }
         return (& $finish "restart-for-update" "start" "start-new" ("starting the new revision " + (ConvertTo-HordeServiceShortRevision $s.target)) $null $s.target)
@@ -896,9 +918,23 @@ function Get-HordeServiceDecision {
             }
             return (& $finish "wait" "" "confirming" ("the new revision is running; it is confirmed if it still is in " + $left + " s"))
         }
+        # THE HOLD (the header): a fresh beat of its own that names a condition proves nothing either way.
+        $named = $live.PSObject.Properties["condition"]
+        if ($live.alive -cne "no" -and $null -ne $named -and "" + $named.Value -ne "") {
+            $short = ConvertTo-HordeServiceShortRevision $s.target
+            $until = $(if ($s.confirmBy -is [datetime]) { $s.confirmBy.AddHours($script:HordeServiceHoldHours) } else { $at })
+            if ($at -lt $until) {
+                [void]$troubles.Add((New-HordeServiceTrouble -Key ("update-held:" + $s.target) -Text ("the update to " + $short + " is held - neither confirmed nor rolled back - because its new revision runs and says it cannot work (" + $named.Value + "); it is confirmed once that mends, and withdrawn, not pinned, after " + $script:HordeServiceHoldHours + " h")))
+                return (& $finish "wait" "" "update-held" ($live.why + "; the update to " + $short + " is held, neither confirmed nor rolled back, until that mends - for at most " + [long][System.Math]::Ceiling(($until - $at).TotalHours) + " h more"))
+            }
+            # THE CAP: withdrawn - rolled back, never pinned, so it is taken again later.
+            $s.phase = "stopping"; $s.intent = "withdraw"; $s.phaseSince = $at; $s.confirmBy = $null
+            [void]$troubles.Add((New-HordeServiceTrouble -Key ("update-withdrawn:" + $s.target) -Text ("the update to " + $short + " was held " + $script:HordeServiceHoldHours + " h while its new revision said it cannot work (" + $named.Value + "); it is withdrawn to " + (ConvertTo-HordeServiceShortRevision $s.from) + ", not pinned, and is taken again later")))
+            return (& $finish "roll-back" "stop" "withdraw" ($live.why + "; held " + $script:HordeServiceHoldHours + " h, the update to " + $short + " is withdrawn, not pinned") $live.process)
+        }
         if ($live.alive -ceq "no") { $rollback = "the new revision's process ended before it proved itself" }
-        elseif ($left -le 0) { $rollback = "the new revision gave no fresh heartbeat within " + $Definition.confirmSeconds + " s of its restart" }
-        if ($rollback -eq "") { return (& $finish "wait" "" "confirming" ("waiting for the new revision's first heartbeat; " + $left + " s left")) }
+        elseif ($left -le 0) { $rollback = "the new revision did not prove itself within " + $Definition.confirmSeconds + " s of its restart: " + $live.why }
+        if ($rollback -eq "") { return (& $finish "wait" "" "confirming" ("waiting for the new revision's first heartbeat of its own; " + $left + " s left")) }
         $s.phase = "stopping"; $s.intent = "rollback"; $s.phaseSince = $at; $s.confirmBy = $null
         [void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart (" + $rollback + ") and is rolled back to " + (ConvertTo-HordeServiceShortRevision $s.from) + "; it is not tried again until a newer one exists")))
         if ($live.alive -ceq "no") { $s.started = $null; return (& $finish "roll-back" "retreat" "retreat" ($rollback + "; its checkout goes back to " + (ConvertTo-HordeServiceShortRevision $s.from)) $null $s.from) }
@@ -939,7 +975,7 @@ function Get-HordeServiceDecision {
         # Running, beating, and saying it cannot work: told once, by the condition it names, and
         # restarted as a hung one is, a failure in a row each time it was still proving itself, so
         # the restarts slow down. Never alive: a phone's answers wait on it.
-        [void]$troubles.Add((New-HordeServiceTrouble -Key ("" + $live.condition) -Text ($live.why + "; it is restarted, more slowly each time, until it works")))
+        [void]$troubles.Add((New-HordeServiceTrouble -Key ("unwell:" + $live.condition) -Text ($live.why + "; it is restarted, more slowly each time, until it works")))
         $blind = & $deskless
         if ($blind -ne "") { return (& $finish "wait" "" "no-desktop" (& $noDesktop $blind "restarted")) }
         if ($s.proving -eq $true) { $s.failures = [int]$s.failures + 1; $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy)); $s.proving = $false }
@@ -1074,7 +1110,9 @@ function Complete-HordeServiceStep {
         }
         "retreat" {
             # The bad revision is pinned whether or not the checkout went back: it is never tried again.
-            $s.pinnedRevision = $s.target; $s.verifiedRevision = ""
+            # A WITHDRAWN one is not (the header, THE HOLD): nothing showed it to be bad.
+            if ($s.intent -cne "withdraw") { $s.pinnedRevision = $s.target }
+            $s.verifiedRevision = ""
             if ($ok) { $s.phase = "launching"; $s.phaseSince = $at; $s.moving = $null }
             else {
                 if (& $untouched) { $s.moving = $null }

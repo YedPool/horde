@@ -107,8 +107,8 @@
            Find = '{ @{ AtStartup = $true } }'
            Replace = '{ @{} }' }
         @{ Name = "job-home-not-carried"
-           Find = '-Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 }'
-           Replace = '-Arguments @("services", "tend") -Environment @{}' }
+           Find = '    $environment = @{ HORDE_HOME = $home2 }'
+           Replace = '    $environment = @{}' }
         @{ Name = "install-unverified"
            Find = 'if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job "'
            Replace = 'if ($false) { throw ("the " + $s.name + " did not keep the job "' }
@@ -163,15 +163,15 @@
            Find = '    if ($null -ne $needs -and $needs.Value -eq $true) {'
            Replace = '    if ($true) {' }
         @{ Name = "desktop-not-handed-to-the-decision"
-           Find = '-ExitCode $exit -Desktop $desktop); state = $s }'
-           Replace = '-ExitCode $exit); state = $s }' }
+           Find = '-ExitCode $exit -Desktop $desktop -PersonPass $personPass); state = $s }'
+           Replace = '-ExitCode $exit -PersonPass $personPass); state = $s }' }
         @{ Name = "install-says-the-persons-session"
            Find = 'says = "at start-up and every minute, whether or not anyone is signed in, with no password stored" }'
            Replace = 'says = "every minute, in the person''s own session" }' }
             # --- review of PR 249 ---
         @{ Name = "person-job-is-a-start-up-job"
-           Find = '-Name $b.name -Folder $Folder -Kind $b.kind -Disabled:$Disabled'
-           Replace = '-Name $b.name -Folder $Folder -Kind "startup" -Disabled:$Disabled' }
+           Find = '-Name $b.name -Folder $Folder -Kind $b.kind -PersonJob $names.person -Disabled:$Disabled'
+           Replace = '-Name $b.name -Folder $Folder -Kind "startup" -PersonJob $names.person -Disabled:$Disabled' }
         @{ Name = "person-job-installed-first"
            Find = '            foreach ($b in @($both)) {'
            Replace = '            foreach ($b in @(@($both)[1, 0])) {' }
@@ -187,5 +187,24 @@
         @{ Name = "install-names-no-account"
            Find = '                $as = $(if ($null -ne $st.value.PSObject.Properties["runsAs"]'
            Replace = '                $as = ""; $null = $(if ($null -ne $st.value.PSObject.Properties["runsAs"]' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "person-job-not-named-to-start-up"
+           Find = 'if ($Kind -ceq "startup" -and $PersonJob -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "person-job-never-asked"
+           Find = 'if ($desktop.state -ceq "unknown" -and $null -ne $needs -and $needs.Value -eq $true -and $null -ne $Tools["PersonPass"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "person-job-answer-dropped"
+           Find = '-Desktop $desktop -PersonPass $personPass); state'
+           Replace = '-Desktop $desktop); state' }
+        @{ Name = "disabled-person-job-counts"
+           Find = 'if ($st.state -ceq "known" -and $st.value.marked -eq $true -and $st.value.enabled -eq $true) { return (New-HordeKnown -Value $true) }'
+           Replace = 'if ($st.state -ceq "known" -and $st.value.marked -eq $true) { return (New-HordeKnown -Value $true) }' }
+        @{ Name = "unschedule-stops-at-first-failure"
+           Find = '} catch { $failed++; [void]$lines.Add("COULD NOT REMOVE "'
+           Replace = '} catch { throw; $failed++; [void]$lines.Add("COULD NOT REMOVE "' }
+        @{ Name = "unschedule-failure-swallowed"
+           Find = '            if ($failed -gt 0) { throw ($lines -join "; ") }'
+           Replace = '' }
     )
 }

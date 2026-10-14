@@ -159,7 +159,7 @@ function ConvertFrom-HordeServiceStateRecord {
         }
     }
     if ($s.phase -cne "steady") {
-        if (@("update", "rollback", "heal") -cnotcontains $s.intent) { return (& $bad "it is part way through something and does not say what") }
+        if (@("update", "rollback", "withdraw", "heal") -cnotcontains $s.intent) { return (& $bad "it is part way through something and does not say what") }
         if ($s.phaseSince -isnot [datetime]) { return (& $bad "it is part way through something and does not say since when") }
         if ($s.intent -cne "heal" -and ($s.target -eq "" -or $s.from -eq "")) { return (& $bad "it is part way through an update and does not say between which revisions") }
         if ($s.intent -ceq "heal" -and $s.phase -cne "stopping") { return (& $bad "its phase and what it is doing do not go together") }

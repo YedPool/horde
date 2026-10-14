@@ -52,6 +52,13 @@ try {
     Check (Throws { Write-HordeHeartbeat -Path $sickPath -At $t0 -ProcessId 1 -TickSeconds 1 -Condition "Keys Gone" } "one lower-case word") "a condition is one lower-case word"
     [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": "<b>no</b>", "why": "x" }')
     Check ((Read-HordeHeartbeat -Path $sickPath).value.condition -ceq "unwell") "a condition that is not a word is still read as one - unwell - never as well"
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": [] }')
+    $emptyList = (Read-HordeHeartbeat -Path $sickPath).value.condition
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": {} }')
+    $emptyObject = (Read-HordeHeartbeat -Path $sickPath).value.condition
+    Check ($emptyList -ceq "unwell" -and $emptyObject -ceq "unwell") ("and so is an empty list or an empty object (" + $emptyList + ", " + $emptyObject + ")")
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": null }')
+    Check ((Read-HordeHeartbeat -Path $sickPath).value.condition -ceq "") "CONTROL: a condition that is null is none"
 
     Write-Host ""
     Write-Host "--- absent, unknown and known are told apart ---" -ForegroundColor Cyan

@@ -57,6 +57,8 @@ $script:HordeServiceTellSentences = [ordered]@{
     "start-unrecorded" = "a start of it was interrupted and it keeps no heartbeat, so whether it is running cannot be told"
     "keys-unavailable" = "it is running and cannot use this machine's keys, so nothing from the phone is opened; it is restarted, more slowly each time, and should work once someone has signed in"
     "unwell"           = "it is running and says it cannot do its work; it is restarted, more slowly each time"
+    "update-held"      = "an update is held, neither confirmed nor rolled back, because its new revision says it cannot work; it is confirmed once that mends"
+    "update-withdrawn" = "an update was held too long and is withdrawn, not pinned; it is taken again later"
     "no-desktop"       = "it needs the person's desktop, which the pass that runs before anyone signs in cannot reach; it is started once someone signs in"
 }
 $script:HordeServiceTellNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
@@ -72,6 +74,8 @@ function Format-HordeServiceNoticeBody {
     $said = New-Object System.Collections.ArrayList
     $what = $Notice.PSObject.Properties["what"]
     if ($null -ne $what) { foreach ($w in @(("" + $what.Value) -split ",")) { if ($script:HordeServiceTellSentences.Contains($w) -and -not $said.Contains($script:HordeServiceTellSentences[$w])) { [void]$said.Add($script:HordeServiceTellSentences[$w]) } } }
+    # A condition is told as "unwell" only when its own word has no sentence here (core/Services.ps1).
+    if ($said.Count -gt 1 -and $said.Contains($script:HordeServiceTellSentences["unwell"])) { $said.Remove($script:HordeServiceTellSentences["unwell"]) }
     if ($said.Count -eq 0) { [void]$said.Add("it needs a person") }
     return ("HORDE SERVICES - needs attention`n" + $service + ": " + ($said -join "; ") + "`nSee it with: horde services status")
 }

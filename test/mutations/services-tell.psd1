@@ -39,5 +39,12 @@
         @{ Name = "keys-unavailable-told-as-needs-a-person"
            Find = '    "keys-unavailable" = '
            Replace = '    "keys-unavailable-x" = ' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "general-said-beside-specific"
+           Find = 'if ($said.Count -gt 1 -and $said.Contains($script:HordeServiceTellSentences["unwell"])) { $said.Remove($script:HordeServiceTellSentences["unwell"]) }'
+           Replace = '' }
+        @{ Name = "update-held-told-as-needs-a-person"
+           Find = '    "update-held"      = '
+           Replace = '    "update-held-x"    = ' }
     )
 }

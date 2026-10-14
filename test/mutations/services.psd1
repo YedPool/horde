@@ -161,8 +161,8 @@
            Find = '            if ($null -ne $Definition.alive -or $left -le 0) {'
            Replace = '            if ($true) {' }
         @{ Name = "never-rolls-back-on-silence"
-           Find = '        elseif ($left -le 0) { $rollback = "the new revision gave no fresh heartbeat within "'
-           Replace = '        elseif ($false) { $rollback = "the new revision gave no fresh heartbeat within "' }
+           Find = '        elseif ($left -le 0) { $rollback = "the new revision did not prove itself within "'
+           Replace = '        elseif ($false) { $rollback = "the new revision did not prove itself within "' }
         @{ Name = "never-rolls-back-on-death"
            Find = '        if ($live.alive -ceq "no") { $rollback = "the new revision''s process ended before it proved itself" }'
            Replace = '' }
@@ -170,8 +170,8 @@
            Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart (" + $rollback'
            Replace = '[void]@((New-HordeServiceTrouble -Key ("rolled-back:" + $s.target) -Text ("revision " + (ConvertTo-HordeServiceShortRevision $s.target) + " did not prove itself after its restart (" + $rollback' }
         @{ Name = "bad-revision-not-pinned"
-           Find = '            $s.pinnedRevision = $s.target; $s.verifiedRevision = ""'
-           Replace = '            $s.verifiedRevision = ""' }
+           Find = 'if ($s.intent -cne "withdraw") { $s.pinnedRevision = $s.target }'
+           Replace = 'if ($false) { $s.pinnedRevision = $s.target }' }
         @{ Name = "failed-check-not-recorded"
            Find = '            else { $s.verifiedRevision = ""; $s.refused = [pscustomobject]@{ revision = $Decision.revision; kind = "verify"; reason = $detail; at = $at; count = (& $times $Decision.revision "verify") } }'
            Replace = '            else { $s.verifiedRevision = $Decision.revision }' }
@@ -304,11 +304,11 @@
            Replace = 'if ($false) {' }
         # 9. a notice is told by its kind
         @{ Name = "kind-not-carried"
-           Find = '$what = (@($fresh | ForEach-Object { ("" + $_.key).Split(":")[0] } | Select-Object -Unique) -join ",")'
-           Replace = '$what = ""' }
+           Find = '$what = (@($fresh | ForEach-Object { $k = ("" + $_.key).Split(":");'
+           Replace = '$what = ""; $null = (@($fresh | ForEach-Object { $k = ("" + $_.key).Split(":");' }
         @{ Name = "kind-carries-the-revision"
-           Find = '$what = (@($fresh | ForEach-Object { ("" + $_.key).Split(":")[0] } | Select-Object -Unique) -join ",")'
-           Replace = '$what = (@($fresh | ForEach-Object { "" + $_.key }) -join ",")' }
+           Find = '} else { $k[0] } } | Select-Object -Unique) -join ",")'
+           Replace = '} else { "" + $_.key } } | Select-Object -Unique) -join ",")' }
         @{ Name = "notice-kept-without-its-kind"
            Find = 'at = $Now.ToUniversalTime(); what = (Get-HordeServiceNoticeWhat -Notice $Decision) })'
            Replace = 'at = $Now.ToUniversalTime(); what = "" })' }
@@ -354,16 +354,38 @@
            Find = 'if ($own -and $verdict.value.fresh -and $null -ne $named -and "" + $named.Value -ne "") {'
            Replace = 'if ($false) {' }
         @{ Name = "unwell-given-no-time"
-           Find = 'if ($since -lt $Definition.confirmSeconds) { return (& $result "starting" ($says'
-           Replace = 'if ($false) { return (& $result "starting" ($says' }
+           Find = '$r = $(if ($since -lt $Definition.confirmSeconds) { & $result "starting" ($says'
+           Replace = '$r = $(if ($false) { & $result "starting" ($says' }
         @{ Name = "unwell-not-told"
-           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key ("" + $live.condition)'
-           Replace = '$null = ((New-HordeServiceTrouble -Key ("" + $live.condition)' }
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key ("unwell:" + $live.condition)'
+           Replace = '$null = ((New-HordeServiceTrouble -Key ("unwell:" + $live.condition)' }
         @{ Name = "unwell-restarted-without-back-off"
            Find = 'if ($s.proving -eq $true) { $s.failures = [int]$s.failures + 1;'
            Replace = 'if ($false) { $s.failures = [int]$s.failures + 1;' }
         @{ Name = "unwell-left-running"
            Find = 'return (& $finish "start" "stop" "unwell"'
            Replace = 'return (& $finish "wait" "" "unwell"' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "condition-judges-the-update"
+           Find = 'if ($live.alive -cne "no" -and $null -ne $named -and "" + $named.Value -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "hold-never-ends"
+           Find = '            if ($at -lt $until) {'
+           Replace = '            if ($true) {' }
+        @{ Name = "hold-not-told"
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key ("update-held:" + $s.target)'
+           Replace = '$null = ((New-HordeServiceTrouble -Key ("update-held:" + $s.target)' }
+        @{ Name = "withdrawn-update-pinned"
+           Find = 'if ($s.intent -cne "withdraw") { $s.pinnedRevision = $s.target }'
+           Replace = '$s.pinnedRevision = $s.target' }
+        @{ Name = "roll-back-says-no-beat"
+           Find = '$rollback = "the new revision did not prove itself within " + $Definition.confirmSeconds + " s of its restart: " + $live.why'
+           Replace = '$rollback = "the new revision gave no fresh heartbeat within " + $Definition.confirmSeconds + " s of its restart"' }
+        @{ Name = "condition-told-only-by-its-word"
+           Find = 'if ($k[0] -ceq "unwell" -and $k.Count -gt 1) { $k[1]; "unwell" }'
+           Replace = 'if ($k[0] -ceq "unwell" -and $k.Count -gt 1) { $k[1] }' }
+        @{ Name = "person-job-ignored"
+           Find = '$covered = ($Observed.personPass.state -ceq "known" -and $Observed.personPass.value -eq $true)'
+           Replace = '$covered = $false' }
     )
 }

@@ -53,7 +53,7 @@ $svcText = '"svc": { "checkout": "' + $co + '", "hordeHome": "' + $served + '", 
 function New-World {
     return @{ now = $t0; tick = 0; procs = @{}; beat = (New-HordeAbsent -Note "none"); head = $revA; wanted = $revA; clean = $true; idle = (New-HordeKnown -Value ([long]9999))
         calls = (New-Object System.Collections.ArrayList); nextPid = 1000; startOk = $true; beatsOnStart = $true; verifyOk = $true; tableOk = $true; fetchOk = $true; told = (New-Object System.Collections.ArrayList); tellOk = $true; stopEnds = $true
-        spotless = $true; exit = (New-HordeUnknown -Reason "nothing recorded the code it ended with"); sawMark = $null; markAtStop = $null; desktop = (New-HordeKnown -Value "here") }
+        spotless = $true; exit = (New-HordeUnknown -Reason "nothing recorded the code it ended with"); sawMark = $null; markAtStop = $null; desktop = (New-HordeKnown -Value "here"); personPass = (New-HordeUnknown -Reason "no job in the person's session") }
 }
 function New-Tools {
     return @{
@@ -64,6 +64,7 @@ function New-Tools {
         Heartbeat    = { param($Path) [void]$W.calls.Add("heartbeat " + $Path); return $W.beat }
         Idle         = { [void]$W.calls.Add("idle"); return $W.idle }
         Desktop      = { [void]$W.calls.Add("desktop"); return $W.desktop }
+        PersonPass   = { [void]$W.calls.Add("personpass"); return $W.personPass }
         Fetch        = { param($Definition, $Policy) [void]$W.calls.Add("fetch"); return [pscustomobject]@{ ok = $W.fetchOk; detail = $(if ($W.fetchOk) { "" } else { "could not resolve host" }) } }
         Checkout     = {
             param($Definition, $RunningRevision, $Policy, $Full)
@@ -157,6 +158,10 @@ try {
     $r = Pass $hD
     Check ((Calls "start") -eq 0 -and (Calls "desktop") -ge 1 -and $r.services[0].code -ceq "no-desktop" -and ($r.lines -join " | ") -like ("*svc: wait - not started: it needs the person's desktop, and this pass cannot reach it (" + $sessionZero + ")*")) "the S4U pass does not start a needsDesktop service - under a non-interactive session it is not started, and the pass's line says why"
     Check (@($W.told | Where-Object { $_.what -ceq "no-desktop" }).Count -eq 1 -and (Format-HordeServiceNoticeBody -Notice $W.told[0]) -like "*service svc: it needs the person's desktop, which the pass that runs before anyone signs in cannot reach; it is started once someone signs in*") "and the warchief is told, in the teller's own fixed words"
+    $W = New-World; $W.idle = New-HordeUnknown -Reason $sessionZero; $W.desktop = New-HordeUnknown -Reason $sessionZero; $W.personPass = New-HordeKnown -Value $true
+    $hD2 = New-Home "hD2" ($svcText.Replace('"follow": {', '"needsDesktop": true, "follow": {'))
+    $r = Pass $hD2
+    Check ((Calls "start") -eq 0 -and (Calls "personpass") -ge 1 -and $r.services[0].code -ceq "no-desktop" -and $W.told.Count -eq 0) "when the person's job is scheduled, the start-up pass leaves the window to it and tells nobody: it comes back as they sign in"
     $W.desktop = New-HordeKnown -Value "here"; $W.calls.Clear(); $W.now = $W.now.AddSeconds(60)
     $r = Pass $hD
     Check ((Calls "start") -eq 1) "the interactive pass - the person's job, from sign-in - starts a needsDesktop service"
@@ -388,6 +393,26 @@ try {
         Check ((@(Invoke-HordeServiceSchedule -Action status -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde)) -join " " -like "*neither job is installed: no service is being supervised*") "and then status says nothing is supervised"
         Check ((@(Invoke-HordeServiceSchedule -Action remove -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde))[0] -like "no job*") "removing what is not there says so"
         Check ((Throws { Invoke-HordeServiceSchedule -Action install -TaskName "fake tend" -Folder "Microsoft" -HordeScript $horde } "not one of Horde's scheduler folders") -and (Throws { Invoke-HordeServiceSchedule -Action remove -TaskName "fake tend" -Folder "Microsoft" -HordeScript $horde } "not one of Horde's scheduler folders") -and (Throws { Invoke-HordeServiceSchedule -Action status -TaskName "C:\Windows\x" -Folder "HordeTest" -HordeScript $horde } "not a job name")) "it acts only in Horde's own scheduler folders and on plain job names - when removing and showing, as when installing"
+        Register-HordeScheduler -Name "fake" -Available { $true } -Install { param($j) $fake.installs++; $fake.jobs[$j.folder + "\" + $j.name] = $j } -Remove { param($n, $f) if ($fake.jobs.ContainsKey($f + "\" + $n)) { $fake.jobs.Remove($f + "\" + $n); $true } else { $false } } -Status $fakeStatus
+        $null = Invoke-HordeServiceSchedule -Action install -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde
+        $savedPersonJob = $env:HORDE_SERVICES_PERSON_JOB
+        try {
+            $env:HORDE_SERVICES_PERSON_JOB = $null
+            Check ((Test-HordeServicePersonJob).reason -like "*was not told which job*") "a pass not told the name of the person's job cannot say it is scheduled"
+            $env:HORDE_SERVICES_PERSON_JOB = "HordeTest\fake tend"
+            Check ((Test-HordeServicePersonJob).state -ceq "known") "a pass told its name finds it scheduled, marked and enabled"
+            $fake.jobs["HordeTest\fake tend"].disabled = $true
+            Check ((Test-HordeServicePersonJob).state -ceq "unknown") "a disabled one will start nothing, so it is not counted"
+            $fake.jobs["HordeTest\fake tend"].disabled = $false
+            $env:HORDE_SERVICES_PERSON_JOB = "Microsoft\fake tend"
+            Check ((Test-HordeServicePersonJob).state -ceq "unknown") "nor one outside Horde's folders"
+        } finally { $env:HORDE_SERVICES_PERSON_JOB = $savedPersonJob }
+        Check ($fake.jobs["HordeTest\fake tend at start-up"].environment["HORDE_SERVICES_PERSON_JOB"] -ceq "HordeTest\fake tend" -and -not $fake.jobs["HordeTest\fake tend"].environment.ContainsKey("HORDE_SERVICES_PERSON_JOB")) "the start-up job is told which job runs in the person's session, so it can ask whether that one will start a window"
+        Register-HordeScheduler -Name "fake" -Available { $true } -Install { param($j) } -Remove { param($n, $f) if ($n -like "*at start-up") { throw "the scheduler is busy" }; if ($fake.jobs.ContainsKey($f + "\" + $n)) { $fake.jobs.Remove($f + "\" + $n); $true } else { $false } } -Status $fakeStatus
+        $rmErr = ""
+        try { $null = Invoke-HordeServiceSchedule -Action remove -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde } catch { $rmErr = $_.Exception.Message }
+        Check ($rmErr -like "COULD NOT REMOVE 'fake tend at start-up'*the scheduler is busy; removed 'fake tend' *" -and -not $fake.jobs.ContainsKey("HordeTest\fake tend")) ("unschedule tries both removals when the first throws, and reports both (" + $rmErr + ")")
+        $fake.jobs.Clear()
         Register-HordeScheduler -Name "fake" -Available { $true } -Install { param($j) } -Remove { param($n, $f) $false } -Status { param($n, $f) New-HordeAbsent -Note "none" }
         Check (Throws { Invoke-HordeServiceSchedule -Action install -TaskName "fake tend" -Folder "HordeTest" -HordeScript $horde } "did not keep") "a scheduler that does not keep the job makes install fail"
     } finally {
@@ -874,7 +899,10 @@ try {
     Check ((Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "escalate"; text = "x"; service = $outside; what = "failing" })) -like "HORDE SERVICES - needs attention`na service: it keeps failing to stay up*") "a service name that is not a service name is not repeated either"
     Check ((Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "recovered"; text = $outside; service = "svc" })) -ceq "HORDE SERVICES - recovered`nservice svc: what it was told about is over, and it is running`nSee it with: horde services status") "a recovery is fixed words too"
     Check ((Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "escalate"; text = "x"; service = "thr"; what = "ended-itself" })) -like "*service thr: it ended itself on purpose and is held*") "a deliberate exit has its own sentence"
-    Check ((Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "escalate"; text = "x"; service = "relay-runner"; what = "keys-unavailable" })) -like "*service relay-runner: it is running and cannot use this machine's keys, so nothing from the phone is opened*") "a runner that cannot use its keys has its own sentence (review of PR 249)"
+    $keysBody = Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "escalate"; text = "x"; service = "relay-runner"; what = "keys-unavailable,unwell" })
+    Check ($keysBody -like "*service relay-runner: it is running and cannot use this machine's keys, so nothing from the phone is opened*" -and $keysBody -notlike "*says it cannot do its work*") "a runner that cannot use its keys has its own sentence, and not the general one too (review of PR 249)"
+    Check ((Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "escalate"; text = "x"; service = "svc"; what = "disk-full,unwell" })) -like "*service svc: it is running and says it cannot do its work; it is restarted*") "a condition the teller has no sentence for is told as unwell, never by its own word"
+    Check ((Format-HordeServiceNoticeBody -Notice ([pscustomobject]@{ kind = "escalate"; text = "x"; service = "svc"; what = "update-held" })) -like "*an update is held, neither confirmed nor rolled back*") "a held update has its own sentence"
     # A TEST'S HOME TELLS NOBODY: refused before a messenger or a seat is even looked for.
     $tempTell = Send-HordeServiceNotices -Notices @($notice) -HordeHome $h1 -Policy $pol -Seat { throw "the seat must not be read for a home under the temp folder" }
     Check (@($tempTell.told).Count -eq 0 -and $tempTell.problem -like "*under the temp folder, so it is a test's: nobody is told*") "a tell from a Horde home under the temp folder is refused, whatever its settings say"

@@ -190,10 +190,12 @@ function Read-HordeHeartbeat {
     $pass = [long]0
     $count = $j.PSObject.Properties["pass"]
     if ($null -ne $count -and ($count.Value -is [int] -or $count.Value -is [long]) -and $count.Value -ge 0) { $pass = [long]$count.Value }
-    # A condition that is not one word is still a condition: it is read as "unwell", never as well.
+    # A condition that is not one word is still a condition: it is read as "unwell", never as well -
+    # an empty list or an empty object included (review of PR 249, round 2). Only a condition left
+    # out, null or the empty text is none.
     $condition = ""; $why = ""
     $c = $j.PSObject.Properties["condition"]
-    if ($null -ne $c -and $null -ne $c.Value -and ("" + $c.Value) -ne "") {
+    if ($null -ne $c -and $null -ne $c.Value -and -not ($c.Value -is [string] -and $c.Value -eq "")) {
         $condition = $(if (("" + $c.Value) -cmatch $script:HordeHeartbeatConditionPattern) { "" + $c.Value } else { "unwell" })
         $w = $j.PSObject.Properties["why"]
         if ($null -ne $w) { $why = ConvertTo-HordeHeartbeatWhy -Text $w.Value }

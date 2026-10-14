@@ -48,14 +48,14 @@ $none = New-HordeAbsent -Note "none"
 function Obs {
     # An observation. -Running is the state's own process when it is alive; -Beat a heartbeat answer;
     # -Beater the process the heartbeat names when THAT is alive and is not the state's own.
-    param($Running = $null, $Beat = $null, $Beater = $null, $Checkout = $null, $Wanted = $null, $Idle = $null, $Started = $null, $Exit = $null, $Desktop = $null)
+    param($Running = $null, $Beat = $null, $Beater = $null, $Checkout = $null, $Wanted = $null, $Idle = $null, $Started = $null, $Exit = $null, $Desktop = $null, $PersonPass = $null)
     $st = $(if ($null -ne $Started) { $Started } elseif ($null -ne $Running) { New-HordeKnown -Value $Running } else { $none })
     $bt = $(if ($null -ne $Beat) { $Beat } else { $none })
     $br = $(if ($null -ne $Beater) { New-HordeKnown -Value $Beater } elseif ($null -ne $Running -and $null -ne $Beat) { New-HordeKnown -Value $Running } else { $none })
     $co = $(if ($null -ne $Checkout) { $Checkout } else { $none })
     $wa = $(if ($null -ne $Wanted) { $Wanted } else { $none })
     $id = $(if ($null -ne $Idle) { $Idle } else { New-HordeUnknown -Reason "nobody looked" })
-    return (New-HordeServiceObserved -Started $st -Heartbeat $bt -Beater $br -Checkout $co -Wanted $wa -IdleSeconds $id -ExitCode $Exit -Desktop $Desktop)
+    return (New-HordeServiceObserved -Started $st -Heartbeat $bt -Beater $br -Checkout $co -Wanted $wa -IdleSeconds $id -ExitCode $Exit -Desktop $Desktop -PersonPass $PersonPass)
 }
 function Decide { param($Def, $State, $Seen, [datetime]$At, [switch]$IgnoreIdle, [double]$Gap = 0) return (Get-HordeServiceDecision -Definition $Def -State $State -Observed $Seen -Now $At -Policy $policy -IgnoreIdle:$IgnoreIdle -SupervisorGapSeconds $Gap) }
 function Did {
@@ -519,7 +519,7 @@ try {
     $sSick = New-HordeServiceState -Name "svc"; $sSick.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
     $dSick = Decide $svc $sSick (Obs -Running $run -Beat (& $sickBeat 700 $run.startedAt $t0.AddSeconds(-5))) $t0
     Check ((Is $dSick "start" "stop" "unwell") -and $dSick.live.alive -ceq "unwell" -and $dSick.reason -like "*its process 700 is running and says it cannot work: keys-unavailable (Keyset does not exist)*" -and $dSick.state.phase -ceq "stopping") ("a runner whose fresh heartbeat of its own says keys-unavailable is not alive: it is stopped and started again (" + $dSick.reason + ")")
-    Check ($dSick.notify -ceq "escalate" -and $dSick.what -ceq "keys-unavailable") "and the warchief is told, by the condition it named"
+    Check ($dSick.notify -ceq "escalate" -and $dSick.what -ceq "keys-unavailable,unwell") "and the warchief is told, by the condition it named and as unwell"
     $justBorn = Proc 710 $t0.AddSeconds(-20)
     $sNew = New-HordeServiceState -Name "svc"; $sNew.started = [pscustomobject]@{ pid = 710; startedAt = $justBorn.startedAt; at = $justBorn.startedAt }; $sNew.proving = $true
     $dYoung = Decide $svc $sNew (Obs -Running $justBorn -Beat (& $sickBeat 710 $justBorn.startedAt $t0.AddSeconds(-2))) $t0
@@ -529,6 +529,35 @@ try {
     $told = $dSick.state; $told.phase = "steady"; $told.intent = ""
     Check ((Decide $svc $told (Obs -Running $run -Beat (& $sickBeat 700 $run.startedAt $t0.AddSeconds(55))) $t0.AddSeconds(60)).notify -eq "") "told once, not every pass"
     Check ((Is (Decide $svc $sSick (Obs -Running $run -Beat (Beat 700 $run.startedAt $t0.AddSeconds(-5))) $t0) "nothing" "" "running")) "CONTROL: the same heartbeat with no condition is alive"
+
+    Write-Host ""
+    Write-Host "--- an update is never judged by its environment: held while its new revision beats a condition (review of PR 249, round 2) ---" -ForegroundColor Cyan
+    $nb = $t0.AddSeconds(6)
+    $pNew = Proc 710 $nb
+    $sConf = New-HordeServiceState -Name "svc"; $sConf.phase = "confirming"; $sConf.intent = "update"; $sConf.phaseSince = $nb; $sConf.target = $revB; $sConf.from = $revA
+    $sConf.started = [pscustomobject]@{ pid = 710; startedAt = $nb; at = $nb }; $sConf.proving = $true; $sConf.confirmBy = $nb.AddSeconds(120); $sConf.runningRevision = $revA; $sConf.previousRevision = $revA
+    $seenNew = { param($Beat) return (Obs -Running $pNew -Beat $Beat -Checkout (Co $revB) -Wanted (Want $revB)) }
+    $dHeld = Decide $up $sConf (& $seenNew (& $sickBeat 710 $nb $nb.AddSeconds(195))) $nb.AddSeconds(200)
+    Check ((Is $dHeld "wait" "" "update-held") -and $dHeld.state.phase -ceq "confirming" -and $dHeld.state.pinnedRevision -ceq "" -and @($dHeld.state.told | Where-Object { "$_".StartsWith("rolled-back") }).Count -eq 0) ("an update whose new revision beats keys-unavailable is held, not rolled back or blocked - past its confirm time (" + $dHeld.reason + ")")
+    Check ($dHeld.notify -ceq "escalate" -and $dHeld.what -ceq "update-held" -and $dHeld.reason -notlike "*no fresh heartbeat*" -and $dHeld.reason -like "*keys-unavailable*held, neither confirmed nor rolled back*") "the warchief is told that the update waits on the condition, and the reason never says no heartbeat came"
+    Check ((Decide $up $dHeld.state (& $seenNew (& $sickBeat 710 $nb $nb.AddSeconds(255))) $nb.AddSeconds(260)).notify -eq "") "told once"
+    $dEarly = Decide $up $sConf (& $seenNew (& $sickBeat 710 $nb $nb.AddSeconds(25))) $nb.AddSeconds(30)
+    Check (Is $dEarly "wait" "" "update-held") "and held from its first such beat, within its confirm time too"
+    $dMended = Decide $up $dHeld.state (& $seenNew (Beat 710 $nb $nb.AddSeconds(3595))) $nb.AddSeconds(3600)
+    Check ((Is $dMended "nothing" "" "updated") -and $dMended.state.runningRevision -ceq $revB) "it confirms once the beat turns healthy"
+    $dNoBeat = Decide $up $sConf (Obs -Running $pNew -Checkout (Co $revB) -Wanted (Want $revB)) $nb.AddSeconds(200)
+    Check ((Is $dNoBeat "roll-back" "stop" "roll-back") -and $dNoBeat.reason -like "the new revision did not prove itself within 120 s of its restart: *has written no heartbeat of its own*" -and @($dNoBeat.state.told) -ccontains ("rolled-back:" + $revB)) ("a revision that gives no beat is still rolled back, and blocked, saying what it saw (" + $dNoBeat.reason + ")")
+    Check (Is (Decide $up $sConf (Obs -Beat (& $sickBeat 710 $nb $nb.AddSeconds(195)) -Checkout (Co $revB) -Wanted (Want $revB)) $nb.AddSeconds(200)) "roll-back" "retreat" "retreat") "and one whose process has ended is rolled back, whatever its last beat said"
+    $capAt = $nb.AddSeconds(120).AddHours(12).AddSeconds(1)
+    $dCap = Decide $up $dHeld.state (& $seenNew (& $sickBeat 710 $nb $capAt.AddSeconds(-5))) $capAt
+    Check ((Is $dCap "roll-back" "stop" "withdraw") -and $dCap.state.intent -ceq "withdraw" -and $dCap.what -ceq "update-withdrawn" -and @($dCap.state.told | Where-Object { "$_".StartsWith("rolled-back") }).Count -eq 0) ("held 12 h past its confirm time, the update is withdrawn - rolled back, not blocked (" + $dCap.reason + ")")
+    $sGone = Did $up $dCap $true $capAt
+    $dWithdrawBack = Decide $up $sGone (Obs -Checkout (Co $revB) -Wanted (Want $revB)) $capAt.AddSeconds(5)
+    Check ((Is $dWithdrawBack "roll-back" "retreat" "retreat") -and @($dWithdrawBack.state.told | Where-Object { "$_".StartsWith("rolled-back") }).Count -eq 0) "once it has stopped its checkout goes back, with nobody told it is blocked"
+    $sBack = Did $up $dWithdrawBack $true $capAt.AddSeconds(6)
+    Check ($sBack.pinnedRevision -ceq "" -and $sBack.phase -ceq "launching" -and $sBack.verifiedRevision -ceq "") "a withdrawn revision is not pinned: it is checked and taken again later"
+    $sPin = Did $up (Decide $up $sConf (Obs -Beat (& $sickBeat 710 $nb $nb.AddSeconds(195)) -Checkout (Co $revB) -Wanted (Want $revB)) $nb.AddSeconds(200)) $true $nb.AddSeconds(201)
+    Check ($sPin.pinnedRevision -ceq $revB) "CONTROL: a revision rolled back for real is pinned"
 
     Write-Host ""
     Write-Host "--- a pass that cannot see the person: the supervisor runs whether or not anyone is signed in (2026-10-14) ---" -ForegroundColor Cyan
@@ -545,6 +574,8 @@ try {
     Check ((Is $dNoDesk "wait" "" "no-desktop") -and $dNoDesk.reason -like "not started: it needs the person's desktop, and this pass cannot reach it (this process is in session 0*)*a pass in the person's own session does it*" -and $null -eq $dNoDesk.state.launchingAt) ("under a non-interactive session a needsDesktop service is not started, and the reason says so (" + $dNoDesk.reason + ")")
     Check ($dNoDesk.notify -ceq "escalate" -and $dNoDesk.what -ceq "no-desktop" -and (Decide $deskSvc $dNoDesk.state (Obs -Desktop $blind) $t0.AddSeconds(60)).notify -eq "") "someone is told, once"
     Check (Is (Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs -Desktop $here) $t0) "start" "start" "start") "CONTROL: where the desktop can be reached, it is started"
+    $dCovered = Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs -Idle $blind -Desktop $blind -PersonPass (New-HordeKnown -Value $true)) $t0
+    Check ((Is $dCovered "wait" "" "no-desktop") -and $dCovered.notify -eq "") "when the job in the person's session is scheduled, it is not started here and nobody is told: that job starts it as they sign in"
     Check (Is (Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs) $t0) "wait" "" "no-desktop") "and where nobody looked, it is not: unknown is never here"
     $sHung = New-HordeServiceState -Name "svc"; $sHung.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
     $staleBeat = Beat 700 $run.startedAt $t0.AddSeconds(-400)
@@ -581,6 +612,10 @@ try {
 
     Write-Host ""
     Write-Host "--- the state file ---" -ForegroundColor Cyan
+    $wd = New-HordeServiceState -Name "wd"; $wd.phase = "stopping"; $wd.intent = "withdraw"; $wd.phaseSince = $t0; $wd.target = $revB; $wd.from = $revA
+    $hhWd = Join-Path $work "home-wd"
+    Write-HordeServiceState -State $wd -HordeHome $hhWd
+    Check ((Read-HordeServiceState -Name "wd" -HordeHome $hhWd).value.intent -ceq "withdraw") "an update being withdrawn is kept, and read back, as what it is"
     Check ((Read-HordeServiceState -Name "svc" -HordeHome $hh).state -ceq "absent") "a service the supervisor has never kept state of is absent"
     $keep = Copy-HordeServiceState -State $dBack.state
     $keep.refused = [pscustomobject]@{ revision = $revB; kind = "verify"; reason = ("fetch failed from https://user:" + $planted + "@example.invalid/x.git"); at = $t0 }

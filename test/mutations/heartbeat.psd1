@@ -71,5 +71,9 @@
         @{ Name = "why-not-capped"
            Find = 'if ($t.Length -gt $script:HordeHeartbeatWhyMost) {'
            Replace = 'if ($false) {' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "empty-condition-read-as-well"
+           Find = '-and -not ($c.Value -is [string] -and $c.Value -eq "")) {'
+           Replace = '-and ("" + $c.Value) -ne "") {' }
     )
 }
