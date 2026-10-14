@@ -9,16 +9,16 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "unsigned-vouch-taken-to-the-check"
-           Find = 'if ($v.signature -ceq "" -or $v.authenticatorData -ceq "" -or $v.clientDataJSON -ceq "") { return (& $no "the phone vouch carries no signature: an unsigned announcement is never taken") }'
+           Find = 'if ($v.signature -ceq "" -or $v.authenticatorData -ceq "" -or $v.clientDataJSON -ceq "") { return (New-HordeRelayRefusedOutcome -Reason "the phone vouch carries no signature: an unsigned announcement is never taken") }'
            Replace = '' }
         @{ Name = "another-hordes-vouch-not-refused-by-name"
-           Find = 'if ($v.horde -cne $horde.value) { return (& $no ("the phone vouch is for the horde " + $v.horde + ", not this one (" + $horde.value + ")")) }'
+           Find = 'if ($v.horde -cne $horde.value) { return (New-HordeRelayRefusedOutcome -Reason ("the phone vouch is for the horde " + $v.horde + ", not this one (" + $horde.value + ")")) }'
            Replace = '' }
         @{ Name = "unreadable-store-refuses-for-good"
            Find = 'if (-not $s.ok) { return [pscustomobject]@{ outcome = "held"; reason = ("the trust store cannot be read: " + $s.reason) } }'
            Replace = '' }
         @{ Name = "refused-vouch-said-done"
-           Find = 'if ($added.state -cne "known") { return (& $no ("the phone key is refused: " + $added.reason)) }'
+           Find = 'if ($added.state -cne "known") { return (New-HordeRelayRefusedOutcome -Reason ("the phone key is refused: " + $added.reason)) }'
            Replace = 'if ($added.state -cne "known") { return [pscustomobject]@{ outcome = "done"; reason = "the phone key is now in the trust store" } }' }
         @{ Name = "no-size-cap"
            Find = 'if ($Text.Length -gt 16384) {'

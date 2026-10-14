@@ -615,30 +615,36 @@ function Test-HordeRelayPhoneVouchText {
     return ($null -ne $Text -and $Text.StartsWith('{"v":1,"kind":"horde-relay-phone-vouch",'))
 }
 
+function New-HordeRelayRefusedOutcome {
+    # { outcome = "refused"; reason; request = "" }: what an item judged here answers when it is refused
+    # for good (a function, not a script block: tools/ExecScan.ps1 holds relay/ to holding none).
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Reason)
+    return [pscustomobject]@{ outcome = "refused"; reason = $Reason; request = "" }
+}
+
 function Receive-HordeRelayPhoneVouch {
     # One phone vouch item from the machine's mailbox into the trust store (the header). { outcome;
     # reason }: done (the key is trusted by this vouch, now or already), refused (never will be: the
     # item, the device or the vouch) or held (the trust store cannot be read now: the item comes again).
     # Never throws.
     param([string]$HordeHome = "", [AllowNull()][AllowEmptyString()][string]$Text, $Now = $null)
-    $no = { param($Why) [pscustomobject]@{ outcome = "refused"; reason = $Why } }
     if ($null -eq $Text) { $Text = "" }
     # The three base64url parts of a WebAuthn assertion are a few hundred characters; 16384 is room.
-    if ($Text.Length -gt 16384) { return (& $no ("the phone vouch is " + $Text.Length + " characters, over the 16384 one may be; it is not read")) }
+    if ($Text.Length -gt 16384) { return (New-HordeRelayRefusedOutcome -Reason ("the phone vouch is " + $Text.Length + " characters, over the 16384 one may be; it is not read")) }
     $r = Read-HordeRelayRecordText -Text $Text -Spec (Get-HordeRelayPhoneVouchSpec) -Kind "horde-relay-phone-vouch" -What "the phone vouch"
-    if (-not $r.ok) { return (& $no $r.reason) }
+    if (-not $r.ok) { return (New-HordeRelayRefusedOutcome -Reason $r.reason) }
     $v = $r.value
-    if ($v.signature -ceq "" -or $v.authenticatorData -ceq "" -or $v.clientDataJSON -ceq "") { return (& $no "the phone vouch carries no signature: an unsigned announcement is never taken") }
+    if ($v.signature -ceq "" -or $v.authenticatorData -ceq "" -or $v.clientDataJSON -ceq "") { return (New-HordeRelayRefusedOutcome -Reason "the phone vouch carries no signature: an unsigned announcement is never taken") }
     $horde = Get-HordeRelayHorde -HordeHome $HordeHome
     if ($horde.state -cne "known") { return [pscustomobject]@{ outcome = "held"; reason = ("this machine's horde is not named: " + $horde.reason) } }
-    if ($v.horde -cne $horde.value) { return (& $no ("the phone vouch is for the horde " + $v.horde + ", not this one (" + $horde.value + ")")) }
+    if ($v.horde -cne $horde.value) { return (New-HordeRelayRefusedOutcome -Reason ("the phone vouch is for the horde " + $v.horde + ", not this one (" + $horde.value + ")")) }
     $s = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
     if (-not $s.ok) { return [pscustomobject]@{ outcome = "held"; reason = ("the trust store cannot be read: " + $s.reason) } }
     try {
         $added = Add-HordeRelayPhoneKey -HordeHome $HordeHome -AgreePublic (ConvertFrom-HordeRelayBase64Url -Text $v.agreePublic) -By $v.by `
             -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $v.authenticatorData) -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $v.clientDataJSON) `
             -Signature (ConvertFrom-HordeRelayBase64Url -Text $v.signature) -Now $Now
-    } catch { return (& $no ("the phone vouch could not be read: " + $_.Exception.Message)) }
-    if ($added.state -cne "known") { return (& $no ("the phone key is refused: " + $added.reason)) }
+    } catch { return (New-HordeRelayRefusedOutcome -Reason ("the phone vouch could not be read: " + $_.Exception.Message)) }
+    if ($added.state -cne "known") { return (New-HordeRelayRefusedOutcome -Reason ("the phone key is refused: " + $added.reason)) }
     return [pscustomobject]@{ outcome = "done"; reason = ("the phone key " + $added.value.record.agreeKeyId + " is " + $(if ($added.value.duplicate) { "already" } else { "now" }) + " in the trust store, vouched for by " + $added.value.record.by + " (a phone vouch item)") }
 }
