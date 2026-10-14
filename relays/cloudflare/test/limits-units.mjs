@@ -18,6 +18,7 @@ const L = await load("relays/cloudflare/worker/limits.js");
 const T = await load("relays/cloudflare/worker/throttle.js");
 const N = await load("relays/cloudflare/worker/answers.js");
 const A = await load("relays/cloudflare/worker/client-address.js");
+const B = await load("relays/cloudflare/worker/budget.js");
 const subtle = globalThis.crypto.subtle;
 
 let failures = 0;
@@ -36,6 +37,9 @@ const throws = (f) => { try { f(); return false; } catch (e) { return true; } };
     putsPerMinute: 60, putBurst: 20, readsPerMinute: 120, readBurst: 40,
     signInStartsPerMinute: 10, newAccountsPerDay: 5,
     refusedSignaturesPerMinutePerAddress: 30, refusedSignaturesPerMinutePerKey: 10, noncesPerKey: 1000,
+    // The relay-wide numbers (proposed 2026-10-14, the PR that adds them; merged only on the founder's yes).
+    relayRequestsPerDay: 80000, relayOwnerReserve: 15000, relayRequestLease: 50,
+    relayMaxChars: 2 * 1024 * 1024 * 1024, relayCharsLease: 256 * 1024,
     retentionMs: 30 * 24 * 3600 * 1000
   };
   const d = L.DEFAULTS;
@@ -61,6 +65,48 @@ const throws = (f) => { try { f(); return false; } catch (e) { return true; } };
   check(throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: '{"putBurts":3}' }, local)), "a binding that names no setting fails the request rather than prove nothing");
   check(throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: '{"putBurst":0}' }, local)) && throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: '{"putBurst":1.5}' }, local)) && throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: '{"putBurst":"3"}' }, local)), "and so does a value that is not a whole number from 1");
   check(throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: "not json" }, local)) && throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: "[1]" }, local)), "and a binding that is not a JSON object");
+  check(throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: '{"relayRequestsPerDay":6,"relayOwnerReserve":6}' }, local)) && !throws(() => L.limitsOf({ HORDE_RELAY_TEST_LIMITS: '{"relayRequestsPerDay":6,"relayOwnerReserve":5}' }, local)), "a reserve that is not below the relay's day fails the request; one a step below it is taken");
+}
+
+// --- 2b. the relay-wide limits, pure (budget.js) ---
+{
+  const d = L.DEFAULTS;
+  check(d.relayRequestsPerDay < 100000 && d.relayRequestsPerDay - d.relayOwnerReserve > 0, "the relay's day is below the free plan's 100,000 Worker requests, and leaves a shared part above the reserve");
+  check(d.relayRequestsPerDay >= 4 * d.requestsPerDay, "and holds four accounts at their own whole day");
+  check(d.relayRequestLease < d.requestsPerDay && d.relayCharsLease <= d.accountMaxChars, "a lease is smaller than what one account may use");
+  const day = 20000;
+  const t = day * T.DAY_MS + 3600000;
+  const lim = { relayRequestsPerDay: 6, relayOwnerReserve: 3 };
+  check(B.requestCapOf(lim, "public") === 3 && B.requestCapOf(lim, "owner") === 6 && B.requestCapOf(lim, "everyone") === 6, "a public account draws on the day less the reserve; an owner, and everyone when no owner is named, on the whole day");
+  check(B.requestCapOf(lim, undefined) === 3 && B.requestCapOf(lim, "Owner") === 3, "a tier that is missing or misspelled gets the smaller part");
+  let s = B.grantRequests(undefined, t, 2, 3);
+  check(s.granted === 2 && s.state.used === 2 && s.state.day === day, "a lease of two is granted from a fresh day");
+  const twin = B.grantRequests(s.state, t, 1, 3);
+  check(twin.granted === 1 && twin.state.used === 3, "CONTROL: one step below the line, the last of the shared part is granted");
+  const over = B.grantRequests(twin.state, t, 1, 3);
+  check(over.granted === 0 && over.state.used === 3 && over.retryAfterMs === T.DAY_MS - 3600000, "past it a public account is granted nothing, told the time to midnight UTC", String(over.retryAfterMs));
+  const part = B.grantRequests(s.state, t, 50, 3);
+  check(part.granted === 1 && part.state.used === 3, "a lease near the line is granted in part: never past the line, never a request more");
+  check(B.grantRequests(twin.state, t, 2, 6).granted === 2 && B.grantRequests({ day, used: 6 }, t, 1, 6).granted === 0, "an owner goes on into the reserve, and is refused at the end of it too");
+  check(B.grantRequests({ day, used: 6 }, (day + 1) * T.DAY_MS, 1, 3).granted === 1, "at UTC midnight the relay's day starts again");
+  check(B.grantRequests({ day, used: "6" }, t, 1, 3).granted === 1 && B.grantRequests({ day, used: 2 }, t, 0, 3).granted === 0, "a stored count that is not a number counts from 0; a lease of nothing grants nothing");
+  check(B.grantChars(0, 10, 5, 100).ok && B.grantChars(0, 10, 5, 100).granted === 15 && B.grantChars(90, 10, 5, 100).granted === 10 && B.grantChars(90, 10, 5, 100).total === 100, "characters are granted with up to a lease of room, and only the room there is");
+  check(!B.grantChars(91, 10, 5, 100).ok && B.grantChars(91, 10, 5, 100).total === 91, "a put that does not fit under the relay's cap is refused, and nothing is taken");
+  check(B.charsToRelease(100, 20, 30) === 50 && B.charsToRelease(40, 20, 30) === 0 && B.charsToRelease(10, 20, 30) === 0, "an account gives back all it holds past one lease of room, and never more than it holds");
+  check(B.RELAY_DAY_WORDS.length < 140 && B.RELAY_FULL_WORDS.length < 140 && /^[\x20-\x7e]+$/.test(B.RELAY_DAY_WORDS + B.RELAY_FULL_WORDS), "the relay-wide refusals' words are plain ASCII, short enough for the phone to show whole");
+}
+
+// --- 2c. the owners (budget.js, and Owners.ps1 its twin) ---
+{
+  check(B.ownersOf({}).state === "none" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "" }).state === "none", "no binding, or an empty one, is no owner");
+  const o = B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "112233,445566" });
+  check(o.state === "set" && o.subs.has("112233") && o.subs.has("445566") && o.subs.size === 2, "the binding's Google account ids are the owners");
+  check(B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "112233, 445566" }).state === "broken" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "founder@example.com" }).state === "broken" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "1,".repeat(16) + "1" }).state === "broken", "a binding not exactly ids and commas, or naming too many, is broken");
+  check(B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: Array(16).fill("1").join(",") }).state === "set", "CONTROL: sixteen owners, the most, are taken");
+  check(B.tierOf(o, "google:112233") === "owner" && B.tierOf(o, "google:999") === "public", "an owner's account id is an owner's tier; another is public");
+  check(B.tierOf(o, "112233") === "public" && B.tierOf(o, "test") === "public" && B.tierOf(o, "google:1122334") === "public", "only the whole id behind google: makes an owner");
+  check(B.tierOf({ state: "none" }, "google:999") === "everyone", "with no owner named, every account draws on the whole day");
+  check(B.tierOf({ state: "broken" }, "google:112233") === "public", "a broken binding fails closed: nobody is an owner, and the reserve is still held back");
 }
 
 // --- 3. a bucket at its edges ---

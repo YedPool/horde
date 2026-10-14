@@ -16,7 +16,10 @@ export const CODES = Object.freeze({
   gone: "account-gone",          // 401: the account was deleted (its device's request was in flight)
   mailboxGone: "mailbox-gone",   // 410: the mailbox was deleted with its account
   deleting: "account-deleting",  // 409: the account is being deleted; try again once it is gone
-  replaced: "watch-replaced"     // a watch's message: a newer watch of the same device took its place
+  replaced: "watch-replaced",    // a watch's message: a newer watch of the same device took its place
+  relayDaily: "relay-daily-limit", // 429: every account's requests together for the UTC day (budget.js);
+                                   //      wait Retry-After. A phone's watch hears it as its one message
+  relayFull: "relay-full"        // 507: every account's unacked characters together (budget.js)
 });
 
 export function answer(status, body) {

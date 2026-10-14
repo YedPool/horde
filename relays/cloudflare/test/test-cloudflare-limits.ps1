@@ -21,6 +21,10 @@
 #      identity rotation carried by the machine's adapter, and refused when replayed, presented twice,
 #      tampered with, or for a removed machine; deleting an account - its sessions, machines and
 #      mailboxes at once, puts racing it, and the same Google account signing up again to nothing.
+#   5. THE RELAY'S OWN DAY AND CAP, every account together (worker/budget.js): public accounts refused
+#      once the shared part is spent, the owner served from the reserve and then refused too, a phone's
+#      watch told why in plain words (budget-watch.mjs); with no owner named, the whole day shared; the
+#      relay's cap on unacked characters refusing, never dropping, and freed by an ack.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the tree);
 # without them parts 2 to 4 are skipped, said so, and the suite exits 3, never 0. A key store too
@@ -144,8 +148,9 @@ function Send-Signed {
 function Get-Code { param($Answer) try { $j = $Answer.text | ConvertFrom-Json; if ($null -ne $j.PSObject.Properties["code"]) { return ("" + $j.code) } } catch { }; return "" }
 function Get-Json { param($Answer) try { return ($Answer.text | ConvertFrom-Json) } catch { return $null } }
 function Start-Dev {
-    param([string]$Name, [string]$Limits)
+    param([string]$Name, [string]$Limits, [hashtable]$More = @{})
     $vars = @{ HORDE_RELAY_TEST_OIDC = $fake.issuer; GOOGLE_CLIENT_ID = $clientId; GOOGLE_CLIENT_SECRET = $clientSecret; HORDE_RELAY_TEST_LIMITS = $Limits }
+    foreach ($k in @($More.Keys)) { $vars[$k] = $More[$k] }
     $d = Start-HordeCloudflareRelayDev -Work (Join-Path $work $Name) -Site $site -Script $tools.value.script -ExtraVars $vars
     Check ($d.state -ceq "known") ("a dev with " + $Limits + " answers (" + $d.reason + ")")
     if ($d.state -cne "known") { throw ("no dev " + $Name) }
@@ -653,6 +658,63 @@ try {
     Check ((Send-Signed -Dev $X -Signer $dmach.signer -Target ("/v1/mailboxes/work/" + $dmach.kid + "/items?since=0&max=1")).code -eq 401) "and the old machine is not the new account's: it must be paired again"
     $stranger = New-Phone -Dev $X -Sub "100000000000000001102"
     Check ((Send-To -Url ($O + "/v1/account/machines") -Method "POST" -Body (New-Offer -Machine $dmach -Label "doomed-box") -Cookie $stranger.cookie -Origin $O).code -eq 200) "its key was released, not left to the deleted account: any account may pair it now"
+
+    Write-Host ""
+    Write-Host "--- 5. the relay's own day and cap, every account together (worker/budget.js) ---" -ForegroundColor Cyan
+    # A day of six with three held back for the owner, leased one at a time so every request is the
+    # edge: two public accounts share three, the owner goes on to six. Only mailbox requests count.
+    $ownerSub = "100000000000000001201"
+    $V = Start-Dev -Name "relay-owned" -Limits '{"relayRequestsPerDay":6,"relayOwnerReserve":3,"relayRequestLease":1}' -More @{ HORDE_RELAY_OWNER_ACCOUNTS = $ownerSub }
+    $O = $V.origin
+    $read = { param($Phone) Send-To -Url ($O + "/v1/mailboxes/work/phone/items?since=0&max=1") -Cookie $Phone.cookie }
+    $pa = New-Phone -Dev $V -Sub "100000000000000001202"
+    $pb = New-Phone -Dev $V -Sub "100000000000000001203"
+    $po = New-Phone -Dev $V -Sub $ownerSub
+    $vm = New-Machine -Dev $V -Cookie $pa.cookie -Label "budget-box"
+    Check ($vm.reg.code -eq 200) "registering a machine is not a mailbox request: it takes nothing of the relay's day"
+    $aTwo = @(1, 2 | ForEach-Object { (& $read $pa).code })
+    $bOne = & $read $pb
+    Check ((@($aTwo) -join ",") -ceq "200,200" -and $bOne.code -eq 200) ("CONTROL: two public accounts make the shared three between them - the third one step below the line (" + (@($aTwo) -join ",") + "," + $bOne.code + ")")
+    $aOver = & $read $pa
+    $wait = [int](Get-Header $aOver "retry-after")
+    $said = "" + (Get-HordeTestMember (Get-Json $aOver) "error")
+    Check ($aOver.code -eq 429 -and (Get-Code $aOver) -ceq "relay-daily-limit" -and $wait -ge 1 -and $wait -le 86400 -and $said.Contains("all accounts together") -and $said.Contains("midnight UTC")) ("past the shared part a public account is refused, 429 relay-daily-limit, until UTC midnight, in plain words (" + $aOver.code + ", Retry-After " + $wait + ": " + $said + ")")
+    Check ((& $read $pb).code -eq 429) "the line is the relay's, not the account's: the other public account is refused too"
+    Check ((Send-Signed -Dev $V -Signer $vm.signer -Target ("/v1/mailboxes/work/" + $vm.kid + "/items?since=0&max=1")).code -eq 429) "and a public account's machine, whose refused watch it reads by status (relays/cloudflare/Relay.ps1)"
+    Check ((Send-To -Url ($O + "/v1/account") -Cookie $pa.cookie).code -eq 200) "the Account screen is not a mailbox request: it still opens"
+    Invoke-NodeChecks -ArgList @((Join-Path $here "budget-watch.mjs"), $site, $O, $pa.session) -AtLeast 6 -What "the phone's checks of a spent relay-wide day"
+    $oThree = @(1, 2, 3 | ForEach-Object { (& $read $po).code })
+    Check ((@($oThree) -join ",") -ceq "200,200,200") ("the owner is served from the reserve once the shared part is spent - the third one step below the end of it (" + (@($oThree) -join ",") + ")")
+    $oOver = & $read $po
+    Check ($oOver.code -eq 429 -and (Get-Code $oOver) -ceq "relay-daily-limit") ("and once the reserve is spent the owner is refused too: nothing goes past the relay's day (" + $oOver.code + ")")
+
+    # NO OWNER NAMED: the reserve is not held back, the whole day is shared. A day of 20 with 15 that
+    # would be held back: a public account's part would be 5. Its cap on characters is 100.
+    $S = Start-Dev -Name "relay-shared" -Limits '{"relayRequestsPerDay":20,"relayOwnerReserve":15,"relayRequestLease":1,"relayMaxChars":100,"relayCharsLease":1}'
+    $O = $S.origin
+    $s1 = New-Phone -Dev $S -Sub "100000000000000001301"
+    $s2 = New-Phone -Dev $S -Sub "100000000000000001302"
+    $text = { param([int]$N) ("x" * $N) }
+    $put = { param($Phone, [string]$Box, [string]$Key, [int]$N) Send-To -Url ($O + "/v1/mailboxes/work/" + $Box + "/items") -Method "POST" -Body ('{"key":"' + $Key + '","text":"' + (& $text $N) + '"}') -Cookie $Phone.cookie -Origin $O }
+    $c60 = & $put $s1 "a" "k-60" 60
+    $c39 = & $put $s2 "b" "k-39" 39
+    Check ($c60.code -eq 200 -and $c39.code -eq 200) ("CONTROL: two accounts put 60 and 39 characters - with the first's lease of one, the relay's 100 exactly, one step below the line (" + $c60.code + "," + $c39.code + ")")
+    $full = & $put $s2 "b" "k-1" 1
+    $fullSaid = "" + (Get-HordeTestMember (Get-Json $full) "error")
+    Check ($full.code -eq 507 -and (Get-Code $full) -ceq "relay-full" -and $fullSaid.Contains("all accounts together") -and (Get-Header $full "retry-after") -ceq "") ("one character more is refused, 507 relay-full, in plain words, with no Retry-After (" + $full.code + ": " + $fullSaid + ")")
+    $kept = Get-Json (Send-To -Url ($O + "/v1/mailboxes/work/a/items?since=0&max=10") -Cookie $s1.cookie)
+    $keptItems = @(Get-HordeTestMember $kept "items")
+    Check ($keptItems.Count -eq 1 -and ("" + (Get-HordeTestMember $keptItems[0] "text")).Length -eq 60) ("nothing held is dropped for it: the first account's mail is still there to read (" + $keptItems.Count + " item)")
+    $ack = Send-To -Url ($O + "/v1/mailboxes/work/a/ack") -Method "POST" -Body '{"through":1}' -Cookie $s1.cookie -Origin $O
+    $after = & $put $s2 "b" "k-1" 1
+    Check ($ack.code -eq 200 -and $after.code -eq 200) ("once that mail is read and acked, its characters go back to the relay and the put is taken (" + $ack.code + "," + $after.code + ")")
+    # Six mailbox requests so far (three puts, a read, an ack, a put - the refused put was counted: the
+    # gate took it before the cap refused it); a public account's part, were the reserve held back,
+    # would have been five. With no owner, the whole 20 is everyone's: 14 more, then refused.
+    $s3 = New-Phone -Dev $S -Sub "100000000000000001303"
+    $more = @(1..14 | ForEach-Object { (Send-To -Url ($O + "/v1/mailboxes/work/phone/items?since=0&max=1") -Cookie $s3.cookie).code })
+    $past = Send-To -Url ($O + "/v1/mailboxes/work/phone/items?since=0&max=1") -Cookie $s3.cookie
+    Check ((@($more | Sort-Object -Unique) -join ",") -ceq "200" -and @($more).Count -eq 14 -and $past.code -eq 429 -and (Get-Code $past) -ceq "relay-daily-limit") ("with no owner named, the reserve is shared: twenty requests in all - the twentieth one step below the line - then refused (" + (@($more | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + "; " + $past.code + ")")
 } finally {
     foreach ($dv in @($devs)) { Stop-HordeCloudflareRelayDev -Dev $dv }
     foreach ($p in @($script:procs)) { try { if (-not $p.HasExited) { $p.StandardInput.BaseStream.Close(); if (-not $p.WaitForExit(10000)) { $p.Kill() } } } catch { }; $p.Dispose() }

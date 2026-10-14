@@ -18,7 +18,12 @@
 //                  on mailboxes and characters are counted here, and deleting the account finds every
 //                  mailbox with something to wipe (one emptied by its acks or retention is dropped)
 //   usage          the characters of unacked mail across all its mailboxes
-//   day            { day, n }: its requests this UTC day (throttle.js)
+//   day            { day, n, lease }: its requests this UTC day (throttle.js), and how many of the
+//                  relay-wide day's it holds and has not spent (relay-budget.js, the lease)
+//   granted        the characters it holds of the relay-wide cap (relay-budget.js): its usage and up
+//                  to relayCharsLease of room
+//   room           the relayCharsLease its last put was held to: what an ack or an expiry, which carry
+//                  no limits, keeps of the room when it gives the rest back
 //   pairing        its pairing bucket (throttle.js)
 //   s:<key id>     when that machine was last heard from (presence.js): written at most once per 30 s
 //   deleting       { account, epoch }: a deletion under way (remove, alarm)
@@ -36,12 +41,19 @@
 //     which only needs the account to be there;
 //   - the account's requests this UTC day - the mailbox operations only: its own Account screen, its
 //     phones and machines are still its to manage, and its deletion still its to make, over the day;
+//   - and THE RELAY'S DAY, every account's together (budget.js): the same mailbox operations, each
+//     spent from the lease this account holds of it, a new lease taken from the relay-wide object
+//     (relay-budget.js) when it is spent. Refused, 429 relay-daily-limit, when the account's tier
+//     (an owner, or not: budget.js, THE TIERS) has nothing left today. A request refused there is not
+//     counted against the account's own day either;
 //   - and, first of all once the account is known to be there, A MACHINE IS HEARD (presence.js): its
 //     signature was verified before the gate was asked, so this is where its lastSeenAt is kept;
 // A PUT IS CHARGED, and an ack or an expiry credited, by the mailbox itself (mailbox.js, charge and
 // credit), which knows the text's length: the account refuses a put that would make one mailbox too
 // many (accountMaxMailboxes, 409 mailboxes-cap) or take its unacked characters past accountMaxChars
-// (507 account-full) - refused, never by dropping anything already held.
+// (507 account-full) - refused, never by dropping anything already held. And past the RELAY'S cap on
+// characters, every account's together (relayMaxChars, 507 relay-full): the account holds a lease of
+// it (granted), and asks the relay-wide object for more only when a put would pass what it holds.
 // WHY ONE CALL A REQUEST. An account's day is counted across all its phones and machines, so it is
 // counted in one place, exactly, and that place is this object. It costs one Durable Object request on
 // each relay request (three in all with the principal's and the mailbox's; reckoned 2026-10-11 against
@@ -51,6 +63,8 @@
 // phone sat on unused requests; and the deletion fence and the mailbox index would then need calls
 // of their own anyway. A put costs one more (the mailbox charging the account), and so does an ack or
 // an expiry that frees mail (its credit): the account-wide caps are counted where the lengths are known.
+// THE RELAY'S DAY costs one call more in relayRequestLease (50) requests, and the relay's cap on
+// characters one when an account's room runs out or is given back (relay-budget.js, why a lease).
 // THE ROWS IT WRITES, beside those requests (reckoned 2026-10-14, for the PC offline banner): the day's
 // count is one row written on each mailbox request, and a machine's last heard time (presence.js) one
 // more on each of its requests at least 30 s after the last written. An idle runner asks once a minute:
@@ -73,6 +87,8 @@ import { machineKeyOf } from "./machines.js";
 import { mailboxOf } from "./mailbox.js";
 import { sessionByObjectId } from "./sessions.js";
 import { noteSeen, lastSeenOf } from "./presence.js";
+import { charsToRelease, ACCOUNT_PREFIX, RELAY_DAY_WORDS, RELAY_FULL_WORDS } from "./budget.js";
+import { relayBudgetOf } from "./relay-budget.js";
 import { b64u, randomBytes } from "../../../relay/js/protocol.js";
 
 const PROFILE = "profile";
@@ -84,6 +100,8 @@ const PAIRING = "pairing";
 const DELETING = "deleting";
 const USAGE = "usage";
 const SEEN = "s:";
+const GRANTED = "granted";
+const ROOM = "room";
 // A machine's device, as auth.js names it: "machine:" and its key id. Only a verified signature makes one.
 const MACHINE_DEVICE = "machine:";
 const MINUTE_MS = 60000;
@@ -143,7 +161,7 @@ export class Account extends DurableObject {
   async signOut(phoneId) { await this.ctx.storage.delete(PHONE + phoneId); return true; }
 
   // THE GATE (the header): { ok } or a refusal { ok: false, status, code, reason, retryAfterMs }.
-  async admit({ device, epoch, op, mailbox, now, limits }) {
+  async admit({ device, epoch, op, mailbox, now, limits, tier }) {
     const storage = this.ctx.storage;
     const p = await storage.get(PROFILE);
     if (!p || p.epoch !== epoch) return gone();
@@ -155,9 +173,17 @@ export class Account extends DurableObject {
     this.devices.set(device, put ? { ...held, put: t.state } : { ...held, read: t.state });
     if (!t.ok) return { ok: false, status: 429, code: CODES.rate, reason: "this " + (device.startsWith("phone:") ? "phone" : "machine") + " made more " + (put ? "puts" : "requests") + " than the relay takes in a minute: wait", retryAfterMs: t.retryAfterMs };
     if (MAILBOX_OPS.has(op)) {
-      const c = countInDay(await storage.get(DAY), now, limits.requestsPerDay);
+      const held = await storage.get(DAY);
+      const c = countInDay(held, now, limits.requestsPerDay);
       if (!c.ok) return { ok: false, status: 429, code: CODES.daily, reason: "this account made " + limits.requestsPerDay + " requests today, its most for a day: the count starts again at midnight UTC", retryAfterMs: c.retryAfterMs };
-      await storage.put(DAY, c.state);
+      // THE RELAY'S DAY (the header): a lease of today's, or a new one.
+      let lease = held && held.day === c.state.day && Number.isSafeInteger(held.lease) ? held.lease : 0;
+      if (lease < 1) {
+        const g = await relayBudgetOf(this.env).takeRequests({ now, want: limits.relayRequestLease, tier, limits });
+        if (!(g.granted >= 1)) return { ok: false, status: 429, code: CODES.relayDaily, reason: RELAY_DAY_WORDS, retryAfterMs: g.retryAfterMs };
+        lease = g.granted;
+      }
+      await storage.put(DAY, { ...c.state, lease: lease - 1 });
     }
     return { ok: true };
   }
@@ -175,7 +201,16 @@ export class Account extends DurableObject {
     }
     const usage = (await storage.get(USAGE)) || 0;
     if (usage + chars > limits.accountMaxChars) return { ok: false, status: 507, code: CODES.accountFull, reason: "this account's mailboxes hold " + usage + " characters their readers have not acked; this text would take them past their most, " + limits.accountMaxChars };
-    await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars });
+    // THE RELAY'S CAP (the header): more of it leased only when this put passes what the account holds.
+    // An account from before the cap holds none for the mail it already has: that is leased with its
+    // next put, whole.
+    let granted = (await storage.get(GRANTED)) || 0;
+    if (usage + chars > granted) {
+      const r = await relayBudgetOf(this.env).takeChars({ need: usage + chars - granted, extra: limits.relayCharsLease, limits });
+      if (!r.ok) return { ok: false, status: 507, code: CODES.relayFull, reason: RELAY_FULL_WORDS };
+      granted += r.granted;
+    }
+    await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars, [GRANTED]: granted, [ROOM]: limits.relayCharsLease });
     return { ok: true };
   }
 
@@ -187,9 +222,19 @@ export class Account extends DurableObject {
     if (p === undefined || p.epoch !== epoch) return true;
     const usage = (await storage.get(USAGE)) || 0;
     const held = (await storage.get(BOX + mailbox)) || 0;
-    await storage.put(USAGE, Math.max(0, usage - chars));
+    const left = Math.max(0, usage - chars);
+    await storage.put(USAGE, left);
     if (emptied) await storage.delete(BOX + mailbox);
     else await storage.put(BOX + mailbox, Math.max(0, held - chars));
+    // The relay's cap: what this account holds past one lease of room goes back (budget.js, THE LEASE).
+    // The room is the one its last put was held to (ROOM): an ack or an expiry carries no limits.
+    // Taken off here first, given back after: a give that is lost leaves the count ahead, never behind.
+    const granted = (await storage.get(GRANTED)) || 0;
+    const back = charsToRelease(granted, left, (await storage.get(ROOM)) || 0);
+    if (back > 0) {
+      await storage.put(GRANTED, granted - back);
+      await relayBudgetOf(this.env).giveChars({ chars: back });
+    }
     return true;
   }
 
@@ -267,7 +312,10 @@ export class Account extends DurableObject {
     const seen = await storage.list({ prefix: SEEN });
     for (const [, ph] of phones) { const s = sessionByObjectId(this.env, ph.id); if (s) await s.end(); }
     for (const [, m] of machines) await machineKeyOf(this.env, m.keyId).release(account);
-    await storage.delete([...phones.keys(), ...machines.keys(), ...seen.keys(), DAY, PAIRING, USAGE]);
+    const granted = (await storage.get(GRANTED)) || 0;
+    await storage.delete([...phones.keys(), ...machines.keys(), ...seen.keys(), DAY, PAIRING, USAGE, GRANTED, ROOM]);
+    // Its share of the relay's cap goes back with it: its mailboxes are wiped by the alarm, uncredited.
+    if (granted > 0) await relayBudgetOf(this.env).giveChars({ chars: granted });
     this.devices.clear();
     this.seen.clear();
     await storage.setAlarm(Date.now());
@@ -287,5 +335,5 @@ export class Account extends DurableObject {
   }
 }
 
-export const ACCOUNT_PREFIX = "google:";
+export { ACCOUNT_PREFIX };
 export function accountOf(env, account) { return env.ACCOUNT.get(env.ACCOUNT.idFromName("account/" + account)); }
