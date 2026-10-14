@@ -3,15 +3,17 @@
 #
 # relays/cloudflare/SecretFiles.ps1, asked through the port (relays/Port.ps1, WHICH FILES ON THIS MACHINE
 # HOLD A RELAY'S SECRETS) exactly as the code that shares a file asks. Pinned here:
-#   1. with no settings: the default Google client file under the user's profile, and the four places
-#      the deploy tool may keep its login, each with its fixed words;
+#   1. with no settings: the default Google client file under the user's profile, the four places
+#      the deploy tool may keep its login, and the default metrics salt file (the request metrics,
+#      2026-10-14), each with its fixed words;
 #   2. with the setting googleClientFile: that file, wherever it is and whatever it is called - one that
 #      does not exist, and one another process holds open and will not share, are still named, because
-#      nothing here opens a file - and it is the very path the deploy's own resolver gives;
+#      nothing here opens a file - and it is the very path the deploy's own resolver gives; and with the
+#      setting metricsSaltFile, that file, by the deploy's own resolver too;
 #   3. where the login is: under XDG_CONFIG_HOME when that is set, under APPDATA when it is not, and
 #      under the profile's own AppData\Roaming when neither is;
 #   4. what it cannot tell, each unknown and each for its own reason: a client file that is not an
-#      absolute path, a settings file that fails its checks, no user profile, a configuration folder
+#      absolute path, a metrics salt file that is not one, a settings file that fails its checks, no user profile, a configuration folder
 #      that is not an absolute path;
 #   5. asking writes nothing, and the home asked about is the one read.
 #
@@ -40,12 +42,13 @@ New-Item -ItemType Directory -Path (Join-Path $hh "settings") -Force | Out-Null
 $kept = @{ USERPROFILE = $env:USERPROFILE; APPDATA = $env:APPDATA; XDG_CONFIG_HOME = $env:XDG_CONFIG_HOME }
 $clientWords = "the sign-in client file"
 $loginWords = "the deploy tool's login"
+$saltWords = "the request metrics salt file"
 
 function Set-Settings {
     # The relay's settings file in the suite's home: -Raw as is, -Client as googleClientFile, or none.
-    param([string]$Client = "", [string]$Raw = "", [switch]$None)
+    param([string]$Client = "", [string]$Raw = "", [switch]$None, [string]$Salt = "")
     if ($None) { if (Test-Path -LiteralPath $settingsFile) { Remove-Item -LiteralPath $settingsFile -Force }; return }
-    if ($Raw -eq "") { $Raw = (@{ schemaVersion = 1; settings = @{ googleClientFile = $Client } } | ConvertTo-Json -Depth 4) }
+    if ($Raw -eq "") { $Raw = (@{ schemaVersion = 1; settings = @{ googleClientFile = $Client; metricsSaltFile = $Salt } } | ConvertTo-Json -Depth 4) }
     [System.IO.File]::WriteAllText($settingsFile, $Raw, $utf8)
 }
 function Ask {
@@ -74,9 +77,9 @@ try {
     Check ((@(Get-HordeRelayNames | Where-Object { $null -ne (Get-HordeRelay -Name $_).secretFiles }) -join ",") -ceq $relay) "and of the relays loaded it is the only one that does: a relay on this disk keeps no secret file"
     $q = Ask
     Check ($q.answer.state -ceq "known" -and (@($q.answer.value.asked) -join ",") -ceq $relay) ("asked through the port it can tell, and it was the one asked (" + $q.answer.state + ")")
-    $want = @((Join-Path $prof ".horde-secrets\google-oauth-client.json")) + @(Login-Paths -Config (Join-Path $roaming "xdg.config"))
-    Check ($q.paths.Count -eq 5 -and ($q.paths -join "|") -ceq ($want -join "|")) ("it names five files: the default client file under the profile, then the login's two names in the tool's older place and in its newer one (" + $q.paths.Count + ")")
-    Check ($q.files[0].what -ceq $clientWords -and (@($q.files | Select-Object -Skip 1 | ForEach-Object { $_.what } | Sort-Object -Unique) -join "|") -ceq $loginWords) "each with its own fixed words: the client file is the sign-in client file, the other four the deploy tool's login"
+    $want = @((Join-Path $prof ".horde-secrets\google-oauth-client.json")) + @(Login-Paths -Config (Join-Path $roaming "xdg.config")) + @((Join-Path $prof ".horde-secrets\relay-metrics-salt.txt"))
+    Check ($q.paths.Count -eq 6 -and ($q.paths -join "|") -ceq ($want -join "|")) ("it names six files: the default client file under the profile, then the login's two names in the tool's older place and in its newer one, then the default metrics salt file under the profile (" + $q.paths.Count + ")")
+    Check ($q.files[0].what -ceq $clientWords -and (@($q.files | Select-Object -Skip 1 -First 4 | ForEach-Object { $_.what } | Sort-Object -Unique) -join "|") -ceq $loginWords -and $q.files[5].what -ceq $saltWords) "each with its own fixed words: the client file is the sign-in client file, the next four the deploy tool's login, the last the request metrics salt file"
     Check (@($q.paths | Where-Object { -not $_.StartsWith($work + "\", [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) "CONTROL: every path named is under the suite's own folder - none is the user's own profile"
 
     Write-Host ""
@@ -84,11 +87,17 @@ try {
     $elsewhere = Join-Path $work "elsewhere\any name at all.dat"
     Set-Settings -Client $elsewhere
     $q = Ask
-    Check ($q.answer.state -ceq "known" -and $q.paths.Count -eq 5 -and $q.paths[0] -ceq $elsewhere -and $q.files[0].what -ceq $clientWords) ("the client file is the one the setting names, by any name (" + $q.answer.state + ")")
+    Check ($q.answer.state -ceq "known" -and $q.paths.Count -eq 6 -and $q.paths[0] -ceq $elsewhere -and $q.files[0].what -ceq $clientWords) ("the client file is the one the setting names, by any name (" + $q.answer.state + ")")
     Check ($q.paths -cnotcontains (Join-Path $prof ".horde-secrets\google-oauth-client.json")) "and the default place is no longer named: it is not where the secret is"
     Check (-not (Test-Path -LiteralPath $elsewhere) -and -not (Test-Path -LiteralPath (Split-Path -Parent $elsewhere))) "CONTROL: that file, and its folder, do not exist - a file is named for where a secret would be, not for being there"
     $resolved = Get-HordeCloudflareRelayClientFile -Values (Get-HordeCloudflareRelaySettings -HordeHome $hh).value
     Check ($resolved -ceq $q.paths[0]) "it is the very path the deploy's own resolver gives: the file named is the file a deploy would read"
+    $saltElsewhere = Join-Path $work "salts\any salt.bin"
+    Set-Settings -Client $elsewhere -Salt $saltElsewhere
+    $q = Ask
+    $saltResolved = Get-HordeCloudflareRelayMetricsSaltFile -Values (Get-HordeCloudflareRelaySettings -HordeHome $hh).value
+    Check ($q.answer.state -ceq "known" -and $q.paths.Count -eq 6 -and $q.paths[5] -ceq $saltElsewhere -and $q.files[5].what -ceq $saltWords -and $saltResolved -ceq $saltElsewhere -and $q.paths -cnotcontains (Join-Path $prof ".horde-secrets\relay-metrics-salt.txt")) "the metrics salt file is the one its setting names, the deploy's own resolver's, and the default is no longer named"
+    Set-Settings -Client $elsewhere
     Set-Settings -Client ((Join-Path $work "elsewhere") + "\..\vault\client.json")
     $q = Ask
     Check ($q.answer.state -ceq "known" -and $q.paths[0] -ceq (Join-Path $work "vault\client.json")) "a setting written with a dot-dot in it is named as the file it opens"
@@ -118,11 +127,11 @@ try {
     $xdg = Join-Path $work "xdg"
     $env:XDG_CONFIG_HOME = $xdg
     $q = Ask
-    Check ($q.answer.state -ceq "known" -and (@($q.paths | Select-Object -Skip 1) -join "|") -ceq (@(Login-Paths -Config $xdg) -join "|")) "with XDG_CONFIG_HOME set, the login's newer place is under it, and APPDATA is not used"
+    Check ($q.answer.state -ceq "known" -and (@($q.paths | Select-Object -Skip 1 -First 4) -join "|") -ceq (@(Login-Paths -Config $xdg) -join "|")) "with XDG_CONFIG_HOME set, the login's newer place is under it, and APPDATA is not used"
     $env:XDG_CONFIG_HOME = ""
     $env:APPDATA = ""
     $q = Ask
-    Check ($q.answer.state -ceq "known" -and (@($q.paths | Select-Object -Skip 1) -join "|") -ceq (@(Login-Paths -Config (Join-Path $prof "AppData\Roaming\xdg.config")) -join "|")) "with neither XDG_CONFIG_HOME nor APPDATA, it is under the profile's own AppData\Roaming, as the tool itself falls back"
+    Check ($q.answer.state -ceq "known" -and (@($q.paths | Select-Object -Skip 1 -First 4) -join "|") -ceq (@(Login-Paths -Config (Join-Path $prof "AppData\Roaming\xdg.config")) -join "|")) "with neither XDG_CONFIG_HOME nor APPDATA, it is under the profile's own AppData\Roaming, as the tool itself falls back"
     $env:APPDATA = $roaming
     # ON A DRIVE THAT IS NOT THERE, when this machine has such a letter: joining paths by asking the
     # system throws for one (SecretFiles.ps1), and a login on a drive not plugged in is still a login.
@@ -140,6 +149,9 @@ try {
     Set-Settings -Client "keys\client.json"
     $q = Ask
     Check ($q.answer.state -ceq "unknown" -and "$($q.answer.reason)".Contains("'" + $relay + "'") -and "$($q.answer.reason)".Contains("googleClientFile") -and (@($q.answer.relays) -join ",") -ceq $relay) ("a client file that is not an absolute path: unknown, naming this relay and the setting (" + $q.answer.reason + ")")
+    Set-Settings -Client $elsewhere -Salt "keys\salt.txt"
+    $q = Ask
+    Check ($q.answer.state -ceq "unknown" -and "$($q.answer.reason)".Contains("'" + $relay + "'") -and "$($q.answer.reason)".Contains("metricsSaltFile") -and (@($q.answer.relays) -join ",") -ceq $relay) ("a metrics salt file that is not an absolute path: unknown, naming this relay and the setting (" + $q.answer.reason + ")")
     Set-Settings -Raw "{ this is not a settings file"
     $q = Ask
     Check ($q.answer.state -ceq "unknown" -and "$($q.answer.reason)".Contains("settings do not read")) ("a settings file that fails its checks: unknown - never the default read as if nothing were set (" + $q.answer.reason + ")")
@@ -156,7 +168,7 @@ try {
     Check ($q.answer.state -ceq "unknown" -and "$($q.answer.reason)".Contains("configuration folder")) ("a configuration folder that is not an absolute path: unknown (" + $q.answer.reason + ")")
     $env:XDG_CONFIG_HOME = ""
     $q = Ask
-    Check ($q.answer.state -ceq "known" -and $q.paths.Count -eq 5) "CONTROL: and with the environment put right it is answered again"
+    Check ($q.answer.state -ceq "known" -and $q.paths.Count -eq 6) "CONTROL: and with the environment put right it is answered again"
 
     Write-Host ""
     Write-Host "--- 5. asking writes nothing, and the home asked about is the one read ---" -ForegroundColor Cyan

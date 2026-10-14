@@ -3,7 +3,8 @@
 # SECRETS). Sharing a file with a phone asks the port, so that neither of these can be sent off the
 # machine by a person who did not know what it was.
 #
-# THERE ARE TWO, found by reading every file of this folder on 2026-10-13:
+# THERE ARE THREE: two found by reading every file of this folder on 2026-10-13, and the third added with
+# the request metrics on 2026-10-14:
 #   1. THE GOOGLE CLIENT FILE (Settings.ps1, GoogleClient.ps1): the OAuth client JSON, which holds the
 #      client's secret. Where it is, is the setting googleClientFile, or the default under the user's
 #      profile when the setting is empty - resolved by Get-HordeCloudflareRelayClientFile, the one
@@ -24,6 +25,10 @@
 #      against another of the host's environments, is <that name>.toml in the same folder and is not
 #      named here; nothing in this folder ever makes one. A new pin of the tool is when to read its
 #      source again.
+#   3. THE METRICS SALT FILE (Settings.ps1, MetricsSalt.ps1): the salt the relay hashes account ids with
+#      in its request metrics (worker/metrics.js). Whoever holds it can tell whose rows are whose, so it is
+#      a secret like the client's. The setting metricsSaltFile, or the default under the user's profile,
+#      resolved by Get-HordeCloudflareRelayMetricsSaltFile - the deploy's own resolver. Named last.
 #
 # WHAT IS NOT A SECRET FILE HERE, each looked at: the pinned tool itself and its lock (public); the
 # work folders of a deploy and of a local dev (temp, deleted, and the deploy's "never held a secret" -
@@ -45,6 +50,7 @@
 # What each file is, in words for a person. Fixed: nothing of a setting or of a file is ever in them.
 $script:HordeCloudflareRelayClientFileWhat = "the sign-in client file"
 $script:HordeCloudflareRelayLoginFileWhat = "the deploy tool's login"
+$script:HordeCloudflareRelayMetricsSaltFileWhat = "the request metrics salt file"
 # The tool's folder, and its login file under each of the two names it may have (the header).
 $script:HordeCloudflareRelayLoginFolder = ".wrangler"
 $script:HordeCloudflareRelayLoginNames = @("config\default.toml", "config\default.enc")
@@ -83,10 +89,15 @@ function Get-HordeCloudflareRelaySecretFiles {
     # THE SAME REFUSAL THE DEPLOY MAKES (GoogleClient.ps1), made here without the file: a relative path
     # names a different file from every folder, so no one file can be called the secret.
     if (-not (Test-HordeModuleSettingFolder -Path $clientFile)) { return (New-HordeUnknown -Reason "the Google client file is not an absolute path (the setting googleClientFile), so which file holds the client's secret is not known") }
+    # 3. THE METRICS SALT (MetricsSalt.ps1): its own file, resolved by the deploy's own resolver, and
+    # refused the same way when the setting is not an absolute path.
+    $saltFile = Get-HordeCloudflareRelayMetricsSaltFile -Values $set.value
+    if ($saltFile -eq "" -or -not (Test-HordeModuleSettingFolder -Path $saltFile)) { return (New-HordeUnknown -Reason "the metrics salt file is not an absolute path (the setting metricsSaltFile), so which file holds the metrics salt is not known") }
     $login = Get-HordeCloudflareRelayLoginFiles
     if ($login.state -cne "known") { return $login }
     $files = New-Object System.Collections.ArrayList
     [void]$files.Add([pscustomobject]@{ path = $clientFile; what = $script:HordeCloudflareRelayClientFileWhat })
     foreach ($p in @($login.value)) { [void]$files.Add([pscustomobject]@{ path = $p; what = $script:HordeCloudflareRelayLoginFileWhat }) }
+    [void]$files.Add([pscustomobject]@{ path = $saltFile; what = $script:HordeCloudflareRelayMetricsSaltFileWhat })
     return (New-HordeKnown -Value ([pscustomobject]@{ files = @($files.ToArray()) }))
 }

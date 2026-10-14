@@ -1,18 +1,21 @@
-# relays/cloudflare/Deploy.ps1 - putting the hosted relay on Cloudflare: the Google client's two values
-# and the sign-in allowlist stored as Worker secrets, then the Worker deployed with the phone app it serves. The relay's -Deploy
+# relays/cloudflare/Deploy.ps1 - putting the hosted relay on Cloudflare: the Google client's two values,
+# the sign-in allowlist and the metrics salt stored as Worker secrets, then the Worker deployed with the phone app it serves. The relay's -Deploy
 # block (Relay.ps1); `horde relay deploy` (cli/RelayDeploy.ps1) builds the app and calls it through the
 # port (relays/Port.ps1, Publish-HordeRelay).
 #
 # THE STEPS, each stopping the deploy when it fails, with nothing done after it:
 #   1. the settings (Settings.ps1) and the Google client file they name, read and checked
 #      (GoogleClient.ps1), and the sign-in allowlist they hold (SignInAllowlist.ps1: off unless
-#      switched on) - before wrangler is even looked for, so a missing file costs nothing;
+#      switched on), and the metrics salt file they name (MetricsSalt.ps1) - before wrangler is even
+#      looked for, so a missing file costs nothing: A DEPLOY WITHOUT A SALT REFUSES, saying how to make one;
 #   2. wrangler: the pinned one (Wrangler.ps1, installed outside the tree when it is not), or the one the
 #      setting wranglerScript names;
 #   3. the production config, written into a work folder outside the tree (Wrangler.ps1,
 #      New-HordeCloudflareRelayConfig), which REFUSES a wrangler.json that carries a test binding;
-#   4. `wrangler secret put GOOGLE_CLIENT_ID`, `... GOOGLE_CLIENT_SECRET` and
-#      `... HORDE_RELAY_SIGNIN_ALLOWLIST` (written every time, so switching it off is a deploy too), each value written to
+#   4. `wrangler secret put GOOGLE_CLIENT_ID`, `... GOOGLE_CLIENT_SECRET`,
+#      `... HORDE_RELAY_SIGNIN_ALLOWLIST` (written every time, so switching it off is a deploy too) and
+#      `... METRICS_SALT` (worker/metrics.js: the key the account hashes of the request metrics are
+#      made with), each value written to
 #      wrangler's standard input - never an argument (a process list shows those to anyone on the
 #      machine), never a file (a file outlives the run, and could be one in the repository);
 #   5. `wrangler deploy`, with the relay's owners as a plain --var (Owners.ps1), or - with none set -
@@ -34,9 +37,10 @@
 . (Join-Path $PSScriptRoot "GoogleClient.ps1")
 . (Join-Path $PSScriptRoot "SignInAllowlist.ps1")
 . (Join-Path $PSScriptRoot "Owners.ps1")
+. (Join-Path $PSScriptRoot "MetricsSalt.ps1")
 
 # The Worker's secrets, in the order they are stored, each from the value of that name below (Publish).
-$script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "clientId"; GOOGLE_CLIENT_SECRET = "clientSecret"; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }
+$script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "clientId"; GOOGLE_CLIENT_SECRET = "clientSecret"; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist"; METRICS_SALT = "metricsSalt" }
 $script:HordeCloudflareRelayDeploySeconds = 600
 
 function Hide-HordeCloudflareRelaySecrets {
@@ -68,9 +72,13 @@ function Publish-HordeCloudflareRelay {
     # THE OWNERS (Owners.ps1): a plain var of the deploy, not a secret; none is a warning, not a refusal.
     $owners = ConvertTo-HordeCloudflareRelayOwners -Values $set.value
     if ($owners.state -cne "known") { return $owners }
-    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value }
-    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value)
+    $saltFile = Get-HordeCloudflareRelayMetricsSaltFile -Values $set.value
+    $salt = Read-HordeCloudflareRelayMetricsSalt -Path $saltFile -RepoRoot (Get-HordeCloudflareRelayRepoRoot)
+    if ($salt.state -cne "known") { return $salt }
+    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value; metricsSalt = $salt.value }
+    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value, $salt.value)
     & $Say ("read the Google client from " + $clientFile)
+    & $Say ("read the metrics salt from " + $saltFile)
 
     $node = Find-HordeCloudflareRelayNode
     if ($node -eq "") { return (New-HordeUnknown -Reason "node is not installed here (wrangler needs node 22 or later)") }

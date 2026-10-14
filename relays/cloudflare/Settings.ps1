@@ -26,10 +26,15 @@ $script:HordeCloudflareRelaySettings = New-HordeModuleSettings -Module "relay-cl
        what = "The Google accounts that may sign in once signInAllowlistOn is true: emails and Google account ids, separated by commas." },
     # THE OWNERS (Owners.ps1, worker/budget.js): who may use the relay-wide reserve once the shared day is spent.
     @{ name = "relayOwnerAccounts"; kind = "text"; default = ""; min = 0; max = 4096
-       what = "The relay's owners, who alone may use its reserve of the day's requests: Google account ids (digits), separated by commas. Empty: no reserve, and the deploy warns." }
+       what = "The relay's owners, who alone may use its reserve of the day's requests: Google account ids (digits), separated by commas. Empty: no reserve, and the deploy warns." },
+    # THE METRICS SALT (MetricsSalt.ps1, worker/metrics.js): a secret file, named here by its path only.
+    @{ name = "metricsSaltFile"; kind = "text"; default = ""; min = 0; max = 1024
+       what = "The file holding the relay's metrics salt, the Worker secret METRICS_SALT; empty means .horde-secrets\relay-metrics-salt.txt in the user's profile." }
 )
 # The default client file, under the user's profile.
 $script:HordeCloudflareRelayClientFileDefault = ".horde-secrets\google-oauth-client.json"
+# The default metrics salt file, under the user's profile.
+$script:HordeCloudflareRelayMetricsSaltFileDefault = ".horde-secrets\relay-metrics-salt.txt"
 
 function Get-HordeCloudflareRelaySettings {
     # The settings: known values, or unknown with the findings of a refused file.
@@ -48,4 +53,12 @@ function Get-HordeCloudflareRelayClientFile {
     if ("" + $Values.googleClientFile -ne "") { return ("" + $Values.googleClientFile) }
     if ("" + $env:USERPROFILE -eq "") { return "" }
     return (Join-Path $env:USERPROFILE $script:HordeCloudflareRelayClientFileDefault)
+}
+
+function Get-HordeCloudflareRelayMetricsSaltFile {
+    # The metrics salt file the settings name, or the default under the user's profile.
+    param($Values)
+    if ("" + $Values.metricsSaltFile -ne "") { return ("" + $Values.metricsSaltFile) }
+    if ("" + $env:USERPROFILE -eq "") { return "" }
+    return (Join-Path $env:USERPROFILE $script:HordeCloudflareRelayMetricsSaltFileDefault)
 }
