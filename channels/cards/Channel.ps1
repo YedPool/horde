@@ -447,8 +447,9 @@ function New-HordeCardsChannelSnapshot {
     # status.txt is a lane that ended, and it leaves the phone as it leaves the panel - no card, not
     # counted on the Thrall's. A folder with neither file is still "no status file"; with both, the lane
     # came back and its status.txt stands. Passed over before lanesRead counts, or old lanes would push
-    # live ones out of the folders read.
-    $folders = @($folders | Where-Object { [System.IO.File]::Exists((Join-Path $_ "status.txt")) -or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })
+    # live ones out of the folders read. The rule is fleet/StatusPanel.ps1's (Test-HordeFleetStatusRetired),
+    # the one the panel uses, so the two cannot drift.
+    $folders = @($folders | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })
     if ($folders.Count -gt [int]$Settings.lanesRead) { [void]$lines.Add("" + ($folders.Count - [int]$Settings.lanesRead) + " lane folder(s) past the first " + $Settings.lanesRead + " were not read"); $folders = @($folders | Select-Object -First ([int]$Settings.lanesRead)) }
     $ledger = Read-HordeCardsChannelLedger -Path $Paths.ledger -Now $Now
     if (-not $ledger.ok) { [void]$lines.Add("the cards show no task counts: " + $ledger.reason) }

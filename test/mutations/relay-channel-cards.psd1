@@ -82,15 +82,11 @@
         @{ Name = "the-thrall-now-is-cut-before-the-refusal"
            Find = '$now = $(if ($s.keys.ContainsKey("doing")) { $s.keys["doing"] }'
            Replace = '$now = $(if ($s.keys.ContainsKey("doing")) { Get-HordeCardsChannelPlain $s.keys["doing"] }' }
+        # Which folder is retired is fleet/StatusPanel.ps1's rule (Test-HordeFleetStatusRetired); its
+        # both-files and neither-file mutants are in test\mutations\fleet-status.psd1.
         @{ Name = "a-retired-lane-gets-a-card"
-           Find = '$folders = @($folders | Where-Object { [System.IO.File]::Exists((Join-Path $_ "status.txt")) -or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })'
+           Find = '$folders = @($folders | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })'
            Replace = '' }
-        @{ Name = "a-folder-with-both-files-is-retired"
-           Find = '[System.IO.File]::Exists((Join-Path $_ "status.txt")) -or -not'
-           Replace = '-not' }
-        @{ Name = "a-folder-with-neither-file-is-retired"
-           Find = '-or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })'
-           Replace = ') })' }
         @{ Name = "why-a-card-has-its-own-id-not-sent"
            Find = '$c.idNote = Protect-HordeCardsChannelField'
            Replace = '$c.note = Protect-HordeCardsChannelField' }
