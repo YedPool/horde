@@ -81,17 +81,8 @@
       "path": "user",
       "requirement": "a phone signed in to the relay and paired with this machine",
       "checks": "the trust store holds a phone that is trusted",
-      "fixes": "none: Google sign-in happens on the phone, and pairing needs the person at both ends",
-      "manual": "on the phone, open {origin}/app/index.html, sign in with Google, add it to the home screen and open it from there; then here: horde relay pair -Relay {relay} -Label \"{label}\", scan the code with the app, and check the 12-digit number"
-    },
-    {
-      "id": "runner-scheduled",
-      "title": "relay runner kept running",
-      "path": "user",
-      "requirement": "the supervisor scheduled for this home, so the relay runner runs from start-up without a window left open",
-      "checks": "both of the supervisor's jobs are installed, enabled, made by Horde, and serve this home",
-      "fixes": "installs them, as horde services schedule does, when this prompt is elevated; never elevates by itself",
-      "manual": "in any PowerShell window, run this one line, and allow it to run as administrator: {elevated}"
+      "fixes": "runs the pairing, as horde relay pair -Relay {relay} does: shows the QR code and the offer, says where to tap on the phone, waits for the phone, then asks for the 12-digit number the phone shows and compares it; Google sign-in itself happens on the phone",
+      "manual": "on the phone, open {origin}/app/index.html, sign in with Google, add it to the home screen and open it from there; then here: horde relay pair -Relay {relay} -Label \"{label}\", and in the app: Pair with a machine, Scan the QR code; then type the 12-digit number the phone shows"
     },
     {
       "id": "test-question",
@@ -101,6 +92,15 @@
       "checks": "the decisions list holds the question horde setup adds, in the group Setup",
       "fixes": "adds it once: Horde is set up on {machine} - does it reach your phone?",
       "manual": "horde decisions add -File <a question file>, as horde setup would"
+    },
+    {
+      "id": "runner-scheduled",
+      "title": "relay runner kept running",
+      "path": "user",
+      "requirement": "the supervisor scheduled for this home, so the relay runner runs from start-up without a window left open",
+      "checks": "both of the supervisor's jobs are installed, enabled, made by Horde, and serve this home",
+      "fixes": "installs them, as horde services schedule does, when this prompt is elevated; never elevates by itself",
+      "manual": "in any PowerShell window, run this one line, and allow it to run as administrator: {elevated}"
     }
   ]
 }

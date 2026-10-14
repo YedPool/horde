@@ -38,8 +38,10 @@ foreach ($f in @("Tristate", "Home", "ModuleSettings", "Heartbeat", "Services"))
 . (Join-Path $root "relays\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 . (Join-Path $root "relay\Trust.ps1")
-foreach ($f in @("RelayDeploy", "RelayRun", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
+. (Join-Path $root "relay\Pairing.ps1")
+foreach ($f in @("RelayDeploy", "RelayRun", "QrCode", "RelayPair", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\RelayPhone.ps1")
 Set-StrictMode -Version Latest
 
 if ((Find-HordeCloudflareRelayNode) -eq "") {
@@ -57,6 +59,9 @@ $clientId = "123456789012-fakeclientforhordesetup000000000.apps.googleuserconten
 $clientSecret = "GOCSPX-fakeSecretForHordeSetup01234567"
 $clientFile = Join-Path $prof ".horde-secrets\google-oauth-client.json"
 $script:said = New-Object System.Collections.ArrayList
+$script:sayLines = New-Object System.Collections.ArrayList
+$script:pairHomes = New-Object System.Collections.ArrayList
+$script:partial = $false
 # The shipped relay, as the code under test reads it: wrangler.json's origin, for a home that names none.
 $shipped = "" + (([System.IO.File]::ReadAllText((Join-Path $root "relays\cloudflare\wrangler.json"))) | ConvertFrom-Json).vars.HORDE_RELAY_ORIGIN
 $shippedHost = ([uri]$shipped).Host
@@ -99,7 +104,7 @@ function Test-Ascii { param([string]$Path) return (@([System.IO.File]::ReadAllBy
 function Report {
     # In this process: { report; lines; next; states }.
     param([string]$HordeHome, [hashtable]$Probes, [string[]]$NoFix = @())
-    $r = Get-HordeSetupReport -HordeHome $HordeHome -Root $root -Probes $Probes -Label "Test PC" -NoFix $NoFix
+    $r = Get-HordeSetupReport -HordeHome $HordeHome -Root $root -Probes $Probes -Label "Test phone" -NoFix $NoFix -Say { param($Line) [void]$script:sayLines.Add("" + $Line) }
     $lines = @(Format-HordeSetupReport -Report $r)
     [void]$script:said.Add(($lines -join "`n"))
     return [pscustomobject]@{ report = $r; lines = $lines; next = $lines[-1]; states = (@($r.steps | ForEach-Object { $_.id + "=" + $_.state }) -join " ") }
@@ -193,35 +198,46 @@ try {
     Check ((Last-Step $x).id -ceq "runner-serving" -and (Last-Step $x).said -clike "*heartbeat is * s old: it is not running") "MUST FAIL: a stale heartbeat is not serving"
     $probes.Remove("now")
     $probes.Remove("trust")
+    # The pairing itself is a stand-in here (section 2b runs the real one): it answers that no phone came.
+    $script:pairs = 0
+    $probes["pairConnect"] = { param($Ctx) New-HordeKnown -Value ([pscustomobject]@{ stand = "in" }) }
+    $probes["pair"] = { param($Ctx, $Connection) $script:pairs++; [pscustomobject]@{ ok = $false; reason = "no phone answered (a stand-in)"; device = $null; offer = $null } }
+    $script:sayLines = New-Object System.Collections.ArrayList
     $x = Report $hh $probes
-    Check ((Last-Step $x).id -ceq "phone-paired" -and (Last-Step $x).said -ceq "no phone is paired with this machine yet" -and $x.next -ceq ("next: on the phone, open " + $shipped + "/app/index.html, sign in with Google, add it to the home screen and open it from there; then here: horde relay pair -Relay cloudflare -Label ""Test PC"", scan the code with the app, and check the 12-digit number")) ("a fresh, well heartbeat serves; the real, empty trust store asks for the phone (" + $x.next + ")")
-    Check (@((Last-Step $x).notes | Where-Object { $_ -clike "*good for minutes (15 at most)*never photograph it, send it, or show it on a screen share*" }).Count -eq 1) "and the pairing code's warning is said beside it"
+    $wantNext = "next: on the phone, open " + $shipped + "/app/index.html, sign in with Google, add it to the home screen and open it from there; then here: horde relay pair -Relay cloudflare -Label ""Test phone"", and in the app: Pair with a machine, Scan the QR code; then type the 12-digit number the phone shows"
+    Check ((Last-Step $x).id -ceq "phone-paired" -and (Last-Step $x).said -ceq "no phone is paired with this machine yet; setup tried: the pairing did not finish: no phone answered (a stand-in)" -and $script:pairs -eq 1 -and $x.next -ceq $wantNext) ("MUST FAIL: with the real, empty trust store setup runs the pairing; one that does not finish is said, with the command to pair by hand (" + $x.next + ")")
+    $minutes = Get-HordeSetupPairMinutes
+    $warning = "The pairing code is valid for " + $minutes + " minutes and works for whoever uses it first: keep it off screen shares and out of photos. If someone else may have seen it, stop (Ctrl+C) and run horde setup again."
+    Check ($minutes -ge 1 -and @($script:sayLines | Where-Object { $_ -ceq $warning }).Count -eq 1 -and @((Last-Step $x).notes | Where-Object { $_ -ceq $warning }).Count -eq 1) ("before pairing it says how long the code is good for - horde relay pair's own lifetime, " + $minutes + " minutes - and who it works for")
+    Check (@($script:sayLines | Where-Object { $_ -ceq ("Pairing a phone with this machine. On the phone: open " + $shipped + "/app/index.html, sign in with Google, add it to the home screen and open it from there; then, in the app, tap Pair with a machine, then Scan the QR code.") }).Count -eq 1) "and exactly where to tap on the phone"
     $probes["trust"] = { param($HordeHome) New-HordeKnown -Value ([pscustomobject]@{ devices = @([pscustomobject]@{ id = "d1"; state = "pending" }); machines = @(); revoked = @(); phones = @() }) }
     $x = Report $hh $probes
     Check ((Last-Step $x).id -ceq "phone-paired" -and (Last-Step $x).state -ceq "todo") "MUST FAIL: a phone still pending is not paired"
+    $x = Report $hh $probes -NoFix @("phone-paired")
+    Check ((Last-Step $x).id -ceq "phone-paired" -and (Last-Step $x).said -ceq "no phone is paired with this machine yet" -and $script:pairs -eq 2) "-NoFix phone-paired checks without pairing"
     $probes["trust"] = { param($HordeHome) New-HordeKnown -Value ([pscustomobject]@{ devices = @([pscustomobject]@{ id = "d1"; state = "trusted" }); machines = @(); revoked = @(); phones = @() }) }
+    $realDecisions = (Get-HordeSetupDefaultProbes).decisions
+    $probes["decisions"] = { param($HordeHome, $Root, [string[]]$HordeArgs) [pscustomobject]@{ code = 1; out = ""; err = "the list is held (a stand-in)" } }
     $x = Report $hh $probes
+    Check ((Last-Step $x).id -ceq "test-question" -and (Last-Step $x).said -clike "the decisions list cannot be read: the list is held (a stand-in)*") ("with a trusted phone the test question is next; a decisions list that cannot be read stops it, honestly (" + $x.states + ")")
+    $probes["decisions"] = $realDecisions
+    $x = Report $hh $probes
+    $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
+    $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions) | Where-Object { $_.group -ceq "Setup" })
+    Check (@($x.report.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" -and $_.said -clike "added question 1: Horde is set up on * - does it reach your phone?" }).Count -eq 1 -and $qs.Count -eq 1 -and $qs[0].title -ceq ("Horde is set up on " + $env:COMPUTERNAME + " - does it reach your phone?") -and $qs[0].askedBy -ceq "horde setup") ("setup adds the test question through the shipped decisions list, once (" + $x.states + ")")
     $elev = Get-HordeSetupElevatedCommand -Root $root -HordeHome $hh
     $b64 = $(if ($elev.line -match "-EncodedCommand ([A-Za-z0-9+/=]+)'\z") { $Matches[1] } else { "" })
     $decoded = $(if ($b64 -ne "") { [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b64)) } else { "" })
     Check ((Last-Step $x).id -ceq "runner-scheduled" -and (Last-Step $x).said -clike "*is not installed*" -and $script:installs -eq 0 -and $x.next -ceq ("next: in any PowerShell window, run this one line, and allow it to run as administrator: " + $elev.line)) ("MUST FAIL: from a prompt that is not elevated, setup tries nothing and prints the one elevated line (" + $x.next + ")")
     Check ($elev.line -clike "Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -EncodedCommand *'" -and $decoded -ceq ("$" + "env:HORDE_HOME = '" + $hh + "'; & '" + (Join-Path $root "horde.ps1") + "' services schedule") -and @((Last-Step $x).notes | Where-Object { $_ -ceq ("it runs, as administrator: " + $decoded) }).Count -eq 1) ("and that line runs exactly horde services schedule for this home, which it says in plain words (" + $decoded + ")")
     $probes["elevated"] = { $true }
-    $realDecisions = (Get-HordeSetupDefaultProbes).decisions
-    $probes["decisions"] = { param($HordeHome, $Root, [string[]]$HordeArgs) [pscustomobject]@{ code = 1; out = ""; err = "the list is held (a stand-in)" } }
     $x = Report $hh $probes
-    Check ($script:installs -eq 1 -and @($x.report.steps | Where-Object { $_.id -ceq "runner-scheduled" -and $_.state -ceq "fixed" }).Count -eq 1 -and (Last-Step $x).id -ceq "test-question" -and (Last-Step $x).said -clike "the decisions list cannot be read: the list is held (a stand-in)*") ("from an elevated prompt the supervisor is scheduled once; a decisions list that cannot be read stops at the test question, honestly (" + $x.states + ")")
-    $probes["decisions"] = $realDecisions
-    $x = Report $hh $probes
-    $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
-    $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions) | Where-Object { $_.group -ceq "Setup" })
-    Check (@($x.report.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" -and $_.said -clike "added question 1: Horde is set up on * - does it reach your phone?" }).Count -eq 1 -and $qs.Count -eq 1 -and $qs[0].title -ceq ("Horde is set up on " + $env:COMPUTERNAME + " - does it reach your phone?") -and $qs[0].askedBy -ceq "horde setup") ("setup adds the test question through the shipped decisions list, once (" + $x.states + ")")
-    Check ($x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-serving=done phone-paired=done runner-scheduled=done test-question=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("and every step is done: the last line says all set (" + $x.next + ")")
+    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-serving=done phone-paired=done test-question=done runner-scheduled=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("from an elevated prompt the supervisor is scheduled, once, and every step is done: all set (" + $x.states + ")")
     $before = Get-Tree $hh
     $x = Report $hh $probes
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
     $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions))
-    Check ($x.states -cnotmatch "fixed|todo" -and $x.next -clike "all set:*" -and (Get-Tree $hh) -ceq $before -and $qs.Count -eq 1 -and $script:installs -eq 1) "run again: nothing fixed, no byte changed, no second question, nothing scheduled again - all set"
+    Check ($x.states -cnotmatch "fixed|todo" -and $x.next -clike "all set:*" -and (Get-Tree $hh) -ceq $before -and $qs.Count -eq 1 -and $script:installs -eq 1 -and $script:pairs -eq 2) "run again: nothing fixed, no byte changed, no second question, nothing scheduled or paired again - all set"
     $probes["platform"] = { [pscustomobject]@{ windowsMajor = 10; windowsBuild = 19045; desktopShell = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"; edition = "Core"; version = "7.4.1" } }
     $x = Report $hh $probes
     Check ($x.states -ceq "requirements=todo" -and (Last-Step $x).said -ceq "setup is running under PowerShell 7.4.1, not Windows PowerShell 5.1" -and $x.next -ceq ("next: run horde from Windows PowerShell 5.1: powershell -NoProfile -ExecutionPolicy Bypass -File " + $root + "\horde.ps1 setup")) "MUST FAIL: run under PowerShell 7 where it could not run itself again, the requirement stops it first"
@@ -238,6 +254,65 @@ try {
     Check ((Last-Step $x).id -ceq "runner-defined" -and (Last-Step $x).state -ceq "todo" -and $x.next -clike ('next: add "relay-runner": { "checkout": *') -and $after.Count -eq 1 -and [System.IO.File]::ReadAllText($after[0].FullName) -ceq '{"schemaVersion":1,"settings":{}}') "MUST FAIL: a service-definitions file that is there is the person's: setup says what to add, and does not write it"
     $entry = $x.report.next.Substring(4, $x.report.next.IndexOf(" to the settings in ") - 4)
     Check ((Read-HordeServiceDefinitionsText -Text ('{"schemaVersion":1,"settings":{' + $entry + '}}')).state -ceq "read") "and what it says to add is an entry the real reader takes"
+
+    Write-Host ""
+    Write-Host "--- 2b. the pairing, run by setup: the real horde relay pair, a test phone, typed through -InputFile ---" -ForegroundColor Cyan
+    # A home with a REAL relay identity (software keys, removed in the finally block, as the pairing
+    # suite does) and a relay on this disk: the offer, the phone's response and the fingerprint are the
+    # real ones. The phone is test/lib/RelayPhone.ps1's; it answers when setup says the offer, by
+    # pasting its response into the input file, and the "person" types the number the phone computed.
+    if ((Get-HordeRelayKeyStore).state -cne "known") {
+        Write-Host "  [SKIP] no key store here, so no machine identity to pair" -ForegroundColor Yellow
+        $script:partial = $true
+    } else {
+        $hp = Join-Path $work "home-pair"
+        [void]$script:pairHomes.Add($hp)
+        Write-Text (Join-Path $hp "settings\relay.json") '{"schemaVersion":1,"settings":{"horde":"work","pairRpId":"relay.example.test","pairOrigin":"https://relay.example.test"}}'
+        $idReal = New-HordeRelayMachineIdentity -HordeHome $hp -Provider "software"
+        Check ($idReal.state -ceq "known") "CONTROL: the pairing home has a real relay identity"
+        $mailboxes = Join-Path $work "pair-relay"
+        [void][System.IO.Directory]::CreateDirectory($mailboxes)
+        $typed = Join-Path $work "pair-typed.txt"
+        [System.IO.File]::WriteAllText($typed, "", [System.Text.Encoding]::ASCII)
+        Write-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $hp) -At ([datetime]::UtcNow) -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds 3600
+        $script:phone = New-HordeTestPhone
+        $script:pairSaid = New-Object System.Collections.ArrayList
+        $script:wrongTyped = $false
+        $phoneSay = {
+            param($Line)
+            $l = "" + $Line
+            [void]$script:pairSaid.Add($l)
+            if ($l -clike '{"v":1,"kind":"horde-relay-pairing-offer"*') {
+                $o = Read-HordeRelayPairingOffer -Text $l
+                $pend = Read-HordeRelayRecordText -Text ([System.IO.File]::ReadAllText((Join-Path $hp ("relay\pairing\offers\" + $o.value.offer + ".json")))) -Spec (Get-HordeRelayPendingSpec) -Kind "horde-relay-pairing-pending"
+                $resp = New-HordeTestPhonePairingResponse -Offer ([pscustomobject]@{ offer = $o.value.offer; code = $o.value.code; challenge = $pend.value.challenge }) -Phone $script:phone
+                [System.IO.File]::AppendAllText($typed, $resp + "`n", [System.Text.Encoding]::ASCII)
+            }
+            if ($l -clike "*Type that number here*") {
+                $dev = @((Get-HordeRelayTrust -HordeHome $hp).value.devices | Where-Object { $_.keyId -ceq $script:phone.keyId }) | Select-Object -First 1
+                $fp = "" + $dev.fingerprint
+                $wrong = $(if ($fp -ceq "0000-0000-0000") { "1111-1111-1111" } else { "0000-0000-0000" })
+                [System.IO.File]::AppendAllText($typed, $wrong + "`n" + $fp + "`n", [System.Text.Encoding]::ASCII)
+            }
+        }
+        $pairProbes = @{
+            identity = { param($HordeHome) Read-HordeRelayIdentityRecords -HordeHome $HordeHome }
+            schedule = $schedProbe; elevated = { $false }; installSchedule = { param($HordeHome, $Root) $script:installs++ }
+            pairConnect = { param($Ctx) Connect-HordeRelay -Name "local" -Options @{ root = $mailboxes } }
+        }
+        $opened = New-Object System.Collections.ArrayList
+        $r = Get-HordeSetupReport -HordeHome $hp -Root $root -Probes $pairProbes -Label "Setup phone" -InputFile $typed -Say $phoneSay -OpenPicture { param($Path) [void]$opened.Add($Path) }
+        $states = @($r.steps | ForEach-Object { $_.id + "=" + $_.state }) -join " "
+        $pairStep = @($r.steps | Where-Object { $_.id -ceq "phone-paired" }) | Select-Object -First 1
+        $saidAll = $script:pairSaid -join "`n"
+        Check ($null -ne $pairStep -and $pairStep.state -ceq "fixed" -and $pairStep.said -clike "paired: 'Setup phone' (device *) is trusted") ("setup runs the pairing and the phone is trusted (" + $states + ")")
+        Check ($saidAll.Contains("Scan this QR code with the phone app (Pair with a machine, Scan the QR code)") -and $opened.Count -eq 1 -and $saidAll.Contains('{"v":1,"kind":"horde-relay-pairing-offer"') -and $saidAll.Contains("Look at your PHONE: it shows a 12-digit number. Type that number here")) "it shows the QR code (opened as a picture) and the offer, and asks for the number the PHONE shows"
+        Check ($saidAll.Contains("That number does not match the device that registered") -and $saidAll.Contains("Confirmed: 'Setup phone'")) "a wrong number is refused and the phone's own number confirms it"
+        $devReal = @((Get-HordeRelayTrust -HordeHome $hp).value.devices | Where-Object { $_.keyId -ceq $script:phone.keyId }) | Select-Object -First 1
+        Check ($null -ne $devReal -and $devReal.state -ceq "trusted" -and -not $saidAll.Contains($devReal.fingerprint)) "the trust store holds the phone, trusted, and the machine never printed its fingerprint"
+        Check ($opened.Count -eq 1 -and -not (Test-Path -LiteralPath $opened[0])) "the picture of the offer is gone"
+        Check ((@($r.steps | ForEach-Object { $_.id }) -join ",") -clike "*,phone-paired,test-question*" -and @($r.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" }).Count -eq 1) ("on success it moves on to the test question, and adds it (" + $states + ")")
+    }
 
     Write-Host ""
     Write-Host "--- 3. the operator's path, through the shipped command ---" -ForegroundColor Cyan
@@ -300,14 +375,27 @@ try {
     $listed = $null
     try { $listed = ($r.out.Trim()) | ConvertFrom-Json } catch { $listed = $null }
     $ids = $(if ($null -ne $listed) { @($listed.steps | ForEach-Object { $_.id }) -join "," } else { "" })
-    Check ($r.code -eq 0 -and $ids -ceq ($fileIds -join ",") -and $listed.manifestVersion -eq $man.manifestVersion -and @($listed.steps | Where-Object { $_.path -ceq "operator" }).Count -eq 2 -and @($listed.steps | Where-Object { $_.fixedBySetup }).Count -eq 6) ("setup -Steps -Json prints the manifest as this code reads it, in order (" + $ids + ")")
+    Check ($r.code -eq 0 -and $ids -ceq ($fileIds -join ",") -and $listed.manifestVersion -eq $man.manifestVersion -and @($listed.steps | Where-Object { $_.path -ceq "operator" }).Count -eq 2 -and @($listed.steps | Where-Object { $_.fixedBySetup }).Count -eq 7) ("setup -Steps -Json prints the manifest as this code reads it, in order (" + $ids + ")")
     $all = $script:said -join "`n"
     Check ($script:said.Count -ge 12 -and $all.Contains($callback)) ("CONTROL: " + $script:said.Count + " runs were read, and the search finds what they did say")
     Check (-not $all.Contains($clientSecret) -and -not $all.Contains($clientId)) "nothing setup said ever holds the client's id or secret"
     Check (@($all.ToCharArray() | Where-Object { [int]$_ -gt 126 }).Count -eq 0) "and all of it is ASCII"
 } finally {
+    # Every key a pairing home made, removed, then checked gone (as test/test-relay-pair-cli.ps1 does).
+    $made = New-Object System.Collections.ArrayList
+    foreach ($h in @($script:pairHomes)) {
+        $dir = Join-Path $h "relay\identity"
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter "machine-*.json")) {
+            $m = [regex]::Match([System.IO.File]::ReadAllText($f.FullName), '"scope":"([a-z]+)","signName":"([a-z0-9-]+)".*"agreeName":"([a-z0-9-]+)"')
+            if ($m.Success) { foreach ($k in @($m.Groups[2].Value, $m.Groups[3].Value)) { [void]$made.Add(@{ n = $k; s = $m.Groups[1].Value }); try { [void](Remove-HordeRelayKey -Name $k -Scope $m.Groups[1].Value) } catch { } } }
+        }
+    }
+    $left = @($made | Where-Object { (Find-HordeRelayCngKey -Name $_.n -Scope $_.s) -cne "" })
+    Check ($left.Count -eq 0 -and ($script:partial -or $made.Count -ge 2)) ("every key the suite's pairing home made is gone (" + $made.Count + " names, " + $left.Count + " left)")
     if ($work -like "*horde-cf-setup-test-*" -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 Check (-not (Test-Path -LiteralPath $work)) "the suite's folder is gone"
 
-Complete-HordeSuite -Success "horde setup fixes what it safely can, stops with one next step, changes nothing on a second run, and keeps the operator's deploy to the operator"
+if ($script:partial) { Complete-HordeSuite -Success "a partial run: no key store here, so the real pairing was skipped" -PassCode 3 }
+Complete-HordeSuite -Success "horde setup fixes what it safely can, runs the pairing, stops with one next step, changes nothing on a second run, and keeps the operator's deploy to the operator"

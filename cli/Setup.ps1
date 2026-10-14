@@ -34,8 +34,8 @@
 #
 # No Set-StrictMode here: dot-sourced. The caller loads core (Tristate, Home, ModuleSettings,
 # Heartbeat, Services, ServicesFiles, ServiceHostPort, Schedule and the schedulers), relays/Port.ps1
-# with the relays, relay/Trust.ps1, cli/RelayDeploy.ps1, cli/RelayRun.ps1, cli/ServicesAct.ps1 and
-# cli/ServicesTend.ps1, as cli/commands/setup.ps1 does.
+# with the relays, relay/Trust.ps1, cli/RelayDeploy.ps1, cli/RelayRun.ps1, cli/ServicesAct.ps1,
+# cli/ServicesTend.ps1, cli/QrCode.ps1 and cli/RelayPair.ps1, as cli/commands/setup.ps1 does.
 
 # The manifest format this code reads, and the newest manifest version it understands.
 $script:HordeSetupManifestSchema = 1
@@ -218,6 +218,8 @@ function Get-HordeSetupDefaultProbes {
         }
         installSchedule = { param($HordeHome, $Root) Invoke-HordeServiceSchedule -Action install -HordeScript (Join-Path $Root "horde.ps1") }
         decisions     = { param($HordeHome, $Root, [string[]]$HordeArgs) Invoke-HordeSetupHorde -Root $Root -HordeHome $HordeHome -HordeArgs $HordeArgs }
+        pairConnect   = { param($Ctx) Connect-HordeRelay -Name $Ctx.relay -Options @{ hordeHome = $Ctx.home } }
+        pair          = { param($Ctx, $Connection) Invoke-HordeRelayPair -HordeHome $Ctx.home -Connection $Connection -Label $Ctx.label -InputFile $Ctx.inputFile -Say $Ctx.say -OpenPicture $Ctx.openPicture }
     }
 }
 
@@ -337,16 +339,27 @@ function Get-HordeSetupStepCode {
         }
         fix = $null }
     $code["phone-paired"] = [pscustomobject]@{
+        # THE PAIRING ITSELF (the founder, 2026-10-14): setup runs it, as `horde relay pair` does - the QR
+        # code and the offer, the phone's response, and the 12-digit number the PHONE shows typed here and
+        # compared (cli/RelayPair.ps1) - after saying where to tap and how long the code is good for.
         check = {
             param($Ctx)
             $tr = & $Ctx.probes.trust $Ctx.home
             if ($tr.state -cne "known") { return (New-HordeSetupResult $false $tr.reason) }
             $trusted = @(@($tr.value.devices) | Where-Object { $_.state -ceq "trusted" })
-            $warn = "the pairing code it shows is good for minutes (15 at most), and for whoever uses it first: never photograph it, send it, or show it on a screen share; if someone else may have seen it, close it and pair again"
-            if ($trusted.Count -eq 0) { return (New-HordeSetupResult $false "no phone is paired with this machine yet" @($warn)) }
+            if ($trusted.Count -eq 0) { return (New-HordeSetupResult $false "no phone is paired with this machine yet" @(Get-HordeSetupPairWarning)) }
             return (New-HordeSetupResult $true ($(if ($trusted.Count -eq 1) { "one phone is" } else { "" + $trusted.Count + " phones are" }) + " paired and trusted"))
         }
-        fix = $null }
+        fix = {
+            param($Ctx)
+            $null = & $Ctx.say ("Pairing a phone with this machine. On the phone: open " + $Ctx.origin + "/app/index.html, sign in with Google, add it to the home screen and open it from there; then, in the app, tap Pair with a machine, then Scan the QR code.")
+            $null = & $Ctx.say (Get-HordeSetupPairWarning)
+            $conn = & $Ctx.probes.pairConnect $Ctx
+            if ($conn.state -cne "known") { return (New-HordeSetupResult $false ("the relay could not be reached to pair: " + $conn.reason)) }
+            $r = & $Ctx.probes.pair $Ctx $conn.value
+            if (-not $r.ok) { return (New-HordeSetupResult $false ("the pairing did not finish: " + $r.reason)) }
+            return (New-HordeSetupResult $true ("paired: '" + $r.device.label + "' (device " + $r.device.id + ") is trusted"))
+        } }
     $code["runner-scheduled"] = [pscustomobject]@{
         check = {
             param($Ctx)
@@ -394,6 +407,24 @@ function Get-HordeSetupStepCode {
     return $code
 }
 
+function Get-HordeSetupPairMinutes {
+    # How long a pairing offer lives, in whole minutes: whatever `horde relay pair` uses, read from the
+    # default of Invoke-HordeRelayPair's -TtlSeconds (cli/RelayPair.ps1), so this never says another
+    # number than the offer has. 0 when it cannot be read.
+    $c = Get-Command -Name "Invoke-HordeRelayPair" -CommandType Function -ErrorAction SilentlyContinue
+    if ($null -eq $c) { return 0 }
+    $p = @($c.ScriptBlock.Ast.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -ceq "TtlSeconds" })
+    if ($p.Count -ne 1 -or $null -eq $p[0].DefaultValue) { return 0 }
+    try { $s = [int]$p[0].DefaultValue.SafeGetValue() } catch { return 0 }
+    return [int][System.Math]::Floor($s / 60)
+}
+
+function Get-HordeSetupPairWarning {
+    # The one warning about the pairing code, with its real lifetime.
+    $m = Get-HordeSetupPairMinutes
+    return ("The pairing code is valid for " + $(if ($m -gt 0) { "" + $m + " minutes" } else { "a few minutes" }) + " and works for whoever uses it first: keep it off screen shares and out of photos. If someone else may have seen it, stop (Ctrl+C) and run horde setup again.")
+}
+
 function Expand-HordeSetupText {
     # A manifest sentence with its {names} filled in from the run's context.
     param([string]$Text, $Ctx)
@@ -416,7 +447,8 @@ function Get-HordeSetupReport {
     # file gets. -NoFix lists step ids only to check. -Check fixes nothing. -Probes replaces any answer.
     # Throws when the manifest is refused: nothing is checked against a list this code does not trust.
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$Root, [string]$Relay = "", [switch]$Operator,
-        [string]$Horde = "home", [string]$Label = "", [string[]]$NoFix = @(), [switch]$Check, [hashtable]$Probes = @{}, [string]$Manifest = "")
+        [string]$Horde = "home", [string]$Label = "", [string[]]$NoFix = @(), [switch]$Check, [hashtable]$Probes = @{}, [string]$Manifest = "",
+        [scriptblock]$Say = { param($Line) Write-Host $Line }, [string]$InputFile = "", [scriptblock]$OpenPicture = $null)
     if ($Manifest -eq "") { $Manifest = Get-HordeSetupManifestPath -Root $Root }
     $man = Read-HordeSetupManifest -Path $Manifest
     if ($man.state -cne "known") { throw $man.reason }
@@ -425,8 +457,10 @@ function Get-HordeSetupReport {
     foreach ($k in @($Probes.Keys)) { $p[$k] = $Probes[$k] }
     $lines = New-Object System.Collections.ArrayList
     $machine = "" + $env:COMPUTERNAME
+    # label is what this machine calls the phone it pairs (horde relay pair -Label).
     $ctx = [pscustomobject]@{ home = $HordeHome; root = $Root; relay = ""; origin = ""; beforeDeploy = ""; horde = $Horde; machine = $machine
-        label = $(if ($Label -ne "") { $Label } else { $machine }); probes = $p; state = @{}; elevated = (Get-HordeSetupElevatedCommand -Root $Root -HordeHome $HordeHome) }
+        label = $(if ($Label -ne "") { $Label } else { "Phone" }); probes = $p; state = @{}; elevated = (Get-HordeSetupElevatedCommand -Root $Root -HordeHome $HordeHome)
+        say = $Say; inputFile = $InputFile; openPicture = $OpenPicture }
     $finish = { [pscustomobject]@{ home = $HordeHome; relay = $ctx.relay; origin = $ctx.origin; manifestVersion = $man.value.manifestVersion; steps = @($lines.ToArray()); next = $(if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].state -ceq "todo") { $lines[$lines.Count - 1].next } else { "" }) } }
     $rs = $null
     foreach ($step in @($man.value.steps)) {

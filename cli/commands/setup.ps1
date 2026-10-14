@@ -1,10 +1,10 @@
 $HordeCommand = @{
     name    = "setup"
     group   = "setup"
-    usage   = "setup [-Horde <name>] [-Label <text>] [-Operator] [-Relay <name>] [-NoFix <step id>,...] [-Check] [-Json] | setup -Steps [-Json]"
-    summary = "the first run of Horde on this machine: walks setup\steps.json, the one list of what Horde needs (cli/Setup.ps1 interprets it) - Windows and Windows PowerShell 5.1, the Horde home, the relay settings naming this horde and the phone app, this machine's relay identity, the relay runner defined as a service, the relay runner serving, a phone paired, the relay runner kept running from start-up, and a first test question - checks each in order, fixes what it safely can (makes the home, writes settings\relay.json for the shared relay, makes the identity, writes the relay runner's service definition, schedules the supervisor when the prompt is elevated, adds the test question once; never a file that is there already, and never elevating by itself), stops at the first step it cannot finish, and ends with one line: the next thing to do, with the exact command, or all set. Run again, it changes nothing that is right. Started from PowerShell 7, it runs itself again under Windows PowerShell 5.1. It never asks for a password or stores a secret: Google sign-in stays on the phone. -Horde names the horde a written relay.json gets (home by default); -Label is what pairing will call this machine; -Operator walks a home that hosts its own relay through that relay's steps (where it answers, its Google sign-in client with the exact redirect URI and JavaScript origin, its deploy) first; -NoFix names steps to check without fixing; -Check (or -CheckOnly) fixes nothing; -Json prints the report as one line of data; -Steps lists the manifest's steps as this code reads them"
+    usage   = "setup [-Horde <name>] [-Label <text>] [-Operator] [-Relay <name>] [-NoFix <step id>,...] [-Check] [-InputFile <path>] [-NoPicture] [-Json] | setup -Steps [-Json]"
+    summary = "the first run of Horde on this machine: walks setup\steps.json, the one list of what Horde needs (cli/Setup.ps1 interprets it) - Windows and Windows PowerShell 5.1, the Horde home, the relay settings naming this horde and the phone app, this machine's relay identity, the relay runner defined as a service, the relay runner serving, a phone paired, a first test question, and the relay runner kept running from start-up - checks each in order, fixes what it safely can (makes the home, writes settings\relay.json for the shared relay, makes the identity, writes the relay runner's service definition, runs the pairing as horde relay pair does - the QR code, where to tap on the phone, how long the code is good for, and the 12-digit number the phone shows typed here and compared - adds the test question once, schedules the supervisor when the prompt is elevated; never a file that is there already, and never elevating by itself), stops at the first step it cannot finish, and ends with one line: the next thing to do, with the exact command, or all set. Run again, it changes nothing that is right. Started from PowerShell 7, it runs itself again under Windows PowerShell 5.1. It never asks for a password or stores a secret: Google sign-in stays on the phone. -Horde names the horde a written relay.json gets (home by default); -Label is what this machine calls the phone it pairs (Phone by default); -InputFile reads what would be typed during pairing from a file as it grows, and -NoPicture does not open the QR code's picture (as for horde relay pair); -Operator walks a home that hosts its own relay through that relay's steps (where it answers, its Google sign-in client with the exact redirect URI and JavaScript origin, its deploy) first; -NoFix names steps to check without fixing; -Check (or -CheckOnly) fixes nothing; -Json prints the report as one line of data; -Steps lists the manifest's steps as this code reads them"
     run     = {
-        [CmdletBinding()] param([string]$Horde = "home", [string]$Label = "", [switch]$Operator, [string]$Relay = "", [string[]]$NoFix = @(), [Alias("CheckOnly")][switch]$Check, [switch]$Json, [switch]$Steps)
+        [CmdletBinding()] param([string]$Horde = "home", [string]$Label = "", [switch]$Operator, [string]$Relay = "", [string[]]$NoFix = @(), [Alias("CheckOnly")][switch]$Check, [string]$InputFile = "", [switch]$NoPicture, [switch]$Json, [switch]$Steps)
         if ($Steps) { foreach ($flag in @($PSBoundParameters.Keys)) { if (@("Steps", "Json") -notcontains $flag) { throw ("-" + $flag + " does not belong to setup -Steps") } } }
         $root = Get-HordeRoot
         # WINDOWS POWERSHELL 5.1, until issue 274 is fixed: under PowerShell 7, `horde decisions add` is
@@ -33,7 +33,7 @@ $HordeCommand = @{
         . (Join-Path $root "relays\Port.ps1")
         foreach ($f in @(Get-HordeRelayFiles)) { . $f }
         . (Join-Path $root "relay\Trust.ps1")
-        foreach ($f in @("RelayDeploy", "RelayRun", "ServicesAct", "ServicesTend", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
+        foreach ($f in @("RelayDeploy", "RelayRun", "ServicesAct", "ServicesTend", "QrCode", "RelayPair", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
         $man = Read-HordeSetupManifest -Path (Get-HordeSetupManifestPath -Root $root)
         if ($man.state -cne "known") { throw $man.reason }
         if ($Steps) {
@@ -54,7 +54,9 @@ $HordeCommand = @{
         $noFixIds = @(@($NoFix) | ForEach-Object { ("" + $_) -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
         $known = @($man.value.steps | ForEach-Object { $_.id })
         foreach ($id in $noFixIds) { if ($known -cnotcontains $id) { throw ("-NoFix names no step: '" + $id + "'; the steps are " + ($known -join ", ")) } }
-        $report = Get-HordeSetupReport -HordeHome (Get-HordeHome) -Root $root -Relay $Relay -Operator:$Operator -Horde $Horde -Label $Label -NoFix $noFixIds -Check:$Check
+        $open = $(if ($NoPicture) { $null } else { { param($Path) Start-Process -FilePath $Path } })
+        $file = $(if ($InputFile -ne "") { [System.IO.Path]::GetFullPath($InputFile) } else { "" })
+        $report = Get-HordeSetupReport -HordeHome (Get-HordeHome) -Root $root -Relay $Relay -Operator:$Operator -Horde $Horde -Label $Label -NoFix $noFixIds -Check:$Check -InputFile $file -OpenPicture $open
         if ($Json) { ConvertTo-Json -InputObject $report -Depth 6 -Compress; return }
         Format-HordeSetupReport -Report $report | ForEach-Object { Write-Output $_ }
     }
