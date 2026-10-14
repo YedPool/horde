@@ -282,7 +282,7 @@ $attacks += @(
     @{ found = $true; what = "YAML with a comment after the value"; text = ($six[5] + ": " + $made + "  # the one for the test box") },
     @{ found = $true; what = "YAML with blanks after the value, then a line break"; text = ($six[5] + ": " + $made + "   " + $nl + "next: 1") },
     @{ found = $true; what = "YAML at the very end of the text"; text = ("a: 1" + $nl + $six[4] + ": " + $made) },
-    @{ found = $false; what = "KNOWN COST: a bare literal with a comma after it reads as an identifier in an object or a list"; text = ($ak + ": " + $made + ",") },
+    @{ found = $true; what = "a bare literal with a digit and a comma after it is a value, in an object or a list (round 2 of the review of PR 238)"; text = ($ak + ": " + $made + ",") },
     @{ found = $false; what = "YAML placeholder in angle brackets"; text = ($six[0] + ": <your-client-secret>") },
     @{ found = $false; what = "YAML placeholder in capitals with the word your"; text = ($six[0] + ": YOUR_CLIENT_SECRET") },
     @{ found = $false; what = "YAML placeholder read from the environment"; text = ($six[0] + ': ${GOOGLE_CLIENT_SECRET}') },
@@ -313,6 +313,15 @@ $attacks += @(
     @{ found = $false; what = "F: db.connect(host=h, password=db_password, port=5432)"; text = ("db.connect(host=h, " + $six[5] + "=db_" + $six[5] + ", port=5432)") },
     @{ found = $false; what = "F: password = config.db_password"; text = ($six[5] + " = config.db_" + $six[5]) },
     @{ found = $false; what = "F: password = os.environ['DB_PASSWORD'], quoted inside"; text = ($six[5] + " = os.environ['DB_PASS" + "WORD']") },
+    # --- round 2 of that review (2026-10-14): six secrets ended by punctuation, each shared by the
+    #     first reference rule though the rule before it refused them all. As written there, the
+    #     made-up values assembled from pieces. ---
+    @{ found = $true; what = "F2: a connection string's Password=...;"; text = ("Server=db1;Database=app;User Id=app;" + "Pass" + "word=MyS3" + "cretPass;") },
+    @{ found = $true; what = "F2: export DB_PASSWORD=...;"; text = ("export DB_" + "PASS" + "WORD=Sup3r" + "S3cret;") },
+    @{ found = $true; what = "F2: mysql --password=...,"; text = ("mysql --" + $six[5] + "=Sup3r" + "S3cret,") },
+    @{ found = $true; what = "F2: password = ...,"; text = ($six[5] + " = Sup3r" + "S3cret,") },
+    @{ found = $true; what = "F2: client_secret: ...; with an underscore in the value"; text = ($six[0] + ": Sup3r_" + "S3cret;") },
+    @{ found = $true; what = "F2: password: ...,"; text = ($six[5] + ": Sup3r" + "S3cret,") },
     # --- and round them, from both sides ---
     @{ found = $false; what = "an identifier with a semicolon after it, as a statement ends"; text = ($ak + " = theKeyVariable;") },
     @{ found = $false; what = "an identifier with a closing parenthesis after it"; text = ("f(" + $six[4] + "=theKeyVariable)") },
@@ -320,7 +329,11 @@ $attacks += @(
     @{ found = $false; what = "a YAML value with a digit that is a call"; text = ($six[5] + ": lookup(vault2)") },
     @{ found = $false; what = "a YAML value with a digit that is a dotted lookup"; text = ($six[5] + ": settings.v2.password") },
     @{ found = $false; what = "KNOWN COST: a YAML value of letters only, bare, is taken for a word"; text = ($six[5] + ": lettersonlyvalue") },
-    @{ found = $false; what = "KNOWN COST: a bare secret with a semicolon after it reads as a statement's identifier"; text = ($six[4] + "=" + $made + ";") },
+    @{ found = $true; what = "a bare secret with a digit and a semicolon after it is a value (round 2 of the review of PR 238)"; text = ($six[4] + "=" + $made + ";") },
+    @{ found = $false; what = "KNOWN COST: a bare secret of letters only with a semicolon after it reads as a statement's identifier"; text = ($six[4] + "=lettersonlyvalue;") },
+    @{ found = $false; what = "KNOWN COST: and so with a comma, in a list"; text = ($six[5] + ": lettersonlyvalue,") },
+    @{ found = $true; what = "KNOWN COST: an argument whose variable's name holds a digit is taken for a value (password=user_password2,)"; text = ("login(" + $six[5] + "=user_" + $six[5] + "2, timeout=5)") },
+    @{ found = $true; what = "a bare letters-only value with nothing after it is still a value, as it was"; text = ($six[5] + " = lettersonlyvalue") },
     @{ found = $false; what = "KNOWN COST: a bare secret with a dot in it reads as a lookup"; text = ($six[4] + "=abc123.def456") },
     @{ found = $false; what = "KNOWN LIMIT: a value that ends in a parenthesis is code by the rule"; text = ($six[5] + "=Ab3dEf6hIj9k)") },
     @{ found = $false; what = "KNOWN LIMIT: a YAML anchor before the value"; text = ($six[5] + ": &pw " + $made) },

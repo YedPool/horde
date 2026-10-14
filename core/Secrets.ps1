@@ -113,6 +113,16 @@ $script:HordeSecretRunKind = "a long random-looking string, as a key or token is
 #   bare identifier with nothing after it is NOT skipped: hunter2xyz is one, and so is a secret.
 #   KNOWN COST: a real secret written bare with a dot or a bracket in it (abc123.def456) is taken
 #   for a lookup; a signed web token, the usual dotted secret, has a kind of its own.
+#   AN IDENTIFIER BEFORE , ; OR ) HOLDS NO DIGIT (round 2 of that review, 2026-10-14): the first
+#   rule took ANY run of letters, digits and underscores before those for code, and so shared
+#   six lines that round of the review wrote, each a secret with a digit in it ended by its
+#   punctuation: a connection string's Password=...;, an export line's ...;, a command line's
+#   --password=...,, and YAML and name=value lines ending in , or ; - a statement, a list and a
+#   connection string end a secret the same way they end a name (test/test-secrets.ps1 has all
+#   six). So, as the YAML value below: letters and underscores only, no digit.
+#   KNOWN COST: a secret of letters only with , ; or ) after it (password=lettersonly;) is still
+#   taken for code, and an argument whose name holds a digit (password=user_password2,) is found.
+#   A dotted or indexed lookup keeps its digits (settings.v2.password): it is code by its shape.
 #   AND AN UNQUOTED YAML VALUE MUST HOLD A DIGIT (the same review): after a colon, code and pages
 #   that explain a setting write words - password: required, api_key: optional, api_key: SecretStr,
 #   password: see-the-vault - and a secret of eight or more random characters almost never lacks
@@ -131,9 +141,10 @@ $script:HordeSecretNamedName = '[A-Za-z0-9_-]*?(?i:' + ((@($script:HordeSecretNa
 $script:HordeSecretNamedPattern = '(?<q>["''])(?<name>' + $script:HordeSecretNamedName + ')\k<q>\s*:\s*(?<v>["''])(?<value>(?:\\.|(?!\k<v>)[^\\\s]){8,})\k<v>' +
     '|(?<![A-Za-z0-9_-])(?<name>' + $script:HordeSecretNamedName + ')[ \t]*=[ \t]*(?:(?<w>["''])(?<value>(?:(?!\k<w>)\S){8,})\k<w>|(?<bare>[^\s"''=]\S{7,}))' +
     '|(?<![A-Za-z0-9_-])(?<name>' + $script:HordeSecretNamedName + ')[ \t]*:[ \t]+(?:(?<y>["''])(?<value>(?:(?!\k<y>)\S){8,})\k<y>|(?<ybare>[^\s"''=]\S{7,}))(?=[ \t]*(?:\r|\n|\z|#))'
-# A REFERENCE IN CODE (the header): an identifier and then either one or more .member or [index]
-# parts with any of , ; ) after them, or only those characters.
-$script:HordeSecretNamedCodePattern = '\A[A-Za-z_][A-Za-z0-9_]*(?:(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])+[,;)]*|[,;)]+)\z'
+# A REFERENCE IN CODE (the header): an identifier and then one or more .member or [index] parts
+# with any of , ; ) after them, or an identifier of letters and underscores only (no digit) and
+# then only those characters.
+$script:HordeSecretNamedCodePattern = '\A(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])+[,;)]*|[A-Za-z_]+[,;)]+)\z'
 $script:HordeSecretNamedPlaceholder = '[<>${]|\.\.\.|(?i:your|xxx|example|changeme|redacted)'
 # THE MARKER a hidden secret leaves. Its own characters match no pattern above (test/test-secrets.ps1
 # redacts a redacted text and requires no change), so redacting twice is redacting once.
