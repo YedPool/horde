@@ -72,7 +72,21 @@ function Get-HordeFilesTextProblem {
                 try { $null = $strict.GetDecoder().GetCharCount($Bytes, 0, $half, $false) } catch { $reads = $false }
                 if ($reads) { $stillText = $half } else { $notText = $half }
             }
-            $which = " (it stops being UTF-8 at byte " + ($notText - 1) + ")"
+            # THE BYTE THAT IS WRONG IS NOT ALWAYS WHERE THE BAD SEQUENCE STARTS (the review's next
+            # round, 2026-10-13): of 61 62 C3 28 the wrong byte is 28, byte 3, and the character it
+            # broke began at C3, byte 2. So when the beginning before the wrong byte ends inside a
+            # character (it does not read when told the bytes end there), the position walks back
+            # over that character's continuation bytes (80 to BF, at most three) to its first byte.
+            # Positions count from 0, as the NUL's above does and as this did before.
+            $wrong = $notText - 1
+            $from = $wrong
+            $whole = $true
+            try { $null = $strict.GetDecoder().GetCharCount($Bytes, 0, $wrong, $true) } catch { $whole = $false }
+            if (-not $whole) {
+                $from = $wrong - 1
+                while ($from -gt 0 -and $from -gt ($wrong - 4) -and $Bytes[$from] -ge 0x80 -and $Bytes[$from] -le 0xBF) { $from-- }
+            }
+            $which = " (it stops being UTF-8 at byte " + $from + ")"
         }
         return ("it is not UTF-8: it holds a byte sequence that is no character in UTF-8" + $which + "; text is shared as UTF-8")
     }

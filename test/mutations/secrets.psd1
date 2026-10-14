@@ -45,11 +45,69 @@
            Find = ' -and $kindName -cne $script:HordeSecretNamedKind) { throw'
            Replace = ') { throw' }
         @{ Name = "a-placeholder-is-a-value"
-           Find = 'if (-not [regex]::IsMatch($m.Groups["value"].Value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }'
+           Find = 'if (-not [regex]::IsMatch($value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }'
            Replace = 'return $true' }
         @{ Name = "only-the-first-named-match-is-looked-at"
-           Find = 'if (-not [regex]::IsMatch($m.Groups["value"].Value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }'
-           Replace = 'return (-not [regex]::IsMatch($m.Groups["value"].Value, $script:HordeSecretNamedPlaceholder, $invariant))' }
+           Find = 'if (-not [regex]::IsMatch($value, $script:HordeSecretNamedPlaceholder, $invariant)) { return $true }'
+           Replace = 'return (-not [regex]::IsMatch($value, $script:HordeSecretNamedPlaceholder, $invariant))' }
+        @{ Name = "a-bare-value-is-not-looked-at"
+           Find = '$value = $(if ($null -ne $unquoted) { $unquoted.Value } else { $m.Groups["value"].Value })'
+           Replace = '$value = $m.Groups["value"].Value' }
+        # --- an unquoted value with a parenthesis is code (the review's next round, 2026-10-13) ---
+        @{ Name = "a-bare-value-with-a-parenthesis-is-a-value"
+           Find = 'if ($null -ne $unquoted -and $unquoted.Value.IndexOfAny([char[]]@(''('', '')'')) -ge 0) { continue }'
+           Replace = '' }
+        @{ Name = "a-yaml-value-is-never-unquoted"
+           Find = '$unquoted = $(if ($bare.Success) { $bare } elseif ($yamlBare.Success) { $yamlBare } else { $null })'
+           Replace = '$unquoted = $(if ($bare.Success) { $bare } else { $null })' }
+        # --- a reference in code, and a YAML value with no digit (the review of PR 238, 2026-10-13) ---
+        @{ Name = "a-reference-in-code-is-a-value"
+           Find = 'if ($null -ne $unquoted -and $unquoted.Value -cmatch $script:HordeSecretNamedCodePattern) { continue }'
+           Replace = '' }
+        @{ Name = "a-dotted-lookup-is-a-value"
+           Find = '(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])+'
+           Replace = '(?:\[[^\]]*\])+' }
+        @{ Name = "an-indexed-lookup-is-a-value"
+           Find = '[A-Za-z0-9_]*|\[[^\]]*\])+'
+           Replace = '[A-Za-z0-9_]*)+' }
+        @{ Name = "an-identifier-before-a-comma-is-a-value"
+           Find = '[,;)]*|[A-Za-z_]+[,;)]+)(?:`[.,;:)]*)?\z'''
+           Replace = '[,;)]*)(?:`[.,;:)]*)?\z''' }
+        @{ Name = "every-bare-identifier-is-a-reference"
+           Find = '|[A-Za-z_]+[,;)]+)(?:`[.,;:)]*)?\z'''
+           Replace = '|[A-Za-z0-9_]+[,;)]*)(?:`[.,;:)]*)?\z''' }
+        # --- round 2 of that review (2026-10-14): an identifier before , ; ) holds no digit ---
+        @{ Name = "an-identifier-before-a-comma-may-hold-a-digit"
+           Find = '|[A-Za-z_]+[,;)]+)(?:`[.,;:)]*)?\z'''
+           Replace = '|[A-Za-z_][A-Za-z0-9_]*[,;)]+)(?:`[.,;:)]*)?\z''' }
+        # --- round 3 of that review (2026-10-14): a reference may end in one backtick ---
+        @{ Name = "a-reference-in-a-code-span-is-a-value"
+           Find = '[,;)]+)(?:`[.,;:)]*)?\z'''
+           Replace = '[,;)]+)\z''' }
+        @{ Name = "any-number-of-backticks-close-a-reference"
+           Find = '(?:`[.,;:)]*)?\z'''
+           Replace = '(?:`+[.,;:)]*)?\z''' }
+        @{ Name = "no-punctuation-after-a-code-span"
+           Find = '(?:`[.,;:)]*)?\z'''
+           Replace = '`?\z''' }
+        @{ Name = "anything-after-a-code-span"
+           Find = '(?:`[.,;:)]*)?\z'''
+           Replace = '(?:`.*)?\z''' }
+        @{ Name = "a-yaml-value-needs-no-digit"
+           Find = 'if ($yamlBare.Success -and $yamlBare.Value -cnotmatch ''[0-9]'') { continue }'
+           Replace = '' }
+        @{ Name = "every-unquoted-value-needs-a-digit"
+           Find = 'if ($yamlBare.Success -and $yamlBare.Value -cnotmatch'
+           Replace = 'if ($null -ne $unquoted -and $unquoted.Value -cnotmatch' }
+        @{ Name = "only-an-open-parenthesis-makes-code"
+           Find = '[char[]]@(''('', '')'')'
+           Replace = '[char[]]@(''('')' }
+        @{ Name = "only-a-close-parenthesis-makes-code"
+           Find = '[char[]]@(''('', '')'')'
+           Replace = '[char[]]@('')'')' }
+        @{ Name = "a-quoted-value-with-a-parenthesis-is-code-too"
+           Find = 'if ($null -ne $unquoted -and $unquoted.Value.IndexOfAny('
+           Replace = 'if ($m.Value.IndexOfAny(' }
         @{ Name = "named-secret-name-client-secret-off"
            Find = 'client_secret|private_key|refresh_token|access_token|api_key|password'''
            Replace = 'zzzzzz_zzzzzz|private_key|refresh_token|access_token|api_key|password''' }
@@ -68,18 +126,38 @@
         @{ Name = "named-secret-name-password-off"
            Find = 'client_secret|private_key|refresh_token|access_token|api_key|password'''
            Replace = 'client_secret|private_key|refresh_token|access_token|api_key|zzzzzzzz''' }
-        @{ Name = "named-secret-member-name-case-sensitive"
-           Find = '(?<name>(?i:'' + $script:HordeSecretNamedNames + ''))\k<q>'
-           Replace = '(?<name>(?:'' + $script:HordeSecretNamedNames + ''))\k<q>' }
-        @{ Name = "named-secret-pair-name-case-sensitive"
-           Find = '(?<name>(?i:'' + $script:HordeSecretNamedNames + ''))[ \t]*='
-           Replace = '(?<name>(?:'' + $script:HordeSecretNamedNames + ''))[ \t]*=' }
-        @{ Name = "named-secret-found-at-the-end-of-a-longer-name"
-           Find = '|(?<![A-Za-z0-9_])(?<name>'
-           Replace = '|(?<name>' }
+        # --- the name is folded, and may have a prefix (the review's next round, 2026-10-13) ---
+        @{ Name = "named-secret-name-case-sensitive"
+           Find = '$script:HordeSecretNamedName = ''[A-Za-z0-9_-]*?(?i:'''
+           Replace = '$script:HordeSecretNamedName = ''[A-Za-z0-9_-]*?(?:''' }
+        @{ Name = "named-secret-no-prefix-allowed"
+           Find = '$script:HordeSecretNamedName = ''[A-Za-z0-9_-]*?(?i:'''
+           Replace = '$script:HordeSecretNamedName = ''(?i:''' }
+        @{ Name = "named-secret-name-not-folded-of-separators"
+           Find = '-join ''[_-]*'''
+           Replace = '-join ''''' }
+        @{ Name = "named-secret-dash-not-folded"
+           Find = '-join ''[_-]*'''
+           Replace = '-join ''_*''' }
+        @{ Name = "named-secret-underscores-kept-in-the-name"
+           Find = '($_.Replace("_", "").ToCharArray()'
+           Replace = '($_.ToCharArray()' }
         @{ Name = "named-secret-equals-sign-may-be-on-another-line"
-           Find = '))[ \t]*=[ \t]*(?:'
-           Replace = '))\s*=\s*(?:' }
+           Find = ')[ \t]*=[ \t]*(?:'
+           Replace = ')\s*=\s*(?:' }
+        # --- YAML: a colon and a value that is the rest of its line ---
+        @{ Name = "named-secret-yaml-not-looked-for"
+           Find = ')[ \t]*:[ \t]+(?:'
+           Replace = ')[ \t]*:[ \t]+(?!)(?:' }
+        @{ Name = "named-secret-yaml-value-need-not-end-its-line"
+           Find = '(?=[ \t]*(?:\r|\n|\z|#))'
+           Replace = '' }
+        @{ Name = "named-secret-yaml-comment-ends-no-value"
+           Find = '(?:\r|\n|\z|#))'
+           Replace = '(?:\r|\n|\z))' }
+        @{ Name = "named-secret-yaml-colon-may-be-on-another-line"
+           Find = ')[ \t]*:[ \t]+(?:'
+           Replace = ')\s*:\s+(?:' }
         @{ Name = "named-secret-member-value-of-any-length"
            Find = '[^\\\s]){8,})\k<v>'
            Replace = '[^\\\s]){1,})\k<v>' }
@@ -87,14 +165,20 @@
            Find = '(?!\k<w>)\S){8,})\k<w>'
            Replace = '(?!\k<w>)\S){1,})\k<w>' }
         @{ Name = "named-secret-bare-pair-value-of-any-length"
-           Find = '=]\S{7,}))'
-           Replace = '=]\S{0,}))' }
+           Find = '=]\S{7,}))'' +'
+           Replace = '=]\S{0,}))'' +' }
+        @{ Name = "named-secret-bare-yaml-value-of-any-length"
+           Find = '=]\S{7,}))(?='
+           Replace = '=]\S{0,}))(?=' }
+        @{ Name = "named-secret-quoted-yaml-value-of-any-length"
+           Find = '(?!\k<y>)\S){8,})\k<y>'
+           Replace = '(?!\k<y>)\S){1,})\k<y>' }
         @{ Name = "named-secret-member-value-may-hold-white-space"
            Find = '(?!\k<v>)[^\\\s]){8,}'
            Replace = '(?!\k<v>)[^\\]){8,}' }
         @{ Name = "named-secret-a-comparison-is-a-pair"
-           Find = '(?<value>[^\s"''''=]\S{7,})'
-           Replace = '(?<value>[^\s"'''']\S{7,})' }
+           Find = '\k<w>|(?<bare>[^\s"''''=]'
+           Replace = '\k<w>|(?<bare>[^\s"'''']' }
         @{ Name = "named-secret-angle-bracket-is-no-placeholder"
            Find = '$script:HordeSecretNamedPlaceholder = ''[<>${]|'
            Replace = '$script:HordeSecretNamedPlaceholder = ''[${]|' }

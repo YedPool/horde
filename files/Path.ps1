@@ -153,6 +153,64 @@ function Initialize-HordeFilesPlaceNative {
     Add-Type -Namespace HordeNative -Name FilePlace -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string lpFileName, int dwDesiredAccess, int dwShareMode, System.IntPtr lpSecurityAttributes, int dwCreationDisposition, int dwFlagsAndAttributes, System.IntPtr hTemplateFile);'
 }
 
+function Initialize-HordeFilesIdentityNative {
+    # WHICH FILE an open handle is, as the file system numbers it: GetFileInformationByHandle's volume
+    # serial number and file index. Two names of one file (a hard link) give one answer, which no
+    # path can (files/Deny.ps1, the relays' own files). Defined once a process, under a name of its own.
+    if (([System.Management.Automation.PSTypeName]"HordeNative.FileIdentity").Type) { return }
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace HordeNative {
+    public static class FileIdentity {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Info {
+            public uint Attributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+            public uint VolumeSerial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out Info info);
+        public static string Of(SafeFileHandle handle) {
+            Info info;
+            if (handle == null || handle.IsInvalid || !GetFileInformationByHandle(handle, out info)) { return ""; }
+            return info.VolumeSerial.ToString("x8") + ":" + info.IndexHigh.ToString("x8") + info.IndexLow.ToString("x8");
+        }
+    }
+}
+"@
+}
+
+function Get-HordeFilesHandleIdentity {
+    # The identity of an open file (Initialize-HordeFilesIdentityNative), or "" when Windows would not
+    # give it. KNOWN LIMIT: the file index is 64 bits; a volume whose ids are 128 bits (ReFS) may give
+    # two files one index, which errs towards refusing.
+    param([Parameter(Mandatory = $true)]$Handle)
+    Initialize-HordeFilesIdentityNative
+    return [HordeNative.FileIdentity]::Of($Handle)
+}
+
+function Get-HordeFilesPathIdentity {
+    # The identity of the file at -Path: { state: ok | absent | unknown; id }. It is opened for its
+    # attributes only (FILE_READ_ATTRIBUTES, 0x80): not one byte of it is read.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    Initialize-HordeFilesPlaceNative
+    # OPEN_EXISTING (3), and FILE_FLAG_BACKUP_SEMANTICS (0x02000000) as for a folder, so that whatever
+    # the relay named opens.
+    $openExisting = 3
+    $backupSemantics = 0x02000000
+    $handle = [HordeNative.FilePlace]::CreateFileW($Path, 0x80, 7, [System.IntPtr]::Zero, $openExisting, $backupSemantics, [System.IntPtr]::Zero)
+    $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($handle.IsInvalid) {
+        if (@(2, 3) -contains $code) { return [pscustomobject]@{ state = "absent"; id = "" } }
+        return [pscustomobject]@{ state = "unknown"; id = "" }
+    }
+    try { $id = Get-HordeFilesHandleIdentity -Handle $handle } finally { $handle.Dispose() }
+    if ($id -eq "") { return [pscustomobject]@{ state = "unknown"; id = "" } }
+    return [pscustomobject]@{ state = "ok"; id = $id }
+}
+
 function Get-HordeFilesFolderFinalPath {
     # Where the FOLDER at -Path really is: { state: ok | absent | unknown; path }. path is what
     # Windows says of the open folder (\\?\C:\...), by the same question a shared file's handle is

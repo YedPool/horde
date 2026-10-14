@@ -29,6 +29,22 @@ trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "files\Share.ps1")
 
+# THE RELAYS ARE LOADED BY files/Deny.ps1 ITSELF, once per load (its header, THE RELAYS' OWN SECRET
+# FILES), and a second load in the same scope must not throw the port's "already registered". Asked
+# here, first, before anything below replaces a function of that file: a second load defines its
+# functions again. Only the relays' NAMES are looked at; no real relay is asked for its files.
+Write-Host ""
+Write-Host "--- files/Deny.ps1 loads every relay, once, and loading it again is safe ---" -ForegroundColor Cyan
+$relayFolderNames = (@(Get-HordeRelayFiles | ForEach-Object { Split-Path -Leaf (Split-Path -Parent $_) }) -join ",")
+$loadedRelayNames = (@(Get-HordeRelayNames) -join ",")
+Check ($relayFolderNames -ne "" -and $loadedRelayNames -ceq $relayFolderNames) ("loading the share loads every relay the port finds, by its folder's name (" + $loadedRelayNames + ")")
+$secondLoad = "loaded"
+try { . (Join-Path $root "files\Deny.ps1") } catch { $secondLoad = "threw: " + $_.Exception.Message }
+Check ($secondLoad -ceq "loaded" -and (@(Get-HordeRelayNames) -join ",") -ceq $loadedRelayNames) ("files/Deny.ps1 loaded a second time in the same scope does not throw, and every relay is there once (" + $secondLoad + ")")
+$thirdLoad = "loaded"
+try { . (Join-Path $root "files\Share.ps1") } catch { $thirdLoad = "threw: " + $_.Exception.Message }
+Check ($thirdLoad -ceq "loaded" -and (@(Get-HordeRelayNames) -join ",") -ceq $loadedRelayNames) ("and so does the whole share, loaded again over relays that are already registered (" + $thirdLoad + ")")
+
 $script:work = Join-Path $env:TEMP ("horde-files-deny-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $script:work | Out-Null
 [System.IO.Directory]::SetCurrentDirectory($script:work)
@@ -60,6 +76,31 @@ New-Item -ItemType Directory -Path (Join-Path $repo "agents\harness-y") | Out-Nu
 [System.IO.File]::WriteAllText((Join-Path $repo "agents\harness-y\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-y" }, { "env": "HORDE_TEST_HARNESS_Y_HOME" } ] }')
 $script:n = 0
 $sess = New-HordeKnown -Value "deny-session"
+# THE RELAYS THIS SUITE ASKS ARE ITS OWN (the relays' secret files, further down): the real ones are
+# let go and the port is given relays registered the way a real one registers, through
+# Register-HordeRelay, each with a folder and a capabilities.json of this suite's own. So the share
+# asks the real Get-HordeRelaySecretFiles, and no real relay's settings or files are looked at.
+# Until a section says otherwise, one made-up relay is asked and names no file: the ordinary answer.
+$script:relayFixtures = Join-Path $script:real "relays"
+$script:entriesA = @()
+$script:relayKnownA = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @($script:entriesA) }) }
+function Set-TestRelays {
+    # The port's relays become exactly these: each @{ name; block }, a block of $null registering a
+    # relay with no -SecretFiles at all.
+    param([object[]]$Relays)
+    $script:HordeRelays.Clear()
+    foreach ($r in $Relays) {
+        $folder = Join-Path $script:relayFixtures $r.name
+        if (-not (Test-Path -LiteralPath $folder)) {
+            [void][System.IO.Directory]::CreateDirectory($folder)
+            [System.IO.File]::WriteAllText((Join-Path $folder "capabilities.json"), ('{ "schemaVersion": 1, "relay": "' + $r.name + '", "capabilities": { "durable": { "support": "yes", "evidence": "fixture" }, "realtime": { "support": "yes", "evidence": "fixture" }, "reach.remote": { "support": "yes", "evidence": "fixture" }, "trim.on.ack": { "support": "yes", "evidence": "fixture" } }, "limits": { "maxTextChars": 4096, "maxBatch": 8, "maxWatchMs": 2000, "retentionSeconds": 0 } }'))
+        }
+        if ($null -eq $r.block) { $null = Register-HordeRelay -Folder $folder -Connect {} -Put {} -Get {} -Watch {} -Ack {} }
+        else { $null = Register-HordeRelay -Folder $folder -Connect {} -Put {} -Get {} -Watch {} -Ack {} -SecretFiles $r.block }
+    }
+}
+function Set-OrdinaryRelays { $script:entriesA = @(); Set-TestRelays @(@{ name = "test-relay-a"; block = $script:relayKnownA }, @{ name = "test-relay-quiet"; block = $null }) }
+Set-OrdinaryRelays
 
 function New-TestHome { $script:n++; return (Join-Path $script:real ("home-" + $script:n)) }
 function Get-Names {
@@ -86,7 +127,10 @@ function Test-Refused {
     $r = [pscustomobject]@{ outcome = "threw"; reason = "" }
     try { $r = Invoke-Share -TestHome $TestHome -Path $Path -Force:$Force -Repo $Repo } catch { $r.reason = "$($_.Exception.Message)" }
     $ok = ($r.outcome -ceq "refused" -and $r.reason -like ("*" + $Like + "*") -and ($NotLike -eq "" -or $r.reason -notlike ("*" + $NotLike + "*")) -and (Get-Names $TestHome) -ceq $before)
-    if (-not $ok) { Write-Host ("         got: " + $r.outcome + " - " + $r.reason) -ForegroundColor Red }
+    # The store's names before and after are printed when they differ: round 3 of the review of PR
+    # 238 saw this helper fail once with the right outcome and reason, and not again (2026-10-14).
+    $after = Get-Names $TestHome
+    if (-not $ok) { Write-Host ("         got: " + $r.outcome + " - " + $r.reason + $(if ($after -cne $before) { " (the store before: '" + $before + "'; after: '" + $after + "')" } else { "" })) -ForegroundColor Red }
     return $ok
 }
 function Test-Shared {
@@ -125,9 +169,9 @@ Write-Host "--- the list: one place, six words, and what -Force may lift ---" -F
 $list = Get-HordeFilesDenyList
 $anywhereWords = (@($list.words | Where-Object { $_.how -ceq "anywhere" } | ForEach-Object { $_.word }) -join ",")
 $wholeWords = (@($list.words | Where-Object { $_.how -ceq "word" } | ForEach-Object { $_.word }) -join ",")
-Check ($anywhereWords -ceq "credential,secret,key,password,passwd,.env,passphrase,mnemonic,kubeconfig") ("the words looked for anywhere in a name are five of the six first asked for, passwd, and three the second round of the review added (" + $anywhereWords + ")")
+Check ($anywhereWords -ceq "credential,secret,key,password,passwd,.env,passphrase,mnemonic,kubeconfig,accesstoken,refreshtoken,authtoken") ("the words looked for anywhere in a name are five of the six first asked for, passwd, three the second round of the review added and the three token words of the next round (" + $anywhereWords + ")")
 Check ($wholeWords -ceq "token,auth,oauth,cred,private,wallet,cookie,recovery,env,service-account,id_rsa,id_dsa,id_ecdsa,id_ed25519,pem,pfx,p12,ppk,kdbx,jks,netrc,npmrc,pypirc,tfstate,pwd,totp,seed,jwt,vault,2fa") ("the short words, looked for only as whole words, are these, token now among them (" + $wholeWords + ")")
-Check (@($list.words | Where-Object { $_.how -cne "anywhere" -and $_.how -cne "word" }).Count -eq 0 -and @($list.words).Count -eq 39) "every word says which of the two ways it is looked for, and there are 39"
+Check (@($list.words | Where-Object { $_.how -cne "anywhere" -and $_.how -cne "word" }).Count -eq 0 -and @($list.words).Count -eq 42) "every word says which of the two ways it is looked for, and there are 42"
 Check ((@($list.signInFolders) -join ",") -ceq ".aws,.azure,.kube,.docker" -and (@($list.signInNames) -join ",") -ceq "config.json") "a cloud tool's sign-in is config.json in one of four folders"
 Check ($list.secretsFolder -ceq ".horde-secrets" -and $list.sshFolder -ceq ".ssh" -and $list.homeFolder -ceq ".horde") "the three folders of the profile are .horde, .horde-secrets and .ssh"
 $wasHome = $env:HORDE_HOME; $env:HORDE_HOME = ""
@@ -160,7 +204,7 @@ Write-Host "--- a name: each word at the start, in the middle and at the end, in
 $refusedNames = [ordered]@{
     "credential" = @("credentials.json", "my-credential-notes.md", "aws.credential", "CREDENTIALS.TXT", "GoogleCredentials.json", ".git-credentials", "credentials")
     "secret" = @("secret.md", "top-secret-plan.md", "client_secret", "Secrets.json", "MySecretNotes.md", "secretary.txt")
-    "token" = @("token.txt", "my-token-list.md", "access_token", "TOKENS.json", "refreshToken.json", "token-budget-analysis.md", "x.token")
+    "token" = @("token.txt", "my-token-list.md", "access_token", "TOKENS.json", "refresh-token.json", "token-budget-analysis.md", "x.token")
     "key" = @("key.md", "api-key.txt", "id_rsa.key.txt", "keys.json", "KEY.MD", "mykey.txt", "keyed.md", "ApiKey.json", "private-key-notes.md", "x.key", "apikeys.txt", "key2.json", "monkey-api-key.txt", "keyboard.key.md", "turkeykey.md", "release.keystore", "private-key.md")
     "password" = @("password.txt", "my-passwords-old.md", "wifi_password", "PASSWORDS.md", "PassWord.txt", "passwordless.md")
     "passwd" = @("passwd.txt", "htpasswd.txt", ".htpasswd", "PASSWD.md", "etc-passwd-copy.txt")
@@ -200,6 +244,10 @@ $refusedNames = [ordered]@{
     "jwt" = @("jwt.json", "jwts.md", "my-jwt.txt", "JWT.md")
     "vault" = @("vault.json", "vaults.md", "my-vault.txt", "VAULT.md")
     "2fa" = @("2fa.txt", "my-2fa.md", "2FA.md", "2fas.txt")
+    # THE THREE TOKEN WORDS OF THE NEXT ROUND, letters anywhere: run together, as token alone missed.
+    "accesstoken" = @("ACCESSTOKEN.txt", "accesstoken.json", "github-accesstoken.md", "myAccesstokens.txt", "AccessToken.json")
+    "refreshtoken" = @("refreshtoken.txt", "REFRESHTOKEN.json", "old_refreshtoken.md", "refreshToken.json")
+    "authtoken" = @("authtoken.txt", "AUTHTOKEN.md", "ngrok-authtoken.json", "oauthtoken.json", "AuthToken.md")
 }
 Check (@($refusedNames.Keys).Count -eq @($list.words).Count -and @($list.words | Where-Object { -not $refusedNames.Contains($_.word) }).Count -eq 0) ("every word of the list has names here that only it refuses (" + @($refusedNames.Keys).Count + " of " + @($list.words).Count + ")")
 # THE TWELVE NAMES THE REVIEW OF 2026-10-13 MEASURED BEING SHARED: each is refused now.
@@ -213,6 +261,14 @@ foreach ($word in $refusedNames.Keys) {
 $plainNames = @("report.md", "notes.txt", "chart.png", "a", "", "ke y.md", "k-e-y.md", "tok.en.md", "pass-word.md", "secre.t", "environment.md", "x.en.v", "credentia.md", "passwor.d")
 $caught = @($plainNames | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
 Check ($caught.Count -eq 0) ("CONTROL: " + $plainNames.Count + " names that hold no word of the list, a word cut short and a word broken by a character among them, are let by" + $(if ($caught.Count) { " (CAUGHT: " + ($caught -join ", ") + ")" } else { "" }))
+# A SOFT HYPHEN OR A ZERO-WIDTH SPACE INSIDE A LONG WORD IS JUDGED AS WRITTEN, by code units (the
+# review of PR 238, the survivor of 227's nets, word-looked-for-by-the-runtimes-own-comparison): a
+# comparison of the runtime's own would take pass<U+00AD>word for password; the list's does not. Both
+# characters are invisible, and the rule is the one written in the header, so this pins it.
+$invisible = @(("pass" + [char]0x00AD + "word.txt"), ("pass" + [char]0x200B + "word.txt"), ("secr" + [char]0x00AD + "et-notes.md"), ("creden" + [char]0x200B + "tial.json"))
+$takenAsTheWord = @($invisible | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
+Check ($takenAsTheWord.Count -eq 0) ("a soft hyphen (U+00AD) or a zero-width space (U+200B) inside a long word: the name is judged as written, ordinal, and is not the word (" + $takenAsTheWord.Count + " of " + $invisible.Count + " taken for it)")
+Check ((Get-HordeFilesDenyWord -Name "password.txt") -ceq "password" -and (Get-HordeFilesDenyWord -Name "secret-notes.md") -ceq "secret" -and (Get-HordeFilesDenyWord -Name "credential.json") -ceq "credential") "CONTROL: the same names without the invisible character are each the word"
 # A SHORT WORD INSIDE A LONGER ONE IS NOT THE WORD: the five names the review said must pass, and
 # for every short word a name that only holds its letters.
 $holdTheLetters = @("author-notes.md", "template.html", "credits.md", "privateer.txt", "cookiecutter.md",
@@ -229,6 +285,9 @@ Check (((Get-HordeFilesNameWords -Name "oauthCreds.OLD_v2 final-COPY.json") -joi
 Check (@(Get-HordeFilesNameWords -Name "").Count -eq 0 -and @(Get-HordeFilesNameWords -Name "...--__").Count -eq 0) "a name with no letter or digit has no words"
 Check ((Get-HordeFilesDenyWord -Name ("auth" + [char]0xE9 + "x.json")) -ceq "auth" -and (Get-HordeFilesDenyWord -Name ([char]0x05D0 + "cred" + [char]0x05D0 + ".md")) -ceq "cred") "a letter outside ASCII ends a word and never hides one: a short word beside such a letter is still the word"
 # KNOWN LIMITS of the whole-word way, pinned so that changing them is a decision.
+# mytoken.txt IS LET BY, ON PURPOSE (files/Deny.ps1, THE THREE TOKEN WORDS): catching it needs a third
+# way of looking, a word that ends in token, which the review did not ask for.
+Check ((Get-HordeFilesDenyWord -Name "mytoken.txt") -ceq "" -and (Get-HordeFilesDenyWord -Name "githubtoken.json") -ceq "") "DECIDED: a name word that only ENDS in token (mytoken.txt, githubtoken.json) is not found"
 Check ((Get-HordeFilesDenyWord -Name "authfile.json") -ceq "" -and (Get-HordeFilesDenyWord -Name "AUTHFile.json") -ceq "" -and (Get-HordeFilesDenyWord -Name "auth2.json") -ceq "") "KNOWN LIMIT: a short word run into another with no capital between them, or with a digit after it, is not found"
 
 Write-Host ""
@@ -903,7 +962,7 @@ Check (Test-Refused $h $both $neverSays -Force) "a text holding a token AND a pr
 # THE KINDS THAT ARE NOT ASKED FOR AT ALL (the review's decision): core finds each of these in a
 # text, and a share lets each by with no -Force, because ordinary reports are full of them.
 $notAsked = [ordered]@{
-    "after-a-colon.txt" = ("Pass" + "word: " + "hunter2x")
+    "after-a-colon.txt" = ("Pass" + "word: " + "hunter2x, and then rotate it")
     "in-a-sentence.md" = ("the pass" + "word is 'correct horse battery staple'")
     "bearer.md" = ("Send Bea" + "rer " + ("a1b2c3d4e5" * 3) + " in the header.")
     "authorization.txt" = ("Authorization: Basic " + "ZGVwbG95OlRyMHViNGRvcjM=")
@@ -911,6 +970,11 @@ $notAsked = [ordered]@{
     "a-long-run.json" = ('{"id":"' + "Zx9Qm2Lp7Rt4Vb8Nc1Hd" + "6Jf3Kg5Ws0YaUe4Ti7Ro" + '"}')
     "a-run-with-slashes.txt" = ("wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY")
 }
+# ALONE ON ITS LINE, THAT IS A YAML SECRET (core/Secrets.ps1, the next round of the review): the named
+# kind finds it, and -Force lifts it. Followed by more words on its line, as above, it is prose.
+$yamlLine = New-File (Join-Path $held "yaml-line.txt") ("Pass" + "word: " + "hunter2x")
+Check (Test-Refused $h $yamlLine "a secret written under a name such as client_secret or password") "a password alone after a colon, the rest of its line, is refused as a secret under its own name"
+Check (Test-Shared $h $yamlLine -Force) "and -Force shares it"
 foreach ($named in $notAsked.Keys) {
     $file = New-File (Join-Path $held $named) $notAsked[$named]
     Check ((Find-HordeSecretKind -Text $notAsked[$named]) -cne "" -and (Test-Shared $h $file)) ("CONTROL: " + $named + " holds what core calls '" + (Find-HordeSecretKind -Text $notAsked[$named]) + "', which a share does not ask for: it is shared with no -Force")
@@ -970,11 +1034,13 @@ $described = '{"properties":{"client_' + 'secret":{"type":"string","description"
 Check (Test-Shared $h (New-File (Join-Path $held "client-schema.json") $described)) "CONTROL: a schema, where the member's value is an object that describes it, is shared with no -Force"
 $placeheld = '{"client_' + 'secret":"<paste-the-secret-here>","api_' + 'key":"YOUR_API_KEY_HERE","pass' + 'word":"changeme-before-use"}'
 Check (Test-Shared $h (New-File (Join-Path $held "client-sample.json") $placeheld)) "CONTROL: and a sample whose values are placeholders (angle brackets, the word your, changeme) is shared with no -Force"
-# THE GAP THAT IS STILL LEFT, pinned so that closing it is seen: the same file with its secret under
-# a member name that is none of the six. Nothing knows it for what it is until the setting that
-# names the file is asked (the relay port's question, which is not built).
+# THE GAP THAT IS LEFT FOR A FILE NO RELAY NAMES, pinned so that closing it is seen: the same file
+# with its secret under a member name that is none of the six. Its content says nothing; what closes
+# it is the relay that keeps it naming it (the relays' secret files, below, shares this very file
+# with a made-up relay that names it).
 $otherMember = '{"web":{"client_id":"made-up.apps.example.com","signing_' + 'material":"' + $clientValue + '"}}'
-Check (Test-Shared $h (New-File (Join-Path $held "moved-client.json") $otherMember)) "KNOWN LIMIT: a moved file whose secret sits under another member name is shared, with no -Force"
+$movedClient = New-File (Join-Path $held "moved-client.json") $otherMember
+Check (Test-Shared $h $movedClient) "KNOWN LIMIT: a moved file whose secret sits under another member name, and that no relay names, is shared, with no -Force"
 # THE FUNCTION ITSELF, and the list it reads.
 Check ((@($list.shapes.never) -join ",") -ceq "a private key" -and (@($list.shapes.lifted) -join ",") -ceq "an access token,a signed web token,a webhook address,a secret written under a name such as client_secret or password") "the kinds asked for are one that is never lifted and four that -Force lifts"
 $asBytes = { param([string]$Words) return ,([System.Text.Encoding]::UTF8.GetBytes($Words)) }
@@ -983,6 +1049,294 @@ Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes $keyBlock)) -like ($neve
 Check ((Get-HordeFilesContentRefusal -Bytes (& $asBytes $cut)) -like "*an access token*" -and (Get-HordeFilesContentRefusal -Bytes (& $asBytes $cut) -Force) -eq "") "a token is answered without -Force and not with it"
 $everyKind = @(Find-HordeSecretKind -Text $keyBlock -Kinds (@($list.shapes.never) + @($list.shapes.lifted)))
 Check ($everyKind.Count -eq 1 -and $everyKind[0] -ceq "a private key") "CONTROL: every kind the list names is one core/Secrets.ps1 has - it throws for a name it does not have"
+
+Write-Host ""
+Write-Host "--- the relays' own secret files: asked of the port, refused by the handle's path, never lifted ---" -ForegroundColor Cyan
+# files/Deny.ps1's header, THE RELAYS' OWN SECRET FILES. Each answer the port can give is attacked:
+# known with files, known with none, unknown naming a relay, and nobody asked. A file a relay names is
+# reached by its path, in another case, through .., by a link to it and through a junction to its
+# folder, each with and without -Force; and the files beside it are shared. Every relay is this
+# suite's own, and every file holds dummy words.
+$h = New-TestHome
+$relayDir = Join-Path $script:real "relay-kept"
+$clientFile = New-File (Join-Path $relayDir "innocent-name.json") '{"dummy":"content-of-the-client-file-0042"}'
+$besideClient = New-File (Join-Path $relayDir "other.json") '{"dummy":1}'
+$longerName = New-File (Join-Path $relayDir "innocent-name.json.md") "dummy words, and no secret"
+$neverFile = Join-Path $relayDir "not-there-yet.json"
+$saysRelay = "is what the relay 'test-relay-a' calls the sign-in client file"
+$script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+Check (Test-Refused $h $clientFile ($saysRelay + " ('" + $clientFile + "'), a file it keeps a secret in. " + $never) "content-of-the-client") "KNOWN WITH FILES: the file a relay names is refused, the reason naming the relay and what the file is, and nothing it holds"
+Check (Test-Refused $h $clientFile $saysRelay -Force) "and -Force does not lift it"
+Check (Test-Shared $h $besideClient) "CONTROL: a file beside it, in the same folder, is shared"
+Check (Test-Shared $h $longerName -Force) "CONTROL: and so is one whose name only begins with its name, as a path that merely begins like it is not it"
+Check (Test-Refused $h (Join-Path $relayDir "INNOCENT-NAME.JSON") $saysRelay) "the file, reached by its path in other case, is refused"
+Check (Test-Refused $h (Join-Path $relayDir "sub\..\innocent-name.json") $saysRelay -Force) "and by a path with .. in it, with -Force"
+$script:entriesA = @([pscustomobject]@{ path = $clientFile.ToUpperInvariant(); what = "the sign-in client file" })
+Check (Test-Refused $h $clientFile $saysRelay) "a relay that names the file in other case still has it refused"
+Check (Test-Refused $h $clientFile $saysRelay -Force) "and -Force does not lift that either"
+$script:entriesA = @([pscustomobject]@{ path = (Join-Path $relayDir "made-up-sub\..\innocent-name.json"); what = "the sign-in client file" })
+Check (Test-Refused $h $clientFile $saysRelay) "a relay that names the file with .. in its path still has it refused"
+$links = Join-Path $script:work "links"
+[void][System.IO.Directory]::CreateDirectory($links)
+$junction = Join-Path $links "relay-kept-junction"
+if (New-Junction $junction $relayDir) {
+    $script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+    Check (Test-Refused $h (Join-Path $junction "innocent-name.json") $saysRelay) "the file, reached through a junction to its folder, is refused"
+    Check (Test-Refused $h (Join-Path $junction "innocent-name.json") $saysRelay -Force) "and with -Force"
+    # A share never follows a link (files/Path.ps1), so the file beside it is refused through the junction
+    # too - for the link, and not as the relay's file.
+    Check (Test-Refused $h (Join-Path $junction "other.json") "is a link" "the relay") "CONTROL: the file beside it, through the same junction, is refused for the link, not as the relay's file"
+    $script:entriesA = @([pscustomobject]@{ path = (Join-Path $junction "innocent-name.json"); what = "the sign-in client file" })
+    Check (Test-Refused $h $clientFile $saysRelay -Force) "a relay that names the file THROUGH a junction has it refused by its real path, -Force or not"
+} else { Write-Skip "a junction could not be made here, so the junction cases did not run" }
+$fileLink = Join-Path $links "innocent-link.md"
+if (New-FileLink $fileLink $clientFile) {
+    $script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+    Check (Test-Refused $h $fileLink $saysRelay) "the file, reached by a symbolic link to it with another name, is refused"
+    Check (Test-Refused $h $fileLink $saysRelay -Force) "and with -Force"
+} else { Write-Skip "a symbolic link could not be made here (it needs the right to make one), so the file-link cases did not run" }
+# A HARD LINK, A SECOND NAME OF THE SAME FILE (the review of PR 238): no path says it is the file, so
+# it is known by which file it is - the volume serial number and file index of the open handle.
+$script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+$hardToClient = Join-Path $links "a-second-name.json"
+$hardToBeside = Join-Path $links "a-second-name-of-other.json"
+$null = & cmd.exe /c ("mklink /H `"" + $hardToClient + "`" `"" + $clientFile + "`" >nul 2>nul")
+$null = & cmd.exe /c ("mklink /H `"" + $hardToBeside + "`" `"" + $besideClient + "`" >nul 2>nul")
+if ([System.IO.File]::Exists($hardToClient) -and [System.IO.File]::Exists($hardToBeside)) {
+    $sameFile = "is the very file the relay 'test-relay-a' calls the sign-in client file ('" + $clientFile + "') under another name, as a hard link or a network or device path to it is"
+    Check (Test-Refused $h $hardToClient $sameFile) "a hard link to the file a relay names, under another name in another folder, is refused as that file"
+    Check (Test-Refused $h $hardToClient $sameFile -Force) "and -Force does not lift it"
+    Check (Test-Shared $h $hardToBeside -Force) "CONTROL: a hard link to the file BESIDE it is another file, and is shared"
+    Check ((Get-HordeFilesDenyRefusal -FinalPath $hardToClient -HordeHome $h -RepoRoot $repo -Force) -like ("*" + $sameFile + "*")) "and the list alone, handed no handle, opens the file for its attributes and says the same"
+    $script:entriesA = @([pscustomobject]@{ path = $hardToClient; what = "the sign-in client file" })
+    Check (Test-Refused $h $clientFile "under another name, as a hard link or a network or device path to it is" -Force) "a relay that names the second name has the first refused, -Force or not"
+} else { Write-Skip "a hard link could not be made here, so the hard-link cases did not run" }
+# AN ENTRY THAT IS NO LOCAL PATH IS ASKED WHICH FILE IT IS (round 2 of the review of PR 238,
+# 2026-10-14). Through the REAL port, which now hands such a path over: round 1 had to replace the
+# port's answer to reach this door, and refused every share here. Each spelling of the client file
+# that is no drive path is the same file and is refused, -Force or not, while an ordinary file is
+# shared; an identity that cannot be read refuses every share; nothing there, and a file on another
+# volume, refuse nothing. A loopback share needs the machine's own administrative share, so a box
+# that has none skips those spellings and says so; the device path and the volume need nothing.
+$sameAsLink = "under another name, as a hard link or a network or device path to it is"
+$letterOf = $clientFile.Substring(0, 1)
+$doors = @(("\\.\" + $clientFile), ("\\localhost\" + $letterOf + "$" + $clientFile.Substring(2)), ("\\127.0.0.1\" + $letterOf + "$" + $clientFile.Substring(2)), ("\\?\UNC\localhost\" + $letterOf + "$" + $clientFile.Substring(2)))
+# The volume's own name, as the system lists it for the client file's drive (round 4 of the review
+# of PR 238: Volume{guid} is one of the three device names the allow-list opens).
+$volumeName = ("" + (& mountvol.exe ($letterOf + ":\") /L)).Trim()
+if ($volumeName -cmatch '\A\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\\z') { $doors += ($volumeName + $clientFile.Substring(3)) } else { Write-Skip ("the volume name of " + $letterOf + ": could not be read here ('" + $volumeName + "'), so the Volume{guid} spelling did not run") }
+$clientIs = Get-HordeFilesPathIdentity -Path $clientFile
+Check ($clientIs.state -ceq "ok") ("CONTROL: the client file's own identity can be read (" + $clientIs.state + ")")
+foreach ($door in $doors) {
+    $doorIs = Get-HordeFilesPathIdentity -Path $door
+    $short = $door.Substring(0, [Math]::Min(18, $door.Length)) + "..."
+    if ($doorIs.state -cne "ok" -and $door -cnotlike "\\.\*" -and $door -cnotlike "\\?\Volume*") { Write-Skip ("the loopback share " + $short + " could not be opened here (" + $doorIs.state + "), so that spelling did not run"); continue }
+    Check ($doorIs.state -ceq "ok" -and $doorIs.id -ceq $clientIs.id) ("CONTROL: " + $short + " is the client file's own identity, as measured (" + $doorIs.state + ")")
+    $script:entriesA = @([pscustomobject]@{ path = $door; what = "the sign-in client file" })
+    Check ((Get-HordeRelaySecretFiles -HordeHome $h).state -ceq "known") ("the real port hands " + $short + " over as a file, not as a relay that could not tell")
+    Check (Test-Refused $h $clientFile $sameAsLink) ("SAME IDENTITY: a relay that names the client file as " + $short + " has it refused by its plain path")
+    Check (Test-Refused $h $clientFile $sameAsLink -Force) "and -Force does not lift it"
+    Check (Test-Shared $h $besideClient -Force) "CONTROL: an ordinary file beside it is shared, where round 1 refused every share"
+    if ($null -ne $hardToClient -and [System.IO.File]::Exists($hardToClient)) { Check (Test-Refused $h $hardToClient $sameAsLink -Force) "and a hard link to the client file is refused through that entry too" }
+}
+# AN IDENTITY THAT CANNOT BE READ: the null device opens and has none, and a share this machine does
+# not have does not open. Each refuses every share, -Force or not, and names the relay.
+$noShare = "\\localhost\horde-no-such-share-" + [guid]::NewGuid().ToString("N") + "\client.json"
+foreach ($unread in @("\\.\NUL", $noShare)) {
+    $short = $unread.Substring(0, [Math]::Min(26, $unread.Length)) + "..."
+    $unreadIs = Get-HordeFilesPathIdentity -Path $unread
+    Check ($unreadIs.state -ceq "unknown") ("CONTROL: which file " + $short + " is cannot be read (" + $unreadIs.state + ")")
+    $script:entriesA = @([pscustomobject]@{ path = $unread; what = "the sign-in client file" })
+    Check (Test-Refused $h $besideClient ("which file what the relay 'test-relay-a' calls the sign-in client file") -Force) ("UNREADABLE: an entry named as " + $short + " refuses even an ordinary file, -Force or not")
+    Check (Test-Refused $h $besideClient "-Force does not change that" -Force) "and says -Force does not lift it"
+}
+# NOTHING THERE: a device path to a file that is not there yet refuses nothing, as a local one does.
+$script:entriesA = @([pscustomobject]@{ path = ("\\.\" + $neverFile); what = "the sign-in client file" })
+Check ((Get-HordeFilesPathIdentity -Path ("\\.\" + $neverFile)).state -ceq "absent") "CONTROL: the device path of a file not there yet is absent"
+Check (Test-Shared $h $besideClient) "NOTHING THERE: an entry naming a file not there yet, by its device path, refuses nothing"
+# ANOTHER VOLUME: the named-pipe file system is a volume of its own, readable, whose serial number no
+# drive's file has - the shape of a file on a real network share, which this suite may not reach.
+$otherVolume = "\\.\pipe\"
+$otherIs = Get-HordeFilesPathIdentity -Path $otherVolume
+Check ($otherIs.state -ceq "ok" -and $otherIs.id.Split(":")[0] -cne $clientIs.id.Split(":")[0]) ("CONTROL: " + $otherVolume + " is readable and on another volume (" + $otherIs.state + " " + $otherIs.id + ")")
+# Named by its own device name, pipe is no name of the allow-list (round 4 of the review of PR 238):
+# which machine it is cannot be told, so it refuses every share. The same volume reached through a
+# share of this machine, below, is opened and blocks nothing.
+$script:entriesA = @([pscustomobject]@{ path = $otherVolume; what = "the sign-in client file" })
+Check (Test-Refused $h $besideClient "which file what the relay 'test-relay-a' calls the sign-in client file" -Force) "A DEVICE NAME OFF THE ALLOW-LIST: an entry named \\.\pipe\ refuses even an ordinary file, -Force or not"
+# ONLY A PATH TO THIS MACHINE IS OPENED, DECIDED BY ADDRESS (round 3 of the review of PR 238,
+# 2026-10-14; files/Deny.ps1's header). NO NAME IS RESOLVED AND NOTHING ON THE NETWORK IS OPENED
+# HERE: the three questions the rule asks are answered by this suite, each called exactly as the
+# real one is - which addresses a host resolves to (a table; a name not in it resolves to none),
+# which addresses this machine's interfaces have (made-up ones from the documentation ranges), and
+# which file a path is (a path under a share of the table is asked as the real folder it stands
+# for; every path asked is counted, and anything else is answered "absent" without being opened).
+# The drive letters are the suite's own table, as above: no letter is made.
+#   horde-self-name   192.0.2.10, this machine's made-up IPv4     horde-remote   203.0.113.7
+#   horde-self-six    2001:db8::10, its made-up IPv6              horde-mixed    203.0.113.8 and 127.0.0.1
+#   horde-gone        resolves to nothing                        localhost      ::1 and 127.0.0.1, as measured
+$realOwn = @(Get-HordeFilesOwnAddresses)
+Check ($realOwn -ccontains "127.0.0.1" -and $realOwn -ccontains "::1") ("CONTROL: the real reader of this machine's addresses finds the loopback ones (" + $realOwn.Count + " addresses)")
+$script:realResolve = ${function:Get-HordeFilesHostAddresses}
+$script:realOwnAddresses = ${function:Get-HordeFilesOwnAddresses}
+$script:realOpen = ${function:Get-HordeFilesPathIdentity}
+$script:realLetterTarget3 = ${function:Get-HordeDriveLetterTarget}
+$script:realDriveType3 = ${function:Get-HordeDriveLetterType}
+$script:resolves = @{ "horde-self-name" = @("192.0.2.10"); "horde-self-six" = @("2001:db8::10"); "horde-remote" = @("203.0.113.7"); "horde-mixed" = @("203.0.113.8", "127.0.0.1"); "localhost" = @("::1", "127.0.0.1") }
+$script:resolved = New-Object System.Collections.ArrayList
+$script:opened = New-Object System.Collections.ArrayList
+$script:openAs = @{}
+$script:stands3 = @{ "V" = "\Device\LanmanRedirector\;V:0000000000012345\horde-self-name\share"; "W" = "\Device\LanmanRedirector\;W:0000000000012345\horde-remote\share"
+    "U" = "\??\UNC\horde-self-name\share"; "Y" = "\??\V:\"; "Q" = "\Device\SomeRedirector"; "J" = "\??\K:"; "K" = "\??\J:"; "Z" = "\??\W:\" }
+$script:types3 = @{ "V" = "Network"; "W" = "Network"; "U" = "Network"; "Y" = "NoRootDirectory"; "Q" = "Network"; "J" = "NoRootDirectory"; "K" = "NoRootDirectory"; "Z" = "NoRootDirectory" }
+function Get-HordeFilesHostAddresses {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name)
+    [void]$script:resolved.Add($Name)
+    $key = ConvertTo-HordeAsciiLower -Text $Name
+    if ($script:resolves.ContainsKey($key)) { return @($script:resolves[$key]) }
+    return @()
+}
+function Get-HordeFilesOwnAddresses { return @("192.0.2.10", "2001:db8::10", "fe80::10%7") }
+$script:madeUpOwn = ${function:Get-HordeFilesOwnAddresses}
+function Get-HordeFilesPathIdentity {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    [void]$script:opened.Add($Path)
+    foreach ($prefix in $script:openAs.Keys) {
+        if (-not $Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($script:openAs[$prefix] -ceq "unreadable") { return [pscustomobject]@{ state = "unknown"; id = "" } }
+        return (& $script:realOpen -Path ($script:openAs[$prefix] + $Path.Substring($prefix.Length)))
+    }
+    # Anything else on the network, or on a letter of the table, is answered without being opened.
+    if ($Path -cmatch '\A(?:[\\/]{2}|\\\?\?\\)' -and $Path -cnotmatch '\A\\\\\?\\[A-Za-z]:\\') { return [pscustomobject]@{ state = "absent"; id = "" } }
+    if ($Path -cmatch '\A([A-Za-z]):' -and $script:stands3.ContainsKey($Matches[1].ToUpperInvariant())) { return [pscustomobject]@{ state = "absent"; id = "" } }
+    return (& $script:realOpen -Path $Path)
+}
+function Get-HordeDriveLetterTarget {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    if ($script:stands3.ContainsKey($Letter.ToUpperInvariant())) { return ("" + $script:stands3[$Letter.ToUpperInvariant()]) }
+    return (& $script:realLetterTarget3 -Letter $Letter)
+}
+function Get-HordeDriveLetterType {
+    param([Parameter(Mandatory = $true)][string]$Letter)
+    if ($script:types3.ContainsKey($Letter.ToUpperInvariant())) { return ("" + $script:types3[$Letter.ToUpperInvariant()]) }
+    return (& $script:realDriveType3 -Letter $Letter)
+}
+$selfSeen = @{}
+$elseSeen = @{}
+$untoldSeen = @{}
+$byReach = @{}
+try {
+    # Each share root of the table, and each letter, stands for the relay's real folder when opened.
+    foreach ($root in @("\\horde-self-name\share\", "\\horde-self-six\share\", "\\horde-mixed\share\", "\\192.0.2.10\share\", "\\2001-db8--10.ipv6-literal.net\share\", "\\0.0.0.0\share\", "\\fe80--10s3.ipv6-literal.net\share\",
+        "\\horde-self-name@SSL@443\share\", "\\horde-self-name.\share\", "\\?\UNC\horde-self-six\share\", "\\HORDE-SELF-NAME\share\", "V:\", "U:\", "Y:\", "\\horde-remote\share\", "\\horde-gone\share\", "\\203.0.113.7\share\", "W:\", "Z:\", "\\?\UNC\horde-remote\share\", "\\--ffff-c000-20a.ipv6-literal.net\share\")) { $script:openAs[$root] = $relayDir + "\" }
+    $script:openAs["\\horde-self-name\down\"] = "unreadable"
+    $script:openAs["\\horde-self-name\pipes\"] = $otherVolume
+    $selfForms = [ordered]@{ "own name (its NIC IPv4)" = "\\horde-self-name\share\"; "own name in capitals" = "\\HORDE-SELF-NAME\share\"; "own name with a trailing dot" = "\\horde-self-name.\share\"
+        "own name as a web share (@SSL@443)" = "\\horde-self-name@SSL@443\share\"; "a name resolving to its NIC IPv6" = "\\horde-self-six\share\"; "the long UNC form of that name" = "\\?\UNC\horde-self-six\share\"
+        "a name of which one address of two is loopback" = "\\horde-mixed\share\"; "its NIC IPv4 written as an address" = "\\192.0.2.10\share\"; "its NIC IPv4 carried in IPv6" = "\\--ffff-c000-20a.ipv6-literal.net\share\"
+        "its NIC IPv6 in the ipv6-literal.net form" = "\\2001-db8--10.ipv6-literal.net\share\"; "its link-local address in another zone" = "\\fe80--10s3.ipv6-literal.net\share\"
+        "the unspecified address" = "\\0.0.0.0\share\"; "a mapped drive letter whose host is this machine" = "V:\"; "a letter defined over a share of this machine" = "U:\"; "a letter that stands for that mapped letter" = "Y:\" }
+    foreach ($form in $selfForms.Keys) {
+        $script:entriesA = @([pscustomobject]@{ path = ($selfForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
+        $script:opened.Clear()
+        $refused = Test-Refused $h $clientFile $sameAsLink -Force
+        $wasOpened = @($script:opened | Where-Object { $_.StartsWith($selfForms[$form], [System.StringComparison]::OrdinalIgnoreCase) }).Count -ge 1
+        $selfSeen[$form] = ($refused -and $wasOpened -and (Test-Shared $h $besideClient -Force))
+    }
+    foreach ($form in @("\\localhost\", "\\127.0.0.1\", "\\0--1.ipv6-literal.net\", "\\0-0-0-0-0-0-0-1.ipv6-literal.net\", ("\\" + [System.Environment]::MachineName.ToLowerInvariant() + "\"))) {
+        $byReach[$form] = Get-HordeFilesHostReach -HostName ($form.Trim('\'))
+    }
+    Set-Item -Path function:Get-HordeFilesOwnAddresses -Value $script:realOwnAddresses
+    try { $byReach.realOwnName = Get-HordeFilesHostReach -HostName "192.0.2.10" } finally { Set-Item -Path function:Get-HordeFilesOwnAddresses -Value $script:madeUpOwn }
+    $elseForms = [ordered]@{ "a host that resolves to another machine" = "\\horde-remote\share\"; "another machine written as an address" = "\\203.0.113.7\share\"; "a host that resolves to nothing" = "\\horde-gone\share\"; "a mapped drive letter whose host is another machine" = "W:\"
+        "the long UNC form of another machine" = "\\?\UNC\horde-remote\share\"; "a letter that stands for that letter" = "Z:\" }
+    foreach ($form in $elseForms.Keys) {
+        $script:entriesA = @([pscustomobject]@{ path = ($elseForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
+        $script:opened.Clear()
+        $elseSeen[$form] = ((Test-Shared $h $clientFile -Force) -and (Test-Shared $h $besideClient) -and @($script:opened | Where-Object { $_.StartsWith($elseForms[$form], [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0)
+    }
+    # ANOTHER VOLUME: a share of this machine that is the named-pipe volume is opened, and is
+    # another file than every file of the drives.
+    $script:entriesA = @([pscustomobject]@{ path = "\\horde-self-name\pipes\"; what = "the sign-in client file" })
+    $script:opened.Clear()
+    $otherVolumeShared = ((Test-Shared $h $besideClient) -and (Test-Shared $h $clientFile -Force))
+    $otherVolumeOpened = @($script:opened | Where-Object { $_ -like "\\horde-self-name\pipes\*" }).Count
+    # Round 4 of the review of PR 238: every device name off the allow-list, Global's UNC to another
+    # machine above all, refuses every share and is never opened.
+    $untoldForms = [ordered]@{ "this machine with its identity unreadable" = "\\horde-self-name\down\"; "a network drive whose entry shows no host" = "Q:\"; "a ring of letters" = "J:\"; "a device path through GLOBALROOT" = "\\?\GLOBALROOT\Device\Mup\horde-remote\share\"
+        "Global's UNC to another machine, \\.\" = "\\.\Global\UNC\horde-remote\share\"; "Global's UNC to another machine, \\?\" = "\\?\Global\UNC\horde-remote\share\"; "Global's UNC to another machine, \??\" = "\??\GLOBAL\UNC\horde-remote\share\"
+        "Global over a drive letter" = "\\.\Global\C:\"; "a device name someone defined" = "\\.\horde-device\share\"; "a device name like a volume's, but no GUID" = "\\?\Volume{horde}\" }
+    foreach ($form in $untoldForms.Keys) {
+        $script:entriesA = @([pscustomobject]@{ path = ($untoldForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
+        $script:opened.Clear()
+        # The relay port hands no \??\ path over as a file (measured round 4): that one is refused a
+        # step earlier, as a relay that could not tell, and never reaches the device names.
+        $refusedFor = $(if ($untoldForms[$form].StartsWith("\??\")) { "the relay 'test-relay-a' could not tell" } else { "which file what the relay 'test-relay-a' calls the sign-in client file" })
+        $refusedAll = Test-Refused $h $besideClient $refusedFor -Force
+        $untoldSeen[$form] = ($refusedAll -and ($form -like "this machine*" -or @($script:opened | Where-Object { $_ -like ($untoldForms[$form] + "*") }).Count -eq 0))
+    }
+    $resolvedNames = @($script:resolved | Select-Object -Unique)
+} finally {
+    Set-Item -Path function:Get-HordeFilesHostAddresses -Value $script:realResolve
+    Set-Item -Path function:Get-HordeFilesOwnAddresses -Value $script:realOwnAddresses
+    Set-Item -Path function:Get-HordeFilesPathIdentity -Value $script:realOpen
+    Set-Item -Path function:Get-HordeDriveLetterTarget -Value $script:realLetterTarget3
+    Set-Item -Path function:Get-HordeDriveLetterType -Value $script:realDriveType3
+}
+foreach ($form in $selfSeen.Keys) { Check $selfSeen[$form] ("THIS MACHINE, BY ADDRESS: an entry named by " + $form + " is opened, and the same file is refused with -Force, while an ordinary file is shared") }
+foreach ($form in @("\\localhost\", "\\127.0.0.1\", "\\0--1.ipv6-literal.net\", "\\0-0-0-0-0-0-0-1.ipv6-literal.net\")) { Check ($byReach[$form] -ceq "self") ("a loopback host, " + $form + ", is this machine (" + $byReach[$form] + ")") }
+Check ($byReach[("\\" + [System.Environment]::MachineName.ToLowerInvariant() + "\")] -ceq "unresolved") "CONTROL: a NAME alone makes nothing this machine - this machine's own name, which the table here does not resolve, is not taken for it by its letters"
+Check ($byReach.realOwnName -ceq "other") "CONTROL: the made-up NIC address is this machine only by the made-up interfaces: the real reader does not have it"
+foreach ($form in $elseSeen.Keys) { Check $elseSeen[$form] ("ANOTHER MACHINE, OR NONE: an entry named by " + $form + " is NEVER OPENED and blocks nothing, not even the very file with -Force") }
+Check ($otherVolumeShared -and $otherVolumeOpened -ge 1) ("ANOTHER VOLUME: an entry that is a share of this machine on another volume is opened (" + $otherVolumeOpened + " calls), and blocks neither an ordinary file nor the file it would have been")
+foreach ($form in $untoldSeen.Keys) { Check $untoldSeen[$form] ("CANNOT BE TOLD: an entry named by " + $form + " refuses every share, -Force or not, and is not opened unless it is this machine") }
+# F's ruling on round 4: NOTHING IS OPENED BY DEFAULT. A rooted or a relative path is neither a device,
+# a host nor a letter; the relay port makes such an entry local before it gets here, so the function is
+# asked directly, the one place that would have said "open".
+foreach ($form in @("\horde-rooted\share\innocent-name.json", "horde-relative\share\innocent-name.json", "/horde-rooted/share/innocent-name.json")) { $r = Get-HordeFilesRelayEntryReach -Path $form; Check ($r -ceq "untold") ("NOTHING OPENED BY DEFAULT: an entry " + $form + " that is no device, host or letter is untold, so every share is refused (" + $r + ")") }
+Check ((Get-HordeFilesRelayEntryReach -Path "\\?\Volume{00000000-0000-0000-0000-000000000000}\x.json") -ceq "open") "CONTROL: a volume by its GUID, on the allow-list, is still opened"
+Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames -ccontains "203.0.113.7") -and -not ($resolvedNames -ccontains "2001:db8::10") -and -not ($resolvedNames -ccontains "0.0.0.0")) ("a name is resolved, and an address written as one is not (asked: " + ($resolvedNames -join ",") + ")")
+Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames | Where-Object { $_ -like "*@*" -or $_.EndsWith(".") })) "a host is resolved cut at its @ and without its trailing dot"
+Check ((Get-HordeFilesHostAddresses -Name "203.0.113.7") -ccontains "203.0.113.7") "CONTROL: the real resolver is back, and answers an address with itself, which sends no query"
+$script:entriesA = @([pscustomobject]@{ path = $movedClient; what = "the sign-in client file" })
+Check (Test-Refused $h $movedClient $saysRelay -Force) "THE GAP ABOVE, CLOSED BY THE RELAY: the moved client file whose content says nothing is refused once its relay names it, -Force or not"
+$script:entriesA = @([pscustomobject]@{ path = $neverFile; what = "the sign-in client file" })
+Check (Test-Shared $h $besideClient) "CONTROL: a relay may name a file that is not there yet, and an ordinary file beside it is shared"
+# TWO RELAYS, ONE OF WHICH NAMES NOTHING, and a relay that keeps no secret file: the files of the one
+# that does are still refused, by its name.
+$script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+Set-TestRelays @(@{ name = "test-relay-a"; block = $script:relayKnownA }, @{ name = "test-relay-b"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } }, @{ name = "test-relay-quiet"; block = $null })
+Check (Test-Refused $h $clientFile $saysRelay) "with two relays asked and a third that keeps none, the file one of them names is refused"
+Check (Test-Shared $h $besideClient) "CONTROL: and an ordinary file is shared"
+Write-Host ""
+Write-Host "--- known with none, unknown, and nobody asked ---" -ForegroundColor Cyan
+Set-OrdinaryRelays
+Check (Test-Shared $h $clientFile) "KNOWN, NO FILE NAMED, A RELAY ASKED: the ordinary answer, and the same file is shared"
+# THE RELAYS ARE ASKED OF THE HOME THE SHARE IS GIVEN, not of the user's own: a relay's settings
+# live in a home, and a share made for one home must not be judged by another's.
+$script:askedHome = $h
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($given) if ($given -ceq $script:askedHome) { New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } else { New-HordeUnknown -Reason "asked of another home" } } })
+Check (Test-Shared $h $besideClient) "a relay is asked of the very home the share was given (one that answers only for that home lets the share through)"
+Set-OrdinaryRelays
+$unknownSays = "which files hold the relays' secrets is not known: the relay 'test-relay-a' could not tell"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) New-HordeUnknown -Reason "its made-up settings do not read" } }, @{ name = "test-relay-b"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } })
+Check (Test-Refused $h $besideClient ($unknownSays + ", so whether*" + $never)) "UNKNOWN: an ordinary file is refused, the reason naming the relay that could not tell, and never shared"
+Check (Test-Refused $h $besideClient $unknownSays -Force) "and -Force does not lift it"
+Check (Test-Refused $h $besideClient $unknownSays "made-up settings") "and the reason does NOT repeat what the relay said (the review of PR 238): a relay may say anything"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) throw "made up exception text 7731" } })
+Check (Test-Refused $h $besideClient $unknownSays "7731" -Force) "a relay that throws is one that could not tell: refused, -Force or not, and its exception's text is not in the reason"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "relative\file.json"; what = "the sign-in client file" }) }) } })
+Check (Test-Refused $h $besideClient $unknownSays) "a relay that names a file by a path that is not absolute is one that could not tell"
+$nobody = "no relay was asked, so the relays were not loaded"
+Set-TestRelays @()
+Check (Test-Refused $h $besideClient ($nobody + "*" + $never)) "NOBODY ASKED, no relay loaded at all: an ordinary file is refused, and never shared"
+Check (Test-Refused $h $besideClient $nobody -Force) "and -Force does not lift it"
+Set-TestRelays @(@{ name = "test-relay-quiet"; block = $null })
+Check (Test-Refused $h $besideClient $nobody -Force) "NOBODY ASKED, with a relay loaded that keeps no secret file: the same refusal, -Force or not"
+$placesNow = Get-HordeFilesDenyPlaces -HordeHome $h -RepoRoot $repo
+Check ($placesNow.unknownRelays -like ("*" + $nobody + "*") -and @($placesNow.places | Where-Object { $_.kind -ceq "relay" }).Count -eq 0) "and the places say why, with no relay place among them"
+Set-OrdinaryRelays
+Check (Test-Shared $h $besideClient) "CONTROL: with the ordinary answer back, the same file is shared again"
 
 Set-Location -LiteralPath $env:TEMP
 [System.IO.Directory]::SetCurrentDirectory($env:TEMP)

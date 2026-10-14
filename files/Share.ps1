@@ -281,7 +281,7 @@ function Add-HordeFilesShare {
         # THE DENY LIST, OF THE HANDLE'S OWN PATH AND BEFORE A BYTE IS READ (files/Deny.ps1). It is
         # asked before the link test on purpose: a link into a place that is never shared is refused
         # as that place, whatever the link test would have said of the link.
-        $denied = Get-HordeFilesDenyRefusal -FinalPath $real -HordeHome $HordeHome -RepoRoot $RepoRoot -Force:$Force
+        $denied = Get-HordeFilesDenyRefusal -FinalPath $real -HordeHome $HordeHome -RepoRoot $RepoRoot -Force:$Force -Handle $opened.stream.SafeFileHandle
         if ($denied -ne "") { return (& $refuse $denied) }
         # The link test: of the path that was written, and then of the handle's own. The second is
         # asked behind the long-path prefix: measured 2026-10-13, a path of 578 characters without
