@@ -52,5 +52,28 @@
         @{ Name = "absent-verdict-is-fresh"
            Find = '    if ($Heartbeat.state -cne "known") { return $Heartbeat }'
            Replace = '    if ($Heartbeat.state -cne "known") { return (New-HordeKnown -Value ([pscustomobject]@{ fresh = $true; ageSeconds = [long]0; staleAfterSeconds = 0; tickSeconds = 0 })) }' }
+            # --- review of PR 249 ---
+        @{ Name = "condition-not-written"
+           Find = 'if ($Condition -ne "") { $beat["condition"] = $Condition;'
+           Replace = 'if ($false) { $beat["condition"] = $Condition;' }
+        @{ Name = "condition-not-read"
+           Find = '$condition = $(if (("" + $c.Value) -cmatch $script:HordeHeartbeatConditionPattern) { "" + $c.Value } else { "unwell" })'
+           Replace = '$condition = ""' }
+        @{ Name = "odd-condition-read-as-well"
+           Find = '{ "" + $c.Value } else { "unwell" })'
+           Replace = '{ "" + $c.Value } else { "" })' }
+        @{ Name = "condition-word-unchecked"
+           Find = 'if ($Condition -ne "" -and $Condition -cnotmatch $script:HordeHeartbeatConditionPattern) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "why-keeps-line-breaks"
+           Find = '$t = ("" + $Text) -replace ''\p{Cc}+'', '' '''
+           Replace = '$t = ("" + $Text)' }
+        @{ Name = "why-not-capped"
+           Find = 'if ($t.Length -gt $script:HordeHeartbeatWhyMost) {'
+           Replace = 'if ($false) {' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "empty-condition-read-as-well"
+           Find = '-and -not ($c.Value -is [string] -and $c.Value -eq "")) {'
+           Replace = '-and ("" + $c.Value) -ne "") {' }
     )
 }

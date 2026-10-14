@@ -157,29 +157,49 @@ exit 0
     Check ($null -ne $row -and $row.name -ceq "stub" -and $row.alive -ceq "no" -and $row.failures -ge 1 -and $row.escalationOutstanding -eq $false) "status -Json shows it not running, and the failure counted"
 
     Write-Host ""
-    Write-Host "--- the schedule: Horde's own job, in the test folder, disabled ---" -ForegroundColor Cyan
+    Write-Host "--- the schedule: Horde's own two jobs, in the test folder, disabled ---" -ForegroundColor Cyan
     foreach ($s in (Get-HordeSchedulerFiles)) { . $s }
     $real = Get-HordeScheduler
     if ($real.state -ne "known") {
         Write-Host ("  [SKIP] " + $real.reason)
     } else {
         Assert-TestName $testName
+        $bootName = $testName + " at start-up"
+        $mine = { $svcL = New-Object -ComObject Schedule.Service; try { $svcL.Connect(); try { return @($svcL.GetFolder("\HordeTest").GetTasks(1) | Where-Object { $_.Name -like ($testName + "*") } | ForEach-Object { $_.Name }) } catch { return @() } } finally { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($svcL) } }
+        # ONLY AN ADMINISTRATOR, ELEVATED, MAY REGISTER A JOB THAT RUNS AT START-UP (measured
+        # 2026-10-14, core/schedule/WindowsTaskScheduler.ps1). This suite checks whichever case it is
+        # run in: elevated, the jobs are installed; not, the command fails and says what to do.
+        $elevated = (New-Object System.Security.Principal.WindowsPrincipal ([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
         try {
+            # SHOULD 3 of the review of PR 249: an INTERACTIVE Horde job already under the start-up
+            # job's name - a disabled test task - is replaced in place by the S4U one.
+            $savedHomeCli = $env:HORDE_HOME; $env:HORDE_HOME = $empty
+            try { & $real.value.install (New-HordeScheduledJob -Name $bootName -Folder "HordeTest" -Script (Join-Path $root "horde.ps1") -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $empty } -HordeHome $empty -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson -Disabled) } finally { $env:HORDE_HOME = $savedHomeCli }
+            Check ((& $real.value.status $bootName "HordeTest").value.logonType -eq "Interactive") "CONTROL: an interactive job stands under the start-up job's name"
             $in = Horde $empty @("services", "schedule", "-TaskName", $testName, "-TaskFolder", "HordeTest", "-Disabled")
-            Check ($in.code -eq 0 -and $in.out -like "*installed '$testName'*every minute, in the person's own session*DISABLED, so it never runs*") ("schedule installs the job (" + $in.out.Trim() + ")")
-            $ss = & $real.value.status $testName "HordeTest"
-            Check ($ss.state -eq "known" -and $ss.value.marked -and $ss.value.enabled -eq $false -and $ss.value.everyMinutes -eq 1 -and $ss.value.logonType -eq "Interactive" -and $ss.value.home -eq $empty) "in Horde's test folder, marked as Horde's, every minute, in the person's session, for this home, and disabled"
+            if (-not $elevated) {
+                Check ($in.code -ne 0 -and $in.out -like "*run this again from an elevated prompt*" -and (& $real.value.status $bootName "HordeTest").value.logonType -eq "Interactive" -and (& $real.value.status $testName "HordeTest").state -eq "absent") ("not elevated, schedule fails, says to run it elevated, and registers nothing in another form (" + $in.out.Trim() + ")")
+                throw "SKIP-ELEVATED"
+            }
+            Check ($in.code -eq 0 -and $in.out -like "*installed '$bootName'*at start-up and every minute, whether or not anyone is signed in*DISABLED, so it never runs*installed '$testName'*at sign-in and every minute, in the person's own session*DISABLED, so it never runs*") ("schedule installs both jobs (" + $in.out.Trim() + ")")
+            $ss = & $real.value.status $bootName "HordeTest"
+            Check ($ss.state -eq "known" -and $ss.value.marked -and $ss.value.enabled -eq $false -and $ss.value.everyMinutes -eq 1 -and $ss.value.atStartup -eq $true -and $ss.value.logonType -eq "S4U" -and $ss.value.home -eq $empty -and $ss.value.program -ceq (Join-Path ([System.Environment]::SystemDirectory) "WindowsPowerShell\v1.0\powershell.exe")) "the start-up job replaced the interactive one under its name through -Force: at start-up and every minute, logon S4U - whether or not anyone is signed in - run by PowerShell itself, for this home, and disabled"
+            $ps = & $real.value.status $testName "HordeTest"
+            Check ($ps.state -eq "known" -and $ps.value.marked -and $ps.value.enabled -eq $false -and $ps.value.everyMinutes -eq 1 -and $ps.value.atLogon -eq $true -and $ps.value.logonType -eq "Interactive" -and $ps.value.runsAs -ne "") "the person's job: at sign-in and every minute, in their own session, and it names the account it runs as"
+            $again = Horde $empty @("services", "schedule", "-TaskName", $testName, "-TaskFolder", "HordeTest", "-Disabled")
+            Check ($again.code -eq 0 -and @(& $mine).Count -eq 2) "scheduling again replaces both: two jobs, never more"
             $sst = Horde $empty @("services", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest")
-            Check ($sst.code -eq 0 -and $sst.out -like "*DISABLED*every 1 minute(s)*Horde's*") "schedule status shows it"
+            Check ($sst.code -eq 0 -and $sst.out -like "*DISABLED*at start-up and every 1 minute(s), logon S4U*Horde's*DISABLED*at sign-in and every 1 minute(s), logon Interactive*Horde's*") "schedule status shows both"
             $un = Horde $empty @("services", "unschedule", "-TaskName", $testName, "-TaskFolder", "HordeTest")
-            Check ($un.code -eq 0 -and $un.out -like "*removed*Nothing that is running was stopped*" -and (& $real.value.status $testName "HordeTest").state -eq "absent") "unschedule removes it"
-            Check ((Horde $empty @("services", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest")).out -like "*is not installed: no service is being supervised*") "and then schedule status says nothing is supervised"
+            Check ($un.code -eq 0 -and $un.out -like "*removed*removed*Nothing that is running was stopped*" -and (& $real.value.status $testName "HordeTest").state -eq "absent" -and (& $real.value.status $bootName "HordeTest").state -eq "absent") "unschedule removes both"
+            Check ((Horde $empty @("services", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest")).out -like "*neither job is installed: no service is being supervised*") "and then schedule status says nothing is supervised"
+        } catch {
+            if ($_.Exception.Message -cne "SKIP-ELEVATED") { throw }
+            Write-Host "  [SKIP] the installed jobs' properties: this suite is not elevated, and a job that runs at start-up is registered only elevated"
         } finally {
-            try { $null = & $real.value.remove $testName "HordeTest" } catch { }
+            foreach ($n in @($bootName, $testName)) { try { $null = & $real.value.remove $n "HordeTest" } catch { } }
         }
-        $svc = New-Object -ComObject Schedule.Service; $svc.Connect()
-        $left = @(); try { $left = @($svc.GetFolder("\HordeTest").GetTasks(1) | Where-Object { $_.Name -ceq $testName }) } catch { $left = @() }
-        Check ($left.Count -eq 0) "nothing of this suite's is left in the scheduler"
+        Check (@(& $mine).Count -eq 0) "nothing of this suite's is left in the scheduler"
     }
 } finally {
     # The stub ends when its stop file appears; written whatever happened, so none outlives the suite.

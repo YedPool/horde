@@ -160,5 +160,9 @@
         @{ Name = "turn-rings-on-refused-settings"
            Find = 'if ($settings.state -ceq "refused") { return (& $answer "refused"'
            Replace = 'if ($false) { return (& $answer "refused"' }
+            # --- review of PR 249 ---
+        @{ Name = "bell-in-one-sessions-namespace"
+           Find = 'return ("Global\" + (Get-HordeDecisionNotifyName'
+           Replace = 'return ("Local\" + (Get-HordeDecisionNotifyName' }
     )
 }
