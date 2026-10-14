@@ -23,6 +23,7 @@ const { createPhone } = await load("app/phone-core.js");
 const { createRelayClient } = await load("app/relay-client.js");
 const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
+const P = await load("relay/protocol.js");
 
 // The page, as one object: a store and an authenticator that outlive a reload, and a phone and a
 // bridge that do not (a reload drops every unlocked session).
@@ -63,6 +64,9 @@ const commands = {
   age: async (c) => { await store.update("outbox/" + c.id, (x) => ({ v: 1, items: ((x && x.items) || []).map((i) => ({ ...i, sentAt: i.sentAt - c.ms, lastSentAt: i.lastSentAt - c.ms, lastResendAt: i.lastResendAt ? i.lastResendAt - c.ms : 0 })) })); return true; },
   line: (c) => phone.sendLine(c.id, { text: c.text, messageId: c.messageId }),
   bridge: (c) => bridge.request(c.name, c.args || {}),
+  // A photo the page has already shrunk, through the bridge's chat-photo: its bytes as base64url, since a
+  // line of JSON carries no bytes.
+  photo: (c) => bridge.request("chat-photo", { bytes: P.unb64u(c.b64), id: c.id }),
   reload: async () => { reload(); return true; },
   // What a person could read in the store: every value, as JSON (CryptoKeys show as {}), for the
   // suite to look for anything decrypted.
