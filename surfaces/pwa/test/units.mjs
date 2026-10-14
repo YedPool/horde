@@ -26,6 +26,7 @@ const NV = await load("app/notices-view.js");
 const CW = await load("app/cards-why.js");
 const AU = await load("app/app-update.js");
 const RB = await load("app/read-banner.js");
+const PC = await load("app/pair-countdown.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -1421,6 +1422,25 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   const lk = reads[reads.length - 1];
   check(lk.locked === true && RB.readFailure(lk) === "locked" && bannerOf(lk).indexOf("This horde is locked - unlock to read.") === 0, "a read of a locked horde says it is locked", bannerOf(lk));
   check(RB.readBanner("", 5, at) === "" && RB.readBanner("unreachable", 0, at) === "Cannot reach the relay." && RB.readFailure(null) === "", "no failure is no banner; with no read that ever worked there is no time to say");
+}
+
+// --- 10i. THE PAIRING CODE'S TIME LEFT, LIVE, AND PLAINLY WHEN IT HAS EXPIRED (pair-countdown.js; issue #283) ---
+{
+  const m = await newMachine("work");
+  const t0 = Date.parse("2026-10-14T12:00:00Z");
+  const text = offerText(m, { expiresAt: t0 + 600000 });
+  const exp = PC.offerExpiresAt(text);
+  check(exp === t0 + 600000, "the offer's expiresAt is read from the pasted or scanned text", String(exp));
+  check(PC.offerExpiresAt("  " + text + "\n") === exp && PC.offerExpiresAt("") === 0 && PC.offerExpiresAt("not an offer") === 0 && PC.offerExpiresAt(JSON.stringify({ kind: "horde-relay-pairing-response", expiresAt: t0 })) === 0 && PC.offerExpiresAt(JSON.stringify({ kind: "horde-relay-pairing-offer", expiresAt: "soon" })) === 0, "only an offer's own whole-number expiresAt counts: no text, junk, another record or a word is no countdown");
+  // A fake clock walked through the offer's life: each moment's words.
+  const at = (ms) => PC.countdownWords(exp, t0 + ms);
+  check(at(0) === "Time left to use this pairing code: 10:00", "at the start it shows the whole ten minutes", at(0));
+  check(at(1) === "Time left to use this pairing code: 10:00" && at(1000) === "Time left to use this pairing code: 9:59" && at(65500) === "Time left to use this pairing code: 8:55", "it counts down in minutes and seconds, a part-second still counting as one", at(65500));
+  check(at(599000) === "Time left to use this pairing code: 0:01" && at(599999) === "Time left to use this pairing code: 0:01", "the last second still shows a second left", at(599999));
+  check(at(600000) === "This pairing code has expired - ask the PC for a new one." && at(600000) === PC.EXPIRED_WORDS, "AT expiresAt it says plainly that the code has expired, and to ask the PC for a new one", at(600000));
+  check(at(9999999) === PC.EXPIRED_WORDS, "and keeps saying so after");
+  check(PC.countdownWords(0, t0) === "" && PC.countdownWords(PC.offerExpiresAt("junk"), t0) === "", "with no offer in the box it says nothing");
+  check(/^[\x20-\x7e]*$/.test(at(0) + PC.EXPIRED_WORDS), "its words are plain ASCII");
 }
 
 // --- 10f. the notices: each once, newest first, read kept on the phone; the follow switch sent like an answer ---

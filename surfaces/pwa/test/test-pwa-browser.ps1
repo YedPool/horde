@@ -7,8 +7,9 @@
 # is the one New-HordePwaSite builds, served on http://localhost; the relay is the local test transport
 # carried to relays/local's folders; the machine is the shipped horde.ps1. At phone size (412 by 915
 # CSS pixels, a common Android width), with touch.
-#   1. the app loads under its strict policy with no error; it pairs with a Chrome passkey that the
-#      machine enrolls, the two fingerprints agree, and the passkey is confirmed;
+#   1. the app loads under its strict policy with no error; the pairing screen shows an offer's time
+#      left, live, and says plainly when it has expired (issue #283); it pairs with a Chrome passkey that
+#      the machine enrolls, the two fingerprints agree, and the passkey is confirmed;
 #   2. it announces its key - the button says why it is shut until the recovery code is written down, a
 #      relay that refuses and a passkey that does not sign are each said beside it, and the horde's own
 #      view offers "Announce this phone" until the machine answers (the founder's first live use,
@@ -161,6 +162,16 @@ try {
     Check ($open.ok -and $open.value.empty) "the app starts, shows that it holds no horde yet"
     $fi = Invoke-Browser @{ cmd = "firstInstall" }
     Check ($fi.ok -and $fi.value.controlled -and $fi.value.mark) ("THE FIRST INSTALL DOES NOT RELOAD: the first worker takes control of the page and the page stays as it was (" + $(if ($fi.ok) { ConvertTo-Json $fi.value -Compress } else { $fi.reason }) + ")")
+    # THE PAIRING CODE'S TIME LEFT (issue #283): a ten-minute offer, then one that expired 100 s ago.
+    $live = New-HordeRelayPairingOffer -HordeHome $hh -RpId "localhost" -Origins @($origin) -TtlSeconds 600
+    $gone = New-HordeRelayPairingOffer -HordeHome $hh -RpId "localhost" -Origins @($origin) -TtlSeconds 300 -Now ([datetime]::UtcNow.AddSeconds(-400))
+    $cdn = Invoke-Browser @{ cmd = "offerCountdown"; offer = $live.value.text; expired = $gone.value.text }
+    $cdnFirst = $(if ($cdn.ok) { "" + $cdn.value.first.words } else { "" })
+    $cdnLater = $(if ($cdn.ok) { "" + $cdn.value.later.words } else { "" })
+    Check ($cdn.ok -and $cdn.value.first.shown -and $cdnFirst -cmatch '\ATime left to use this pairing code: (10:00|9:[0-5][0-9])\z') ("an offer in the box shows its time left, with no typing (" + $(if ($cdn.ok) { $cdnFirst } else { $cdn.reason }) + ")")
+    Check ($cdnLater -cmatch '\ATime left to use this pairing code: 9:[0-5][0-9]\z' -and $cdnLater -cne $cdnFirst) ("and counts down live: two seconds later it shows less (" + $cdnFirst + " then " + $cdnLater + ")")
+    Check ($cdn.ok -and $cdn.value.expired.shown -and $cdn.value.expired.words -ceq "This pairing code has expired - ask the PC for a new one." -and $cdn.value.expired.cls -ceq "status") ("an expired offer says so plainly, as a warning (" + $(if ($cdn.ok) { $cdn.value.expired.words } else { "" }) + ")")
+    Check ($cdn.ok -and -not $cdn.value.cleared.shown) "an empty box shows no countdown"
     $offer = New-HordeRelayPairingOffer -HordeHome $hh -RpId "localhost" -Origins @($origin)
     $paired = Invoke-Browser @{ cmd = "pair"; offer = $offer.value.text; label = "Founder phone" }
     Check ($paired.ok -and $paired.value.paired -and $paired.value.fingerprint -cmatch '\A[0-9]{4}-[0-9]{4}-[0-9]{4}\z') ("Chrome makes the passkey and the app shows a fingerprint (" + $(if ($paired.ok) { $paired.value.fingerprint + $paired.value.notice } else { $paired.reason }) + ")")

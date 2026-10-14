@@ -102,6 +102,7 @@ import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
+import { offerExpiresAt, countdownWords } from "./pair-countdown.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
 
 const $ = (id) => document.getElementById(id);
@@ -700,10 +701,32 @@ bridge.on("notice", (words) => say("relay", words));
 // --- pairing ---
 
 let scanning = null;
+// THE TIME LEFT ON THE OFFER (pair-countdown.js; issue #283), under the paste box, once a second while
+// the pairing screen is up. Made here rather than in index.html, so a change to it is a script's alone.
+const offerCountdown = document.createElement("p");
+offerCountdown.id = "offerCountdown";
+offerCountdown.setAttribute("role", "status");
+offerCountdown.hidden = true;
+$("offerText").insertAdjacentElement("afterend", offerCountdown);
+let countdownTimer = 0;
+function showOfferCountdown() {
+  if ($("pairView").hidden) { clearInterval(countdownTimer); countdownTimer = 0; offerCountdown.hidden = true; return; }
+  const expiresAt = offerExpiresAt($("offerText").value);
+  const words = countdownWords(expiresAt, Date.now());
+  offerCountdown.textContent = words;
+  offerCountdown.className = expiresAt > 0 && expiresAt <= Date.now() ? "status" : "hint";
+  offerCountdown.hidden = words === "";
+}
+function startOfferCountdown() {
+  showOfferCountdown();
+  if (!countdownTimer) countdownTimer = setInterval(showOfferCountdown, 1000);
+}
+$("offerText").addEventListener("input", showOfferCountdown);
 async function openPair() {
   show("pairView");
   $("scanBtn").hidden = !(await canScan());
   $("offerText").value = "";
+  startOfferCountdown();
 }
 $("addBtn").addEventListener("click", openPair);
 $("firstPair").addEventListener("click", openPair);
@@ -714,7 +737,7 @@ $("scanBtn").addEventListener("click", async () => {
   const r = await scanning.done;
   scanning = null;
   $("scanBox").hidden = true;
-  if (r.text) $("offerText").value = r.text;
+  if (r.text) { $("offerText").value = r.text; showOfferCountdown(); }
   else if (r.reason) say("action", r.reason);
 });
 $("scanStop").addEventListener("click", () => { if (scanning) scanning.stop(); });

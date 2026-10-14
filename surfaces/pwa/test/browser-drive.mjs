@@ -153,6 +153,26 @@ async function centre(selector) {
 
 const commands = {
   async open() { await load(origin + "/app/index.html"); return { empty: !!(await until(shown("emptyView") + " || " + shown("lockedView") + " || " + shown("doc"), 15000)) }; },
+  // THE PAIRING CODE'S TIME LEFT (issue #283): an offer put in the box the way a scan does - no typing,
+  // so only the screen's own once-a-second tick can show it - read twice, 2 s apart; then an expired
+  // offer; then an empty box. The pairing screen is left open for pair.
+  async offerCountdown(c) {
+    await evaluate("document.getElementById('firstPair').click()", true);
+    await until(shown("pairView"));
+    const read = "({ shown: " + shown("offerCountdown") + ", words: document.getElementById('offerCountdown') ? document.getElementById('offerCountdown').textContent : '', cls: document.getElementById('offerCountdown') ? document.getElementById('offerCountdown').className : '' })";
+    await evaluate("document.getElementById('offerText').value = " + JSON.stringify(c.offer));
+    await until(shown("offerCountdown") + " && document.getElementById('offerCountdown').textContent.indexOf('Time left') === 0", 5000);
+    const first = await evaluate(read);
+    await sleep(2200);
+    const later = await evaluate(read);
+    await evaluate("document.getElementById('offerText').value = " + JSON.stringify(c.expired));
+    await until("document.getElementById('offerCountdown').textContent.indexOf('expired') >= 0", 5000);
+    const expired = await evaluate(read);
+    await evaluate("document.getElementById('offerText').value = ''");
+    await until("!" + shown("offerCountdown"), 5000);
+    const cleared = await evaluate(read);
+    return { first, later, expired, cleared };
+  },
   async pair(c) {
     await evaluate("document.getElementById('firstPair').click()", true);
     await until(shown("pairView"));

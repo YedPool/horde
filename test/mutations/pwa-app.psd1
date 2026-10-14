@@ -120,5 +120,12 @@
         @{ Name = "cards-fallback-line-never-shown"
            Find = '$("cardsWhy").hidden = !stream || !stream.fallback;'
            Replace = '$("cardsWhy").hidden = true;' }
+        # --- the pairing code's time left (issue #283)
+        @{ Name = "offer-countdown-never-shown"
+           Find = '  offerCountdown.hidden = words === "";'
+           Replace = '  offerCountdown.hidden = true;' }
+        @{ Name = "offer-countdown-not-live"
+           Find = '  if (!countdownTimer) countdownTimer = setInterval(showOfferCountdown, 1000);'
+           Replace = '' }
     )
 }
