@@ -585,9 +585,9 @@
         @{ Name = "relay-unknown-names-no-relay"
            Find = 'if ($null -ne $relayFiles.PSObject.Properties["relays"]) { $who = @($relayFiles.relays) }'
            Replace = '' }
-        @{ Name = "relay-unknown-says-not-why"
-           Find = ' + " (" + $relayFiles.reason + ")"'
-           Replace = '' }
+        @{ Name = "relay-unknown-echoes-what-the-relay-said"
+           Find = '"which files hold the relays'' secrets is not known: " + $named'
+           Replace = '"which files hold the relays'' secrets is not known: " + $named + " (" + $relayFiles.reason + ")"' }
         @{ Name = "nobody-asked-taken-for-none"
            Find = '} elseif (@($relayFiles.value.asked).Count -eq 0) {'
            Replace = '} elseif ($false) {' }
@@ -610,8 +610,24 @@
            Find = '"'' is what the relay ''" + $place.relay + "'' calls " + $place.what'
            Replace = '"'' is what a relay calls " + $place.what' }
         @{ Name = "relay-refusal-does-not-say-what-the-file-is"
-           Find = '"'' calls " + $place.what + " (''"'
-           Replace = '"'' calls a file (''"' }
+           Find = '"'' is what the relay ''" + $place.relay + "'' calls " + $place.what + " (''"'
+           Replace = '"'' is what the relay ''" + $place.relay + "'' calls a file (''"' }
+        # --- a relay's file by which file it is, and an entry that is no local path (review of PR 238) ---
+        @{ Name = "relay-entry-with-no-local-path-is-shared"
+           Find = 'if (@($where.paths).Count -eq 0) { return ($itsWords'
+           Replace = 'if ($false) { return ($itsWords' }
+        @{ Name = "relay-entry-with-no-local-path-said-force-shares-it"
+           Find = 'is that file cannot be told" + $never) }'
+           Replace = 'is that file cannot be told" + $insist) }' }
+        @{ Name = "hard-link-to-a-relay-file-is-shared"
+           Find = 'if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "hard-link-refusal-does-not-name-the-relay"
+           Find = '"'' is the very file the relay ''" + $place.relay + "'' calls "'
+           Replace = '"'' is the very file a relay calls "' }
+        @{ Name = "any-file-is-a-relay-file-by-identity"
+           Find = 'if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) {'
+           Replace = 'if ($entryIs.id -ne "") {' }
         @{ Name = "relay-refusal-says-force-shares-it"
            Find = '"''), a file it keeps a secret in" + $never)'
            Replace = '"''), a file it keeps a secret in" + $insist)' }

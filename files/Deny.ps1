@@ -152,7 +152,19 @@
 #   loaded the relays itself, without the port's "already registered". The folder's own name is
 #   the relay's name: the port refuses a capabilities.json that says otherwise.
 #   THE REFUSAL NAMES THE RELAY AND WHAT THE FILE IS, in the relay's own few words, never anything
-#   of what the file holds: nothing of it is read.
+#   of what the file holds: nothing of it is read. NOR WHY A RELAY COULD NOT TELL (the review of PR
+#   238): a relay that throws may throw anything, so an unknown answer names only the relay.
+#   A RELAY'S FILE IS ONE FILE, NOT A FOLDER, SO IT IS ALSO KNOWN BY WHICH FILE IT IS (the same
+#   review): measured that day, a hard link to it - a second name, which no path says is the same
+#   file - was shared, -Force or not. So where the named file is there, the volume serial number
+#   and file index of the shared file's open handle are compared with its own, and the same file
+#   under any name is refused. That is the one place a hard link is caught (the places above are
+#   folders, and a folder has no such number for the files in it).
+#   AN ENTRY THAT IS NO PATH ON THIS MACHINE'S OWN DRIVES REFUSES EVERY SHARE (the same review):
+#   measured that day, a relay file named as \\.\C:\... or \\localhost\C$\... resolved to no path
+#   at all, and nothing was compared - the file was shared by its plain path with -Force. A file a
+#   relay names that cannot be placed is a file nobody can tell this one from. The port refuses
+#   those forms too (relays/Port.ps1); this is the second door.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
@@ -338,7 +350,7 @@ function Get-HordeFilesDenyPlaces {
         $who = @()
         if ($null -ne $relayFiles.PSObject.Properties["relays"]) { $who = @($relayFiles.relays) }
         $named = $(if ($who.Count -gt 0) { "the relay " + (($who | ForEach-Object { "'" + $_ + "'" }) -join ", ") + " could not tell" } else { "the relay port could not tell" })
-        $unknownRelays = "which files hold the relays' secrets is not known: " + $named + " (" + $relayFiles.reason + ")"
+        $unknownRelays = "which files hold the relays' secrets is not known: " + $named
     } elseif (@($relayFiles.value.asked).Count -eq 0) {
         $unknownRelays = "which files hold the relays' secrets is not known: no relay was asked, so the relays were not loaded"
     } else {
@@ -444,7 +456,9 @@ function Get-HordeFilesDenyRefusal {
     # Why the file whose open handle's path is -FinalPath is not shared, or "" when the list has
     # nothing against it. The header has every rule. What -Force never lifts is judged first, so
     # that a file in the Horde home is refused for that and not for its name.
-    param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force)
+    # -Handle is the shared file's open handle, which a relay's file is compared with by identity;
+    # without it the file at -FinalPath is opened for its attributes and asked instead.
+    param([Parameter(Mandatory = $true)][string]$FinalPath, [string]$HordeHome = "", [string]$RepoRoot = "", [switch]$Force, $Handle = $null)
     $list = Get-HordeFilesDenyList
     $what = @{ home = "the Horde home, where Horde keeps its own records, keys and settings"; secrets = ("a " + $list.secretsFolder + " folder, where credentials are kept"); ssh = "the folder the user's SSH keys are kept in"; agent = "a folder an agent harness keeps its own files in (its settings, its sign-in and what was said to it)"; relay = "a file a relay keeps a secret in" }
     $never = ". Nothing there is ever shared, and -Force does not change that"
@@ -455,6 +469,8 @@ function Get-HordeFilesDenyRefusal {
     # cannot be looked at without its prefix. The first part is the drive, the last the file's
     # name, and what is between are the folders.
     $parts = @($FinalPath -split '\\')
+    # Which file the shared one is, asked once and only when a relay's file is there to compare with.
+    $sharedIs = $null
     if ($found.unknownNever -ne "") { return ($found.unknownNever + ", so whether '" + $FinalPath + "' is in " + $what.home + " or among the user's own keys cannot be told" + $never) }
     if ($found.unknownRelays -ne "") { return ($found.unknownRelays + ", so whether '" + $FinalPath + "' is one of them cannot be told" + $never) }
     # The harness folder the file is in, as it is written; and, when that cannot be told, why not.
@@ -501,6 +517,21 @@ function Get-HordeFilesDenyRefusal {
                 if (-not $lifted -and $place.kind -ceq "relay") { return ("'" + $FinalPath + "' is what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "'), a file it keeps a secret in" + $never) }
                 if (-not $lifted) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $never) }
                 if ($harness -eq "") { $harness = "" + $place.path }
+            }
+            # A RELAY'S FILE BY WHICH FILE IT IS (the header): no local path at all refuses every
+            # share; where it is there, the same file under another name is refused.
+            if ($place.kind -ceq "relay") {
+                $itsWords = "what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "')"
+                if (@($where.paths).Count -eq 0) { return ($itsWords + " is not a path on one of this machine's own drives, so whether '" + $FinalPath + "' is that file cannot be told" + $never) }
+                $entryIs = Get-HordeFilesPathIdentity -Path ("\\?\" + $where.paths[0])
+                if ($entryIs.state -ceq "unknown") { return ("which file " + $itsWords + " is could not be told, so whether '" + $FinalPath + "' is that file cannot be told either" + $never) }
+                if ($entryIs.state -ceq "ok") {
+                    if ($null -eq $sharedIs) {
+                        $sharedIs = $(if ($null -ne $Handle) { Get-HordeFilesHandleIdentity -Handle $Handle } else { (Get-HordeFilesPathIdentity -Path ("\\?\" + $FinalPath)).id })
+                    }
+                    if ($sharedIs -eq "") { return ("which file '" + $FinalPath + "' is could not be told, so whether it is " + $itsWords + " cannot be told either" + $never) }
+                    if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is the very file the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "') under another name, as a hard link is: a file it keeps a secret in" + $never) }
+                }
             }
         }
     }

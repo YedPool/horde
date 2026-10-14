@@ -1092,6 +1092,35 @@ if (New-FileLink $fileLink $clientFile) {
     Check (Test-Refused $h $fileLink $saysRelay) "the file, reached by a symbolic link to it with another name, is refused"
     Check (Test-Refused $h $fileLink $saysRelay -Force) "and with -Force"
 } else { Write-Skip "a symbolic link could not be made here (it needs the right to make one), so the file-link cases did not run" }
+# A HARD LINK, A SECOND NAME OF THE SAME FILE (the review of PR 238): no path says it is the file, so
+# it is known by which file it is - the volume serial number and file index of the open handle.
+$script:entriesA = @([pscustomobject]@{ path = $clientFile; what = "the sign-in client file" })
+$hardToClient = Join-Path $links "a-second-name.json"
+$hardToBeside = Join-Path $links "a-second-name-of-other.json"
+$null = & cmd.exe /c ("mklink /H `"" + $hardToClient + "`" `"" + $clientFile + "`" >nul 2>nul")
+$null = & cmd.exe /c ("mklink /H `"" + $hardToBeside + "`" `"" + $besideClient + "`" >nul 2>nul")
+if ([System.IO.File]::Exists($hardToClient) -and [System.IO.File]::Exists($hardToBeside)) {
+    $sameFile = "is the very file the relay 'test-relay-a' calls the sign-in client file ('" + $clientFile + "') under another name, as a hard link is"
+    Check (Test-Refused $h $hardToClient $sameFile) "a hard link to the file a relay names, under another name in another folder, is refused as that file"
+    Check (Test-Refused $h $hardToClient $sameFile -Force) "and -Force does not lift it"
+    Check (Test-Shared $h $hardToBeside -Force) "CONTROL: a hard link to the file BESIDE it is another file, and is shared"
+    Check ((Get-HordeFilesDenyRefusal -FinalPath $hardToClient -HordeHome $h -RepoRoot $repo -Force) -like ("*" + $sameFile + "*")) "and the list alone, handed no handle, opens the file for its attributes and says the same"
+    $script:entriesA = @([pscustomobject]@{ path = $hardToClient; what = "the sign-in client file" })
+    Check (Test-Refused $h $clientFile "under another name, as a hard link is" -Force) "a relay that names the second name has the first refused, -Force or not"
+} else { Write-Skip "a hard link could not be made here, so the hard-link cases did not run" }
+# THE SECOND DOOR (the review of PR 238): an entry that is no path on this machine's own drives
+# refuses every share. The port refuses such an entry first (test/test-relay-port.ps1), so to reach
+# this door the port's answer is replaced, for these checks only, by one that names it - the way
+# the review's probe reached it on the head before the port refused those forms.
+$script:realAsk = ${function:Get-HordeRelaySecretFiles}
+$script:doorPath = ""
+function Get-HordeRelaySecretFiles { param([string]$HordeHome = "") return (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ relay = "test-relay-a"; path = $script:doorPath; what = "the sign-in client file" }); asked = @("test-relay-a") })) }
+foreach ($door in @(("\\localhost\" + $clientFile.Substring(0, 1) + "$" + $clientFile.Substring(2)), ("\\.\" + $clientFile))) {
+    $script:doorPath = $door
+    Check (Test-Refused $h $besideClient ("is not a path on one of this machine's own drives, so whether '") -Force) ("an entry named as " + $door.Substring(0, [Math]::Min(14, $door.Length)) + "... refuses even an ordinary file, -Force or not")
+    Check (Test-Refused $h $clientFile "is not a path on one of this machine's own drives" -Force) "and the very file it names, by its plain path, is refused with it"
+}
+${function:Get-HordeRelaySecretFiles} = $script:realAsk
 $script:entriesA = @([pscustomobject]@{ path = $movedClient; what = "the sign-in client file" })
 Check (Test-Refused $h $movedClient $saysRelay -Force) "THE GAP ABOVE, CLOSED BY THE RELAY: the moved client file whose content says nothing is refused once its relay names it, -Force or not"
 $script:entriesA = @([pscustomobject]@{ path = $neverFile; what = "the sign-in client file" })
@@ -1114,11 +1143,11 @@ Check (Test-Shared $h $besideClient) "a relay is asked of the very home the shar
 Set-OrdinaryRelays
 $unknownSays = "which files hold the relays' secrets is not known: the relay 'test-relay-a' could not tell"
 Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) New-HordeUnknown -Reason "its made-up settings do not read" } }, @{ name = "test-relay-b"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @() }) } })
-Check (Test-Refused $h $besideClient ($unknownSays + " (*" + $never)) "UNKNOWN: an ordinary file is refused, the reason naming the relay that could not tell, and never shared"
+Check (Test-Refused $h $besideClient ($unknownSays + ", so whether*" + $never)) "UNKNOWN: an ordinary file is refused, the reason naming the relay that could not tell, and never shared"
 Check (Test-Refused $h $besideClient $unknownSays -Force) "and -Force does not lift it"
-Check (Test-Refused $h $besideClient "made-up settings do not read") "and the reason carries the relay's own why"
-Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) throw "made up" } })
-Check (Test-Refused $h $besideClient $unknownSays -Force) "a relay that throws is one that could not tell: refused, -Force or not"
+Check (Test-Refused $h $besideClient $unknownSays "made-up settings") "and the reason does NOT repeat what the relay said (the review of PR 238): a relay may say anything"
+Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) throw "made up exception text 7731" } })
+Check (Test-Refused $h $besideClient $unknownSays "7731" -Force) "a relay that throws is one that could not tell: refused, -Force or not, and its exception's text is not in the reason"
 Set-TestRelays @(@{ name = "test-relay-a"; block = { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "relative\file.json"; what = "the sign-in client file" }) }) } })
 Check (Test-Refused $h $besideClient $unknownSays) "a relay that names a file by a path that is not absolute is one that could not tell"
 $nobody = "no relay was asked, so the relays were not loaded"
