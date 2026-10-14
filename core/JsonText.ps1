@@ -31,17 +31,20 @@
 #     string written another way ("...T12:00:00Z", or with an offset) comes back as the same instant in
 #     "o" form, not as typed. OWED: an exact reader for 7.0 to 7.4.
 #   - 5.1 never converts, so the text is parsed as it is.
-# The output is ConvertFrom-Json's own, passed on unchanged (a function body that is the pipeline
-# re-wraps nothing), so a caller sees the same arrays and objects as from the cmdlet itself.
+# A TOP-LEVEL ARRAY IS ONE VALUE UNDER BOTH. 5.1 writes it as one array; 7 writes its items one at a
+# time unless told -NoEnumerate (measured 2026-10-14 on 7.6.6: through this function '[7]' came back as
+# the number 7 and '[]' as nothing, against an array of one and an empty array under 5.1). Every 7 path
+# passes -NoEnumerate (7.0 has it), so @(ConvertFrom-HordeJson '[1,2]').Count is 1 under both.
+# WHOLE NUMBERS ARE NOT THE SAME TYPE: Int64 under 7, Int32 under 5.1, so a caller must not test -is [int].
 $script:HordeJsonDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")
 $script:HordeJsonMakesDates = ("" + $PSVersionTable.PSEdition) -ceq "Core"
 
 function ConvertFrom-HordeJson {
-    # -Text parsed as JSON, with every string left a string. Throws as ConvertFrom-Json throws on text
-    # that is not JSON.
+    # -Text parsed as JSON, with every string left a string and a top-level array kept one array.
+    # Throws as ConvertFrom-Json throws on text that is not JSON.
     param($Text)
-    if ($script:HordeJsonDateKind) { $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop }
-    elseif ($script:HordeJsonMakesDates) { $Text | ConvertFrom-Json -ErrorAction Stop | ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }
+    if ($script:HordeJsonDateKind) { $Text | ConvertFrom-Json -DateKind String -NoEnumerate -ErrorAction Stop }
+    elseif ($script:HordeJsonMakesDates) { $Text | ConvertFrom-Json -NoEnumerate -ErrorAction Stop | ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }
     else { $Text | ConvertFrom-Json -ErrorAction Stop }
 }
 

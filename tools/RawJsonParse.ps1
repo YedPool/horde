@@ -17,6 +17,7 @@
 # WHAT COUNTS. A command named ConvertFrom-Json in the file's PARSE (a CommandAst), with or without its
 # module prefix - not a mention in a comment or a string. A file that does not parse is a finding, so it
 # can never pass by being unreadable.
+# NOT COUNTED: a direct .NET JSON call ([System.Text.Json...], JavaScriptSerializer) is not a command, so this lint does not see it.
 #
 # WHAT IS SCANNED: the shipped files (tools/FunctionNames.ps1, Get-HordeShippedScriptFiles), which
 # leaves out every folder named test. That exclusion is deliberate: a suite reads the answers of the

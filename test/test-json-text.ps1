@@ -66,9 +66,15 @@ $sample = '{"at":"' + $stamp + '","typed":"2026-10-14T12:00:00Z","list":["' + $s
 $here51 = ConvertFrom-HordeJson $sample
 Check ($here51.at -is [string] -and $here51.at -ceq $stamp -and $here51.typed -ceq "2026-10-14T12:00:00Z") ("in this shell (" + $PSVersionTable.PSEdition + " " + $PSVersionTable.PSVersion + "), a timestamp comes back as the text it was")
 Check (@($here51.list).Count -eq 1 -and $here51.list[0] -ceq $stamp -and $here51.deep.rows[0].at -ceq $stamp -and $here51.n -eq 5) "so does one inside a one-item list and one inside a nested object; a number stays a number"
-# Lists come out as the cmdlet gives them in THIS shell (5.1 writes a list as one object, 7 one item at a
-# time), so a caller that moves to the seam sees no change in shape.
-Check (@(ConvertFrom-HordeJson '[]').Count -eq @('[]' | ConvertFrom-Json).Count -and @(ConvertFrom-HordeJson '[1,2]').Count -eq @('[1,2]' | ConvertFrom-Json).Count) "lists come out in the same shape as from ConvertFrom-Json itself in this shell"
+# A TOP-LEVEL ARRAY IS ONE ARRAY, as 5.1 gives it, in whichever shell runs this suite. The same shape
+# from each shell's own process is checked below (Get-ShapeSignature in the probe).
+function Get-ShapeSignature {
+    $parts = foreach ($t in @('[1,2]', '[7]', '[]')) { $x = ConvertFrom-HordeJson $t; $t + ":" + @(ConvertFrom-HordeJson $t).Count + "/" + ($x -is [array]) + "/" + $(if ($null -eq $x) { "null" } else { $x.Count }) }
+    return ($parts -join ";")
+}
+$wantShape = "[1,2]:1/True/2;[7]:1/True/1;[]:1/True/0"
+$shapeHere = Get-ShapeSignature
+Check ($shapeHere -ceq $wantShape) ("in this shell a top-level array is one array: @()-wrapped count 1, a one-element array stays an array, an empty one is an empty array (got '" + $shapeHere + "')")
 Check (Throws { ConvertFrom-HordeJson '{"a":' }) "text that is not JSON throws, as ConvertFrom-Json does"
 $caught = $false; try { $null = ConvertFrom-HordeJson 'not json' } catch { $caught = $true }
 Check ($caught -eq $true) "a caller's try catches the throw from inside the seam"
@@ -84,37 +90,52 @@ Check ($walked.n -eq 5 -and $walked.s -ceq "plain") "the fallback leaves numbers
 $offset = [datetimeoffset]::new($utc)
 Check ((ConvertTo-HordeJsonDateText -Value $offset) -ceq "2026-10-14T12:00:00.0000000+00:00") "a [datetimeoffset] is written back as round-trip text too"
 
-# UNDER POWERSHELL 7 ITSELF, where the bug lives: a child pwsh loads core/JsonText.ps1 and reports the
-# type of what the seam gives, through the shell's own -DateKind path and through the fallback path
-# forced on. Without pwsh this part is NOT RUN, said loudly, and the suite exits 3, not 0.
+# EACH SHELL IN ITS OWN PROCESS: a child loads core/JsonText.ps1 and reports what the seam gives - the
+# type of a parsed timestamp and the shape of a top-level array. Windows PowerShell 5.1 runs it once;
+# pwsh, where the bug lives, runs it through its own -DateKind path and through the fallback path forced
+# on. Every shell must give 5.1's array shape. Without pwsh the 7 half is NOT RUN, said loudly, and the
+# suite exits 3, not 0.
 $pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
 $partial = $false
-if ($null -eq $pwsh) {
-    Write-Host "  [NOT RUN] POWERSHELL 7 IS NOT ON THIS MACHINE (no pwsh.exe): the parse under 7 was NOT checked here." -ForegroundColor Yellow
-    $partial = $true
-} else {
-    $probe = Join-Path $env:TEMP ("horde-json-text-probe-" + [guid]::NewGuid().ToString("N") + ".ps1")
-    # The JSON goes through a file: 5.1 passing it as an argument to a native program drops its quotes.
-    $sampleFile = $probe + ".json"
-    [System.IO.File]::WriteAllText($sampleFile, $sample, (New-Object System.Text.UTF8Encoding($false)))
-    $probeText = @(
-        'param([string]$Root, [string]$TextFile, [string]$Force)'
-        '. (Join-Path $Root "core\JsonText.ps1")'
-        '$Text = [System.IO.File]::ReadAllText($TextFile)'
-        'if ($Force -eq "fallback") { $script:HordeJsonDateKind = $false }'
-        '$o = ConvertFrom-HordeJson $Text'
-        '$raw = $Text | ConvertFrom-Json'
-        'Write-Output ("raw=" + $raw.at.GetType().Name + ";at=" + $o.at.GetType().Name + "|" + $o.at + ";list=" + $o.list[0].GetType().Name + ";deep=" + $o.deep.rows[0].at)'
-    ) -join "`r`n"
-    [System.IO.File]::WriteAllText($probe, $probeText, (New-Object System.Text.UTF8Encoding($false)))
-    try {
-        foreach ($force in @("own", "fallback")) {
-            $line = (& $pwsh.Source -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probe -Root $root -TextFile $sampleFile -Force $force | Out-String).Trim()
-            $want = "raw=DateTime;at=String|" + $stamp + ";list=String;deep=" + $stamp
-            Check ($line -ceq $want) ("under pwsh, " + $force + " path: ConvertFrom-Json gives a DateTime and the seam gives the text (got '" + $line + "')")
-        }
-    } finally { Remove-Item -LiteralPath $probe, $sampleFile -Force -ErrorAction SilentlyContinue }
+$probe = Join-Path $env:TEMP ("horde-json-text-probe-" + [guid]::NewGuid().ToString("N") + ".ps1")
+# The JSON goes through a file: 5.1 passing it as an argument to a native program drops its quotes.
+$sampleFile = $probe + ".json"
+[System.IO.File]::WriteAllText($sampleFile, $sample, (New-Object System.Text.UTF8Encoding($false)))
+$probeText = @(
+    'param([string]$Root, [string]$TextFile, [string]$Force)'
+    '. (Join-Path $Root "core\JsonText.ps1")'
+    ('function Get-ShapeSignature {' + ${function:Get-ShapeSignature}.ToString() + '}')
+    '$Text = [System.IO.File]::ReadAllText($TextFile)'
+    'if ($Force -eq "fallback") { $script:HordeJsonDateKind = $false }'
+    '$o = ConvertFrom-HordeJson $Text'
+    '$raw = $Text | ConvertFrom-Json'
+    'Write-Output ("dates=raw=" + $raw.at.GetType().Name + ";at=" + $o.at.GetType().Name + "|" + $o.at + ";list=" + $o.list[0].GetType().Name + ";deep=" + $o.deep.rows[0].at)'
+    'Write-Output ("shape=" + (Get-ShapeSignature))'
+) -join "`r`n"
+[System.IO.File]::WriteAllText($probe, $probeText, (New-Object System.Text.UTF8Encoding($false)))
+function Invoke-Probe {
+    # { dates; shape } from the probe run by -Exe with -Force own or fallback.
+    param([string]$Exe, [string]$Force)
+    $out = @(& $Exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probe -Root $root -TextFile $sampleFile -Force $Force)
+    $d = "" + (@($out | Where-Object { "$_".StartsWith("dates=") }) | Select-Object -First 1)
+    $s = "" + (@($out | Where-Object { "$_".StartsWith("shape=") }) | Select-Object -First 1)
+    return [pscustomobject]@{ dates = $d.Trim(); shape = $s.Trim() }
 }
+try {
+    $r = Invoke-Probe -Exe "powershell.exe" -Force "own"
+    Check ($r.dates -ceq ("dates=raw=String;at=String|" + $stamp + ";list=String;deep=" + $stamp)) ("under 5.1 in its own process, a timestamp is text from both the cmdlet and the seam (got '" + $r.dates + "')")
+    Check ($r.shape -ceq ("shape=" + $wantShape)) ("under 5.1 in its own process, a top-level array is one array (got '" + $r.shape + "')")
+    if ($null -eq $pwsh) {
+        Write-Host "  [NOT RUN] POWERSHELL 7 IS NOT ON THIS MACHINE (no pwsh.exe): the parse under 7 was NOT checked here." -ForegroundColor Yellow
+        $partial = $true
+    } else {
+        foreach ($force in @("own", "fallback")) {
+            $r = Invoke-Probe -Exe $pwsh.Source -Force $force
+            Check ($r.dates -ceq ("dates=raw=DateTime;at=String|" + $stamp + ";list=String;deep=" + $stamp)) ("under pwsh, " + $force + " path: ConvertFrom-Json gives a DateTime and the seam gives the text (got '" + $r.dates + "')")
+            Check ($r.shape -ceq ("shape=" + $wantShape)) ("under pwsh, " + $force + " path: a top-level array is one array, the same shape as 5.1 (got '" + $r.shape + "')")
+        }
+    }
+} finally { Remove-Item -LiteralPath $probe, $sampleFile -Force -ErrorAction SilentlyContinue }
 
 if ($partial) { Complete-HordeSuite -Success "the scanner and the parse hold in this shell; the parse under PowerShell 7 was NOT RUN (no pwsh)" -PassCode 3 }
 Complete-HordeSuite -Success "the one scanner finds every key written twice in one object, and nothing else; the one parse keeps every string a string under both shells"

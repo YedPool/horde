@@ -63,8 +63,14 @@
            Replace = '        if ($b -lt 0x20 -and $b -ne 0x0A -and $b -ne 0x0D) {' }
         # The one parse (issue #274). Caught under pwsh by the suite's child-process probe.
         @{ Name = "date-kind-not-asked"
-           Find = '{ $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop }'
-           Replace = '{ $Text | ConvertFrom-Json -ErrorAction Stop }' }
+           Find = '{ $Text | ConvertFrom-Json -DateKind String -NoEnumerate -ErrorAction Stop }'
+           Replace = '{ $Text | ConvertFrom-Json -NoEnumerate -ErrorAction Stop }' }
+        @{ Name = "array-enumerated-with-date-kind"
+           Find = '{ $Text | ConvertFrom-Json -DateKind String -NoEnumerate -ErrorAction Stop }'
+           Replace = '{ $Text | ConvertFrom-Json -DateKind String -ErrorAction Stop }' }
+        @{ Name = "array-enumerated-in-fallback"
+           Find = '{ $Text | ConvertFrom-Json -NoEnumerate -ErrorAction Stop | ForEach-Object'
+           Replace = '{ $Text | ConvertFrom-Json -ErrorAction Stop | ForEach-Object' }
         @{ Name = "fallback-not-walked"
            Find = '| ForEach-Object { ConvertTo-HordeJsonDateText -Value $_ } }'
            Replace = '}' }
