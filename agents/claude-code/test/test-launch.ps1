@@ -159,7 +159,44 @@ try {
     Check ($sn.state -eq "known" -and $sn.value -eq $true) "once whole, a turn whose text blocks join to the line is seen"
     $big = [pscustomobject]@{ size = [long]((Get-Item -LiteralPath $tfile).Length + 100000) }
     $sn = Seen $big
-    Check ($sn.state -eq "known" -and $sn.value -eq $true) "a transcript shorter than its mark is read from its start: it is not the file the mark measured"
+    Check ($sn.state -eq "unknown" -and $sn.reason -like "*shorter*") "a transcript shorter than its mark is unknown: read from its start it could take a turn typed BEFORE the mark for this one (F's probe)"
+    # THE QUEUED LINE, AND WHAT IS NOT A RECEIPT (review of PR 239, M1, nits; rows as measured on 2.1.299
+    # on 2026-10-14, the PR 239 live check, and as Transcript.ps1 reads them).
+    $mq = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    Add-Row ('{"type":"queue-operation","operation":"enqueue","sessionId":"' + $tsid + '","content":"Reply with OK only."}')
+    Add-Row (UserRow $typed -Extra ',"isSidechain":true')
+    Add-Row ('{"type":"attachment","sessionId":"' + $tsid + '","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"Reply with OK only."}}')
+    Add-Row ('{"type":"attachment","sessionId":"' + $tsid + '","attachment":{"type":"queued_command","commandMode":"prompt","origin":{"kind":"task-notification"},"prompt":"Reply with OK only."}}')
+    Add-Row ('{"type":"attachment","sessionId":"34343434-1111-4222-8333-444444444444","attachment":{"type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"prompt":"Reply with OK only."}}')
+    $sn = Seen $mq.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $false) "an enqueue row, a side chain's user row, a queued notification (old and new shape) and another session's queued line are none of them the receipt"
+    Add-Row ('{"type":"attachment","sessionId":"' + $tsid + '","attachment":{"type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"prompt":[{"type":"text","text":"Reply with OK only."}]}}')
+    $sn = Seen $mq.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $true) "a queued_command a person typed, origin human, whose prompt is the line, IS the receipt (M1)"
+    $mh = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    Add-Row ('{"type":"user","sessionId":"' + $tsid + '","Cwd":"a","cwd":"b","message":{"role":"user","content":"Reply with OK only."}}')
+    $sn = Seen $mh.value
+    Check ($sn.state -eq "known" -and $sn.value -eq $true) "a row with two keys differing only in case is read, where ConvertFrom-Json on PowerShell 5.1 throws (F's probe, case H)"
+    $mu = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    Add-Row ('{"type":"user","sessionId":"' + $tsid + '","message":{"role":"user","content":"Reply with OK only."},}}')
+    $sn = Seen $mu.value
+    Check ($sn.state -eq "unknown" -and $sn.reason -like "*could not be read*") "a WHOLE user row that cannot be parsed makes the answer unknown, never a silent no"
+    # THE END OF A TURN (M1).
+    $me = Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid
+    $td = Test-ClaudeCodeTurnDone -ConfigDir $tcfg -SessionId $tsid -Mark $me.value
+    Check ($td.state -eq "known" -and $td.value -eq $false) "no turn end after the mark: not done"
+    Add-Row ('{"type":"system","subtype":"stop_hook_summary","sessionId":"' + $tsid + '","hookCount":2}')
+    Add-Row ('{"type":"system","subtype":"turn_duration","sessionId":"34343434-1111-4222-8333-444444444444","durationMs":5}')
+    Add-Row ('{"type":"system","subtype":"turn_duration","sessionId":"' + $tsid + '","isSidechain":true,"durationMs":5}')
+    $td = Test-ClaudeCodeTurnDone -ConfigDir $tcfg -SessionId $tsid -Mark $me.value
+    Check ($td.state -eq "known" -and $td.value -eq $false) "a stop-hook summary, another session's turn end and a side chain's are not this turn's end"
+    Add-Row ('{"type":"system","subtype":"turn_duration","sessionId":"' + $tsid + '","isMeta":false,"isSidechain":false,"durationMs":2372,"version":"2.1.299"}')
+    $td = Test-ClaudeCodeTurnDone -ConfigDir $tcfg -SessionId $tsid -Mark $me.value
+    Check ($td.state -eq "known" -and $td.value -eq $true) "CONTROL: the turn_duration row of this session after the mark, as 2.1.299 writes it, is the turn's end"
+    $td = Test-ClaudeCodeTurnDone -ConfigDir $tcfg -SessionId $tsid -Mark (Get-ClaudeCodeTurnMark -ConfigDir $tcfg -SessionId $tsid).value
+    Check ($td.state -eq "known" -and $td.value -eq $false) "a turn end before the mark is not the end of the turn typed after it"
+    $td = Test-ClaudeCodeTurnDone -ConfigDir $tcfg -SessionId $tsid -Mark $null
+    Check ($td.state -eq "unknown") "no mark: unknown"
     $sn = Seen $null
     Check ($sn.state -eq "unknown") "no mark: unknown, never a guess"
     New-Item -ItemType Directory -Path (Join-Path $tcfg "projects\C--fixture-other") -Force | Out-Null
@@ -173,6 +210,10 @@ try {
     Add-Row (UserRow "Read C:\h\node\spawned\x\prompt.txt and do what it says.")
     $ps = & $tad.turnSeen $tsid $tview $pm.value "Read C:\h\node\spawned\x\prompt.txt and do what it says."
     Check ($pm.state -eq "known" -and $ps.state -eq "known" -and $ps.value -eq $true) "through the port, from the folder the harness's environment names: marked, typed, seen"
+    $pd = & $tad.turnDone $tsid $tview $pm.value
+    Add-Row ('{"type":"system","subtype":"turn_duration","sessionId":"' + $tsid + '","durationMs":1}')
+    $pd2 = & $tad.turnDone $tsid $tview $pm.value
+    Check ($pd.state -eq "known" -and $pd.value -eq $false -and $pd2.state -eq "known" -and $pd2.value -eq $true) "through the port, TurnDone: not ended, then ended"
 } finally {
     if ((Split-Path -Leaf $tw) -match '^horde-turns-[0-9a-f]{32}$') { Remove-Item -LiteralPath $tw -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -202,5 +243,45 @@ $hb = Test-ClaudeCodeInputHolds -Screen @() -Line $typed
 Check ($hb.state -eq "unknown") "an empty screen is unknown, never an empty box"
 $hb = & $tad.inputHolds ([string[]]@($rule, ($glyph + " " + $typed), $rule)) $typed
 Check ($hb.state -eq "known" -and $hb.value -eq $true) "through the port the same"
+$hb = Test-ClaudeCodeInputHolds -Screen @($rule, ($glyph + " 1. Yes, proceed"), "  2. No, exit", $rule) -Line $typed
+Check ($hb.state -eq "unknown" -and $hb.reason -like "*dialog*") "a dialog of numbered choices drawn between two rules is a dialog, said so, never a box that does not hold the line (F's nit)"
+
+Write-Host ""
+Write-Host "--- the box on 2.1.299, as measured on 2026-10-14 in an isolated terminal (the PR 239 live check) ---" -ForegroundColor Cyan
+# Rows copied from the live check's screens, glyphs as escapes: a 120-column pane, a session started
+# with -n "E livecheck", so the TOP rule carries the name; U+00A0 after the glyph.
+$nb = [string][char]0x00A0
+$r120 = ([string][char]0x2500) * 120
+$named = (([string][char]0x2500) * 106) + " E livecheck " + ([string][char]0x2500)
+$dot = [string][char]0x00B7
+$idleFoot = "  " + [char]0x23F8 + " manual mode on " + $dot + " ? for shortcuts " + $dot + " " + [char]0x2190 + " 1 agent"
+$busyFoot = "  " + [char]0x23F8 + " manual mode on " + $dot + " esc to interrupt " + $dot + " " + [char]0x2190 + " 1 agent"
+$head = @(" Claude Code v2.1.299", "", "")
+$atStart = $head + @($named, ($glyph + $nb + 'Try "edit <filepath> to..."'), $r120, $idleFoot)
+$afterTurn = $head + @(($glyph + " " + $typed), ([string][char]0x25CF + " OK"), $named, $glyph, $r120, $idleFoot)
+$queuedShown = $head + @(($glyph + " Count from 1 to 60, one number per line, nothing else."), ($glyph + " " + $typed), "  ctrl+enter to send now", "* Inferring", $named, ($glyph + $nb + "Press up to edit queued messages"), $r120, $busyFoot)
+$holding = $head + @($named, ($glyph + $nb + $typed), $r120, $idleFoot)
+$running = $head + @(($glyph + " " + $typed), "", "* Wibbling (running UserPromptSubmit hook)", "", $named, ($glyph + $nb), $r120, $busyFoot)
+Check ((Test-ClaudeCodeRuleRow -Row $named) -and (Test-ClaudeCodeRuleRow -Row $r120) -and -not (Test-ClaudeCodeRuleRow -Row (" E livecheck " + $r120)) -and -not (Test-ClaudeCodeRuleRow -Row ($r120 + " x"))) "a rule may carry a label between its runs of U+2500, but must start with eight of them and end with one"
+$hb = Test-ClaudeCodeInputHolds -Screen $holding -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $true) "the box under a NAMED top rule, glyph then U+00A0, holding the line: holds it (the 2026-09-15 reader found no box here at all)"
+$hb = Test-ClaudeCodeInputHolds -Screen $atStart -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "the idle box at start with its placeholder does not hold the line"
+$hb = Test-ClaudeCodeInputHolds -Screen $afterTurn -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "the idle box after a turn, the glyph alone, does not hold it, though the sent line shows above"
+$hb = Test-ClaudeCodeInputHolds -Screen $queuedShown -Line $typed
+Check ($hb.state -eq "known" -and $hb.value -eq $false) "a QUEUED line is drawn above the box, which shows its own hint: the box does not hold it, so no Enter is pressed for it (F's S4)"
+$ir = Test-ClaudeCodeInputReady -Screen $atStart
+Check ($ir.state -eq "known" -and $ir.value -eq $true) "READY: the box drawn at start, idle, placeholder and all"
+$ir = Test-ClaudeCodeInputReady -Screen $afterTurn
+Check ($ir.state -eq "known" -and $ir.value -eq $true) "READY: the idle box after a turn"
+$ir = Test-ClaudeCodeInputReady -Screen $running
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") "NOT READY: the box drawn while a hook or turn runs (the row under it says esc to interrupt)"
+$ir = Test-ClaudeCodeInputReady -Screen @("", "", "")
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*no input box*") "NOT READY: a blank screen while the program starts"
+$ir = Test-ClaudeCodeInputReady -Screen @("Do you trust the files in this folder?", $r120, (" " + $glyph + " 1. Yes, proceed"), "   2. No, exit", $r120)
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*dialog*") "NOT READY: a dialog, said as a dialog"
+$ir = & $tad.inputReady ([string[]]$atStart)
+Check ($ir.state -eq "known" -and $ir.value -eq $true) "through the port the same"
 
 Complete-HordeSuite -Success "the argv is the flags agent.json promises, the mode, process and Remote Control state are read back exactly, and a typed line is taken only as a new turn"
