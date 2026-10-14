@@ -112,5 +112,8 @@
            Replace = ''
            Expect = "survives"
            Reason = "The profile left in place is deleted moments later by the deletion's own alarm (deleteAll), and in between every session is ended and every key released, so no request can see it - but the fence must still be first, so a request racing the deletion is refused by the gate; that race is what no suite can place." }
+        @{ Name = "rotation-not-heard"
+           Find = 'if (Number.isSafeInteger(now)) await this.heard(entry.keyId, now);'
+           Replace = '' }
     )
 }

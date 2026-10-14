@@ -51,6 +51,14 @@
 // phone sat on unused requests; and the deletion fence and the mailbox index would then need calls
 // of their own anyway. A put costs one more (the mailbox charging the account), and so does an ack or
 // an expiry that frees mail (its credit): the account-wide caps are counted where the lengths are known.
+// THE ROWS IT WRITES, beside those requests (reckoned 2026-10-14, for the PC offline banner): the day's
+// count is one row written on each mailbox request, and a machine's last heard time (presence.js) one
+// more on each of its requests at least 30 s after the last written. An idle runner asks once a minute:
+// about 1,440 day rows and about 1,400 presence rows a day per machine, about 2,800 in all; for 10
+// machines, the most an account may have, about 28,000 a day, and a busy machine's presence rows are
+// held to 2,880 a day. Against what plan limit on rows written: UNVERIFIED - no figure for Durable
+// Object storage writes is recorded in this repository; check Cloudflare's current limits before relying
+// on the free plan for many machines.
 //
 // DELETION (remove) happens AT ONCE for everything that can reach the account: the profile goes first
 // (from that moment the gate refuses every request), then every phone's session is ended and every
@@ -91,9 +99,11 @@ const gone = () => ({ ok: false, status: 401, code: CODES.gone, reason: "this ac
 export class Account extends DurableObject {
   constructor(ctx, env) { super(ctx, env); this.devices = new Map(); this.seen = new Map(); }
 
-  // A machine of this account was heard at now (presence.js): kept in memory, written when due.
+  // A machine of this account was heard at now (presence.js): kept in memory, written when due. After
+  // an eviction the stored time is read once, so a write never moves it back.
   async heard(keyId, now) {
-    const n = noteSeen(this.seen.get(keyId), now);
+    const held = this.seen.get(keyId);
+    const n = noteSeen(held, now, held ? undefined : await this.ctx.storage.get(SEEN + keyId));
     this.seen.set(keyId, n.held);
     if (n.write) await this.ctx.storage.put(SEEN + keyId, n.held.at);
   }
@@ -211,13 +221,15 @@ export class Account extends DurableObject {
 
   async unlistMachine(keyId) { this.seen.delete(keyId); await this.ctx.storage.delete(SEEN + keyId); return this.ctx.storage.delete(MACHINE + keyId); }
 
-  // A rotation moved a machine's registration from one key to its successor (rotation.js).
-  async moveMachine({ from, entry }) {
+  // A rotation moved a machine's registration from one key to its successor (rotation.js). The rotation
+  // was itself a request the relay verified, signed by the successor: it is heard under the new key.
+  async moveMachine({ from, entry, now }) {
     const storage = this.ctx.storage;
     await storage.delete(MACHINE + from);
     await storage.delete(SEEN + from);
     this.seen.delete(from);
     await storage.put(MACHINE + entry.keyId, entry);
+    if (Number.isSafeInteger(now)) await this.heard(entry.keyId, now);
     return true;
   }
 

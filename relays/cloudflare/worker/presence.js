@@ -13,11 +13,18 @@
 // rate still counts: the machine was there and signed it.
 //
 // WHEN IT IS WRITTEN. The time is kept in the object's memory on every request, exactly, and written to
-// its storage at most once per SEEN_WRITE_MS per machine: a storage write per request would be a write
-// per glance of every runner. An eviction loses only the memory, so what storage holds after one is at
-// most SEEN_WRITE_MS old. That is inside the phone's margin: an idle runner's watch is 60 s (Relay.ps1,
-// the run watch), so a live machine is heard at least every 60 s, plus at most 30 s of a write held back,
-// against the phone's 120 s (account-client.js, OFFLINE_AFTER_MS).
+// its storage at most once per SEEN_WRITE_MS per machine. WHAT THAT SAVES, honestly: an idle runner asks
+// the relay once per watch, every 60 s or a little more (Relay.ps1, the run watch; a runner's glances
+// during the watch are local reads and reach no relay), so each of its requests is past the 30 s and IS
+// written - about 58 rows an hour, about 1,400 a day per machine, the same as with no throttle. The
+// throttle bounds a BUSY machine, whose puts come seconds apart, to two rows a minute (2,880 a day at
+// most) instead of one a request. The reckoning against the account's other writes is in accounts.js.
+// THE MARGIN against the phone's 120 s (account-client.js, OFFLINE_AFTER_MS): a live machine is heard
+// at least every 60 s when well, and every 105 s at worst while its run backs off (cli/RelayRun.ps1,
+// BACKOFF: the watch plus a backoff capped at 45 s). The memory answers exactly; only an eviction
+// leaves storage to answer, and what it holds is then at most SEEN_WRITE_MS behind - and for an idle
+// runner, 0 behind, every request being written. So a false banner needs a busy machine, then an
+// eviction, then a run backing off, all at once; it lasts until the machine's next request.
 //
 // WHAT A PHONE IS SHOWN: lastSeenAt to the second (the precision the founder allowed), and only on its own
 // account's Account answer (account-api.js), which only a signed-in phone of that account may read
@@ -26,9 +33,12 @@
 export const SEEN_WRITE_MS = 30000;
 
 // The machine was heard at now. held is { at, wroteAt } from an earlier call, or undefined after an
-// eviction. -> { held, write }: the new state, and whether storage must be written with held.at now.
-export function noteSeen(held, now) {
-  const at = held && held.at > now ? held.at : now;
+// eviction; stored is what storage holds, read only then. -> { held, write }: the new state, and whether
+// storage must be written with held.at now. held.at is never before held's or stored's own time, so
+// neither memory nor storage ever moves back.
+export function noteSeen(held, now, stored) {
+  const before = Math.max(held && Number.isSafeInteger(held.at) ? held.at : 0, Number.isSafeInteger(stored) ? stored : 0);
+  const at = before > now ? before : now;
   const write = !held || now - held.wroteAt >= SEEN_WRITE_MS;
   return { held: { at, wroteAt: write ? now : held.wroteAt }, write };
 }

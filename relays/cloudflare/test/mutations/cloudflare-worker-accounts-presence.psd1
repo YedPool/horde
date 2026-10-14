@@ -6,7 +6,9 @@
 # survive, each with its reason. Every find string occurs once.
 #
 # NOT HERE, and why: the storage write itself, and its removal when a machine is unlisted, moved by a
-# rotation or deleted with its account - a local dev never evicts the object, so what storage holds is
+# rotation or deleted with its account, and the stored time read once after an eviction so a write never
+# moves it back (presence.js's rule is mutated and caught by its pure checks, storage-moves-back-after-
+# an-eviction) - a local dev never evicts the object, so what storage holds is
 # never read back without the memory beside it; the throttle that decides the write is presence.js's,
 # mutated in cloudflare-worker-presence.psd1 and caught by its pure checks.
 @{

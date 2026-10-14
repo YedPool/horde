@@ -19,8 +19,11 @@
            Find = 'const write = !held || now - held.wroteAt >= SEEN_WRITE_MS;'
            Replace = 'const write = Boolean(held) && now - held.wroteAt >= SEEN_WRITE_MS;' }
         @{ Name = "time-moves-back"
-           Find = 'const at = held && held.at > now ? held.at : now;'
+           Find = 'const at = before > now ? before : now;'
            Replace = 'const at = now;' }
+        @{ Name = "storage-moves-back-after-an-eviction"
+           Find = 'Number.isSafeInteger(stored) ? stored : 0);'
+           Replace = '0);' }
         @{ Name = "storage-ignored"
            Find = 'const at = Math.max(m, s);'
            Replace = 'const at = m;' }
