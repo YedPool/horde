@@ -246,6 +246,47 @@ try {
         Check ($up.status -clike "HTTP/1.1 101*" -and $up.headers["content-security-policy"] -ceq $wantCsp -and $up.headers["x-content-type-options"] -ceq "nosniff" -and $up.headers["strict-transport-security"] -ceq "max-age=63072000; includeSubDomains") ("strict headers on a WebSocket upgrade too (" + $up.status + ")")
 
         Write-Host ""
+        Write-Host "--- the unlocked session's condition: the policy the relay SERVES for /app/index.html keeps foreign script out ---" -ForegroundColor Cyan
+        # Design note "Unlocked session", the content-security policy: a non-extractable session key
+        # cannot be copied out of the page, but any script RUNNING in it could use it. So the header the
+        # relay actually serves must be exactly these directives - read off the wire from the Worker's
+        # dev, not from the page's line - and must fail the day 'unsafe-inline', 'unsafe-eval' or any
+        # script source but 'self' appears in it.
+        $notePolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        function Get-ScriptPolicyFindings {
+            # Why a policy lets foreign script run, or nothing: 'unsafe-inline' or 'unsafe-eval' anywhere,
+            # and a script-src (or default-src when there is none) with any source but 'self'.
+            param([string]$Policy)
+            $out = New-Object System.Collections.ArrayList
+            foreach ($bad in @("'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "'wasm-unsafe-eval'", "'strict-dynamic'")) { if ($Policy.ToLowerInvariant().Contains($bad)) { [void]$out.Add("it allows " + $bad) } }
+            $dirs = @{}
+            foreach ($d in @($Policy.Split(";"))) { $parts = @($d.Trim() -split '\s+' | Where-Object { $_ -ne "" }); if ($parts.Count -gt 0) { $dirs[$parts[0].ToLowerInvariant()] = @($parts | Select-Object -Skip 1) } }
+            foreach ($name in @("script-src", "script-src-elem", "script-src-attr", "worker-src")) {
+                if ($dirs.ContainsKey($name)) { foreach ($src in @($dirs[$name])) { if ($src -cne "'self'") { [void]$out.Add($name + " allows " + $src) } } }
+            }
+            if (-not $dirs.ContainsKey("script-src")) {
+                if (-not $dirs.ContainsKey("default-src")) { [void]$out.Add("there is no script-src and no default-src") }
+                else { foreach ($src in @($dirs["default-src"])) { if ($src -cne "'none'" -and $src -cne "'self'") { [void]$out.Add("default-src allows " + $src) } } }
+            }
+            return @($out)
+        }
+        $servedCsp = "" + $answers["the app's page"].headers["content-security-policy"]
+        Check ($answers["the app's page"].code -eq 200 -and $servedCsp -ceq $notePolicy) ("the relay serves /app/index.html with exactly the design note's policy (" + $servedCsp + ")")
+        $found = @(Get-ScriptPolicyFindings -Policy $servedCsp)
+        Check ($found.Count -eq 0) ("and nothing in it lets foreign script run (" + ($found -join "; ") + ")")
+        foreach ($m in @(
+            @{ what = "'unsafe-inline' in script-src"; policy = $notePolicy.Replace("script-src 'self'", "script-src 'self' 'unsafe-inline'") },
+            @{ what = "'unsafe-eval' in script-src"; policy = $notePolicy.Replace("script-src 'self'", "script-src 'self' 'unsafe-eval'") },
+            @{ what = "a script source of another origin"; policy = $notePolicy.Replace("script-src 'self'", "script-src 'self' https://cdn.example.com") },
+            @{ what = "a script source of any https origin"; policy = $notePolicy.Replace("script-src 'self'", "script-src https:") },
+            @{ what = "no script-src and a default-src of '*'"; policy = $notePolicy.Replace("default-src 'none'; script-src 'self'; ", "default-src *; ") },
+            @{ what = "'unsafe-inline' in style-src only"; policy = $notePolicy.Replace("style-src 'self'", "style-src 'self' 'unsafe-inline'") }
+        )) {
+            Check ($m.policy -cne $notePolicy) ("CONTROL: the copy with " + $m.what + " differs")
+            Check (@(Get-ScriptPolicyFindings -Policy $m.policy).Count -gt 0) ("a served policy with " + $m.what + " would fail this check")
+        }
+
+        Write-Host ""
         Write-Host "--- deny by default ---" -ForegroundColor Cyan
         foreach ($c in @(
                 @{ what = "a read"; m = "GET"; p = ($mbPath + "/items?since=0&max=1"); b = $null },

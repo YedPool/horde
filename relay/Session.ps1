@@ -62,6 +62,7 @@
 . (Join-Path $PSScriptRoot "Bytes.ps1")
 . (Join-Path $PSScriptRoot "P256.ps1")
 . (Join-Path $PSScriptRoot "Records.ps1")
+. (Join-Path $PSScriptRoot "WebAuthn.ps1")
 
 function Get-HordeRelaySessionLimits {
     # maxWindowMs: the hard cap of the design note, 8 hours, whatever any setting says.
@@ -136,4 +137,81 @@ function Get-HordeRelaySessionSigningInput {
     # signed bytes (-Signed, relay/Envelope.ps1's Get-HordeRelaySigningInput).
     param([Parameter(Mandatory = $true)][string]$VouchId, [Parameter(Mandatory = $true)][byte[]]$Signed)
     return ,(Join-HordeRelayBytes -Parts @((Get-HordeRelayAsciiBytes -Text ((Get-HordeRelaySessionDomain -Part "envelope") + $VouchId + "`n")), $Signed))
+}
+
+# --- WHAT THE MACHINE TAKES (relay/Envelope.ps1's Test-HordeRelayEnvelope asks this for alg "session") ---
+#
+# The verdict is pure: everything the PC knows of its sessions NOW is handed in as data on the sender
+# (channels/Sessions.ps1 builds it from its records and its own clock; relay/ runs no block it is
+# given), as sender.session:
+#   horde, machine, mailbox   this machine's horde, signing key id and mailbox
+#   nowMs                     the PC's clock
+#   idleMs                    the idle limit (the PC's setting, 60 minutes unless set)
+#   skewMs                    how far a phone's clock may run ahead (the journal's clockSkewSeconds)
+#   endedAt                   the newest "end all phone sessions" at the PC, 0 for none
+#   broken                    "" or why the PC's session records cannot be read (then nothing is taken)
+#   phoneKeyIds               the phone identity keys this passkey vouched for that are trusted NOW
+#   vouches                   vouchId -> { vouch (Read-HordeRelaySessionVouch's value); recordedAt;
+#                             lastSeen } - the vouches of THIS passkey the PC holds, with when the PC
+#                             recorded each and last took an envelope under it (PC clock, 0 for never)
+#   highestSeq                the highest vouch seq the PC holds of this passkey, -1 for none
+# A sender with no session member takes no session (an older PC refuses it the same way, by name).
+# The checks, each refusal by its code, in this order - the signatures first, so nothing about the
+# PC's records is said to a forger:
+#   1. the vouch: carried, its passkey assertion verifies under THIS sender's key with user
+#      verification over the vouch's hash; or not carried, and the PC holds it (else session-unknown).
+#      A carried vouch the PC already holds must be the very text it holds.
+#   2. the vouch is this sender's (deviceKeyId is the envelope's from), and the session signature
+#      verifies under the vouched key over the envelope's signed bytes and this vouchId;
+#   3. it binds this horde, machine and mailbox; its phone key is trusted now (else session-ended);
+#   4. a vouch the PC does not hold yet has a seq above the highest it holds (else session-stale);
+#   5. not ended: no "end all" at or after the vouch's notBefore or the time the PC recorded it;
+#   6. the window: the envelope's time and the PC's clock inside [notBefore, notAfter] (the PC's clock
+#      may be behind notBefore by skewMs, a phone clock running ahead); else session-expired;
+#   7. idle: the PC took an envelope under it, or recorded it, within idleMs of now; else session-idle.
+# Revoking the device takes it out of the senders altogether, so nothing of it reaches here.
+
+function Test-HordeRelaySessionEnvelope {
+    # A read envelope whose sig is alg session, against -Sender (New-HordeRelaySender, webauthn, with
+    # its session member) and -Signed (Get-HordeRelaySigningInput of the envelope). { ok; reason; value }
+    # with value { vouchId; vouch; isNew } - isNew when the PC does not hold this vouch yet.
+    param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)]$Sender, [Parameter(Mandatory = $true)][byte[]]$Signed)
+    $fail = [pscustomobject]@{ ok = $false; reason = ""; value = $null }
+    $h = $Envelope.header
+    $sig = $Envelope.sig
+    $sp = $Sender.PSObject.Properties["session"]
+    if ($null -eq $sp -or $null -eq $sp.Value) { $fail.reason = "session-refused: this machine takes no session signature from this sender"; return $fail }
+    $p = $sp.Value
+    if ("" + $p.broken -cne "") { $fail.reason = ("session-unknown: the PC's session records cannot be read (" + $p.broken + "), so no session is taken until they are repaired"); return $fail }
+    $held = $null
+    if ($p.vouches.ContainsKey($sig.vouchId)) { $held = $p.vouches[$sig.vouchId] }
+    $vouch = $null
+    if ($null -ne $sig.vouch) {
+        $wa = Test-HordeRelayWebAuthnAssertion -Public $Sender.public -AuthenticatorData $sig.authenticatorData -ClientDataJson $sig.clientDataJson -Signature $sig.signature `
+            -Challenge (Get-HordeRelaySessionVouchChallenge -Text $sig.vouch.text) -RpId $Sender.rpId -Origins $Sender.origins -RequireUserVerification $true
+        if (-not $wa.ok) { $fail.reason = ("session-refused: the vouch's passkey assertion is refused: " + $wa.reason); return $fail }
+        if ($null -ne $held -and $held.vouch.text -cne $sig.vouch.text) { $fail.reason = "session-refused: the vouch carried is not the one the PC holds under that vouchId"; return $fail }
+        $vouch = $sig.vouch
+    } elseif ($null -ne $held) {
+        $vouch = $held.vouch
+    } else {
+        $fail.reason = ("session-unknown: the PC holds no vouch " + $sig.vouchId + " of this passkey: send the vouch with the next envelope"); return $fail
+    }
+    if ($vouch.deviceKeyId -cne $h.from) { $fail.reason = "session-refused: the vouch is another passkey's, not this envelope's sender's"; return $fail }
+    $toVerify = Get-HordeRelaySessionSigningInput -VouchId $sig.vouchId -Signed $Signed
+    # Either half of s: WebCrypto does not normalise it, and a signature is not an envelope's identity.
+    if (-not (Test-HordeRelayEs256Signature -Public $vouch.sessionPublic -Bytes $toVerify -Signature $sig.value -AllowHighS)) { $fail.reason = "session-refused: the session signature does not verify under the vouched key"; return $fail }
+    if ($vouch.horde -cne $p.horde -or $vouch.machine -cne $p.machine -or $vouch.mailbox -cne $p.mailbox) { $fail.reason = ("session-refused: the vouch is for " + $vouch.mailbox + ", not this machine's mailbox " + $p.mailbox); return $fail }
+    if (@($p.phoneKeyIds) -cnotcontains $vouch.phoneKeyId) { $fail.reason = ("session-ended: the vouch's phone key " + $vouch.phoneKeyId + " is not one this passkey vouched for that is trusted now"); return $fail }
+    $isNew = ($null -eq $held)
+    if ($isNew -and [long]$vouch.seq -le [long]$p.highestSeq) { $fail.reason = ("session-stale: the vouch's seq " + $vouch.seq + " is not above " + $p.highestSeq + ", the highest this PC holds of this passkey"); return $fail }
+    $recordedAt = $(if ($isNew) { [long]$p.nowMs } else { [long]$held.recordedAt })
+    if ([long]$p.endedAt -gt 0 -and ([long]$vouch.notBefore -le [long]$p.endedAt -or $recordedAt -le [long]$p.endedAt)) { $fail.reason = ("session-ended: every phone session was ended at the PC at " + $p.endedAt + " ms"); return $fail }
+    $ts = [long]$h.ts
+    if ($ts -lt [long]$vouch.notBefore -or $ts -gt [long]$vouch.notAfter) { $fail.reason = ("session-expired: the envelope's time " + $ts + " is outside the session's window " + $vouch.notBefore + " to " + $vouch.notAfter); return $fail }
+    if ([long]$p.nowMs -gt [long]$vouch.notAfter -or [long]$p.nowMs + [long]$p.skewMs -lt [long]$vouch.notBefore) { $fail.reason = ("session-expired: the PC's clock " + $p.nowMs + " is outside the session's window " + $vouch.notBefore + " to " + $vouch.notAfter); return $fail }
+    $last = $recordedAt
+    if (-not $isNew -and [long]$held.lastSeen -gt $last) { $last = [long]$held.lastSeen }
+    if ([long]$p.nowMs - $last -gt [long]$p.idleMs) { $fail.reason = ("session-idle: the PC has not seen this session used for " + [long](([long]$p.nowMs - $last) / 60000) + " minutes; the limit is " + [long]([long]$p.idleMs / 60000)); return $fail }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ vouchId = $sig.vouchId; vouch = $vouch; isNew = $isNew } }
 }

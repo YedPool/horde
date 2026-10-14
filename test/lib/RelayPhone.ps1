@@ -137,6 +137,45 @@ function New-HordeTestPhoneLineBody {
     return ,($script:HordeTestPhoneUtf8.GetBytes($t))
 }
 
+function New-HordeTestPhoneSession {
+    # An unlocked session (relay/Session.ps1): a session key and ONE passkey assertion over its vouch.
+    # { key; public; vouchId; text; assertion; notBefore; notAfter; seq }. -NotBefore and -Minutes set
+    # the window (the hard cap refuses over 480 in the writer); -Seq the vouch counter; -Machine,
+    # -Horde and -PhoneKeyId what it binds; -Signer another phone's passkey (a vouch it did not make).
+    param($Phone, [Parameter(Mandatory = $true)][string]$Machine, [string]$Horde = "work", [string]$PhoneKeyId = "", [long]$Seq = 1,
+        $NotBefore = $null, [long]$Minutes = 480, $Signer = $null)
+    $k = New-HordeRelayP256Key -Use "ecdsa"
+    $pub = ConvertTo-HordeRelayP256Public -Key $k
+    if ($PhoneKeyId -ceq "") { $PhoneKeyId = Get-HordeRelayKeyId -Public $Phone.agreePublic }
+    $nb = $(if ($null -eq $NotBefore) { ConvertTo-HordeRelayRecordMs -Time ([datetime]::UtcNow.AddSeconds(-5)) } else { ConvertTo-HordeRelayRecordMs -Time $NotBefore })
+    $text = ConvertTo-HordeRelaySessionVouchText -SessionPublicKey $pub -DeviceKeyId $Phone.keyId -PhoneKeyId $PhoneKeyId -Horde $Horde -Machine $Machine -NotBefore $nb -NotAfter ($nb + $Minutes * 60000) -Seq $Seq
+    $who = $(if ($null -ne $Signer) { $Signer } else { $Phone })
+    $a = New-HordeTestPhoneAssertion -Phone $who -Challenge (Get-HordeRelaySessionVouchChallenge -Text $text)
+    return [pscustomobject]@{ key = $k; public = $pub; vouchId = (Get-HordeRelayKeyId -Public $pub); text = $text; assertion = $a; notBefore = $nb; notAfter = ($nb + $Minutes * 60000); seq = $Seq }
+}
+
+function New-HordeTestPhoneSessionEnvelope {
+    # An envelope signed by -Session's key, no prompt; -WithVouch carries the vouch (the first envelope
+    # of a session). -Now is its time; -Seq, -From as New-HordeTestPhoneEnvelope. -SignAs signs with
+    # another session's key under -Session's vouchId (a forgery). { text; key; header; draft }.
+    param($Phone, $Session, [string]$Kind, [string]$Channel, [byte[]]$Body, [object[]]$To, [switch]$WithVouch, [long]$Seq = -1, [string]$From = "", $Now = $null, $SignAs = $null)
+    if ($Seq -lt 0) {
+        if (-not $Phone.seq.ContainsKey($Channel)) { $Phone.seq[$Channel] = [long]0 }
+        $Phone.seq[$Channel] = [long]$Phone.seq[$Channel] + 1
+        $Seq = $Phone.seq[$Channel]
+    }
+    $who = $(if ($From -cne "") { $From } else { $Phone.keyId })
+    $draft = New-HordeRelayEnvelopeDraft -Kind $Kind -Channel $Channel -From $who -Seq $Seq -Body $Body -Recipients $To -Now $Now
+    $signer = $(if ($null -ne $SignAs) { $SignAs.key } else { $Session.key })
+    $value = New-HordeRelayEs256Signature -Key $signer -Bytes (Get-HordeRelaySessionSigningInput -VouchId $Session.vouchId -Signed $draft.signingInput)
+    if ($WithVouch) {
+        $text = Complete-HordeRelayEnvelope -Draft $draft -SessionVouchId $Session.vouchId -SessionValue $value -VouchText $Session.text -AuthenticatorData $Session.assertion.authenticatorData -ClientDataJson $Session.assertion.clientDataJson -Signature $Session.assertion.signature
+    } else {
+        $text = Complete-HordeRelayEnvelope -Draft $draft -SessionVouchId $Session.vouchId -SessionValue $value
+    }
+    return [pscustomobject]@{ text = $text; key = (Get-HordeRelayReplayKey -Header $draft.header); header = $draft.header; draft = $draft }
+}
+
 function Open-HordeTestPhoneEnvelope {
     # What the phone does with an envelope from the machine: verify it against the machine's signing key
     # and open it with the phone identity key. { ok; reason; body (parsed JSON) }. The phone keeps no
