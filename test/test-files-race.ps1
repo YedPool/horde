@@ -279,8 +279,11 @@ Write-Host "--- CONTROL: the same race against a store that overwrites instead o
 # The copy needs what files/Share.ps1 loads by relative path: files/, core/ and schema/.
 # The agents folder is part of the tree: without it a share refuses, not knowing which folders are a
 # harness's (files/Deny.ps1), and a control whose every share is refused sees no damage at all.
+# So is the relays folder: files/Deny.ps1 loads the relay port and every relay to ask which files
+# hold their secrets, and with no relay asked it refuses every share, for the same reason; and the
+# hosted relay's adapter loads the relay module's own code (relay/), so that comes too.
 $broken = Join-Path $script:work "broken-tree"
-foreach ($folder in @("files", "core", "schema", "agents")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $broken $folder) -Recurse }
+foreach ($folder in @("files", "core", "schema", "agents", "relays", "relay")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $broken $folder) -Recurse }
 $storeCopy = Join-Path $broken "files\Store.ps1"
 $src = [System.IO.File]::ReadAllText($storeCopy)
 $find = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $entryPath -Open $fs'
@@ -310,7 +313,7 @@ Check (@($first.told | Where-Object { $_.outcome -ceq "shared" } | ForEach-Objec
 Write-Host ""
 Write-Host "--- CONTROL: the same first-share race when the key's move replaces what is there ---" -ForegroundColor Cyan
 $brokenKey = Join-Path $script:work "broken-key-tree"
-foreach ($folder in @("files", "core", "schema", "agents")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $brokenKey $folder) -Recurse }
+foreach ($folder in @("files", "core", "schema", "agents", "relays", "relay")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $brokenKey $folder) -Recurse }
 $keyCopy = Join-Path $brokenKey "files\Key.ps1"
 $src = [System.IO.File]::ReadAllText($keyCopy)
 $find = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $Path'
