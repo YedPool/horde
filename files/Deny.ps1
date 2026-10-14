@@ -200,14 +200,20 @@
 #   - A DRIVE LETTER that is a network drive, or stands for one, is read from the system's table
 #     (QueryDosDevice, core/PathText.ps1), following letter to letter: a share written
 #     \??\UNC\host\... or a mapped drive's redirector entry (\Device\<redirector>\;X:<id>\host\...)
-#     is that host, and is judged as above. A network drive whose entry shows no host, a ring of
-#     letters, and a device path through GLOBALROOT (which reaches any device, the network's among
-#     them) refuse every share: which machine they are cannot be told without opening them.
+#     is that host, and is judged as above. A network drive whose entry shows no host, and a ring
+#     of letters, refuse every share: which machine they are cannot be told without opening them.
+#   - A DEVICE PATH (\\.\, \\?\ or \??\) IS JUDGED BY AN ALLOW-LIST: UNC\host by the address test
+#     above, a drive letter through the system's table, and Volume{guid} as a volume of this
+#     machine. Every other name refuses every share and is never opened: GLOBALROOT reaches any
+#     device, the network's among them; Global\UNC\host reaches another machine (measured
+#     2026-10-14: Global\UNC\localhost\C$ is the plain path's own file); and a DOS device name
+#     someone defined may stand for a share.
 #   KNOWN LIMITS of the address rule, each a path to this machine that a name and its addresses do
 #   not show: a DFS name, whose referral may lead back here; a Linux subsystem's 9P share, whose
-#   host is no machine on the network; a server that re-exports a share of this machine; and a DOS
-#   device name other than a drive letter (\\.\NAME\...), defined over a share, which is opened as
-#   a device of this machine.
+#   host is no machine on the network; a server that re-exports a share of this machine; NAT, port
+#   forwarding or a portproxy that forwards port 445 back to this machine, whose address is
+#   another's; and a loopback RDP session with drive redirection, whose tsclient drives are this
+#   machine's own, reached over the RDP channel.
 #   KNOWN LIMIT: AN ENTRY THAT NAMES A FOLDER is compared as a place (a file under it is refused)
 #   and its identity is a folder's, which no shared file has: a hard link to a file inside it, or
 #   a network path to that folder, is not caught. A relay names its secret FILES; no relay names
@@ -517,9 +523,12 @@ function Get-HordeFilesRelayEntryReach {
     if ($Path -cmatch '\A(?:[\\/]{2}[.?]|\\\?\?)[\\/](?<rest>.*)\z') {
         $rest = $Matches["rest"]
         if ($rest -cmatch '\A[Uu][Nn][Cc](?:[\\/](?<host>[^\\/]*)|\z)') { $hostName = "" + $Matches["host"] }
-        elseif ($rest -cmatch '\A[Gg][Ll][Oo][Bb][Aa][Ll][Rr][Oo][Oo][Tt](?:[\\/]|\z)') { return "untold" }
         elseif ($rest -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }
-        else { return "open" }
+        # A VOLUME BY ITS NAME is a volume of this machine: the system names none on the network.
+        elseif ($rest -cmatch '\A[Vv][Oo][Ll][Uu][Mm][Ee]\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}(?:[\\/]|\z)') { return "open" }
+        # AN ALLOW-LIST (the header): any other device name - GLOBALROOT, Global, a name someone
+        # defined - may stand for a share, and which machine it is cannot be told without opening it.
+        else { return "untold" }
     }
     elseif ($Path -cmatch '\A[\\/]{2}(?<host>[^\\/]*)') { $hostName = "" + $Matches["host"] }
     elseif ($Path -cmatch '\A([A-Za-z]):') { $letter = $Matches[1] }

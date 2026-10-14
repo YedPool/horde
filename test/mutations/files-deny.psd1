@@ -669,9 +669,16 @@
         @{ Name = "a-long-unc-host-is-not-read"
            Find = 'if ($rest -cmatch ''\A[Uu][Nn][Cc](?:[\\/](?<host>[^\\/]*)|\z)'') { $hostName = "" + $Matches["host"] }'
            Replace = 'if ($false) { }' }
-        @{ Name = "globalroot-is-opened"
-           Find = '(?:[\\/]|\z)'') { return "untold" }'
-           Replace = '(?:[\\/]|\z)'') { return "open" }' }
+        # --- device paths by an allow-list (round 4 of that review, 2026-10-14) ---
+        @{ Name = "a-device-name-off-the-list-is-opened"
+           Find = 'else { return "untold" }'
+           Replace = 'else { return "open" }' }
+        @{ Name = "a-volume-by-its-name-is-not-opened"
+           Find = '{12}\}(?:[\\/]|\z)'') { return "open" }'
+           Replace = '{12}\}(?:[\\/]|\z)'') { return "untold" }' }
+        @{ Name = "any-name-in-braces-is-a-volume"
+           Find = '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}'
+           Replace = '\{[^\\/]*\}' }
         @{ Name = "a-letter-over-a-share-is-not-read"
            Find = 'if ($target -cmatch ''\A\\\?\?\\[Uu][Nn][Cc]\\(?<host>[^\\]*)'') { $hostName = "" + $Matches["host"] }'
            Replace = 'if ($false) { }' }

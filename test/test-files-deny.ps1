@@ -1121,12 +1121,16 @@ if ([System.IO.File]::Exists($hardToClient) -and [System.IO.File]::Exists($hardT
 $sameAsLink = "under another name, as a hard link or a network or device path to it is"
 $letterOf = $clientFile.Substring(0, 1)
 $doors = @(("\\.\" + $clientFile), ("\\localhost\" + $letterOf + "$" + $clientFile.Substring(2)), ("\\127.0.0.1\" + $letterOf + "$" + $clientFile.Substring(2)), ("\\?\UNC\localhost\" + $letterOf + "$" + $clientFile.Substring(2)))
+# The volume's own name, as the system lists it for the client file's drive (round 4 of the review
+# of PR 238: Volume{guid} is one of the three device names the allow-list opens).
+$volumeName = ("" + (& mountvol.exe ($letterOf + ":\") /L)).Trim()
+if ($volumeName -cmatch '\A\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\\z') { $doors += ($volumeName + $clientFile.Substring(3)) } else { Write-Skip ("the volume name of " + $letterOf + ": could not be read here ('" + $volumeName + "'), so the Volume{guid} spelling did not run") }
 $clientIs = Get-HordeFilesPathIdentity -Path $clientFile
 Check ($clientIs.state -ceq "ok") ("CONTROL: the client file's own identity can be read (" + $clientIs.state + ")")
 foreach ($door in $doors) {
     $doorIs = Get-HordeFilesPathIdentity -Path $door
     $short = $door.Substring(0, [Math]::Min(18, $door.Length)) + "..."
-    if ($doorIs.state -cne "ok" -and $door -cnotlike "\\.\*") { Write-Skip ("the loopback share " + $short + " could not be opened here (" + $doorIs.state + "), so that spelling did not run"); continue }
+    if ($doorIs.state -cne "ok" -and $door -cnotlike "\\.\*" -and $door -cnotlike "\\?\Volume*") { Write-Skip ("the loopback share " + $short + " could not be opened here (" + $doorIs.state + "), so that spelling did not run"); continue }
     Check ($doorIs.state -ceq "ok" -and $doorIs.id -ceq $clientIs.id) ("CONTROL: " + $short + " is the client file's own identity, as measured (" + $doorIs.state + ")")
     $script:entriesA = @([pscustomobject]@{ path = $door; what = "the sign-in client file" })
     Check ((Get-HordeRelaySecretFiles -HordeHome $h).state -ceq "known") ("the real port hands " + $short + " over as a file, not as a relay that could not tell")
@@ -1155,9 +1159,11 @@ Check (Test-Shared $h $besideClient) "NOTHING THERE: an entry naming a file not 
 $otherVolume = "\\.\pipe\"
 $otherIs = Get-HordeFilesPathIdentity -Path $otherVolume
 Check ($otherIs.state -ceq "ok" -and $otherIs.id.Split(":")[0] -cne $clientIs.id.Split(":")[0]) ("CONTROL: " + $otherVolume + " is readable and on another volume (" + $otherIs.state + " " + $otherIs.id + ")")
+# Named by its own device name, pipe is no name of the allow-list (round 4 of the review of PR 238):
+# which machine it is cannot be told, so it refuses every share. The same volume reached through a
+# share of this machine, below, is opened and blocks nothing.
 $script:entriesA = @([pscustomobject]@{ path = $otherVolume; what = "the sign-in client file" })
-Check (Test-Shared $h $besideClient) "ANOTHER VOLUME: an entry on another volume does not block an ordinary file"
-Check (Test-Shared $h $clientFile -Force) "and not even the file it would have been, which is another file"
+Check (Test-Refused $h $besideClient "which file what the relay 'test-relay-a' calls the sign-in client file" -Force) "A DEVICE NAME OFF THE ALLOW-LIST: an entry named \\.\pipe\ refuses even an ordinary file, -Force or not"
 # ONLY A PATH TO THIS MACHINE IS OPENED, DECIDED BY ADDRESS (round 3 of the review of PR 238,
 # 2026-10-14; files/Deny.ps1's header). NO NAME IS RESOLVED AND NOTHING ON THE NETWORK IS OPENED
 # HERE: the three questions the rule asks are answered by this suite, each called exactly as the
@@ -1201,7 +1207,7 @@ function Get-HordeFilesPathIdentity {
         return (& $script:realOpen -Path ($script:openAs[$prefix] + $Path.Substring($prefix.Length)))
     }
     # Anything else on the network, or on a letter of the table, is answered without being opened.
-    if ($Path -cmatch '\A[\\/]{2}' -and $Path -cnotmatch '\A\\\\\?\\[A-Za-z]:\\') { return [pscustomobject]@{ state = "absent"; id = "" } }
+    if ($Path -cmatch '\A(?:[\\/]{2}|\\\?\?\\)' -and $Path -cnotmatch '\A\\\\\?\\[A-Za-z]:\\') { return [pscustomobject]@{ state = "absent"; id = "" } }
     if ($Path -cmatch '\A([A-Za-z]):' -and $script:stands3.ContainsKey($Matches[1].ToUpperInvariant())) { return [pscustomobject]@{ state = "absent"; id = "" } }
     return (& $script:realOpen -Path $Path)
 }
@@ -1224,6 +1230,7 @@ try {
     foreach ($root in @("\\horde-self-name\share\", "\\horde-self-six\share\", "\\horde-mixed\share\", "\\192.0.2.10\share\", "\\2001-db8--10.ipv6-literal.net\share\", "\\0.0.0.0\share\", "\\fe80--10s3.ipv6-literal.net\share\",
         "\\horde-self-name@SSL@443\share\", "\\horde-self-name.\share\", "\\?\UNC\horde-self-six\share\", "\\HORDE-SELF-NAME\share\", "V:\", "U:\", "Y:\", "\\horde-remote\share\", "\\horde-gone\share\", "\\203.0.113.7\share\", "W:\", "Z:\", "\\?\UNC\horde-remote\share\", "\\--ffff-c000-20a.ipv6-literal.net\share\")) { $script:openAs[$root] = $relayDir + "\" }
     $script:openAs["\\horde-self-name\down\"] = "unreadable"
+    $script:openAs["\\horde-self-name\pipes\"] = $otherVolume
     $selfForms = [ordered]@{ "own name (its NIC IPv4)" = "\\horde-self-name\share\"; "own name in capitals" = "\\HORDE-SELF-NAME\share\"; "own name with a trailing dot" = "\\horde-self-name.\share\"
         "own name as a web share (@SSL@443)" = "\\horde-self-name@SSL@443\share\"; "a name resolving to its NIC IPv6" = "\\horde-self-six\share\"; "the long UNC form of that name" = "\\?\UNC\horde-self-six\share\"
         "a name of which one address of two is loopback" = "\\horde-mixed\share\"; "its NIC IPv4 written as an address" = "\\192.0.2.10\share\"; "its NIC IPv4 carried in IPv6" = "\\--ffff-c000-20a.ipv6-literal.net\share\"
@@ -1248,11 +1255,24 @@ try {
         $script:opened.Clear()
         $elseSeen[$form] = ((Test-Shared $h $clientFile -Force) -and (Test-Shared $h $besideClient) -and @($script:opened | Where-Object { $_.StartsWith($elseForms[$form], [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0)
     }
-    $untoldForms = [ordered]@{ "this machine with its identity unreadable" = "\\horde-self-name\down\"; "a network drive whose entry shows no host" = "Q:\"; "a ring of letters" = "J:\"; "a device path through GLOBALROOT" = "\\?\GLOBALROOT\Device\Mup\horde-remote\share\" }
+    # ANOTHER VOLUME: a share of this machine that is the named-pipe volume is opened, and is
+    # another file than every file of the drives.
+    $script:entriesA = @([pscustomobject]@{ path = "\\horde-self-name\pipes\"; what = "the sign-in client file" })
+    $script:opened.Clear()
+    $otherVolumeShared = ((Test-Shared $h $besideClient) -and (Test-Shared $h $clientFile -Force))
+    $otherVolumeOpened = @($script:opened | Where-Object { $_ -like "\\horde-self-name\pipes\*" }).Count
+    # Round 4 of the review of PR 238: every device name off the allow-list, Global's UNC to another
+    # machine above all, refuses every share and is never opened.
+    $untoldForms = [ordered]@{ "this machine with its identity unreadable" = "\\horde-self-name\down\"; "a network drive whose entry shows no host" = "Q:\"; "a ring of letters" = "J:\"; "a device path through GLOBALROOT" = "\\?\GLOBALROOT\Device\Mup\horde-remote\share\"
+        "Global's UNC to another machine, \\.\" = "\\.\Global\UNC\horde-remote\share\"; "Global's UNC to another machine, \\?\" = "\\?\Global\UNC\horde-remote\share\"; "Global's UNC to another machine, \??\" = "\??\GLOBAL\UNC\horde-remote\share\"
+        "Global over a drive letter" = "\\.\Global\C:\"; "a device name someone defined" = "\\.\horde-device\share\"; "a device name like a volume's, but no GUID" = "\\?\Volume{horde}\" }
     foreach ($form in $untoldForms.Keys) {
         $script:entriesA = @([pscustomobject]@{ path = ($untoldForms[$form] + "innocent-name.json"); what = "the sign-in client file" })
         $script:opened.Clear()
-        $refusedAll = Test-Refused $h $besideClient "which file what the relay 'test-relay-a' calls the sign-in client file" -Force
+        # The relay port hands no \??\ path over as a file (measured round 4): that one is refused a
+        # step earlier, as a relay that could not tell, and never reaches the device names.
+        $refusedFor = $(if ($untoldForms[$form].StartsWith("\??\")) { "the relay 'test-relay-a' could not tell" } else { "which file what the relay 'test-relay-a' calls the sign-in client file" })
+        $refusedAll = Test-Refused $h $besideClient $refusedFor -Force
         $untoldSeen[$form] = ($refusedAll -and ($form -like "this machine*" -or @($script:opened | Where-Object { $_ -like ($untoldForms[$form] + "*") }).Count -eq 0))
     }
     $resolvedNames = @($script:resolved | Select-Object -Unique)
@@ -1268,6 +1288,7 @@ foreach ($form in @("\\localhost\", "\\127.0.0.1\", "\\0--1.ipv6-literal.net\", 
 Check ($byReach[("\\" + [System.Environment]::MachineName.ToLowerInvariant() + "\")] -ceq "unresolved") "CONTROL: a NAME alone makes nothing this machine - this machine's own name, which the table here does not resolve, is not taken for it by its letters"
 Check ($byReach.realOwnName -ceq "other") "CONTROL: the made-up NIC address is this machine only by the made-up interfaces: the real reader does not have it"
 foreach ($form in $elseSeen.Keys) { Check $elseSeen[$form] ("ANOTHER MACHINE, OR NONE: an entry named by " + $form + " is NEVER OPENED and blocks nothing, not even the very file with -Force") }
+Check ($otherVolumeShared -and $otherVolumeOpened -ge 1) ("ANOTHER VOLUME: an entry that is a share of this machine on another volume is opened (" + $otherVolumeOpened + " calls), and blocks neither an ordinary file nor the file it would have been")
 foreach ($form in $untoldSeen.Keys) { Check $untoldSeen[$form] ("CANNOT BE TOLD: an entry named by " + $form + " refuses every share, -Force or not, and is not opened unless it is this machine") }
 Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames -ccontains "203.0.113.7") -and -not ($resolvedNames -ccontains "2001:db8::10") -and -not ($resolvedNames -ccontains "0.0.0.0")) ("a name is resolved, and an address written as one is not (asked: " + ($resolvedNames -join ",") + ")")
 Check (($resolvedNames -ccontains "horde-self-name") -and -not ($resolvedNames | Where-Object { $_ -like "*@*" -or $_.EndsWith(".") })) "a host is resolved cut at its @ and without its trailing dot"
