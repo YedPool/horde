@@ -205,6 +205,24 @@ function Invoke-Tick {
     if ($null -ne $t -and $t -isnot [string] -and $null -ne $t.PSObject.Properties["lines"]) { return @($t.lines) }
     return @($t)
 }
+function Get-PhoneReceiptsText {
+    # The receipts member of the newest snapshot in the phone's mailbox, as JSON text ("" for none).
+    param($World)
+    $mail = @(Get-PhoneMail $World)
+    if ($mail.Count -eq 0) { return "" }
+    $o = Open-HordeTestPhoneEnvelope -Phone $World.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $World.id.sign.public
+    if (-not $o.ok -or $null -eq $o.body.PSObject.Properties["receipts"]) { return "" }
+    return (ConvertTo-Json -InputObject @($o.body.receipts) -Compress -Depth 5)
+}
+function Get-PhoneReceipts {
+    # The receipt for the world's phone's passkey in the newest snapshot, or $null.
+    param($World)
+    $mail = @(Get-PhoneMail $World)
+    if ($mail.Count -eq 0) { return $null }
+    $o = Open-HordeTestPhoneEnvelope -Phone $World.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $World.id.sign.public
+    if (-not $o.ok -or $null -eq $o.body.PSObject.Properties["receipts"]) { return $null }
+    return (@($o.body.receipts | Where-Object { $_.from -ceq $World.phone.keyId }) | Select-Object -First 1)
+}
 function Get-Member2 { param($Object, [string]$Name) if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) { return $null }; return $Object.$Name }
 
 try {
@@ -1015,6 +1033,81 @@ try {
     $shown = Invoke-HordeDecision -Operation "show" -Root $O.store -Request @{ number = 2 }
     $old = @(Get-Said $O.store | Where-Object { $_.data.number -eq 2 })
     Check ((Has $t "done") -and $old.Count -eq 1 -and $null -eq (Get-Member2 $old[0].data "part") -and $shown.value.question.thread.turn -ceq "warchief") ("AN EARLIER PHONE'S ANSWER TO ALL THE PARTS AT ONCE - version 1, no part - is still taken, as an answer to the whole question (" + $t.text + ")")
+
+    Write-Host ""
+    Write-Host "--- receipts: what became of each answer goes back to the phone, by id, never its words (the founder, 2026-10-14) ---" -ForegroundColor Cyan
+    $R = New-World
+    Use-World $R
+    $words = "Receipt words that must never be in a receipt."
+    $badSettings = Join-Path $R.home "settings\decisions.json"
+    [System.IO.File]::WriteAllText($badSettings, "{ this is not json", $utf8)
+    $aid = New-Id
+    $first = Get-Answer $R -AnswerId $aid -Text $words
+    [void](Send-ToMachine $R $first.text)
+    $t = Invoke-Turn $R
+    Remove-Item -LiteralPath $badSettings
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "retry") -and $null -ne $rc -and $rc.through -eq [long]$first.header.seq -and @($rc.missing).Count -eq 0 -and @($rc.applied) -cnotcontains $aid -and @($rc.refused) -cnotcontains $aid) ("A RECEIVED ANSWER IS ACKED AS RECEIVED: journaled and not yet in the list, the snapshot's receipt for the phone's passkey holds its seq at or below through, and the id is neither applied nor refused (" + $t.text + "; " + $(if ($null -ne $rc) { ConvertTo-Json $rc -Compress } else { "no receipt" }) + ")")
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "done") -and $null -ne $rc -and @($rc.applied) -ccontains $aid -and @(Get-Said $R.store).Count -eq 1) ("THEN APPLIED: once the list takes it, the next snapshot's receipt lists its answerId as applied (" + $t.text + ")")
+    Check (-not (Get-PhoneReceiptsText $R).Contains("Receipt words")) "a receipt holds ids and numbers, never an answer's words"
+    $again = Get-Answer $R -AnswerId $aid -Text $words
+    [void](Send-ToMachine $R $again.text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "(replayed)") -and @(Get-Said $R.store).Count -eq 1 -and @(@($rc.applied) | Where-Object { $_ -ceq $aid }).Count -eq 1 -and $rc.through -eq [long]$again.header.seq) ("A RESENT ANSWER IS APPLIED ONCE: the same answerId in a new envelope is the first record answered again, and the receipt lists it once (" + $t.text + ")")
+    $other = Get-Answer $R -AnswerId $aid -Text "Other words under the same id."
+    [void](Send-ToMachine $R $other.text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "already used for a different request") -and @($rc.applied) -ccontains $aid -and @($rc.refused) -cnotcontains $aid) "an id once applied stays applied: other words sent under it later are refused by the list, and the receipt never says the first answer was refused"
+    $lostSeq = [long]$R.phone.seq["decisions"] + 1
+    $R.phone.seq["decisions"] = $lostSeq
+    $after = Get-Answer $R -Text "Sent after one that was lost."
+    [void](Send-ToMachine $R $after.text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "missing") -and @($rc.missing) -contains $lostSeq -and $rc.through -eq [long]$after.header.seq) ("A MISSING ID IS REPORTED: an envelope of the phone that never arrived is a seq below through the journal never recorded, and the receipt lists it as missing (" + $(if ($null -ne $rc) { ConvertTo-Json $rc -Compress } else { "no receipt" }) + ")")
+    $late = New-HordeTestPhoneEnvelope -Phone $R.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "The lost one, arriving late." -Machine $R.id.sign.keyId -Snapshot (Get-SentKey $R)) -To $R.agree -Seq $lostSeq
+    [void](Send-ToMachine $R $late.text)
+    $t = Invoke-Turn $R
+    Check ((Has $t "out of order") -and @(Get-Said $R.store | Where-Object { $_.data.text -ceq "The lost one, arriving late." }).Count -eq 0) ("CONTROL: the lost envelope arriving late is refused for good as out of order - so only a NEW envelope heals it, which is what the phone sends (" + $t.text + ")")
+    $refusedId = New-Id
+    [void](Send-ToMachine $R (Get-Answer $R -AnswerId $refusedId -Number 9).text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "there is no question 9") -and @($rc.refused) -ccontains $refusedId -and @($rc.applied) -cnotcontains $refusedId) ("an answer refused for good is listed refused, so the phone stops sending it (" + $t.text + ")")
+    # A RESTART FORGETS NOTHING: a new run's context, with no memory, reads the ledger back.
+    $R2ctx = New-HordeRelayRunContext -HordeHome $R.home -Connection $R.conn
+    Close-HordeRelayRunContext -Context $R.ctx
+    $R.ctx = $R2ctx.value
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ($null -ne $rc -and @($rc.applied) -ccontains $aid -and @($rc.refused) -ccontains $refusedId -and @($rc.missing) -contains $lostSeq) "after a restart the next run's first snapshot carries the same receipts: the ledger is kept on disk, the rest is the journal's"
+    $headBefore = Get-PhoneHead $R
+    $null = Invoke-Tick $R
+    Check ((Get-PhoneHead $R) -eq $headBefore) "CONTROL: a look with no new receipt and no new record sends nothing"
+    $refused2 = New-Id
+    [void](Send-ToMachine $R (Get-Answer $R -AnswerId $refused2 -Number 9).text)
+    $null = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    Check ((Get-PhoneHead $R) -gt $headBefore -and @((Get-PhoneReceipts $R).refused) -ccontains $refused2) "a change of the receipts alone - an answer refused, no record written - sends a new snapshot"
+    # THE LEDGER STAYS SMALL: its newest 64 applied and 16 refused.
+    $L = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    foreach ($i in 1..70) { $null = Add-HordeDecisionsChannelReceipt -Context $L -From ("a" * 32) -AnswerId ($i.ToString("x32")) -Outcome "done" }
+    foreach ($i in 1..20) { $null = Add-HordeDecisionsChannelReceipt -Context $L -From ("a" * 32) -AnswerId ((100 + $i).ToString("x32")) -Outcome "refused" }
+    $null = Add-HordeDecisionsChannelReceipt -Context $L -From ("a" * 32) -AnswerId ((200).ToString("x32")) -Outcome "retry"
+    $kept = (Get-HordeDecisionsChannelLedger -Context $L).streams[("a" * 32)]
+    Check ($kept.applied.Count -eq 64 -and $kept.applied[0] -ceq (7).ToString("x32") -and $kept.applied[63] -ceq (70).ToString("x32") -and $kept.refused.Count -eq 16 -and $kept.refused[15] -ceq (120).ToString("x32") -and $kept.applied -cnotcontains (200).ToString("x32")) ("the ledger keeps the newest 64 applied and 16 refused, and a retry adds nothing (" + $kept.applied.Count + ", " + $kept.refused.Count + ")")
+    $receiptBytes = $utf8.GetByteCount((Get-HordeDecisionsChannelReceipts -Context $L).text)
+    Check ($receiptBytes -gt 2000 -and $receiptBytes -lt 4096) ("a receipt at its fullest for one passkey is small: " + $receiptBytes + " bytes")
     }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
