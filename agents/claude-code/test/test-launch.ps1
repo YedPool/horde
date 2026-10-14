@@ -311,6 +311,10 @@ foreach ($tip in @(" Tip: press Esc to interrupt a turn", " Tip: wait... esc to 
     $ir = Test-ClaudeCodeInputReady -Screen (@($tip, "") + $atStart)
     Check ($ir.state -eq "known" -and $ir.value -eq $true) ("CONTROL: READY: a tip '" + $tip + "' still is no status item (" + $ir.state + " " + $ir.reason + ")")
 }
+# KNOWN LIMIT (F's nit of round 5): a row that STARTS with the phrase and a comma reads busy, as a spinner's
+# item would. Busy is the safe reading - nothing is typed into a session that looks busy - so it stays.
+$ir = Test-ClaudeCodeInputReady -Screen (@(" esc to interrupt, or wait for the turn to end", "") + $atStart)
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") ("KNOWN LIMIT: a tip row starting 'esc to interrupt,' reads busy, the safe way (" + $ir.state + ")")
 $ir = Test-ClaudeCodeInputReady -Screen ($atStart + @(("  " + [char]0x23F8 + " manual mode on   context 12% left " + $dot + " v2.1.299"), ""))
 Check ($ir.state -eq "known" -and $ir.value -eq $true) "CONTROL: footer rows with numbers in them - a count, a percentage, a version - are footer rows: ready"
 
