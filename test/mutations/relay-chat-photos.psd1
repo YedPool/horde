@@ -31,9 +31,19 @@
         @{ Name = "photo-pending-into-another-passkeys-photo"
            Find = 'if ($others.Count -gt 0) { return (& $no ($label + ": that photo is another passkey''s")) }'
            Replace = '' }
-        @{ Name = "photo-pending-unbounded"
-           Find = 'if ($held.Count -ge $script:HordeChatPhotoPendingMost -or'
-           Replace = 'if ($held.Count -ge 100000 -or' }
+        # Capped per photo, oldest evicted, and in how many photos (review of PR 285).
+        @{ Name = "photo-pending-one-photo-unbounded"
+           Find = 'for ($i = 0; $i -le $own.Count - $script:HordeChatPhotoPendingPerPhoto; $i++)'
+           Replace = 'for ($i = 0; $false; $i++)' }
+        @{ Name = "photo-pending-photos-unbounded"
+           Find = 'for ($i = 0; $i -le $byAge.Count - $script:HordeChatPhotoPendingPhotos; $i++)'
+           Replace = 'for ($i = 0; $false; $i++)' }
+        @{ Name = "photo-pending-evicts-the-newest-photo"
+           Find = '$byAge = @($groups.Keys | Sort-Object @{'
+           Replace = '$byAge = @($groups.Keys | Sort-Object -Descending @{' }
+        @{ Name = "photo-pending-evicts-the-newest-part"
+           Find = '$own = @($groups[$mine] | Sort-Object at, name)'
+           Replace = '$own = @($groups[$mine] | Sort-Object at, name -Descending)' }
         # Put together: every digest again, the whole digest, the first bytes.
         @{ Name = "photo-join-part-digest-not-rechecked"
            Find = 'if ((ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes $ct)) -cne $parts[$n - 1]) {'

@@ -8,7 +8,8 @@
 # refuses everything:
 #   - a whole photo lands, its bytes exact, under the machine's own name, owner-only, with ONE post to
 #     the Thrall naming the path and no image byte, and receipts receiving then delivered;
-#   - parts before their manifest wait (bounded: count, bytes, expiry), and are taken when it comes;
+#   - parts before their manifest wait (capped per photo with the oldest evicted, in how many photos,
+#     and by expiry), and are taken when it comes; junk under many photo ids cannot starve a real photo;
 #   - parts in any order make the same photo; a part SWAPPED to another number is refused;
 #   - a forged part, a part of another manifest, a replayed part, a part after the window, a part from
 #     another account, a part changed at rest, a whole that does not hash: nothing written, phone told;
@@ -411,14 +412,34 @@ try {
     Check ($turn.Contains("accepted (receiving)")) ("past the minute's cap, it is taken (" + $turn + ")")
     $Pd = New-Photo -World $C -Image (New-ImageBytes -Type "jpg" -Length 1000); $null = Send-Manifest $C $Pd
     Check ((Invoke-Turn $C).Contains("refused (over-budget)")) "the fourth in a day is refused: the daily budget"
-    $made = 0; $outcome = ""
-    for ($i = 1; $i -le 97; $i++) {
-        $o = Send-Part $C (Get-PartText -From $C.phone.keyId -PhotoId (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16)) -Number 1 -Ct (Get-HordeRelayRandomBytes -Count 40))
-        if ($o.outcome -ceq "pending") { $made++ } else { $outcome = $o.reason }
-    }
-    Check ($made -eq 96 -and $outcome.Contains("pending area is full")) ("the pending area holds 96 parts and refuses the 97th (" + $made + "; " + $outcome + ")")
-    Remove-HordeChatPhotoPendingExpired -HordeHome $C.home -WindowMs 600000 -Now ([datetime]::UtcNow.AddMinutes(11))
-    Check (@(Get-ChildItem -LiteralPath (Join-Path $C.home "relay\chat\photos\pending") -File).Count -eq 0) "past the window, every pending part is dropped"
+    # THE PENDING AREA IS CAPPED PER PHOTO, OLDEST EVICTED (review of PR 285). Junk is anything put in
+    # the mailbox naming the founder's passkey (its key id is no secret) under made-up photo ids.
+    $Q = New-World
+    $pendQ = Join-Path $Q.home "relay\chat\photos\pending"
+    $junkIds = @(1..10 | ForEach-Object { ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16) })
+    $junkOut = @(foreach ($jid in $junkIds) { foreach ($jn in 1..2) { (Send-Part $Q (Get-PartText -From $Q.phone.keyId -PhotoId $jid -Number $jn -Ct (Get-HordeRelayRandomBytes -Count 40))).outcome } })
+    $heldIds = @(Get-ChildItem -LiteralPath $pendQ -File | ForEach-Object { $_.Name.Split("-")[1] } | Select-Object -Unique)
+    Check (@($junkOut | Where-Object { $_ -cne "pending" }).Count -eq 0 -and $heldIds.Count -eq 4 -and (@($junkIds[6..9]) -join ",") -ceq (@($junkIds | Where-Object { $heldIds -ccontains $_ }) -join ",")) ("BOUNDED: junk under 10 photo ids leaves 4 photos held, the 4 added to last; the older ones are evicted, never refused for room (" + $heldIds.Count + ")")
+    $imgQ = New-ImageBytes -Type "jpg" -Length 130000
+    $PQ = New-Photo -World $Q -Image $imgQ
+    $early = @(($PQ.parts[0], $PQ.parts[1]) | ForEach-Object { Send-Part $Q $_ })
+    Check (($early | ForEach-Object { $_.outcome }) -join "," -ceq "pending,pending" -and $early[0].reason.Contains("evicted")) ("NOT STARVED: after the junk, a genuine photo's early parts are held, junk evicted for them (" + $early[0].reason + ")")
+    $null = Send-Manifest $Q $PQ
+    $turn = Invoke-Turn $Q
+    Check ($turn.Contains("2 had come already")) ("its manifest takes both early parts (" + $turn + ")")
+    $null = Send-Part $Q $PQ.parts[2]
+    $null = Invoke-Tick $Q
+    $fQ = @(Get-InboxFiles $Q)
+    Check ($fQ.Count -eq 1 -and (Test-SameBytes ([System.IO.File]::ReadAllBytes($fQ[0].FullName)) $imgQ)) "and the genuine photo completes, whole, in the inbox"
+    # ONE PHOTO cannot take more than its share: 49 parts under one id leave 48, the first evicted.
+    $one = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16)
+    for ($jn = 1; $jn -le 49; $jn++) { $null = Send-Part $Q (Get-PartText -From $Q.phone.keyId -PhotoId $one -Number $jn -Ct (Get-HordeRelayRandomBytes -Count 40)) }
+    $ofOne = @(Get-ChildItem -LiteralPath $pendQ -File | Where-Object { $_.Name.Split("-")[1] -ceq $one })
+    Check ($ofOne.Count -eq 48 -and @($ofOne | Where-Object { $_.Name.Split("-")[2] -ceq "1.part" }).Count -eq 0 -and @($ofOne | Where-Object { $_.Name.Split("-")[2] -ceq "49.part" }).Count -eq 1) ("PER PHOTO: one photo holds at most 48 waiting parts, its oldest evicted for the newest (" + $ofOne.Count + ")")
+    $all = @(Get-ChildItem -LiteralPath $pendQ -File)
+    Check ($all.Count -le 4 * 48 -and @($all | ForEach-Object { $_.Name.Split("-")[1] } | Select-Object -Unique).Count -le 4) ("THE TOTAL stays bounded: at most 4 photos of 48 parts (" + $all.Count + " parts)")
+    Remove-HordeChatPhotoPendingExpired -HordeHome $Q.home -WindowMs 600000 -Now ([datetime]::UtcNow.AddMinutes(11))
+    Check (@(Get-ChildItem -LiteralPath $pendQ -File).Count -eq 0) "past the window, every pending part is dropped"
 
     Write-Host ""
     Write-Host "--- 9. retention: only Horde's own photos, only when old ---" -ForegroundColor Cyan

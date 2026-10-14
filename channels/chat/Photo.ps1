@@ -35,9 +35,10 @@
 #
 #   A PART BEFORE ITS MANIFEST. A batch is judged before its envelopes are opened, so the parts of a
 #   photo usually arrive while its manifest is still journaled and unopened. Such a part waits in a
-#   PENDING area - capped in count and bytes, each dropped at the window's end - and is never taken
-#   early: when its manifest is accepted, every waiting part of it is checked against the digests like
-#   any other, and a part that does not match is deleted.
+#   PENDING area - capped PER PHOTO with the oldest evicted, and in how many photos it holds, each part
+#   dropped at the window's end (Add-HordeChatPhotoPending) - and is never taken early: when its
+#   manifest is accepted, every waiting part of it is checked against the digests like any other, and a
+#   part that does not match is deleted.
 #
 #   THE WINDOW: a manifest's expiresAt is at most photoWindowSeconds after the time its passkey signed,
 #   and is passed when it is accepted, or when a part comes, or when the photo is put together - and the
@@ -81,9 +82,13 @@ $script:HordeChatPhotoIdDomain = "horde-relay/chat/v1 photo id"
 # longer than this is no part a phone of ours made.
 $script:HordeChatPhotoChunkMost = 48000
 $script:HordeChatPhotoPartsMost = 64
-# THE PENDING AREA: two photos at the largest size, and their frames.
-$script:HordeChatPhotoPendingMost = 96
-$script:HordeChatPhotoPendingBytes = [long](2 * 2097152 + 96 * 64)
+# THE PENDING AREA (Add-HordeChatPhotoPending), capped per photo and not as one heap (review of PR 285):
+# a photo holds at most 48 parts - the largest photoMaxBytes allows, 2 MiB, is 44, and 4 to spare - and
+# the area at most four photos, so the whole is bounded at 4 x 48 sealed parts of at most 48,016 bytes:
+# 9,219,072 bytes.
+$script:HordeChatPhotoPendingPerPhoto = 48
+$script:HordeChatPhotoPendingPhotos = 4
+$script:HordeChatPhotoPendingPattern = '\A([0-9a-f]{32})-([0-9a-f]{32})-([1-9][0-9]{0,2})\.part\z'
 # How long what became of a photo is kept, so a part that comes after it is refused, not pending.
 $script:HordeChatPhotoClosedHours = 48
 # How long the Thrall is asked again for a photo already in the inbox, before the phone is told saved.
@@ -305,9 +310,54 @@ function Remove-HordeChatPhotoPendingExpired {
     $utcAt = $(if ($null -eq $Now) { [datetime]::UtcNow } else { ([datetime]$Now).ToUniversalTime() })
     foreach ($f in @([System.IO.Directory]::GetFiles($dir))) {
         $name = [System.IO.Path]::GetFileName($f)
-        $isPart = $name -cmatch '\A[0-9a-f]{32}-[0-9a-f]{32}-[1-9][0-9]{0,2}\.part\z'
+        $isPart = $name -cmatch $script:HordeChatPhotoPendingPattern
         if (-not $isPart -or ($utcAt - [System.IO.File]::GetLastWriteTimeUtc($f)).TotalMilliseconds -ge $WindowMs) { try { [System.IO.File]::Delete($f) } catch { } }
     }
+}
+
+function Add-HordeChatPhotoPending {
+    # Hold one part that came before its manifest, in the folder -Pending: { written; evicted } - written
+    # "moved", or "exists" when that very part waits already (nothing is evicted for it).
+    # CAPPED PER PHOTO, OLDEST EVICTED (review of PR 285). Anybody who can put an item in this mailbox can
+    # name the founder's passkey, whose key id is no secret; under ONE cap for the whole area, junk under
+    # many photo ids filled it, and a genuine photo's early parts were then refused. Now no part is
+    # refused for room: a photo holds at most HordeChatPhotoPendingPerPhoto parts, its oldest evicted when
+    # full; the area holds at most HordeChatPhotoPendingPhotos photos, and a part of a new one evicts,
+    # whole, the photo least recently added to. A photo being sent is added to every moment, so junk must
+    # outrun it to push it out. "Oldest" is by write time, made strictly increasing below: NTFS times a
+    # burst of writes alike, and a tie would leave the order to the names.
+    param([Parameter(Mandatory = $true)][string]$Pending, [string]$From, [string]$PhotoId, [int]$Number, [byte[]]$Ct)
+    $mine = $From + "-" + $PhotoId
+    $at = [System.IO.Path]::Combine($Pending, ($mine + "-" + $Number + ".part"))
+    if ([System.IO.File]::Exists($at)) { return [pscustomobject]@{ written = "exists"; evicted = 0 } }
+    $groups = @{}
+    $newest = [long]0
+    foreach ($f in @([System.IO.Directory]::GetFiles($Pending))) {
+        $name = [System.IO.Path]::GetFileName($f)
+        $m = [regex]::Match($name, $script:HordeChatPhotoPendingPattern)
+        if (-not $m.Success) { continue }
+        $g = $m.Groups[1].Value + "-" + $m.Groups[2].Value
+        if (-not $groups.ContainsKey($g)) { $groups[$g] = New-Object System.Collections.ArrayList }
+        $ticks = [System.IO.File]::GetLastWriteTimeUtc($f).Ticks
+        if ($ticks -gt $newest) { $newest = $ticks }
+        [void]$groups[$g].Add([pscustomobject]@{ path = $f; name = $name; at = $ticks })
+    }
+    $evicted = 0
+    $gone = New-Object System.Collections.ArrayList
+    if ($groups.ContainsKey($mine)) {
+        $own = @($groups[$mine] | Sort-Object at, name)
+        for ($i = 0; $i -le $own.Count - $script:HordeChatPhotoPendingPerPhoto; $i++) { [void]$gone.Add($own[$i].path) }
+    } else {
+        $byAge = @($groups.Keys | Sort-Object @{ Expression = { ($groups[$_] | Measure-Object -Property at -Maximum).Maximum } }, @{ Expression = { $_ } })
+        for ($i = 0; $i -le $byAge.Count - $script:HordeChatPhotoPendingPhotos; $i++) { foreach ($x in $groups[$byAge[$i]]) { [void]$gone.Add($x.path) } }
+    }
+    foreach ($f in $gone) { try { [System.IO.File]::Delete($f); $evicted++ } catch { } }
+    $w = Write-HordeChatPhotoFile -Path $at -Bytes $Ct
+    if ($w -ceq "moved") {
+        $stamp = [System.Math]::Max([datetime]::UtcNow.Ticks, $newest + 1)
+        try { [System.IO.File]::SetLastWriteTimeUtc($at, (New-Object System.DateTime -ArgumentList $stamp, ([System.DateTimeKind]::Utc))) } catch { }
+    }
+    return [pscustomobject]@{ written = $w; evicted = $evicted }
 }
 
 function Receive-HordeChatPhotoPart {
@@ -345,14 +395,9 @@ function Receive-HordeChatPhotoPart {
         Remove-HordeChatPhotoPendingExpired -HordeHome $homeDir -WindowMs $ps.windowMs -Now $Now
         New-HordeChatPhotoOwnerFolder -Path $root
         [void][System.IO.Directory]::CreateDirectory($pending)
-        $held = @([System.IO.Directory]::GetFiles($pending))
-        $bytes = [long]0
-        foreach ($f in $held) { $bytes += (New-Object System.IO.FileInfo($f)).Length }
-        if ($held.Count -ge $script:HordeChatPhotoPendingMost -or $bytes + $p.ct.Length -gt $script:HordeChatPhotoPendingBytes) { return (& $no ($label + ": the pending area is full (" + $held.Count + " parts, " + $bytes + " bytes)")) }
-        $at = [System.IO.Path]::Combine($pending, ($p.from + "-" + $p.photo + "-" + $p.n + ".part"))
-        $w = Write-HordeChatPhotoFile -Path $at -Bytes $p.ct
-        if ($w -ceq "exists") { return (& $no ($label + ": a part of that number is already waiting")) }
-        return [pscustomobject]@{ outcome = "pending"; reason = ($label + " waits for its manifest") }
+        $w = Add-HordeChatPhotoPending -Pending $pending -From $p.from -PhotoId $p.photo -Number $p.n -Ct $p.ct
+        if ($w.written -ceq "exists") { return (& $no ($label + ": a part of that number is already waiting")) }
+        return [pscustomobject]@{ outcome = "pending"; reason = ($label + " waits for its manifest" + $(if ($w.evicted -gt 0) { " (" + $w.evicted + " older pending part(s) evicted to make room)" } else { "" })) }
     }
     $rec = Read-HordeChatPhotoRecord -Path $recordPath
     if ($null -eq $rec) { return (& $no ($label + ": its photo's record does not read")) }
@@ -482,11 +527,11 @@ function Invoke-HordeChatPhotoAccept {
     $adopted = 0
     if ([System.IO.Directory]::Exists($pending)) {
         foreach ($f in @([System.IO.Directory]::GetFiles($pending, ($mf.from + "-" + $mf.photoId + "-*.part")))) {
-            $mm = [regex]::Match([System.IO.Path]::GetFileName($f), '\A[0-9a-f]{32}-[0-9a-f]{32}-([1-9][0-9]{0,2})\.part\z')
+            $mm = [regex]::Match([System.IO.Path]::GetFileName($f), $script:HordeChatPhotoPendingPattern)
             if ($mm.Success) {
                 try {
                     $ct = [System.IO.File]::ReadAllBytes($f)
-                    $got = Add-HordeChatPhotoPart -HordeHome $homeDir -Record $rec -Folder $folder -Number ([int]$mm.Groups[1].Value) -Ct $ct -Digest (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes $ct)) -Now $Now
+                    $got = Add-HordeChatPhotoPart -HordeHome $homeDir -Record $rec -Folder $folder -Number ([int]$mm.Groups[3].Value) -Ct $ct -Digest (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes $ct)) -Now $Now
                     if ($got.outcome -ceq "taken") { $adopted++ }
                 } catch { }
             }
