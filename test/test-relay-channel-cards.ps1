@@ -96,6 +96,11 @@ function Get-CardsMail {
     return @($out.ToArray())
 }
 function Get-Card { param($Body, [string]$Lane) return (@($Body.cards | Where-Object { $_.lane -ceq $Lane }) | Select-Object -First 1) }
+# A member of the Thrall's card ('census.running'), or $null when the snapshot does not carry it. Read
+# through Get-HordeTestMember (test\lib\Suite.ps1): read plainly under strict mode, a member a mutant
+# dropped from the Thrall's card raised an error inside this suite's one try, which skipped every later
+# check and broke the suite with no failed check, instead of failing the check that names the rule.
+function Get-Thrall { param($Body, [string]$Path) return (Get-HordeTestMember $Body ("thrall." + $Path)) }
 function Said { param($Tick) return (@($Tick.lines) -join " | ") }
 function Iso { param([datetime]$At) return $At.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) }
 
@@ -154,8 +159,8 @@ try {
     Check ((Said $t) -like "*1 line(s) of the task ledger could not be read*") "and the passed-over ledger line is said at the machine"
     $bc = Get-Card $b "B"
     Check ($bc.blocked -ceq "yes" -and $bc.blockedText -ceq "the account hit its weekly usage limit" -and $bc.tasksOpen -eq 0) "a lane that says it is blocked is blocked, with its words and not its own yes again; a lane the ledger has no task of has none open"
-    $th = $b.thrall
-    Check ($th.orcs -eq 3 -and $th.working -eq 1 -and $th.waitingFounder -eq 1 -and $th.blocked -eq 1 -and (@($th.waitingFounderLanes) -join ",") -ceq "F" -and $th.census.running -eq 1 -and $th.census.waiting -eq 1 -and -not $th.hasStatus -and $th.now -ceq "") ("the Thrall's card: 3 Orcs - 1 working, 1 waiting on the founder (F), 1 blocked; sessions: of the open run, 1 working and 1 waiting on a person - a closed run and a session quiet for days are neither; no Thrall status file, no now (" + ($th | ConvertTo-Json -Compress) + ")")
+    $th = Get-HordeTestMember $b "thrall"
+    Check ((Get-Thrall $b "orcs") -eq 3 -and (Get-Thrall $b "working") -eq 1 -and (Get-Thrall $b "waitingFounder") -eq 1 -and (Get-Thrall $b "blocked") -eq 1 -and (@(Get-Thrall $b "waitingFounderLanes") -join ",") -ceq "F" -and (Get-Thrall $b "census.running") -eq 1 -and (Get-Thrall $b "census.waiting") -eq 1 -and (Test-HordeTestMember $b "thrall.hasStatus") -and -not (Get-Thrall $b "hasStatus") -and (Get-Thrall $b "now") -ceq "") ("the Thrall's card: 3 Orcs - 1 working, 1 waiting on the founder (F), 1 blocked; sessions: of the open run, 1 working and 1 waiting on a person - a closed run and a session quiet for days are neither; no Thrall status file, no now (" + (ConvertTo-Json -InputObject $th -Compress) + ")")
     Check ((@($b.areas | ForEach-Object { $_.area + "=" + (@($_.lanes) -join "+") }) -join ";") -ceq "Form fill=C;Horde=C+E+F;Ask voice=B") "the area-to-lane map rides in the snapshot, in the file's order"
 
     Write-Host ""
@@ -176,7 +181,7 @@ try {
     $withNote = @($b.cards | Where-Object { $null -ne $_.PSObject.Properties["note"] } | ForEach-Object { $_.lane })
     Check (@($b.cards).Count -ge 4 -and $withNote.Count -eq 0) ("NO NOTE: no card - standard, other, missing or unreadable - carries a note member (" + ($withNote -join ",") + "; this snapshot re-serialized: " + (ConvertTo-Json -InputObject $b -Compress -Depth 10).Length + " bytes)")
     Check (@($b.cards | Where-Object { $null -eq $_.PSObject.Properties["idNote"] }).Count -eq 0) "CONTROL: the same look finds a member every card does carry (idNote)"
-    Check ($b.thrall.orcs -eq 6 -and $b.thrall.unknown -eq 2) "and the Thrall's count says two lanes are not known"
+    Check ((Get-Thrall $b "orcs") -eq 6 -and (Get-Thrall $b "unknown") -eq 2) "and the Thrall's count says two lanes are not known"
 
     Write-Host ""
     Write-Host "--- 4. a secret in a status line: refused, a notice in its place, never the text ---" -ForegroundColor Cyan
@@ -206,7 +211,7 @@ try {
     $last = $mail[$mail.Count - 1]
     $e = Get-Card $last.body "E"
     Check ($null -ne $e -and (@($e.refused) -join ",") -ceq "now,lastDone" -and $e.now -like "Not shown:*" -and $e.lastDone -like "Not shown:*") ("A LANE CARD: a token and a key that straddle the cut are refused, each field named (" + (@($e.refused) -join ",") + ")")
-    Check ($last.body.thrall.hasStatus -and (@($last.body.thrall.refused) -join ",") -ceq "now" -and $last.body.thrall.now -like "Not shown:*") ("THE THRALL CARD: the same token in its own status is refused (" + (@($last.body.thrall.refused) -join ",") + ")")
+    Check ((Get-Thrall $last.body "hasStatus") -eq $true -and (@(Get-Thrall $last.body "refused") -join ",") -ceq "now" -and (Get-Thrall $last.body "now") -like "Not shown:*") ("THE THRALL CARD: the same token in its own status is refused (" + (@(Get-Thrall $last.body "refused") -join ",") + ")")
     Check (-not $last.raw.Contains("ghp_") -and -not $last.raw.Contains("Zq7Xw2") -and -not $last.raw.Contains("Qm9vX2Fy") -and -not (Said $t).Contains("Zq7Xw2")) "and no first part of either goes to the phone or into the machine's own lines"
     $long = ("plain " * 80)
     Set-Lane $A "research" (New-Status -Orc "E" -Lane "research" -Doing $long -Finished "fine words")
@@ -416,14 +421,14 @@ try {
     $mail = @(Get-CardsMail $R)
     $b = $mail[$mail.Count - 1].body
     $z = Get-Card $b "Z"
-    Check ($null -ne $z -and $b.thrall.orcs -eq 4 -and $b.thrall.blocked -eq 1) ("CONTROL: before it retires, the lane Z has its card and is counted, blocked (cards " + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; blocked " + $b.thrall.blocked + ")")
+    Check ($null -ne $z -and (Get-Thrall $b "orcs") -eq 4 -and (Get-Thrall $b "blocked") -eq 1) ("CONTROL: before it retires, the lane Z has its card and is counted, blocked (cards " + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; blocked " + (Get-Thrall $b "blocked") + ")")
     [System.IO.File]::Move((Join-Path $R.lanes "old-lane\status.txt"), (Join-Path $R.lanes "old-lane\status.retired.txt"))
     $t = Invoke-Tick $R
     $mail = @(Get-CardsMail $R)
     $b = $mail[$mail.Count - 1].body
     $ids = @($b.cards | ForEach-Object { $_.lane })
     Check ($null -eq (Get-Card $b "Z") -and @($b.cards | Where-Object { $_.name -ceq "old lane" -or $_.name -ceq "old-lane" }).Count -eq 0 -and $ids.Count -eq 3) ("RETIRED: a folder with status.retired.txt and no status.txt gets no card (cards " + ($ids -join ",") + ")")
-    Check ($b.thrall.orcs -eq 3 -and $b.thrall.blocked -eq 0 -and $b.thrall.waitingFounder -eq 0 -and $b.thrall.unknown -eq 1) ("and it is not counted on the Thrall's card (orcs " + $b.thrall.orcs + ", blocked " + $b.thrall.blocked + ", waiting on the founder " + $b.thrall.waitingFounder + ", not known " + $b.thrall.unknown + ")")
+    Check ((Get-Thrall $b "orcs") -eq 3 -and (Get-Thrall $b "blocked") -eq 0 -and (Get-Thrall $b "waitingFounder") -eq 0 -and (Get-Thrall $b "unknown") -eq 1) ("and it is not counted on the Thrall's card (orcs " + (Get-Thrall $b "orcs") + ", blocked " + (Get-Thrall $b "blocked") + ", waiting on the founder " + (Get-Thrall $b "waitingFounder") + ", not known " + (Get-Thrall $b "unknown") + ")")
     $none = @($b.cards | Where-Object { $_.name -ceq "nothing-here" }) | Select-Object -First 1
     Check ($null -ne $none -and $none.form -ceq "missing" -and $null -eq $none.PSObject.Properties["note"]) "a folder with neither file still gets its 'no status file' card"
     $y = Get-Card $b "Y"

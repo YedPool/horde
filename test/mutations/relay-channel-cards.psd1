@@ -58,6 +58,15 @@
         @{ Name = "blocked-words-keep-their-yes"
            Find = "`$card.blockedText = [regex]::Replace("
            Replace = "`$card.blockedText = `$b; `$null = [regex]::Replace(" }
+        # A MEMBER DROPPED FROM THE THRALL'S CARD must fail a named check, not break the suite
+        # (test\test-mutation-specs.ps1, the rule; the suite reads the Thrall's card through
+        # Get-HordeTestMember).
+        @{ Name = "the-thrall-card-drops-its-census"
+           Find = 'waitingFounderLanes = @($founder.ToArray()); census = $(if ($Census.ok) { [pscustomobject]@{ running = $Census.running; waiting = $Census.waiting } } else { $null }); refused'
+           Replace = 'waitingFounderLanes = @($founder.ToArray()); refused' }
+        @{ Name = "the-thrall-card-drops-its-unknown-count"
+           Find = 'blocked = $blocked; unknown = $unknown; waitingFounderLanes'
+           Replace = 'blocked = $blocked; waitingFounderLanes' }
         @{ Name = "the-map-is-not-sent"
            Find = '(@($areaTexts | Select-Object -First $AreasKept) -join ",")'
            Replace = '""' }

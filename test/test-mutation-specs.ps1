@@ -6,6 +6,19 @@
 # into a second function of tools\HostNames.ps1, and the spec stayed broken on main, unseen, until
 # the -Changed selector placed every mutant on 2026-10-02. This suite checks every spec on every gate
 # run, by text alone - no suite is run - so it costs seconds.
+#
+# THE RULE FOR EVERY SPEC AND ITS SUITE: A MUTANT MUST FAIL A NAMED CHECK, NEVER BREAK THE SUITE. A
+# mutant that drops a member from an object (a field of a card, a switch of an envelope) is caught only
+# when a check that names the rule fails. If the suite reads that member plainly under Set-StrictMode,
+# the read raises an error instead: the check vanishes, and in a suite built as one top-level try every
+# later check is skipped too (issue 216). The suite exits 1 with no [FAIL], and tools\Mutate.ps1 reports
+# "the suite broke ... with no failed check - not a catch", showing the [ERROR] lines that broke it.
+# Three after-merge nets in a row found this (PR 239's node-act, PR 259's notices, the cards channel).
+# So a suite reads any member a mutant can drop through Get-HordeTestMember / Test-HordeTestMember
+# (test\lib\Suite.ps1), which answer as a non-strict read would and never raise an error, and calls code
+# that a mutant can make throw inside a try that turns the throw into a failed check. This suite checks
+# specs by text and cannot see a crash; Mutate.ps1 is where a broken suite is reported, distinctly from
+# a caught or surviving mutant.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
