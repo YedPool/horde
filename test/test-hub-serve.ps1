@@ -266,7 +266,24 @@ try {
     Check ((Read-HordeHubMirror -Path $mp2 -DeviceId $device -Contract $contract).state -ceq "known") "a mirror holding membershipComplete is written and read back"
     Remove-Item -LiteralPath $mp2 -Force
     # A node that offers only verbs version 1 and sends the member anyway: the link agreed on 1.
-    $node = Start-Node -View $mvTwo -MembershipOnVersion1
+    $node = Start-Node -View $mvTwo -MembershipOnVersion1 -MaxLinks 2
+    # Its raw answer first, read off the link as the hub's reader decodes it, before any stripping.
+    $raw = $null
+    $open = Open-HordeTransportLink -Transport $mem -Endpoint $device -Role "hub" -TimeoutMs 15000
+    if ("$($open.state)" -ceq "known") {
+        try {
+            $t = Get-HordeLinkTime
+            $hello = [pscustomobject][ordered]@{ v = 1; kind = "hello"; id = (New-HordeLinkFrameId); seq = 1; ts = $t; hello = [pscustomobject][ordered]@{ role = "hub"; id = $hubId; name = "fixture-hub"; protocols = @(1); verbsVersions = @(1, 2); hordeVersion = "0.1.0"; t1 = $t } }
+            $null = Send-HordeHubFrame -Link $open.value -Frame $hello -Contract $contract
+            $null = Receive-HordeHubFrame -Link $open.value -Contract $contract -TimeoutMs 30000
+            $req = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = 2; ts = (Get-HordeLinkTime); verb = "sessions.list"; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = [pscustomobject]@{} }
+            $null = Send-HordeHubFrame -Link $open.value -Frame $req -Contract $contract
+            $raw = (Receive-HordeHubFrame -Link $open.value -Contract $contract -TimeoutMs 30000).frame
+            $null = Send-HordeHubFrame -Link $open.value -Frame (New-HordeLinkBye -Code "shutdown" -Reason "done" -Seq 3 -Contract $contract) -Contract $contract
+        } finally { Close-HordeLink -Link $open.value }
+    }
+    $rawMc = $null; if ($null -ne $raw) { $rawMc = Get-HordeLinkProp $raw.result.value "membershipComplete" }
+    Check ($null -ne $rawMc -and "$(Get-HordeLinkProp $rawMc 'state')" -ceq "known") "CONTROL: that node's raw answer on a verbs-1 link does carry membershipComplete"
     $p3 = Invoke-HordeHubPull -Entry (Entry) -Hub $hub -Contract $contract -TimeoutMs 30000
     $null = Stop-Node $node
     Check ($p3.ok -and $null -eq $p3.list.PSObject.Properties["membershipComplete"]) ("the hub does not hear membershipComplete on a link that agreed on verbs version 1 (" + $p3.reason + ")")
