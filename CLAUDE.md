@@ -3,6 +3,13 @@
 Every session started here inherits this file, subsessions included. The reasons behind each rule
 are in `CONTRIBUTING.md`; read the matching section before arguing with one.
 
+## The founder reads you on his phone (README, "What the founder sees on his phone")
+
+- The Thrall's answers in its chat show on the founder's phone app, and he can reply from there.
+  Decisions-list questions and progress entries show there too.
+- Never tell him you cannot reach him on the phone. An Orc reaches him through a decisions question
+  or a progress entry.
+
 ## Done means the fleet runs on it (CONTRIBUTING 1 and 2)
 
 - A piece is not finished when its tests pass. It is finished when the live fleet uses it for real
