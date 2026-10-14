@@ -28,15 +28,17 @@ function check(ok, name, detail = "") {
 }
 
 // --- the host page: list.js mounted on a phone-sized page, its list handed in by window.hostList.
-// ?prefs=throw hands it a store whose every call throws, as a page whose storage is refused.
+// ?prefs=throw hands it, for the order AND for drafts and what was seen, a store whose every call
+// throws, as a page whose storage is refused. window.mountError is what mounting threw, if anything.
 const HOST = [
   "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
   "<link rel=\"stylesheet\" href=\"/list.css\"></head><body><div id=\"list\"></div>",
   "<script src=\"/list.js\"></script><script>",
   "var refused = /prefs=throw/.test(location.search);",
   "var prefs = refused ? { getItem: function () { throw new Error('refused'); }, setItem: function () { throw new Error('refused'); } } : null;",
-  "window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), { prefs: prefs });",
-  "window.hostList = function (qs) { return window.doc.setList({ state: 'known', value: { questions: qs } }); };",
+  "window.mountError = '';",
+  "try { window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), { prefs: prefs, storage: prefs }); } catch (e) { window.mountError = String(e && e.message || e); }",
+  "window.hostList = function (qs) { return window.doc ? window.doc.setList({ state: 'known', value: { questions: qs } }) : 'not mounted: ' + window.mountError; };",
   "</script></body></html>"
 ].join("\n");
 const FILES = { "/list.js": ["list.js", "text/javascript; charset=utf-8"], "/list.css": ["list.css", "text/css; charset=utf-8"] };
@@ -209,9 +211,11 @@ try {
 
   // ---------------- 4. A PAGE WHOSE STORAGE IS REFUSED still orders, for as long as it is open ----------------
   await load(origin + "/host.html?prefs=throw");
-  await evaluate("window.hostList(" + JSON.stringify(longList()) + ")");
+  const drawnRefused = await evaluate("window.hostList(" + JSON.stringify(longList()) + ")");
   await settle();
   r = await read();
+  check(drawnRefused === "drawn" && r.order.split(",").length === 24 && r.buttons.length === 3 && r.barInView,
+    "STORAGE THAT THROWS ON EVERY CALL (order, drafts, what was seen): the page mounts, draws all 24 questions and the order line", String(drawnRefused) + "; " + r.order.split(",").length + " lines, " + r.buttons.length + " buttons");
   check(head(r, 1) === "24" && pressedOf(r)[0].text === "Date " + DOWN, "storage that throws: the page opens by date, newest first, and nothing breaks", r.order);
   r = await tap("Date");
   check(head(r, 1) === "1" && pressedOf(r)[0].text === "Date " + UP, "and a tap still turns it over", r.order);

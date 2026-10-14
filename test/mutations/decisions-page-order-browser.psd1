@@ -7,12 +7,24 @@
     Target = "decisions\page\list.js"
     Suite  = "test\test-decisions-page-browser.ps1"
     Mutations = @(
+        # THE SCROLL FIX IS TWO LAYERS, and each alone holds the order line still in the browser
+        # suite: without keepBar, draw follows the old top question and setOrder's compensation
+        # scrolls the bar back; without the compensation, keepBar leaves the scroll alone (Chrome's own
+        # anchoring did not move it in the cases measured). So each half survives by itself, and the
+        # mutant that removes both is the one that must be caught (review of PR 280).
         @{ Name = "a-press-follows-the-question-at-the-top-again"
            Find = '      var before = (how && how.keepBar === true) ? null : place();'
-           Replace = '      var before = place();' }
+           Replace = '      var before = place();'
+           Expect = "survives"
+           Reason = "setOrder's compensation (barWas, moved) scrolls the order line back to where it was pressed, so the view ends where it would have without the follow" }
         @{ Name = "the-order-line-is-not-held-under-the-finger"
            Find = '        var moved = orderBar.getBoundingClientRect().top - barWas;'
-           Replace = '        var moved = 0;' }
+           Replace = '        var moved = 0;'
+           Expect = "survives"
+           Reason = "draw({ keepBar: true }) already leaves the scroll where it was, and Chrome's own scroll anchoring did not move the page in the measured cases (top, and scrolled 13-19 px)" }
+        @{ Name = "both-layers-of-the-scroll-fix-gone"
+           Find = '      draw({ keepBar: true });'
+           Replace = '      draw(); barWas = null;' }
         @{ Name = "a-second-press-does-not-turn-it-over"
            Find = '      setOrder(key, key === orderKey ? !orderTurned : false);'
            Replace = '      setOrder(key, false);' }

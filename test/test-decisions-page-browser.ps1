@@ -64,7 +64,7 @@ try {
     $passes = @($lines | Where-Object { $_.StartsWith("[PASS] ") }).Count
     $doneLine = @($lines | Where-Object { $_.StartsWith("[DONE] ") })
     # NO CLOSING LINE MEANS NOT RUN: a driver that stopped half way printed some passes and no [DONE].
-    Check ($p.ExitCode -eq 0 -and $doneLine.Count -eq 1 -and $passes -ge 23) ("the browser's checks ran to their end (" + $passes + " passed; exit " + $p.ExitCode + "; " + $errTask.Result.Trim() + ")")
+    Check ($p.ExitCode -eq 0 -and $doneLine.Count -eq 1 -and $passes -ge 24) ("the browser's checks ran to their end (" + $passes + " passed; exit " + $p.ExitCode + "; " + $errTask.Result.Trim() + ")")
 } finally { $p.Dispose() }
 
 # Chrome is ended by the driver (taskkill of its tree); whatever is left of it under this profile is ended
