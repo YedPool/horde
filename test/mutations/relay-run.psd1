@@ -11,7 +11,7 @@
            Find = '$base = $base * 2'
            Replace = '$base = $base * 3' }
         @{ Name = "backoff-not-capped"
-           Find = '    $base = [System.Math]::Min($base, [double]$Settings.backoffMaxMs)'
+           Find = '    $base = [System.Math]::Min($base, $most)'
            Replace = '' }
         @{ Name = "no-jitter"
            Find = '    $ms = $base - $spread + ($Random.NextDouble() * 2 * $spread)'
@@ -84,5 +84,24 @@
         @{ Name = "tick-ignores-the-jitter"
            Find = '    $wait = [double]$Settings.backoffMaxMs * (1 + [double]$Settings.backoffJitterPercent / 100)'
            Replace = '    $wait = [double]$Settings.backoffMaxMs' }
+        # --- the backoff's cap: a live PC never looks offline on the phone (2026-10-14) ---
+        @{ Name = "backoff-cap-not-used-by-the-run"
+           Find = '-Random $Random -CapMs (Get-HordeRelayRunBackoffCap -Inbox $in -Context $ctx)'
+           Replace = '-Random $Random' }
+        @{ Name = "backoff-cap-forgets-the-jitter"
+           Find = '[System.Math]::Floor([double]$CapMs / (1 + [double]$Settings.backoffJitterPercent / 100))'
+           Replace = '[double]$CapMs' }
+        @{ Name = "backoff-cap-past-the-offline-line"
+           Find = '$script:HordeRelayRunBackoffCapMs = 45000'
+           Replace = '$script:HordeRelayRunBackoffCapMs = 72000' }
+        @{ Name = "relay-limit-refusal-capped"
+           Find = '@(429, 507) -contains [int]$Inbox.status) { return 0 }'
+           Replace = '@(429, 507) -contains [int]$Inbox.status) { return $script:HordeRelayRunBackoffCapMs }' }
+        @{ Name = "full-mailbox-capped"
+           Find = '$Context.full.Count -gt 0) { return 0 }'
+           Replace = '$Context.full.Count -lt 0) { return 0 }' }
+        @{ Name = "nothing-capped"
+           Find = '    return $script:HordeRelayRunBackoffCapMs'
+           Replace = '    return 0' }
     )
 }

@@ -77,6 +77,20 @@
 # backoffJitterPercent either way, so machines that lost one relay together do not come back together
 # (the design's resilience rule; the long-poll itself is the wait when all is well). One good turn
 # resets it.
+# THE BACKOFF IS CAPPED AT 45 s, JITTER INCLUDED, unless the relay itself asked to be left (2026-10-14,
+# the phone's PC offline banner). The hosted relay hears this machine only when it asks it something,
+# and the founder's phone calls the PC offline after 120 s without that (the phone's account client,
+# OFFLINE_AFTER_MS). Uncapped, the backoff grew to about 72 s at the seventh failure in a row, and with
+# a 60 s watch the relay then heard the machine only about every 132 s: the banner came and went while
+# answers were still being applied. A longer pause also gains nothing: an idle run already asks the
+# relay about once a minute, so waiting longer than that does not relieve it. So the watch's ceiling
+# (60 s) plus the cap stays under 110 s, ten seconds inside the line. Which is which:
+#   - CAPPED (the run's own trouble, or the relay merely unreachable): the keys would not open, a channel
+#     failed for a reason of its own, the watch failed with no status, or with any status but these;
+#   - NOT CAPPED, the settings' own backoffMaxMs (the relay ASKED to be left, and a longer pause is what
+#     it asked for): the watch refused with 429 (a rate, or the account's day) or 507, or a mailbox the
+#     relay holds full (channels/Port.ps1, full). A put refused for its rate alone (429 on a put) is
+#     capped: that bucket refills at one a second, so 45 s already gives it all it needs.
 #
 # A CLEAN STOP. The loop ends after the turn in which a stop is asked (<HORDE_HOME>\relay\run.stop, made
 # by `horde relay stop`), or after -MaxTurns, or on Ctrl+C; in every case it lets go of its keys. The
@@ -173,17 +187,36 @@ function Get-HordeRelayRunSettings {
     return (New-HordeKnown -Value $s.values)
 }
 
+# THE BACKOFF CAP when the relay did not ask to be left (BACKOFF, in the header), jitter included: the
+# relay port's longest watch plus this stays under the phone's 120 s offline line, with 10 s to spare.
+$script:HordeRelayRunBackoffCapMs = 45000
+
 function Get-HordeRelayRunBackoffMs {
     # The wait after -Failures failures in a row: min doubled per failure past the first, capped at max,
     # moved by up to jitter percent either way by -Random (a System.Random, so a suite can fix the seed).
-    param([Parameter(Mandatory = $true)][int]$Failures, [Parameter(Mandatory = $true)]$Settings, [Parameter(Mandatory = $true)]$Random)
+    # -CapMs over 0 caps the wait WITH its jitter: the base is held to CapMs / (1 + jitter), so the waits
+    # still spread and none is over CapMs.
+    param([Parameter(Mandatory = $true)][int]$Failures, [Parameter(Mandatory = $true)]$Settings, [Parameter(Mandatory = $true)]$Random, [long]$CapMs = 0)
     if ($Failures -le 0) { return 0 }
+    $most = [double]$Settings.backoffMaxMs
+    if ($CapMs -gt 0) { $most = [System.Math]::Min($most, [System.Math]::Floor([double]$CapMs / (1 + [double]$Settings.backoffJitterPercent / 100))) }
     $base = [double]$Settings.backoffMinMs
-    for ($i = 1; $i -lt $Failures -and $base -lt [double]$Settings.backoffMaxMs; $i++) { $base = $base * 2 }
-    $base = [System.Math]::Min($base, [double]$Settings.backoffMaxMs)
+    for ($i = 1; $i -lt $Failures -and $base -lt $most; $i++) { $base = $base * 2 }
+    $base = [System.Math]::Min($base, $most)
     $spread = $base * [double]$Settings.backoffJitterPercent / 100
     $ms = $base - $spread + ($Random.NextDouble() * 2 * $spread)
     return [int][System.Math]::Max(0, [System.Math]::Round($ms))
+}
+
+function Get-HordeRelayRunBackoffCap {
+    # This failed turn's cap on its backoff (BACKOFF, in the header): 0 - none, the settings' own
+    # backoffMaxMs - when the relay asked to be left: -Inbox (the watch's answer, or $null when the turn
+    # never watched) refused with 429 or 507, or -Context holding a mailbox the relay refused as full.
+    # Otherwise $script:HordeRelayRunBackoffCapMs.
+    param($Inbox = $null, $Context = $null)
+    if ($null -ne $Inbox -and $null -ne $Inbox.PSObject.Properties["status"] -and @(429, 507) -contains [int]$Inbox.status) { return 0 }
+    if ($null -ne $Context -and $null -ne $Context.PSObject.Properties["full"] -and $Context.full.Count -gt 0) { return 0 }
+    return $script:HordeRelayRunBackoffCapMs
 }
 
 function Get-HordeRelayRunStopPath {
@@ -389,6 +422,7 @@ function Invoke-HordeRelayRun {
             elseif ($beat.state -ceq "known" -and $beatFailed) { $beatFailed = $false; $null = & $Say "the heartbeat is being written again" }
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $failed = ""
+            $in = $null
             $empty = $false
             if ($null -eq $ctx -or ([datetime]::UtcNow - $lastCheck).TotalMinutes -ge $set.retiredAgreeCheckMinutes) {
                 # The periodic check: release what is past its grace, then open the keys again, keeping
@@ -439,7 +473,7 @@ function Invoke-HordeRelayRun {
             $last = ($MaxTurns -gt 0 -and $turns -ge $MaxTurns)
             if ($failed -cne "") {
                 $failures++
-                $wait = Get-HordeRelayRunBackoffMs -Failures $failures -Settings $set -Random $Random
+                $wait = Get-HordeRelayRunBackoffMs -Failures $failures -Settings $set -Random $Random -CapMs (Get-HordeRelayRunBackoffCap -Inbox $in -Context $ctx)
                 $null = & $Say ($failed + "; waiting " + $wait + " ms (failure " + $failures + " in a row)")
                 if (-not $last) { $null = Wait-HordeRelayRunSliced -Ms $wait -Why "backoff" -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs }
             } else {
