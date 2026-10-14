@@ -53,7 +53,7 @@
            Find = "`$card.blockedText = [regex]::Replace("
            Replace = "`$card.blockedText = `$b; `$null = [regex]::Replace(" }
         @{ Name = "the-map-is-not-sent"
-           Find = '$areasText = ConvertTo-HordeCardsChannelValueText @($areas.areas)'
+           Find = '$areasText = "[" + (@($areaTexts | Select-Object -First $areasKept) -join ",") + "]"'
            Replace = '$areasText = "[]"' }
         @{ Name = "no-lanes-folder-sends-an-empty-snapshot"
            Find = 'if (-not [System.IO.Directory]::Exists($paths.lanes)) { return (& $once "lanes"'
