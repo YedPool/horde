@@ -87,6 +87,42 @@ function Get-HordeCloudflareRelayQuietEnv {
     }
 }
 
+function Start-HordeCloudflareRelayProcessNoMark {
+    # Start -Info so that nothing at all has been written to the child's input yet: the process, or $null
+    # (the child stopped already) when its input would begin with a byte order mark.
+    #
+    # WHY. Windows PowerShell 5.1's Process.Start (.NET Framework) makes the child's input writer with
+    # [Console]::InputEncoding and AutoFlush on, and turning AutoFlush on writes that encoding's preamble
+    # AT ONCE - before the caller can reach the base stream. Under a console whose input code page is
+    # 65001 that is EF BB BF. Measured 2026-10-14: `horde relay deploy` from such a console stored all
+    # three Worker secrets with EF BB BF in front, and Google answered invalid_client to every new
+    # sign-in; a probe giving node "AB" read 239,187,191,65,66 under 5.1, and 65,66 under PowerShell 7
+    # (whose Process strips the preamble itself).
+    #
+    # So, for the moment of the start only, the input encoding is made UTF-8 WITHOUT a preamble, and the
+    # one it was is put back. The console's input code page is the console's, shared with every process
+    # attached to it, so it is touched only when its encoding has a preamble, and for the start alone.
+    # Where it cannot be set (no console), the writer's encoding is checked instead: a preamble there
+    # means it was already sent, so the child is stopped before anything else reaches it.
+    param([Parameter(Mandatory = $true)][System.Diagnostics.ProcessStartInfo]$Info)
+    $saved = $null
+    if ($Info.RedirectStandardInput) {
+        try {
+            $current = [Console]::InputEncoding
+            if ($current.GetPreamble().Length -gt 0) { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; $saved = $current }
+        } catch { $saved = $null }
+    }
+    try { $p = [System.Diagnostics.Process]::Start($Info) }
+    finally { if ($null -ne $saved) { try { [Console]::InputEncoding = $saved } catch { } } }
+    if ($Info.RedirectStandardInput -and $p.StandardInput.Encoding.GetPreamble().Length -gt 0) {
+        try { $p.Kill() } catch { }
+        $null = $p.WaitForExit(10000)
+        $p.Dispose()
+        return $null
+    }
+    return $p
+}
+
 function Invoke-HordeCloudflareRelayNode {
     # Run node with -ArgList; -StdIn, when given, is written as ASCII bytes and the input closed, so a
     # secret travels in the pipe and never in the arguments. { code; out; err; timedOut }. Only the
@@ -104,12 +140,13 @@ function Invoke-HordeCloudflareRelayNode {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     foreach ($k in @($Env.Keys)) { $psi.EnvironmentVariables[$k] = "" + $Env[$k] }
-    $p = [System.Diagnostics.Process]::Start($psi)
+    $p = Start-HordeCloudflareRelayProcessNoMark -Info $psi
+    if ($null -eq $p) { return [pscustomobject]@{ code = -1; out = ""; err = "node was stopped before anything was written to it: its input would have begun with a byte order mark"; timedOut = $false } }
     try {
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
-        # THE BASE STREAM, NOT THE WRITER: Windows PowerShell's writer on a child's input may put a byte
-        # order mark first (it takes the console's input encoding), and the secret would carry it.
+        # The bytes are written to the base stream, so the value itself is ASCII whatever the writer's
+        # encoding; the mark the writer may already have sent is Start-...NoMark's to prevent.
         $in = $p.StandardInput.BaseStream
         if ($StdIn -ne "") { $b = [System.Text.Encoding]::ASCII.GetBytes($StdIn); $in.Write($b, 0, $b.Length); $in.Flush() }
         $in.Close()
