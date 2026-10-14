@@ -139,7 +139,7 @@
            Find = 'if (-not (Test-HordeAnswer $on) -or $on.state -cne "known") {'
            Replace = 'if ($false) {' }
         @{ Name = "page-only-not-bundled"
-           Find = '$classes = Get-HordeRelayPublishMeasured -Classes $classes -Base (& $bundleOf $b.base) -Head (& $bundleOf $h.commit)'
+           Find = '$classes = Get-HordeRelayPublishMeasured -Classes $classes -Base (& $bundleOf $b.base) -Head $headBundle'
            Replace = '$classes = [pscustomobject]@{ worker = @(); page = @(@($classes.page) + @($classes.worker)); ignored = $classes.ignored; measured = "same" }' }
         @{ Name = "bundle-not-kept"
            Find = '$had = @(@($s.bundles) | Where-Object { $_.commit -ceq $Commit -and ("" + $_.sha256) -cmatch'
@@ -183,5 +183,32 @@
         @{ Name = "dirty-read-as-clean"
            Find = 'clean = [bool]($st.out -eq "")'
            Replace = 'clean = $true' }
+        @{ Name = "worker-notice-keyed-by-commit"
+           Find = '("held:" + $b.base + ":bundle:" + $headBundle.value.sha256)'
+           Replace = '("held:" + $b.base + ":bundle:" + $h.commit)' }
+        @{ Name = "worker-notice-keyed-by-base-alone"
+           Find = '("held:" + $b.base + ":bundle:" + $headBundle.value.sha256)'
+           Replace = '("held:" + $b.base + ":bundle")' }
+        @{ Name = "pointer-any-path-accepted"
+           Find = 'if ($t -cnotmatch ''\A[A-Za-z]:\\[^\\/:*?"<>|]'' -or $t -match'
+           Replace = 'if ($false -and $t -match' }
+        @{ Name = "pointer-dot-parts-accepted"
+           Find = ' -or $t -match ''(\A|\\)\.{1,2}(\\|\z)'' -or'
+           Replace = ' -or' }
+        @{ Name = "pointer-temp-accepted"
+           Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $full -TempRoot $TempRoot) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "pointer-bare-folder-accepted"
+           Find = 'if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($full, "settings", "service-definitions.json"))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "also-from-a-test-home"
+           Find = 'if (Test-HordeServiceHomeIsATests -HordeHome $mineFull -TempRoot $TempRoot) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refused-pointer-silent"
+           Find = 'note = ("note: this deploy is recorded only in " + $mineFull + ": " + $p.reason) }'
+           Replace = 'note = "" }' }
+        @{ Name = "also-own-home"
+           Find = 'if ($p.value.Equals($mineFull, [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($false) {' }
     )
 }

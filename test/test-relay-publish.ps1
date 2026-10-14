@@ -28,7 +28,7 @@ foreach ($f in @("ServicesAct", "ServicesTend", "ServicesTell")) { . (Join-Path 
 $work = Join-Path $env:TEMP ("horde-relay-publish-" + [guid]::NewGuid().ToString("N"))
 [void][System.IO.Directory]::CreateDirectory($work)
 $t0 = [datetime]::new(2026, 10, 14, 12, 0, 0, [System.DateTimeKind]::Utc)
-$cA = "a" * 40; $cB = "b" * 40; $cC = "c" * 40
+$cA = "a" * 40; $cB = "b" * 40; $cC = "c" * 40; $cD = "d" * 40; $cE = "e" * 40
 $origin = "https://zorbrelay.example"
 $v1 = "1111111111111111"; $v2 = "2222222222222222"
 $siteMap = Get-HordeRelayDeploySiteSources
@@ -36,9 +36,9 @@ $builtPaths = @(@($siteMap.Keys) + @("app/config.json", "app/icon-192.png", "app
 # What the deploy ships, as this suite's relay would have it: its folder but its tests, the two files
 # outside it that its code imports, and the site's sources and builder.
 $shippedHere = [pscustomobject]@{ workerPrefixes = [string[]]@("relays/zorbrelay/"); workerExcept = [string[]]@("relays/zorbrelay/test/")
-    workerFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js", "cli/RelayDeploy.ps1", "relays/Port.ps1")
+    workerFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js", "surfaces/pwa/page/index.html", "cli/RelayDeploy.ps1", "relays/Port.ps1")
     pageFiles = [string[]]@(@($siteMap.Values) + @(Get-HordeRelayDeployBuildFiles)); buildFiles = [string[]]@(Get-HordeRelayDeployBuildFiles)
-    sharedFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js") }
+    sharedFiles = [string[]]@("relay/js/protocol.js", "surfaces/pwa/page/account-client.js", "surfaces/pwa/page/index.html") }
 
 function New-Home { param([string]$Name) $h = Join-Path $work $Name; [void][System.IO.Directory]::CreateDirectory($h); return $h }
 function Sw { param([string]$Version) return ("// the worker`nconst VERSION = `"" + $Version + "`";`nconst SHELL = [];`n") }
@@ -519,6 +519,56 @@ try {
     Check (@($s0.pending).Count -eq 20 -and $s0.pending[19].id -ceq "id25") "at most the last 20 notices wait"
 
     Write-Host ""
+    Write-Host "--- a Worker that differs is told again only when it changes ---" -ForegroundColor Cyan
+    # An index.html change: the Worker imports it as text, so the bundle differs from the deployed one,
+    # and stays so through every later merge that changes only the page.
+    $W = New-World (New-Home "index-html"); Seed
+    $W.bundles[$cB] = "9" * 64; $W.bundles[$cC] = "9" * 64; $W.bundles[$cD] = "9" * 64; $W.bundles[$cE] = "8" * 64
+    Range @("surfaces/pwa/page/index.html")
+    $null = Pass
+    foreach ($c in @($cC, $cD)) { $W.head = $c; $W.diffs[$cA + ".." + $c] = [string[]]@("surfaces/pwa/page/index.html", "surfaces/pwa/page/app.js"); $W.now = $W.now.AddMinutes(10); $null = Pass }
+    Check ($W.deploys -eq 0 -and (Whats) -ceq "worker-changed") ("three page merges after an index.html change send one notice (" + (Whats) + ")")
+    $W.head = $cE; $W.diffs[$cA + ".." + $cE] = [string[]]@("surfaces/pwa/page/index.html", "relay/js/protocol.js"); $null = Pass
+    Check ((Whats) -ceq "worker-changed,worker-changed") "a later change that changes the Worker that would ship is told again"
+
+    Write-Host ""
+    Write-Host "--- the supervisor's pointer names only a supervisor's home ---" -ForegroundColor Cyan
+    # This suite's folders are under the temp folder, so a temp root of its own stands for it.
+    $notTemp = Join-Path $work "not-the-temp"
+    $tend = New-Home "pointed-home"
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $tend "settings"))
+    [System.IO.File]::WriteAllText((Join-Path $tend "settings\service-definitions.json"), '{ "schemaVersion": 1, "settings": { } }')
+    $bare = New-Home "pointed-bare"
+    $pf = Join-Path $work "pointer-cases.txt"
+    $read = { param([string]$Text, [string]$TempRoot = $notTemp) [System.IO.File]::WriteAllText($pf, $Text); return (Read-HordeRelayTendHomePointer -Path $pf -TempRoot $TempRoot) }
+    $ok = & $read $tend
+    Check ($ok.state -ceq "known" -and $ok.value -ceq $tend.TrimEnd('\')) "CONTROL: a full local path to a home the supervisor runs in is taken"
+    $r = & $read $tend ""
+    Check ($r.state -ceq "unknown" -and $r.reason -like "*under the temp folder*") "a home under the temp folder is refused"
+    $r = & $read $bare
+    Check ($r.state -ceq "unknown" -and $r.reason -like "*not a Horde home*") "a folder that is not a supervisor's home is refused"
+    foreach ($bad in @("relative\home", "C:home", "\\server\share\home", "\\?\C:\home", ($tend + "\..\pointed-home"), "C:\home:stream", "\home")) {
+        $r = & $read $bad
+        Check ($r.state -ceq "unknown" -and $r.reason -like "*not a full local path*") ("'" + $bad + "' is not a full local path, and is refused")
+    }
+
+    Write-Host ""
+    Write-Host "--- the hand deploy's second home ---" -ForegroundColor Cyan
+    $mine = New-Home "hand-mine"
+    [System.IO.File]::WriteAllText($pf, $tend)
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath $pf -TempRoot $notTemp
+    Check ($ch.also -ceq $tend.TrimEnd('\') -and $ch.note -like "*recorded there as well as here*") "from a home that is not a test's, the supervisor's home is recorded in too, and said"
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $tend -PointerPath $pf -TempRoot $notTemp
+    Check ($ch.also -ceq "" -and $ch.note -ceq "") "from the supervisor's own home, once is enough"
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath $pf
+    Check ($ch.also -ceq "" -and $ch.note -ceq "") "from a test's home, nothing else is written to"
+    [System.IO.File]::WriteAllText($pf, $bare)
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath $pf -TempRoot $notTemp
+    Check ($ch.also -ceq "" -and $ch.note -like "*recorded only in*not a Horde home*") "a refused pointer: recorded only in its own home, and it says so"
+    $ch = Get-HordeRelayDeployAlsoRecordIn -Mine $mine -PointerPath (Join-Path $work "no-such-pointer.txt") -TempRoot $notTemp
+    Check ($ch.also -ceq "" -and $ch.note -ceq "") "no pointer: its own home only, nothing to say"
+
+    Write-Host ""
     Write-Host "--- telling ---" -ForegroundColor Cyan
     $W = New-World (New-Home "tell-off")
     $l = Pass -Policy ([pscustomobject]@{ tellWarchief = $false })
@@ -596,8 +646,8 @@ try {
     Check ($r1.state -ceq "known" -and $r2.state -ceq "known" -and $r1.value.id -ceq $r2.value.id -and $r2.value.commit -ceq $cC) "a deploy from another home records it in the supervisor's home too, as one deploy"
     $ptr = Join-Path $work "pointer\relay-tend-home.txt"
     Write-HordeRelayTendHomePointer -Path $ptr -HordeHome $tendHome
-    Check ((Read-HordeRelayTendHomePointer -Path $ptr) -ceq [System.IO.Path]::GetFullPath($tendHome).TrimEnd('\')) "the supervisor's pointer names its home"
-    Check ((Read-HordeRelayTendHomePointer -Path (Join-Path $work "no-pointer.txt")) -ceq "") "no pointer names no home"
+    Check (([System.IO.File]::ReadAllText($ptr)).Trim() -ceq [System.IO.Path]::GetFullPath($tendHome).TrimEnd('\')) "the supervisor's pointer names its home"
+    Check ((Read-HordeRelayTendHomePointer -Path (Join-Path $work "no-pointer.txt")).state -ceq "absent") "no pointer names no home"
     $hh = New-Home "hand-failed"; $script:relayAnswer = "fail"
     $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
     Check ($a.state -ceq "unknown" -and -not [System.IO.File]::Exists((Get-HordeRelayDeployedPath -HordeHome $hh))) "a deploy that failed records nothing"
@@ -618,7 +668,7 @@ try {
     $ptr = Join-Path $work "from-tend-pointer\relay-tend-home.txt"
     $l = @(Invoke-HordeRelayPublishFromTend -HordeHome $W.home -Teller $teller -Root $work -Tools (New-Tools) -TempRoot (Join-Path $work "not-the-temp") -PointerPath $ptr)
     Check ($W.deploys -eq 1 -and (Says $l "DEPLOYED")) "a home that is not a test's takes the step, with the tools handed in"
-    Check ((Read-HordeRelayTendHomePointer -Path $ptr) -ceq [System.IO.Path]::GetFullPath($W.home).TrimEnd('\')) "and points the machine at its home"
+    Check ([System.IO.File]::Exists($ptr) -and ([System.IO.File]::ReadAllText($ptr)).Trim() -ceq [System.IO.Path]::GetFullPath($W.home).TrimEnd('\')) "and points the machine at its home"
     $l = @(Invoke-HordeRelayPublishFromTend -HordeHome $W.home -Teller $teller -Root $work -Tools (New-Tools) -PointerPath (Join-Path $work "p2.txt"))
     Check ((Says $l "it is a test's") -and -not [System.IO.File]::Exists((Join-Path $work "p2.txt"))) "a home under the temp folder looks at nothing and points nowhere"
 
