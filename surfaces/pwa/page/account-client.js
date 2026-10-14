@@ -57,6 +57,42 @@ export function accountClient(fetchFn, origin = "") {
   };
 }
 
+// IS THE PC THERE? (the founder, 2026-10-14, fix 2 of six). The account's answer carries, for each of
+// its machines, lastSeenAt - the second the relay last verified a request signed by it, or null for a
+// machine not heard from yet - and now, the relay's own clock (the hosted relay's presence record). A
+// machine is OFFLINE when now - lastSeenAt is over OFFLINE_AFTER_MS, BOTH TIMES THE RELAY'S: the phone's
+// own clock is never read here, so a phone set wrong cannot raise the banner or hold it down. An idle
+// runner is heard at least once a minute (its watch is 60 s), so two minutes is a PC that has stopped.
+// A machine never heard from gets no offline banner - nothing says it ever ran - only a quiet "not heard
+// from yet" on the Account screen. An answer that is not the relay's shape says nothing about anyone.
+export const OFFLINE_AFTER_MS = 120000;
+
+// The machines of an account answer (accountClient's account().value), each as
+// { keyId, name, state: "online" | "offline" | "never", lastSeenAt }. name is the machine's own label and
+// its horde, as the Account screen shows it.
+export function presenceOf(answer) {
+  if (!answer || !Number.isSafeInteger(answer.now) || !Array.isArray(answer.machines)) return [];
+  const out = [];
+  for (const m of answer.machines) {
+    if (!m || typeof m.keyId !== "string") continue;
+    const name = (typeof m.label === "string" && m.label ? m.label : "machine " + m.keyId.slice(0, 12)) + " (" + String(m.horde) + ")";
+    const seen = Number.isSafeInteger(m.lastSeenAt) && m.lastSeenAt > 0 ? m.lastSeenAt : null;
+    const state = seen === null ? "never" : answer.now - seen > OFFLINE_AFTER_MS ? "offline" : "online";
+    out.push({ keyId: m.keyId, name, state, lastSeenAt: seen });
+  }
+  return out;
+}
+
+// The banner of one offline machine, in the founder's words. timeText turns lastSeenAt into the phone's
+// local time (the app hands in protocol.js's dayTime). Nothing is lost while the PC is away - the answers
+// wait in this phone's outbox and in the relay's mailbox - so the words never say otherwise.
+// THE HOOK FOR "N ANSWERS WAITING" (fixes 3 and 4, later): options.waiting, a count of answers not yet
+// applied, adds one sentence; nothing passes it yet.
+export function offlineWords(machine, timeText, options = {}) {
+  const waiting = Number.isSafeInteger(options.waiting) && options.waiting > 0 ? " " + options.waiting + (options.waiting === 1 ? " answer is" : " answers are") + " waiting." : "";
+  return "PC " + machine.name + " offline since " + timeText(machine.lastSeenAt) + ". Your answers are kept and will be applied when it is back." + waiting;
+}
+
 // The accounts of a deployment's relay, or null when it has none (the header).
 export function accountFromConfig(config, host) {
   if (!config || config.transport !== "http" || config.relayOrigin || !host || typeof host.fetch !== "function") return null;

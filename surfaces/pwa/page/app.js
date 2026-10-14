@@ -57,11 +57,19 @@
 // are the turn's own and the line's signed one (relay/js/protocol.js, chatTimeline); what carries none
 // shows none.
 //
+// THE PC OFFLINE BANNER (the founder, 2026-10-14, fix 2 of six): while the app is open and signed in to a
+// relay with accounts, it reads the account's answer every PRESENCE_EVERY_MS, and for each machine the
+// relay has not heard from for two minutes BY THE RELAY'S OWN CLOCK (account-client.js, presenceOf) the
+// sticky bar holds one line, on every screen: "PC <name> offline since <local time>. Your answers are kept
+// and will be applied when it is back." It goes by itself at the first read that has the machine heard
+// again. A read that fails says nothing about the PC, so it takes the banners down rather than guess; a
+// machine never heard from gets no banner, only "not heard from yet" on the Account screen.
+//
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value).
 import { createPhone } from "./phone-core.js";
 import { createBridge, deferredBridge } from "../surface/bridge.js";
 import { createRelayClient, transportFromConfig } from "./relay-client.js";
-import { accountFromConfig } from "./account-client.js";
+import { accountFromConfig, presenceOf, offlineWords } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
@@ -585,13 +593,15 @@ async function isSignedIn() {
   const s = await account.session();
   return s.state === "known" && s.value.signedIn === true;
 }
-function showSignIn() { $("accountBtn").hidden = true; show("signInView"); }
+function showSignIn() { $("accountBtn").hidden = true; stopPresence(); show("signInView"); }
 $("signInBtn").addEventListener("click", () => { if (account) window.location.assign(account.signInUrl()); });
 async function openAccount() {
   say("action", "");
   const a = await account.account();
   if (a.state !== "known") { if (a.status === 401) { showSignIn(); return; } say("action", "The account could not be read just now; try again."); return; }
   $("accountWho").textContent = "Signed in as " + (a.value.account.email || "your Google account") + ".";
+  presence = presenceOf(a.value);
+  drawPresence();
   const list = $("machineList");
   while (list.firstChild) list.removeChild(list.firstChild);
   const machines = Array.isArray(a.value.machines) ? a.value.machines : [];
@@ -601,6 +611,14 @@ async function openAccount() {
     // The machine's own name, which its grant signed (relay/Pairing.ps1); the key id's start when a
     // registration carries none.
     what.textContent = String(m.horde) + " - " + (typeof m.label === "string" && m.label ? m.label : "machine " + String(m.keyId).slice(0, 12));
+    // When the relay last heard from it, quietly; the banner is the bar's (drawPresence).
+    const heardOf = presenceOf({ now: a.value.now, machines: [m] })[0];
+    if (heardOf) {
+      const seen = document.createElement("span");
+      seen.className = "seen";
+      seen.textContent = heardOf.state === "never" ? " - not heard from yet" : heardOf.state === "offline" ? " - offline since " + dayTime(heardOf.lastSeenAt) : " - heard from " + dayTime(heardOf.lastSeenAt);
+      what.appendChild(seen);
+    }
     const rm = document.createElement("button");
     rm.type = "button";
     rm.textContent = "Remove";
@@ -656,6 +674,39 @@ $("signOutBtn").addEventListener("click", async () => {
   if (r.state !== "known") say("action", "The relay did not sign this phone out just now; try again.");
   else showSignIn();
 });
+
+// --- is the PC there? (the header, THE PC OFFLINE BANNER) ---
+
+const PRESENCE_EVERY_MS = 30000;
+let presence = [];
+let presenceTimer = null;
+// Each run of the loop has its number: a run started while another waits on the relay ends the older one,
+// so there is never more than one timer.
+let presenceRun = 0;
+function drawPresence() {
+  const box = $("pcOffline");
+  while (box.firstChild) box.removeChild(box.firstChild);
+  for (const m of presence) {
+    if (m.state !== "offline") continue;
+    const line = document.createElement("p");
+    line.textContent = offlineWords(m, dayTime);
+    box.appendChild(line);
+  }
+  box.hidden = !box.firstChild;
+}
+async function checkPresence() {
+  const run = ++presenceRun;
+  clearTimeout(presenceTimer);
+  if (!account) return;
+  if (document.visibilityState === "visible") {
+    const a = await account.account();
+    if (run !== presenceRun) return;
+    presence = a.state === "known" ? presenceOf(a.value) : [];
+    drawPresence();
+  }
+  presenceTimer = setTimeout(checkPresence, PRESENCE_EVERY_MS);
+}
+function stopPresence() { presenceRun++; clearTimeout(presenceTimer); presence = []; drawPresence(); }
 
 // --- unlocking ---
 
@@ -737,6 +788,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catc
 // ended, or another tab signed out), every horde locked and the sign-in screen.
 async function resume() {
   if (!(await isSignedIn())) { await lockAll(); showSignIn(); return; }
+  checkPresence();
   await pick(current);
 }
 made.then(async () => {
@@ -746,6 +798,7 @@ made.then(async () => {
   }
   if (!(await isSignedIn())) { showSignIn(); return; }
   $("accountBtn").hidden = !account;
+  checkPresence();
   await loadHordes();
   if (!hordes.length) { show("emptyView"); return; }
   await pick(hordes[0].id);

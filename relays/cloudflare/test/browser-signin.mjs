@@ -3,7 +3,8 @@
 // built app served by a local dev of the real Worker, and signs in through the local fake provider
 // (fake-oidc.mjs) - every redirect, cookie and policy is Chrome's own: the sign-in screen, the button,
 // the trip to the provider and back, the session cookie as Chrome keeps it (HttpOnly, Secure,
-// SameSite=Lax, __Host-), the Account screen (the machine by its own name, this phone), Sign out,
+// SameSite=Lax, __Host-), the Account screen (the machine by its own name and when it was last heard
+// from, this phone), the PC offline banner (the account's answer five minutes on by the relay's clock), Sign out,
 // deleting the account (relay PR 8c), and a refused sign-in's words on the screen - a limit's own too.
 //
 //   node browser-signin.mjs <dev origin> <fake provider origin> <chrome.exe> <profile folder> <machine label>
@@ -40,8 +41,11 @@ try {
   let nextId = 1;
   const waiting = new Map();
   const problems = [];
+  // A paused request (CDP Fetch), handed to the suite's own handler while one is set.
+  let onPaused = null;
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    if (m.method === "Fetch.requestPaused" && onPaused) { onPaused(m.params); return; }
     if (m.id && waiting.has(m.id)) { const w = waiting.get(m.id); waiting.delete(m.id); if (m.error) w.reject(new Error(m.error.message)); else w.resolve(m.result); return; }
     if (m.method === "Runtime.exceptionThrown") problems.push("exception: " + (m.params.exceptionDetails.exception ? m.params.exceptionDetails.exception.description : m.params.exceptionDetails.text));
     if (m.method === "Log.entryAdded" && /Content Security Policy/i.test(m.params.entry.text)) problems.push("log: " + m.params.entry.text);
@@ -81,7 +85,29 @@ try {
   await evaluate("document.getElementById('accountBtn').click()", true);
   check(!!(await until(shown("accountView") + " && document.getElementById('accountWho').textContent.indexOf('founder@example.test') >= 0")), "the Account screen says who is signed in", await evaluate("document.getElementById('accountWho').textContent"));
   const listed = await evaluate("Array.from(document.querySelectorAll('#machineList li')).map((li) => li.textContent).join('|')");
-  check(listed === "work - " + machineLabel + "Remove" && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, with a Remove button", listed);
+  // The machine read the relay just before (the suite's control): heard from it, at a time of the phone's day.
+  check(new RegExp("^work - " + machineLabel + " - heard from [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$").test(listed) && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, when the relay last heard from it, with a Remove button", listed);
+  check(await evaluate("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').childNodes.length === 0"), "and a machine heard from just now raises no PC offline banner");
+  // FIVE MINUTES LATER BY THE RELAY'S CLOCK: the account's answer is passed through Chrome with its now
+  // moved on 300 s (CDP Fetch) - the relay's own lastSeenAt untouched, the phone's clock untouched - so the
+  // page sees exactly what a relay would send once the machine had been silent that long.
+  onPaused = async (p) => {
+    const raw = await cdp("Fetch.getResponseBody", { requestId: p.requestId });
+    const body = JSON.parse(raw.base64Encoded ? Buffer.from(raw.body, "base64").toString("utf8") : raw.body);
+    body.now += 300000;
+    await cdp("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: p.responseStatusCode, responseHeaders: p.responseHeaders, body: Buffer.from(JSON.stringify(body), "utf8").toString("base64") });
+  };
+  await cdp("Fetch.enable", { patterns: [{ urlPattern: "*/v1/account", requestStage: "Response" }] });
+  await evaluate("document.getElementById('accountBtn').click()", true);
+  const banner = await until("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.closest('#bar') && b.children.length === 1 ? b.children[0].textContent : ''; })()");
+  const head = "PC " + machineLabel + " (work) offline since ", tail = ". Your answers are kept and will be applied when it is back.";
+  const when = typeof banner === "string" && banner.startsWith(head) && banner.endsWith(tail) ? banner.slice(head.length, banner.length - tail.length) : "";
+  check(/^[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}$/.test(when),"past two minutes by the relay's clock, the PC offline banner stands in the bar, by the machine's name, with the time in the phone's own day, and says the answers are kept", banner);
+  check(/ - offline since [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$/.test(await evaluate("document.querySelector('#machineList li').textContent")), "and the Account screen says so of the machine");
+  await cdp("Fetch.disable");
+  onPaused = null;
+  await evaluate("document.getElementById('accountBtn').click()", true);
+  check(!!(await until("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').children.length === 0")), "and it goes by itself at the next answer that has the machine heard again");
   const phones = await evaluate("Array.from(document.querySelectorAll('#phoneList li')).map((li) => li.textContent + '|' + li.querySelectorAll('button').length).join(';')");
   const rows = phones.split(";");
   check(rows.filter((r) => /^This phone, signed in [^|]+|0$/.test(r)).length === 1 && rows.every((r) => /^This phone, signed in [^|]+|0$/.test(r) || /^A phone, signed in [^|]+Sign out|1$/.test(r)), "and lists its phones: this one once, with no Sign out of its own (the one below signs it out), each other with one", phones);
