@@ -1,6 +1,6 @@
 # IS AN ORC'S STATUS RECORD READ WHOLE, OR NOT AT ALL?
 #
-# fleet/StatusPanel.ps1 reads the six-line record each Orc keeps and hands it to a panel. A record
+# fleet/StatusPanel.ps1 reads the record each Orc keeps (six lines, or seven with the optional waiting on line) and hands it to a panel. A record
 # that breaks a rule must come out as "no status written" with what was wrong, and with NONE of its
 # fields - a panel that showed half a broken record would be guessing. Every shape of wrong the
 # record's own checker knows is here: a byte-order mark, a byte outside ASCII, the wrong number of
@@ -83,7 +83,7 @@ Check (@((Parse (Bytes (With 2 "lane: tidying C:\work after PR 9"))).problems).C
 Write-Host ""
 Write-Host "--- a control character is no part of a record ---" -ForegroundColor Cyan
 # A record with an escape, a NUL or a backspace in a field was "written" and handed on (measured
-# 2026-10-06 by the review of this reader). The record is plain words on six lines; the only bytes
+# 2026-10-06 by the review of this reader). The record is plain words on six lines, or seven with the optional waiting on line; the only bytes
 # below a space it may hold are the ends of its lines.
 foreach ($ctl in @(@{ byte = 0x1B; name = "an escape" }, @{ byte = 0x00; name = "a NUL" }, @{ byte = 0x08; name = "a backspace" }, @{ byte = 0x09; name = "a tab" }, @{ byte = 0x7F; name = "a delete" })) {
     $r = Parse (Bytes (With 3 ("doing: Building" + [string][char]$ctl.byte + "the window")))
@@ -108,6 +108,18 @@ Check (@($waits.problems).Count -eq 0 -and $waits.fields["waiting on"] -ceq "the
 Check ((@($waits.fields.Keys) -join ",") -ceq "orc,lane,doing,finished,blocked,waiting on") "its six fields, in the record's order"
 Check (@((Parse (Bytes $withWait "`r`n")).problems).Count -eq 0) "CONTROL: and with Windows line endings, as the fleet writes it"
 Check (@($ok.problems).Count -eq 0 -and $null -eq $ok.fields["waiting on"] -and -not $ok.fields.Contains("waiting on")) "a six-line record is still read, and has no waiting-on field at all"
+$waitBom = Parse ([byte[]](@(0xEF, 0xBB, 0xBF) + (Bytes $withWait)))
+Check ((Says $waitBom "starts with a byte-order mark") -and @($waitBom.problems).Count -eq 1 -and $null -eq $waitBom.fields) "a seven-line record that starts with a byte-order mark is refused for it, as a six-line one is: one problem, and no field"
+# TRAILING BLANK LINES ARE IGNORED, for six lines and for seven alike: the reader drops every empty
+# line at the end before it counts the lines. Pinned here for both, so the two cannot drift apart.
+$sixBlanks = Parse ([System.Text.Encoding]::ASCII.GetBytes(($good -join "`r`n") + "`r`n`r`n`r`n`r`n"))
+Check (@($sixBlanks.problems).Count -eq 0 -and $sixBlanks.fields["blocked"] -ceq "no" -and -not $sixBlanks.fields.Contains("waiting on")) "a six-line record followed by several blank lines is read whole: the blank lines are not lines of it"
+$sevenBlanks = Parse ([System.Text.Encoding]::ASCII.GetBytes(($withWait -join "`r`n") + "`r`n`r`n`r`n`r`n"))
+Check (@($sevenBlanks.problems).Count -eq 0 -and $sevenBlanks.fields["waiting on"] -ceq $waits.fields["waiting on"]) "a seven-line record followed by several blank lines is read whole too, its waiting-on line and all"
+$sevenBlanksLf = Parse ([System.Text.Encoding]::ASCII.GetBytes(($withWait -join "`n") + "`n`n`n"))
+Check (@($sevenBlanksLf.problems).Count -eq 0 -and $sevenBlanksLf.fields["waiting on"] -ceq $waits.fields["waiting on"]) "CONTROL: and so with Unix line endings"
+$blankInside = Parse (Bytes ($good + @("", "waiting on: the founder")))
+Check ((Says $blankInside "has 8 lines") -and $null -eq $blankInside.fields) "CONTROL: a blank line BEFORE the waiting-on line is a line of the record, and makes eight"
 foreach ($other in @("note: one line too many", "waiting: the founder", "Waiting on: the founder", "waiting on:the founder", "waiting on:   ", "blocked: no")) {
     $r = Parse (Bytes ($good + @($other)))
     Check ((Says $r "line 7 is not 'waiting on: ...'") -and @($r.problems).Count -eq 1 -and $null -eq $r.fields) ("a seventh line with another key is refused, naming it: '" + $other + "'")
@@ -163,6 +175,15 @@ $twins = Get-HordeFleetStatus -Folder (Join-Path $work "twins") -Now $now
 $claimed = @($twins.orcs | Where-Object { $_.folder -ceq "one" -or $_.folder -ceq "two" })
 Check (@($claimed | Where-Object { $_.written -eq $false -and $_.orc -ceq "" -and $_.doing -ceq "" -and $_.problems[0] -like "says it is Orc F, and so does another folder (one, two)*" }).Count -eq 2) "two folders that both say they are Orc F: neither is shown as F, and each says why"
 Check (@($twins.orcs | Where-Object { $_.folder -ceq "three" })[0].written -eq $true) "CONTROL: the third folder, alone in its letter, is read"
+# TWINS THAT BOTH WAIT: two seven-line records claiming one letter are "no status written" like any
+# other twins, and the waiting-on line goes with the rest of their fields - absent, not left behind.
+[void](New-Orc "twins-waiting" "one" $withWait); [void](New-Orc "twins-waiting" "two" $withWait); [void](New-Orc "twins-waiting" "three" ((With 1 "orc: G") + @("waiting on: the reviewer, since 2026-10-13")))
+$twinsWaiting = Get-HordeFleetStatus -Folder (Join-Path $work "twins-waiting") -Now $now
+$claimedWaiting = @($twinsWaiting.orcs | Where-Object { $_.folder -ceq "one" -or $_.folder -ceq "two" })
+Check (@($claimedWaiting | Where-Object { $_.written -eq $false -and $_.orc -ceq "" -and $_.problems[0] -like "says it is Orc F, and so does another folder (one, two)*" }).Count -eq 2) "two seven-line records that both say they are Orc F: neither is shown as F"
+Check (@($claimedWaiting | Where-Object { $null -ne $_.PSObject.Properties["waitingOn"] }).Count -eq 0) "and neither keeps its waitingOn: the field is absent on both, as on any record not written"
+$thirdWaiting = @($twinsWaiting.orcs | Where-Object { $_.folder -ceq "three" })[0]
+Check ($thirdWaiting.written -eq $true -and $thirdWaiting.waitingOn -ceq "the reviewer, since 2026-10-13") "CONTROL: the third, alone in its letter, is read with its waitingOn"
 # MANY FOLDERS, ONE LETTER: each one's problem names a few of the others and counts the rest. Naming
 # all of them in every one made the answer grow with the square of the folders (measured 2026-10-06 by
 # the review of this reader: 1,000 folders gave a panel 11 MB of text, 3,000 gave it 100 MB, and

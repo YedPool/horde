@@ -112,6 +112,9 @@
         @{ Name = "two-folders-one-letter-both-shown"
            Find = '| Where-Object { $_.Count -gt 1 })) {'
            Replace = '| Where-Object { $_.Count -gt 2 })) {' }
+        @{ Name = "a-twin-keeps-its-waiting-on"
+           Find = '$o.PSObject.Properties.Remove("waitingOn")'
+           Replace = '$null = $o' }
         @{ Name = "every-claimant-of-a-letter-is-named"
            Find = '$names = @($claimants | Select-Object -First $script:HordeFleetStatusMostNamed) -join ", "'
            Replace = '$names = @($claimants) -join ", "' }
