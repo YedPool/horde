@@ -264,7 +264,7 @@ try {
         Clear-Log
         $d = Deploy
         $why = "" + $d.answer.reason
-        Check ($d.answer.state -ceq "unknown" -and $why.Contains("the relay was deployed, but its sign-in failed the check after the deploy") -and $why.Contains($c.like) -and @(Read-Log).Count -eq 4 -and -not (Holds-Value ($why + ($d.said -join " ")))) ("a relay whose sign-in sends " + $c.what + ": the deploy is reported failed, with no value in the reason (" + $why + ")")
+        Check ($d.answer.state -ceq "unknown" -and $why.Contains("the Worker IS live, but its sign-in failed the check after the deploy") -and $why.Contains($c.like) -and $why.Contains("deploy again from a fixed checkout") -and $why.Contains($starts[$c.mode] + "/auth/google redirects to Google") -and @(Read-Log).Count -eq 4 -and -not (Holds-Value ($why + ($d.said -join " ")))) ("a relay whose sign-in sends " + $c.what + ": the deploy is reported failed, says the Worker is live and the way back, with no value in the reason (" + $why + ")")
     }
     # Not 127.0.0.1, so refused - yet on this machine, so a mutant that took it would contact nothing.
     Set-Settings -Client (Write-Client -WithCallback) -Check "http://localhost:9"

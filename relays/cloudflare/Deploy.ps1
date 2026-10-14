@@ -44,6 +44,9 @@ $script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "client
 $script:HordeCloudflareRelayDeploySeconds = 600
 # The check after a deploy asks this many times, this far apart, before it calls the deploy failed: a
 # Worker just deployed can take a few seconds to answer everywhere. A suite shortens the wait.
+# Each try is a real GET /auth/google: it counts toward this machine's address's signInStartsPerMinute
+# (10, worker/limits.js) and the relay sets a pending sign-in cookie, which the check discards. 3 is well
+# inside that limit.
 $script:HordeCloudflareRelayCheckTries = 3
 $script:HordeCloudflareRelayCheckWaitMs = 2000
 
@@ -174,7 +177,8 @@ function Publish-HordeCloudflareRelay {
         if ($r.timedOut -or $r.code -ne 0) { return (New-HordeUnknown -Reason ("wrangler deploy failed (exit " + $r.code + $(if ($r.timedOut) { ", timed out" } else { "" }) + "): " + (Get-HordeCloudflareRelayWranglerTail -Run $r -Secrets $secrets))) }
         $asked = $(if ($checkOrigin -ne "") { $checkOrigin } else { $dep.origin })
         $check = Test-HordeCloudflareRelaySignInClient -Origin $asked -ClientId $client.value.clientId -Tries $script:HordeCloudflareRelayCheckTries -WaitMs $script:HordeCloudflareRelayCheckWaitMs
-        if ($check.state -cne "known") { return (New-HordeUnknown -Reason ("the relay was deployed, but its sign-in failed the check after the deploy: " + $check.reason + "; sign-in will not work until it is deployed again")) }
+        # The Worker is live by now, running the secrets just stored: the reason names the way back.
+        if ($check.state -cne "known") { return (New-HordeUnknown -Reason ("the Worker IS live, but its sign-in failed the check after the deploy: " + $check.reason + ". Sign-in will not work until it is fixed: deploy again from a fixed checkout (under PowerShell 7, or with the byte order mark fix), then check that " + $asked + "/auth/google redirects to Google")) }
         & $Say ("checked: the relay's sign-in sends Google the client file's id")
         # SIGN-IN'S RETURN ADDRESS (8b) must be registered with Google, or Google refuses the sign-in.
         $callback = $dep.origin + $dep.callback
