@@ -63,10 +63,36 @@ $script:HordeServiceTellSentences = [ordered]@{
 }
 $script:HordeServiceTellNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
 
+# THE HOSTED PHONE PAGE (cli/RelayPublish.ps1) is told in the same way: one fixed sentence for each
+# outcome, chosen by its what alone, and the commit only when it is a commit id. Its notices are of the
+# kind "page", and do not say "needs attention" when the news is that it was deployed.
+$script:HordeServiceTellPageSentences = [ordered]@{
+    "deployed"      = "the supervisor deployed the phone page and checked it: the hosted page serves the new version"
+    "deploy-failed" = "the supervisor's deploy of the phone page failed; it is tried again an hour later at the earliest, or a person runs: horde relay deploy"
+    "check-failed"  = "the supervisor deployed the phone page, but the hosted page did not then serve exactly what was built; it is tried again an hour later at the earliest"
+    "worker-changed" = "the relay's Worker changed since the last deploy, so the supervisor did not deploy the phone page; a person reads the change, then runs: horde relay deploy"
+    "worker-unmeasured" = "files the relay's Worker shares with the phone page changed, and whether the Worker itself changed could not be measured, so the supervisor did not deploy; a person checks, then runs: horde relay deploy"
+    "no-record"     = "nothing records a clean commit the hosted phone page was deployed from, so the supervisor does not deploy it; one deploy by hand from a clean checkout (horde relay deploy) records it"
+    "unreadable"    = "what changed since the phone page was last deployed could not be read, so the supervisor did not deploy it"
+    "dirty"         = "the checkout the phone page is built from has changes of its own, so the supervisor did not deploy it"
+}
+
+function Format-HordeServicePageNoticeBody {
+    # PURE. The words of one notice about the hosted phone page (above).
+    param([Parameter(Mandatory = $true)]$Notice)
+    $what = "" + $Notice.what
+    $said = $(if ($script:HordeServiceTellPageSentences.Contains($what)) { $script:HordeServiceTellPageSentences[$what] } else { "it needs a person" })
+    $rev = ""
+    $named = $Notice.PSObject.Properties["revision"]
+    if ($null -ne $named -and "" + $named.Value -cmatch '\A[0-9a-f]{7,40}\z') { $rev = " (commit " + ("" + $named.Value).Substring(0, 7) + ")" }
+    return ("HORDE SERVICES - phone page" + $(if ($what -ceq "deployed") { "" } else { " needs attention" }) + "`n" + $said + $rev + "`nIts log: relay\publish-log.txt in the Horde home")
+}
+
 function Format-HordeServiceNoticeBody {
     # PURE. The words of one notice (header): the service's name and fixed sentences, by the notice's
     # kind and its what - never its text. A name that is not a service name is not repeated either.
     param([Parameter(Mandatory = $true)]$Notice)
+    if ("" + $Notice.kind -ceq "page") { return (Format-HordeServicePageNoticeBody -Notice $Notice) }
     $service = "a service"
     $named = $Notice.PSObject.Properties["service"]
     if ($null -ne $named -and "" + $named.Value -cmatch $script:HordeServiceTellNamePattern) { $service = "service " + $named.Value }

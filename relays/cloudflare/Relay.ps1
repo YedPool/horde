@@ -77,6 +77,7 @@
 
 $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
 . (Join-Path $PSScriptRoot "Deploy.ps1")
+. (Join-Path $PSScriptRoot "Bundle.ps1")
 . (Join-Path $PSScriptRoot "RequestSigner.ps1")
 . (Join-Path $PSScriptRoot "SecretFiles.ps1")
 Add-Type -AssemblyName System.Net.Http
@@ -428,6 +429,10 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     -Deploy {
         param([string]$Site, [scriptblock]$Say, [string]$HordeHome)
         return (Publish-HordeCloudflareRelay -Site $Site -Say $Say -HordeHome $HordeHome)
+    } `
+    -Bundle {
+        param([string]$Tree, [string]$Work)
+        return (Get-HordeCloudflareRelayBundleHash -Tree $Tree -Work $Work)
     } `
     -RunWatchMs $script:HordeCloudflareRelayRunWatchMs `
     -SecretFiles {

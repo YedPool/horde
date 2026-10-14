@@ -70,6 +70,9 @@ function New-HordeServiceTools {
         Kill         = { param($Process) return (Stop-HordeServiceProcess -Process $Process) }
         # $null: nobody is told. The command sets it (cli/commands/services.ps1), a suite sets its own.
         TellAll      = $null
+        # $null: the hosted phone page is not looked at (cli/RelayPublish.ps1). The command sets it, so
+        # no suite can deploy anything by forgetting to stub it: param($HordeHome, $Policy, $Teller).
+        PagePublish  = $null
     }
 }
 
@@ -361,6 +364,13 @@ function Invoke-HordeServiceSupervisor {
             $null = Invoke-HordeServiceTool -Tools $Tools -Name "Sleep" -With @(2000)
         }
         foreach ($l in @(Send-HordeServicePending -Definitions $chosen -Tools $Tools -Policy $policy -HordeHome $HordeHome)) { [void]$lines.Add($l) }
+        # THE HOSTED PHONE PAGE, once a whole pass, after the services (cli/RelayPublish.ps1): a pass for
+        # chosen services only - a person's start or rollout of one - leaves it to the next whole pass.
+        # Its failure is its own, as one service's is.
+        if (@($Only).Count -eq 0 -and $null -ne $Tools["PagePublish"]) {
+            try { foreach ($l in @(& $Tools["PagePublish"] $HordeHome $policy $Tools["TellAll"])) { [void]$lines.Add("" + $l) } }
+            catch { [void]$lines.Add("phone page: THE PASS FAILED ON IT - " + (Protect-HordeServiceText $_.Exception.Message)) }
+        }
         $null = Write-HordeHeartbeatQuietly -Path $beatPath -At (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
     } finally { $lock.Dispose() }
     return [pscustomobject]@{ ran = $true; problem = ""; lines = [string[]]@($lines.ToArray()); services = @($chosen | ForEach-Object { $last[$_.name] } | Where-Object { $null -ne $_ }) }
