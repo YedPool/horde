@@ -35,8 +35,11 @@
            Find = 'if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }'
            Replace = 'if (!c || typeof c !== "object" || lanesSeen.has(c.lane)) { dropped++; continue; }' }
         @{ Name = "the-machines-note-words-shown"
-           Find = 'blockedText: cardText(c.blockedText), note: CARD_FORM_WORDS[c.form],'
-           Replace = 'blockedText: cardText(c.blockedText), note: cardText(c.note) || CARD_FORM_WORDS[c.form],' }
+           Find = 'blockedText: cardText(c.blockedText), note: cardFormNote(c.form, cardText(c.problems)),'
+           Replace = 'blockedText: cardText(c.blockedText), note: cardText(c.note) || cardFormNote(c.form, cardText(c.problems)),' }
+        @{ Name = "the-broken-rules-not-said"
+           Find = 'if (form === "other" && problems) return'
+           Replace = 'if (false) return' }
         @{ Name = "a-control-character-shown"
            Find = 'const cardText = (v) => (typeof v === "string" && v.length <= CARD_TEXT && PLAIN.test(v) ? v : "");'
            Replace = 'const cardText = (v) => (typeof v === "string" ? v : "");' }

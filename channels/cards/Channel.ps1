@@ -13,10 +13,9 @@
 # suite's `horde relay run` on a home of its own never reads a real fleet. THIS CHANNEL ONLY READS.
 #   lanesFolder       <HORDE_HOME>\progress\lanes. Each direct subfolder is one lane, its status.txt what
 #                     the lane says of itself: "horde-orc-status 1", then orc:, lane:, doing:, finished:,
-#                     blocked: and waiting on: lines (waiting on: may be missing). Read by THIS file and
-#                     not by fleet/StatusPanel.ps1, whose record is exactly six lines: every lane file on
-#                     the founder's machine had a seventh, waiting on:, on 2026-10-13, so that reader
-#                     would show none of them.
+#                     blocked: and waiting on: lines (waiting on: may be missing). Whether a file is in
+#                     the standard form is fleet/StatusPanel.ps1's to say, by the record's own rules
+#                     (Read-HordeCardsChannelStatusText); one that breaks them still gets its card.
 #   ledgerFile        <HORDE_HOME>\progress\tasks.jsonl: the fleet's task ledger, one JSON event a line
 #                     (opened, started, waiting, done, verified, handed, ...), read the way its own tool
 #                     reads it: opened first, the rest in time order; handed moves a task to another lane.
@@ -38,8 +37,8 @@
 # WHAT A CARD SAYS (OUT, below): the lane's id (its orc letter, else its folder's name), its name, the
 # time its status file was last written (asOf: the phone shows its age), now, last done, waiting on,
 # blocked yes or no, and from the ledger the tasks open and done in the last 7 days. A status file in
-# another form still gets a card: its first lines as now, its waiting on line, and form "other", which
-# the phone says. A file that is missing or cannot be read gets a card that says so - never no card.
+# another form still gets a card: its first lines as now, its waiting on line, and form "other" with
+# the rules it breaks in plain words (problems), which the phone says. A file that is missing or cannot be read gets a card that says so - never no card.
 #
 # NO SECRET LEAVES THE MACHINE. Every text that goes out is put through core/Secrets.ps1's refusal, the
 # one the log's entries get. A text that trips it is replaced by a fixed sentence, and the card is still
@@ -76,6 +75,7 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Secrets.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ReadShared.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\StatusPanel.ps1")
 
 $script:HordeCardsChannelFolder = $PSScriptRoot
 $script:HordeCardsChannelSettings = New-HordeModuleSettings -Module "relay-cards" -Settings @(
@@ -99,7 +99,6 @@ $script:HordeCardsChannelDoneDays = 7
 $script:HordeCardsChannelSecretWords = "Not shown: this line looks like it holds a secret, so it stays at the machine."
 $script:HordeCardsChannelLanePattern = '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}\z'
 $script:HordeCardsChannelOrcPattern = '\A[A-Z][A-Z0-9]{0,3}\z'
-$script:HordeCardsChannelStandardKeys = @("orc", "lane", "doing", "finished", "blocked")
 $script:HordeCardsChannelClosed = @("done", "verified", "dropped", "superseded")
 
 function Get-HordeCardsChannelSettingsDeclaration { return $script:HordeCardsChannelSettings }
@@ -142,9 +141,16 @@ function Get-HordeCardsChannelPlain {
 }
 
 function Read-HordeCardsChannelStatusText {
-    # What a lane's status file says: { form; lines } - form "standard", "other", "missing" or
-    # "unreadable" (with why in reason), lines a table of its "key: value" lines by key in lower case,
-    # first holds its first lines that hold words, header aside.
+    # What a lane's status file says: { form; reason; keys; first; asOf } - form "standard", "other",
+    # "missing" or "unreadable"; reason, for "other", the rules it breaks in the status reader's own
+    # words, and for "unreadable" why; keys a table of its "key: value" lines by key in lower case;
+    # first its first lines that hold words, header aside.
+    # STANDARD MEANS WHAT THE FLEET'S ONE STATUS READER SAYS IT IS: fleet/StatusPanel.ps1's
+    # ConvertFrom-HordeFleetStatusBytes, the record's rules (header, one capital letter, doing and
+    # finished at most 120 characters with no bare reference or path, the optional waiting-on line at
+    # most 200, ASCII, no control character), which the decisions window uses too. No second copy of
+    # them here (review of PR 244, 2026-10-14). A file that breaks them still gets its card, "other",
+    # read loosely below and shown as it stands, with the reader's problems as the reason.
     param([Parameter(Mandatory = $true)][string]$Path)
     $out = [pscustomobject]@{ form = "missing"; reason = ""; keys = @{}; first = @(); asOf = "" }
     try {
@@ -152,8 +158,12 @@ function Read-HordeCardsChannelStatusText {
         if (-not $info.Exists) { return $out }
         $out.asOf = $info.LastWriteTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
         if ($info.Length -gt $script:HordeCardsChannelStatusBytes) { $out.form = "unreadable"; $out.reason = "it is " + $info.Length + " bytes, far more than a status"; return $out }
-        $text = Read-HordeSharedText -Path $Path
+        $stream = Open-HordeSharedStream -Path $Path
+        try { $mem = New-Object System.IO.MemoryStream; $stream.CopyTo($mem); $bytes = $mem.ToArray() } finally { $stream.Dispose() }
     } catch { $out.form = "unreadable"; $out.reason = "it could not be read"; return $out }
+    $judged = ConvertFrom-HordeFleetStatusBytes -Bytes $bytes
+    $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+    if ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
     $lines = @($text -split "\r?\n" | Where-Object { $_.Trim() -ne "" })
     $keys = @{}
     $first = New-Object System.Collections.ArrayList
@@ -162,11 +172,17 @@ function Read-HordeCardsChannelStatusText {
         if ($m.Success) { $k = $m.Groups[1].Value.ToLowerInvariant(); if (-not $keys.ContainsKey($k)) { $keys[$k] = $m.Groups[2].Value.Trim() } }
         if ($line.Trim() -cne "horde-orc-status 1" -and $first.Count -lt 2) { [void]$first.Add($line.Trim()) }
     }
-    $out.keys = $keys
     $out.first = @($first.ToArray())
-    $standard = ($lines.Count -gt 0 -and $lines[0].Trim() -ceq "horde-orc-status 1")
-    foreach ($k in $script:HordeCardsChannelStandardKeys) { if (-not $keys.ContainsKey($k)) { $standard = $false } }
-    $out.form = $(if ($standard) { "standard" } else { "other" })
+    if (@($judged.problems).Count -eq 0) {
+        # A standard record's values are the reader's, exactly as it hands them to the decisions window.
+        $keys = @{}
+        foreach ($k in @($judged.fields.Keys)) { $keys[$k] = $judged.fields[$k] }
+        $out.form = "standard"
+    } else {
+        $out.form = "other"
+        $out.reason = (@($judged.problems) -join "; ")
+    }
+    $out.keys = $keys
     return $out
 }
 
@@ -202,7 +218,7 @@ function New-HordeCardsChannelLaneCard {
     if ($lane -ceq "thrall") { $lane = $fallback }
     $name = & $get "lane"
     if ($name -ceq "") { $name = Get-HordeCardsChannelClean $leaf }
-    $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; note = "" }
+    $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; note = ""; problems = "" }
     if ($s.form -ceq "missing") { $card.note = "This lane has no status file." }
     elseif ($s.form -ceq "unreadable") { $card.note = "This lane's status file could not be read: " + $s.reason + "." }
     else {
@@ -214,10 +230,10 @@ function New-HordeCardsChannelLaneCard {
         if ($b -cne "") {
             if ($b -imatch '\Ano\b') { $card.blocked = "no" } else { $card.blocked = "yes"; $card.blockedText = [regex]::Replace($b, '\A(?i:yes)\b\s*[-:,.]?\s*', '') }
         }
-        if ($s.form -ceq "other") { $card.note = "This lane's status file is not in the standard form; what it says is shown as it stands." }
+        if ($s.form -ceq "other") { $card.note = "This lane's status file is not in the standard form; what it says is shown as it stands."; $card.problems = $s.reason }
     }
     $refused = New-Object System.Collections.ArrayList
-    foreach ($f in @("lane", "name", "now", "lastDone", "waitingOn", "blockedText")) { $card[$f] = Protect-HordeCardsChannelField -Text $card[$f] -Field $f -Refused $refused }
+    foreach ($f in @("lane", "name", "now", "lastDone", "waitingOn", "blockedText", "problems")) { $card[$f] = Protect-HordeCardsChannelField -Text $card[$f] -Field $f -Refused $refused }
     # A refused id cannot name a stream: the lane is then its folder's place in the list, said plainly.
     if (@($refused) -ccontains "lane") { $card.lane = $fallback }
     $card["refused"] = @($refused.ToArray())

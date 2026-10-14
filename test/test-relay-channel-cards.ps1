@@ -338,6 +338,58 @@ try {
         ('{"ts":"' + $ts + '","task":"T-4","event":7,"lane":"E"}')) -join "`n"), $utf8)
     $led = Read-HordeCardsChannelLedger -Path $ledgerE -Now ([datetime]::UtcNow)
     Check ($led.ok -and $led.lanes["E"].open -eq 1 -and $led.skipped -eq 3 -and -not $led.lanes.ContainsKey("@{a=1}") -and -not $led.lanes.ContainsKey("E E")) ("a task, event or lane that is an object, a list or a number is passed over and counted, never read as its printed form (open " + $led.lanes["E"].open + ", skipped " + $led.skipped + ")")
+    Write-Host ""
+    Write-Host "--- 11. the standard form is the fleet status reader's: each rule broken is a card not in the standard form, saying which ---" -ForegroundColor Cyan
+    # E and F, 2026-10-14: standard means what fleet/StatusPanel.ps1's ConvertFrom-HordeFleetStatusBytes
+    # says, the rules the decisions window uses too, never a second copy. One lane a rule, each with its
+    # own orc letter so no id is shared; the problems are the reader's own words.
+    $H = New-World
+    $rec = { param([string]$Orc, [string]$Doing = "plain words", [string]$Finished = "plain words", [string]$Waiting = $null, [string]$Head = "horde-orc-status 1")
+        $t = $Head + "`norc: " + $Orc + "`nlane: lane " + $Orc + "`ndoing: " + $Doing + "`nfinished: " + $Finished + "`nblocked: no`n"
+        if ($null -ne $Waiting -and $Waiting -ne "") { $t += "waiting on: " + $Waiting + "`n" }
+        return $t }
+    $bytesOf = { param([string]$Folder, [byte[]]$Bytes) $dir = Join-Path $H.lanes $Folder; [void][System.IO.Directory]::CreateDirectory($dir); [System.IO.File]::WriteAllBytes((Join-Path $dir "status.txt"), $Bytes) }
+    $ascii = { param([string]$Text) return [System.Text.Encoding]::ASCII.GetBytes($Text) }
+    $wait200 = "x" * (200 - "waiting on: ".Length)
+    $cases = @(
+        @{ f = "a-six-lines"; orc = "A"; bytes = (& $ascii (& $rec "A")); want = "" },
+        @{ f = "b-seven-lines"; orc = "B"; bytes = (& $ascii (& $rec "B" -Waiting "the reviewer, since 2026-10-07 13:00, unblocked by a yes")); want = "" },
+        @{ f = "c-doing-at-120"; orc = "C"; bytes = (& $ascii (& $rec "C" -Doing ("d" * 120))); want = "" },
+        @{ f = "d-waiting-line-at-200"; orc = "D"; bytes = (& $ascii (& $rec "D" -Waiting $wait200)); want = "" },
+        @{ f = "e-bom"; orc = "E"; bytes = ([byte[]](@(0xEF, 0xBB, 0xBF) + @(& $ascii (& $rec "E")))); want = "starts with a byte-order mark" },
+        @{ f = "f-not-ascii"; orc = "F"; bytes = ($utf8.GetBytes((& $rec "F" -Doing ("words " + [char]0x05D0)))); want = "holds bytes that are not ASCII" },
+        @{ f = "g-five-lines"; orc = "G"; bytes = (& $ascii ("horde-orc-status 1`norc: G`nlane: lane G`ndoing: words`nfinished: words`n")); want = "has 5 lines, and a record is 6, or 7 with its waiting-on line" },
+        @{ f = "h-eight-lines"; orc = "H"; bytes = (& $ascii ((& $rec "H" -Waiting "nobody") + "extra: line`n")); want = "line 8 is one too many" },
+        @{ f = "i-no-header"; orc = "I"; bytes = (& $ascii (& $rec "I" -Head "status 2")); want = "does not begin with the line 'horde-orc-status 1'" },
+        @{ f = "j-no-doing-key"; orc = "J"; bytes = (& $ascii ("horde-orc-status 1`norc: J`nlane: lane J`nnow: words`nfinished: words`nblocked: no`n")); want = "line 4 is not 'doing: ...'" },
+        @{ f = "k-orc-two-letters"; orc = "K1"; bytes = (& $ascii (& $rec "K1")); want = "its orc is not one capital letter" },
+        @{ f = "l-doing-at-121"; orc = "L"; bytes = (& $ascii (& $rec "L" -Doing ("d" * 121))); want = "doing is 121 characters, and the most is 120" },
+        @{ f = "m-finished-pr"; orc = "M"; bytes = (& $ascii (& $rec "M" -Finished "merged PR 238")); want = "finished holds a bare reference or a path" },
+        @{ f = "n-doing-issue"; orc = "N"; bytes = (& $ascii (& $rec "N" -Doing "fixing issue 214")); want = "doing holds a bare reference or a path" },
+        @{ f = "o-finished-hash"; orc = "O"; bytes = (& $ascii (& $rec "O" -Finished "closed #12")); want = "finished holds a bare reference or a path" },
+        @{ f = "p-doing-path"; orc = "P"; bytes = (& $ascii (& $rec "P" -Doing "editing C:\work\notes")); want = "doing holds a bare reference or a path" },
+        @{ f = "q-waiting-line-at-201"; orc = "Q"; bytes = (& $ascii (& $rec "Q" -Waiting ($wait200 + "x"))); want = "the waiting on line is 201 characters, and the most is 200" },
+        @{ f = "r-waiting-pr"; orc = "R"; bytes = (& $ascii (& $rec "R" -Waiting "the reviewer of PR 5")); want = "waiting on holds a bare reference or a path" },
+        @{ f = "s-control"; orc = "S"; bytes = (& $ascii (& $rec "S" -Doing ("tab" + [char]9 + "in it"))); want = "holds a control character" },
+        @{ f = "t-seventh-other-key"; orc = "T"; bytes = (& $ascii ((& $rec "T") + "note: something`n")); want = "line 7 is not 'waiting on: ...'" }
+    )
+    foreach ($c in $cases) { & $bytesOf $c.f $c.bytes }
+    $t = Invoke-Tick $H
+    $mail = @(Get-CardsMail $H)
+    $b = $mail[$mail.Count - 1].body
+    foreach ($c in $cases) {
+        $card = @($b.cards | Where-Object { $_.lane -ceq $c.orc })[0]
+        $judged = ConvertFrom-HordeFleetStatusBytes -Bytes $c.bytes
+        if ($c.want -ceq "") {
+            Check ($null -ne $card -and $card.form -ceq "standard" -and $card.problems -ceq "" -and @($judged.problems).Count -eq 0) ("STANDARD: " + $c.f + " is in the standard form, as the status reader says (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
+        } else {
+            Check ($null -ne $card -and $card.form -ceq "other" -and $card.problems.Contains($c.want) -and $card.problems -ceq (Get-HordeCardsChannelPlain (@($judged.problems) -join "; ")) -and $card.note -like "*not in the standard form*") ("NOT STANDARD: " + $c.f + " still gets its card, marked not in the standard form, with the reader's words '" + $c.want + "' (" + $(if ($null -ne $card) { $card.form + ": " + $card.problems } else { "no card" }) + ")")
+        }
+    }
+    $bw = @($b.cards | Where-Object { $_.lane -ceq "B" })[0]
+    Check ($bw.waitingOn -ceq "the reviewer, since 2026-10-07 13:00, unblocked by a yes" -and $bw.now -ceq "plain words") "a standard record's values, its waiting-on line among them, are the ones the reader hands over"
+    $kc = @($b.cards | Where-Object { $_.lane -ceq "K1" })[0]
+    Check ($null -ne $kc -and $kc.now -ceq "plain words") "and a lane that breaks a rule is still shown as it stands, by the orc it names"
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin

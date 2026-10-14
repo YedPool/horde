@@ -23,8 +23,14 @@
            Find = 'if ($info.Length -gt $script:HordeCardsChannelStatusBytes) { $out.form = "unreadable"'
            Replace = 'if ($false) { $out.form = "unreadable"' }
         @{ Name = "another-form-is-called-standard"
-           Find = '$out.form = $(if ($standard) { "standard" } else { "other" })'
-           Replace = '$out.form = "standard"' }
+           Find = 'if (@($judged.problems).Count -eq 0) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "the-broken-rules-not-sent"
+           Find = '; $card.problems = $s.reason }'
+           Replace = ' }' }
+        @{ Name = "a-standard-record-read-loosely"
+           Find = 'foreach ($k in @($judged.fields.Keys)) { $keys[$k] = $judged.fields[$k] }'
+           Replace = 'foreach ($k in @()) { }' }
         @{ Name = "another-form-names-no-orc"
            Find = '$m = [regex]::Match("$v", ''\(Orc ([A-Z][A-Z0-9]{0,3})\)'')'
            Replace = '$m = [regex]::Match("", ''x'')' }
