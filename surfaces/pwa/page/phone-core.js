@@ -718,8 +718,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      if (s.mode === "read-only") throw fail(NO_PRF);
-      if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to change how a question is ranked.");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to change how a question is ranked."); }
       const v = s.view;
       if (!v || v.ranks !== true) throw fail("Not changed: this PC does not take a change of rank from the phone yet. Change it at the PC.");
       const q = v.questions.find((x) => x.question.number === number);

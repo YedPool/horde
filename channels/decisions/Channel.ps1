@@ -410,15 +410,18 @@ function Invoke-HordeDecisionsChannelRankApply {
     }
     $request = [ordered]@{ id = (Get-HordeDecisionsChannelAnswerId -From $Item.from -AnswerId $Rank.rankId -Domain $script:HordeDecisionsChannelRankIdDomain); actor = "founder"; number = $n }
     foreach ($w in @($Rank.words.Keys)) { $request[$w] = $Rank.words[$w] }
-    $a = Invoke-HordeDecision -Operation "rank" -Request $request -Root $Context.decisionsRoot
-    if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take it now: " + $a.reason) } }
-    if ($a.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + $a.reason) } }
-    if ($a.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused it: " + (@($a.value.findings) -join "; ")) } }
+    $ranked = Invoke-HordeDecision -Operation "rank" -Request $request -Root $Context.decisionsRoot
+    if ($ranked.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take the change now: " + $ranked.reason) } }
+    if ($ranked.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused the change: " + $ranked.reason) } }
+    if ($ranked.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused the change: " + (@($ranked.value.findings) -join "; ")) } }
     # WHEN HE SIGNED IT, kept by the record's sequence for the next change's stale check. A ledger that
-    # cannot be kept costs only that: the record then counts at the time the store recorded it.
-    $null = Add-HordeDecisionsChannelRanked -Context $Context -Sequence ([long]$a.value.sequence) -SignedAt $signedAt -Evidence "$($Item.evidence)"
+    # cannot be kept costs only that: the record then counts at the time the store recorded it. (A crash
+    # between the record and this line makes a resend of the same change count its own record at the
+    # time the store wrote it, and so be listed refused as superseded: the record stands all the same,
+    # and the error is toward refusing, never toward applying an older change.)
+    $null = Add-HordeDecisionsChannelRanked -Context $Context -Sequence ([long]$ranked.value.sequence) -SignedAt $signedAt -Evidence "$($Item.evidence)"
     $said = @(@($Rank.words.Keys) | ForEach-Object { $_ + " " + $Rank.words[$_] }) -join ", "
-    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $n + ": the founder's change of rank (" + $said + ") is record " + $a.value.sequence + " (" + $a.value.outcome + ")") }
+    return [pscustomobject]@{ outcome = "done"; reason = ("question " + $n + ": the founder's change of rank (" + $said + ") is record " + $ranked.value.sequence + " (" + $ranked.value.outcome + ")") }
 }
 
 function Get-HordeDecisionsChannelRankedAt {
@@ -576,7 +579,7 @@ function Read-HordeDecisionsChannelRankedFile {
     $out = [ordered]@{}
     try {
         $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
-        if (-not [System.IO.File]::Exists($path)) { return $out }
+        if (-not [System.IO.File]::Exists($path)) { return [ordered]@{} }
         $j = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($path))
         if ($null -eq $j -or $null -eq $j.PSObject.Properties["ranked"]) { return $out }
         foreach ($x in @($j.ranked)) {
