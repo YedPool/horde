@@ -92,7 +92,15 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
     @{ name = "notifyFounder"; kind = "truefalse"; default = $true
        what = "Whether the founder's phone is told when a round gets no ack in time." },
     @{ name = "fromLabel"; kind = "label"; default = "AS"
-       what = "The hub label the supervisor's messages wear, so a messenger can say who they are from." }
+       what = "The hub label the supervisor's messages wear, so a messenger can say who they are from." },
+    # THE RELAY WATCH (core/RelayWatch.ps1), run by the same token-free loop. Empty origin: the relay
+    # settings' pairOrigin. Two failures in a row before anyone is told, so one blip tells nobody.
+    @{ name = "relayOrigin"; kind = "text"; min = 0; max = 200; default = ""
+       what = "The hosted relay to check, https://host. Empty: pairOrigin of the relay settings; neither: no check." },
+    @{ name = "relayEveryMinutes"; kind = "whole"; default = 5; min = 1; max = 120
+       what = "How often, in minutes, the hosted relay is checked." },
+    @{ name = "relayFailuresBeforeAlert"; kind = "whole"; default = 2; min = 1; max = 10
+       what = "How many failed checks in a row before the warchief is told the relay is down." }
 )
 
 $script:HordeAnalystMarkerPattern = '\A[A-Z][A-Z0-9-]{1,23}\z'
