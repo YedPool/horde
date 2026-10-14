@@ -15,11 +15,11 @@
            Find = 'else if (r.refused.has(item.answerId)) state = "refused";'
            Replace = 'else if (false) state = "refused";' }
         @{ Name = "a-missing-seq-counts-as-received"
-           Find = 'seqs.some((s) => s <= r.through && !r.missing.has(s))'
-           Replace = 'seqs.some((s) => s <= r.through)' }
+           Find = 's >= r.checked && !r.missing.has(s);'
+           Replace = 's >= r.checked;' }
         @{ Name = "a-missing-answer-is-never-signed-again"
-           Find = 'if (r.missing.has(newest)) resend = "resign";'
-           Replace = 'if (false) resend = "resign";' }
+           Find = 'const lost = (s) => r.missing.has(s) ||'
+           Replace = 'const lost = (s) => false ||' }
         @{ Name = "an-unseen-answer-is-put-again-without-the-grace"
            Find = 'newest > r.through && Number(receiptTs) > Number(item.lastSentAt) + ANSWER_TAIL_GRACE_MS'
            Replace = 'newest > r.through' }
@@ -47,5 +47,24 @@
         @{ Name = "the-warning-is-not-drawn"
            Find = '(a.warning ? ANSWER_WARNING : "")'
            Replace = '""' }
+        # --- the review of PR 262
+        @{ Name = "a-seq-below-checked-is-received"
+           Find = 'const arrived = (s) => s <= r.through && s >= r.checked && !r.missing.has(s);'
+           Replace = 'const arrived = (s) => s <= r.through && !r.missing.has(s);' }
+        @{ Name = "a-seq-below-checked-is-never-sent-again"
+           Find = 'const lost = (s) => r.missing.has(s) || (s <= r.through && s < r.checked);'
+           Replace = 'const lost = (s) => r.missing.has(s);' }
+        @{ Name = "a-receipt-silent-on-checked-vouches-for-everything"
+           Find = 'r.checked <= r.through ? r.checked : r.through;'
+           Replace = 'r.checked <= r.through ? r.checked : 0;' }
+        @{ Name = "an-answer-stuck-at-received-is-never-signed-again"
+           Find = 'if (state === "received" && receipt && item.stuckResent !== true && now'
+           Replace = 'if (false && now' }
+        @{ Name = "an-answer-stuck-at-received-is-signed-again-for-ever"
+           Find = 'item.stuckResent !== true && '
+           Replace = '' }
+        @{ Name = "unreadable-words-draw-nothing"
+           Find = 'a.unreadable || typeof a.text !== "string" ? ANSWER_UNREADABLE : a.text'
+           Replace = 'a.text' }
     )
 }

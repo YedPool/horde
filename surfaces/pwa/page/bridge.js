@@ -84,11 +84,22 @@ export function createBridge(phone, options = {}) {
   let view = null;
   let viewError = "";
   let polling = false;
+  // The lock one window of the app holds while it sends answers again: options.lock(name, fn), where fn
+  // is handed true when the lock is held; by default the browser's navigator.locks, asked not to wait,
+  // and with no such thing (the suites under Node) the one window there is holds it.
+  function withSendLock(id, fn) {
+    if (typeof options.lock === "function") return options.lock("horde-answer-resend-" + id, fn);
+    const locks = globalThis.navigator && globalThis.navigator.locks;
+    if (locks && typeof locks.request === "function") return locks.request("horde-answer-resend-" + id, { ifAvailable: true }, (lock) => fn(!!lock));
+    return fn(true);
+  }
   // What became of the answers this phone keeps (phone-core.js, answers), drawn into the list.
   let answers = [];
   async function loadAnswers() {
     if (!picked || locked) { answers = []; return; }
-    try { answers = await phone.answers(picked); } catch (e) { answers = []; }
+    // A READ THAT FAILS KEEPS WHAT WAS LAST READ (review of PR 262, S3): emptied, every question he
+    // answered would show as an empty slot until the next read.
+    try { answers = await phone.answers(picked); } catch (e) { /* the answers last read stand */ }
   }
   const look = options.look || { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
 
@@ -137,7 +148,10 @@ export function createBridge(phone, options = {}) {
     } catch (e) { view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e); }
     if (view && !locked) {
       try {
-        const again = await phone.resend(picked);
+        // A NEW SIGNATURE ONLY WHILE HE CAN SEE THE PAGE, AND FROM ONE WINDOW OF THE APP AT A TIME (review
+        // of PR 262, S4): hidden, or another window holding the lock, only what needs no signature goes.
+        const shown = !options.visible || options.visible();
+        const again = await withSendLock(picked, (held) => phone.resend(picked, { sign: shown && held }));
         if (again.problems.length) emit("notice", again.problems.join(" "));
       } catch (e) { /* the next refresh asks again; the answers stay kept */ }
     }

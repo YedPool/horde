@@ -12,7 +12,14 @@
            Find = 'questions: withAnswers(view.questions, answers),'
            Replace = 'questions: view.questions,' }
         @{ Name = "a-refresh-sends-nothing-again"
-           Find = 'const again = await phone.resend(picked);'
+           Find = 'const again = await withSendLock(picked, (held) => phone.resend(picked, { sign: shown && held }));'
            Replace = 'const again = { problems: [] };' }
+        # --- the review of PR 262
+        @{ Name = "a-failed-read-empties-the-answers"
+           Find = 'catch (e) { /* the answers last read stand */ }'
+           Replace = 'catch (e) { answers = []; }' }
+        @{ Name = "hidden-or-unlocked-the-page-still-signs"
+           Find = '{ sign: shown && held }'
+           Replace = '{ sign: true }' }
     )
 }

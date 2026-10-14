@@ -37,8 +37,8 @@
            Find = 'if (best && best.seq < e.lastSnapshotSeq) {'
            Replace = 'if (false) {' }
         @{ Name = "sequence-not-counted-up"
-           Find = 'counts[channel] = (counts[channel] || 0) + 1;'
-           Replace = 'counts[channel] = 1;' }
+           Find = 'const seq = ((held.seq && held.seq[channel]) || 0) + 1;'
+           Replace = 'const seq = 1;' }
         @{ Name = "answer-bound-to-snapshot-hash-not-page"
            Find = 'snapshot: q.pageKey, number, wordingVersion, text: words,'
            Replace = 'snapshot: e.machine + "/decisions/" + v.snapshot, number, wordingVersion, text: words,' }
