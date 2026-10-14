@@ -206,7 +206,7 @@
            Find = 'if ($run.closed.state -ne "known" -or -not [bool]$run.closed.value) { return "it is in a run that is open, or may be" }'
            Replace = 'if ($false) { return "it is in a run that is open, or may be" }' }
         @{ Name = "scope-control-file-ignored"
-           Find = 'if ($C.identity.records.ContainsKey($Id)) { return "a control file names it" }'
+           Find = 'if (-not $NotItsControlFile -and $C.identity.records.ContainsKey($Id)) { return "a control file names it" }'
            Replace = 'if ($false) { return "a control file names it" }' }
         @{ Name = "scope-duplicate-control-files-ignored"
            Find = 'if (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0) { return "two control files name it" }'
