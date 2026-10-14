@@ -536,6 +536,30 @@ const commands = {
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
     return { put: headOf(c.mailbox) > before, left: await evaluate("document.getElementById('chatText').value"), notice: await evaluate(notice) };
   },
+  // A PHOTO from the chat's Photo button: a real touch on it must open Chrome's file chooser (caught here,
+  // never shown), and the file on disk at c.path is then given to the page's file field as a person's pick
+  // would be (DOM.setFileInputFiles fires its change). Chrome decodes, draws and encodes it; Chrome's
+  // passkey signs the manifest. { chooser, put, prompts, thumbs, notice }.
+  async chatPhoto(c) {
+    const before = headOf(c.mailbox);
+    const signsBefore = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    await cdp("Page.setInterceptFileChooserDialog", { enabled: true });
+    let chooser = false;
+    on("Page.fileChooserOpened", () => { chooser = true; });
+    const at = await centre("#chatPhoto");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    for (let i = 0; i < 50 && !chooser; i++) await sleep(100);
+    await cdp("Page.setInterceptFileChooserDialog", { enabled: false });
+    const field = await cdp("Runtime.evaluate", { expression: "document.getElementById('chatPhotoFile')" });
+    await cdp("DOM.enable");
+    await cdp("DOM.setFileInputFiles", { files: [c.path], objectId: field.result.objectId });
+    const end = Date.now() + (c.expectNone ? 3000 : 60000);
+    while (headOf(c.mailbox) < before + (c.parts || 2) && Date.now() < end) await sleep(100);
+    await sleep(c.expectNone ? 0 : 500);
+    const signsAfter = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    return { chooser, put: headOf(c.mailbox) - before, prompts: signsAfter - signsBefore, thumbs: await evaluate("document.querySelectorAll('#chatLog canvas.chat-photo').length"), notice: await evaluate(notice) };
+  },
   async chatShot(c) {
     const shot = await cdp("Page.captureScreenshot", { format: "png" });
     writeFileSync(c.path, Buffer.from(shot.data, "base64"));

@@ -29,6 +29,10 @@
 #      scrolls sideways and the composer stands at the foot; with the page scrolled to its end the other
 #      view's tab is still on the screen and a touch opens it, both ways, and the phone's Back goes back
 #      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page;
+#  10b. a photo: a touch on Photo opens the picker; a 3000 by 2000 JPEG with a camera block is shrunk by
+#      Chrome's own canvas, signed by ONE assertion of Chrome's passkey and put in parts; a real run writes
+#      it to the PC's inbox at 1600 px with no camera block left, and posts one line; an HTML page called
+#      .jpg is refused on the phone with nothing sent;
 #  11. the progress tab (the founder asked for it, 2026-10-12): a changelog under the suite's home is sent by
 #      a run and drawn oldest to newest in the order written, each entry with its time, bold title, labelled
 #      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
@@ -389,6 +393,48 @@ try {
     $b1 = Invoke-Browser @{ cmd = "back" }
     $b2 = Invoke-Browser @{ cmd = "back" }
     Check ($b1.ok -and $b1.value.doc -and -not $b1.value.chat -and $b2.ok -and $b2.value.chat -and -not $b2.value.doc) ("the phone's Back goes back to the questions, and Back again to the chat (" + $(if ($b1.ok) { ConvertTo-Json $b1.value -Compress } else { $b1.reason }) + " " + $(if ($b2.ok) { ConvertTo-Json $b2.value -Compress } else { $b2.reason }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 10b. a photo from the Photo button: shrunk by Chrome, ONE passkey tap, whole on the PC, one line to the Thrall ---" -ForegroundColor Cyan
+    # A real picture, 3000 by 2000, drawn here and saved as a JPEG with a made-up camera block (APP1 Exif
+    # holding a "GPS" marker) put in after its first two bytes, as a phone camera's would be.
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-Object System.Drawing.Bitmap 3000, 2000
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $rand = New-Object System.Random 5
+    for ($k = 0; $k -lt 400; $k++) { $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb($rand.Next(256), $rand.Next(256), $rand.Next(256))); $gfx.FillEllipse($brush, $rand.Next(3000), $rand.Next(2000), 40 + $rand.Next(400), 40 + $rand.Next(400)); $brush.Dispose() }
+    $gfx.Dispose()
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); $bmp.Dispose()
+    $plain = $ms.ToArray(); $ms.Dispose()
+    $exifBody = [System.Text.Encoding]::ASCII.GetBytes("Exif`0`0GPSLAT-SECRET-PLACE-31.7767N")
+    $app1 = [byte[]](@(0xFF, 0xE1, 0, ($exifBody.Length + 2)) + $exifBody)
+    $camera = [byte[]](@($plain[0], $plain[1]) + $app1 + $plain[2..($plain.Length - 1)])
+    $photoPath = Join-Path $work "camera.jpg"
+    [System.IO.File]::WriteAllBytes($photoPath, $camera)
+    Check ([System.Text.Encoding]::ASCII.GetString($camera).Contains("GPSLAT-SECRET")) ("CONTROL: the picture picked carries a camera block with a location marker (" + $camera.Length + " bytes)")
+    $pp = Invoke-Browser @{ cmd = "chatPhoto"; path = $photoPath; mailbox = $mailbox; parts = 2 }
+    Check ($pp.ok -and $pp.value.chooser) ("a touch on Photo opens the phone's picker (" + $(if ($pp.ok) { ConvertTo-Json $pp.value -Compress } else { $pp.reason }) + ")")
+    Check ($pp.ok -and $pp.value.prompts -eq 1 -and $pp.value.put -ge 2) ("the photo is ONE passkey signature - the same as a line - and its manifest and parts are put (" + $(if ($pp.ok) { "" + $pp.value.prompts + " signature(s), " + $pp.value.put + " put(s)" } else { $pp.reason }) + ")")
+    Check ($pp.ok -and $pp.value.thumbs -eq 1) "the chat shows the photo sent as a small picture"
+    $run = Invoke-Run -Turns 2
+    $landed = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    $bytesIn = $(if ($landed.Count -eq 1) { [System.IO.File]::ReadAllBytes($landed[0].FullName) } else { [byte[]]@() })
+    Check ($landed.Count -eq 1 -and $bytesIn.Length -le 1000000 -and $bytesIn[0] -eq 0xFF -and $bytesIn[1] -eq 0xD8 -and $landed[0].Extension -ceq ".jpg") ("a real run writes one JPEG within 1,000,000 bytes to the PC's inbox (" + $(if ($landed.Count) { $landed[0].Name + ", " + $bytesIn.Length + " bytes" } else { "none" }) + "; exit " + $run.code + ")")
+    $asText = [System.Text.Encoding]::ASCII.GetString($bytesIn)
+    Check ($landed.Count -eq 1 -and -not $asText.Contains("GPSLAT-SECRET") -and -not $asText.Contains("Exif")) "the camera block, and the location in it, is not in what reached the PC"
+    $dims = $null
+    if ($landed.Count -eq 1) { $im = [System.Drawing.Image]::FromFile($landed[0].FullName); $dims = @($im.Width, $im.Height); $im.Dispose() }
+    Check ($null -ne $dims -and [math]::Max($dims[0], $dims[1]) -eq 1600 -and $dims[1] -eq [math]::Round(1600 * 2000 / 3000)) ("a photo is shrunk to 1600 px on its longest side, its shape kept (" + $(if ($null -ne $dims) { "" + $dims[0] + " x " + $dims[1] } else { "none" }) + ")")
+    $photoPosts = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") })
+    Check ($photoPosts.Count -eq 1 -and $landed.Count -eq 1 -and $photoPosts[0].body.Contains($landed[0].FullName)) ("one line to the Thrall names the file's path (" + $photoPosts.Count + ")")
+    $w3 = Invoke-Browser @{ cmd = "chatWait"; text = "Photo saved on the PC, and the Thrall told." }
+    Check ($w3.ok -and $w3.value.found) "the photo's receipt shows under it, in the app's own words"
+    $fake1 = Join-Path $work "evil.jpg"
+    [System.IO.File]::WriteAllText($fake1, "<!DOCTYPE html><html><script>alert(1)</script></html>", $utf8)
+    $np = Invoke-Browser @{ cmd = "chatPhoto"; path = $fake1; mailbox = $mailbox; expectNone = $true }
+    Check ($np.ok -and $np.value.put -eq 0 -and $np.value.prompts -eq 0 -and $np.value.notice.Contains("not a picture")) ("an HTML page called .jpg is refused on the phone by its first bytes, in a plain line, with no passkey asked and nothing sent (" + $(if ($np.ok) { $np.value.notice } else { $np.reason }) + ")")
+    $null = Save-Shot "phone-chat-photo"
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
     Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"
