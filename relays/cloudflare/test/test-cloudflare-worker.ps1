@@ -23,7 +23,10 @@
 #        and words, and with no origin given it connects to the production origin;
 #      - a dev run with test-bindings.json exactly as committed vouches for no one: the placeholder is
 #        too short to be a token, whatever a caller sends;
-#      - the phone's own relay client and http transport, run by node, against this Worker.
+#      - the phone's own relay client and http transport, run by node, against this Worker;
+#      - a Google client id stored with a byte order mark in front (2026-10-14) is not set up: the
+#        sign-in start is 503 and sends nothing to Google, while its clean twin redirects with the id;
+#        the deploy's check after a deploy fails the one and passes the other.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the
 # tree). Without them part 2 is skipped, said so, and the suite exits 3, never 0. Every folder is the
@@ -384,6 +387,34 @@ try {
                 Check ($pCode -eq 401) ("the placeholder sent as the token is 401: too short to count (" + $pCode + ")")
             }
         } finally { if ($plain.state -ceq "known") { Stop-HordeCloudflareRelayDev -Dev $plain.value } }
+
+        Write-Host ""
+        Write-Host "--- a marked Google client is not set up: it never reaches Google ---" -ForegroundColor Cyan
+        # 2026-10-14: the secrets were stored with a byte order mark in front, and Google refused the id.
+        # A dev with the marked id must refuse to start a sign-in (503); its twin, the same id clean, must
+        # redirect with it - and the deploy's own check (Deploy.ps1) must tell the two apart.
+        $gId = "123456789012-fakeclientforhordetests0000000000.apps.googleusercontent.com"
+        $gSecret = "GOCSPX-fakeSecretForHordeTests0123456"
+        foreach ($t in @(@{ what = "marked"; id = ([string][char]0xFEFF + $gId) }, @{ what = "clean"; id = $gId })) {
+            $gd = Start-HordeCloudflareRelayDev -Work (Join-Path $work ("dev-google-" + $t.what)) -Site $site -Script $tools.value.script -ExtraVars @{ GOOGLE_CLIENT_ID = $t.id; GOOGLE_CLIENT_SECRET = $gSecret }
+            try {
+                Check ($gd.state -ceq "known") ("a dev with the " + $t.what + " client id starts (" + $gd.reason + ")")
+                if ($gd.state -cne "known") { continue }
+                $gRes = $http.GetAsync($gd.value.origin + "/auth/google").GetAwaiter().GetResult()
+                $gCode = [int]$gRes.StatusCode
+                $gLoc = $(if ($null -ne $gRes.Headers.Location) { $gRes.Headers.Location.OriginalString } else { "" })
+                $gText = $gRes.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                $gRes.Dispose()
+                $gCheck = Test-HordeCloudflareRelaySignInClient -Origin $gd.value.origin -ClientId $gId -Tries 1
+                if ($t.what -ceq "marked") {
+                    Check ($gCode -eq 503 -and $gText.Contains("sign-in is not set up") -and $gLoc -eq "") ("with the marked id, the sign-in start is 503 'not set up', and nothing is sent to Google (" + $gCode + ")")
+                    Check ($gCheck.state -ceq "unknown" -and "$($gCheck.reason)".Contains("503")) ("and the deploy's check fails it (" + $gCheck.reason + ")")
+                } else {
+                    Check ($gCode -eq 303 -and (Get-HordeCloudflareRelayLocationClientId -Location $gLoc) -ceq $gId) ("CONTROL: its clean twin redirects to Google with the id exactly (" + $gCode + ")")
+                    Check ($gCheck.state -ceq "known") ("and the deploy's check passes it (" + $gCheck.reason + ")")
+                }
+            } finally { if ($gd.state -ceq "known") { Stop-HordeCloudflareRelayDev -Dev $gd.value } }
+        }
     }
 } finally {
     $http.Dispose()
