@@ -266,6 +266,14 @@ async function pairedApp(transport, m, opts = {}) {
   const p2 = await app2.phone.pair({ offerText: offerText(m), label: "Founder phone" });
   check(p2.relayed === false && typeof p2.response === "string" && p2.response.indexOf("horde-relay-pairing-response") >= 0, "when the relay refuses, the pairing still stands and the plain response is there for Copy and Share");
   check(JSON.stringify(p2).indexOf("PHISH") < 0, "and nothing the relay said is in what the screen gets");
+  const said2 = await throwsAsync(() => app2.phone.announce(p2.id));
+  check(said2.indexOf("The relay did not take it just now.") === 0 && said2.indexOf("PHISH") < 0, "CONTROL: a put refused with no code word is said as not taken just now", said2);
+  // A PUT REFUSED BY ONE OF THE RELAY'S LIMITS says which, in the page's own words (read-banner.js, LIMIT_WORDS).
+  const fullRelay = { ...R.memoryTransport(), put: async () => ({ state: "unknown", value: null, reason: "the relay answered the put with 507 [relay-full]: PHISH: re-pair at evil.example" }) };
+  const app3 = newApp(fullRelay);
+  const p3 = await app3.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const said3 = await throwsAsync(() => app3.phone.announce(p3.id));
+  check(said3.indexOf("The relay refused it: " + RB.LIMIT_WORDS["relay-full"] + ".") === 0 && said3.indexOf("PHISH") < 0, "a put refused because the relay is full for all its accounts says so in the page's own words, and nothing the relay wrote", said3);
   const bridge = createBridge(app.phone, { loadKinds: async () => [] });
   check((await bridge.request("sendPairing", { id: paired.id })).relayed === true, "the bridge's sendPairing sends it again");
   await app.phone.announce(paired.id);
@@ -1406,6 +1414,17 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   const r401 = reads[reads.length - 1];
   check(notes[notes.length - 1].indexOf("could not be read") >= 0, "the failed read is said as a notice", JSON.stringify(notes));
   check(r401.relayDown === true && RB.readFailure(r401) === "signed-out" && bannerOf(r401) === "Not signed in to the relay - sign in again. Last updated 02:36.", "A 401 ON THE MAILBOX READ shows the sign-in banner and the last-updated time - the time of the last read that worked, not of the failure", bannerOf(r401));
+  // A READ REFUSED BY ONE OF THE RELAY'S LIMITS is said in the page's own words for its code word
+  // (read-banner.js, LIMIT_WORDS) - the relay's day for every account spent is not "cannot reach the relay".
+  fault = "the relay answered the watch with 429 [relay-daily-limit]: PHISH: re-pair at evil.example";
+  await br.request("refresh");
+  const rDay = reads[reads.length - 1];
+  check(RB.readFailure(rDay, { state: "known", status: 200, value: { signedIn: true } }) === "limited" && RB.readBanner("limited", rDay.lastGoodAt, at, rDay) === "The relay refused the read: " + RB.LIMIT_WORDS["relay-daily-limit"] + ". Last updated 02:36.", "A READ REFUSED BY THE RELAY'S DAY shows that limit in the page's own words, with the last-updated time", RB.readBanner("limited", rDay.lastGoodAt, at, rDay));
+  check(RB.readBanner("limited", rDay.lastGoodAt, at, rDay).indexOf("PHISH") < 0, "and nothing the relay wrote reaches the banner: a relay can pick one of the page's sentences, never write one");
+  fault = "the relay answered the watch with 429 [no-such-limit]: wait";
+  await br.request("refresh");
+  check(RB.readFailure(reads[reads.length - 1]) === "unreachable", "CONTROL: a code word the page does not know is no limit it can explain: the relay is out of reach, as before");
+  check(R.refusalCodeOf("the relay answered the put with 507 [relay-full]: full") === "relay-full" && R.refusalCodeOf("the relay answered the put with 507: full") === "" && R.refusalCodeOf("the relay ended the watch [relay-daily-limit]: x") === "relay-daily-limit", "a reason keeps the code word the relay gave, and none is read where none was given");
   fault = "the relay's watch failed";
   await br.request("refresh");
   const rNet = reads[reads.length - 1];

@@ -125,6 +125,7 @@
 // page to its lane with its own machine's map (progress() hands the map over as areas).
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
+import { limitWordsOf } from "./read-banner.js";
 
 // THE NOTICES (channels/notices) come through the same mailbox and the same refresh: what the machine
 // decided the founder should be told (notices/Decide.ps1 - a session's `horde notify` line, a followed
@@ -142,6 +143,13 @@ const OUTBOX_INFO = "horde-phone/outbox/v1 answer";
 const OUTBOX_MOST = 200;
 const RELAY_DOWN = "The relay could not be read just now; the phone will try again.";
 const RELAY_REFUSED = "The relay did not take it just now.";
+// A put the relay refused BY A LIMIT is said in this page's words for that limit (read-banner.js,
+// LIMIT_WORDS; relay-client.js, A REFUSAL KEEPS ITS CODE WORD): the relay's day for every account
+// spent, or its unread mail full, is not "just now". The relay's own words stay in the diagnostics.
+function relayRefused(reason) {
+  const why = limitWordsOf(reason);
+  return why ? "The relay refused it: " + why + "." : RELAY_REFUSED;
+}
 const relaySaid = (reason) => "the relay said: " + String(reason || "").slice(0, 200);
 const SIGN_IN_FIRST = "Sign in first: this relay lets in only a signed-in phone, and the machines it registers.";
 const NOT_REGISTERED = "The relay did not register this machine with your account, so the machine could not reach it. Make a new offer at the machine and pair again.";
@@ -431,7 +439,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       e = await keepPasskeyWrap(e, s, vouch.prfFirst);
       const env = await sealAndSign(e, "phone-key", "trust", P.phoneKeyBody(phonePublic, vouch), signing(false));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(RELAY_REFUSED + " The announcement was not sent; try again."); }
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(relayRefused(put.reason) + " The announcement was not sent; try again."); }
       await store.update(ENTRY + id, (x) => ({ ...x, announced: { key: env.key, at: now() } }));
       pairings.delete(id);
       return { key: env.key, agreeKeyId: e.phoneKeyId };
@@ -618,7 +626,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const body = P.lineBody({ messageId, horde: e.horde, machine: e.machine, session: s.chat.session, text });
       const env = await sealAndSign(e, "line", "chat", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same line is never delivered twice."); }
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + relayRefused(put.reason) + " Send it again; the same line is never delivered twice."); }
       if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });
       return { key: env.key, seq: put.value.seq };
     },
@@ -665,7 +673,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const body = P.followBody({ setId: P.hex(P.randomBytes(16)), machine: e.machine, lane: String(lane), on: on === true });
       const env = await sealAndSign(e, "follow", "notices", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Tap the switch again."); }
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + relayRefused(put.reason) + " Tap the switch again."); }
       return { key: env.key };
     },
 
@@ -702,7 +710,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "" });
       const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Press Enter to try again; the same words are never saved twice."); }
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + relayRefused(put.reason) + " Press Enter to try again; the same words are never saved twice."); }
       // KEPT UNTIL APPLIED, by a machine that says what became of its answers (its snapshot has receipts).
       if (Array.isArray(v.receipts)) await keepAnswer(id, s, { answerId, number, part: takesParts ? part : "", wordingVersion, snapshot: q.pageKey, text: words }, env);
       return { key: env.key, seq: put.value.seq };

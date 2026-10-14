@@ -223,10 +223,30 @@ export function bindingTransport(host, name) {
 // link, and under the 25 s a watch waits (app.js, WATCH_MS), so a frozen read costs the live refresh no
 // more than one quiet watch would have.
 export const REQUEST_MS = 20000;
-const RELAY_CLOSED = { 4001: "the relay replaced this watch with a newer one of this phone", 4002: "the relay closed the watch: the account was deleted" };
+const RELAY_CLOSED = { 4001: "the relay replaced this watch with a newer one of this phone", 4002: "the relay closed the watch: the account was deleted", 4003: "the relay refused the watch by one of its limits" };
+
+// A REFUSAL KEEPS ITS CODE WORD. The hosted relay answers a refusal by a limit { error, code }: an
+// account's day, its caps, a device's rate - and the RELAY'S OWN day and cap, every account's together.
+// The code goes into the reason as " [<code>]" before the relay's words, so the page can tell such a
+// refusal from a relay out of reach. The page then shows ITS OWN words for that code (read-banner.js,
+// LIMIT_WORDS), as it does for a refused sign-in's code (app.js, SIGNIN_REFUSED): the relay's words stay
+// in the diagnostics, never on the screen, so a relay can only pick one of the page's sentences, never
+// write one. A phone's watch refused so arrives as the socket's one message, then a close of 4003: a
+// browser is never shown the answer to a refused upgrade.
+const CODE = /^[a-z][a-z-]{0,39}$/;
+function refusalWords(body) {
+  if (!body || typeof body.error !== "string") return "";
+  return (typeof body.code === "string" && CODE.test(body.code) ? " [" + body.code + "]" : "") + ": " + body.error.slice(0, 200);
+}
+// The code word a reason carries (refusalWords above), or "" for none.
+export function refusalCodeOf(reason) {
+  const m = / \[([a-z][a-z-]{0,39})\]: /.exec(String(reason || ""));
+  return m ? m[1] : "";
+}
+
 export function httpTransport(origin, fetchFn, WebSocketCtor, { requestMs = REQUEST_MS } = {}) {
   const url = (mailbox, op) => origin + "/v1/mailboxes/" + mailbox + "/" + op;
-  const words = (body) => (body && typeof body.error === "string" ? ": " + body.error.slice(0, 200) : "");
+  const words = refusalWords;
   const answerOf = async (response, what) => {
     let body = null;
     try { body = await response.json(); } catch (x) { body = null; }
@@ -266,7 +286,7 @@ export function httpTransport(origin, fetchFn, WebSocketCtor, { requestMs = REQU
       socket.onmessage = (event) => {
         let body = null;
         try { body = JSON.parse(String(event.data)); } catch (x) { body = null; }
-        if (body && typeof body === "object" && !Array.isArray(body) && typeof body.error === "string") { finish(unknown("the relay ended the watch: " + body.error.slice(0, 200))); return; }
+        if (body && typeof body === "object" && !Array.isArray(body) && typeof body.error === "string") { finish(unknown("the relay ended the watch" + refusalWords(body))); return; }
         finish(body && typeof body === "object" && !Array.isArray(body) ? known(body) : unknown("the relay's watch message is not a JSON object"));
       };
       socket.onerror = () => finish(unknown("the relay's watch failed"));

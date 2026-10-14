@@ -154,7 +154,7 @@ let readSession = null;
 const lastTime = (ms) => (new Date(ms).toDateString() === new Date().toDateString() ? clockTime(ms) : dayTime(ms));
 function showReadBanner() {
   const kind = readFailure(readLast, readSession);
-  say("read", kind === "locked" && !$("lockedView").hidden ? "" : readBanner(kind, readLast ? readLast.lastGoodAt : 0, lastTime));
+  say("read", kind === "locked" && !$("lockedView").hidden ? "" : readBanner(kind, readLast ? readLast.lastGoodAt : 0, lastTime, readLast));
 }
 bridge.on("read-changed", async (rec) => {
   readLast = rec;
