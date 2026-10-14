@@ -43,6 +43,24 @@ try {
     try { Check (Throws { Write-HordeHeartbeat -Path "relative\beat.json" -At $t0 -ProcessId 1 -TickSeconds 1 } "absolute path") "a relative path is refused: where it would land depends on the current folder" } finally { [System.IO.Directory]::SetCurrentDirectory($wasIn) }
 
     Write-Host ""
+    Write-Host "--- a writer that runs and cannot work says so (review of PR 249) ---" -ForegroundColor Cyan
+    Check ((Read-HordeHeartbeat -Path $path).value.condition -ceq "" -and -not ([System.IO.File]::ReadAllText($path)).Contains("condition")) "a writer that is well writes no condition, and reads back with none"
+    $sickPath = Join-Path $work "sick-beat.json"
+    Write-HordeHeartbeat -Path $sickPath -At $t0 -ProcessId 4242 -ProcessStartedAt $born -TickSeconds 97 -Pass 9 -Condition "keys-unavailable" -Why ("the key could not be opened`r`n(Keyset does not exist)" + ("x" * 400))
+    $sick = Read-HordeHeartbeat -Path $sickPath
+    Check ($sick.state -ceq "known" -and $sick.value.condition -ceq "keys-unavailable" -and $sick.value.why.StartsWith("the key could not be opened (Keyset does not exist)") -and $sick.value.why.Length -le 300) "a condition comes back as its word, and its sentence on one line, capped"
+    Check (Throws { Write-HordeHeartbeat -Path $sickPath -At $t0 -ProcessId 1 -TickSeconds 1 -Condition "Keys Gone" } "one lower-case word") "a condition is one lower-case word"
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": "<b>no</b>", "why": "x" }')
+    Check ((Read-HordeHeartbeat -Path $sickPath).value.condition -ceq "unwell") "a condition that is not a word is still read as one - unwell - never as well"
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": [] }')
+    $emptyList = (Read-HordeHeartbeat -Path $sickPath).value.condition
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": {} }')
+    $emptyObject = (Read-HordeHeartbeat -Path $sickPath).value.condition
+    Check ($emptyList -ceq "unwell" -and $emptyObject -ceq "unwell") ("and so is an empty list or an empty object (" + $emptyList + ", " + $emptyObject + ")")
+    [System.IO.File]::WriteAllText($sickPath, '{ "at": "2026-10-13T12:00:00Z", "pid": 5, "condition": null }')
+    Check ((Read-HordeHeartbeat -Path $sickPath).value.condition -ceq "") "CONTROL: a condition that is null is none"
+
+    Write-Host ""
     Write-Host "--- absent, unknown and known are told apart ---" -ForegroundColor Cyan
     Check ((Read-HordeHeartbeat -Path (Join-Path $work "none.json")).state -ceq "absent") "no file is absent: it has never run here"
     $bad = Join-Path $work "bad.json"

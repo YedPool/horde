@@ -22,6 +22,7 @@ const AC = await load("app/account-client.js");
 const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
 const LC = await load("app/lane-card.js");
+const NV = await load("app/notices-view.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -1231,6 +1232,11 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check((() => { try { const tv = LC.laneCardView(bare, LC.THRALL_LANE, { nowMs }); return tv !== null && tv.lines.every((l) => l.label !== "Waiting on the founder"); } catch (x) { return false; } })(), "a Thrall entry with no list of lanes waiting on the founder draws, with no such line");
   const dupes = P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("thrall"), card("A"), card("A", { now: "the second A" }), card("B")] }), "work", m1.keyId);
   check(dupes.ok && dupes.value.dropped === 2 && dupes.value.cards.map((x) => x.lane).join(",") === "A,B" && dupes.value.cards[0].now === "doing A", "ONE ID IS ONE CARD: a lane card with the Thrall's id, and a second card of one id, are dropped and counted; the first stands", JSON.stringify(dupes.value && dupes.value.cards.map((x) => [x.lane, x.now])));
+  const why = (extra) => P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("Q", { form: "other", ...extra })] }), "work", m1.keyId).value.cards[0].note;
+  check(why({ problems: "its orc is not one capital letter" }).indexOf("not in the standard form") >= 0 && why({ problems: "its orc is not one capital letter" }).indexOf("its orc is not one capital letter") >= 0 && why({ problems: "a\u0007bell" }) === P.CARD_FORM_WORDS.other && why({}) === P.CARD_FORM_WORDS.other && P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("Q", { problems: "has 5 lines" })] }), "work", m1.keyId).value.cards[0].note === "", "A LANE NOT IN THE STANDARD FORM says which rules it breaks, in the status reader's words; words with a control character, or none, leave the phone's own sentence; a standard card says nothing", why({ problems: "its orc is not one capital letter" }));
+  const idWords = "Another lane folder here (orc-f-first) gives the same id, F, so this card has its own.";
+  const renamed = (extra) => P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("lane-5", extra)] }), "work", m1.keyId).value.cards[0].note;
+  check(renamed({ idNote: idWords }) === idWords && renamed({ form: "other", problems: "its orc is not one capital letter", idNote: idWords }) === P.cardFormNote("other", "its orc is not one capital letter") + " " + idWords && renamed({ form: "missing", idNote: idWords }) === P.CARD_FORM_WORDS.missing + " " + idWords && renamed({ idNote: "a\u0007bell" }) === "" && renamed({}) === "", "A CARD WITH AN ID OF ITS OWN says why on the phone, after what its form says; words with a control character, or none, add nothing", renamed({ form: "other", problems: "x", idNote: idWords }));
   const lo = P.readCardsSnapshot(cardsBody(m1, { name: "pc", left: 3, areasLeft: 7 }), "work", m1.keyId);
   const lom = P.mergeCards([{ entry: "e1", seq: 1, value: lo.value }]);
   check(lo.ok && lo.value.cardsLeftOut === 3 && lo.value.areasLeftOut === 7 && lom.machines[0].cardsLeftOut === 3 && lom.machines[0].areasLeftOut === 7 && P.readCardsSnapshot(cardsBody(m1, { name: "pc", areasLeft: -2 }), "work", m1.keyId).value.areasLeftOut === 0, "CARDS AND AREAS LEFT OUT are read from the snapshot and carried per machine for the page to say; a count that is no count is none", JSON.stringify(lom.machines));
@@ -1242,6 +1248,121 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(c.machines.every((x) => x.entry !== p2.id), "a locked pairing's cards are not shown");
   a.phone.lock(a.paired.id);
   check((await throwsAsync(() => a.phone.cards(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no cards");
+}
+
+// --- 10f. the notices: each once, newest first, read kept on the phone; the follow switch sent like an answer ---
+const noticeOf = (n, extra = {}) => ({ v: 1, n, id: P.hex(P.randomBytes(16)), ts: "2026-10-14T03:0" + n + ":00.000Z", kind: "notify", from: "E", text: "line " + n, lane: "", entry: "", ...extra });
+const noticesBody = (m, { follows = {}, notices = [] }) => P.utf8(JSON.stringify({ v: 1, kind: "notices", horde: m.horde, machine: m.keyId, follows, notices }));
+async function sendNotices(t, m, phone, body, seq) { const e = await machineEnvelope(m, { kind: "notices", channel: "notices", body, phones: [phone], ...(seq ? { seq } : {}) }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
+{
+  const t = R.memoryTransport();
+  const m1 = await newMachine("work");
+  const m2 = await newMachine("work");
+  const a = await pairedApp(t, m1);
+  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  await a.phone.announce(p2.id);
+  const k2 = await phoneKeyOf(t, m2);
+  await a.phone.refresh(a.paired.id);
+  let nv = await a.phone.notices(a.paired.id);
+  check(nv.items.length === 0 && nv.unread === 0, "CONTROL: before any machine sends notices there are none");
+  const n1 = noticeOf(1), n2 = noticeOf(2, { kind: "progress", from: "Orc E", text: "Merged: the cards", lane: "E", entry: "p-1" }), n3 = noticeOf(3);
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: true }, notices: [n1, n2] }));
+  // The same notice again in a later envelope (a backfill beside a live one) is one notice.
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: true }, notices: [n2, n3] }));
+  await sendNotices(t, m2, k2, noticesBody(m2, { follows: {}, notices: [noticeOf(4, { from: "G" })] }));
+  const r1 = await a.phone.refresh(a.paired.id);
+  nv = await a.phone.notices(a.paired.id);
+  check(r1.anomalies.length === 0 && nv.items.map((x) => x.text).join("|") === "line 4|line 3|Merged: the cards|line 1" && nv.unread === 4, "NEWEST FIRST, EACH ONCE: the notices of both machines of the horde, a notice carried twice shown once, all unread", JSON.stringify({ an: r1.anomalies, t: nv.items.map((x) => x.text) }));
+  check(nv.items.find((x) => x.text === "line 4").entry === p2.id && nv.items.find((x) => x.id === n2.id).entry === a.paired.id && nv.follows[a.paired.id].E === true && Object.keys(nv.follows[p2.id]).length === 0, "each notice names the pairing it came by, and each machine's switches are what it sent", JSON.stringify(nv.follows));
+  const read = await a.phone.markNoticesRead(a.paired.id, [n2.id]);
+  check(read.unread === 3 && read.items.find((x) => x.id === n2.id).read === true, "a notice marked read is read, and the count goes down");
+  const stored = await a.store.get("horde/" + a.paired.id);
+  check(Array.isArray(stored.noticesRead) && stored.noticesRead.indexOf(n2.id) >= 0 && JSON.stringify(stored).indexOf("Merged: the cards") < 0, "read is kept on this phone, as ids only: no word of a notice is stored");
+  const all = await a.phone.markNoticesRead(a.paired.id);
+  check(all.unread === 0, "mark all read reads every notice the phone holds");
+  // THE SWITCHES OF THE NEWEST ENVELOPE STAND: an envelope of a lower seq, arriving later, changes nothing.
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: false }, notices: [] }), 1);
+  await a.phone.refresh(a.paired.id);
+  check((await a.phone.notices(a.paired.id)).follows[a.paired.id].E === true, "a switch from an older envelope of the machine never overrules a newer one");
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: false, thrall: true }, notices: [] }));
+  await a.phone.refresh(a.paired.id);
+  nv = await a.phone.notices(a.paired.id);
+  check(nv.follows[a.paired.id].E === false && nv.follows[a.paired.id].thrall === true, "THE PHONE SHOWS WHAT THE MACHINE HOLDS: the newest envelope's switches stand");
+  // The body, read strictly.
+  check(!P.readNotices(noticesBody({ horde: "work", keyId: m2.keyId }, {}), "work", m1.keyId).ok && !P.readNotices(P.utf8('{"v":1,"kind":"notices"}'), "work", m1.keyId).ok && !P.readNotices(P.utf8("{"), "work", m1.keyId).ok, "a notices body of another machine, with no switches or notices, or not JSON, is refused");
+  const bad = P.readNotices(noticesBody(m1, { follows: { "E": true, "bad lane!": true, F: "yes" }, notices: [noticeOf(1), noticeOf(2, { kind: "made-up" }), noticeOf(3, { text: "a\u0007bell" }), noticeOf(4, { id: "short" })] }), "work", m1.keyId);
+  check(bad.ok && bad.value.dropped === 3 && bad.value.notices.length === 1 && JSON.stringify(bad.value.follows) === '{"E":true}', "a notice of a kind the phone does not know, with a control character, or with no id is dropped and counted; a switch that is not a lane's true or false is left out", JSON.stringify(bad.value));
+  // THE FOLLOW SWITCH, sent like an answer.
+  const before = (await t.get(m1.mailbox, 0, 256)).value.items.length;
+  const sent = await a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "E", on: true });
+  const items = (await t.get(m1.mailbox, 0, 256)).value.items;
+  const got = await machineOpens(m1, items[items.length - 1].text);
+  check(items.length === before + 1 && got.header.channel === "notices" && got.header.kind === "follow" && got.header.from === (await a.store.get("horde/" + a.paired.id)).deviceKeyId && sent.key === P.replayKey(got.header), "a switch goes to the card's machine, on the notices channel, as kind follow, from this phone's passkey", JSON.stringify(got.header));
+  check(Object.keys(got.body).join(",") === "v,setId,machine,lane,on" && got.body.machine === m1.keyId && got.body.lane === "E" && got.body.on === true && /^[0-9a-f]{32}$/.test(got.body.setId), "its body is exactly what the machine reads: version, setId, the machine's key id, the lane and on", JSON.stringify(got.body));
+  const viaSibling = await a.phone.follow(a.paired.id, { entry: p2.id, lane: "thrall", on: false });
+  const items2 = (await t.get(m2.mailbox, 0, 256)).value.items;
+  const got2 = await machineOpens(m2, items2[items2.length - 1].text);
+  check(!!viaSibling.key && got2.body.machine === m2.keyId && got2.body.lane === "thrall" && got2.body.on === false, "a card of the horde's other machine sends its switch to THAT machine, sealed to it", JSON.stringify(got2.body));
+  check((await throwsAsync(() => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "bad lane!", on: true }))).indexOf("lane") >= 0, "a lane that is not a card's lane is never sent");
+  check((() => { try { P.followBody({ setId: "x", machine: m1.keyId, lane: "E", on: true }); return false; } catch (x) { return true; } })() && (() => { try { P.followBody({ setId: P.hex(P.randomBytes(16)), machine: m1.keyId, lane: "E", on: "yes" }); return false; } catch (x) { return true; } })(), "a switch body with a setId that is no id, or an on that is not true or false, is never made");
+  // Through the bridge.
+  const br = createBridge(a.phone, { loadKinds: async () => ({}) });
+  const evs = [];
+  br.on("notices-changed", (rec) => evs.push(rec));
+  await br.request("pick", { id: a.paired.id });
+  const rec = await br.request("notices");
+  const f = await br.request("follow", { entry: a.paired.id, lane: "F", on: true });
+  const rr = await br.request("notices-read", { ids: [n1.id] });
+  check(rec.state === "known" && rec.value.items.length === 4 && evs.length === 1 && evs[0].state === "known" && f.ok === true && rr.state === "known", "the bridge answers notices, pushes notices-changed with every refresh, sends a switch and marks notices read");
+  // A session that cannot sign sends no switch.
+  a.phone.lock(a.paired.id);
+  await a.phone.recover(a.paired.id, a.paired.recoveryCode);
+  check((await throwsAsync(() => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "E", on: false }))).indexOf("recovery code") >= 0, "unlocked with the recovery code, a switch is refused in words: only the passkey signs one");
+  a.phone.lock(a.paired.id);
+  check((await throwsAsync(() => a.phone.notices(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no notices");
+}
+{
+  // THE VIEW (notices-view.js), with a stand-in document whose clicks bubble as a browser's do.
+  const fake = () => {
+    const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, parent: null,
+      appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); k.parent = this; this.kids.push(k); return k; },
+      setAttribute(a, v) { this.attrs[a] = v; }, addEventListener(a, f) { (this.on[a] = this.on[a] || []).push(f); },
+      // A click goes to the node, then up through its parents until a handler stops it.
+      click() { const ev = { stopped: false, prevented: false, stopPropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; } }; for (let x = this; x && !ev.stopped; x = x.parent) for (const f of x.on.click || []) f(ev); return ev; } });
+    return { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+  };
+  const doc = fake();
+  const card = doc.createElement("button");
+  let cardOpened = 0;
+  card.addEventListener("click", () => { cardOpened++; });
+  const plainSlot = doc.createElement("span");
+  card.appendChild(plainSlot);
+  plainSlot.click();
+  check(cardOpened === 1, "CONTROL: in the stand-in, a tap on what a card holds opens the card, as in a browser");
+  let wanted = null;
+  const sw = NV.renderFollowSwitch(doc, { held: false, onToggle: (v) => { wanted = v; } });
+  card.appendChild(sw);
+  const ev = sw.click();
+  check(wanted === true && cardOpened === 1 && ev.stopped && sw.attrs.role === "switch" && sw.attrs["aria-checked"] === "false" && sw.textContent === "Follow", "THE SWITCH'S TAP IS ITS OWN: off, a tap asks for on, and the card it sits in is not opened", JSON.stringify({ wanted, cardOpened }));
+  const on = NV.renderFollowSwitch(doc, { held: true, onToggle: (v) => { wanted = v; } });
+  on.click();
+  check(wanted === false && on.attrs["aria-checked"] === "true" && on.textContent === "Following", "on, it says Following, and a tap asks for off");
+  wanted = null;
+  const busy = NV.renderFollowSwitch(doc, { held: true, sending: true, onToggle: (v) => { wanted = v; } });
+  busy.click();
+  check(wanted === null && busy.textContent === "Sending..." && busy.className.indexOf("sending") >= 0, "while a change is on its way it says Sending..., and a tap does nothing");
+  const nowMs = Date.parse("2026-10-14T03:10:00Z");
+  let openedItem = null;
+  const unread = NV.renderNoticeItem(doc, { id: "a".repeat(32), said: Date.parse("2026-10-14T03:06:00Z"), kind: "notify", from: "E", text: "the build <b>is</b> green", read: false }, { nowMs, onOpen: (x) => { openedItem = x; } });
+  const head = unread.kids[0];
+  check(unread.className.indexOf("unread") >= 0 && head.kids[0].textContent === "E" && head.kids[1].textContent === "Unread" && head.kids[2].textContent === "4 min ago" && !!head.kids[2].attrs.title && unread.kids[1].textContent === "the build <b>is</b> green", "A NOTICE says who it is from, that it is unread, when in plain words with the exact time as its title, and its words as text, never markup", JSON.stringify(head.kids.map((k) => k.textContent)));
+  unread.click();
+  check(!!openedItem && openedItem.from === "E", "a tap on a notice is the page's");
+  const readOne = NV.renderNoticeItem(doc, { id: "b".repeat(32), said: 0, kind: "notify", from: "E", text: "x", read: true }, { nowMs });
+  check(readOne.className.indexOf("unread") < 0 && readOne.kids[0].kids.length === 2 && readOne.kids[0].kids[1].textContent === "", "a read notice has no unread mark, and one with no time says no time, never a guess");
+  check(JSON.stringify(NV.noticeTarget({ kind: "progress", lane: "E", entry: "e1", machine: "pc" })) === '{"entry":"e1","lane":"E","machine":"pc"}' && NV.noticeTarget({ kind: "notify", lane: "", entry: "e1" }) === null && NV.noticeTarget({ kind: "cutoff", lane: "" }) === null, "a followed lane's notice opens that lane's stream; a notify line and a cut-off open nothing");
+  check(NV.noticesTabWords(0) === "Notices" && NV.noticesTabWords(3) === "Notices (3)", "THE UNREAD COUNT on the tab: none says nothing, three says (3)");
+  check(P.noticeList([{ entry: "e", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }, { id: "y", said: 5, n: 2 }, { id: "z", said: 9, n: 3 }] }], new Set(["x"])).items.map((i) => i.id + (i.read ? "r" : "")).join(",") === "z,y,xr" && P.noticeList([{ entry: "e", notices: [{ id: "x", said: 1, n: 1 }] }], new Set()).unread === 1, "the list is newest first by time, then by the machine's number; the count is of unread ones");
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

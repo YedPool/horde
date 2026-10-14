@@ -56,5 +56,12 @@
         @{ Name = "watcher-records-another-pid"
            Find = '[void]$sb.Append(''$t = '' + $q + ''{"pid":'' + $ProcessId +'
            Replace = '[void]$sb.Append(''$t = '' + $q + ''{"pid":'' + 1 +' }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "blind-session-reaches-the-desktop"
+           Find = '    return (New-HordeUnknown -Reason $blind)'
+           Replace = '    return (New-HordeKnown -Value "here")' }
+        @{ Name = "desktop-not-given-to-the-port"
+           Find = '        Desktop     = { Get-HordeWindowsServiceDesktop }'
+           Replace = '' }
     )
 }

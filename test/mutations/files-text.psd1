@@ -36,14 +36,27 @@
            Replace = '$null = ("it is not UTF-8: it holds a byte sequence' }
         # --- a refusal says where, and never what (review of the files deny list, 2026-10-13) ---
         @{ Name = "refusal-repeats-the-bytes-that-are-not-utf8"
-           Find = '$which = " (it stops being UTF-8 at byte " + ($notText - 1) + ")"'
-           Replace = '$which = " (the bytes " + [System.BitConverter]::ToString($Bytes, ($notText - 1), 1) + ")"' }
+           Find = '$which = " (it stops being UTF-8 at byte " + $from + ")"'
+           Replace = '$which = " (the bytes " + [System.BitConverter]::ToString($Bytes, $from, 1) + ")"' }
         @{ Name = "refusal-repeats-the-byte-it-stopped-at"
-           Find = '$which = " (it stops being UTF-8 at byte " + ($notText - 1) + ")"'
-           Replace = '$which = " (it stops being UTF-8 at byte " + ($notText - 1) + ", which is " + $Bytes[$notText - 1].ToString("X2") + ")"' }
+           Find = '$which = " (it stops being UTF-8 at byte " + $from + ")"'
+           Replace = '$which = " (it stops being UTF-8 at byte " + $from + ", which is " + $Bytes[$from].ToString("X2") + ")"' }
         @{ Name = "not-utf8-said-to-be-one-byte-later"
-           Find = 'at byte " + ($notText - 1) + ")"'
-           Replace = 'at byte " + $notText + ")"' }
+           Find = 'at byte " + $from + ")"'
+           Replace = 'at byte " + ($from + 1) + ")"' }
+        # --- where the bad sequence STARTS, not the byte that broke it (the review's next round, 2026-10-13) ---
+        @{ Name = "not-utf8-said-at-the-byte-that-broke-it"
+           Find = 'if (-not $whole) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "not-utf8-walked-back-even-after-a-whole-character"
+           Find = 'try { $null = $strict.GetDecoder().GetCharCount($Bytes, 0, $wrong, $true) } catch { $whole = $false }'
+           Replace = '$whole = $false' }
+        @{ Name = "not-utf8-walked-back-over-any-byte"
+           Find = '-and $Bytes[$from] -ge 0x80 -and $Bytes[$from] -le 0xBF) { $from-- }'
+           Replace = ') { $from-- }' }
+        @{ Name = "not-utf8-walked-back-one-byte-too-few"
+           Find = '$from = $wrong - 1'
+           Replace = '$from = $wrong' }
         @{ Name = "text-cut-short-said-to-stop-at-a-byte"
            Find = 'if (-not $readsToTheEnd) {'
            Replace = 'if ($true) {' }

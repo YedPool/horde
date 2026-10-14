@@ -7,8 +7,12 @@ are in `CONTRIBUTING.md`; read the matching section before arguing with one.
 
 - The Thrall's answers in its chat show on the founder's phone app, and he can reply from there.
   Decisions-list questions and progress entries show there too.
-- Never tell him you cannot reach him on the phone. An Orc reaches him through a decisions question
-  or a progress entry.
+- Never tell him you cannot reach him on the phone. An Orc reaches him through a decisions question,
+  a progress entry, or a notice.
+- When he asks to be told when something is done, run `horde notify -Text "<one line>"` at that
+  moment. The line reaches his phone's Notices at once and is never muted.
+  - Keep it to one plain line with no secrets.
+  - There are at most 10 an hour per session.
 
 ## Done means the fleet runs on it (CONTRIBUTING 1 and 2)
 

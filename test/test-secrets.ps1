@@ -213,10 +213,10 @@ $attacks = @(
     @{ found = $false; what = "a value that is true"; text = ('{"' + $six[4] + '":true}') },
     @{ found = $false; what = "a value that is an OBJECT, as a schema describes the member"; text = ('{"properties":{"' + $six[0] + '":{"type":"string","description":"whatever-the-provider-issued"}}}') },
     @{ found = $false; what = "KNOWN LIMIT: a value that is a list holding the secret"; text = ('{"' + $six[3] + '":["' + $made + '"]}') },
-    @{ found = $false; what = "the name at the end of a longer member name"; text = (Get-Member ("my_" + $six[4]) $made) },
+    @{ found = $true; what = "a PREFIXED member name, the name at the end of a longer one (my_api_key)"; text = (Get-Member ("my_" + $six[4]) $made) },
     @{ found = $false; what = "the name at the start of a longer member name"; text = (Get-Member ($six[4] + "_id") $made) },
     @{ found = $false; what = "a look-alike letter in the name (U+212A for k)"; text = (Get-Member $kelvin $made) },
-    @{ found = $false; what = "KNOWN LIMIT: the name with no quotes before a colon, as YAML writes it"; text = ($six[5] + ": " + $made) },
+    @{ found = $true; what = "YAML: the name with no quotes before a colon"; text = ($six[5] + ": " + $made) },
     @{ found = $false; what = "KNOWN LIMIT: JSON written inside a JSON string, its quotes escaped"; text = ('{"body":"{\"' + $six[5] + '\":\"' + $made + '\"}"}') },
     # --- each placeholder form, in a member ---
     @{ found = $false; what = "a placeholder in angle brackets"; text = (Get-Member $six[4] "<paste-it-here>") },
@@ -242,14 +242,14 @@ $attacks = @(
     @{ found = $true; what = "the name after a dot, as a properties file writes it"; text = ("db." + $six[5] + "=" + $made) },
     @{ found = $true; what = "the name after two dashes, as a command line writes it"; text = ("tool --" + $six[5] + "=" + $made) },
     @{ found = $true; what = "a bare value of exactly 8 characters"; text = ($six[5] + "=Ab3dEf6h") },
-    @{ found = $true; what = "KNOWN COST: code that gives the name a value from an expression"; text = ($six[5] + ' = os.environ["THE_NAME_OF_IT"]') },
+    @{ found = $false; what = "code that gives the name a value from an indexed lookup (os.environ[...])"; text = ($six[5] + ' = os.environ["THE_NAME_OF_IT"]') },
     @{ found = $false; what = "a bare value of 7 characters"; text = ($six[5] + "=Ab3dEf6 and more words") },
     @{ found = $false; what = "a quoted value of 7 characters"; text = ($six[5] + '="Ab3dEf6"') },
     @{ found = $false; what = "a quoted value that holds a blank"; text = ($six[5] + ' = "two words here"') },
     @{ found = $false; what = "the name as part of a longer name"; text = ("my_" + $six[4] + "_name=" + $made) },
-    @{ found = $false; what = "KNOWN LIMIT: the name at the end of a longer name"; text = ("DB_" + $six[5].ToUpperInvariant() + "=" + $made) },
+    @{ found = $true; what = "a PREFIXED name=value (DB_PASSWORD)"; text = ("DB_" + $six[5].ToUpperInvariant() + "=" + $made) },
     @{ found = $false; what = "the name at the start of a longer name"; text = ($six[5] + "_hash=" + $made) },
-    @{ found = $false; what = "KNOWN LIMIT: the name written without its underscore"; text = ("apikey=" + $made) },
+    @{ found = $true; what = "the name written without its underscore (apikey)"; text = (("api" + "key") + "=" + $made) },
     @{ found = $false; what = "a shell line that reads the value from a variable"; text = ($six[5] + '=$DB_PASS_VALUE') },
     @{ found = $false; what = "a shell line that reads it from a variable in braces and quotes"; text = ($six[4] + '="${THE_KEY_VALUE}"') },
     @{ found = $false; what = "a shell line that reads it from a command"; text = ($six[5] + '=$(cat /run/the-file-it-is-in)') },
@@ -257,6 +257,110 @@ $attacks = @(
     @{ found = $false; what = "a comparison with two equals signs"; text = ("if (" + $six[4] + "==" + $made + ")") },
     @{ found = $false; what = "a placeholder in angle brackets after the equals sign"; text = ($six[4] + "=<paste-it-here>") },
     @{ found = $false; what = "a placeholder holding the word your after the equals sign"; text = ("export " + $six[4].ToUpperInvariant() + "=your-value-goes-here") })
+# THE NEXT ROUND OF THE REVIEW (2026-10-13): the name is FOLDED (underscores, dashes and case do not
+# count), may have a PREFIX, may stand before a YAML colon, and an unquoted value with a parenthesis in
+# it is code. Each from both sides; the names are assembled from pieces like the six above.
+$cs = "client" + "Secret"; $ak = "api" + "Key"
+$attacks += @(
+    # --- the name folded, and prefixed ---
+    @{ found = $true; what = "a camelCase member name (clientSecret)"; text = (Get-Member $cs $made) },
+    @{ found = $true; what = "a camelCase name=value (apiKey)"; text = ($ak + "=" + $made) },
+    @{ found = $true; what = "a dashed name before a YAML colon (client-secret)"; text = (("client-" + "secret") + ": " + $made) },
+    @{ found = $true; what = "a prefixed name before a YAML colon (google_client_secret)"; text = (("google_client_" + "secret") + ": " + $made) },
+    @{ found = $true; what = "a prefixed camelCase member (googleClientSecret)"; text = (Get-Member ("google" + $cs.Substring(0, 1).ToUpperInvariant() + $cs.Substring(1)) $made) },
+    @{ found = $true; what = "a prefixed name in capitals (GOOGLE_CLIENT_SECRET=)"; text = (("GOOGLE_CLIENT_" + "SECRET") + "=" + $made) },
+    @{ found = $true; what = "a dash between two letters of the name is folded too (pass-word=)"; text = (("pass-" + "word") + "=" + $made) },
+    @{ found = $true; what = "a command line's two dashes and a camelCase name (--apiKey=)"; text = ("tool --" + $ak + "=" + $made) },
+    @{ found = $false; what = "a name that goes on past the six names something else (password_hash)"; text = ($six[5] + "_hash: " + $made) },
+    @{ found = $false; what = "DECIDED: client_secret_path names where the file is, not the secret"; text = ($six[0] + "_path: ./secrets/client-file.json") },
+    @{ found = $false; what = "and the same in camelCase (clientSecretPath)"; text = (Get-Member ($cs + "Path") "C:\secrets\client-file.json") },
+    @{ found = $false; what = "a name that only holds the letters of one of the six in the middle (passwordless_login)"; text = ($six[5] + "less_login=" + $made) },
+    # --- YAML ---
+    @{ found = $true; what = "YAML with the value in double quotes"; text = ($six[0] + ': "' + $made + '"') },
+    @{ found = $true; what = "YAML with the value in single quotes"; text = ($six[0] + ": '" + $made + "'") },
+    @{ found = $true; what = "YAML indented under a parent key"; text = ("google:" + $nl + "  " + $six[0] + ": " + $made + $nl + "  client_id: abc") },
+    @{ found = $true; what = "YAML with a comment after the value"; text = ($six[5] + ": " + $made + "  # the one for the test box") },
+    @{ found = $true; what = "YAML with blanks after the value, then a line break"; text = ($six[5] + ": " + $made + "   " + $nl + "next: 1") },
+    @{ found = $true; what = "YAML at the very end of the text"; text = ("a: 1" + $nl + $six[4] + ": " + $made) },
+    @{ found = $true; what = "a bare literal with a digit and a comma after it is a value, in an object or a list (round 2 of the review of PR 238)"; text = ($ak + ": " + $made + ",") },
+    @{ found = $false; what = "YAML placeholder in angle brackets"; text = ($six[0] + ": <your-client-secret>") },
+    @{ found = $false; what = "YAML placeholder in capitals with the word your"; text = ($six[0] + ": YOUR_CLIENT_SECRET") },
+    @{ found = $false; what = "YAML placeholder read from the environment"; text = ($six[0] + ': ${GOOGLE_CLIENT_SECRET}') },
+    @{ found = $false; what = "a page that explains a setting: words after the colon"; text = ($six[5] + ": required for login") },
+    @{ found = $false; what = "a page that explains a setting: a short word"; text = ($six[5] + ": ask the owner") },
+    @{ found = $false; what = "a colon with no blank after it, which YAML does not read as a key"; text = ($six[4] + ":" + $made) },
+    @{ found = $false; what = "KNOWN LIMIT: a YAML value on the line after its key"; text = ($six[0] + ":" + $nl + "  " + $made) },
+    @{ found = $false; what = "a name in backticks before a colon, as a page that explains a setting writes it"; text = ("- ``" + $six[5] + "``: " + $made) },
+    # --- an unquoted value with a parenthesis is code ---
+    @{ found = $false; what = "code that calls for the value (password = get_password_from_vault())"; text = ($six[5] + " = get_" + $six[5] + "_from_vault()") },
+    @{ found = $false; what = "code that passes a variable as an argument (login(password=user_password))"; text = ("login(" + $six[5] + "=user_" + $six[5] + ")") },
+    @{ found = $false; what = "code that calls for the value with an argument"; text = ($ak + " = read_setting(name)") },
+    @{ found = $false; what = "YAML whose value is a call"; text = ($six[5] + ": lookup(the-vault)") },
+    @{ found = $true; what = "a QUOTED value with a parenthesis in it is still a value"; text = ($six[5] + ' = "Ab3d(Ef6h)Ij9k"') },
+    @{ found = $true; what = "a member whose value has a parenthesis in it is still a value"; text = (Get-Member $six[0] "Ab3d(Ef6h)Ij9k") },
+    @{ found = $true; what = "code first, then a literal secret: every match is looked at"; text = ("login(" + $six[5] + "=user_" + $six[5] + ")" + $nl + $six[4] + "=" + $made) },
+    @{ found = $true; what = "KNOWN COST: code that names a password variable with nothing after it (self.password = password)"; text = ("self." + $six[5] + " = " + $six[5]) },
+    # --- the review of PR 238 (2026-10-13): each line it measured firing, as written there ---
+    @{ found = $false; what = "F: password: required"; text = ($six[5] + ": required") },
+    @{ found = $false; what = "F: - api_key: optional"; text = ("- " + $six[4] + ": optional") },
+    @{ found = $false; what = "F: password: process.env.DB_PASSWORD, with its comma"; text = ($six[5] + ": process.env.DB_PASS" + "WORD,") },
+    @{ found = $false; what = "F: apiKey: config.apiKey"; text = ($ak + ": config." + $ak) },
+    @{ found = $false; what = "F: api_key: SecretStr"; text = ($six[4] + ": SecretStr") },
+    @{ found = $false; what = "F: password: Optional[str]"; text = ($six[5] + ": Optional[str]") },
+    @{ found = $false; what = "F: clientSecret: SecretString; with its semicolon"; text = ($cs + ": SecretString;") },
+    @{ found = $false; what = "F: password: see-the-vault"; text = ($six[5] + ": see-the-vault") },
+    @{ found = $false; what = "F: login(password=user_password, timeout=5)"; text = ("login(" + $six[5] + "=user_" + $six[5] + ", timeout=5)") },
+    @{ found = $false; what = "F: db.connect(host=h, password=db_password, port=5432)"; text = ("db.connect(host=h, " + $six[5] + "=db_" + $six[5] + ", port=5432)") },
+    @{ found = $false; what = "F: password = config.db_password"; text = ($six[5] + " = config.db_" + $six[5]) },
+    @{ found = $false; what = "F: password = os.environ['DB_PASSWORD'], quoted inside"; text = ($six[5] + " = os.environ['DB_PASS" + "WORD']") },
+    # --- round 2 of that review (2026-10-14): six secrets ended by punctuation, each shared by the
+    #     first reference rule though the rule before it refused them all. As written there, the
+    #     made-up values assembled from pieces. ---
+    @{ found = $true; what = "F2: a connection string's Password=...;"; text = ("Server=db1;Database=app;User Id=app;" + "Pass" + "word=MyS3" + "cretPass;") },
+    @{ found = $true; what = "F2: export DB_PASSWORD=...;"; text = ("export DB_" + "PASS" + "WORD=Sup3r" + "S3cret;") },
+    @{ found = $true; what = "F2: mysql --password=...,"; text = ("mysql --" + $six[5] + "=Sup3r" + "S3cret,") },
+    @{ found = $true; what = "F2: password = ...,"; text = ($six[5] + " = Sup3r" + "S3cret,") },
+    @{ found = $true; what = "F2: client_secret: ...; with an underscore in the value"; text = ($six[0] + ": Sup3r_" + "S3cret;") },
+    @{ found = $true; what = "F2: password: ...,"; text = ($six[5] + ": Sup3r" + "S3cret,") },
+    # --- and round them, from both sides ---
+    @{ found = $false; what = "an identifier with a semicolon after it, as a statement ends"; text = ($ak + " = theKeyVariable;") },
+    @{ found = $false; what = "an identifier with a closing parenthesis after it"; text = ("f(" + $six[4] + "=theKeyVariable)") },
+    @{ found = $false; what = "an indexed lookup with a number"; text = ($six[5] + " = secrets[0]") },
+    @{ found = $false; what = "a YAML value with a digit that is a call"; text = ($six[5] + ": lookup(vault2)") },
+    @{ found = $false; what = "a YAML value with a digit that is a dotted lookup"; text = ($six[5] + ": settings.v2.password") },
+    @{ found = $false; what = "KNOWN COST: a YAML value of letters only, bare, is taken for a word"; text = ($six[5] + ": lettersonlyvalue") },
+    @{ found = $true; what = "a bare secret with a digit and a semicolon after it is a value (round 2 of the review of PR 238)"; text = ($six[4] + "=" + $made + ";") },
+    @{ found = $false; what = "KNOWN COST: a bare secret of letters only with a semicolon after it reads as a statement's identifier"; text = ($six[4] + "=lettersonlyvalue;") },
+    @{ found = $false; what = "KNOWN COST: and so with a comma, in a list"; text = ($six[5] + ": lettersonlyvalue,") },
+    @{ found = $true; what = "KNOWN COST: an argument whose variable's name holds a digit is taken for a value (password=user_password2,)"; text = ("login(" + $six[5] + "=user_" + $six[5] + "2, timeout=5)") },
+    @{ found = $true; what = "a bare letters-only value with nothing after it is still a value, as it was"; text = ($six[5] + " = lettersonlyvalue") },
+    @{ found = $false; what = "KNOWN COST: a bare secret with a dot in it reads as a lookup"; text = ($six[4] + "=abc123.def456") },
+    @{ found = $false; what = "KNOWN LIMIT: a value that ends in a parenthesis is code by the rule"; text = ($six[5] + "=Ab3dEf6hIj9k)") },
+    @{ found = $false; what = "KNOWN LIMIT: a YAML anchor before the value"; text = ($six[5] + ": &pw " + $made) },
+    @{ found = $false; what = "KNOWN LIMIT: a PHP array arrow"; text = ("'" + $six[5] + "' => '" + $made + "'") },
+    @{ found = $false; what = "KNOWN LIMIT: an XML element"; text = ("<" + $six[5] + ">" + $made + "</" + $six[5] + ">") },
+    @{ found = $true; what = "a YAML value in quotes needs no digit"; text = ($six[4] + ": 'lettersonlyvalue'") },
+    @{ found = $true; what = "a bare identifier-looking secret with nothing after it is still a value"; text = ($six[5] + " = hunter2xyz") },
+    @{ found = $true; what = "a bare value with an ampersand after it, in an address, is no identifier"; text = ("https://example.org/cb?" + $six[3] + "=" + $made + "&state=1") },
+    @{ found = $true; what = "a quoted value that looks like a lookup is still a value"; text = ($six[5] + ' = "config.db_password"') },
+    # --- a markdown code span round a reference (round 3 of the review of PR 238, 2026-10-14) ---
+    @{ found = $false; what = "F3: a lookup in a markdown code span (password = config.db_password)"; text = ('`' + $six[5] + " = config.db_" + $six[5] + '`') },
+    @{ found = $false; what = "a YAML lookup with a digit in a code span (the digit keeps the YAML rule from hiding it)"; text = ('`' + $six[5] + ": settings.v2.db_" + $six[5] + '`') },
+    @{ found = $false; what = "an identifier and its semicolon in a code span"; text = ('`' + $ak + " = theKeyVariable;" + '`') },
+    @{ found = $false; what = "an indexed lookup in a code span, in a sentence"; text = ("set it with " + '`' + $six[5] + " = secrets[0]" + '`' + " and go on") },
+    @{ found = $true; what = "a secret with a digit in a code span is still a secret"; text = ('`' + $six[5] + " = " + $made + '`') },
+    @{ found = $true; what = "a secret with a digit and a semicolon in a code span"; text = ('`' + "export DB_" + "PASS" + "WORD=Sup3r" + "S3cret;" + '`') },
+    @{ found = $true; what = "a letters-only value with only the backtick after it is still a value, as it is without one"; text = ('`' + $six[5] + " = lettersonlyvalue" + '`') },
+    @{ found = $true; what = "two backticks after a lookup are not a code span's one"; text = ($six[5] + " = config.db_" + $six[5] + '``') },
+    @{ found = $false; what = "F3: a code span with the sentence's full stop after it (os.environ['DB_PASSWORD'])"; text = ("set " + '`' + $six[5] + " = os.environ['DB_" + "PASS" + "WORD']" + '`' + ". Then go on") },
+    @{ found = $false; what = "a code span with a comma after it (no parenthesis, which the older rule would skip on its own)"; text = ("as " + '`' + $six[5] + " = config.db_" + $six[5] + '`' + ", and more") },
+    @{ found = $true; what = "a secret with a digit in a code span is still a secret with a full stop after it"; text = ("use " + '`' + $six[5] + " = " + $made + '`' + ". Then go on") },
+    @{ found = $true; what = "a lookup with a word after its backtick is no code span's end"; text = ($six[5] + " = config.db_" + $six[5] + '`' + "x9") })
 foreach ($a in $attacks) { Check ((Test-Named $a.text) -eq $a.found) ($(if ($a.found) { "FOUND: " } else { "not found: " }) + $a.what) }
-Check (@($attacks | Where-Object { $_.found }).Count -ge 20 -and @($attacks | Where-Object { -not $_.found }).Count -ge 35) ("the rule was attacked from both sides: " + @($attacks | Where-Object { $_.found }).Count + " texts that must be found and " + @($attacks | Where-Object { -not $_.found }).Count + " that must not")
+Check (@($attacks | Where-Object { $_.found }).Count -ge 35 -and @($attacks | Where-Object { -not $_.found }).Count -ge 50) ("the rule was attacked from both sides: " + @($attacks | Where-Object { $_.found }).Count + " texts that must be found and " + @($attacks | Where-Object { -not $_.found }).Count + " that must not")
+# THE DEFAULT KINDS ARE UNCHANGED FOR EVERY CALLER: the folded and YAML forms above are found only
+# when the named kind is asked for, never by a caller that names no kind or other kinds.
+$newForms = @(($cs + "=" + $made), ($six[0] + ": " + $made), (("google_client_" + "secret") + ": " + $made), (Get-Member $cs $made))
+$leaked = @($newForms | Where-Object { (Find-HordeSecretKind -Text $_) -cne "" -or (Find-HordeSecretKind -Text $_ -Kinds @("an access token", "a private key")) -cne "" -or (Protect-HordeSecretText -Text $_).count -ne 0 })
+Check ($leaked.Count -eq 0) ("and none of the new forms is found by a caller that does not name the kind, nor hidden by the redact mode (" + $leaked.Count + " of " + $newForms.Count + " are)")
 Complete-HordeSuite -Success "every secret shape is found and hidden whole, near misses stay, and decisions reads the one list"

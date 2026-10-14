@@ -31,5 +31,20 @@
            Replace = '    } catch { return $false }'
            Expect = "survives"
            Reason = "no path a suite can hand in makes the resolving throw on this system without also failing earlier; the line errs towards telling nobody, and is held by its comment" }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "no-desktop-told-as-needs-a-person"
+           Find = '    "no-desktop"       = '
+           Replace = '    "no-desktop-x"     = ' }
+            # --- review of PR 249 ---
+        @{ Name = "keys-unavailable-told-as-needs-a-person"
+           Find = '    "keys-unavailable" = '
+           Replace = '    "keys-unavailable-x" = ' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "general-said-beside-specific"
+           Find = 'if ($said.Count -gt 1 -and $said.Contains($script:HordeServiceTellSentences["unwell"])) { $said.Remove($script:HordeServiceTellSentences["unwell"]) }'
+           Replace = '' }
+        @{ Name = "update-held-told-as-needs-a-person"
+           Find = '    "update-held"      = '
+           Replace = '    "update-held-x"    = ' }
     )
 }

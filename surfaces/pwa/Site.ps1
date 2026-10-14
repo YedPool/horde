@@ -50,6 +50,7 @@ $script:HordePwaSiteFiles = [ordered]@{
     "app/app.js" = "surfaces/pwa/page/app.js"
     "app/phone-core.js" = "surfaces/pwa/page/phone-core.js"
     "app/lane-card.js" = "surfaces/pwa/page/lane-card.js"
+    "app/notices-view.js" = "surfaces/pwa/page/notices-view.js"
     "app/keywrap.js" = "surfaces/pwa/page/keywrap.js"
     "app/relay-client.js" = "surfaces/pwa/page/relay-client.js"
     "app/account-client.js" = "surfaces/pwa/page/account-client.js"

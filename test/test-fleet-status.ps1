@@ -1,6 +1,6 @@
 # IS AN ORC'S STATUS RECORD READ WHOLE, OR NOT AT ALL?
 #
-# fleet/StatusPanel.ps1 reads the six-line record each Orc keeps and hands it to a panel. A record
+# fleet/StatusPanel.ps1 reads the record each Orc keeps (six lines, or seven with the optional waiting on line) and hands it to a panel. A record
 # that breaks a rule must come out as "no status written" with what was wrong, and with NONE of its
 # fields - a panel that showed half a broken record would be guessing. Every shape of wrong the
 # record's own checker knows is here: a byte-order mark, a byte outside ASCII, the wrong number of
@@ -83,7 +83,7 @@ Check (@((Parse (Bytes (With 2 "lane: tidying C:\work after PR 9"))).problems).C
 Write-Host ""
 Write-Host "--- a control character is no part of a record ---" -ForegroundColor Cyan
 # A record with an escape, a NUL or a backspace in a field was "written" and handed on (measured
-# 2026-10-06 by the review of this reader). The record is plain words on six lines; the only bytes
+# 2026-10-06 by the review of this reader). The record is plain words on six lines, or seven with the optional waiting on line; the only bytes
 # below a space it may hold are the ends of its lines.
 foreach ($ctl in @(@{ byte = 0x1B; name = "an escape" }, @{ byte = 0x00; name = "a NUL" }, @{ byte = 0x08; name = "a backspace" }, @{ byte = 0x09; name = "a tab" }, @{ byte = 0x7F; name = "a delete" })) {
     $r = Parse (Bytes (With 3 ("doing: Building" + [string][char]$ctl.byte + "the window")))
@@ -108,6 +108,18 @@ Check (@($waits.problems).Count -eq 0 -and $waits.fields["waiting on"] -ceq "the
 Check ((@($waits.fields.Keys) -join ",") -ceq "orc,lane,doing,finished,blocked,waiting on") "its six fields, in the record's order"
 Check (@((Parse (Bytes $withWait "`r`n")).problems).Count -eq 0) "CONTROL: and with Windows line endings, as the fleet writes it"
 Check (@($ok.problems).Count -eq 0 -and $null -eq $ok.fields["waiting on"] -and -not $ok.fields.Contains("waiting on")) "a six-line record is still read, and has no waiting-on field at all"
+$waitBom = Parse ([byte[]](@(0xEF, 0xBB, 0xBF) + (Bytes $withWait)))
+Check ((Says $waitBom "starts with a byte-order mark") -and @($waitBom.problems).Count -eq 1 -and $null -eq $waitBom.fields) "a seven-line record that starts with a byte-order mark is refused for it, as a six-line one is: one problem, and no field"
+# TRAILING BLANK LINES ARE IGNORED, for six lines and for seven alike: the reader drops every empty
+# line at the end before it counts the lines. Pinned here for both, so the two cannot drift apart.
+$sixBlanks = Parse ([System.Text.Encoding]::ASCII.GetBytes(($good -join "`r`n") + "`r`n`r`n`r`n`r`n"))
+Check (@($sixBlanks.problems).Count -eq 0 -and $sixBlanks.fields["blocked"] -ceq "no" -and -not $sixBlanks.fields.Contains("waiting on")) "a six-line record followed by several blank lines is read whole: the blank lines are not lines of it"
+$sevenBlanks = Parse ([System.Text.Encoding]::ASCII.GetBytes(($withWait -join "`r`n") + "`r`n`r`n`r`n`r`n"))
+Check (@($sevenBlanks.problems).Count -eq 0 -and $sevenBlanks.fields["waiting on"] -ceq $waits.fields["waiting on"]) "a seven-line record followed by several blank lines is read whole too, its waiting-on line and all"
+$sevenBlanksLf = Parse ([System.Text.Encoding]::ASCII.GetBytes(($withWait -join "`n") + "`n`n`n"))
+Check (@($sevenBlanksLf.problems).Count -eq 0 -and $sevenBlanksLf.fields["waiting on"] -ceq $waits.fields["waiting on"]) "CONTROL: and so with Unix line endings"
+$blankInside = Parse (Bytes ($good + @("", "waiting on: the founder")))
+Check ((Says $blankInside "has 8 lines") -and $null -eq $blankInside.fields) "CONTROL: a blank line BEFORE the waiting-on line is a line of the record, and makes eight"
 foreach ($other in @("note: one line too many", "waiting: the founder", "Waiting on: the founder", "waiting on:the founder", "waiting on:   ", "blocked: no")) {
     $r = Parse (Bytes ($good + @($other)))
     Check ((Says $r "line 7 is not 'waiting on: ...'") -and @($r.problems).Count -eq 1 -and $null -eq $r.fields) ("a seventh line with another key is refused, naming it: '" + $other + "'")
@@ -163,6 +175,15 @@ $twins = Get-HordeFleetStatus -Folder (Join-Path $work "twins") -Now $now
 $claimed = @($twins.orcs | Where-Object { $_.folder -ceq "one" -or $_.folder -ceq "two" })
 Check (@($claimed | Where-Object { $_.written -eq $false -and $_.orc -ceq "" -and $_.doing -ceq "" -and $_.problems[0] -like "says it is Orc F, and so does another folder (one, two)*" }).Count -eq 2) "two folders that both say they are Orc F: neither is shown as F, and each says why"
 Check (@($twins.orcs | Where-Object { $_.folder -ceq "three" })[0].written -eq $true) "CONTROL: the third folder, alone in its letter, is read"
+# TWINS THAT BOTH WAIT: two seven-line records claiming one letter are "no status written" like any
+# other twins, and the waiting-on line goes with the rest of their fields - absent, not left behind.
+[void](New-Orc "twins-waiting" "one" $withWait); [void](New-Orc "twins-waiting" "two" $withWait); [void](New-Orc "twins-waiting" "three" ((With 1 "orc: G") + @("waiting on: the reviewer, since 2026-10-13")))
+$twinsWaiting = Get-HordeFleetStatus -Folder (Join-Path $work "twins-waiting") -Now $now
+$claimedWaiting = @($twinsWaiting.orcs | Where-Object { $_.folder -ceq "one" -or $_.folder -ceq "two" })
+Check (@($claimedWaiting | Where-Object { $_.written -eq $false -and $_.orc -ceq "" -and $_.problems[0] -like "says it is Orc F, and so does another folder (one, two)*" }).Count -eq 2) "two seven-line records that both say they are Orc F: neither is shown as F"
+Check (@($claimedWaiting | Where-Object { $null -ne $_.PSObject.Properties["waitingOn"] }).Count -eq 0) "and neither keeps its waitingOn: the field is absent on both, as on any record not written"
+$thirdWaiting = @($twinsWaiting.orcs | Where-Object { $_.folder -ceq "three" })[0]
+Check ($thirdWaiting.written -eq $true -and $thirdWaiting.waitingOn -ceq "the reviewer, since 2026-10-13") "CONTROL: the third, alone in its letter, is read with its waitingOn"
 # MANY FOLDERS, ONE LETTER: each one's problem names a few of the others and counts the rest. Naming
 # all of them in every one made the answer grow with the square of the folders (measured 2026-10-06 by
 # the review of this reader: 1,000 folders gave a panel 11 MB of text, 3,000 gave it 100 MB, and
@@ -306,6 +327,40 @@ Check (@($few.orcs).Count -eq 3 -and $few.notRead -eq 68 -and @($few.orcs | Wher
 Check (@((Get-HordeFleetStatus -Folder (Join-Path $work "fleet") -Settings $three -Now $now).orcs).Count -eq 3 -and (Get-HordeFleetStatus -Folder (Join-Path $work "fleet") -Settings $defaults -Now $now).notRead -eq 0) "CONTROL: a folder of four is read whole at 64, and counts none unread"
 $wrongKind = Get-HordeFleetStatus -HordeHome (New-Home "home-cap" ('{"statusFolder":"' + (Join-Path $work "many").Replace("\", "\\") + '","statusFoldersRead":"3"}')) -Now $now
 Check ($wrongKind.state -ceq "refused" -and @($wrongKind.orcs).Count -eq 0 -and @($wrongKind.findings).Count -eq 1 -and $wrongKind.findings[0] -like "*statusFoldersRead*") ("a most that is written as text is refused by name, and 64 is not used in its place (" + (@($wrongKind.findings) -join " / ") + ")")
+
+Write-Host ""
+Write-Host "--- a retired lane has no row (C's ruling, 2026-10-14) ---" -ForegroundColor Cyan
+# A folder with status.retired.txt and no status.txt is a lane that ended: no row, not "no status
+# written", not counted. Both files: a lane that came back, read from status.txt. Neither: no status
+# written, as before. The retired file holds a good record of its own, so a reader that read it would
+# show it.
+function Set-Retired { param([string]$Dir, [string[]]$Lines) [System.IO.File]::WriteAllBytes((Join-Path $Dir "status.retired.txt"), (Bytes $Lines)) }
+$liveA = @("horde-orc-status 1", "orc: A", "lane: live lane", "doing: Working", "finished: Something", "blocked: no")
+$oldZ = @("horde-orc-status 1", "orc: Z", "lane: old lane", "doing: The retired words", "finished: Everything", "blocked: The founder said stop")
+[void](New-Orc "retired" "live" $liveA)
+$oldDir = New-Orc "retired" "old-lane" $oldZ
+$before = Get-HordeFleetStatus -Folder (Join-Path $work "retired") -Settings $defaults -Now $now
+Check (@($before.orcs).Count -eq 2 -and @($before.orcs | Where-Object { $_.orc -ceq "Z" }).Count -eq 1) "CONTROL: before it retires, the old lane has its row"
+[System.IO.File]::Move((Join-Path $oldDir "status.txt"), (Join-Path $oldDir "status.retired.txt"))
+$retired = Get-HordeFleetStatus -Folder (Join-Path $work "retired") -Settings $defaults -Now $now
+Check ($retired.state -ceq "read" -and @($retired.orcs).Count -eq 1 -and @($retired.orcs | Where-Object { $_.folder -ceq "old-lane" }).Count -eq 0 -and $retired.notRead -eq 0) ("a retired lane (status.retired.txt only) has no row and is not counted (" + (@($retired.orcs | ForEach-Object { $_.folder }) -join ",") + "; not read " + $retired.notRead + ")")
+$a = @($retired.orcs)[0]
+Check ($a.folder -ceq "live" -and $a.written -eq $true -and $a.orc -ceq "A" -and $a.doing -ceq "Working" -and $a.ageSeconds -eq 90) "CONTROL: the live lane beside the retired one is read as it was"
+$backDir = New-Orc "retired" "came-back" @("horde-orc-status 1", "orc: Y", "lane: came back", "doing: Back at work", "finished: The return", "blocked: no")
+Set-Retired $backDir (@("horde-orc-status 1", "orc: Y", "lane: came back", "doing: The retired words", "finished: Everything", "blocked: Stopped"))
+$neitherDir = New-Orc "retired" "nothing-here"
+$all = Get-HordeFleetStatus -Folder (Join-Path $work "retired") -Settings $defaults -Now $now
+$y = @($all.orcs | Where-Object { $_.folder -ceq "came-back" })
+Check ($y.Count -eq 1 -and $y[0].written -eq $true -and $y[0].orc -ceq "Y" -and $y[0].doing -ceq "Back at work" -and $y[0].blocked -eq $false) ("a lane with both files is read from status.txt (" + $(if ($y.Count -eq 1) { $y[0].doing } else { "no row" }) + ")")
+$n = @($all.orcs | Where-Object { $_.folder -ceq "nothing-here" })
+Check ($n.Count -eq 1 -and $n[0].written -eq $false -and $n[0].problems[0] -ceq "there is no status.txt") "a lane with neither file is still no status written"
+Check (@($all.orcs).Count -eq 3 -and (@($all.orcs | ForEach-Object { $_.folder }) -join ",") -ceq "live,came-back,nothing-here") ("three rows, the retired lane none of them (" + (@($all.orcs | ForEach-Object { $_.folder }) -join ",") + ")")
+# Retired folders are passed over before the most read is counted, or old lanes would push live ones out.
+foreach ($old in @("a-old", "b-old", "c-old")) { Set-Retired (New-Orc "retired-first" $old) $oldZ }
+[void](New-Orc "retired-first" "d-live" (With 1 "orc: D")); [void](New-Orc "retired-first" "e-live" (With 1 "orc: E"))
+$two = Read-HordeModuleSettingsText -Declaration (Get-HordeFleetSettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"statusFoldersRead":2}}'
+$first = Get-HordeFleetStatus -Folder (Join-Path $work "retired-first") -Settings $two -Now $now
+Check ((@($first.orcs | ForEach-Object { $_.orc }) -join ",") -ceq "D,E" -and $first.notRead -eq 0) ("retired folders do not count against the most read: two live lanes behind three retired ones are both read, none counted unread (" + (@($first.orcs | ForEach-Object { $_.folder }) -join ",") + "; not read " + $first.notRead + ")")
 
 Write-Host ""
 Write-Host "--- the reader writes nothing ---" -ForegroundColor Cyan

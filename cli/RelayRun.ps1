@@ -124,6 +124,20 @@
 # so a run that is waiting out a long backoff, as designed, is never read as dead. A write that fails
 # never ends the loop: it costs the heartbeat and one line said once, nothing else.
 #
+# A RUN THAT BEATS IS NOT A RUN THAT WORKS, so the heartbeat says which (review of PR 249, MUST 1).
+# The supervisor runs whether or not anyone is signed in (cli/ServicesTend.ps1), and a run it starts
+# before anyone has signed in since the machine started may not be able to use this machine's keys:
+# the agreement key is a software key protected under the account's logon (relay/Keys.ps1), and with
+# no logon there may be nothing to unlock it. Such a run used to beat on every turn while it could not
+# open one answer from the phone. Now the keys are PROVED - opened, and each used once (a signature
+# made and checked, an agreement made with a throwaway peer) - before the run's first healthy beat,
+# and every turn the keys are not open beats the condition keys-unavailable, with why
+# (core/Heartbeat.ps1). The supervisor never calls such a run alive: it restarts it with a back-off
+# and tells the warchief once (core/Services.ps1). The run itself goes on trying its keys every turn,
+# at its own back-off, so once they open - the person has signed in, or a run started after that - it
+# beats well again. Keys that were opened and proved stay open for the run's life; the hourly reopen
+# that fails keeps them (it says so) and is not a condition.
+#
 # THE SETTINGS are core/ModuleSettings.ps1's, module relay-run (<HORDE_HOME>\settings\relay-run.json),
 # read when the run starts. A file that fails its checks refuses the run, in its own words.
 #
@@ -375,13 +389,42 @@ function Invoke-HordeRelayRunSendCheck {
     } finally { $Watching.sinceLook.Restart() }
 }
 
+function Test-HordeRelayRunContextKeys {
+    # Use each key of a run's context once (relay/Keys.ps1, Test-HordeRelayKeyWorks): the signing key,
+    # and every agreement key that may open. "" when all work, else which did not and why.
+    param([Parameter(Mandatory = $true)]$Context)
+    $why = Test-HordeRelayKeyWorks -KeyObject $Context.signKey -Use "sign"
+    if ("" + $why -ne "") { return ("the signing key " + $Context.signKeyId + " could not be used: " + $why) }
+    foreach ($id in @($Context.openingKeys.Keys)) {
+        $why = Test-HordeRelayKeyWorks -KeyObject $Context.openingKeys[$id] -Use "agree"
+        if ("" + $why -ne "") { return ("the agreement key " + $id + " could not be used: " + $why) }
+    }
+    return ""
+}
+
+function Open-HordeRelayRunProvenContext {
+    # The run's context with its keys PROVED (the header): known, or unknown with why. A context whose
+    # keys opened and cannot be used is closed again, never handed on.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)]$Connection, [string]$DecisionsRoot = "")
+    $made = New-HordeRelayRunContext -HordeHome $HordeHome -Connection $Connection -DecisionsRoot $DecisionsRoot
+    if ($made.state -cne "known") { return $made }
+    $why = ""
+    try { $why = Test-HordeRelayRunContextKeys -Context $made.value } catch { $why = $_.Exception.Message }
+    if ("" + $why -eq "") { return $made }
+    Close-HordeRelayRunContext -Context $made.value
+    return (New-HordeUnknown -Reason ("the keys opened and cannot be used - " + $why))
+}
+
 function Invoke-HordeRelayRun {
     # The loop (the header). -Connection is a relays/Port.ps1 connection the caller made; -Say receives
     # each line the loop has to say (the command prints them). Returns { turns; failures; stoppedBy }.
-    # -MaxTurns 0 runs until stopped. -Random is for a suite that fixes the jitter.
+    # -MaxTurns 0 runs until stopped. -Random is for a suite that fixes the jitter. -OpenContext
+    # { param($HordeHome, $Connection, $DecisionsRoot) } opens the run's context with its keys proved
+    # (Open-HordeRelayRunProvenContext), for a suite whose keys fail and then open.
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)]$Connection, [Parameter(Mandatory = $true)][scriptblock]$Say,
-        [int]$MaxTurns = 0, [string]$DecisionsRoot = "", $Random = $null, [scriptblock]$Sleep = $null)
+        [int]$MaxTurns = 0, [string]$DecisionsRoot = "", $Random = $null, [scriptblock]$Sleep = $null, [scriptblock]$OpenContext = $null)
     if ($HordeHome -ceq "") { $HordeHome = Get-HordeHome }
+    if ($null -eq $OpenContext) { $OpenContext = { param($H, $C, $D) Open-HordeRelayRunProvenContext -HordeHome $H -Connection $C -DecisionsRoot $D } }
     if ($null -eq $Random) { $Random = New-Object System.Random }
     if ($null -eq $Sleep) { $Sleep = { param($Ms, $Why) Start-Sleep -Milliseconds $Ms } }
     $settings = Get-HordeRelayRunSettings -HordeHome $HordeHome
@@ -420,10 +463,6 @@ function Invoke-HordeRelayRun {
             if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }
             if ($MaxTurns -gt 0 -and $turns -ge $MaxTurns) { $stoppedBy = "turns"; break }
             $turns++
-            # One small write a turn; a failure is said the first time it happens, and when it mends.
-            $beat = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns
-            if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ("the heartbeat could not be written, and the run goes on without it: " + $beat.reason) }
-            elseif ($beat.state -ceq "known" -and $beatFailed) { $beatFailed = $false; $null = & $Say "the heartbeat is being written again" }
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $failed = ""
             $in = $null
@@ -436,7 +475,7 @@ function Invoke-HordeRelayRun {
                 $released = Remove-HordeRelayRetiredAgreeKeys -HordeHome $HordeHome
                 if ($released.state -ceq "known" -and @($released.value.released).Count -gt 0) { $null = & $Say ("released the retired agreement key(s) of generation " + (@($released.value.released) -join ", ")) }
                 elseif ($released.state -cne "known") { $null = & $Say ("retired agreement keys were not checked: " + $released.reason) }
-                if ($null -eq $ctx) { $made = New-HordeRelayRunContext -HordeHome $HordeHome -Connection $Connection -DecisionsRoot $DecisionsRoot }
+                if ($null -eq $ctx) { $made = @(& $OpenContext $HordeHome $Connection $DecisionsRoot) | Select-Object -Last 1; if (-not (Test-HordeAnswer $made)) { $made = New-HordeUnknown -Reason "opening the keys did not answer" } }
                 else { $made = Update-HordeRelayRunContext -Context $ctx }
                 if ($made.state -ceq "known") {
                     $moved = ($null -eq $ctx -or $made.value.mailbox -cne $ctx.mailbox)
@@ -446,6 +485,13 @@ function Invoke-HordeRelayRun {
                 elseif ($null -eq $ctx) { $failed = "this machine's relay keys cannot be opened: " + $made.reason }
                 else { $null = & $Say ("the keys could not be opened again, so the run goes on with those it has: " + $made.reason) }
             }
+            # One small write a turn, AFTER the keys were tried, so the first beat of a run is never a
+            # healthy one it has not earned (the header). A failure is said once, and when it mends.
+            $beatArgs = @{ Path = $beatPath; At = ([datetime]::UtcNow); ProcessId = $beatSelf.pid; ProcessStartedAt = $beatSelf.startedAt; TickSeconds = $beatTick; Pass = $turns }
+            if ($null -eq $ctx) { $beatArgs["Condition"] = "keys-unavailable"; $beatArgs["Why"] = $failed }
+            $beat = Write-HordeHeartbeatQuietly @beatArgs
+            if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ("the heartbeat could not be written, and the run goes on without it: " + $beat.reason) }
+            elseif ($beat.state -ceq "known" -and $beatFailed) { $beatFailed = $false; $null = & $Say "the heartbeat is being written again" }
             if ($failed -ceq "") {
                 $r1 = Invoke-HordeRelayUnfinished -Context $ctx
                 foreach ($l in @(Get-HordeRelayRunLines -Report $r1.value)) { $null = & $Say $l }

@@ -34,9 +34,18 @@ on the phone.** What reaches it:
   add`), with his answers sent back signed by his phone. An Orc that needs him asks here.
 - **Progress** (`channels/progress`): the fleet's progress log, the analyst's changelog. Work worth
   his attention is written there.
+- **Notices** (`horde notify -Text "<one line>"`): a line from any session, sent to his phone's
+  Notices tab at once.
+  - Use it when he has asked to be told when something is done.
+  - It is never muted.
+  - A session may send 10 an hour. Past that it is held back for the hour, and he is told once.
+  - The sender is proven, not given: it is the session whose process runs the command.
+  - A line that holds a secret is sent as a fixed sentence instead.
+  - A card's Follow switch also turns that Orc's new progress entries into notices.
 
 The chat carries the Thrall's conversation only. An Orc or a Warg reaches him through a decisions
-question or a progress entry, or through the Thrall. It does not reach him through its own chat.
+question, a progress entry or a notice, or through the Thrall. It does not reach him through its own
+chat.
 
 ## License
 

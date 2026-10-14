@@ -188,6 +188,9 @@
 #     ([System.IO.Path]::GetFullPath, which reads no disk), so a setting written C:\a\..\b\key.json is
 #     named as the file it opens. A link, a junction and a short 8.3 name are NOT resolved - that would
 #     mean reading the disk - so a caller that compares paths must bring its own to the same form.
+#     A NETWORK OR DEVICE PATH (\\server\share\..., \\.\C:\..., \\?\...) is handed back the same way
+#     and is a file like any other: what it leads to is the caller's to ask (files/Deny.ps1 asks it
+#     which file it is), not a reason for the relay to be one that could not tell.
 #   - AN OPTIONAL BLOCK, NOT A CAPABILITY OF THE CLOSED LIST, for the reason the watch in slices and the
 #     trim are not: nothing picks a relay by it (Find-HordeRelay -Require), and a "yes" there is a claim
 #     about what the far end can do, shown by a case - this is a fact about this machine's disk.
@@ -822,6 +825,12 @@ function Read-HordeRelaySecretFiles {
         $at = "relay '" + $name + "' named secret file " + $n + " of " + $raw.Count
         $path = Get-HordeRelayMember $it "path"
         if (-not $path.has -or -not (Test-HordeRelayAbsolutePath $path.value)) { return (New-HordeUnknown -Reason ($at + " by something that is not an absolute path")) }
+        # A NETWORK OR DEVICE PATH IS HANDED OVER AS IT IS, MADE WHOLE (round 2 of the review of PR
+        # 238, 2026-10-14). Round 1 made such a relay one that could not tell, which refused EVERY
+        # share on a machine whose relay file sits on a network share or a redirected profile
+        # folder, with no setting to fix it. The caller asks such a file which file it is instead
+        # (files/Deny.ps1, the relays' own files): measured that day, \\localhost\C$\..., \\.\C:\...
+        # and the plain path give one volume serial number and file index.
         $whole = ""
         try { $whole = [System.IO.Path]::GetFullPath($path.value) } catch { $whole = "" }
         if ($whole -eq "") { return (New-HordeUnknown -Reason ($at + " by a path that cannot be read as one")) }

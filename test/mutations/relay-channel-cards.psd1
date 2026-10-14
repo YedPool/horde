@@ -23,8 +23,14 @@
            Find = 'if ($info.Length -gt $script:HordeCardsChannelStatusBytes) { $out.form = "unreadable"'
            Replace = 'if ($false) { $out.form = "unreadable"' }
         @{ Name = "another-form-is-called-standard"
-           Find = '$out.form = $(if ($standard) { "standard" } else { "other" })'
-           Replace = '$out.form = "standard"' }
+           Find = 'if (@($judged.problems).Count -eq 0) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "the-broken-rules-not-sent"
+           Find = '{ $card.problems = $s.reason }'
+           Replace = '{ }' }
+        @{ Name = "a-standard-record-read-loosely"
+           Find = 'foreach ($k in @($judged.fields.Keys)) { $keys[$k] = $judged.fields[$k] }'
+           Replace = 'foreach ($k in @()) { }' }
         @{ Name = "another-form-names-no-orc"
            Find = '$m = [regex]::Match("$v", ''\(Orc ([A-Z][A-Z0-9]{0,3})\)'')'
            Replace = '$m = [regex]::Match("", ''x'')' }
@@ -53,8 +59,14 @@
            Find = "`$card.blockedText = [regex]::Replace("
            Replace = "`$card.blockedText = `$b; `$null = [regex]::Replace(" }
         @{ Name = "the-map-is-not-sent"
-           Find = '$areasText = "[" + (@($areaTexts | Select-Object -First $areasKept) -join ",") + "]"'
-           Replace = '$areasText = "[]"' }
+           Find = '(@($areaTexts | Select-Object -First $AreasKept) -join ",")'
+           Replace = '""' }
+        @{ Name = "the-map-does-not-fill-the-room-left"
+           Find = 'while ($areasKept -lt $areaTexts.Count) {'
+           Replace = 'while ($false) {' }
+        @{ Name = "the-map-fills-past-the-budget"
+           Find = 'if ($more.body.Length -gt $Budget) { break }'
+           Replace = '' }
         @{ Name = "no-lanes-folder-sends-an-empty-snapshot"
            Find = 'if (-not [System.IO.Directory]::Exists($paths.lanes)) { return (& $once "lanes"'
            Replace = 'if ($false) { return (& $once "lanes"' }
@@ -70,6 +82,17 @@
         @{ Name = "the-thrall-now-is-cut-before-the-refusal"
            Find = '$now = $(if ($s.keys.ContainsKey("doing")) { $s.keys["doing"] }'
            Replace = '$now = $(if ($s.keys.ContainsKey("doing")) { Get-HordeCardsChannelPlain $s.keys["doing"] }' }
+        # Which folder is retired is fleet/StatusPanel.ps1's rule (Test-HordeFleetStatusRetired); its
+        # both-files and neither-file mutants are in test\mutations\fleet-status.psd1.
+        @{ Name = "a-retired-lane-gets-a-card"
+           Find = '$folders = @($folders | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })'
+           Replace = '' }
+        @{ Name = "why-a-card-has-its-own-id-not-sent"
+           Find = '$c.idNote = Protect-HordeCardsChannelField'
+           Replace = '$null = Protect-HordeCardsChannelField' }
+        @{ Name = "a-card-carries-a-note-the-phone-never-reads"
+           Find = 'blockedText = ""; problems = ""; idNote = "" }'
+           Replace = 'blockedText = ""; note = ""; problems = ""; idNote = "" }' }
         @{ Name = "two-cards-share-one-id"
            Find = 'if ($taken.ContainsKey($c.lane)) {'
            Replace = 'if ($false) {' }
@@ -83,8 +106,8 @@
            Find = 'elseif ($areasKept -gt 0) { $areasKept-- }'
            Replace = 'elseif ($false) { }' }
         @{ Name = "cards-left-out-not-counted"
-           Find = 'if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1); $left++ }'
-           Replace = 'if ($kept.Count -gt 0) { $kept.RemoveAt($kept.Count - 1) }' }
+           Find = '$left = $cardTexts.Count - $cardsKept'
+           Replace = '$left = 0' }
         @{ Name = "one-bad-run-wipes-the-census"
            Find = '} catch { $answer.skipped++ }'
            Replace = '} catch { throw }' }

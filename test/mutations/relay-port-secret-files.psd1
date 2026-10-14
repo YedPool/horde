@@ -9,6 +9,10 @@
     Suite  = "test\test-relay-port.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        # --- a network or device path is a file like any other (round 2 of the review of PR 238, 2026-10-14) ---
+        @{ Name = "a-network-or-device-path-cannot-tell-again"
+           Find = 'try { $whole = [System.IO.Path]::GetFullPath($path.value) } catch { $whole = "" }'
+           Replace = 'if ($path.value -cmatch ''\A[\\/]{2}'') { return (New-HordeUnknown -Reason ($at + " by a network or device path")) }; try { $whole = [System.IO.Path]::GetFullPath($path.value) } catch { $whole = "" }' }
         @{ Name = "relay-that-cannot-tell-left-out"
            Find = 'if ($a.state -cne "known") { [void]$cannot.Add($n); [void]$why.Add($a.reason); continue }'
            Replace = 'if ($a.state -cne "known") { continue }' }

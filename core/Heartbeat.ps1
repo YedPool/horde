@@ -20,6 +20,12 @@
 #                tick of up to an hour, so a healthy watcher read as dead for all but two minutes of
 #                every hour (review of PR #207). The writer knows its own rhythm; the reader does not.
 #   pass         how many times it has beaten since it started; a reader can see it move.
+#   condition    LEFT OUT WHEN IT IS WELL. Otherwise one fixed word for why it is running and still
+#                cannot do its work, and why the reason in a sentence. A process that beats is not
+#                proof of a process that works: the relay runner started before anyone had signed in
+#                beat on every turn while it could not open its keys, and a phone's answers waited on a
+#                runner every reader called alive (review of PR 249, MUST 1). A reader that sees a
+#                condition never calls the writer alive (core/Services.ps1).
 #
 # A WRITE THAT FAILS IS THE CALLER'S TO SWALLOW. Write-HordeHeartbeat throws like any write. A loop
 # whose work matters more than its heartbeat calls Write-HordeHeartbeatQuietly, which answers known or
@@ -45,6 +51,17 @@ $script:HordeHeartbeatMaxBytes = 4096
 # tick; one second is slack for a platform that rounds, and no pid is reused within a second of the
 # start of the process that last had it, because that process would have to start, end and be replaced.
 $script:HordeHeartbeatStartSlackSeconds = 1
+# A condition is one word a reader can match exactly; its sentence is at most this long, on one line.
+$script:HordeHeartbeatConditionPattern = '\A[a-z][a-z0-9-]{0,39}\z'
+$script:HordeHeartbeatWhyMost = 300
+
+function ConvertTo-HordeHeartbeatWhy {
+    # A condition's sentence as a heartbeat holds it: on one line, no control character, capped.
+    param([AllowNull()]$Text)
+    $t = ("" + $Text) -replace '\p{Cc}+', ' '
+    if ($t.Length -gt $script:HordeHeartbeatWhyMost) { $t = $t.Substring(0, $script:HordeHeartbeatWhyMost) }
+    return $t.Trim()
+}
 
 function ConvertTo-HordeHeartbeatTimeText {
     # A UTC time as text that reads back as the same instant, to the tick.
@@ -105,11 +122,15 @@ function Write-HordeHeartbeat {
         [Parameter(Mandatory = $true)][int]$ProcessId,
         $ProcessStartedAt = $null,
         [Parameter(Mandatory = $true)][int]$TickSeconds,
-        [long]$Pass = 0
+        [long]$Pass = 0,
+        [string]$Condition = "",
+        [string]$Why = ""
     )
     if (-not [System.IO.Path]::IsPathRooted($Path)) { throw ("a heartbeat is written to an absolute path, not '" + $Path + "'") }
+    if ($Condition -ne "" -and $Condition -cnotmatch $script:HordeHeartbeatConditionPattern) { throw ("a heartbeat's condition is one lower-case word, not '" + $Condition + "'") }
     $beat = [ordered]@{ at = (ConvertTo-HordeHeartbeatTimeText -At $At); pid = $ProcessId; startedAt = $null; tickSeconds = $TickSeconds; pass = $Pass }
     if ($ProcessStartedAt -is [datetime]) { $beat["startedAt"] = ConvertTo-HordeHeartbeatTimeText -At $ProcessStartedAt }
+    if ($Condition -ne "") { $beat["condition"] = $Condition; $beat["why"] = ConvertTo-HordeHeartbeatWhy -Text $Why }
     $dir = [System.IO.Path]::GetDirectoryName($Path)
     [void][System.IO.Directory]::CreateDirectory($dir)
     $temp = $Path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
@@ -128,16 +149,19 @@ function Write-HordeHeartbeatQuietly {
         [Parameter(Mandatory = $true)][int]$ProcessId,
         $ProcessStartedAt = $null,
         [Parameter(Mandatory = $true)][int]$TickSeconds,
-        [long]$Pass = 0
+        [long]$Pass = 0,
+        [string]$Condition = "",
+        [string]$Why = ""
     )
     try {
-        Write-HordeHeartbeat -Path $Path -At $At -ProcessId $ProcessId -ProcessStartedAt $ProcessStartedAt -TickSeconds $TickSeconds -Pass $Pass
+        Write-HordeHeartbeat -Path $Path -At $At -ProcessId $ProcessId -ProcessStartedAt $ProcessStartedAt -TickSeconds $TickSeconds -Pass $Pass -Condition $Condition -Why $Why
         return (New-HordeKnown -Value "written")
     } catch { return (New-HordeUnknown -Reason "the heartbeat could not be written" -ErrorRecord $_) }
 }
 
 function Read-HordeHeartbeat {
-    # The heartbeat at -Path as an answer: known { at; pid; startedAt; tickSeconds; pass }, absent when
+    # The heartbeat at -Path as an answer: known { at; pid; startedAt; tickSeconds; pass; condition;
+    # why }, absent when
     # there is no file (the writer never ran here), or unknown when the file cannot be read as one. A
     # heartbeat that holds no time, or no pid, is unknown: it says nothing a reader can decide by.
     # startedAt is $null and tickSeconds 0 when the writer did not say; the reader decides what that
@@ -166,7 +190,17 @@ function Read-HordeHeartbeat {
     $pass = [long]0
     $count = $j.PSObject.Properties["pass"]
     if ($null -ne $count -and ($count.Value -is [int] -or $count.Value -is [long]) -and $count.Value -ge 0) { $pass = [long]$count.Value }
-    return (New-HordeKnown -Value ([pscustomobject]@{ at = $at; pid = $processId; startedAt = $started; tickSeconds = $tick; pass = $pass }) -ObservedAt $at)
+    # A condition that is not one word is still a condition: it is read as "unwell", never as well -
+    # an empty list or an empty object included (review of PR 249, round 2). Only a condition left
+    # out, null or the empty text is none.
+    $condition = ""; $why = ""
+    $c = $j.PSObject.Properties["condition"]
+    if ($null -ne $c -and $null -ne $c.Value -and -not ($c.Value -is [string] -and $c.Value -eq "")) {
+        $condition = $(if (("" + $c.Value) -cmatch $script:HordeHeartbeatConditionPattern) { "" + $c.Value } else { "unwell" })
+        $w = $j.PSObject.Properties["why"]
+        if ($null -ne $w) { $why = ConvertTo-HordeHeartbeatWhy -Text $w.Value }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ at = $at; pid = $processId; startedAt = $started; tickSeconds = $tick; pass = $pass; condition = $condition; why = $why }) -ObservedAt $at)
 }
 
 function Get-HordeHeartbeatVerdict {

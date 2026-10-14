@@ -146,6 +146,21 @@ button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: va
 .card-line b { font-weight: 600; }
 .card-stats { margin-top: 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
 .card-note { margin-top: 4px; color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); }
+/* THE FOLLOW SWITCH, in a card's one slot (lane-card.js): what the machine holds, and a word while a change is on its way. */
+.follow { display: inline-block; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; font-weight: 600; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); cursor: pointer; }
+.follow[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
+.follow.sending { color: var(--muted); border-style: dashed; }
+/* The notices: newest first, an unread one marked. */
+#notices { padding: 0 12px 12px; }
+#noticesHead { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+#noticesCount { flex: 1 1 auto; color: var(--muted); }
+#noticesList { display: flex; flex-direction: column; gap: 8px; }
+.notice-item { display: block; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.notice-item.unread { border-left: 4px solid var(--accent); }
+.notice-head { display: flex; align-items: baseline; gap: 8px; }
+.notice-from { flex: 1 1 auto; font-weight: 600; }
+.notice-when { flex: 0 0 auto; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.notice-text { margin-top: 3px; }
 #streamHead { display: flex; align-items: center; gap: 8px; padding: 2px 0 6px; }
 #streamTitle { flex: 1 1 auto; font-weight: 600; overflow-wrap: anywhere; }
 #streamLimit { padding: 0 0 6px; }

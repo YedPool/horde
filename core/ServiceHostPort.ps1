@@ -21,6 +21,11 @@
 #                                               and was asked to close; absent when there is no such
 #                                               window of that process; unknown otherwise. OPTIONAL: an
 #                                               adapter without it cannot close a window, and says so.
+#   Desktop      {}                          -> known "here" when a process this one starts can open a
+#                                               window on the person's desktop; unknown, with why, when
+#                                               it cannot. OPTIONAL: an adapter without it is unknown,
+#                                               so a service that needs the desktop is never started on
+#                                               a guess (core/Services.ps1, needsDesktop).
 #
 # THE LAUNCH (New-HordeServiceLaunch) is the start, as data, in the one shape every adapter takes:
 #   kind horde    script (a checkout's horde entry point), words, named, switches, environment,
@@ -56,11 +61,12 @@ function Register-HordeServiceHost {
         [Parameter(Mandatory = $true)][scriptblock]$Applies,
         [Parameter(Mandatory = $true)][scriptblock]$IdleSeconds,
         [Parameter(Mandatory = $true)][scriptblock]$Start,
-        [scriptblock]$CloseWindow = $null
+        [scriptblock]$CloseWindow = $null,
+        [scriptblock]$Desktop = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a platform name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($known in @($script:HordeServiceHosts)) { if ($known.name -ceq $Name) { $script:HordeServiceHosts.Remove($known) } }
-    [void]$script:HordeServiceHosts.Add([pscustomobject]@{ PSTypeName = "Horde.ServiceHost"; name = $Name; applies = $Applies; idleSeconds = $IdleSeconds; start = $Start; closeWindow = $CloseWindow })
+    [void]$script:HordeServiceHosts.Add([pscustomobject]@{ PSTypeName = "Horde.ServiceHost"; name = $Name; applies = $Applies; idleSeconds = $IdleSeconds; start = $Start; closeWindow = $CloseWindow; desktop = $Desktop })
 }
 
 function Get-HordeServiceHostFiles {
@@ -157,6 +163,15 @@ function Get-HordePersonIdleSeconds {
     if ($answer.state -cne "known") { return $answer }
     if (($answer.value -isnot [int] -and $answer.value -isnot [long]) -or $answer.value -lt 0) { return (New-HordeUnknown -Reason "whether the person is idle: the adapter answered something that is not a number of seconds") }
     return (New-HordeKnown -Value ([long]$answer.value))
+}
+
+function Get-HordeServiceDesktop {
+    # Can a process this one starts open a window on the person's desktop? known "here", or unknown
+    # with the reason. UNKNOWN IS NEVER "HERE": a service that needs the desktop is not started on it.
+    $answer = Invoke-HordeServiceHostBlock -What "whether the person's desktop can be reached" -Block "desktop"
+    if ($answer.state -cne "known") { return $answer }
+    if ($answer.value -isnot [string] -or $answer.value -cne "here") { return (New-HordeUnknown -Reason "whether the person's desktop can be reached: the adapter answered something that is not here") }
+    return $answer
 }
 
 function Start-HordeServiceProcess {

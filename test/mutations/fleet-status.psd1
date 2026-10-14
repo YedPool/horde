@@ -112,6 +112,9 @@
         @{ Name = "two-folders-one-letter-both-shown"
            Find = '| Where-Object { $_.Count -gt 1 })) {'
            Replace = '| Where-Object { $_.Count -gt 2 })) {' }
+        @{ Name = "a-twin-keeps-its-waiting-on"
+           Find = '$o.PSObject.Properties.Remove("waitingOn")'
+           Replace = '$null = $o' }
         @{ Name = "every-claimant-of-a-letter-is-named"
            Find = '$names = @($claimants | Select-Object -First $script:HordeFleetStatusMostNamed) -join ", "'
            Replace = '$names = @($claimants) -join ", "' }
@@ -183,6 +186,16 @@
         @{ Name = "the-count-of-unread-not-handed-on"
            Find = 'orcs = $sorted; notRead = $notRead; findings = $findings }'
            Replace = 'orcs = $sorted; notRead = 0; findings = $findings }' }
+        # --- a retired lane has no row (C's ruling, 2026-10-14) ---
+        @{ Name = "a-retired-lane-has-a-row-again"
+           Find = '$paths = [string[]]@($paths | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })'
+           Replace = '' }
+        @{ Name = "a-folder-with-both-files-is-retired"
+           Find = 'return ((-not [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusFile))) -and'
+           Replace = 'return ((-not $false) -and' }
+        @{ Name = "a-folder-with-neither-file-is-retired"
+           Find = '-and [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusRetiredFile)))'
+           Replace = '-and $true)' }
         # --- a refused settings file refuses the reading, and no default stands in ---
         @{ Name = "a-refused-settings-file-is-read"
            Find = 'if (@("defaults", "read") -ccontains $state) { return $null }'
