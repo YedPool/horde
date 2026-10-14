@@ -510,11 +510,12 @@ function Stop-HordeNodeSession {
 # and every run of them kept as one, then the LAST 40 rows (a dialog and the input box are drawn at the
 # bottom), fewer while they are over 4000 characters; printable ASCII and the box-drawing glyphs
 # (U+2500 to U+257F) as they are, a tab or a no-break space as a space, and every other character as
-# '?', so the record reads alike in any console. NO SECRET IS SHOWN: the screen as read, and the rows
-# kept, go through the refusal the progress log uses (core/Secrets.ps1, Find-HordeSecretKind with its
-# default kinds); one that looks like a secret is withheld whole - only the kind is said, never a row.
+# '?', so the record reads alike in any console. NO SECRET IS SHOWN: see Find-HordeNodeScreenSecret;
+# a screen that looks like it holds one is withheld whole - only the kind is said, never a row.
 $script:HordeNodeScreenRows = 40
 $script:HordeNodeScreenChars = 4000
+# The one kind core/Secrets.ps1 looks for only when it is named; misspelt, Find-HordeSecretKind throws.
+$script:HordeNodeNamedSecretKind = "a secret written under a name such as client_secret or password"
 
 function ConvertTo-HordeNodeScreenRow {
     # One screen row as the record keeps it: see THE SCREEN OF A SESSION THAT WAS NOT READY.
@@ -527,6 +528,42 @@ function ConvertTo-HordeNodeScreenRow {
         else { [void]$sb.Append('?') }
     }
     return $sb.ToString().TrimEnd()
+}
+
+function Find-HordeNodeScreenSecret {
+    # The kind of secret a screen looks like it holds, or "". -Raw is the screen as read, one row each;
+    # -Kept the rows as the record would keep them. A secret on a screen is not always on one row in one
+    # piece, so every reading below is checked, with every default kind and then the named kind (F's
+    # re-check of round 4, REQUIRED; each reading answers one of F's probe4 cases that the rows alone
+    # showed, measured 2026-10-14):
+    #   - rows joined by a line break, and joined by NOTHING: a terminal wraps a long token across two
+    #     rows, and each half is too short for any shape (a 40-character cloud secret, a ghp token);
+    #   - the raw rows, the raw rows with every character outside printable ASCII REMOVED (a zero-width
+    #     space splits a token, and as '?' it still splits it), and the kept rows (a letter outside ASCII
+    #     as '?' gives the name=value kind its word boundary: "Note" + U+00E9 + "password=...");
+    #   - each of those as it is, and SPACED: every underscore as a space and a space after every '=',
+    #     because the name=value kind needs a word boundary that DB_PASSWORD's underscore does not give,
+    #     and the look for a key with slashes refuses one with '=' right before it, so
+    #     AWS_SECRET_ACCESS_KEY=<key>, wrapped, read as nothing even joined.
+    # Withholding too much costs a person the screen of one failed spawn; showing a secret cannot be
+    # taken back. Rows the 40-row window cuts are checked too, since the raw screen is. WHAT THAT COSTS,
+    # measured on the suite's screens: a 40-character commit id ending a row, with a capitalised word
+    # starting the next, joins into a long mixed run and is withheld; so is GH_TOKEN=<placeholder>.
+    # STILL SHOWN, a known limit of the kinds themselves: a value after a NAME= that holds none of the
+    # six names nor a key's shape, such as MY_API_KEY=short1234.
+    param([string[]]$Raw, [string[]]$Kept)
+    $ascii = [string[]]@(@($Raw) | ForEach-Object { [regex]::Replace(("" + $_), '[^\x20-\x7E]', '') })
+    foreach ($source in @(@{ rows = @($Raw) }, @{ rows = @($ascii) }, @{ rows = @($Kept) })) {
+        foreach ($glue in @("`n", "")) {
+            $text = @($source.rows) -join $glue
+            foreach ($form in @($text, $text.Replace("_", " ").Replace("=", "= "))) {
+                $kind = Find-HordeSecretKind -Text $form
+                if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text $form -Kinds @($script:HordeNodeNamedSecretKind) }
+                if ($kind -cne "") { return $kind }
+            }
+        }
+    }
+    return ""
 }
 
 function Get-HordeNodeScreenReport {
@@ -551,8 +588,7 @@ function Get-HordeNodeScreenReport {
     while ($rows.Count -gt $script:HordeNodeScreenRows) { $rows.RemoveAt(0) }
     while ($rows.Count -gt 1 -and ((@($rows) -join "`n").Length -gt $script:HordeNodeScreenChars)) { $rows.RemoveAt(0) }
     if ($rows.Count -eq 1 -and $rows[0].Length -gt $script:HordeNodeScreenChars) { $rows[0] = $rows[0].Substring(0, $script:HordeNodeScreenChars) }
-    $kind = Find-HordeSecretKind -Text ($raw -join "`n")
-    if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text (@($rows) -join "`n") }
+    $kind = Find-HordeNodeScreenSecret -Raw ([string[]]@($raw)) -Kept ([string[]]@($rows))
     if ($kind -cne "") { return [pscustomobject]@{ state = "withheld"; said = ("its screen was WITHHELD because it looked like it held " + $kind + ", so it is shown nowhere"); rows = $none } }
     if ($rows.Count -eq 0) { return [pscustomobject]@{ state = "shown"; said = "its screen was blank"; rows = $none } }
     $cut = ""

@@ -301,12 +301,34 @@
         @{ Name = "screen-secret-shown"
            Find = 'if ($kind -cne "") { return [pscustomobject]@{ state = "withheld";'
            Replace = 'if ($false) { return [pscustomobject]@{ state = "withheld";' }
+        # F's re-check of round 4, REQUIRED: every reading of the screen is checked (Find-HordeNodeScreenSecret).
         @{ Name = "screen-secret-raw-unchecked"
-           Find = '$kind = Find-HordeSecretKind -Text ($raw -join "`n")'
-           Replace = '$kind = ""' }
+           Find = 'foreach ($source in @(@{ rows = @($Raw) }, '
+           Replace = 'foreach ($source in @(' }
         @{ Name = "screen-secret-kept-unchecked"
-           Find = 'if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text (@($rows) -join "`n") }'
+           Find = ', @{ rows = @($Kept) })) {'
+           Replace = ')) {' }
+        @{ Name = "screen-secret-ascii-unstripped"
+           Find = ' @{ rows = @($ascii) },'
            Replace = '' }
+        @{ Name = "screen-secret-rows-only-by-line"
+           Find = 'foreach ($glue in @("`n", "")) {'
+           Replace = 'foreach ($glue in @("`n")) {' }
+        @{ Name = "screen-secret-never-spaced"
+           Find = 'foreach ($form in @($text, $text.Replace("_", " ").Replace("=", "= "))) {'
+           Replace = 'foreach ($form in @($text)) {' }
+        @{ Name = "screen-secret-underscore-kept"
+           Find = '$text.Replace("_", " ").Replace("=", "= ")'
+           Replace = '$text.Replace("=", "= ")' }
+        @{ Name = "screen-secret-equals-unspaced"
+           Find = '.Replace("_", " ").Replace("=", "= ")'
+           Replace = '.Replace("_", " ")' }
+        @{ Name = "screen-secret-named-kind-unasked"
+           Find = '                if ($kind -ceq "") { $kind = Find-HordeSecretKind -Text $form -Kinds @($script:HordeNodeNamedSecretKind) }'
+           Replace = '' }
+        @{ Name = "screen-secret-finder-unused"
+           Find = '    $kind = Find-HordeNodeScreenSecret -Raw ([string[]]@($raw)) -Kept ([string[]]@($rows))'
+           Replace = '    $kind = Find-HordeSecretKind -Text ($raw -join "`n")' }
         @{ Name = "screen-rows-uncut"
            Find = '    while ($rows.Count -gt $script:HordeNodeScreenRows) { $rows.RemoveAt(0) }'
            Replace = '' }

@@ -524,9 +524,9 @@ Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contain
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @(("Note" + [char]0x00E9 + "password=s3cretValue1"))
 $x = SpawnRec
 Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("s3cretValue1")) ("a password=value that only reads as one once a letter outside ASCII becomes '?': the rows as kept are checked too, and withheld (" + $x.rec.screen.state + ")")
-Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", "export GH_TOKEN=<your token here>", $rule)
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", "gh auth login --with-token < your-token-file", $rule)
 $x = SpawnRec
-Check ("$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -like "*GH_TOKEN=<your token here>*" -and (RecText $x.o).Contains("your token here")) "CONTROL: the same screen with a placeholder in place of the token is shown, and the record's text has it"
+Check ("$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -like "*--with-token < your-token-file*" -and (RecText $x.o).Contains("your-token-file")) "CONTROL: the same screen with no token in its row is shown, and the record's text has it"
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
 $x = SpawnRec { param($c) $c.bounds.readySeconds = 600; $c.bounds.spawnSeconds = 5 }
 Check ("$($x.rec.screen.state)" -ceq "skipped" -and @($x.rec.screen.rows).Count -eq 0 -and $x.o.reason -like "*its screen was not read: this spawn's own limit had run out*" -and @($script:textAt | Where-Object { $_ -ge 5000 }).Count -le 1 -and @($script:stopped).Count -eq 1) ("no time left: no screen read for the report past the limit (the one read at 5000 ms is the readiness wait's last look, at its end), the report says so, and the session is still ended (" + $x.o.reason + ")")
@@ -561,6 +561,47 @@ Check ("$($x.o.state)" -ceq "refused" -and $null -eq $x.rec.screen) "a session e
 Reset; $script:loseAllLike = "Read *"
 $x = SpawnRec
 Check ($x.o.reason -clike "prompt-not-submitted:*" -and $null -eq $x.rec.screen) "a prompt not submitted gets no capture"
+
+Write-Host ""
+Write-Host "--- a secret wrapped, split or under a name is withheld too (F's re-check of round 4) ---" -ForegroundColor Cyan
+# F's probe4, every case: made-up values assembled from pieces, never a credential. Each one was SHOWN on
+# 5b2f471 (measured 2026-10-14), because each half, or each piece, is too short for any shape.
+$scrRows = $null
+$scrActor = [pscustomobject]@{ name = "screenhost"; text = { param($t, $h) New-HordeKnown -Value ([string[]]$script:scrRows) } }
+$scrCtx = [pscustomobject]@{ clock = { 0.0 }; bounds = [pscustomobject]@{} }
+function ScreenOf { param([string[]]$Rows) $script:scrRows = $Rows; return (Get-HordeNodeScreenReport -Context $scrCtx -Actor $scrActor -Target "t" -Handle "1") }
+$cloud = "wJalrXUtnFEMI/K7MDENG" + "/bPxRfiCYEXAMPLEKEY"
+$gh2 = "ghp_" + "A1b2C3d4E5f6G7h8I9j0" + "K1l2M3n4O5p6Q7r8"
+$zw = [string][char]0x200B
+$mustWithhold = [ordered]@{
+    "a 40-character cloud secret wrapped mid-token after its NAME=" = @(("export AWS_SECRET_ACCESS_KEY=" + $cloud.Substring(0, 20)), $cloud.Substring(20))
+    "a 40-character cloud secret wrapped mid-token, no name before it" = @(("echo " + $cloud.Substring(0, 20)), $cloud.Substring(20))
+    "a ghp token wrapped 6 characters into its body" = @(("git push https://x@github " + $gh2.Substring(0, 10)), $gh2.Substring(10))
+    "a ghp token split by a zero-width space (one '?' as kept)" = @(("echo " + $gh2.Substring(0, 12) + $zw + $gh2.Substring(12)))
+    "DB_PASSWORD=value, whose underscore hides the name from the name=value kind" = @(("DB_PASS" + "WORD=Hunter2Hunter2"))
+    "a client_secret member, the kind looked for only when named" = @(('{"client_' + 'secret": "s3cr3tValue9"}'))
+}
+# Only the screen as READ shows this one: a no-break space is white space to the sentence kind, removing
+# it joins the words, and its row is above the 40 kept.
+$mustWithhold["a password in a sentence with a no-break space, in a row above the 40 kept"] = @(("pass" + "word" + [char]0x00A0 + "is Hunter22x")) + @(1..60 | ForEach-Object { "row " + $_ })
+foreach ($k in $mustWithhold.Keys) {
+    $s = ScreenOf $mustWithhold[$k]
+    Check ("$($s.state)" -ceq "withheld" -and @($s.rows).Count -eq 0) ("WITHHELD: " + $k + " (" + $s.state + ": " + $s.said + ")")
+}
+# CONTROL: the same instrument shows an ordinary screen: a welcome box, a long folder path, a session id,
+# a commit id, a numbered dialog and a footer - nothing in it a secret - every row of it, as kept.
+$plain = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30)), "Welcome to the harness!", "  cwd: C:\work\code\app-worktrees\act-a3\agents\claude-code", ("  session 3f2a9c1e-" + "7b4d-4e21-9a0c-5d6e7f8a9b0c"), ("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), " Do you trust the files in this folder?", " 1. Yes, proceed", "   2. No, exit", "  ? for shortcuts")
+$s = ScreenOf $plain
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $plain.Count -and @($s.rows)[2] -clike "*act-a3\agents\claude-code") ("CONTROL: an ordinary screen with no secret, a path, a session id and a commit id in it, is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
+# KNOWN LIMIT, on purpose: rows joined by nothing can fuse two harmless rows into one long mixed run, and
+# a placeholder after a NAME= reads as a value once the name is spaced. Both are withheld: a screen lost,
+# never a secret shown. If either is ever shown again, that is a deliberate change to this rule.
+$s = ScreenOf @(("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), "Do you trust the files in this folder?")
+Check ("$($s.state)" -ceq "withheld") ("KNOWN LIMIT: a 40-character commit id at a row's end, a capitalised word starting the next, is withheld (" + $s.said + ")")
+$s = ScreenOf @("export GH_TOKEN=<your token here>")
+Check ("$($s.state)" -ceq "withheld") ("KNOWN LIMIT: GH_TOKEN=<your token here>, a placeholder, is withheld, as token=<...> always was (" + $s.said + ")")
+$s = ScreenOf @(("export AWS_REGION=" + "us-east-1"), ("echo " + "wJalrXUtnFEMI"), "/bPxRfiCYE")
+Check ("$($s.state)" -ceq "shown") ("CONTROL: a short value after a NAME=, and two short pieces that are no key even joined, are shown (" + $s.state + ")")
 
 Write-Host ""
 Write-Host "--- the prompt is typed only once the no-op's turn has ENDED (review of PR 239, M1) ---" -ForegroundColor Cyan
