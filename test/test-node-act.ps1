@@ -502,21 +502,24 @@ $rule = ([string][char]0x2500) * 40
 $dialog = @("", "", "Do you trust the files in this folder?", "", $rule, (" " + [char]0x276F + " 1. Yes, proceed"), "   2. No, exit   ", "", "", "")
 $dialogKept = @("Do you trust the files in this folder?", "", $rule, " ? 1. Yes, proceed", "   2. No, exit")
 function RecText { param($O) return [System.IO.File]::ReadAllText((Join-Path $script:lastRecords ($O.sessionId + ".json"))) }
+# The screen's rows are kept in the session's own folder, never in the record (F's re-check of round 4).
+function ScreenText { param($X) $f = "" + $X.rec.screen.file; if ($f -ne "" -and (Test-Path -LiteralPath $f -PathType Leaf)) { return [System.IO.File]::ReadAllText($f) }; return "" }
+function ScreenRows { param($X) $t = ScreenText $X; if ($t -eq "") { return [string[]]@() }; return [string[]]@(($t | ConvertFrom-Json).rows) }
 function SpawnRec { param([scriptblock]$Tune = $null) $c = New-Context; if ($null -ne $Tune) { & $Tune $c }; $script:lastRecords = $c.records; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value } }
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
 $x = SpawnRec
-Check ("$($x.rec.outcome)" -ceq "not-ready-closed" -and "$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -ceq ($dialogKept -join "|") -and $x.o.reason -like "*its screen as it was then, the last 5 rows, is in this node's spawn record*" -and @($script:stopped).Count -eq 1) ("never ready with a dialog up, then ended: the dialog's screen is in the spawn record - blank rows trimmed, the box rule as it is, the prompt glyph as '?' - and the reason says where (" + (@($x.rec.screen.rows) -join "|") + " / " + $x.o.reason + ")")
+Check ("$($x.rec.outcome)" -ceq "not-ready-closed" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq ($dialogKept -join "|") -and $x.o.reason -like "*its screen as it was then, the last 5 rows, is kept for 7 days in this node's own folder of the session, this user's alone*" -and @($script:stopped).Count -eq 1) ("never ready with a dialog up, then ended: the dialog's screen is kept in the session's own folder - blank rows trimmed, the box rule as it is, the prompt glyph as '?' - and the reason says where (" + (@(ScreenRows $x) -join "|") + " / " + $x.o.reason + ")")
 Reset; $script:neverReady = $true; $script:screenRows = $dialog
 $x = SpawnRec
-Check ("$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -ceq ($dialogKept -join "|") -and $x.o.reason -like "*its screen as it was then*LEFT RUNNING*") ("never ready, its mode proven, so kept: its screen is captured too (" + $x.o.reason + ")")
+Check ("$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq ($dialogKept -join "|") -and $x.o.reason -like "*its screen as it was then*LEFT RUNNING*") ("never ready, its mode proven, so kept: its screen is captured too (" + $x.o.reason + ")")
 # A made-up credential, planted: never a real one (it is in this file, in the open).
 $planted = "ghp_" + "Zq7vK2mN9xR4tW8yB3cF6hJ1pL5sD0gA2eUi"
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", ("export GH_TOKEN=" + $planted), $rule, (" " + [char]0x276F + " 1. Continue"))
 $x = SpawnRec
-$everywhere = $x.o.reason + "`n" + (RecText $x.o) + "`n" + (@($script:alerts) -join "`n")
+$everywhere = $x.o.reason + "`n" + (RecText $x.o) + "`n" + (ScreenText $x) + "`n" + (@($script:alerts) -join "`n")
 $pieces = @(0..([int][math]::Floor($planted.Length / 8) - 1) | ForEach-Object { $planted.Substring($_ * 8, 8) })
 $leaked = @($pieces | Where-Object { $everywhere.Contains($_) })
-Check ("$($x.rec.screen.state)" -ceq "withheld" -and @($x.rec.screen.rows).Count -eq 0 -and $x.o.reason -like "*screen was WITHHELD because it looked like it held an access token*" -and $leaked.Count -eq 0 -and -not (RecText $x.o).Contains("Configure the token")) ("a screen with a planted made-up token: withheld whole, the kind said, and not one 8-character piece of it in the reason, the record or an alert (" + $leaked.Count + " found; " + $x.o.reason + ")")
+Check ("$($x.rec.screen.state)" -ceq "withheld" -and @(ScreenRows $x).Count -eq 0 -and $x.o.reason -like "*screen was WITHHELD because it looked like it held an access token*" -and $leaked.Count -eq 0 -and -not (RecText $x.o).Contains("Configure the token")) ("a screen with a planted made-up token: withheld whole, the kind said, and not one 8-character piece of it in the reason, the record or an alert (" + $leaked.Count + " found; " + $x.o.reason + ")")
 Check (@($pieces).Count -ge 4 -and @($pieces | Where-Object { ("export GH_TOKEN=" + $planted).Contains($_) }).Count -eq @($pieces).Count) "CONTROL: the leak check has pieces to look for, and finds every one in the screen it was planted in"
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @(("export GH_TOKEN=" + $planted)) + @(1..60 | ForEach-Object { "row " + $_ })
 $x = SpawnRec
@@ -526,32 +529,32 @@ $x = SpawnRec
 Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("s3cretValue1")) ("a password=value that only reads as one once a letter outside ASCII becomes '?': the rows as kept are checked too, and withheld (" + $x.rec.screen.state + ")")
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", "gh auth login --with-token < your-token-file", $rule)
 $x = SpawnRec
-Check ("$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -like "*--with-token < your-token-file*" -and (RecText $x.o).Contains("your-token-file")) "CONTROL: the same screen with no token in its row is shown, and the record's text has it"
+Check ("$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -like "*--with-token < your-token-file*" -and (ScreenText $x).Contains("your-token-file") -and -not (RecText $x.o).Contains("your-token-file")) "CONTROL: the same screen with no token in its row is shown: its screen file has it, and the record itself holds no row"
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
 $x = SpawnRec { param($c) $c.bounds.readySeconds = 600; $c.bounds.spawnSeconds = 5 }
-Check ("$($x.rec.screen.state)" -ceq "skipped" -and @($x.rec.screen.rows).Count -eq 0 -and $x.o.reason -like "*its screen was not read: this spawn's own limit had run out*" -and @($script:textAt | Where-Object { $_ -ge 5000 }).Count -le 1 -and @($script:stopped).Count -eq 1) ("no time left: no screen read for the report past the limit (the one read at 5000 ms is the readiness wait's last look, at its end), the report says so, and the session is still ended (" + $x.o.reason + ")")
+Check ("$($x.rec.screen.state)" -ceq "skipped" -and @(ScreenRows $x).Count -eq 0 -and $x.o.reason -like "*its screen was not read: this spawn's own limit had run out*" -and @($script:textAt | Where-Object { $_ -ge 5000 }).Count -le 1 -and @($script:stopped).Count -eq 1) ("no time left: no screen read for the report past the limit (the one read at 5000 ms is the readiness wait's last look, at its end), the report says so, and the session is still ended (" + $x.o.reason + ")")
 $long = @(1..100 | ForEach-Object { ("row " + $_.ToString("000") + " ") + ("x" * 52) })
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $long
 $x = SpawnRec
-$kept = @($x.rec.screen.rows)
+$kept = @(ScreenRows $x)
 Check ($kept.Count -eq 40 -and $kept[0] -clike "row 061 *" -and $kept[39] -clike "row 100 *" -and $x.o.reason -like "*the last 40 rows, the 60 rows above them left out*") ("a screen of 100 rows: the LAST 40 kept, and the reason says 60 were left out (" + $kept[0] + " .. " + $kept[39] + ")")
 $wide = @(1..40 | ForEach-Object { ("row " + $_.ToString("000") + " ") + ("y" * 192) })
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $wide
 $x = SpawnRec
-$kept = @($x.rec.screen.rows)
+$kept = @(ScreenRows $x)
 Check (($kept -join "`n").Length -le 4000 -and ($kept -join "`n").Length -gt 3500 -and $kept[$kept.Count - 1] -clike "row 040 *" -and $kept.Count -lt 40) ("40 rows of 200 characters: cut to at most 4000 characters from the top (" + $kept.Count + " rows, " + ($kept -join "`n").Length + " characters)")
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("a  ", "", "", "", ("b`tc" + [char]0x00A0 + "d" + [char]0x00E9), "")
 $x = SpawnRec
-Check ((@($x.rec.screen.rows) -join "|") -ceq "a||b c d?") ("a run of blank rows is kept as one, a tab and a no-break space read as spaces, any other character as '?' (" + (@($x.rec.screen.rows) -join "|") + ")")
+Check ((@(ScreenRows $x) -join "|") -ceq "a||b c d?") ("a run of blank rows is kept as one, a tab and a no-break space read as spaces, any other character as '?' (" + (@(ScreenRows $x) -join "|") + ")")
 Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:noScreen = $true
 $x = SpawnRec
 Check ("$($x.rec.screen.state)" -ceq "unreadable" -and $x.o.reason -like "*its screen could not be read: the fixture host shows no screen*") ("a screen the host cannot read: said so (" + $x.o.reason + ")")
 Reset; $script:turnMs = 600000
 $x = SpawnRec
-Check ("$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -ceq "BOX:|BUSY" -and $x.o.reason -like "*no-op line's turn did not end*its screen as it was then*LEFT RUNNING*") ("the no-op's turn never ended: kept, and its screen captured (" + $x.o.reason + ")")
+Check ("$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq "BOX:|BUSY" -and $x.o.reason -like "*no-op line's turn did not end*its screen as it was then*LEFT RUNNING*") ("the no-op's turn never ended: kept, and its screen captured (" + $x.o.reason + ")")
 Reset; $script:readyAtMs = 9500
 $x = SpawnRec { param($c) $c.bounds.spawnSeconds = 10; $c.bounds.readySeconds = 60 }
-Check ($x.o.reason -like "*so the no-op line was not typed*" -and "$($x.rec.screen.state)" -ceq "shown" -and (@($x.rec.screen.rows) -join "|") -ceq "BOX:|IDLE") ("too near the limit for the no-op line: its screen captured (" + $x.o.reason + ")")
+Check ($x.o.reason -like "*so the no-op line was not typed*" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq "BOX:|IDLE") ("too near the limit for the no-op line: its screen captured (" + $x.o.reason + ")")
 Reset
 $x = SpawnRec
 Check ("$($x.o.state)" -ceq "done" -and $null -eq $x.rec.screen) "a session kept and done gets no capture"
@@ -563,7 +566,7 @@ $x = SpawnRec
 Check ($x.o.reason -clike "prompt-not-submitted:*" -and $null -eq $x.rec.screen) "a prompt not submitted gets no capture"
 
 Write-Host ""
-Write-Host "--- a secret wrapped, split or under a name is withheld too (F's re-check of round 4) ---" -ForegroundColor Cyan
+Write-Host "--- a secret wrapped, split or under a name is withheld too; the rows are this user's alone, for a week (F's re-check of round 4) ---" -ForegroundColor Cyan
 # F's probe4, every case: made-up values assembled from pieces, never a credential. Each one was SHOWN on
 # 5b2f471 (measured 2026-10-14), because each half, or each piece, is too short for any shape.
 $scrRows = $null
@@ -602,6 +605,47 @@ $s = ScreenOf @("export GH_TOKEN=<your token here>")
 Check ("$($s.state)" -ceq "withheld") ("KNOWN LIMIT: GH_TOKEN=<your token here>, a placeholder, is withheld, as token=<...> always was (" + $s.said + ")")
 $s = ScreenOf @(("export AWS_REGION=" + "us-east-1"), ("echo " + "wJalrXUtnFEMI"), "/bPxRfiCYE")
 Check ("$($s.state)" -ceq "shown") ("CONTROL: a short value after a NAME=, and two short pieces that are no key even joined, are shown (" + $s.state + ")")
+
+# The rows are in the session's own folder, which is this user's alone; the record holds none of them.
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
+$x = SpawnRec
+$sf = "" + $x.rec.screen.file
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+function RuleSids { param([string]$Path) return @((Get-Acl -LiteralPath $Path).Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique) }
+$sfSids = @(RuleSids $sf)
+$recSids = @(RuleSids (Join-Path $script:lastRecords ($x.o.sessionId + ".json")))
+Check ($sf -ceq (Join-Path (Join-Path $script:lastRecords $x.o.sessionId) "screen.json") -and $sfSids.Count -eq 1 -and $sfSids[0] -ceq $me.Value) ("the screen's rows are in <records>\<sid>\screen.json, whose every access rule is this user's alone (" + ($sfSids -join ",") + ")")
+Check ($recSids.Count -gt 1 -and -not (RecText $x.o).Contains("Do you trust")) ("CONTROL: the record beside it takes the folder's wider rules (" + $recSids.Count + " identities), and holds no row of the screen")
+Check (("" + (ScreenText $x | ConvertFrom-Json).takenAt) -ceq "2026-10-05T12:00:00.0000000Z") "the screen file says when it was taken, by the node's clock, for the week it is kept"
+# A record with no folder of its own (as one read back without promptDir): the screen is read, never kept.
+$bare = [pscustomobject]@{ sessionId = "s1"; handle = "p" }
+$script:scrRows = $dialog
+$said = Save-HordeNodeScreenReport -Context ([pscustomobject]@{ clock = { 0.0 }; now = { [datetime]::UtcNow }; records = $work; bounds = [pscustomobject]@{} }) -Actor $scrActor -Target "t" -Record $bare
+Check ("$($bare.screen.state)" -ceq "unkept" -and "$($bare.screen.file)" -ceq "" -and $null -eq $bare.screen.PSObject.Properties["rows"] -and $said -like "*read but not kept*") ("a record with no folder of its own keeps no rows: " + $said)
+# A record naming a folder that exists but is not this session's own: no rows are written there.
+$elsewhereDir = Join-Path $work ("not-own-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $elsewhereDir -Force | Out-Null
+$named = [ordered]@{ sessionId = "s2"; handle = "p"; promptDir = $elsewhereDir }
+$said = Save-HordeNodeScreenReport -Context ([pscustomobject]@{ clock = { 0.0 }; now = { [datetime]::UtcNow }; records = $work; bounds = [pscustomobject]@{} }) -Actor $scrActor -Target "t" -Record $named
+Check ("$($named.screen.state)" -ceq "unkept" -and @(Get-ChildItem -LiteralPath $elsewhereDir -Force).Count -eq 0) ("a record naming another folder as its own keeps no rows, and writes nothing there: " + $said)
+
+# A WEEK: every spawn deletes the screen files taken more than 7 days before its clock, and unreadable ones.
+$ret = Join-Path $work ("retention-" + [guid]::NewGuid().ToString("N"))
+function PlantScreen { param([string]$Name, [string]$Body) $d = Join-Path $ret $Name; New-Item -ItemType Directory -Path $d -Force | Out-Null; [System.IO.File]::WriteAllText((Join-Path $d "prompt.txt"), "the prompt"); if ($null -ne $Body) { [System.IO.File]::WriteAllText((Join-Path $d "screen.json"), $Body) }; return (Join-Path $d "screen.json") }
+$oldF = PlantScreen "11111111-1111-4111-8111-111111111111" '{ "takenAt": "2026-09-28T11:59:00.0000000Z", "rows": ["old"] }'
+$freshF = PlantScreen "22222222-2222-4222-8222-222222222222" '{ "takenAt": "2026-09-28T12:01:00.0000000Z", "rows": ["fresh"] }'
+$badF = PlantScreen "33333333-3333-4333-8333-333333333333" 'not json'
+$otherF = PlantScreen "not-a-session" '{ "takenAt": "2020-01-01T00:00:00Z", "rows": ["x"] }'
+$swept = Remove-HordeNodeOldScreens -Dir $ret -Now ([datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime())
+Check ($swept -eq 2 -and -not (Test-Path -LiteralPath $oldF) -and -not (Test-Path -LiteralPath $badF) -and (Test-Path -LiteralPath (Join-Path (Split-Path $oldF) "prompt.txt"))) ("a screen taken 7 days and a minute before the clock, and one that cannot be read, are deleted - and only the screen file (" + $swept + " deleted)")
+Check ((Test-Path -LiteralPath $freshF) -and (Test-Path -LiteralPath $otherF)) "CONTROL: one taken 6 days 23 h 59 min before is kept, and a folder not named as a session is never looked in"
+# By a spawn, under its lock: a screen planted a week and more before the fixture's clock is gone after it.
+Reset
+$cR = New-Context
+$oldInRec = Join-Path (Join-Path $cR.records "44444444-4444-4444-8444-444444444444") "screen.json"
+New-Item -ItemType Directory -Path (Split-Path $oldInRec) -Force | Out-Null
+[System.IO.File]::WriteAllText($oldInRec, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
+$null = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $cR
+Check (-not (Test-Path -LiteralPath $oldInRec) -and (Test-Path -LiteralPath (Split-Path $oldInRec))) "a spawn deletes a screen file past its week from its records, and leaves the folder"
 
 Write-Host ""
 Write-Host "--- the prompt is typed only once the no-op's turn has ENDED (review of PR 239, M1) ---" -ForegroundColor Cyan

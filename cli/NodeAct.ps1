@@ -512,8 +512,18 @@ function Stop-HordeNodeSession {
 # (U+2500 to U+257F) as they are, a tab or a no-break space as a space, and every other character as
 # '?', so the record reads alike in any console. NO SECRET IS SHOWN: see Find-HordeNodeScreenSecret;
 # a screen that looks like it holds one is withheld whole - only the kind is said, never a row.
+# WHERE THE ROWS ARE KEPT (F's re-check of round 4, REQUIRED): not in the record, whose folder takes the
+# permissions of the node's home, but in <records>\<sid>\screen.json, inside the session's own folder,
+# which is this user's alone (Set-HordeNodeOwnerOnly, F10). The record says only the state, the clause
+# and that file. HOW LONG: 7 days from the look, by the node's clock; every spawn, under the spawn lock,
+# deletes the screen files older than that, and any it cannot read (Remove-HordeNodeOldScreens). A screen
+# is for a person looking into a failed spawn the same week, and its rows are the one thing in a record
+# that can hold what the session showed; a week is long enough to look and short enough that a screen
+# nobody looked at does not stay forever.
 $script:HordeNodeScreenRows = 40
 $script:HordeNodeScreenChars = 4000
+$script:HordeNodeScreenFile = "screen.json"
+$script:HordeNodeScreenKeepDays = 7
 # The one kind core/Secrets.ps1 looks for only when it is named; misspelt, Find-HordeSecretKind throws.
 $script:HordeNodeNamedSecretKind = "a secret written under a name such as client_secret or password"
 
@@ -593,17 +603,60 @@ function Get-HordeNodeScreenReport {
     if ($rows.Count -eq 0) { return [pscustomobject]@{ state = "shown"; said = "its screen was blank"; rows = $none } }
     $cut = ""
     if ($all -gt $rows.Count) { $cut = ", the " + ($all - $rows.Count) + " rows above them left out" }
-    return [pscustomobject]@{ state = "shown"; said = ("its screen as it was then, the last " + $rows.Count + " rows" + $cut + ", is in this node's spawn record of the session"); rows = [string[]]@($rows) }
+    return [pscustomobject]@{ state = "shown"; said = ("its screen as it was then, the last " + $rows.Count + " rows" + $cut + ", is kept for " + $script:HordeNodeScreenKeepDays + " days in this node's own folder of the session, this user's alone"); rows = [string[]]@($rows) }
 }
 
 function Save-HordeNodeScreenReport {
-    # Capture -Handle's screen into -Record (written later by the caller) and return the reason's clause.
+    # Capture -Handle's screen: its rows into the session's own folder, and { state; said; file } into
+    # -Record (written later by the caller). Returns the reason's clause. See WHERE THE ROWS ARE KEPT.
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)]$Record)
     $s = Get-HordeNodeScreenReport -Context $Context -Actor $Actor -Target $Target -Handle ("" + $Record.handle)
-    $screen = [pscustomobject][ordered]@{ state = $s.state; said = $s.said; rows = $s.rows }
+    $state = $s.state; $said = $s.said; $file = ""
+    if (@($s.rows).Count -gt 0) {
+        # Only the folder this node made for this session, which New-HordeNodePromptDir made this user's
+        # alone: a record without one, or naming another, keeps no rows.
+        $own = Join-Path $Context.records ("" + $Record.sessionId)
+        $dir = ""
+        if ($Record -is [System.Collections.IDictionary]) { if ($Record.Contains("promptDir")) { $dir = "" + $Record["promptDir"] } }
+        elseif ($null -ne $Record.PSObject.Properties["promptDir"]) { $dir = "" + $Record.promptDir }
+        if ($dir -ceq "" -or $dir -cne $own -or -not (Test-Path -LiteralPath $dir -PathType Container) -or (Test-HordeNodeReparse -Path $dir)) {
+            $state = "unkept"; $said = "its screen was read but not kept: this spawn has no folder of its own, this user's alone, to keep it in"
+        } else {
+            try {
+                $file = Join-Path $dir $script:HordeNodeScreenFile
+                $tmp = Join-Path $dir ("." + [guid]::NewGuid().ToString("N") + ".tmp")
+                $body = [pscustomobject][ordered]@{ sessionId = "" + $Record.sessionId; takenAt = (& $Context.now).ToUniversalTime().ToString("o"); rows = [string[]]@($s.rows) }
+                [System.IO.File]::WriteAllText($tmp, ($body | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
+                Move-Item -LiteralPath $tmp -Destination $file -Force
+            } catch { $file = ""; $state = "unkept"; $said = "its screen was read but could not be kept: " + $_.Exception.Message }
+        }
+    }
+    $screen = [pscustomobject][ordered]@{ state = $state; said = $said; file = $file }
     # A spawn's record is an ordered table; one read back from its file is an object.
     if ($Record -is [System.Collections.IDictionary]) { $Record["screen"] = $screen } else { $Record | Add-Member -NotePropertyName screen -NotePropertyValue $screen -Force }
-    return $s.said
+    return $said
+}
+
+function Remove-HordeNodeOldScreens {
+    # Delete every screen file under -Dir taken more than HordeNodeScreenKeepDays before -Now, and every
+    # one whose time cannot be read (see WHERE THE ROWS ARE KEPT). Only a session's own folder is looked
+    # in - a session id for a name, no junction or link - and only its screen file is deleted. Returns
+    # how many were.
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][datetime]$Now)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container) -or (Test-HordeNodeReparse -Path $Dir)) { return 0 }
+    $n = 0
+    foreach ($d in @(Get-ChildItem -LiteralPath $Dir -Directory -Force)) {
+        if ($d.Name -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' -or (Test-HordeNodeReparse -Path $d.FullName)) { continue }
+        $f = Join-Path $d.FullName $script:HordeNodeScreenFile
+        if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+        $old = $true
+        try {
+            $at = [datetime]::Parse(("" + ([System.IO.File]::ReadAllText($f) | ConvertFrom-Json).takenAt), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            $old = (($Now.ToUniversalTime() - $at).TotalDays -gt $script:HordeNodeScreenKeepDays)
+        } catch { $old = $true }
+        if ($old) { Remove-Item -LiteralPath $f -Force; $n++ }
+    }
+    return $n
 }
 
 # NOT READY, NOTHING TYPED (review of PR 239, S-d). A session the node typed nothing into - never ready
@@ -694,6 +747,10 @@ function Invoke-HordeNodeSpawn {
         $req = [pscustomobject]@{ profile = "" + $a.profile; repoId = "" + $a.repoId; worktree = $wt }
         $today = Get-HordeNodeSpawnsToday -Dir $Context.records -Now (& $Context.now)
         if ($today.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $today.reason) }
+        # Screens past their week go now, under the lock (WHERE THE ROWS ARE KEPT). A sweep that fails
+        # refuses nothing: it is said, and the next spawn sweeps again.
+        try { $null = Remove-HordeNodeOldScreens -Dir $Context.records -Now (& $Context.now) }
+        catch { & $Context.alert ("ALERT: this node could not delete its old screens of sessions that were not ready: " + $_.Exception.Message) }
         $d = Test-HordeRemotePolicy -Policy $cfg.policy -Resolution $res -Request $req -SpawnsToday $today.value
         if (-not $d.allowed) { return (New-HordeNodeOutcome -State "refused" -Reason (@($d.reasons) -join "; ")) }
         # 2. Own login only.

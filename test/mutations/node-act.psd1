@@ -347,6 +347,34 @@
         @{ Name = "screen-box-glyphs-dropped"
            Find = ' -or ($n -ge 0x2500 -and $n -le 0x257F))'
            Replace = ')' }
+        # F's re-check of round 4, REQUIRED: the rows are this user's alone, and kept for a week.
+        @{ Name = "screen-rows-in-the-record"
+           Find = '    $screen = [pscustomobject][ordered]@{ state = $state; said = $said; file = $file }'
+           Replace = '    $screen = [pscustomobject][ordered]@{ state = $state; said = $said; file = $file; rows = $s.rows }' }
+        @{ Name = "screen-file-beside-the-record"
+           Find = '                $file = Join-Path $dir $script:HordeNodeScreenFile'
+           Replace = '                $file = Join-Path $Context.records ("" + $Record.sessionId + ".screen.json")' }
+        @{ Name = "screen-kept-in-any-folder"
+           Find = ' -or $dir -cne $own -or '
+           Replace = ' -or ' }
+        @{ Name = "screen-kept-forever"
+           Find = '            $old = (($Now.ToUniversalTime() - $at).TotalDays -gt $script:HordeNodeScreenKeepDays)'
+           Replace = '            $old = $false' }
+        @{ Name = "screen-kept-six-days"
+           Find = '$script:HordeNodeScreenKeepDays = 7'
+           Replace = '$script:HordeNodeScreenKeepDays = 6' }
+        @{ Name = "screen-unreadable-kept"
+           Find = '        } catch { $old = $true }'
+           Replace = '        } catch { $old = $false }' }
+        @{ Name = "screen-sweep-any-folder"
+           Find = "        if (`$d.Name -cnotmatch '\A[0-9a-f]{8}"
+           Replace = "        if (`$false -and `$d.Name -cnotmatch '\A[0-9a-f]{8}" }
+        @{ Name = "screen-sweep-deletes-the-folder"
+           Find = '        if ($old) { Remove-Item -LiteralPath $f -Force; $n++ }'
+           Replace = '        if ($old) { Remove-Item -LiteralPath $d.FullName -Recurse -Force; $n++ }' }
+        @{ Name = "screen-never-swept"
+           Find = '        try { $null = Remove-HordeNodeOldScreens -Dir $Context.records -Now (& $Context.now) }'
+           Replace = '        try { }' }
         # F's nit of round 4: bounds without hostCallSeconds count 20 s a call.
         @{ Name = "host-call-default-zero"
            Find = '    $hostCall = 20.0'
