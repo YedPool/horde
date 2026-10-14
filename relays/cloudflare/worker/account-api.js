@@ -46,6 +46,7 @@ import { accountOf } from "./accounts.js";
 import { PHONE_ID } from "./sessions.js";
 import { clearedCookieHeader, SESSION_COOKIE } from "./cookies.js";
 import { mailboxProblem } from "./rules.js";
+import { ownersOf, ownersSummary } from "./budget.js";
 // The words a deletion must carry: the phone's account client's, the one copy of them (SSOT).
 import { DELETE_CONFIRM } from "../../../surfaces/pwa/page/account-client.js";
 import { keyId as keyIdOf, unb64u, accountGrantBytes, verifyMachineSignature, validLabel, PAIRING_LIMITS } from "../../../relay/js/protocol.js";
@@ -141,7 +142,9 @@ export async function handleAccountApi(request, env, url, who, limits) {
     const v = await accountOf(env, who.account).view(now);
     if (!v) return refuse(401, "this account was deleted");
     const phones = v.phones.map((p) => ({ id: p.id, signedInAt: p.signedInAt, expiresAt: p.expiresAt, current: p.id === who.phone }));
-    return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones, now });
+    // relay: the relay's owners in number and whether a reserve is kept (budget.js, ownersSummary), never
+    // who: the Account screen says when the whole day is shared (surfaces/pwa, account-client.js).
+    return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones, now, relay: ownersSummary(ownersOf(env)) });
   }
   const ph = PHONES.exec(url.pathname);
   if (ph) {

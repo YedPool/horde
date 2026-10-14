@@ -19,7 +19,16 @@
            Find = 'if (read.relayDown !== true) return "";'
            Replace = '' }
         @{ Name = "no-last-updated-time"
-           Find = 'return words + "." + (when ? " Last updated " + when + "." : "");'
-           Replace = 'return words + ".";' }
+           Find = 'return words + (why ? ": " + why : "") + "." + (when ? " Last updated " + when + "." : "");'
+           Replace = 'return words + (why ? ": " + why : "") + ".";' }
+        @{ Name = "a-limit-read-as-out-of-reach"
+           Find = 'if (limitOf(read)) return "limited";'
+           Replace = '' }
+        @{ Name = "a-limit-said-without-why"
+           Find = 'const why = kind === "limited" ? limitOf(read) : "";'
+           Replace = 'const why = "";' }
+        @{ Name = "any-code-a-known-limit"
+           Find = 'return Object.prototype.hasOwnProperty.call(LIMIT_WORDS, code) ? LIMIT_WORDS[code] : "";'
+           Replace = 'return code ? LIMIT_WORDS["relay-daily-limit"] : "";' }
     )
 }

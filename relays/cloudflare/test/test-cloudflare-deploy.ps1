@@ -19,7 +19,11 @@
 #   3. a wrangler that fails: at a secret, nothing is deployed; at the deploy, it says so; and what it
 #      printed reaches the founder with the values hidden;
 #   4. which relay: the one that can be deployed, and a refusal for one that cannot;
-#   5. the shipped command, end to end: horde relay deploy, its success and failure, and its refusals.
+#   5. the shipped command, end to end: horde relay deploy, its success and failure, and its refusals;
+#   6. horde relay status: what the live relay (a stub of the suite's own) says of its owners.
+# THE OWNERS (part 1): a secret by email or account id; a home that names none is refused while the live
+# relay has owners, deploys with a warning while it has none, is refused when it cannot say; none is the
+# opt-out.
 #
 # NODE IS NEEDED (the fake is a node script, as wrangler is). Without it the suite skips and exits 3.
 
@@ -50,6 +54,41 @@ $dep = Get-HordeCloudflareRelayDeployment
 $callback = $dep.origin + $dep.callback
 $env:HORDE_FAKE_WRANGLER_LOG = $log
 $env:HORDE_FAKE_WRANGLER_FAIL = ""
+
+# THE LIVE RELAY, A STUB (relays/cloudflare/Owners.ps1): every deploy whose home names no owner asks the
+# live relay first. Here that is a listener of the suite's own on 127.0.0.1 - the only stand-in the
+# deploy takes (HORDE_RELAY_TEST_STATUS_ORIGIN) - answering GET /status/owners with $live.answer, and
+# counting what it was asked. Nothing here reaches the real relay.
+$live = [hashtable]::Synchronized(@{ answer = "404"; asked = 0 })
+$liveListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+$liveListener.Start()
+$env:HORDE_RELAY_TEST_STATUS_ORIGIN = "http://127.0.0.1:" + ([System.Net.IPEndPoint]$liveListener.LocalEndpoint).Port
+$liveRs = [runspacefactory]::CreateRunspace()
+$liveRs.Open()
+$livePs = [powershell]::Create()
+$livePs.Runspace = $liveRs
+[void]$livePs.AddScript({
+        param($Listener, $Live)
+        while ($true) {
+            try { $c = $Listener.AcceptTcpClient() } catch { return }
+            try {
+                $st = $c.GetStream()
+                $st.ReadTimeout = 5000
+                $buf = New-Object byte[] 8192
+                $got = ""
+                while (-not $got.Contains("`r`n`r`n")) { $n = $st.Read($buf, 0, $buf.Length); if ($n -le 0) { break }; $got += [System.Text.Encoding]::ASCII.GetString($buf, 0, $n) }
+                $Live.asked = $Live.asked + 1
+                $a = "" + $Live.answer
+                $body = $(if ($a.StartsWith("{")) { $a } else { "" })
+                $code = $(if ($a.StartsWith("{")) { "200 OK" } elseif ($a -ceq "500") { "500 Internal Server Error" } else { "404 Not Found" })
+                $text = "HTTP/1.1 " + $code + "`r`nContent-Type: application/json`r`nContent-Length: " + $body.Length + "`r`nConnection: close`r`n`r`n" + $body
+                $bytes = [System.Text.Encoding]::ASCII.GetBytes($text)
+                $st.Write($bytes, 0, $bytes.Length)
+                $st.Flush()
+            } catch { } finally { $c.Close() }
+        }
+    }).AddArgument($liveListener).AddArgument($live)
+$liveJob = $livePs.BeginInvoke()
 
 function Write-Client {
     # A client file of the suite's own: -Text as is, or a well-formed web client.
@@ -96,27 +135,28 @@ try {
     $d = Deploy
     $runs = @(Read-Log)
     Check ($d.answer.state -ceq "known" -and $d.answer.value.origin -ceq $dep.origin -and $d.answer.value.relay -ceq "cloudflare") ("the deploy answers where the relay now is (" + $d.answer.state + " " + $d.answer.reason + ")")
-    Check ($runs.Count -eq 4) ("wrangler ran four times (" + $runs.Count + ")")
-    if ($runs.Count -eq 4) {
+    Check ($runs.Count -eq 5) ("wrangler ran five times (" + $runs.Count + ")")
+    if ($runs.Count -eq 5) {
         $cmds = @($runs | ForEach-Object { (@($_.argv) | Select-Object -First 3) -join " " })
-        Check ($cmds[0] -ceq "secret put GOOGLE_CLIENT_ID" -and $cmds[1] -ceq "secret put GOOGLE_CLIENT_SECRET" -and $cmds[2] -ceq "secret put HORDE_RELAY_SIGNIN_ALLOWLIST" -and $cmds[3] -clike "deploy --config*") ("the three secrets first, then the deploy (" + ($cmds -join "; ") + ")")
+        Check ($cmds[0] -ceq "secret put GOOGLE_CLIENT_ID" -and $cmds[1] -ceq "secret put GOOGLE_CLIENT_SECRET" -and $cmds[2] -ceq "secret put HORDE_RELAY_SIGNIN_ALLOWLIST" -and $cmds[3] -ceq "secret put HORDE_RELAY_OWNER_ACCOUNTS" -and $cmds[4] -clike "deploy --config*") ("the four secrets first, then the deploy (" + ($cmds -join "; ") + ")")
         Check ($runs[0].stdin -ceq $clientId -and $runs[1].stdin -ceq $clientSecret) "each secret's value is on standard input exactly: no byte order mark, no line end"
         Check ($runs[2].stdin -ceq '{"on":false,"emails":[],"subs":[]}') ("with the settings untouched the allowlist is OFF: signup is public (" + $runs[2].stdin + ")")
-        Check ($runs[3].stdin -ceq "") "the deploy is given nothing on its input"
+        Check ($runs[3].stdin -ceq '{"emails":[],"subs":[]}') ("with no owner set, and none on the live relay, the owners are written empty (" + $runs[3].stdin + ")")
+        Check ($runs[4].stdin -ceq "") "the deploy is given nothing on its input"
         $argvAll = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
         Check (-not (Holds-Value $argvAll)) "no value is ever an argument"
         Check (@($runs | Where-Object { $null -eq $_.config -or $_.config.namesTestBinding -or -not $_.config.appIndex -or $_.config.name -cne "relay" }).Count -eq 0) "every run is given the production config: the Worker relay, no test binding, the app's files beside it"
         $repoFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + "\"
         Check (@($runs | Where-Object { ([System.IO.Path]::GetFullPath($_.config.path)).StartsWith($repoFull, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) "the config wrangler is given lives outside the repository"
-        $appConfig = $runs[3].config.appConfig | ConvertFrom-Json
-        Check ($appConfig.transport -ceq "http" -and $appConfig.relayOrigin -ceq "") ("the app is built with the http transport at its own origin (" + $runs[3].config.appConfig + ")")
+        $appConfig = $runs[4].config.appConfig | ConvertFrom-Json
+        Check ($appConfig.transport -ceq "http" -and $appConfig.relayOrigin -ceq "") ("the app is built with the http transport at its own origin (" + $runs[4].config.appConfig + ")")
         Check (@($runs | Where-Object { $_.env.WRANGLER_SEND_METRICS -cne "false" -or $_.env.CI -cne "true" -or $null -ne $_.env.PSObject.Properties["HORDE_RELAY_TEST_AUTH"] }).Count -eq 0) "every run is quiet and non-interactive, and none carries the test binding"
     }
     $saidAll = $d.said -join "`n"
     Check (-not (Holds-Value $saidAll) -and $saidAll.Contains("stored GOOGLE_CLIENT_SECRET") -and $saidAll.Contains("https://relay.example.workers.dev")) "what the deploy says names each step and passes wrangler's words on, and holds no value"
     Check ($saidAll.Contains("note: the Google client does not list " + $callback)) "a client that does not list the relay's return address gets a note naming it"
     $argvNoOwner = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
-    Check ($saidAll.Contains("warning: the setting relayOwnerAccounts names no owner") -and $saidAll.Contains("shared by every account") -and -not $argvNoOwner.Contains("HORDE_RELAY_OWNER_ACCOUNTS") -and -not $argvNoOwner.Contains("--var")) "with no owner set the deploy warns that the relay keeps no reserve - its whole day shared - and passes no owners"
+    Check ($saidAll.Contains("warning: the setting relayOwnerAccounts names no owner") -and $saidAll.Contains("shared by every account") -and -not $argvNoOwner.Contains("--var")) "with no owner set, and none on the live relay, the deploy warns that the relay keeps no reserve - its whole day shared"
     $after = @(Get-DeployLeftovers | Where-Object { $before -notcontains $_ })
     Check ($after.Count -eq 0) ("the deploy's work folders are gone (" + ($after -join ", ") + ")")
     Set-Settings -Client (Write-Client -WithCallback)
@@ -127,29 +167,56 @@ try {
     Clear-Log
     $d = Deploy
     $runs = @(Read-Log)
-    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[2].stdin -ceq '{"on":true,"emails":["founder@example.com","second@example.org"],"subs":["112233445566778899"]}') ("one setting switches the allowlist on: its emails in lower case, its Google account ids apart (" + $(if ($runs.Count -ge 3) { $runs[2].stdin } else { $d.answer.reason }) + ")")
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and $runs[2].stdin -ceq '{"on":true,"emails":["founder@example.com","second@example.org"],"subs":["112233445566778899"]}') ("one setting switches the allowlist on: its emails in lower case, its Google account ids apart (" + $(if ($runs.Count -ge 3) { $runs[2].stdin } else { $d.answer.reason }) + ")")
     Check (-not (($d.said -join " ").Contains("founder@example.com"))) "and what the deploy says names nobody on it"
     Set-Settings -Client (Write-Client -WithCallback) -More @{ signInAllowlistOn = $false; signInAllowlist = "founder@example.com" }
     Clear-Log
     $d = Deploy
     $runs = @(Read-Log)
-    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[2].stdin -ceq '{"on":false,"emails":["founder@example.com"],"subs":[]}') "switched off, the list is kept for the day it is switched on, and nobody is shut out"
-    # THE OWNERS (Owners.ps1): a plain --var of the deploy, never a secret and never in the committed config.
-    Set-Settings -Client (Write-Client -WithCallback) -More @{ relayOwnerAccounts = " 112233445566778899 ,998877665544332211,112233445566778899" }
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and $runs[2].stdin -ceq '{"on":false,"emails":["founder@example.com"],"subs":[]}') "switched off, the list is kept for the day it is switched on, and nobody is shut out"
+    # THE OWNERS (Owners.ps1): a secret like the allowlist, by email or Google account id - and a home that
+    # names none may not deploy over a live relay that has some.
+    Set-Settings -Client (Write-Client -WithCallback) -More @{ relayOwnerAccounts = " Boss@Example.com ,112233445566778899,boss@example.com,112233445566778899" }
     Clear-Log
+    $live.asked = 0
     $d = Deploy
     $runs = @(Read-Log)
-    $deployArgv = @($(if ($runs.Count -eq 4) { @($runs[3].argv) } else { @() }))
-    $at = [Array]::IndexOf([string[]]$deployArgv, "--var")
-    $ownersArg = $(if ($at -ge 0 -and $at + 1 -lt $deployArgv.Count) { "" + $deployArgv[$at + 1] } else { "" })
-    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $ownersArg -ceq "HORDE_RELAY_OWNER_ACCOUNTS:112233445566778899,998877665544332211" -and @($runs | Select-Object -First 3 | Where-Object { (@($_.argv) -join " ").Contains("OWNER") }).Count -eq 0) ("the owners go to the deploy as one --var: ids only, each once, in order - not a secret (" + $ownersArg + ")")
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and $runs[3].stdin -ceq '{"emails":["boss@example.com"],"subs":["112233445566778899"]}' -and $live.asked -eq 0) ("SET: the owners are a secret of their own - emails in lower case, account ids apart, each once - and the live relay is not asked (" + $(if ($runs.Count -ge 4) { $runs[3].stdin } else { $d.answer.reason }) + ")")
+    $argvOwners = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
     $saidOwners = $d.said -join " "
-    Check (-not $saidOwners.Contains("warning:") -and $saidOwners.Contains("the relay's owners: 2 Google account id(s)") -and -not $saidOwners.Contains("112233445566778899")) "with owners set there is no warning, and what the deploy says counts them without naming them"
+    Check (-not $argvOwners.Contains("boss@example.com") -and -not $argvOwners.Contains("--var") -and -not $saidOwners.Contains("warning:") -and $saidOwners.Contains("the relay's owners: 2 account(s)") -and -not $saidOwners.Contains("boss@example.com")) "no owner is ever an argument, and what the deploy says counts them without naming them"
     Check (-not ([System.IO.File]::ReadAllText((Join-Path $root "relays\cloudflare\wrangler.json")).Contains("HORDE_RELAY_OWNER_ACCOUNTS"))) "CONTROL: the committed config names no owner"
     Set-Settings -Client (Write-Client -WithCallback) -More @{ relayOwnerAccounts = ((1..16 | ForEach-Object { "1000" + $_ }) -join ",") }
     Clear-Log
     $d = Deploy
-    Check ($d.answer.state -ceq "known" -and @(Read-Log).Count -eq 4) ("CONTROL: sixteen owners, the most - one step below the refusal in part 2 - deploy (" + $d.answer.reason + ")")
+    Check ($d.answer.state -ceq "known" -and @(Read-Log).Count -eq 5) ("CONTROL: sixteen owners, the most - one step below the refusal in part 2 - deploy (" + $d.answer.reason + ")")
+    # MISSING, AND THE LIVE RELAY HAS OWNERS: refused, nothing run, the reason naming the setting and its file.
+    Set-Settings -Client (Write-Client -WithCallback)
+    $settingsFile = Join-Path $hh "settings\relay-cloudflare.json"
+    $live.answer = '{"owners":1,"reserve":true}'
+    Clear-Log
+    $live.asked = 0
+    $d = Deploy
+    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("the live relay has 1 owner(s), and the setting relayOwnerAccounts in " + $settingsFile + " names none") -and "$($d.answer.reason)".Contains("nothing was deployed") -and @(Read-Log).Count -eq 0 -and $live.asked -eq 1) ("MISSING + LIVE OWNERS: refused, nothing run, the setting and its file named (" + $d.answer.reason + ")")
+    # MISSING, AND THE LIVE RELAY HAS NONE: deployed, with the warning.
+    $live.answer = '{"owners":0,"reserve":false}'
+    Clear-Log
+    $d = Deploy
+    Check ($d.answer.state -ceq "known" -and @(Read-Log).Count -eq 5 -and ($d.said -join " ").Contains("warning: the setting relayOwnerAccounts names no owner, and the live relay has none")) ("MISSING + NO LIVE OWNERS: deployed, with the warning (" + $d.answer.reason + ")")
+    # MISSING, AND THE LIVE RELAY CANNOT SAY: refused - not knowing is not none.
+    $live.answer = "500"
+    Clear-Log
+    $d = Deploy
+    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("answered 500") -and @(Read-Log).Count -eq 0) ("MISSING + A LIVE RELAY THAT CANNOT SAY: refused, nothing run (" + $d.answer.reason + ")")
+    # THE OPT-OUT: none clears them on purpose, without asking.
+    $live.answer = '{"owners":1,"reserve":true}'
+    Set-Settings -Client (Write-Client -WithCallback) -More @{ relayOwnerAccounts = "None" }
+    Clear-Log
+    $live.asked = 0
+    $d = Deploy
+    $runs = @(Read-Log)
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and $runs[3].stdin -ceq '{"emails":[],"subs":[]}' -and $live.asked -eq 0 -and ($d.said -join " ").Contains("clears any the live relay has")) ("OPT-OUT: relayOwnerAccounts none deploys with no owners, clearing the live relay's, said so (" + $d.answer.reason + ")")
+    $live.answer = "404"
 
     Write-Host ""
     Write-Host "--- 2. refusals, before wrangler is ever run ---" -ForegroundColor Cyan
@@ -165,7 +232,7 @@ try {
         @{ what = "a wranglerScript that is not there"; client = (Write-Client); wrangler = (Join-Path $work "no-wrangler.js"); like = "wranglerScript names no file" },
         @{ what = "an allowlist entry that is neither an email nor an account id"; client = (Write-Client); more = @{ signInAllowlist = ("founder@example.com, not-an-address " + $clientSecret) }; like = "signInAllowlist" },
         @{ what = "an allowlist switched on with nobody on it"; client = (Write-Client); more = @{ signInAllowlistOn = $true; signInAllowlist = "" }; like = "nobody could sign in" },
-        @{ what = "an owner named by email, not by account id"; client = (Write-Client); more = @{ relayOwnerAccounts = "112233445566778899, founder@example.com" }; like = "relayOwnerAccounts holds an entry (number 2) that is not a Google account id (an email" },
+        @{ what = "an owner that is neither an email nor an account id"; client = (Write-Client); more = @{ relayOwnerAccounts = "112233445566778899, not-an-owner" }; like = "relayOwnerAccounts holds an entry (number 2) that is neither an email nor a Google account id" },
         @{ what = "seventeen owners, one past the most"; client = (Write-Client); more = @{ relayOwnerAccounts = ((1..17 | ForEach-Object { "1000" + $_ }) -join ",") }; like = "names more than 16" }
     )
     foreach ($c in $bad) {
@@ -192,7 +259,7 @@ try {
     Clear-Log
     $env:HORDE_FAKE_WRANGLER_FAIL = "deploy"
     $d = Deploy
-    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("wrangler deploy failed (exit 7)") -and @(Read-Log).Count -eq 4) "a failed deploy says so, after the secrets"
+    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("wrangler deploy failed (exit 7)") -and @(Read-Log).Count -eq 5) "a failed deploy says so, after the secrets"
     $env:HORDE_FAKE_WRANGLER_FAIL = ""
 
     Write-Host ""
@@ -209,7 +276,7 @@ try {
     Clear-Log
     $cliEnv = @{ HORDE_HOME = $hh; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = "" }
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
-    Check ($r.code -eq 0 -and $r.out.Contains("deployed relay cloudflare: it answers at " + $dep.origin) -and @(Read-Log).Count -eq 4 -and -not (Holds-Value $r.out)) ("horde relay deploy deploys, says where, and prints no value (exit " + $r.code + ")")
+    Check ($r.code -eq 0 -and $r.out.Contains("deployed relay cloudflare: it answers at " + $dep.origin) -and @(Read-Log).Count -eq 5 -and -not (Holds-Value $r.out)) ("horde relay deploy deploys, says where, and prints no value (exit " + $r.code + ")")
     # WHAT IS DEPLOYED IS RECORDED (cli/RelayDeploy.ps1): the commit of the checkout the command ran from,
     # which the supervisor compares with its own (cli/RelayPublish.ps1).
     $headNow = ("" + (& git -C $root rev-parse HEAD)).Trim()
@@ -224,9 +291,27 @@ try {
     Check ($r.code -ne 0 -and $r.out.Contains("cannot be deployed")) "relay deploy -Relay local is refused"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-MaxTurns", "1") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("-MaxTurns does not belong to relay deploy")) "a flag of another verb is refused"
+
+    Write-Host ""
+    Write-Host "--- 6. horde relay status: what the live relay says of its owners ---" -ForegroundColor Cyan
+    $live.answer = '{"owners":0,"reserve":false}'
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "status") -Env $cliEnv
+    Check ($r.code -eq 0 -and $r.out.Contains("no owner set: the whole day is shared, no reserve")) ("with no owner on the live relay, relay status says the whole day is shared, no reserve (exit " + $r.code + ": " + $r.out.Trim() + ")")
+    $live.answer = '{"owners":2,"reserve":true}'
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "status", "-Relay", "cloudflare") -Env $cliEnv
+    Check ($r.code -eq 0 -and $r.out.Contains("2 owner(s): the reserve of the day is kept for them") -and -not $r.out.Contains("no reserve")) ("with owners, it says how many and that the reserve is kept for them - never who (exit " + $r.code + ": " + $r.out.Trim() + ")")
+    $live.answer = "500"
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "status") -Env $cliEnv
+    Check ($r.code -eq 0 -and $r.out.Contains("cannot say whether it has owners")) ("a live relay that cannot be asked is said so, never read as none (exit " + $r.code + ")")
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "status", "-Relay", "local") -Env $cliEnv
+    Check ($r.code -ne 0 -and $r.out.Contains("cannot say how it is")) "a relay that runs only here has no status to ask"
+    $live.answer = "404"
 } finally {
     $env:HORDE_FAKE_WRANGLER_LOG = $null
     $env:HORDE_FAKE_WRANGLER_FAIL = $null
+    $env:HORDE_RELAY_TEST_STATUS_ORIGIN = $null
+    try { $liveListener.Stop() } catch { }
+    try { $livePs.Dispose(); $liveRs.Dispose() } catch { }
     if ($work -like "*horde-cf-deploy-test-*" -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 Check (-not (Test-Path -LiteralPath $work)) "the suite's folder is gone"

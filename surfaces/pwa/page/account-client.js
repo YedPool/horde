@@ -93,6 +93,16 @@ export function offlineWords(machine, timeText, options = {}) {
   return "PC " + machine.name + " offline since " + timeText(machine.lastSeenAt) + ". Your answers are kept and will be applied when it is back." + waiting;
 }
 
+// THE RELAY'S RESERVE, as the account's answer carries it: relay { owners, reserve } - how many owner
+// accounts the relay names and whether it holds part of its day back for them, never who. When it names
+// none, every account shares the whole day, the owner's included, and the Account screen says so in
+// these words; otherwise, or when the answer does not say, it says nothing ("").
+export const NO_RESERVE_WORDS = "No owner set: the whole day is shared, no reserve. When the relay's requests for the day run out, this account is refused with every other until midnight UTC.";
+export function reserveWords(answer) {
+  const r = answer && answer.relay;
+  return r && typeof r === "object" && r.reserve === false ? NO_RESERVE_WORDS : "";
+}
+
 // The accounts of a deployment's relay, or null when it has none (the header).
 export function accountFromConfig(config, host) {
   if (!config || config.transport !== "http" || config.relayOrigin || !host || typeof host.fetch !== "function") return null;

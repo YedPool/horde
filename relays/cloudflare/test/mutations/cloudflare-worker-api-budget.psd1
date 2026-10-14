@@ -10,8 +10,8 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "owners-never-read"
-           Find = 'const tier = tierOf(ownersOf(env), who.account);'
-           Replace = 'const tier = tierOf(ownersOf({}), who.account);' }
+           Find = 'limits, owners: ownersOf(env) });'
+           Replace = 'limits, owners: ownersOf({}) });' }
         @{ Name = "phone-watch-refused-by-status"
            Find = 'return op === "watch" && who.kind === "phone" && g.status === 429 ? refuseWatch(request, g) : refusalOf(g);'
            Replace = 'return refusalOf(g);' }

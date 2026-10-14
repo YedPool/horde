@@ -93,7 +93,7 @@
 import { createPhone } from "./phone-core.js";
 import { createBridge, deferredBridge } from "../surface/bridge.js";
 import { createRelayClient, transportFromConfig } from "./relay-client.js";
-import { accountFromConfig, presenceOf, offlineWords } from "./account-client.js";
+import { accountFromConfig, presenceOf, offlineWords, reserveWords } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
@@ -791,6 +791,10 @@ async function openAccount() {
   const a = await account.account();
   if (a.state !== "known") { if (a.status === 401) { showSignIn(); return; } say("action", "The account could not be read just now; try again."); return; }
   $("accountWho").textContent = "Signed in as " + (a.value.account.email || "your Google account") + ".";
+  // THE RELAY'S RESERVE (account-client.js, reserveWords): said only when the relay keeps none.
+  const reserve = reserveWords(a.value);
+  $("relayReserve").textContent = reserve;
+  $("relayReserve").hidden = reserve === "";
   showVersion();
   presence = presenceOf(a.value);
   drawPresence();

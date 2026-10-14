@@ -16,14 +16,29 @@
            Find = 'if (owners.state === "none") return "everyone";'
            Replace = 'if (owners.state === "none") return "public";' }
         @{ Name = "broken-owners-fail-open"
-           Find = 'if (owners.state !== "set" || typeof account'
-           Replace = 'if (owners.state === "broken") return "owner"; if (owners.state !== "set" || typeof account' }
+           Find = 'if (owners.state !== "set") return "public";'
+           Replace = 'if (owners.state !== "set") return "owner";' }
+        @{ Name = "no-owners-given-fail-open"
+           Find = 'if (!owners) return "public";'
+           Replace = 'if (!owners) return "everyone";' }
         @{ Name = "any-account-an-owner"
-           Find = 'return owners.subs.has(account.slice(ACCOUNT_PREFIX.length)) ? "owner" : "public";'
-           Replace = 'return "owner";' }
-        @{ Name = "owners-split-on-spaces-too"
-           Find = 'if (parts.length > MAX_OWNERS || !parts.every((p) => SUB.test(p))) return { state: "broken" };'
-           Replace = 'if (parts.length > MAX_OWNERS) return { state: "broken" };' }
+           Find = '  return "public";'
+           Replace = '  return "owner";' }
+        @{ Name = "email-matched-in-its-own-case"
+           Find = 'owners.emails.includes(email.toLowerCase())'
+           Replace = 'owners.emails.includes(email)' }
+        @{ Name = "an-empty-email-matches"
+           Find = 'typeof email === "string" && email !== "" && owners.emails'
+           Replace = 'typeof email === "string" && owners.emails.concat([""])' }
+        @{ Name = "nobody-named-is-owners-set"
+           Find = 'if (emails.size + subs.size === 0) return { state: "none" };'
+           Replace = 'if (false) return { state: "none" };' }
+        @{ Name = "owners-of-any-shape-taken"
+           Find = 'Object.keys(o).sort().join(",") !== "emails,subs") return { state: "broken" };'
+           Replace = 'false) return { state: "broken" };' }
+        @{ Name = "summary-names-no-count"
+           Find = 'return { owners: owners.emails.length + owners.subs.length, reserve: true };'
+           Replace = 'return { owners: 0, reserve: true };' }
         @{ Name = "public-draws-on-the-reserve"
            Find = 'return limits.relayRequestsPerDay - limits.relayOwnerReserve;'
            Replace = 'return limits.relayRequestsPerDay;' }

@@ -59,7 +59,7 @@ import { handleRotation, ROTATION_PATH } from "./rotation.js";
 import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
-import { ownersOf, tierOf } from "./budget.js";
+import { ownersOf } from "./budget.js";
 import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
@@ -178,8 +178,9 @@ export async function handleApi(request, env, url) {
   if (!op) return refuse(405, "that method does not apply to " + m[3]);
   if (!authorize(who, op, mailbox)) return refuse(403, "you may not " + op + " in this mailbox");
   if (who.gated) {
-    const tier = tierOf(ownersOf(env), who.account);
-    const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op, mailbox, now: Date.now(), limits, tier });
+    // The owners (budget.js): the account's own object decides its tier, by its id and the verified
+    // email it keeps from its sign-in - nothing this request carries.
+    const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op, mailbox, now: Date.now(), limits, owners: ownersOf(env) });
     if (!g.ok) return op === "watch" && who.kind === "phone" && g.status === 429 ? refuseWatch(request, g) : refusalOf(g);
   }
   const box = mailboxOf(env, who.account, who.epoch, mailbox);

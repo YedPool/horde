@@ -98,15 +98,20 @@ const throws = (f) => { try { f(); return false; } catch (e) { return true; } };
 
 // --- 2c. the owners (budget.js, and Owners.ps1 its twin) ---
 {
-  check(B.ownersOf({}).state === "none" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "" }).state === "none", "no binding, or an empty one, is no owner");
-  const o = B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "112233,445566" });
-  check(o.state === "set" && o.subs.has("112233") && o.subs.has("445566") && o.subs.size === 2, "the binding's Google account ids are the owners");
-  check(B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "112233, 445566" }).state === "broken" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "founder@example.com" }).state === "broken" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "1,".repeat(16) + "1" }).state === "broken", "a binding not exactly ids and commas, or naming too many, is broken");
-  check(B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: Array(16).fill("1").join(",") }).state === "set", "CONTROL: sixteen owners, the most, are taken");
-  check(B.tierOf(o, "google:112233") === "owner" && B.tierOf(o, "google:999") === "public", "an owner's account id is an owner's tier; another is public");
+  const bind = (emails, subs) => ({ HORDE_RELAY_OWNER_ACCOUNTS: JSON.stringify({ emails, subs }) });
+  check(B.ownersOf({}).state === "none" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "" }).state === "none" && B.ownersOf(bind([], [])).state === "none", "no binding, an empty one, or one naming nobody is no owner");
+  const o = B.ownersOf(bind(["founder@example.com"], ["112233", "445566"]));
+  check(o.state === "set" && o.subs.join(",") === "112233,445566" && o.emails.join(",") === "founder@example.com", "the binding's emails and Google account ids are the owners");
+  check(JSON.stringify(B.ownersOf(bind(["a@example.com"], ["1"]))) === JSON.stringify({ state: "set", emails: ["a@example.com"], subs: ["1"] }), "they are plain arrays, so the value crosses to the account's object as it is");
+  check(B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: "112233,445566" }).state === "broken" && B.ownersOf(bind(["Founder@Example.com"], [])).state === "broken" && B.ownersOf(bind([], ["not-a-sub"])).state === "broken" && B.ownersOf({ HORDE_RELAY_OWNER_ACCOUNTS: '{"emails":[],"subs":[],"on":true}' }).state === "broken", "a binding not exactly the allowlist's shape - lower-case emails, digit ids, those two lists - is broken");
+  check(B.ownersOf(bind(["a@example.com"], Array(16).fill(0).map((x, i) => String(i)))).state === "broken" && B.ownersOf(bind([], Array(16).fill(0).map((x, i) => String(i)))).state === "set", "seventeen owners are broken; CONTROL: sixteen, the most, are taken");
+  check(B.tierOf(o, "google:112233", "") === "owner" && B.tierOf(o, "google:999", "") === "public", "an owner's account id is an owner's tier; another is public");
   check(B.tierOf(o, "112233") === "public" && B.tierOf(o, "test") === "public" && B.tierOf(o, "google:1122334") === "public", "only the whole id behind google: makes an owner");
+  check(B.tierOf(o, "google:999", "founder@example.com") === "owner" && B.tierOf(o, "google:999", "Founder@Example.COM") === "owner", "an account whose verified email is an owner's is an owner, in any case of letters");
+  check(B.tierOf(o, "google:999", "other@example.com") === "public" && B.tierOf(o, "google:999", "") === "public" && B.tierOf(o, "google:999", undefined) === "public" && B.tierOf(o, "google:999", null) === "public", "another email is public, and no email at all never matches");
   check(B.tierOf({ state: "none" }, "google:999") === "everyone", "with no owner named, every account draws on the whole day");
-  check(B.tierOf({ state: "broken" }, "google:112233") === "public", "a broken binding fails closed: nobody is an owner, and the reserve is still held back");
+  check(B.tierOf({ state: "broken" }, "google:112233", "founder@example.com") === "public" && B.tierOf(undefined, "google:112233") === "public", "a broken binding fails closed, and so does none given at all: nobody is an owner, and the reserve is still held back");
+  check(JSON.stringify(B.ownersSummary(o)) === '{"owners":3,"reserve":true}' && JSON.stringify(B.ownersSummary({ state: "none" })) === '{"owners":0,"reserve":false}' && JSON.stringify(B.ownersSummary({ state: "broken" })) === '{"owners":0,"reserve":true}', "what anyone may know is how many owners and whether a reserve is held back - never who");
 }
 
 // --- 3. a bucket at its edges ---

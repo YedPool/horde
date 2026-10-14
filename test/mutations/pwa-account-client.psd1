@@ -55,5 +55,11 @@
         @{ Name = "waiting-hook-says-zero"
            Find = 'Number.isSafeInteger(options.waiting) && options.waiting > 0 ?'
            Replace = 'Number.isSafeInteger(options.waiting) && options.waiting >= 0 ?' }
+        @{ Name = "no-reserve-never-said"
+           Find = 'r.reserve === false ? NO_RESERVE_WORDS : ""'
+           Replace = '""' }
+        @{ Name = "no-reserve-said-always"
+           Find = 'return r && typeof r === "object" && r.reserve === false'
+           Replace = 'return true || r && typeof r === "object" && r.reserve === false' }
     )
 }

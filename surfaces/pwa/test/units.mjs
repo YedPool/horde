@@ -1390,6 +1390,13 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(AU.versionWords(v, v) === "Version " + v + "." && AU.versionWords(v, "") === "Version " + v + "." && AU.versionWords(v, w) === "Version " + v + " - update pending (" + w + ")." && AU.versionWords("", "") === "Version not known." && AU.versionWords("<b>", w) === "Version not known.", "THE ACCOUNT SCREEN SAYS THE VERSION the page was built as; a worker of another says update pending; anything that is not a version is not shown");
 }
 
+// --- 10g2. THE ACCOUNT SCREEN SAYS WHEN THE RELAY KEEPS NO RESERVE (account-client.js, reserveWords) ---
+{
+  check(AC.reserveWords({ relay: { owners: 0, reserve: false } }) === AC.NO_RESERVE_WORDS && AC.NO_RESERVE_WORDS.indexOf("No owner set: the whole day is shared, no reserve.") === 0, "a relay that names no owner: the Account screen says the whole day is shared, with no reserve");
+  check(AC.reserveWords({ relay: { owners: 1, reserve: true } }) === "" && AC.reserveWords({ relay: { owners: 0, reserve: true } }) === "", "CONTROL: a relay that keeps a reserve - for its owners, or held back by a broken setting - says nothing of it");
+  check(AC.reserveWords({}) === "" && AC.reserveWords(null) === "" && AC.reserveWords({ relay: "no" }) === "" && AC.reserveWords({ relay: { reserve: "false" } }) === "", "and an answer that does not say, from a relay before owners or a bad one, says nothing either");
+}
+
 // --- 10h. A READ THAT FAILS IS SAID, WITH THE TIME OF THE LAST ONE THAT WORKED (read-banner.js, bridge.js read-changed) ---
 {
   const base = R.memoryTransport();

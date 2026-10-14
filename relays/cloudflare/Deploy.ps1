@@ -15,8 +15,9 @@
 #      `... HORDE_RELAY_SIGNIN_ALLOWLIST` (written every time, so switching it off is a deploy too), each value written to
 #      wrangler's standard input - never an argument (a process list shows those to anyone on the
 #      machine), never a file (a file outlives the run, and could be one in the repository);
-#   5. `wrangler deploy`, with the relay's owners as a plain --var (Owners.ps1), or - with none set -
-#      a warning that the relay keeps no reserve for them.
+#      With them, `... HORDE_RELAY_OWNER_ACCOUNTS`, the relay's owners (Owners.ps1), also every time -
+#      and before anything runs, a home that names no owner is refused while the live relay has some;
+#   5. `wrangler deploy`.
 # Secrets before the deploy, as the founder set it (2026-10-11): a Worker never runs a version that is
 # missing them. The work folder is deleted at the end, whatever happened; it never held a secret.
 #
@@ -36,7 +37,7 @@
 . (Join-Path $PSScriptRoot "Owners.ps1")
 
 # The Worker's secrets, in the order they are stored, each from the value of that name below (Publish).
-$script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "clientId"; GOOGLE_CLIENT_SECRET = "clientSecret"; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }
+$script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "clientId"; GOOGLE_CLIENT_SECRET = "clientSecret"; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist"; HORDE_RELAY_OWNER_ACCOUNTS = "owners" }
 $script:HordeCloudflareRelayDeploySeconds = 600
 
 function Hide-HordeCloudflareRelaySecrets {
@@ -65,11 +66,15 @@ function Publish-HordeCloudflareRelay {
     if ($client.state -cne "known") { return $client }
     $allow = ConvertTo-HordeCloudflareRelayAllowlist -Values $set.value
     if ($allow.state -cne "known") { return $allow }
-    # THE OWNERS (Owners.ps1): a plain var of the deploy, not a secret; none is a warning, not a refusal.
+    # THE OWNERS (Owners.ps1): a secret like the allowlist; a home that names none may not deploy over a
+    # live relay that has some - asked before anything is run.
     $owners = ConvertTo-HordeCloudflareRelayOwners -Values $set.value
     if ($owners.state -cne "known") { return $owners }
-    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value }
-    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value)
+    $settingsHome = $(if ($HordeHome -ne "") { $HordeHome } else { Get-HordeHome })
+    $ownersSay = Test-HordeCloudflareRelayOwnersDeploy -Owners $owners.value -Origin (Get-HordeCloudflareRelayDeployment).origin -SettingsFile (Join-Path $settingsHome "settings\relay-cloudflare.json")
+    if ($ownersSay.state -cne "known") { return $ownersSay }
+    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value; owners = $owners.value.text }
+    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value, $owners.value.text)
     & $Say ("read the Google client from " + $clientFile)
 
     $node = Find-HordeCloudflareRelayNode
@@ -96,9 +101,8 @@ function Publish-HordeCloudflareRelay {
             if ($r.timedOut -or $r.code -ne 0) { return (New-HordeUnknown -Reason ("wrangler secret put " + $name + " failed (exit " + $r.code + $(if ($r.timedOut) { ", timed out" } else { "" }) + "): " + (Get-HordeCloudflareRelayWranglerTail -Run $r -Secrets $secrets) + "; nothing was deployed")) }
             & $Say ("stored " + $name + " as a secret of the Worker " + $dep.name)
         }
-        if ($owners.value -eq "") { & $Say "warning: the setting relayOwnerAccounts names no owner, so the relay keeps no reserve: its whole day of requests is shared by every account, yours included" }
-        else { & $Say ("the relay's owners: " + @($owners.value -split ",").Count + " Google account id(s), who may use the reserve once every other account's share of the day is spent") }
-        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList (@($wrangler, "deploy", "--config", $cfg.value) + @(Get-HordeCloudflareRelayOwnersArgs -Owners $owners.value)) -Env $quiet -WorkDir $work -TimeoutSeconds $script:HordeCloudflareRelayDeploySeconds
+        & $Say $ownersSay.value
+        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @($wrangler, "deploy", "--config", $cfg.value) -Env $quiet -WorkDir $work -TimeoutSeconds $script:HordeCloudflareRelayDeploySeconds
         foreach ($l in @(("" + $r.out) -split "`r?`n" | Where-Object { $_.Trim() -ne "" })) { & $Say ("  " + (Hide-HordeCloudflareRelaySecrets -Text $l -Secrets $secrets)) }
         if ($r.timedOut -or $r.code -ne 0) { return (New-HordeUnknown -Reason ("wrangler deploy failed (exit " + $r.code + $(if ($r.timedOut) { ", timed out" } else { "" }) + "): " + (Get-HordeCloudflareRelayWranglerTail -Run $r -Secrets $secrets))) }
         # SIGN-IN'S RETURN ADDRESS (8b) must be registered with Google, or Google refuses the sign-in.

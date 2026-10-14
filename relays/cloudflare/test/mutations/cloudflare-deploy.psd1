@@ -32,8 +32,8 @@
            Find = 'if ($allow.state -cne "known") { return $allow }'
            Replace = '' }
         @{ Name = "allowlist-not-stored"
-           Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }'
-           Replace = ' }' }
+           Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist";'
+           Replace = ';' }
         @{ Name = "wrangler-script-setting-unchecked"
            Find = '} elseif (-not (Test-HordeModuleSettingFolder -Path $wrangler) -or -not (Test-Path -LiteralPath $wrangler -PathType Leaf)) {'
            Replace = '} elseif ($false) {' }

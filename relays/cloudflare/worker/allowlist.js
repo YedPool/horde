@@ -15,10 +15,10 @@
 // as soon as its session ends. Its sessions can be ended sooner: each phone from another's Account
 // screen, or all of them by deleting the account (accounts.js).
 // Written in lower case by the deploy (SignInAllowlist.ps1, its twin), so one address has one spelling.
-const EMAIL = /^[a-z0-9._%+'-]{1,64}@[a-z0-9.-]{1,253}$/;
-const SUB = /^[0-9]{1,255}$/;
+export const EMAIL = /^[a-z0-9._%+'-]{1,64}@[a-z0-9.-]{1,253}$/;
+export const SUB = /^[0-9]{1,255}$/;
 
-function listOf(x, pattern) {
+export function listOf(x, pattern) {
   if (!Array.isArray(x) || x.length > 256) return null;
   const out = new Set();
   for (const v of x) { if (typeof v !== "string" || !pattern.test(v)) return null; out.add(v); }
