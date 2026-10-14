@@ -35,8 +35,14 @@
            Find = 'if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }'
            Replace = 'if (!c || typeof c !== "object" || lanesSeen.has(c.lane)) { dropped++; continue; }' }
         @{ Name = "the-machines-note-words-shown"
-           Find = 'blockedText: cardText(c.blockedText), note: cardFormNote(c.form, cardText(c.problems)),'
-           Replace = 'blockedText: cardText(c.blockedText), note: cardText(c.note) || cardFormNote(c.form, cardText(c.problems)),' }
+           Find = 'note: [cardFormNote(c.form, cardText(c.problems)), cardText(c.idNote)].filter((x) => x).join(" "),'
+           Replace = 'note: cardText(c.note) || [cardFormNote(c.form, cardText(c.problems)), cardText(c.idNote)].filter((x) => x).join(" "),' }
+        @{ Name = "why-a-card-has-its-own-id-not-said"
+           Find = ', cardText(c.idNote)].filter((x) => x).join(" "),'
+           Replace = '].filter((x) => x).join(" "),' }
+        @{ Name = "the-id-words-unchecked"
+           Find = 'cardText(c.idNote)]'
+           Replace = 'String(c.idNote || "")]' }
         @{ Name = "the-broken-rules-not-said"
            Find = 'if (form === "other" && problems) return'
            Replace = 'if (false) return' }

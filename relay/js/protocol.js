@@ -901,8 +901,10 @@ export function readCardsSnapshot(bodyBytes, horde, machine) {
   for (const c of b.cards) {
     if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }
     lanesSeen.add(c.lane);
+    // The note is the form's sentence, then why the card has an id of its own when another lane folder
+    // of the machine gives the same one (idNote; F, review of PR 244: a card named lane-5, never why).
     cards.push({ lane: c.lane, name: cardText(c.name) || c.lane, form: c.form, asOf: timeOf(c.asOf), now: cardText(c.now), lastDone: cardText(c.lastDone), waitingOn: cardText(c.waitingOn),
-      blocked: c.blocked === "yes" || c.blocked === "no" ? c.blocked : "", blockedText: cardText(c.blockedText), note: cardFormNote(c.form, cardText(c.problems)),
+      blocked: c.blocked === "yes" || c.blocked === "no" ? c.blocked : "", blockedText: cardText(c.blockedText), note: [cardFormNote(c.form, cardText(c.problems)), cardText(c.idNote)].filter((x) => x).join(" "),
       tasksOpen: cardCount(c.tasksOpen), doneWeek: cardCount(c.doneWeek), refused: cardList(c.refused, (x) => typeof x === "string" && WORD.test(x.toLowerCase())) });
   }
   const t = b.thrall;

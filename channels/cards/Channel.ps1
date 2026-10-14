@@ -219,7 +219,7 @@ function New-HordeCardsChannelLaneCard {
     if ($lane -ceq "thrall") { $lane = $fallback }
     $name = & $get "lane"
     if ($name -ceq "") { $name = Get-HordeCardsChannelClean $leaf }
-    $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; note = ""; problems = "" }
+    $card = [ordered]@{ lane = $lane; name = $name; form = $s.form; asOf = $s.asOf; now = ""; lastDone = ""; waitingOn = ""; blocked = ""; blockedText = ""; note = ""; problems = ""; idNote = "" }
     if ($s.form -ceq "missing") { $card.note = "This lane has no status file." }
     elseif ($s.form -ceq "unreadable") { $card.note = "This lane's status file could not be read: " + $s.reason + "." }
     else {
@@ -467,8 +467,11 @@ function New-HordeCardsChannelSnapshot {
             while ($taken.ContainsKey("lane-" + $k)) { $k++ }
             $c.lane = "lane-" + $k
             $why = New-Object System.Collections.ArrayList
-            $c.note = Protect-HordeCardsChannelField -Text ("Another lane folder here (" + $taken[$was] + ") gives the same id, " + $was + ", so this card has its own.") -Field "note" -Refused $why
-            if ($why.Count -gt 0) { $c.refused = @(@($c.refused) + "note") }
+            # Its own field, idNote, and not the note: the phone makes a card's note from its form alone
+            # (relay/js/protocol.js, cardFormNote), so a reason put in the note never reached the founder
+            # (F, review of PR 244), and a card can be both renamed and not in the standard form.
+            $c.idNote = Protect-HordeCardsChannelField -Text ("Another lane folder here (" + $taken[$was] + ") gives the same id, " + $was + ", so this card has its own.") -Field "idNote" -Refused $why
+            if ($why.Count -gt 0) { $c.refused = @(@($c.refused) + "idNote") }
             [void]$lines.Add("the lane folders " + $taken[$was] + " and " + (Split-Path -Leaf $f) + " both give the id " + $was + ": the card of " + (Split-Path -Leaf $f) + " is " + $c.lane + " on the phone")
         }
         $taken[$c.lane] = (Split-Path -Leaf $f)

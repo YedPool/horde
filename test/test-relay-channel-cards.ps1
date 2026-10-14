@@ -257,7 +257,7 @@ try {
     Check ($ids.Count -eq 5 -and @($ids | Select-Object -Unique).Count -eq 5) ("every card of a machine has its own id (" + ($ids -join ",") + ")")
     $f = @($b.cards | Where-Object { $_.lane -ceq "F" })
     $dup = @($b.cards | Where-Object { $_.name -ceq "decisions page too" })[0]
-    Check ($f.Count -eq 1 -and $f[0].now -ceq "the first F" -and $null -ne $dup -and $dup.lane -cne "F" -and $dup.note -like "*(orc-f-first) gives the same id, F,*" -and (Said $t) -like "*orc-f-first and orc-f-second both give the id F*") ("TWO FOLDERS OF ONE ORC: the first by folder name keeps the id, the other gets its own and says why, on the phone and at the machine (" + $dup.lane + ": " + $dup.note + ")")
+    Check ($f.Count -eq 1 -and $f[0].now -ceq "the first F" -and $null -ne $dup -and $dup.lane -cne "F" -and $dup.idNote -like "*(orc-f-first) gives the same id, F,*" -and (Said $t) -like "*orc-f-first and orc-f-second both give the id F*") ("TWO FOLDERS OF ONE ORC: the first by folder name keeps the id, the other gets its own and says why, on the phone and at the machine (" + $dup.lane + ": " + $dup.idNote + ")")
     $bad = @($b.cards | Where-Object { $_.name -like "*bad name*" })
     Check ($bad.Count -eq 2 -and $bad[0].lane -cne $bad[1].lane -and @($bad | Where-Object { $_.lane -cmatch '\Alane-[0-9]+\z' }).Count -eq 2) ("FOLDER NAMES NO ID IS MADE OF: each gets its own id by its place in the list, never one shared 'lane' (" + (@($bad | ForEach-Object { $_.lane }) -join ",") + ")")
 
@@ -428,6 +428,19 @@ try {
     $b = $mail[$mail.Count - 1].body
     Check ((@($b.cards | ForEach-Object { $_.lane }) -join ",") -ceq "D,E" -and (Said $t) -notlike "*were not read*") ("retired folders do not count against lanesRead: two live lanes behind three retired ones both get their cards (" + (@($b.cards | ForEach-Object { $_.lane }) -join ",") + "; " + (Said $t) + ")")
 
+    Write-Host ""
+    Write-Host "--- 13. why a card has an id of its own reaches the phone, beside what its form says ---" -ForegroundColor Cyan
+    # F, review of PR 244: the reason a card is named lane-5 was put in the card's note, which the phone
+    # never reads (relay/js/protocol.js makes a card's note from its form), so the founder never saw it.
+    $U = New-World
+    Set-Lane $U "u-first" (New-Status -Orc "U" -Lane "u first")
+    Set-Lane $U "u-second" "LANE: u second (Orc U)`nsome loose words`n"
+    $t = Invoke-Tick $U
+    $mail = @(Get-CardsMail $U)
+    $b = $mail[$mail.Count - 1].body
+    $second = @($b.cards | Where-Object { $_.lane -cne "U" }) | Select-Object -First 1
+    Check ($null -ne $second -and $second.lane -cne "U" -and $second.idNote -like "*(u-first) gives the same id, U,*" -and $second.form -ceq "other" -and $second.note -like "*not in the standard form*" -and $second.problems -cne "") ("A SECOND CARD OF ONE ID says why in idNote, its own field, and keeps what its form says (" + $(if ($null -ne $second) { $second.lane + ": " + $second.idNote + " / " + $second.note } else { "no card" }) + ")")
+    Check ((Get-Card $b "U").idNote -ceq "") "the card that keeps the id says nothing of it"
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin

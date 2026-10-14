@@ -85,6 +85,9 @@
         @{ Name = "a-folder-with-neither-file-is-retired"
            Find = '-or -not [System.IO.File]::Exists((Join-Path $_ "status.retired.txt")) })'
            Replace = ') })' }
+        @{ Name = "why-a-card-has-its-own-id-not-sent"
+           Find = '$c.idNote = Protect-HordeCardsChannelField'
+           Replace = '$c.note = Protect-HordeCardsChannelField' }
         @{ Name = "two-cards-share-one-id"
            Find = 'if ($taken.ContainsKey($c.lane)) {'
            Replace = 'if ($false) {' }

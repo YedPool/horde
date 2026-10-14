@@ -28,7 +28,8 @@
 //     waitingFounderLanes: [lane], census: { running, waiting } | null, refused: [field] },
 //     cards: [{ lane, name, form (standard|other|missing|unreadable), asOf, now, lastDone, waitingOn,
 //     blocked (yes|no|""), blockedText, note, problems (form "other": the rules of the status record
-//     it breaks, in plain words, from fleet/StatusPanel.ps1), tasksOpen, doneWeek, refused: [field] }],
+//     it breaks, in plain words, from fleet/StatusPanel.ps1), idNote (why the card has an id of its
+//     own: another lane folder gives the same one), tasksOpen, doneWeek, refused: [field] }],
 //     cardsLeftOut, areas: [{ area, lanes: [lane] }], areasLeftOut }. Within one snapshot no two cards
 //     share a lane, and none is "thrall": readCardsSnapshot drops such a card and counts it
 //
