@@ -274,7 +274,7 @@ function Read-HordeClaudeControlFiles {
     $uncheckablePids = @{}
     # WHICH PROCESSES MAY BE THIS AGENT, by image, read once: imagePids its own image, hostPids an image
     # it can run inside. The orphan answer below reads them, and so does a node deciding whether a stale
-    # file's end is proven (core/Projection.ps1, Test-HordeSessionProvenEnded), so the image names stay
+    # file's end is proven (core/Projection.ps1, Get-HordeSessionEndProof), so the image names stay
     # here, in the one reader that already holds them.
     $imagePids = @{}
     $hostPids = @{}

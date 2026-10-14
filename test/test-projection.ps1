@@ -388,6 +388,7 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     Check ((@(Served (NodeFleet "ended-orphan-nostart" $one) (Table @((Proc 3300 $null)))) -join ",") -ceq (Sid 42)) "a stale session is still listed while an agent process with no control file has no start time"
     Check (@(Served (NodeFleet "ended-orphan-control" $one) (Table @((Proc 3300 $t0)))).Count -eq 0) "CONTROL: an agent process with no control file that started hours before does not keep it"
     Check ((@(Served (NodeFleet "ended-orphan-host" $one) (Table @((Proc 3300 $t2 "host-a --continue" "node.exe")))) -join ",") -ceq (Sid 42)) "a stale session is still listed while a host-image process that no control file verifies started after it: the agent may run inside it"
+    Check (@(Served (NodeFleet "ended-orphan-host-control" $one) (Table @((Proc 3300 $t0 "host-a --continue" "node.exe")))).Count -eq 0) "CONTROL: a host-image process that no control file verifies and that started hours before does not keep it"
     # THE OTHER STORES ARE WHOLE when wezfleet's root exists.
     $mn = NodeFleet "ended-misnamed" $one
     Reg $mn 42; Move-Item -LiteralPath (Join-Path $mn ("wezfleet\registry\sessions\" + (Sid 42) + ".json")) -Destination (Join-Path $mn ("wezfleet\registry\sessions\" + (Sid 99) + ".json"))
