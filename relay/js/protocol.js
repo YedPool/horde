@@ -767,7 +767,10 @@ export function readChatTurns(bodyBytes, horde, machine) {
     turns.push({ id: t.id, role: t.role, session: t.session, text: t.text, time: typeof t.time === "string" ? t.time : "", group: typeof t.group === "string" ? t.group : "",
       part: t.part || 0, parts: t.parts || 0, truncated: t.truncated === true, redactions: Number.isSafeInteger(t.redactions) ? t.redactions : 0, line: t.role === "founder" ? t.line : "" });
   }
-  return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped } };
+  // photoBytes: the machine takes photos up to that size (channels/chat/Photo.ps1); 0 from a machine
+  // older than the member, which the phone offers no picture button.
+  const photoBytes = Number.isSafeInteger(b.photoBytes) && b.photoBytes > 0 ? b.photoBytes : 0;
+  return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped, photoBytes } };
 }
 
 // A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text,
@@ -801,7 +804,7 @@ export function readChatReceipt(bodyBytes, horde, machine) {
 // reached the Thrall (saidHow "delivered", so the screen can say which it is). A receipt's own envelope
 // time is the machine's, later than the send by however long the line waited: it orders a line with no
 // better time, and is never shown as when he said it.
-export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
+export function chatTimeline({ turns = [], receipts = [], sent = [], photos = [], photoReceipts = [] }) {
   const byId = new Map();
   for (const t of turns) {
     let g = byId.get(t.id);
@@ -842,8 +845,122 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
     items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, said: timeOf(t.time), saidHow: "turn", order: g.seq });
   }
   for (const l of lines.values()) items.push({ ...l, order: l.order === undefined ? Number.MAX_SAFE_INTEGER : l.order });
+  for (const p of photoItems(photos, photoReceipts)) items.push(p);
   items.sort((a, b) => (a.at - b.at) || (a.order - b.order));
   return items;
+}
+
+// --- photos in the chat (channels/chat/Photo.ps1) ---
+//
+// ONE PASSKEY TAP A PHOTO. Every envelope the phone sends is one passkey assertion, user verified, so a
+// photo split over envelopes would be a prompt a part: 21 of them for 1 MB through the hosted relay's
+// 65,536-character texts (measured 2026-10-14). So a photo is ONE envelope of kind photo - the manifest,
+// signed like a line - and its parts are unsigned relay items, sealed under a key that only the sealed
+// manifest carries, each vouched for by its SHA-256 listed in the manifest at its number. The machine
+// takes a part only on that digest (Photo.ps1, THE PARTS).
+//
+// PHOTO_CHUNK: 48,000 bytes. Sealed (16-byte tag) and in base64url, 64,022 characters; with the part's
+// frame, 64,132 - inside the hosted relay's 65,536. 1 MB is 21 parts, the 2 MiB cap 44.
+export const PHOTO_CHUNK = 48000;
+export const PHOTO_PARTS_MOST = 64;
+// The window the manifest names: its parts must reach the machine within it (the machine allows at most
+// its photoWindowSeconds, 600 by default, after the signing time).
+export const PHOTO_WINDOW_MS = 300000;
+const PHOTO_PART_AAD = "horde-relay/chat/v1 photo part";
+
+// The relay key a part is put under: the sender, the kind, the photo and the number. It names no stream
+// (no seq and nonce), so no trim ever reaches it, and a part put twice is the same item.
+export function photoPartKey(from, photoId, n) { return from + "/photo-part/" + photoId + "/" + n; }
+
+function photoNonce(n) { const b = new Uint8Array(12); b[8] = (n >>> 24) & 255; b[9] = (n >>> 16) & 255; b[10] = (n >>> 8) & 255; b[11] = n & 255; return b; }
+
+// Seal an image's bytes as parts: { key (32 bytes), sha256 (hex of the whole), parts: [{ n, digest, key,
+// text }] } - digest the SHA-256 of the sealed bytes, key the relay key, text the item as the machine
+// reads it, in its one form (Photo.ps1, $HordeChatPhotoPartPattern).
+export async function sealPhotoParts(bytes, { from, photoId }) {
+  if (!KEY_ID.test(from) || !/^[0-9a-f]{32}$/.test(photoId)) throw new Error("a photo's sender and id are 32 lower-case hex");
+  if (!(bytes instanceof Uint8Array) || bytes.length < 1) throw new Error("a photo is bytes");
+  const count = Math.ceil(bytes.length / PHOTO_CHUNK);
+  if (count > PHOTO_PARTS_MOST) throw new Error("a photo is at most " + PHOTO_PARTS_MOST + " parts");
+  const key = randomBytes(32);
+  const parts = [];
+  for (let n = 1; n <= count; n++) {
+    const chunk = bytes.subarray((n - 1) * PHOTO_CHUNK, Math.min(bytes.length, n * PHOTO_CHUNK));
+    const ct = await gcmSeal(key, photoNonce(n), utf8(PHOTO_PART_AAD + "\n" + from + "\n" + photoId + "\n" + n), chunk);
+    parts.push({ n, digest: hex(await sha256(ct)), key: photoPartKey(from, photoId, n), text: '{"v":1,"kind":"photo-part","from":"' + from + '","photo":"' + photoId + '","part":' + n + ',"ct":"' + b64u(ct) + '"}' });
+  }
+  return { key, sha256: hex(await sha256(bytes)), parts };
+}
+
+// The manifest body: exactly the members the machine reads strictly (Photo.ps1), in its order.
+export function photoManifestBody({ photoId, horde, machine, mailbox, from, phoneKey, seq, session, expiresAt, bytes, sha256: whole, key, parts }) {
+  if (![photoId, machine, from, phoneKey].every((x) => typeof x === "string" && /^[0-9a-f]{32}$/.test(x))) throw new Error("photoId, machine, from and phoneKey are 32 lower-case hex");
+  if (typeof horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (typeof session !== "string" || !SESSION.test(session)) throw new Error("the session is the Thrall's session id");
+  if (![seq, expiresAt, bytes].every((x) => Number.isSafeInteger(x) && x >= 1)) throw new Error("seq, expiresAt and bytes are whole numbers from 1");
+  if (!Array.isArray(parts) || parts.length < 1 || parts.length > PHOTO_PARTS_MOST || !parts.every((d) => /^[0-9a-f]{64}$/.test(d))) throw new Error("the parts are 1 to " + PHOTO_PARTS_MOST + " digests");
+  return utf8(JSON.stringify({ v: 1, photoId, horde, machine, mailbox, from, phoneKey, seq, session, expiresAt, bytes, sha256: whole, key: b64u(key), parts }));
+}
+
+// What the first bytes of a file say it is: "jpeg", "png", "webp", or "" for anything else - a script,
+// a PDF, an HTML page called .jpg. The machine checks the same bytes again (Photo.ps1, magic).
+export function sniffImage(bytes) {
+  if (!(bytes instanceof Uint8Array)) return "";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length >= 8 && png.every((b, i) => bytes[i] === b)) return "png";
+  const at = (i, s) => [...s].every((c, k) => bytes[i + k] === c.charCodeAt(0));
+  if (bytes.length >= 12 && at(0, "RIFF") && at(8, "WEBP")) return "webp";
+  return "";
+}
+
+// The photo receipt's codes, by status, and the ONE sentence the phone shows for each (Photo.ps1).
+export const PHOTO_WORDS = {
+  accepted: { receiving: "Photo on its way to the PC.", delivered: "Photo saved on the PC, and the Thrall told.", saved: "Photo saved on the PC; the Thrall could not be told yet." },
+  held: { "too-many": "Held: too many photos in a minute; it goes shortly." },
+  refused: {
+    "wrong-machine": "Refused: it was sent to the wrong machine.",
+    "wrong-horde": "Refused: it was sent to the wrong horde.",
+    "wrong-mailbox": "Refused: it was sent to the wrong mailbox.",
+    "wrong-sender": "Refused: it does not say it is from the passkey that signed it.",
+    expired: "Refused: it arrived too late. Send it again.",
+    "too-large": "Refused: it is larger than the PC takes.",
+    "over-budget": "Refused: the PC has taken as many photos as it takes in a day.",
+    "no-phone-key": "Refused: the PC does not trust this phone's key.",
+    incomplete: "Not saved: not all of it arrived in time. Send it again.",
+    damaged: "Not saved: what arrived is not the photo that was signed. Send it again.",
+    "not-image": "Not saved: it is not a picture.",
+    revoked: "Not saved: the passkey or this phone was removed from the PC.",
+    "not-here": "Refused: the PC cannot take photos as it runs now."
+  }
+};
+export const PHOTO_SENDING = "Sending the photo...";
+export const PHOTO_NOT_IMAGE = "That file is not a picture: choose a JPEG, PNG or WebP photo.";
+export const PHOTO_PC_OLD = "Your PC does not take photos yet: it needs a Horde update.";
+
+// A photo receipt, read: { ok, reason, value: { session, photoId, status, code, sentAt, file } }.
+export function readPhotoReceipt(bodyBytes, horde, machine) {
+  const h = chatHead(bodyBytes, "chat-photo-receipt", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (typeof b.photoId !== "string" || !/^[0-9a-f]{32}$/.test(b.photoId)) return { ok: false, reason: "the photo receipt names no photo", value: null };
+  if (!Object.prototype.hasOwnProperty.call(PHOTO_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(PHOTO_WORDS[b.status], b.code)) return { ok: false, reason: "the photo receipt's status or code is not one this phone knows", value: null };
+  const file = typeof b.file === "string" && /^[A-Za-z0-9._-]{0,80}$/.test(b.file) ? b.file : "";
+  return { ok: true, reason: "", value: { session: b.session, photoId: b.photoId, status: b.status, code: b.code, sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0, file } };
+}
+
+// The photos of the chat: those this phone sent this session ({ photoId, at, session }), and every one a
+// receipt names (another phone's too), each once, with its newest receipt's words.
+function photoItems(photos, photoReceipts) {
+  const byId = new Map();
+  for (const p of photos) byId.set(p.photoId, { kind: "photo", photoId: p.photoId, at: p.at, said: p.at, saidHow: "sent", session: p.session, status: "sending", code: "", words: PHOTO_SENDING, file: "", seq: -1, mine: true, order: Number.MAX_SAFE_INTEGER });
+  for (const r of photoReceipts) {
+    const had = byId.get(r.photoId);
+    if (had && had.seq > r.seq) continue;
+    const at = had ? had.at : (r.sentAt || r.ts);
+    byId.set(r.photoId, { kind: "photo", photoId: r.photoId, at, said: r.sentAt || (had ? had.said : 0), saidHow: "sent", session: r.session, status: r.status, code: r.code, words: PHOTO_WORDS[r.status][r.code], file: r.file, seq: r.seq, mine: !!(had && had.mine), order: Number.MAX_SAFE_INTEGER });
+  }
+  return [...byId.values()];
 }
 
 // --- the progress channel (channels/progress/Channel.ps1) ---

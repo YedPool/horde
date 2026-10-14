@@ -97,7 +97,8 @@ import { accountFromConfig, presenceOf, offlineWords } from "./account-client.js
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
-import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
+import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace, sniffImage, PHOTO_NOT_IMAGE, PHOTO_PC_OLD } from "../relay/protocol.js";
+import { shrinkInBrowser } from "./photo.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
@@ -372,19 +373,26 @@ function drawChat(rec) {
     const box = document.createElement("div");
     const who = document.createElement("div");
     const text = document.createElement("div");
-    box.className = "chat-item " + (it.kind === "line" ? "founder" : it.role);
+    const mine = it.kind === "line" || it.kind === "photo";
+    box.className = "chat-item " + (mine ? "founder" : it.role);
     who.className = "chat-who";
     const name = document.createElement("span");
-    name.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    name.textContent = mine ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
     who.appendChild(name);
-    const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", "chat/" + (it.kind === "line" ? "line/" + it.messageId : "turn/" + it.id));
+    const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", "chat/" + (it.kind === "line" ? "line/" + it.messageId : it.kind === "photo" ? "photo/" + it.photoId : "turn/" + it.id));
     if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
-    text.textContent = it.text;
     box.appendChild(who);
+    if (it.kind === "photo") {
+      // A PHOTO: the small picture this page drew when it was sent (kept in memory only, like the chat);
+      // from another phone, or after a reload, the words say what it is.
+      const thumb = photoThumbs.get(it.photoId);
+      if (thumb) { const c = document.createElement("canvas"); c.className = "chat-photo"; c.width = thumb.width; c.height = thumb.height; c.getContext("2d").drawImage(thumb, 0, 0); c.setAttribute("role", "img"); c.setAttribute("aria-label", "Your photo"); box.appendChild(c); }
+      text.textContent = it.file ? "Photo " + it.file : "Photo";
+    } else text.textContent = it.text;
     box.appendChild(text);
     const notes = [];
-    if (it.kind === "line") notes.push(it.words);
+    if (it.kind === "line" || it.kind === "photo") notes.push(it.words);
     if (it.truncated) notes.push("Cut short at the machine: it was longer than a turn may be.");
     if (it.redactions) notes.push(it.redactions + " thing(s) that look like secrets were hidden at the machine.");
     for (const n of notes) { const d = document.createElement("div"); d.className = "chat-note"; d.textContent = n; box.appendChild(d); }
@@ -398,8 +406,40 @@ function drawChat(rec) {
   $("chatText").disabled = !canWrite;
   $("chatSend").disabled = !canWrite;
   $("chatNewline").disabled = !canWrite;
+  $("chatPhoto").disabled = !canWrite;
+  photoOffered = v.photoBytes || 0;
   if (atEnd) window.scrollTo(0, document.documentElement.scrollHeight);
 }
+// --- photos to the Thrall (photo.js shrinks; phone-core.js, sendPhoto, signs once and sends) ---
+// What the machine said it takes (its newest turns body), and the small pictures this page drew, by id.
+let photoOffered = 0;
+const photoThumbs = new Map();
+let photoSending = false;
+$("chatPhoto").addEventListener("click", () => {
+  if ($("chatPhoto").disabled || photoSending) return;
+  // A MACHINE OLDER THAN PHOTOS never offered them: said in plain words, and nothing is picked or sent.
+  if (!photoOffered) { say("action", PHOTO_PC_OLD); return; }
+  $("chatPhotoFile").value = "";
+  $("chatPhotoFile").click();
+});
+$("chatPhotoFile").addEventListener("change", async () => {
+  const file = $("chatPhotoFile").files && $("chatPhotoFile").files[0];
+  if (!file || photoSending) return;
+  photoSending = true;
+  say("action", "");
+  try {
+    // THE FIRST BYTES DECIDE, not the name or the type the browser guesses from it: an HTML page called
+    // .jpg is refused here, before anything is drawn.
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    if (!sniffImage(head)) { say("action", PHOTO_NOT_IMAGE); return; }
+    let made;
+    try { made = await shrinkInBrowser(file); } catch (e) { say("action", PHOTO_NOT_IMAGE + " (" + messageOf(e) + ")"); return; }
+    const id = newDraftId();
+    photoThumbs.set(id, made.thumb);
+    const r = await bridge.request("chat-photo", { bytes: made.bytes, id });
+    if (!r.ok) say("action", r.reason);
+  } catch (e) { say("action", messageOf(e)); } finally { photoSending = false; settleUpdate(); }
+});
 // The page's id for the words in the composer: kept until they are sent, so a line sent again after a
 // failure is the same line, posted once - but only the SAME words: words changed since the last try
 // are a new line with a new id (review of 3d837f0, finding 1).
@@ -1005,7 +1045,7 @@ function inFlight(p) {
 // His unsent words: a send under way, a chat line, a draft the document keeps, a field outside the
 // document with words in it, or the pairing screens (the recovery code is shown only once).
 function unsentWords() {
-  if (sending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;
+  if (sending || photoSending || sendsInFlight > 0 || $("chatText").value.trim() !== "") return true;
   for (const id of Object.keys(docs)) if (draftsHeld(docs[id].storage.getItem(DRAFTS_KEY))) return true;
   const f = document.activeElement;
   if (f && (f.tagName === "TEXTAREA" || f.tagName === "INPUT") && f.type !== "checkbox" && f.value && !$("lists").contains(f)) return true;

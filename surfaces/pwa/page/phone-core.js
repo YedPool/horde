@@ -159,14 +159,19 @@ function passkeyDidNotSign(x) {
 
 function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(origin || ""); return m ? m[1] : ""; }
 
-export function createPhone({ store, authenticator, relay, account = null, origin, now = () => Date.now() }) {
+// THE PACE OF A PHOTO'S PUTS (sendPhoto): 18 at once leaves two of the relay's burst of 20 for a line or an
+// answer sent beside it; then one each 1.1 s, a little slower than the relay's one a second refills.
+const PHOTO_BURST = 18;
+const PHOTO_PACE_MS = 1100;
+
+export function createPhone({ store, authenticator, relay, account = null, origin, now = () => Date.now(), sleep = (ms) => new Promise((ok) => setTimeout(ok, ms)) }) {
   const sessions = new Map();
   // Sealed pairing responses not yet known to have arrived, by horde id (THE PAIRING RESPONSE...).
   const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
   const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map() });
-  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
+  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set(), photos: [], photoReceipts: [], photoBytes: 0 });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
@@ -199,12 +204,14 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   }
   // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it - and,
   // for an answer signed again, when he FIRST sent it (A STALE ANSWER NEVER WINS, in the header).
+  // body may be a function of (seq, ts): a photo's manifest names its own envelope's seq (sendPhoto).
   async function sealAndSign(e, kind, channel, body, assert, ts = null) {
     for (let tries = 0; tries < 3; tries++) {
       const held = await store.get(ENTRY + e.id);
       if (!held) throw fail("there is no such horde on this phone");
       const seq = ((held.seq && held.seq[channel]) || 0) + 1;
-      const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq, ts: ts === null ? now() : ts, recipientPublic: P.unb64u(e.machineAgreePublic), body });
+      const at = ts === null ? now() : ts;
+      const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq, ts: at, recipientPublic: P.unb64u(e.machineAgreePublic), body: typeof body === "function" ? body(seq, at) : body });
       const text = await P.signEnvelope(parts, assert);
       if (await claimSeq(e.id, channel, seq)) return { text, key: P.replayKey(parts.header), ts: parts.header.ts, seq };
     }
@@ -236,11 +243,16 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
       if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " turn(s) that do not hold together were left out");
       for (const t of r.value.turns) c.turns.push({ ...t, seq: h.seq });
-      if (h.seq > c.sessionSeq) { c.session = r.value.session; c.sessionSeq = h.seq; }
+      // What the newest turns body says of photos is what the machine takes now (THE PHOTOS, sendPhoto).
+      if (h.seq > c.sessionSeq) { c.session = r.value.session; c.sessionSeq = h.seq; c.photoBytes = r.value.photoBytes; }
     } else if (h.kind === "receipt") {
       const r = P.readChatReceipt(opened.body, e.horde, e.machine);
       if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
       c.receipts.push({ ...r.value, seq: h.seq, ts: h.ts });
+    } else if (h.kind === "photo-receipt") {
+      const r = P.readPhotoReceipt(opened.body, e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      c.photoReceipts.push({ ...r.value, seq: h.seq, ts: h.ts });
     }
   }
 
@@ -559,7 +571,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      return { session: s.chat.session, items: P.chatTimeline(s.chat), mode: s.mode };
+      return { session: s.chat.session, items: P.chatTimeline(s.chat), mode: s.mode, photoBytes: s.chat.photoBytes };
     },
 
     // The progress log of the horde as this session holds it (refresh reads it), with the reading position
@@ -621,6 +633,50 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same line is never delivered twice."); }
       if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: env.ts, session: s.chat.session });
       return { key: env.key, seq: put.value.seq };
+    },
+
+    // THE PHOTOS (channels/chat/Photo.ps1; relay/js/protocol.js, ONE PASSKEY TAP A PHOTO): an image the
+    // page has already shrunk to a JPEG, sent as ONE passkey-signed manifest - the same single prompt
+    // as a line - and its sealed parts. Only to a machine whose newest turns body says it takes photos
+    // (photoBytes), and no larger than it says. THE PACE: the hosted relay lets one phone put 20 at once
+    // and then one a second (relays/cloudflare/worker/limits.js, putBurst and putsPerMinute), so the
+    // manifest and the first PHOTO_BURST - 1 parts go at once and the rest a little over a second apart:
+    // a 1 MB photo (21 parts) waits about 4 s, the 2 MiB cap (44 parts) about 30 s, and none is refused
+    // for its pace. A part the relay does not take is tried again twice, 1.5 s apart.
+    // { photoId, parts, puts }.
+    async sendPhoto(id, { bytes, photoId }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode === "read-only") throw fail(NO_PRF);
+      if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to send a photo.");
+      if (!s.chat.session) throw fail("Nothing has come from the Thrall yet, so there is no session to send to. Wait for its turns, then send.");
+      if (!s.chat.photoBytes) throw fail(P.PHOTO_PC_OLD);
+      if (!/^[0-9a-f]{32}$/.test(photoId)) throw fail("the photo's id is 32 lower-case hex");
+      if (!P.sniffImage(bytes)) throw fail(P.PHOTO_NOT_IMAGE);
+      if (bytes.length > s.chat.photoBytes) throw fail("This photo is " + bytes.length + " bytes, and the PC takes at most " + s.chat.photoBytes + ".");
+      const sealed = await P.sealPhotoParts(bytes, { from: e.deviceKeyId, photoId });
+      const session = s.chat.session;
+      const body = (seq, ts) => P.photoManifestBody({ photoId, horde: e.horde, machine: e.machine, mailbox: e.machineMailbox, from: e.deviceKeyId, phoneKey: e.phoneKeyId, seq, session,
+        expiresAt: ts + P.PHOTO_WINDOW_MS, bytes: bytes.length, sha256: sealed.sha256, key: sealed.key, parts: sealed.parts.map((p) => p.digest) });
+      const env = await sealAndSign(e, "photo", "chat", body, assertWith(e));
+      sealed.key.fill(0);
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send the photo again."); }
+      s.chat.photos.push({ photoId, at: env.ts, session });
+      let puts = 1;
+      for (const p of sealed.parts) {
+        if (puts >= PHOTO_BURST) await sleep(PHOTO_PACE_MS);
+        let done = false;
+        for (let attempt = 0; attempt < 3 && !done; attempt++) {
+          if (attempt > 0) await sleep(1500);
+          const r = await relay.put(e.machineMailbox, p.key, p.text);
+          puts++;
+          if (r.state === "known") done = true; else diagnostics.push(relaySaid(r.reason));
+        }
+        if (!done) throw fail("Not all of the photo went: the relay did not take part " + p.n + " of " + sealed.parts.length + ". Send the photo again.");
+      }
+      return { photoId, parts: sealed.parts.length, puts };
     },
 
     // The notices of the horde (THE NOTICES, in the header): this pairing's and every other unlocked pairing's
