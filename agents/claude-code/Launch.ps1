@@ -323,8 +323,13 @@ $script:ClaudeCodeBusyMark = "esc to interrupt"
 # phrase stands alone on its row, or between the separators a footer or spinner row puts round its
 # items - "(" or a middle dot before it, ")" or a middle dot after it. Both measured forms are that:
 # the 2.1.299 footer "... manual mode on, a middle dot, esc to interrupt, a middle dot ..." and the spinner
-# "* Thinking... (esc to interrupt)".
-$script:ClaudeCodeBusyItem = '(?:\A|[(\u00B7])\s*esc to interrupt\s*(?:\)|\u00B7|\z)'
+# "* Thinking... (esc to interrupt)". THREE FORMS NOT SEEN ON 2.1.299 ARE BUSY TOO (F's re-check of round
+# 4, nit), since a spinner's wording moves between versions and a busy session read as ready takes a key
+# it should not: a comma as the separator ("(12s, esc to interrupt)"), the spinner's own "..." (or the
+# one-glyph ellipsis) before it with nothing after ("* Working... esc to interrupt"), and the phrase in
+# any case ("Esc to interrupt"). A tip still reads ready: "press esc to interrupt a turn" has a word
+# before the phrase and words after it.
+$script:ClaudeCodeBusyItem = '(?:\A|[(\u00B7,]|\.\.\.|\u2026)\s*(?i:esc to interrupt)\s*(?:[)\u00B7,]|\z)'
 
 function Test-ClaudeCodeRuleRow {
     # Is a screen row a rule: trimmed, at least 8 U+2500 first and one last, a label allowed between?

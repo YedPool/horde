@@ -302,6 +302,15 @@ $ir = Test-ClaudeCodeInputReady -Screen (@(" Tip: press esc to interrupt a turn,
 Check ($ir.state -eq "known" -and $ir.value -eq $true) ("READY: a start-up tip that says esc to interrupt in a sentence is not a status item (F's nit of round 3: " + $ir.state + " " + $ir.reason + ")")
 $ir = Test-ClaudeCodeInputReady -Screen ($atStart[0..($atStart.Count - 2)] + @(("  " + [char]0x23F8 + " manual mode on " + $dot + " esc to interrupt")))
 Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") "CONTROL: the mark as the LAST item of the footer row is busy"
+# Spinner forms not seen on 2.1.299, busy too (F's nit of round 4); each read READY on 5b2f471.
+foreach ($spin in @("* Working... esc to interrupt", "* Working... (12s, esc to interrupt)", "* Working... (Esc to interrupt)", ("* Working" + [char]0x2026 + " esc to interrupt"), "* Working... (esc to interrupt, 3 tokens)")) {
+    $ir = Test-ClaudeCodeInputReady -Screen @($spin, $named, ($glyph + $nb), $r120, $idleFoot)
+    Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") ("NOT READY: a spinner row '" + $spin + "' above the box")
+}
+foreach ($tip in @(" Tip: press Esc to interrupt a turn", " Tip: wait... esc to interrupt a long turn, twice to go back")) {
+    $ir = Test-ClaudeCodeInputReady -Screen (@($tip, "") + $atStart)
+    Check ($ir.state -eq "known" -and $ir.value -eq $true) ("CONTROL: READY: a tip '" + $tip + "' still is no status item (" + $ir.state + " " + $ir.reason + ")")
+}
 $ir = Test-ClaudeCodeInputReady -Screen ($atStart + @(("  " + [char]0x23F8 + " manual mode on   context 12% left " + $dot + " v2.1.299"), ""))
 Check ($ir.state -eq "known" -and $ir.value -eq $true) "CONTROL: footer rows with numbers in them - a count, a percentage, a version - are footer rows: ready"
 

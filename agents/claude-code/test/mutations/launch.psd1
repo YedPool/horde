@@ -137,7 +137,20 @@
            Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
            Replace = '    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))' }
         @{ Name = "busy-last-item-missed"
-           Find = '(?:\)|\u00B7|\z)'
-           Replace = '(?:\)|\u00B7)' }
+           Find = '(?:[)\u00B7,]|\z)'
+           Replace = '(?:[)\u00B7,])' }
+        # F's nit of round 4: spinner forms not seen on 2.1.299.
+        @{ Name = "busy-comma-before-missed"
+           Find = '(?:\A|[(\u00B7,]|'
+           Replace = '(?:\A|[(\u00B7]|' }
+        @{ Name = "busy-comma-after-missed"
+           Find = '\s*(?:[)\u00B7,]|\z)'
+           Replace = '\s*(?:[)\u00B7]|\z)' }
+        @{ Name = "busy-ellipsis-missed"
+           Find = '|\.\.\.|\u2026)\s*'
+           Replace = ')\s*' }
+        @{ Name = "busy-capital-missed"
+           Find = '(?i:esc to interrupt)'
+           Replace = '(?:esc to interrupt)' }
     )
 }
