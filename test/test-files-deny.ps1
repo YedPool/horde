@@ -1100,27 +1100,61 @@ $hardToBeside = Join-Path $links "a-second-name-of-other.json"
 $null = & cmd.exe /c ("mklink /H `"" + $hardToClient + "`" `"" + $clientFile + "`" >nul 2>nul")
 $null = & cmd.exe /c ("mklink /H `"" + $hardToBeside + "`" `"" + $besideClient + "`" >nul 2>nul")
 if ([System.IO.File]::Exists($hardToClient) -and [System.IO.File]::Exists($hardToBeside)) {
-    $sameFile = "is the very file the relay 'test-relay-a' calls the sign-in client file ('" + $clientFile + "') under another name, as a hard link is"
+    $sameFile = "is the very file the relay 'test-relay-a' calls the sign-in client file ('" + $clientFile + "') under another name, as a hard link or a network or device path to it is"
     Check (Test-Refused $h $hardToClient $sameFile) "a hard link to the file a relay names, under another name in another folder, is refused as that file"
     Check (Test-Refused $h $hardToClient $sameFile -Force) "and -Force does not lift it"
     Check (Test-Shared $h $hardToBeside -Force) "CONTROL: a hard link to the file BESIDE it is another file, and is shared"
     Check ((Get-HordeFilesDenyRefusal -FinalPath $hardToClient -HordeHome $h -RepoRoot $repo -Force) -like ("*" + $sameFile + "*")) "and the list alone, handed no handle, opens the file for its attributes and says the same"
     $script:entriesA = @([pscustomobject]@{ path = $hardToClient; what = "the sign-in client file" })
-    Check (Test-Refused $h $clientFile "under another name, as a hard link is" -Force) "a relay that names the second name has the first refused, -Force or not"
+    Check (Test-Refused $h $clientFile "under another name, as a hard link or a network or device path to it is" -Force) "a relay that names the second name has the first refused, -Force or not"
 } else { Write-Skip "a hard link could not be made here, so the hard-link cases did not run" }
-# THE SECOND DOOR (the review of PR 238): an entry that is no path on this machine's own drives
-# refuses every share. The port refuses such an entry first (test/test-relay-port.ps1), so to reach
-# this door the port's answer is replaced, for these checks only, by one that names it - the way
-# the review's probe reached it on the head before the port refused those forms.
-$script:realAsk = ${function:Get-HordeRelaySecretFiles}
-$script:doorPath = ""
-function Get-HordeRelaySecretFiles { param([string]$HordeHome = "") return (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ relay = "test-relay-a"; path = $script:doorPath; what = "the sign-in client file" }); asked = @("test-relay-a") })) }
-foreach ($door in @(("\\localhost\" + $clientFile.Substring(0, 1) + "$" + $clientFile.Substring(2)), ("\\.\" + $clientFile))) {
-    $script:doorPath = $door
-    Check (Test-Refused $h $besideClient ("is not a path on one of this machine's own drives, so whether '") -Force) ("an entry named as " + $door.Substring(0, [Math]::Min(14, $door.Length)) + "... refuses even an ordinary file, -Force or not")
-    Check (Test-Refused $h $clientFile "is not a path on one of this machine's own drives" -Force) "and the very file it names, by its plain path, is refused with it"
+# AN ENTRY THAT IS NO LOCAL PATH IS ASKED WHICH FILE IT IS (round 2 of the review of PR 238,
+# 2026-10-14). Through the REAL port, which now hands such a path over: round 1 had to replace the
+# port's answer to reach this door, and refused every share here. Each spelling of the client file
+# that is no drive path is the same file and is refused, -Force or not, while an ordinary file is
+# shared; an identity that cannot be read refuses every share; nothing there, and a file on another
+# volume, refuse nothing. A loopback share needs the machine's own administrative share, so a box
+# that has none skips those spellings and says so; the device path and the volume need nothing.
+$sameAsLink = "under another name, as a hard link or a network or device path to it is"
+$letterOf = $clientFile.Substring(0, 1)
+$doors = @(("\\.\" + $clientFile), ("\\localhost\" + $letterOf + "$" + $clientFile.Substring(2)), ("\\127.0.0.1\" + $letterOf + "$" + $clientFile.Substring(2)), ("\\?\UNC\localhost\" + $letterOf + "$" + $clientFile.Substring(2)))
+$clientIs = Get-HordeFilesPathIdentity -Path $clientFile
+Check ($clientIs.state -ceq "ok") ("CONTROL: the client file's own identity can be read (" + $clientIs.state + ")")
+foreach ($door in $doors) {
+    $doorIs = Get-HordeFilesPathIdentity -Path $door
+    $short = $door.Substring(0, [Math]::Min(18, $door.Length)) + "..."
+    if ($doorIs.state -cne "ok" -and $door -cnotlike "\\.\*") { Write-Skip ("the loopback share " + $short + " could not be opened here (" + $doorIs.state + "), so that spelling did not run"); continue }
+    Check ($doorIs.state -ceq "ok" -and $doorIs.id -ceq $clientIs.id) ("CONTROL: " + $short + " is the client file's own identity, as measured (" + $doorIs.state + ")")
+    $script:entriesA = @([pscustomobject]@{ path = $door; what = "the sign-in client file" })
+    Check ((Get-HordeRelaySecretFiles -HordeHome $h).state -ceq "known") ("the real port hands " + $short + " over as a file, not as a relay that could not tell")
+    Check (Test-Refused $h $clientFile $sameAsLink) ("SAME IDENTITY: a relay that names the client file as " + $short + " has it refused by its plain path")
+    Check (Test-Refused $h $clientFile $sameAsLink -Force) "and -Force does not lift it"
+    Check (Test-Shared $h $besideClient -Force) "CONTROL: an ordinary file beside it is shared, where round 1 refused every share"
+    if ($null -ne $hardToClient -and [System.IO.File]::Exists($hardToClient)) { Check (Test-Refused $h $hardToClient $sameAsLink -Force) "and a hard link to the client file is refused through that entry too" }
 }
-${function:Get-HordeRelaySecretFiles} = $script:realAsk
+# AN IDENTITY THAT CANNOT BE READ: the null device opens and has none, and a share this machine does
+# not have does not open. Each refuses every share, -Force or not, and names the relay.
+$noShare = "\\localhost\horde-no-such-share-" + [guid]::NewGuid().ToString("N") + "\client.json"
+foreach ($unread in @("\\.\NUL", $noShare)) {
+    $short = $unread.Substring(0, [Math]::Min(26, $unread.Length)) + "..."
+    $unreadIs = Get-HordeFilesPathIdentity -Path $unread
+    Check ($unreadIs.state -ceq "unknown") ("CONTROL: which file " + $short + " is cannot be read (" + $unreadIs.state + ")")
+    $script:entriesA = @([pscustomobject]@{ path = $unread; what = "the sign-in client file" })
+    Check (Test-Refused $h $besideClient ("which file what the relay 'test-relay-a' calls the sign-in client file") -Force) ("UNREADABLE: an entry named as " + $short + " refuses even an ordinary file, -Force or not")
+    Check (Test-Refused $h $besideClient "-Force does not change that" -Force) "and says -Force does not lift it"
+}
+# NOTHING THERE: a device path to a file that is not there yet refuses nothing, as a local one does.
+$script:entriesA = @([pscustomobject]@{ path = ("\\.\" + $neverFile); what = "the sign-in client file" })
+Check ((Get-HordeFilesPathIdentity -Path ("\\.\" + $neverFile)).state -ceq "absent") "CONTROL: the device path of a file not there yet is absent"
+Check (Test-Shared $h $besideClient) "NOTHING THERE: an entry naming a file not there yet, by its device path, refuses nothing"
+# ANOTHER VOLUME: the named-pipe file system is a volume of its own, readable, whose serial number no
+# drive's file has - the shape of a file on a real network share, which this suite may not reach.
+$otherVolume = "\\.\pipe\"
+$otherIs = Get-HordeFilesPathIdentity -Path $otherVolume
+Check ($otherIs.state -ceq "ok" -and $otherIs.id.Split(":")[0] -cne $clientIs.id.Split(":")[0]) ("CONTROL: " + $otherVolume + " is readable and on another volume (" + $otherIs.state + " " + $otherIs.id + ")")
+$script:entriesA = @([pscustomobject]@{ path = $otherVolume; what = "the sign-in client file" })
+Check (Test-Shared $h $besideClient) "ANOTHER VOLUME: an entry on another volume does not block an ordinary file"
+Check (Test-Shared $h $clientFile -Force) "and not even the file it would have been, which is another file"
 $script:entriesA = @([pscustomobject]@{ path = $movedClient; what = "the sign-in client file" })
 Check (Test-Refused $h $movedClient $saysRelay -Force) "THE GAP ABOVE, CLOSED BY THE RELAY: the moved client file whose content says nothing is refused once its relay names it, -Force or not"
 $script:entriesA = @([pscustomobject]@{ path = $neverFile; what = "the sign-in client file" })

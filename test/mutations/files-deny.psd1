@@ -612,13 +612,20 @@
         @{ Name = "relay-refusal-does-not-say-what-the-file-is"
            Find = '"'' is what the relay ''" + $place.relay + "'' calls " + $place.what + " (''"'
            Replace = '"'' is what the relay ''" + $place.relay + "'' calls a file (''"' }
-        # --- a relay's file by which file it is, and an entry that is no local path (review of PR 238) ---
-        @{ Name = "relay-entry-with-no-local-path-is-shared"
-           Find = 'if (@($where.paths).Count -eq 0) { return ($itsWords'
-           Replace = 'if ($false) { return ($itsWords' }
-        @{ Name = "relay-entry-with-no-local-path-said-force-shares-it"
-           Find = 'is that file cannot be told" + $never) }'
-           Replace = 'is that file cannot be told" + $insist) }' }
+        # --- a relay's file by which file it is (review of PR 238) ---
+        # --- an entry that is no local path is asked which file it is (round 2 of that review, 2026-10-14) ---
+        @{ Name = "relay-entry-with-no-local-path-is-not-asked"
+           Find = '{ Get-HordeFilesPathIdentity -Path $place.path }'
+           Replace = '{ [pscustomobject]@{ state = "absent"; id = "" } }' }
+        @{ Name = "relay-entry-with-no-local-path-refuses-every-share"
+           Find = '$entryIs = $(if (@($where.paths).Count -eq 0) { Get-HordeFilesPathIdentity -Path $place.path }'
+           Replace = '$entryIs = $(if (@($where.paths).Count -eq 0) { [pscustomobject]@{ state = "unknown"; id = "" } }' }
+        @{ Name = "unreadable-relay-identity-is-shared"
+           Find = 'if ($entryIs.state -ceq "unknown") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "unreadable-relay-identity-said-force-shares-it"
+           Find = '" is could not be told, so whether ''" + $FinalPath + "'' is that file cannot be told either" + $never)'
+           Replace = '" is could not be told, so whether ''" + $FinalPath + "'' is that file cannot be told either" + $insist)' }
         @{ Name = "hard-link-to-a-relay-file-is-shared"
            Find = 'if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) { return'
            Replace = 'if ($false) { return' }

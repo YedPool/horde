@@ -613,12 +613,13 @@ $f1 = @($a.value.files)[1]
 Check ($f0.relay -ceq "fixture-good" -and $f0.what -ceq "the sign-in client file" -and $f1.relay -ceq "fixture-good" -and $f1.what -ceq "a login") "each file says which relay's it is and what it is, in the relay's own few words"
 Check ($f0.path -ceq "C:\vault\client.json") ("a path is handed back whole: its dot-dot folded away and its slashes the system's, so it names the file it opens (" + $f0.path + ")")
 Check ($f1.path -ceq "D:\tool\login.toml") "a path on another drive is absolute too, and is kept"
-# A NETWORK OR DEVICE PATH IS NO PATH ON THIS MACHINE (the review of PR 238, 2026-10-13): files/ could
-# place none of these and compared nothing. Each makes the relay one that could not tell.
-foreach ($elsewhere in @("\\server\share\login.toml", "\\localhost\C$\vault\client.json", "\\.\C:\vault\client.json", "\\?\C:\vault\client.json", "//server/share/login.toml", "\/server\share\login.toml")) {
-    $script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\fine.json"; what = "a key" }, @{ path = $elsewhere; what = "a login" }) })
+# A NETWORK OR DEVICE PATH IS A FILE LIKE ANY OTHER (round 2 of the review of PR 238, 2026-10-14):
+# handed over whole, so files/ can ask it which file it is. Round 1 made each of these a relay that
+# could not tell, which refused every share on a machine whose relay file is on a network share.
+foreach ($elsewhere in @(@("\\server\share\login.toml", "\\server\share\login.toml"), @("\\localhost\C$\vault\client.json", "\\localhost\C$\vault\client.json"), @("\\.\C:\vault\client.json", "\\.\C:\vault\client.json"), @("\\?\C:\vault\client.json", "\\?\C:\vault\client.json"), @("//server/share/login.toml", "\\server\share\login.toml"), @("\/server\share\login.toml", "\\server\share\login.toml"), @("\\server\share\a\..\login.toml", "\\server\share\login.toml"))) {
+    $script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\fine.json"; what = "a key" }, @{ path = $elsewhere[0]; what = "a login" }) })
     $a = Get-HordeRelaySecretFiles
-    Check ($a.state -ceq "unknown" -and $a.reason -like "*named secret file 2 of 2 by a network or device path*" -and -not $a.reason.Contains($elsewhere)) ("a relay that names a file as " + $elsewhere + " could not tell, and the path is not repeated (" + $a.state + ")")
+    Check ($a.state -ceq "known" -and @($a.value.files).Count -eq 2 -and @($a.value.files)[1].path -ceq $elsewhere[1]) ("a relay that names a file as " + $elsewhere[0] + " is known, and the path is handed over whole (" + $a.state + ")")
 }
 $script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:/vault/fine.json"; what = "a key" }) })
 Check ((Get-HordeRelaySecretFiles).state -ceq "known") "CONTROL: a local path written with forward slashes is still a local path"

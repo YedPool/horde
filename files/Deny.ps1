@@ -160,11 +160,26 @@
 #   and file index of the shared file's open handle are compared with its own, and the same file
 #   under any name is refused. That is the one place a hard link is caught (the places above are
 #   folders, and a folder has no such number for the files in it).
-#   AN ENTRY THAT IS NO PATH ON THIS MACHINE'S OWN DRIVES REFUSES EVERY SHARE (the same review):
-#   measured that day, a relay file named as \\.\C:\... or \\localhost\C$\... resolved to no path
-#   at all, and nothing was compared - the file was shared by its plain path with -Force. A file a
-#   relay names that cannot be placed is a file nobody can tell this one from. The port refuses
-#   those forms too (relays/Port.ps1); this is the second door.
+#   AN ENTRY THAT IS NO PATH ON THIS MACHINE'S OWN DRIVES IS ASKED WHICH FILE IT IS, BY THE PATH IT
+#   WAS NAMED BY (round 2 of that review, 2026-10-14). Measured on 2026-10-13, a relay file named as
+#   \\.\C:\... or \\localhost\C$\... resolved to no path at all, nothing was compared, and the file
+#   was shared by its plain path with -Force. Round 1 then refused EVERY share for such an entry,
+#   which on a machine whose relay file is on a mapped network drive or under a profile folder
+#   redirected to a server blocked all sharing, with no setting to fix it. Measured 2026-10-14, the
+#   loopback UNC, \\127.0.0.1\C$\..., \\?\UNC\localhost\..., the device path and the plain path of
+#   one file give ONE volume serial number and file index. So: the same identity refuses, -Force
+#   or not; an identity that cannot be read refuses every share (a share that is down, a share
+#   that is not there, access denied); nothing there refuses nothing, as for a local entry; and
+#   another identity - another file, or another volume, as every file on a real network share is -
+#   refuses nothing.
+#     COST: asking a network path is looking at it. core/PathText.ps1 says why a path a CALLER
+#     wrote is never looked at: opening it sends the user's sign-in to the host it names. This
+#     path is not the caller's: it is the relay's own setting, the file its deploy reads from that
+#     same host. And a host that does not answer costs its time-out on every share, and refuses.
+#   KNOWN LIMIT: AN ENTRY THAT NAMES A FOLDER is compared as a place (a file under it is refused)
+#   and its identity is a folder's, which no shared file has: a hard link to a file inside it, or
+#   a network path to that folder, is not caught. A relay names its secret FILES; no relay names
+#   a folder today.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
@@ -518,19 +533,21 @@ function Get-HordeFilesDenyRefusal {
                 if (-not $lifted) { return ("'" + $FinalPath + "' is under " + $what[$place.kind] + " ('" + $place.path + "')" + $never) }
                 if ($harness -eq "") { $harness = "" + $place.path }
             }
-            # A RELAY'S FILE BY WHICH FILE IT IS (the header): no local path at all refuses every
-            # share; where it is there, the same file under another name is refused.
+            # A RELAY'S FILE BY WHICH FILE IT IS (the header): where it is there, the same file under
+            # another name is refused. An entry with no local path is asked by the path it was
+            # named by, network and device paths too: which file it is cannot be told refuses every
+            # share, and another file - on another volume, as a network share's files are - refuses
+            # nothing.
             if ($place.kind -ceq "relay") {
                 $itsWords = "what the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "')"
-                if (@($where.paths).Count -eq 0) { return ($itsWords + " is not a path on one of this machine's own drives, so whether '" + $FinalPath + "' is that file cannot be told" + $never) }
-                $entryIs = Get-HordeFilesPathIdentity -Path ("\\?\" + $where.paths[0])
+                $entryIs = $(if (@($where.paths).Count -eq 0) { Get-HordeFilesPathIdentity -Path $place.path } else { Get-HordeFilesPathIdentity -Path ("\\?\" + $where.paths[0]) })
                 if ($entryIs.state -ceq "unknown") { return ("which file " + $itsWords + " is could not be told, so whether '" + $FinalPath + "' is that file cannot be told either" + $never) }
                 if ($entryIs.state -ceq "ok") {
                     if ($null -eq $sharedIs) {
                         $sharedIs = $(if ($null -ne $Handle) { Get-HordeFilesHandleIdentity -Handle $Handle } else { (Get-HordeFilesPathIdentity -Path ("\\?\" + $FinalPath)).id })
                     }
                     if ($sharedIs -eq "") { return ("which file '" + $FinalPath + "' is could not be told, so whether it is " + $itsWords + " cannot be told either" + $never) }
-                    if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is the very file the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "') under another name, as a hard link is: a file it keeps a secret in" + $never) }
+                    if ([string]::Equals($sharedIs, $entryIs.id, [System.StringComparison]::Ordinal)) { return ("'" + $FinalPath + "' is the very file the relay '" + $place.relay + "' calls " + $place.what + " ('" + $place.path + "') under another name, as a hard link or a network or device path to it is: a file it keeps a secret in" + $never) }
                 }
             }
         }
