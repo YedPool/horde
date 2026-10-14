@@ -11,9 +11,16 @@
 #      key store, a phone) and the real files for the rest: the identity made; the relay runner's
 #      service written, which the real definitions reader takes; the runner serving or not by its real
 #      heartbeat; a phone paired; all set - and a second run that fixes nothing and says all set.
+#      Then the supervisor: from a prompt that is not elevated, nothing tried and the one elevated line
+#      printed (decoded, it is exactly `services schedule` for this home); elevated, scheduled once.
+#      Then the test question, added through the shipped decisions list, once. The requirements
+#      (Windows, Windows PowerShell 5.1) first, and setup run again under 5.1 when started from pwsh.
 #   3. THE OPERATOR'S PATH (-Operator), through the shipped command, with the must-fail twins: no
 #      origin of its own; no client file (and the deploy refuses); a client file whose redirect URIs
 #      lack the callback (warned); then the deploy with the fake wrangler, and on to the user's steps.
+#   4. THE MANIFEST (setup\steps.json): every step in it has its check in the code and every check its
+#      step, both ways; a step with no code, code with no step, a newer manifest version and a manifest
+#      that is not ASCII each refuse it whole; -Steps -Json prints it as the code reads it.
 #
 # NOTHING HERE DEPLOYS OR CONTACTS ANYTHING REAL: the wrangler is test/fake-wrangler.cjs, named by the
 # home's own setting; every command runs with USERPROFILE pointed at a profile folder of the suite's
@@ -106,7 +113,8 @@ try {
     Check (-not (Test-Path -LiteralPath $hh) -and $shipped -clike "https://*.workers.dev") ("CONTROL: the home does not exist yet, and the shipped relay is read (" + $shipped + ")")
     $relayJson = Join-Path $hh "settings\relay.json"
     $s = Setup $hh @("-NoFix", "machine-identity")
-    Check ($s.code -eq 0 -and (Has $s ("  fixed Horde home: " + $hh + " (made just now)")) -and (Test-Path -LiteralPath $hh -PathType Container)) ("setup makes the home and says so (exit " + $s.code + ")")
+    Check ($s.code -eq 0 -and (HasLike $s "  done  what Horde needs: Windows *, Windows PowerShell 5.1*")) ("the requirements are checked first, and met (exit " + $s.code + ")")
+    Check ((Has $s ("  fixed Horde home: " + $hh + " (made just now)")) -and (Test-Path -LiteralPath $hh -PathType Container)) "setup makes the home and says so"
     Check ((Has $s ("  fixed relay settings: wrote " + $relayJson + ": the horde home, the phone app at " + $shipped)) -and (Test-Path -LiteralPath $relayJson)) "and writes the relay settings for the shipped relay, saying so"
     $want = '{ "schemaVersion": 1, "settings": { "horde": "home", "pairRpId": "' + $shippedHost + '", "pairOrigin": "' + $shipped + '" } }'
     Check ((Test-Ascii $relayJson) -and [System.IO.File]::ReadAllText($relayJson) -ceq $want) ("the file is ASCII and exactly what the hand-written step wrote (" + [System.IO.File]::ReadAllText($relayJson) + ")")
@@ -127,9 +135,26 @@ try {
     $before = Get-Tree $h3
     $s = Setup $h3 @("-NoFix", "machine-identity")
     Check ((HasLike $s "  TO DO relay settings: *") -and $s.next -ceq ('next: add "pairRpId": "' + $shippedHost + '", "pairOrigin": "' + $shipped + '" to the settings in ' + (Join-Path $h3 "settings\relay.json")) -and (Get-Tree $h3) -ceq $before) ("MUST FAIL: a relay.json that is there is the person's: setup says exactly what to add, and writes nothing (" + $s.next + ")")
-    $h4 = Join-Path $work "home-checkonly"
+    $h4 = Join-Path $work "home-check"
+    $s = Setup $h4 @("-Check")
+    Check ((Has $s ("  TO DO Horde home: there is no folder " + $h4)) -and $s.next -ceq ("next: make the folder " + $h4) -and -not (Test-Path -LiteralPath $h4)) "MUST FAIL: -Check fixes nothing, not even the home, and says the manifest's sentence for it"
     $s = Setup $h4 @("-CheckOnly")
-    Check ((Has $s ("  TO DO Horde home: there is no folder " + $h4)) -and -not (Test-Path -LiteralPath $h4)) "MUST FAIL: -CheckOnly fixes nothing, not even the home"
+    Check ((Has $s ("  TO DO Horde home: there is no folder " + $h4)) -and -not (Test-Path -LiteralPath $h4)) "and -CheckOnly is the same walk"
+    # STARTED FROM POWERSHELL 7, setup runs itself again under Windows PowerShell 5.1 (issue 274).
+    $pwsh = @(Get-Command -Name "pwsh" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($pwsh.Count -eq 1) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $pwsh[0].Source
+        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" setup -Check"
+        $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+        $psi.EnvironmentVariables["HORDE_HOME"] = $h4; $psi.EnvironmentVariables["USERPROFILE"] = $prof
+        $pp = [System.Diagnostics.Process]::Start($psi)
+        $ppErr = $pp.StandardError.ReadToEndAsync(); $ppOut = $pp.StandardOutput.ReadToEnd(); $pp.WaitForExit()
+        $both = $ppOut + "`n" + $ppErr.Result
+        [void]$script:said.Add($both)
+        Check ($pp.ExitCode -eq 0 -and $both.Contains("running again under Windows PowerShell 5.1") -and $both -match "done  what Horde needs: Windows [0-9]+ \(build [0-9]+\), Windows PowerShell 5\.1" -and $both.Contains("TO DO Horde home: there is no folder " + $h4)) ("started from PowerShell 7, setup runs itself again under 5.1, with the same arguments (exit " + $pp.ExitCode + ")")
+        $pp.Dispose()
+    } else { Write-Host "  (no PowerShell 7 here: the run-again under 5.1 is not exercised)" -ForegroundColor Yellow }
 
     Write-Host ""
     Write-Host "--- 2. the rest, in this process: stand-ins for the key store and the phone only ---" -ForegroundColor Cyan
@@ -142,13 +167,21 @@ try {
     Check ((Last-Step $x).id -ceq "machine-identity" -and (Last-Step $x).state -ceq "todo" -and (Last-Step $x).said -clike "*setup tried: it could not be made: no key store answered (a stand-in)" -and $x.next -ceq "next: horde relay identity -New") "MUST FAIL: an identity that cannot be made is said to have been tried, with why, and the command to make it"
     $defsPath = Join-Path $hh "settings\service-definitions.json"
     Check (-not (Test-Path -LiteralPath $defsPath)) "CONTROL: and nothing past it was touched"
-    $probes = @{ identity = $idProbe; makeIdentity = $makeOk; trust = $noPhone }
+    # The scheduler and elevation are stand-ins too: the real scheduler holds this machine's own jobs.
+    $script:scheduled = $false
+    $script:installs = 0
+    $schedProbe = {
+        param($HordeHome)
+        $at = $(if ($script:scheduled) { $HordeHome } else { "" })
+        New-HordeKnown -Value ([pscustomobject]@{ jobs = @([pscustomobject]@{ name = "Horde services tend at start-up"; found = $script:scheduled; enabled = $script:scheduled; marked = $script:scheduled; home = $at }, [pscustomobject]@{ name = "Horde services tend"; found = $script:scheduled; enabled = $script:scheduled; marked = $script:scheduled; home = $at }) })
+    }
+    $probes = @{ identity = $idProbe; makeIdentity = $makeOk; trust = $noPhone; schedule = $schedProbe; elevated = { $false }; installSchedule = { param($HordeHome, $Root) $script:installs++; $script:scheduled = $true } }
     $x = Report $hh $probes
-    Check ($x.states -clike "home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-serving=todo") ("the identity is made, and the relay runner's service written (" + $x.states + ")")
+    Check ($x.states -clike "requirements=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-serving=todo") ("the identity is made, and the relay runner's service written (" + $x.states + ")")
     $read = Get-HordeServiceDefinitions -HordeHome $hh
     $svc = $(if ($read.state -ceq "read" -and @($read.services).Count -eq 1) { $read.services[0] } else { $null })
     Check ((Test-Ascii $defsPath) -and $null -ne $svc -and $svc.name -ceq "relay-runner" -and (@($svc.start.words) -join " ") -ceq "relay run" -and $svc.start.named["Relay"] -ceq "cloudflare" -and $svc.hordeHome -ceq $hh -and $svc.checkout -ceq $root -and (@($svc.stop.words) -join " ") -ceq "relay stop" -and $svc.alive.path -ceq (Get-HordeRelayRunHeartbeatPath -HordeHome $hh)) ("the file is ASCII, and the real definitions reader takes it: the relay run of this checkout, for this home, alive by the runner's own heartbeat (" + $read.state + " " + (@($read.findings) -join "; ") + ")")
-    Check ((Last-Step $x).said -ceq "the relay runner has never run for this home" -and $x.next -ceq "next: horde relay run -Relay cloudflare, and leave that window open; or, to have it kept running from start-up, from a prompt run as administrator, with HORDE_HOME as it is here: horde services schedule") ("the runner is next, by hand or by the supervisor (" + $x.next + ")")
+    Check ((Last-Step $x).said -ceq "the relay runner has never run for this home" -and $x.next -ceq "next: horde relay run -Relay cloudflare, and leave that window open") ("the runner is next, in a window of its own, as the manifest says (" + $x.next + ")")
     $beatPath = Get-HordeRelayRunHeartbeatPath -HordeHome $hh
     $self = Get-HordeHeartbeatSelf
     Write-HordeHeartbeat -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds 60 -Condition "keys" -Why "cannot open this machine's keys"
@@ -167,11 +200,35 @@ try {
     $x = Report $hh $probes
     Check ((Last-Step $x).id -ceq "phone-paired" -and (Last-Step $x).state -ceq "todo") "MUST FAIL: a phone still pending is not paired"
     $probes["trust"] = { param($HordeHome) New-HordeKnown -Value ([pscustomobject]@{ devices = @([pscustomobject]@{ id = "d1"; state = "trusted" }); machines = @(); revoked = @(); phones = @() }) }
+    $x = Report $hh $probes
+    $elev = Get-HordeSetupElevatedCommand -Root $root -HordeHome $hh
+    $b64 = $(if ($elev.line -match "-EncodedCommand ([A-Za-z0-9+/=]+)'\z") { $Matches[1] } else { "" })
+    $decoded = $(if ($b64 -ne "") { [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b64)) } else { "" })
+    Check ((Last-Step $x).id -ceq "runner-scheduled" -and (Last-Step $x).said -clike "*is not installed*" -and $script:installs -eq 0 -and $x.next -ceq ("next: in any PowerShell window, run this one line, and allow it to run as administrator: " + $elev.line)) ("MUST FAIL: from a prompt that is not elevated, setup tries nothing and prints the one elevated line (" + $x.next + ")")
+    Check ($elev.line -clike "Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -EncodedCommand *'" -and $decoded -ceq ("$" + "env:HORDE_HOME = '" + $hh + "'; & '" + (Join-Path $root "horde.ps1") + "' services schedule") -and @((Last-Step $x).notes | Where-Object { $_ -ceq ("it runs, as administrator: " + $decoded) }).Count -eq 1) ("and that line runs exactly horde services schedule for this home, which it says in plain words (" + $decoded + ")")
+    $probes["elevated"] = { $true }
+    $realDecisions = (Get-HordeSetupDefaultProbes).decisions
+    $probes["decisions"] = { param($HordeHome, $Root, [string[]]$HordeArgs) [pscustomobject]@{ code = 1; out = ""; err = "the list is held (a stand-in)" } }
+    $x = Report $hh $probes
+    Check ($script:installs -eq 1 -and @($x.report.steps | Where-Object { $_.id -ceq "runner-scheduled" -and $_.state -ceq "fixed" }).Count -eq 1 -and (Last-Step $x).id -ceq "test-question" -and (Last-Step $x).said -clike "the decisions list cannot be read: the list is held (a stand-in)*") ("from an elevated prompt the supervisor is scheduled once; a decisions list that cannot be read stops at the test question, honestly (" + $x.states + ")")
+    $probes["decisions"] = $realDecisions
+    $x = Report $hh $probes
+    $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
+    $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions) | Where-Object { $_.group -ceq "Setup" })
+    Check (@($x.report.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" -and $_.said -clike "added question 1: Horde is set up on * - does it reach your phone?" }).Count -eq 1 -and $qs.Count -eq 1 -and $qs[0].title -ceq ("Horde is set up on " + $env:COMPUTERNAME + " - does it reach your phone?") -and $qs[0].askedBy -ceq "horde setup") ("setup adds the test question through the shipped decisions list, once (" + $x.states + ")")
+    Check ($x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-serving=done phone-paired=done runner-scheduled=done test-question=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("and every step is done: the last line says all set (" + $x.next + ")")
     $before = Get-Tree $hh
     $x = Report $hh $probes
-    Check ($x.report.next -ceq "" -and $x.states -ceq "home=done relay-settings=done machine-identity=done runner-defined=done runner-serving=done phone-paired=done" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("with a trusted phone, every step is done and the last line says all set (" + $x.next + ")")
+    $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
+    $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions))
+    Check ($x.states -cnotmatch "fixed|todo" -and $x.next -clike "all set:*" -and (Get-Tree $hh) -ceq $before -and $qs.Count -eq 1 -and $script:installs -eq 1) "run again: nothing fixed, no byte changed, no second question, nothing scheduled again - all set"
+    $probes["platform"] = { [pscustomobject]@{ windowsMajor = 10; windowsBuild = 19045; desktopShell = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"; edition = "Core"; version = "7.4.1" } }
     $x = Report $hh $probes
-    Check ($x.states -cnotmatch "fixed|todo" -and $x.next -clike "all set:*" -and (Get-Tree $hh) -ceq $before) "run again: nothing fixed, no byte changed, all set"
+    Check ($x.states -ceq "requirements=todo" -and (Last-Step $x).said -ceq "setup is running under PowerShell 7.4.1, not Windows PowerShell 5.1" -and $x.next -ceq ("next: run horde from Windows PowerShell 5.1: powershell -NoProfile -ExecutionPolicy Bypass -File " + $root + "\horde.ps1 setup")) "MUST FAIL: run under PowerShell 7 where it could not run itself again, the requirement stops it first"
+    $probes["platform"] = { [pscustomobject]@{ windowsMajor = 6; windowsBuild = 9600; desktopShell = ""; edition = "Desktop"; version = "4.0" } }
+    $x = Report $hh $probes
+    Check ($x.states -ceq "requirements=todo" -and (Last-Step $x).said -ceq "Windows is version 6; Horde needs 10 or 11; Windows PowerShell 5.1 (powershell.exe) is not installed") "MUST FAIL: an older Windows without Windows PowerShell 5.1 is named, both things"
+    $probes.Remove("platform")
     $h5 = Join-Path $work "home-owndefs"
     Write-Text (Join-Path $h5 "settings\service-definitions.json") '{"schemaVersion":1,"settings":{}}'
     $s5 = $script:hasIdentity
@@ -212,12 +269,38 @@ try {
 
     Write-Host ""
     Write-Host "--- the steps, as data, and what was said ---" -ForegroundColor Cyan
+    $manPath = Join-Path $root "setup\steps.json"
+    $manText = [System.IO.File]::ReadAllText($manPath)
+    $man = $manText | ConvertFrom-Json
+    $fileIds = @($man.steps | ForEach-Object { $_.id })
+    $codeIds = @((Get-HordeSetupStepCode).Keys)
+    Check ((Test-Ascii $manPath) -and $man.schemaVersion -eq 1 -and $man.manifestVersion -ge 1 -and $fileIds.Count -ge 10) ("CONTROL: setup\steps.json is ASCII and read (" + $fileIds.Count + " steps)")
+    Check (@($fileIds | Where-Object { $codeIds -cnotcontains $_ }).Count -eq 0) ("every step in setup\steps.json has its check in cli/Setup.ps1 (missing: " + (@($fileIds | Where-Object { $codeIds -cnotcontains $_ }) -join ", ") + ")")
+    Check (@($codeIds | Where-Object { $fileIds -cnotcontains $_ }).Count -eq 0) ("every check in cli/Setup.ps1 has its step in setup\steps.json (missing: " + (@($codeIds | Where-Object { $fileIds -cnotcontains $_ }) -join ", ") + ")")
+    # The manifest's "fixes" starts with "none" exactly where the code has no fix - but for the
+    # requirements, whose one fix (running again under 5.1) is the command's own, before any step.
+    $code = Get-HordeSetupStepCode
+    $mismatch = @($man.steps | Where-Object { $_.id -cne "requirements" -and ($_.fixes -clike "none*") -ne ($null -eq $code[$_.id].fix) } | ForEach-Object { $_.id })
+    Check ($mismatch.Count -eq 0) ("a step the manifest says setup does not fix has no fix in the code, and the other way round (" + ($mismatch -join ", ") + ")")
+    $mdir = Join-Path $work "manifests"
+    [void][System.IO.Directory]::CreateDirectory($mdir)
+    foreach ($case in @(
+            @{ what = "a step with no check in the code"; text = $manText.Replace('"id": "test-question"', '"id": "made-up-step"'); like = "step 'made-up-step' has no check in this code" },
+            @{ what = "a check with no step in the manifest"; text = $manText.Replace('"id": "test-question"', '"id": "home"'); like = "this code checks a step 'test-question' that the manifest does not list" },
+            @{ what = "a manifest newer than this code"; text = $manText.Replace('"manifestVersion": 1', '"manifestVersion": 2'); like = "manifestVersion 2 is newer than this code knows (1)" },
+            @{ what = "a manifest that is not ASCII"; text = $manText.Replace('"title": "Horde home"', ('"title": "Horde h' + [char]0xF6 + 'me"')); like = "it is not ASCII" })) {
+        $mp = Join-Path $mdir ([guid]::NewGuid().ToString("N") + ".json")
+        [System.IO.File]::WriteAllText($mp, $case.text, $utf8)
+        $m2 = Read-HordeSetupManifest -Path $mp
+        $threw = ""
+        try { $null = Get-HordeSetupReport -HordeHome (Join-Path $work "never-made") -Root $root -Manifest $mp -Check } catch { $threw = $_.Exception.Message }
+        Check ($case.text -cne $manText -and $m2.state -ceq "unknown" -and "$($m2.reason)".Contains($case.like) -and $threw.Contains($case.like) -and -not (Test-Path -LiteralPath (Join-Path $work "never-made"))) ("MUST FAIL: " + $case.what + " refuses the whole manifest, and nothing is checked (" + $m2.reason + ")")
+    }
     $r = Horde $hh @("setup", "-Steps", "-Json")
-    $list = $null
-    # Unrolled: Windows PowerShell 5.1's ConvertFrom-Json hands a JSON array on as ONE object.
-    try { $list = @(($r.out.Trim()) | ConvertFrom-Json | ForEach-Object { $_ }) } catch { $list = $null }
-    $ids = $(if ($null -ne $list) { @($list | ForEach-Object { $_.id }) -join "," } else { "" })
-    Check ($r.code -eq 0 -and $ids -ceq "home,relay-hosting,relay-deployed,relay-settings,machine-identity,runner-defined,runner-serving,phone-paired" -and @($list | Where-Object { $_.path -ceq "operator" }).Count -eq 2) ("setup -Steps -Json is the one list of steps, in order, as data (" + $ids + ")")
+    $listed = $null
+    try { $listed = ($r.out.Trim()) | ConvertFrom-Json } catch { $listed = $null }
+    $ids = $(if ($null -ne $listed) { @($listed.steps | ForEach-Object { $_.id }) -join "," } else { "" })
+    Check ($r.code -eq 0 -and $ids -ceq ($fileIds -join ",") -and $listed.manifestVersion -eq $man.manifestVersion -and @($listed.steps | Where-Object { $_.path -ceq "operator" }).Count -eq 2 -and @($listed.steps | Where-Object { $_.fixedBySetup }).Count -eq 6) ("setup -Steps -Json prints the manifest as this code reads it, in order (" + $ids + ")")
     $all = $script:said -join "`n"
     Check ($script:said.Count -ge 12 -and $all.Contains($callback)) ("CONTROL: " + $script:said.Count + " runs were read, and the search finds what they did say")
     Check (-not $all.Contains($clientSecret) -and -not $all.Contains($clientId)) "nothing setup said ever holds the client's id or secret"

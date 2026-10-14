@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "manifestVersion": 1,
+  "about": "The steps of Horde's first run on a machine, in order: the one source of what Horde needs. cli/Setup.ps1 interprets it (horde setup); each id has its check, and its fix when it has one, in that file. A later change generates the README's first-run section and the installer from it. In manual, {relay}, {origin}, {home}, {root}, {machine}, {label} and {elevated} are filled in by horde setup.",
+  "steps": [
+    {
+      "id": "requirements",
+      "title": "what Horde needs",
+      "path": "user",
+      "requirement": "Windows 10 or 11, and Windows PowerShell 5.1 (powershell.exe), which comes with Windows; Git for Windows to get Horde",
+      "checks": "Windows is version 10 or later, powershell.exe 5.1 is installed, and setup is running under it",
+      "fixes": "when started from PowerShell 7, setup runs itself again under Windows PowerShell 5.1",
+      "manual": "run horde from Windows PowerShell 5.1: powershell -NoProfile -ExecutionPolicy Bypass -File {root}\\horde.ps1 setup"
+    },
+    {
+      "id": "home",
+      "title": "Horde home",
+      "path": "user",
+      "requirement": "a folder of Horde's own: HORDE_HOME, or .horde in the user's profile",
+      "checks": "the Horde home exists",
+      "fixes": "makes the folder",
+      "manual": "make the folder {home}"
+    },
+    {
+      "id": "relay-hosting",
+      "title": "the hosted relay's own steps",
+      "path": "operator",
+      "requirement": "for a home that hosts its own relay: where it will answer, its Google sign-in client and the tools it is deployed with",
+      "checks": "each of the relay's own steps, as the relay says them (relays/<name>/Setup.ps1): its origin, its Google sign-in client file with the exact redirect URI and JavaScript origin to register, node",
+      "fixes": "none",
+      "manual": "do what the relay's step above says"
+    },
+    {
+      "id": "relay-deployed",
+      "title": "relay deployed",
+      "path": "operator",
+      "requirement": "the operator's relay is deployed, serving the phone app",
+      "checks": "a deploy from this home recorded the origin the relay will answer at",
+      "fixes": "none",
+      "manual": "horde relay deploy -Relay {relay}"
+    },
+    {
+      "id": "relay-settings",
+      "title": "relay settings",
+      "path": "user",
+      "requirement": "the relay settings name this machine's horde and where the phone app is",
+      "checks": "settings\\relay.json names horde, pairRpId and pairOrigin",
+      "fixes": "writes settings\\relay.json, in ASCII, when it is not there: the horde named by -Horde (home by default), and the phone app at the relay this home uses",
+      "manual": "horde setup -Horde <a name for this horde: a-z, 0-9 and -, such as home>"
+    },
+    {
+      "id": "machine-identity",
+      "title": "machine identity",
+      "path": "user",
+      "requirement": "this machine's relay identity: its keys, made in this machine's key store (the TPM when there is one) and never copied",
+      "checks": "an identity record exists in the Horde home",
+      "fixes": "makes it, as horde relay identity -New does",
+      "manual": "horde relay identity -New"
+    },
+    {
+      "id": "runner-defined",
+      "title": "relay runner defined",
+      "path": "user",
+      "requirement": "the relay runner - what carries questions to the phone and answers back - defined as a service of this home, so the supervisor can keep it running",
+      "checks": "settings\\service-definitions.json has a service that runs horde relay run for this home",
+      "fixes": "writes settings\\service-definitions.json, in ASCII, when it is not there",
+      "manual": "add the relay-runner entry setup prints to settings\\service-definitions.json"
+    },
+    {
+      "id": "runner-serving",
+      "title": "relay runner serving",
+      "path": "user",
+      "requirement": "the relay runner running for this home",
+      "checks": "the relay runner's heartbeat is fresh and says it can do its work",
+      "fixes": "none: a long-running process is started by the person or by the supervisor, never by setup",
+      "manual": "horde relay run -Relay {relay}, and leave that window open"
+    },
+    {
+      "id": "phone-paired",
+      "title": "phone paired",
+      "path": "user",
+      "requirement": "a phone signed in to the relay and paired with this machine",
+      "checks": "the trust store holds a phone that is trusted",
+      "fixes": "none: Google sign-in happens on the phone, and pairing needs the person at both ends",
+      "manual": "on the phone, open {origin}/app/index.html, sign in with Google, add it to the home screen and open it from there; then here: horde relay pair -Relay {relay} -Label \"{label}\", scan the code with the app, and check the 12-digit number"
+    },
+    {
+      "id": "runner-scheduled",
+      "title": "relay runner kept running",
+      "path": "user",
+      "requirement": "the supervisor scheduled for this home, so the relay runner runs from start-up without a window left open",
+      "checks": "both of the supervisor's jobs are installed, enabled, made by Horde, and serve this home",
+      "fixes": "installs them, as horde services schedule does, when this prompt is elevated; never elevates by itself",
+      "manual": "in any PowerShell window, run this one line, and allow it to run as administrator: {elevated}"
+    },
+    {
+      "id": "test-question",
+      "title": "test question",
+      "path": "user",
+      "requirement": "a first question on the decisions list, to see it reach the phone",
+      "checks": "the decisions list holds the question horde setup adds, in the group Setup",
+      "fixes": "adds it once: Horde is set up on {machine} - does it reach your phone?",
+      "manual": "horde decisions add -File <a question file>, as horde setup would"
+    }
+  ]
+}
