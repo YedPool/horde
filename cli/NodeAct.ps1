@@ -557,7 +557,9 @@ function Find-HordeNodeScreenSecret {
     #     rows, and each half is too short for any shape (a 40-character cloud secret, a ghp token);
     #   - the raw rows, the raw rows with every character outside printable ASCII REMOVED (a zero-width
     #     space splits a token, and as '?' it still splits it), and the kept rows (a letter outside ASCII
-    #     as '?' gives the name=value kind its word boundary: "Note" + U+00E9 + "password=...");
+    #     as '?' gives the name=value kind its word boundary: "Note" + U+00E9 + "password=" and a value
+    #     under 8 characters, which the named kind does not take; measured 2026-10-14, only this reading
+    #     finds it);
     #   - each of those as it is; SPACED, a space after every '=', because the look for a key with
     #     slashes refuses one with '=' right before it (NAME=<key> read as nothing); and DASHED, every
     #     underscore as a dash, because the name=value kind needs a word boundary that DB_PASSWORD's
