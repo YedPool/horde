@@ -98,4 +98,4 @@ core/WezfleetState.ps1 | 1 | comments on this harness's path key and control fil
 schema/session-view.v1.json | 1 | the agent enum of the view names the two harnesses; engines K1 and A4 make it the harness field
 test/test-projection.ps1 | 37 | the projection suite drives the readers engines A4 moves, and its trip wires replace them by name; it shrinks with them
 test/fixtures/projection/fleet/wezfleet/codex-sessions/codex-thread-1.json | 5 | the fixture's control file for this harness, in the old system's codex-sessions store, under that store's own name
-test/mutations/projection.psd1 | 4 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4
+test/mutations/projection.psd1 | 2 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4

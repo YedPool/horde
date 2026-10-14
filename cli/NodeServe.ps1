@@ -43,7 +43,8 @@ function New-HordeNodeManifest {
         repos = @()
         admission = [ordered]@{ tier = "default"; state = "unknown" }
         protocols = @(1)
-        verbsVersions = @(1)
+        # What remote/NodeServe.ps1 speaks, so node.info and the hello never disagree.
+        verbsVersions = @($script:HordeNodeVerbsVersions)
     }
 }
 

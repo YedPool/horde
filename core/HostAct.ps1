@@ -25,6 +25,9 @@
 #                                 { pid; procStart }: known bool, unknown when it cannot be told
 #   Stop    ($target, $handle, $expect)  the pane ended, only after the expected process is proven
 #                                 to be in it: known $true
+#   Text    ($target, $handle)    optional: the pane's screen as it shows now, one string per row:
+#                                 known string[], unknown when it cannot be read. A host without it
+#                                 cannot show what a pane's input box holds (issue #214).
 # A handle is the host's own text, opaque here (core/HostPort.ps1: "a host handle ... never a key"); a
 # host whose pane ids restart puts its terminal's identity in it.
 #
@@ -46,11 +49,12 @@ function Register-HordeHostActor {
         [Parameter(Mandatory = $true)][scriptblock]$Send,
         [Parameter(Mandatory = $true)][scriptblock]$Live,
         [Parameter(Mandatory = $true)][scriptblock]$Stop,
-        [scriptblock]$OwnMarker = $null
+        [scriptblock]$OwnMarker = $null,
+        [scriptblock]$Text = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a host name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($a in $script:HordeHostActors) { if ($a.name -ceq $Name) { $script:HordeHostActors.Remove($a); break } }
-    [void]$script:HordeHostActors.Add([pscustomobject]@{ name = $Name; own = $Own; resolve = $Resolve; start = $Start; send = $Send; live = $Live; stop = $Stop; ownMarker = $OwnMarker })
+    [void]$script:HordeHostActors.Add([pscustomobject]@{ name = $Name; own = $Own; resolve = $Resolve; start = $Start; send = $Send; live = $Live; stop = $Stop; ownMarker = $OwnMarker; text = $Text })
 }
 
 function Get-HordeHostActor {

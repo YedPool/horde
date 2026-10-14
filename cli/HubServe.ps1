@@ -51,8 +51,9 @@ $script:HordeHubLockViolation = -2147024863
 # is about four of those; nodes are pulled one after another, so a slow one costs the rest of the
 # round at most this much.
 $script:HordeHubNodeBudgetMs = 45000
-# The verbs versions this hub speaks (link-verbs v1).
-$script:HordeHubVerbsVersions = @(1)
+# The verbs versions this hub speaks (link-verbs v1). 2: its reader accepts sessions.list's
+# membershipComplete, and remote/Mirror.ps1 drops what a membership-complete list leaves out (L-101).
+$script:HordeHubVerbsVersions = @(1, 2)
 # Unicode without a byte-order mark: a mirror file is the hub's own and read back by this file only.
 # Callers load core/ReadShared.ps1 and core/FileAtomic.ps1 (Read-HordeSharedText, Move-HordeFileAtomic).
 $script:HordeHubMirrorEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -354,6 +355,9 @@ function Invoke-HordeHubPull {
             return $res
         }
         $res.nodeName = "$($f.hello.name)"
+        # The verbs version both ends offer (1 when they share none above it): what the node's answers
+        # may carry. sessions.list's membershipComplete is verbs version 2's (L-101).
+        $verbs = [Math]::Max(1, (Select-HordeLinkProtocol -Ours $script:HordeHubVerbsVersions -Theirs @(Get-HordeLinkProp $f.hello "verbsVersions")))
         $cutPing = Stop-HordeHubUnadmitted -Link $link -DeviceId "$($Entry.deviceId)" -Admit $Admit -Seq ($seq + 1) -Contract $Contract
         if ($cutPing -ne "") { $res.reason = $cutPing; return $res }
         # One ping: the four timestamps of R6's clock sample. t1 is read back from the text sent, so the
@@ -386,6 +390,10 @@ function Invoke-HordeHubPull {
         $sentAt = ConvertFrom-HordeMirrorTime "$($r.ts)"
         if ($null -eq $sentAt) { $res.reason = "the node's answer carries no send time the hub can read"; return $res }
         $res.list = $r.result.value
+        # A member of a version this link did not agree on is not heard: a node that sends
+        # membershipComplete on a verbs-1 link does not get its sessions dropped, and the mirror never
+        # stores what this link's version does not carry.
+        if ($verbs -lt 2 -and $null -ne $res.list.PSObject.Properties["membershipComplete"]) { $res.list.PSObject.Properties.Remove("membershipComplete") }
         $res.nodeSentAt = $sentAt
         $res.receivedAt = $received
         $res.ok = $true

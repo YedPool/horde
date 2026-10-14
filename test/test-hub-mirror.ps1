@@ -135,6 +135,34 @@ $c = @(Row @(Get-HordeMirrorRows -Mirror $lostPart -Now (At 35)) $s2)
 Check ($c.Count -eq 1 -and $c[0].presence.reason -clike "node box-a (*) unreachable since*last seen*") "a carried session of a node that drops is unknown for the node's reason, and still says when it was last seen"
 
 Write-Host ""
+Write-Host "--- a list that names every session drops what it leaves out (membershipComplete, ledger core-projection L-101) ---" -ForegroundColor Cyan
+# The always-on node's fields are never all whole (no host adapter), so its complete is always false and
+# every session that ended was carried forever. A node that declares the stores naming its sessions,
+# and read them whole, says so in membershipComplete (verbs version 2); then a session it leaves out
+# has ended, and the hub drops it. Dropped, not marked absent: a lookup still needs a complete inventory.
+function Membered { param($List, $Answer) $List | Add-Member -NotePropertyName membershipComplete -NotePropertyValue $Answer -Force; return $List }
+$m1 = Pull (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") (List @((Summary $s1), (Summary $s2)) -Complete $false) 0
+$mem = Pull $m1 (Membered (List @((Summary $s1)) -Complete $false -At (T 20)) (Known $true (T 20))) 20
+$rows = @(Get-HordeMirrorRows -Mirror $mem -Now (At 25))
+$node = @((Get-HordeFleetView -Mirrors @($mem) -Now (At 25)).nodes)[0]
+Check (@(Row $rows $s2).Count -eq 0 -and $node.carried -eq 0) "a session left out of a membership-complete list is dropped, not carried, while the fields are partial"
+Check (@(Row $rows $s1).Count -eq 1 -and @(Row $rows $s1)[0].presence.state -ceq "known" -and $node.listed -eq 1) "CONTROL: a live session stays listed and mirrored"
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($mem) -Now (At 25)) -SessionId $s2
+Check ($f.state -ceq "unknown") "a lookup of the dropped session is unknown, never absent: absence still needs a complete inventory"
+Check ($node.complete.value -eq $false) "the node's entry still says its inventory is partial: its fields are"
+$carrying = Pull $m1 (List @((Summary $s1)) -Complete $false -At (T 20)) 20
+$mem = Pull $carrying (Membered (List @((Summary $s1)) -Complete $false -At (T 40)) (Known $true (T 40))) 40
+Check (@(Row @(Get-HordeMirrorRows -Mirror $mem -Now (At 45)) $s2).Count -eq 0) "a session carried from an earlier partial list is dropped by the first membership-complete one"
+$old = Pull $m1 (List @((Summary $s1)) -Complete $false -At (T 20)) 20
+Check (@($old.inventory.carried).Count -eq 1) "an older node without the field is carried as today"
+$no = Pull $m1 (Membered (List @((Summary $s1)) -Complete $false -At (T 20)) (Known $false (T 20))) 20
+Check (@($no.inventory.carried).Count -eq 1) "membership known false carries as today"
+$unk = Pull $m1 (Membered (List @((Summary $s1)) -Complete $false -At (T 20)) (Unknown "the node could not say")) 20
+Check (@($unk.inventory.carried).Count -eq 1) "membership unknown carries as today"
+$txt = Pull $m1 (Membered (List @((Summary $s1)) -Complete $false -At (T 20)) (Known "true" (T 20))) 20
+Check (@($txt.inventory.carried).Count -eq 1) "membership whose value is text, not true, carries as today"
+
+Write-Host ""
 Write-Host "--- a dropped link resumes with nothing lost and nothing twice ---" -ForegroundColor Cyan
 $m = Pull (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") (List @((Summary $s1), (Summary $s2))) 0
 $m = Set-HordeNodeMirrorLost -Mirror $m -At (At 20) -Reason "the link dropped"

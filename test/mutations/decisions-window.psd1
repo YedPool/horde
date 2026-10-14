@@ -288,5 +288,9 @@
         @{ Name = "only-the-first-finding-is-said"
            Find = 'foreach ($f in $found) { [void]$lines.Add($f) }'
            Replace = '[void]$lines.Add($found[0])' }
+        # --- the fleet record's optional seventh line, waiting on, is part of what the line is compared by
+        @{ Name = "waiting-on-not-compared"
+           Find = '$(if ($null -ne $_.PSObject.Properties["waitingOn"]) { $_.waitingOn } else { "" })'
+           Replace = '""' }
     )
 }
