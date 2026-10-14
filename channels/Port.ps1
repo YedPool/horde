@@ -99,6 +99,21 @@
 #              it does at the top of each turn - so the runner judges a failed turn's backoff by what the
 #              relay said THIS turn, never by the sticky full mark (cli/RelayRun.ps1, BACKOFF).
 #
+# DATA KINDS (shape B, 2026-10-14: agreed by the Horde coordinator and the relay owner, for the photos
+# of channels/chat/Photo.ps1). An item in the machine's mailbox that is NOT an envelope, and opens with
+# {"v":1,"kind":"<a registered data kind>", is not signed by anybody, so it is never an envelope, never
+# journaled with them, never opened, and never handed to an Accept. It is handed to its kind's Take
+# block ALONE - Register-HordeRelayDataKind - whose only power is to keep inert bytes that a passkey-
+# signed envelope already vouched for by digest. THE GATE ENFORCES IT BY KIND, NOT BY CONVENTION:
+#   - a data kind's name can never be an envelope kind: Test-HordeRelayInboundGate refuses an envelope
+#     of that kind on EVERY channel before the journal sees it, Invoke-HordeRelayChannelRecord refuses a
+#     record of it (one journaled by older code), and Register-HordeRelayChannel refuses a channel that
+#     says it takes it - so an answer, a line, a follow or anything a runner acts on can never be one;
+#   - a data item whose kind is not registered is refused as not an envelope, as before;
+#   - every Take outcome - taken, pending or refused - settles the item, and a Take that throws refuses
+#     it: a part can be lost (the photo is then incomplete, and its phone is told), never wedge the
+#     mailbox behind it.
+#
 # Answers are core/tristate; the channels' outcomes are words. Nothing here prints: the runner does.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
@@ -112,6 +127,9 @@ if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction 
 $script:HordeRelayChannelSenders = @("founder", "horde")
 $script:HordeRelayChannelOutcomes = @("done", "refused", "retry")
 $script:HordeRelayChannelWordPattern = '\A[a-z][a-z0-9-]{0,31}\z'
+if ($null -eq (Get-Variable -Name HordeRelayDataKinds -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayDataKinds = [ordered]@{} }
+$script:HordeRelayDataKindPattern = '\A\{"v":1,"kind":"([a-z][a-z0-9-]{0,31})",'
+$script:HordeRelayDataOutcomes = @("taken", "pending", "refused")
 
 function Get-HordeRelayChannelRoot {
     return $PSScriptRoot
@@ -141,6 +159,7 @@ function Register-HordeRelayChannel {
     if ($Name -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("a channel is one lower-case word of up to 32 characters, not '" + $Name + "'") }
     if ((Split-Path -Leaf $Folder) -cne $Name) { throw ("the channel '" + $Name + "' sits in the folder '" + (Split-Path -Leaf $Folder) + "'; a channel's folder is its name") }
     foreach ($k in $Kinds) { if ($k -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("the channel '" + $Name + "' takes the kind '" + $k + "', which is not one lower-case word") } }
+    foreach ($k in $Kinds) { if ($script:HordeRelayDataKinds.Contains($k)) { throw ("the channel '" + $Name + "' says it takes the kind '" + $k + "', which is a data kind: unsigned, and never an envelope (DATA KINDS)") } }
     if ($script:HordeRelayChannelSenders -cnotcontains $Senders) { throw ("a channel takes envelopes from " + ($script:HordeRelayChannelSenders -join " or ") + ", not '" + $Senders + "'") }
     # Once per name: a second registration would silently swap the channel every envelope goes to.
     if ($script:HordeRelayChannels.Contains($Name)) { throw ("the channel '" + $Name + "' is already registered, from " + $script:HordeRelayChannels[$Name].folder + "; the first registration stands") }
@@ -149,6 +168,30 @@ function Register-HordeRelayChannel {
     $c = [pscustomobject]@{ PSTypeName = "Horde.RelayChannel"; name = $Name; folder = $Folder; kinds = @($Kinds); senders = $Senders; accept = $Accept; tick = $Tick; glance = $Glance }
     $script:HordeRelayChannels[$Name] = $c
     return $c
+}
+
+function Register-HordeRelayDataKind {
+    # A data kind (DATA KINDS, in the header): -Name, owned by the registered channel -Channel from its
+    # -Folder, and the one block its items are handed to - param($Context, $Text) -> { outcome; reason },
+    # outcome taken, pending or refused. Throws on a declaration that does not hold together.
+    param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][scriptblock]$Take)
+    if ($Name -cnotmatch $script:HordeRelayChannelWordPattern) { throw ("a data kind is one lower-case word of up to 32 characters, not '" + $Name + "'") }
+    $owner = Get-HordeRelayChannel -Name $Channel
+    if ($null -eq $owner) { throw ("the data kind '" + $Name + "' names the channel '" + $Channel + "', which is not registered") }
+    if ($owner.folder -cne $Folder) { throw ("the data kind '" + $Name + "' is registered from " + $Folder + ", not from its channel's folder " + $owner.folder) }
+    if ($script:HordeRelayDataKinds.Contains($Name)) { throw ("the data kind '" + $Name + "' is already registered; the first registration stands") }
+    foreach ($c in @($script:HordeRelayChannels.Values)) { if (@($c.kinds) -ccontains $Name) { throw ("the channel '" + $c.name + "' takes '" + $Name + "' as an envelope kind, so it cannot be a data kind") } }
+    $d = [pscustomobject]@{ PSTypeName = "Horde.RelayDataKind"; name = $Name; channel = $Channel; take = $Take }
+    $script:HordeRelayDataKinds[$Name] = $d
+    return $d
+}
+
+function Get-HordeRelayDataKindOf {
+    # The registered data kind an item's text opens with, or $null.
+    param([AllowEmptyString()][string]$Text)
+    $m = [regex]::Match($Text, $script:HordeRelayDataKindPattern)
+    if (-not $m.Success -or -not $script:HordeRelayDataKinds.Contains($m.Groups[1].Value)) { return $null }
+    return $script:HordeRelayDataKinds[$m.Groups[1].Value]
 }
 
 function Get-HordeRelayChannelNames {
@@ -347,6 +390,8 @@ function Test-HordeRelayInboundGate {
     # trust store unreadable) is not a refusal of this envelope: why is "" and transient is $true.
     param($Context, $Envelope, [hashtable]$Cache = $null)
     $h = $Envelope.header
+    # BY NAME, FIRST, ON EVERY CHANNEL (DATA KINDS): a data kind is never an envelope's.
+    if ($script:HordeRelayDataKinds.Contains("$($h.kind)")) { return [pscustomobject]@{ why = ("the kind " + $h.kind + " is data, which is never taken as an envelope on any channel"); transient = $false; channel = $null; senders = $null } }
     $ch = Get-HordeRelayChannel -Name $h.channel
     if ($null -eq $ch) { return [pscustomobject]@{ why = ("no channel '" + $h.channel + "' is registered here"); transient = $false; channel = $null; senders = $null } }
     if (@($ch.kinds) -cnotcontains $h.kind) { return [pscustomobject]@{ why = ("the channel " + $ch.name + " takes " + $(if (@($ch.kinds).Count) { @($ch.kinds) -join ", " } else { "nothing in" }) + ", not " + $h.kind); transient = $false; channel = $ch; senders = $null } }
@@ -425,9 +470,23 @@ function Complete-HordeRelayInbox {
     $settled = @{}
     # The trusted senders, read once for the whole batch (Get-HordeRelayChannelSenders).
     $senderCache = @{}
+    $data = New-Object System.Collections.ArrayList
     foreach ($it in @($w.value.items)) {
         $r = Read-HordeRelayEnvelope -Text $it.text
-        if (-not $r.ok) { [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue }
+        if (-not $r.ok) {
+            # A DATA ITEM (the header, DATA KINDS): to its kind's Take alone, settled whatever it says.
+            $dk = Get-HordeRelayDataKindOf -Text $it.text
+            if ($null -ne $dk) {
+                $settled[[long]$it.seq] = $true
+                $got = $null
+                try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker failed: " + $_.Exception.Message); continue }
+                $said = $(if ($null -ne $got -and $null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
+                if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayDataOutcomes -cnotcontains "$($got.outcome)") { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker answered with something that is not taken, pending or refused"); continue }
+                if ("$($got.outcome)" -ceq "refused") { [void]$refused.Add("item " + $it.seq + ": " + $said) } else { [void]$data.Add("item " + $it.seq + ": " + $said) }
+                continue
+            }
+            [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue
+        }
         [void]$parsed.Add([pscustomobject]@{ item = $it; envelope = $r.value })
     }
     # Sorted by sender and that sender's seq (step 2). The relay's own order is not trusted to be theirs.
@@ -462,7 +521,7 @@ function Complete-HordeRelayInbox {
         if ($ack.state -ceq "known") { $Context.acked = $through }
         else { [void]$held.Add("the relay was not acked through " + $through + ": " + $ack.reason) }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; data = @($data.ToArray()) }))
 }
 
 function Invoke-HordeRelayUnfinished {
@@ -494,6 +553,7 @@ function Invoke-HordeRelayUnfinished {
 function Invoke-HordeRelayChannelRecord {
     # One unfinished record: open it and hand it to its channel. { outcome; reason }.
     param($Context, $Channel, $Record, [hashtable]$Cache = $null)
+    if ($script:HordeRelayDataKinds.Contains("$($Record.kind)")) { return [pscustomobject]@{ outcome = "refused"; reason = ("the kind " + $Record.kind + " is data, which is never handed to a channel's Accept") } }
     if (@($Channel.kinds) -cnotcontains $Record.kind) { return [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $Channel.name + " no longer takes the kind " + $Record.kind) } }
     $r = Read-HordeRelayEnvelope -Text $Record.text
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("the journaled text is not an envelope: " + $r.reason) } }

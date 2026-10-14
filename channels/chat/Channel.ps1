@@ -829,3 +829,7 @@ $null = Register-HordeRelayChannel -Folder $script:HordeChatChannelFolder -Name 
     -Accept { param($Context, $Item) return (Invoke-HordeChatChannelAccept -Context $Context -Item $Item) } `
     -Tick { param($Context) return (Invoke-HordeChatChannelTick -Context $Context) } `
     -Glance { param($Context) return (Test-HordeChatChannelGlance -Context $Context) }
+# A PHOTO'S PARTS are a data kind (channels/Port.ps1, DATA KINDS): unsigned, never an envelope, handed to
+# Photo.ps1's sink alone, which can make them nothing but bytes vouched for by a signed manifest.
+$null = Register-HordeRelayDataKind -Folder $script:HordeChatChannelFolder -Name "photo-part" -Channel "chat" `
+    -Take { param($Context, $Text) return (Receive-HordeChatPhotoPart -Context $Context -Text $Text) }

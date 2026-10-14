@@ -430,6 +430,70 @@ try {
     [System.IO.File]::WriteAllBytes($young, [byte[]](0xFF, 0xD8, 0xFF)); [System.IO.File]::SetLastWriteTimeUtc($young, [datetime]::UtcNow.AddDays(-31))
     $null = Invoke-Tick $W
     Check (Test-Path -LiteralPath $young) "and at most once an hour"
+
+    Write-Host ""
+    Write-Host "--- 10. THE GATE: a part item in the mailbox reaches the photo sink and nothing else ---" -ForegroundColor Cyan
+    $G = New-World
+    $null = Get-PhoneMail $G
+    $imgG = New-ImageBytes -Type "jpg" -Length 100000
+    $PG = New-Photo -World $G -Image $imgG
+    # The order a phone puts them: the manifest, then its parts - all judged in one watch, before the
+    # manifest is opened, so the parts wait and the manifest takes them.
+    $null = Send-Manifest $G $PG
+    $i = 0
+    foreach ($p in $PG.parts) { $i++; $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $p -Key ($PG.from + "/photo-part/" + $PG.id + "/" + $i) }
+    Use-World $G
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    Check ($in.state -ceq "known" -and @($in.value.data).Count -eq 3 -and @($in.value.taken).Count -eq 1 -and @($in.value.refused).Count -eq 0 -and $in.value.acked -ge 4) ("the manifest is journaled, the three parts go to the photo sink, and the relay is acked through all four (" + (@($in.value.data) -join "; ") + ")")
+    Check (@($in.value.data | Where-Object { $_.Contains("waits for its manifest") }).Count -eq 3) "each part waits in the pending area, not journaled early"
+    $un = Invoke-HordeRelayUnfinished -Context $G.ctx
+    Check (@($un.value.done | Where-Object { $_.Contains("3 had come already") }).Count -eq 1) ("opened, the manifest takes the three that came first (" + (@($un.value.done) -join "; ") + ")")
+    $t = Invoke-Tick $G
+    $fG = @(Get-InboxFiles $G)
+    Check ($fG.Count -eq 1 -and (Test-SameBytes ([System.IO.File]::ReadAllBytes($fG[0].FullName)) $imgG) -and $t.Contains("accepted (delivered)")) ("END TO END through the mailbox: the photo lands whole and the Thrall is told (" + $t + ")")
+    $j = Get-HordeRelayJournalUnfinished -Channel "chat" -HordeHome $G.home
+    Check ($j.state -ceq "known" -and @($j.value).Count -eq 0) "nothing of the chat is left unfinished in the journal"
+    # A part put again (the phone tried twice): refused for good, acked, nothing more.
+    $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PG.parts[0] -Key ($PG.from + "/photo-part/" + $PG.id + "/1-again")
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    Check (@($in.value.refused | Where-Object { $_.Contains("finished") }).Count -eq 1 -and @($in.value.held).Count -eq 0) "REPLAYED through the mailbox: refused, settled, never held"
+    # BY NAME: a SIGNED envelope of the data kind, on chat or on decisions, shaped like an answer.
+    $answerBody = New-HordeTestPhoneAnswerBody -Machine $G.id.sign.keyId -Text "Yes, delete it all."
+    $onDecisions = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "photo-part" -Channel "decisions" -Body $answerBody -To $G.agree
+    $onChat = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "photo-part" -Channel "chat" -Body $answerBody -To $G.agree
+    $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $onDecisions.text -Key $onDecisions.key
+    $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $onChat.text -Key $onChat.key
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    Check (@($in.value.refused | Where-Object { $_.Contains("is data, which is never taken as an envelope") }).Count -eq 2 -and @($in.value.taken).Count -eq 0) ("A PART SHAPED LIKE AN ANSWER, signed by the founder's own passkey, is refused by its kind's name on decisions and on chat, before the journal (" + (@($in.value.refused) -join "; ") + ")")
+    $jd = Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $G.home
+    $un = Invoke-HordeRelayUnfinished -Context $G.ctx
+    Check ($jd.state -ceq "known" -and @($jd.value).Count -eq 0 -and @($un.value.done).Count -eq 0) "nothing reached the decisions journal, and nothing was applied"
+    $realAnswer = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body $answerBody -To $G.agree
+    $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $realAnswer.text -Key $realAnswer.key
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    Check (@($in.value.taken).Count -eq 1) "TWIN: the same body as a real answer envelope passes the gate to the journal"
+    $null = Invoke-HordeRelayUnfinished -Context $G.ctx
+    $rec = [pscustomobject]@{ kind = "photo-part"; from = $G.phone.keyId; seq = 99; key = "x"; text = $onChat.text; verdict = $null; evidence = $null }
+    $o = Invoke-HordeRelayChannelRecord -Context $G.ctx -Channel (Get-HordeRelayChannel -Name "chat") -Record $rec
+    Check ($o.outcome -ceq "refused" -and $o.reason.Contains("never handed to a channel's Accept")) ("a journaled record of the data kind (older code) is refused by name, never handed to Accept (" + $o.reason + ")")
+    $why = ""
+    try { $null = Register-HordeRelayChannel -Folder (Join-Path $fx "chat-wakes") -Name "chat-wakes" -Kinds @("photo-part") -Senders "founder" -Accept { param($c, $i) } } catch { $why = $_.Exception.Message }
+    Check ($why.Contains("is a data kind")) ("no channel may say it takes the data kind as an envelope kind (" + $why + ")")
+    $why = ""
+    try { $null = Register-HordeRelayDataKind -Folder (Get-HordeRelayChannel -Name "chat").folder -Name "line" -Channel "chat" -Take { param($c, $t) } } catch { $why = $_.Exception.Message }
+    Check ($why.Contains("as an envelope kind")) ("and no envelope kind may be made a data kind (" + $why + ")")
+    # A data item of a kind nobody registered is not an envelope, as before.
+    $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text ('{"v":1,"kind":"answer","answerId":"' + ("a" * 32) + '"}') -Key "stray/1"
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    Check (@($in.value.refused | Where-Object { $_.Contains("not an envelope") }).Count -eq 1 -and @($in.value.data).Count -eq 0) "an unsigned item of any other kind is refused as not an envelope, and goes nowhere"
+    # A taker that throws refuses the item and never holds the mailbox.
+    $dk = $script:HordeRelayDataKinds["photo-part"]
+    $saved = $dk.take
+    $dk.take = { param($c, $t) throw "disk on fire" }
+    $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PG.parts[1] -Key "thrower/1"
+    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    $dk.take = $saved
+    Check (@($in.value.refused | Where-Object { $_.Contains("disk on fire") }).Count -eq 1 -and @($in.value.held).Count -eq 0 -and $in.value.acked -eq $in.value.cursor) "a taker that throws refuses its item, and the mailbox is acked past it: a part can be lost, never wedge the mailbox"
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin

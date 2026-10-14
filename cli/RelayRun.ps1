@@ -513,7 +513,10 @@ function Invoke-HordeRelayRun {
                     foreach ($l in @($in.value.held)) { $null = & $Say ("held " + $l) }
                     foreach ($l in @($in.value.missing)) { $null = & $Say ("missing " + $l) }
                     foreach ($l in @($in.value.anomalies)) { $null = & $Say ("relay: " + $l) }
-                    $empty = (@($in.value.taken).Count + @($in.value.refused).Count + @($in.value.held).Count + @($in.value.missing).Count + @($in.value.anomalies).Count -eq 0)
+                    # Data items (channels/Port.ps1, DATA KINDS) are said as one count, not a line each: a
+                    # photo is up to 64 of them.
+                    if (@($in.value.data).Count -gt 0) { $null = & $Say ("data items taken or waiting: " + @($in.value.data).Count) }
+                    $empty = (@($in.value.taken).Count + @($in.value.refused).Count + @($in.value.held).Count + @($in.value.missing).Count + @($in.value.anomalies).Count + @($in.value.data).Count -eq 0)
                     $r2 = Invoke-HordeRelayUnfinished -Context $ctx
                     foreach ($l in @(Get-HordeRelayRunLines -Report $r2.value)) { $null = & $Say $l }
                 }
