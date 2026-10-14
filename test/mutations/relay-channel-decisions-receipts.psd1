@@ -24,9 +24,6 @@
         @{ Name = "retry-is-recorded-as-refused"
            Find = 'if ($Outcome -cne "done" -and $Outcome -cne "refused") { return "" }'
            Replace = 'if ($Outcome -ceq "") { return "" }' }
-        @{ Name = "a-resent-answer-is-listed-twice"
-           Find = 'if ($mine.applied -cnotcontains $AnswerId) { [void]$mine.applied.Add($AnswerId) }'
-           Replace = '[void]$mine.applied.Add($AnswerId)' }
         @{ Name = "a-refusal-overrides-an-applied-answer"
            Find = 'if ($mine.applied -ccontains $AnswerId -or $mine.refused -ccontains $AnswerId) { return "" }'
            Replace = 'if ($mine.refused -ccontains $AnswerId) { return "" }' }
@@ -60,18 +57,6 @@
         @{ Name = "checked-claims-every-seq-was-looked-at"
            Find = '            $checked = $s'
            Replace = '            $checked = [long]1' }
-        @{ Name = "a-stale-answer-is-applied"
-           Find = 'if ($older -cne "") { return [pscustomobject]@{ outcome = "refused"; reason = $older } }'
-           Replace = '' }
-        @{ Name = "the-applied-answer-sent-again-is-called-stale"
-           Find = 'if ($mine.applied -ccontains $Answer.answerId) { return "" }'
-           Replace = '' }
-        @{ Name = "the-newest-signing-time-is-never-raised"
-           Find = '$mine.latest[$Slot] = $SignedAt'
-           Replace = '$null = $SignedAt' }
-        @{ Name = "the-newest-signing-times-are-not-read-back-after-a-restart"
-           Find = '$entry.latest["$($pr.Name)"] = [long]$pr.Value'
-           Replace = '' }
         @{ Name = "the-phone-sealed-to-is-not-preferred"
            Find = 'if (@($Prefer) -ccontains $_) { 0 } else { 1 }'
            Replace = '1' }
@@ -81,5 +66,25 @@
         @{ Name = "a-failed-move-leaves-its-temp-file"
            Find = 'try { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } } catch { }'
            Replace = '' }
+        # --- the review of PR 266, S-A: the newest answer in the store wins, whatever its route
+        @{ Name = "a-resent-answer-is-listed-twice"
+           Find = 'if ($mine.applied -ccontains $AnswerId) { return "" }'
+           Replace = 'if ($false) { return "" }' }
+        @{ Name = "a-stale-answer-is-applied"
+           Find = 'if ("$($older.value)" -cne "") { return [pscustomobject]@{ outcome = "refused"; reason = $older.value } }'
+           Replace = '' }
+        @{ Name = "a-store-that-cannot-be-read-lets-it-pass"
+           Find = 'if ($shown.state -ceq "unknown") { return (New-HordeUnknown -Reason $shown.reason) }'
+           Replace = 'if ($shown.state -ceq "unknown") { return (New-HordeKnown -Value "") }' }
+        @{ Name = "the-applied-answer-sent-again-is-called-stale"
+           Find = 'if ($ledger.streams.ContainsKey($From) -and $ledger.streams[$From].applied -ccontains $Answer.answerId) { return (New-HordeKnown -Value "") }'
+           Replace = '' }
+        @{ Name = "a-phone-answer-counts-by-when-it-landed"
+           Find = 'if ($signed -ge 0) { return $signed }'
+           Replace = '' }
+        @{ Name = "the-newest-is-not-kept"
+           Find = 'if ($given -gt $newest) { $newest = $given; $how = "$($m.route)" }'
+           Replace = 'if ($newest -lt 0) { $newest = $given; $how = "$($m.route)" }' }
+
     )
 }
