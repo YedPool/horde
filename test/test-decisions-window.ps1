@@ -343,6 +343,16 @@ Check (@($script:posted | Where-Object { $_ -like '*"event":"fleet-changed"*' })
 [System.IO.File]::WriteAllText((Join-Path $fleetHome "alpha\status.txt"), "horde-orc-status 1`norc: A`nlane: a lane`ndoing: Something`nfinished: Something else`nblocked: no`n")
 Invoke-HordeDecisionWindowTick -Window $window -State $state -Now $due.AddMilliseconds(5000)
 Check (@($script:posted | Where-Object { $_ -like '*"event":"fleet-changed"*' }).Count -eq 1) "an Orc wrote its record: the new status is pushed, once"
+# THE SEVENTH LINE IS PART OF WHAT THE LINE IS COMPARED BY: an Orc that only adds or changes what it
+# waits on, the six lines before it as they were, has written something new for the fleet line.
+$sixLines = "horde-orc-status 1`norc: A`nlane: a lane`ndoing: Something`nfinished: Something else`nblocked: no`n"
+$waitSig0 = (Get-HordeDecisionWindowFleet).signature
+[System.IO.File]::WriteAllText((Join-Path $fleetHome "alpha\status.txt"), ($sixLines + "waiting on: the founder, since 2026-10-13 09:30`n"))
+$waitSig1 = (Get-HordeDecisionWindowFleet).signature
+[System.IO.File]::WriteAllText((Join-Path $fleetHome "alpha\status.txt"), ($sixLines + "waiting on: nothing, since 2026-10-14 08:00`n"))
+$waitSig2 = (Get-HordeDecisionWindowFleet).signature
+[System.IO.File]::WriteAllText((Join-Path $fleetHome "alpha\status.txt"), $sixLines)
+Check ($waitSig1 -cne $waitSig0 -and $waitSig2 -cne $waitSig1 -and $waitSig1 -clike "*|the founder, since 2026-10-13 09:30|*") "a record that adds a waiting-on line, or changes only that line, changes what the fleet line is compared by"
 $pic = New-HordeDecisionWindowState -PicturePath (Join-Path $work "p.png") -Settings $defaults
 $now = [datetime]::UtcNow
 Invoke-HordeDecisionWindowTick -Window $window -State $pic -Now $now
