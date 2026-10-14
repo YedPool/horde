@@ -668,7 +668,7 @@ try {
     $ptr = Join-Path $work "from-tend-pointer\relay-tend-home.txt"
     $l = @(Invoke-HordeRelayPublishFromTend -HordeHome $W.home -Teller $teller -Root $work -Tools (New-Tools) -TempRoot (Join-Path $work "not-the-temp") -PointerPath $ptr)
     Check ($W.deploys -eq 1 -and (Says $l "DEPLOYED")) "a home that is not a test's takes the step, with the tools handed in"
-    Check (([System.IO.File]::ReadAllText($ptr)).Trim() -ceq [System.IO.Path]::GetFullPath($W.home).TrimEnd('\')) "and points the machine at its home"
+    Check ([System.IO.File]::Exists($ptr) -and ([System.IO.File]::ReadAllText($ptr)).Trim() -ceq [System.IO.Path]::GetFullPath($W.home).TrimEnd('\')) "and points the machine at its home"
     $l = @(Invoke-HordeRelayPublishFromTend -HordeHome $W.home -Teller $teller -Root $work -Tools (New-Tools) -PointerPath (Join-Path $work "p2.txt"))
     Check ((Says $l "it is a test's") -and -not [System.IO.File]::Exists((Join-Path $work "p2.txt"))) "a home under the temp folder looks at nothing and points nowhere"
 
