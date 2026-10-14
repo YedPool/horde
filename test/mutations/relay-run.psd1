@@ -97,9 +97,12 @@
         @{ Name = "relay-limit-refusal-capped"
            Find = '@(429, 507) -contains [int]$Inbox.status) { return 0 }'
            Replace = '@(429, 507) -contains [int]$Inbox.status) { return $script:HordeRelayRunBackoffCapMs }' }
-        @{ Name = "full-mailbox-capped"
-           Find = '$Context.full.Count -gt 0) { return 0 }'
-           Replace = '$Context.full.Count -lt 0) { return 0 }' }
+        @{ Name = "own-turn-refusal-capped"
+           Find = '($Context.refusedWith.ContainsKey(429) -or $Context.refusedWith.ContainsKey(507))) { return 0 }'
+           Replace = '($false)) { return 0 }' }
+        @{ Name = "cap-from-the-sticky-full-map"
+           Find = '$null -ne $Context.PSObject.Properties["refusedWith"] -and ($Context.refusedWith.ContainsKey(429) -or $Context.refusedWith.ContainsKey(507))'
+           Replace = '$null -ne $Context.PSObject.Properties["full"] -and $Context.full.Count -gt 0' }
         @{ Name = "nothing-capped"
            Find = '    return $script:HordeRelayRunBackoffCapMs'
            Replace = '    return 0' }

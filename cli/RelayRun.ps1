@@ -88,9 +88,12 @@
 #   - CAPPED (the run's own trouble, or the relay merely unreachable): the keys would not open, a channel
 #     failed for a reason of its own, the watch failed with no status, or with any status but these;
 #   - NOT CAPPED, the settings' own backoffMaxMs (the relay ASKED to be left, and a longer pause is what
-#     it asked for): the watch refused with 429 (a rate, or the account's day) or 507, or a mailbox the
-#     relay holds full (channels/Port.ps1, full). A put refused for its rate alone (429 on a put) is
-#     capped: that bucket refills at one a second, so 45 s already gives it all it needs.
+#     it asked for): THIS TURN's watch or one of THIS TURN's puts refused with 429 (a rate, or the
+#     account's day) or 507 (channels/Port.ps1, refusedWith, cleared at the top of every turn).
+#     NEVER the mark of a mailbox the relay holds full (channels/Port.ps1, full): it stays set for as
+#     long as the mailbox does, so a turn that failed for another reason - one dropped watch socket -
+#     would wait the long backoff too, and the relay would hear the machine only every 132 s (review of
+#     PR 252, 2026-10-14). A turn whose own put is refused as full is not capped; one that is not, is.
 #
 # A CLEAN STOP. The loop ends after the turn in which a stop is asked (<HORDE_HOME>\relay\run.stop, made
 # by `horde relay stop`), or after -MaxTurns, or on Ctrl+C; in every case it lets go of its keys. The
@@ -210,12 +213,13 @@ function Get-HordeRelayRunBackoffMs {
 
 function Get-HordeRelayRunBackoffCap {
     # This failed turn's cap on its backoff (BACKOFF, in the header): 0 - none, the settings' own
-    # backoffMaxMs - when the relay asked to be left: -Inbox (the watch's answer, or $null when the turn
-    # never watched) refused with 429 or 507, or -Context holding a mailbox the relay refused as full.
+    # backoffMaxMs - when the relay asked to be left IN THIS TURN: -Inbox (the watch's answer, or $null
+    # when the turn never watched) refused with 429 or 507, or -Context's refusedWith (the statuses this
+    # turn's puts were refused with) holding either. Never the sticky full mark (the header).
     # Otherwise $script:HordeRelayRunBackoffCapMs.
     param($Inbox = $null, $Context = $null)
     if ($null -ne $Inbox -and $null -ne $Inbox.PSObject.Properties["status"] -and @(429, 507) -contains [int]$Inbox.status) { return 0 }
-    if ($null -ne $Context -and $null -ne $Context.PSObject.Properties["full"] -and $Context.full.Count -gt 0) { return 0 }
+    if ($null -ne $Context -and $null -ne $Context.PSObject.Properties["refusedWith"] -and ($Context.refusedWith.ContainsKey(429) -or $Context.refusedWith.ContainsKey(507))) { return 0 }
     return $script:HordeRelayRunBackoffCapMs
 }
 
@@ -423,6 +427,8 @@ function Invoke-HordeRelayRun {
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $failed = ""
             $in = $null
+            # What the relay refused THIS turn's puts with: begun empty each turn (BACKOFF, in the header).
+            if ($null -ne $ctx -and $null -ne $ctx.PSObject.Properties["refusedWith"]) { $ctx.refusedWith.Clear() }
             $empty = $false
             if ($null -eq $ctx -or ([datetime]::UtcNow - $lastCheck).TotalMinutes -ge $set.retiredAgreeCheckMinutes) {
                 # The periodic check: release what is past its grace, then open the keys again, keeping
