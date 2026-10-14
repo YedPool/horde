@@ -271,6 +271,12 @@ function Test-ClaudeCodeTurnSeen {
 # every one of three turns, written after the Stop hooks (stop_hook_summary just before it), 1.8 s to
 # 2.4 s after the user row of a one-line turn, with the box idle. Transcript.ps1 reads turn ends from the
 # same rows.
+# KNOWN LIMITS, kept (review of PR 239, F's nits): (1) only turn_duration ends a turn, with no fallback
+# to an assistant row's stop_reason "end_turn": a version that stops writing it makes the wait run out,
+# which fails the spawn not-ready with the prompt untyped - never a false done; (2) any turn end after
+# the mark counts, not only one after the no-op's own user row: the mark is taken on a new session the
+# node has just seen ready - no "esc to interrupt", so no turn running - before its first line, so no
+# earlier turn can end after it.
 function Test-ClaudeCodeTurnDone {
     # After a line was taken: known $true once a turn has ended after -Mark, known $false while not.
     param([Parameter(Mandatory = $true)][string]$ConfigDir, [Parameter(Mandatory = $true)][string]$SessionId, $Mark)
@@ -301,9 +307,14 @@ function Test-ClaudeCodeTurnDone {
 # Typed text follows the glyph and wraps onto the rows below at any column, even inside a word (the
 # 2026-09-15 measurement), so the rows are joined, the glyph dropped, and ALL whitespace removed from
 # both sides before they are compared. A glyph row whose text starts with a number and a dot is a dialog
-# of choices, not a box (the trust dialog's "1. Yes, proceed"). A screen with no box is unknown, never
-# empty, so no Enter is pressed into a dialog or a screen nobody can read (a dialog takes Enter as its
-# answer).
+# of choices, not a box (the trust dialog's "1. Yes, proceed"). The box is ANCHORED TO THE BOTTOM (review
+# of PR 239, S-c): under its bottom rule only footer rows may stand - none with the prompt glyph and none
+# with a numbered choice ("1. ") - or what looked like a box is model output with rules in it, or a box
+# with a dialog drawn under it, and the answer is unknown. MEASURED on the 48 saved 2.1.299 screens of
+# the live check: under the bottom rule stood blank rows and one footer row ("manual mode on", with
+# "? for shortcuts" or "esc to interrupt", "1 agent", the effort), never a glyph or a numbered choice.
+# A screen with no box is unknown, never empty, so no Enter is pressed into a dialog or a screen nobody
+# can read (a dialog takes Enter as its answer).
 $script:ClaudeCodeBoxRule = [char]0x2500
 $script:ClaudeCodePromptGlyph = [char]0x276F
 $script:ClaudeCodeBusyMark = "esc to interrupt"
@@ -333,6 +344,7 @@ function Find-ClaudeCodeInputBox {
         if ($body -cmatch '\A\s*[0-9]+\.\s') { return (New-HordeUnknown -Reason "a dialog of numbered choices is showing where the input box would be") }
         for ($j = $top + 2; $j -lt $bottom; $j++) { $body += $rows[$j] }
         $below = @(); if ($bottom + 1 -lt $rows.Count) { $below = @($rows[($bottom + 1)..($rows.Count - 1)]) }
+        foreach ($r in $below) { if (("" + $r).IndexOf($script:ClaudeCodePromptGlyph) -ge 0 -or ("" + $r) -cmatch '(\A|\s)[0-9]+\.\s') { return (New-HordeUnknown -Reason "a dialog of choices is drawn under the input box, or the rules found are not the input box's") } }
         return (New-HordeKnown -Value ([pscustomobject]@{ body = $body; below = $below }))
     }
     return (New-HordeUnknown -Reason "no input box of this harness can be read on the pane's screen")
@@ -354,13 +366,15 @@ function Test-ClaudeCodeInputHolds {
 # and on 2026-10-13 a spawn lost both of its Enters. The control file the node identifies the session by
 # was written 3.9 s and 4.3 s in, after the box, on this machine; nothing orders the two on a slower one.
 # So the session is ready once the box is drawn, is not a dialog, and nothing runs: no row under the box
-# says "esc to interrupt". Anything else is not ready, said as unknown with why.
+# says "esc to interrupt" - on 2.1.299 the footer under the box, on other versions a spinner row above it,
+# so every row of the screen is read for it (review of PR 239, F's nit; at spawn the screen holds no
+# conversation that could quote it). Anything else is not ready, said as unknown with why.
 function Test-ClaudeCodeInputReady {
     # Is the session on -Screen ready to take a typed line? known $true, or unknown with why not.
     param([AllowEmptyCollection()][string[]]$Screen = @())
     $b = Find-ClaudeCodeInputBox -Screen $Screen
     if ($b.state -ne "known") { return $b }
-    foreach ($r in @($b.value.below)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark)) { return (New-HordeUnknown -Reason "the input box is drawn but a turn or hook is running (the row under it says esc to interrupt)") } }
+    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark)) { return (New-HordeUnknown -Reason "the input box is drawn but a turn or hook is running (the screen says esc to interrupt)") } }
     return (New-HordeKnown -Value $true)
 }
 

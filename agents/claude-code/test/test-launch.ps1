@@ -283,5 +283,22 @@ $ir = Test-ClaudeCodeInputReady -Screen @("Do you trust the files in this folder
 Check ($ir.state -eq "unknown" -and $ir.reason -like "*dialog*") "NOT READY: a dialog, said as a dialog"
 $ir = & $tad.inputReady ([string[]]$atStart)
 Check ($ir.state -eq "known" -and $ir.value -eq $true) "through the port the same"
+# THE BOX IS ANCHORED TO THE BOTTOM (review of PR 239, S-c; F's probe 6 and r5): rows of model output
+# that look like rules, or a dialog drawn under a real box, are not a box that is ready or holds a line.
+$hr6 = @((([string][char]0x2500) * 10 + " Summary " + [char]0x2500), ($glyph + " " + $typed), (([string][char]0x2500) * 10 + " notes " + [char]0x2500), "", "Dialog: Allow tool?  1. Yes")
+$hb = Test-ClaudeCodeInputHolds -Screen $hr6 -Line $typed
+Check ($hb.state -eq "unknown" -and $hb.reason -like "*dialog of choices is drawn under*") ("model output with two rule-like rows around a sent line, a numbered choice under them: unknown, not a box holding the line (F's probe 6: " + $hb.state + " " + $hb.reason + ")")
+$ir = Test-ClaudeCodeInputReady -Screen $hr6
+Check ($ir.state -eq "unknown") "...and not ready (F's probe 6)"
+$ir = Test-ClaudeCodeInputReady -Screen @($named, ($glyph + $nb), $r120, "New MCP server found in .mcp.json: x", (" " + $glyph + " 1. Use this and all future MCP servers"), "   2. Continue without")
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*dialog of choices*") ("NOT READY: a box drawn with a dialog of choices under it (F's probe r5: " + $ir.reason + ")")
+$ir = Test-ClaudeCodeInputReady -Screen @($named, ($glyph + $nb), $r120, "   2. Continue without")
+Check ($ir.state -eq "unknown") "NOT READY: a numbered choice under the box, even with no glyph on it"
+$ir = Test-ClaudeCodeInputReady -Screen @($named, ($glyph + $nb), $r120, (" " + $glyph + " Yes"), "   No")
+Check ($ir.state -eq "unknown") "NOT READY: an unnumbered choice list, the glyph on its first row, under the box"
+$ir = Test-ClaudeCodeInputReady -Screen @("* Thinking... (esc to interrupt)", $named, ($glyph + $nb), $r120, $idleFoot)
+Check ($ir.state -eq "unknown" -and $ir.reason -like "*esc to interrupt*") "NOT READY: esc to interrupt on a spinner row ABOVE the box, as other versions draw it (F's probe r3)"
+$ir = Test-ClaudeCodeInputReady -Screen ($atStart + @(("  " + [char]0x23F8 + " manual mode on   context 12% left " + $dot + " v2.1.299"), ""))
+Check ($ir.state -eq "known" -and $ir.value -eq $true) "CONTROL: footer rows with numbers in them - a count, a percentage, a version - are footer rows: ready"
 
 Complete-HordeSuite -Success "the argv is the flags agent.json promises, the mode, process and Remote Control state are read back exactly, and a typed line is taken only as a new turn"
