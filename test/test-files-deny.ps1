@@ -258,6 +258,14 @@ foreach ($word in $refusedNames.Keys) {
 $plainNames = @("report.md", "notes.txt", "chart.png", "a", "", "ke y.md", "k-e-y.md", "tok.en.md", "pass-word.md", "secre.t", "environment.md", "x.en.v", "credentia.md", "passwor.d")
 $caught = @($plainNames | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
 Check ($caught.Count -eq 0) ("CONTROL: " + $plainNames.Count + " names that hold no word of the list, a word cut short and a word broken by a character among them, are let by" + $(if ($caught.Count) { " (CAUGHT: " + ($caught -join ", ") + ")" } else { "" }))
+# A SOFT HYPHEN OR A ZERO-WIDTH SPACE INSIDE A LONG WORD IS JUDGED AS WRITTEN, by code units (the
+# review of PR 238, the survivor of 227's nets, word-looked-for-by-the-runtimes-own-comparison): a
+# comparison of the runtime's own would take pass<U+00AD>word for password; the list's does not. Both
+# characters are invisible, and the rule is the one written in the header, so this pins it.
+$invisible = @(("pass" + [char]0x00AD + "word.txt"), ("pass" + [char]0x200B + "word.txt"), ("secr" + [char]0x00AD + "et-notes.md"), ("creden" + [char]0x200B + "tial.json"))
+$takenAsTheWord = @($invisible | Where-Object { (Get-HordeFilesDenyWord -Name $_) -cne "" })
+Check ($takenAsTheWord.Count -eq 0) ("a soft hyphen (U+00AD) or a zero-width space (U+200B) inside a long word: the name is judged as written, ordinal, and is not the word (" + $takenAsTheWord.Count + " of " + $invisible.Count + " taken for it)")
+Check ((Get-HordeFilesDenyWord -Name "password.txt") -ceq "password" -and (Get-HordeFilesDenyWord -Name "secret-notes.md") -ceq "secret" -and (Get-HordeFilesDenyWord -Name "credential.json") -ceq "credential") "CONTROL: the same names without the invisible character are each the word"
 # A SHORT WORD INSIDE A LONGER ONE IS NOT THE WORD: the five names the review said must pass, and
 # for every short word a name that only holds its letters.
 $holdTheLetters = @("author-notes.md", "template.html", "credits.md", "privateer.txt", "cookiecutter.md",
