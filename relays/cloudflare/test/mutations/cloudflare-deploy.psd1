@@ -51,8 +51,8 @@
            Find = 'if ([int]$c -lt 0x20 -or [int]$c -gt 0x7E) {'
            Replace = 'if ($false) {' }
         @{ Name = "failed-check-reported-as-done"
-           Find = 'if ($check.state -cne "known") { return'
-           Replace = 'if ($false) { return' }
+           Find = 'if ($check.state -cne "known") {'
+           Replace = 'if ($false) {' }
         @{ Name = "check-mends-the-id"
            Find = '[string]::Equals($sent, $ClientId, [System.StringComparison]::Ordinal)'
            Replace = '($sent.Trim([char]0xFEFF, [char]0x20) -ceq $ClientId)' }

@@ -264,7 +264,8 @@ try {
         Clear-Log
         $d = Deploy
         $why = "" + $d.answer.reason
-        Check ($d.answer.state -ceq "unknown" -and $why.Contains("the Worker IS live, but its sign-in failed the check after the deploy") -and $why.Contains($c.like) -and $why.Contains("deploy again from a fixed checkout") -and $why.Contains($starts[$c.mode] + "/auth/google redirects to Google") -and @(Read-Log).Count -eq 4 -and -not (Holds-Value ($why + ($d.said -join " ")))) ("a relay whose sign-in sends " + $c.what + ": the deploy is reported failed, says the Worker is live and the way back, with no value in the reason (" + $why + ")")
+        $liveMember = $d.answer.PSObject.Properties["live"]
+        Check ($d.answer.state -ceq "unknown" -and $null -ne $liveMember -and $liveMember.Value -eq $true -and $why.Contains("relay 'cloudflare' IS deployed, but its sign-in failed the check after the deploy") -and $why -notmatch 'not deployed' -and $why.Contains($c.like) -and $why.Contains("deploy again from a fixed checkout") -and $why.Contains($starts[$c.mode] + "/auth/google redirects to Google") -and @(Read-Log).Count -eq 4 -and -not (Holds-Value ($why + ($d.said -join " ")))) ("a relay whose sign-in sends " + $c.what + ": the deploy is reported failed, says the Worker is live and the way back, with no value in the reason (" + $why + ")")
     }
     # Not 127.0.0.1, so refused - yet on this machine, so a mutant that took it would contact nothing.
     Set-Settings -Client (Write-Client -WithCallback) -Check "http://localhost:9"
@@ -275,7 +276,15 @@ try {
     Set-Settings -Client (Write-Client -WithCallback) -Check $starts["mark"]
     Clear-Log
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
-    Check ($r.code -ne 0 -and $r.out.Contains("the relay was not deployed") -and $r.out.Contains("byte for byte") -and -not (Holds-Value $r.out)) ("horde relay deploy whose check fails exits non-zero and says why, with no value (exit " + $r.code + ")")
+    Check ($r.code -ne 0 -and $r.out.Contains("IS deployed, but its sign-in failed the check after the deploy") -and $r.out.Contains("byte for byte") -and -not (Holds-Value $r.out)) ("horde relay deploy whose check fails exits non-zero and says why, with no value (exit " + $r.code + ")")
+    # IT WENT OUT: the founder must act on a live relay, so the real command never says "not deployed"
+    # here, and does say the way back (review of PR 275).
+    Check ($r.out -notmatch 'not deployed' -and $r.out.Contains("deploy again from a fixed checkout") -and $r.out.Contains($starts["mark"] + "/auth/google redirects to Google")) ("and it never says 'not deployed', and names the way back (" + (($r.out -split "`r?`n" | Where-Object { $_ -match 'deploy' } | Select-Object -Last 2) -join " | ") + ")")
+    # ITS MUST-KEEP TWIN: a failure before anything is deployed still says so, in the shipped command.
+    Set-Settings -Client (Write-Client -WithCallback) -Check "http://localhost:9"
+    Clear-Log
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
+    Check ($r.code -ne 0 -and $r.out.Contains("the relay was not deployed") -and $r.out.Contains("relay 'cloudflare' was not deployed") -and $r.out -notmatch 'IS deployed' -and @(Read-Log).Count -eq 0) ("CONTROL: a deploy refused before wrangler runs still says 'not deployed' (exit " + $r.code + ")")
 
     Write-Host ""
     Write-Host "--- 7. every secret's value, before wrangler runs ---" -ForegroundColor Cyan
@@ -312,7 +321,7 @@ try {
             Clear-Log
             $d = Deploy
             $why = "" + $d.answer.reason
-            Check ($d.answer.state -ceq "unknown" -and $why.Contains($c.name) -and $why.Contains($c.like) -and $why.Contains("nothing was deployed") -and @(Read-Log).Count -eq 0 -and -not $why.Contains($clientSecret) -and -not $why.Contains($clientId)) ("" + $c.what + ": refused before wrangler runs, naming the secret and not its value (" + $why + ")")
+            Check ($d.answer.state -ceq "unknown" -and $why.Contains($c.name) -and $why.Contains($c.like) -and $why.Contains("nothing was deployed") -and $why.Contains("relay 'cloudflare' was not deployed") -and $null -eq $d.answer.PSObject.Properties["live"] -and @(Read-Log).Count -eq 0 -and -not $why.Contains($clientSecret) -and -not $why.Contains($clientId)) ("" + $c.what + ": refused before wrangler runs, naming the secret and not its value (" + $why + ")")
         }
         $script:planted = @{ id = $clientId; secret = "GOCSPX-inner space-0123456" }
         Set-Item -Path function:script:Read-HordeCloudflareRelayGoogleClient -Value { param($Path, $RepoRoot) New-HordeKnown -Value ([pscustomobject]@{ clientId = $script:planted.id; clientSecret = $script:planted.secret; redirectUris = @() }) }

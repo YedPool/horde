@@ -88,6 +88,9 @@
 # (`horde relay deploy`, cli/RelayDeploy.ps1) builds what the relay is to serve - the phone app, as a
 # folder of static files - so the relay never names the app and the app never names the relay:
 #   Deploy  param([string]$Site, [scriptblock]$Say, [string]$HordeHome) -> known { origin }
+# An unknown with a member live = $true means the deploy went out but a check after it failed: the relay
+# IS running what was deployed, and is broken. Publish-HordeRelay passes it on, still unknown and still
+# marked live, worded "IS deployed, but ...", never "not deployed" (2026-10-14, a sign-in check).
 # Publish-HordeRelay runs it and checks its answer as it checks every other; Get-HordeRelayDeployable
 # names the relays that have one.
 # A relay that is deployed may also hand -Bundle: what it would deploy as its own code, built from a
@@ -347,6 +350,12 @@ function Publish-HordeRelay {
     try { $a = & $r.deploy $Site $Say $HordeHome }
     catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to deploy") -ErrorRecord $_) }
     if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy with something that is not an answer")) }
+    $live = Get-HordeRelayMember $a "live"
+    if ($a.state -cne "known" -and $live.has -and $live.value -eq $true) {
+        $broken = New-HordeUnknown -Reason ("relay '" + $Name + "' IS deployed, but " + $(if ("$($a.reason)" -ne "") { $a.reason } else { "a check after the deploy failed" }))
+        $broken | Add-Member -NotePropertyName live -NotePropertyValue $true
+        return $broken
+    }
     if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' was not deployed: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
     $o = Get-HordeRelayMember $a.value "origin"
     if (-not $o.has -or $o.value -isnot [string] -or $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy without the https origin it answers at")) }

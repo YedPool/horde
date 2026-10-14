@@ -177,8 +177,13 @@ function Publish-HordeCloudflareRelay {
         if ($r.timedOut -or $r.code -ne 0) { return (New-HordeUnknown -Reason ("wrangler deploy failed (exit " + $r.code + $(if ($r.timedOut) { ", timed out" } else { "" }) + "): " + (Get-HordeCloudflareRelayWranglerTail -Run $r -Secrets $secrets))) }
         $asked = $(if ($checkOrigin -ne "") { $checkOrigin } else { $dep.origin })
         $check = Test-HordeCloudflareRelaySignInClient -Origin $asked -ClientId $client.value.clientId -Tries $script:HordeCloudflareRelayCheckTries -WaitMs $script:HordeCloudflareRelayCheckWaitMs
-        # The Worker is live by now, running the secrets just stored: the reason names the way back.
-        if ($check.state -cne "known") { return (New-HordeUnknown -Reason ("the Worker IS live, but its sign-in failed the check after the deploy: " + $check.reason + ". Sign-in will not work until it is fixed: deploy again from a fixed checkout (under PowerShell 7, or with the byte order mark fix), then check that " + $asked + "/auth/google redirects to Google")) }
+        # The Worker is live by now, running the secrets just stored: the answer is unknown marked live
+        # (relays/Port.ps1, DEPLOYING), so no caller says "not deployed", and the reason names the way back.
+        if ($check.state -cne "known") {
+            $failed = New-HordeUnknown -Reason ("its sign-in failed the check after the deploy: " + $check.reason + ". Sign-in will not work until it is fixed: deploy again from a fixed checkout (under PowerShell 7, or with the byte order mark fix), then check that " + $asked + "/auth/google redirects to Google")
+            $failed | Add-Member -NotePropertyName live -NotePropertyValue $true
+            return $failed
+        }
         & $Say ("checked: the relay's sign-in sends Google the client file's id")
         # SIGN-IN'S RETURN ADDRESS (8b) must be registered with Google, or Google refuses the sign-in.
         $callback = $dep.origin + $dep.callback
