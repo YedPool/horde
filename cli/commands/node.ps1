@@ -89,7 +89,10 @@ $HordeCommand = @{
         elseif (Test-Path -LiteralPath $journal -PathType Container) { $journalRoot = $journal }
         # Plain blocks, not closures: a closure runs in a module of its own and would not see the
         # functions loaded above; these run in this scope, where they are.
-        $getView = { ConvertTo-HordeSessionViewDocument -Projection (Get-HordeProjection -Platform $platform) }
+        # A session whose end is proven - its pid not running, or running with another start time - and
+        # that no other store calls live is left out (core/Projection.ps1, ConvertTo-HordeNodeViewDocument):
+        # a pane ended by hand leaves its control file, and the hub counted those as the node's sessions.
+        $getView = { ConvertTo-HordeNodeViewDocument -Projection (Get-HordeProjection -Platform $platform) }
         $say = { Write-Host ("node " + $node.deviceId + " listening on the local link") }
         # MESSAGING (R21 slice 4). The message journal and the outbox are this node's own, under its home.
         # remote.deliverTo is read from the node's own layers - engine.json (L1) and engine-live.json (L4),
