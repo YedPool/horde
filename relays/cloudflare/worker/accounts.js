@@ -87,7 +87,7 @@ import { machineKeyOf } from "./machines.js";
 import { mailboxOf } from "./mailbox.js";
 import { sessionByObjectId } from "./sessions.js";
 import { noteSeen, lastSeenOf } from "./presence.js";
-import { charsToRelease, tierOf, ACCOUNT_PREFIX, RELAY_DAY_WORDS, RELAY_FULL_WORDS } from "./budget.js";
+import { charsToRelease, tierOf, ownerEmailOf, ownerEmailsOf, ACCOUNT_PREFIX, RELAY_DAY_WORDS, RELAY_FULL_WORDS } from "./budget.js";
 import { relayBudgetOf } from "./relay-budget.js";
 import { b64u, randomBytes } from "../../../relay/js/protocol.js";
 
@@ -181,8 +181,10 @@ export class Account extends DurableObject {
       // THE RELAY'S DAY (the header): a lease of today's, or a new one.
       let lease = leaseOf(held, c.state.day);
       if (lease < 1) {
-        const tier = tierOf(owners, p.account, p.email);
-        const g = await relayBudgetOf(this.env).takeRequests({ now, want: limits.relayRequestLease, tier, limits });
+        // The tier by id; an owner email is asked of its pin in the same call (budget.js, THE PINS).
+        const tier = tierOf(owners, p.account);
+        const email = tier === "public" ? ownerEmailOf(owners, p.email) : "";
+        const g = await relayBudgetOf(this.env).takeRequests({ now, want: limits.relayRequestLease, tier, limits, pin: email ? { email, account: p.account } : null, emails: ownerEmailsOf(owners) });
         if (!(g.granted >= 1)) return { ok: false, status: 429, code: CODES.relayDaily, reason: RELAY_DAY_WORDS, retryAfterMs: g.retryAfterMs };
         // THE GAP (review of PR 281): while the relay-wide object was asked, this object's input gate was
         // open, and another request of this account may have counted itself in the day or taken a lease.

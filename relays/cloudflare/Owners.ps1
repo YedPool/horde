@@ -99,8 +99,8 @@ function Get-HordeCloudflareRelayLiveOwners {
             $text = $res.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         } finally { $res.Dispose() }
     } finally { $http.Dispose() }
-    if ($text.Length -gt 200 -or $text -cnotmatch '\A\{"owners":([0-9]{1,3}),"reserve":(true|false)\}\z') { return (New-HordeUnknown -Reason ("the live relay at " + $at + " answered whether it has owners with something that is not the answer")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ owners = [int]$Matches[1]; reserve = ($Matches[2] -ceq "true") }))
+    if ($text.Length -gt 200 -or $text -cnotmatch '\A\{"owners":([0-9]{1,3}),"reserve":(true|false)(,"deploy":"([0-9a-f]{16})")?\}\z') { return (New-HordeUnknown -Reason ("the live relay at " + $at + " answered whether it has owners with something that is not the answer")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ owners = [int]$Matches[1]; reserve = ($Matches[2] -ceq "true"); deploy = $(if ($Matches[4]) { "" + $Matches[4] } else { "" }) }))
 }
 
 function Test-HordeCloudflareRelayOwnersDeploy {
@@ -116,6 +116,41 @@ function Test-HordeCloudflareRelayOwnersDeploy {
     if ($live.state -ceq "unknown") { return (New-HordeUnknown -Reason ($live.reason + ", and the setting relayOwnerAccounts" + $where + " names no owner: set it to the owners' emails or Google account ids, or to none to deploy with no owners; nothing was deployed")) }
     if ($live.state -ceq "known" -and $live.value.owners -gt 0) { return (New-HordeUnknown -Reason ("the live relay has " + $live.value.owners + " owner(s), and the setting relayOwnerAccounts" + $where + " names none, so this deploy would take the reserve from them: set it to the owners' emails or Google account ids (the phone's Account screen shows the email), or to none to clear them on purpose; nothing was deployed")) }
     return (New-HordeKnown -Value ("warning: the setting relayOwnerAccounts names no owner, and the live relay has none: " + $shared))
+}
+
+# THE DEPLOY'S WORD (worker/budget.js; relay-budget.js, THE PINS). Each deploy writes a fresh random word
+# into the owners secret, and the live relay answers /status/owners with the word of the version that
+# runs - and drops, in that same answer, the pins of every email that version does not name. So once
+# the deploy has read its own word back, the version it deployed has dropped the pins of any email it
+# removed: a later deploy that names the email again starts it unpinned, as the setting says.
+$script:HordeCloudflareRelayOwnersConfirmSeconds = 60
+
+function New-HordeCloudflareRelayOwnersWord {
+    # 16 random lower-case hex digits.
+    $b = New-Object byte[] 8
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+    return (($b | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+
+function Add-HordeCloudflareRelayOwnersWord {
+    # The owners' binding text (ConvertTo-HordeCloudflareRelayOwners) with the deploy's -Word in it.
+    param([Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Word)
+    return ('{"deploy":"' + $Word + '",' + $Text.Substring(1))
+}
+
+function Confirm-HordeCloudflareRelayOwnersLive {
+    # Ask the live relay at -Origin until it answers the deploy's -Word (the header): the line to say.
+    # Never refuses: the deploy is done; a relay that does not answer it in time is said so, and drops
+    # the pins of a removed email at its next request of any account's lease.
+    param([Parameter(Mandatory = $true)][string]$Origin, [Parameter(Mandatory = $true)][string]$Word)
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $live = Get-HordeCloudflareRelayLiveOwners -Origin $Origin
+        if ($live.state -ceq "known" -and $live.value.deploy -ceq $Word) { return ("the live relay runs this deploy: " + $live.value.owners + " owner(s)" + $(if ($live.value.reserve) { "" } else { ", no reserve" })) }
+        if ($clock.Elapsed.TotalSeconds -ge $script:HordeCloudflareRelayOwnersConfirmSeconds) { return ("note: the live relay did not answer with this deploy within " + $script:HordeCloudflareRelayOwnersConfirmSeconds + " s; the owners it names are this deploy's once it runs") }
+        Start-Sleep -Seconds 2
+    }
 }
 
 function Get-HordeCloudflareRelayStatusLines {

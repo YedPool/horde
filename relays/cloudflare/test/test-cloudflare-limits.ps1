@@ -703,6 +703,38 @@ try {
     $oOver = & $read $po
     $eOver = & $read $pe
     Check ($oOver.code -eq 429 -and (Get-Code $oOver) -ceq "relay-daily-limit" -and $eOver.code -eq 429) ("and once the reserve is spent both owners are refused too: nothing goes past the relay's day (" + $oOver.code + "," + $eOver.code + ")")
+    # THE PINS (worker/relay-budget.js): an owner email is the account's that first matched it, and
+    # naming it no more - a deploy whose version then answers /status/owners - drops the pin. Each phase
+    # is a dev of the same state restarted with the owners a deploy would write.
+    $pinSub = "100000000000000001503"
+    $pinOwners = { param([string]$Emails) @{ HORDE_RELAY_OWNER_ACCOUNTS = ('{"emails":[' + $Emails + '],"subs":["' + $pinSub + '"]}') } }
+    $P = Start-Dev -Name "relay-pin" -Limits '{"relayRequestsPerDay":12,"relayOwnerReserve":9,"relayRequestLease":1}' -More (& $pinOwners '"pin@example.test"')
+    $pRead = { param($Phone) (Send-To -Url ($P.origin + "/v1/mailboxes/work/phone/items?since=0&max=1") -Cookie $Phone.cookie).code }
+    $pp = New-Phone -Dev $P -Sub "100000000000000001500"
+    $a1 = New-Phone -Dev $P -Sub "100000000000000001501" -Claims @{ email = "pin@example.test" }
+    $a2 = New-Phone -Dev $P -Sub "100000000000000001502" -Claims @{ email = "Pin@Example.test" }
+    $ps3 = New-Phone -Dev $P -Sub $pinSub
+    $shared3 = @(1, 2, 3 | ForEach-Object { & $pRead $pp })
+    $public4 = & $pRead $pp
+    Check ((@($shared3) -join ",") -ceq "200,200,200" -and $public4 -eq 429) ("CONTROL: a public account spends the shared three and is refused the fourth (" + (@($shared3) -join ",") + "," + $public4 + ")")
+    $first = & $pRead $a1
+    $second = & $pRead $a2
+    $firstAgain = & $pRead $a1
+    Check ($first -eq 200 -and $second -eq 429 -and $firstAgain -eq 200) ("the first account to match the owner email is pinned to it: a second Google account with the same verified email is refused the reserve, and the first still has it (" + $first + "," + $second + "," + $firstAgain + ")")
+    Check ((& $pRead $ps3) -eq 200) "an owner named by Google account id still has the reserve"
+    $pinStatus = (Send-To -Url ($P.origin + "/status/owners")).text
+    Check ($pinStatus -ceq '{"owners":2,"reserve":true}') ("and the status never says who - no id, no email (" + $pinStatus + ")")
+    Stop-HordeCloudflareRelayDev -Dev $P
+    [void]$devs.Remove($P)
+    $P = Start-Dev -Name "relay-pin" -Limits '{"relayRequestsPerDay":12,"relayOwnerReserve":9,"relayRequestLease":1}' -More (& $pinOwners "")
+    $removed = (Send-To -Url ($P.origin + "/status/owners")).text
+    Check ($removed -ceq '{"owners":1,"reserve":true}' -and (& $pRead $a1) -eq 429) ("a deploy naming the email no more: its version answers the status as a deploy asks it, and the email is an owner no more (" + $removed + ")")
+    Stop-HordeCloudflareRelayDev -Dev $P
+    [void]$devs.Remove($P)
+    $P = Start-Dev -Name "relay-pin" -Limits '{"relayRequestsPerDay":12,"relayOwnerReserve":9,"relayRequestLease":1}' -More (& $pinOwners '"pin@example.test"')
+    $secondNow = & $pRead $a2
+    $firstNow = & $pRead $a1
+    Check ($secondNow -eq 200 -and $firstNow -eq 429) ("named again, the email starts unpinned: the next account to match it - the second this time - is pinned, and the first is refused (" + $secondNow + "," + $firstNow + ")")
     $st = Get-Json (Send-To -Url ($O + "/status/owners"))
     $view = Get-Json (Send-To -Url ($O + "/v1/account") -Cookie $pa.cookie)
     Check ((Send-To -Url ($O + "/status/owners")).text -ceq '{"owners":2,"reserve":true}' -and (ConvertTo-Json -Compress -InputObject (Get-HordeTestMember $view "relay")) -ceq '{"owners":2,"reserve":true}') ("anyone may read how many owners there are and that a reserve is kept - never who - and the Account screen's view says the same (" + (ConvertTo-Json -Compress -InputObject $st) + ")")
@@ -719,14 +751,23 @@ try {
     $c60 = & $put $s1 "a" "k-60" 60
     $c39 = & $put $s2 "b" "k-39" 39
     Check ($c60.code -eq 200 -and $c39.code -eq 200) ("CONTROL: two accounts put 60 and 39 characters - with the first's lease of one, the relay's 100 exactly, one step below the line (" + $c60.code + "," + $c39.code + ")")
+    # WHAT A REFUSAL COSTS (review of PR 281): the relay-wide object's calls, read by the test principal.
+    $sBearer = "Bearer " + $S.token
+    $charCalls = { Get-HordeTestMember (Get-Json (Send-To -Url ($O + "/v1/test/relay-budget") -Authorization $sBearer)) "takeChars" }
+    $callsBefore = & $charCalls
     $full = & $put $s2 "b" "k-1" 1
+    $callsRefused = (& $charCalls) - $callsBefore
     $fullSaid = "" + (Get-HordeTestMember (Get-Json $full) "error")
     Check ($full.code -eq 507 -and (Get-Code $full) -ceq "relay-full" -and $fullSaid.Contains("all accounts together") -and (Get-Header $full "retry-after") -ceq "") ("one character more is refused, 507 relay-full, in plain words, with no Retry-After (" + $full.code + ": " + $fullSaid + ")")
     $kept = Get-Json (Send-To -Url ($O + "/v1/mailboxes/work/a/items?since=0&max=10") -Cookie $s1.cookie)
     $keptItems = @(Get-HordeTestMember $kept "items")
     Check ($keptItems.Count -eq 1 -and ("" + (Get-HordeTestMember $keptItems[0] "text")).Length -eq 60) ("nothing held is dropped for it: the first account's mail is still there to read (" + $keptItems.Count + " item)")
     $ack = Send-To -Url ($O + "/v1/mailboxes/work/a/ack") -Method "POST" -Body '{"through":1}' -Cookie $s1.cookie -Origin $O
+    $callsBefore2 = & $charCalls
     $after = & $put $s2 "b" "k-1" 1
+    $callsTaken = (& $charCalls) - $callsBefore2
+    Check ($null -ne $callsBefore -and $callsRefused -eq 1 -and $callsTaken -eq 1) ("a put the relay's cap refuses asks the relay-wide object exactly once, as a put it takes does - the must-pass twin (" + $callsRefused + ", " + $callsTaken + ")")
+    Check ((Send-To -Url ($O + "/v1/test/relay-budget") -Cookie $s1.cookie).code -eq 404) "CONTROL: only the test principal reads those calls; a signed-in phone is told there is no such operation"
     Check ($ack.code -eq 200 -and $after.code -eq 200) ("once that mail is read and acked, its characters go back to the relay and the put is taken (" + $ack.code + "," + $after.code + ")")
     # Six mailbox requests so far (three puts, a read, an ack, a put - the refused put was counted: the
     # gate took it before the cap refused it); a public account's part, were the reserve held back,

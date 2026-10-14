@@ -73,8 +73,10 @@ function Publish-HordeCloudflareRelay {
     $settingsHome = $(if ($HordeHome -ne "") { $HordeHome } else { Get-HordeHome })
     $ownersSay = Test-HordeCloudflareRelayOwnersDeploy -Owners $owners.value -Origin (Get-HordeCloudflareRelayDeployment).origin -SettingsFile (Join-Path $settingsHome "settings\relay-cloudflare.json")
     if ($ownersSay.state -cne "known") { return $ownersSay }
-    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value; owners = $owners.value.text }
-    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value, $owners.value.text)
+    $ownersWord = New-HordeCloudflareRelayOwnersWord
+    $ownersText = Add-HordeCloudflareRelayOwnersWord -Text $owners.value.text -Word $ownersWord
+    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value; owners = $ownersText }
+    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value, $ownersText)
     & $Say ("read the Google client from " + $clientFile)
 
     $node = Find-HordeCloudflareRelayNode
@@ -107,6 +109,8 @@ function Publish-HordeCloudflareRelay {
         if ($r.timedOut -or $r.code -ne 0) { return (New-HordeUnknown -Reason ("wrangler deploy failed (exit " + $r.code + $(if ($r.timedOut) { ", timed out" } else { "" }) + "): " + (Get-HordeCloudflareRelayWranglerTail -Run $r -Secrets $secrets))) }
         # SIGN-IN'S RETURN ADDRESS (8b) must be registered with Google, or Google refuses the sign-in.
         $callback = $dep.origin + $dep.callback
+        # THE OWNERS' PINS (Owners.ps1, the deploy's word): the deploy waits until its own version answers.
+        & $Say (Confirm-HordeCloudflareRelayOwnersLive -Origin $dep.origin -Word $ownersWord)
         if (@($client.value.redirectUris) -cnotcontains $callback) { & $Say ("note: the Google client does not list " + $callback + " among its redirect addresses; add it in the Google Cloud console before sign-in is used") }
         return (New-HordeKnown -Value ([pscustomobject]@{ origin = $dep.origin }))
     } finally {

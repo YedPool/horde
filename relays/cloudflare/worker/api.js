@@ -60,9 +60,11 @@ import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
 import { ownersOf } from "./budget.js";
+import { relayBudgetOf } from "./relay-budget.js";
 import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
+export const TEST_BUDGET_PATH = "/v1/test/relay-budget";
 const ROUTE = /^\/v1\/mailboxes\/([^/]{1,63})\/([^/]{1,63})\/(items|watch|ack)$/;
 const OPS = { "items GET": "get", "items POST": "put", "watch GET": "watch", "ack POST": "ack" };
 
@@ -170,6 +172,10 @@ export async function handleApi(request, env, url) {
     return refuse(401, who && who.refusal ? who.refusal : "this relay answers only a signed-in phone or a registered machine");
   }
   if (isAccountPath(url.pathname)) return handleAccountApi(request, env, url, who, limits);
+  // THE RELAY-WIDE OBJECT'S CALLS (relay-budget.js), for a suite: only the test principal of a local dev
+  // (auth.js, which never vouches for a request to a deployed Worker) reads them; anyone else is told
+  // there is no such operation.
+  if (url.pathname === TEST_BUDGET_PATH) return who.kind === "test" && request.method === "GET" ? answer(200, await relayBudgetOf(env).counts()) : refuse(404, "there is no such relay operation");
   const m = ROUTE.exec(url.pathname);
   if (!m) return refuse(404, "there is no such relay operation");
   const mailbox = m[1] + "/" + m[2];

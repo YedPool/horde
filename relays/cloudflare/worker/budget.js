@@ -14,6 +14,13 @@
 // for (jwt.js refuses one it does not) - never anything a request carries. An account with no email
 // matches no owner email. The email is the way to name an owner a person can read (the phone's Account
 // screen shows it); the sub is nowhere a person sees it.
+// AND AN OWNER EMAIL IS ONE ACCOUNT'S: the first account whose verified email matches it is PINNED to it
+// (relay-budget.js, THE PINS), and from then on the email makes only that account an owner - an
+// address later given to another Google account does not carry the reserve with it. Naming the email
+// no more drops the pin. So tierOf here decides by id alone, and ownerEmailOf names the email a pin is
+// asked for.
+// The binding may also carry "deploy", a random word each deploy writes (Owners.ps1), which
+// /status/owners answers (status.js) so the deploy can tell when its own version runs.
 //   absent, or both lists empty   NO OWNERS: no reserve is held back, the whole day is shared (tier
 //                                 "everyone"); the deploy warns that this is so (Owners.ps1)
 //   owners named                  those accounts are owners (tier "owner"); every other is "public"
@@ -41,8 +48,9 @@ import { EMAIL, SUB, listOf } from "./allowlist.js";
 
 export const OWNERS_BINDING = "HORDE_RELAY_OWNER_ACCOUNTS";
 export const ACCOUNT_PREFIX = "google:";
-// Owners.ps1's twin: a relay has few owners.
+// Owners.ps1's twin: a relay has few owners; a deploy's word is 16 hex digits.
 export const MAX_OWNERS = 16;
+const DEPLOY = /^[0-9a-f]{16}$/;
 
 // The relay-wide refusals' words: plain, for whoever reads the answer - a machine's log, a person at the
 // API. The phone shows its own words for the code instead (surfaces/pwa, read-banner.js, LIMIT_WORDS),
@@ -58,12 +66,27 @@ export function ownersOf(env) {
   if (typeof v !== "string") return { state: "broken" };
   let o;
   try { o = JSON.parse(v); } catch (e) { return { state: "broken" }; }
-  if (!o || typeof o !== "object" || Array.isArray(o) || Object.keys(o).sort().join(",") !== "emails,subs") return { state: "broken" };
+  const keys = Object.keys(o || {}).sort().join(",");
+  if (!o || typeof o !== "object" || Array.isArray(o) || (keys !== "emails,subs" && keys !== "deploy,emails,subs")) return { state: "broken" };
+  if (o.deploy !== undefined && (typeof o.deploy !== "string" || !DEPLOY.test(o.deploy))) return { state: "broken" };
+  const deploy = o.deploy === undefined ? "" : o.deploy;
   const emails = listOf(o.emails, EMAIL);
   const subs = listOf(o.subs, SUB);
   if (!emails || !subs || emails.size + subs.size > MAX_OWNERS) return { state: "broken" };
-  if (emails.size + subs.size === 0) return { state: "none" };
-  return { state: "set", emails: [...emails], subs: [...subs] };
+  if (emails.size + subs.size === 0) return { state: "none", deploy };
+  return { state: "set", emails: [...emails], subs: [...subs], deploy };
+}
+
+// The owner emails of owners, [] when there are none: the pins of any other are dropped (THE PINS).
+export function ownerEmailsOf(owners) {
+  return owners && owners.state === "set" ? owners.emails : [];
+}
+
+// The owner email a verified email is, lower case, or "" when it is none: a pin is asked for it.
+export function ownerEmailOf(owners, email) {
+  if (!owners || owners.state !== "set" || typeof email !== "string" || email === "") return "";
+  const e = email.toLowerCase();
+  return owners.emails.includes(e) ? e : "";
 }
 
 // What anyone may know of the owners: how many, and whether a reserve is held back - NEVER WHO
@@ -74,15 +97,14 @@ export function ownersSummary(owners) {
   return { owners: 0, reserve: owners.state !== "none" };
 }
 
-// The tier of an account: "owner", "public", or "everyone" when the relay names no owners. account is
-// its id; email the VERIFIED email its own object keeps from its last sign-in (the header), or "". No
-// owners value at all is public: a caller that forgot them gets the smaller part, never the reserve.
-export function tierOf(owners, account, email = "") {
+// The tier of an account by its id: "owner", "public", or "everyone" when the relay names no owners. An
+// owner by email is not decided here but by its pin (the header). No owners value at all is public: a
+// caller that forgot them gets the smaller part, never the reserve.
+export function tierOf(owners, account) {
   if (!owners) return "public";
   if (owners.state === "none") return "everyone";
   if (owners.state !== "set") return "public";
   if (typeof account === "string" && account.startsWith(ACCOUNT_PREFIX) && owners.subs.includes(account.slice(ACCOUNT_PREFIX.length))) return "owner";
-  if (typeof email === "string" && email !== "" && owners.emails.includes(email.toLowerCase())) return "owner";
   return "public";
 }
 

@@ -25,16 +25,16 @@
            Find = '  return "public";'
            Replace = '  return "owner";' }
         @{ Name = "email-matched-in-its-own-case"
-           Find = 'owners.emails.includes(email.toLowerCase())'
-           Replace = 'owners.emails.includes(email)' }
-        @{ Name = "an-empty-email-matches"
-           Find = 'typeof email === "string" && email !== "" && owners.emails'
-           Replace = 'typeof email === "string" && owners.emails.concat([""])' }
+           Find = 'const e = email.toLowerCase();'
+           Replace = 'const e = email;' }
+        @{ Name = "any-email-asks-for-a-pin"
+           Find = 'return owners.emails.includes(e) ? e : "";'
+           Replace = 'return e;' }
         @{ Name = "nobody-named-is-owners-set"
-           Find = 'if (emails.size + subs.size === 0) return { state: "none" };'
-           Replace = 'if (false) return { state: "none" };' }
+           Find = 'if (emails.size + subs.size === 0) return { state: "none", deploy };'
+           Replace = 'if (false) return { state: "none", deploy };' }
         @{ Name = "owners-of-any-shape-taken"
-           Find = 'Object.keys(o).sort().join(",") !== "emails,subs") return { state: "broken" };'
+           Find = '(keys !== "emails,subs" && keys !== "deploy,emails,subs")) return { state: "broken" };'
            Replace = 'false) return { state: "broken" };' }
         @{ Name = "summary-names-no-count"
            Find = 'return { owners: owners.emails.length + owners.subs.length, reserve: true };'

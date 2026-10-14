@@ -45,7 +45,7 @@ export default {
     let response;
     try {
       if (auth) response = await handleAuth(request, env, url);
-      else if (status) response = handleStatus(request, env, url);
+      else if (status) response = await handleStatus(request, env, url);
       else response = api ? await handleApi(request, env, url) : await serveFile(request, env, url);
     } catch (e) {
       response = refuse(500, "the relay failed this request");

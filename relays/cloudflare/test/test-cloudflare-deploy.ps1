@@ -58,8 +58,11 @@ $env:HORDE_FAKE_WRANGLER_FAIL = ""
 # THE LIVE RELAY, A STUB (relays/cloudflare/Owners.ps1): every deploy whose home names no owner asks the
 # live relay first. Here that is a listener of the suite's own on 127.0.0.1 - the only stand-in the
 # deploy takes (HORDE_RELAY_TEST_STATUS_ORIGIN) - answering GET /status/owners with $live.answer, and
-# counting what it was asked. Nothing here reaches the real relay.
-$live = [hashtable]::Synchronized(@{ answer = "404"; asked = 0 })
+# counting what it was asked. Nothing here reaches the real relay. ONCE A DEPLOY HAS RUN (the fake
+# wrangler's last run is the deploy) it answers as the deployed version would: the owners the deploy
+# wrote and its word, so the deploy's confirmation (Owners.ps1, the deploy's word) finds its own at once;
+# $live.echo = $false turns that off for the status checks.
+$live = [hashtable]::Synchronized(@{ answer = "404"; asked = 0; echo = $true; log = $log })
 $liveListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
 $liveListener.Start()
 $env:HORDE_RELAY_TEST_STATUS_ORIGIN = "http://127.0.0.1:" + ([System.Net.IPEndPoint]$liveListener.LocalEndpoint).Port
@@ -79,6 +82,17 @@ $livePs.Runspace = $liveRs
                 while (-not $got.Contains("`r`n`r`n")) { $n = $st.Read($buf, 0, $buf.Length); if ($n -le 0) { break }; $got += [System.Text.Encoding]::ASCII.GetString($buf, 0, $n) }
                 $Live.asked = $Live.asked + 1
                 $a = "" + $Live.answer
+                if ($Live.echo -and (Test-Path -LiteralPath $Live.log)) {
+                    $runs = @([System.IO.File]::ReadAllLines($Live.log) | Where-Object { $_ -ne "" } | ForEach-Object { $_ | ConvertFrom-Json })
+                    if ($runs.Count -gt 0 -and ("" + @($runs[$runs.Count - 1].argv)[0]) -ceq "deploy") {
+                        $o = @($runs | Where-Object { (@($_.argv) -join " ") -like "secret put HORDE_RELAY_OWNER_ACCOUNTS*" } | Select-Object -Last 1)
+                        if ($o.Count -eq 1) {
+                            $j = ("" + $o[0].stdin).Substring(("" + $o[0].stdin).IndexOf("{")) | ConvertFrom-Json
+                            $n = @($j.emails).Count + @($j.subs).Count
+                            $a = '{"owners":' + $n + ',"reserve":' + $(if ($n -gt 0) { "true" } else { "false" }) + ',"deploy":"' + $j.deploy + '"}'
+                        }
+                    }
+                }
                 $body = $(if ($a.StartsWith("{")) { $a } else { "" })
                 $code = $(if ($a.StartsWith("{")) { "200 OK" } elseif ($a -ceq "500") { "500 Internal Server Error" } else { "404 Not Found" })
                 $text = "HTTP/1.1 " + $code + "`r`nContent-Type: application/json`r`nContent-Length: " + $body.Length + "`r`nConnection: close`r`n`r`n" + $body
@@ -124,6 +138,7 @@ function Deploy {
     $a = Invoke-HordeRelayDeploy -Relay "cloudflare" -HordeHome $hh -Say { param($Line) [void]$said.Add("" + $Line) }
     return [pscustomobject]@{ answer = $a; said = @($said) }
 }
+function Remove-Word { param([string]$Text) return ($Text -replace '"deploy":"[0-9a-f]{16}",', "") }
 function Holds-Value { param([string]$Text) return ($Text.Contains($clientSecret) -or $Text.Contains($clientId)) }
 
 try {
@@ -141,7 +156,8 @@ try {
         Check ($cmds[0] -ceq "secret put GOOGLE_CLIENT_ID" -and $cmds[1] -ceq "secret put GOOGLE_CLIENT_SECRET" -and $cmds[2] -ceq "secret put HORDE_RELAY_SIGNIN_ALLOWLIST" -and $cmds[3] -ceq "secret put HORDE_RELAY_OWNER_ACCOUNTS" -and $cmds[4] -clike "deploy --config*") ("the four secrets first, then the deploy (" + ($cmds -join "; ") + ")")
         Check ($runs[0].stdin -ceq $clientId -and $runs[1].stdin -ceq $clientSecret) "each secret's value is on standard input exactly: no byte order mark, no line end"
         Check ($runs[2].stdin -ceq '{"on":false,"emails":[],"subs":[]}') ("with the settings untouched the allowlist is OFF: signup is public (" + $runs[2].stdin + ")")
-        Check ($runs[3].stdin -ceq '{"emails":[],"subs":[]}') ("with no owner set, and none on the live relay, the owners are written empty (" + $runs[3].stdin + ")")
+        Check ((Remove-Word $runs[3].stdin) -ceq '{"emails":[],"subs":[]}') ("with no owner set, and none on the live relay, the owners are written empty (" + $runs[3].stdin + ")")
+        Check ($runs[3].stdin -cmatch '"deploy":"[0-9a-f]{16}",' -and ($d.said -join " ").Contains("the live relay runs this deploy: 0 owner(s), no reserve")) "the owners carry the deploy's word, and the deploy waits until its own version answers it"
         Check ($runs[4].stdin -ceq "") "the deploy is given nothing on its input"
         $argvAll = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
         Check (-not (Holds-Value $argvAll)) "no value is ever an argument"
@@ -181,7 +197,7 @@ try {
     $live.asked = 0
     $d = Deploy
     $runs = @(Read-Log)
-    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and $runs[3].stdin -ceq '{"emails":["boss@example.com"],"subs":["112233445566778899"]}' -and $live.asked -eq 0) ("SET: the owners are a secret of their own - emails in lower case, account ids apart, each once - and the live relay is not asked (" + $(if ($runs.Count -ge 4) { $runs[3].stdin } else { $d.answer.reason }) + ")")
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and (Remove-Word $runs[3].stdin) -ceq '{"emails":["boss@example.com"],"subs":["112233445566778899"]}' -and $live.asked -eq 1) ("SET: the owners are a secret of their own - emails in lower case, account ids apart, each once - and the live relay is asked only to confirm the deploy (" + $(if ($runs.Count -ge 4) { $runs[3].stdin } else { $d.answer.reason }) + ")")
     $argvOwners = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
     $saidOwners = $d.said -join " "
     Check (-not $argvOwners.Contains("boss@example.com") -and -not $argvOwners.Contains("--var") -and -not $saidOwners.Contains("warning:") -and $saidOwners.Contains("the relay's owners: 2 account(s)") -and -not $saidOwners.Contains("boss@example.com")) "no owner is ever an argument, and what the deploy says counts them without naming them"
@@ -215,7 +231,7 @@ try {
     $live.asked = 0
     $d = Deploy
     $runs = @(Read-Log)
-    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and $runs[3].stdin -ceq '{"emails":[],"subs":[]}' -and $live.asked -eq 0 -and ($d.said -join " ").Contains("clears any the live relay has")) ("OPT-OUT: relayOwnerAccounts none deploys with no owners, clearing the live relay's, said so (" + $d.answer.reason + ")")
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 5 -and (Remove-Word $runs[3].stdin) -ceq '{"emails":[],"subs":[]}' -and $live.asked -eq 1 -and ($d.said -join " ").Contains("clears any the live relay has")) ("OPT-OUT: relayOwnerAccounts none deploys with no owners, clearing the live relay's, said so (" + $d.answer.reason + ")")
     $live.answer = "404"
 
     Write-Host ""
@@ -294,6 +310,7 @@ try {
 
     Write-Host ""
     Write-Host "--- 6. horde relay status: what the live relay says of its owners ---" -ForegroundColor Cyan
+    $live.echo = $false
     $live.answer = '{"owners":0,"reserve":false}'
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "status") -Env $cliEnv
     Check ($r.code -eq 0 -and $r.out.Contains("no owner set: the whole day is shared, no reserve")) ("with no owner on the live relay, relay status says the whole day is shared, no reserve (exit " + $r.code + ": " + $r.out.Trim() + ")")
