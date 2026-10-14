@@ -353,7 +353,7 @@ $attacks += @(
     @{ found = $true; what = "a letters-only value with only the backtick after it is still a value, as it is without one"; text = ('`' + $six[5] + " = lettersonlyvalue" + '`') },
     @{ found = $true; what = "two backticks after a lookup are not a code span's one"; text = ($six[5] + " = config.db_" + $six[5] + '``') },
     @{ found = $false; what = "F3: a code span with the sentence's full stop after it (os.environ['DB_PASSWORD'])"; text = ("set " + '`' + $six[5] + " = os.environ['DB_" + "PASS" + "WORD']" + '`' + ". Then go on") },
-    @{ found = $false; what = "a code span with a comma and a closing parenthesis after it"; text = ("(as " + '`' + $six[5] + " = config.db_" + $six[5] + '`' + "), and more") },
+    @{ found = $false; what = "a code span with a comma after it (no parenthesis, which the older rule would skip on its own)"; text = ("as " + '`' + $six[5] + " = config.db_" + $six[5] + '`' + ", and more") },
     @{ found = $true; what = "a secret with a digit in a code span is still a secret with a full stop after it"; text = ("use " + '`' + $six[5] + " = " + $made + '`' + ". Then go on") },
     @{ found = $true; what = "a lookup with a word after its backtick is no code span's end"; text = ($six[5] + " = config.db_" + $six[5] + '`' + "x9") })
 foreach ($a in $attacks) { Check ((Test-Named $a.text) -eq $a.found) ($(if ($a.found) { "FOUND: " } else { "not found: " }) + $a.what) }
