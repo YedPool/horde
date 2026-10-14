@@ -112,7 +112,9 @@
 #   - a data item whose kind is not registered is refused as not an envelope, as before;
 #   - every Take outcome - taken, pending or refused - settles the item, and a Take that throws refuses
 #     it: a part can be lost (the photo is then incomplete, and its phone is told), never wedge the
-#     mailbox behind it.
+#     mailbox behind it;
+#   - data items refused for the very same reason are said as ONE line with their count, so a photo
+#     its runtime cannot take is one line, not one a part (review of PR 285).
 #
 # Answers are core/tristate; the channels' outcomes are words. Nothing here prints: the runner does.
 #
@@ -471,6 +473,8 @@ function Complete-HordeRelayInbox {
     # The trusted senders, read once for the whole batch (Get-HordeRelayChannelSenders).
     $senderCache = @{}
     $data = New-Object System.Collections.ArrayList
+    # Refused data items BY REASON, said once each after the batch (below): a photo is up to 64 items.
+    $dataRefused = [ordered]@{}
     foreach ($it in @($w.value.items)) {
         $r = Read-HordeRelayEnvelope -Text $it.text
         if (-not $r.ok) {
@@ -482,12 +486,22 @@ function Complete-HordeRelayInbox {
                 try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker failed: " + $_.Exception.Message); continue }
                 $said = $(if ($null -ne $got -and $null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
                 if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayDataOutcomes -cnotcontains "$($got.outcome)") { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker answered with something that is not taken, pending or refused"); continue }
-                if ("$($got.outcome)" -ceq "refused") { [void]$refused.Add("item " + $it.seq + ": " + $said) } else { [void]$data.Add("item " + $it.seq + ": " + $said) }
+                if ("$($got.outcome)" -ceq "refused") {
+                    if (-not $dataRefused.Contains($said)) { $dataRefused[$said] = New-Object System.Collections.ArrayList }
+                    [void]$dataRefused[$said].Add([long]$it.seq)
+                } else { [void]$data.Add("item " + $it.seq + ": " + $said) }
                 continue
             }
             [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue
         }
         [void]$parsed.Add([pscustomobject]@{ item = $it; envelope = $r.value })
+    }
+    # ONE LINE A REASON (review of PR 285): data items refused for the same reason - every part of a photo
+    # a runtime cannot take says the same thing - are one line naming how many, not a line each. A reason
+    # that names its part (a digest, a number) stays a line of its own.
+    foreach ($why in @($dataRefused.Keys)) {
+        $seqs = @($dataRefused[$why])
+        [void]$refused.Add($(if ($seqs.Count -eq 1) { "item " + $seqs[0] } else { "items " + $seqs[0] + " to " + $seqs[$seqs.Count - 1] + " (" + $seqs.Count + ")" }) + ": " + $why)
     }
     # Sorted by sender and that sender's seq (step 2). The relay's own order is not trusted to be theirs.
     $ordered = @($parsed | Sort-Object @{ Expression = { $_.envelope.header.from } }, @{ Expression = { [long]$_.envelope.header.seq } })

@@ -375,6 +375,15 @@ function Receive-HordeChatPhotoPart {
     # the item: the relay may be acked through it. A part becomes nothing but bytes in its photo's folder.
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, $Now = $null)
     $no = { param([string]$Why) return [pscustomobject]@{ outcome = "refused"; reason = ("photo part refused: " + $Why) } }
+    # A RUNTIME THAT TAKES NO PHOTO refuses FIRST (review of PR 285): before the settings are read or a
+    # folder is made, since nothing it could keep would ever be taken. The reason names the photo and not
+    # the part, so all of a photo's parts say one thing, and the inbound gate says that once
+    # (channels/Port.ps1, DATA KINDS): one line a photo, not up to 64.
+    $runtime = Get-HordeChatPhotoRuntimeRefusal
+    if ($runtime -cne "") {
+        $named = [regex]::Match($Text, $script:HordeChatPhotoPartPattern)
+        return (& $no ($(if ($named.Success) { "photo " + $named.Groups[2].Value + ": " } else { "" }) + $runtime))
+    }
     $p = Read-HordeChatPhotoPart -Text $Text
     if (-not $p.ok) { return (& $no $p.reason) }
     $homeDir = Get-HordeChatChannelHome $Context

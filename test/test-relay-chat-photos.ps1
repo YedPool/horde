@@ -16,7 +16,9 @@
 #   - a manifest from a revoked passkey; a passkey revoked after it: voided;
 #   - a script, a PDF and an HTML page are refused by their bytes, whatever they are called;
 #   - the size, per-minute and per-day caps; retention deletes only its own old files;
-#   - the turns body tells the phone the machine takes photos.
+#   - the turns body tells the phone the machine takes photos;
+#   - a runtime that takes no photo refuses a part FIRST, making nothing, one line a photo - under 5.1
+#     with the check made to refuse, and under PowerShell 7 itself (without pwsh.exe: NOT RUN, exit 3).
 # The inbound gate's half (a part item in the mailbox routed only to the photo sink, the kind refused by
 # name everywhere else) is test/test-relay-channels.ps1's and the gate section at the end of this suite.
 #
@@ -54,6 +56,7 @@ if ((Get-HordeRelayKeyStore).state -cne "known") {
     Complete-HordeSuite -Success "no key store here: no machine identity can be made, so nothing was run" -PassCode 3
 }
 
+$script:pwshNotRun = $false
 $script:posts = @{}
 $postBlock = {
     param($Message)
@@ -557,6 +560,70 @@ try {
     try { $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0 } catch { $in = [pscustomobject]@{ value = [pscustomobject]@{ refused = @(); held = @("it threw: " + $_.Exception.Message); acked = -1; cursor = 0 } } }
     $dk.take = $saved
     Check (@($in.value.refused | Where-Object { $_.Contains("disk on fire") }).Count -eq 1 -and @($in.value.held).Count -eq 0 -and $in.value.acked -eq $in.value.cursor) "a taker that throws refuses its item, and the mailbox is acked past it: a part can be lost, never wedge the mailbox"
+
+    Write-Host ""
+    Write-Host "--- 11. a runtime that takes no photo refuses FIRST: no folder, one line a photo ---" -ForegroundColor Cyan
+    # Review of PR 285. Under 5.1, through the real gate, with the runtime check made to refuse; then
+    # under PowerShell 7 itself, in a process of its own.
+    $R = New-World
+    $photosRoot = Join-Path $R.home "relay\chat\photos"
+    $PA = New-Photo -World $R -Image (New-ImageBytes -Type "jpg" -Length 130000)
+    $PB = New-Photo -World $R -Image (New-ImageBytes -Type "jpg" -Length 60000)
+    $realRuntime = ${function:Get-HordeChatPhotoRuntimeRefusal}
+    ${function:Get-HordeChatPhotoRuntimeRefusal} = { return "this runtime takes no photo (the suite says so)" }
+    try {
+        foreach ($p in @($PA.parts) + @($PB.parts)) { $null = Send-HordeRelayItem -Connection $R.conn -Mailbox $R.ctx.mailbox -Text $p -Key (Get-PartKey $p) }
+        Use-World $R
+        $in = Receive-HordeRelayInbox -Context $R.ctx -TimeoutMs 0
+    } finally { ${function:Get-HordeChatPhotoRuntimeRefusal} = $realRuntime }
+    $lines = @($in.value.refused)
+    Check ($lines.Count -eq 2 -and @($lines | Where-Object { $_.Contains("(3): photo part refused: photo " + $PA.id + ": this runtime takes no photo") }).Count -eq 1 -and @($lines | Where-Object { $_.Contains("(2): photo part refused: photo " + $PB.id + ":") }).Count -eq 1) ("ONE LINE A PHOTO: five parts of two photos a runtime cannot take are two refusals, each with its count (" + ($lines -join " / ") + ")")
+    Check (-not (Test-Path -LiteralPath $photosRoot) -and @($in.value.data).Count -eq 0 -and $in.value.acked -eq $in.value.cursor) "and it refused FIRST: no photo folder was made, nothing waits, and the mailbox is acked past them"
+    foreach ($p in @($PA.parts[0], $PA.parts[1])) { $null = Send-HordeRelayItem -Connection $R.conn -Mailbox $R.ctx.mailbox -Text $p -Key ((Get-PartKey $p) + "-again") }
+    $in = Receive-HordeRelayInbox -Context $R.ctx -TimeoutMs 0
+    Check (@($in.value.data | Where-Object { $_.Contains("waits for its manifest") }).Count -eq 2 -and (Test-Path -LiteralPath $photosRoot)) "TWIN: under a runtime that takes photos, the same parts wait for their manifest"
+    $null = Send-HordeRelayItem -Connection $R.conn -Mailbox $R.ctx.mailbox -Text $PA.parts[0] -Key ((Get-PartKey $PA.parts[0]) + "-thrice")
+    $null = Send-HordeRelayItem -Connection $R.conn -Mailbox $R.ctx.mailbox -Text $PA.parts[1] -Key ((Get-PartKey $PA.parts[1]) + "-thrice")
+    $in = Receive-HordeRelayInbox -Context $R.ctx -TimeoutMs 0
+    Check (@($in.value.refused).Count -eq 2 -and @($in.value.refused | Where-Object { $_.StartsWith("item ") }).Count -eq 2) ("TWIN: refusals for reasons of their own - each names its part - stay a line each (" + (@($in.value.refused) -join " / ") + ")")
+    # UNDER POWERSHELL 7 ITSELF (the test-decisions-shells pattern: without pwsh.exe, NOT RUN and exit 3).
+    $pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+    if ($null -eq $pwsh) {
+        $script:pwshNotRun = $true
+        Write-Host "  [NOT RUN] POWERSHELL 7 IS NOT ON THIS MACHINE (no pwsh.exe): the sink's refusal under 7 was NOT RUN." -ForegroundColor Yellow
+    } else {
+        $probeDir = Join-Path $env:TEMP ("horde-relay-photo-" + [guid]::NewGuid().ToString("N"))
+        [void]$script:homes.Add($probeDir)
+        $probeHome = Join-Path $probeDir "home"
+        New-Item -ItemType Directory -Path $probeHome -Force | Out-Null
+        $probe = Join-Path $probeDir "probe.ps1"
+        $partA = @($PA.parts)
+        $partB = @($PB.parts)
+        $partsFile = Join-Path $probeDir "parts.txt"
+        [System.IO.File]::WriteAllLines($partsFile, [string[]](@($partA) + @($partB)))
+        [System.IO.File]::WriteAllText($probe, @'
+param([string]$Root, [string]$HomeDir, [string]$PartsFile)
+$ErrorActionPreference = "Stop"
+. (Join-Path $Root "core\ModuleSettings.ps1")
+. (Join-Path $Root "channels\Port.ps1")
+foreach ($f in @(Get-HordeRelayFiles)) { . $f }
+foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
+$ctx = [pscustomobject]@{ hordeHome = $HomeDir }
+$out = @(foreach ($t in [System.IO.File]::ReadAllLines($PartsFile)) { $r = Receive-HordeChatPhotoPart -Context $ctx -Text $t; [pscustomobject]@{ outcome = $r.outcome; reason = $r.reason } })
+ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" + $PSVersionTable.PSEdition; results = $out })
+'@, $utf8)
+        $before = $env:HORDE_HOME
+        $env:HORDE_HOME = $probeHome
+        try { $said = @(& $pwsh.Source -NoProfile -NonInteractive -File $probe $root $probeHome $partsFile) } finally { $env:HORDE_HOME = $before }
+        $got = $null
+        try { $got = ConvertFrom-Json -InputObject ($said | Select-Object -Last 1) } catch { $got = $null }
+        $res = $(if ($null -ne $got) { @($got.results) } else { @() })
+        $reasonsA = @($res[0..($partA.Count - 1)] | ForEach-Object { $_.reason } | Select-Object -Unique)
+        $reasonsB = @($res[$partA.Count..($res.Count - 1)] | ForEach-Object { $_.reason } | Select-Object -Unique)
+        Check ($null -ne $got -and $got.edition -ceq "Core" -and $res.Count -eq 5 -and @($res | Where-Object { $_.outcome -cne "refused" }).Count -eq 0) ("UNDER POWERSHELL 7 every part is refused (" + ($said -join " ") + ")")
+        Check ($reasonsA.Count -eq 1 -and $reasonsB.Count -eq 1 -and "$($reasonsA[0])".Contains("photo " + $PA.id + ": photos are taken under Windows PowerShell 5.1 only") -and "$($reasonsB[0])".Contains("photo " + $PB.id)) ("one reason a photo, naming the photo and not the part, so the gate says it once (" + ($reasonsA -join "; ") + ")")
+        Check (@(Get-ChildItem -LiteralPath $probeHome -Force).Count -eq 0) "and FIRST: nothing at all was made under its home"
+    }
 } finally {
     $env:HORDE_HOME = $realHome
     Exit-HordeTestEmptyFleet -Pin $fleetPin
@@ -578,4 +645,5 @@ try {
     Check (@($script:homes | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0 -and -not (Test-Path -LiteralPath $fleetPin.path)) "every folder the suite made is gone"
 }
 
+if ($script:pwshNotRun) { Complete-HordeSuite -Success "photos hold under 5.1; the sink's refusal under PowerShell 7 was NOT RUN (no pwsh.exe)" -PassCode 3 }
 Complete-HordeSuite -Success "a photo signed once by the passkey lands whole, owner-only, under the machine's name, with one line to the Thrall; every part not vouched for by the signed manifest, in its window, from a key trusted now, writes nothing"

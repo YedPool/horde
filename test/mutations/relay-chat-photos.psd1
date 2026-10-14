@@ -48,6 +48,13 @@
         @{ Name = "photo-pending-evicts-the-newest-part"
            Find = '$own = @($groups[$mine] | Sort-Object at, name)'
            Replace = '$own = @($groups[$mine] | Sort-Object at, name -Descending)' }
+        # A runtime that takes no photo refuses a part FIRST, one reason a photo (review of PR 285).
+        @{ Name = "photo-part-runtime-not-refused-first"
+           Find = '        return (& $no ($(if ($named.Success) { "photo " + $named.Groups[2].Value + ": " } else { "" }) + $runtime))'
+           Replace = '' }
+        @{ Name = "photo-part-runtime-refusal-names-the-part"
+           Find = '{ "photo " + $named.Groups[2].Value + ": " }'
+           Replace = '{ "part " + $named.Groups[3].Value + " of photo " + $named.Groups[2].Value + ": " }' }
         # Put together: every digest again, the whole digest, the first bytes.
         @{ Name = "photo-join-part-digest-not-rechecked"
            Find = 'if ((ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes $ct)) -cne $parts[$n - 1]) {'

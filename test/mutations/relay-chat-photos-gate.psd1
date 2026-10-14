@@ -22,6 +22,9 @@
         @{ Name = "gate-data-items-not-routed"
            Find = '            $dk = Get-HordeRelayDataKindOf -Text $it.text'
            Replace = '            $dk = $null' }
+        @{ Name = "gate-data-refusals-a-line-each"
+           Find = '                    [void]$dataRefused[$said].Add([long]$it.seq)'
+           Replace = '                    $dataRefused[$said + $it.seq] = New-Object System.Collections.ArrayList; [void]$dataRefused[$said + $it.seq].Add([long]$it.seq)' }
         @{ Name = "gate-taker-that-throws-is-not-caught"
            Find = '                try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch {'
            Replace = '                $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1; if ($false) {' }
