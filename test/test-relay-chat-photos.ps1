@@ -234,7 +234,9 @@ try {
     Add-HordeMemoryConversationTurn -Store $W.store -Fleet "work" -Role "assistant" -Text "I see it."
     $null = Invoke-Tick $W
     $turns = @(Get-PhoneMail $W | Where-Object { $_.kind -ceq "chat-turns" })
-    Check ($turns.Count -ge 1 -and [long]$turns[0].photoBytes -eq 2097152) ("every turns body tells the phone this machine takes photos, and up to what size (" + $(if ($turns.Count) { $turns[0].photoBytes } else { "none" }) + ")")
+    # Read as a non-strict read would: a body without the member is a failed check, not a broken suite.
+    $offered = $(if ($turns.Count -ge 1 -and $null -ne $turns[0].PSObject.Properties["photoBytes"]) { [long]$turns[0].photoBytes } else { [long]0 })
+    Check ($offered -eq 2097152) ("every turns body tells the phone this machine takes photos, and up to what size (" + $offered + ")")
 
     Write-Host ""
     Write-Host "--- 2. parts before their manifest wait, bounded; in any order they make the same photo ---" -ForegroundColor Cyan
@@ -491,7 +493,8 @@ try {
     $saved = $dk.take
     $dk.take = { param($c, $t) throw "disk on fire" }
     $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PG.parts[1] -Key "thrower/1"
-    $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    # A throw that escapes is a failed check here, never a broken suite.
+    try { $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0 } catch { $in = [pscustomobject]@{ value = [pscustomobject]@{ refused = @(); held = @("it threw: " + $_.Exception.Message); acked = -1; cursor = 0 } } }
     $dk.take = $saved
     Check (@($in.value.refused | Where-Object { $_.Contains("disk on fire") }).Count -eq 1 -and @($in.value.held).Count -eq 0 -and $in.value.acked -eq $in.value.cursor) "a taker that throws refuses its item, and the mailbox is acked past it: a part can be lost, never wedge the mailbox"
 } finally {
