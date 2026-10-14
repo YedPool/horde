@@ -174,5 +174,24 @@
         @{ Name = "default-profile-unchecked"
            Find = '        $why = Test-HordeWeztermProfileDir -Path $pd'
            Replace = '        $why = ""' }
+        # Issue #214: the pause before Enter, and the pane's screen.
+        @{ Name = "no-pause-before-enter"
+           Find = '        if ($Text -ne "") { if ($null -ne $Sleep) { & $Sleep $script:HordeWeztermSubmitPauseMs } else { Start-Sleep -Milliseconds $script:HordeWeztermSubmitPauseMs } }'
+           Replace = '' }
+        @{ Name = "pause-before-a-lone-enter"
+           Find = '        if ($Text -ne "") { if ($null -ne $Sleep)'
+           Replace = '        if ($true) { if ($null -ne $Sleep)' }
+        @{ Name = "pause-value-changed"
+           Find = '$script:HordeWeztermSubmitPauseMs = 250'
+           Replace = '$script:HordeWeztermSubmitPauseMs = 0' }
+        @{ Name = "screen-decoded-by-code-page"
+           Find = '    if ($Utf8) { $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false) }'
+           Replace = '' }
+        @{ Name = "unread-screen-as-empty"
+           Find = '    if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not give the pane''s text'
+           Replace = '    if ($false) { return (New-HordeUnknown -Reason ("the terminal did not give the pane''s text' }
+        @{ Name = "screen-not-registered"
+           Find = '    -Text { param($target, $h) Read-HordeWeztermScreen -Target $target -Handle $h }'
+           Replace = '    -Text $null' }
     )
 }

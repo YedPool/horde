@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/node-session-stores.v1",
+  "title": "node-session-stores v1",
+  "description": "The stores that NAME this node's sessions and that it uses, as the node's owner declares them, in <HordeHome>/node/session-stores.json; never written from the link, never inferred from which folders exist. When every store listed here was read whole, every other session-naming store reads whole or has no folder, the view is of every session and the list was not cut, sessions.list says membershipComplete known true (link-verbs v1, verbs version 2) and the hub drops a session the list leaves out instead of carrying it. Store ids as core/ownership.json names them: X2 the agent's control files, W8 the other agent control files core/identity lists, W1 the wezfleet registry, W5 the run reports (read through the runs W3 and rosters W4, which must be whole too). X1, the pane-sessions files, is not offered: a file names its session only through the host's guard, so a whole read of the folder does not show every session it names. A file of its own, not a member of node-policy.v1, so a bad value here takes away only this claim and never the node's acts, and a Horde that predates it never reads it. At least one store, each once (core/NodePolicy.ps1). Ledger core-projection L-101.",
+  "type": "object",
+  "required": ["schemaVersion", "sessionStores"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "sessionStores": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["X2", "W8", "W1", "W5"] }
+    }
+  }
+}

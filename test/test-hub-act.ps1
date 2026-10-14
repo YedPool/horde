@@ -116,6 +116,13 @@ $cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("session", "spawn", "-Node
 Check ($cr.code -ne 0 -and ("" + $cr.out) -like "*the label RS is reserved*" -and -not (Test-Path -LiteralPath (Join-Path $cliHome "hub\acts"))) ("horde session spawn with a reserved label is refused where the hub hands the label out, before anything is written (exit " + $cr.code + ")")
 
 Write-Host ""
+Write-Host "--- a spawn whose prompt never became a turn reads FAILED, with why, to a person (issue #214) ---" -ForegroundColor Cyan
+$why = "prompt-not-submitted: the line naming the prompt file was typed but never became a turn: no turn holding the typed line reached the session's transcript within 20 s; its input box still held the line, so ONE more Enter was pressed, and no turn came in 10 s more; session s214 is LEFT RUNNING in pane 4242.1.17 at the level asked for: press Enter in that pane, or close it with this process"
+$stuck = [pscustomobject]@{ answered = $true; error = $null; reason = ""; result = [pscustomobject]@{ state = "known"; reason = ""; value = [pscustomobject]@{ state = "failed"; verb = "session.spawn"; requestId = "r214"; sessionId = "s214"; expect = [pscustomobject]@{ pid = 5000; procStart = "134000000000005000" }; reason = $why } } }
+$said = Format-HordeHubActAnswer -Res $stuck -RequestId "r214"
+Check ($said -ceq ("FAILED session.spawn request r214 session s214 pid 5000 procStart 134000000000005000: " + $why)) ("the person reads FAILED, the session, its process and the whole reason, never DONE (" + $said + ")")
+
+Write-Host ""
 Write-Host "--- a node that cannot be reached leaves the request unknown ---" -ForegroundColor Cyan
 $gone = Invoke-HordeHubAct -Entry ([pscustomobject]@{ deviceId = $device; endpoint = "11111111-2222-4333-8444-555555555555"; transport = (Get-HordeTransport -Name "memory"); transportError = "" }) -Hub $hub -Contract $contract -Verb "session.spawn" -Arguments $spawnArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime) -TimeoutMs 3000
 Check (-not $gone.answered -and $gone.reason -like "*could not open a link*") "no listener: the request is unanswered, with the reason"

@@ -21,11 +21,25 @@
            Find = 'if ($node.state -cne "known") { $presence = New-HordeUnknown -Reason $node.reason }'
            Replace = '' }
         @{ Name = "partial-inventory-carries-nothing"
-           Find = 'if (-not (Test-HordeMirrorComplete $List)) {'
+           Find = 'if (-not (Test-HordeMirrorComplete $List) -and -not (Test-HordeMirrorMembershipComplete $List)) {'
            Replace = 'if ($false) {' }
         @{ Name = "complete-inventory-carries-too"
-           Find = 'if (-not (Test-HordeMirrorComplete $List)) {'
+           Find = 'if (-not (Test-HordeMirrorComplete $List) -and -not (Test-HordeMirrorMembershipComplete $List)) {'
            Replace = 'if ($true) {' }
+        # membershipComplete (ledger core-projection L-101): a list that names every session drops what
+        # it leaves out; only a real boolean true does, never false, unknown or the text "true".
+        @{ Name = "membership-complete-still-carries"
+           Find = ' -and -not (Test-HordeMirrorMembershipComplete $List)) {'
+           Replace = ') {' }
+        @{ Name = "membership-false-drops"
+           Find = '    return (Test-HordeMirrorTrue (Get-HordeLinkProp $List "membershipComplete"))'
+           Replace = '    return ($null -ne (Get-HordeLinkProp $List "membershipComplete"))' }
+        @{ Name = "membership-text-true-drops"
+           Find = '    return ("$(Get-HordeLinkProp $Answer ''state'')" -ceq "known" -and $v -is [bool] -and $v)'
+           Replace = '    return ("$(Get-HordeLinkProp $Answer ''state'')" -ceq "known" -and "$v" -eq "true")' }
+        @{ Name = "membership-makes-a-lookup-absent"
+           Find = '        if (Test-HordeMirrorComplete $list) { $complete = New-HordeKnown -Value $true }'
+           Replace = '        if ((Test-HordeMirrorComplete $list) -or (Test-HordeMirrorMembershipComplete $list)) { $complete = New-HordeKnown -Value $true }' }
         @{ Name = "carried-session-absent"
            Find = '-Presence (New-HordeUnknown -Reason $why)'
            Replace = '-Presence (New-HordeAbsent -Note $why)' }
