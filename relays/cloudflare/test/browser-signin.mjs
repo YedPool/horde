@@ -91,12 +91,13 @@ try {
   // FIVE MINUTES LATER BY THE RELAY'S CLOCK: the account's answer is passed through Chrome with its now
   // moved on 300 s (CDP Fetch) - the relay's own lastSeenAt untouched, the phone's clock untouched - so the
   // page sees exactly what a relay would send once the machine had been silent that long.
-  onPaused = async (p) => {
+  const fiveMinutesOn = async (p) => {
     const raw = await cdp("Fetch.getResponseBody", { requestId: p.requestId });
     const body = JSON.parse(raw.base64Encoded ? Buffer.from(raw.body, "base64").toString("utf8") : raw.body);
     body.now += 300000;
     await cdp("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: p.responseStatusCode, responseHeaders: p.responseHeaders, body: Buffer.from(JSON.stringify(body), "utf8").toString("base64") });
   };
+  onPaused = fiveMinutesOn;
   await cdp("Fetch.enable", { patterns: [{ urlPattern: "*/v1/account", requestStage: "Response" }] });
   await evaluate("document.getElementById('accountBtn').click()", true);
   const banner = await until("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.closest('#bar') && b.children.length === 1 ? b.children[0].textContent : ''; })()");
@@ -108,6 +109,28 @@ try {
   onPaused = null;
   await evaluate("document.getElementById('accountBtn').click()", true);
   check(!!(await until("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').children.length === 0")), "and it goes by itself at the next answer that has the machine heard again");
+  // THE PRODUCTION PATH: on every other screen the banner comes only from the app's own timed read
+  // (app.js, checkPresence) - at start-up, on return to the app, then every 30 s. The page is loaded
+  // again with the answer five minutes on, and no Account screen is opened at all.
+  let reads = 0;
+  onPaused = async (p) => { reads++; await fiveMinutesOn(p); };
+  await cdp("Fetch.enable", { patterns: [{ urlPattern: "*/v1/account", requestStage: "Response" }] });
+  await cdp("Page.reload");
+  const booted = await until("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.children.length === 1 && document.getElementById('accountView').hidden && !document.getElementById('emptyView').hidden ? b.children[0].textContent : ''; })()");
+  check(typeof booted === "string" && booted.startsWith(head) && booted.endsWith(tail), "at start-up the app reads it by itself, and the banner stands over the app's own screen, not the Account screen", booted);
+  await evaluate("document.getElementById('pcOffline').children[0].setAttribute('data-drawn', 'once')");
+  const readsBefore = reads;
+  await evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+  for (let i = 0; i < 100 && reads === readsBefore; i++) await sleep(100);
+  await sleep(500);
+  check(reads > readsBefore && (await evaluate("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.children.length === 1 && b.children[0].getAttribute('data-drawn') === 'once'; })()")), "back to the app it reads again, and the same banner is not drawn again - a screen reader is not told it twice", String(reads - readsBefore));
+  onPaused = async (p) => { reads++; await cdp("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: 500, responseHeaders: [{ name: "Content-Type", value: "application/json" }], body: Buffer.from('{"error":"down"}', "utf8").toString("base64") }); };
+  await evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+  check(!!(await until("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').children.length === 0")), "and a read that fails takes the banner down: it says nothing about the PC, so nothing is guessed");
+  await cdp("Fetch.disable");
+  onPaused = null;
+  await evaluate("document.getElementById('accountBtn').click()", true);
+  await until(shown("accountView") + " && document.querySelectorAll('#machineList li').length === 1");
   const phones = await evaluate("Array.from(document.querySelectorAll('#phoneList li')).map((li) => li.textContent + '|' + li.querySelectorAll('button').length).join(';')");
   const rows = phones.split(";");
   check(rows.filter((r) => /^This phone, signed in [^|]+|0$/.test(r)).length === 1 && rows.every((r) => /^This phone, signed in [^|]+|0$/.test(r) || /^A phone, signed in [^|]+Sign out|1$/.test(r)), "and lists its phones: this one once, with no Sign out of its own (the one below signs it out), each other with one", phones);

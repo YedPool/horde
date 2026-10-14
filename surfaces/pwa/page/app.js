@@ -683,16 +683,26 @@ let presenceTimer = null;
 // Each run of the loop has its number: a run started while another waits on the relay ends the older one,
 // so there is never more than one timer.
 let presenceRun = 0;
+// The banner's lines as last drawn: a read that changes nothing redraws nothing, so a screen reader does
+// not announce the same banner again every PRESENCE_EVERY_MS (the box is role=status).
+let presenceDrawn = "";
 function drawPresence() {
-  const box = $("pcOffline");
-  while (box.firstChild) box.removeChild(box.firstChild);
+  const lines = [];
   for (const m of presence) {
     if (m.state !== "offline") continue;
+    lines.push(offlineWords(m, dayTime));
+  }
+  const key = JSON.stringify(lines);
+  if (key === presenceDrawn) return;
+  presenceDrawn = key;
+  const box = $("pcOffline");
+  while (box.firstChild) box.removeChild(box.firstChild);
+  for (const words of lines) {
     const line = document.createElement("p");
-    line.textContent = offlineWords(m, dayTime);
+    line.textContent = words;
     box.appendChild(line);
   }
-  box.hidden = !box.firstChild;
+  box.hidden = lines.length === 0;
 }
 async function checkPresence() {
   const run = ++presenceRun;
@@ -788,7 +798,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catc
 // ended, or another tab signed out), every horde locked and the sign-in screen.
 async function resume() {
   if (!(await isSignedIn())) { await lockAll(); showSignIn(); return; }
-  checkPresence();
+  checkPresence(); // back to the app: read at once, not 30 s on
   await pick(current);
 }
 made.then(async () => {
@@ -798,7 +808,7 @@ made.then(async () => {
   }
   if (!(await isSignedIn())) { showSignIn(); return; }
   $("accountBtn").hidden = !account;
-  checkPresence();
+  checkPresence(); // at start-up: the banner from the first moment
   await loadHordes();
   if (!hordes.length) { show("emptyView"); return; }
   await pick(hordes[0].id);

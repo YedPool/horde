@@ -1118,6 +1118,8 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   const many = AC.presenceOf({ now: t0, machines: [mach(k1, t0 - 600000, "build-box"), mach(k2, t0 - 5000, "laptop"), mach(k3, t0 - 900000, "", "personal")] });
   const off = many.filter((m) => m.state === "offline");
   check(off.length === 2 && off[0].name === "build-box (work)" && off[1].name === "machine " + k3.slice(0, 12) + " (personal)", "one banner per offline machine, by its name: its label and horde, or its key id's start when it has no label", JSON.stringify(off.map((m) => m.name)));
+  const bare = AC.presenceOf({ now: t0, machines: [{ keyId: k1, label: "build-box", lastSeenAt: t0 - 600000 }, { keyId: k2, label: "", horde: "", lastSeenAt: t0 - 600000 }] });
+  check(bare[0].name === "build-box" && bare[1].name === "machine " + k2.slice(0, 12), "a machine whose answer names no horde is named without one: never '(undefined)'", JSON.stringify(bare.map((m) => m.name)));
   const never = AC.presenceOf({ now: t0, machines: [mach(k1, null)] });
   check(never.length === 1 && never[0].state === "never" && never[0].lastSeenAt === null, "a never-seen machine gets no offline banner: it is 'never', quietly");
   check(AC.presenceOf({ now: t0, machines: [{ keyId: k1, horde: "work", label: "x" }] })[0].state === "never" && AC.presenceOf({ now: t0, machines: [mach(k1, 0)] })[0].state === "never", "and so is one whose answer carries no lastSeenAt at all (a relay from before this), or a zero");

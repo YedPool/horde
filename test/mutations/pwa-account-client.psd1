@@ -44,8 +44,11 @@
            Find = 'if (!answer || !Number.isSafeInteger(answer.now) || !Array.isArray(answer.machines)) return [];'
            Replace = 'if (!answer || !Array.isArray(answer.machines)) return [];' }
         @{ Name = "banner-without-the-horde"
-           Find = '"machine " + m.keyId.slice(0, 12)) + " (" + String(m.horde) + ")";'
+           Find = '"machine " + m.keyId.slice(0, 12)) + (typeof m.horde === "string" && m.horde ? " (" + m.horde + ")" : "");'
            Replace = '"machine " + m.keyId.slice(0, 12));' }
+        @{ Name = "missing-horde-shown-as-undefined"
+           Find = '(typeof m.horde === "string" && m.horde ? " (" + m.horde + ")" : "")'
+           Replace = '(" (" + String(m.horde) + ")")' }
         @{ Name = "banner-does-not-say-kept"
            Find = '". Your answers are kept and will be applied when it is back."'
            Replace = '". Your answers could not be sent."' }

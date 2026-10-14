@@ -75,7 +75,7 @@ export function presenceOf(answer) {
   const out = [];
   for (const m of answer.machines) {
     if (!m || typeof m.keyId !== "string") continue;
-    const name = (typeof m.label === "string" && m.label ? m.label : "machine " + m.keyId.slice(0, 12)) + " (" + String(m.horde) + ")";
+    const name = (typeof m.label === "string" && m.label ? m.label : "machine " + m.keyId.slice(0, 12)) + (typeof m.horde === "string" && m.horde ? " (" + m.horde + ")" : "");
     const seen = Number.isSafeInteger(m.lastSeenAt) && m.lastSeenAt > 0 ? m.lastSeenAt : null;
     const state = seen === null ? "never" : answer.now - seen > OFFLINE_AFTER_MS ? "offline" : "online";
     out.push({ keyId: m.keyId, name, state, lastSeenAt: seen });
