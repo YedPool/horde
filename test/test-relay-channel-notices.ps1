@@ -14,8 +14,9 @@
 #      from a TRUSTED PEER MACHINE are refused, and none changes a switch.
 #   3. FOLLOWING THE LOG: what the log held before the first look never becomes a notice, even of a
 #      followed lane; a followed lane's new entry is one notice; an unfollowed lane's none; an entry whose
-#      AREA maps to two lanes is one notice when either is followed; a log replaced is followed again from
-#      its new end, said, and nothing in it before that end becomes a notice.
+#      AREA maps to two lanes is one notice when either is followed; a log replaced, by a shorter file or by
+#      a longer one, is followed again from its new end, said, and nothing in it before that end becomes a
+#      notice; every notices envelope carries the switches the machine holds.
 #   4. NOTHING ELSE comes in on the channel: a kind it does not take is refused at the gate.
 #
 # NO REAL FLEET, HOME OR RELAY IS TOUCHED: the fleet root is an empty folder of the suite's own
@@ -125,6 +126,24 @@ function Add-Entry {
     $fs = New-Object System.IO.FileStream -ArgumentList $World.log, ([System.IO.FileMode]::Append), ([System.IO.FileAccess]::Write), ([System.IO.FileShare]::ReadWrite)
     try { $b = $utf8.GetBytes($t); $fs.Write($b, 0, $b.Length) } finally { $fs.Dispose() }
 }
+function Get-Carried {
+    # The switches one opened envelope carries, as text in the machine's own form ({"E":true}), or
+    # "(none)" when it carries no follows member. Never throws: under Set-StrictMode a missing member
+    # is an error, and an error here broke the suite with no failed check (PR 259's after-merge net,
+    # the-switches-are-not-sent) instead of failing the check that names the rule.
+    param($Mail)
+    try {
+        $f = $Mail.body.follows
+        if ($null -eq $f) { return "(none)" }
+        return ('{' + ((@($f.PSObject.Properties | Sort-Object { $_.Name } -CaseSensitive) | ForEach-Object { (ConvertTo-HordeNoticeJsonString $_.Name) + ':' + $(if ($_.Value -eq $true) { "true" } else { "false" }) }) -join ",") + '}')
+    } catch { return "(none)" }
+}
+function Test-CarriesHeld {
+    # Every opened notices envelope in -Mail carries exactly the switches -World's machine holds now.
+    param($World, $Mail)
+    $held = Get-HordeNoticesChannelFollowsText -Follows (Get-Follows $World)
+    return (@($Mail).Count -gt 0 -and @($Mail | Where-Object { -not $_.ok -or (Get-Carried $_) -cne $held }).Count -eq 0)
+}
 function Get-Notices { param($World) $r = Read-HordeNoticeLog -Store (Join-Path $World.home "notices"); if ($r.state -cne "known") { throw $r.reason }; return @($r.value) }
 function Proven { param([string]$Label) return [pscustomobject]@{ ok = $true; reason = ""; sessionId = ("cccccccc-0000-4000-8000-" + ("" + $Label.Length).PadLeft(12, "0")); label = $Label } }
 
@@ -165,7 +184,7 @@ try {
     Check ((Test-HordeNoticesChannelGlance -Context $W.ctx) -eq $true) "the Glance sees the switch"
     $t = Invoke-Tick $W
     $mail = @(Get-NewMail $W)
-    Check ($mail.Count -eq 1 -and $mail[0].ok -and $mail[0].body.follows.E -eq $true -and @($mail[0].body.notices).Count -eq 0) ("THE PHONE SHOWS WHAT THE MACHINE HOLDS: the next envelope carries the switch on (" + (Said $t) + ")")
+    Check ($mail.Count -eq 1 -and $mail[0].ok -and (Get-Carried $mail[0]) -ceq '{"E":true}' -and @($mail[0].body.notices).Count -eq 0) ("THE PHONE SHOWS WHAT THE MACHINE HOLDS: the next envelope carries the switch on (" + (Said $t) + ")")
     [void](Send-HordeRelayItem -Connection $W.conn -Mailbox $W.ctx.mailbox -Text (New-HordeTestPhoneResigned -Phone $W.phone -Envelope $env1) -Key $env1.key)
     $turn = Invoke-Turn $W
     Check ((Get-Follows $W)["E"].on -and $turn.text -notlike "*now on*") ("the same envelope again is not a second setting (" + $turn.text + ")")
@@ -221,6 +240,7 @@ try {
     Check ($all.Count -eq 1 -and $all[0].entry -ceq "new-1" -and $all[0].from -ceq "Orc E" -and $all[0].text -ceq "Merged: the switch works") ("a followed lane's new entry is one notice; an unfollowed lane's none (" + (Said $t) + ")")
     $mail = @(Get-NewMail $P)
     Check ((Get-Texts $mail) -ceq "Merged: the switch works" -and @($mail[-1].body.notices)[0].lane -ceq "E" -and @($mail[-1].body.notices)[0].entry -ceq "new-1") "and it is on the phone in the same Tick, naming its lane and its entry, so a tap opens that stream"
+    Check (Test-CarriesHeld $P $mail) ("EVERY NOTICES ENVELOPE CARRIES THE SWITCHES THE MACHINE HOLDS, a notice's envelope too (" + (@($mail | ForEach-Object { Get-Carried $_ }) -join " ") + ")")
     Add-Entry $P "new-3" "a phone fix for two lanes" -Area "horde PHONE"
     $t = Invoke-Tick $P
     $all = @(Get-Notices $P)
@@ -231,10 +251,11 @@ try {
     Check (@(Get-Notices $P).Count -eq 3 -and @(Get-Notices $P)[-1].from -ceq "Orc F") "with both followed it is still one notice"
     $null = Invoke-Tick $P
     Check (@(Get-Notices $P).Count -eq 3) "a look with nothing new makes no notice"
-    # REPLACED: a new file with an entry of E. Followed again from its new end; the entry in it is old.
+    # REPLACED BY A SHORTER FILE: a new file with one entry of E, shorter than where the channel stood, so
+    # this is the "cut short" path. Followed again from its new end; the entry in it is old.
     [System.IO.File]::WriteAllText($P.log, '{"v":1,"id":"r-1","ts":"2026-10-14T03:00:00Z","kind":"merged","lane":"E","title":"in the new file already","text":"t"}' + "`n", $utf8)
     $t = Invoke-Tick $P
-    Check (@(Get-Notices $P).Count -eq 3 -and (Said $t) -like "*followed again from its present end*") ("A LOG REPLACED is followed again from its new end, said, and what it already held is no notice (" + (Said $t) + ")")
+    Check (@(Get-Notices $P).Count -eq 3 -and (Said $t) -like "*followed again from its present end*" -and (Said $t) -like "*cut short*") ("A LOG REPLACED BY A SHORTER ONE is followed again from its new end, said, and what it already held is no notice (" + (Said $t) + ")")
     Add-Entry $P "r-2" "after the replace" -Lane "E"
     $null = Invoke-Tick $P
     Check (@(Get-Notices $P).Count -eq 4 -and @(Get-Notices $P)[-1].entry -ceq "r-2") "and an entry written after that is a notice"
@@ -245,6 +266,32 @@ try {
     $P.ctx = (New-HordeRelayRunContext -HordeHome $P.home -Connection $P.conn).value
     $null = Invoke-Tick $P
     Check (@(Get-Notices $P).Count -eq 4 -and @(Get-NewMail $P).Count -eq 0) "a new run on the same home sends nothing again and makes no notice again"
+
+    # REPLACED BY A LONGER FILE (PR 259's after-merge mutation net: a-replaced-log-is-read-from-its-start
+    # survived, because the replace above is shorter than where the channel stood and so goes down the
+    # "cut short" path). Here the new file already holds more bytes than the old place, so only the marks
+    # (the hash of its first and last bytes before that place) can tell it was replaced. Read on from the
+    # old place, every whole entry past it would become a notice and flood the founder.
+    $R = New-World
+    Add-Entry $R "o-1" "an old entry of E" -Lane "E"
+    Add-Entry $R "o-2" "another old entry of E" -Lane "E"
+    $null = Set-HordeNoticeFollow -Lane "E" -On $true -At 1000 -Key "k/notices/1/a" -HordeHome $R.home
+    $null = Invoke-Tick $R
+    $stood = [long](ConvertFrom-Json ([System.IO.File]::ReadAllText((Join-Path $R.home "relay\notices\state.json")))).offset
+    $newFile = $R.log + ".new"
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($i in 1..6) { [void]$sb.Append('{"v":1,"id":"n-' + $i + '","ts":"2026-10-14T03:00:00Z","kind":"merged","lane":"E","title":"in the new file already, number ' + $i + '","text":"t"}' + "`n") }
+    [System.IO.File]::WriteAllText($newFile, $sb.ToString(), $utf8)
+    # A real replace: a new file renamed over the old name.
+    [System.IO.File]::Delete($R.log); [System.IO.File]::Move($newFile, $R.log)
+    $len = (New-Object System.IO.FileInfo -ArgumentList $R.log).Length
+    Check ($stood -gt 0 -and $len -gt (2 * $stood)) ("CONTROL: the new file is longer than where the channel stood, so this is not the cut-short path (" + $stood + " then " + $len + " bytes)")
+    $t = Invoke-Tick $R
+    Check (@(Get-Notices $R).Count -eq 0 -and (Said $t) -like "*followed again from its present end*" -and (Said $t) -like "*replaced or rewritten*") ("A LOG REPLACED BY A LONGER ONE is followed again from its new end, said, and none of the entries it already held is a notice (" + (Said $t) + ")")
+    Add-Entry $R "after" "written after the replace" -Lane "E"
+    $null = Invoke-Tick $R
+    $rn = @(Get-Notices $R)
+    Check ($rn.Count -eq 1 -and $rn[0].entry -ceq "after") ("and one entry appended after it is exactly one notice, for that entry (" + (@($rn | ForEach-Object { $_.entry }) -join ",") + ")")
 
     Write-Host ""
     Write-Host "--- 4. idle: nothing changed, nothing read; anything to send is a full look ---" -ForegroundColor Cyan

@@ -1536,6 +1536,13 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   check(JSON.stringify(NV.noticeTarget({ kind: "progress", lane: "E", entry: "e1", machine: "pc" })) === '{"entry":"e1","lane":"E","machine":"pc"}' && NV.noticeTarget({ kind: "notify", lane: "", entry: "e1" }) === null && NV.noticeTarget({ kind: "cutoff", lane: "" }) === null, "a followed lane's notice opens that lane's stream; a notify line and a cut-off open nothing");
   check(NV.noticesTabWords(0) === "Notices" && NV.noticesTabWords(3) === "Notices (3)", "THE UNREAD COUNT on the tab: none says nothing, three says (3)");
   check(P.noticeList([{ entry: "e", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }, { id: "y", said: 5, n: 2 }, { id: "z", said: 9, n: 3 }] }], new Set(["x"])).items.map((i) => i.id + (i.read ? "r" : "")).join(",") === "z,y,xr" && P.noticeList([{ entry: "e", notices: [{ id: "x", said: 1, n: 1 }] }], new Set()).unread === 1, "the list is newest first by time, then by the machine's number; the count is of unread ones");
+  // EACH ONCE, IN THE LIST ITSELF: phone-core's takeNotices keeps one per id within one pairing, so the
+  // end-to-end check above cannot see this rule (PR 259's after-merge mutation net: a-notice-is-shown-twice
+  // survived). Here two held envelopes, of two pairings, carry the same notice.
+  const twice = P.noticeList([{ entry: "e1", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }] }, { entry: "e2", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }] }], new Set());
+  const twoIds = P.noticeList([{ entry: "e1", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }] }, { entry: "e2", machine: "pc", notices: [{ id: "y", said: 5, n: 1 }] }], new Set());
+  check(twice.items.length === 1 && twice.items[0].entry === "e1" && twice.unread === 1, "A NOTICE TWO ENVELOPES CARRY IS SHOWN ONCE, by its id, and counted once", JSON.stringify(twice));
+  check(twoIds.items.length === 2 && twoIds.unread === 2, "CONTROL: two notices of two ids are shown twice", JSON.stringify(twoIds));
 }
 
 // --- 15. what became of each answer: kept until applied, shown answered while on its way, sent again when missing (the founder, 2026-10-14, relay fixes 3 and 4) ---
