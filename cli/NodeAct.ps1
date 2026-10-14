@@ -564,7 +564,9 @@ function Save-HordeNodeScreenReport {
     # Capture -Handle's screen into -Record (written later by the caller) and return the reason's clause.
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)]$Record)
     $s = Get-HordeNodeScreenReport -Context $Context -Actor $Actor -Target $Target -Handle ("" + $Record.handle)
-    $Record.screen = [pscustomobject][ordered]@{ state = $s.state; said = $s.said; rows = $s.rows }
+    $screen = [pscustomobject][ordered]@{ state = $s.state; said = $s.said; rows = $s.rows }
+    # A spawn's record is an ordered table; one read back from its file is an object.
+    if ($Record -is [System.Collections.IDictionary]) { $Record["screen"] = $screen } else { $Record | Add-Member -NotePropertyName screen -NotePropertyValue $screen -Force }
     return $s.said
 }
 
