@@ -95,6 +95,7 @@ function Test-RunWasUp {
     if ($prof -ne "") { [void]$script:profilesSeen.Add($prof) }
     $n = $(if ($prof -ne "") { @(Get-HordeTestBrowserProcesses -ProfileDir $prof).Count } else { 0 })
     Check ($up -and $prof.StartsWith($work) -and $n -ge 2) ("CONTROL (" + $What + "): the browser was up in its own profile under the run's folder, and the instrument saw " + $n + " process(es) of it")
+    [System.IO.File]::WriteAllText($Log + ".go", "")
     return $prof
 }
 function Test-RunCleaned {
