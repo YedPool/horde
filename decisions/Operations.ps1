@@ -104,6 +104,10 @@ $script:HordeDecisionOperations = [ordered]@{
     # question's number - after a repost of one recorded before has been answered from its record.
     reopen = @{ writes = $true;  kind = "question-reopened"; content = "Get-HordeDecisionReopenContent"; retired = $script:HordeDecisionReopenRetired }
     rank   = @{ writes = $true;  kind = "question-ranked";   content = "Get-HordeDecisionRankContent" }
+    # remind: the keeper asks an open question again (decisions/Rules.ps1, WHEN A QUESTION WAS ASKED).
+    # Whether the question is open is the fold's to say (Step-HordeDecisionReminded), like every rule
+    # that needs the list.
+    remind = @{ writes = $true;  kind = "question-reminded"; content = "Get-HordeDecisionRemindContent" }
     say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData"; parts = "Get-HordeDecisionSayParts" }
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
@@ -229,6 +233,19 @@ function Get-HordeDecisionRankContent {
     }
     if ($body.Count -eq 0) { [void]$found.Add("the ranking names neither word, so there is nothing to change: give 'importance' (" + ((Get-HordeDecisionImportances) -join ", ") + "), 'blocks' (" + ((Get-HordeDecisionBlockings) -join ", ") + "), or both") }
     return [pscustomobject]@{ body = $body; findings = @($found) }
+}
+
+function Get-HordeDecisionRemindContent {
+    # A checked remind request as { body; findings }: the note, recorded only when the request states one.
+    # The note is part of what makes a request the same: the same id with another note is another request.
+    param($Request, $Definitions)
+    $body = [ordered]@{}
+    $found = @()
+    if (Test-HordeDecisionMember -Object $Request -Name "note") {
+        $found = @(Test-HordeDecisionAskedNote -Text (Get-HordeDecisionMember -Object $Request -Name "note"))
+        $body["note"] = [string]$Request.note
+    }
+    return [pscustomobject]@{ body = $body; findings = $found }
 }
 
 function Get-HordeDecisionUpdateContent {

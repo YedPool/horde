@@ -106,6 +106,7 @@ $script:HordeDecisionEventKinds = [ordered]@{
     "question-closed"   = @{ data = "question-closed";   words = "";         apply = "Step-HordeDecisionClosed";   about = "question"; actors = "keepers";  counts = @{} }
     "question-reopened" = @{ data = "question-reopened"; words = "";         apply = "Step-HordeDecisionReopened"; about = "question"; actors = "keepers";  counts = @{} }
     "question-ranked"   = @{ data = "question-ranked";   words = "";         apply = "Step-HordeDecisionRanked";   about = "question"; actors = "keepers";  counts = @{} }
+    "question-reminded" = @{ data = "question-reminded"; words = "";         apply = "Step-HordeDecisionReminded"; about = "question"; actors = "keepers";  counts = @{} }
     "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number" } }
     "messages-read"     = @{ data = "messages-read";     words = "";         apply = "Step-HordeDecisionRead";     about = "list";     actors = "speakers"; counts = @{ upTo = "sequence" } }
 }
@@ -237,6 +238,33 @@ $script:HordeDecisionPartPattern = '\A[a-z]\z'
 # he answered, as context; the whole of both stays under the old question's own number. 2,000
 # characters is some thirty lines on a phone: more than a reminder needs, and far inside a snapshot page.
 $script:HordeDecisionFollowsUpAnswerChars = 2000
+
+# WHEN A QUESTION WAS ASKED, AND EVERY TIME IT WAS ASKED AGAIN (the founder, 2026-10-14: his list shows
+# when each question was last asked, and his Date order sorts by it). A question's "asked" is a list,
+# oldest first, of { at; how; by; note }, and it is DERIVED IN THE FOLD like the turn, never stored: a
+# record is never rewritten, so a list kept on the question's own record could not grow. Each entry is
+# one record, at that record's place and time:
+#   first         the question-added record that asked it. by: its askedBy.
+#   remind        a question-reminded record: the keeper raised it again (horde decisions remind).
+#                 by: the record's actor; note: the record's note, when it has one.
+#   thrall-reply  the keeper's words under it that ASK (not a note, not an act), while it is open
+#                 (Step-HordeDecisionSaid). by: the speaker.
+#   follow-up     a question-added record whose followsUp names it (Step-HordeDecisionAdded). by: the
+#                 new question's askedBy; note: "follow-up question <its number>".
+# SO A QUESTION WITH NONE OF THE LAST THREE READS AS ASKED ONCE, AT addedAt - every question of a store
+# from before this list, unless a reply that asked or a follow-up was recorded under it, which reads as
+# the re-ask it was. decisions/page/list.js sorts by the last entry's time.
+# THE NOTE of a reminder: plain words, at most this many characters, printable ASCII only. It is shown on
+# a phone beside a date, and the remind command is typed by a session, so there is no alphabet to keep.
+$script:HordeDecisionAskedHows = @("first", "remind", "thrall-reply", "follow-up")
+$script:HordeDecisionAskedNoteChars = 200
+# HOW MANY ENTRIES A VIEW CARRIES: the first, and the newest after it up to this many in all. The view
+# says how many there are (askedCount), so a cut list says it is cut; the records keep every one. A
+# question is not reminded a hundred times; the cap is there so that one that is cannot swell every
+# list, and every phone page, without bound.
+$script:HordeDecisionAskedViewMost = 100
+# What a reminder of a closed question is refused with: {0} is its number.
+$script:HordeDecisionRemindClosedAdvice = 'What is still open is asked as a new question that follows it: horde decisions add -File <question.json> -FollowsUp {0}'
 
 # LIMITS. A text longer than the first is refused whole, with the count, never cut: 500,000 characters
 # is five times the 100,000-character text the decisions design (2026-10-06, section 6) requires to be stored whole, and keeps a record
@@ -372,6 +400,26 @@ function Get-HordeDecisionImportances { return @($script:HordeDecisionImportance
 function Get-HordeDecisionBlockings { return @($script:HordeDecisionBlockings.Keys) }
 function Get-HordeDecisionDefaultImportance { return $script:HordeDecisionDefaultImportance }
 function Get-HordeDecisionDefaultBlocks { return $script:HordeDecisionDefaultBlocks }
+function Get-HordeDecisionAskedHows { return @($script:HordeDecisionAskedHows) }
+function Get-HordeDecisionAskedViewMost { return $script:HordeDecisionAskedViewMost }
+
+function Test-HordeDecisionAskedNote {
+    # Findings for the note of a reminder (above, WHEN A QUESTION WAS ASKED): empty when it may be written.
+    # The text is never repeated in a finding.
+    param($Text)
+    if ($Text -isnot [string]) { return @("'note' is text") }
+    $out = New-Object System.Collections.ArrayList
+    if ("$Text".Trim().Length -eq 0) { [void]$out.Add("'note' is blank: leave it out, or say in plain words why the question is asked again") }
+    if ($Text.Length -gt $script:HordeDecisionAskedNoteChars) { [void]$out.Add("'note' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionAskedNoteChars + ". It is refused whole, never cut") }
+    if ($Text -cmatch '[^\x20-\x7E]') { [void]$out.Add("'note' holds a character that is not printable ASCII (an accented or non-Latin letter, a line break, a tab or a control character); a reminder's note is one line of plain ASCII") }
+    return @($out)
+}
+
+function Add-HordeDecisionAsked {
+    # One entry of a question's "asked", at -Ev's time (above, WHEN A QUESTION WAS ASKED).
+    param($Question, $Ev, [string]$How, [string]$By, [string]$Note = "")
+    [void]$Question.asked.Add([pscustomobject]@{ at = "$($Ev.at)"; how = $How; by = $By; note = $Note })
+}
 
 function Get-HordeDecisionRankShown {
     # The plain words for one rank word, as a way of showing puts them beside a question: "" for the
@@ -802,7 +850,15 @@ function Step-HordeDecisionAdded {
     $question["history"] = (New-Object System.Collections.ArrayList)
     $question["thread"] = (New-Object System.Collections.ArrayList)
     $question["turn"] = $script:HordeDecisionFirstTurn
+    $question["asked"] = (New-Object System.Collections.ArrayList)
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "added"
+    Add-HordeDecisionAsked -Question $question -Ev $Ev -How "first" -By "$($question.askedBy)"
+    # A FOLLOW-UP ASKS THE QUESTION IT FOLLOWS AGAIN (above, WHEN A QUESTION WAS ASKED): an entry on the
+    # earlier question, at this record's time. One the list cannot show - its record unreadable - has no
+    # list to add to, and this question is added all the same: a stored record is a fact.
+    if ([int]$question.followsUp -ge 1 -and $State.questions.ContainsKey([int]$question.followsUp)) {
+        Add-HordeDecisionAsked -Question $State.questions[[int]$question.followsUp] -Ev $Ev -How "follow-up" -By "$($question.askedBy)" -Note ("follow-up question " + $number)
+    }
     $State.questions[$number] = $question
     $State.lastNumber = $number
     $State.pending = 0
@@ -896,6 +952,24 @@ function Step-HordeDecisionRanked {
     }
     if ($changed.Count -eq 0) { return ("it changes nothing: question " + $question.number + " already has that importance and that blocking") }
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note ("ranked: " + ($changed -join ", "))
+    return ""
+}
+
+function Step-HordeDecisionReminded {
+    # The keeper raised a question again - in chat, or by a reminder (above, WHEN A QUESTION WAS ASKED).
+    # Its own record: it adds an entry to the question's "asked" and a line to its history, and moves no
+    # wording, no state and no turn. Only an open question is asked again: a closed one is off every list,
+    # and what is left to ask of it is a follow-up. Every reminder applies, the same words twice included:
+    # each is a moment it was asked; the same request sent twice under one id is still one record.
+    param($State, $Ev)
+    $target = Get-HordeDecisionTarget -State $State -Ev $Ev
+    if ($null -eq $target.question) { return $target.why }
+    $question = $target.question
+    if ($question.state -cne "open") { return ("question " + $question.number + " is " + $question.state + ", and only an open question is asked again. " + ($script:HordeDecisionRemindClosedAdvice -f $question.number)) }
+    $note = ""
+    if (Test-HordeDecisionMember -Object $Ev.data -Name "note") { $note = [string]$Ev.data.note }
+    Add-HordeDecisionAsked -Question $question -Ev $Ev -How "remind" -By "$($Ev.actor)" -Note $note
+    Add-HordeDecisionHistory -Question $question -Ev $Ev -Note $(if ($note -ne "") { "asked again: " + $note } else { "asked again" })
     return ""
 }
 
@@ -1030,6 +1104,10 @@ function Step-HordeDecisionSaid {
             $passes = ($partStands -and @(Get-HordeDecisionParts -Question $question | Where-Object { -not $question.partsAnswered.Contains("$($_.letter)") }).Count -eq 0)
         }
         if ($passes) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }
+        # THE KEEPER'S WORDS THAT ASK ASK THE QUESTION AGAIN (above, WHEN A QUESTION WAS ASKED). Only
+        # here: under an open question, words that ask, and no act. A note asks nothing, and words under
+        # a closed question take no turn and ask nobody.
+        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }
     }
     return ""
 }
@@ -1292,6 +1370,16 @@ function ConvertTo-HordeDecisionView {
     $view["blocksShown"] = (Get-HordeDecisionRankShown -Name "blocks" -Word "$($Question.blocks)")
     if ([int]$Question.followsUp -ge 1) { $view["followsUp"] = (ConvertTo-HordeDecisionFollowsUpView -State $State -Number ([int]$Question.followsUp)) }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
+    # WHEN IT WAS ASKED (above): the first entry and the newest after it, up to the cap, oldest first;
+    # how many there are in all; and the last one's time, which is what the Date order sorts by.
+    # A question handed in without the list - built by hand, not by the fold - reads as asked once, at addedAt.
+    $all = @([pscustomobject]@{ at = "$($Question.addedAt)"; how = "first"; by = "$($Question.askedBy)"; note = "" })
+    if (Test-HordeDecisionMember -Object $Question -Name "asked") { $held = Get-HordeDecisionMember -Object $Question -Name "asked"; if (@($held).Count -gt 0) { $all = @($held) } }
+    $kept = $all
+    if ($all.Count -gt $script:HordeDecisionAskedViewMost) { $kept = @($all[0]) + @($all[($all.Count - $script:HordeDecisionAskedViewMost + 1)..($all.Count - 1)]) }
+    $view["asked"] = @($kept | ForEach-Object { [pscustomobject]@{ at = "$($_.at)"; how = "$($_.how)"; by = "$($_.by)"; note = "$($_.note)" } })
+    $view["askedCount"] = $all.Count
+    $view["lastAskedAt"] = "$($all[$all.Count - 1].at)"
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view
 }

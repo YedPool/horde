@@ -72,6 +72,12 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     reopen = @{ number = $true;  flags = @("Reason", "Id", "Json");                 usage = "reopen <number> -Reason <one line> [-Id <32 hex>] [-Json]" }
     # rank: correct the two words that stand beside a question, the ones add takes.
     rank   = @{ number = $true;  flags = @("Importance", "Blocks", "Id", "Json");   usage = "rank <number> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-Id <32 hex>] [-Json]" }
+    # remind: the keeper asks an open question again - he raised it in chat, or reminds the founder -
+    # which moves it up his Date order. -Note <text> is why, on one line of plain ASCII. -Note is the
+    # same flag reply takes as a switch, so its text arrives as the next word on the command line
+    # (NoteText, cli/commands/decisions.ps1): a flag cannot be a switch to one verb and a text to another.
+    # noteText says this verb takes that word; it is no flag anybody types, so it is not among the flags.
+    remind = @{ number = $true;  flags = @("Note", "Id", "Json");                   usage = "remind <number> [-Note <text>] [-Id <32 hex>] [-Json]"; noteText = $true }
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
@@ -306,6 +312,18 @@ function Get-HordeDecisionRankWords {
     return ($words -join "; ")
 }
 
+function Format-HordeDecisionAskedLine {
+    # When a question was last asked, as one line - "asked 2026-10-14 16:05 UTC", and when that was not
+    # the first time, how many times and when first - or "" for an answer from an earlier version, which
+    # carries no lastAskedAt.
+    param($Question)
+    if ($null -eq $Question.PSObject.Properties["lastAskedAt"]) { return "" }
+    $line = "asked " + (Format-HordeDecisionTime -At "$($Question.lastAskedAt)")
+    $first = @($Question.asked) | Select-Object -First 1
+    if ([int]$Question.askedCount -gt 1 -and $null -ne $first) { $line = "last " + $line + " (" + $Question.askedCount + " times; first " + (Format-HordeDecisionTime -At "$($first.at)") + ")" }
+    return $line
+}
+
 function Get-HordeDecisionAnsweredLine {
     # For the keeper's list: what the founder answered under an open question that is no longer his
     # turn, as one line - the first line of his last words, or of each part's - or "" when he has
@@ -354,6 +372,8 @@ function Format-HordeDecisionList {
             [void]$lines.Add($pad + $meta)
             $rank = Get-HordeDecisionRankWords -Question $q
             if ($rank -ne "") { [void]$lines.Add($pad + $rank) }
+            $askedLine = Format-HordeDecisionAskedLine -Question $q
+            if ($askedLine -ne "") { [void]$lines.Add($pad + $askedLine) }
             if ($null -ne $q.PSObject.Properties["followsUp"]) { [void]$lines.Add($pad + "follows up on question " + $q.followsUp.number + $(if ("$($q.followsUp.title)" -ne "") { ": " + (Get-HordeDecisionFirstLine -Text "$($q.followsUp.title)") } else { "" })) }
             if ("$($q.recommendation)".Trim() -ne "") { [void]$lines.Add($pad + "recommended: " + (Get-HordeDecisionFirstLine -Text $q.recommendation)) }
             # A question nobody has spoken under says nothing here: it is the founder's turn, as for
@@ -424,6 +444,13 @@ function Format-HordeDecisionQuestion {
     if ($q.needsSecret) { [void]$lines.Add("Needs a secret: yes. Never write the secret into this list or into an answer; give it outside.") }
     if ("$($q.outcome)".Trim() -ne "") { Add-HordeDecisionTextBlock -Lines $lines -Heading ("Closed " + (Format-HordeDecisionTime -At $q.closedAt) + ", with this outcome:") -Text $q.outcome }
     if ("$($q.reopenReason)".Trim() -ne "") { [void]$lines.Add("Last reopened because: " + $q.reopenReason) }
+    $whenAsked = @()
+    if ($null -ne $q.PSObject.Properties["asked"]) { $whenAsked = @($q.asked) }
+    if ($whenAsked.Count -gt 0) {
+        [void]$lines.Add("")
+        [void]$lines.Add("Asked " + $q.askedCount + " time(s)" + $(if ([int]$q.askedCount -gt $whenAsked.Count) { " (the first and the newest " + ($whenAsked.Count - 1) + " shown)" } else { "" }) + ":")
+        foreach ($a in $whenAsked) { [void]$lines.Add("  " + (Format-HordeDecisionTime -At $a.at) + "  " + $a.how + " (by " + $a.by + ")" + $(if ("$($a.note)" -ne "") { ": " + $a.note } else { "" })) }
+    }
     [void]$lines.Add("")
     [void]$lines.Add("History:")
     foreach ($h in @($q.history)) { [void]$lines.Add("  " + (Format-HordeDecisionTime -At $h.at) + "  " + $h.note + " (by " + $h.actor + ", record " + $h.sequence + ")") }
@@ -477,9 +504,10 @@ function Format-HordeDecisionAnswer {
         if ($value.message.saidToEarlierWording) { [void]$lines.Add("  NOTE: they were said to wording " + $value.message.wordingVersion + ", and the question is now at wording " + $value.question.wordingVersion + ". They are kept, and marked as said to an earlier wording.") }
     }
     else {
-        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question " }
+        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question "; remind = "Asked again: question " }
         [void]$lines.Add($done[$Verb] + $value.number + ": " + $value.question.title)
         if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
+        if ($Verb -ceq "remind") { [void]$lines.Add("  " + (Format-HordeDecisionAskedLine -Question $value.question)) }
         if ($Verb -ceq "add") {
             # WHERE IT STANDS IN HIS LIST, said back so that a keeper who gave neither word sees what
             # the question reads as, and how to change it.
@@ -560,6 +588,9 @@ function Invoke-HordeDecisionCommand {
     if ($Verb -ceq "inbox") { $writes = $false }
     foreach ($flag in @($have.Keys)) {
         if ($flag -eq "Verb" -or $flag -eq "Number") { continue }
+        # NoteText is no flag anybody types: it is the word after the number and the flags, which only
+        # remind's -Note takes. Said as that, and the word is not repeated.
+        if ($flag -eq "NoteText") { if (-not $spec.ContainsKey("noteText")) { throw ("decisions " + $Verb + " takes no further word on its command line" + $usageNote) }; continue }
         if ($spec.flags -notcontains $flag) { throw ("-" + $flag + " does not belong to decisions " + $Verb + $usageNote) }
     }
     $request = [ordered]@{}
@@ -594,6 +625,13 @@ function Invoke-HordeDecisionCommand {
         }
         "rank" {
             if (-not $have.ContainsKey("Importance") -and -not $have.ContainsKey("Blocks")) { throw ("decisions rank needs -Importance, -Blocks, or both: the word to change" + $usageNote) }
+        }
+        "remind" {
+            # -Note and its text come together or not at all; whether the text may be written is the
+            # operations' to say, by name, and nothing of it is repeated here.
+            $noted = ($have.ContainsKey("Note") -and [bool]$have["Note"])
+            if ($noted -ne $have.ContainsKey("NoteText")) { throw ("decisions remind takes a note as -Note <text>: the flag and its text together, as in: horde decisions remind 7 -Note ""raised again in chat""" + $usageNote) }
+            if ($noted) { $request["note"] = "$($have['NoteText'])" }
         }
         "update" {
             if (-not $have.ContainsKey("File")) { throw ("decisions update needs -File <changes.json>: a JSON file holding only the fields to change" + $usageNote) }
