@@ -19,6 +19,10 @@ $script:HordeCloudflareRelaySettings = New-HordeModuleSettings -Module "relay-cl
        what = "The Google OAuth client JSON the deploy reads; empty means .horde-secrets\google-oauth-client.json in the user's profile." },
     @{ name = "wranglerScript"; kind = "text"; default = ""; min = 0; max = 1024
        what = "A wrangler command line (a .js file node runs) to deploy with; empty means the pinned one, installed outside the repository." },
+    # THE CHECK AFTER A DEPLOY (Deploy.ps1) asks the deployed relay itself; a suite points it at a local
+    # stand-in, as it points wranglerScript at a fake, and nothing else is taken (http to this machine).
+    @{ name = "deployCheckOrigin"; kind = "text"; default = ""; min = 0; max = 64
+       what = "Where the deploy checks the client id sign-in sends to Google; empty means the relay's own origin. Only http://127.0.0.1:<port>, for a test's stand-in." },
     # SIGN-IN (relay PR 8b, SignInAllowlist.ps1): public by default; true here is the one switch.
     @{ name = "signInAllowlistOn"; kind = "truefalse"; default = $false
        what = "Whether only the accounts in signInAllowlist may sign in to the relay; false lets any Google account sign up." },
