@@ -745,6 +745,9 @@ const PH = await load("app/photo.js");
   check(s.textLike && s.flat >= 0.5 && s.edges >= 0.02, "a screenshot of text is text-like: a few flat colours, many hard edges", JSON.stringify(s));
   check(!p.textLike && p.flat < 0.5, "a photo is not: its colours spread over many", JSON.stringify(p));
   check(!w.textLike && w.flat === 1 && w.edges === 0, "a white wall is flat but has no edges: not text", JSON.stringify(w));
+  const leaves = pixels(() => (rnd() < 0.5 ? [20, 60 + rnd() * 120, 10] : [200 + rnd() * 55, 230, 120 + rnd() * 100]));
+  const l = PH.textLikeness(leaves, W, H);
+  check(!l.textLike && l.edges >= 0.02 && l.flat < 0.5, "a photo of leaves has hard edges but is not flat: not text", JSON.stringify(l));
   const big = PH.targetSize(4000, 3000, false), tall = PH.targetSize(1440, 3200, true), small = PH.targetSize(800, 600, false);
   check(big.width === 1600 && big.height === 1200 && tall.height === 2000 && tall.width === 900 && small.width === 800, "a photo's longest side is 1600 px, text's 2000, and nothing is enlarged", JSON.stringify([big, tall, small]));
   // A made-up encoder: its JPEG's length grows with the pixels and the quality, as a real one's does.

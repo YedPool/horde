@@ -309,6 +309,22 @@ try {
     $null = Send-Manifest $W $P6b
     $turn = Invoke-Turn $W
     Check ($turn.Contains("refused (expired)") -and $turn.Contains("after it was signed")) ("a manifest whose window is longer than the setting is refused (" + $turn + ")")
+    # WHAT THE MANIFEST BINDS, each a lie the founder's own passkey signed: refused, with its code.
+    $lies = [ordered]@{
+        "wrong-sender (from)" = @{ from = ("ab" * 16) }
+        "wrong-sender (seq)" = @{ seq = 999 }
+        "wrong-machine" = @{ machine = ("cd" * 16) }
+        "wrong-horde" = @{ horde = "home" }
+        "wrong-mailbox" = @{ mailbox = "work/elsewhere" }
+        "no-phone-key" = @{ phoneKey = ("ef" * 16) }
+    }
+    foreach ($code in $lies.Keys) {
+        $Pl = New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -Set $lies[$code]
+        $null = Send-Manifest $W $Pl
+        $turn = Invoke-Turn $W
+        $want = "refused (" + $code.Split(" ")[0] + ")"
+        Check ($turn.Contains($want) -and -not (Test-Path -LiteralPath (Join-Path $W.home ("relay\chat\photos\open\" + $Pl.from + "-" + $Pl.id)))) ("a manifest that lies about its " + $code + " is refused, and nothing is kept (" + $turn + ")")
+    }
 
     Write-Host ""
     Write-Host "--- 5. a part changed at rest, or a whole that does not hash, writes nothing ---" -ForegroundColor Cyan
@@ -320,7 +336,7 @@ try {
     $bytes = [System.IO.File]::ReadAllBytes($at); $bytes[100] = $bytes[100] -bxor 1; [System.IO.File]::WriteAllBytes($at, $bytes)
     $before = @(Get-InboxFiles $W).Count
     $t = Invoke-Tick $W
-    Check ($t.Contains("refused (damaged)") -and @(Get-InboxFiles $W).Count -eq $before) ("TAMPERED at rest: nothing is written, the phone told damaged (" + $t + ")")
+    Check ($t.Contains("refused (damaged)") -and $t.Contains("part 2 no longer has its digest") -and @(Get-InboxFiles $W).Count -eq $before) ("TAMPERED at rest: caught by its digest, nothing is written, the phone told damaged (" + $t + ")")
     $img8 = New-ImageBytes -Type "jpg" -Length 50000
     $P8 = New-Photo -World $W -Image $img8 -Set @{ sha256 = ("ab" * 32) }
     $null = Send-Manifest $W $P8

@@ -1,0 +1,35 @@
+# Mutations of the phone's photos (surfaces/pwa/page/phone-core.js, THE PHOTOS; shape B, 2026-10-14).
+# Applied by hand, one at a time:
+#   powershell -File tools\Mutate.ps1 -Spec test\mutations\pwa-photos.psd1
+# surfaces\pwa\test\test-pwa-site.ps1 must fail for every one. Every find string occurs exactly once.
+# The shrink and the heuristic are pwa-photo-shrink.psd1's; the bytes on the wire pwa-photo-protocol.psd1's.
+@{
+    Target = "surfaces\pwa\page\phone-core.js"
+    Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
+    Mutations = @(
+        @{ Name = "photo-sent-to-a-machine-that-offers-none"
+           Find = '      if (!s.chat.photoBytes) throw fail(P.PHOTO_PC_OLD);'
+           Replace = '' }
+        @{ Name = "photo-not-an-image-sent"
+           Find = '      if (!P.sniffImage(bytes)) throw fail(P.PHOTO_NOT_IMAGE);'
+           Replace = '' }
+        @{ Name = "photo-over-the-machines-size-sent"
+           Find = '      if (bytes.length > s.chat.photoBytes) throw fail('
+           Replace = '      if (false) throw fail(' }
+        @{ Name = "photo-sent-from-the-recovery-code"
+           Find = '      if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to send a photo.");'
+           Replace = '' }
+        @{ Name = "photo-parts-not-paced"
+           Find = '        if (puts >= PHOTO_BURST) await sleep(PHOTO_PACE_MS);'
+           Replace = '' }
+        @{ Name = "photo-a-tap-a-part"
+           Find = '          const r = await relay.put(e.machineMailbox, p.key, p.text);'
+           Replace = '          await assertWith(e)(new Uint8Array(32)); const r = await relay.put(e.machineMailbox, p.key, p.text);' }
+        @{ Name = "photo-offer-not-learnt"
+           Find = 'c.sessionSeq = h.seq; c.photoBytes = r.value.photoBytes; }'
+           Replace = 'c.sessionSeq = h.seq; }' }
+        @{ Name = "photo-receipts-not-read"
+           Find = '      c.photoReceipts.push({ ...r.value, seq: h.seq, ts: h.ts });'
+           Replace = '' }
+    )
+}
