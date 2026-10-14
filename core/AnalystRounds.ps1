@@ -73,7 +73,26 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
     @{ name = "wakeNowMarkers"; kind = "text"; default = "URGENT,QUESTION"; min = 1; max = 200
        what = "First words, comma separated, that make a mail from the warchief wake the analyst at once." },
     @{ name = "ackMinutes"; kind = "whole"; default = 15; min = 1; max = 240
-       what = "How long, in minutes, a round may wait for its ack before the warchief and the founder are told." }
+       what = "How long, in minutes, a round may wait for its ack before the warchief and the founder are told." },
+    # THE SESSION (core/AnalystSession.ps1). 120k is the warchief's cap of 2026-10-14: a fresh start
+    # measured 62k to 67k, so a session gets about ten wakes of 4.7k each before it is replaced.
+    @{ name = "contextCapTokens"; kind = "whole"; default = 120000; min = 20000; max = 2000000
+       what = "Past this many tokens of context, the next round goes to a fresh session started from the handover file." },
+    @{ name = "startWaitMinutes"; kind = "whole"; default = 20; min = 2; max = 240
+       what = "How long, in minutes, a fresh session has to write its handover file before the warchief is told." },
+    @{ name = "restartMinMinutes"; kind = "whole"; default = 30; min = 5; max = 1440
+       what = "The least time, in minutes, between two starts of a fresh session." },
+    # EMPTY BY DEFAULT: nothing is started until a person has named the script that starts it.
+    @{ name = "spawnScript"; kind = "folder"; default = ""
+       what = "The absolute path of the .ps1 that starts a fresh analyst. Empty: never start one; tell the warchief." },
+    # ON BY DEFAULT, as the supervisor of services is: a trouble nobody is told of is the failure this
+    # module exists to end. A test's home under the temp folder tells nobody whatever this says.
+    @{ name = "tellWarchief"; kind = "truefalse"; default = $true
+       what = "Whether the warchief is told when the analyst is started, cannot be started, or does not answer." },
+    @{ name = "notifyFounder"; kind = "truefalse"; default = $true
+       what = "Whether the founder's phone is told when a round gets no ack in time." },
+    @{ name = "fromLabel"; kind = "label"; default = "AS"
+       what = "The hub label the supervisor's messages wear, so a messenger can say who they are from." }
 )
 
 $script:HordeAnalystMarkerPattern = '\A[A-Z][A-Z0-9-]{1,23}\z'
@@ -238,7 +257,7 @@ function Read-HordeAnalystMail {
                 $reader = New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false)), $true)
                 $buffer = New-Object char[] $script:HordeAnalystMarkerReadChars
                 $n = $reader.Read($buffer, 0, $buffer.Length)
-                if ($n -gt 0) { $start = New-Object string($buffer, 0, $n) }
+                if ($n -gt 0) { $start = [string]::new($buffer, 0, $n) }
             } finally { $stream.Dispose() }
             [void]$out.Add([pscustomobject]@{ id = [System.IO.Path]::GetFileNameWithoutExtension($name); path = $path; marker = (Get-HordeAnalystMailMarker -Text $start -Markers $Markers) })
         }
