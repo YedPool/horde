@@ -1,10 +1,10 @@
 # ONE RUN OF A BROWSER SUITE, CUT SHORT ONE WAY, for test/test-browser-cleanup.ps1. Shaped as the real
-# suites are (relays/cloudflare/test/test-cloudflare-accounts.ps1, surfaces/pwa/test/test-pwa-browser.ps1):
+# suites are (the hosted relay's accounts suite, surfaces/pwa/test/test-pwa-browser.ps1):
 # the browser started through -Launcher inside a try, a node driver reaching it, and the launcher's
 # cleanup in the finally. -Mode says how the run ends:
 #   pass           the driver finishes (its input closed) and the run ends normally;
 #   throw          an error thrown mid-suite;
-#   timeout        the driver does not finish in time: the run kills it, as Invoke-HordeCloudflareRelayNode
+#   timeout        the driver does not finish in time: the run kills it, as the hosted relay's node runner
 #                  does on its timeout, and fails;
 #   driver-killed  the run waits on its driver, and the TEST kills the driver;
 #   wait           the run waits for ever: the test stops it (Ctrl+C) or kills this process.

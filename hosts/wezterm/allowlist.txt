@@ -24,6 +24,7 @@ core/Identity.ps1 | 1 | a comment cites the wezfleet fallback through WEZTERM_PA
 core/Schema.ps1 | 1 | a comment cites the plugin's case-sensitive Lua lookup of session_id as the reason keys are compared exactly (review of PR 15)
 core/Tristate.ps1 | 1 | the header quotes the historical unknown "wezterm did not answer" that the old code resolved four different ways, which is why this module exists
 core/ownership.json | 7 | the ownership table catalogues the stores of the system being replaced, and three are WezTerm's own: its live pane list, the pane environment and the plugin's layout saves; they leave core when a host contributes its own stores
+core/json-parse-allowlist.txt | 2 | the raw JSON parse list (issue #274) names by path the two files in this host's folder that still call ConvertFrom-Json; each line leaves when its file moves to ConvertFrom-HordeJson
 
 # --- the contract: the existing pane-session file format, documented exactly as the old system writes it.
 schema/pane-session.v1.json | 3 | Phase 1 documents the existing pane-session file, whose name is a WezTerm pane number and whose only reader today is the WezTerm-side wezfleet code
