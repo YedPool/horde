@@ -67,6 +67,57 @@ function Throws {
     try { $null = & $Block; return $false } catch { return ("$($_.Exception.Message)" -like "*$Like*") }
 }
 
+# READING A MEMBER THAT A MUTANT CAN DROP. Under Set-StrictMode, `$body.thrall.orcs` raises an error when
+# any step of it is missing. Inside Check(...) that error makes the check vanish (above), and in a suite
+# built as one top-level try the trap's `continue` resumes after the try, skipping every later check
+# (issue 216). So a mutant that drops a member ended its suite with no failed check, and
+# tools\Mutate.ps1 rightly reported "the suite broke" instead of a catch: three after-merge mutation
+# nets in a row (PR 239's node-act, PR 259's notices, the cards channel) found suites doing exactly that.
+#
+# Read such a member through Get-HordeTestMember instead. It answers what a read WITHOUT strict mode
+# would: the value, or $null when any step of the path is missing - so a check written against the
+# plain read asserts exactly the same thing, and fails by its own name when the member is gone. It never
+# raises an error. A list comes back the way any PowerShell function returns one (an empty list as
+# nothing, one item as that item), so count a list with @(...) as usual. Test-HordeTestMember says
+# whether the whole path is there, for a check whose rule is that the member exists, or to tell a
+# member that is $null from one that is missing.
+#
+#   Check ((Get-HordeTestMember $b "thrall.orcs") -eq 3) "the Thrall's card counts three Orcs"
+#   Check (Test-HordeTestMember $b "thrall.census") "the Thrall's card carries the census"
+#
+# A path is member names separated by dots. A step reads a property of an object, or a key of a
+# dictionary (a hashtable); case is ignored, as PowerShell's own member access ignores it.
+
+function Resolve-HordeTestMember {
+    # { found; value } for -Path under -Object. Wrapped in an object so a list is not unrolled on the way.
+    param($Object, [Parameter(Mandatory = $true)][string]$Path)
+    $cur = $Object
+    foreach ($step in ($Path -split '\.')) {
+        if ($null -eq $cur -or $step -eq "") { return [pscustomobject]@{ found = $false; value = $null } }
+        if ($cur -is [System.Collections.IDictionary]) {
+            if (-not $cur.Contains($step)) { return [pscustomobject]@{ found = $false; value = $null } }
+            $cur = $cur[$step]
+            continue
+        }
+        $p = $cur.PSObject.Properties[$step]
+        if ($null -eq $p) { return [pscustomobject]@{ found = $false; value = $null } }
+        $cur = $p.Value
+    }
+    return [pscustomobject]@{ found = $true; value = $cur }
+}
+
+function Get-HordeTestMember {
+    # The value at -Path under -Object, or $null when any step is missing. Never raises an error.
+    param($Object, [Parameter(Mandatory = $true)][string]$Path)
+    return (Resolve-HordeTestMember -Object $Object -Path $Path).value
+}
+
+function Test-HordeTestMember {
+    # Is every step of -Path there under -Object? Exactly $true or $false; never raises an error.
+    param($Object, [Parameter(Mandatory = $true)][string]$Path)
+    return [bool](Resolve-HordeTestMember -Object $Object -Path $Path).found
+}
+
 function Register-HordeSuiteError {
     # Called by the suite's trap line. Records an error no test expected, so the suite cannot pass.
     param($ErrorRecord)

@@ -44,6 +44,30 @@ Check ((Throws { "noise"; 42 } "x") -eq $false) "a block that prints and returns
 Check (Throws { throw "expected text" } "expected") "CONTROL: a block that throws with the text is"
 
 Write-Host ""
+Write-Host "--- a member a mutant dropped fails a check by name, not the suite with none ---" -ForegroundColor Cyan
+$dp = Invoke-Fixture "dropped-plain"
+Check ($dp.code -eq 1 -and $dp.out -like "*[[]ERROR]*" -and $dp.out -notmatch '(?m)^\s*\[FAIL\]' -and $dp.out -notlike "*a check after the dropped member*") "CONTROL: read plainly in one big try, a dropped member ends the suite with an error and NO failed check, and skips the checks after it (the crash the mutation nets found)"
+$ds = Invoke-Fixture "dropped-safe"
+Check ($ds.code -eq 1 -and $ds.out -match "(?m)^\s*\[FAIL\] the Thrall's card counts one run" -and $ds.out -notlike "*[[]ERROR]*" -and $ds.out -like "*[[]PASS] a check after the dropped member*") "read through Get-HordeTestMember, the same dropped member fails the check that names it, with no error, and the checks after it still run"
+# The helper itself, under strict mode as the suites that need it run.
+$member = & {
+    Set-StrictMode -Version Latest
+    $o = [pscustomobject]@{ a = [pscustomobject]@{ b = 7; n = $null; list = @(1, 2, 3); one = @("x"); none = @() }; h = @{ k = "v" }; zero = 0; f = $false; s = "" }
+    [pscustomobject]@{
+        deep = (Get-HordeTestMember $o "a.b"); missing = (Get-HordeTestMember $o "a.c"); missingMid = (Get-HordeTestMember $o "x.y.z")
+        throughNull = (Get-HordeTestMember $o "a.n.deeper"); fromNull = (Get-HordeTestMember $null "a"); dict = (Get-HordeTestMember $o "h.k"); dictMissing = (Get-HordeTestMember $o "h.q")
+        list = @(Get-HordeTestMember $o "a.list").Count; one = @(Get-HordeTestMember $o "a.one").Count; none = @(Get-HordeTestMember $o "a.none").Count
+        hasNull = (Test-HordeTestMember $o "a.n"); hasMissing = (Test-HordeTestMember $o "a.c"); hasDeep = (Test-HordeTestMember $o "a.b"); hasEmptyStep = (Test-HordeTestMember $o "a..b")
+        zero = (Get-HordeTestMember $o "zero"); f = (Get-HordeTestMember $o "f"); s = (Get-HordeTestMember $o "s"); caseless = (Get-HordeTestMember $o "A.B")
+    }
+}
+Check ($member.deep -eq 7 -and $member.dict -ceq "v" -and $member.caseless -eq 7) "it reads a member, a dictionary key, and ignores case as PowerShell's own member access does"
+Check ($null -eq $member.missing -and $null -eq $member.missingMid -and $null -eq $member.throughNull -and $null -eq $member.fromNull -and $null -eq $member.dictMissing) "a missing member, a missing step, a step through `$null, a `$null object and a missing key each read as `$null, with no error"
+Check ($member.list -eq 3 -and $member.one -eq 1 -and $member.none -eq 0) "a list counts under @() as the plain read would"
+Check ($member.zero -is [int] -and $member.zero -eq 0 -and $member.f -is [bool] -and -not $member.f -and $member.s -is [string] -and $member.s -ceq "") "a value that is 0, false or empty comes back as itself, not as missing"
+Check ($member.hasDeep -eq $true -and $member.hasNull -eq $true -and $member.hasMissing -eq $false -and $member.hasEmptyStep -eq $false) "Test-HordeTestMember tells a member that is `$null from one that is missing, and answers exactly true or false"
+
+Write-Host ""
 Write-Host "--- every suite is built the same way ---" -ForegroundColor Cyan
 
 # Checked on the syntax tree of every suite the gate runs - test/test-*.ps1 and each host's,

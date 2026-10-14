@@ -57,6 +57,7 @@ Check ($rtCode -ne 0 -and @($rt | Where-Object { $_ -match '\[BAD\] throws-at-ru
 $hc = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-helper-crash.psd1" | ForEach-Object { "$_" })
 $hcCode = $LASTEXITCODE
 Check ($hcCode -ne 0 -and @($hc | Where-Object { $_ -match '\[BAD\] throws-under-the-helper: the suite broke' }).Count -eq 1) "a mutant that crashes a suite built on the shared helper is not counted as caught"
+Check (@($hc | Where-Object { $_ -match '^\s+\[ERROR\] an error no test expected' }).Count -ge 1) ("and the error that broke it is shown under it, so the reader sees which read broke the suite (" + (@($hc | Select-Object -Last 4) -join " | ") + ")")
 
 # A SPEC'S ENVIRONMENT IS ITS OWN. A suite that needs a variable for mutation runs (test-projection's
 # HORDE_SKIP_REALITY) gets it from the spec, set for that run and cleared after, never from whatever
