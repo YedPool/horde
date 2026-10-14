@@ -8,11 +8,13 @@
 #      (relay PR 8b: off by default, written as the Worker reads it) - each value on standard input exactly - no byte order
 #      mark, no line end - and in no argument; then the deploy; of the production config, which names no
 #      test binding, serving the app built with the http transport at its own origin; quiet; and
-#      nothing said holds a value; the work folders are gone after; the redirect-address note;
+#      nothing said holds a value; the work folders are gone after; the redirect-address note; the
+#      relay's owners as one plain --var of the deploy, or - with none set - a warning and no --var;
 #   2. refusals before wrangler is ever run: no client file, one inside the repository, one that is not
 #      JSON, not a web client, a malformed id, no secret, a relative path, a settings file that fails
 #      its checks, a wranglerScript that is not there, an allowlist entry that is neither an email nor a
-#      Google account id, an allowlist switched on with nobody on it - each reason free of the values
+#      Google account id, an allowlist switched on with nobody on it, an owner named by email, one owner
+#      past the most - each reason free of the values
 #      planted in it;
 #   3. a wrangler that fails: at a secret, nothing is deployed; at the deploy, it says so; and what it
 #      printed reaches the founder with the values hidden;
@@ -113,6 +115,8 @@ try {
     $saidAll = $d.said -join "`n"
     Check (-not (Holds-Value $saidAll) -and $saidAll.Contains("stored GOOGLE_CLIENT_SECRET") -and $saidAll.Contains("https://relay.example.workers.dev")) "what the deploy says names each step and passes wrangler's words on, and holds no value"
     Check ($saidAll.Contains("note: the Google client does not list " + $callback)) "a client that does not list the relay's return address gets a note naming it"
+    $argvNoOwner = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
+    Check ($saidAll.Contains("warning: the setting relayOwnerAccounts names no owner") -and $saidAll.Contains("shared by every account") -and -not $argvNoOwner.Contains("HORDE_RELAY_OWNER_ACCOUNTS") -and -not $argvNoOwner.Contains("--var")) "with no owner set the deploy warns that the relay keeps no reserve - its whole day shared - and passes no owners"
     $after = @(Get-DeployLeftovers | Where-Object { $before -notcontains $_ })
     Check ($after.Count -eq 0) ("the deploy's work folders are gone (" + ($after -join ", ") + ")")
     Set-Settings -Client (Write-Client -WithCallback)
@@ -130,6 +134,22 @@ try {
     $d = Deploy
     $runs = @(Read-Log)
     Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[2].stdin -ceq '{"on":false,"emails":["founder@example.com"],"subs":[]}') "switched off, the list is kept for the day it is switched on, and nobody is shut out"
+    # THE OWNERS (Owners.ps1): a plain --var of the deploy, never a secret and never in the committed config.
+    Set-Settings -Client (Write-Client -WithCallback) -More @{ relayOwnerAccounts = " 112233445566778899 ,998877665544332211,112233445566778899" }
+    Clear-Log
+    $d = Deploy
+    $runs = @(Read-Log)
+    $deployArgv = @($(if ($runs.Count -eq 4) { @($runs[3].argv) } else { @() }))
+    $at = [Array]::IndexOf([string[]]$deployArgv, "--var")
+    $ownersArg = $(if ($at -ge 0 -and $at + 1 -lt $deployArgv.Count) { "" + $deployArgv[$at + 1] } else { "" })
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $ownersArg -ceq "HORDE_RELAY_OWNER_ACCOUNTS:112233445566778899,998877665544332211" -and @($runs | Select-Object -First 3 | Where-Object { (@($_.argv) -join " ").Contains("OWNER") }).Count -eq 0) ("the owners go to the deploy as one --var: ids only, each once, in order - not a secret (" + $ownersArg + ")")
+    $saidOwners = $d.said -join " "
+    Check (-not $saidOwners.Contains("warning:") -and $saidOwners.Contains("the relay's owners: 2 Google account id(s)") -and -not $saidOwners.Contains("112233445566778899")) "with owners set there is no warning, and what the deploy says counts them without naming them"
+    Check (-not ([System.IO.File]::ReadAllText((Join-Path $root "relays\cloudflare\wrangler.json")).Contains("HORDE_RELAY_OWNER_ACCOUNTS"))) "CONTROL: the committed config names no owner"
+    Set-Settings -Client (Write-Client -WithCallback) -More @{ relayOwnerAccounts = ((1..16 | ForEach-Object { "1000" + $_ }) -join ",") }
+    Clear-Log
+    $d = Deploy
+    Check ($d.answer.state -ceq "known" -and @(Read-Log).Count -eq 4) ("CONTROL: sixteen owners, the most - one step below the refusal in part 2 - deploy (" + $d.answer.reason + ")")
 
     Write-Host ""
     Write-Host "--- 2. refusals, before wrangler is ever run ---" -ForegroundColor Cyan
@@ -144,7 +164,9 @@ try {
         @{ what = "a relative client path"; client = "secrets\client.json"; like = "absolute path" },
         @{ what = "a wranglerScript that is not there"; client = (Write-Client); wrangler = (Join-Path $work "no-wrangler.js"); like = "wranglerScript names no file" },
         @{ what = "an allowlist entry that is neither an email nor an account id"; client = (Write-Client); more = @{ signInAllowlist = ("founder@example.com, not-an-address " + $clientSecret) }; like = "signInAllowlist" },
-        @{ what = "an allowlist switched on with nobody on it"; client = (Write-Client); more = @{ signInAllowlistOn = $true; signInAllowlist = "" }; like = "nobody could sign in" }
+        @{ what = "an allowlist switched on with nobody on it"; client = (Write-Client); more = @{ signInAllowlistOn = $true; signInAllowlist = "" }; like = "nobody could sign in" },
+        @{ what = "an owner named by email, not by account id"; client = (Write-Client); more = @{ relayOwnerAccounts = "112233445566778899, founder@example.com" }; like = "relayOwnerAccounts holds an entry (number 2) that is not a Google account id (an email" },
+        @{ what = "seventeen owners, one past the most"; client = (Write-Client); more = @{ relayOwnerAccounts = ((1..17 | ForEach-Object { "1000" + $_ }) -join ",") }; like = "names more than 16" }
     )
     foreach ($c in $bad) {
         Set-Settings -Client $c.client -Wrangler $(if ($c.ContainsKey("wrangler")) { $c.wrangler } else { $fake }) -More $(if ($c.ContainsKey("more")) { $c.more } else { @{} })

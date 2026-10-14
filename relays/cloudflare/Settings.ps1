@@ -23,7 +23,10 @@ $script:HordeCloudflareRelaySettings = New-HordeModuleSettings -Module "relay-cl
     @{ name = "signInAllowlistOn"; kind = "truefalse"; default = $false
        what = "Whether only the accounts in signInAllowlist may sign in to the relay; false lets any Google account sign up." },
     @{ name = "signInAllowlist"; kind = "text"; default = ""; min = 0; max = 4096
-       what = "The Google accounts that may sign in once signInAllowlistOn is true: emails and Google account ids, separated by commas." }
+       what = "The Google accounts that may sign in once signInAllowlistOn is true: emails and Google account ids, separated by commas." },
+    # THE OWNERS (Owners.ps1, worker/budget.js): who may use the relay-wide reserve once the shared day is spent.
+    @{ name = "relayOwnerAccounts"; kind = "text"; default = ""; min = 0; max = 4096
+       what = "The relay's owners, who alone may use its reserve of the day's requests: Google account ids (digits), separated by commas. Empty: no reserve, and the deploy warns." }
 )
 # The default client file, under the user's profile.
 $script:HordeCloudflareRelayClientFileDefault = ".horde-secrets\google-oauth-client.json"
