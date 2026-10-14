@@ -351,7 +351,11 @@ $attacks += @(
     @{ found = $true; what = "a secret with a digit in a code span is still a secret"; text = ('`' + $six[5] + " = " + $made + '`') },
     @{ found = $true; what = "a secret with a digit and a semicolon in a code span"; text = ('`' + "export DB_" + "PASS" + "WORD=Sup3r" + "S3cret;" + '`') },
     @{ found = $true; what = "a letters-only value with only the backtick after it is still a value, as it is without one"; text = ('`' + $six[5] + " = lettersonlyvalue" + '`') },
-    @{ found = $true; what = "two backticks after a lookup are not a code span's one"; text = ($six[5] + " = config.db_" + $six[5] + '``') })
+    @{ found = $true; what = "two backticks after a lookup are not a code span's one"; text = ($six[5] + " = config.db_" + $six[5] + '``') },
+    @{ found = $false; what = "F3: a code span with the sentence's full stop after it (os.environ['DB_PASSWORD'])"; text = ("set " + '`' + $six[5] + " = os.environ['DB_" + "PASS" + "WORD']" + '`' + ". Then go on") },
+    @{ found = $false; what = "a code span with a comma and a closing parenthesis after it"; text = ("(as " + '`' + $six[5] + " = config.db_" + $six[5] + '`' + "), and more") },
+    @{ found = $true; what = "a secret with a digit in a code span is still a secret with a full stop after it"; text = ("use " + '`' + $six[5] + " = " + $made + '`' + ". Then go on") },
+    @{ found = $true; what = "a lookup with a word after its backtick is no code span's end"; text = ($six[5] + " = config.db_" + $six[5] + '`' + "x9") })
 foreach ($a in $attacks) { Check ((Test-Named $a.text) -eq $a.found) ($(if ($a.found) { "FOUND: " } else { "not found: " }) + $a.what) }
 Check (@($attacks | Where-Object { $_.found }).Count -ge 35 -and @($attacks | Where-Object { -not $_.found }).Count -ge 50) ("the rule was attacked from both sides: " + @($attacks | Where-Object { $_.found }).Count + " texts that must be found and " + @($attacks | Where-Object { -not $_.found }).Count + " that must not")
 # THE DEFAULT KINDS ARE UNCHANGED FOR EVERY CALLER: the folded and YAML forms above are found only

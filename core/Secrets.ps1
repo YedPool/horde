@@ -127,9 +127,12 @@ $script:HordeSecretRunKind = "a long random-looking string, as a key or token is
 #   quotes code puts it in a markdown code span, `password = config.db_password`, and the closing
 #   backtick is the last character of the bare value, so the reference no longer had its shape and
 #   was found. Measured round 2: 4 of the 5 hits of the old rule on the fleet's session files, and 4
-#   of the 6 of the new, were that one quoted line. The backtick changes nothing else: a value with
-#   a digit and no dot, bracket or , ; ) before it is still a value (`password = Sup3rS3cret9`), and
-#   so is a letters-only one with nothing but the backtick after it, as it is without one.
+#   of the 6 of the new, were that one quoted line. After the backtick, the punctuation of the
+#   sentence the span stands in (. , ; : or a closing parenthesis) is allowed too: measured round 3,
+#   the same files quote `password = os.environ['DB_PASSWORD']`. with a full stop after it. The
+#   backtick changes nothing else: a value with a digit and no dot, bracket or , ; ) before it is
+#   still a value (`password = Sup3rS3cret9`.), and so is a letters-only one with nothing but the
+#   backtick after it, as it is without one.
 #   AND AN UNQUOTED YAML VALUE MUST HOLD A DIGIT (the same review): after a colon, code and pages
 #   that explain a setting write words - password: required, api_key: optional, api_key: SecretStr,
 #   password: see-the-vault - and a secret of eight or more random characters almost never lacks
@@ -150,8 +153,9 @@ $script:HordeSecretNamedPattern = '(?<q>["''])(?<name>' + $script:HordeSecretNam
     '|(?<![A-Za-z0-9_-])(?<name>' + $script:HordeSecretNamedName + ')[ \t]*:[ \t]+(?:(?<y>["''])(?<value>(?:(?!\k<y>)\S){8,})\k<y>|(?<ybare>[^\s"''=]\S{7,}))(?=[ \t]*(?:\r|\n|\z|#))'
 # A REFERENCE IN CODE (the header): an identifier and then one or more .member or [index] parts
 # with any of , ; ) after them, or an identifier of letters and underscores only (no digit) and
-# then only those characters; either may end in one backtick, as a markdown code span closes.
-$script:HordeSecretNamedCodePattern = '\A(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])+[,;)]*|[A-Za-z_]+[,;)]+)`?\z'
+# then only those characters; either may end in one backtick, as a markdown code span closes, and
+# the sentence's own punctuation after it.
+$script:HordeSecretNamedCodePattern = '\A(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])+[,;)]*|[A-Za-z_]+[,;)]+)(?:`[.,;:)]*)?\z'
 $script:HordeSecretNamedPlaceholder = '[<>${]|\.\.\.|(?i:your|xxx|example|changeme|redacted)'
 # THE MARKER a hidden secret leaves. Its own characters match no pattern above (test/test-secrets.ps1
 # redacts a redacted text and requires no change), so redacting twice is redacting once.
