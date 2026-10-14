@@ -196,6 +196,9 @@ try {
     $O = $M.origin
     $day = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
     $expected = @{}
+    # The launcher's own readiness probe (Wrangler.ps1, Start-HordeCloudflareRelayDev): GET /v1/ until the
+    # dev answers, which only its first answered try reaches the Worker as - a 401 to nobody.
+    Add-Expected $expected "other|anonymous|unauthenticated"
     # THE MARKER: in mailbox names, keys and texts. Lower-case hex after a fixed start, so it is a legal
     # mailbox part, key and text, and nothing in a summary can be it by chance.
     $marker = "zqmk" + [guid]::NewGuid().ToString("N").Substring(0, 12)
