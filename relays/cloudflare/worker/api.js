@@ -59,7 +59,10 @@ import { handleRotation, ROTATION_PATH } from "./rotation.js";
 import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
+import { isLoopback } from "./site.js";
 import { ownersOf, tierOf } from "./budget.js";
+import { noteWho, noteOutcome } from "./metrics-request.js";
+import { handleMetricsSummary, METRICS_SUMMARY_PATH } from "./metrics-api.js";
 import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
@@ -122,7 +125,9 @@ async function get(url, box) {
   return answer(200, await box.read(a.since, a.max));
 }
 
-async function watch(request, url, box, device) {
+// local: the request was made to this machine itself, which the mailbox is told so a watch's end is
+// counted under the test override of the metrics settings there (metrics-request.js, recordWatchEnd).
+async function watch(request, url, box, device, local) {
   if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return refuse(426, "a watch is a WebSocket upgrade");
   const a = readArgs(url, true);
   if (a.refusal) return a.refusal;
@@ -131,6 +136,7 @@ async function watch(request, url, box, device) {
   inner.searchParams.set("max", String(a.max));
   inner.searchParams.set("timeoutMs", String(a.timeoutMs));
   inner.searchParams.set("device", device);
+  if (local) inner.searchParams.set("local", "1");
   return box.fetch(new Request(inner.href, { headers: { Upgrade: "websocket" } }));
 }
 
@@ -145,6 +151,7 @@ async function watch(request, url, box, device) {
 export const LIMITED = 4003;
 function refuseWatch(request, r) {
   if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return refusalOf(r);
+  noteOutcome(request, r.code);
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
   server.send(JSON.stringify({ error: r.reason, code: r.code }));
@@ -169,6 +176,8 @@ export async function handleApi(request, env, url) {
     if (who && who.status === 429) return refusalOf({ status: 429, code: who.code, reason: who.refusal, retryAfterMs: who.retryAfterMs });
     return refuse(401, who && who.refusal ? who.refusal : "this relay answers only a signed-in phone or a registered machine");
   }
+  noteWho(request, who);
+  if (url.pathname === METRICS_SUMMARY_PATH) return handleMetricsSummary(request, env, url, who);
   if (isAccountPath(url.pathname)) return handleAccountApi(request, env, url, who, limits);
   const m = ROUTE.exec(url.pathname);
   if (!m) return refuse(404, "there is no such relay operation");
@@ -185,6 +194,6 @@ export async function handleApi(request, env, url) {
   const box = mailboxOf(env, who.account, who.epoch, mailbox);
   if (op === "put") return put(request, url, box, limits, who.gated ? { account: who.account, epoch: who.epoch, mailbox } : null, who);
   if (op === "get") return get(url, box);
-  if (op === "watch") return watch(request, url, box, who.device);
+  if (op === "watch") return watch(request, url, box, who.device, isLoopback(url));
   return ack(request, box);
 }
