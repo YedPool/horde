@@ -66,7 +66,8 @@ async function tapCard(name) {
   await touch(c.x, c.y);
   return read();
 }
-async function tapOrder(word) { const r = await read(); const b = r.buttons.find((x) => x.text.indexOf(word) === 0); if (!b) return null; await touch(b.x, b.y); return read(); }
+// The order line brought onto the screen first: the cards above it can push it off.
+async function tapOrder(word) { await evaluate("document.querySelector('#list .hd-order').scrollIntoView({ block: 'center' }), true"); const r = await read(); const b = r.buttons.find((x) => x.text.indexOf(word) === 0); if (!b) return null; await touch(b.x, b.y); return read(); }
 async function tapFold() { await evaluate("document.querySelector('#list .hd-foldall').scrollIntoView({ block: 'center' }), true"); const r = await read(); if (!r.fold) return null; await touch(r.fold.x, r.fold.y); return read(); }
 const sorted = (s) => s.split(",").filter((x) => x).map(Number).sort((a, b) => a - b).join(",");
 
