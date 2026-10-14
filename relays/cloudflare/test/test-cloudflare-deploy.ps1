@@ -266,7 +266,8 @@ try {
         $why = "" + $d.answer.reason
         Check ($d.answer.state -ceq "unknown" -and $why.Contains("the relay was deployed, but its sign-in failed the check after the deploy") -and $why.Contains($c.like) -and @(Read-Log).Count -eq 4 -and -not (Holds-Value ($why + ($d.said -join " ")))) ("a relay whose sign-in sends " + $c.what + ": the deploy is reported failed, with no value in the reason (" + $why + ")")
     }
-    Set-Settings -Client (Write-Client -WithCallback) -Check "https://relay.example.workers.dev"
+    # Not 127.0.0.1, so refused - yet on this machine, so a mutant that took it would contact nothing.
+    Set-Settings -Client (Write-Client -WithCallback) -Check "http://localhost:9"
     Clear-Log
     $d = Deploy
     Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("deployCheckOrigin") -and @(Read-Log).Count -eq 0) ("the check can be pointed only at a stand-in on this machine: anything else is refused before wrangler runs (" + $d.answer.reason + ")")
