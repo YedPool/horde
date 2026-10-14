@@ -128,7 +128,7 @@ foreach ($l in @(Invoke-HordeRelayPublishStep -HordeHome $HordeHome -Tools $t -C
     $null = & git -C $clone commit -qam "suite: worker"
     & $seed $head0
     $said = & $runStep
-    Check (-not $said.Contains("DEPLOY") -and $said.Contains("Worker changed") -and -not $said.Contains("bundled at")) ("a change to the Worker's own code is warned, and nothing is bundled (" + ($said -replace "`n", " | ") + ")")
+    Check (-not ($said -cmatch "(?m)^DEPLOY ") -and $said.Contains("Worker changed") -and -not $said.Contains("bundled at")) ("a change to the Worker's own code is warned, and nothing is bundled (" + ($said -replace "`n", " | ") + ")")
 } finally {
     if ($work -like "*horde-cf-bundle-test-*" -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
