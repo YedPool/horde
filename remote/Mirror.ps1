@@ -11,7 +11,11 @@
 #     same: a mirror older than the link's silence window (remote/Clock.ps1, 60 s) is not current.
 #   - A PARTIAL INVENTORY NEVER MARKS A SESSION ABSENT. A session the node listed before and leaves out
 #     of an inventory whose complete is not known true is carried, unknown, with when it was last seen.
-#     Only a complete inventory can make a session absent (Get-HordeSessionLiveness, R6).
+#     Only a complete inventory can make a session absent (Get-HordeSessionLiveness, R6). A list that
+#     says it names every session the node has (membershipComplete, verbs version 2: the stores the
+#     node declares naming its sessions were read whole, and nothing was cut) is not carried from: a
+#     session it leaves out has ended, and is dropped. Dropped, not marked absent: its fields may be
+#     partial, so a lookup of the session stays unknown until an inventory is complete (L-101).
 #   - A KEY ON TWO DEVICES IS A FAULT. A session is (agent, sessionId) (link-verbs v1 session-summary).
 #     The same key listed by two devices is reported as a fault, both rows stay, and a lookup of the key
 #     is unknown naming both devices. It is never resolved by picking one.
@@ -164,18 +168,34 @@ function Limit-HordeMirrorCarried {
     return $kept.ToArray()
 }
 
+function Test-HordeMirrorTrue {
+    # Is a link answer known true - a real boolean true, never the text "true"? Anything else is not.
+    param($Answer)
+    $v = Get-HordeLinkProp $Answer "value"
+    return ("$(Get-HordeLinkProp $Answer 'state')" -ceq "known" -and $v -is [bool] -and $v)
+}
+
 function Test-HordeMirrorComplete {
     # Is a sessions.list value's complete known true? Anything else is partial.
     param($List)
-    $c = Get-HordeLinkProp $List "complete"
-    $v = Get-HordeLinkProp $c "value"
-    return ("$(Get-HordeLinkProp $c 'state')" -ceq "known" -and $v -is [bool] -and $v)
+    return (Test-HordeMirrorTrue (Get-HordeLinkProp $List "complete"))
+}
+
+function Test-HordeMirrorMembershipComplete {
+    # Does a sessions.list value say it names every session the node has (membershipComplete known
+    # true, link-verbs verbs version 2)? Absent - an older node, or a hub that offered only version 1 -
+    # false or unknown, and it does not: the list may leave out a live session.
+    param($List)
+    return (Test-HordeMirrorTrue (Get-HordeLinkProp $List "membershipComplete"))
 }
 
 function Update-HordeNodeMirror {
     # The mirror after a pull that returned -List, a sessions.list value as the link's decoder accepted
     # it. The list replaces the last one whole. A session the last inventory held, or carried, that this
-    # one leaves out is carried when this one is partial and dropped when it is complete. heardAt is
+    # one leaves out is carried when this one is partial and dropped when it is complete. It is
+    # dropped too when the list names every session the node has (membershipComplete) though its
+    # fields are partial: the always-on node has no host adapter, so its complete is never true, and
+    # every session that ended was carried forever (ledger core-projection L-101). heardAt is
     # the receive time; lost is cleared. -Clock is the ping's sample (Get-HordeClockSample), or $null.
     param([Parameter(Mandatory = $true)]$Mirror, [Parameter(Mandatory = $true)]$List, $NodeSentAt, $ReceivedAt, $Clock = $null, [string]$DeviceName = "")
     Assert-HordeMirrorUtc $NodeSentAt "the node's send time"
@@ -185,7 +205,7 @@ function Update-HordeNodeMirror {
     $listedIndex = @{}
     $carriedIndex = @{}
     foreach ($s in $now) { Add-HordeMirrorIndex -Index $listedIndex -Item $s -Key (Get-HordeMirrorKey $s) }
-    if (-not (Test-HordeMirrorComplete $List)) {
+    if (-not (Test-HordeMirrorComplete $List) -and -not (Test-HordeMirrorMembershipComplete $List)) {
         $old = Get-HordeLinkProp $Mirror "inventory"
         $seen = New-Object System.Collections.ArrayList
         $oldAt = "$(Get-HordeLinkProp $old 'receivedAt')"
@@ -324,6 +344,8 @@ function Get-HordeMirrorRows {
     # unknown, and nothing below is asked to age an answer with no time (review of PR #86, F7).
     if ($null -eq $sent -or $null -eq $got) { $node = New-HordeUnknown -Reason ((Get-HordeMirrorNodeName $Mirror) + ": the mirror's send or receive time cannot be read, so nothing it holds can be dated") }
     $list = Get-HordeLinkProp $inv "list"
+    # complete, not membershipComplete: every row here is a session the list holds (InInventory), for
+    # which Get-HordeSessionLiveness reads the node's own answer and never this flag.
     $complete = Test-HordeMirrorComplete $list
     $listAt = ConvertFrom-HordeMirrorTime (Get-HordeLinkProp $list "observedAt")
     # Every listed session is present by the same observation, the list's: worked out once.
@@ -370,6 +392,10 @@ function New-HordeFleetNode {
     $complete = New-HordeUnknown -Reason "no inventory has been received from this node"
     if ($null -ne $list) {
         $c = Get-HordeLinkProp $list "complete"
+        # complete, not membershipComplete: `horde nodes` shows whether the node's answers are whole, and
+        # Find-HordeFleetSession rules a session out only on a complete inventory. A membership-complete
+        # list with partial fields drops what it leaves out (Update-HordeNodeMirror), so its carried
+        # count falls to 0, but it never makes a lookup absent (L-101).
         if (Test-HordeMirrorComplete $list) { $complete = New-HordeKnown -Value $true }
         else { $complete = New-HordeKnown -Value $false; $complete.reason = "$(Get-HordeLinkProp $c 'reason')" }
     }

@@ -51,8 +51,9 @@ $script:HordeHubLockViolation = -2147024863
 # is about four of those; nodes are pulled one after another, so a slow one costs the rest of the
 # round at most this much.
 $script:HordeHubNodeBudgetMs = 45000
-# The verbs versions this hub speaks (link-verbs v1).
-$script:HordeHubVerbsVersions = @(1)
+# The verbs versions this hub speaks (link-verbs v1). 2: its reader accepts sessions.list's
+# membershipComplete, and remote/Mirror.ps1 drops what a membership-complete list leaves out (L-101).
+$script:HordeHubVerbsVersions = @(1, 2)
 # Unicode without a byte-order mark: a mirror file is the hub's own and read back by this file only.
 # Callers load core/ReadShared.ps1 and core/FileAtomic.ps1 (Read-HordeSharedText, Move-HordeFileAtomic).
 $script:HordeHubMirrorEncoding = New-Object System.Text.UTF8Encoding($false)

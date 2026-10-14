@@ -30,7 +30,7 @@ $root = Split-Path -Parent $here
 # -Section pane,runs. The shared fixture views are built whatever is selected. A name this suite does
 # not have fails the run, so a typo cannot select nothing and pass; and a run that skipped a section
 # exits 3, as a skipped reality check does, so it is never a gate's pass.
-$script:sectionIds = @("view", "scope", "ended", "precedence", "pane", "hostport", "stored-handle", "instance-proven", "instance-whole", "platform", "one-writer", "judge", "pane-guard", "claim-guard", "carry", "cannot-tell", "holes", "runs", "cardinality", "parity", "silent-winner", "one-agent", "layout", "schema", "writes", "reality")
+$script:sectionIds = @("view", "scope", "ended", "membership", "precedence", "pane", "hostport", "stored-handle", "instance-proven", "instance-whole", "platform", "one-writer", "judge", "pane-guard", "claim-guard", "carry", "cannot-tell", "holes", "runs", "cardinality", "parity", "silent-winner", "one-agent", "layout", "schema", "writes", "reality")
 $script:sectionsWanted = @()
 if (@($Section).Count -gt 0) { $script:sectionsWanted = @($Section | ForEach-Object { "$_" -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }) }
 elseif ("$env:HORDE_SECTIONS".Trim() -ne "") { $script:sectionsWanted = @("$env:HORDE_SECTIONS" -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }) }
@@ -153,6 +153,52 @@ function Fault { param($P, [string]$Kind) foreach ($f in $P.faults) { if ($f.kin
 function FSt { param($F) if ($null -eq $F) { return "(no check)" }; if ($F.answer.state -eq "known") { return ("" + $F.answer.value).ToLowerInvariant() }; return "unknown" }
 function Subjects { param($F) if ($null -eq $F) { return @() }; return @($F.found | ForEach-Object { @($_.subjects) }) }
 
+# THE NODE'S FIXTURES (sections ended and membership): a node's stores are control files under
+# agent\sessions and only the store a case needs; its process table is given.
+$agentImage = "$(@(ReadJson (Join-Path $fx 'processes.json'))[0].name)"
+$nodeDevice = "0f8fad5b-d9cb-469f-a165-70867728950e"
+function NodeFleet {
+    # A node's stores: control files under agent\sessions, an empty projects folder, nothing else.
+    param([string]$Name, [object[]]$Files)
+    $script:copies++
+    $d = Join-Path $work ($Name + "-" + $script:copies)
+    New-Item -ItemType Directory -Path (Join-Path $d "agent\sessions") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $d "agent\projects") -Force | Out-Null
+    foreach ($f in $Files) { PutJson (Join-Path $d ("agent\sessions\" + $f.pid + ".json")) $f }
+    return $d
+}
+function ControlFile {
+    # One control file; -Created $null writes no procStart, so its process cannot be checked.
+    param([int]$ProcId, [int]$N, $Created)
+    $o = [ordered]@{ pid = $ProcId; sessionId = (Sid $N); cwd = "C:\work\node"; startedAt = 1780304405000 }
+    if ($null -ne $Created) { $o["procStart"] = "" + ([datetime]$Created).ToFileTimeUtc() }
+    $o["version"] = "9.9.9"; $o["kind"] = "interactive"; $o["entrypoint"] = "cli"; $o["status"] = "idle"; $o["statusUpdatedAt"] = 1780315160000
+    return [pscustomobject]$o
+}
+function Proc { param([int]$ProcId, $Created, $CommandLine = "harness-a", [string]$Name = $agentImage) return [pscustomobject]@{ pid = $ProcId; name = $Name; created = $Created; commandLine = $CommandLine } }
+function Table { param([object[]]$Rows, $At = $null) $t = @{}; foreach ($r in $Rows) { $t[[int]$r.pid] = $r }; return (New-HordeKnown -Value $t -ObservedAt $At) }
+function NodeProject { param([string]$D, $Processes, $HostPort = $null) if ($null -eq $HostPort) { $HostPort = New-HordeUnavailableHostPort -Reason "the node has no host adapter" }; return (Project $D -HostPort $HostPort -Processes $Processes -Layout { return , @() }) }
+function NodeIds { param($P) return @($P.sessions | ForEach-Object { "$($_.sessionId)" }) }
+function Served { param([string]$D, $Processes, $HostPort = $null) return @(NodeIds (Remove-HordeEndedSessions -Projection (NodeProject $D $Processes $HostPort))) }
+function Reg {
+    # A registry record for session N, the fixture's session 04 re-keyed: every member holding 04's id
+    # now holds N's. -Set adds or replaces members.
+    param([string]$D, [int]$N, [hashtable]$Set = @{})
+    $regDir = Join-Path $D "wezfleet\registry\sessions"; New-Item -ItemType Directory -Path $regDir -Force | Out-Null
+    $rec = ReadJson (Join-Path $fx ("wezfleet\registry\sessions\" + (Sid 4) + ".json"))
+    foreach ($pp in @($rec.PSObject.Properties)) { if ("$($pp.Value)" -ceq (Sid 4)) { $pp.Value = (Sid $N) } }
+    $rec.parent = ""
+    foreach ($k in $Set.Keys) { $rec | Add-Member -NotePropertyName $k -NotePropertyValue $Set[$k] -Force }
+    PutJson (Join-Path $regDir ((Sid $N) + ".json")) $rec
+}
+function FakeHost {
+    # A host whose one instance started at -Started and lists -Live handles; it wrote the stored handles.
+    param([string[]]$Live, [datetime]$Started)
+    $rows = @($Live | ForEach-Object { [pscustomobject]@{ handle = $_; window = "1"; tab = "1"; hostTitle = "t" } })
+    $inst = [pscustomobject]@{ id = "inst-n"; startedAt = $Started; running = 1; ambiguous = $false }
+    return (New-HordeHostPort -Name "fake" -Capabilities @{ "list" = "yes"; "instance.startedAt" = "yes"; "text.read" = "unverified" } -StoredHandles @("W1", "W2", "W4", "W5", "X1") -Handles ({ return , $rows }.GetNewClosure()) -Instance ({ return $inst }.GetNewClosure()))
+}
+
 try {
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 Check ($script:sectionsUnknown.Count -eq 0) ("every section asked for exists (unknown: " + ($script:sectionsUnknown -join ", ") + ")")
@@ -270,50 +316,6 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
     # leaves a session out, and only when nothing else may say it is live; every other session stays
     # listed with its reason (ledger core-projection L-100; Get-HordeSessionEndProof's rules, each with
     # a case that keeps the session and, where the rule can be isolated, a control that drops it).
-    $agentImage = "$(@(ReadJson (Join-Path $fx 'processes.json'))[0].name)"
-    $nodeDevice = "0f8fad5b-d9cb-469f-a165-70867728950e"
-    function NodeFleet {
-        # A node's stores: control files under agent\sessions, an empty projects folder, nothing else.
-        param([string]$Name, [object[]]$Files)
-        $script:copies++
-        $d = Join-Path $work ($Name + "-" + $script:copies)
-        New-Item -ItemType Directory -Path (Join-Path $d "agent\sessions") -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $d "agent\projects") -Force | Out-Null
-        foreach ($f in $Files) { PutJson (Join-Path $d ("agent\sessions\" + $f.pid + ".json")) $f }
-        return $d
-    }
-    function ControlFile {
-        # One control file; -Created $null writes no procStart, so its process cannot be checked.
-        param([int]$ProcId, [int]$N, $Created)
-        $o = [ordered]@{ pid = $ProcId; sessionId = (Sid $N); cwd = "C:\work\node"; startedAt = 1780304405000 }
-        if ($null -ne $Created) { $o["procStart"] = "" + ([datetime]$Created).ToFileTimeUtc() }
-        $o["version"] = "9.9.9"; $o["kind"] = "interactive"; $o["entrypoint"] = "cli"; $o["status"] = "idle"; $o["statusUpdatedAt"] = 1780315160000
-        return [pscustomobject]$o
-    }
-    function Proc { param([int]$ProcId, $Created, $CommandLine = "harness-a", [string]$Name = $agentImage) return [pscustomobject]@{ pid = $ProcId; name = $Name; created = $Created; commandLine = $CommandLine } }
-    function Table { param([object[]]$Rows, $At = $null) $t = @{}; foreach ($r in $Rows) { $t[[int]$r.pid] = $r }; return (New-HordeKnown -Value $t -ObservedAt $At) }
-    function NodeProject { param([string]$D, $Processes, $HostPort = $null) if ($null -eq $HostPort) { $HostPort = New-HordeUnavailableHostPort -Reason "the node has no host adapter" }; return (Project $D -HostPort $HostPort -Processes $Processes -Layout { return , @() }) }
-    function NodeIds { param($P) return @($P.sessions | ForEach-Object { "$($_.sessionId)" }) }
-    function Served { param([string]$D, $Processes, $HostPort = $null) return @(NodeIds (Remove-HordeEndedSessions -Projection (NodeProject $D $Processes $HostPort))) }
-    function Reg {
-        # A registry record for session N, the fixture's session 04 re-keyed: every member holding 04's id
-        # now holds N's. -Set adds or replaces members.
-        param([string]$D, [int]$N, [hashtable]$Set = @{})
-        $regDir = Join-Path $D "wezfleet\registry\sessions"; New-Item -ItemType Directory -Path $regDir -Force | Out-Null
-        $rec = ReadJson (Join-Path $fx ("wezfleet\registry\sessions\" + (Sid 4) + ".json"))
-        foreach ($pp in @($rec.PSObject.Properties)) { if ("$($pp.Value)" -ceq (Sid 4)) { $pp.Value = (Sid $N) } }
-        $rec.parent = ""
-        foreach ($k in $Set.Keys) { $rec | Add-Member -NotePropertyName $k -NotePropertyValue $Set[$k] -Force }
-        PutJson (Join-Path $regDir ((Sid $N) + ".json")) $rec
-    }
-    function FakeHost {
-        # A host whose one instance started at -Started and lists -Live handles; it wrote the stored handles.
-        param([string[]]$Live, [datetime]$Started)
-        $rows = @($Live | ForEach-Object { [pscustomobject]@{ handle = $_; window = "1"; tab = "1"; hostTitle = "t" } })
-        $inst = [pscustomobject]@{ id = "inst-n"; startedAt = $Started; running = 1; ambiguous = $false }
-        return (New-HordeHostPort -Name "fake" -Capabilities @{ "list" = "yes"; "instance.startedAt" = "yes"; "text.read" = "unverified" } -StoredHandles @("W1", "W2", "W4", "W5", "X1") -Handles ({ return , $rows }.GetNewClosure()) -Instance ({ return $inst }.GetNewClosure()))
-    }
-
     $t0 = Utc "2026-06-01T05:00:00.0000000Z"
     $t1 = Utc "2026-06-01T09:00:00.0000000Z"
     $t2 = Utc "2026-06-01T10:00:00.0000000Z"
@@ -460,15 +462,99 @@ if (Section "ended" "a node lists no session whose end is proven (core/Projectio
             $block = [scriptblock]::Create($assign[0].Right.Expression.ScriptBlock.EndBlock.Extent.Text)
             function Get-HordeProjection { param($Platform) return $nAll }
             $platform = $null
+            # The node's own policy, in a temporary home, declaring the one store it names sessions from.
+            . (Join-Path $root "core\NodePolicy.ps1")
+            $hordeHome = Join-Path $work ("node-home-" + [guid]::NewGuid().ToString("N"))
+            New-Item -ItemType Directory -Path (Join-Path $hordeHome "node") -Force | Out-Null
+            [System.IO.File]::WriteAllText((Get-HordeNodePolicyPath -HordeHome $hordeHome), '{ "schemaVersion": 1, "repos": [], "profiles": [], "sessionStores": ["X2"] }', (New-Object System.Text.ASCIIEncoding))
             $served = & $block
         }
-        [pscustomobject]@{ ids = @(@($list["sessions"]) | ForEach-Object { "$(Get-HordeLinkProp $_ 'sessionId')" }); listed = (New-HordeFleetNode -Mirror $mirror -Now $at -TtlSeconds 60).listed; get = $get; commandIds = $(if ($null -ne $served) { @(@($served["sessions"]) | ForEach-Object { "$($_['sessionId'])" }) } else { $null }); getViews = $assign.Count }
+        $declared = $null; if ($null -ne $served) { $declared = Get-HordeLinkProp $served "sessionStores" }
+        [pscustomobject]@{ ids = @(@($list["sessions"]) | ForEach-Object { "$(Get-HordeLinkProp $_ 'sessionId')" }); listed = (New-HordeFleetNode -Mirror $mirror -Now $at -TtlSeconds 60).listed; get = $get; commandIds = $(if ($null -ne $served) { @(@($served["sessions"]) | ForEach-Object { "$($_['sessionId'])" }) } else { $null }); getViews = $assign.Count; declared = $declared }
     }
     Check (@($wire.ids) -notcontains (Sid 42) -and @($wire.ids) -notcontains (Sid 43) -and @($wire.ids) -contains (Sid 44)) "the node's sessions.list carries the sessions it keeps and not the ended ones"
     Check ($wire.listed -eq 3) ("the hub's count matches the live sessions, and the ones whose liveness is unknown (" + $wire.listed + ", want 3)")
     Check ("$($wire.get[42].state)" -ceq "absent" -and "$($wire.get[42].reason)" -like "*ended, proven by its process*3002 is not running*") ("session.get answers an ended session absent with its proof, not that no store holds it (" + $wire.get[42].reason + ")")
     Check ("$($wire.get[41].state)" -ceq "known") "CONTROL: session.get finds a live session"
     Check ($wire.getViews -eq 1 -and $null -ne $wire.commandIds -and @($wire.commandIds) -notcontains (Sid 42) -and @($wire.commandIds) -contains (Sid 41)) "horde node serve's own view block leaves out the sessions whose end is proven"
+    Check ($null -ne $wire.declared -and "$($wire.declared.state)" -ceq "known" -and (@($wire.declared.value) -join ",") -ceq "X2") "horde node serve's own view block carries the session stores the node's policy declares"
+}
+
+if (Section "membership" "the hub drops a session a membership-complete node list leaves out (remote/NodeServe.ps1, remote/Mirror.ps1)") {
+    # THE ALWAYS-ON NODE AFTER PR #240: its list is never complete (no host adapter, X4), so the hub
+    # carried every session that ended, forever ("0 session(s), 2 carried"). The node now declares the
+    # stores that name its sessions (node policy sessionStores, here X2 alone) and, when it read them
+    # whole, says its list names every session it has (membershipComplete, verbs version 2); the hub then
+    # drops what the list leaves out (ledger core-projection L-101). Each poll goes over the real frame
+    # path: the node's hello and answer, encoded by the link's writer and decoded by the hub's reader.
+    & {
+        . (Join-Path $root "remote\NodeServe.ps1")
+        . (Join-Path $root "remote\Mirror.ps1")
+        $contract = Get-HordeLinkContract
+        $nsn = New-HordeNamespace -Device $nodeDevice -Space "windows"
+        $x2 = New-HordeKnown -Value @("X2")
+        $t1 = Utc "2026-06-01T09:00:00.0000000Z"
+        function FrameLine { param($Frame) $b = ConvertTo-HordeFrameBytes -Frame $Frame -Contract $contract; return [System.Text.Encoding]::ASCII.GetString($b.bytes, 0, $b.bytes.Length - 1) }
+        function Poll {
+            # One pull by a hub that speaks verbs version 2: the node's view as horde node serve builds it,
+            # its sessions.list answer as the hub's reader decodes it, and the mirror after it.
+            param($Mirror, [string]$D, $Processes, $Stores)
+            $doc = ConvertTo-HordeNodeViewDocument -Projection (NodeProject $D $Processes)
+            $doc["sessionStores"] = $Stores
+            $data = [pscustomobject]@{ manifest = $null; view = $doc; viewError = ""; journalRoot = ""; namespace = $nsn }
+            $st = New-HordeNodeServeState -NodeId $nodeDevice -NodeName "always-on" -HordeVersion "0.1.0" -Contract $contract
+            $t = Get-HordeLinkTime
+            $hello = [pscustomobject][ordered]@{ v = 1; kind = "hello"; id = (New-HordeLinkFrameId); seq = 1; ts = $t; hello = [pscustomobject][ordered]@{ role = "hub"; id = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; name = "fixture-hub"; protocols = @(1); verbsVersions = @(1, 2); hordeVersion = "0.1.0"; t1 = $t } }
+            $null = Invoke-HordeNodeFrame -State $st -Line (FrameLine $hello) -Data $data
+            $req = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = 2; ts = (Get-HordeLinkTime); verb = "sessions.list"; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = [pscustomobject]@{} }
+            $reply = (Invoke-HordeNodeFrame -State $st -Line (FrameLine $req) -Data $data).reply
+            $got = ConvertFrom-HordeFrameBytes -Bytes ([System.Text.Encoding]::ASCII.GetBytes((FrameLine $reply))) -Contract $contract
+            if (-not $got.ok) { throw ("the hub's reader refused the node's answer: " + $got.reason) }
+            $list = $got.frame.result.value
+            $at = [datetime]::UtcNow
+            $m = Update-HordeNodeMirror -Mirror $Mirror -List $list -NodeSentAt $at -ReceivedAt $at
+            $rows = @(Get-HordeMirrorRows -Mirror $m -Now $at)
+            return [pscustomobject]@{ mirror = $m; list = $list; node = (New-HordeFleetNode -Mirror $m -Now $at -TtlSeconds 60); rows = $rows; ids = @($rows | ForEach-Object { "$($_.sessionId)" }) }
+        }
+        function Start-Node {
+            # A node with two live sessions, 51 and 52, pulled once: both listed, nothing carried.
+            param([string]$Name, $Stores = $x2)
+            $d = NodeFleet $Name @((ControlFile 5051 51 $t1), (ControlFile 5052 52 $t1))
+            $p = Poll (New-HordeNodeMirror -DeviceId $nodeDevice -DeviceName "always-on") $d (Table @((Proc 5051 $t1), (Proc 5052 $t1))) $Stores
+            return [pscustomobject]@{ dir = $d; first = $p }
+        }
+        $live = Table @((Proc 5051 $t1))
+
+        # A CLEAN EXIT: the agent deletes its control file, so nothing is left to prove the end by.
+        $n = Start-Node "member-clean"
+        Check ($n.first.node.listed -eq 2 -and $n.first.node.carried -eq 0 -and "$($n.first.list.membershipComplete.state)" -ceq "known" -and $n.first.list.membershipComplete.value -eq $true -and $n.first.list.complete.value -eq $false) "CONTROL: the node's list names every session while its fields stay partial (no host adapter)"
+        Remove-Item -LiteralPath (Join-Path $n.dir "agent\sessions\5052.json")
+        $p2 = Poll $n.first.mirror $n.dir $live $x2
+        Check ($p2.node.carried -eq 0 -and @($p2.ids) -notcontains (Sid 52)) "a clean exit is dropped by the hub"
+        # Mirrored as listed, not carried: the fixture's clock is in the past, so its presence is aged out.
+        $inList = @(@(Get-HordeLinkProp (Get-HordeLinkProp (Get-HordeLinkProp $p2.mirror "inventory") "list") "sessions") | ForEach-Object { "$(Get-HordeLinkProp $_ 'sessionId')" })
+        Check (@($p2.rows | Where-Object { $_.sessionId -ceq (Sid 51) }).Count -eq 1 -and $inList -ccontains (Sid 51) -and $p2.node.listed -eq 1) "a live session stays listed and mirrored"
+        $p3 = Poll $p2.mirror $n.dir $live $x2
+        Check ($p3.node.carried -eq 0 -and $p3.node.listed -eq 1) "the next poll carries nothing either"
+
+        # A KILLED PANE: the control file stays, its process is gone; the node drops it (PR #240).
+        $n = Start-Node "member-killed"
+        $p2 = Poll $n.first.mirror $n.dir $live $x2
+        Check ($p2.node.carried -eq 0 -and @($p2.ids) -notcontains (Sid 52) -and $p2.list.membershipComplete.value -eq $true) "a killed pane is dropped by the hub"
+
+        # THE LISTING CANNOT BE READ WHOLE: a half-written control file may name any session.
+        $n = Start-Node "member-unread"
+        Remove-Item -LiteralPath (Join-Path $n.dir "agent\sessions\5052.json")
+        PutText (Join-Path $n.dir "agent\sessions\5099.json") '{"pid":5099,"sess'
+        $p2 = Poll $n.first.mirror $n.dir $live $x2
+        Check ($p2.list.membershipComplete.value -eq $false -and $p2.node.carried -eq 1 -and @($p2.ids) -contains (Sid 52)) ("an unreadable listing drops nothing (" + $p2.list.membershipComplete.reason + ")")
+
+        # NO DECLARATION: the node says nothing about membership, and the hub carries as before.
+        $n = Start-Node "member-undeclared" (New-HordeAbsent -Note "the node policy declares no sessionStores")
+        Remove-Item -LiteralPath (Join-Path $n.dir "agent\sessions\5052.json")
+        $p2 = Poll $n.first.mirror $n.dir $live (New-HordeAbsent -Note "the node policy declares no sessionStores")
+        Check ($p2.list.membershipComplete.value -eq $false -and $p2.node.carried -eq 1 -and @($p2.ids) -contains (Sid 52)) "a node that declares no stores is unchanged: the hub carries what it leaves out"
+    }
 }
 
 if (Section "precedence" "precedence, one field at a time (core/ownership.json)") {

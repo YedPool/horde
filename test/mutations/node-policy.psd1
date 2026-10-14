@@ -86,5 +86,18 @@
         @{ Name = "policy-bytes-unchecked"
            Find = '    try { Assert-HordeAsciiBytes -Bytes $bytes -What ("the node policy at " + $Path) } catch {'
            Replace = '    try { } catch {' }
+        # The session stores a node declares (ledger core-projection L-101).
+        @{ Name = "empty-session-store-declaration-allowed"
+           Find = 'if (@($ssp.Value).Count -eq 0) { [void]$problems.Add('
+           Replace = 'if ($false) { [void]$problems.Add(' }
+        @{ Name = "session-store-declared-twice-allowed"
+           Find = 'if ($null -ne $s -and -not $seenStores.Add("" + $s)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "no-declaration-read-as-empty-list"
+           Find = 'if ($null -eq $p) { return (New-HordeAbsent -Note "the node policy declares no session stores (sessionStores)") }'
+           Replace = 'if ($null -eq $p) { return (New-HordeKnown -Value @()) }' }
+        @{ Name = "unreadable-policy-declares-stores"
+           Find = 'return (New-HordeUnknown -Reason ("this node''s session stores cannot be read: " + $Policy.reason))'
+           Replace = 'return (New-HordeKnown -Value @("X2"))' }
     )
 }

@@ -34,9 +34,10 @@ function View { return ([System.IO.File]::ReadAllText($viewPath) | ConvertFrom-J
 function Data { param($View = $null, [string]$Journal = "", [string]$ViewError = "") return [pscustomobject]@{ manifest = $manifest; view = $View; viewError = $ViewError; journalRoot = $Journal; namespace = $ns } }
 function State { return (New-HordeNodeServeState -NodeId $device -NodeName "fixture-node" -HordeVersion "0.1.0") }
 function Hello {
-    param([int[]]$Protocols = @(1))
+    # -Verbs: the verbs versions the hub offers; 1 alone is a hub from before membershipComplete.
+    param([int[]]$Protocols = @(1), [int[]]$Verbs = @(1))
     $t = Get-HordeLinkTime
-    return [pscustomobject][ordered]@{ v = 1; kind = "hello"; id = (New-HordeLinkFrameId); seq = 1; ts = $t; hello = [pscustomobject][ordered]@{ role = "hub"; id = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; name = "fixture-hub"; protocols = $Protocols; verbsVersions = @(1); hordeVersion = "0.1.0"; t1 = $t } }
+    return [pscustomobject][ordered]@{ v = 1; kind = "hello"; id = (New-HordeLinkFrameId); seq = 1; ts = $t; hello = [pscustomobject][ordered]@{ role = "hub"; id = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; name = "fixture-hub"; protocols = $Protocols; verbsVersions = $Verbs; hordeVersion = "0.1.0"; t1 = $t } }
 }
 function Req {
     param([string]$Verb, $ArgsObject = $null)
@@ -54,9 +55,9 @@ function Line {
 function Sendable { param($Frame) $b = ConvertTo-HordeFrameBytes -Frame $Frame; if (-not $b.ok) { Write-Host ("         not sendable: " + $b.reason) -ForegroundColor DarkYellow }; return [bool]$b.ok }
 function Ask {
     # One request answered by a node whose hello is done.
-    param([string]$Verb, $ArgsObject = $null, $View = $null, [string]$Journal = "", [string]$ViewError = "")
+    param([string]$Verb, $ArgsObject = $null, $View = $null, [string]$Journal = "", [string]$ViewError = "", [int[]]$Verbs = @(1))
     $st = State
-    $null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello)) -Data (Data)
+    $null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello -Verbs $Verbs)) -Data (Data)
     return (Invoke-HordeNodeFrame -State $st -Line (Line (Req $Verb $ArgsObject)) -Data (Data -View $View -Journal $Journal -ViewError $ViewError))
 }
 
@@ -203,6 +204,59 @@ $r = Ask "sessions.list" -View $noTime
 Check ($null -ne $r -and (Sendable $r.reply) -and "$($r.reply.result.value.observedAt)" -cmatch '^[0-9]{4}-') "a view with no observation time is answered with the node's own time, not dropped"
 $r = Ask "sessions.list" -View (View) -ViewError "the store is locked"
 Check ("$($r.reply.error.code)" -ceq "internal" -and "$($r.reply.error.reason)" -clike "*the store is locked*" -and (Sendable $r.reply)) "a view that could not be built is an internal error to that request, never silence"
+
+Write-Host ""
+Write-Host "--- membershipComplete: the list names every session the node has (verbs version 2, ledger core-projection L-101) ---" -ForegroundColor Cyan
+# The always-on node's list is never complete: it has no host adapter (X4) and no layouts (R1), so the
+# hub carried every session it left out, forever. membershipComplete splits "every session is listed"
+# from "every field is whole": known true only when every store the node DECLARES it names sessions
+# from (node policy sessionStores) was read whole, and nothing was cut from the list.
+function Declare { param($V, [string[]]$Stores) $V | Add-Member -NotePropertyName sessionStores -NotePropertyValue (New-HordeKnown -Value $Stores) -Force; return $V }
+function Member { param($R) return $R.reply.result.value.membershipComplete }
+$r = Ask "sessions.list" -View (Declare (View) @("X2")) -Verbs @(1, 2)
+$mc = Member $r
+Check ($r.reply.result.value.complete.value -eq $false -and $mc.state -ceq "known" -and $mc.value -eq $true -and (Sendable $r.reply)) "a node that declares X2 and read it whole says its list names every session, while its fields stay partial (X4)"
+$r = Ask "sessions.list" -View (Declare (View) @("X2")) -Verbs @(1)
+Check ($null -eq $r.reply.result.value.PSObject.Properties["membershipComplete"] -and (Sendable $r.reply)) "a hub that offers only verbs version 1 is never sent membershipComplete: its decoder would refuse the frame"
+$r = Ask "sessions.list" -View (View) -Verbs @(1, 2)
+$mc = Member $r
+Check ($mc.state -ceq "known" -and $mc.value -eq $false -and "$($mc.reason)" -clike "*declares no session stores*" -and (Sendable $r.reply)) "a node that declares no stores is unchanged: membership is false, and says why"
+$absentDecl = View; $absentDecl | Add-Member -NotePropertyName sessionStores -NotePropertyValue (New-HordeAbsent -Note "this node has no policy file") -Force
+$mc = Member (Ask "sessions.list" -View $absentDecl -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*no policy file*") "a node with no policy file declares nothing, and the reason says so"
+$notWhole = Declare (View) @("X2")
+$notWhole.complete.X2 = [pscustomobject]@{ state = "unknown"; reason = "a control file is half written" }
+$mc = Member (Ask "sessions.list" -View $notWhole -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*X2*half written*") "a declared store that was not read whole keeps membership false"
+$w5 = Declare (View) @("X2", "W5")
+$w5.complete.W4 = [pscustomobject]@{ state = "unknown"; reason = "a roster is locked" }
+$mc = Member (Ask "sessions.list" -View $w5 -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*W5*W4*roster is locked*") "a declared report store needs its runs and rosters whole too: reports are found through them"
+$undeclared = Declare (View) @("X2")
+$undeclared.complete.W1 = [pscustomobject]@{ state = "unknown"; reason = "the registry is locked" }
+$mc = Member (Ask "sessions.list" -View $undeclared -Verbs @(1, 2))
+Check ($mc.value -eq $true) "a store the node does not declare does not count against membership"
+$forged = Declare (View) @("X4")
+$mc = Member (Ask "sessions.list" -View $forged -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*X4*names no session*") "a declared store that names no session is not a declaration of membership"
+$mc = Member (Ask "sessions.list" -View (Declare (View) @()) -Verbs @(1, 2))
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*names none*") "a declaration that names no store claims nothing"
+$capped = Declare $many @("X2")
+foreach ($pp in @($capped.complete.PSObject.Properties)) { $pp.Value.state = "known"; $pp.Value | Add-Member -NotePropertyName value -NotePropertyValue $true -Force }
+$r = Ask "sessions.list" -View $capped -Verbs @(1, 2)
+$mc = Member $r
+Check (@($r.reply.result.value.sessions).Count -eq 256 -and $mc.value -eq $false -and "$($mc.reason)" -clike "*past the list cap*") "a list cut at the cap is not membership-complete"
+$r = Ask "sessions.list" -View (Declare $badId @("X2")) -Verbs @(1, 2)
+$mc = Member $r
+Check ($mc.value -eq $false -and "$($mc.reason)" -clike "*ids*" -and (Sendable $r.reply)) "a list that left out an id the link cannot carry is not membership-complete"
+$sv = @(([System.IO.File]::ReadAllText((Join-Path $root "schema\node-policy.v1.json")) | ConvertFrom-Json).properties.sessionStores.items.enum)
+Check ($sv.Count -gt 0 -and (@($sv | Sort-Object) -join ",") -ceq (@($script:HordeNodeSessionStoreReads.Keys | Sort-Object) -join ",")) "the stores a policy may declare are exactly the ones the node knows how to check"
+$st = State
+$null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello -Verbs @(1, 2, 9))) -Data (Data)
+Check ($st.verbsVersion -eq 2) "the verbs version is the highest both ends offer"
+$st = State
+$null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello)) -Data (Data)
+Check ($st.verbsVersion -eq 1) "CONTROL: a hub that offers 1 alone is spoken to in verbs version 1"
 
 Write-Host ""
 Write-Host "--- session.get ---" -ForegroundColor Cyan

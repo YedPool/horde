@@ -106,6 +106,24 @@ try {
 } finally { if ((Split-Path -Leaf $pf) -match '^horde-policy-bytes-[0-9a-f]{32}\.json$') { Remove-Item -LiteralPath $pf -ErrorAction SilentlyContinue } }
 
 Write-Host ""
+Write-Host "--- the session stores a node declares (sessions.list's membershipComplete, ledger core-projection L-101) ---" -ForegroundColor Cyan
+# The node's owner says which stores that NAME sessions this node uses, so the node can say its list
+# names every session it has. Nothing is inferred from a missing folder: no declaration, no claim.
+$declared = Read-HordeNodePolicyText -Text ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "sessionStores": ["X2"]'))
+Check ($declared.state -eq "known") ("CONTROL: a policy declaring the session stores it uses reads (" + $declared.reason + ")")
+$ss = Get-HordeNodeSessionStores -Policy $declared
+Check ($ss.state -ceq "known" -and (@($ss.value) -join ",") -ceq "X2") "the declared session stores are known, as written"
+$ss = Get-HordeNodeSessionStores -Policy $policy
+Check ($ss.state -ceq "absent" -and "$($ss.reason)" -like "*declares no session stores*") "a policy that declares none says so: absent, never an empty list"
+$ss = Get-HordeNodeSessionStores -Policy $missing
+Check ($ss.state -ceq "absent" -and "$($ss.reason)" -like "*no policy file*") "a node with no policy file declares no session stores"
+$ss = Get-HordeNodeSessionStores -Policy (New-HordeUnknown -Reason "the node policy is malformed: x")
+Check ($ss.state -ceq "unknown" -and "$($ss.reason)" -like "*malformed: x*") "a policy that cannot be read declares nothing, and says why"
+Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "sessionStores": []')) "*names no store*") "an empty declaration is refused: it would claim a list names every session while naming no store"
+Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "sessionStores": ["X2", "X2"]')) "*declared twice*") "a store declared twice is refused"
+Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "sessionStores": ["X4"]')) "*malformed*") "a store that names no session (the live pane list, X4) cannot be declared"
+
+Write-Host ""
 Write-Host "--- where the session runs (decision 2: no worktree means the registered clone) ---" -ForegroundColor Cyan
 $wd = Resolve-HordeNodeWorkdir -Policy $policy.value -RepoId "github.com/example/app"
 Check ($wd.state -eq "known" -and $wd.value -ceq "C:\code\app") "no worktree: the registered clone"

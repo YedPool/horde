@@ -103,5 +103,37 @@
         @{ Name = "contract-read-per-session"
            Find = '$pattern = "$($Contract.verbs.definitions.''session-id''.pattern)"'
            Replace = '$pattern = "$((Get-HordeLinkContract).verbs.definitions.''session-id''.pattern)"' }
+        # membershipComplete, verbs version 2 (ledger core-projection L-101): every guard of the claim
+        # that the list names every session the node has.
+        @{ Name = "membership-declared-store-not-whole"
+           Find = 'if (-not ("$(Get-HordeLinkProp $a ''state'')" -ceq "known" -and $v -is [bool] -and $v)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "membership-no-declaration-reason-lost"
+           Find = 'if ("$(Get-HordeLinkProp $decl ''state'')" -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "membership-no-declaration-claims"
+           Find = 'if ($stores.Count -eq 0) { return @('
+           Replace = 'if ($false) { return @(' }
+        @{ Name = "membership-undeclared-store-counts"
+           Find = 'foreach ($s in $stores) {'
+           Replace = 'foreach ($s in @($stores) + @("W1")) {' }
+        @{ Name = "membership-store-naming-nothing-counts"
+           Find = 'if (-not $script:HordeNodeSessionStoreReads.Contains($s)) { [void]$gaps.Add('
+           Replace = 'if ($false) { [void]$gaps.Add(' }
+        @{ Name = "membership-reports-without-rosters"
+           Find = 'W5 = @("W3", "W4", "W5")'
+           Replace = 'W5 = @("W5")' }
+        @{ Name = "membership-ignores-a-cut-list"
+           Find = '-Missing (@(Get-HordeNodeMembershipGaps -View $View) + @($cut))'
+           Replace = '-Missing @(Get-HordeNodeMembershipGaps -View $View)' }
+        @{ Name = "membership-sent-to-a-version-1-hub"
+           Find = '-Membership:($State.verbsVersion -ge $script:HordeNodeMembershipVerbs)'
+           Replace = '-Membership' }
+        @{ Name = "verbs-version-not-negotiated"
+           Find = '$State.verbsVersion = [Math]::Max(1, (Select-HordeLinkProtocol'
+           Replace = '$State.verbsVersion = 1; $null = [Math]::Max(1, (Select-HordeLinkProtocol' }
+        @{ Name = "node-offers-only-verbs-version-1"
+           Find = '$script:HordeNodeVerbsVersions = @(1, 2)'
+           Replace = '$script:HordeNodeVerbsVersions = @(1)' }
     )
 }

@@ -37,6 +37,12 @@
 # session-summary): identity and status fields, each a tristate answer, with the pid, procStart and
 # project directory placed by device and space (R11). No transcript path, resume command or other raw
 # worker context. complete is known true only when every store the projection read was readable.
+# membershipComplete (verbs version 2, sent only to a hub that offers it) is known true when the list
+# names every session the node has: every store the node's owner DECLARES names its sessions (node
+# policy sessionStores, carried in the view as sessionStores) was read whole, and nothing was cut. The
+# fields may still be partial - the always-on node has no host adapter, so complete is never true there -
+# and the hub then drops a session the list leaves out instead of carrying it (ledger core-projection
+# L-101). A store not declared does not count; no declaration, no claim.
 #
 # EVERY ANSWER FITS THE WIRE. A value the link cannot carry becomes an unknown with the reason; a reason
 # is cut to the reasonBytes cap; a session whose id the link cannot carry, or past the list cap, is left
@@ -57,8 +63,17 @@ $script:HordeNodeActVerbs = @("session.spawn", "session.close")
 $script:HordeNodeIssuedFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'"
 $script:HordeNodeViewVerbs = @("sessions.list", "session.get", "session.deliver")
 $script:HordeNodeOutboxVerbs = @("mail.next", "mail.receipt")
-# The verbs versions this node speaks (link-verbs v1).
-$script:HordeNodeVerbsVersions = @(1)
+# The verbs versions this node speaks (link-verbs v1). Version 2 adds sessions.list's optional
+# membershipComplete. link-verbs v1 is closed, so a hub that offers only 1 would refuse a list carrying
+# it: the node sends it only when the hub's hello offers 2 (the link's verbsVersion, L-101).
+$script:HordeNodeVerbsVersions = @(1, 2)
+$script:HordeNodeMembershipVerbs = 2
+# THE STORES THAT NAME SESSIONS (core/Projection.ps1, Get-HordeSessionIds), each with the stores that
+# must be read whole for it to have named every session it holds: a report names its session only
+# through its run folder and roster. A node may declare only these (schema/node-policy.v1 sessionStores;
+# test/test-node-serve.ps1 holds the two lists equal). The stores that only give fields - transcripts
+# X3, the live pane list X4, processes X5, layouts R1, claims W2, cmdlog W6 - never count.
+$script:HordeNodeSessionStoreReads = [ordered]@{ X2 = @("X2"); W8 = @("W8"); W1 = @("W1"); X1 = @("X1"); W5 = @("W3", "W4", "W5") }
 # The time pattern of the link (link-frame.v1 "time"), for values taken from the session view.
 $script:HordeNodeTimePattern = '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z\z'
 # answer-token's value pattern (link-verbs v1).
@@ -77,7 +92,7 @@ function New-HordeNodeServeState {
     # took 44 s and the hub's 60 s wait ran out. Every contract use below takes this one.
     param([Parameter(Mandatory = $true)][string]$NodeId, [Parameter(Mandatory = $true)][string]$NodeName, [Parameter(Mandatory = $true)][string]$HordeVersion, $Contract = $null)
     if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
-    return [pscustomobject]@{ helloDone = $false; protocol = 0; seq = 0; peerId = ""; nodeId = $NodeId; nodeName = $NodeName; hordeVersion = $HordeVersion; closed = $false; contract = $Contract }
+    return [pscustomobject]@{ helloDone = $false; protocol = 0; verbsVersion = 1; seq = 0; peerId = ""; nodeId = $NodeId; nodeName = $NodeName; hordeVersion = $HordeVersion; closed = $false; contract = $Contract }
 }
 
 function Get-HordeNodeNextSeq {
@@ -284,17 +299,51 @@ function Get-HordeNodeUnreadable {
 
 function New-HordeNodeComplete {
     # complete as a link answer: known true only with nothing missing; otherwise known false, the reason
-    # naming what was missing, cut to its cap.
-    param([string[]]$Missing, [Parameter(Mandatory = $true)][string]$ViewObservedAt)
+    # naming what was missing, cut to its cap. -What names which completeness (membershipComplete's is
+    # "membership").
+    param([string[]]$Missing, [Parameter(Mandatory = $true)][string]$ViewObservedAt, [string]$What = "")
     $m = @($Missing | Where-Object { "$_" -ne "" })
     if ($m.Count -eq 0) { return [ordered]@{ state = "known"; value = $true; reason = ""; observedAt = $ViewObservedAt } }
-    return [ordered]@{ state = "known"; value = $false; reason = (Limit-HordeNodeReason ("not complete: " + ($m -join "; "))); observedAt = $ViewObservedAt }
+    $head = "not complete: "; if ($What -ne "") { $head = $What + " not complete: " }
+    return [ordered]@{ state = "known"; value = $false; reason = (Limit-HordeNodeReason ($head + ($m -join "; "))); observedAt = $ViewObservedAt }
+}
+
+function Get-HordeNodeMembershipGaps {
+    # Why the view may not name every session the node has, from the stores the node declares: empty
+    # when every declared store, and every store it is read through, was read whole. No declaration,
+    # an unreadable one, or one naming no store is a gap: nothing is inferred from what the view lacks.
+    param([Parameter(Mandatory = $true)]$View)
+    $decl = Get-HordeLinkProp $View "sessionStores"
+    if ("$(Get-HordeLinkProp $decl 'state')" -cne "known") {
+        $why = "$(Get-HordeLinkProp $decl 'reason')"
+        if ($why.Trim() -eq "") { $why = "the node's view carries no declaration" }
+        return @("this node declares no session stores (node policy sessionStores): " + $why)
+    }
+    $stores = @(@(Get-HordeLinkProp $decl "value") | Where-Object { "$_" -ne "" } | ForEach-Object { "$_" })
+    if ($stores.Count -eq 0) { return @("this node declares no session stores (node policy sessionStores names none)") }
+    $complete = Get-HordeLinkProp $View "complete"
+    $gaps = New-Object System.Collections.ArrayList
+    foreach ($s in $stores) {
+        if (-not $script:HordeNodeSessionStoreReads.Contains($s)) { [void]$gaps.Add("the declared store " + $s + " names no session"); continue }
+        foreach ($r in $script:HordeNodeSessionStoreReads[$s]) {
+            $a = Get-HordeLinkProp $complete $r
+            $v = Get-HordeLinkProp $a "value"
+            if (-not ("$(Get-HordeLinkProp $a 'state')" -ceq "known" -and $v -is [bool] -and $v)) {
+                $why = "$(Get-HordeLinkProp $a 'reason')"
+                if ($why.Trim() -eq "") { $why = "not read" }
+                [void]$gaps.Add("the declared store " + $s + " was not read whole: " + $r + " (" + $why + ")")
+            }
+        }
+    }
+    return $gaps.ToArray()
 }
 
 function Get-HordeNodeSessionList {
     # sessions.list's result value from a session-view document. A session the link cannot carry, or
-    # past the list cap, is left out, and complete names the omission.
-    param([Parameter(Mandatory = $true)]$View, [Parameter(Mandatory = $true)]$Namespace, [Parameter(Mandatory = $true)]$Contract)
+    # past the list cap, is left out, and complete names the omission. -Membership adds
+    # membershipComplete (verbs version 2): known true only when the stores the node declares naming
+    # its sessions were read whole and nothing was left out of the list.
+    param([Parameter(Mandatory = $true)]$View, [Parameter(Mandatory = $true)]$Namespace, [Parameter(Mandatory = $true)]$Contract, [switch]$Membership)
     $at = Get-HordeNodeViewTime $View
     $missing = New-Object System.Collections.ArrayList
     foreach ($u in @(Get-HordeNodeUnreadable (Get-HordeLinkProp $View "complete"))) { [void]$missing.Add("not every store was readable: " + $u) }
@@ -307,9 +356,14 @@ function Get-HordeNodeSessionList {
         if ($list.Count -ge $script:HordeNodeListItems) { $over++; continue }
         [void]$list.Add((ConvertTo-HordeNodeSessionSummary -Session $s -ViewObservedAt $at -Namespace $Namespace))
     }
-    if ($skipped -gt 0) { [void]$missing.Add("" + $skipped + " session(s) left out: their ids are not ones the link can carry") }
-    if ($over -gt 0) { [void]$missing.Add("" + $over + " session(s) left out past the list cap of " + $script:HordeNodeListItems) }
-    return [ordered]@{ complete = (New-HordeNodeComplete -Missing $missing.ToArray() -ViewObservedAt $at); sessions = $list.ToArray(); observedAt = $at }
+    $cut = New-Object System.Collections.ArrayList
+    if ($skipped -gt 0) { [void]$cut.Add("" + $skipped + " session(s) left out: their ids are not ones the link can carry") }
+    if ($over -gt 0) { [void]$cut.Add("" + $over + " session(s) left out past the list cap of " + $script:HordeNodeListItems) }
+    $out = [ordered]@{ complete = (New-HordeNodeComplete -Missing (@($missing) + @($cut)) -ViewObservedAt $at) }
+    if ($Membership) { $out["membershipComplete"] = New-HordeNodeComplete -Missing (@(Get-HordeNodeMembershipGaps -View $View) + @($cut)) -ViewObservedAt $at -What "membership" }
+    $out["sessions"] = $list.ToArray()
+    $out["observedAt"] = $at
+    return $out
 }
 
 function ConvertTo-HordeNodeRequestEntry {
@@ -544,6 +598,9 @@ function Invoke-HordeNodeFrame {
         if ($null -ne $r.bye) { $null = Get-HordeNodeNextSeq $State; return (New-HordeNodeReply -Reply $r.bye -Close $true) }
         $State.helloDone = $true
         $State.protocol = $r.protocol
+        # The verbs version: the highest both ends offer, 1 when they share none above it (every hub
+        # speaks 1). It decides only what a result may carry: membershipComplete needs 2.
+        $State.verbsVersion = [Math]::Max(1, (Select-HordeLinkProtocol -Ours $script:HordeNodeVerbsVersions -Theirs @(Get-HordeLinkProp $f.hello "verbsVersions")))
         # The hub this link serves, handed with every act: a session is closed only by the hub that
         # asked for it (review of #104, F8).
         $State.peerId = "$($f.hello.id)"
@@ -591,7 +648,7 @@ function Invoke-HordeNodeFrame {
             return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "known"; value = $Data.manifest; reason = ""; observedAt = $now })))
         }
         "sessions.list" {
-            $list = Get-HordeNodeSessionList -View $Data.view -Namespace $Data.namespace -Contract $State.contract
+            $list = Get-HordeNodeSessionList -View $Data.view -Namespace $Data.namespace -Contract $State.contract -Membership:($State.verbsVersion -ge $script:HordeNodeMembershipVerbs)
             return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "known"; value = $list; reason = ""; observedAt = $list["observedAt"] })))
         }
         "session.get" {
