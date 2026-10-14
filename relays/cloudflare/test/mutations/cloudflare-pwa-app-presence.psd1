@@ -22,9 +22,9 @@
         @{ Name = "banner-for-every-machine"
            Find = 'if (m.state !== "offline") continue;'
            Replace = 'if (false) continue;' }
-        @{ Name = "banner-box-always-shown"
-           Find = 'box.hidden = lines.length === 0;'
-           Replace = 'box.hidden = false;' }
+        @{ Name = "banner-box-hidden-when-empty"
+           Find = '  presenceDrawn = key;'
+           Replace = '  presenceDrawn = key; $("pcOffline").hidden = lines.length === 0;' }
         @{ Name = "account-read-does-not-refresh-the-banner"
            Find = '  presence = presenceOf(a.value);'
            Replace = '' }
@@ -35,11 +35,11 @@
            Find = '  checkPresence(); // back to the app: read at once, not 30 s on'
            Replace = '' }
         @{ Name = "timed-read-ignores-the-answer"
-           Find = 'presence = a.state === "known" ? presenceOf(a.value) : [];'
+           Find = 'if (a.state === "known") presence = presenceOf(a.value);'
            Replace = 'presence = [];' }
-        @{ Name = "failed-read-keeps-the-banner"
-           Find = 'presence = a.state === "known" ? presenceOf(a.value) : [];'
-           Replace = 'presence = a.state === "known" ? presenceOf(a.value) : presence;' }
+        @{ Name = "failed-read-clears-the-banner"
+           Find = 'if (a.state === "known") presence = presenceOf(a.value);'
+           Replace = 'presence = a.state === "known" ? presenceOf(a.value) : [];' }
         @{ Name = "banner-redrawn-on-every-read"
            Find = 'if (key === presenceDrawn) return;'
            Replace = '' }

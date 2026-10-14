@@ -73,8 +73,14 @@
 // relay has not heard from for two minutes BY THE RELAY'S OWN CLOCK (account-client.js, presenceOf) the
 // sticky bar holds one line, on every screen: "PC <name> offline since <local time>. Your answers are kept
 // and will be applied when it is back." It goes by itself at the first read that has the machine heard
-// again. A read that fails says nothing about the PC, so it takes the banners down rather than guess; a
-// machine never heard from gets no banner, only "not heard from yet" on the Account screen.
+// again. A READ THAT FAILS CHANGES NOTHING (review of PR 252): the banner stands as of the last good
+// read until a good read changes it. A phone waking from sleep often fails its first fetch, and a dead
+// PC's banner vanishing then would read as "the PC is back" - a warning fails toward warning. A machine
+// never heard from gets no banner, only "not heard from yet" on the Account screen.
+// THE BOX IS NEVER HIDDEN: it is a live region (role=status), and a hidden node is not in the
+// accessibility tree, so a line added in the same step it is shown may never be announced. It is
+// always there, empty when nothing is offline (app.css: an empty box takes no space); only its lines
+// come and go.
 //
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value).
 import { createPhone } from "./phone-core.js";
@@ -788,7 +794,6 @@ function drawPresence() {
     line.textContent = words;
     box.appendChild(line);
   }
-  box.hidden = lines.length === 0;
 }
 async function checkPresence() {
   const run = ++presenceRun;
@@ -797,7 +802,8 @@ async function checkPresence() {
   if (document.visibilityState === "visible") {
     const a = await account.account();
     if (run !== presenceRun) return;
-    presence = a.state === "known" ? presenceOf(a.value) : [];
+    // A failed read keeps the banner as it was (the header).
+    if (a.state === "known") presence = presenceOf(a.value);
     drawPresence();
   }
   presenceTimer = setTimeout(checkPresence, PRESENCE_EVERY_MS);

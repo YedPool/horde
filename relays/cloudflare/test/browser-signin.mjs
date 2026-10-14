@@ -87,7 +87,11 @@ try {
   const listed = await evaluate("Array.from(document.querySelectorAll('#machineList li')).map((li) => li.textContent).join('|')");
   // The machine read the relay just before (the suite's control): heard from it, at a time of the phone's day.
   check(new RegExp("^work - " + machineLabel + " - heard from [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$").test(listed) && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, when the relay last heard from it, with a Remove button", listed);
-  check(await evaluate("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').childNodes.length === 0"), "and a machine heard from just now raises no PC offline banner");
+  // THE BOX IS NEVER HIDDEN (app.js): a live region that is hidden is not in the accessibility tree, so
+  // its first line could go unannounced. It is checked unhidden, and empty when nothing is offline.
+  const unhidden = "(document.getElementById('pcOffline') && !document.getElementById('pcOffline').hasAttribute('hidden') && document.getElementById('pcOffline').getAttribute('role') === 'status')";
+  const emptyBox = "(" + unhidden + " && document.getElementById('pcOffline').childNodes.length === 0)";
+  check(await evaluate(emptyBox), "and a machine heard from just now raises no PC offline banner: the box is there, unhidden, and empty");
   // FIVE MINUTES LATER BY THE RELAY'S CLOCK: the account's answer is passed through Chrome with its now
   // moved on 300 s (CDP Fetch) - the relay's own lastSeenAt untouched, the phone's clock untouched - so the
   // page sees exactly what a relay would send once the machine had been silent that long.
@@ -100,15 +104,15 @@ try {
   onPaused = fiveMinutesOn;
   await cdp("Fetch.enable", { patterns: [{ urlPattern: "*/v1/account", requestStage: "Response" }] });
   await evaluate("document.getElementById('accountBtn').click()", true);
-  const banner = await until("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.closest('#bar') && b.children.length === 1 ? b.children[0].textContent : ''; })()");
+  const banner = await until("(() => { const b = document.getElementById('pcOffline'); return b.closest('#bar') && b.children.length === 1 ? b.children[0].textContent : ''; })()");
   const head = "PC " + machineLabel + " (work) offline since ", tail = ". Your answers are kept and will be applied when it is back.";
   const when = typeof banner === "string" && banner.startsWith(head) && banner.endsWith(tail) ? banner.slice(head.length, banner.length - tail.length) : "";
-  check(/^[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}$/.test(when),"past two minutes by the relay's clock, the PC offline banner stands in the bar, by the machine's name, with the time in the phone's own day, and says the answers are kept", banner);
+  check(/^[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}$/.test(when) && (await evaluate(unhidden)),"past two minutes by the relay's clock, the PC offline banner stands in the bar, by the machine's name, with the time in the phone's own day, and says the answers are kept", banner);
   check(/ - offline since [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$/.test(await evaluate("document.querySelector('#machineList li').textContent")), "and the Account screen says so of the machine");
   await cdp("Fetch.disable");
   onPaused = null;
   await evaluate("document.getElementById('accountBtn').click()", true);
-  check(!!(await until("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').children.length === 0")), "and it goes by itself at the next answer that has the machine heard again");
+  check(!!(await until(emptyBox)), "and it goes by itself at the next answer that has the machine heard again, the box left empty and unhidden");
   // THE PRODUCTION PATH: on every other screen the banner comes only from the app's own timed read
   // (app.js, checkPresence) - at start-up, on return to the app, then every 30 s. The page is loaded
   // again with the answer five minutes on, and no Account screen is opened at all.
@@ -116,19 +120,26 @@ try {
   onPaused = async (p) => { reads++; await fiveMinutesOn(p); };
   await cdp("Fetch.enable", { patterns: [{ urlPattern: "*/v1/account", requestStage: "Response" }] });
   await cdp("Page.reload");
-  const booted = await until("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.children.length === 1 && document.getElementById('accountView').hidden && !document.getElementById('emptyView').hidden ? b.children[0].textContent : ''; })()");
+  const booted = await until("(() => { const b = document.getElementById('pcOffline'); return b.children.length === 1 && document.getElementById('accountView').hidden && !document.getElementById('emptyView').hidden ? b.children[0].textContent : ''; })()");
   check(typeof booted === "string" && booted.startsWith(head) && booted.endsWith(tail), "at start-up the app reads it by itself, and the banner stands over the app's own screen, not the Account screen", booted);
   await evaluate("document.getElementById('pcOffline').children[0].setAttribute('data-drawn', 'once')");
   const readsBefore = reads;
   await evaluate("document.dispatchEvent(new Event('visibilitychange'))");
   for (let i = 0; i < 100 && reads === readsBefore; i++) await sleep(100);
   await sleep(500);
-  check(reads > readsBefore && (await evaluate("(() => { const b = document.getElementById('pcOffline'); return !b.hidden && b.children.length === 1 && b.children[0].getAttribute('data-drawn') === 'once'; })()")), "back to the app it reads again, and the same banner is not drawn again - a screen reader is not told it twice", String(reads - readsBefore));
+  check(reads > readsBefore && (await evaluate("(() => { const b = document.getElementById('pcOffline'); return b.children.length === 1 && b.children[0].getAttribute('data-drawn') === 'once'; })()")), "back to the app it reads again, and the same banner is not drawn again - a screen reader is not told it twice", String(reads - readsBefore));
   onPaused = async (p) => { reads++; await cdp("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: 500, responseHeaders: [{ name: "Content-Type", value: "application/json" }], body: Buffer.from('{"error":"down"}', "utf8").toString("base64") }); };
+  // A READ THAT FAILS CHANGES NOTHING (review of PR 252): a phone waking from sleep often fails its first
+  // fetch, and a dead PC's banner vanishing then would read as "the PC is back".
+  const readsBeforeFail = reads;
   await evaluate("document.dispatchEvent(new Event('visibilitychange'))");
-  check(!!(await until("document.getElementById('pcOffline').hidden && document.getElementById('pcOffline').children.length === 0")), "and a read that fails takes the banner down: it says nothing about the PC, so nothing is guessed");
+  for (let i = 0; i < 100 && reads === readsBeforeFail; i++) await sleep(100);
+  await sleep(500);
+  check(reads > readsBeforeFail && (await evaluate("(() => { const b = document.getElementById('pcOffline'); return b.children.length === 1 && b.children[0].getAttribute('data-drawn') === 'once'; })()")) && (await evaluate(unhidden)), "and a read that fails keeps the banner as it stood: a warning fails toward warning", String(reads - readsBeforeFail));
   await cdp("Fetch.disable");
   onPaused = null;
+  await evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+  check(!!(await until(emptyBox)), "it goes only when a good read has the PC heard again");
   await evaluate("document.getElementById('accountBtn').click()", true);
   await until(shown("accountView") + " && document.querySelectorAll('#machineList li').length === 1");
   const phones = await evaluate("Array.from(document.querySelectorAll('#phoneList li')).map((li) => li.textContent + '|' + li.querySelectorAll('button').length).join(';')");
