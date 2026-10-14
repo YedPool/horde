@@ -34,6 +34,12 @@
 #      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
 #      down moves his place, Jump to newest marks nothing, a reload opens at his place, Mark all read; the
 #      tab is reached by touch from the other views, and a lock takes the log off the page.
+#  12. the cards (the founder's phone, 2026-10-14): a real cards envelope from a run is drawn, the Thrall's
+#      card first and one per lane; a touch on the Thrall's card opens the whole log, and on a lane's card
+#      that lane's stream, its area's entries only;
+#  13. a relay refusing every read with 401: the entry sent meanwhile is not drawn, and arrives once reads
+#      come back; meanwhile the page says so and keeps saying it, with the sign-in banner and the time of
+#      the last read that worked;
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 
@@ -334,10 +340,10 @@ try {
     Write-Host ""
     Write-Host "--- 8d. reads that fail are said, with the time of the last that worked ---" -ForegroundColor Cyan
     $null = Invoke-Browser @{ cmd = "readFail"; reason = "the relay answered the read with 401: not signed in" }
-    $nb = Invoke-Browser @{ cmd = "noticeWait"; text = "Not signed in to the relay - sign in again."; hold = 8000 }
+    $nb = Invoke-Browser @{ cmd = "noticeHeld"; text = "Not signed in to the relay - sign in again."; hold = 8000 }
     Check ($nb.ok -and $nb.value.ok -and $nb.value.notice -cmatch 'Not signed in to the relay - sign in again\. Last updated [0-9]{2}:[0-9]{2}\.' -and $nb.value.notice.Contains("The relay could not be read just now")) ("A 401 ON THE MAILBOX READ shows the sign-in banner and the last-updated time, and it stays (" + $(if ($nb.ok) { $nb.value.notice } else { $nb.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "readFail"; reason = "" }
-    $ng = Invoke-Browser @{ cmd = "noticeWait"; text = "Not signed in to the relay"; gone = $true }
+    $ng = Invoke-Browser @{ cmd = "noticeHeld"; text = "Not signed in to the relay"; gone = $true }
     Check ($ng.ok -and $ng.value.ok -and -not $ng.value.notice.Contains("Not signed in")) ("a successful read clears it (" + $(if ($ng.ok) { $ng.value.notice } else { $ng.reason }) + ")")
 
     Write-Host ""
@@ -453,6 +459,61 @@ try {
     Check ($lk.ok -and $lk.value.logBefore -gt 0) ("CONTROL: the log held entries when the lock was touched (" + $(if ($lk.ok) { $lk.value.logBefore } else { $lk.reason }) + ")")
     Check ($lk.ok -and $lk.value.logAtOnce -eq 0) ("and it is gone in the same moment as the touch, before the bridge has answered (" + $(if ($lk.ok) { "" + $lk.value.logAtOnce + " left" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
+
+    Write-Host ""
+    Write-Host "--- 12. the cards: a real cards envelope is drawn, and a touch opens the Thrall's and a lane's stream ---" -ForegroundColor Cyan
+    # The founder's phone heard nothing new from 02:36 on 2026-10-14; the diagnosis found the cards
+    # themselves work, and this keeps it so: the envelope is the real `horde relay run`'s, from two lane
+    # status files under the suite's home and the map of areas to lanes.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-cards.json"), '{"schemaVersion": 1, "settings": {"sendIntervalMs": 0, "machineName": "office-pc"}}', $utf8)
+    # A card's lane is its Orc's letter (the status file's orc line); the map of areas names lanes so.
+    $laneWork = [ordered]@{ "F" = "formfill"; "V" = "voice" }
+    foreach ($orc in @($laneWork.Keys)) {
+        $laneDir = Join-Path $hh ("progress\lanes\" + $laneWork[$orc])
+        [void][System.IO.Directory]::CreateDirectory($laneDir)
+        [System.IO.File]::WriteAllText((Join-Path $laneDir "status.txt"), ("horde-orc-status 1`norc: " + $orc + "`nlane: " + $laneWork[$orc] + "`ndoing: working on " + $laneWork[$orc] + "`nfinished: the first part`nblocked: no`nwaiting on: nothing`n"), $utf8)
+    }
+    [System.IO.File]::WriteAllText((Join-Path $hh "progress\area-lanes.json"), '{"v":1,"areas":{"Form fill":"F","Ask Orah voice":"V"}}', $utf8)
+    $run = Invoke-Run -Turns 2
+    Check ($run.code -eq 0) ("CONTROL: a run with two lanes written sends its cards (exit " + $run.code + ")")
+    $null = Invoke-Browser @{ cmd = "progressTab" }
+    $cw = Invoke-Browser @{ cmd = "cardsWait"; count = 3 }
+    $drawn = @(); if ($cw.ok) { $drawn = @($cw.value.cards) }
+    $laneCards = @($drawn | Where-Object { -not $_.thrall } | ForEach-Object { $_.lane } | Sort-Object)
+    Check ($cw.ok -and $cw.value.found -and $cw.value.cardsPage -and -not $cw.value.streamPage -and $drawn.Count -eq 3 -and $drawn[0].thrall -and ($laneCards -join ",") -ceq "F,V") ("the cards are drawn live, the Thrall's first and one per lane (" + $(if ($cw.ok) { ($drawn | ForEach-Object { $_.lane }) -join ", " } else { $cw.reason }) + ")")
+    Check ($cw.ok -and @($drawn | Where-Object { -not $_.thrall -and $laneWork.Contains($_.lane) -and $_.text.Contains("working on " + $laneWork[$_.lane]) }).Count -eq 2) ("each lane's card says what its status file says it is doing (" + $(if ($cw.ok) { ($drawn | ForEach-Object { $_.text }) -join " | " } else { "" }) + ")")
+    # The whole log: section 11's entries and what was written after them, one a line.
+    $whole = @(Get-Content -LiteralPath $logFile | Where-Object { $_.Trim() }).Count
+    $th = Invoke-Browser @{ cmd = "cardTouch"; thrall = $true }
+    Check ($th.ok -and $th.value.streamPage -and -not $th.value.cardsPage -and $th.value.title -ceq "Thrall - the whole fleet, office-pc" -and $th.value.items -eq $whole -and $whole -ge 41) ("a touch on the Thrall's card opens the whole log (" + $(if ($th.ok) { $th.value.title + ": " + $th.value.items + " of " + $whole + " entries" } else { $th.reason }) + ")")
+    $bk = Invoke-Browser @{ cmd = "streamBack" }
+    Check ($bk.ok -and $bk.value.cardsPage -and @($bk.value.cards).Count -eq 3) "and Back goes back to the cards"
+    $ff = Invoke-Browser @{ cmd = "cardTouch"; lane = "F" }
+    $ffTexts = @(); if ($ff.ok) { $ffTexts = @($ff.value.texts) }
+    Check ($ff.ok -and $ff.value.streamPage -and $ff.value.title -ceq "F, office-pc" -and $ff.value.items -eq 21 -and @($ffTexts | Where-Object { -not $_.Contains("Form fill") }).Count -eq 0) ("a touch on a lane's card opens that lane's stream: only the entries of its area (" + $(if ($ff.ok) { $ff.value.title + ": " + $ff.value.items + " entries" } else { $ff.reason }) + ")")
+    $null = Save-Shot "cards-lane-stream"
+    $null = Invoke-Browser @{ cmd = "streamBack" }
+
+    Write-Host ""
+    Write-Host "--- 13. a relay that refuses every read: the page must say so ---" -ForegroundColor Cyan
+    $null = Invoke-Browser @{ cmd = "cardTouch"; thrall = $true }
+    $probe = Invoke-Browser @{ cmd = "noticeProbe"; text = "Probe: a line in the notice" }
+    Check ($probe.ok -and $probe.value.found) "CONTROL: the check below can see a line in the notice: words put there as the page puts them are found"
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "the relay answered the read with 401: sign in again" }
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261014T070000Z-77","ts":"2026-10-14T07:00:00Z","kind":"note","area":"Form fill","title":"Written while the relay refused","text":"Means: the phone must not draw this until it can read."}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $nw = Invoke-Browser @{ cmd = "noticeWait"; text = "could not be read"; timeoutMs = 15000 }
+    $during = Invoke-Browser @{ cmd = "cardsState" }
+    Check ($run.code -eq 0 -and $during.ok -and $during.value.streamPage -and $during.value.items -ge 41 -and -not (@($during.value.texts) -join " ").Contains("Written while the relay refused")) ("CONTROL: while every read is refused, the entry the run sent is not drawn: the refusal is in force (exit " + $run.code + "; " + $(if ($during.ok) { "stream " + $during.value.streamPage + ", " + $during.value.items + " entries, title '" + $during.value.title + "'" } else { $during.reason }) + ")")
+    # THE NOTICE FIX (it was PENDING): a failed read used to be said by the bridge and wiped by the next draw of
+    # the list (app.js, render). Now the relay's line stays until a read comes back clean, and the read banner
+    # (read-banner.js) says he must sign in again, with the time of the last read that worked.
+    $readSaid = $nw.ok -and $nw.value.found
+    Check ($readSaid -and $nw.value.notice -cmatch 'Not signed in to the relay - sign in again\. Last updated [0-9]{2}:[0-9]{2}\.') ("a relay refusing every read with 401 IS said on the page: the line stays, with the sign-in banner and the last-updated time (notice now '" + $(if ($nw.ok) { $nw.value.notice } else { $nw.reason }) + "')")
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "" }
+    $rw = Invoke-Browser @{ cmd = "progressWait"; text = "Written while the relay refused" }
+    Check ($rw.ok -and $rw.value.found) ("once the relay is read again, the entry written meanwhile arrives with no reload (" + $(if ($rw.ok) { "" + $rw.value.items + " entries" } else { $rw.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "streamBack" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }
     Check ($probs.ok -and @($probs.value).Count -eq 0) ("no exception, no console error and no policy violation in the whole run (" + $(if ($probs.ok) { @($probs.value) -join " | " } else { $probs.reason }) + ")")
@@ -473,4 +534,4 @@ try {
 }
 
 if (-not $canDecide) { Complete-HordeSuite -Success "skipped under this runtime: the decisions list cannot add a question (issue #173)" -PassCode 3 }
-Complete-HordeSuite -Success "in headless Chrome at phone size the app pairs with Chrome's passkey, draws the question with the window's document, sends answers by Enter and by touch that land once, unlocks by PRF, starts offline from its worker, keeps nothing opened, and reads but never answers by its recovery code"
+Complete-HordeSuite -Success "in headless Chrome at phone size the app pairs with Chrome's passkey, draws the question with the window's document, sends answers by Enter and by touch that land once, unlocks by PRF, starts offline from its worker, keeps nothing opened, reads but never answers by its recovery code, and draws the cards and opens their streams"
