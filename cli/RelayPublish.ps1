@@ -1,41 +1,56 @@
 # cli/RelayPublish - the supervisor's pass keeps the hosted phone page current: it deploys the page
-# itself when only the page changed, checks that the deploy took, and otherwise tells the warchief once
-# why it did not.
+# itself when the page changed and the relay's Worker did not, checks that the deploy took, and
+# otherwise tells the warchief once why it did not.
 #
 # WHY. The phone app (surfaces/pwa/, with relay/js/protocol.js) is served by the hosted relay, and the
 # relay serves only what was last handed to it by `horde relay deploy` (cli/RelayDeploy.ps1). The
 # supervisor keeps the machine's checkout on what was merged, but nothing kept the hosted page: on
 # 2026-10-14 the founder could not see merged cards on his phone for hours because nobody had deployed.
 #
-# THE RULE (approved 2026-10-14, exactly):
+# THE RULE (approved 2026-10-14; what counts as what, decided by F the same day, after the first build
+# showed that nearly every merge touches tests or core, so "only the page changed" was almost never so):
 #   1. The last deployed commit is recorded in the home (<home>\relay\deployed.json, written by every
-#      deploy, by hand or by this; cli/RelayDeploy.ps1) and compared with the checkout's commit.
-#   2. When what changed since then is ONLY the phone page - surfaces/pwa/** and relay/js/** - this
-#      deploys, logged; then checks that /app/sw.js's VERSION changed and that every new or changed
-#      file the site serves answers 200; and tells the warchief once how it went.
-#   3. When the RELAY changed - anything under relays/**, which holds the hosted relay's Worker and its
-#      deploy config - this does NOT deploy: a change there can alter storage or the API, and a person
+#      deploy, by hand or by this; cli/RelayDeploy.ps1) and compared with the checkout's commit. Each
+#      changed file is one of three, by WHAT THE DEPLOY SHIPS (Get-HordeRelayPublishShipped):
+#        WORKER  anything the relay's Worker is made of: the deployable relay's own folder (but its
+#                test/), and every file the code there imports, followed through every import - which
+#                today brings in relay/js/protocol.js and surfaces/pwa/page/account-client.js, so a
+#                change to either is a Worker change too;
+#        PAGE    the files the site serves (Site.ps1's list) and the code that builds it
+#                (cli/RelayDeploy.ps1, Get-HordeRelayDeployBuildFiles);
+#        IGNORED everything else - tests, core, docs, planning, other relays' machine code.
+#   2. Any WORKER file changed: no deploy - a change there can alter storage or the API, and a person
 #      reads it first. The warchief is told once.
-#   4. Anything else that changed is not the page either: told once, not deployed. UNKNOWN IS NEVER A
-#      DEPLOY - a record that is missing or names no clean commit, a diff that cannot be read, a
-#      checkout with local changes. A deploy that failed or a check that failed is told once, and tried
-#      again an hour later at the earliest.
-#   5. One deploy at a time, by hand or not: the deploy itself holds the lock (cli/RelayDeploy.ps1), and
+#   3. Otherwise any PAGE file changed: this deploys, logged; then checks the deploy took (below); and
+#      tells the warchief once how it went.
+#   4. Only IGNORED files changed: nothing is done, and the record does not move - it says what was
+#      DEPLOYED. The state remembers the range as checked ("checked up to"), so it is not read again.
+#   5. UNKNOWN IS NEVER A DEPLOY - a record that is missing or names no clean commit, a diff or a list
+#      of what is shipped that cannot be read, a checkout with local changes: told once. A deploy that
+#      failed or a check that failed is told once, and tried again an hour later at the earliest.
+#   6. One deploy at a time, by hand or not: the deploy itself holds the lock (cli/RelayDeploy.ps1), and
 #      a deploy that finds it held is left to the next pass, neither a failure nor told.
 #
-# THE RELAY IS NOT NAMED HERE (CONTRIBUTING 14). relays/** is every relay's folder, so "the relay
-# changed" needs no relay's name; the origin the check asks is the one the deploy answered with, the
-# relay's own configured origin, never an address written here.
+# THE CHECK, after a deploy, against the origin the deploy answered with:
+#   - app/sw.js serves the VERSION the deploy built. That VERSION is a hash of the other files of the
+#     shell, not of app/sw.js itself (surfaces/pwa/Site.ps1), so it is required to CHANGE only when the
+#     built VERSION differs from the one served before - when the files it hashes changed;
+#   - every changed file the site serves, and app/sw.js, answers 200 with exactly the bytes that were
+#     built (the deploy answers each built file's hash), so a change the VERSION does not see is still
+#     seen; when the code that builds the site changed, every file under app/ is compared.
+#
+# THE RELAY IS NOT NAMED HERE (CONTRIBUTING 14). Its folder is the one the relay port registered for
+# the relay that can be deployed, and the origin the check asks is the one the deploy answered with.
 #
 # THE FIRST RUN HAS NO RECORD, AND DOES NOT DEPLOY. The live page's VERSION cannot stand in for a
 # commit: it is a hash of the built files, and the commit that built it could be found only by building
 # commits until one matched. So a home with no record is told once that one deploy by hand records it.
 #
 # WHAT IS KEPT: <home>\relay\publish-state.json - a deploy part way (attempt), the last failure and its
-# base (so a deploy whose check failed is tried again from the same base), the keys of what has been
-# told (each told once), and the notices not yet taken by a teller (they wait, as the services' do,
-# cli/ServicesTend.ps1). <home>\relay\publish-log.txt gets a line for everything that happened, and
-# every line of a deploy; it is set aside at 1 MB.
+# base (so a deploy whose check failed is tried again from the same base), the range found to hold
+# nothing shipped (checked), the keys of what has been told (each told once), and the notices not yet
+# taken by a teller (they wait, as the services' do, cli/ServicesTend.ps1). <home>\relay\publish-log.txt
+# gets a line for everything that happened, and every line of a deploy; it is set aside at 1 MB.
 #
 # THE TOOLS ARE HANDED IN, as the pass's are (cli/ServicesTend.ps1, New-HordeServiceTools): a suite
 # makes its own, and the real ones (New-HordeRelayPublishTools) are made only by the command, which
@@ -44,8 +59,6 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Requires core/Tristate.ps1,
 # core/Home.ps1, core/FileAtomic.ps1 and cli/RelayDeploy.ps1 (its record, read and written there).
 
-$script:HordeRelayPublishPagePrefixes = @("surfaces/pwa/", "relay/js/")
-$script:HordeRelayPublishRelayPrefix = "relays/"
 $script:HordeRelayPublishRetrySeconds = 3600
 $script:HordeRelayPublishStateVersion = 1
 $script:HordeRelayPublishToldMost = 50
@@ -54,6 +67,10 @@ $script:HordeRelayPublishHttpSeconds = 10
 $script:HordeRelayPublishGitSeconds = 20
 $script:HordeRelayPublishVersionPattern = 'const VERSION = "([0-9a-f]{8,64})";'
 $script:HordeRelayPublishCommitPattern = '\A[0-9a-f]{40}\z'
+# An import a bundler follows from one file to another: a relative specifier after from, or after a
+# bare or dynamic import. A specifier that is not relative (a host's own module) names no file here.
+$script:HordeRelayPublishImportPatterns = @('\bfrom\s*["''](\.{1,2}/[^"'']+)["'']', '\bimport\s*\(?\s*["''](\.{1,2}/[^"'']+)["'']')
+$script:HordeRelayPublishCodeExtensions = @(".js", ".mjs", ".cjs")
 
 function ConvertTo-HordeRelayPublishShort {
     # PURE. A commit as a line shows it: its first seven characters, or what there is of it.
@@ -66,7 +83,7 @@ function Get-HordeRelayPublishStatePath { param([string]$HordeHome = "") return 
 function Get-HordeRelayPublishLogPath { param([string]$HordeHome = "") return [System.IO.Path]::Combine((Get-HordeRelayDeployFolder -HordeHome $HordeHome), "publish-log.txt") }
 
 function New-HordeRelayPublishState {
-    return [pscustomobject]@{ attempt = $null; failure = $null; told = [string[]]@(); pending = @() }
+    return [pscustomobject]@{ attempt = $null; failure = $null; checked = $null; told = [string[]]@(); pending = @() }
 }
 
 function Read-HordeRelayPublishState {
@@ -89,6 +106,8 @@ function Read-HordeRelayPublishState {
         $s = New-HordeRelayPublishState
         if ($null -ne $r.attempt) { $s.attempt = [pscustomobject]@{ head = "" + $r.attempt.head; base = "" + $r.attempt.base; at = (& $when $r.attempt.at) } }
         if ($null -ne $r.failure) { $s.failure = [pscustomobject]@{ head = "" + $r.failure.head; base = "" + $r.failure.base; at = (& $when $r.failure.at); what = "" + $r.failure.what } }
+        $checked = $r.PSObject.Properties["checked"]
+        if ($null -ne $checked -and $null -ne $checked.Value) { $s.checked = [pscustomobject]@{ base = "" + $checked.Value.base; through = "" + $checked.Value.through } }
         $s.told = [string[]]@(@($r.told) | Where-Object { $null -ne $_ } | ForEach-Object { "" + $_ })
         $s.pending = @(@($r.pending) | Where-Object { $null -ne $_ } | ForEach-Object { [pscustomobject]@{ id = "" + $_.id; kind = "page"; what = "" + $_.what; revision = "" + $_.revision; service = "phone-page"; text = ""; at = (& $when $_.at) } })
         return (New-HordeKnown -Value $s)
@@ -103,6 +122,7 @@ function Write-HordeRelayPublishState {
         schemaVersion = $script:HordeRelayPublishStateVersion
         attempt = $(if ($null -ne $State.attempt) { [ordered]@{ head = $State.attempt.head; base = $State.attempt.base; at = (& $fmt $State.attempt.at) } } else { $null })
         failure = $(if ($null -ne $State.failure) { [ordered]@{ head = $State.failure.head; base = $State.failure.base; at = (& $fmt $State.failure.at); what = $State.failure.what } } else { $null })
+        checked = $(if ($null -ne $State.checked) { [ordered]@{ base = $State.checked.base; through = $State.checked.through } } else { $null })
         told = [string[]]@($State.told)
         pending = @(@($State.pending) | ForEach-Object { [ordered]@{ id = $_.id; what = $_.what; revision = $_.revision; at = (& $fmt $_.at) } })
     }
@@ -126,19 +146,75 @@ function Write-HordeRelayPublishLog {
     } catch { }
 }
 
-function Get-HordeRelayPublishClasses {
-    # PURE. The changed paths, as the revision tool names them (forward slashes, from the top), sorted
-    # into the page, the relay, and everything else (header, THE RULE).
-    param([string[]]$Paths = @())
-    $page = New-Object System.Collections.ArrayList; $relay = New-Object System.Collections.ArrayList; $other = New-Object System.Collections.ArrayList
-    foreach ($p in @($Paths | Where-Object { "" + $_ -ne "" })) {
-        $isPage = $false
-        foreach ($prefix in $script:HordeRelayPublishPagePrefixes) { if ($p.StartsWith($prefix, [System.StringComparison]::Ordinal)) { $isPage = $true } }
-        if ($isPage) { [void]$page.Add($p) }
-        elseif ($p.StartsWith($script:HordeRelayPublishRelayPrefix, [System.StringComparison]::Ordinal)) { [void]$relay.Add($p) }
-        else { [void]$other.Add($p) }
+function Get-HordeRelayPublishImports {
+    # Every file reached from -Start (repository paths) by following relative imports, -Start included,
+    # as repository paths with forward slashes. Reads the files under -Root; one that is not there is
+    # still in the answer (a change to it is a change) and is not read further.
+    param([Parameter(Mandatory = $true)][string]$Root, [string[]]$Start = @())
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $seen = New-Object System.Collections.Generic.HashSet[string]
+    $todo = New-Object System.Collections.Queue
+    foreach ($s in @($Start)) { $one = (("" + $s) -replace '\\', '/'); if ($seen.Add($one)) { $todo.Enqueue($one) } }
+    while ($todo.Count -gt 0) {
+        $rel = $todo.Dequeue()
+        $full = Join-Path $rootFull ($rel -replace '/', '\')
+        if (-not [System.IO.File]::Exists($full)) { continue }
+        $text = [System.IO.File]::ReadAllText($full)
+        $dir = Split-Path -Parent $full
+        foreach ($pattern in $script:HordeRelayPublishImportPatterns) {
+            foreach ($m in [regex]::Matches($text, $pattern)) {
+                $target = [System.IO.Path]::GetFullPath((Join-Path $dir ($m.Groups[1].Value -replace '/', '\')))
+                # Only a file in this repository: an import that climbs out of it names nothing deployed from here.
+                if (-not $target.StartsWith($rootFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+                $t = $target.Substring($rootFull.Length + 1) -replace '\\', '/'
+                if ($seen.Add($t)) { $todo.Enqueue($t) }
+            }
+        }
     }
-    return [pscustomobject]@{ page = [string[]]@($page.ToArray()); relay = [string[]]@($relay.ToArray()); other = [string[]]@($other.ToArray()) }
+    return [string[]]@($seen | Sort-Object)
+}
+
+function Get-HordeRelayPublishShipped {
+    # What the deploy ships, for -Checkout (header, THE RULE 1): known { workerPrefixes; workerExcept;
+    # workerFiles; pageFiles; buildFiles }, every path a repository path with forward slashes, or unknown.
+    # Needs the relay port, the relays and cli/RelayDeploy.ps1 loaded (the real Shipped tool loads them).
+    param([Parameter(Mandatory = $true)][string]$Checkout)
+    $target = Resolve-HordeRelayDeployTarget
+    if ($target.state -cne "known") { return (New-HordeUnknown -Reason ("which relay is deployed cannot be told: " + $target.reason)) }
+    $root = [System.IO.Path]::GetFullPath($Checkout).TrimEnd('\', '/')
+    $folder = [System.IO.Path]::GetFullPath((Get-HordeRelay -Name $target.value).folder).TrimEnd('\', '/')
+    if (-not $folder.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase)) { return (New-HordeUnknown -Reason "the deployed relay's folder is not in this checkout") }
+    $prefix = ($folder.Substring($root.Length + 1) -replace '\\', '/') + "/"
+    $code = @(Get-ChildItem -LiteralPath $folder -Recurse -File | Where-Object {
+            $rel = $_.FullName.Substring($root.Length + 1) -replace '\\', '/'
+            $script:HordeRelayPublishCodeExtensions -contains $_.Extension.ToLowerInvariant() -and -not $rel.StartsWith($prefix + "test/", [System.StringComparison]::Ordinal) -and $rel -notmatch '/node_modules/'
+        } | ForEach-Object { $_.FullName.Substring($root.Length + 1) -replace '\\', '/' })
+    $reached = @(Get-HordeRelayPublishImports -Root $root -Start $code)
+    $map = Get-HordeRelayDeploySiteSources
+    $build = @(Get-HordeRelayDeployBuildFiles)
+    return (New-HordeKnown -Value ([pscustomobject]@{
+        workerPrefixes = [string[]]@($prefix); workerExcept = [string[]]@($prefix + "test/")
+        workerFiles = [string[]]@($reached | Where-Object { -not $_.StartsWith($prefix, [System.StringComparison]::Ordinal) })
+        pageFiles = [string[]]@(@($map.Values | ForEach-Object { "" + $_ }) + $build | Sort-Object -Unique)
+        buildFiles = [string[]]$build }))
+}
+
+function Get-HordeRelayPublishClasses {
+    # PURE. The changed paths, as the revision tool names them (forward slashes, from the top), sorted by
+    # what the deploy ships (-Shipped, Get-HordeRelayPublishShipped's value) into worker, page and
+    # ignored (header, THE RULE). A file that is both - the protocol, which the Worker imports and the
+    # site serves - is the worker's: the person reads it.
+    param([string[]]$Paths = @(), [Parameter(Mandatory = $true)]$Shipped)
+    $worker = New-Object System.Collections.ArrayList; $page = New-Object System.Collections.ArrayList; $ignored = New-Object System.Collections.ArrayList
+    foreach ($p in @($Paths | Where-Object { "" + $_ -ne "" })) {
+        $inFolder = $false
+        foreach ($w in @($Shipped.workerPrefixes)) { if ($p.StartsWith($w, [System.StringComparison]::Ordinal)) { $inFolder = $true } }
+        foreach ($x in @($Shipped.workerExcept)) { if ($p.StartsWith($x, [System.StringComparison]::Ordinal)) { $inFolder = $false } }
+        if ($inFolder -or @($Shipped.workerFiles) -ccontains $p) { [void]$worker.Add($p) }
+        elseif (@($Shipped.pageFiles) -ccontains $p) { [void]$page.Add($p) }
+        else { [void]$ignored.Add($p) }
+    }
+    return [pscustomobject]@{ worker = [string[]]@($worker.ToArray()); page = [string[]]@($page.ToArray()); ignored = [string[]]@($ignored.ToArray()) }
 }
 
 function Get-HordeRelayPublishBase {
@@ -165,32 +241,31 @@ function Get-HordeRelayPublishBase {
 }
 
 function Get-HordeRelayPublishDecision {
-    # PURE. What to do about what changed between -Base and -Head: { action; what; key; reason }, action
-    # one of nothing | warn | wait | deploy. -Classes is Get-HordeRelayPublishClasses's answer.
+    # PURE. What to do about what changed between -Base and the checkout: { action; what; key; reason },
+    # action one of ignore | warn | wait | deploy. -Classes is Get-HordeRelayPublishClasses's answer.
     param([Parameter(Mandatory = $true)]$Classes, [Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)][string]$Base)
-    $kinds = @()
-    if (@($Classes.page).Count -gt 0) { $kinds += "page" }
-    if (@($Classes.relay).Count -gt 0) { $kinds += "relay" }
-    if (@($Classes.other).Count -gt 0) { $kinds += "other" }
     $say = { param([string]$Action, [string]$What, [string]$Key, [string]$Why) return [pscustomobject]@{ action = $Action; what = $What; key = $Key; reason = $Why } }
-    if ($kinds.Count -eq 0) { return (& $say "nothing" "" "" "no file differs from the last deploy") }
-    # Told once for each base and each mix of what changed: a page change arriving on top of a held
-    # relay change is worth saying again; the same mix on the next merge is not.
-    $key = "held:" + $Base + ":" + ($kinds -join "+")
-    if (@($Classes.relay).Count -gt 0) { return (& $say "warn" "relay-changed" $key ("the relay changed (" + @($Classes.relay).Count + " file(s) under relays/), so it is not deployed by the supervisor")) }
-    if (@($Classes.other).Count -gt 0) { return (& $say "warn" "other-changed" $key ("" + @($Classes.other).Count + " file(s) beyond the phone page changed, so it is not deployed by the supervisor")) }
+    if (@($Classes.worker).Count -gt 0) {
+        # Told once for each base, and again only when a page change joins it.
+        $key = "held:" + $Base + ":worker" + $(if (@($Classes.page).Count -gt 0) { "+page" } else { "" })
+        return (& $say "warn" "worker-changed" $key ("the relay's Worker changed (" + @($Classes.worker).Count + " file(s)), so the supervisor does not deploy"))
+    }
+    if (@($Classes.page).Count -eq 0) { return (& $say "ignore" "" "" ("nothing the deploy ships changed (" + @($Classes.ignored).Count + " other file(s))")) }
     if ($null -ne $State.failure -and $Now -lt $State.failure.at.AddSeconds($script:HordeRelayPublishRetrySeconds)) {
         return (& $say "wait" "" "" ("the last deploy failed at " + $State.failure.at.ToString("HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture) + "; it is tried again an hour after that"))
     }
-    return (& $say "deploy" "" "" ("only the phone page changed (" + @($Classes.page).Count + " file(s))"))
+    return (& $say "deploy" "" "" ("the phone page changed (" + @($Classes.page).Count + " file(s)) and the Worker did not"))
 }
 
 function Get-HordeRelayPublishServed {
-    # PURE. The site paths to ask for after a deploy: every changed repository path the site serves.
-    # -SiteMap is site path -> repository path (cli/RelayDeploy.ps1, Get-HordeRelayDeploySiteSources).
-    param([string[]]$Changed = @(), [Parameter(Mandatory = $true)]$SiteMap)
+    # PURE. The site paths to compare after a deploy (header, THE CHECK): app/sw.js, every changed
+    # repository path the site serves, and - when the code that builds the site changed - every built
+    # file under app/. -SiteMap is site path -> repository path; -Built the site paths that were built.
+    param([string[]]$Changed = @(), [Parameter(Mandatory = $true)]$SiteMap, [string[]]$BuildFiles = @(), [string[]]$Built = @())
     $out = New-Object System.Collections.ArrayList
+    [void]$out.Add("app/sw.js")
     foreach ($site in @($SiteMap.Keys)) { if (@($Changed) -ccontains ("" + $SiteMap[$site]) -and -not $out.Contains("" + $site)) { [void]$out.Add("" + $site) } }
+    if (@($Changed | Where-Object { @($BuildFiles) -ccontains $_ }).Count -gt 0) { foreach ($b in @($Built)) { if (("" + $b).StartsWith("app/", [System.StringComparison]::Ordinal) -and -not $out.Contains("" + $b)) { [void]$out.Add("" + $b) } } }
     return [string[]]@($out.ToArray() | Sort-Object)
 }
 
@@ -204,20 +279,22 @@ function Get-HordeRelayPublishVersion {
 }
 
 function Test-HordeRelayPublishCheck {
-    # PURE. Did the deploy take? { ok; reason }. -Before is the VERSION served before the deploy ("" when
-    # it could not be read), -Built the VERSION the deploy built, -After the answer for app/sw.js after
-    # it, -Files { path; answer } for every new or changed file the site serves.
+    # PURE. Did the deploy take? { ok; reason } (header, THE CHECK). -Before is the VERSION served before
+    # the deploy ("" when it could not be read), -Built the VERSION the deploy built, -After the answer for
+    # app/sw.js after it, -Files { path; answer; expected } for each file compared, expected being the
+    # built file's hash ("" when the deploy did not build it).
     param([AllowEmptyString()][string]$Before = "", [Parameter(Mandatory = $true)][string]$Built, $After, [object[]]$Files = @())
     $fail = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why } }
     $now = Get-HordeRelayPublishVersion -Answer $After
     if ($now -eq "") { return (& $fail "app/sw.js did not answer 200 with a VERSION after the deploy") }
+    if ($Before -ne "" -and $Built -cne $Before -and $now -ceq $Before) { return (& $fail ("app/sw.js's VERSION did not change, though the files it hashes did: it is still " + $Before)) }
     if ($now -cne $Built) { return (& $fail ("app/sw.js serves VERSION " + $now + ", not the " + $Built + " the deploy built")) }
-    if ($Before -ne "" -and $now -ceq $Before) { return (& $fail ("app/sw.js's VERSION did not change: it was " + $Before + " before the deploy, and is still")) }
     foreach ($f in @($Files)) {
         $a = $f.answer
         if ($null -eq $a -or $a.state -cne "known" -or [int]$a.value.status -ne 200) { return (& $fail ($f.path + " did not answer 200" + $(if ($null -ne $a -and $a.state -ceq "known") { " (it answered " + $a.value.status + ")" } else { "" }))) }
+        if (("" + $f.expected) -eq "" -or ("" + $a.value.sha256) -cne ("" + $f.expected)) { return (& $fail ($f.path + " is hosted with bytes other than the ones built")) }
     }
-    return [pscustomobject]@{ ok = $true; reason = ("app/sw.js serves VERSION " + $now + $(if ($Before -ne "") { " (it was " + $Before + ")" } else { "" }) + ", and " + @($Files).Count + " changed file(s) answer 200") }
+    return [pscustomobject]@{ ok = $true; reason = ("app/sw.js serves VERSION " + $now + $(if ($Before -ne "") { " (it was " + $Before + ")" } else { "" }) + ", and " + @($Files).Count + " file(s) are hosted exactly as built") }
 }
 
 function Add-HordeRelayPublishNotice {
@@ -237,7 +314,8 @@ function Invoke-HordeRelayPublishTool {
 
 function Invoke-HordeRelayPublishStep {
     # One look at the hosted page, once a pass (header): the lines to say. Never throws for a tool.
-    #   -Tools   Now, NewId, Head, Diff, Deploy, Http, SiteMap (New-HordeRelayPublishTools)
+    #   -Tools   Now, NewId, Head, Diff, Load, Shipped, Deploy, Http, SiteMap (New-HordeRelayPublishTools);
+    #            Load may be $null where what the others need is loaded already
     #   -Teller  the pass's teller (Tools.TellAll of cli/ServicesTend.ps1): param($Notices, $HordeHome,
     #            $Policy) -> { told; problem }; $null, or the policy's tellWarchief off, keeps them waiting
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)]$Tools, $Policy = $null, $Teller = $null, [string]$Checkout = "")
@@ -271,22 +349,42 @@ function Invoke-HordeRelayPublishStep {
         $b = Get-HordeRelayPublishBase -Head $h -Record $record -State $s
         if ($b.kind -ceq "unknown") { & $queue $b.what $b.key $h.commit; & $say ("NOT DEPLOYED - " + $b.reason + "; a deploy by hand records it"); return }
         if ($b.kind -ceq "same") {
+            $s.checked = $null
             if ($null -ne $s.failure) { $s.failure = $null; & $say ("the hosted page is on " + (ConvertTo-HordeRelayPublishShort $h.commit) + "; the failure before is settled") -Log }
             else { & $say ("current - " + $b.reason) }
             return
         }
+        # CHECKED UP TO: a range already found to hold nothing shipped is not read again; a later commit
+        # is compared from where that range ended. The base itself - what was deployed - does not move.
+        $from = $b.base
+        if ($null -ne $s.checked -and $s.checked.base -ceq $b.base -and $s.checked.through -cmatch $script:HordeRelayPublishCommitPattern) {
+            if ($s.checked.through -ceq $h.commit) { & $say ("current - nothing the deploy ships changed since " + (ConvertTo-HordeRelayPublishShort $b.base)); return }
+            $from = $s.checked.through
+        }
         # A checkout with changes of its own would be built as it is, not as its commit says.
         if ($h.clean -ne $true) { & $queue "dirty" ("dirty:" + $h.commit) $h.commit; & $say "NOT DEPLOYED - the checkout has changes of its own" -Log; return }
         $diff = $null
-        try { $diff = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Diff" -With @($Checkout, $b.base, $h.commit) } catch { $diff = New-HordeUnknown -Reason "the revision tool failed" -ErrorRecord $_ }
+        try { $diff = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Diff" -With @($Checkout, $from, $h.commit) } catch { $diff = New-HordeUnknown -Reason "the revision tool failed" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $diff) -or $diff.state -cne "known") {
-            & $queue "unreadable" ("unreadable:" + $b.base + ":" + $h.commit) $h.commit
-            & $say ("NOT DEPLOYED - what changed since " + (ConvertTo-HordeRelayPublishShort $b.base) + " could not be read" + $(if ((Test-HordeAnswer $diff) -and "" + $diff.reason -ne "") { ": " + $diff.reason } else { "" })) -Log
+            & $queue "unreadable" ("unreadable:" + $from + ":" + $h.commit) $h.commit
+            & $say ("NOT DEPLOYED - what changed since " + (ConvertTo-HordeRelayPublishShort $from) + " could not be read" + $(if ((Test-HordeAnswer $diff) -and "" + $diff.reason -ne "") { ": " + $diff.reason } else { "" })) -Log
             return
         }
-        $classes = Get-HordeRelayPublishClasses -Paths @($diff.value.paths)
+        $changed = [string[]]@($diff.value.paths)
+        if ($changed.Count -eq 0) { $s.checked = [pscustomobject]@{ base = $b.base; through = $h.commit }; & $say "current - no file differs from the last deploy"; return }
+        $shipped = $null
+        if ($null -ne $Tools["Load"]) {
+            try { . $Tools["Load"] $Checkout } catch { $shipped = New-HordeUnknown -Reason "the relays could not be loaded" -ErrorRecord $_ }
+        }
+        if ($null -eq $shipped) { try { $shipped = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Shipped" -With @($Checkout) } catch { $shipped = New-HordeUnknown -Reason "what the deploy ships could not be read" -ErrorRecord $_ } }
+        if (-not (Test-HordeAnswer $shipped) -or $shipped.state -cne "known") {
+            & $queue "unreadable" ("unshipped:" + $from + ":" + $h.commit) $h.commit
+            & $say ("NOT DEPLOYED - what the deploy ships could not be told" + $(if ((Test-HordeAnswer $shipped) -and "" + $shipped.reason -ne "") { ": " + $shipped.reason } else { "" })) -Log
+            return
+        }
+        $classes = Get-HordeRelayPublishClasses -Paths $changed -Shipped $shipped.value
         $d = Get-HordeRelayPublishDecision -Classes $classes -State $s -Now $now -Base $b.base
-        if ($d.action -ceq "nothing") { & $say ("current - " + $d.reason); return }
+        if ($d.action -ceq "ignore") { $s.checked = [pscustomobject]@{ base = $b.base; through = $h.commit }; & $say ("current - " + $d.reason); return }
         if ($d.action -ceq "wait") { & $say ("waits - " + $d.reason); return }
         if ($d.action -ceq "warn") {
             if (@($s.told) -cnotcontains $d.key) { & $say ("NOT DEPLOYED - " + $d.reason + " (" + (ConvertTo-HordeRelayPublishShort $b.base) + ".." + (ConvertTo-HordeRelayPublishShort $h.commit) + ")") -Log } else { & $say ("not deployed - " + $d.reason) }
@@ -315,17 +413,19 @@ function Invoke-HordeRelayPublishStep {
             & $say ("FAILED - " + $Why + "; tried again an hour from now at the earliest") -Log
         }
         if (-not (Test-HordeAnswer $r) -or $r.state -cne "known") { & $failed "deploy-failed" ("the deploy did not work: " + $(if (Test-HordeAnswer $r) { $r.reason } else { "it did not answer" })); return }
-        $origin = "" + $r.value.origin
+        # The deploy recorded this commit: the base has moved, and what was checked up to is spent.
+        $s.checked = $null; $origin = "" + $r.value.origin
+        $hashes = $r.value.hashes
         $map = $null
         try { $map = Invoke-HordeRelayPublishTool -Tools $Tools -Name "SiteMap" } catch { $map = $null }
-        if ($null -eq $map) { & $failed "check-failed" "the deploy worked, but the list of files the site serves could not be had to check it"; return }
+        if ($null -eq $map -or $null -eq $hashes) { & $failed "check-failed" "the deploy worked, but what it built could not be had to check it"; return }
         $after = $null
         try { $after = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Http" -With @($origin + "/app/sw.js") } catch { $after = $null }
         $files = New-Object System.Collections.ArrayList
-        foreach ($p in @(Get-HordeRelayPublishServed -Changed @($classes.page) -SiteMap $map)) {
+        foreach ($p in @(Get-HordeRelayPublishServed -Changed @($classes.page) -SiteMap $map -BuildFiles @($shipped.value.buildFiles) -Built @($hashes.Keys))) {
             $a = $null
-            try { $a = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Http" -With @($origin + "/" + $p) } catch { $a = $null }
-            [void]$files.Add([pscustomobject]@{ path = $p; answer = $a })
+            try { $a = $(if ($p -ceq "app/sw.js") { $after } else { Invoke-HordeRelayPublishTool -Tools $Tools -Name "Http" -With @($origin + "/" + $p) }) } catch { $a = $null }
+            [void]$files.Add([pscustomobject]@{ path = $p; answer = $a; expected = $(if ($hashes.ContainsKey($p)) { "" + $hashes[$p] } else { "" }) })
         }
         $check = Test-HordeRelayPublishCheck -Before $before -Built ("" + $r.value.version) -After $after -Files @($files.ToArray())
         if (-not $check.ok) { & $failed "check-failed" ("deployed, but the check failed: " + $check.reason); return }
@@ -373,38 +473,43 @@ function Get-HordeRelayPublishChanged {
     # checked before they reach the revision tool, so neither can be read as a flag.
     param([Parameter(Mandatory = $true)][string]$Checkout, [Parameter(Mandatory = $true)][string]$Base, [Parameter(Mandatory = $true)][string]$Head)
     if ($Base -cnotmatch $script:HordeRelayPublishCommitPattern -or $Head -cnotmatch $script:HordeRelayPublishCommitPattern) { return (New-HordeUnknown -Reason "a commit to compare is not a full commit id") }
-    # --no-renames: a moved file is its old path AND its new one, so a move out of the relay is seen.
+    # --no-renames: a moved file is its old path AND its new one, so a move out of the Worker is seen.
     $r = Invoke-HordeServiceGit -Checkout $Checkout -Arguments @("diff", "--name-only", "--no-renames", $Base, $Head) -TimeoutSeconds $script:HordeRelayPublishGitSeconds
     if (-not $r.ok) { return (New-HordeUnknown -Reason $r.detail) }
     return (New-HordeKnown -Value ([pscustomobject]@{ paths = [string[]]@(("" + $r.out) -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }) }))
 }
 
 function Get-HordeRelayPublishUrl {
-    # GET -Url with a short time limit: known { status; body } (any status), or unknown when nothing
-    # answered. Only an https origin's address is asked; the cache is told to answer afresh.
+    # GET -Url with a short time limit: known { status; body; sha256 } (any status; body and sha256 of a
+    # 200 only), or unknown when nothing answered. Only an https origin's address is asked; the cache is
+    # told to answer afresh.
     param([Parameter(Mandatory = $true)][string]$Url, [int]$TimeoutSeconds = $script:HordeRelayPublishHttpSeconds)
     if ($Url -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?/') { return (New-HordeUnknown -Reason "only an https address of the relay is asked") }
     Add-Type -AssemblyName System.Net.Http
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
     $http = New-Object System.Net.Http.HttpClient
+    $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         $http.Timeout = [System.TimeSpan]::FromSeconds($TimeoutSeconds)
         $req = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $Url)
         $req.Headers.CacheControl = New-Object System.Net.Http.Headers.CacheControlHeaderValue
         $req.Headers.CacheControl.NoCache = $true
         $res = $http.SendAsync($req).GetAwaiter().GetResult()
-        $body = ""
-        if ([int]$res.StatusCode -eq 200) { $body = $res.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
-        return (New-HordeKnown -Value ([pscustomobject]@{ status = [int]$res.StatusCode; body = $body }))
+        $body = ""; $hash = ""
+        if ([int]$res.StatusCode -eq 200) {
+            $bytes = $res.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+            $hash = (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join "")
+            $body = [System.Text.Encoding]::ASCII.GetString($bytes)
+        }
+        return (New-HordeKnown -Value ([pscustomobject]@{ status = [int]$res.StatusCode; body = $body; sha256 = $hash }))
     } catch { return (New-HordeUnknown -Reason ("the relay did not answer for " + $Url) -ErrorRecord $_) }
-    finally { $http.Dispose() }
+    finally { $http.Dispose(); $sha.Dispose() }
 }
 
 function New-HordeRelayPublishTools {
-    # The real tools (header). -Root is this checkout: the files the relays and the deploy load from.
-    # THE BLOCKS TAKE WHAT THEY NEED AS ARGUMENTS (cli/ServicesTend.ps1 says why), and the deploy loads
-    # the relays inside its own block, as the pass's teller loads the messengers, so a pass that does
-    # not deploy - nearly every pass - never pays for them.
+    # The real tools (header). THE BLOCKS TAKE WHAT THEY NEED AS ARGUMENTS (cli/ServicesTend.ps1 says
+    # why), and the relays are loaded inside the blocks that need them, from the checkout given, as the
+    # pass's teller loads the messengers, so a pass with nothing to look at never pays for them.
     return @{
         Now     = { return [datetime]::UtcNow }
         NewId   = { return [guid]::NewGuid().ToString() }
@@ -412,15 +517,22 @@ function New-HordeRelayPublishTools {
         Diff    = { param($Checkout, $Base, $Head) return (Get-HordeRelayPublishChanged -Checkout $Checkout -Base $Base -Head $Head) }
         Http    = { param($Url) return (Get-HordeRelayPublishUrl -Url $Url) }
         SiteMap = { return (Get-HordeRelayDeploySiteSources) }
+        # LOAD IS DOT-SOURCED by the step, once, before the first tool that needs the relays: a relay
+        # registers itself once a process (relays/Port.ps1), so the relays are loaded once, into the
+        # step's own scope, where the two blocks below can see what they registered.
+        Load    = {
+            param($Checkout)
+            . (Join-Path $Checkout "relays\Port.ps1")
+            foreach ($f in @(Get-HordeRelayFiles)) { . $f }
+            . (Join-Path $Checkout "cli\RelayDeploy.ps1")
+        }
+        Shipped = { param($Checkout) return (Get-HordeRelayPublishShipped -Checkout $Checkout) }
         Deploy  = {
             param($HordeHome, $Say, $Checkout)
             # A TEST'S HOME DEPLOYS NOTHING, whatever called this (cli/ServicesTell.ps1 says why a home
             # under the temp folder is a suite's).
             if (Test-HordeServiceHomeIsATests -HordeHome $HordeHome) { return (New-HordeUnknown -Reason "this Horde home is under the temp folder, so it is a test's: nothing is deployed") }
             $rev = Get-HordeRelayPublishRevision -Checkout $Checkout
-            . (Join-Path $Checkout "relays\Port.ps1")
-            foreach ($f in @(Get-HordeRelayFiles)) { . $f }
-            . (Join-Path $Checkout "cli\RelayDeploy.ps1")
             return (Invoke-HordeRelayDeploy -HordeHome $HordeHome -Say $Say -Revision $(if ($rev.state -ceq "known") { $rev.value } else { $null }))
         }
     }

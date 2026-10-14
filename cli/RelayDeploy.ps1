@@ -46,6 +46,26 @@ function Get-HordeRelayDeploySiteSources {
     return (Get-HordePwaSiteFiles)
 }
 
+function Get-HordeRelayDeployBuildFiles {
+    # The code that builds the site, as repository paths: this file, Site.ps1 and the files each
+    # dot-sources (the lines at the top of each). A change to any of them can change every built file, so
+    # the supervisor counts it as the page (cli/RelayPublish.ps1); test/test-relay-publish.ps1 reads the
+    # dot-source lines of these files and fails when one is missing here.
+    return @("cli/RelayDeploy.ps1", "surfaces/pwa/Site.ps1", "core/Tristate.ps1", "core/FileAtomic.ps1")
+}
+
+function Get-HordeRelayDeploySiteHashes {
+    # Site path -> SHA-256 (lower-case hex) of each built file under -Out: what the supervisor's check
+    # compares the hosted bytes with, since the built folder is gone once the deploy ends.
+    param([Parameter(Mandatory = $true)][string]$Out, [string[]]$Files = @())
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $h = @{}
+        foreach ($f in @($Files)) { $h[$f] = (($sha.ComputeHash([System.IO.File]::ReadAllBytes((Join-Path $Out ("" + $f).Replace('/', [System.IO.Path]::DirectorySeparatorChar)))) | ForEach-Object { $_.ToString("x2") }) -join "") }
+        return $h
+    } finally { $sha.Dispose() }
+}
+
 function Get-HordeRelayDeployFolder {
     param([string]$HordeHome = "")
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
@@ -118,8 +138,9 @@ function Resolve-HordeRelayDeployTarget {
 }
 
 function Invoke-HordeRelayDeploy {
-    # Build the app and deploy relay -Relay with it: known { relay; origin; version } or unknown with the
-    # reason. The built site is the run's own temporary folder, deleted at the end whatever happened.
+    # Build the app and deploy relay -Relay with it: known { relay; origin; version; hashes } or unknown
+    # with the reason; hashes is each built file's (Get-HordeRelayDeploySiteHashes). The built site is
+    # the run's own temporary folder, deleted at the end whatever happened.
     # Under the deploy lock, and recorded when it worked (header). -Revision: the checkout's { commit;
     # clean }, read by the caller BEFORE this is called, so the record never names a revision newer than
     # the files the build reads; $null records the commit as unknown. -Now: the clock of the record.
@@ -133,11 +154,12 @@ function Invoke-HordeRelayDeploy {
         $site = New-HordeRelayDeploySite -Out (Join-Path $work "site")
         if ($site.state -cne "known") { return (New-HordeUnknown -Reason ("the phone app could not be built: " + $site.reason)) }
         & $Say ("built the phone app (version " + $site.value.version + ") for relay " + $target.value)
+        $hashes = Get-HordeRelayDeploySiteHashes -Out $site.value.out -Files @($site.value.files)
         $done = Publish-HordeRelay -Name $target.value -Site $site.value.out -Say $Say -HordeHome $HordeHome
         if ($done.state -cne "known") { return $done }
         try { Write-HordeRelayDeployed -HordeHome $HordeHome -Revision $Revision -Version $site.value.version -Relay $done.value.relay -Origin $done.value.origin -At (& $Now) }
         catch { & $Say ("note: the deploy worked, but its record could not be written: " + $_.Exception.Message) }
-        return (New-HordeKnown -Value ([pscustomobject]@{ relay = $done.value.relay; origin = $done.value.origin; version = $site.value.version }))
+        return (New-HordeKnown -Value ([pscustomobject]@{ relay = $done.value.relay; origin = $done.value.origin; version = $site.value.version; hashes = $hashes }))
     } finally {
         if ($work -like "*horde-relay-deploy-*" -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
         $lock.Dispose()

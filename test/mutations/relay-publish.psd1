@@ -6,18 +6,42 @@
     Suite  = "test\test-relay-publish.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "relay-change-not-the-relay"
-           Find = '        elseif ($p.StartsWith($script:HordeRelayPublishRelayPrefix, [System.StringComparison]::Ordinal)) { [void]$relay.Add($p) }'
+        @{ Name = "worker-folder-not-the-worker"
+           Find = 'foreach ($w in @($Shipped.workerPrefixes)) { if ($p.StartsWith($w, [System.StringComparison]::Ordinal)) { $inFolder = $true } }'
            Replace = '' }
-        @{ Name = "relay-change-deployed"
-           Find = 'if (@($Classes.relay).Count -gt 0) { return (& $say "warn" "relay-changed"'
-           Replace = 'if ($false) { return (& $say "warn" "relay-changed"' }
-        @{ Name = "other-change-deployed"
-           Find = 'if (@($Classes.other).Count -gt 0) { return (& $say "warn" "other-changed"'
-           Replace = 'if ($false) { return (& $say "warn" "other-changed"' }
-        @{ Name = "page-prefix-loose"
-           Find = 'foreach ($prefix in $script:HordeRelayPublishPagePrefixes) { if ($p.StartsWith($prefix, [System.StringComparison]::Ordinal)) { $isPage = $true } }'
-           Replace = 'foreach ($prefix in $script:HordeRelayPublishPagePrefixes) { if ($p.StartsWith($prefix.TrimEnd("/"), [System.StringComparison]::OrdinalIgnoreCase)) { $isPage = $true } }' }
+        @{ Name = "worker-tests-are-the-worker"
+           Find = 'foreach ($x in @($Shipped.workerExcept)) { if ($p.StartsWith($x, [System.StringComparison]::Ordinal)) { $inFolder = $false } }'
+           Replace = '' }
+        @{ Name = "imported-file-not-the-worker"
+           Find = 'if ($inFolder -or @($Shipped.workerFiles) -ccontains $p) {'
+           Replace = 'if ($inFolder) {' }
+        @{ Name = "page-before-worker"
+           Find = 'if ($inFolder -or @($Shipped.workerFiles) -ccontains $p) { [void]$worker.Add($p) }'
+           Replace = 'if (@($Shipped.pageFiles) -ccontains $p) { [void]$page.Add($p) } elseif ($inFolder -or @($Shipped.workerFiles) -ccontains $p) { [void]$worker.Add($p) }' }
+        @{ Name = "ignored-is-the-page"
+           Find = '        elseif (@($Shipped.pageFiles) -ccontains $p) { [void]$page.Add($p) }'
+           Replace = '        elseif ($true) { [void]$page.Add($p) }' }
+        @{ Name = "imports-not-followed"
+           Find = '                if ($seen.Add($t)) { $todo.Enqueue($t) }'
+           Replace = '                if ($seen.Add($t) -and $false) { $todo.Enqueue($t) }' }
+        @{ Name = "relay-tests-shipped"
+           Find = '-and -not $rel.StartsWith($prefix + "test/", [System.StringComparison]::Ordinal)'
+           Replace = '' }
+        @{ Name = "worker-change-deployed"
+           Find = '    if (@($Classes.worker).Count -gt 0) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "ignored-only-deployed"
+           Find = 'if (@($Classes.page).Count -eq 0) { return (& $say "ignore"'
+           Replace = 'if ($false) { return (& $say "ignore"' }
+        @{ Name = "checked-range-read-again"
+           Find = 'if ($s.checked.through -ceq $h.commit) { & $say ("current - nothing the deploy ships changed since "'
+           Replace = 'if ($false) { & $say ("current - nothing the deploy ships changed since "' }
+        @{ Name = "checked-range-not-continued"
+           Find = '            $from = $s.checked.through'
+           Replace = '' }
+        @{ Name = "checked-range-kept-after-deploy"
+           Find = '$s.checked = $null; $origin = "" + $r.value.origin'
+           Replace = '$origin = "" + $r.value.origin' }
         @{ Name = "unknown-base-deployed"
            Find = '        if ($b.kind -ceq "unknown") {'
            Replace = '        if ($false) {' }
@@ -37,22 +61,37 @@
            Find = '    if (@($State.told) -ccontains $Key) { return $State }'
            Replace = '' }
         @{ Name = "version-unchanged-accepted"
-           Find = 'if ($Before -ne "" -and $now -ceq $Before) {'
+           Find = 'if ($Before -ne "" -and $Built -cne $Before -and $now -ceq $Before) {'
            Replace = 'if ($false) {' }
+        @{ Name = "version-change-always-required"
+           Find = 'if ($Before -ne "" -and $Built -cne $Before -and $now -ceq $Before) {'
+           Replace = 'if ($Before -ne "" -and $now -ceq $Before) {' }
         @{ Name = "stale-version-accepted"
            Find = 'if ($now -cne $Built) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "hosted-bytes-not-compared"
+           Find = 'if (("" + $f.expected) -eq "" -or ("" + $a.value.sha256) -cne ("" + $f.expected)) {'
            Replace = 'if ($false) {' }
         @{ Name = "changed-files-not-checked"
            Find = '    foreach ($f in @($Files)) {'
            Replace = '    foreach ($f in @()) {' }
         @{ Name = "served-file-missed"
            Find = 'if (@($Changed) -ccontains ("" + $SiteMap[$site])'
-           Replace = 'if ($false'  }
+           Replace = 'if ($false' }
+        @{ Name = "sw-not-compared"
+           Find = '    [void]$out.Add("app/sw.js")'
+           Replace = '' }
+        @{ Name = "builder-change-compares-little"
+           Find = 'if (@($Changed | Where-Object { @($BuildFiles) -ccontains $_ }).Count -gt 0) {'
+           Replace = 'if ($false) {' }
         @{ Name = "dirty-checkout-deployed"
            Find = 'if ($h.clean -ne $true) {'
            Replace = 'if ($false) {' }
         @{ Name = "unreadable-diff-not-told"
            Find = '        if (-not (Test-HordeAnswer $diff) -or $diff.state -cne "known") {'
+           Replace = '        if ($false) {' }
+        @{ Name = "unreadable-shipped-not-told"
+           Find = '        if (-not (Test-HordeAnswer $shipped) -or $shipped.state -cne "known") {'
            Replace = '        if ($false) {' }
         @{ Name = "busy-is-a-failure"
            Find = 'if ((Test-HordeAnswer $r) -and $r.state -ceq "unknown" -and $r.reason -ceq (Get-HordeRelayDeployBusyReason)) {'
