@@ -42,7 +42,10 @@
            Find = 'if (!authorize(who, "remove", m[1])) return refuse(403,'
            Replace = 'if (false) return refuse(403,' }
         @{ Name = "account-answer-without-the-relays-now"
-           Find = 'return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones, now });'
-           Replace = 'return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones });' }
+           Find = 'machines: v.machines, phones, now, relay: ownersSummary(ownersOf(env)) });'
+           Replace = 'machines: v.machines, phones, relay: ownersSummary(ownersOf(env)) });' }
+        @{ Name = "account-answer-without-the-relays-reserve"
+           Find = 'phones, now, relay: ownersSummary(ownersOf(env)) });'
+           Replace = 'phones, now });' }
     )
 }

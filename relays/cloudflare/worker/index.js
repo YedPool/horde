@@ -19,6 +19,7 @@
 import { handleApi, isApiPath } from "./api.js";
 import { handleAuth, isAuthPath } from "./signin.js";
 import { refuse } from "./answers.js";
+import { handleStatus, isStatusPath } from "./status.js";
 import { withStrictHeaders } from "./headers.js";
 import { withMetrics } from "./metrics-request.js";
 
@@ -44,11 +45,13 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const auth = isAuthPath(url.pathname);
-    const api = auth || isApiPath(url.pathname);
+    const status = isStatusPath(url.pathname);
+    const api = auth || status || isApiPath(url.pathname);
     return withMetrics(request, env, ctx, url, async () => {
       let response;
       try {
         if (auth) response = await handleAuth(request, env, url);
+        else if (status) response = await handleStatus(request, env, url);
         else response = api ? await handleApi(request, env, url) : await serveFile(request, env, url);
       } catch (e) {
         response = refuse(500, "the relay failed this request");

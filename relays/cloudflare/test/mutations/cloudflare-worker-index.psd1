@@ -10,8 +10,8 @@
            Find = 'if (auth) response = await handleAuth(request, env, url);'
            Replace = 'if (false) response = await handleAuth(request, env, url);' }
         @{ Name = "sign-in-answers-cached"
-           Find = 'const api = auth || isApiPath(url.pathname);'
-           Replace = 'const api = isApiPath(url.pathname);' }
+           Find = 'const api = auth || status || isApiPath(url.pathname);'
+           Replace = 'const api = status || isApiPath(url.pathname);' }
         @{ Name = "root-not-the-site-index"
            Find = 'if (url.pathname === "/") return env.ASSETS.fetch('
            Replace = 'if (false) return env.ASSETS.fetch(' }

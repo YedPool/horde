@@ -483,6 +483,11 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
         param([string]$Tree, [string]$Work)
         return (Get-HordeCloudflareRelayBundleHash -Tree $Tree -Work $Work)
     } `
+    -Status {
+        param([string]$HordeHome)
+        # What the live relay says of its owners (Owners.ps1): how many, never who.
+        return (New-HordeKnown -Value ([pscustomobject]@{ lines = @(Get-HordeCloudflareRelayStatusLines -Origin (Get-HordeCloudflareRelayDeployment).origin) }))
+    } `
     -DaySummary {
         param($State, [string]$Day)
         return (Get-HordeCloudflareRelayDaySummary -State $State -Day $Day)

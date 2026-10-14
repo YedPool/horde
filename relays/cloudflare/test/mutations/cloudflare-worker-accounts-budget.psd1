@@ -18,8 +18,8 @@
            Find = 'if (!(g.granted >= 1)) return { ok: false, status: 429, code: CODES.relayDaily'
            Replace = 'if (false) return { ok: false, status: 429, code: CODES.relayDaily' }
         @{ Name = "tier-not-passed"
-           Find = 'want: limits.relayRequestLease, tier, limits });'
-           Replace = 'want: limits.relayRequestLease, tier: "owner", limits });' }
+           Find = 'want: limits.relayRequestLease, tier, limits, pin:'
+           Replace = 'want: limits.relayRequestLease, tier: "owner", limits, pin:' }
         @{ Name = "lease-never-spent"
            Find = 'await storage.put(DAY, { ...c.state, lease: lease - 1 });'
            Replace = 'await storage.put(DAY, { ...c.state, lease });' }

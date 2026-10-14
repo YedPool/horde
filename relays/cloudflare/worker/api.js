@@ -60,12 +60,14 @@ import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
 import { isLoopback } from "./site.js";
-import { ownersOf, tierOf } from "./budget.js";
+import { ownersOf } from "./budget.js";
+import { relayBudgetOf } from "./relay-budget.js";
 import { noteWho, noteOutcome } from "./metrics-request.js";
 import { handleMetricsSummary, METRICS_SUMMARY_PATH } from "./metrics-api.js";
 import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
+export const TEST_BUDGET_PATH = "/v1/test/relay-budget";
 const ROUTE = /^\/v1\/mailboxes\/([^/]{1,63})\/([^/]{1,63})\/(items|watch|ack)$/;
 const OPS = { "items GET": "get", "items POST": "put", "watch GET": "watch", "ack POST": "ack" };
 
@@ -179,6 +181,10 @@ export async function handleApi(request, env, url) {
   noteWho(request, who);
   if (url.pathname === METRICS_SUMMARY_PATH) return handleMetricsSummary(request, env, url, who);
   if (isAccountPath(url.pathname)) return handleAccountApi(request, env, url, who, limits);
+  // THE RELAY-WIDE OBJECT'S CALLS (relay-budget.js), for a suite: only the test principal of a local dev
+  // (auth.js, which never vouches for a request to a deployed Worker) reads them; anyone else is told
+  // there is no such operation.
+  if (url.pathname === TEST_BUDGET_PATH) return who.kind === "test" && request.method === "GET" ? answer(200, await relayBudgetOf(env).counts()) : refuse(404, "there is no such relay operation");
   const m = ROUTE.exec(url.pathname);
   if (!m) return refuse(404, "there is no such relay operation");
   const mailbox = m[1] + "/" + m[2];
@@ -187,8 +193,9 @@ export async function handleApi(request, env, url) {
   if (!op) return refuse(405, "that method does not apply to " + m[3]);
   if (!authorize(who, op, mailbox)) return refuse(403, "you may not " + op + " in this mailbox");
   if (who.gated) {
-    const tier = tierOf(ownersOf(env), who.account);
-    const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op, mailbox, now: Date.now(), limits, tier });
+    // The owners (budget.js): the account's own object decides its tier, by its id and the verified
+    // email it keeps from its sign-in - nothing this request carries.
+    const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op, mailbox, now: Date.now(), limits, owners: ownersOf(env) });
     if (!g.ok) return op === "watch" && who.kind === "phone" && g.status === 429 ? refuseWatch(request, g) : refusalOf(g);
   }
   const box = mailboxOf(env, who.account, who.epoch, mailbox);

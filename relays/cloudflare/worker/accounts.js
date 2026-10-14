@@ -87,7 +87,7 @@ import { machineKeyOf } from "./machines.js";
 import { mailboxOf } from "./mailbox.js";
 import { sessionByObjectId } from "./sessions.js";
 import { noteSeen, lastSeenOf } from "./presence.js";
-import { charsToRelease, ACCOUNT_PREFIX, RELAY_DAY_WORDS, RELAY_FULL_WORDS } from "./budget.js";
+import { charsToRelease, tierOf, ownerEmailOf, ownerEmailsOf, ACCOUNT_PREFIX, RELAY_DAY_WORDS, RELAY_FULL_WORDS } from "./budget.js";
 import { relayBudgetOf } from "./relay-budget.js";
 import { b64u, randomBytes } from "../../../relay/js/protocol.js";
 
@@ -161,7 +161,7 @@ export class Account extends DurableObject {
   async signOut(phoneId) { await this.ctx.storage.delete(PHONE + phoneId); return true; }
 
   // THE GATE (the header): { ok } or a refusal { ok: false, status, code, reason, retryAfterMs }.
-  async admit({ device, epoch, op, mailbox, now, limits, tier }) {
+  async admit({ device, epoch, op, mailbox, now, limits, owners }) {
     const storage = this.ctx.storage;
     const p = await storage.get(PROFILE);
     if (!p || p.epoch !== epoch) return gone();
@@ -173,15 +173,29 @@ export class Account extends DurableObject {
     this.devices.set(device, put ? { ...held, put: t.state } : { ...held, read: t.state });
     if (!t.ok) return { ok: false, status: 429, code: CODES.rate, reason: "this " + (device.startsWith("phone:") ? "phone" : "machine") + " made more " + (put ? "puts" : "requests") + " than the relay takes in a minute: wait", retryAfterMs: t.retryAfterMs };
     if (MAILBOX_OPS.has(op)) {
-      const held = await storage.get(DAY);
-      const c = countInDay(held, now, limits.requestsPerDay);
-      if (!c.ok) return { ok: false, status: 429, code: CODES.daily, reason: "this account made " + limits.requestsPerDay + " requests today, its most for a day: the count starts again at midnight UTC", retryAfterMs: c.retryAfterMs };
+      const dailyRefusal = (c) => ({ ok: false, status: 429, code: CODES.daily, reason: "this account made " + limits.requestsPerDay + " requests today, its most for a day: the count starts again at midnight UTC", retryAfterMs: c.retryAfterMs });
+      const leaseOf = (held, day) => (held && held.day === day && Number.isSafeInteger(held.lease) ? held.lease : 0);
+      let held = await storage.get(DAY);
+      let c = countInDay(held, now, limits.requestsPerDay);
+      if (!c.ok) return dailyRefusal(c);
       // THE RELAY'S DAY (the header): a lease of today's, or a new one.
-      let lease = held && held.day === c.state.day && Number.isSafeInteger(held.lease) ? held.lease : 0;
+      let lease = leaseOf(held, c.state.day);
       if (lease < 1) {
-        const g = await relayBudgetOf(this.env).takeRequests({ now, want: limits.relayRequestLease, tier, limits });
+        // The tier by id; an owner email is asked of its pin in the same call (budget.js, THE PINS).
+        const tier = tierOf(owners, p.account);
+        const email = tier === "public" ? ownerEmailOf(owners, p.email) : "";
+        const g = await relayBudgetOf(this.env).takeRequests({ now, want: limits.relayRequestLease, tier, limits, pin: email ? { email, account: p.account } : null, emails: ownerEmailsOf(owners) });
         if (!(g.granted >= 1)) return { ok: false, status: 429, code: CODES.relayDaily, reason: RELAY_DAY_WORDS, retryAfterMs: g.retryAfterMs };
-        lease = g.granted;
+        // THE GAP (review of PR 281): while the relay-wide object was asked, this object's input gate was
+        // open, and another request of this account may have counted itself in the day or taken a lease.
+        // So the day is READ AGAIN and this request counted on what is there now, the lease granted added
+        // to what is there - never written from the value read before the call, which would lose the
+        // other's count. Chosen over blockConcurrencyWhile, which would hold every request of the account
+        // behind a call to another object. A request the day now refuses keeps its lease for the next.
+        held = await storage.get(DAY);
+        c = countInDay(held, now, limits.requestsPerDay);
+        lease = leaseOf(held, c.state.day) + g.granted;
+        if (!c.ok) { await storage.put(DAY, { ...c.state, lease }); return dailyRefusal(c); }
       }
       await storage.put(DAY, { ...c.state, lease: lease - 1 });
     }
@@ -192,26 +206,36 @@ export class Account extends DurableObject {
   // would hold one mailbox too many, or too many characters. Counted only when ok.
   async charge({ mailbox, chars, epoch, limits }) {
     const storage = this.ctx.storage;
-    const p = await storage.get(PROFILE);
-    if (p === undefined || epoch !== p.epoch) return gone();
-    const held = await storage.get(BOX + mailbox);
-    if (held === undefined) {
-      const n = (await storage.list({ prefix: BOX })).size;
-      if (n >= limits.accountMaxMailboxes) return { ok: false, status: 409, code: CODES.mailboxes, reason: "this account has " + n + " mailboxes holding unacked mail, its most: nothing goes into another until one is read and acked" };
-    }
-    const usage = (await storage.get(USAGE)) || 0;
-    if (usage + chars > limits.accountMaxChars) return { ok: false, status: 507, code: CODES.accountFull, reason: "this account's mailboxes hold " + usage + " characters their readers have not acked; this text would take them past their most, " + limits.accountMaxChars };
-    // THE RELAY'S CAP (the header): more of it leased only when this put passes what the account holds.
-    // An account from before the cap holds none for the mail it already has: that is leased with its
-    // next put, whole.
-    let granted = (await storage.get(GRANTED)) || 0;
-    if (usage + chars > granted) {
+    for (let round = 0; ; round++) {
+      const p = await storage.get(PROFILE);
+      if (p === undefined || epoch !== p.epoch) return gone();
+      const held = await storage.get(BOX + mailbox);
+      if (held === undefined) {
+        const n = (await storage.list({ prefix: BOX })).size;
+        if (n >= limits.accountMaxMailboxes) return { ok: false, status: 409, code: CODES.mailboxes, reason: "this account has " + n + " mailboxes holding unacked mail, its most: nothing goes into another until one is read and acked" };
+      }
+      const usage = (await storage.get(USAGE)) || 0;
+      if (usage + chars > limits.accountMaxChars) return { ok: false, status: 507, code: CODES.accountFull, reason: "this account's mailboxes hold " + usage + " characters their readers have not acked; this text would take them past their most, " + limits.accountMaxChars };
+      // THE RELAY'S CAP (the header): more of it leased only when this put passes what the account holds.
+      // An account from before the cap holds none for the mail it already has: that is leased with its
+      // next put, whole.
+      const granted = (await storage.get(GRANTED)) || 0;
+      if (usage + chars <= granted) {
+        await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars, [ROOM]: limits.relayCharsLease });
+        return { ok: true };
+      }
+      // Asked again and again, and another put of this account took the room each time: refused, as full.
+      if (round >= 8) return { ok: false, status: 507, code: CODES.relayFull, reason: RELAY_FULL_WORDS };
       const r = await relayBudgetOf(this.env).takeChars({ need: usage + chars - granted, extra: limits.relayCharsLease, limits });
       if (!r.ok) return { ok: false, status: 507, code: CODES.relayFull, reason: RELAY_FULL_WORDS };
-      granted += r.granted;
+      // THE GAP (review of PR 281): while the relay-wide object was asked, this object's input gate was
+      // open, and another put of this account (into another mailbox) may have charged itself. So what
+      // was granted is ADDED TO WHAT IS STORED NOW, and every check above is made again on what is there
+      // - never a write from the values read before the call, which would lose the other's charge.
+      // Chosen over blockConcurrencyWhile, which would hold every request of the account behind a call
+      // to another object. Kept even if the account is now gone: an over-count, never an under-count.
+      await storage.put(GRANTED, ((await storage.get(GRANTED)) || 0) + r.granted);
     }
-    await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars, [GRANTED]: granted, [ROOM]: limits.relayCharsLease });
-    return { ok: true };
   }
 
   // Mail of chars characters left mailbox, by its ack or its expiry (mailbox.js); emptied when nothing

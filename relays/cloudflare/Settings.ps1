@@ -26,7 +26,7 @@ $script:HordeCloudflareRelaySettings = New-HordeModuleSettings -Module "relay-cl
        what = "The Google accounts that may sign in once signInAllowlistOn is true: emails and Google account ids, separated by commas." },
     # THE OWNERS (Owners.ps1, worker/budget.js): who may use the relay-wide reserve once the shared day is spent.
     @{ name = "relayOwnerAccounts"; kind = "text"; default = ""; min = 0; max = 4096
-       what = "The relay's owners, who alone may use its reserve of the day's requests: Google account ids (digits), separated by commas. Empty: no reserve, and the deploy warns." },
+       what = "The relay's owners, who alone may use its reserve of requests: emails or Google account ids, by commas; none for no owner. Empty: refused while the live relay has owners." },
     # THE METRICS SALT (MetricsSalt.ps1, worker/metrics.js): a secret file, named here by its path only.
     @{ name = "metricsSaltFile"; kind = "text"; default = ""; min = 0; max = 1024
        what = "The file holding the relay's metrics salt, the Worker secret METRICS_SALT; empty means .horde-secrets\relay-metrics-salt.txt in the user's profile." }
