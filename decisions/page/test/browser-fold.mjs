@@ -52,6 +52,9 @@ async function tapQuestion(n) {
   await touch(p.x, p.y);
   return read();
 }
+// The head of the page, where the order line and the fold button are, brought onto the screen (a
+// question tapped before scrolled them away).
+const toTop = () => evaluate("scrollTo(0, 0), true");
 const ALL20 = Array.from({ length: 20 }, (_, i) => String(i + 1)).join(",");
 
 try {
@@ -96,6 +99,7 @@ try {
   r = await read();
   check(r.count === 21 && r.open === "7" && r.fold.text === "Expand all", "A LIST THAT ARRIVES (the background refresh) keeps it: 7 alone unfolded, the new question 21 folded as the button left them", "count " + r.count + ", open " + r.open);
   check(r.order.split(",").slice(0, 2).join(",") === "9,4" && /^Task importance/.test(r.pressed), "and the order he chose still stands", r.order);
+  await toTop();
   r = await tapFold();
   r = await tapQuestion(12);
   const open12 = r ? r.open.split(",") : [];
@@ -106,6 +110,7 @@ try {
   check(r.count === 22 && openNow.length === 21 && openNow.indexOf("12") < 0 && openNow.indexOf("22") >= 0, "a list that arrives keeps 12 folded and the rest unfolded, and the new question 22 opens unfolded", "open " + r.open);
 
   // ---------------- 4. SORTING STILL WORKS, and keeps what is folded ----------------
+  await toTop();
   r = await tapOrder("Date");
   check(!!r && r.order.split(",")[0] === "22" && /^Date/.test(r.pressed) && r.open.split(",").indexOf("12") < 0 && r.open.split(",").length === 21, "a tap on Date sorts the newest (22) first, and 12 is still the one folded", r ? r.order + " / open " + r.open : "");
   r = await tapOrder("Date");

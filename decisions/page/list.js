@@ -104,8 +104,8 @@
 //
 // EVERY QUESTION STARTS UNFOLDED (the founder, 2026-10-14: "I also want a collapse all button on the
 // questions even though they should start expanded"): each question of his list opens with its
-// context under it, and one button at the end of the order line folds them all ("Collapse all"),
-// then says "Expand all" and unfolds them all again. A press drops what he chose for single questions
+// context under it, and one button, on a short line just under the order line, folds them all
+// ("Collapse all"), then says "Expand all" and unfolds them all again. A press drops what he chose for single questions
 // and touches neither the order nor his place on the page (THE VIEW FOLLOWS HIM). What he folds or
 // unfolds is kept, question by question, through every list that arrives; a question that arrives
 // later opens as the button last left them. Rows that are only read (With Thrall, History) stay one
@@ -1568,13 +1568,17 @@
       orderBar.appendChild(b);
       return b;
     });
-    // ONE BUTTON FOLDS OR UNFOLDS EVERY QUESTION (header, EVERY QUESTION STARTS UNFOLDED), at the end
-    // of the same line: its word says what a press does, and flips once it is done.
+    // ONE BUTTON FOLDS OR UNFOLDS EVERY QUESTION (header, EVERY QUESTION STARTS UNFOLDED), on a short
+    // line of its own just under the order line: its word says what a press does, and flips once it
+    // is done. NOT ON THE ORDER LINE ITSELF: at a phone's 412 px that line then wrapped to two, and a
+    // page scrolled 18 px put the order buttons above the screen (measured 2026-10-14 in
+    // decisions/page/test/browser-order.mjs: the tap on Blocking missed).
+    var foldLine = make("div", "hd-foldline");
     var foldButton = make("button", "hd-foldall");
     foldButton.type = "button";
     foldButton.tabIndex = -1;
     foldButton.addEventListener("click", function () { setExpanded(!openFirst); });
-    orderBar.appendChild(foldButton);
+    foldLine.appendChild(foldButton);
     drawFoldButton();
     function drawFoldButton() {
       foldButton.textContent = openFirst ? FOLD_WORDS.collapse : FOLD_WORDS.expand;
@@ -1739,7 +1743,7 @@
       Object.keys(headEls).forEach(function (k) { if (!used[k]) { delete headEls[k]; } });
       drawOrderBar();
       drawFoldButton();
-      order(root, [orderBar].concat(groups));
+      order(root, [orderBar, foldLine].concat(groups));
       // In the page now, so what is folded can be told from what is shown: each line's state again.
       drawnLines.forEach(function (line) { refresh(line); fit(line); });
       if (before) {
