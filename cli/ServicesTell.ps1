@@ -55,6 +55,7 @@ $script:HordeServiceTellSentences = [ordered]@{
     "apply"            = "a new revision could not be put in place; the old one keeps running"
     "stuck"            = "its process should have ended and could not be ended"
     "start-unrecorded" = "a start of it was interrupted and it keeps no heartbeat, so whether it is running cannot be told"
+    "no-desktop"       = "it needs the person's desktop, which the scheduled pass cannot reach; run horde services tend in the person's own session"
 }
 $script:HordeServiceTellNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
 

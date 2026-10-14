@@ -48,14 +48,14 @@ $none = New-HordeAbsent -Note "none"
 function Obs {
     # An observation. -Running is the state's own process when it is alive; -Beat a heartbeat answer;
     # -Beater the process the heartbeat names when THAT is alive and is not the state's own.
-    param($Running = $null, $Beat = $null, $Beater = $null, $Checkout = $null, $Wanted = $null, $Idle = $null, $Started = $null, $Exit = $null)
+    param($Running = $null, $Beat = $null, $Beater = $null, $Checkout = $null, $Wanted = $null, $Idle = $null, $Started = $null, $Exit = $null, $Desktop = $null)
     $st = $(if ($null -ne $Started) { $Started } elseif ($null -ne $Running) { New-HordeKnown -Value $Running } else { $none })
     $bt = $(if ($null -ne $Beat) { $Beat } else { $none })
     $br = $(if ($null -ne $Beater) { New-HordeKnown -Value $Beater } elseif ($null -ne $Running -and $null -ne $Beat) { New-HordeKnown -Value $Running } else { $none })
     $co = $(if ($null -ne $Checkout) { $Checkout } else { $none })
     $wa = $(if ($null -ne $Wanted) { $Wanted } else { $none })
     $id = $(if ($null -ne $Idle) { $Idle } else { New-HordeUnknown -Reason "nobody looked" })
-    return (New-HordeServiceObserved -Started $st -Heartbeat $bt -Beater $br -Checkout $co -Wanted $wa -IdleSeconds $id -ExitCode $Exit)
+    return (New-HordeServiceObserved -Started $st -Heartbeat $bt -Beater $br -Checkout $co -Wanted $wa -IdleSeconds $id -ExitCode $Exit -Desktop $Desktop)
 }
 function Decide { param($Def, $State, $Seen, [datetime]$At, [switch]$IgnoreIdle, [double]$Gap = 0) return (Get-HordeServiceDecision -Definition $Def -State $State -Observed $Seen -Now $At -Policy $policy -IgnoreIdle:$IgnoreIdle -SupervisorGapSeconds $Gap) }
 function Did {
@@ -512,6 +512,40 @@ try {
     Write-Host "--- review 9: a notice is told by its kind, never by its text ---" -ForegroundColor Cyan
     Check ($dTell.what -ceq "failing" -and $dBack.what -ceq "rolled-back" -and $dDirty.what -ceq "checkout" -and $dNot.what -ceq "verify" -and $dWell.what -ceq "recovered") "each decision that tells says WHAT kind of trouble it is, apart from the sentence that explains it"
     Check ($n1.notices[0].what -ceq "failing") "and the notice kept in the state carries it"
+
+    Write-Host ""
+    Write-Host "--- a pass that cannot see the person: the supervisor runs whether or not anyone is signed in (2026-10-14) ---" -ForegroundColor Cyan
+    # What the Windows adapter answers in such a pass (platform/windows/Services.ps1).
+    $blind = New-HordeUnknown -Reason "this process is in session 0, where no person types"
+    $here = New-HordeKnown -Value "here"
+    $winStop = '"stop": { "kind": "window", "report": "C:\\r\\report.json" }'
+    Check ((One $base).needsDesktop -eq $false -and $win.needsDesktop -eq $true -and (One ($base + ', "needsDesktop": true')).needsDesktop -eq $true -and (One ($places + ", " + $startHorde + ", " + $winStop + ', "needsDesktop": false')).needsDesktop -eq $false) "needsDesktop is false unless said, true for a service stopped by closing its window, and either can be said outright"
+    Check (Refused ('"svc": { ' + $base + ', "needsDesktop": "yes" }') "needsDesktop must be true or false") "needsDesktop is true or false, nothing else"
+    Check (Is (Decide $up (New-HordeServiceState -Name "svc") (Obs -Idle $blind -Desktop $blind) $t0) "start" "start" "start") "under a non-interactive session a stopped service is started without waiting on idle - even one whose updates wait for the person to be idle"
+    Check (Is (Decide $svc (New-HordeServiceState -Name "svc") (Obs -Idle $blind -Desktop $blind) $t0) "start" "start" "start") "and so is one that follows nothing"
+    $deskSvc = One ($base + ", " + $beatDef + ', "needsDesktop": true')
+    $dNoDesk = Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs -Idle $blind -Desktop $blind) $t0
+    Check ((Is $dNoDesk "wait" "" "no-desktop") -and $dNoDesk.reason -like "not started: it needs the person's desktop, and this pass cannot reach it (this process is in session 0*)*horde services tend, run in the person's own session*" -and $null -eq $dNoDesk.state.launchingAt) ("under a non-interactive session a needsDesktop service is not started, and the reason says so (" + $dNoDesk.reason + ")")
+    Check ($dNoDesk.notify -ceq "escalate" -and $dNoDesk.what -ceq "no-desktop" -and (Decide $deskSvc $dNoDesk.state (Obs -Desktop $blind) $t0.AddSeconds(60)).notify -eq "") "someone is told, once"
+    Check (Is (Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs -Desktop $here) $t0) "start" "start" "start") "CONTROL: where the desktop can be reached, it is started"
+    Check (Is (Decide $deskSvc (New-HordeServiceState -Name "svc") (Obs) $t0) "wait" "" "no-desktop") "and where nobody looked, it is not: unknown is never here"
+    $sHung = New-HordeServiceState -Name "svc"; $sHung.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }
+    $staleBeat = Beat 700 $run.startedAt $t0.AddSeconds(-400)
+    $dHungBlind = Decide $deskSvc $sHung (Obs -Running $run -Beat $staleBeat -Desktop $blind) $t0
+    Check ((Is $dHungBlind "wait" "" "no-desktop") -and $dHungBlind.state.phase -ceq "steady" -and $dHungBlind.reason -like "not stopped and started again:*") "a hung service that needs the desktop is not stopped by a pass that could not start it again"
+    Check (Is (Decide $svc $sHung (Obs -Running $run -Beat $staleBeat -Idle $blind) $t0) "start" "stop" "hung") "CONTROL: a hung service that needs no desktop is stopped and started again, and nobody's idleness is asked"
+    $deskAny = One ($places + ", " + $startHorde + ", " + $stopHorde + ", " + $beatDef + ", " + $followAny + ', "needsDesktop": true')
+    $sUp = New-HordeServiceState -Name "svc"; $sUp.started = [pscustomobject]@{ pid = 700; startedAt = $run.startedAt; at = $run.startedAt }; $sUp.runningRevision = $revA; $sUp.verifiedRevision = $revB
+    $upSeen = { param($Idle, $Desktop) return (Obs -Running $run -Beat (Beat 700 $run.startedAt $t0.AddSeconds(-5)) -Checkout (Co $revA) -Wanted (Want $revB) -Idle $Idle -Desktop $Desktop) }
+    $dUpBlind = Decide $deskAny $sUp (& $upSeen $blind $blind) $t0 -IgnoreIdle
+    Check ((Is $dUpBlind "wait" "" "no-desktop") -and $dUpBlind.state.phase -ceq "steady" -and $dUpBlind.reason -like "not restarted for the update to bbbbbbbbb:*") "an update of a service that needs the desktop is not begun by a pass that could not start it again - not even by rollout -Now"
+    Check (Is (Decide $deskAny $sUp (& $upSeen $blind $here) $t0) "restart-for-update" "stop" "update") "CONTROL: where the desktop can be reached, that update goes ahead"
+    $dIdleBlind = Decide $up $sUp (& $upSeen $blind $blind) $t0
+    Check ((Is $dIdleBlind "wait" "" "idle-unknown") -and $dIdleBlind.state.phase -ceq "steady" -and $dIdleBlind.reason -like "*session 0*unknown is never read as idle; horde rollout -Now takes it") "a disruptive restart for an update that waits for the person to be idle WAITS under a non-interactive session, and says what takes it"
+    Check (Is (Decide $up $sUp (& $upSeen $blind $blind) $t0 -IgnoreIdle) "restart-for-update" "stop" "update") "and horde rollout -Now takes it"
+    $sLaunch = New-HordeServiceState -Name "svc"; $sLaunch.phase = "launching"; $sLaunch.intent = "update"; $sLaunch.target = $revB; $sLaunch.from = $revA; $sLaunch.phaseSince = $t0
+    Check (Is (Decide $deskAny $sLaunch (Obs -Checkout (Co $revB) -Wanted (Want $revB) -Desktop $blind) $t0) "wait" "" "no-desktop") "a service already stopped for its update is not started where its window cannot be seen"
+    Check (Is (Decide $deskAny $sLaunch (Obs -Checkout (Co $revB) -Wanted (Want $revB) -Desktop $here) $t0) "restart-for-update" "start" "start-new") "CONTROL: and is, where it can"
 
     Write-Host ""
     Write-Host "--- the remote is asked at an interval, not every pass ---" -ForegroundColor Cyan

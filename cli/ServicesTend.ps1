@@ -2,8 +2,8 @@
 # observe, decide, act, journal - and what `status`, `schedule` and `horde rollout` are made of.
 #
 # THE PASS IS THE SUPERVISOR. Nothing here stays running: the scheduler (core/Schedule.ps1) starts a
-# pass every minute, in the person's own session, and the operating system is what keeps THAT coming
-# round. A pass looks at each service as it is now and takes the next step towards how it should be
+# pass at start-up and every minute, whether or not anyone is signed in, and the operating system is
+# what keeps THAT coming round (New-HordeServiceTendJob says why, and what that pass cannot do). A pass looks at each service as it is now and takes the next step towards how it should be
 # (core/Services.ps1, LEVEL-TRIGGERED), so a pass that was killed, or a machine that slept, costs a
 # minute and nothing else. The pass writes its own heartbeat, and `status` says plainly when no pass
 # has come round lately - the one failure the passes themselves cannot report.
@@ -55,6 +55,7 @@ function New-HordeServiceTools {
         ProcessEntry = { param($ProcessId) return (Get-HordeServiceProcessEntry -ProcessId $ProcessId) }
         Heartbeat    = { param($Path) return (Read-HordeHeartbeat -Path $Path) }
         Idle         = { return (Get-HordePersonIdleSeconds) }
+        Desktop      = { return (Get-HordeServiceDesktop) }
         Fetch        = { param($Definition, $Policy) return (Update-HordeServiceRemote -Definition $Definition -TimeoutSeconds $Policy.gitSeconds) }
         Checkout     = { param($Definition, $RunningRevision, $Policy, $Full) return (Get-HordeServiceCheckoutState -Definition $Definition -RunningRevision $RunningRevision -TimeoutSeconds $Policy.gitSeconds -Full:($Full -eq $true)) }
         ExitCode     = { param($Definition, $HordeHome, $Process) return (Read-HordeServiceExitRecord -Name $Definition.name -Process $Process -HordeHome $HordeHome) }
@@ -127,6 +128,13 @@ function Get-HordeServiceObservation {
             if (-not (Test-HordeAnswer $idle) -or $idle.state -ceq "absent") { $idle = New-HordeUnknown -Reason "nothing answered whether the person is idle" }
         }
     }
+    # Whether this pass can reach the person's desktop is asked only of a service that needs it.
+    $desktop = New-HordeUnknown -Reason "nobody looked: it needs no desktop"
+    $needs = $Definition.PSObject.Properties["needsDesktop"]
+    if ($null -ne $needs -and $needs.Value -eq $true) {
+        try { $desktop = Invoke-HordeServiceTool -Tools $Tools -Name "Desktop" } catch { $desktop = New-HordeUnknown -Reason "whether the person's desktop can be reached could not be read" -ErrorRecord $_ }
+        if (-not (Test-HordeAnswer $desktop) -or $desktop.state -ceq "absent") { $desktop = New-HordeUnknown -Reason "nothing answered whether the person's desktop can be reached" }
+    }
     # The code its process ended with is asked only when it could matter: the definition lists
     # deliberate exit codes, and the process the state names has just been found gone.
     $exit = New-HordeUnknown -Reason "nobody looked: it has not just ended, or no exit code of its is deliberate"
@@ -134,7 +142,7 @@ function Get-HordeServiceObservation {
         try { $exit = Invoke-HordeServiceTool -Tools $Tools -Name "ExitCode" -With @($Definition, $HordeHome, $s.started) } catch { $exit = New-HordeUnknown -Reason "the code it ended with could not be read" -ErrorRecord $_ }
         if (-not (Test-HordeAnswer $exit) -or $exit.state -ceq "absent" -or ($exit.state -ceq "known" -and $exit.value -isnot [int] -and $exit.value -isnot [long])) { $exit = New-HordeUnknown -Reason "nothing recorded the code it ended with" }
     }
-    return [pscustomobject]@{ observed = (New-HordeServiceObserved -Started $started -Heartbeat $beat -Beater $beater -Checkout $checkout -Wanted $wanted -IdleSeconds $idle -ExitCode $exit); state = $s }
+    return [pscustomobject]@{ observed = (New-HordeServiceObserved -Started $started -Heartbeat $beat -Beater $beater -Checkout $checkout -Wanted $wanted -IdleSeconds $idle -ExitCode $exit -Desktop $desktop); state = $s }
 }
 
 function Invoke-HordeServiceStep {
@@ -432,17 +440,24 @@ function Format-HordeServiceStatus {
 }
 
 function New-HordeServiceTendJob {
-    # The supervisor's job: this checkout's horde, `services tend`, every minute, in the person's own
-    # session. STOPPED AT FIVE MINUTES, NOT ONE: a pass decides to take a step while it has budget
+    # The supervisor's job: this checkout's horde, `services tend`, at start-up and every minute.
+    # WHETHER OR NOT ANYONE IS SIGNED IN (core/Schedule.ps1, -AtStartup). Until 2026-10-14 it ran in
+    # the person's own session (-WithPerson), and so only while they were signed in: after a restart
+    # nobody signed in for 2 h 38 min, the relay it keeps was down all that time, and twenty answers
+    # from a phone waited on it. Where it runs now nobody's input is seen and no window can be shown
+    # (core/Services.ps1, THE PASS THAT CANNOT SEE THE PERSON, says what each rule then does), and
+    # what it starts runs in its logon - the person's own account, with their profile and no stored
+    # password. STOPPED AT FIVE MINUTES, NOT ONE: a pass decides to take a step while it has budget
     # left, and the step it then takes - the move of a checkout, a self-check - may itself run a
     # minute; ended at one minute, a pass was being cut down in the middle of exactly the steps that
     # must not be cut (safety review of the first build, item 6). Two passes never overlap: the
-    # scheduler starts no second run while one is going, and a pass holds the lock. Still in the
-    # person's own session (core/Schedule.ps1, -WithPerson, says why it cannot run
-    # where nobody is). The home travels with it as data, as the metrics job's does.
+    # scheduler starts no second run while one is going, and a pass holds the lock - an open file
+    # under the home (core/ServicesFiles.ps1), which keeps a pass of this job and a pass of any other
+    # apart too: the job it replaced, still running as it is replaced, or a person's own tend. The
+    # home travels with it as data, as the metrics job's does.
     param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeServiceTendJobName, [string]$Folder = "Horde", [switch]$Disabled)
     $home2 = Get-HordeHome
-    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup -Disabled:$Disabled -Description "Horde: keep the defined services running and current - one pass over every service each minute. Managed by horde services schedule; remove it with horde services unschedule.")
 }
 
 function Invoke-HordeServiceSchedule {
@@ -459,10 +474,12 @@ function Invoke-HordeServiceSchedule {
     switch ($Action) {
         "install" {
             $job = New-HordeServiceTendJob -HordeScript $HordeScript -Name $TaskName -Folder $Folder -Disabled:$Disabled
+            # Installed over a job of the same name REPLACES it: one job, never two. A refusal is the
+            # scheduler's to say, and nothing else is installed in its place.
             & $s.install $job
             $st = & $s.status $TaskName $Folder
             if ($st.state -ne "known" -or -not $st.value.marked) { throw ("the " + $s.name + " did not keep the job " + $where + ": " + $st.reason) }
-            return @("installed " + $where + ": every minute, in the person's own session, for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }), ("runs: " + $job.script + " " + ($job.arguments -join " ")), "horde services status says whether its passes are coming round")
+            return @("installed " + $where + ": at start-up and every minute, whether or not anyone is signed in, with no password stored, for the Horde home " + $job.hordeHome + $(if ($Disabled) { "; DISABLED, so it never runs" } else { "" }), ("runs: " + $job.script + " " + ($job.arguments -join " ")), "horde services status says whether its passes are coming round")
         }
         "remove" {
             $gone = & $s.remove $TaskName $Folder
@@ -475,9 +492,9 @@ function Invoke-HordeServiceSchedule {
             $v = $st.value
             $fmt = { param($t) if ($null -eq $t) { "never" } else { $t.ToString("yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture) } }
             return @(
-                ($where + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", every " + $v.everyMinutes + " minute(s), logon " + $v.logonType + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" })),
+                ($where + ": " + $(if ($v.enabled) { "enabled" } else { "DISABLED" }) + ", " + $v.state + ", " + $(if ($null -ne $v.PSObject.Properties["atStartup"] -and $v.atStartup -eq $true) { "at start-up and " } else { "" }) + "every " + $v.everyMinutes + " minute(s), logon " + $v.logonType + $(if ($v.marked) { ", Horde's" } else { ", NOT made by Horde" })),
                 ("serves the Horde home " + $v.home + "; last run " + (& $fmt $v.lastRunAt) + ", next run " + (& $fmt $v.nextRunAt)),
-                "whether its passes do their work is horde services status's to say: this job's own result is its console host's, not the pass's"
+                "whether its passes do their work is horde services status's to say"
             )
         }
     }

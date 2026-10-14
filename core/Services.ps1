@@ -33,6 +33,10 @@
 #                   never updated.
 #   confirmSeconds  how long a restarted service has to prove itself (a fresh heartbeat of its own;
 #                   without a heartbeat, to still be running) before the update is rolled back.
+#   needsDesktop    true or false: it opens a window on the person's desktop, so it can be started
+#                   - and stopped to be started again - only by a pass that runs in the person's own
+#                   session (THE PASS THAT CANNOT SEE THE PERSON, below). Default: true when it is
+#                   stopped by closing its window, false otherwise.
 # READ STRICTLY. A member nobody declared, a value of the wrong kind, a path that is not absolute, a
 # word that could be read as a flag, and any text that looks like a credential (core/Secrets.ps1) each
 # refuse the WHOLE file, with every problem named: a supervisor acting on half a file would be
@@ -62,6 +66,20 @@
 # a supervisor that restarted it would undo exactly what it had decided. Only a code that something
 # RECORDED counts (core/ServiceHostPort.ps1, THE EXIT RECORD); an exit nobody saw is an ordinary death.
 #
+# THE PASS THAT CANNOT SEE THE PERSON. The scheduled pass runs whether or not anyone is signed in
+# (cli/ServicesTend.ps1, since 2026-10-14), so it is not in the person's session: it cannot see their
+# input, and a process it starts is in its own session, with no desktop of the person's (measured
+# 2026-10-14: a process Win32_Process.Create made from such a job was in session 0). What each rule
+# does there:
+#   - A service that is NOT RUNNING is started. A start never asks whether the person is idle.
+#   - A HUNG service is stopped and started again. That never asks either.
+#   - An UPDATE of a service that follows restart "idle" waits: whether the person is idle cannot be
+#     told, and unknown is never idle. It is taken by `horde rollout -Now`, or by a pass that can
+#     see the person. A service that follows restart "any" is updated as before.
+#   - A service that NEEDS THE DESKTOP is not started, and is not stopped to be updated or healed,
+#     by a pass that cannot reach the desktop: it waits, says why, and someone is told once. A pass
+#     run in the person's session - `horde services tend` typed there - starts it.
+
 # NEVER A RESTART LOOP. A start that does not last stableSeconds counts as a failure; each failure in
 # a row doubles the wait before the next start, up to a cap; after failuresBeforeEscalation of them
 # someone is told once, and the starts go on at the capped pace. One start that lasts resets it.
@@ -254,7 +272,7 @@ function ConvertTo-HordeServiceDefinition {
     if (-not (Test-HordeServiceObject $Value)) { return [pscustomobject]@{ definition = $null; findings = @($at + " must be an object") } }
     Find-HordeServiceSecret -Value $Value -Where $at -Findings $found
     $have = Get-HordeObjectByKey $Value
-    Add-HordeServiceUnknownMembers -Have $have -Allowed @("enabled", "checkout", "hordeHome", "start", "stop", "alive", "follow", "confirmSeconds") -Where $at -Findings $found
+    Add-HordeServiceUnknownMembers -Have $have -Allowed @("enabled", "checkout", "hordeHome", "start", "stop", "alive", "follow", "confirmSeconds", "needsDesktop") -Where $at -Findings $found
 
     $enabled = $true
     if ($have.ContainsKey("enabled")) { if ($have["enabled"] -is [bool]) { $enabled = [bool]$have["enabled"] } else { [void]$found.Add($at + ".enabled must be true or false") } }
@@ -372,8 +390,12 @@ function ConvertTo-HordeServiceDefinition {
     $confirm = Get-HordeServiceWhole -Have $have -Name "confirmSeconds" -Default 120 -Min 10 -Max 3600
     if (-not $confirm.ok) { [void]$found.Add($at + ".confirmSeconds must be a whole number from 10 to 3600") }
 
+    # A service stopped by closing its window has one, so it needs the desktop unless it says not.
+    $desktop = ($null -ne $stop -and $stop.kind -ceq "window")
+    if ($have.ContainsKey("needsDesktop")) { if ($have["needsDesktop"] -is [bool]) { $desktop = [bool]$have["needsDesktop"] } else { [void]$found.Add($at + ".needsDesktop must be true or false") } }
+
     if ($found.Count -gt 0) { return [pscustomobject]@{ definition = $null; findings = @($found.ToArray()) } }
-    $definition = [pscustomobject]@{ PSTypeName = "Horde.ServiceDefinition"; name = $Name; enabled = $enabled; checkout = $checkout; hordeHome = $servedHome; start = $start; stop = $stop; alive = $alive; follow = $follow; confirmSeconds = $confirm.value }
+    $definition = [pscustomobject]@{ PSTypeName = "Horde.ServiceDefinition"; name = $Name; enabled = $enabled; checkout = $checkout; hordeHome = $servedHome; start = $start; stop = $stop; alive = $alive; follow = $follow; confirmSeconds = $confirm.value; needsDesktop = $desktop }
     return [pscustomobject]@{ definition = $definition; findings = @() }
 }
 
@@ -575,8 +597,10 @@ function New-HordeServiceObserved {
     #                ordinary case - nothing recorded it - and an unknown exit is an ordinary death.
     #   checkout's value also carries spotless when it was asked for: no changed tracked file AND no
     #                untracked one, which is what a checkout must be after a move that was interrupted.
-    param($Started, $Heartbeat, $Beater, $Checkout, $Wanted, $IdleSeconds, $ExitCode = $null)
-    $o = [ordered]@{ started = $Started; heartbeat = $Heartbeat; beater = $Beater; checkout = $Checkout; wanted = $Wanted; idleSeconds = $IdleSeconds; exitCode = $ExitCode }
+    #   desktop      known when this pass can open a window on the person's desktop; unknown, with
+    #                why, when it cannot. Asked only of a service that needs the desktop.
+    param($Started, $Heartbeat, $Beater, $Checkout, $Wanted, $IdleSeconds, $ExitCode = $null, $Desktop = $null)
+    $o = [ordered]@{ started = $Started; heartbeat = $Heartbeat; beater = $Beater; checkout = $Checkout; wanted = $Wanted; idleSeconds = $IdleSeconds; exitCode = $ExitCode; desktop = $Desktop }
     foreach ($k in @($o.Keys)) {
         if ($null -eq $o[$k]) { $o[$k] = New-HordeUnknown -Reason ("nobody looked at " + $k) }
         Assert-HordeAnswer $o[$k]
@@ -713,17 +737,37 @@ function Get-HordeServiceDecision {
         if ($null -eq $whole -or $whole.Value -ne $true) { return "after a move that was interrupted its checkout holds changed or stray files" }
         return ""
     }
+    $deskless = {
+        # Why this pass cannot start a service that needs the person's desktop, or stop one to start
+        # it again; "" when it can, or when the service needs no desktop (THE PASS THAT CANNOT SEE
+        # THE PERSON, in the header). Unknown is never "it can".
+        $needs = $Definition.PSObject.Properties["needsDesktop"]
+        if ($null -eq $needs -or $needs.Value -ne $true) { return "" }
+        if ($Observed.desktop.state -ceq "known") { return "" }
+        return ("it needs the person's desktop, and this pass cannot reach it (" + $Observed.desktop.reason + ")")
+    }
+    $noDesktop = {
+        # The wait of a service that needs the desktop this pass cannot reach. Told once.
+        param([string]$Blind, [string]$What)
+        [void]$troubles.Add((New-HordeServiceTrouble -Key "no-desktop" -Text ($Blind + "; it is not " + $What + " until horde services tend runs in the person's own session")))
+        return ("not " + $What + ": " + $Blind + "; horde services tend, run in the person's own session, does it")
+    }
     $finish = {
         # Close a decision: settle what is told. A trouble not yet told is told now, once; when none
         # is left and the service is running and stable, one "recovered" is said and the list emptied.
         param([string]$Action, [string]$Step, [string]$Code, [string]$Reason, $Process = $null, [string]$Revision = "", [bool]$Healthy = $false)
-        # EVERY START PASSES HERE, so no path to a start can skip these two:
+        # EVERY START PASSES HERE, so no path to a start can skip these three:
         if ($Step -ceq "start") {
             $broken = & $unsafe
+            $blind = & $deskless
             if ($broken -ne "") {
                 # ...a checkout that is not proven whole is never started from; someone is told.
                 [void]$troubles.Add((New-HordeServiceTrouble -Key "half-moved" -Text ($broken + "; nothing is started from it until a person has put it right")))
                 $Action = "wait"; $Step = ""; $Code = "checkout-unsafe"; $Reason = "not started: " + $broken; $Process = $null; $Revision = ""
+            } elseif ($blind -ne "") {
+                # ...a service that needs the desktop is never started where its window cannot be seen.
+                $Reason = & $noDesktop $blind "started"
+                $Action = "wait"; $Step = ""; $Code = "no-desktop"; $Process = $null; $Revision = ""
             } else {
                 # ...and the state says a start is in flight BEFORE the process is made: a pass ended
                 # between making the process and recording it must not make a second one (item 6).
@@ -878,6 +922,9 @@ function Get-HordeServiceDecision {
 
     if ($live.alive -ceq "starting") { return (& $finish "wait" "" "starting" $live.why) }
     if ($live.alive -ceq "hung") {
+        # Stopped here, it could not be started again by this pass: it is left as it is.
+        $blind = & $deskless
+        if ($blind -ne "") { return (& $finish "wait" "" "no-desktop" (& $noDesktop $blind "stopped and started again")) }
         if ($s.proving) { $s.failures = [int]$s.failures + 1; $s.nextStartAt = $at.AddSeconds((Get-HordeServiceBackoffSeconds -Failures $s.failures -Policy $Policy)); $s.proving = $false }
         $s.phase = "stopping"; $s.intent = "heal"; $s.phaseSince = $at
         return (& $finish "start" "stop" "hung" ($live.why + "; it is stopped and started again") $live.process)
@@ -930,9 +977,13 @@ function Get-HordeServiceDecision {
     }
     if ($s.verifiedRevision -cne $wanted) { return (& $finish "restart-for-update" "verify" "verify" ("revision " + $short + " is wanted; it is checked in a scratch copy while the old one runs") $live.process $wanted) }
     if ($Definition.follow.restart -ceq "idle" -and -not $IgnoreIdle) {
-        if ($Observed.idleSeconds.state -cne "known") { return (& $finish "wait" "" "idle-unknown" ("update to " + $short + " waits: whether the person is idle is not known (" + $Observed.idleSeconds.reason + "), and unknown is never read as idle")) }
+        if ($Observed.idleSeconds.state -cne "known") { return (& $finish "wait" "" "idle-unknown" ("update to " + $short + " waits: whether the person is idle is not known (" + $Observed.idleSeconds.reason + "), and unknown is never read as idle; horde rollout -Now takes it")) }
         if ([long]$Observed.idleSeconds.value -lt $Definition.follow.idleSeconds) { return (& $finish "wait" "" "not-idle" ("update to " + $short + " waits: the person is not idle (it restarts after " + $Definition.follow.idleSeconds + " s with no input)")) }
     }
+    # Stopped for the update, it could not be started again by this pass: the update waits. Even
+    # `horde rollout -Now` waits, unless it runs in the person's own session.
+    $blind = & $deskless
+    if ($blind -ne "") { return (& $finish "wait" "" "no-desktop" (& $noDesktop $blind ("restarted for the update to " + $short))) }
     $s.phase = "stopping"; $s.intent = "update"; $s.phaseSince = $at; $s.target = $wanted
     $s.from = $(if ($s.runningRevision -ne "") { $s.runningRevision } else { $head })
     return (& $finish "restart-for-update" "stop" "update" ("restarting for the update from " + (ConvertTo-HordeServiceShortRevision $s.from) + " to " + $short) $live.process $wanted)

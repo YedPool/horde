@@ -103,8 +103,8 @@
         @{ Name = "refused-definitions-not-said"
            Find = '[void]$lines.Add("definitions: NO SERVICE IS SUPERVISED until that file is mended") }'
            Replace = '}' }
-        @{ Name = "job-not-with-person"
-           Find = '-MayOutlastInterval -WithPerson -Disabled:$Disabled'
+        @{ Name = "job-not-at-start-up"
+           Find = '-MayOutlastInterval -AtStartup -Disabled:$Disabled'
            Replace = '-MayOutlastInterval -Disabled:$Disabled' }
         @{ Name = "job-home-not-carried"
            Find = '-Arguments @("services", "tend") -Environment @{ HORDE_HOME = $home2 }'
@@ -147,10 +147,26 @@
            Find = 'if ($kept.state -ceq "unknown") { return (& $answer ("nothing was done: " + $kept.reason)) }'
            Replace = '' }
         @{ Name = "pass-ended-at-one-minute"
-           Find = '-EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -WithPerson'
-           Replace = '-EveryMinutes 1 -TimeLimitMinutes 1 -WithPerson' }
+           Find = '-EveryMinutes 1 -TimeLimitMinutes 5 -MayOutlastInterval -AtStartup'
+           Replace = '-EveryMinutes 1 -TimeLimitMinutes 1 -AtStartup' }
         @{ Name = "held-is-not-done-for-a-roll-out"
            Find = 'if (@("current", "updated", "disabled", "held") -ccontains $one.code) { continue }'
            Replace = 'if (@("current", "updated", "disabled") -ccontains $one.code) { continue }' }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "job-back-in-the-persons-session"
+           Find = '-MayOutlastInterval -AtStartup -Disabled:$Disabled'
+           Replace = '-MayOutlastInterval -WithPerson -Disabled:$Disabled' }
+        @{ Name = "desktop-never-asked"
+           Find = '    if ($null -ne $needs -and $needs.Value -eq $true) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "desktop-asked-of-every-service"
+           Find = '    if ($null -ne $needs -and $needs.Value -eq $true) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "desktop-not-handed-to-the-decision"
+           Find = '-ExitCode $exit -Desktop $desktop); state = $s }'
+           Replace = '-ExitCode $exit); state = $s }' }
+        @{ Name = "install-says-the-persons-session"
+           Find = ': at start-up and every minute, whether or not anyone is signed in, with no password stored, for the Horde home '
+           Replace = ': every minute, in the person''s own session, for the Horde home ' }
     )
 }

@@ -164,16 +164,30 @@ exit 0
         Write-Host ("  [SKIP] " + $real.reason)
     } else {
         Assert-TestName $testName
+        # ONLY AN ADMINISTRATOR, ELEVATED, MAY REGISTER A JOB THAT RUNS AT START-UP (measured
+        # 2026-10-14, core/schedule/WindowsTaskScheduler.ps1). This suite checks whichever case it is
+        # run in: elevated, the job is installed; not, the command fails and says what to do.
+        $elevated = (New-Object System.Security.Principal.WindowsPrincipal ([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
         try {
             $in = Horde $empty @("services", "schedule", "-TaskName", $testName, "-TaskFolder", "HordeTest", "-Disabled")
-            Check ($in.code -eq 0 -and $in.out -like "*installed '$testName'*every minute, in the person's own session*DISABLED, so it never runs*") ("schedule installs the job (" + $in.out.Trim() + ")")
+            if (-not $elevated) {
+                Check ($in.code -ne 0 -and $in.out -like "*run this again from an elevated prompt*" -and (& $real.value.status $testName "HordeTest").state -eq "absent") ("not elevated, schedule fails, says to run it elevated, and registers nothing in another form (" + $in.out.Trim() + ")")
+                throw "SKIP-ELEVATED"
+            }
+            Check ($in.code -eq 0 -and $in.out -like "*installed '$testName'*at start-up and every minute, whether or not anyone is signed in*DISABLED, so it never runs*") ("schedule installs the job (" + $in.out.Trim() + ")")
             $ss = & $real.value.status $testName "HordeTest"
-            Check ($ss.state -eq "known" -and $ss.value.marked -and $ss.value.enabled -eq $false -and $ss.value.everyMinutes -eq 1 -and $ss.value.logonType -eq "Interactive" -and $ss.value.home -eq $empty) "in Horde's test folder, marked as Horde's, every minute, in the person's session, for this home, and disabled"
+            Check ($ss.state -eq "known" -and $ss.value.marked -and $ss.value.enabled -eq $false -and $ss.value.everyMinutes -eq 1 -and $ss.value.atStartup -eq $true -and $ss.value.logonType -eq "S4U" -and $ss.value.home -eq $empty -and $ss.value.program -ceq (Join-Path ([System.Environment]::SystemDirectory) "WindowsPowerShell\v1.0\powershell.exe")) "in Horde's test folder, marked as Horde's, at start-up and every minute, logon S4U - whether or not anyone is signed in - run by PowerShell itself, for this home, and disabled"
+            $again = Horde $empty @("services", "schedule", "-TaskName", $testName, "-TaskFolder", "HordeTest", "-Disabled")
+            $svcA = New-Object -ComObject Schedule.Service; $svcA.Connect()
+            Check ($again.code -eq 0 -and @($svcA.GetFolder("\HordeTest").GetTasks(1) | Where-Object { $_.Name -like ($testName + "*") }).Count -eq 1) "scheduling again replaces it: one job, never two"
             $sst = Horde $empty @("services", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest")
-            Check ($sst.code -eq 0 -and $sst.out -like "*DISABLED*every 1 minute(s)*Horde's*") "schedule status shows it"
+            Check ($sst.code -eq 0 -and $sst.out -like "*DISABLED*at start-up and every 1 minute(s), logon S4U*Horde's*") "schedule status shows it"
             $un = Horde $empty @("services", "unschedule", "-TaskName", $testName, "-TaskFolder", "HordeTest")
             Check ($un.code -eq 0 -and $un.out -like "*removed*Nothing that is running was stopped*" -and (& $real.value.status $testName "HordeTest").state -eq "absent") "unschedule removes it"
             Check ((Horde $empty @("services", "schedule", "status", "-TaskName", $testName, "-TaskFolder", "HordeTest")).out -like "*is not installed: no service is being supervised*") "and then schedule status says nothing is supervised"
+        } catch {
+            if ($_.Exception.Message -cne "SKIP-ELEVATED") { throw }
+            Write-Host "  [SKIP] the installed job's properties: this suite is not elevated, and a job that runs at start-up is registered only elevated"
         } finally {
             try { $null = & $real.value.remove $testName "HordeTest" } catch { }
         }

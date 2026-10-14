@@ -312,5 +312,42 @@
         @{ Name = "notice-kept-without-its-kind"
            Find = 'at = $Now.ToUniversalTime(); what = (Get-HordeServiceNoticeWhat -Notice $Decision) })'
            Replace = 'at = $Now.ToUniversalTime(); what = "" })' }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "needs-desktop-member-refused"
+           Find = '"confirmSeconds", "needsDesktop") -Where $at'
+           Replace = '"confirmSeconds") -Where $at' }
+        @{ Name = "window-service-needs-no-desktop"
+           Find = '$desktop = ($null -ne $stop -and $stop.kind -ceq "window")'
+           Replace = '$desktop = $false' }
+        @{ Name = "needs-desktop-not-read"
+           Find = '{ if ($have["needsDesktop"] -is [bool]) { $desktop = [bool]$have["needsDesktop"] } else {'
+           Replace = '{ if ($have["needsDesktop"] -is [bool]) { } else {' }
+        @{ Name = "needs-desktop-any-value"
+           Find = '} else { [void]$found.Add($at + ".needsDesktop must be true or false") } }'
+           Replace = '} else { } }' }
+        @{ Name = "nobody-needs-the-desktop"
+           Find = 'if ($null -eq $needs -or $needs.Value -ne $true) { return "" }'
+           Replace = 'if ($true) { return "" }' }
+        @{ Name = "unlooked-desktop-is-here"
+           Find = 'if ($Observed.desktop.state -ceq "known") { return "" }'
+           Replace = 'if ($Observed.desktop.state -ceq "known" -or ("" + $Observed.desktop.reason) -like "nobody looked*") { return "" }' }
+        @{ Name = "start-without-the-desktop"
+           Find = '            } elseif ($blind -ne "") {'
+           Replace = '            } elseif ($false) {' }
+        @{ Name = "hung-stopped-without-the-desktop"
+           Find = '        if ($blind -ne "") { return (& $finish "wait" "" "no-desktop" (& $noDesktop $blind "stopped and started again")) }'
+           Replace = '' }
+        @{ Name = "update-begun-without-the-desktop"
+           Find = '    if ($blind -ne "") { return (& $finish "wait" "" "no-desktop" (& $noDesktop $blind ("restarted for the update to " + $short))) }'
+           Replace = '' }
+        @{ Name = "no-desktop-not-told"
+           Find = '[void]$troubles.Add((New-HordeServiceTrouble -Key "no-desktop"'
+           Replace = '$null = ((New-HordeServiceTrouble -Key "no-desktop"' }
+        @{ Name = "stopped-service-waits-on-idle"
+           Find = '        return (& $finish "start" "start" "start" ($live.why +'
+           Replace = '        if ($Observed.idleSeconds.state -cne "known") { return (& $finish "wait" "" "idle-unknown" "waits on idle") }; return (& $finish "start" "start" "start" ($live.why +' }
+        @{ Name = "idle-wait-says-nothing-of-rollout"
+           Find = ', and unknown is never read as idle; horde rollout -Now takes it")'
+           Replace = ', and unknown is never read as idle")' }
     )
 }

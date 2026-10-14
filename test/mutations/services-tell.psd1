@@ -31,5 +31,9 @@
            Replace = '    } catch { return $false }'
            Expect = "survives"
            Reason = "no path a suite can hand in makes the resolving throw on this system without also failing earlier; the line errs towards telling nobody, and is held by its comment" }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "no-desktop-told-as-needs-a-person"
+           Find = '    "no-desktop"       = '
+           Replace = '    "no-desktop-x"     = ' }
     )
 }

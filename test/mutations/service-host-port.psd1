@@ -64,5 +64,12 @@
         @{ Name = "relative-exit-file-taken"
            Find = 'if ($ExitFile -ne "" -and -not [System.IO.Path]::IsPathRooted($ExitFile)) {'
            Replace = 'if ($false) {' }
+        # --- the supervisor runs whether or not anyone is signed in (2026-10-14) ---
+        @{ Name = "desktop-any-answer-is-here"
+           Find = 'if ($answer.value -isnot [string] -or $answer.value -cne "here") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "desktop-block-dropped"
+           Find = 'closeWindow = $CloseWindow; desktop = $Desktop })'
+           Replace = 'closeWindow = $CloseWindow; desktop = $null })' }
     )
 }
