@@ -1206,7 +1206,7 @@ function Get-HordeLiveSignal {
     # Which of live signals 1 to 4 (the header's SCOPE) makes a session current, or "" when none does.
     # Signal 5 needs the session's pane, so Complete-HordeProjection judges it.
     # -NotItsControlFile asks whether any OTHER signal holds, for a session whose control file is proven
-    # stale (Test-HordeSessionProvenEnded).
+    # stale (Get-HordeSessionEndProof).
     param($C, [string]$Id, [switch]$NotItsControlFile)
     if (-not $NotItsControlFile -and $C.identity.records.ContainsKey($Id)) { return "a control file names it" }
     if (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0) { return "two control files name it" }
@@ -1266,13 +1266,19 @@ function Get-HordeProjection {
         [ValidateSet("All", "Current")][string]$Scope = "All"
     )
     Assert-HordePlatform $Platform
-    if ($null -eq $Processes) { $Processes = Read-HordePlatformProcessTable -Platform $Platform }
+    # WHEN THE TABLE WAS READ: a process that started after this may be missing from it, so a control
+    # file written by such a process proves nothing by its pid's absence (Get-HordeSessionEndProof).
+    # Taken before the read, so it is never later than the table; a table passed in carries its own
+    # observedAt, or else -Now, which a caller sets no later than its own read.
+    $tableAt = $Now.ToUniversalTime()
+    if ($null -eq $Processes) { $tableAt = [datetime]::UtcNow; $Processes = Read-HordePlatformProcessTable -Platform $Platform }
+    elseif ($null -ne $Processes.observedAt) { $tableAt = ([datetime]$Processes.observedAt).ToUniversalTime() }
     Assert-HordeProcessTable $Processes
     Assert-HordeHostPort $HostPort
     $statics = Get-HordeProjectionStatics
     $C = [pscustomobject]@{
         rules = $statics.rules; viewSchema = $statics.viewSchema; valueSchemas = $statics.valueSchemas
-        roleTable = $statics.roleTable; now = $Now; processes = $Processes
+        roleTable = $statics.roleTable; now = $Now; processes = $Processes; tableAt = $tableAt
         identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir -Processes $Processes -TtlSeconds $TtlSeconds -Now $Now)
         wf = (Read-HordeWezfleetState -Root $WezfleetRoot)
         paneRead = (Read-HordePaneSessions -Dir $PaneSessionsDir)
@@ -1360,44 +1366,119 @@ function Complete-HordeProjection {
 
 # -------------------------------------------------------------------- the sessions a node serves
 
-function Test-HordeSessionProvenEnded {
-    # Is this projected session's end PROVEN, with nothing else saying it is live? Only then may a node
-    # leave it out of what it serves (Remove-HordeEndedSessions). Proven means its control file's process
-    # check is gone (the pid is not running) or reused (the pid runs with another start time): core/
-    # identity's kinds, never words in a reason. uncheckable, no-table, unchecked (a file with no pid) and
-    # a duplicate are not proof, so those sessions stay, their live fields unknown with the reason.
-    # And no other live signal may hold: a process resuming it, a guarded pane-sessions file, a registry
-    # record not retired or unreadable, an open run, or a stored handle live now (its pane known).
+function Get-HordeSessionEndProof {
+    # Why this projected session's end is PROVEN, with nothing else saying it is live - or "" when it is
+    # not, which is the answer whenever anything is in doubt. Only a proven end lets a node leave the
+    # session out of what it serves (Remove-HordeEndedSessions). Each rule below closes a way a live
+    # session would otherwise be dropped (reviews of PR #240, 2026-10-13):
+    #   - THE PROOF is core/identity's process check, by kind, never by words: gone (the pid is not
+    #     running) or reused (the pid runs with another start time). uncheckable, no-table, unchecked (an
+    #     agent that writes no pid) and a duplicate are not proof.
+    #   - THE LISTING IS WHOLE: the agent's control-file listing is complete. A file that cannot be read
+    #     (one half written, say) may be this session resumed under a new pid.
+    #   - THE FILE IS OLDER THAN THE TABLE: its procStart is before the process table was read. The table
+    #     is read before the files are listed, so a session started in between has a file and no row.
+    #   - REUSED BY ANOTHER PROGRAM: a reused pid proves the end only when the process now at that pid is
+    #     not one of this agent's image or host image. CIM gives start times in local time, and in the
+    #     hour the clocks repeat the conversion can land an hour off (core/Platform.ps1), which reads a
+    #     live agent as a reused pid; a live agent would also have rewritten its own file.
+    #   - NO PROCESS OF THE AGENT IS UNREAD: no process of its image or host image has a command line
+    #     that cannot be read, since it may be resuming this session.
+    #   - NO UNACCOUNTED AGENT PROCESS: no process of its image that no control file verifies started
+    #     after the stale file's process, or has no start time; it may be this session continued. An hour
+    #     of slack, for the same clock change.
+    #   - THE OTHER STORES ARE WHOLE: when a wezfleet root exists, its registry, runs, rosters and reports
+    #     were each read whole; a record under another file name, or a folder that cannot be listed, may
+    #     hold the signal below. A machine with no wezfleet root has no such store to hold one.
+    #   - NO OTHER SIGNAL: no process resumes it, no guarded pane-sessions file names it, no registry
+    #     record is unretired or unreadable, no run that lists it is open, and no live handle makes its
+    #     pane known.
     param($C, $Session)
     $id = "$($Session.sessionId)"
-    if (-not $C.identity.records.ContainsKey($id)) { return $false }
-    if (@("gone", "reused") -cnotcontains "$($C.identity.records[$id].processCheck)") { return $false }
-    # A process whose command line cannot be read may be resuming this very session.
-    if (@($C.procIndex.unreadPids).Count -gt 0) { return $false }
-    if ($Session.fields["pane"].answer.state -eq "known") { return $false }
-    return ((Get-HordeLiveSignal -C $C -Id $id -NotItsControlFile) -eq "")
+    if (-not $C.identity.records.ContainsKey($id)) { return "" }
+    $rec = $C.identity.records[$id]
+    $kind = "$($rec.processCheck)"
+    if (@("gone", "reused") -cnotcontains $kind) { return "" }
+    $agent = "$($rec.fields.agent.value)"
+    if (-not $C.identity.complete.Contains($agent) -or $C.identity.complete[$agent].state -ne "known") { return "" }
+    if ($null -eq $C.identity.agentProcesses -or -not $C.identity.agentProcesses.ContainsKey($agent)) { return "" }
+    $procs = $C.identity.agentProcesses[$agent]
+    $j = Read-HordeSnapshotControlExtras -C $C -Record $rec
+    if ($null -eq $j) { return "" }
+    $ticks = [long]0
+    if (-not [long]::TryParse("$(Get-HordeMemberValue $j 'procStart')", [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ticks)) { return "" }
+    $born = $null
+    try { $born = [DateTime]::FromFileTimeUtc($ticks) } catch { return "" }
+    if ($born -ge $C.tableAt) { return "" }
+    $procId = 0
+    if (-not [int]::TryParse("$(Get-HordeMemberValue $j 'pid')", [ref]$procId)) { return "" }
+    if ($kind -ceq "reused" -and ($procs.imagePids.ContainsKey($procId) -or $procs.hostPids.ContainsKey($procId))) { return "" }
+    foreach ($k in @(@($procs.imagePids.Keys) + @($procs.hostPids.Keys))) {
+        if ($null -eq $C.processes.value[$k].commandLine) { return "" }
+    }
+    foreach ($k in @($procs.imagePids.Keys)) {
+        if ($procs.verifiedPids.ContainsKey($k)) { continue }
+        $cr = $C.processes.value[$k].created
+        if ($null -eq $cr -or ([datetime]$cr) -gt $born.AddHours(-1)) { return "" }
+    }
+    if ($C.wf.present) {
+        foreach ($w in @($C.wf.registry.complete, $C.wf.runs.runsComplete, $C.wf.runs.rostersComplete, $C.wf.runs.reportsComplete)) { if ($w.state -ne "known") { return "" } }
+    }
+    if ($Session.fields["pane"].answer.state -eq "known") { return "" }
+    if ((Get-HordeLiveSignal -C $C -Id $id -NotItsControlFile) -ne "") { return "" }
+    return "$($rec.fields.pid.reason)"
+}
+
+function Get-HordeMemberValue {
+    # A member of a parsed file, or $null when it has none: under strict mode a missing member is an error.
+    param($Object, [string]$Name)
+    $p = $Object.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $null }
+    return $p.Value
 }
 
 function Remove-HordeEndedSessions {
-    # The projection without the sessions whose end is proven (Test-HordeSessionProvenEnded): what a node
-    # serves as its inventory. WHY (2026-10-13, the always-on node): a session whose process is ended
-    # rather than exiting - its pane closed by hand, or ended by the host after a refused spawn - leaves
-    # its control file behind, and the whole projection keeps a session any store names. On a node whose
-    # only store is those control files, every such session was listed, and the hub counted it as one of
-    # the node's sessions: "2 session(s)" where none ran. The read model itself is unchanged (-Scope All
-    # still holds every session, and the current scope's signal 4 still counts a control file, running or
-    # not); this is the node's serving rule. A copy: the projection given is not modified. A kept session
-    # is carried exactly as the projection has it; the handles, faults and store completeness are the
-    # projection's, unchanged. A handle row names only sessions whose pane is known, and those are kept.
+    # The projection without the sessions whose end is proven (Get-HordeSessionEndProof): what a node
+    # serves. WHY (2026-10-13, the always-on node): a session whose process is ended rather than exiting
+    # - its pane closed by hand, or ended by the host after a refused spawn - leaves its control file
+    # behind, and the whole projection keeps a session any store names. On a node whose only store is
+    # those control files, every such session was listed, and the hub counted it as one of the node's
+    # sessions: "2 session(s)" where none ran. The read model itself is unchanged (-Scope All still holds
+    # every session, and the current scope's signal 4 still counts a control file, running or not); this
+    # is the node's serving rule. A copy: the projection given is not modified. A kept session is carried
+    # exactly as the projection has it; the handles, faults and store completeness are the projection's.
+    # A handle row names only sessions whose pane is known, and those are kept. ended lists what was left
+    # out, { sessionId; reason }, so the node can say why when asked for one.
     param([Parameter(Mandatory = $true)]$Projection)
     $C = $Projection.inputs
-    $kept = @($Projection.sessions | Where-Object { -not (Test-HordeSessionProvenEnded -C $C -Session $_) })
+    $kept = New-Object System.Collections.ArrayList
+    $ended = New-Object System.Collections.ArrayList
+    foreach ($s in @($Projection.sessions)) {
+        $why = Get-HordeSessionEndProof -C $C -Session $s
+        if ($why -eq "") { [void]$kept.Add($s) } else { [void]$ended.Add([pscustomobject]@{ sessionId = "$($s.sessionId)"; reason = $why }) }
+    }
     $out = [pscustomobject]@{
         PSTypeName = "Horde.Projection"; observedAt = $Projection.observedAt; host = $Projection.host
-        sessions = $kept; handles = $Projection.handles; faults = $Projection.faults; complete = $Projection.complete; inputs = $C
+        sessions = $kept.ToArray(); handles = $Projection.handles; faults = $Projection.faults; complete = $Projection.complete; inputs = $C
+        ended = $ended.ToArray()
     }
     if ($null -ne $Projection.PSObject.Properties["scope"]) { $out | Add-Member -NotePropertyName scope -NotePropertyValue $Projection.scope }
     return $out
+}
+
+function ConvertTo-HordeNodeViewDocument {
+    # The view a node serves (horde node serve's GetView): the projection without its proven-ended
+    # sessions, as a session-view document, plus endedSessions, the ones left out with why. endedSessions
+    # is the node's own note and never crosses the link: sessions.list carries only sessions, and
+    # session.get reads it to say that a session's end is proven rather than that no store holds it
+    # (review of PR #240). Every verb that reads the view reads this one - sessions.list, session.get and
+    # session.deliver (remote/NodeServe.ps1, HordeNodeViewVerbs) - so an ended session is not listed, is
+    # answered absent with its proof, and is not delivered to.
+    param([Parameter(Mandatory = $true)]$Projection)
+    $served = Remove-HordeEndedSessions -Projection $Projection
+    $doc = ConvertTo-HordeSessionViewDocument -Projection $served
+    $doc["endedSessions"] = @($served.ended | ForEach-Object { [ordered]@{ sessionId = $_.sessionId; reason = $_.reason } })
+    return $doc
 }
 
 # ------------------------------------------------------------------------------- the document
