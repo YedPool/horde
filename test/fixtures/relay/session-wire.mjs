@@ -29,14 +29,14 @@ out.sigBare = P.sessionSigText({ vouchId, value: P.unhex(v.value) });
 out.sigWithVouch = P.sessionSigText({ vouchId, value: P.unhex(v.value), vouch: { text: vouchText, authenticatorData: P.unhex(v.authenticatorData), clientDataJSON: P.unhex(v.clientDataJSON), signature: P.unhex(v.signature) } });
 out.openBody = new TextDecoder().decode(P.sessionOpenBody(vouchId));
 out.refusals = P.SESSION_REFUSALS;
-out.maxMs = P.SESSION_MAX_MS;
+out.maxGone = (typeof P.SESSION_MAX_MS === "undefined") && Number.isSafeInteger(P.SESSION_DEFAULT_LIFETIME_MS);
 
 // The writer refuses what the reader would: each must throw.
 const base = { sessionPublicKey: P.unhex(v.sessionPublicKey), deviceKeyId: v.deviceKeyId, phoneKeyId: v.phoneKeyId, horde: v.horde, machine: v.machine, notBefore: v.notBefore, notAfter: v.notAfter, seq: v.seq };
 const throwsOf = async (over) => { try { await P.sessionVouchText({ ...base, ...over }); return ""; } catch (e) { return e.message; } };
 out.throws = {
-  overCap: await throwsOf({ notAfter: v.notBefore + P.SESSION_MAX_MS + 1 }),
-  atCap: await throwsOf({ notAfter: v.notBefore + P.SESSION_MAX_MS }),
+  thirtyDays: await throwsOf({ notAfter: v.notBefore + 30 * 24 * 3600 * 1000 }),
+  oneMs: await throwsOf({ notAfter: v.notBefore + 1 }),
   backwards: await throwsOf({ notAfter: v.notBefore }),
   badHorde: await throwsOf({ horde: "Bad Horde" }),
   badKeyId: await throwsOf({ deviceKeyId: "XYZ" })

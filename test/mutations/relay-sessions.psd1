@@ -44,8 +44,5 @@
         @{ Name = "broken-records-trusted"
            Find = 'if ("" + $p.broken -cne "") {'
            Replace = 'if ($false) {' }
-        @{ Name = "window-over-8-hours-read"
-           Find = 'if (($v.notAfter - $v.notBefore) -gt (Get-HordeRelaySessionLimits).maxWindowMs) {'
-           Replace = 'if ($false) {' }
     )
 }

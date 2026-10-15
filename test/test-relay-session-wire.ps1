@@ -84,17 +84,18 @@ try {
     Check ((Get-HordeTestMember $js "sigWithVouch") -ceq $withVouch) "JavaScript writes the session sig carrying its vouch, members in their one order"
     Check ((Get-HordeTestMember $js "openBody") -ceq ('{"v":1,"vouchId":"' + $goldenVouchId + '"}')) "the opening body is {v:1, vouchId}"
     Check ((@(Get-HordeTestMember $js "refusals") -join ",") -ceq ((Get-HordeRelaySessionRefusals) -join ",")) "both languages list the same refusal codes, in the same order"
-    Check ([long](Get-HordeTestMember $js "maxMs") -eq (Get-HordeRelaySessionLimits).maxWindowMs) "both hold the same 8-hour cap"
+    # NO MAXIMUM SESSION LENGTH (the founder, Q75 (b)): neither language holds an 8-hour limit any more.
+    Check ((Get-HordeTestMember $js "maxGone") -eq $true -and -not (Test-HordeTestMember (Get-HordeRelaySessionLimits) "maxWindowMs")) "neither language holds a maximum session length: SESSION_MAX_MS and maxWindowMs are gone"
 
     Write-Host ""
     Write-Host "--- the writers refuse what the reader would ---" -ForegroundColor Cyan
-    Check ("" + (Get-HordeTestMember $js "throws.atCap") -ceq "") "JavaScript writes a window of exactly 8 hours"
-    Check ("" + (Get-HordeTestMember $js "throws.overCap") -cne "") "JavaScript refuses a window of 8 hours and 1 ms"
+    Check ("" + (Get-HordeTestMember $js "throws.thirtyDays") -ceq "") "JavaScript writes a window of 30 days: there is no maximum"
+    Check ("" + (Get-HordeTestMember $js "throws.oneMs") -ceq "") "JavaScript writes a window of 1 ms: the shortest that is after notBefore"
     Check ("" + (Get-HordeTestMember $js "throws.backwards") -cne "") "JavaScript refuses notAfter at notBefore"
     Check ("" + (Get-HordeTestMember $js "throws.badHorde") -cne "") "JavaScript refuses a horde that is not a name"
     Check ("" + (Get-HordeTestMember $js "throws.badKeyId") -cne "") "JavaScript refuses a key id that is not 32 hex"
-    Check (Throws { ConvertTo-HordeRelaySessionVouchText -SessionPublicKey $g -DeviceKeyId $vec.deviceKeyId -PhoneKeyId $vec.phoneKeyId -Horde "work" -Machine $vec.machine -NotBefore 0 -NotAfter 28800001 -Seq 1 } "8 hours") "PowerShell refuses a window of 8 hours and 1 ms"
-    Check (-not (Throws { $null = ConvertTo-HordeRelaySessionVouchText -SessionPublicKey $g -DeviceKeyId $vec.deviceKeyId -PhoneKeyId $vec.phoneKeyId -Horde "work" -Machine $vec.machine -NotBefore 0 -NotAfter 28800000 -Seq 1 })) "CONTROL: PowerShell writes a window of exactly 8 hours"
+    Check (Throws { ConvertTo-HordeRelaySessionVouchText -SessionPublicKey $g -DeviceKeyId $vec.deviceKeyId -PhoneKeyId $vec.phoneKeyId -Horde "work" -Machine $vec.machine -NotBefore 1000 -NotAfter 1000 -Seq 1 } "after its notBefore") "PowerShell refuses notAfter at notBefore"
+    Check (-not (Throws { $null = ConvertTo-HordeRelaySessionVouchText -SessionPublicKey $g -DeviceKeyId $vec.deviceKeyId -PhoneKeyId $vec.phoneKeyId -Horde "work" -Machine $vec.machine -NotBefore 0 -NotAfter 2592000000 -Seq 1 })) "CONTROL: PowerShell writes a window of 30 days: there is no maximum"
 
     Write-Host ""
     Write-Host "--- reading a vouch: each refusal beside its accepted twin ---" -ForegroundColor Cyan
@@ -105,7 +106,6 @@ try {
         @{ what = "a space"; text = $goldenText.Replace('"v":1,', '"v": 1,') },
         @{ what = "a vouchId that is not the key's"; text = $goldenText.Replace($goldenVouchId, "698bea63dc44a344663ff1429aea1085") },
         @{ what = "a mailbox of another machine"; text = $goldenText.Replace('"mailbox":"work/0123456789abcdef', '"mailbox":"work/1123456789abcdef') },
-        @{ what = "a window over 8 hours"; text = $goldenText.Replace('"notAfter":1760428800000', '"notAfter":1760428800001') },
         @{ what = "a notAfter before notBefore"; text = $goldenText.Replace('"notAfter":1760428800000', '"notAfter":1760399999999') },
         @{ what = "another kind"; text = $goldenText.Replace('"kind":"horde-relay-session-vouch"', '"kind":"horde-relay-session-vouce"') }
     )

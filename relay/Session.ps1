@@ -21,8 +21,13 @@
 #   horde, machine    the horde and the key id of the ONE machine the session answers (a pairing is one
 #                     machine: surfaces/pwa/page/phone-core.js, ONE HORDE, ONE ENTRY).
 #   mailbox           that machine's mailbox, <horde>/<machine>: nothing else, checked on read.
-#   notBefore,        the window, Unix milliseconds, phone clock: notBefore < notAfter, and notAfter at
-#   notAfter          most notBefore + 8 h (the hard cap, whatever the idle setting).
+#   notBefore,        the window, Unix milliseconds, phone clock: notBefore < notAfter. THERE IS NO
+#   notAfter          MAXIMUM SESSION LENGTH (the founder, Q75 (b), "hard limit: no"): the phone sets
+#                     notAfter far ahead, and A SESSION ENDS ONLY BY the 60-minute idle rule (enforced
+#                     by the PC), the 10-minute away lock (the phone), end-all, a revoke of the device
+#                     or its passkey, or closing the page. The PC still refuses an envelope outside
+#                     the window, so a phone may choose a shorter one. (The first pin of this wire,
+#                     862287ad, bounded notAfter at notBefore + 8 h; that bound is gone, nothing else is.)
 #   seq               this device's vouch counter: each new vouch of a device above its last. The PC
 #                     refuses a NEW vouch at or below the highest it has of that device (session-stale).
 #   vouchId           the key id of sessionPublicKey (relay/P256.ps1's Get-HordeRelayKeyId): one id, one
@@ -65,10 +70,10 @@
 . (Join-Path $PSScriptRoot "WebAuthn.ps1")
 
 function Get-HordeRelaySessionLimits {
-    # maxWindowMs: the hard cap of the design note, 8 hours, whatever any setting says.
+    # No maximum window (the header, notAfter): the founder answered "hard limit: no".
     # idleDefaultMs: the idle limit the PC holds when nothing is set (the founder's 60 minutes).
     # vouchTextChars: the vouch text is about 420 characters at its longest names; 1024 is room.
-    return [pscustomobject]@{ maxWindowMs = [long]28800000; idleDefaultMs = [long]3600000; vouchTextChars = 1024 }
+    return [pscustomobject]@{ idleDefaultMs = [long]3600000; vouchTextChars = 1024 }
 }
 
 function Get-HordeRelaySessionDomain {
@@ -97,7 +102,7 @@ function ConvertTo-HordeRelaySessionVouchText {
         [Parameter(Mandatory = $true)][string]$PhoneKeyId, [Parameter(Mandatory = $true)][string]$Horde,
         [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)][long]$NotBefore,
         [Parameter(Mandatory = $true)][long]$NotAfter, [Parameter(Mandatory = $true)][long]$Seq)
-    if ($NotAfter -le $NotBefore -or ($NotAfter - $NotBefore) -gt (Get-HordeRelaySessionLimits).maxWindowMs) { throw "a session's notAfter is after its notBefore, and at most 8 hours after it" }
+    if ($NotAfter -le $NotBefore) { throw "a session's notAfter is after its notBefore" }
     $values = @{ v = 1; kind = "horde-relay-session-vouch"; sessionPublicKey = (ConvertTo-HordeRelayBase64Url -Bytes $SessionPublicKey); deviceKeyId = $DeviceKeyId
         phoneKeyId = $PhoneKeyId; horde = $Horde; machine = $Machine; mailbox = ($Horde + "/" + $Machine); notBefore = $NotBefore; notAfter = $NotAfter
         seq = $Seq; vouchId = (Get-HordeRelayKeyId -Public $SessionPublicKey) }
@@ -120,7 +125,6 @@ function Read-HordeRelaySessionVouch {
     if ((Get-HordeRelayKeyId -Public $point) -cne $v.vouchId) { $fail.reason = "session-refused: the vouchId is not the key id of the session key"; return $fail }
     if ($v.mailbox -cne ($v.horde + "/" + $v.machine)) { $fail.reason = "session-refused: the vouch's mailbox is not its horde and machine"; return $fail }
     if ($v.notAfter -le $v.notBefore) { $fail.reason = "session-refused: the vouch's notAfter is not after its notBefore"; return $fail }
-    if (($v.notAfter - $v.notBefore) -gt (Get-HordeRelaySessionLimits).maxWindowMs) { $fail.reason = "session-refused: the vouch's window is longer than 8 hours"; return $fail }
     $v | Add-Member -NotePropertyName sessionPublic -NotePropertyValue $point
     $v | Add-Member -NotePropertyName text -NotePropertyValue $Text
     return [pscustomobject]@{ ok = $true; reason = ""; value = $v }
