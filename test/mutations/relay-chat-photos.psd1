@@ -36,11 +36,11 @@
            Find = 'for ($i = 0; $i -le $own.Count - $script:HordeChatPhotoPendingPerPhoto; $i++)'
            Replace = 'for ($i = 0; $false; $i++)' }
         @{ Name = "photo-pending-photos-unbounded"
-           Find = 'for ($i = 0; $i -le $byAge.Count - $script:HordeChatPhotoPendingPhotos; $i++)'
-           Replace = 'for ($i = 0; $false; $i++)' }
+           Find = '$need = $byAge.Count - $script:HordeChatPhotoPendingPhotos + 1'
+           Replace = '$need = 0' }
         # A fresh pending part is never evicted: the newcomer is refused (review round 3 of PR 285).
         @{ Name = "photo-pending-evicts-a-fresh-photo"
-           Find = 'if ($last[$byAge[$i]] -ge $freshFrom) {'
+           Find = 'if (-not $outranks -and $last[$g] -ge $freshFrom) {'
            Replace = 'if ($false) {' }
         @{ Name = "photo-pending-evicts-a-fresh-part"
            Find = 'if ($own[$i].at -ge $freshFrom) {'
@@ -48,6 +48,23 @@
         @{ Name = "photo-pending-fresh-for-ever"
            Find = '$freshFrom = $nowTicks - [long]$script:HordeChatPhotoPendingFreshSeconds * [System.TimeSpan]::TicksPerSecond'
            Replace = '$freshFrom = [long]0' }
+        # A photo a verified, journaled manifest names outranks junk, and junk never evicts it (review
+        # round 4 of PR 285).
+        @{ Name = "photo-pending-signed-does-not-outrank"
+           Find = '$outranks = $mineSigned -and @($Signed) -cnotcontains $g'
+           Replace = '$outranks = $false' }
+        @{ Name = "photo-pending-junk-evicts-a-signed-photo"
+           Find = '$order = $(if ($mineSigned) { @($unsigned) + @($byAge | Where-Object { @($Signed) -ccontains $_ }) } else { $unsigned })'
+           Replace = '$order = $byAge' }
+        @{ Name = "photo-pending-not-told-what-is-signed"
+           Find = '-Digest $p.digest -Now $Now -Signed $signed'
+           Replace = '-Digest $p.digest -Now $Now' }
+        @{ Name = "photo-held-manifest-not-marked-signed"
+           Find = '        try { Set-HordeChatPhotoSigned -HordeHome $homeDir -From $mf.from -PhotoId $mf.photoId -ExpiresAt $mf.expiresAt } catch { }'
+           Replace = '' }
+        @{ Name = "photo-signed-mark-never-expires"
+           Find = '        if ($until -gt $nowMs) {'
+           Replace = '        if ($m.Success) {' }
         @{ Name = "photo-pending-full-not-refused"
            Find = 'if ($w.written -ceq "full") { return (& $no ($label + ": " + $w.why)) }'
            Replace = '' }

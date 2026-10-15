@@ -8,10 +8,14 @@
 # refuses everything:
 #   - a whole photo lands, its bytes exact, under the machine's own name, owner-only, with ONE post to
 #     the Thrall naming the path and no image byte, and receipts receiving then delivered;
+#   - a batch's envelopes are opened before its parts are judged, so a photo whose manifest comes in
+#     the same batch has its parts taken at once, junk or no junk; a batch with no part is unchanged;
 #   - parts before their manifest wait (capped per photo and in how many photos, the oldest evicted
 #     only once no longer fresh, and by expiry), and are taken when it comes; junk under many photo ids
 #     cannot fill the area for good, and junk AFTER a real photo's parts - under new ids or its own, in
-#     the same batch or the next - evicts none of them;
+#     the same batch or the next - evicts none of them; a photo a verified manifest names (held
+#     too-many) outranks junk, and junk never evicts it - junk refreshed under 4 ids every 120 s cannot
+#     keep a genuine photo out;
 #   - parts in any order make the same photo; a part SWAPPED to another number is refused;
 #   - a forged part, a part of another manifest, a replayed part, a part after the window, a part from
 #     another account, a part changed at rest, a whole that does not hash: nothing written, phone told;
@@ -111,7 +115,7 @@ function Invoke-Turn {
     $in = Receive-HordeRelayInbox -Context $World.ctx -TimeoutMs 0
     $un = Invoke-HordeRelayUnfinished -Context $World.ctx
     $lines = New-Object System.Collections.ArrayList
-    if ($in.state -ceq "known") { foreach ($l in @($in.value.refused)) { [void]$lines.Add("refused " + $l) }; foreach ($l in @($in.value.held)) { [void]$lines.Add("held " + $l) } }
+    if ($in.state -ceq "known") { foreach ($l in @($in.value.refused)) { [void]$lines.Add("refused " + $l) }; foreach ($l in @($in.value.held)) { [void]$lines.Add("held " + $l) }; foreach ($l in @(Get-HordeRelayRunLines -Report $in.value.opened)) { [void]$lines.Add($l) } }
     foreach ($l in @(Get-HordeRelayRunLines -Report $un.value)) { [void]$lines.Add($l) }
     return (@($lines.ToArray()) -join " | ")
 }
@@ -478,6 +482,94 @@ try {
     Check ($all.Count -le 4 * 48 -and @($all | ForEach-Object { $_.Name.Split("-")[1] } | Select-Object -Unique).Count -le 4) ("THE TOTAL stays bounded: at most 4 photos of 48 parts (" + $all.Count + " parts)")
     Remove-HordeChatPhotoPendingExpired -HordeHome $Q.home -WindowMs 600000 -Now ([datetime]::UtcNow.AddMinutes(11))
     Check (@(Get-ChildItem -LiteralPath $pendQ -File).Count -eq 0) "past the window, every pending part is dropped"
+    # A SIGNED PHOTO OUTRANKS UNSIGNED ONES (review round 4 of PR 285), on the area alone. S is a photo a
+    # verified manifest names (-Signed), J junk. Every time is the test clock's, given as -Now; fresh is
+    # written in the last 120 s.
+    $U = Join-Path $env:TEMP ("horde-relay-photo-" + [guid]::NewGuid().ToString("N"))
+    [void]$script:homes.Add($U)
+    [void][System.IO.Directory]::CreateDirectory($U)
+    $uFrom = $Q.phone.keyId
+    $uIds = @{}
+    foreach ($n in @("S1", "S2", "S3", "S4", "S5", "S6", "J1", "J2", "J3", "J4", "J5", "J6", "J7", "J8")) { $uIds[$n] = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16) }
+    $uSigned = @(@("S1", "S2", "S3", "S4", "S5", "S6") | ForEach-Object { $uFrom + "-" + $uIds[$_] })
+    $uAdd = { param([string]$Name, $At) $ct = Get-HordeRelayRandomBytes -Count 40; return (Add-HordeChatPhotoPending -Pending $U -From $uFrom -PhotoId $uIds[$Name] -Number 1 -Ct $ct -Digest (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes $ct)) -Now $At -Signed $uSigned) }
+    $uHas = { param([string]$Name) return (@([System.IO.Directory]::GetFiles($U) | Where-Object { [System.IO.Path]::GetFileName($_).Split("-")[1] -ceq $uIds[$Name] }).Count -gt 0) }
+    $uCount = { param([string[]]$Names) return @($Names | Where-Object { & $uHas $_ }).Count }
+    $t0 = [datetime]::UtcNow
+    $null = & $uAdd "S1" $t0; $null = & $uAdd "J1" $t0; $null = & $uAdd "J2" $t0; $null = & $uAdd "J3" $t0
+    $r = & $uAdd "J4" ($t0.AddSeconds(200))
+    Check ($r.written -ceq "moved" -and (& $uHas "S1") -and -not (& $uHas "J1") -and (& $uHas "J4")) ("all no longer fresh and the signed photo the oldest, junk evicts the oldest JUNK, not the signed photo (" + $r.evicted + " evicted)")
+    $null = & $uAdd "J5" ($t0.AddSeconds(200)); $null = & $uAdd "J6" ($t0.AddSeconds(205))
+    $r = & $uAdd "J7" ($t0.AddSeconds(210))
+    Check ($r.written -ceq "full" -and (& $uHas "S1") -and -not (& $uHas "J7") -and (& $uCount @("J4", "J5", "J6")) -eq 3) ("UNSIGNED NEVER EVICTS SIGNED: the signed photo is the only one no longer fresh, and junk is refused rather than evict it (" + $r.why + ")")
+    $r = & $uAdd "S2" ($t0.AddSeconds(220))
+    Check ($r.written -ceq "moved" -and (& $uHas "S2") -and (& $uCount @("J4", "J5", "J6")) -eq 2) ("TWIN: A SIGNED PHOTO EVICTS JUNK, FRESH OR NOT (" + $r.evicted + " evicted)")
+    $null = & $uAdd "S3" ($t0.AddSeconds(230)); $null = & $uAdd "S4" ($t0.AddSeconds(240))
+    Check ((& $uCount @("S1", "S2", "S3", "S4")) -eq 4 -and (& $uCount @("J1", "J2", "J3", "J4", "J5", "J6", "J7")) -eq 0) "and again while there is junk to evict: 4 signed photos, no junk left"
+    $r = & $uAdd "J8" ($t0.AddSeconds(250))
+    Check ($r.written -ceq "full" -and (& $uCount @("S1", "S2", "S3", "S4")) -eq 4) ("with only signed photos to make room from, junk is refused (" + $r.why + ")")
+    $r = & $uAdd "S5" ($t0.AddSeconds(250))
+    Check ($r.written -ceq "moved" -and -not (& $uHas "S1") -and (& $uHas "S5")) ("TWIN: a signed newcomer evicts the oldest signed photo once it is no longer fresh (" + $r.evicted + " evicted)")
+    $r = & $uAdd "S6" ($t0.AddSeconds(260))
+    Check ($r.written -ceq "full" -and (& $uCount @("S2", "S3", "S4", "S5")) -eq 4) ("BETWEEN SIGNED PHOTOS FRESH STILL HOLDS: with 4 signed photos fresh, a fifth is refused (" + $r.why + ")")
+    $r = & $uAdd "J8" ($t0.AddSeconds(1000))
+    Check ($r.written -ceq "full" -and (& $uCount @("S2", "S3", "S4", "S5")) -eq 4) ("NEVER, NOT EVEN STALE: junk is refused when only signed photos could make room, however old they are (" + $r.why + ")")
+    # A MARK LASTS ITS PHOTO'S WINDOW: past it the photo is junk's equal again, and the mark is deleted.
+    $mHome = Join-Path $env:TEMP ("horde-relay-photo-" + [guid]::NewGuid().ToString("N"))
+    [void]$script:homes.Add($mHome)
+    $mNow = [datetime]::UtcNow
+    $mLive = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16)
+    $mDead = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16)
+    Set-HordeChatPhotoSigned -HordeHome $mHome -From $uFrom -PhotoId $mLive -ExpiresAt ((Get-HordeChatPhotoNow -Now $mNow) + 60000)
+    Set-HordeChatPhotoSigned -HordeHome $mHome -From $uFrom -PhotoId $mDead -ExpiresAt ((Get-HordeChatPhotoNow -Now $mNow) - 1)
+    $mGot = @(Get-HordeChatPhotoSigned -HordeHome $mHome -Now $mNow)
+    Check ($mGot.Count -eq 1 -and $mGot[0] -ceq ($uFrom + "-" + $mLive) -and -not (Test-Path -LiteralPath (Join-Path $mHome ("relay\chat\photos\signed\" + $uFrom + "-" + $mDead + ".json")))) ("a photo's mark counts until its window ends, and a mark past it is deleted (" + ($mGot -join ", ") + ")")
+    # F'S CASE, END TO END (review round 4 of PR 285): junk under 4 made-up ids, refreshed every 120 s,
+    # and a genuine photo whose manifest is held too-many. Round 3 refused every one of its early parts.
+    $Fw = New-World -Settings '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 1, "photosPerDay": 1000}'
+    $pendF = Join-Path $Fw.home "relay\chat\photos\pending"
+    $Pfill = New-Photo -World $Fw -Image (New-ImageBytes -Type "jpg" -Length 1000)
+    $null = Send-Manifest $Fw $Pfill
+    $null = Invoke-Turn $Fw
+    $fJunk = @(1..4 | ForEach-Object { ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16) })
+    $tF = [datetime]::UtcNow
+    $refresh = { param($At) return @(foreach ($jid in $fJunk) { Send-Part $Fw (Get-PartText -From $Fw.phone.keyId -PhotoId $jid -Number 1 -Ct (Get-HordeRelayRandomBytes -Count 40)) -Now $At }) }
+    $first = & $refresh $tF
+    $imgF = New-ImageBytes -Type "jpg" -Length 130000
+    $PF = New-Photo -World $Fw -Image $imgF -ExpiresInMs 600000
+    $null = Send-Manifest $Fw $PF
+    $turn = Invoke-Turn $Fw
+    $markF = Join-Path $Fw.home ("relay\chat\photos\signed\" + $PF.from + "-" + $PF.id + ".json")
+    Check (@($first | Where-Object { $_.outcome -ceq "pending" }).Count -eq 4 -and $turn.Contains("held (too-many)") -and (Test-Path -LiteralPath $markF)) ("the 4 junk ids hold the area, and the genuine manifest is verified and held too-many, its photo marked signed (" + $turn + ")")
+    $partsOut = New-Object System.Collections.ArrayList
+    $junkOut = New-Object System.Collections.ArrayList
+    for ($k = 1; $k -le 4; $k++) {
+        $at = $tF.AddSeconds(120 * $k)
+        foreach ($x in @(& $refresh $at)) { [void]$junkOut.Add($x) }
+        if ($k -le 3) { [void]$partsOut.Add((Send-Part $Fw $PF.parts[$k - 1] -Now $at.AddSeconds(1))) }
+    }
+    $realF = @(Get-ChildItem -LiteralPath $pendF -File | Where-Object { $_.Name.Split("-")[1] -ceq $PF.id })
+    Check (@($partsOut | Where-Object { $_.outcome -ceq "pending" }).Count -eq 3 -and $realF.Count -eq 3) ("JUNK REFRESHED UNDER 4 IDS EVERY 120 s NO LONGER BLOCKS A GENUINE PHOTO: each of its 3 parts waits, and all 3 are still there after the last refresh (" + (@($partsOut | ForEach-Object { $_.outcome + ": " + $_.reason }) -join " / ") + ")")
+    Set-ChatSettings $Fw '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 30, "photosPerDay": 1000}'
+    $turn = Invoke-Turn $Fw
+    $null = Invoke-Tick $Fw
+    $fF = @(Get-InboxFiles $Fw | Where-Object { Test-SameBytes ([System.IO.File]::ReadAllBytes($_.FullName)) $imgF })
+    Check ($turn.Contains("3 had come already") -and $fF.Count -eq 1 -and -not (Test-Path -LiteralPath $markF)) ("its manifest comes again, takes the 3 parts that waited, and the photo completes, its mark gone (" + $turn + ")")
+    # TWIN: the same, with no junk.
+    $Fn = New-World -Settings '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 1, "photosPerDay": 1000}'
+    $Pfill2 = New-Photo -World $Fn -Image (New-ImageBytes -Type "jpg" -Length 1000)
+    $null = Send-Manifest $Fn $Pfill2
+    $null = Invoke-Turn $Fn
+    $imgFn = New-ImageBytes -Type "jpg" -Length 130000
+    $PFn = New-Photo -World $Fn -Image $imgFn -ExpiresInMs 600000
+    $null = Send-Manifest $Fn $PFn
+    $held = Invoke-Turn $Fn
+    $tFn = [datetime]::UtcNow
+    $outFn = @(for ($k = 1; $k -le 3; $k++) { Send-Part $Fn $PFn.parts[$k - 1] -Now ($tFn.AddSeconds(120 * $k)) })
+    Set-ChatSettings $Fn '{"sendIntervalMs": 0, "startTurns": 3, "photosPerMinute": 30, "photosPerDay": 1000}'
+    $turn = Invoke-Turn $Fn
+    $null = Invoke-Tick $Fn
+    Check ($held.Contains("held (too-many)") -and @($outFn | Where-Object { $_.outcome -ceq "pending" }).Count -eq 3 -and $turn.Contains("3 had come already") -and @(Get-InboxFiles $Fn | Where-Object { Test-SameBytes ([System.IO.File]::ReadAllBytes($_.FullName)) $imgFn }).Count -eq 1) ("TWIN, NO JUNK: the held photo's parts wait and it completes (" + $turn + ")")
 
     Write-Host ""
     Write-Host "--- 9. retention: only Horde's own photos, only when old ---" -ForegroundColor Cyan
@@ -505,17 +597,18 @@ try {
     $null = Get-PhoneMail $G
     $imgG = New-ImageBytes -Type "jpg" -Length 100000
     $PG = New-Photo -World $G -Image $imgG
-    # The order a phone puts them: the manifest, then its parts - all judged in one watch, before the
-    # manifest is opened, so the parts wait and the manifest takes them.
+    # The order a phone puts them: the manifest, then its parts - all in one watch. The manifest is
+    # opened BEFORE the parts are judged (review round 4 of PR 285), so they are taken at once.
     $null = Send-Manifest $G $PG
     $i = 0
     foreach ($p in $PG.parts) { $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $p -Key (Get-PartKey $p) }
     Use-World $G
     $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
     Check ($in.state -ceq "known" -and @($in.value.data).Count -eq 3 -and @($in.value.taken).Count -eq 1 -and @($in.value.refused).Count -eq 0 -and $in.value.acked -ge 4) ("the manifest is journaled, the three parts go to the photo sink, and the relay is acked through all four (" + (@($in.value.data) -join "; ") + ")")
-    Check (@($in.value.data | Where-Object { $_.Contains("waits for its manifest") }).Count -eq 3) "each part waits in the pending area, not journaled early"
+    Check ($null -ne $in.value.opened -and @($in.value.opened.done | Where-Object { $_.Contains("accepted (receiving)") -and $_.Contains("0 had come already") }).Count -eq 1) ("OPENED FIRST: the manifest is opened and accepted in the batch, before its parts are judged (" + $(if ($null -ne $in.value.opened) { @($in.value.opened.done) -join "; " } else { "nothing opened" }) + ")")
+    Check (@($in.value.data | Where-Object { $_.Contains("taken") }).Count -eq 3 -and -not (Test-Path -LiteralPath (Join-Path $G.home "relay\chat\photos\pending\*"))) ("so each part is taken at once, and none waits in the pending area (" + (@($in.value.data) -join "; ") + ")")
     $un = Invoke-HordeRelayUnfinished -Context $G.ctx
-    Check (@($un.value.done | Where-Object { $_.Contains("3 had come already") }).Count -eq 1) ("opened, the manifest takes the three that came first (" + (@($un.value.done) -join "; ") + ")")
+    Check (@($un.value.done).Count -eq 0 -and @($un.value.retry).Count -eq 0) "and the runner's own step 6 after it finds nothing left to open"
     $t = Invoke-Tick $G
     $fG = @(Get-InboxFiles $G)
     Check ($fG.Count -eq 1 -and (Test-SameBytes ([System.IO.File]::ReadAllBytes($fG[0].FullName)) $imgG) -and $t.Contains("accepted (delivered)")) ("END TO END through the mailbox: the photo lands whole and the Thrall is told (" + $t + ")")
@@ -533,8 +626,9 @@ try {
     $squat = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $PJ.parts[0] -Key (Get-PartKey $junk)
     Check ($squat.state -ceq "known" -and $squat.value.duplicate) "TWIN: under the junk's own key the relay keeps the junk - the key is what a squatter would hold, so it must name the digest"
     foreach ($p in $PJ.parts[1..2]) { $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $p -Key (Get-PartKey $p) }
-    $null = Send-Manifest $G $PJ
+    # The manifest comes in the NEXT batch here, so the parts wait for it.
     $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+    $null = Send-Manifest $G $PJ
     $pendS = @(Get-ChildItem -LiteralPath (Join-Path $G.home "relay\chat\photos\pending") -File | Where-Object { $_.Name.Contains($PJ.id + "-1-") })
     Check ($pendS.Count -eq 2 -and @($in.value.data | Where-Object { $_.Contains("waits for its manifest") }).Count -eq 4) ("in the pending area, junk and real part 1 wait side by side under their digests (" + $pendS.Count + ")")
     $un = Invoke-HordeRelayUnfinished -Context $G.ctx
@@ -542,9 +636,10 @@ try {
     $t = Invoke-Tick $G
     $fS = @(Get-InboxFiles $G | Where-Object { Test-SameBytes ([System.IO.File]::ReadAllBytes($_.FullName)) $imgS })
     Check ($fS.Count -eq 1) ("JUNK FIRST, THEN THE REAL PART: the photo completes (" + $t + ")")
-    # JUNK AFTER THE GENUINE PARTS, IN THE SAME BATCH (review round 3 of PR 285): data items are taken
-    # before envelopes, so all of this is judged before the manifest is opened. Junk under 4 new ids and
-    # 48 under the photo's own id evicted it whole in round 2.
+    # JUNK AFTER THE GENUINE PARTS, IN THE SAME BATCH (reviews round 3 and 4 of PR 285): junk under 4
+    # new ids and 48 under the photo's own id evicted it whole in round 2. Since round 4 the manifest is
+    # opened before any part is judged, so the real parts are taken at once and junk under the photo's
+    # own id is refused against its digests.
     $E = New-World
     $pendE = Join-Path $E.home "relay\chat\photos\pending"
     $imgE = New-ImageBytes -Type "jpg" -Length 100000
@@ -556,12 +651,13 @@ try {
     foreach ($j in $junkE) { $null = Send-HordeRelayItem -Connection $E.conn -Mailbox $E.ctx.mailbox -Text $j -Key (Get-PartKey $j) }
     Use-World $E
     $in = Receive-HordeRelayInbox -Context $E.ctx -TimeoutMs 0
-    $realE = @(Get-ChildItem -LiteralPath $pendE -File | Where-Object { $_.Name.Contains($PE.id) -and [int]$_.Name.Split("-")[2] -le 3 })
-    Check ($in.state -ceq "known" -and $realE.Count -eq 3 -and @($in.value.refused | Where-Object { $_.Contains("none is evicted") }).Count -ge 2) ("SAME BATCH: junk put after a genuine photo's parts, under 4 new ids and 48 under its own, evicts none of its 3 parts; the newcomers past the caps are refused (" + $realE.Count + ")")
-    $un = Invoke-HordeRelayUnfinished -Context $E.ctx
+    $takenE = @($in.value.data | Where-Object { $_.Contains("of photo " + $PE.id + " taken") })
+    Check ($in.state -ceq "known" -and $takenE.Count -eq 3 -and @(Get-ChildItem -LiteralPath $pendE -File -ErrorAction SilentlyContinue | Where-Object { $_.Name.Contains($PE.id) }).Count -eq 0 -and @($in.value.refused | Where-Object { $_.Contains("its photo has 3 parts") }).Count -eq 1) ("SAME BATCH: junk put after a genuine photo's parts, under 4 new ids and 48 under its own, takes none of its place: its 3 parts are taken at once, and the 48 refused against its manifest (" + (@($in.value.refused) -join "; ") + ")")
     $t = Invoke-Tick $E
     $fE = @(Get-InboxFiles $E | Where-Object { Test-SameBytes ([System.IO.File]::ReadAllBytes($_.FullName)) $imgE })
-    Check (@($un.value.done | Where-Object { $_.Contains("3 had come already") }).Count -eq 1 -and $fE.Count -eq 1) ("and the photo completes (" + (@($un.value.done) -join "; ") + ")")
+    Check ($fE.Count -eq 1) ("and the photo completes (" + $t + ")")
+    # The 4 junk ids took the 4 places of the pending area; they are no longer fresh before the next.
+    Set-PendingAge $E 130
     # IN THE NEXT BATCH: the parts are judged in one batch and the junk in the next, before the manifest
     # is opened - as when the manifest is held too-many and comes again (put last here, to the same end).
     $imgN = New-ImageBytes -Type "jpg" -Length 100000
@@ -653,6 +749,19 @@ try {
     Check ($sameLines.Count -eq 1 -and $sameLines[0] -cmatch '\Aitems [0-9]+ to [0-9]+ \(2\): photo ab refused\z') ("TWIN: the same reason, every seq between, is one line, items A to B (" + ($sameLines -join "; ") + ")")
     Check ($gapLines.Count -eq 1 -and $gapLines[0] -cmatch '\Aitems [0-9]+, [0-9]+, [0-9]+: same reason\z') ("with other items between them, three are named one by one, never as a range (" + ($gapLines -join "; ") + ")")
     Check ($manyLines.Count -eq 1 -and $manyLines[0] -cmatch '\A9 items, the first [0-9]+ and the last [0-9]+: same reason\z') ("and past 8, how many, the first and the last (" + ($manyLines -join "; ") + ")")
+    # THE SEQS ARE SORTED before a range is named (review round 4 of PR 285): a batch in the relay's
+    # order 3, 1, 5 was "items 3 to 5 (3)". Handed to the gate directly, in that order; the batch ends
+    # at the cursor already acked, so nothing is acked again.
+    $unsorted = { param([long[]]$Seqs) $its = @(foreach ($q in $Seqs) { [pscustomobject]@{ seq = $q; text = (Get-PartText -From $G.phone.keyId -PhotoId $PG.id -Number 4 -Ct (Get-HordeRelayRandomBytes -Count 40)) } }); return (Complete-HordeRelayInbox -Context $G.ctx -Watched (New-HordeKnown -Value ([pscustomobject]@{ mailbox = $G.ctx.mailbox; since = $G.ctx.cursor; next = $G.ctx.cursor; items = $its; anomalies = @() }))) }
+    $dk.take = { param($c, $t) return [pscustomobject]@{ outcome = "refused"; reason = "same reason" } }
+    try {
+        $gapped = & $unsorted @(3, 1, 5)
+        $whole = & $unsorted @(3, 1, 2)
+    } finally { $dk.take = $saved }
+    $gapLines = @($gapped.value.refused | Where-Object { $_.Contains("same reason") })
+    $wholeLines = @($whole.value.refused | Where-Object { $_.Contains("same reason") })
+    Check ($gapLines.Count -eq 1 -and $gapLines[0] -ceq "items 1, 3, 5: same reason") ("UNSORTED 3, 1, 5 is named one by one in order, never as a range (" + ($gapLines -join "; ") + ")")
+    Check ($wholeLines.Count -eq 1 -and $wholeLines[0] -ceq "items 1 to 3 (3): same reason") ("TWIN: unsorted 3, 1, 2 is the range it is (" + ($wholeLines -join "; ") + ")")
 
     Write-Host ""
     Write-Host "--- 11. a runtime that takes no photo refuses FIRST: no folder, one line a photo ---" -ForegroundColor Cyan

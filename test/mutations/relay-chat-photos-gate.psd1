@@ -23,8 +23,8 @@
            Find = '            $dk = Get-HordeRelayDataKindOf -Text $it.text'
            Replace = '            $dk = $null' }
         @{ Name = "gate-data-refusals-a-line-each"
-           Find = '                    [void]$dataRefused[$said].Add([long]$it.seq)'
-           Replace = '                    $dataRefused[$said + $it.seq] = New-Object System.Collections.ArrayList; [void]$dataRefused[$said + $it.seq].Add([long]$it.seq)' }
+           Find = '            [void]$dataRefused[$said].Add([long]$it.seq)'
+           Replace = '            $dataRefused[$said + $it.seq] = New-Object System.Collections.ArrayList; [void]$dataRefused[$said + $it.seq].Add([long]$it.seq)' }
         # Folded by ordinal reason, and a range only of every seq in it (review round 3 of PR 285).
         @{ Name = "gate-data-refusals-folded-ignoring-case"
            Find = '$dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)'
@@ -35,8 +35,16 @@
         @{ Name = "gate-data-refusals-many-listed-one-by-one"
            Find = 'elseif ($seqs.Count -le 8) {'
            Replace = 'elseif ($true) {' }
+        # Envelopes are opened before data items are judged, and seqs sorted before a range is named
+        # (review round 4 of PR 285).
+        @{ Name = "gate-data-judged-before-envelopes-are-opened"
+           Find = 'if ($dataItems.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "gate-data-refusals-seqs-unsorted"
+           Find = '$seqs = @(@($dataRefused[$why]) | Sort-Object)'
+           Replace = '$seqs = @($dataRefused[$why])' }
         @{ Name = "gate-taker-that-throws-is-not-caught"
-           Find = '                try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch {'
+           Find = '        try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch {'
            Replace = '                $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1; if ($false) {' }
     )
 }
