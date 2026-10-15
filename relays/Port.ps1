@@ -102,6 +102,25 @@
 #                                                          most 300 characters
 # Get-HordeRelayStatus runs it and checks its answer; nothing reads the lines but a person.
 #
+# A RELAY THAT IS DEPLOYED MAY SAY WHAT A NEW MACHINE STILL NEEDS BEFORE ITS FIRST DEPLOY (2026-10-14).
+# Horde's first person to install it on a fresh machine was stuck: nothing said what to set up, and the
+# hosted relay's origin was the founder's own, so a deploy would have gone there. `horde setup`
+# (cli/Setup.ps1) walks the steps of a first run in order, and the ones that belong to a relay - where it
+# will answer, the sign-in client it needs, the tools it is deployed with - are that relay's to say,
+# because nothing outside its folder may name it (CONTRIBUTING rule 14). So such a relay also hands
+#   Setup   param([string]$HordeHome) -> known { origin; steps; beforeDeploy }
+#           origin        "" while none is chosen, else the https origin it will answer at
+#           steps         its own steps, in order, each { name; done; said; next; notes }: name 1 to 60
+#                         printable characters; done true or false; said, what is the case, 1 to 1000;
+#                         next, the ONE thing to do, "" when done and 1 to 1000 when not; notes, 0 to
+#                         8 lines of 1 to 600 to show beside the step whether it is done or not
+#           beforeDeploy  "" or 1 to 400 printable characters: what to do once before the first deploy
+#                         that this machine cannot check (a login kept by another tool, say)
+# and Get-HordeRelaySetup -Name [-HordeHome] runs it and checks its answer, never throwing for the
+# relay: a block that throws, or answers with anything else, is unknown, with the reason. IT READS AND
+# DOES NOTHING: settings and files only, no network, no process, no file written - the person asked
+# what to do, not for it to be done - and NO SECRET IS EVER IN IT, since every word of it is printed.
+#
 # A RELAY THAT COUNTS REQUESTS (the hosted one: a request a day per account is its limit) may also hand
 # Register-HordeRelay -RunWatchMs: how long a long-running runner's watch waits on it (cli/RelayRun.ps1).
 # A runner's quiet turn is one watch, so this is what one always-on machine costs it a day. 0, the
@@ -324,6 +343,7 @@ function Register-HordeRelay {
         [scriptblock]$SecretFiles = $null,
         [scriptblock]$Bundle = $null,
         [scriptblock]$Status = $null,
+        [scriptblock]$Setup = $null,
         [scriptblock]$DaySummary = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
@@ -344,7 +364,7 @@ function Register-HordeRelay {
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
         watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles; daySummary = $DaySummary
-        bundle = $Bundle; status = $Status; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
+        bundle = $Bundle; status = $Status; setup = $Setup; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }
@@ -411,6 +431,48 @@ function Get-HordeRelayBundle {
     $h = Get-HordeRelayMember $a.value "sha256"
     if (-not $h.has -or $h.value -isnot [string] -or $h.value -cnotmatch '\A[0-9a-f]{64}\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the bundle without its hash")) }
     return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $h.value }))
+}
+
+function Test-HordeRelaySetupText {
+    # Is -Value printable ASCII of -Min to -Max characters (the header, A RELAY THAT IS DEPLOYED MAY SAY)?
+    param($Value, [int]$Min, [int]$Max)
+    if ($Value -isnot [string]) { return $false }
+    if ($Value.Length -lt $Min -or $Value.Length -gt $Max) { return $false }
+    return ($Value.Length -eq 0 -or $Value -cmatch '\A[\x20-\x7E]+\z')
+}
+
+function Get-HordeRelaySetup {
+    # Relay -Name's own steps of a first run (the header, A RELAY THAT IS DEPLOYED MAY SAY): known
+    # { origin; steps; beforeDeploy }, every step { name; done; said; next; notes }, or unknown with the
+    # reason. Never throws for the relay. NOTHING THE RELAY SAID IS REPEATED IN A REFUSAL.
+    param([Parameter(Mandatory = $true)][string]$Name, [string]$HordeHome = "")
+    if (-not $script:HordeRelays.ContainsKey($Name)) { return (New-HordeUnknown -Reason ("no relay named '" + $Name + "' is loaded")) }
+    $r = $script:HordeRelays[$Name]
+    if ($null -eq $r.setup) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' says nothing of a first run")) }
+    try { $a = & $r.setup $HordeHome }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to say what a first run needs") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the first run with something that is not an answer")) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' cannot say what a first run needs: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
+    $bad = New-HordeUnknown -Reason ("relay '" + $Name + "' answered the first run with steps that are not steps")
+    $o = Get-HordeRelayMember $a.value "origin"
+    if (-not $o.has -or -not (Test-HordeRelaySetupText $o.value 0 200) -or ($o.value -ne "" -and $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z')) { return $bad }
+    $b = Get-HordeRelayMember $a.value "beforeDeploy"
+    if (-not $b.has -or -not (Test-HordeRelaySetupText $b.value 0 400)) { return $bad }
+    $st = Get-HordeRelayMember $a.value "steps"
+    if (-not $st.has) { return $bad }
+    $steps = New-Object System.Collections.ArrayList
+    foreach ($s in @($(if ($null -ne $st.value) { $st.value } else { @() }))) {
+        $n = Get-HordeRelayMember $s "name"; $d = Get-HordeRelayMember $s "done"; $said = Get-HordeRelayMember $s "said"
+        $next = Get-HordeRelayMember $s "next"; $notes = Get-HordeRelayMember $s "notes"
+        if (-not $n.has -or -not (Test-HordeRelaySetupText $n.value 1 60) -or -not $d.has -or $d.value -isnot [bool]) { return $bad }
+        if (-not $said.has -or -not (Test-HordeRelaySetupText $said.value 1 1000) -or -not $next.has) { return $bad }
+        if ($(if ($d.value) { $next.value -cne "" } else { -not (Test-HordeRelaySetupText $next.value 1 1000) })) { return $bad }
+        $lines = @($(if ($notes.has -and $null -ne $notes.value) { $notes.value } else { @() }))
+        if (-not $notes.has -or $lines.Count -gt 8 -or @($lines | Where-Object { -not (Test-HordeRelaySetupText $_ 1 600) }).Count -gt 0) { return $bad }
+        [void]$steps.Add([pscustomobject]@{ name = $n.value; done = $d.value; said = $said.value; next = $next.value; notes = [string[]]@($lines) })
+    }
+    if ($steps.Count -eq 0) { return $bad }
+    return (New-HordeKnown -Value ([pscustomobject]@{ origin = $o.value; steps = @($steps.ToArray()); beforeDeploy = $b.value }))
 }
 
 function Get-HordeRelay {
