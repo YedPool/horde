@@ -1,6 +1,6 @@
 # Mutations of relay/Session.ps1. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\relay-sessions.psd1
 # Each switches off one rule a session-signed envelope is taken by - the vouch's passkey assertion, its
-# sender, the session signature, the binding, the phone key, the seq, end-all, the window, the cap, the
+# sender, the session signature, the binding, the phone key, the seq, end-all, the window, the
 # idle limit - and test\test-relay-sessions.ps1 must fail for every one. Every find string occurs once
 # in the target.
 @{
