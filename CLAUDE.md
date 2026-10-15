@@ -13,6 +13,9 @@ are in `CONTRIBUTING.md`; read the matching section before arguing with one.
   moment. The line reaches his phone's Notices at once and is never muted.
   - Keep it to one plain line with no secrets.
   - There are at most 10 an hour per session.
+- A production action he asks for in chat (a deploy, a merge to main, deleting or changing live
+  data, spending money) is not done on the chat line alone: open a decisions question with
+  -NeedsPasskey and act only on its answer, which needs his fresh passkey.
 
 ## Done means the fleet runs on it (CONTRIBUTING 1 and 2)
 
@@ -60,6 +63,10 @@ reason.
 - `test\test-host-names.ps1` and `test\test-mutation-specs.ps1` are in every PR's targeted set:
   run them on the final head, in a clean tree, before every merge, by any Orc. They read the whole
   repository, so any PR can break them (2026-10-14: PRs 278, 279 and 288 left main red on both).
+- `surfaces\pwa\test\test-pwa-browser.ps1` is in the targeted set of every PR that touches
+  `surfaces/pwa`, `decisions/page` or `test/lib/Browser.ps1`: it is the whole phone app in a real
+  browser, and a page or launcher change can break a part its own suites never load (2026-10-15:
+  PR 288's launcher lost the service worker, and four page merges went in on their own suites).
 - Once per PR, on the final head merged with current `main`: the full suite and the full mutation
   specs. "Mergeable" is not "green".
 - Reviewers read the code and write targeted probes; they do not rerun the author's suites.
