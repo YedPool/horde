@@ -89,12 +89,14 @@ function Get-HordeCloudflareRelaySecretFiles {
     # THE SAME REFUSAL THE DEPLOY MAKES (GoogleClient.ps1), made here without the file: a relative path
     # names a different file from every folder, so no one file can be called the secret.
     if (-not (Test-HordeModuleSettingFolder -Path $clientFile)) { return (New-HordeUnknown -Reason "the Google client file is not an absolute path (the setting googleClientFile), so which file holds the client's secret is not known") }
-    # 3. THE METRICS SALT (MetricsSalt.ps1): its own file, resolved by the deploy's own resolver, and
-    # refused the same way when the setting is not an absolute path.
-    $saltFile = Get-HordeCloudflareRelayMetricsSaltFile -Values $set.value
-    if ($saltFile -eq "" -or -not (Test-HordeModuleSettingFolder -Path $saltFile)) { return (New-HordeUnknown -Reason "the metrics salt file is not an absolute path (the setting metricsSaltFile), so which file holds the metrics salt is not known") }
     $login = Get-HordeCloudflareRelayLoginFiles
     if ($login.state -cne "known") { return $login }
+    # 3. THE METRICS SALT (MetricsSalt.ps1): its own file, resolved by the deploy's own resolver, and
+    # refused the same way when the setting is not an absolute path - or, with no setting, when there is
+    # no user profile to put the default under.
+    $saltFile = Get-HordeCloudflareRelayMetricsSaltFile -Values $set.value
+    if ($saltFile -eq "") { return (New-HordeUnknown -Reason "there is no user profile in the environment, so the default metrics salt file cannot be named") }
+    if (-not (Test-HordeModuleSettingFolder -Path $saltFile)) { return (New-HordeUnknown -Reason "the metrics salt file is not an absolute path (the setting metricsSaltFile), so which file holds the metrics salt is not known") }
     $files = New-Object System.Collections.ArrayList
     [void]$files.Add([pscustomobject]@{ path = $clientFile; what = $script:HordeCloudflareRelayClientFileWhat })
     foreach ($p in @($login.value)) { [void]$files.Add([pscustomobject]@{ path = $p; what = $script:HordeCloudflareRelayLoginFileWhat }) }
