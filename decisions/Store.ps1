@@ -182,7 +182,7 @@ $script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
 #     not seen by a running process until it restarts. Records are written once, by a rename of a new
 #     file (Add-HordeDecisionRecord), so nothing in Horde does that; a hand that edits a record must
 #     restart the runner, as it must for any file a process has read.
-$script:HordeDecisionStoreCodeStamp = [System.BitConverter]::ToString((New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([System.IO.File]::ReadAllBytes($PSCommandPath))).Replace("-", "")
+$script:HordeDecisionStoreCodeStamp = [System.BitConverter]::ToString((New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([System.IO.File]::ReadAllBytes($PSCommandPath)))
 if ($null -eq (Get-Variable -Name HordeDecisionStoreCache -Scope Script -ErrorAction SilentlyContinue) -or "$($script:HordeDecisionStoreCacheStamp)" -cne $script:HordeDecisionStoreCodeStamp) {
     $script:HordeDecisionStoreCache = @{}
     $script:HordeDecisionStoreCacheStamp = $script:HordeDecisionStoreCodeStamp

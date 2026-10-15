@@ -1113,26 +1113,38 @@ function Test-HordeDecisionEvent {
 # process, in memory; the checks of records that left the store are dropped at the next fold.
 $script:HordeDecisionCheckCache = @{}
 
-function Get-HordeDecisionRecordChecks {
-    # { cover: the envelope's findings; shape: a block giving the event's findings, made once, on the
-    # first call }: the event is checked only when the record gets that far, as before.
+function Get-HordeDecisionRecordHeld {
+    # The kept checks of a stamped record, made fresh when there are none for these very definitions:
+    # { definitions; cover; shape; shapeDone }, or $null for a record with no stamp. Plain functions,
+    # not closures: a closure cannot see functions loaded inside another function, which is how the
+    # horde command loads this file (review round of PR 310).
     param($Record, $Definitions)
-    $stamp = $(if ($null -ne $Record.PSObject.Properties["stamp"]) { "$($Record.stamp)" } else { "" })
-    if ($stamp -eq "") {
-        $data = $Record.data
-        return [pscustomobject]@{ cover = @(Test-HordeDecisionEnvelope -Ev $data -Definitions $Definitions); shape = { @(Test-HordeDecisionEvent -Ev $data -Definitions $Definitions) }.GetNewClosure() }
-    }
+    if ($null -eq $Record.PSObject.Properties["stamp"] -or "$($Record.stamp)" -eq "") { return $null }
+    $stamp = "$($Record.stamp)"
     $held = $script:HordeDecisionCheckCache[$stamp]
     if ($null -eq $held -or -not [object]::ReferenceEquals($held.definitions, $Definitions)) {
-        $held = [pscustomobject]@{ definitions = $Definitions; cover = @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions); shape = $null; shapeDone = $false }
+        $held = [pscustomobject]@{ definitions = $Definitions; cover = @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions); shape = @(); shapeDone = $false }
         $script:HordeDecisionCheckCache[$stamp] = $held
     }
-    $data = $Record.data
-    $shape = {
-        if (-not $held.shapeDone) { $held.shape = @(Test-HordeDecisionEvent -Ev $data -Definitions $Definitions); $held.shapeDone = $true }
-        return @($held.shape)
-    }.GetNewClosure()
-    return [pscustomobject]@{ cover = @($held.cover); shape = $shape }
+    return $held
+}
+
+function Get-HordeDecisionRecordCover {
+    # The envelope's findings for a record: kept for a stamped record (above), made every time for one without.
+    param($Record, $Definitions)
+    $held = Get-HordeDecisionRecordHeld -Record $Record -Definitions $Definitions
+    if ($null -eq $held) { return @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions) }
+    return @($held.cover)
+}
+
+function Get-HordeDecisionRecordShape {
+    # The event's findings for a record, asked only once the record gets that far, as before: kept for
+    # a stamped record, made every time for one without.
+    param($Record, $Definitions)
+    $held = Get-HordeDecisionRecordHeld -Record $Record -Definitions $Definitions
+    if ($null -eq $held) { return @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions) }
+    if (-not $held.shapeDone) { $held.shape = @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions); $held.shapeDone = $true }
+    return @($held.shape)
 }
 
 function Add-HordeDecisionRecordToState {
@@ -1150,8 +1162,7 @@ function Add-HordeDecisionRecordToState {
     else {
         # The envelope first, and the record's place: only a record that passes both is believed about
         # anything, its kind's name included.
-        $checks = Get-HordeDecisionRecordChecks -Record $Record -Definitions $Definitions
-        $cover = $checks.cover
+        $cover = @(Get-HordeDecisionRecordCover -Record $Record -Definitions $Definitions)
         if ($cover.Count -gt 0) { $why = $cover[0] }
         elseif ([long]$Record.data.sequence -ne [long]$Record.sequence) { $why = "it says it is record " + $Record.data.sequence + ", which is not its place in the store" }
         elseif ($null -eq $script:HordeDecisionEventKinds["$($Record.data.kind)"]) {
@@ -1174,7 +1185,7 @@ function Add-HordeDecisionRecordToState {
             return ""
         }
         else {
-            $shape = @(& $checks.shape)
+            $shape = @(Get-HordeDecisionRecordShape -Record $Record -Definitions $Definitions)
             if ($shape.Count -gt 0) { $why = $shape[0] }
         }
     }

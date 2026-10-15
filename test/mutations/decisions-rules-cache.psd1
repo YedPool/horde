@@ -15,7 +15,7 @@
            Find = 'if (-not $seen.ContainsKey($k) -and $folders.ContainsKey($k.Substring(0, $k.IndexOf("|") + 1))) {'
            Replace = 'if (-not $seen.ContainsKey($k)) {' }
         @{ Name = "no-check-is-kept"
-           Find = '    if ($stamp -eq "") {'
-           Replace = '    if ($true) {' }
+           Find = 'if ($null -eq $Record.PSObject.Properties["stamp"] -or "$($Record.stamp)" -eq "") { return $null }'
+           Replace = 'return $null' }
     )
 }

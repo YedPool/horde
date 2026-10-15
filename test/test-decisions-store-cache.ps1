@@ -53,6 +53,7 @@ function Show-Records {
     return (@($Got.records | ForEach-Object { [ordered]@{ sequence = $_.sequence; span = $_.span; file = $_.file; kind = $_.kind; reason = $_.reason; data = $_.data } }) | ConvertTo-Json -Depth 30 -Compress)
 }
 function Show-Answer { param($A) return ((ConvertTo-Json -InputObject $A.value -Depth 30 -Compress) -replace '"observedAt":"[^"]*"', '') }
+function Get-StampOf { param($Record) $p = $Record.PSObject.Properties["stamp"]; if ($null -eq $p) { return "" }; return "$($p.Value)" }
 function Reset-Caches { $script:HordeDecisionStoreCache = @{}; $script:HordeDecisionCheckCache = @{} }
 function File-Of { param([string]$Store, [long]$Seq) return (Join-Path $Store (Get-HordeDecisionRecordName -Sequence $Seq)) }
 
@@ -70,7 +71,7 @@ try {
     Check (@(Get-Cached $store).Count -eq $n) ("the first read keeps every record read whole (" + @(Get-Cached $store).Count + " of " + $n + ")")
     $cached = Get-HordeDecisionRecords -Root $store
     Check ((Show-Records $fresh) -ceq (Show-Records $cached)) "the second read hands back exactly the records the first did"
-    Check (@($cached.records | Where-Object { $_.kind -ceq "ok" -and "$($_.stamp)" -clike ((Get-Key $store) + "|*|*|*") }).Count -eq $n) "and each record read whole carries its stamp: folder, name, size, write time"
+    Check (@($cached.records | Where-Object { $_.kind -ceq "ok" -and $null -ne $_.PSObject.Properties["stamp"] -and "$($_.stamp)" -clike ((Get-Key $store) + "|*|*|*") }).Count -eq $n) "and each record read whole carries its stamp: folder, name, size, write time"
     Reset-Caches
     $ops = @(@{ o = "list"; r = @{ state = "open"; messages = $true } }, @{ o = "inbox"; r = @{ actor = "warchief" } }, @{ o = "show"; r = @{ number = 2 } })
     $cold = @($ops | ForEach-Object { Show-Answer (Invoke-HordeDecision -Operation $_.o -Request $_.r -Root $store) })
@@ -109,10 +110,10 @@ try {
     [System.IO.File]::WriteAllText($f2, $orig, $utf8)
     $mended = Get-HordeDecisionRecords -Root $store
     Check (@($mended.records | Where-Object { $_.sequence -eq 2 })[0].kind -ceq "ok" -and (Show-Records $mended) -ceq (Show-Records $grown)) "mended, it is read again and is the record it was"
-    $before = "$(@($mended.records | Where-Object { $_.sequence -eq 3 })[0].stamp)"
+    $before = (Get-StampOf @($mended.records | Where-Object { $_.sequence -eq 3 })[0])
     [System.IO.File]::SetLastWriteTimeUtc((File-Of $store 3), [datetime]::UtcNow.AddMinutes(1))
     $touched = Get-HordeDecisionRecords -Root $store
-    $after = "$(@($touched.records | Where-Object { $_.sequence -eq 3 })[0].stamp)"
+    $after = (Get-StampOf @($touched.records | Where-Object { $_.sequence -eq 3 })[0])
     Check ($after -cne $before -and (Show-Records $touched) -ceq (Show-Records $grown)) "a record only touched has a new stamp, is read again, and is the same"
     $null = ConvertTo-HordeDecisionState -Records $touched.records -Definitions $defs
     Remove-Item -LiteralPath $f2
