@@ -111,9 +111,20 @@ try {
     Write-Host "--- the launcher itself ---" -ForegroundColor Cyan
     $end0 = Stop-HordeTestBrowser -Browser $null
     Check ($end0.left -eq 0 -and $end0.profileGone) "stopping no browser is safe: a finally block may run before anything started"
-    $b = Start-HordeTestBrowser -Chrome $chrome -Parent $work
+    # A PROFILE TOO DEEP FOR CHROME'S SERVICE-WORKER STORAGE is refused in words, before Chrome starts
+    # (test/lib/Browser.ps1, THE PROFILE'S PATH IS KEPT SHORT: measured 2026-10-15, a worker silently lost).
+    $deep = Join-Path $work ("d" * 120)
+    $deepWhy = ""
+    try { $null = Start-HordeTestBrowser -Chrome $chrome -Parent $deep; $deepWhy = "it started" } catch { $deepWhy = "" + $_.Exception.Message }
+    Check ($deepWhy -match "would be lost; start it under a shorter -Parent") ("a profile too deep for the service worker's storage is refused, saying why (" + $deepWhy + ")")
+    Check (-not (Test-Path -LiteralPath $deep)) "and nothing was made for it"
+    Check ($work.Length + 12 -le 119) ("CONTROL: this suite's own parent leaves the room the guard asks for (" + ($work.Length + 12) + " characters)")
+    # Started in a try, so a refusal of this suite's own, short parent is a named failure, not an error.
+    $b = $null; $startWhy = ""
+    try { $b = Start-HordeTestBrowser -Chrome $chrome -Parent $work } catch { $startWhy = "" + $_.Exception.Message }
+    Check ($null -ne $b) ("a browser starts under this suite's own folder, whose profile leaves the room the guard asks for (" + $startWhy + ")")
     [void]$script:profilesSeen.Add($b.profile)
-    Check ($b.port -gt 0 -and (Split-Path -Parent $b.profile) -ceq $work -and (Split-Path -Leaf $b.profile) -cmatch '\Ahorde-browser-[0-9a-f]{32}\z') ("a browser starts in a fresh profile of its own, under -Parent, with its debugging port open (" + $b.port + ")")
+    Check ($b.port -gt 0 -and (Split-Path -Parent $b.profile) -ceq $work -and (Split-Path -Leaf $b.profile) -cmatch '\Ahb-[0-9a-f]{8}\z') ("a browser starts in a fresh profile of its own, under -Parent, with its debugging port open (" + $b.port + ")")
     $version = $null
     try { $version = Invoke-RestMethod -Uri ("http://127.0.0.1:" + $b.port + "/json/version") -TimeoutSec 10 } catch { }
     Check ($null -ne $version -and ("" + $version.'User-Agent') -match 'HeadlessChrome') "it answers on that port, and it is headless"

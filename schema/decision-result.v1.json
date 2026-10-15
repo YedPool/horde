@@ -194,6 +194,7 @@
         "importanceShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
         "blocks": {"type": "string", "description": "How much of that task's work stands still until the question is answered: a label of decisions/Rules.ps1's blockings, part for a question that was given none."},
         "blocksShown": {"type": "string", "description": "That, in the few plain words shown beside the question; empty for the default."},
+        "needsPasskey": {"type": "boolean", "enum": [true], "description": "Present, and true, only for a question its asker marked as needing a passkey: from the phone it is answered only with a fresh passkey. Absent for every other question."},
         "followsUp": {"$ref": "#/definitions/followsUp"}
       }
     }
