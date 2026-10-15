@@ -160,6 +160,11 @@
 # guard errs toward the newest answer either way. A store that cannot be read makes the answer wait
 # (retry), never pass unguarded.
 # PAST 16 PASSKEYS the phones the snapshot is sealed to come first, then the most recently active.
+# NEEDS-PASSKEY (the unlocked session, relay/Session.ps1): a session-signed answer to a question flagged
+# needsPasskey is refused by name and kept in the ledger's needsPasskey list until a passkey answer
+# applies it; the ledger's writer and reader keep that list beside applied and refused, whatever else
+# the ledger comes to hold (test/test-relay-sessions.ps1 round-trips it). Once the rank buttons are on
+# main too, a session-signed rank is allowed except on a needsPasskey question (decided 2026-10-14).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 

@@ -402,6 +402,26 @@ try {
     } finally { $null = & icacls.exe $vdir /remove:d ("*" + $who) }
     $t = Invoke-Turn $W3 $B3.AddMinutes(146)
     Check ((Test-Said $W3 "Under a vouch that could not be written.") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("CONTROL TWIN: once the folder takes files again the waiting envelope is taken; the other passkey's name still never is (" + $t.text + ")")
+
+    Write-Host ""
+    Write-Host "--- the receipts ledger keeps its needsPasskey list through a save and a read ---" -ForegroundColor Cyan
+    # Another change rewrites the ledger's writer (the rank buttons): whichever lands second must keep
+    # this list, so a save and a fresh read are checked here, beside applied and refused.
+    $L = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    $lf = "e" * 32
+    $np1 = New-Id; $np2 = New-Id; $ap = New-Id; $rf = New-Id
+    $null = Add-HordeDecisionsChannelReceipt -Context $L -From $lf -AnswerId $np1 -Outcome "needs-passkey"
+    $null = Add-HordeDecisionsChannelReceipt -Context $L -From $lf -AnswerId $np2 -Outcome "needs-passkey"
+    $null = Add-HordeDecisionsChannelReceipt -Context $L -From $lf -AnswerId $ap -Outcome "done"
+    $why = Add-HordeDecisionsChannelReceipt -Context $L -From $lf -AnswerId $rf -Outcome "refused"
+    Check ($why -ceq "") ("the ledger is saved (" + $why + ")")
+    $read = Read-HordeDecisionsChannelLedgerFile -Context ([pscustomobject]@{ hordeHome = $L.hordeHome; state = @{} })
+    $back = $(if ($read.ContainsKey($lf)) { $read[$lf] } else { $null })
+    Check ($null -ne $back -and @($back.needsPasskey) -ccontains $np1 -and @($back.needsPasskey) -ccontains $np2) "a fresh read of the saved ledger has both needsPasskey entries"
+    Check ($null -ne $back -and @($back.applied) -ccontains $ap -and @($back.refused) -ccontains $rf) "CONTROL: and applied and refused beside them"
+    $null = Add-HordeDecisionsChannelReceipt -Context ([pscustomobject]@{ hordeHome = $L.hordeHome; state = @{} }) -From $lf -AnswerId $np1 -Outcome "done"
+    $again = Read-HordeDecisionsChannelLedgerFile -Context ([pscustomobject]@{ hordeHome = $L.hordeHome; state = @{} })
+    Check (@($again[$lf].needsPasskey) -cnotcontains $np1 -and @($again[$lf].needsPasskey) -ccontains $np2 -and @($again[$lf].applied) -ccontains $np1) "a save from a run that READ the ledger keeps the other needsPasskey entry, and moves the applied one"
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
