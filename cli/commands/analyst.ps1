@@ -48,7 +48,7 @@ $HordeCommand = @{
             $tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason) }
         }
         if ($Verb -eq "tend") {
-            $done = Invoke-HordeAnalystPass -Tools $tools -Policy $policy -Folder $folder
+            $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
             foreach ($l in @($done.lines)) { Write-Output ("analyst: " + $l) }
             if ($done.problem -ne "") { throw $done.problem }
             return
@@ -65,7 +65,7 @@ $HordeCommand = @{
                 $policy = Get-HordeAnalystPolicy -HordeHome $hordeHome
                 if (-not $policy.ok) { $problem = $policy.reason }
                 else {
-                    $done = Invoke-HordeAnalystPass -Tools $tools -Policy $policy -Folder $folder
+                    $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
                     foreach ($l in @($done.lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $l) }
                     $problem = $done.problem
                 }

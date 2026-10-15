@@ -173,43 +173,46 @@ try {
     $said = Mail $r "URGENT: the relay is down"
     Check ($said -like "*marked URGENT*") "and says an URGENT one wakes it"
     $null = Pass $r
+    Check ($r.posts.Count -eq 2) "but not within 5 minutes of the last round: a burst is one wake (review of PR 305)"
+    $r.now = $t0.AddMinutes(37)
+    $null = Pass $r
     Check ($r.posts.Count -eq 3 -and $r.posts[2].body -like "*AT ONCE*" -and $r.posts[2].body -like "*2 mail(s) from the warchief*" -and $r.posts[2].body -like "*Marked: URGENT.*") "URGENT wakes it at once, and the plain mail rides along"
     Check (@([System.IO.Directory]::GetFiles((Join-Path $r.folder "mail\delivered"))).Count -eq 2 -and @([System.IO.Directory]::GetFiles((Join-Path $r.folder "mail"))).Count -eq 0) "both mails were moved to delivered"
     Check ($r.posts[2].body -cnotlike "*relay is down*") "the round names the mail, never its words"
     Ack $r ((State $r).rounds[-1].id)
-    $r.now = $t0.AddMinutes(36)
+    $r.now = $t0.AddMinutes(42)
     $null = Mail $r "QUESTION: is lane F waiting on you?"
     $null = Pass $r
     Check ($r.posts.Count -eq 4 -and $r.posts[3].body -like "*Marked: QUESTION.*") "QUESTION wakes it at once too"
     Ack $r ((State $r).rounds[-1].id)
-    $r.now = $t0.AddMinutes(37)
+    $r.now = $t0.AddMinutes(43)
     $null = Mail $r "urgent: lower case waits"
     $null = Pass $r
     Check ($r.posts.Count -eq 4) "urgent in lower case is plain mail: it waits"
 
     Write-Host ""
     Write-Host "--- a round with no ack: the warchief and the founder, once ---" -ForegroundColor Cyan
-    $r.now = $t0.AddMinutes(70)
+    $r.now = $t0.AddMinutes(75)
     $null = Pass $r
     Check ($r.posts.Count -eq 5) "the waiting mail goes in the next round"
     $late = (State $r).rounds[-1].id
-    $r.now = $t0.AddMinutes(84)
+    $r.now = $t0.AddMinutes(89)
     $null = Pass $r
     Check (@($r.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 0) "14 minutes with no ack: nobody told yet"
-    $r.now = $t0.AddMinutes(85)
+    $r.now = $t0.AddMinutes(90)
     $null = Pass $r
     Check (@($r.tells | Where-Object { $_.key -ceq "no-answer" -and $_.body -like ("*Round: " + $late + "*") }).Count -eq 1 -and $r.notices.Count -eq 1 -and $r.notices[0] -like ("*round " + $late + " for 15 minutes*")) "15 minutes with no ack: the warchief and the founder are told"
-    $r.now = $t0.AddMinutes(90)
+    $r.now = $t0.AddMinutes(95)
     $null = Pass $r
     Check (@($r.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 1 -and $r.notices.Count -eq 1) "and told once"
     Ack $r $late
 
     Write-Host ""
     Write-Host "--- the heartbeat follows its setting ---" -ForegroundColor Cyan
-    $r.now = $t0.AddMinutes(70).AddHours(5).AddMinutes(59)
+    $r.now = $t0.AddMinutes(75).AddHours(5).AddMinutes(59)
     $null = Pass $r
     Check ($r.posts.Count -eq 5) "5 h 59 min of quiet: no heartbeat"
-    $r.now = $t0.AddMinutes(70).AddHours(6)
+    $r.now = $t0.AddMinutes(75).AddHours(6)
     $null = Pass $r
     Check ($r.posts.Count -eq 6 -and $r.posts[5].body -like "*HEARTBEAT*") "6 hours of quiet: a heartbeat round"
     $h2 = New-Rig "hb2" '"heartbeatHours": 2'
@@ -233,7 +236,7 @@ try {
     $null = Pass $mk
     Check ($mk.posts.Count -eq 1 -and $mk.posts[0].body -cnotlike "*AT ONCE*") "with the markers set to STOP, URGENT is plain mail (a first round goes at once, as a round)"
     $null = Mail $mk "STOP the throttle"
-    $mk.now = $t0.AddMinutes(2)
+    $mk.now = $t0.AddMinutes(6)
     $null = Pass $mk
     Check ($mk.posts.Count -eq 2 -and $mk.posts[1].body -like "*AT ONCE*") "and STOP wakes it at once"
 
@@ -313,9 +316,104 @@ try {
     $fs.listing = New-Listing -Gone @($sidA); $fs.spawnOk = $false
     $fs.now = $t0.AddMinutes(2); $null = Pass $fs
     $fs.now = $t0.AddMinutes(3); $null = Pass $fs
-    Check ($fs.spawns.Count -eq 1 -and @($fs.tells | Where-Object { $_.key -ceq "spawn-failed" }).Count -eq 1) "a spawn that failed is told once and not retried every minute"
+    Check ($fs.spawns.Count -eq 1 -and @($fs.tells | Where-Object { $_.key -ceq "spawn-failed" }).Count -eq 1 -and (State $fs).phase -ceq "starting") "a spawn that failed (or timed out) is told once and stays starting: it may have opened a session all the same"
+    $fs.now = $t0.AddMinutes(22); $null = Pass $fs
     $fs.now = $t0.AddMinutes(33); $null = Pass $fs
-    Check ($fs.spawns.Count -eq 2) "it is tried again after restartMinMinutes"
+    $fs.now = $t0.AddHours(3); $null = Pass $fs
+    Check ($fs.spawns.Count -eq 1 -and @($fs.tells | Where-Object { $_.key -ceq "start-silent" }).Count -eq 1) "it is never started again by itself: after the wait the warchief is told, once (review of PR 306)"
+    Write-Handover -Folder $fs.folder -Sid $sidB -At $t0.AddHours(3)
+    $fs.listing = New-Listing -Live @($sidB)
+    $fs.now = $t0.AddHours(3).AddMinutes(1); $null = Pass $fs
+    Check ((State $fs).sessionId -ceq $sidB -and (State $fs).phase -ceq "running") "and a session that writes its handover later - the timed-out spawn's, or one the warchief started - is adopted"
+
+    Write-Host ""
+    Write-Host "--- review of PR 306: never a second session ---" -ForegroundColor Cyan
+    # A pass killed while its spawn runs: the spawn tool looks at the state file on disk at the moment it
+    # is called, then the pass dies (the tool throws, as a killed process would never return).
+    $k = New-Rig "killed" $spawnSetting
+    Write-Handover -Folder $k.folder -Sid $sidA -At $t0
+    $k.listing = New-Listing -Live @($sidA)
+    $k.now = $t0.AddMinutes(1); $null = Pass $k
+    $k.listing = New-Listing -Gone @($sidA)
+    $seenPhase = New-Object System.Collections.ArrayList
+    $k.tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) [void]$k.spawns.Add($Reason); $onDisk = [System.IO.File]::ReadAllText([System.IO.Path]::Combine($k.folder, "supervisor.json")); [void]$seenPhase.Add($(if ($onDisk -match '"phase":\s*"(\w+)"') { $Matches[1] } else { "none found" })); throw "the pass was killed here" }.GetNewClosure()
+    $k.now = $t0.AddMinutes(2); $null = Pass $k
+    Check ($seenPhase.Count -eq 1 -and $seenPhase[0] -ceq "starting") "starting is on disk BEFORE the spawn script runs"
+    $k.now = $t0.AddMinutes(3); $null = Pass $k
+    $k.now = $t0.AddMinutes(40); $null = Pass $k
+    Check ($k.spawns.Count -eq 1) "so a pass after one killed mid-spawn starts nothing more"
+    # The over-cap swap whose spawn times out: the old session is still alive; no third session, ever.
+    $oc = New-Rig "cap-timeout" $spawnSetting
+    Write-Handover -Folder $oc.folder -Sid $sidA -At $t0
+    $oc.listing = New-Listing -Live @($sidA) -Transcript (Calls $oc "2026-10-14T12:00:00Z,10,130000,1000`n")
+    $oc.now = $t0.AddMinutes(1); $null = Pass $oc; $null = Pass $oc
+    $oc.spawnOk = $false
+    Finding $oc "alarm:cap"
+    $oc.now = $t0.AddMinutes(2); $null = Pass $oc
+    foreach ($m in @(10, 31, 45, 90, 200)) { $oc.now = $t0.AddMinutes($m); $null = Pass $oc }
+    Check ($oc.spawns.Count -eq 1 -and $oc.spawns[0].reason -ceq "over-cap" -and $oc.posts.Count -eq 0) "an over-cap swap whose spawn timed out, with the old session alive: one spawn, never a second or a third"
+    # Two passes at once (a hand tend while run is passing): the machine-wide lock lets exactly one spawn.
+    $two = New-Rig "two" $spawnSetting
+    Write-Handover -Folder $two.folder -Sid $sidA -At $t0
+    $two.listing = New-Listing -Live @($sidA)
+    $two.now = $t0.AddMinutes(1); $null = Pass $two
+    $lockName = "Local\HordeAnalystTendSuite" + [guid]::NewGuid().ToString("N")
+    $spawnLog = Join-Path $work "two-spawns.txt"
+    $racer = {
+        param($Root, $Folder, $HomeDir, $LockName, $SpawnLog, $Gone, $At)
+        Set-StrictMode -Off
+        foreach ($f in @("Tristate", "Home", "ModuleSettings", "Heartbeat", "AnalystRounds", "AnalystSession")) { . (Join-Path $Root ("core\" + $f + ".ps1")) }
+        . (Join-Path $Root "cli\AnalystTend.ps1")
+        $policy = Get-HordeAnalystPolicy -HordeHome $HomeDir
+        $records = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $records[$Gone] = [pscustomobject]@{ sessionId = $Gone; processCheck = "gone"; fields = @{ transcriptPath = (New-HordeUnknown -Reason "none") } }
+        $listing = [pscustomobject]@{ records = $records; duplicates = @(); verifiedLive = (New-HordeKnown -Value @()) }
+        $tools = @{
+            Now = { return $At }.GetNewClosure(); Identity = { return $listing }.GetNewClosure()
+            Length = { param($Path) return [long]-1 }; Context = { param($Path) return $null }
+            Post = $null; Tell = { param($Key, $Body, $Values) return [pscustomobject]@{ ok = $true; detail = "" } }; Notify = $null
+            Spawn = { param($Script, $Handover, $Reason, $Values) [System.IO.File]::AppendAllText($SpawnLog, ($Reason + "`n")); Start-Sleep -Seconds 3; return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+        }
+        $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $Folder -LockName $LockName -WaitSeconds 20
+        return ($done.lines -join " | ")
+    }
+    $jobs = @()
+    foreach ($n in 1..2) {
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript($racer).AddArgument($root).AddArgument($two.folder).AddArgument($two.home).AddArgument($lockName).AddArgument($spawnLog).AddArgument($sidA).AddArgument($t0.AddMinutes(2))
+        $jobs += [pscustomobject]@{ ps = $ps; h = $ps.BeginInvoke() }
+    }
+    $said = @(); foreach ($j in $jobs) { $said += @($j.ps.EndInvoke($j.h)); $j.ps.Dispose() }
+    $spawned = @([System.IO.File]::ReadAllLines($spawnLog) | Where-Object { $_ -ne "" })
+    Check ($spawned.Count -eq 1) ("two passes at once: exactly one spawn (" + $spawned.Count + "; " + ($said -join " || ") + ")")
+    Check ((State $two).phase -ceq "starting") "and the second pass found it starting"
+
+    Write-Host ""
+    Write-Host "--- review of PR 306: no-answer is told once for a run of unacked rounds ---" -ForegroundColor Cyan
+    $w = New-Rig "wedged"
+    Write-Handover -Folder $w.folder -Sid $sidA -At $t0
+    $w.listing = New-Listing -Live @($sidA)
+    $w.now = $t0.AddMinutes(1); $null = Pass $w
+    foreach ($m in @(2, 33, 64, 95, 126)) { Finding $w ("alarm:w" + $m); $w.now = $t0.AddMinutes($m); $null = Pass $w }
+    $w.now = $t0.AddMinutes(150); $null = Pass $w
+    Check ($w.posts.Count -eq 5 -and @($w.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 1 -and $w.notices.Count -eq 1) "a wedged session with five unacked rounds: the warchief and the founder are told once, not five times"
+    Ack $w ((State $w).rounds[-1].id)
+    Finding $w "alarm:after-ack"
+    $w.now = $t0.AddMinutes(160); $null = Pass $w
+    $w.now = $t0.AddMinutes(176); $null = Pass $w
+    Check (@($w.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 2 -and $w.notices.Count -eq 2) "after an ack, the next unacked round is told again"
+
+    Write-Host ""
+    Write-Host "--- review of PR 306: an unreadable findings file holds back no URGENT mail ---" -ForegroundColor Cyan
+    $u = New-Rig "unreadable"
+    Write-Handover -Folder $u.folder -Sid $sidA -At $t0
+    $u.listing = New-Listing -Live @($sidA)
+    $u.now = $t0.AddMinutes(1); $null = Pass $u
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $u.folder "findings.jsonl"))
+    $null = Mail $u "URGENT: read this"
+    $u.now = $t0.AddMinutes(2); $p2 = Pass $u
+    Check ($u.posts.Count -eq 1 -and $u.posts[0].body -like "*Marked: URGENT.*" -and (@($p2.lines) -join " ") -like "*the findings:*") "the findings cannot be read, and the URGENT mail goes all the same"
+    Check ((State $u).findingsOffset -eq 0) "and the findings' place is kept"
 
     Write-Host ""
     Write-Host "--- a post that fails loses nothing ---" -ForegroundColor Cyan
