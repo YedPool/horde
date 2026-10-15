@@ -112,7 +112,7 @@
            Find = '  say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");'
            Replace = '  say("view", did === "unread" ? (rec && rec.reason ? rec.reason : "") : ""); say("relay", "");' }
         @{ Name = "read-banner-never-shown"
-           Find = 'say("read", kind === "locked" && !$("lockedView").hidden ? "" : readBanner(kind, readLast ? readLast.lastGoodAt : 0, lastTime));'
+           Find = 'say("read", kind === "locked" && !$("lockedView").hidden ? "" : readBanner(kind, readLast ? readLast.lastGoodAt : 0, lastTime, readLast));'
            Replace = 'say("read", "");' }
         @{ Name = "cards-fallback-line-not-written"
            Find = '$("cardsWhy").textContent = cardsFallbackLine(v);'

@@ -38,10 +38,10 @@
            Find = 'const t = put ? takeToken(held.put, now,'
            Replace = 'const t = put ? takeToken(held.read, now,' }
         @{ Name = "day-refusal-ignored"
-           Find = 'if (!c.ok) return { ok: false, status: 429, code: CODES.daily,'
-           Replace = 'if (false) return { ok: false, status: 429, code: CODES.daily,' }
+           Find = 'if (!c.ok) return dailyRefusal(c);'
+           Replace = 'if (false) return dailyRefusal(c);' }
         @{ Name = "day-not-counted"
-           Find = 'await storage.put(DAY, c.state);'
+           Find = 'await storage.put(DAY, { ...c.state, lease: lease - 1 });'
            Replace = '' }
         @{ Name = "day-counts-the-account-screen"
            Find = 'if (MAILBOX_OPS.has(op)) {'
@@ -59,10 +59,10 @@
            Find = 'if (usage + chars > limits.accountMaxChars) return'
            Replace = 'if (usage + chars >= limits.accountMaxChars) return' }
         @{ Name = "charge-not-kept"
-           Find = 'await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars });'
+           Find = 'await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars, [ROOM]: limits.relayCharsLease });'
            Replace = '' }
         @{ Name = "credit-gives-nothing-back"
-           Find = 'await storage.put(USAGE, Math.max(0, usage - chars));'
+           Find = 'await storage.put(USAGE, left);'
            Replace = '' }
         @{ Name = "emptied-mailbox-still-counted"
            Find = 'if (emptied) await storage.delete(BOX + mailbox);'

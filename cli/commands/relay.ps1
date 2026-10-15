@@ -4,11 +4,11 @@ $HordeCommand = @{
     # Long-lived like node serve: a watch is a long-poll, and a throttled background process would hold
     # every envelope behind the throttle (core/Platform.ps1).
     sustained = $true
-    usage   = "relay run -Relay <name> [-RelayRoot <folder>] [-MaxTurns <n>] | relay stop | relay pair [-Relay <name>] [-RelayRoot <folder>] [-Label <text>] [-RpId <host>] [-Origin <https://host>] [-InputFile <path>] [-NoPicture] | relay trust list | relay trust revoke <id> [-Reason <text>] | relay identity [-New [-Provider auto|platform|software]] | relay deploy [-Relay <name>]"
-    summary = "run: keep this machine's relay channels moving - the open decisions sent to the founder's phone when they change, his signed answers taken into the decisions list once each, journaled and acked - until stopped (cli/RelayRun.ps1); -Relay names the relay (relays/<name>/), -RelayRoot is the folder of one that keeps its mailboxes on this disk, -MaxTurns stops after that many turns. stop: ask every run on this Horde home to stop after its current turn. pair: pair the founder's phone with this machine (cli/RelayPair.ps1) - make a one-time offer, show it as a QR code (a picture opened here; -NoPicture does not open it) and as text, wait for the phone's response through the relay (-Relay) or pasted here, then ask for the 12-digit number the PHONE shows and compare it; three wrong numbers, or reject, reject the device. -Label is what the device is called here; -RpId and -Origin name the phone app when the relay settings pairRpId and pairOrigin do not; -InputFile reads what would be typed from a file as it grows (for scripts and tests). trust list: every device, peer machine and phone key this machine knows, with its state; trust revoke: end one, by its id, for good. identity: this machine's horde, key ids and mailbox; -New makes that identity, once (it needs the relay setting horde, and is refused when one exists - it is rotated, never remade), its keys non-exportable in -Provider: auto tries the TPM (platform) and falls back to software. deploy: put a hosted relay where it runs, serving the phone app built here (cli/RelayDeploy.ps1); -Relay names it, or the one relay that can be deployed; the relay's own folder says where, and reads its settings and secrets; one deploy at a time, and each records the commit it deployed in <HORDE_HOME>\relay\deployed.json, which services tend compares with its checkout"
+    usage   = "relay run -Relay <name> [-RelayRoot <folder>] [-MaxTurns <n>] | relay stop | relay pair [-Relay <name>] [-RelayRoot <folder>] [-Label <text>] [-RpId <host>] [-Origin <https://host>] [-InputFile <path>] [-NoPicture] | relay trust list | relay trust revoke <id> [-Reason <text>] | relay identity [-New [-Provider auto|platform|software]] | relay deploy [-Relay <name>] | relay status [-Relay <name>]"
+    summary = "run: keep this machine's relay channels moving - the open decisions sent to the founder's phone when they change, his signed answers taken into the decisions list once each, journaled and acked - until stopped (cli/RelayRun.ps1); -Relay names the relay (relays/<name>/), -RelayRoot is the folder of one that keeps its mailboxes on this disk, -MaxTurns stops after that many turns. stop: ask every run on this Horde home to stop after its current turn. pair: pair the founder's phone with this machine (cli/RelayPair.ps1) - make a one-time offer, show it as a QR code (a picture opened here; -NoPicture does not open it) and as text, wait for the phone's response through the relay (-Relay) or pasted here, then ask for the 12-digit number the PHONE shows and compare it; three wrong numbers, or reject, reject the device. -Label is what the device is called here; -RpId and -Origin name the phone app when the relay settings pairRpId and pairOrigin do not; -InputFile reads what would be typed from a file as it grows (for scripts and tests). trust list: every device, peer machine and phone key this machine knows, with its state; trust revoke: end one, by its id, for good. identity: this machine's horde, key ids and mailbox; -New makes that identity, once (it needs the relay setting horde, and is refused when one exists - it is rotated, never remade), its keys non-exportable in -Provider: auto tries the TPM (platform) and falls back to software. deploy: put a hosted relay where it runs, serving the phone app built here (cli/RelayDeploy.ps1); -Relay names it, or the one relay that can be deployed; the relay's own folder says where, and reads its settings and secrets; one deploy at a time, and each records the commit it deployed in <HORDE_HOME>\relay\deployed.json, which services tend compares with its checkout. status: what each relay that runs elsewhere says of itself where it runs (-Relay names one) - for the hosted relay, how many owners it names and so whether it keeps a reserve of its day for them, never who"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "stop", "pair", "trust", "identity", "deploy")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "stop", "pair", "trust", "identity", "deploy", "status")][string]$Verb,
             [Parameter(Position = 1)][string]$Action = "",
             [Parameter(Position = 2)][string]$Id = "",
             [string]$Relay = "",
@@ -25,7 +25,7 @@ $HordeCommand = @{
         )
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
         $verbFlags = @{ run = @("Relay", "RelayRoot", "MaxTurns"); stop = @(); pair = @("Relay", "RelayRoot", "Label", "RpId", "Origin", "InputFile", "NoPicture")
-            trust = @("Action", "Id", "Reason"); identity = @("New", "Provider"); deploy = @("Relay") }
+            trust = @("Action", "Id", "Reason"); identity = @("New", "Provider"); deploy = @("Relay"); status = @("Relay") }
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to relay " + $Verb) } }
         # Loaded here, in the command's own scope, so the relays' and channels' helpers stay visible to the
         # blocks they register (relays/Port.ps1 and channels/Port.ps1, the plug-in contracts).
@@ -73,6 +73,19 @@ $HordeCommand = @{
         }
         if ($Action -ne "" -or $Id -ne "") { throw ("relay " + $Verb + " takes no word after it") }
         foreach ($f in @(Get-HordeRelayFiles)) { . $f }
+        if ($Verb -eq "status") {
+            # What each relay that runs elsewhere says of itself (relays/Port.ps1, -Status): read only.
+            $names = @($(if ($Relay -ne "") { $Relay } else { Get-HordeRelayStatusNames }))
+            if ($names.Count -eq 0) { Write-Output "no relay here runs anywhere but on this machine: there is nothing to ask"; return }
+            $failed = @()
+            foreach ($n in $names) {
+                $st = Get-HordeRelayStatus -Name $n
+                if ($st.state -cne "known") { $failed += ("relay " + $n + ": " + $st.reason); continue }
+                foreach ($l in @($st.value.lines)) { Write-Output ("relay " + $n + ": " + $l) }
+            }
+            if ($failed.Count -gt 0) { throw ($failed -join "; ") }
+            return
+        }
         if ($Verb -eq "deploy") {
             . (Join-Path $root "cli\RelayDeploy.ps1")
             # WHAT IS DEPLOYED IS RECORDED (cli/RelayDeploy.ps1): this checkout's commit, read through the

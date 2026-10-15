@@ -22,7 +22,8 @@
 // A refusal is { error } with its status: 401 nobody vouched (auth.js), 403 not allowed this, 404 no such
 // operation, 405 the wrong method, 400 a malformed request, 413 a body or text over the cap, 409 an ack
 // past the head, 426 a watch that is not a WebSocket upgrade. A refusal by a limit adds its code and,
-// for a rate, Retry-After (answers.js): 429, 507 mailbox-full, 410 mailbox-gone, 401 account-gone.
+// for a rate, Retry-After (answers.js): 429, 507 mailbox-full, 410 mailbox-gone, 401 account-gone - and
+// for the whole relay, every account together (budget.js), 429 relay-daily-limit and 507 relay-full.
 //
 // THE ORDER IS THE POINT. Authentication comes first, before the route is even matched, so a caller
 // nobody vouched for learns nothing - not which paths exist, not which mailbox names are well formed.
@@ -58,9 +59,12 @@ import { handleRotation, ROTATION_PATH } from "./rotation.js";
 import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
+import { ownersOf } from "./budget.js";
+import { relayBudgetOf } from "./relay-budget.js";
 import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
+export const TEST_BUDGET_PATH = "/v1/test/relay-budget";
 const ROUTE = /^\/v1\/mailboxes\/([^/]{1,63})\/([^/]{1,63})\/(items|watch|ack)$/;
 const OPS = { "items GET": "get", "items POST": "put", "watch GET": "watch", "ack POST": "ack" };
 
@@ -132,6 +136,24 @@ async function watch(request, url, box, device) {
   return box.fetch(new Request(inner.href, { headers: { Upgrade: "websocket" } }));
 }
 
+// A PHONE'S WATCH REFUSED BY A RATE OR A DAY (429) is answered as an opened socket whose one message is
+// the refusal { error, code } and which then closes, LIMITED - as the mailbox ends a watch it replaced
+// (mailbox.js). A browser is never shown the status or the body of a refused WebSocket upgrade, only
+// that it failed, so a phone would read a spent relay-wide day as "cannot reach the relay"; this way it
+// reads the code, and says what it means in its own words (surfaces/pwa, relay-client.js and
+// read-banner.js). A machine's
+// adapter reads the status and Retry-After of a refused upgrade itself (relays/cloudflare/Relay.ps1),
+// so its watch is refused as before. Not a WebSocket upgrade at all: refused as before, too.
+export const LIMITED = 4003;
+function refuseWatch(request, r) {
+  if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return refusalOf(r);
+  const [client, server] = Object.values(new WebSocketPair());
+  server.accept();
+  server.send(JSON.stringify({ error: r.reason, code: r.code }));
+  server.close(LIMITED, r.code);
+  return new Response(null, { status: 101, webSocket: client });
+}
+
 async function ack(request, box) {
   const { body, refusal } = await readJson(request, ["through"], BODY_BYTES);
   if (refusal) return refusal;
@@ -150,6 +172,10 @@ export async function handleApi(request, env, url) {
     return refuse(401, who && who.refusal ? who.refusal : "this relay answers only a signed-in phone or a registered machine");
   }
   if (isAccountPath(url.pathname)) return handleAccountApi(request, env, url, who, limits);
+  // THE RELAY-WIDE OBJECT'S CALLS (relay-budget.js), for a suite: only the test principal of a local dev
+  // (auth.js, which never vouches for a request to a deployed Worker) reads them; anyone else is told
+  // there is no such operation.
+  if (url.pathname === TEST_BUDGET_PATH) return who.kind === "test" && request.method === "GET" ? answer(200, await relayBudgetOf(env).counts()) : refuse(404, "there is no such relay operation");
   const m = ROUTE.exec(url.pathname);
   if (!m) return refuse(404, "there is no such relay operation");
   const mailbox = m[1] + "/" + m[2];
@@ -158,8 +184,10 @@ export async function handleApi(request, env, url) {
   if (!op) return refuse(405, "that method does not apply to " + m[3]);
   if (!authorize(who, op, mailbox)) return refuse(403, "you may not " + op + " in this mailbox");
   if (who.gated) {
-    const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op, mailbox, now: Date.now(), limits });
-    if (!g.ok) return refusalOf(g);
+    // The owners (budget.js): the account's own object decides its tier, by its id and the verified
+    // email it keeps from its sign-in - nothing this request carries.
+    const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op, mailbox, now: Date.now(), limits, owners: ownersOf(env) });
+    if (!g.ok) return op === "watch" && who.kind === "phone" && g.status === 429 ? refuseWatch(request, g) : refusalOf(g);
   }
   const box = mailboxOf(env, who.account, who.epoch, mailbox);
   if (op === "put") return put(request, url, box, limits, who.gated ? { account: who.account, epoch: who.epoch, mailbox } : null, who);

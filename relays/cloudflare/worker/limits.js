@@ -46,6 +46,42 @@
 //   noncesPerKey              1000   nonces one key may have in its replay window (two minutes) at
 //                                    once; past it a request is refused, and no nonce is ever
 //                                    forgotten early (forgetting one would let its request replay)
+// RELAY-WIDE - every account together (budget.js, relay-budget.js; added 2026-10-14: with only
+// per-account limits, five busy accounts could spend the plan's whole day and lock everyone out, the
+// relay's owner included, until midnight UTC):
+//   relayRequestsPerDay       80000  mailbox requests (the ones requestsPerDay counts) of ALL accounts
+//                                    in a UTC day. The free plan allows 100,000 Worker requests a day,
+//                                    and this counts only the mailbox requests of signed-in phones and
+//                                    registered machines: the other 20,000 are headroom for what is not
+//                                    counted here but is still a Worker request - the phone app's own
+//                                    files (every one goes through the Worker: wrangler.json,
+//                                    run_worker_first), sign-ins, the Account screen, rotations, the
+//                                    refusals themselves (a refused request still ran the Worker), and
+//                                    the lease's over-count below. 80,000 is four accounts at their own
+//                                    day (requestsPerDay), or fifty-five always-on machines
+//   relayOwnerReserve         15000  of those, the part only the OWNER accounts may use: once the other
+//                                    65,000 are spent, every other account is refused (429
+//                                    relay-daily-limit, Retry-After to midnight UTC) and an owner's
+//                                    requests go on into the reserve. 15,000 is a whole day of ten
+//                                    always-on machines, the most an account may have (10 x 1,440 =
+//                                    14,400), with the rest for the phone - and an owner has usually
+//                                    spent part of the shared 65,000 before the reserve is reached. The owners
+//                                    are the deploy's HORDE_RELAY_OWNER_ACCOUNTS (budget.js); with NONE
+//                                    named, there is no reserve: the whole 80,000 is shared
+//   relayRequestLease         50     requests an account takes from the relay-wide count at a time
+//                                    (budget.js, THE LEASE): what it has not used by midnight was still
+//                                    counted - an over-count of at most 49 an account a day, never an
+//                                    under-count
+//   relayMaxChars             2 GiB  the characters of unacked text across ALL accounts. A put past it
+//                                    is refused, 507 relay-full, and nothing held is dropped. Reckoned
+//                                    against the free plan's 5 GB of Durable Object storage as published
+//                                    (UNVERIFIED in this repository - check Cloudflare's current limits):
+//                                    under half of it, leaving room for each item's key and index rows,
+//                                    the sessions, keys and counters, and the leases below
+//   relayCharsLease           256 KiB characters an account holds of the relay-wide count beyond what
+//                                    it uses, so most puts cost no call to the relay-wide object: an
+//                                    over-count of at most this an account (four of the largest
+//                                    envelopes), given back as its mail is read
 // RETENTION (mailbox.js): an unacked envelope is deleted retentionMs after its put. Its value is
 // capabilities.json's retentionSeconds (30 days), the relay's declared retention the port reads
 // (relays/Port.ps1), so it is not repeated here either. An acked envelope is deleted by its ack, at once.
@@ -78,6 +114,11 @@ export const DEFAULTS = Object.freeze({
   refusedSignaturesPerMinutePerAddress: 30,
   refusedSignaturesPerMinutePerKey: 10,
   noncesPerKey: 1000,
+  relayRequestsPerDay: 80000,
+  relayOwnerReserve: 15000,
+  relayRequestLease: 50,
+  relayMaxChars: 2 * 1024 * 1024 * 1024,
+  relayCharsLease: 256 * 1024,
   retentionMs: capabilities.limits.retentionSeconds * 1000
 });
 
@@ -97,5 +138,6 @@ export function limitsOf(env, url) {
     if (!Number.isSafeInteger(o[name]) || o[name] < 1) throw new Error(TEST_BINDING + "'s " + name + " is not a whole number from 1");
     out[name] = o[name];
   }
+  if (out.relayOwnerReserve >= out.relayRequestsPerDay) throw new Error(TEST_BINDING + "'s relayOwnerReserve is not below relayRequestsPerDay");
   return Object.freeze(out);
 }

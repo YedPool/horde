@@ -42,5 +42,13 @@
         @{ Name = "override-of-a-bad-value-taken"
            Find = 'if (!Number.isSafeInteger(o[name]) || o[name] < 1) throw'
            Replace = 'if (false) throw' }
+        @{ Name = "relay-day-changed"; Find = 'relayRequestsPerDay: 80000,'; Replace = 'relayRequestsPerDay: 100000,' }
+        @{ Name = "owner-reserve-changed"; Find = 'relayOwnerReserve: 15000,'; Replace = 'relayOwnerReserve: 0,' }
+        @{ Name = "request-lease-changed"; Find = 'relayRequestLease: 50,'; Replace = 'relayRequestLease: 500,' }
+        @{ Name = "relay-chars-changed"; Find = 'relayMaxChars: 2 * 1024 * 1024 * 1024,'; Replace = 'relayMaxChars: 5 * 1024 * 1024 * 1024,' }
+        @{ Name = "chars-lease-changed"; Find = 'relayCharsLease: 256 * 1024,'; Replace = 'relayCharsLease: 100 * 1024 * 1024,' }
+        @{ Name = "reserve-past-the-day-taken"
+           Find = 'if (out.relayOwnerReserve >= out.relayRequestsPerDay) throw'
+           Replace = 'if (false) throw' }
     )
 }

@@ -32,8 +32,8 @@
            Find = 'if ($allow.state -cne "known") { return $allow }'
            Replace = '' }
         @{ Name = "allowlist-not-stored"
-           Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }'
-           Replace = ' }' }
+           Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist";'
+           Replace = ';' }
         @{ Name = "bad-origin-deployed-anyway"
            Find = 'if ($dep.state -cne "known") { return $dep }'
            Replace = 'if ($dep.state -cne "known") { $dep = New-HordeKnown -Value ([pscustomobject]@{ name = "relay"; origin = "https://relay.example.workers.dev"; callback = "/auth/google/callback" }) }' }

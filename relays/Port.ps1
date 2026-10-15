@@ -96,6 +96,11 @@
 # Two trees whose bundles hash alike would deploy the same code. The supervisor uses it to tell whether
 # a change to a file the relay's code shares with the phone app changes the relay (cli/RelayPublish.ps1);
 # Get-HordeRelayBundle runs it and checks its answer. -Work is the caller's scratch folder.
+# A relay that is deployed may also hand -Status: what the relay where it runs says of itself, in plain
+# lines for a person (`horde relay status`, cli/commands/relay.ps1):
+#   Status  param([string]$HordeHome) -> known { lines }   at most 20 lines of printable ASCII, each at
+#                                                          most 300 characters
+# Get-HordeRelayStatus runs it and checks its answer; nothing reads the lines but a person.
 #
 # A RELAY THAT IS DEPLOYED MAY SAY WHAT A NEW MACHINE STILL NEEDS BEFORE ITS FIRST DEPLOY (2026-10-14).
 # Horde's first person to install it on a fresh machine was stuck: nothing said what to set up, and the
@@ -322,7 +327,8 @@ function Register-HordeRelay {
         [scriptblock]$PutKeeping = $null,
         [scriptblock]$SecretFiles = $null,
         [scriptblock]$Bundle = $null,
-        [scriptblock]$Setup = $null
+        [scriptblock]$Setup = $null,
+        [scriptblock]$Status = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -342,7 +348,7 @@ function Register-HordeRelay {
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
         watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles
-        bundle = $Bundle; setup = $Setup; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
+        bundle = $Bundle; setup = $Setup; status = $Status; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }
@@ -371,6 +377,28 @@ function Publish-HordeRelay {
     $o = Get-HordeRelayMember $a.value "origin"
     if (-not $o.has -or $o.value -isnot [string] -or $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy without the https origin it answers at")) }
     return (New-HordeKnown -Value ([pscustomobject]@{ relay = $Name; origin = $o.value }) -ObservedAt $a.observedAt)
+}
+
+function Get-HordeRelayStatusNames {
+    # The names of the loaded relays that can say how they are where they run (header, -Status), in order.
+    return @(Get-HordeRelayNames | Where-Object { $null -ne $script:HordeRelays[$_].status })
+}
+
+function Get-HordeRelayStatus {
+    # What relay -Name says of itself where it runs: known { relay; lines } or unknown with the reason.
+    # Never throws for the relay.
+    param([Parameter(Mandatory = $true)][string]$Name, [string]$HordeHome = "")
+    if (-not $script:HordeRelays.ContainsKey($Name)) { return (New-HordeUnknown -Reason ("no relay named '" + $Name + "' is loaded")) }
+    $r = $script:HordeRelays[$Name]
+    if ($null -eq $r.status) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' cannot say how it is: it runs nowhere but here")) }
+    try { $a = & $r.status $HordeHome }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to say how it is") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the status with something that is not an answer")) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' did not say how it is: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
+    $l = Get-HordeRelayMember $a.value "lines"
+    $lines = @($(if ($l.has) { $l.value } else { $null }))
+    if (-not $l.has -or $lines.Count -lt 1 -or $lines.Count -gt 20 -or @($lines | Where-Object { $_ -isnot [string] -or $_.Length -gt 300 -or $_ -cnotmatch $script:HordeRelayTextPattern }).Count -gt 0) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the status without 1 to 20 plain lines")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ relay = $Name; lines = $lines }))
 }
 
 function Get-HordeRelayBundle {
