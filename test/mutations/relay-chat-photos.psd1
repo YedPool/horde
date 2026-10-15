@@ -38,6 +38,19 @@
         @{ Name = "photo-pending-photos-unbounded"
            Find = 'for ($i = 0; $i -le $byAge.Count - $script:HordeChatPhotoPendingPhotos; $i++)'
            Replace = 'for ($i = 0; $false; $i++)' }
+        # A fresh pending part is never evicted: the newcomer is refused (review round 3 of PR 285).
+        @{ Name = "photo-pending-evicts-a-fresh-photo"
+           Find = 'if ($last[$byAge[$i]] -ge $freshFrom) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "photo-pending-evicts-a-fresh-part"
+           Find = 'if ($own[$i].at -ge $freshFrom) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "photo-pending-fresh-for-ever"
+           Find = '$freshFrom = $nowTicks - [long]$script:HordeChatPhotoPendingFreshSeconds * [System.TimeSpan]::TicksPerSecond'
+           Replace = '$freshFrom = [long]0' }
+        @{ Name = "photo-pending-full-not-refused"
+           Find = 'if ($w.written -ceq "full") { return (& $no ($label + ": " + $w.why)) }'
+           Replace = '' }
         @{ Name = "photo-pending-evicts-the-newest-photo"
            Find = '$byAge = @($groups.Keys | Sort-Object @{'
            Replace = '$byAge = @($groups.Keys | Sort-Object -Descending @{' }

@@ -40,8 +40,9 @@
 #
 #   A PART BEFORE ITS MANIFEST. A batch is judged before its envelopes are opened, so the parts of a
 #   photo usually arrive while its manifest is still journaled and unopened. Such a part waits in a
-#   PENDING area - capped PER PHOTO with the oldest evicted, and in how many photos it holds, each part
-#   dropped at the window's end (Add-HordeChatPhotoPending) - and is never taken early: when its
+#   PENDING area - capped PER PHOTO and in how many photos it holds, the oldest evicted only once it is
+#   no longer fresh and the newcomer refused while it is, each part dropped at the window's end
+#   (Add-HordeChatPhotoPending) - and is never taken early: when its
 #   manifest is accepted, every waiting part of it is checked against the digests like any other, and a
 #   part that does not match is deleted.
 #
@@ -94,6 +95,13 @@ $script:HordeChatPhotoPartsMost = 64
 # 9,219,072 bytes.
 $script:HordeChatPhotoPendingPerPhoto = 48
 $script:HordeChatPhotoPendingPhotos = 4
+# A FRESH pending part is never evicted (review round 3 of PR 285): a part written in the last 120
+# seconds. Seconds and not turns, because what a genuine photo waits for is its manifest, and the phone
+# puts the manifest FIRST (surfaces/pwa/page/phone-core.js, sendPhoto), so its parts wait only until
+# that manifest is opened: at the end of the same turn, or, held too-many (photosPerMinute), when it
+# comes again inside 60 seconds. A turn can be one watch slice long, too short for that hold; 120 is the
+# 60 of the hold, twice. The sink also takes -Now, which a turn count would not give the suites.
+$script:HordeChatPhotoPendingFreshSeconds = 120
 $script:HordeChatPhotoPendingPattern = '\A([0-9a-f]{32})-([0-9a-f]{32})-([1-9][0-9]{0,2})-([0-9a-f]{16})\.part\z'
 # How long what became of a photo is kept, so a part that comes after it is refused, not pending.
 $script:HordeChatPhotoClosedHours = 48
@@ -326,19 +334,30 @@ function Add-HordeChatPhotoPending {
     # "moved", or "exists" when that very part - its number AND its digest - waits already (nothing is
     # evicted for it). The digest is in the name (the header, THE PARTS): junk put first under the same
     # photo and number is held beside the real part, not in its place, and its manifest sorts them.
-    # CAPPED PER PHOTO, OLDEST EVICTED (review of PR 285). Anybody who can put an item in this mailbox can
-    # name the founder's passkey, whose key id is no secret; under ONE cap for the whole area, junk under
-    # many photo ids filled it, and a genuine photo's early parts were then refused. Now no part is
-    # refused for room: a photo holds at most HordeChatPhotoPendingPerPhoto parts, its oldest evicted when
-    # full; the area holds at most HordeChatPhotoPendingPhotos photos, and a part of a new one evicts,
-    # whole, the photo least recently added to. A photo being sent is added to every moment, so junk must
-    # outrun it to push it out. "Oldest" is by write time, made strictly increasing below: NTFS times a
-    # burst of writes alike, and a tie would leave the order to the names.
-    param([Parameter(Mandatory = $true)][string]$Pending, [string]$From, [string]$PhotoId, [int]$Number, [byte[]]$Ct, [string]$Digest)
+    # "full" when there is no room that may be made (below), with -why.
+    # CAPPED PER PHOTO AND IN PHOTOS, NEVER EVICTING WHAT IS FRESH (reviews of PR 285). Anybody who can
+    # put an item in this mailbox can name the founder's passkey, whose key id is no secret, and anybody
+    # who sees a relay key sees a photo id. A photo holds at most HordeChatPhotoPendingPerPhoto parts and
+    # the area at most HordeChatPhotoPendingPhotos photos; to make room the oldest part of the photo, or
+    # the photo least recently added to, whole, is evicted - but ONLY once it is no longer fresh
+    # (HordeChatPhotoPendingFreshSeconds). While it is fresh the NEW part is refused instead. Round 2
+    # evicted on age alone, and data items are taken before envelopes in a batch (channels/Port.ps1,
+    # Complete-HordeRelayInbox), so junk under 4 made-up photo ids put just AFTER a genuine photo's parts,
+    # before its manifest was opened, evicted it whole - and 48 junk parts under its own id evicted every
+    # real part. Now junk that comes after a genuine photo's parts is what is refused, and junk that came
+    # long before is evicted for it. WHAT IS LEFT: junk kept fresh under 4 ids refuses a new photo's early
+    # parts, and junk put under a photo's own id ahead of its later parts fills its 48; either breaks that
+    # one photo (incomplete, and the phone is told), never forges one. "Oldest" is by write time, made
+    # strictly increasing below: NTFS times a burst of writes alike, and a tie would leave the order to
+    # the names.
+    param([Parameter(Mandatory = $true)][string]$Pending, [string]$From, [string]$PhotoId, [int]$Number, [byte[]]$Ct, [string]$Digest, $Now = $null)
     $mine = $From + "-" + $PhotoId
     $at = [System.IO.Path]::Combine($Pending, ($mine + "-" + $Number + "-" + $Digest.Substring(0, 16) + ".part"))
-    if ([System.IO.File]::Exists($at)) { return [pscustomobject]@{ written = "exists"; evicted = 0 } }
+    if ([System.IO.File]::Exists($at)) { return [pscustomobject]@{ written = "exists"; evicted = 0; why = "" } }
+    $nowTicks = $(if ($null -eq $Now) { [datetime]::UtcNow } else { ([datetime]$Now).ToUniversalTime() }).Ticks
+    $freshFrom = $nowTicks - [long]$script:HordeChatPhotoPendingFreshSeconds * [System.TimeSpan]::TicksPerSecond
     $groups = @{}
+    $last = @{}
     $newest = [long]0
     foreach ($f in @([System.IO.Directory]::GetFiles($Pending))) {
         $name = [System.IO.Path]::GetFileName($f)
@@ -348,24 +367,32 @@ function Add-HordeChatPhotoPending {
         if (-not $groups.ContainsKey($g)) { $groups[$g] = New-Object System.Collections.ArrayList }
         $ticks = [System.IO.File]::GetLastWriteTimeUtc($f).Ticks
         if ($ticks -gt $newest) { $newest = $ticks }
+        if (-not $last.ContainsKey($g) -or $ticks -gt $last[$g]) { $last[$g] = $ticks }
         [void]$groups[$g].Add([pscustomobject]@{ path = $f; name = $name; at = $ticks })
     }
     $evicted = 0
     $gone = New-Object System.Collections.ArrayList
+    $full = { param([string]$Why) return [pscustomobject]@{ written = "full"; evicted = 0; why = $Why } }
     if ($groups.ContainsKey($mine)) {
         $own = @($groups[$mine] | Sort-Object at, name)
-        for ($i = 0; $i -le $own.Count - $script:HordeChatPhotoPendingPerPhoto; $i++) { [void]$gone.Add($own[$i].path) }
+        for ($i = 0; $i -le $own.Count - $script:HordeChatPhotoPendingPerPhoto; $i++) {
+            if ($own[$i].at -ge $freshFrom) { return (& $full ("its photo holds " + $own.Count + " waiting parts, the oldest of them fresh (written in the last " + $script:HordeChatPhotoPendingFreshSeconds + " seconds), so none is evicted for it")) }
+            [void]$gone.Add($own[$i].path)
+        }
     } else {
-        $byAge = @($groups.Keys | Sort-Object @{ Expression = { ($groups[$_] | Measure-Object -Property at -Maximum).Maximum } }, @{ Expression = { $_ } })
-        for ($i = 0; $i -le $byAge.Count - $script:HordeChatPhotoPendingPhotos; $i++) { foreach ($x in $groups[$byAge[$i]]) { [void]$gone.Add($x.path) } }
+        $byAge = @($groups.Keys | Sort-Object @{ Expression = { $last[$_] } }, @{ Expression = { $_ } })
+        for ($i = 0; $i -le $byAge.Count - $script:HordeChatPhotoPendingPhotos; $i++) {
+            if ($last[$byAge[$i]] -ge $freshFrom) { return (& $full ("the pending area holds " + $byAge.Count + " photos, each added to in the last " + $script:HordeChatPhotoPendingFreshSeconds + " seconds, so none is evicted for a new one")) }
+            foreach ($x in $groups[$byAge[$i]]) { [void]$gone.Add($x.path) }
+        }
     }
     foreach ($f in $gone) { try { [System.IO.File]::Delete($f); $evicted++ } catch { } }
     $w = Write-HordeChatPhotoFile -Path $at -Bytes $Ct
     if ($w -ceq "moved") {
-        $stamp = [System.Math]::Max([datetime]::UtcNow.Ticks, $newest + 1)
+        $stamp = [System.Math]::Max($nowTicks, $newest + 1)
         try { [System.IO.File]::SetLastWriteTimeUtc($at, (New-Object System.DateTime -ArgumentList $stamp, ([System.DateTimeKind]::Utc))) } catch { }
     }
-    return [pscustomobject]@{ written = $w; evicted = $evicted }
+    return [pscustomobject]@{ written = $w; evicted = $evicted; why = "" }
 }
 
 function Receive-HordeChatPhotoPart {
@@ -412,8 +439,9 @@ function Receive-HordeChatPhotoPart {
         Remove-HordeChatPhotoPendingExpired -HordeHome $homeDir -WindowMs $ps.windowMs -Now $Now
         New-HordeChatPhotoOwnerFolder -Path $root
         [void][System.IO.Directory]::CreateDirectory($pending)
-        $w = Add-HordeChatPhotoPending -Pending $pending -From $p.from -PhotoId $p.photo -Number $p.n -Ct $p.ct -Digest $p.digest
+        $w = Add-HordeChatPhotoPending -Pending $pending -From $p.from -PhotoId $p.photo -Number $p.n -Ct $p.ct -Digest $p.digest -Now $Now
         if ($w.written -ceq "exists") { return (& $no ($label + ": that very part, its number and digest, is already waiting")) }
+        if ($w.written -ceq "full") { return (& $no ($label + ": " + $w.why)) }
         return [pscustomobject]@{ outcome = "pending"; reason = ($label + " waits for its manifest" + $(if ($w.evicted -gt 0) { " (" + $w.evicted + " older pending part(s) evicted to make room)" } else { "" })) }
     }
     $rec = Read-HordeChatPhotoRecord -Path $recordPath
