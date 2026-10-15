@@ -103,13 +103,15 @@ import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } f
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
+import { sessionLines } from "./session-view.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
 const WATCH_MS = 25000;
 // relay: what the last refresh said of the relay (bridge.js "notice"), kept until a refresh comes back
 // clean; view: why the picked view could not be drawn, the drawing's own; read: read-banner.js's banner.
-const notices = { boot: "", relay: "", read: "", view: "", action: "", update: "" };
+// session: how the picked horde's unlocked session ended, or that its PC needs an update (phone-core.js).
+const notices = { boot: "", relay: "", read: "", view: "", action: "", update: "", session: "" };
 
 function showNotices() {
   const box = $("notice");
@@ -963,6 +965,53 @@ document.addEventListener("visibilitychange", () => {
   checkForUpdate();
   (expired ? lockAll() : Promise.resolve()).then(resume).then(settleUpdate, settleUpdate);
 });
+
+// --- the unlocked session (phone-core.js, THE UNLOCKED SESSION) ---
+// One passkey prompt at unlock opens a session whose key signs answers, chat lines and photos. It ends
+// here, in the page, at the same moment the PC would end it: when its time is up the page asks the bridge
+// again (sessions), which drops a key whose idle limit has passed. AWAY FROM THE APP - another
+// app in front, or the screen off, which browsers report as the page hidden (visibilitychange) - for the
+// deployment's sessionAwaySeconds (config.json; 600 s, the design note's ten minutes) ends it too, the
+// timer started when the page is hidden and checked again on return in case it did not run. pagehide (the
+// page closed, or put into the back-forward cache, where its memory would otherwise live on) ends it at
+// once. Every end keeps the hordes open to read; the next answer asks for the passkey once.
+let sessionList = [];
+let sessionTimer = null;
+let awayAt = 0;
+let awayTimer = null;
+const sessionAwayMs = () => 1000 * ((config && Number.isSafeInteger(config.sessionAwaySeconds) && config.sessionAwaySeconds > 0) ? config.sessionAwaySeconds : 600);
+function drawSession() {
+  const box = $("sessionWords");
+  while (box.firstChild) box.removeChild(box.firstChild);
+  for (const words of sessionLines(sessionList, lastTime)) {
+    const line = document.createElement("p");
+    line.textContent = words;
+    box.appendChild(line);
+  }
+  const mine = sessionList.find((x) => x.id === current);
+  say("session", mine ? mine.words : "");
+}
+bridge.on("session-changed", (list) => {
+  sessionList = Array.isArray(list) ? list : [];
+  drawSession();
+  clearTimeout(sessionTimer);
+  const ends = sessionList.filter((x) => x.open).map((x) => Number(x.until));
+  // Asked a moment after the end, so the key's time is up when the bridge looks.
+  if (ends.length) sessionTimer = setTimeout(() => { bridge.request("sessions").catch(() => {}); }, Math.max(0, Math.min(...ends) - Date.now()) + 250);
+});
+function endSessions(why) { bridge.request("session-end", { why }).catch(() => { /* the bridge is not up: there is no key to end */ }); }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    awayAt = Date.now();
+    clearTimeout(awayTimer);
+    awayTimer = setTimeout(() => endSessions("away"), sessionAwayMs());
+    return;
+  }
+  clearTimeout(awayTimer);
+  if (awayAt && Date.now() - awayAt >= sessionAwayMs()) endSessions("away");
+  awayAt = 0;
+});
+window.addEventListener("pagehide", () => endSessions("closed"));
 
 // --- the answering keys ---
 
