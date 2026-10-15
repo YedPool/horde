@@ -140,10 +140,10 @@ function New-HordeTestPhoneLineBody {
 function New-HordeTestPhoneSession {
     # An unlocked session (relay/Session.ps1): a session key and ONE passkey assertion over its vouch.
     # { key; public; vouchId; text; assertion; notBefore; notAfter; seq }. -NotBefore and -Minutes set
-    # the window (the hard cap refuses over 480 in the writer); -Seq the vouch counter; -Machine,
+    # the window (30 days by default: there is no maximum); -Seq the vouch counter; -Machine,
     # -Horde and -PhoneKeyId what it binds; -Signer another phone's passkey (a vouch it did not make).
     param($Phone, [Parameter(Mandatory = $true)][string]$Machine, [string]$Horde = "work", [string]$PhoneKeyId = "", [long]$Seq = 1,
-        $NotBefore = $null, [long]$Minutes = 480, $Signer = $null, $Key = $null)
+        $NotBefore = $null, [long]$Minutes = 43200, $Signer = $null, $Key = $null)
     # -Key: a session key another vouch already names (one key vouched for by two passkeys).
     $k = $(if ($null -ne $Key) { $Key } else { New-HordeRelayP256Key -Use "ecdsa" })
     $pub = ConvertTo-HordeRelayP256Public -Key $k

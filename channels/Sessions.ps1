@@ -22,7 +22,9 @@
 # a passkey still signs every envelope as before.
 #
 # THE IDLE LIMIT is the module setting idleMinutes (relay-sessions, <HORDE_HOME>\settings\
-# relay-sessions.json), 60 by default, at most 480 (the 8-hour cap, which no setting moves).
+# relay-sessions.json), 60 by default, at most 480. THERE IS NO MAXIMUM SESSION LENGTH (the founder,
+# Q75 (b), "hard limit: no"): a session ends only by this idle rule, the phone's 10-minute away lock,
+# end-all, a revoke of the device or its passkey, or closing the page.
 #
 # THE HONEST LIMIT is the journal's and the trust store's (relay/Journal.ps1): whoever can write to
 # <HORDE_HOME> can delete an "ended" record or rewind state.json. That access is already the owner's.
@@ -37,13 +39,16 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Trust.ps1")
 
 $script:HordeRelaySessionSettings = New-HordeModuleSettings -Module "relay-sessions" -Settings @(
-    # 480 at most: a session never outlives its 8-hour cap (relay/Session.ps1), so a longer idle limit
-    # would be a setting that does nothing.
+    # 480 at most: an unlocked page left unused for more than eight hours is not a session the founder
+    # is using, and the setting may make the limit shorter, never that long. (state.json keeps a seen
+    # time for 480 minutes and a day, Write-HordeRelaySessionState, which rests on this maximum.)
     @{ name = "idleMinutes"; kind = "whole"; default = 60; min = 1; max = 480
        what = "How many minutes a phone session may go unused before this PC refuses it (the founder unlocks again)." }
 )
 # What the PC remembers of refusals for the phone: the newest 32, and seen times of vouches up to a day
-# past their cap - long enough to say "expired" rather than "unknown" to a phone that comes back late.
+# past the longest idle limit - long enough to say "idle" rather than "unknown" to a phone that comes
+# back late. A vouch unused for that long is left out of the policies too (Add-HordeRelaySessionPolicies):
+# with no maximum session length, its notAfter alone would keep every vouch ever made in them.
 $script:HordeRelaySessionRefusedMost = 32
 $script:HordeRelaySessionKeepPastMs = [long]86400000
 # How many vouches of one passkey the phone is told of in a receipt: the newest.
@@ -188,8 +193,12 @@ function Add-HordeRelaySessionPolicies {
     if ($broken -ceq "") {
         foreach ($e in @($Records.vouches)) {
             if (-not $Senders.ContainsKey($e.record.by) -or $Senders[$e.record.by].proof -cne "webauthn") { continue }
-            # Long past its cap a vouch says nothing a phone still needs; it is not verified again.
+            # A vouch long past its notAfter, or unused for longer than the longest idle limit and a day,
+            # says nothing a phone still needs: it is left out, and not verified again (the header).
             if ([long]$e.vouch.notAfter + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
+            $active = [long]$e.record.recordedAt
+            if ($Records.state.seen.ContainsKey($e.record.vouchId) -and [long]$Records.state.seen[$e.record.vouchId] -gt $active) { $active = [long]$Records.state.seen[$e.record.vouchId] }
+            if ($active + [long]28800000 + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
             $s = $Senders[$e.record.by]
             $wa = Test-HordeRelayWebAuthnAssertion -Public $s.public -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $e.record.authenticatorData) `
                 -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $e.record.clientDataJSON) -Signature (ConvertFrom-HordeRelayBase64Url -Text $e.record.signature) `

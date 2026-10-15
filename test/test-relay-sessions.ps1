@@ -7,7 +7,7 @@
 # Receive-HordeRelayInbox and Invoke-HordeRelayUnfinished, the journal, the trust store, the decisions
 # list - over relays/local, with the PC's clock handed in (-Now) so an hour or eight pass in a moment:
 #   accepted in its window                         refused after the idle limit (the PC's own clock)
-#   accepted before the 8-hour cap                 refused after it, and a vouch over 8 hours never read
+#   used steadily, past 8 hours and past 24        refused past the notAfter the phone chose (no maximum length)
 #   accepted from a trusted device                 refused once the device is revoked
 #   accepted before end-all                        refused after it (and the CLI command ends them)
 #   a phone's own vouch                            another device's vouch, a forged vouch, a forged
@@ -112,7 +112,7 @@ function Get-SentKey {
 function Send-ToMachine {
     param($World, [string]$Text, [string]$Key = "-")
     if ($Key -ceq "-") {
-        # An envelope the reader refuses (a vouch over 8 hours) has no replay key: any key carries it.
+        # An envelope the reader refuses has no replay key: any key carries it.
         $read = Read-HordeRelayEnvelope -Text $Text
         $Key = $(if ($read.ok) { Get-HordeRelayReplayKey -Header $read.value.header } else { "unreadable-" + (New-Id) })
     }
@@ -224,24 +224,31 @@ try {
     Check ((Test-Said $W "Unlocked again.") -and -not $r.turn.text.Contains("session-")) ("a new vouch above it - the founder unlocked again - is taken (" + $r.turn.text + ")")
 
     Write-Host ""
-    Write-Host "--- the 8-hour cap ---" -ForegroundColor Cyan
-    # The idle limit set to its most (480 minutes), so the cap is what is tested.
-    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-sessions.json"), '{"schemaVersion": 1, "settings": {"idleMinutes": 480}}', $utf8)
-    $r = Send-SessionAnswer -World $W -Session $s3 -Text "Just inside the cap." -At $T0.AddMinutes(123 + 479)
-    Check ((Test-Said $W "Just inside the cap.") -and -not $r.turn.text.Contains("session-")) ("a minute before the cap the session answers (" + $r.turn.text + ")")
-    $r = Send-SessionAnswer -World $W -Session $s3 -Text "Past the cap." -At $T0.AddMinutes(123 + 482)
-    Check ($r.turn.text.Contains("session-expired") -and -not (Test-Said $W "Past the cap.")) ("past notAfter it is refused as session-expired, whatever the idle (" + $r.turn.text + ")")
-    $r = Send-SessionAnswer -World $W -Session $s3 -Text "Phone clock says inside." -At $T0.AddMinutes(123 + 479) -Pc $T0.AddMinutes(123 + 482)
-    Check ($r.turn.text.Contains("session-expired") -and -not (Test-Said $W "Phone clock says inside.")) ("the PC's own clock past the cap refuses it even when the phone's says inside (" + $r.turn.text + ")")
-    # A vouch over 8 hours cannot even be read: forged by hand, signed by the real passkey.
-    $k = New-HordeRelayP256Key -Use "ecdsa"; $pub = ConvertTo-HordeRelayP256Public -Key $k
-    $nb = ConvertTo-HordeRelayRecordMs -Time $T0.AddMinutes(700)
-    $long = (ConvertTo-HordeRelaySessionVouchText -SessionPublicKey $pub -DeviceKeyId $W.phone.keyId -PhoneKeyId (Get-HordeRelayKeyId -Public $W.phone.agreePublic) -Horde "work" -Machine $W.machine -NotBefore $nb -NotAfter ($nb + 28800000) -Seq 9).Replace('"notAfter":' + ($nb + 28800000), '"notAfter":' + ($nb + 28800001))
-    $la = New-HordeTestPhoneAssertion -Phone $W.phone -Challenge (Get-HordeRelaySessionVouchChallenge -Text $long)
-    $longS = [pscustomobject]@{ key = $k; public = $pub; vouchId = (Get-HordeRelayKeyId -Public $pub); text = $long; assertion = $la }
-    $r = Send-SessionAnswer -World $W -Session $longS -Text "Nine hours." -At $T0.AddMinutes(701) -WithVouch
-    Check ($r.turn.text.Contains("longer than 8 hours") -and -not (Test-Said $W "Nine hours.")) ("a vouch whose window is over 8 hours is refused, even signed by the founder's passkey (" + $r.turn.text + ")")
-    Remove-Item -LiteralPath (Join-Path $W.home "settings\relay-sessions.json") -Force
+    Write-Host "--- no maximum session length: a session used steadily lives past 8 hours and past 24 ---" -ForegroundColor Cyan
+    # The founder, Q75 (b), "hard limit: no". s3's window is 30 days (the phone puts notAfter far ahead);
+    # it is used every 55 minutes, inside the 60-minute idle limit each time, for 25 hours.
+    $steadyOk = $true; $past8 = $false; $past24 = $false; $steadyWhy = ""
+    for ($m = 124 + 55; $m -le 124 + 1500; $m += 55) {
+        $words = "Steady use at minute " + $m + "."
+        $r = Send-SessionAnswer -World $W -Session $s3 -Text $words -At $T0.AddMinutes($m)
+        if (-not (Test-Said $W $words) -or $r.turn.text.Contains("session-")) { $steadyOk = $false; $steadyWhy = $r.turn.text; break }
+        if ($m - 124 -gt 480) { $past8 = $true }
+        if ($m - 124 -gt 1440) { $past24 = $true }
+    }
+    Check ($steadyOk -and $past8) ("a session used within the idle limit each time still answers past 8 hours after unlock (" + $steadyWhy + ")")
+    Check ($steadyOk -and $past24) ("and past 24 hours after unlock: nothing but idle, the away lock, end-all, a revoke or the page closing ends it (" + $steadyWhy + ")")
+
+    Write-Host ""
+    Write-Host "--- the phone's own notAfter is still honoured ---" -ForegroundColor Cyan
+    # A phone may still choose a short window; past it the PC refuses (session-expired), by its own clock too.
+    $tn = 124 + 1500 + 10
+    $short = New-HordeTestPhoneSession -Phone $W.phone -Machine $W.machine -NotBefore $T0.AddMinutes($tn) -Seq 3 -Minutes 30
+    $r = Send-SessionAnswer -World $W -Session $short -Text "Inside its own window." -At $T0.AddMinutes($tn + 20) -WithVouch
+    Check ((Test-Said $W "Inside its own window.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: inside the window the phone chose, it answers (" + $r.turn.text + ")")
+    $r = Send-SessionAnswer -World $W -Session $short -Text "Past its own window." -At $T0.AddMinutes($tn + 31)
+    Check ($r.turn.text.Contains("session-expired") -and -not (Test-Said $W "Past its own window.")) ("past the notAfter the phone chose it is refused as session-expired (" + $r.turn.text + ")")
+    $r = Send-SessionAnswer -World $W -Session $short -Text "Phone clock says inside." -At $T0.AddMinutes($tn + 29) -Pc $T0.AddMinutes($tn + 32)
+    Check ($r.turn.text.Contains("session-expired") -and -not (Test-Said $W "Phone clock says inside.")) ("the PC's own clock past notAfter refuses it even when the phone's says inside (" + $r.turn.text + ")")
 
     Write-Host ""
     Write-Host "--- another device's vouch, a forged vouch, a forged session signature ---" -ForegroundColor Cyan
