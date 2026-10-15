@@ -7,7 +7,9 @@
 # add or raise the entry here AND append a line to growth.txt in this folder:
 # path | old -> new | YYYY-MM-DD | reason.
 #
-# None today: the port, the conformance suite and the command line name no relay, and reach this one
-# only through its folder, its Relay.ps1 and its test/Fixture.ps1.
+# The port, the conformance suite and the command line name no relay, and reach this one only through
+# its folder, its Relay.ps1 and its test/Fixture.ps1. The one file below is a data list of repository
+# paths, which can only name this folder's files by naming the folder.
 #
 # path | mentions | why this file may name the relay
+core/json-parse-allowlist.txt | 5 | the raw JSON parse list (issue #274) names by path the four files in this relay's folder that still call ConvertFrom-Json, one of them Wrangler.ps1; each line leaves when its file moves to ConvertFrom-HordeJson

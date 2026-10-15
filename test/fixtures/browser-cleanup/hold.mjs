@@ -1,5 +1,5 @@
 // A STAND-IN DRIVER for test/test-browser-cleanup.ps1: it does what the real drivers
-// (relays/cloudflare/test/browser-signin.mjs, surfaces/pwa/test/browser-drive.mjs) do first - reach the
+// (the hosted relay's sign-in driver, surfaces/pwa/test/browser-drive.mjs) do first - reach the
 // suite's browser on its debugging port and hold a debugging socket to its page - and then waits, so the
 // test can end it every way a real driver ends: its input closed (it finishes), killed, or timed out.
 //
