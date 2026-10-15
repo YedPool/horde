@@ -288,9 +288,54 @@ const commands = {
       const $ = (id) => document.getElementById(id);
       const flat = (e) => e.innerText.replace(/\\s+/g, " ").trim();
       const cards = Array.from(document.querySelectorAll("#cardsList .card")).map((c) => ({ lane: c.getAttribute("data-lane"), thrall: c.classList.contains("thrall"), text: flat(c) }));
-      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map(flat);
+      // An entry's words whether it is folded or open (a folded entry hides its chips and text, and innerText
+      // drops what is hidden): what the stream HOLDS. What can be SEEN is entriesState's.
+      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map((e) => e.textContent.replace(/\\s+/g, " ").trim());
       return { progress: !$("progress").hidden, cardsPage: !$("cardsPage").hidden, streamPage: !$("streamPage").hidden, title: $("streamTitle").textContent, cards, items: items.length, texts: items, notice: ${notice} };
     })()`);
+  },
+  // ENTRIES FOLDED AND OPEN (app.js, openEntries): for each entry of the stream, whether it is folded, its
+  // line's role and aria-expanded, its height, and what of it can be SEEN - checkVisibility and a box of
+  // some height, not only that the node is there (every part of a folded entry is still in the DOM).
+  // tagged: the node is the one entriesTag marked, so a redraw that rebuilt the log can be told apart.
+  async entriesState() {
+    return await evaluate(`(() => {
+      const seen = (e) => !!e && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && e.getBoundingClientRect().height > 0;
+      return Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => {
+        const line = b.querySelector(':scope > .progress-line'), title = line ? line.querySelector('.progress-title') : null, when = b.querySelector('.progress-when');
+        const text = b.querySelector(':scope > .progress-text'), head = b.querySelector(':scope > .progress-head'), stamp = b.querySelector('.progress-head .stamp');
+        return { id: b.getAttribute('data-id'), folded: b.classList.contains('collapsed'), role: line ? line.getAttribute('role') : null, expanded: line ? line.getAttribute('aria-expanded') : null,
+          focusable: !!line && line.tabIndex === 0, height: Math.round(b.getBoundingClientRect().height), title: title ? title.textContent : '', titleSeen: seen(title),
+          titleCut: !!title && title.scrollWidth > title.clientWidth, when: when ? when.textContent : '', whenSeen: seen(when), textSeen: seen(text), headSeen: seen(head),
+          stamp: stamp ? stamp.textContent : '', tagged: b.hordeTag === true };
+      });
+    })()`);
+  },
+  async entriesTag() {
+    return await evaluate("Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => { b.hordeTag = true; return 1; }).length");
+  },
+  // A real touch on one part of one entry: "line" its title, "when" its folded line's time, "text" its body,
+  // "head" a chip of its head, "stamp" its head's time stamp. The entry is first brought to the middle of
+  // the screen, as a thumb would.
+  async entryTouch(c) {
+    const sel = "#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "]";
+    const part = { line: " > .progress-line .progress-title", when: " .progress-when", text: " > .progress-text", head: " > .progress-head .chip", stamp: " .progress-head .stamp" }[c.part];
+    await evaluate("document.querySelector(" + JSON.stringify(sel) + ").scrollIntoView({ block: 'center' })");
+    await sleep(300);
+    const at = await centre(sel + part);
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(500);
+    return await commands.entriesState();
+  },
+  // A real key on one entry's line, focused as the Tab key would: "Enter" or " ".
+  async entryKey(c) {
+    await evaluate("document.querySelector(" + JSON.stringify("#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "] > .progress-line") + ").focus()");
+    const k = c.key === " " ? { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " } : { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" };
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", ...k });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode });
+    await sleep(400);
+    return { scrollY: Math.round(await evaluate("window.scrollY")), entries: await commands.entriesState() };
   },
   async cardsWait(c) {
     const found = await until("document.querySelectorAll('#cardsList .card').length >= " + Number(c.count), c.timeoutMs || 30000);

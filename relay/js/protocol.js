@@ -430,7 +430,7 @@ export function phoneKeyBody(agreePublic, vouch) {
 //   vouch text   {"v":1,"kind":"horde-relay-session-vouch","sessionPublicKey":"<b64u point>","deviceKeyId":"<hex>",
 //                 "phoneKeyId":"<hex>","horde":"<horde>","machine":"<hex>","mailbox":"<horde>/<machine>",
 //                 "notBefore":<ms>,"notAfter":<ms>,"seq":<n>,"vouchId":"<hex>"}   (no spaces, this order)
-//                vouchId = keyId(sessionPublicKey); notAfter - notBefore at most SESSION_MAX_MS; seq the
+//                vouchId = keyId(sessionPublicKey); notAfter after notBefore, with NO maximum (below); seq the
 //                device's vouch counter, above its last (a new vouch at or below it is session-stale).
 //   challenge    SHA-256("horde-relay/session/v1 vouch\n" + vouch text): the unlock assertion's challenge.
 //   signed       "horde-relay/session/v1 envelope\n" + vouchId + "\n", then the envelope's signedBytes:
@@ -445,9 +445,14 @@ export function phoneKeyBody(agreePublic, vouch) {
 // WHAT DOES NOT TRAVEL: the away lock (switching away or screen off, 10 minutes by default) is the
 // page's own setting - the PC cannot see it. The idle limit is the PC's setting, enforced by the PC, and
 // told to the phone in sessionStatus (idleMs) so the page can lock at the same moment.
+// THERE IS NO MAXIMUM SESSION LENGTH (the founder, Q75 (b), "hard limit: no"). A session ends ONLY by the
+// 60-minute idle rule (enforced by the PC), the 10-minute away lock (the phone), end-all, a revoke of
+// the device or its passkey, or closing the page. notAfter stays in the vouch and the PC still refuses an
+// envelope outside [notBefore, notAfter]; openSession puts it far ahead (SESSION_DEFAULT_LIFETIME_MS).
+// The first pin of this wire (862287ad) had SESSION_MAX_MS, 8 hours: it is gone from both languages.
 export const SESSION_VOUCH_DOMAIN = "horde-relay/session/v1 vouch\n";
 export const SESSION_ENVELOPE_DOMAIN = "horde-relay/session/v1 envelope\n";
-export const SESSION_MAX_MS = 8 * 60 * 60 * 1000;
+export const SESSION_DEFAULT_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 export const SESSION_IDLE_DEFAULT_MS = 60 * 60 * 1000;
 // The refusal codes (relay/Session.ps1, WHAT THE PC REFUSES): a PC's refusal of a session envelope
 // starts with one of them, and a vouch's state in sessionStatus is "live" or one of them.
@@ -469,7 +474,7 @@ export async function sessionVouchText({ sessionPublicKey, deviceKeyId, phoneKey
   if (!KEY_ID.test(deviceKeyId) || !KEY_ID.test(phoneKeyId) || !KEY_ID.test(machine)) throw new Error("the vouch's key ids are 32 lower-case hex");
   if (typeof horde !== "string" || !HORDE_NAME.test(horde)) throw new Error("the vouch's horde is not a horde name");
   for (const n of [notBefore, notAfter, seq]) if (!Number.isSafeInteger(n) || n < 0) throw new Error("the vouch's times and seq are whole numbers from 0 to 2^53-1");
-  if (notAfter <= notBefore || notAfter - notBefore > SESSION_MAX_MS) throw new Error("a session's notAfter is after its notBefore, and at most 8 hours after it");
+  if (notAfter <= notBefore) throw new Error("a session's notAfter is after its notBefore");
   const vouchId = await keyId(sessionPublicKey);
   return '{"v":1,"kind":"horde-relay-session-vouch","sessionPublicKey":"' + b64u(sessionPublicKey) + '","deviceKeyId":"' + deviceKeyId + '","phoneKeyId":"' + phoneKeyId +
     '","horde":"' + horde + '","machine":"' + machine + '","mailbox":"' + horde + "/" + machine + '","notBefore":' + notBefore + ',"notAfter":' + notAfter +
@@ -486,10 +491,11 @@ export function sessionSigText({ vouchId, value, vouch = null }) {
 }
 // Unlock: ONE passkey assertion (assert, as signEnvelope's) over the vouch for a new session key.
 // { vouchId, privateKey, publicPoint, notBefore, notAfter, seq, vouch: { text, authenticatorData,
-// clientDataJSON, signature } } - kept in page memory only. lifetimeMs is capped at SESSION_MAX_MS.
-export async function openSession({ assert, deviceKeyId, phoneKeyId, horde, machine, now, lifetimeMs = SESSION_MAX_MS, seq, key = null }) {
+// clientDataJSON, signature } } - kept in page memory only. lifetimeMs is how far ahead notAfter is put:
+// far by default, as the session ends by idle, the away lock, end-all, a revoke or the page closing.
+export async function openSession({ assert, deviceKeyId, phoneKeyId, horde, machine, now, lifetimeMs = SESSION_DEFAULT_LIFETIME_MS, seq, key = null }) {
   const k = key || await newSessionKey();
-  const notBefore = now, notAfter = now + Math.min(lifetimeMs, SESSION_MAX_MS);
+  const notBefore = now, notAfter = now + lifetimeMs;
   const text = await sessionVouchText({ sessionPublicKey: k.publicPoint, deviceKeyId, phoneKeyId, horde, machine, notBefore, notAfter, seq });
   const a = await assert(await sessionVouchChallenge(text));
   return { vouchId: await keyId(k.publicPoint), privateKey: k.privateKey, publicPoint: k.publicPoint, notBefore, notAfter, seq,

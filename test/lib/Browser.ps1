@@ -10,7 +10,7 @@
 #       $end = Stop-HordeTestBrowser -Browser $browser    # safe on $null, safe twice
 #   }
 #
-# WHY THIS FILE. Until 2026-10-14 each node driver (relays/cloudflare/test/browser-signin.mjs,
+# WHY THIS FILE. Until 2026-10-14 each node driver (the hosted relay's sign-in driver,
 # surfaces/pwa/test/browser-drive.mjs) spawned Chrome itself and ended it in its own finally with
 # `taskkill /PID <the pid it spawned> /T`. That left headless browsers running for ever, about 0.4 GB
 # each (four at once found orphaned on 2026-10-14), and their profiles under %TEMP% (130
@@ -168,8 +168,8 @@ function Stop-HordeTestBrowser {
         $Browser.stopped = $true
         try {
             $null = [HordeTestBrowserJobV1]::Terminate($Browser.job)
-            # A process ended through its job is counted alive for a moment after (measured on the sshd
-            # job, transports/ssh/test/Sshd.ps1): asked for up to 10 s.
+            # A process ended through its job is counted alive for a moment after (measured on the remote
+            # transport tests' throwaway server job): asked for up to 10 s.
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $left = [HordeTestBrowserJobV1]::Active($Browser.job)
             while ($left -ne 0 -and $clock.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 100; $left = [HordeTestBrowserJobV1]::Active($Browser.job) }
