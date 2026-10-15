@@ -26,6 +26,8 @@ $goodId = "123456789012-abcdefghijklmnop0123456789abcdef.apps.googleusercontent.
 #   bom     as up, with U+FEFF (percent-encoded) in front of the client_id
 #   shape   as up, with a client_id of the wrong shape
 #   elsewhere  as up, but /auth/google redirects to another host
+#   two     as up, with client_id named twice
+#   longid  as up, with a client id past the client file's length bounds
 $sync = [hashtable]::Synchronized(@{ mode = "up"; id = $goodId; stop = $false; hits = 0 })
 $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
 $listener.Start()
@@ -55,6 +57,8 @@ $ps.Runspace = $rs
                 $id = [System.Uri]::EscapeDataString($sync.id)
                 if ($mode -eq "bom") { $id = "%EF%BB%BF" + $id }
                 if ($mode -eq "shape") { $id = "not-a-client-id" }
+                if ($mode -eq "two") { $id = $id + "&client_id=" + $id }
+                if ($mode -eq "longid") { $id = ("1" * 33) + "-abc.apps.googleusercontent.com" }
                 $where = $(if ($mode -eq "elsewhere") { "https://evil.example/o/oauth2/v2/auth" } else { "https://accounts.google.com/o/oauth2/v2/auth" })
                 $status = "303 See Other"; $extra = "Location: " + $where + "?response_type=code&client_id=" + $id + "&redirect_uri=x`r`n"
             }
@@ -87,7 +91,7 @@ try {
     Check ((Test-HordeRelayClientId -Value ($goodId.Replace("abc", "ab" + [char]0x00E9)))-like "*not plain ASCII*") "a character that is not ASCII fails"
     Check ((Test-HordeRelayClientId -Value "abc.apps.googleusercontent.com") -like "*shape*" -and (Test-HordeRelayClientId -Value "") -like "*no client_id*") "a wrong shape and no id fail"
     foreach ($bad in @(([string][char]0xFEFF + $goodId), "not-a-client-id")) { Check ((Test-HordeRelayClientId -Value $bad) -cnotlike ("*" + $bad.Trim([char]0xFEFF) + "*")) "a reason never repeats the id" }
-    Check ((Get-HordeRelayQueryValue -Url "https://a/b?x=1&client_id=%EF%BB%BFab%2Ec" -Name "client_id") -ceq ([string][char]0xFEFF + "ab.c")) "the client_id is URL-decoded before it is checked"
+    Check (@(Get-HordeRelayQueryValues -Url "https://a/b?x=1&client_id=%EF%BB%BFab%2Ec" -Name "client_id")[0] -ceq ([string][char]0xFEFF + "ab.c")) "the client_id is URL-decoded before it is checked"
 
     Write-Host ""
     Write-Host "--- the three checks, against the suite's own relay ---" -ForegroundColor Cyan
@@ -101,6 +105,10 @@ try {
     Check (-not $h.ok -and $h.why -like "GET /auth/google: the client_id carries a byte order mark*every new sign-in fails" -and $h.why -cnotlike ("*" + $goodId + "*")) "a byte order mark in the client id fails, though every page is 200 - and the id is not in the reason"
     $sync.mode = "shape"; $h = Health
     Check (-not $h.ok -and $h.why -like "*not the shape*") "a client id of the wrong shape fails"
+    $sync.mode = "two"; $h = Health
+    Check (-not $h.ok -and $h.why -like "*names client_id more than once*") "a client_id named twice fails, as PR 275's deploy check refuses it"
+    $sync.mode = "longid"; $h = Health
+    Check (-not $h.ok -and $h.why -like "*not the shape*") "a client id past the client file's length bounds fails (relays/cloudflare/GoogleClient.ps1)"
     $sync.mode = "elsewhere"; $h = Health
     Check (-not $h.ok -and $h.why -like "*not https://accounts.google.com*") "a sign-in that redirects elsewhere fails"
     $sync.mode = "up"
@@ -128,17 +136,54 @@ try {
     $null = Watch 25; $null = Watch 30
     Check ($rig.tells.Count -eq 1 -and $rig.notices.Count -eq 1) "while it stays down, nothing more is said, whatever the failure"
     $sync.mode = "up"
+    $null = Watch 35
+    $sync.mode = "500"
     $null = Watch 40
-    Check ($rig.tells.Count -eq 2 -and $rig.tells[1] -like "RELAY BACK*down about 25 minutes*" -and $rig.notices.Count -eq 2 -and $rig.notices[1] -like "*down about 25 minutes*") "back: told once more, with how long it was down (from the first failure)"
+    Check ($rig.tells.Count -eq 1) "one healthy check in the middle of an outage is not a recovery: nothing is said (review of PR 307)"
+    $sync.mode = "up"
     $null = Watch 45
+    Check ($rig.tells.Count -eq 1) "the first healthy check after it: still nothing"
+    $null = Watch 50
+    Check ($rig.tells.Count -eq 2 -and $rig.tells[1] -like "RELAY BACK*down about 35 minutes*" -and $rig.notices.Count -eq 2 -and $rig.notices[1] -like "*down about 35 minutes*") "two healthy checks in a row: told once more, with how long it was down (from the first failure)"
+    $null = Watch 55
     Check ($rig.tells.Count -eq 2) "and then nothing while it is healthy"
+
+    Write-Host ""
+    Write-Host "--- review of PR 307: a tell that failed is not a tell ---" -ForegroundColor Cyan
+    $fr = [pscustomobject]@{ now = $t0; tells = 0; okAfter = 2; notices = 0 }
+    $ft = @{
+        Now = { return $fr.now }.GetNewClosure(); Fetch = $fetch
+        Tell = { param($Body) $fr.tells++; return [pscustomobject]@{ ok = ($fr.tells -ge $fr.okAfter); detail = "the fleet mail failed" } }.GetNewClosure()
+        Notify = { param($Line) $fr.notices++; return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+    }
+    $spf = Join-Path $work "failed-tell.json"
+    $sync.mode = "500"
+    foreach ($m in @(0, 5)) { $fr.now = $t0.AddMinutes(200 + $m); $null = Invoke-HordeRelayWatch -Tools $ft -Policy $policy -StatePath $spf -Origin $origin }
+    Check ($fr.tells -eq 1 -and -not (Read-HordeRelayWatchState -Path $spf).value.alerted) "the warchief's mail failed: the outage is NOT marked told"
+    $fr.now = $t0.AddMinutes(210); $null = Invoke-HordeRelayWatch -Tools $ft -Policy $policy -StatePath $spf -Origin $origin
+    Check ($fr.tells -eq 2 -and (Read-HordeRelayWatchState -Path $spf).value.alerted) "the next check tries again, and this time it is told"
+    $fr.now = $t0.AddMinutes(215); $null = Invoke-HordeRelayWatch -Tools $ft -Policy $policy -StatePath $spf -Origin $origin
+    Check ($fr.tells -eq 2 -and $fr.notices -eq 1) "then quiet; and the founder's notice was tried once for the outage"
+
+    Write-Host ""
+    Write-Host "--- review of PR 307: a state file that cannot be read is told, not a silent stop ---" -ForegroundColor Cyan
+    $bad = Join-Path $work "bad-state.json"
+    [System.IO.File]::WriteAllText($bad, "not json", $utf8)
+    $before = $rig.tells.Count
+    $rig.now = $t0.AddMinutes(300); $wb = Invoke-HordeRelayWatch -Tools $tools -Policy $policy -StatePath $bad -Origin $origin
+    Check ($rig.tells.Count -eq $before + 1 -and $rig.tells[-1] -like "RELAY WATCH STOPPED*" -and (@($wb.lines) -join " ") -like "*cannot be read*") "the warchief is told the watch has stopped"
+    $rig.now = $t0.AddMinutes(310); $null = Invoke-HordeRelayWatch -Tools $tools -Policy $policy -StatePath $bad -Origin $origin
+    Check ($rig.tells.Count -eq $before + 1) "and not again within the day"
+    $rig.now = $t0.AddMinutes(300).AddHours(24); $null = Invoke-HordeRelayWatch -Tools $tools -Policy $policy -StatePath $bad -Origin $origin
+    Check ($rig.tells.Count -eq $before + 2) "but again a day later, while it is still broken"
     $three = [pscustomobject]@{ relayEveryMinutes = 5; relayFailuresBeforeAlert = 3 }
     $sp3 = Join-Path $work "three.json"
     $sync.mode = "500"
+    $told3 = $rig.tells.Count
     foreach ($m in @(0, 5)) { $rig.now = $t0.AddMinutes(100 + $m); $null = Invoke-HordeRelayWatch -Tools $tools -Policy $three -StatePath $sp3 -Origin $origin }
-    Check ($rig.tells.Count -eq 2) "with the setting at 3, two failures tell nobody"
+    Check ($rig.tells.Count -eq $told3) "with the setting at 3, two failures tell nobody"
     $rig.now = $t0.AddMinutes(110); $null = Invoke-HordeRelayWatch -Tools $tools -Policy $three -StatePath $sp3 -Origin $origin
-    Check ($rig.tells.Count -eq 3) "and the third does"
+    Check ($rig.tells.Count -eq $told3 + 1) "and the third does"
     $sync.mode = "up"
     Check ((Invoke-HordeRelayWatch -Tools $tools -Policy $policy -StatePath (Join-Path $work "off.json") -Origin "").lines[0] -like "*off*") "no origin: the watch is off, and says so"
 

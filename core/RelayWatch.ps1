@@ -17,8 +17,16 @@
 # and only after failuresBeforeAlert checks in a row (2), so one blip tells nobody - the warchief is told
 # through the fleet's mail, which does not travel through the relay; then ONE notice to the founder's
 # phone is tried as well, knowing it may not arrive, because that notice does travel through the relay.
-# While it stays down, nothing more is said. When it is healthy again, both are told once more, with how
-# long it was down.
+# While it stays down, nothing more is said. When it is healthy again - TWO healthy checks in a row, so a
+# relay that flaps does not send a notice each way - both are told once more, with how long it was down.
+# A TELL THAT FAILED IS NOT A TELL (review of PR 307): the outage counts as told only once the warchief's
+# mail was taken, so one failed fleet mail cannot silence a whole outage; the next check tries again. The
+# notice is tried once an outage and once a recovery, whatever it answers.
+# A STATE FILE THAT CANNOT BE READ is told to the warchief (at most once a day), never a silent stop.
+#
+# WHAT A CHECK COSTS THE RELAY: each GET /auth/google spends one of the relay's signInStartsPerMinute and
+# sets a throwaway state cookie the watcher never sends back. At one check every five minutes that is one
+# start in five minutes against a limit of several a minute.
 #
 # THE CHECK IS HANDED IN (Invoke-HordeRelayWatch -Tools): a suite points it at a server of its own and
 # never at the real relay. This file starts nothing; the real fetch is Get-HordeRelayWatchResponse.
@@ -30,7 +38,10 @@
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 
-$script:HordeRelayClientIdPattern = '\A[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com\z'
+# THE SAME RULE AS THE RELAY'S OWN CLIENT FILE (relays/cloudflare/GoogleClient.ps1, its length bounds), and
+# a client_id named twice is refused as PR 275's deploy check refuses it (Get-HordeCloudflareRelayLocation-
+# ClientId, "no single client_id"; PR 275 was not on main when this was written, so its rule is copied here).
+$script:HordeRelayClientIdPattern = '\A[0-9]{1,32}-[a-z0-9]{1,64}\.apps\.googleusercontent\.com\z'
 $script:HordeRelayGoogleHost = "accounts.google.com"
 # A check that takes longer than this is a failure: a relay that does not answer in 15 s is down to a phone.
 $script:HordeRelayFetchSeconds = 15
@@ -47,17 +58,18 @@ function Test-HordeRelayClientId {
     return ""
 }
 
-function Get-HordeRelayQueryValue {
-    # PURE. The URL-decoded value of -Name in the query of -Url, or $null when it has none.
+function Get-HordeRelayQueryValues {
+    # PURE. Every URL-decoded value of -Name in the query of -Url, in order: none, one, or (a fault) more.
     param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Name)
     $q = $Url.IndexOf("?")
-    if ($q -lt 0) { return $null }
+    if ($q -lt 0) { return [string[]]@() }
+    $found = New-Object System.Collections.ArrayList
     foreach ($pair in $Url.Substring($q + 1).Split("&")) {
         $eq = $pair.IndexOf("=")
         $k = $(if ($eq -ge 0) { $pair.Substring(0, $eq) } else { $pair })
-        if ([System.Uri]::UnescapeDataString($k.Replace("+", " ")) -ceq $Name) { return $(if ($eq -ge 0) { [System.Uri]::UnescapeDataString($pair.Substring($eq + 1).Replace("+", " ")) } else { "" }) }
+        if ([System.Uri]::UnescapeDataString($k.Replace("+", " ")) -ceq $Name) { [void]$found.Add($(if ($eq -ge 0) { [System.Uri]::UnescapeDataString($pair.Substring($eq + 1).Replace("+", " ")) } else { "" })) }
     }
-    return $null
+    return [string[]]$found.ToArray()
 }
 
 function Get-HordeRelayHealth {
@@ -79,37 +91,41 @@ function Get-HordeRelayHealth {
     $to = "" + $r.location
     $uri = $null
     if (-not [System.Uri]::TryCreate($to, [System.UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -cne "https" -or $uri.Host -cne $script:HordeRelayGoogleHost) { return [pscustomobject]@{ ok = $false; why = "GET /auth/google redirects somewhere that is not https://accounts.google.com" } }
-    $bad = Test-HordeRelayClientId -Value (Get-HordeRelayQueryValue -Url $to -Name "client_id")
+    $ids = @(Get-HordeRelayQueryValues -Url $to -Name "client_id")
+    if ($ids.Count -gt 1) { return [pscustomobject]@{ ok = $false; why = "GET /auth/google: the sign-in address names client_id more than once; every new sign-in fails" } }
+    $bad = Test-HordeRelayClientId -Value $(if ($ids.Count -eq 1) { $ids[0] } else { "" })
     if ($bad -ne "") { return [pscustomobject]@{ ok = $false; why = ("GET /auth/google: " + $bad + "; every new sign-in fails") } }
     return [pscustomobject]@{ ok = $true; why = "" }
 }
 
 function New-HordeRelayWatchState {
-    return [pscustomobject]@{ v = 1; lastCheckAt = $null; failures = 0; downSince = $null; alerted = $false; lastWhy = "" }
+    return [pscustomobject]@{ v = 1; lastCheckAt = $null; failures = 0; healthy = 0; downSince = $null; alerted = $false; notified = $false; lastWhy = "" }
 }
 
 function Get-HordeRelayWatchDecision {
     # PURE. After one check: { state; alert; why } - alert "down" (tell now), "recovered" (tell now, why
-    # says for how long it was down) or "" (say nothing). -Policy holds relayFailuresBeforeAlert.
+    # says for how long it was down) or "" (say nothing). It never marks an outage told: that is done
+    # only once the tell is taken (Invoke-HordeRelayWatch). -Policy holds relayFailuresBeforeAlert.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Health, [Parameter(Mandatory = $true)][datetime]$Now, [Parameter(Mandatory = $true)]$Policy)
-    $s = [pscustomobject]@{ v = 1; lastCheckAt = $Now.ToUniversalTime(); failures = [int]$State.failures; downSince = $State.downSince; alerted = [bool]$State.alerted; lastWhy = "" + $State.lastWhy }
+    $utcNow = $Now.ToUniversalTime()
+    $s = [pscustomobject]@{ v = 1; lastCheckAt = $utcNow; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $State.downSince
+                            alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy }
     if ($Health.ok) {
-        $alert = ""; $why = ""
-        if ($s.alerted) {
-            $alert = "recovered"
-            $mins = $(if ($s.downSince -is [datetime]) { [int][System.Math]::Round(($Now.ToUniversalTime() - ([datetime]$s.downSince).ToUniversalTime()).TotalMinutes) } else { -1 })
-            $why = $(if ($mins -ge 0) { "it was down about " + $mins + " minutes" } else { "how long it was down is not known" })
+        $s.healthy = $s.healthy + 1
+        if (-not $s.alerted) {
+            # Not told of an outage: a blip is forgotten at once.
+            $s.failures = 0; $s.downSince = $null; $s.lastWhy = ""; $s.notified = $false
+            return [pscustomobject]@{ state = $s; alert = ""; why = "" }
         }
-        $s.failures = 0; $s.downSince = $null; $s.alerted = $false; $s.lastWhy = ""
-        return [pscustomobject]@{ state = $s; alert = $alert; why = $why }
+        if ($s.healthy -lt 2) { return [pscustomobject]@{ state = $s; alert = ""; why = "healthy once; one more healthy check before it is called back" } }
+        $mins = $(if ($s.downSince -is [datetime]) { [int][System.Math]::Round(($utcNow - ([datetime]$s.downSince).ToUniversalTime()).TotalMinutes) } else { -1 })
+        return [pscustomobject]@{ state = $s; alert = "recovered"; why = $(if ($mins -ge 0) { "it was down about " + $mins + " minutes" } else { "how long it was down is not known" }) }
     }
+    $s.healthy = 0
     $s.failures = $s.failures + 1
-    if ($s.failures -eq 1) { $s.downSince = $Now.ToUniversalTime() }
+    if ($null -eq $s.downSince) { $s.downSince = $utcNow }
     $s.lastWhy = "" + $Health.why
-    if (-not $s.alerted -and $s.failures -ge [int]$Policy.relayFailuresBeforeAlert) {
-        $s.alerted = $true
-        return [pscustomobject]@{ state = $s; alert = "down"; why = $Health.why }
-    }
+    if (-not $s.alerted -and $s.failures -ge [int]$Policy.relayFailuresBeforeAlert) { return [pscustomobject]@{ state = $s; alert = "down"; why = $Health.why } }
     return [pscustomobject]@{ state = $s; alert = ""; why = $Health.why }
 }
 
@@ -119,8 +135,9 @@ function Read-HordeRelayWatchState {
     if (-not [System.IO.File]::Exists($Path)) { return (New-HordeKnown -Value (New-HordeRelayWatchState)) }
     try {
         $doc = ConvertFrom-HordeJson -Text (Read-HordeSharedText -Path $Path)
+        if ($doc -isnot [System.Management.Automation.PSCustomObject] -or ("" + $doc.v) -cne "1") { throw "it is not a relay watch state, v 1" }
         $s = New-HordeRelayWatchState
-        $s.failures = [int]$doc.failures; $s.alerted = ($doc.alerted -eq $true); $s.lastWhy = "" + $doc.lastWhy
+        $s.failures = [int]$doc.failures; $s.healthy = [int]$doc.healthy; $s.alerted = ($doc.alerted -eq $true); $s.notified = ($doc.notified -eq $true); $s.lastWhy = "" + $doc.lastWhy
         foreach ($k in @("lastCheckAt", "downSince")) {
             $t = [datetime]::MinValue
             if ($doc.$k -is [string] -and [datetime]::TryParse($doc.$k, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$t)) { $s.$k = $t.ToUniversalTime() }
@@ -131,13 +148,23 @@ function Read-HordeRelayWatchState {
 
 function Write-HordeRelayWatchState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$State)
-    $o = [ordered]@{ v = 1; lastCheckAt = $null; failures = [int]$State.failures; downSince = $null; alerted = [bool]$State.alerted; lastWhy = "" + $State.lastWhy }
+    $o = [ordered]@{ v = 1; lastCheckAt = $null; failures = [int]$State.failures; healthy = [int]$State.healthy; downSince = $null; alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy }
     if ($State.lastCheckAt -is [datetime]) { $o.lastCheckAt = $State.lastCheckAt.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
     if ($State.downSince -is [datetime]) { $o.downSince = $State.downSince.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
     [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Path))
     $temp = $Path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
     [System.IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $o -Compress), (New-Object System.Text.UTF8Encoding($false)))
     try { Move-HordeFileAtomic -From $temp -To $Path } catch { try { [System.IO.File]::Delete($temp) } catch { }; throw }
+}
+
+function Send-HordeRelayWatchWord {
+    # Hand one text to the tool -Name: { ok; line }. A tool that is $null tells nobody.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Who)
+    if ($null -eq $Tools[$Name]) { return [pscustomobject]@{ ok = $false; line = ("relay watch: would tell " + $Who + ", but telling is off") } }
+    $r = $null
+    try { $r = @(& $Tools[$Name] $Text) | Select-Object -Last 1 } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+    $ok = ($null -ne $r -and $r.ok -eq $true)
+    return [pscustomobject]@{ ok = $ok; line = ("relay watch: " + $(if ($ok) { "told " + $Who } else { "could not tell " + $Who + ": " + $(if ($null -ne $r) { "" + $r.detail } else { "no answer" }) })) }
 }
 
 function Invoke-HordeRelayWatch {
@@ -147,33 +174,50 @@ function Invoke-HordeRelayWatch {
     param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][string]$StatePath, [AllowEmptyString()][string]$Origin)
     $lines = New-Object System.Collections.ArrayList
     if ($Origin -eq "") { return [pscustomobject]@{ lines = @("relay watch: off - no relay origin is set (relayOrigin, or pairOrigin in the relay settings)") } }
-    $now = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
+    $utcNow = ([datetime](@(& $Tools["Now"]) | Select-Object -Last 1)).ToUniversalTime()
     $read = Read-HordeRelayWatchState -Path $StatePath
-    if ($read.state -cne "known") { return [pscustomobject]@{ lines = @("relay watch: " + $read.reason) } }
-    $st = $read.value
-    if ($st.lastCheckAt -is [datetime] -and $now -lt $st.lastCheckAt.AddMinutes([int]$Policy.relayEveryMinutes)) { return [pscustomobject]@{ lines = @() } }
-    $health = Get-HordeRelayHealth -Origin $Origin -Fetch $Tools["Fetch"]
-    $d = Get-HordeRelayWatchDecision -State $st -Health $health -Now $now -Policy $Policy
-    if ($d.alert -ceq "down") {
-        [void]$lines.Add("relay watch: DOWN - " + $d.why)
-        $tellBody = "RELAY DOWN`nThe hosted relay at " + $Origin + " fails its check " + $d.state.failures + " times in a row: " + $d.why + ".`nThe founder's phone may get nothing from this machine, the notice sent beside this one included. You are told again when it is back."
-        $notice = "The relay check fails: " + $d.why + ". The warchief was told by fleet mail."
-    } elseif ($d.alert -ceq "recovered") {
-        [void]$lines.Add("relay watch: recovered - " + $d.why)
-        $tellBody = "RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + "."
-        $notice = "The relay is back; " + $d.why + "."
-    } else {
-        if (-not $health.ok) { [void]$lines.Add("relay watch: failing (" + $d.state.failures + " in a row), " + $d.why) }
-        Write-HordeRelayWatchState -Path $StatePath -State $d.state
+    if ($read.state -cne "known") {
+        # A STATE THAT CANNOT BE READ IS TOLD (review of PR 307), at most once a day: the time it was last
+        # told is the time of a small file beside it, which needs no reading of the broken one.
+        [void]$lines.Add("relay watch: " + $read.reason + "; nothing is checked until it is mended or removed")
+        $mark = $StatePath + ".told"
+        $last = $(if ([System.IO.File]::Exists($mark)) { [System.IO.File]::GetLastWriteTimeUtc($mark) } else { [datetime]::MinValue })
+        if ($utcNow -ge $last.AddHours(24)) {
+            $w = Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY WATCH STOPPED`nThe relay watch's state file cannot be read, so the hosted relay is not being checked. It is " + $StatePath + "; removing it starts the watch afresh.") -Who "the warchief"
+            [void]$lines.Add($w.line)
+            if ($w.ok) { try { [System.IO.File]::WriteAllText($mark, "told") ; [System.IO.File]::SetLastWriteTimeUtc($mark, $utcNow) } catch { } }
+        }
         return [pscustomobject]@{ lines = @($lines.ToArray()) }
     }
-    foreach ($pair in @(@("Tell", $tellBody, "the warchief"), @("Notify", $notice, "the founder's phone"))) {
-        if ($null -eq $Tools[$pair[0]]) { [void]$lines.Add("relay watch: would tell " + $pair[2] + ", but telling is off"); continue }
-        $r = $null
-        try { $r = @(& $Tools[$pair[0]] $pair[1]) | Select-Object -Last 1 } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
-        [void]$lines.Add("relay watch: " + $(if ($null -ne $r -and $r.ok -eq $true) { "told " + $pair[2] } else { "could not tell " + $pair[2] + ": " + $(if ($null -ne $r) { "" + $r.detail } else { "no answer" }) }))
+    $st = $read.value
+    if ($st.lastCheckAt -is [datetime] -and $utcNow -lt $st.lastCheckAt.AddMinutes([int]$Policy.relayEveryMinutes)) { return [pscustomobject]@{ lines = @() } }
+    $health = Get-HordeRelayHealth -Origin $Origin -Fetch $Tools["Fetch"]
+    $d = Get-HordeRelayWatchDecision -State $st -Health $health -Now $utcNow -Policy $Policy
+    $s = $d.state
+    if ($d.alert -ceq "down") {
+        [void]$lines.Add("relay watch: DOWN - " + $d.why)
+        $w = Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY DOWN`nThe hosted relay at " + $Origin + " fails its check " + $s.failures + " times in a row: " + $d.why + ".`nThe founder's phone may get nothing from this machine, the notice sent beside this one included. You are told again when it is back.") -Who "the warchief"
+        [void]$lines.Add($w.line)
+        # TOLD ONLY WHEN TAKEN: a failed tell leaves it untold, and the next check tries again.
+        if ($w.ok) { $s.alerted = $true }
+        if (-not $s.notified) {
+            $s.notified = $true
+            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay check fails: " + $d.why + ". The warchief is told by fleet mail.") -Who "the founder's phone").line)
+        }
+    } elseif ($d.alert -ceq "recovered") {
+        [void]$lines.Add("relay watch: recovered - " + $d.why)
+        $w = Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + ".") -Who "the warchief"
+        [void]$lines.Add($w.line)
+        # A recovery the warchief did not take stays owed: the next healthy check tells it again, and the
+        # notice goes with the tell that was taken, so it is sent once.
+        if ($w.ok) {
+            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ".") -Who "the founder's phone").line)
+            $s.alerted = $false; $s.notified = $false; $s.failures = 0; $s.healthy = 0; $s.downSince = $null; $s.lastWhy = ""
+        }
+    } elseif (-not $health.ok) {
+        [void]$lines.Add("relay watch: failing (" + $s.failures + " in a row), " + $d.why)
     }
-    Write-HordeRelayWatchState -Path $StatePath -State $d.state
+    Write-HordeRelayWatchState -Path $StatePath -State $s
     return [pscustomobject]@{ lines = @($lines.ToArray()) }
 }
 
