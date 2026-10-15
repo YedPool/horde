@@ -26,6 +26,12 @@
 # warchief's window; the handover file it starts from; and why. With no script set, nothing is ever
 # started: the warchief is told, once. Whatever was started, the warchief is told that it was.
 #
+# A TELL CARRIES NO COMMAND, AND NEVER RIDES A COMMAND LINE (the fleet's interim rule of 2026-10-14, after
+# part of a message's text reached a command line and ran). Every tell and round goes through the
+# messenger port, whose fleet messenger hands the body over only as a file (-MessageFile; its
+# capability body.untyped, messengers/wezfleet/capabilities.json); and the fixed sentences below name
+# no runnable command - they say in words where to look.
+#
 # A TEST'S HOME TELLS NOBODY AND STARTS NOTHING. The real tools refuse a Horde home under the temp
 # folder before they look for a messenger, a seat or a script (cli/ServicesTell.ps1, the same guard).
 #
@@ -48,12 +54,12 @@ $script:HordeAnalystTellSentences = [ordered]@{
     "no-spawn-over-cap"      = "The fleet analyst's context is over its cap, and no spawn script is set, so no fresh session was started. Start one; it starts from its handover file."
     "started-gone"           = "The supervisor started a fresh fleet analyst in your window, because the last one's session had ended. It starts from its handover file."
     "started-over-cap"       = "The supervisor started a fresh fleet analyst in your window, because the last one's context was over its cap. The old session gets no more rounds; close it when you choose."
-    "spawn-failed"           = "The supervisor could not start a fresh fleet analyst: its spawn script failed. See: horde analyst status"
+    "spawn-failed"           = "The supervisor could not start a fresh fleet analyst: its spawn script failed. The status of the analyst supervisor says more."
     "start-silent"           = "A fresh fleet analyst was started and has not written its handover file in the time allowed. Look at its tab; nothing more is started until it does or you start one."
-    "start-too-soon-gone"    = "The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. See: horde analyst status"
-    "start-too-soon-over-cap" = "The fleet analyst went over its context cap within minutes of the last start; no new one is started yet. See: horde analyst status"
-    "no-answer"              = "The fleet analyst has not acked a round in the time allowed. See: horde analyst status"
-    "refused"                = "The analyst's supervisor cannot read one of its own files, so it acts on nothing until a person mends it. See: horde analyst status"
+    "start-too-soon-gone"    = "The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
+    "start-too-soon-over-cap" = "The fleet analyst went over its context cap within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
+    "no-answer"              = "The fleet analyst has not acked a round in the time allowed. The status of the analyst supervisor says more."
+    "refused"                = "The analyst's supervisor cannot read one of its own files, so it acts on nothing until a person mends it. The status of the analyst supervisor says more."
 }
 
 function New-HordeAnalystTools {
@@ -104,7 +110,7 @@ function Send-HordeAnalystTell {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Values, [string]$Extra = "")
     if (@($State.told) -ccontains $Key) { return "" }
     if ($null -eq $Tools["Tell"] -or $Values.tellWarchief -ne $true) { return ("would tell the warchief (" + $Key + "), but telling is off") }
-    $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($Key)) { $script:HordeAnalystTellSentences[$Key] } else { "The fleet analyst needs a person. See: horde analyst status" }) + $Extra
+    $body = "FLEET ANALYST SUPERVISOR`n" + $(if ($script:HordeAnalystTellSentences.Contains($Key)) { $script:HordeAnalystTellSentences[$Key] } else { "The fleet analyst needs a person. The status of the analyst supervisor says more." }) + $Extra
     $r = $null
     try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Tell" -With @($Key, $body, $Values) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
     if ($null -ne $r -and $r.ok -eq $true) { $State.told = [string[]]@(@($State.told) + $Key); return ("told the warchief: " + $Key) }
