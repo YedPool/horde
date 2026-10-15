@@ -244,8 +244,7 @@ export function refusalCodeOf(reason) {
   return m ? m[1] : "";
 }
 
-// WHICH ATTEMPT A REQUEST IS (the relay's request metrics: relays/cloudflare/worker/metrics.js, THE RETRY
-// HEADER). Every request says it in x-horde-attempt: 1, plus the requests in a row before it that came
+// WHICH ATTEMPT A REQUEST IS (the hosted relay's request metrics, its retry header). Every request says it in x-horde-attempt: 1, plus the requests in a row before it that came
 // back unknown - so the request after a failure says it is a retry, and the first after a success says
 // 1 again. The relay only counts it. A browser cannot put a header on a WebSocket, so a watch carries the
 // same number as attempt=<n> in its query. At most 999, the most the relay reads.
