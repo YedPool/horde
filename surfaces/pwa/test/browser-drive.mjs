@@ -374,8 +374,11 @@ const commands = {
   },
   // folded: the words are looked for in everything the lists hold, what stands under a folded heading
   // included (an answered question is out of his list, under the folded "With Thrall"); without it,
-  // only in what is shown.
-  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
+  // only in what is shown. The answered are hidden until asked for (decisions/page/list.js, THE ANSWERED
+  // ARE HIDDEN UNTIL ASKED FOR), so for folded the page's switch is turned on first, as he would.
+  async waitText(c) {
+    if (c.folded) await evaluate("(() => { const s = document.querySelector('#lists .horde-list:not([hidden]) .hd-showans'); if (s && s.getAttribute('aria-checked') !== 'true') s.click(); return true; })()");
+    const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);
