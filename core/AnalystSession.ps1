@@ -290,17 +290,17 @@ function Get-HordeAnalystSessionDecision {
         [bool]$CanStart = $false
     )
     $out = { param($Action, $Why, $Tell, $Sid, $Reason) return [pscustomobject]@{ action = $Action; why = $Why; tell = $Tell; sessionId = $Sid; reason = $Reason } }
-    $now = $Now.ToUniversalTime()
+    $utcNow = $Now.ToUniversalTime()
     $fresh = ($Handover.state -ceq "known")
     switch -CaseSensitive ("" + $State.phase) {
         "starting" {
-            $since = $(if ($State.startedAt -is [datetime]) { $State.startedAt } else { $now })
+            $since = $(if ($State.startedAt -is [datetime]) { $State.startedAt } else { $utcNow })
             # A handover written after the start (a minute of clock slack), by a session that is not the
             # one replaced, is the new one.
             if ($fresh -and $Handover.value.sessionId -cne ("" + $State.previousSessionId) -and $Handover.value.writtenAt -ge $since.AddMinutes(-1)) {
                 return (& $out "adopt" "the fresh session has written its handover" "" $Handover.value.sessionId "")
             }
-            if ($now -ge $since.AddMinutes([int]$Policy.startWaitMinutes)) { return (& $out "wait" ("a fresh session was started " + [int]($now - $since).TotalMinutes + " minutes ago and has not written its handover") "start-silent" "" "") }
+            if ($utcNow -ge $since.AddMinutes([int]$Policy.startWaitMinutes)) { return (& $out "wait" ("a fresh session was started " + [int]($utcNow - $since).TotalMinutes + " minutes ago and has not written its handover") "start-silent" "" "") }
             return (& $out "wait" "a fresh session was started and has not written its handover yet" "" "" "")
         }
         "none" {
@@ -321,7 +321,7 @@ function Get-HordeAnalystSessionDecision {
         return (& $out "adopt" "the analyst's process is gone, and another session has written the handover since" "" $Handover.value.sessionId "")
     }
     if (-not $CanStart) { return (& $out "tell" ($why + "; no spawn script is set, so the warchief must start one") ("no-spawn-" + $reason) "" $reason) }
-    if ($State.startedAt -is [datetime] -and $now -lt ([datetime]$State.startedAt).AddMinutes([int]$Policy.restartMinMinutes)) {
+    if ($State.startedAt -is [datetime] -and $utcNow -lt ([datetime]$State.startedAt).AddMinutes([int]$Policy.restartMinMinutes)) {
         return (& $out "wait" ($why + "; the last start was under " + $Policy.restartMinMinutes + " minutes ago, so none is made yet") ("start-too-soon-" + $reason) "" $reason)
     }
     return (& $out "start" $why "" "" $reason)
