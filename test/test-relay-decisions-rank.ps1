@@ -16,7 +16,10 @@
 #   - A STALE RANK NEVER WINS: older than a newer rank from the command line, or the window - refused;
 #     two taps on the phone, delivered late, stand in the order he made them, across a restart too;
 #   - NEVER AN ANSWER: a rank body sent as an answer, and an answer body sent as a rank, change nothing;
-#     a kind the channel does not name is refused by name.
+#     a kind the channel does not name is refused by name;
+#   - THE UNLOCKED SESSION (PR 302): a session-signed rank is applied with no prompt, except on a question
+#     flagged needsPasskey (needs-passkey, then applied by passkey); never from a passkey never paired, a
+#     forged vouch, or a revoked device.
 # Each refusal has its must-accept twin: the same envelope with the one thing put right is applied.
 #
 # EVERY HORDE HOME IS A FOLDER OF THE SUITE'S OWN under %TEMP% (CONTRIBUTING 9), never the real one, and
@@ -374,6 +377,57 @@ try {
     [void](Send-ToMachine $S (Get-Rank $S -Body (Get-RankBody $S -Number 2 -Which "importance" -Level "high") -Now ([datetime]::UtcNow.AddMinutes(1))).text)
     $t = Invoke-Turn $S
     Check ((Has $t "revoked") -and -not (Has $t "done") -and (Get-Words $S 2) -ceq "normal/all") ("a change from a passkey since revoked is refused, and nothing is ranked (" + $t.text + ")")
+
+    Write-Host ""
+    Write-Host "--- a session-signed rank: taken with no prompt, except on a needsPasskey question ---" -ForegroundColor Cyan
+    # THE UNLOCKED SESSION (relay/Session.ps1, PR 302): the unlock's one passkey assertion vouches for a
+    # session key, which signs the changes after it. A rank is taken under it (Channel.ps1, A SESSION-SIGNED
+    # RANK) - except on a question flagged needsPasskey - and only while the gate trusts its passkey.
+    $U = New-World
+    $np = Invoke-HordeDecision -Operation "add" -Root $U.store -Request @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Should the relay worker be deployed to production now?"; kind = "yes-no"; whatItIs = "A production deploy, for the rank suite."; group = "relay"; askedBy = "orc-f" } }
+    Check ($np.state -ceq "known" -and $np.value.outcome -ceq "done") "CONTROL: a question flagged needsPasskey is added"
+    $nNp = [int]$np.value.number
+    $null = Invoke-HordeRelayChannelTicks -Context $U.ctx
+    $sess = New-HordeTestPhoneSession -Phone $U.phone -Machine $U.id.sign.keyId -NotBefore ([datetime]::UtcNow.AddSeconds(-30))
+    $sendSession = {
+        param($World, $Session, [byte[]]$Body, $Phone = $null, [switch]$WithVouch)
+        if ($null -eq $Phone) { $Phone = $World.phone }
+        $e = New-HordeTestPhoneSessionEnvelope -Phone $Phone -Session $Session -Kind "rank" -Channel "decisions" -Body $Body -To $World.agree -WithVouch:$WithVouch
+        [void](Send-ToMachine $World $e.text)
+        return (Invoke-Turn $World)
+    }
+    $sid1 = New-Id
+    $t = & $sendSession $U $sess (Get-RankBody $U -RankId $sid1 -Number 1 -Level "high") -WithVouch
+    $kept = (Get-HordeDecisionsChannelLedger -Context $U.ctx).ranked
+    $last = @(Get-Records $U "question-ranked") | Select-Object -Last 1
+    Check ((Has $t "done") -and -not (Has $t "session-") -and (Get-Words $U 1) -ceq "high/part" -and "$($last.actor)" -ceq "founder") ("a session-signed change of rank on an ordinary question is applied, with no passkey prompt (" + $t.text + ")")
+    Check ($null -ne $last -and $kept.Contains("" + [long]$last.sequence) -and $kept["" + [long]$last.sequence].proof -ceq "session") "the ledger keeps its signing time with proof session, so a later reader can tell it from a passkey's"
+    $sid2 = New-Id
+    $t = & $sendSession $U $sess (Get-RankBody $U -RankId $sid2 -Number $nNp -Level "high")
+    $rc = @(ConvertFrom-HordeJson (Get-HordeDecisionsChannelReceipts -Context $U.ctx -Prefer @($U.phone.keyId)).text) | ForEach-Object { $_ } | Where-Object { "$(Get-HordeTestMember $_ 'from')" -ceq $U.phone.keyId } | Select-Object -First 1
+    Check ((Has $t "needs-passkey") -and (Get-Words $U $nNp) -ceq "normal/part") ("MUST-REFUSE TWIN: a session-signed change of rank on a needsPasskey question is refused as needs-passkey, and nothing is ranked (" + $t.text + ")")
+    Check (@(Get-HordeTestMember $rc "session.needsPasskey") -ccontains $sid2 -and @(Get-HordeTestMember $rc "refused") -cnotcontains $sid2) "the receipt lists it under session.needsPasskey, not as refused: the phone asks the passkey and sends it again"
+    [void](Send-ToMachine $U (Get-Rank $U -Body (Get-RankBody $U -RankId $sid2 -Number $nNp -Level "high")).text)
+    $t = Invoke-Turn $U
+    $rc = @(ConvertFrom-HordeJson (Get-HordeDecisionsChannelReceipts -Context $U.ctx -Prefer @($U.phone.keyId)).text) | ForEach-Object { $_ } | Where-Object { "$(Get-HordeTestMember $_ 'from')" -ceq $U.phone.keyId } | Select-Object -First 1
+    Check ((Has $t "done") -and (Get-Words $U $nNp) -ceq "high/part" -and @(Get-HordeTestMember $rc "applied") -ccontains $sid2 -and @(Get-HordeTestMember $rc "session.needsPasskey") -cnotcontains $sid2) ("MUST-ACCEPT: the same change with a fresh passkey assertion is applied, and leaves the needsPasskey list (" + $t.text + ")")
+    # FAILS CLOSED: an item that names no proof is looked at as a session's.
+    $bare = Invoke-HordeDecisionsChannelAccept -Context $U.ctx -Item ([pscustomobject]@{ from = $U.phone.keyId; channel = "decisions"; kind = "rank"; seq = 1; key = "x"; evidence = ""; ts = [long]([System.DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); body = (Get-RankBody $U -Number $nNp -Level "low") })
+    Check ($bare.outcome -ceq "refused" -and "$($bare.reason)".StartsWith("needs-passkey:") -and (Get-Words $U $nNp) -ceq "high/part") ("a change of rank whose item names no proof is refused on a needsPasskey question, as a session's (" + $bare.reason + ")")
+    # UNTRUSTED: a session vouched by a passkey never paired, and one whose vouch another passkey signed.
+    $stranger = New-HordeTestPhone
+    $sx = New-HordeTestPhoneSession -Phone $stranger -Machine $U.id.sign.keyId -NotBefore ([datetime]::UtcNow.AddSeconds(-30))
+    $t = & $sendSession $U $sx (Get-RankBody $U -Number 1 -Level "low") -Phone $stranger -WithVouch
+    Check ((Has $t "refused") -and -not (Has $t "done") -and (Get-Words $U 1) -ceq "high/part") ("a session-signed change from a passkey never paired is refused, and nothing is ranked (" + $t.text + ")")
+    $sf = New-HordeTestPhoneSession -Phone $U.phone -Machine $U.id.sign.keyId -NotBefore ([datetime]::UtcNow.AddSeconds(-30)) -Seq 5 -Signer $stranger
+    $t = & $sendSession $U $sf (Get-RankBody $U -Number 1 -Level "low") -WithVouch
+    Check ((Has $t "refused") -and -not (Has $t "done") -and (Get-Words $U 1) -ceq "high/part") ("a session whose vouch another passkey signed ranks nothing (" + $t.text + ")")
+    $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "low")
+    Check ((Has $t "done") -and (Get-Words $U 1) -ceq "low/part") ("CONTROL TWIN: his own live session still ranks (" + $t.text + ")")
+    # REVOKED: the device revoked, its session ranks nothing.
+    [void](Revoke-HordeRelayTrust -HordeHome $U.home -Subject "device" -Id $U.phone.deviceId -Reason "phone lost")
+    $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "high")
+    Check ((Has $t "refused") -and -not (Has $t "done") -and (Get-Words $U 1) -ceq "low/part") ("after the device is revoked its session's change of rank is refused, and nothing is ranked (" + $t.text + ")")
 
 } finally {
     $env:HORDE_HOME = $realHome

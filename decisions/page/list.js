@@ -30,6 +30,8 @@
 //   doc.takeKeyboard()       the caret into the first unanswered question's field
 //   doc.order(), doc.setOrder(key)   the order chosen (date, importance or blocks), and choosing one
 //   doc.expanded(), doc.setExpanded(open)   every question unfolded or folded, as the one button does
+//   doc.lanes(), doc.lane(), doc.setLane(lane)   the cards' numbers, the lane chosen, choosing one
+//                                         (header, ONE LANE AT A TIME)
 //   doc.drive(steps)         a check's steps acted out on the page's own fields (see drive below)
 //   doc.counts()             { open, waiting, other }
 //   doc.snapshot(limits)     WHAT IS DRAWN, read back from the page's own elements; see snapshot below
@@ -112,6 +114,14 @@
 // unfolds is kept, question by question, through every list that arrives; a question that arrives
 // later opens as the button last left them. Rows that are only read (With Thrall, History) stay one
 // line each until he unfolds one. A host may open folded instead (expanded: false - the window).
+//
+// ONE LANE AT A TIME (the founder's decision 74, 2026-10-14: cards first, one per lane with its open
+// questions and a mark when one of them blocks all its work, and one for all the questions; a tap on
+// a card shows that lane's questions). The cards are the host's to draw - the phone draws the same
+// card its Progress tab does (surfaces/pwa/page/decision-cards.js) - from what this page counts
+// (doc.lanes(): a lane is read from who asked, laneOf). A lane chosen shows only its questions, in the
+// list and in every fold, in the order chosen; it is kept on this device beside the order, and a list
+// that arrives keeps it.
 //
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
@@ -355,6 +365,44 @@
     return alone ? alone[1] : "M";
   }
 
+  // THE LANE A QUESTION IS OF (the founder's decision 74, 2026-10-14: on the decisions page, cards
+  // first - one per lane with its open questions, and one for all of them). A question names no lane
+  // of its own (schema/decision-question.v1 has no such field; the live list's askedBy reads "Orc C",
+  // "M (Thrall)", "Thrall"), so its lane is read from who asked, as its letter is (letterOf): an Orc's
+  // lane as its lane file names it ("C", "F1"), and the keeper's - and anybody's the list cannot tell,
+  // which letterOf gives M too - the Thrall's, "thrall" (surfaces/pwa/page/lane-card.js, THRALL_LANE).
+  var KEEPER_LANE = "thrall";
+  var LANE_WORD = /^(thrall|[A-Z][0-9]{0,3})$/;
+  var LANE_KEY = "horde-decisions-lane-v1";
+  function laneWord(word) { word = textOf(word); return LANE_WORD.test(word) ? word : ""; }
+  function laneOf(q) {
+    var name = textOf(q && q.askedBy);
+    var orc = /^Orc ([A-Z][0-9]{0,3})(?![A-Za-z0-9])/.exec(name);
+    if (orc) { return orc[1]; }
+    var letter = letterOf(name);
+    return letter === "M" ? KEEPER_LANE : letter;
+  }
+  // THE NUMBERS ON THE CARDS: for each lane that has a question he has still to answer (toAnswer(q)),
+  // how many, and whether any of them blocks ALL of its task's work (the keeper's word "all",
+  // decisions/Rules.ps1, HOW MUCH A QUESTION MATTERS). The Thrall's lane first, then the lanes by
+  // name, as the Progress tab lists its cards. A new list each time; the questions are not touched.
+  function lanesOf(list, toAnswer) {
+    var by = Object.create(null);
+    var out = [];
+    listOf(list).forEach(function (q) {
+      if (!q || !toAnswer(q)) { return; }
+      var lane = laneOf(q);
+      if (!by[lane]) { by[lane] = { lane: lane, open: 0, blocksAll: false }; out.push(by[lane]); }
+      by[lane].open += 1;
+      if (textOf(q.blocks) === BLOCKINGS[0]) { by[lane].blocksAll = true; }
+    });
+    return out.sort(function (a, b) {
+      if (a.lane === b.lane) { return 0; }
+      if (a.lane === KEEPER_LANE || b.lane === KEEPER_LANE) { return a.lane === KEEPER_LANE ? -1 : 1; }
+      return a.lane < b.lane ? -1 : 1;
+    });
+  }
+
   function mount(root, options) {
     options = options || {};
     // Where the view begins: below whatever the host keeps fixed at the top, which only the host knows.
@@ -383,6 +431,11 @@
     var orderTurned = false;
     try { orderKey = orderOf(prefs ? prefs.getItem(ORDER_KEY) : ""); } catch (e) { orderKey = DEFAULT_ORDER; }
     try { orderTurned = !!prefs && prefs.getItem(ORDER_TURN_KEY) === "1"; } catch (e) { orderTurned = false; }
+    // THE LANE HE CHOSE ON THE CARDS ("" for all of them), kept on this device beside the order, so a
+    // list that arrives - or the page opened again - shows the lane he was reading. A word that is no
+    // lane is all of them.
+    var laneChosen = "";
+    try { laneChosen = laneWord(prefs ? prefs.getItem(LANE_KEY) : ""); } catch (e) { laneChosen = ""; }
     var kinds = Object.create(null);
     var questions = [];
     var lastJson = null;
@@ -684,6 +737,8 @@
       }
       var mine = [];
       questions.forEach(function (q) {
+        // A LANE CHOSEN ON THE CARDS: that lane's questions alone, in the list and in every fold.
+        if (laneChosen && laneOf(q) !== laneChosen) { return; }
         var section = sectionOf(q);
         var keyWas = placedAt[q.number];
         if (keyWas && held(q)) {
@@ -1746,6 +1801,20 @@
         if (moved !== 0) { window.scrollBy(0, moved); }
       }
     }
+    // A LANE CHOSEN ("" for all of them): drawn at once and kept for the next time. A tap on a card
+    // SHOWS that lane's questions: the order line is brought to just under the top of the view, with
+    // the head of the lane's questions under it - the cards above can be many screens of a phone, and
+    // a list that changed below them unseen would look like a tap that did nothing. The order and
+    // what is folded are not touched.
+    function setLane(lane) {
+      laneChosen = laneWord(lane);
+      try { if (prefs) { prefs.setItem(LANE_KEY, laneChosen); } } catch (e) { /* only the remembering is lost */ }
+      if (lastJson === null) { onDraw(); return; }
+      draw({ keepBar: true, lane: true });
+      if (orderBar.parentNode === root) { window.scrollBy(0, orderBar.getBoundingClientRect().top - topInset() - NEAR_TOP_PX); }
+    }
+    // A question he has still to answer: in his list, and no answer of his stands (the cards' count).
+    function toAnswer(q) { return sectionOf(q) === "main" && !stateOf(q).answered; }
     // A press on an order's button: the order in force turns over; another is chosen in its first direction.
     function pressOrder(key) {
       key = orderOf(key);
@@ -1916,6 +1985,7 @@
     //   { do: "order", key, turned }   that order chosen, in its first direction (turned: true, turned
     //                             over), as setOrder does; { do: "press-order", key } a press on its button
     //   { do: "press-fold" }      a press on the one button that folds or unfolds every question
+    //   { do: "lane", lane }      that lane chosen, as a tap on its card does ("" for all)
     //   { do: "follow", q }       a press on that question's "Follows up on question N"
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
@@ -1949,6 +2019,7 @@
         else if (step.do === "order") { setOrder(textOf(step.key), step.turned === true); }
         else if (step.do === "press-order") { pressOrder(textOf(step.key)); }
         else if (step.do === "press-fold") { foldButton.click(); }
+        else if (step.do === "lane") { setLane(textOf(step.lane)); }
         else if (step.do === "follow") { target = lineOf(Number(step.q)); if (target && target.tags.follow) { target.tags.follow.press.click(); } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
@@ -2076,6 +2147,14 @@
       // one button does (header, EVERY QUESTION STARTS UNFOLDED).
       expanded: function () { return openFirst; },
       setExpanded: setExpanded,
+      // THE CARDS' NUMBERS AND THE LANE CHOSEN (decision 74): lanes() is, for each lane with a
+      // question he has still to answer, { lane, open, blocksAll }, counted over the whole list
+      // whatever lane is chosen; lane() the lane chosen, "" for all; setLane(lane) chooses one ("" or
+      // anything that is no lane: all). The host draws the cards (surfaces/pwa/page/decision-cards.js)
+      // and reads these again on each onDraw.
+      lanes: function () { return lanesOf(questions, toAnswer); },
+      lane: function () { return laneChosen; },
+      setLane: setLane,
       drive: drive,
       // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
       // questions are in the run of answering (not parked), toAnswer how many of those have no
@@ -2126,7 +2205,7 @@
         // order: the order chosen, by its key, whether it is turned over, the word on the button drawn
         // as pressed (its word alone: the arrow is arrow), and what that button says to a screen reader.
         var pressedAt = orderButtons.filter(function (b) { return b.getAttribute("aria-pressed") === "true"; }).map(function (b) { return orderButtons.indexOf(b); });
-        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, fold: { expanded: openFirst, word: foldButton.textContent, says: foldButton.getAttribute("aria-label") }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
+        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, lane: laneChosen, fold: { expanded: openFirst, word: foldButton.textContent, says: foldButton.getAttribute("aria-label") }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
         drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.kind === "parked", kind: h.head.kind, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
@@ -2194,5 +2273,7 @@
 
   // order: the one sorting of questions, for a check that holds it without a page (inOrder(list, key,
   // turned), and the orders there are).
-  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };
+  // lanes: the lane a question is of, and the cards' numbers for a list and a test of "still to answer"
+  // (lanesOf), for a check that holds them without a page.
+  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder }, lanes: { keeper: KEEPER_LANE, laneOf: laneOf, lanesOf: lanesOf } };
 }());

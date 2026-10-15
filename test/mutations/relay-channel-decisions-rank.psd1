@@ -40,8 +40,20 @@
            Find = '-Domain $script:HordeDecisionsChannelRankIdDomain)'
            Replace = ')' }
         @{ Name = "the-receipt-is-not-kept"
-           Find = '$null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.rankId -Outcome $out.outcome'
+           Find = '$null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.rankId -Outcome $rankOutcome'
            Replace = '$null = $r.value.rankId' }
+        @{ Name = "a-session-rank-on-a-needs-passkey-question-is-taken"
+           Find = 'if ($proofSaid -cne "webauthn" -and $null -ne $q.PSObject.Properties["needsPasskey"] -and $q.needsPasskey -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-rank-naming-no-proof-passes-as-a-passkeys"
+           Find = 'if ($proofSaid -cne "webauthn" -and $null -ne $q.PSObject'
+           Replace = 'if ($proofSaid -ceq "session" -and $null -ne $q.PSObject' }
+        @{ Name = "a-needs-passkey-rank-is-listed-as-refused"
+           Find = '$rankOutcome = $(if ($out.outcome -ceq "refused" -and "$($out.reason)".StartsWith("needs-passkey:")) { "needs-passkey" } else { $out.outcome })'
+           Replace = '$rankOutcome = $out.outcome' }
+        @{ Name = "a-session-rank-is-kept-as-a-passkeys"
+           Find = '-Proof $(if ($proofSaid -ceq "webauthn") { "webauthn" } else { "session" })'
+           Replace = '-Proof "webauthn"' }
         @{ Name = "the-snapshot-does-not-say-it-takes-ranks"
            Find = ',"ranks":1,"receipts":'
            Replace = ',"receipts":' }
