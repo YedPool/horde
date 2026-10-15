@@ -342,8 +342,8 @@ function Register-HordeRelay {
         [scriptblock]$PutKeeping = $null,
         [scriptblock]$SecretFiles = $null,
         [scriptblock]$Bundle = $null,
-        [scriptblock]$Status = $null,
         [scriptblock]$Setup = $null,
+        [scriptblock]$Status = $null,
         [scriptblock]$DaySummary = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
@@ -364,7 +364,7 @@ function Register-HordeRelay {
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
         watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles; daySummary = $DaySummary
-        bundle = $Bundle; status = $Status; setup = $Setup; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
+        bundle = $Bundle; setup = $Setup; status = $Status; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }

@@ -9,7 +9,8 @@
 #      (the request metrics, 2026-10-14), last - each value on standard input exactly - no byte order
 #      mark, no line end - and in no argument; then the deploy; of the production config, which names no
 #      test binding, serving the app built with the http transport at its own origin; quiet; and
-#      nothing said holds a value; the work folders are gone after; the redirect-address note;
+#      nothing said holds a value; the work folders are gone after; the redirect-address note; the
+#      relay's owners as a secret of their own, the live relay asked first when none is set (part 1 end);
 #   2. refusals before wrangler is ever run: a relay origin (relayOrigin) a deploy cannot make, no
 #      client file, one inside the repository, one that is not
 #      JSON, not a web client, a malformed id, no secret, a relative path, a settings file that fails
