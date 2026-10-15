@@ -1058,6 +1058,20 @@ Check ((Decided $r 1).action -ceq "wait" -and -not $r.acks.ContainsKey((Sid 2)))
 Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 500) }
 $r = PassM 0
 Check ((Decided $r 1).action -ceq "wait") "nor one dated in the future"
+# AN ACKNOWLEDGEMENT WHOSE TIME COULD NOT BE READ IS UNKNOWN, NOT ZERO (review of the before-live fixes).
+# A row that reads T, then acked known with no time it can give, then T again: the return to T was read
+# as a rise from nothing, and released a limited-unknown session with nobody having taken a turn.
+Start-Case; Seat 1 @{ Limited = "unknown" }; Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At -5) }
+$null = PassM 0
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = $null }
+$r = PassM 3
+Check ((Test-Held $r "usage limit unknown")) "another session's acknowledgement read once with no time it can give releases nobody"
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At -5) }
+$r = PassM 6
+Check ((Test-Held $r "usage limit unknown") -and $script:heard.acks[(Sid 2)] -eq (At -5)) "and read again as the time it showed before, it is NO RISE: what could not be read was unknown, not zero, and the time seen is kept"
+Seat 2 @{ UnreadCount = 0; OldestUnreadAt = $null; LastAckedAt = (At 7) }
+$r = PassM 9
+Check ((Decided $r 1).action -ceq "nudge") "CONTROL: a time newer than any it showed is a rise, and releases it"
 # The silence's own reading of the same thing.
 $seenA = @{ (Sid 1) = $null; (Sid 2) = $null }
 $e1 = Update-HordeWakeSilence -Seen $null -Entries @((New-HordeWakeEntry -At $t0 -Kind "nudge" -Id (Sid 1) -Outcome "woken")) -Acks $seenA -Now (At 0) -Settings $settings
@@ -1072,6 +1086,15 @@ $e6 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 1) = $nu
 Check (-not $e4.moved -and -not $e5.moved -and -not $e6.moved) "an older acknowledgement, one dated in the future, and what a session seen for the FIRST time already had are none of them a session answering now"
 $e7 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 2) = (At 85) } -Now (At 90) -Settings $settings
 Check ($e7.moved -and $e7.seen.acks.ContainsKey((Sid 1))) "a newer one is; and a session this pass could not read is remembered as it was"
+# THE LARGEST TIME SEEN IS KEPT: an unknown reading, or an older one, never overwrites it, so the time
+# read again after either is not a rise from them.
+$e8 = Update-HordeWakeSilence -Seen $e3.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = $null } -Now (At 90) -Settings $settings
+$e9 = Update-HordeWakeSilence -Seen $e8.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 20) } -Now (At 93) -Settings $settings
+Check (-not $e8.moved -and $e8.seen.acks[(Sid 2)] -eq (At 20) -and -not $e9.moved) "an acknowledgement read as unknown keeps the time seen before, and that time read again is no rise"
+$e10 = Update-HordeWakeSilence -Seen $e4.seen -Entries @() -Acks @{ (Sid 1) = $null; (Sid 2) = (At 20) } -Now (At 93) -Settings $settings
+Check ($e4.seen.acks[(Sid 2)] -eq (At 20) -and -not $e10.moved) "an older one read in between keeps it too, and the time read again after it is no rise"
+$e11 = Update-HordeWakeSilence -Seen $e8.seen -Entries @() -Acks @{ (Sid 1) = (At 50); (Sid 2) = (At 20) } -Now (At 93) -Settings $settings
+Check ($e11.moved -and $e11.seen.acks[(Sid 1)] -eq (At 50)) "CONTROL: a session's FIRST acknowledgement, after readings of none, is still a rise"
 
 # THE JOURNAL: once per session per limit.
 $said = Update-HordeWakeLimited -Seen @{} -Limited @{ (Sid 1) = "usage limit until 2026-10-12T08:10:00Z" } -Known @((Sid 1)) -Now (At 0)

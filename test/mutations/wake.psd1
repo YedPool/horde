@@ -611,6 +611,9 @@
         @{ Name = "oldest-mail-not-first"
            Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
            Replace = 'Sort-Object -Property nothing, attempts, rank, id' }
+        @{ Name = "an-acknowledgement-that-cannot-be-read-overwrites-the-time-seen"
+           Find = 'if (-not $acksNow.ContainsKey("$id") -or ($shown -is [datetime] -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"]))) { $acksNow["$id"] = $shown }'
+           Replace = '$acksNow["$id"] = $shown' }
         @{ Name = "shadow-nudges"
            Find = 'if ($shadowPass) { $outcomes[$d.id] = "would-nudge";'
            Replace = 'if ($false) { $outcomes[$d.id] = "would-nudge";' }

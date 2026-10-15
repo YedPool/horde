@@ -840,6 +840,13 @@ function Update-HordeWakeAcksRose {
     # FIRST. A session seen for the first time proves nothing by what it already had - which is what makes
     # the first pass after a start, whose reading has nothing before it, no evidence of anything. And
     # one dated in the future is no increase.
+    # THE READING KEPT IS THE LARGEST TIME SEEN, AND WHAT CANNOT BE READ IS UNKNOWN, NOT ZERO. Each reading
+    # overwrote the last, so a row read as T, then with no time that could be read (acked known, the time
+    # not one), then as T again, rose on the third pass from nothing to T: a silence ended, and every
+    # session limited unknown was released, with nobody having taken a turn (review of the before-live
+    # fixes). An older time read after a newer one did the same. So a session's reading is replaced only
+    # by a newer time. A session seen for the first time is kept as it reads - none, if it reads none - so
+    # its first acknowledgement after that is still a rise.
     param($Seen = $null, $Acks = @{}, [Parameter(Mandatory = $true)][datetime]$Now)
     $acksNow = @{}
     $wasAcks = Get-HordeWakeEntryValue $Seen "acks"
@@ -852,7 +859,7 @@ function Update-HordeWakeAcksRose {
         foreach ($id in @($Acks.Keys)) {
             $shown = $Acks[$id]
             if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }
-            $acksNow["$id"] = $shown
+            if (-not $acksNow.ContainsKey("$id") -or ($shown -is [datetime] -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"]))) { $acksNow["$id"] = $shown }
         }
     }
     # risen: the sessions that rose on THIS pass, for a caller that must know whose it was - a session's own
