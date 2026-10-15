@@ -3,7 +3,7 @@ $HordeCommand = @{
     group   = "analyst"
     sustained = $true
     usage   = "analyst tend | analyst run [-TickSeconds <n>] | analyst status | analyst mail -Text <message>"
-    summary = "the fleet analyst kept always on, with no model in the loop. The scripts write findings to <analyst folder>\findings.jsonl; the warchief writes to it with mail. tend: one pass - is the analyst's session running and under its context cap (contextCapTokens); is a round due (every roundMinutes, only when something waits); does a finding marked now, or a mail whose first word is one of wakeNowMarkers (URGENT, QUESTION), wake it at once; after heartbeatHours (6) with no wake, a heartbeat round; a round with no ack after ackMinutes is told to the warchief and the founder, once; a session that is gone, or over its cap when a round is due, is replaced by a fresh one through the person's own spawn script (spawnScript; never a restore), and the warchief is told. run: tend every -TickSeconds (60), with a heartbeat, for horde services to keep running. status: the session, its context, the rounds and what waits. mail: leave the analyst a message; plain mail waits for the next round, a message starting URGENT or QUESTION wakes it at once. Settings: <HORDE_HOME>\settings\analyst.json"
+    summary = "the fleet analyst kept always on, with no model in the loop. The scripts write findings to <analyst folder>\findings.jsonl; the warchief writes to it with mail. tend: one pass - is the analyst's session running and under its context cap (contextCapTokens); is a round due (every roundMinutes, only when something waits); does a finding marked now, or a mail whose first word is one of wakeNowMarkers (URGENT, QUESTION), wake it at once; after heartbeatHours (6) with no wake, a heartbeat round; a round with no ack after ackMinutes is told to the warchief and the founder, once; a session that is gone, or over its cap when a round is due, is replaced by a fresh one through the person's own spawn script (spawnScript; never a restore), and the warchief is told. run: tend every -TickSeconds (60), with a heartbeat, for horde services to keep running. Each tend and each pass of run also checks the hosted relay every relayEveryMinutes (5): its pages answer 200 and its Google sign-in redirects with a client id of the right shape; after relayFailuresBeforeAlert (2) failures in a row the warchief is told by the fleet's mail and one notice is tried, and both again once it is back. status: the session, its context, the rounds and what waits. mail: leave the analyst a message; plain mail waits for the next round, a message starting URGENT or QUESTION wakes it at once. Settings: <HORDE_HOME>\settings\analyst.json"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Position = 0)][ValidateSet("tend", "run", "status", "mail")][string]$Verb,
@@ -47,9 +47,28 @@ $HordeCommand = @{
             $tools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) }
             $tools["Spawn"] = { param($Script, $Handover, $Reason, $Values) return (Start-HordeAnalystSession -Script $Script -Handover $Handover -Reason $Reason) }
         }
+        # THE RELAY WATCH (core/RelayWatch.ps1): the warchief is told through the fleet's mail - the same
+        # teller as above, which does not travel through the relay - and one notice is tried beside it.
+        . (Join-Path $root "core\RelayWatch.ps1")
+        $relayOrigin = "" + $policy.values.relayOrigin
+        if ($relayOrigin -eq "") {
+            . (Join-Path $root "relay\Identity.ps1")
+            $rs = Get-HordeRelaySettingValues -HordeHome $hordeHome
+            if ($rs.state -ceq "known") { $relayOrigin = "" + $rs.value.values.pairOrigin }
+        }
+        $relayTools = @{
+            Now = { return [datetime]::UtcNow }
+            # A test's home checks only a server on this machine: no suite can reach the real relay.
+            Fetch = { param($Url) if ((Test-HordeAnalystHomeIsATests -HordeHome $hordeHome) -and -not ([uri]$Url).IsLoopback) { throw "a test's home checks only a relay on this machine" }; return (Get-HordeRelayWatchResponse -Url $Url) }
+            Tell = $null; Notify = $null
+        }
+        if ($null -ne $tools["Tell"]) { $relayTools["Tell"] = { param($Body) return (Send-HordeAnalystWarchief -Key "relay" -Body $Body -Values $policy.values -HordeHome $hordeHome) } }
+        if ($null -ne $tools["Notify"]) { $relayTools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) } }
+        $relayState = [System.IO.Path]::Combine($hordeHome, "analyst", "relay-watch.json")
         if ($Verb -eq "tend") {
             $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
             foreach ($l in @($done.lines)) { Write-Output ("analyst: " + $l) }
+            foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output $l }
             if ($done.problem -ne "") { throw $done.problem }
             return
         }
@@ -68,6 +87,7 @@ $HordeCommand = @{
                     $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
                     foreach ($l in @($done.lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $l) }
                     $problem = $done.problem
+                    foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) }
                 }
             } catch { $problem = "the pass failed: " + $_.Exception.Message }
             if ($problem -ne "") { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $problem) }
