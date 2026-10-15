@@ -366,7 +366,7 @@ function Test-HordeRelayEnvelope {
     if ($env.sig.alg -ceq "session") {
         # relay/Session.ps1, WHAT THE MACHINE TAKES: the vouch, the session signature, and the PC's own
         # records and clock, handed in on the sender.
-        if ($sender.proof -cne "webauthn") { return (New-HordeRelayEnvelopeAnswer -Reason "session-refused: the envelope is session-signed, but this sender signs ES256") }
+        if ($sender.proof -ceq "es256") { return (New-HordeRelayEnvelopeAnswer -Reason "session-refused: the envelope is session-signed, but this sender signs ES256") }
         $sv = Test-HordeRelaySessionEnvelope -Envelope $env -Sender $sender -Signed $signed
         if (-not $sv.ok) { return (New-HordeRelayEnvelopeAnswer -Reason $sv.reason) }
         return (New-HordeRelayEnvelopeAnswer -Reason "" -Value ([pscustomobject]@{ envelope = $env; header = $h; proof = "session"; signCount = $null; userVerified = $true; vouchId = $sv.value.vouchId; vouch = $sv.value.vouch; newVouch = $sv.value.isNew }))

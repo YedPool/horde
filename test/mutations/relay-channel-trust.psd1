@@ -13,7 +13,7 @@
            Find = 'if ($added.state -cne "known") { return [pscustomobject]@{ outcome = "refused";'
            Replace = 'if ($added.state -cne "known") { return [pscustomobject]@{ outcome = "retry";' }
         @{ Name = "nothing-taken-in"
-           Find = '-Kinds @("phone-key") -Senders "founder"'
+           Find = '-Kinds @("phone-key", "session") -Senders "founder"'
            Replace = '-Kinds @() -Senders "founder"' }
     )
 }
