@@ -6,7 +6,8 @@
 #   1. THE CONFIGS, read without running anything: wrangler.json never names the test binding; the
 #      config written for production carries none, and refuses a wrangler.json that does; the one
 #      written for a test carries a fresh token; the binding's committed value is too short to count;
-#      the production origin is the Worker's own name; the Worker never logs.
+#      the production config takes the deployment's Worker name and origin - the home's relayOrigin,
+#      or wrangler.json's shipped origin - or is refused; the Worker never logs.
 #   2. A LOCAL DEV OF THE WORKER serving the built phone app (built by cli/RelayDeploy.ps1 exactly as
 #      the deploy builds it: the http transport at its own origin):
 #      - strict headers on every kind of answer: a page, a script, a missing file, a refusal, a mailbox
@@ -20,7 +21,7 @@
 #      - one answer's texts stop at a million characters, so a watch's one message fits a WebSocket's;
 #      - a key is remembered while its item is held, and free again once the item is trimmed;
 #      - the machine's adapter: quotes and backslashes round-trip, a refusal carries the relay's status
-#        and words, and with no origin given it connects to the production origin;
+#        and words, and with no origin given it connects to the home's relayOrigin, or the shipped one;
 #      - a dev run with test-bindings.json exactly as committed vouches for no one: the placeholder is
 #        too short to be a token, whatever a caller sends;
 #      - the phone's own relay client and http transport, run by node, against this Worker;
@@ -74,16 +75,23 @@ Check ($authJs.Contains("const TEST_TOKEN_MIN = 32;") -and $authJs.Contains("if 
 
 $siteForConfig = Join-Path $work "config-site"
 [void][System.IO.Directory]::CreateDirectory($siteForConfig)
-$pc = New-HordeCloudflareRelayConfig -Out (Join-Path $work "prod-config") -Site $siteForConfig
+$noDep = $null
+try { $noDep = New-HordeCloudflareRelayConfig -Out (Join-Path $work "nodep-config") -Site $siteForConfig } catch { $noDep = $null }
+Check ($null -ne $noDep -and $noDep.state -ceq "unknown" -and "$($noDep.reason)".Contains("needs a deployment") -and -not (Test-Path -LiteralPath (Join-Path $work "nodep-config"))) ("a production config with no deployment of the home's is refused, and nothing is written (" + $(if ($null -ne $noDep) { $noDep.reason } else { "it threw" }) + ")")
+$exDep = [pscustomobject]@{ name = "my-relay"; origin = "https://my-relay.example.workers.dev" }
+$pc = New-HordeCloudflareRelayConfig -Out (Join-Path $work "prod-config") -Site $siteForConfig -Deployment $exDep
 $pcText = $(if ($pc.state -ceq "known") { Read-Text $pc.value } else { "" })
 Check ($pc.state -ceq "known" -and $pcText -ne "" -and -not (Test-HordeCloudflareRelayHasTestBinding -Text $pcText)) "the config written for production carries no test binding"
 $pcObj = $(if ($pcText -ne "") { $pcText | ConvertFrom-Json } else { $null })
 $siteSlash = ([System.IO.Path]::GetFullPath($siteForConfig)) -replace '\\', '/'
-Check ($null -ne $pcObj -and (Get-Prop (Get-Prop $pcObj "assets") "directory") -ceq $siteSlash -and [System.IO.Path]::IsPathRooted($pcObj.main) -and (Test-Path -LiteralPath $pcObj.main) -and (Get-Prop (Get-Prop $pcObj "vars") "HORDE_RELAY_ORIGIN") -ceq $prod.vars.HORDE_RELAY_ORIGIN) "and points wrangler at the Worker and the app's folder by absolute paths, keeping wrangler.json's own vars"
+Check ($null -ne $pcObj -and (Get-Prop (Get-Prop $pcObj "assets") "directory") -ceq $siteSlash -and [System.IO.Path]::IsPathRooted($pcObj.main) -and (Test-Path -LiteralPath $pcObj.main) -and (Get-Prop (Get-Prop $pcObj "vars") "HORDE_RELAY_GOOGLE_CALLBACK") -ceq $prod.vars.HORDE_RELAY_GOOGLE_CALLBACK) "and points wrangler at the Worker and the app's folder by absolute paths, keeping wrangler.json's own vars"
+Check ($null -ne $pcObj -and (Get-Prop $pcObj "name") -ceq "my-relay" -and (Get-Prop (Get-Prop $pcObj "vars") "HORDE_RELAY_ORIGIN") -ceq "https://my-relay.example.workers.dev") "and deploys the home's Worker, at the home's origin"
 $tok = New-HordeCloudflareRelayToken
 $tc = New-HordeCloudflareRelayConfig -Out (Join-Path $work "test-config") -Site $siteForConfig -TestToken $tok
 $tcObj = $(if ($tc.state -ceq "known") { Read-Text $tc.value | ConvertFrom-Json } else { $null })
-Check ($null -ne $tcObj -and (Get-Prop (Get-Prop $tcObj "vars") "HORDE_RELAY_TEST_AUTH") -ceq $tok -and (Get-Prop (Get-Prop $tcObj "vars") "HORDE_RELAY_ORIGIN") -ceq $prod.vars.HORDE_RELAY_ORIGIN) "the config written for a test carries the binding with the run's own token, beside wrangler.json's vars"
+Check ($null -ne $tcObj -and (Get-Prop (Get-Prop $tcObj "vars") "HORDE_RELAY_TEST_AUTH") -ceq $tok -and (Get-Prop (Get-Prop $tcObj "vars") "HORDE_RELAY_GOOGLE_CALLBACK") -ceq $prod.vars.HORDE_RELAY_GOOGLE_CALLBACK) "the config written for a test carries the binding with the run's own token, beside wrangler.json's vars"
+$tcDep = New-HordeCloudflareRelayConfig -Out (Join-Path $work "test-dep-config") -Site $siteForConfig -TestToken $tok -Deployment $exDep
+Check ($tcDep.state -ceq "unknown") "a test config is never given a production deployment"
 $short = New-HordeCloudflareRelayConfig -Out (Join-Path $work "short-config") -Site $siteForConfig -TestToken "abc"
 Check ($short.state -ceq "unknown") "a test token too short to count is refused before any config is written"
 Check ((New-HordeCloudflareRelayToken) -cne $tok -and $tok -cmatch '\A[0-9a-f]{64}\z') "each run's token is 64 fresh hex digits"
@@ -107,14 +115,12 @@ $answer = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $probe | Out-String
 Check ($answer -clike "unknown|*must never carry the test binding*" -and -not (Test-Path -LiteralPath (Join-Path $work "doctored-out"))) ("a wrangler.json that carries the test provider's binding is refused too (" + $answer + ")")
 $oidcPlaceholder = "" + ($overlayText | ConvertFrom-Json).vars.HORDE_RELAY_TEST_OIDC
 Check ($oidcPlaceholder -cnotmatch '\Ahttp://127\.0\.0\.1:[0-9]{1,5}\z') ("the test provider's committed value is a placeholder no Worker takes for a provider (" + $oidcPlaceholder + ")")
-# The same copy with another Worker's name than its origin's first label: the origin is refused.
-[System.IO.File]::WriteAllText((Join-Path $copy "relays\cloudflare\wrangler.json"), $prodText.Replace('"name": "relay"', '"name": "other"'), $utf8)
-[System.IO.File]::WriteAllText($probe, ('. "' + (Join-Path $copy "relays\cloudflare\Wrangler.ps1") + '"' + "`n" + 'try { $d = Get-HordeCloudflareRelayDeployment; Write-Output ("taken|" + $d.origin) } catch { Write-Output ("refused|" + $_.Exception.Message) }' + "`n"), $utf8)
-$answer = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $probe | Out-String).Trim()
-Check ($prodText.Contains('"name": "relay"') -and $answer -clike "refused|*is not https://other.*") ("a Worker name the origin does not start with is refused, so a deploy never sends machines to another Worker (" + $answer + ")")
-
-$dep = Get-HordeCloudflareRelayDeployment
-Check ($dep.name -ceq "relay" -and $dep.origin -clike ("https://" + $dep.name + ".*.workers.dev") -and $dep.callback -ceq "/auth/google/callback") ("the production origin is the Worker's own name under the account's subdomain, and sign-in's return path is reserved (" + $dep.origin + $dep.callback + ")")
+# THE SHIPPED RELAY (2026-10-14): wrangler.json's origin is the one every Horde user shares, and a home
+# that hosts its own names it in relayOrigin (Settings.ps1). With none, the shipped one is the answer.
+$shipHome = Join-Path $work "ship-home"
+[void][System.IO.Directory]::CreateDirectory((Join-Path $shipHome "settings"))
+$ship = Get-HordeCloudflareRelayDeployment -HordeHome $shipHome
+Check ($ship.state -ceq "known" -and $ship.value.origin -ceq $prod.vars.HORDE_RELAY_ORIGIN -and $ship.value.name -ceq $prod.name -and $ship.value.chosen -eq $false -and $ship.value.callback -ceq "/auth/google/callback") ("with no relayOrigin, the deployment is wrangler.json's shipped relay, its Worker the origin's first label, sign-in's return path reserved (" + $(if ($ship.state -ceq "known") { $ship.value.origin } else { $ship.reason }) + ")")
 $workerFiles = @(Get-ChildItem -LiteralPath (Join-Path $folder "worker") -Filter "*.js" -File)
 Check ($workerFiles.Count -ge 6) ("CONTROL: the Worker's files are read (" + $workerFiles.Count + ")")
 $logs = @($workerFiles | Where-Object { (Read-Text $_.FullName) -match '\bconsole\s*\.' } | ForEach-Object { $_.Name })
@@ -363,8 +369,13 @@ try {
             @{ q = "keepFrom=1"; key = (("d4" * 16) + "/decisions/07/" + ("0" * 24)); why = "a key whose seq has a leading zero" }
         ) | ForEach-Object { $r = Send-Raw "POST" ($tmPath + "/items?" + $_.q) ('{"key":"' + $_.key + '","text":"never"}') $bearer; [pscustomobject]@{ code = $r.code; why = $_.why } }
         Check (@($refusedTrims | Where-Object { $_.code -ne 400 }).Count -eq 0 -and (& $trimTexts) -ceq "s5,s6") ("a put that asks for a trim it may not have is refused, 400, and neither put nor trimmed: " + ((@($refusedTrims | ForEach-Object { $_.why + " " + $_.code }) -join "; ")) + " (held " + (& $trimTexts) + ")")
-        $dc = Connect-HordeRelay -Name "cloudflare" -Options @{}
-        Check ($dc.state -ceq "known" -and $null -ne $dc.value -and $dc.value.state.origin -ceq (Get-HordeCloudflareRelayDeployment).origin) "with no origin given, the adapter connects to the production origin wrangler.json names"
+        $dcHome = Join-Path $work "origin-home"
+        [void][System.IO.Directory]::CreateDirectory((Join-Path $dcHome "settings"))
+        $dc = Connect-HordeRelay -Name "cloudflare" -Options @{ hordeHome = $dcHome }
+        Check ($dc.state -ceq "known" -and $null -ne $dc.value -and $dc.value.state.origin -ceq $prod.vars.HORDE_RELAY_ORIGIN) "with no origin given and none chosen for the home, the adapter connects to the shipped relay's origin"
+        [System.IO.File]::WriteAllText((Join-Path $dcHome "settings\relay-cloudflare.json"), '{"schemaVersion":1,"settings":{"relayOrigin":"https://relay.example.workers.dev"}}', $utf8)
+        $dc = Connect-HordeRelay -Name "cloudflare" -Options @{ hordeHome = $dcHome }
+        Check ($dc.state -ceq "known" -and $null -ne $dc.value -and $dc.value.state.origin -ceq "https://relay.example.workers.dev") "with no origin given, the adapter connects to the origin the home's relayOrigin names"
 
         Write-Host ""
         Write-Host "--- the phone's own client, over this Worker ---" -ForegroundColor Cyan

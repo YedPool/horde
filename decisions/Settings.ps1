@@ -45,6 +45,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 $script:HordeDecisionSettings = $null
 $script:HordeDecisionSettingNamePattern = '\Adecisions(\.[a-z][A-Za-z0-9]{0,39}){2}\z'
@@ -111,7 +112,7 @@ function ConvertFrom-HordeDecisionSettingsText {
     # wrong is refused whole, by the name of the setting that is.
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text, [string]$From = "the settings table")
     $table = $null
-    try { $table = ($Text | ConvertFrom-Json) } catch { throw ($From + " is not JSON") }
+    try { $table = (ConvertFrom-HordeJson $Text) } catch { throw ($From + " is not JSON") }
     $versionProp = $null; $settingsProp = $null
     if ($table -is [System.Management.Automation.PSCustomObject]) { $versionProp = $table.PSObject.Properties["schemaVersion"]; $settingsProp = $table.PSObject.Properties["settings"] }
     if ($null -eq $versionProp -or $versionProp.Value -ne 1 -or $null -eq $settingsProp -or $settingsProp.Value -isnot [System.Management.Automation.PSCustomObject]) {
@@ -169,7 +170,7 @@ function Resolve-HordeDecisionSettings {
     if ($OverrideText.Trim() -eq "") { return [pscustomobject]@{ state = "ok"; values = $values; findings = @() } }
     $findings = New-Object System.Collections.ArrayList
     $given = $null
-    try { $given = ($OverrideText | ConvertFrom-Json) } catch { $given = $null }
+    try { $given = (ConvertFrom-HordeJson $OverrideText) } catch { $given = $null }
     $valuesProp = $null; $versionProp = $null
     if ($given -is [System.Management.Automation.PSCustomObject]) { $valuesProp = $given.PSObject.Properties["values"]; $versionProp = $given.PSObject.Properties["schemaVersion"] }
     if ($null -eq $versionProp -or $versionProp.Value -ne 1 -or $null -eq $valuesProp -or $valuesProp.Value -isnot [System.Management.Automation.PSCustomObject]) {

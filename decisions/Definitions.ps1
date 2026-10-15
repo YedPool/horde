@@ -12,6 +12,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 
 $script:HordeDecisionDefinitions = $null
 # The lists of a question that a kind may need. "" is none.
@@ -21,7 +22,7 @@ function Read-HordeDecisionKinds {
     # The question-kind table from -Path, checked: a table with a kind that has no label, or that
     # needs a list no question has, would be shown wrongly everywhere at once, so it is refused here.
     param([Parameter(Mandatory = $true)][string]$Path)
-    $table = ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+    $table = (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)))
     $kindsProp = $table.PSObject.Properties["kinds"]
     $versionProp = $table.PSObject.Properties["schemaVersion"]
     if ($null -eq $versionProp -or $versionProp.Value -ne 1 -or $null -eq $kindsProp -or $kindsProp.Value -isnot [System.Management.Automation.PSCustomObject]) {

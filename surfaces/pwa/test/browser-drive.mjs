@@ -13,19 +13,24 @@
 // THE SITE is served by a small HTTP server here, on 127.0.0.1, under the origin http://localhost:<port>
 // (a secure context, so WebAuthn and the service worker run; Chrome is told localhost is 127.0.0.1).
 //
-//   node browser-drive.mjs <site folder> <relay root> <chrome.exe> <profile folder>
+//   node browser-drive.mjs <site folder> <relay root> <browser debugging port>
 //
 // The first line printed is { ok, value: { origin } }; then one JSON command per line on stdin, one
-// JSON answer per line on stdout, as app-phone.mjs. Chrome and the server end with the "exit" command
-// or when stdin closes.
+// JSON answer per line on stdout, as app-phone.mjs. The server ends with the "exit" command or when
+// stdin closes.
+//
+// THE BROWSER IS NOT THIS SCRIPT'S. The suite starts it (test/lib/Browser.ps1, in a kill-on-close job
+// of the suite's own, with --host-resolver-rules=MAP localhost 127.0.0.1) and ends it, with its
+// profile, in its finally, however this script ends. Until 2026-10-14 this script spawned Chrome and
+// ended it in shutdown(), and a script killed first left the browser running (test/lib/Browser.ps1 has
+// the measurement). So there is nothing here to clean up on exit or on a signal.
 import http from "node:http";
-import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, existsSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import { join, normalize, extname, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { folderTransport } from "./folder-relay.mjs";
 
-const [, , siteDir, relayRoot, chromePath, profileDir] = process.argv;
+const [, , siteDir, relayRoot, debugPort] = process.argv;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ascii = (v) => JSON.stringify(v).replace(/[^\x20-\x7e]/g, (ch) => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
 const say = (v) => process.stdout.write(ascii(v) + "\n");
@@ -48,13 +53,8 @@ server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.del
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const origin = "http://localhost:" + server.address().port;
 
-// --- Chrome ---
-const chrome = spawn(chromePath, ["--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profileDir, "--no-first-run", "--no-default-browser-check", "--disable-extensions",
-  "--disable-background-networking", "--disable-sync", "--disable-component-update", "--host-resolver-rules=MAP localhost 127.0.0.1", "--window-size=412,915", "about:blank"], { stdio: "ignore" });
-let portFile = join(profileDir, "DevToolsActivePort");
-for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100);
-if (!existsSync(portFile)) { say({ ok: false, reason: "Chrome did not open its debugging port" }); process.exit(1); }
-const debugPort = readFileSync(portFile, "utf8").split(/\r?\n/)[0];
+// --- Chrome: the suite's, reached on its debugging port (header) ---
+if (!/^[0-9]{1,5}$/.test(String(debugPort))) { say({ ok: false, reason: "no browser debugging port was given" }); process.exit(1); }
 let targets = [];
 for (let i = 0; i < 50 && !targets.some((t) => t.type === "page"); i++) { try { targets = await (await fetch("http://127.0.0.1:" + debugPort + "/json/list")).json(); } catch (e) { /* not yet */ } if (!targets.some((t) => t.type === "page")) await sleep(100); }
 const page = targets.find((t) => t.type === "page");
@@ -274,9 +274,54 @@ const commands = {
       const $ = (id) => document.getElementById(id);
       const flat = (e) => e.innerText.replace(/\\s+/g, " ").trim();
       const cards = Array.from(document.querySelectorAll("#cardsList .card")).map((c) => ({ lane: c.getAttribute("data-lane"), thrall: c.classList.contains("thrall"), text: flat(c) }));
-      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map(flat);
+      // An entry's words whether it is folded or open (a folded entry hides its chips and text, and innerText
+      // drops what is hidden): what the stream HOLDS. What can be SEEN is entriesState's.
+      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map((e) => e.textContent.replace(/\\s+/g, " ").trim());
       return { progress: !$("progress").hidden, cardsPage: !$("cardsPage").hidden, streamPage: !$("streamPage").hidden, title: $("streamTitle").textContent, cards, items: items.length, texts: items, notice: ${notice} };
     })()`);
+  },
+  // ENTRIES FOLDED AND OPEN (app.js, openEntries): for each entry of the stream, whether it is folded, its
+  // line's role and aria-expanded, its height, and what of it can be SEEN - checkVisibility and a box of
+  // some height, not only that the node is there (every part of a folded entry is still in the DOM).
+  // tagged: the node is the one entriesTag marked, so a redraw that rebuilt the log can be told apart.
+  async entriesState() {
+    return await evaluate(`(() => {
+      const seen = (e) => !!e && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && e.getBoundingClientRect().height > 0;
+      return Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => {
+        const line = b.querySelector(':scope > .progress-line'), title = line ? line.querySelector('.progress-title') : null, when = b.querySelector('.progress-when');
+        const text = b.querySelector(':scope > .progress-text'), head = b.querySelector(':scope > .progress-head'), stamp = b.querySelector('.progress-head .stamp');
+        return { id: b.getAttribute('data-id'), folded: b.classList.contains('collapsed'), role: line ? line.getAttribute('role') : null, expanded: line ? line.getAttribute('aria-expanded') : null,
+          focusable: !!line && line.tabIndex === 0, height: Math.round(b.getBoundingClientRect().height), title: title ? title.textContent : '', titleSeen: seen(title),
+          titleCut: !!title && title.scrollWidth > title.clientWidth, when: when ? when.textContent : '', whenSeen: seen(when), textSeen: seen(text), headSeen: seen(head),
+          stamp: stamp ? stamp.textContent : '', tagged: b.hordeTag === true };
+      });
+    })()`);
+  },
+  async entriesTag() {
+    return await evaluate("Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => { b.hordeTag = true; return 1; }).length");
+  },
+  // A real touch on one part of one entry: "line" its title, "when" its folded line's time, "text" its body,
+  // "head" a chip of its head, "stamp" its head's time stamp. The entry is first brought to the middle of
+  // the screen, as a thumb would.
+  async entryTouch(c) {
+    const sel = "#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "]";
+    const part = { line: " > .progress-line .progress-title", when: " .progress-when", text: " > .progress-text", head: " > .progress-head .chip", stamp: " .progress-head .stamp" }[c.part];
+    await evaluate("document.querySelector(" + JSON.stringify(sel) + ").scrollIntoView({ block: 'center' })");
+    await sleep(300);
+    const at = await centre(sel + part);
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(500);
+    return await commands.entriesState();
+  },
+  // A real key on one entry's line, focused as the Tab key would: "Enter" or " ".
+  async entryKey(c) {
+    await evaluate("document.querySelector(" + JSON.stringify("#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "] > .progress-line") + ").focus()");
+    const k = c.key === " " ? { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " } : { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" };
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", ...k });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode });
+    await sleep(400);
+    return { scrollY: Math.round(await evaluate("window.scrollY")), entries: await commands.entriesState() };
   },
   async cardsWait(c) {
     const found = await until("document.querySelectorAll('#cardsList .card').length >= " + Number(c.count), c.timeoutMs || 30000);
@@ -544,9 +589,7 @@ const commands = {
 };
 
 async function shutdown() {
-  try { await cdp("Browser.close"); } catch (e) { /* it may be gone */ }
-  await sleep(500);
-  try { if (chrome.exitCode === null) execFileSync("taskkill", ["/PID", String(chrome.pid), "/T", "/F"], { stdio: "ignore" }); } catch (e) { /* gone */ }
+  // The browser is the suite's to end (header); this script ends only what it started: its server.
   server.close();
 }
 

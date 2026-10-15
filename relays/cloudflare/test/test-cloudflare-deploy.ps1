@@ -9,7 +9,8 @@
 #      mark, no line end - and in no argument; then the deploy; of the production config, which names no
 #      test binding, serving the app built with the http transport at its own origin; quiet; and
 #      nothing said holds a value; the work folders are gone after; the redirect-address note;
-#   2. refusals before wrangler is ever run: no client file, one inside the repository, one that is not
+#   2. refusals before wrangler is ever run: a relay origin (relayOrigin) a deploy cannot make, no
+#      client file, one inside the repository, one that is not
 #      JSON, not a web client, a malformed id, no secret, a relative path, a settings file that fails
 #      its checks, a wranglerScript that is not there, an allowlist entry that is neither an email nor a
 #      Google account id, an allowlist switched on with nobody on it - each reason free of the values
@@ -55,7 +56,9 @@ $log = Join-Path $work "wrangler.log"
 $fake = Join-Path $here "fake-wrangler.cjs"
 $clientId = "123456789012-fakeclientforhordetests0000000000.apps.googleusercontent.com"
 $clientSecret = "GOCSPX-fakeSecretForHordeTests0123456"
-$dep = Get-HordeCloudflareRelayDeployment
+# The home's relay origin (Settings.ps1, relayOrigin): the suite's own, under the example subdomain.
+$homeOrigin = "https://relay.example.workers.dev"
+$dep = [pscustomobject]@{ name = "relay"; origin = $homeOrigin; callback = "/auth/google/callback" }
 $callback = $dep.origin + $dep.callback
 $env:HORDE_FAKE_WRANGLER_LOG = $log
 $env:HORDE_FAKE_WRANGLER_FAIL = ""
@@ -100,10 +103,11 @@ function Write-Client {
 function Set-Settings {
     # The relay's settings file in the suite's home: -Raw as is, or googleClientFile and wranglerScript.
     # The check after the deploy asks the suite's stand-in (-Check, the matching one by default), never
-    # the real relay.
-    param([string]$Client = "", [string]$Wrangler = $fake, [string]$Raw = "", [hashtable]$More = @{}, [string]$Check = $starts["same"])
+    # the real relay. -Origin is the home's relayOrigin (empty: none, so the shipped relay).
+    param([string]$Client = "", [string]$Wrangler = $fake, [string]$Raw = "", [hashtable]$More = @{}, [string]$Check = $starts["same"], [string]$Origin = $homeOrigin)
     if ($Raw -eq "") {
         $set = @{ googleClientFile = $Client; wranglerScript = $Wrangler; deployCheckOrigin = $Check }
+        if ($Origin -ne "") { $set["relayOrigin"] = $Origin }
         foreach ($k in @($More.Keys)) { $set[$k] = $More[$k] }
         $Raw = (@{ schemaVersion = 1; settings = $set } | ConvertTo-Json -Depth 4)
     }
@@ -142,7 +146,7 @@ try {
         Check ($runs[3].stdin -ceq "") "the deploy is given nothing on its input"
         $argvAll = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
         Check (-not (Holds-Value $argvAll)) "no value is ever an argument"
-        Check (@($runs | Where-Object { $null -eq $_.config -or $_.config.namesTestBinding -or -not $_.config.appIndex -or $_.config.name -cne "relay" }).Count -eq 0) "every run is given the production config: the Worker relay, no test binding, the app's files beside it"
+        Check (@($runs | Where-Object { $null -eq $_.config -or $_.config.namesTestBinding -or -not $_.config.appIndex -or $_.config.name -cne "relay" -or $_.config.origin -cne $homeOrigin }).Count -eq 0) "every run is given the production config: the home's Worker and origin, no test binding, the app's files beside it"
         $repoFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + "\"
         Check (@($runs | Where-Object { ([System.IO.Path]::GetFullPath($_.config.path)).StartsWith($repoFull, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) "the config wrangler is given lives outside the repository"
         $appConfig = $runs[3].config.appConfig | ConvertFrom-Json
@@ -164,6 +168,12 @@ try {
     $runs = @(Read-Log)
     Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[2].stdin -ceq '{"on":true,"emails":["founder@example.com","second@example.org"],"subs":["112233445566778899"]}') ("one setting switches the allowlist on: its emails in lower case, its Google account ids apart (" + $(if ($runs.Count -ge 3) { $runs[2].stdin } else { $d.answer.reason }) + ")")
     Check (-not (($d.said -join " ").Contains("founder@example.com"))) "and what the deploy says names nobody on it"
+    # THE WORKER IS THE ORIGIN'S FIRST LABEL: another home's origin deploys another Worker, there.
+    Set-Settings -Client (Write-Client -WithCallback) -Origin "https://my-relay.example.workers.dev"
+    Clear-Log
+    $d = Deploy
+    $runs = @(Read-Log)
+    Check ($d.answer.state -ceq "known" -and $d.answer.value.origin -ceq "https://my-relay.example.workers.dev" -and $runs.Count -eq 4 -and @($runs | Where-Object { $_.config.name -cne "my-relay" -or $_.config.origin -cne "https://my-relay.example.workers.dev" }).Count -eq 0) ("another home's relayOrigin deploys its own Worker, my-relay, at its own origin (" + $d.answer.state + " " + $d.answer.reason + ")")
     Set-Settings -Client (Write-Client -WithCallback) -More @{ signInAllowlistOn = $false; signInAllowlist = "founder@example.com" }
     Clear-Log
     $d = Deploy
@@ -174,6 +184,9 @@ try {
     Write-Host "--- 2. refusals, before wrangler is ever run ---" -ForegroundColor Cyan
     $inside = Join-Path $root "relays\cloudflare\google-oauth-client.json"
     $bad = @(
+        @{ what = "a relay origin that is not a workers.dev origin"; client = (Write-Client); origin = "https://relay.example.com"; like = "is not https://<Worker name>" },
+        @{ what = "a relay origin over plain http"; client = (Write-Client); origin = "http://relay.example.workers.dev"; like = "is not https://<Worker name>" },
+        @{ what = "a relay origin with no account subdomain"; client = (Write-Client); origin = "https://relay.workers.dev"; like = "is not https://<Worker name>" },
         @{ what = "no client file"; client = (Join-Path $work "absent.json"); like = "there is no Google client file" },
         @{ what = "a client file inside the repository"; client = $inside; like = "inside the repository" },
         @{ what = "a client file that is not JSON"; client = (Write-Client -Name "notjson.json" -Text ("not json " + $clientSecret)); like = "is not a JSON object" },
@@ -186,7 +199,7 @@ try {
         @{ what = "an allowlist switched on with nobody on it"; client = (Write-Client); more = @{ signInAllowlistOn = $true; signInAllowlist = "" }; like = "nobody could sign in" }
     )
     foreach ($c in $bad) {
-        Set-Settings -Client $c.client -Wrangler $(if ($c.ContainsKey("wrangler")) { $c.wrangler } else { $fake }) -More $(if ($c.ContainsKey("more")) { $c.more } else { @{} })
+        Set-Settings -Client $c.client -Wrangler $(if ($c.ContainsKey("wrangler")) { $c.wrangler } else { $fake }) -More $(if ($c.ContainsKey("more")) { $c.more } else { @{} }) -Origin $(if ($c.ContainsKey("origin")) { $c.origin } else { $homeOrigin })
         Clear-Log
         $d = Deploy
         Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains($c.like) -and @(Read-Log).Count -eq 0 -and -not (Holds-Value ("" + $d.answer.reason + ($d.said -join " ")))) ("" + $c.what + ": refused, wrangler never run, no value in the reason (" + $d.answer.reason + ")")
@@ -237,6 +250,16 @@ try {
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-Relay", "cloudflare") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("the relay was not deployed") -and -not (Holds-Value $r.out)) ("a failed deploy exits non-zero, says so, and prints no value (exit " + $r.code + ")")
     Check ((Read-HordeRelayDeployed -HordeHome $hh).value.at -eq $rec.value.at) "a failed deploy leaves the record of the last one that worked"
+    # THE SHIPPED RELAY (2026-10-14): with no relayOrigin, the deploy is of wrangler.json's own origin -
+    # the relay every user shares, which only its operator deploys.
+    $shipped = "" + (([System.IO.File]::ReadAllText((Join-Path $root "relays\cloudflare\wrangler.json"))) | ConvertFrom-Json).vars.HORDE_RELAY_ORIGIN
+    Set-Settings -Client (Write-Client -WithCallback) -Origin ""
+    $cliEnv["HORDE_FAKE_WRANGLER_FAIL"] = ""
+    Clear-Log
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
+    $runs = @(Read-Log)
+    Check ($shipped -clike "https://relay.*.workers.dev" -and $r.code -eq 0 -and $r.out.Contains("it answers at " + $shipped) -and $runs.Count -eq 4 -and @($runs | Where-Object { $_.config.name -cne "relay" -or $_.config.origin -cne $shipped }).Count -eq 0) ("with no relayOrigin, horde relay deploy deploys the shipped relay, at wrangler.json's origin (exit " + $r.code + ")")
+    Set-Settings -Client (Write-Client -WithCallback)
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-Relay", "local") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("cannot be deployed")) "relay deploy -Relay local is refused"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-MaxTurns", "1") -Env $cliEnv
