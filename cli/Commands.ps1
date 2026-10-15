@@ -33,6 +33,7 @@ function Get-HordeCommandGroups {
         wake = "waking the sessions that have mail"
         services = "long-lived pieces kept running and current"
         files = "files shared for the founder to read"
+        analyst = "the fleet analyst, kept always on"
     }
 }
 
