@@ -185,7 +185,26 @@
 #     this phone - is refused as superseded. A change from another route counts at the time the store
 #     recorded it; one from this phone at the time its passkey signed it, which this channel keeps in its
 #     ledger (rankedAt, by the record's sequence: the record itself holds only the words), so two taps
-#     on the phone a moment apart stand in the order he made them.
+#     on the phone a moment apart stand in the order he made them. A record whose time cannot be read
+#     counts as the newest there is: the guard errs toward refusing (review of PR 303, S5).
+#     THE TWO CLOCKS (review of PR 303, S3): a change from the phone counts by the time ITS clock put in
+#     the envelope, and one from the window or the command line by this PC's clock when the store wrote
+#     it. The journal takes an envelope whose time runs up to its clockSkewSeconds ahead of this PC - 600 s
+#     by default, an hour at most (relay/Journal.ps1) - so a tap made up to ten minutes BEFORE a change at
+#     the window, on a phone whose clock runs that far ahead, can still stand over it. Answers share exactly this limit (PR 268). It is a bound of clock
+#     skew, not a hole: the time is under the signature, so only his own phone's clock can move it.
+#     THIS VERY CHANGE AGAIN (review of PR 303, S4): a crash after the record is written and before its
+#     signing time is kept leaves the record counting at the store's time; when the same change comes
+#     again and the question stands at exactly its levels, the list is asked with its own id, and a
+#     replayed answer makes it done - applied, never reported superseded.
+#   - A SESSION-SIGNED RANK (the coordinator's decision of 2026-10-14, for when the unlocked session of PR
+#     302 is on main): a change of rank signed by the phone's session key, inside the window his passkey
+#     vouched for, IS taken - a rank is low-risk, and he wants fewer prompts - EXCEPT on a question flagged
+#     needsPasskey, where it is refused by name, as a session-signed answer is: there only a fresh passkey
+#     signature ranks. The stale check uses the envelope's own signed time, whichever key signed it; the
+#     ledger keeps, beside each time, which proof the envelope carried (proof: webauthn or session), so a
+#     later reader can tell a passkey's time from a session key's. A passkey-signed rank is recorded with
+#     its passkey's time, as it is today. Until PR 302 lands every rank is passkey-signed (webauthn).
 #   - WHAT BECAME OF IT goes back in the receipts, by rankId, beside the answers' ids: applied or refused.
 #     The phone shows the new level once the snapshot holds it, and a refusal in its own words.
 # done, refused and retry as for an answer.
@@ -399,6 +418,8 @@ function Invoke-HordeDecisionsChannelRankApply {
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
     $signedAt = [long]$Item.ts
     $mine = $ledger.streams.ContainsKey($Item.from) -and $ledger.streams[$Item.from].applied -ccontains $Rank.rankId
+    $request = [ordered]@{ id = (Get-HordeDecisionsChannelAnswerId -From $Item.from -AnswerId $Rank.rankId -Domain $script:HordeDecisionsChannelRankIdDomain); actor = "founder"; number = $n }
+    foreach ($w in @($Rank.words.Keys)) { $request[$w] = $Rank.words[$w] }
     if (-not $mine) {
         $newest = [long]-1
         foreach ($h in @($q.history)) {
@@ -406,20 +427,28 @@ function Invoke-HordeDecisionsChannelRankApply {
             $given = Get-HordeDecisionsChannelRankedAt -Context $Context -Entry $h
             if ($given -gt $newest) { $newest = $given }
         }
-        if ($newest -gt $signedAt) { return [pscustomobject]@{ outcome = "refused"; reason = ("superseded: question " + $n + " already has a newer change of its rank (given at " + $newest + " ms) than this one (signed at " + $signedAt + " ms), so this older one is not applied") } }
+        if ($newest -gt $signedAt) {
+            # THIS VERY CHANGE, WRITTEN BEFORE A CRASH (review of PR 303, S4): the record was written and the
+            # ledger was not, so the record counts at the time the store wrote it, after the signing. When
+            # the question already stands at exactly these levels, the list is asked with this change's own
+            # id: it answers replayed only for this change's own record - another id is refused as changing
+            # nothing, and writes nothing - and then it is done, never superseded.
+            $same = @(@($Rank.words.Keys) | Where-Object { "$($q.$_)" -cne "$($Rank.words[$_])" }).Count -eq 0
+            $again = $null
+            if ($same) { $again = Invoke-HordeDecision -Operation "rank" -Request $request -Root $Context.decisionsRoot }
+            if ($null -eq $again -or $again.state -cne "known" -or "$($again.value.outcome)" -cne "replayed") {
+                return [pscustomobject]@{ outcome = "refused"; reason = ("superseded: question " + $n + " already has a newer change of its rank (given at " + $newest + " ms) than this one (signed at " + $signedAt + " ms), so this older one is not applied") }
+            }
+        }
     }
-    $request = [ordered]@{ id = (Get-HordeDecisionsChannelAnswerId -From $Item.from -AnswerId $Rank.rankId -Domain $script:HordeDecisionsChannelRankIdDomain); actor = "founder"; number = $n }
-    foreach ($w in @($Rank.words.Keys)) { $request[$w] = $Rank.words[$w] }
     $ranked = Invoke-HordeDecision -Operation "rank" -Request $request -Root $Context.decisionsRoot
     if ($ranked.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("the decisions list could not take the change now: " + $ranked.reason) } }
     if ($ranked.state -ceq "absent") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused the change: " + $ranked.reason) } }
     if ($ranked.value.outcome -ceq "refused") { return [pscustomobject]@{ outcome = "refused"; reason = ("the decisions list refused the change: " + (@($ranked.value.findings) -join "; ")) } }
     # WHEN HE SIGNED IT, kept by the record's sequence for the next change's stale check. A ledger that
-    # cannot be kept costs only that: the record then counts at the time the store recorded it. (A crash
-    # between the record and this line makes a resend of the same change count its own record at the
-    # time the store wrote it, and so be listed refused as superseded: the record stands all the same,
-    # and the error is toward refusing, never toward applying an older change.)
-    $null = Add-HordeDecisionsChannelRanked -Context $Context -Sequence ([long]$ranked.value.sequence) -SignedAt $signedAt -Evidence "$($Item.evidence)"
+    # cannot be kept costs only that: the record then counts at the time the store recorded it. A crash
+    # between the record and this line is mended when the change comes again (above, THIS VERY CHANGE).
+    $null = Add-HordeDecisionsChannelRanked -Context $Context -Sequence ([long]$ranked.value.sequence) -SignedAt $signedAt -Evidence "$($Item.evidence)" -Proof "webauthn"
     $said = @(@($Rank.words.Keys) | ForEach-Object { $_ + " " + $Rank.words[$_] }) -join ", "
     return [pscustomobject]@{ outcome = "done"; reason = ("question " + $n + ": the founder's change of rank (" + $said + ") is record " + $ranked.value.sequence + " (" + $ranked.value.outcome + ")") }
 }
@@ -427,12 +456,15 @@ function Invoke-HordeDecisionsChannelRankApply {
 function Get-HordeDecisionsChannelRankedAt {
     # When the change of rank in the history entry -Entry was GIVEN (the header, A STALE RANK NEVER WINS):
     # this phone's own, the time its passkey signed it, from the ledger; any other, the time the store
-    # recorded it. -1 when neither can be read.
+    # recorded it - and the newest time there is when that cannot be read (below).
     param($Context, $Entry)
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
     $key = "" + [long]$Entry.sequence
     if ($ledger.ranked.Contains($key)) { return [long]$ledger.ranked[$key].at }
-    try { return [long][System.DateTimeOffset]::Parse("$($Entry.at)", [System.Globalization.CultureInfo]::InvariantCulture).ToUnixTimeMilliseconds() } catch { return [long]-1 }
+    # A TIME THAT CANNOT BE READ IS THE NEWEST THERE IS (review of PR 303, S5): counted as nothing, an
+    # older change from the phone could stand over it; counted as the newest, the phone's is refused, and
+    # he sees his tap not taken - the error is toward refusing a command, never toward an older one.
+    try { return [long][System.DateTimeOffset]::Parse("$($Entry.at)", [System.Globalization.CultureInfo]::InvariantCulture).ToUnixTimeMilliseconds() } catch { return [long]::MaxValue }
 }
 
 function Get-HordeDecisionsChannelFingerprint {
@@ -584,7 +616,11 @@ function Read-HordeDecisionsChannelRankedFile {
         if ($null -eq $j -or $null -eq $j.PSObject.Properties["ranked"]) { return $out }
         foreach ($x in @($j.ranked)) {
             if ($null -eq $x -or "$($x.sequence)" -cnotmatch '\A[1-9][0-9]{0,15}\z' -or "$($x.at)" -cnotmatch '\A[0-9]{1,16}\z' -or "$($x.evidence)" -cnotmatch '\A([0-9a-f]{64})?\z') { return [ordered]@{} }
-            $out["$($x.sequence)"] = [pscustomobject]@{ at = [long]"$($x.at)"; evidence = "$($x.evidence)" }
+            # proof: what signed it; an entry written before the member was a passkey's, as every one was.
+            $proof = "webauthn"
+            if ($null -ne $x.PSObject.Properties["proof"]) { $proof = "$($x.proof)" }
+            if (@("webauthn", "session") -cnotcontains $proof) { return [ordered]@{} }
+            $out["$($x.sequence)"] = [pscustomobject]@{ at = [long]"$($x.at)"; evidence = "$($x.evidence)"; proof = $proof }
         }
     } catch { return [ordered]@{} }
     return $out
@@ -593,9 +629,10 @@ function Read-HordeDecisionsChannelRankedFile {
 function Add-HordeDecisionsChannelRanked {
     # When the passkey signed the change of rank written as record -Sequence, into the ledger and its file
     # (the newest 64). "" when kept, else why not; never throws.
-    param($Context, [long]$Sequence, [long]$SignedAt, [string]$Evidence = "")
+    # -Proof: what signed it, "webauthn" (his passkey) or "session" (the header, A SESSION-SIGNED RANK).
+    param($Context, [long]$Sequence, [long]$SignedAt, [string]$Evidence = "", [ValidateSet("webauthn", "session")][string]$Proof = "webauthn")
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
-    $ledger.ranked["" + $Sequence] = [pscustomobject]@{ at = $SignedAt; evidence = $(if ($Evidence -cmatch '\A[0-9a-f]{64}\z') { $Evidence } else { "" }) }
+    $ledger.ranked["" + $Sequence] = [pscustomobject]@{ at = $SignedAt; evidence = $(if ($Evidence -cmatch '\A[0-9a-f]{64}\z') { $Evidence } else { "" }); proof = $Proof }
     while ($ledger.ranked.Count -gt $script:HordeDecisionsChannelRankedKept) { $ledger.ranked.RemoveAt(0) }
     return (Save-HordeDecisionsChannelLedger -Context $Context)
 }
@@ -609,7 +646,7 @@ function Save-HordeDecisionsChannelLedger {
         $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
         [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
         $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object { '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].refused) + '}' })
-        $ranked = @($ledger.ranked.Keys | ForEach-Object { '{"sequence":' + $_ + ',"at":' + [long]$ledger.ranked[$_].at + ',"evidence":"' + $ledger.ranked[$_].evidence + '"}' })
+        $ranked = @($ledger.ranked.Keys | ForEach-Object { '{"sequence":' + $_ + ',"at":' + [long]$ledger.ranked[$_].at + ',"evidence":"' + $ledger.ranked[$_].evidence + '","proof":"' + $ledger.ranked[$_].proof + '"}' })
         $temp = $path + "." + $PID + ".tmp"
         try {
             [System.IO.File]::WriteAllText($temp, ('{"v":1,"streams":[' + ($streams -join ",") + '],"ranked":[' + ($ranked -join ",") + ']}'), [System.Text.Encoding]::ASCII)

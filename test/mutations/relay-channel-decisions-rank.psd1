@@ -30,6 +30,12 @@
         @{ Name = "the-signing-time-kept-is-never-read"
            Find = 'if ($ledger.ranked.Contains($key)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "a-time-that-cannot-be-read-counts-as-nothing"
+           Find = 'catch { return [long]::MaxValue }'
+           Replace = 'catch { return [long]-1 }' }
+        @{ Name = "the-same-change-after-a-crash-is-superseded"
+           Find = 'if ($same) { $again = Invoke-HordeDecision'
+           Replace = 'if ($false) { $again = Invoke-HordeDecision' }
         @{ Name = "the-request-id-shares-the-answers-domain"
            Find = '-Domain $script:HordeDecisionsChannelRankIdDomain)'
            Replace = ')' }

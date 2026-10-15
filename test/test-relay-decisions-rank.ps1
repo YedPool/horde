@@ -319,6 +319,56 @@ try {
     Check (@($file.ranked).Count -ge 3 -and @($file.ranked | Where-Object { "$($_.evidence)" -cmatch '\A[0-9a-f]{64}\z' }).Count -eq @($file.ranked).Count) "the ledger keeps each phone change's signing time and the hash of the journal record that proved it"
 
     Write-Host ""
+    Write-Host "--- the ledger survives save and read whole (review of PR 303, item 1) ---" -ForegroundColor Cyan
+    # Whichever of two branches that rewrite the ledger merges second must keep the other's members: this
+    # holds the ranked entries and the receipts' lists to a save and a read, member by member.
+    $held = Get-HordeDecisionsChannelLedger -Context $S.ctx
+    $flat = { param($L) (@($L.ranked.Keys | ForEach-Object { $_ + "=" + $L.ranked[$_].at + "/" + $L.ranked[$_].evidence + "/" + $L.ranked[$_].proof }) -join ";") + "|" + (@($L.streams.Keys | Sort-Object | ForEach-Object { $_ + ":" + (@($L.streams[$_].applied) -join ",") + ":" + (@($L.streams[$_].refused) -join ",") }) -join ";") }
+    $before = & $flat $held
+    Check ((Save-HordeDecisionsChannelLedger -Context $S.ctx) -ceq "") "CONTROL: the ledger is saved"
+    $back = New-HordeRelayRunContext -HordeHome $S.home -Connection $S.conn
+    $after = & $flat (Get-HordeDecisionsChannelLedger -Context $back.value)
+    Close-HordeRelayRunContext -Context $back.value
+    Check (@($held.ranked.Keys).Count -ge 4 -and @($held.ranked.Values | Where-Object { $_.proof -ceq "webauthn" }).Count -eq @($held.ranked.Keys).Count -and $after -ceq $before) ("a ledger holding ranked entries (time, evidence, proof) and receipts reads back exactly as it was saved (" + $before.Length + " characters)")
+
+    Write-Host ""
+    Write-Host "--- a time that cannot be read counts as the newest (review of PR 303, S5) ---" -ForegroundColor Cyan
+    $odd = Get-HordeDecisionsChannelRankedAt -Context $S.ctx -Entry ([pscustomobject]@{ sequence = 999999; kind = "question-ranked"; at = "not a time" })
+    $fine = Get-HordeDecisionsChannelRankedAt -Context $S.ctx -Entry ([pscustomobject]@{ sequence = 999999; kind = "question-ranked"; at = "2026-10-14T12:00:00.0000000Z" })
+    Check ($odd -eq [long]::MaxValue -and $fine -eq 1791979200000) ("a ranking record whose time cannot be read is the newest there is, so every change from the phone is older; one that reads is its time (" + $odd + ", " + $fine + ")")
+
+    Write-Host ""
+    Write-Host "--- this very change again, after a crash before its signing time was kept (review of PR 303, S4) ---" -ForegroundColor Cyan
+    $n5 = Add-Question $S "Should the crash case be ranked once?"
+    $null = Invoke-HordeRelayChannelTicks -Context $S.ctx
+    $crashId = New-Id
+    $signedThen = [datetime]::UtcNow.AddSeconds(-5)
+    [void](Send-ToMachine $S (Get-Rank $S -Body (Get-RankBody $S -RankId $crashId -Number $n5 -Level "high") -Now $signedThen).text)
+    $t = Invoke-Turn $S
+    Check ((Has $t "done") -and (Get-Words $S $n5) -ceq "high/part") ("CONTROL: the change lands, recorded after it was signed (" + $t.text + ")")
+    # THE CRASH: the record is in the store, and the ledger never heard of it - neither its applied id nor
+    # its signing time - as when the run dies between the two.
+    $rpath = Join-Path $S.home "relay\decisions\receipts.json"
+    $seqOfIt = [long](@(Get-Records $S "question-ranked") | Select-Object -Last 1).sequence
+    $j = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($rpath))
+    $streamsText = @($j.streams | ForEach-Object { '{"from":"' + $_.from + '","applied":[' + ((@($_.applied | Where-Object { $_ -cne $crashId }) | ForEach-Object { '"' + $_ + '"' }) -join ",") + '],"refused":[' + ((@($_.refused) | ForEach-Object { '"' + $_ + '"' }) -join ",") + ']}' }) -join ","
+    $rankedText = @($j.ranked | Where-Object { [long]$_.sequence -ne $seqOfIt } | ForEach-Object { '{"sequence":' + $_.sequence + ',"at":' + $_.at + ',"evidence":"' + $_.evidence + '","proof":"' + $_.proof + '"}' }) -join ","
+    [System.IO.File]::WriteAllText($rpath, ('{"v":1,"streams":[' + $streamsText + '],"ranked":[' + $rankedText + ']}'), [System.Text.Encoding]::ASCII)
+    $S.ctx = (New-HordeRelayRunContext -HordeHome $S.home -Connection $S.conn).value
+    $ledgerNow = Get-HordeDecisionsChannelLedger -Context $S.ctx
+    Check (-not $ledgerNow.ranked.Contains("" + $seqOfIt) -and -not (@($ledgerNow.streams[$S.phone.keyId].applied) -ccontains $crashId)) "CONTROL: after the crash the ledger knows neither the change's id nor its signing time"
+    $countBefore = @(Get-Records $S "question-ranked").Count
+    [void](Send-ToMachine $S (Get-Rank $S -Body (Get-RankBody $S -Number $n5 -Level "high") -Now $signedThen).text)
+    $t = Invoke-Turn $S
+    Check ((Has $t "superseded") -and @(Get-Records $S "question-ranked").Count -eq $countBefore) ("MUST-REFUSE TWIN: ANOTHER change to the same levels, signed as early, is still older than the record, and refused as superseded (" + $t.text + ")")
+    [void](Send-ToMachine $S (Get-Rank $S -Body (Get-RankBody $S -RankId $crashId -Number $n5 -Level "high") -Now $signedThen).text)
+    $t = Invoke-Turn $S
+    $null = Invoke-HordeRelayChannelTicks -Context $S.ctx
+    $rc = Get-PhoneReceipt $S
+    Check ((Has $t "(replayed)") -and -not (Has $t "superseded") -and @(Get-Records $S "question-ranked").Count -eq $countBefore -and @($rc.mine.applied) -ccontains $crashId -and -not (@($rc.mine.refused) -ccontains $crashId)) ("THE SAME CHANGE SENT AGAIN is its own record answered again: applied, never superseded, nothing written twice (" + $t.text + ")")
+    Check ((Get-HordeDecisionsChannelLedger -Context $S.ctx).ranked.Contains("" + $seqOfIt)) "and its signing time is kept now"
+
+    Write-Host ""
     Write-Host "--- a revoked passkey ranks nothing ---" -ForegroundColor Cyan
     [void](Revoke-HordeRelayTrust -HordeHome $S.home -Subject "device" -Id $S.phone.deviceId -Reason "phone lost")
     [void](Send-ToMachine $S (Get-Rank $S -Body (Get-RankBody $S -Number 2 -Which "importance" -Level "high") -Now ([datetime]::UtcNow.AddMinutes(1))).text)
