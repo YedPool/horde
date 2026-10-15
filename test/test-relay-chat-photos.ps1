@@ -630,6 +630,29 @@ try {
     try { $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0 } catch { $in = [pscustomobject]@{ value = [pscustomobject]@{ refused = @(); held = @("it threw: " + $_.Exception.Message); acked = -1; cursor = 0 } } }
     $dk.take = $saved
     Check (@($in.value.refused | Where-Object { $_.Contains("disk on fire") }).Count -eq 1 -and @($in.value.held).Count -eq 0 -and $in.value.acked -eq $in.value.cursor) "a taker that throws refuses its item, and the mailbox is acked past it: a part can be lost, never wedge the mailbox"
+    # THE FOLDED LINES (review round 3 of PR 285): reasons are folded by ordinal comparison, and "items A
+    # to B" is said only of every seq from A to B. The taker is a stand-in that refuses with the reason
+    # the item's own number picks.
+    $dk.take = { param($c, $t) $n = [int][regex]::Match($t, '"part":([0-9]+)').Groups[1].Value; return [pscustomobject]@{ outcome = "refused"; reason = @("", "Photo AB refused", "photo ab refused", "photo ab refused", "same reason")[[System.Math]::Min($n, 4)] } }
+    $fold = { param([int[]]$Numbers, [switch]$Stray) foreach ($n in $Numbers) { $x = Get-PartText -From $G.phone.keyId -PhotoId $PG.id -Number $n -Ct (Get-HordeRelayRandomBytes -Count 40); $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text $x -Key ("fold/" + [guid]::NewGuid().ToString("N")); if ($Stray) { $null = Send-HordeRelayItem -Connection $G.conn -Mailbox $G.ctx.mailbox -Text "not json" -Key ("stray/" + [guid]::NewGuid().ToString("N")) } } }
+    try {
+        & $fold @(1, 2)
+        $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+        $caseLines = @($in.value.refused | Where-Object { $_.Contains("hoto AB refused") -or $_.Contains("hoto ab refused") })
+        & $fold @(2, 3)
+        $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+        $sameLines = @($in.value.refused | Where-Object { $_.Contains("photo ab refused") })
+        & $fold @(4, 4, 4) -Stray
+        $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+        $gapLines = @($in.value.refused | Where-Object { $_.Contains("same reason") })
+        & $fold @(4, 4, 4, 4, 4, 4, 4, 4, 4) -Stray
+        $in = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
+        $manyLines = @($in.value.refused | Where-Object { $_.Contains("same reason") })
+    } finally { $dk.take = $saved }
+    Check ($caseLines.Count -eq 2) ("two reasons that differ only in case are two lines, not folded (" + ($caseLines -join "; ") + ")")
+    Check ($sameLines.Count -eq 1 -and $sameLines[0] -cmatch '\Aitems [0-9]+ to [0-9]+ \(2\): photo ab refused\z') ("TWIN: the same reason, every seq between, is one line, items A to B (" + ($sameLines -join "; ") + ")")
+    Check ($gapLines.Count -eq 1 -and $gapLines[0] -cmatch '\Aitems [0-9]+, [0-9]+, [0-9]+: same reason\z') ("with other items between them, three are named one by one, never as a range (" + ($gapLines -join "; ") + ")")
+    Check ($manyLines.Count -eq 1 -and $manyLines[0] -cmatch '\A9 items, the first [0-9]+ and the last [0-9]+: same reason\z') ("and past 8, how many, the first and the last (" + ($manyLines -join "; ") + ")")
 
     Write-Host ""
     Write-Host "--- 11. a runtime that takes no photo refuses FIRST: no folder, one line a photo ---" -ForegroundColor Cyan

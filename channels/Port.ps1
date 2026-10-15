@@ -474,7 +474,9 @@ function Complete-HordeRelayInbox {
     $senderCache = @{}
     $data = New-Object System.Collections.ArrayList
     # Refused data items BY REASON, said once each after the batch (below): a photo is up to 64 items.
-    $dataRefused = [ordered]@{}
+    # Keyed ORDINALLY (review round 3 of PR 285): [ordered]@{} ignores case, so two reasons that differ
+    # only in case - a hex digest, a photo id - would be folded into one line.
+    $dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)
     foreach ($it in @($w.value.items)) {
         $r = Read-HordeRelayEnvelope -Text $it.text
         if (-not $r.ok) {
@@ -498,10 +500,16 @@ function Complete-HordeRelayInbox {
     }
     # ONE LINE A REASON (review of PR 285): data items refused for the same reason - every part of a photo
     # a runtime cannot take says the same thing - are one line naming how many, not a line each. A reason
-    # that names its part (a digest, a number) stays a line of its own.
+    # that names its part (a digest, a number) stays a line of its own. "items A to B" only when they are
+    # every seq from A to B; otherwise each is named, or, past 8, how many and the first and last
+    # (review round 3 of PR 285): items of other reasons, or envelopes, may lie between them.
     foreach ($why in @($dataRefused.Keys)) {
         $seqs = @($dataRefused[$why])
-        [void]$refused.Add($(if ($seqs.Count -eq 1) { "item " + $seqs[0] } else { "items " + $seqs[0] + " to " + $seqs[$seqs.Count - 1] + " (" + $seqs.Count + ")" }) + ": " + $why)
+        $span = $(if ($seqs.Count -eq 1) { "item " + $seqs[0] }
+            elseif ([long]$seqs[$seqs.Count - 1] - [long]$seqs[0] -eq $seqs.Count - 1) { "items " + $seqs[0] + " to " + $seqs[$seqs.Count - 1] + " (" + $seqs.Count + ")" }
+            elseif ($seqs.Count -le 8) { "items " + ($seqs -join ", ") }
+            else { $seqs.Count.ToString() + " items, the first " + $seqs[0] + " and the last " + $seqs[$seqs.Count - 1] })
+        [void]$refused.Add($span + ": " + $why)
     }
     # Sorted by sender and that sender's seq (step 2). The relay's own order is not trusted to be theirs.
     $ordered = @($parsed | Sort-Object @{ Expression = { $_.envelope.header.from } }, @{ Expression = { [long]$_.envelope.header.seq } })

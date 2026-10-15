@@ -25,6 +25,16 @@
         @{ Name = "gate-data-refusals-a-line-each"
            Find = '                    [void]$dataRefused[$said].Add([long]$it.seq)'
            Replace = '                    $dataRefused[$said + $it.seq] = New-Object System.Collections.ArrayList; [void]$dataRefused[$said + $it.seq].Add([long]$it.seq)' }
+        # Folded by ordinal reason, and a range only of every seq in it (review round 3 of PR 285).
+        @{ Name = "gate-data-refusals-folded-ignoring-case"
+           Find = '$dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)'
+           Replace = '$dataRefused = [ordered]@{}' }
+        @{ Name = "gate-data-refusals-range-across-gaps"
+           Find = 'elseif ([long]$seqs[$seqs.Count - 1] - [long]$seqs[0] -eq $seqs.Count - 1) {'
+           Replace = 'elseif ($true) {' }
+        @{ Name = "gate-data-refusals-many-listed-one-by-one"
+           Find = 'elseif ($seqs.Count -le 8) {'
+           Replace = 'elseif ($true) {' }
         @{ Name = "gate-taker-that-throws-is-not-caught"
            Find = '                try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch {'
            Replace = '                $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1; if ($false) {' }
