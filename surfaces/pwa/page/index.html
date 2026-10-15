@@ -52,8 +52,6 @@
 <div id="notice" hidden></div>
 <div id="announceBox" hidden>
   <p id="announceWords" class="hint"></p>
-  <div class="row"><button type="button" id="announceNow" class="primary">Announce this phone</button></div>
-  <p id="announceNowStatus" class="status" role="alert" hidden></p>
 </div>
 
 <section id="signInView" hidden>
@@ -107,9 +105,11 @@
   <textarea id="responseText" rows="4" readonly spellcheck="false"></textarea>
   <div class="row"><button type="button" id="resendResponse" hidden>Send again</button> <button type="button" id="copyResponse">Copy</button> <button type="button" id="shareResponse" hidden>Share</button></div>
   <label class="check"><input type="checkbox" id="wroteCode"> I have written the recovery code down</label>
-  <div class="row"><button type="button" id="announceBtn" class="primary" disabled>I confirmed it at the machine: announce this phone</button></div>
-  <p id="announceWhy" class="hint">The announce button opens once the box above is ticked: write the recovery code down first.</p>
-  <p id="announceStatus" class="status" role="alert" hidden></p>
+  <p id="confirmWait" class="hint" role="status">Type the number at the machine. Once it is confirmed there, Finish pairing appears here.</p>
+  <div class="row"><button type="button" id="finishBtn" class="primary" hidden disabled>Finish pairing</button></div>
+  <p id="finishWhy" class="hint" hidden>Finish pairing opens once the box above is ticked: write the recovery code down first.</p>
+  <p id="finishStatus" class="status" role="alert" hidden></p>
+  <div class="row"><button type="button" id="pairLater" class="link">Later: the phone finishes pairing at its next unlock</button></div>
 </section>
 
 <section id="lockedView" hidden>
@@ -121,7 +121,7 @@
     <input id="recoveryInput" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX">
     <div class="row"><button type="button" id="recoverBtn">Unlock to read</button></div>
   </details>
-  <div class="row"><button type="button" id="announceAgain" class="link">Announce this phone again</button> <button type="button" id="forgetBtn" class="link">Forget this horde</button></div>
+  <div class="row"><button type="button" id="forgetBtn" class="link">Forget this horde</button></div>
 </section>
 
 <section id="emptyView" hidden>

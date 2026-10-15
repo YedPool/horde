@@ -28,7 +28,10 @@
 //   pair {offer, label}   answer a pairing offer, and send the response through the relay:
 //                         { id, fingerprint, response, recoveryCode, prf, pairMailbox, relayed }
 //   sendPairing {id}      send that response through the relay again: { relayed }
-//   announce {id}  unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
+//   announce {id}         ONE passkey prompt that announces the phone: the pairing screen's Finish pairing
+//                         (phone-core.js, THE ANNOUNCEMENT IS NO BUTTON); unlock carries it by itself
+//   pairConfirmed {id, waitMs}  has the machine said the founder confirmed this phone: { confirmed }
+//   unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
 //   chat                  the picked horde's chat with its Thrall: { state, value: { session, items,
 //                         mode } } as phone-core's chat answers it; a locked or empty horde answers
 //                         unknown with the reason
@@ -72,7 +75,7 @@
 // own words what it could not send.
 import { withAnswers } from "../relay/protocol.js";
 
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -154,7 +157,7 @@ export function createBridge(phone, options = {}) {
       if (!relayDown) lastGoodAt = now();
       emit("read-changed", { locked: false, relayDown, said: relayDown ? r.diagnostics.slice() : [], lastGoodAt });
       view = r.snapshot ? r : null;
-      viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, announce this phone again.";
+      viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, the phone is announced again at its next unlock.";
     } catch (e) {
       view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e);
       emit("read-changed", { locked, relayDown, said: locked ? [] : [viewError], lastGoodAt });
@@ -220,6 +223,7 @@ export function createBridge(phone, options = {}) {
     pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || "") }); await hordes(); return r; },
     sendPairing: async (a) => ({ relayed: await phone.sendPairing(String(a.id || "")) }),
     announce: async (a) => { const r = await phone.announce(String(a.id)); await hordes(); return r; },
+    pairConfirmed: async (a) => phone.pairConfirmed(String(a.id || ""), { waitMs: Math.max(0, Math.min(Number(a.waitMs) || 0, 25000)) }),
     unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     recover: async (a) => { const r = await phone.recover(String(a.id), String(a.code || "")); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     // The summaries are pushed BEFORE the list: a frame that hears list-changed already knows the horde
