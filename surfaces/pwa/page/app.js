@@ -100,6 +100,7 @@ import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
 import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
+import { renderDecisionCards } from "./decision-cards.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
@@ -194,12 +195,21 @@ function memoryStorage() {
 }
 function docOf(id) {
   if (docs[id]) return docs[id];
+  // THE CARDS FIRST (decision-cards.js), in a box of their own above the list: the list's box is
+  // list.js's, which keeps in it only what it draws.
+  const cards = document.createElement("div");
+  cards.className = "decision-cards";
+  cards.setAttribute("role", "group");
+  cards.setAttribute("aria-label", "Questions by lane");
+  $("lists").appendChild(cards);
   const box = document.createElement("div");
   box.className = "horde-list";
   $("lists").appendChild(box);
   const storage = memoryStorage();
   const doc = window.HordeDecisionsDocument.mount(box, {
     topInset: () => $("bar").getBoundingClientRect().bottom,
+    // Every draw - a list that arrives, a lane chosen, an answer saved - draws the cards' numbers again.
+    onDraw: () => drawDecisionCards(id),
     onChange: showCounts,
     storage,
     say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
@@ -207,8 +217,16 @@ function docOf(id) {
     sayPart: (number, letter, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId, part: letter })),
     act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId }))
   });
-  docs[id] = { box, doc, kinds: false, storage };
+  docs[id] = { box, cards, doc, kinds: false, storage };
   return docs[id];
+}
+// The cards of one horde's decisions page: its lanes' counts from its list, drawn as the Progress tab's cards
+// when that horde is the one picked and its lanes document has come (cardsLast), and by name alone otherwise.
+function drawDecisionCards(id) {
+  const d = docs[id];
+  if (!d) return;
+  while (d.cards.firstChild) d.cards.removeChild(d.cards.firstChild);
+  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane) })) d.cards.appendChild(card);
 }
 function showCounts() {
   const d = current && docs[current];
@@ -239,7 +257,7 @@ async function pick(id) {
   drawTabs();
   const h = hordes.find((x) => x.id === id);
   if (!h) { show(hordes.length ? "lockedView" : "emptyView"); return; }
-  for (const k of Object.keys(docs)) docs[k].box.hidden = k !== id;
+  for (const k of Object.keys(docs)) { docs[k].box.hidden = k !== id; docs[k].cards.hidden = k !== id; }
   const rec = await bridge.request("pick", { id });
   render(h, rec);
 }
@@ -259,7 +277,11 @@ function render(h, rec) {
   }
   const d = docOf(h.id);
   d.box.hidden = false;
+  d.cards.hidden = false;
   show(PANES[pane].view);
+  // The decisions page's cards are the Progress tab's (decision-cards.js): its lanes document, asked for once here
+  // too; cards-changed brings every later one.
+  if (pane === "decisions" && !cardsLast) bridge.request("cards").then(drawCards);
   showAnnounceBox(h, rec);
   if (pane === "chat") bridge.request("chat").then(drawChat);
   if (pane === "progress") { bridge.request("cards").then(drawCards); requestStream(); }
@@ -455,7 +477,7 @@ const seenEntries = new Set();
 // forgotten when a stream is opened anew (drawProgress, opening). Kept in memory only: nothing stored, nothing sent.
 const openEntries = new Set();
 let watcher = null;
-function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; }
+function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; drawDecisionCards(current); }
 function clearProgress() { const log = $("progressLog"); while (log.firstChild) log.removeChild(log.firstChild); progressDrawn = ""; progressLast = null; seenEntries.clear(); if (watcher) { watcher.disconnect(); watcher = null; } }
 function showProgressCount(v) {
   const n = v ? v.unread : 0;
@@ -517,6 +539,7 @@ function drawCards(rec) {
   if (!rec || rec.state !== "known") return;
   const v = rec.value;
   cardsLast = v;
+  drawDecisionCards(current);
   if ($("progress").hidden) return;
   // NO MACHINE HAS SENT CARDS: the whole log, as before cards were, under one plain line saying why (cards-why.js).
   if (v.machines.length === 0) { $("cardsWhy").textContent = cardsFallbackLine(v); if (!stream) { stream = { entry: current, lane: "", title: "", fallback: true }; requestStream(); } return; }
@@ -964,7 +987,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
