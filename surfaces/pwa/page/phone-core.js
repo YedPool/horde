@@ -597,7 +597,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      if (s.mode !== "passkey") throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to approve a new phone.");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to approve a new phone."); }
       const j = s.joins.get(request);
       if (!j || !j.transcript || j.closed) throw fail("That request to join is not open on this phone.");
       if (j.transcript.expiresAt < now()) throw fail("That request to join has expired.");
@@ -616,7 +616,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      if (s.mode !== "passkey") throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to reject a new phone.");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to reject a new phone."); }
       if (!/^[0-9a-f]{32}$/.test(String(request || ""))) throw fail("That is not a request to join.");
       const env = await sealAndSign(e, "reject", "join", P.joinRejectBody({ request }), assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
