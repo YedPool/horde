@@ -1103,6 +1103,38 @@ function Test-HordeDecisionEvent {
     return @()
 }
 
+# THE CHECKS OF A RECORD ARE KEPT (T-0166, with Store.ps1's read cache, whose header says why). Checking
+# a record against its schemas is nearly all of what a list costs (Read-HordeDecisionState: 40 ms a
+# record), and a record never changes. So the findings of Test-HordeDecisionEnvelope and
+# Test-HordeDecisionEvent are kept for a record that carries the store's stamp (its folder, name, size
+# and write time: the very bytes), and reused only for that stamp AND the very definitions object they
+# were made with - schemas read again, or by other code, are another object and check afresh. A record
+# with no stamp (one not read whole, or made by a caller) is checked every time, as before. Per
+# process, in memory; the checks of records that left the store are dropped at the next fold.
+$script:HordeDecisionCheckCache = @{}
+
+function Get-HordeDecisionRecordChecks {
+    # { cover: the envelope's findings; shape: a block giving the event's findings, made once, on the
+    # first call }: the event is checked only when the record gets that far, as before.
+    param($Record, $Definitions)
+    $stamp = $(if ($null -ne $Record.PSObject.Properties["stamp"]) { "$($Record.stamp)" } else { "" })
+    if ($stamp -eq "") {
+        $data = $Record.data
+        return [pscustomobject]@{ cover = @(Test-HordeDecisionEnvelope -Ev $data -Definitions $Definitions); shape = { @(Test-HordeDecisionEvent -Ev $data -Definitions $Definitions) }.GetNewClosure() }
+    }
+    $held = $script:HordeDecisionCheckCache[$stamp]
+    if ($null -eq $held -or -not [object]::ReferenceEquals($held.definitions, $Definitions)) {
+        $held = [pscustomobject]@{ definitions = $Definitions; cover = @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions); shape = $null; shapeDone = $false }
+        $script:HordeDecisionCheckCache[$stamp] = $held
+    }
+    $data = $Record.data
+    $shape = {
+        if (-not $held.shapeDone) { $held.shape = @(Test-HordeDecisionEvent -Ev $data -Definitions $Definitions); $held.shapeDone = $true }
+        return @($held.shape)
+    }.GetNewClosure()
+    return [pscustomobject]@{ cover = @($held.cover); shape = $shape }
+}
+
 function Add-HordeDecisionRecordToState {
     # Apply one record of the store (decisions/Store.ps1: { sequence; span; file; kind; data; reason })
     # to the list. Returns "" when it applied, or why it did not; either way the list says so itself, in
@@ -1118,7 +1150,8 @@ function Add-HordeDecisionRecordToState {
     else {
         # The envelope first, and the record's place: only a record that passes both is believed about
         # anything, its kind's name included.
-        $cover = @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions)
+        $checks = Get-HordeDecisionRecordChecks -Record $Record -Definitions $Definitions
+        $cover = $checks.cover
         if ($cover.Count -gt 0) { $why = $cover[0] }
         elseif ([long]$Record.data.sequence -ne [long]$Record.sequence) { $why = "it says it is record " + $Record.data.sequence + ", which is not its place in the store" }
         elseif ($null -eq $script:HordeDecisionEventKinds["$($Record.data.kind)"]) {
@@ -1141,7 +1174,7 @@ function Add-HordeDecisionRecordToState {
             return ""
         }
         else {
-            $shape = @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions)
+            $shape = @(& $checks.shape)
             if ($shape.Count -gt 0) { $why = $shape[0] }
         }
     }
@@ -1168,11 +1201,22 @@ function Add-HordeDecisionRecordToState {
 }
 
 function ConvertTo-HordeDecisionState {
-    # THE FOLD: the store's records, in order, become the current list. Nothing is cached and nothing
-    # else is consulted, so the records are the single source of truth.
+    # THE FOLD: the store's records, in order, become the current list. Nothing else is consulted, so
+    # the records are the single source of truth; what is kept is only each record's own checks, keyed
+    # by its bytes (THE CHECKS OF A RECORD ARE KEPT, above), and the list itself is folded afresh.
     param($Records, $Definitions)
     $state = New-HordeDecisionState
-    foreach ($record in @($Records)) { $null = Add-HordeDecisionRecordToState -State $state -Record $record -Definitions $Definitions }
+    $folders = @{}
+    $seen = @{}
+    foreach ($record in @($Records)) {
+        if ($null -ne $record.PSObject.Properties["stamp"]) { $s = "$($record.stamp)"; $seen[$s] = $true; $folders[$s.Substring(0, $s.IndexOf("|") + 1)] = $true }
+        $null = Add-HordeDecisionRecordToState -State $state -Record $record -Definitions $Definitions
+    }
+    # The checks of records that are no longer in these folders are let go: the cache holds what the
+    # stores hold, no more.
+    foreach ($k in @($script:HordeDecisionCheckCache.Keys)) {
+        if (-not $seen.ContainsKey($k) -and $folders.ContainsKey($k.Substring(0, $k.IndexOf("|") + 1))) { $script:HordeDecisionCheckCache.Remove($k) }
+    }
     return $state
 }
 

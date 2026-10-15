@@ -155,6 +155,35 @@ $script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
 # milliseconds (a few kilobytes, written through); ten minutes is far past any writer that is merely
 # slow, so what is removed was left by one that died.
 
+# THE READ CACHE (T-0166, 2026-10-15). Every operation reads every record (Operations.ps1,
+# Read-HordeDecisionState), and the store only grows: measured on a copy of the live store of 264
+# records, on this throttled machine, reading them took 1.5 s and the list built from them, checked
+# record by record (Rules.ps1), 5.2 s more - each time, so a phone's answer reached the phone 22 to 58 s
+# later, and the relay runner's bell, which reads the inbox every 30 s, kept it busy a quarter of the
+# time. A record is written once and never changed, so a process that stays alive (the relay runner,
+# its bell, a window) keeps, per store folder, the TEXT of every record it has read whole, and opens a
+# file again only when it is new or its size or last write time differs from what was read.
+#   - THE FOLDER IS LISTED ON EVERY CALL, as before: a record that is gone is dropped from the cache,
+#     and a gap in the order is still a gap. Nothing is served for a name the folder no longer has.
+#   - ONLY A RECORD READ WHOLE IS KEPT (kind ok). An empty, cut, busy or unreadable file is read again
+#     on the next call, as it always was.
+#   - THE TEXT IS PARSED AGAIN ON EVERY CALL (about 0.2 s for 264 records): each call hands out objects
+#     of its own, so nothing a caller does to a record's data can change what the next caller is given.
+#   - EACH OK RECORD CARRIES stamp, its folder, name, size and write time: what Rules.ps1 keys its own
+#     cache of each record's checks by, so a check is reused only for the very bytes it was made on.
+#   - ANY DOUBT EMPTIES THE CACHE FOR THAT FOLDER: a listing that fails, or a cache made by another
+#     version of this file (keyed by this file's text, so code that reads records differently never
+#     reuses what older code kept).
+#   - PER PROCESS, IN MEMORY, NEVER ON DISK: a second copy of the truth on disk is what the store's
+#     design refuses. So a one-shot `horde decisions` command, a new process each time, still reads
+#     every record; a small on-disk index would be the follow-up if that ever matters.
+#   - ITS SIZE is the records' text: about 0.8 MB for the live store of 264 records.
+$script:HordeDecisionStoreCodeStamp = [System.BitConverter]::ToString((New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([System.IO.File]::ReadAllBytes($PSCommandPath))).Replace("-", "")
+if ($null -eq (Get-Variable -Name HordeDecisionStoreCache -Scope Script -ErrorAction SilentlyContinue) -or "$($script:HordeDecisionStoreCacheStamp)" -cne $script:HordeDecisionStoreCodeStamp) {
+    $script:HordeDecisionStoreCache = @{}
+    $script:HordeDecisionStoreCacheStamp = $script:HordeDecisionStoreCodeStamp
+}
+
 function Get-HordeDecisionStoreNamePattern {
     # What a record's file name matches: exactly that many digits, then .json.
     # \A and \z, not ^ and $: in .NET, $ also matches before a final newline (remote/Journal.ps1).
@@ -296,6 +325,16 @@ function Read-HordeDecisionRecordFile {
         }
         Start-Sleep -Milliseconds $heldWaitMs
     }
+    $read = ConvertFrom-HordeDecisionRecordText -Text $text
+    if ($read.kind -ceq "ok") { $read | Add-Member -NotePropertyName text -NotePropertyValue $text }
+    return $read
+}
+
+function ConvertFrom-HordeDecisionRecordText {
+    # A record file's text, as Read-HordeDecisionRecordFile hands it back: { kind: ok | torn; data;
+    # reason }. Apart, so a record kept by the read cache is parsed exactly as a fresh read is.
+    param([AllowNull()][string]$Text)
+    $text = $Text
     if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty: its writer stopped before writing it" } }
     try { $data = ConvertFrom-HordeJson $text } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }
     if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not a JSON object" } }
@@ -325,12 +364,25 @@ function Get-HordeDecisionRecords {
     # A FILE of the store's name is not "no store yet": every write there fails, so a read that said
     # "an empty list" would be an answer no write could ever agree with (measured 2026-10-06).
     if ([System.IO.File]::Exists($Root)) {
+        $script:HordeDecisionStoreCache.Remove([System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant())
         return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' is a file, not a folder"); last = [long]0; records = @(); strays = @() }
     }
-    if (-not [System.IO.Directory]::Exists($Root)) { return $none }
+    if (-not [System.IO.Directory]::Exists($Root)) { $script:HordeDecisionStoreCache.Remove([System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant()); return $none }
     $names = $null
-    try { $names = [System.IO.Directory]::GetFiles($Root, "*.json") }
-    catch { return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' could not be listed: " + $_.Exception.Message); last = [long]0; records = @(); strays = @() } }
+    $infos = @{}
+    $cacheKey = [System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant()
+    try {
+        $listed = (New-Object System.IO.DirectoryInfo($Root)).GetFiles("*.json")
+        foreach ($fi in $listed) { $infos[$fi.Name] = $fi }
+        $names = @($listed | ForEach-Object { $_.FullName })
+    } catch {
+        $script:HordeDecisionStoreCache.Remove($cacheKey)
+        return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' could not be listed: " + $_.Exception.Message); last = [long]0; records = @(); strays = @() }
+    }
+    # THE READ CACHE (the header): this folder's kept texts, and the ones this call keeps for the next.
+    $kept = $script:HordeDecisionStoreCache[$cacheKey]
+    if ($null -eq $kept) { $kept = @{} }
+    $keep = @{}
     $namePattern = Get-HordeDecisionStoreNamePattern
     $digits = Get-HordeDecisionSequenceDigits
     $maxGap = Get-HordeDecisionSetting -Name "decisions.store.maxGap"
@@ -370,9 +422,21 @@ function Get-HordeDecisionRecords {
             if ($gap -gt 1) { $why = "records " + ($last + 1) + " to " + ($seq - 1) + " (" + $gap + " of them) are not in the store folder, though a later record is: they were deleted" }
             [void]$records.Add([pscustomobject]@{ sequence = ($last + 1); span = $gap; file = (Get-HordeDecisionRecordName -Sequence ($last + 1)); kind = "missing"; data = $null; reason = $why })
         }
-        $read = Read-HordeDecisionRecordFile -Path (Join-Path $Root $leaf)
-        [void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })
+        $fi = $infos[$leaf]
+        $stamp = $cacheKey + "|" + $leaf + "|" + $fi.Length + "|" + $fi.LastWriteTimeUtc.Ticks
+        $was = $kept[$leaf]
+        if ($null -ne $was -and $was.stamp -ceq $stamp) { $read = ConvertFrom-HordeDecisionRecordText -Text $was.text; $text = $was.text }
+        else { $read = Read-HordeDecisionRecordFile -Path (Join-Path $Root $leaf); $text = $(if ($read.kind -ceq "ok") { $read.text } else { $null }) }
+        $rec = [pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason }
+        if ($read.kind -ceq "ok") {
+            $keep[$leaf] = [pscustomobject]@{ stamp = $stamp; text = $text }
+            $rec | Add-Member -NotePropertyName stamp -NotePropertyValue $stamp
+        }
+        [void]$records.Add($rec)
         $last = $seq
     }
+    # Only what this listing saw, read whole, is kept: a record that is gone, or no longer reads whole,
+    # is not served again.
+    $script:HordeDecisionStoreCache[$cacheKey] = $keep
     return [pscustomobject]@{ state = "ok"; reason = ""; last = $last; records = @($records); strays = @($strays) }
 }
