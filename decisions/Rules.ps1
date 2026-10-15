@@ -958,14 +958,21 @@ function Step-HordeDecisionRanked {
 function Step-HordeDecisionReminded {
     # The keeper raised a question again - in chat, or by a reminder (above, WHEN A QUESTION WAS ASKED).
     # Its own record: it adds an entry to the question's "asked" and a line to its history, and moves no
-    # wording, no state and no turn. Only an open question is asked again: a closed one is off every list,
-    # and what is left to ask of it is a follow-up. Every reminder applies, the same words twice included:
+    # wording, no state and no turn. Only an open question is asked again, and only while it is his turn:
+    # a closed one is off every list, an answered one is off his, and what is left to ask of either is a
+    # follow-up. Every reminder applies, the same words twice included:
     # each is a moment it was asked; the same request sent twice under one id is still one record.
     param($State, $Ev)
     $target = Get-HordeDecisionTarget -State $State -Ev $Ev
     if ($null -eq $target.question) { return $target.why }
     $question = $target.question
     if ($question.state -cne "open") { return ("question " + $question.number + " is " + $question.state + ", and only an open question is asked again. " + ($script:HordeDecisionRemindClosedAdvice -f $question.number)) }
+    # AND ONLY WHILE IT IS HIS TURN (decisions/Operations.ps1, A QUESTION IS NEVER PUT BACK). Once he has
+    # answered, the turn is the keeper's and the question is off his list; a reminder would move it up
+    # his Date order all the same - measured 2026-10-14 under 5.1 and 7, before this: added, answered,
+    # reminded, and lastAskedAt jumped. Refused here, in the fold, as the closed question is, so a
+    # request writes nothing and no record of one can move the date either.
+    if ("$($question.turn)" -cne $script:HordeDecisionFirstTurn) { return ("question " + $question.number + " has been answered and is off the founder's list, and a reminder would put it back in front of him. " + ($script:HordeDecisionRemindClosedAdvice -f $question.number) + ". To tell him something that asks nothing, say it as a note (reply -Note)") }
     $note = ""
     if (Test-HordeDecisionMember -Object $Ev.data -Name "note") { $note = [string]$Ev.data.note }
     Add-HordeDecisionAsked -Question $question -Ev $Ev -How "remind" -By "$($Ev.actor)" -Note $note
@@ -1081,6 +1088,7 @@ function Step-HordeDecisionSaid {
     # THE ANSWER TO A PART REPLACES ONLY AN EARLIER ANSWER TO THAT PART: his answers to the other parts,
     # said in between, are stepped over, and the other speaker's words end the search as they always did.
     $replaces = $false
+    $replaced = $null
     if ($last.act -eq "") {
         for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
             $before = $question.thread[$i]
@@ -1088,6 +1096,7 @@ function Step-HordeDecisionSaid {
             if ("$($before.speaker)" -cne $speaker) { break }
             if ($part -ne "" -and "$($before.part)" -ne "" -and "$($before.part)" -cne $part) { continue }
             $replaces = $true
+            $replaced = $before
             break
         }
     }
@@ -1107,7 +1116,12 @@ function Step-HordeDecisionSaid {
         # THE KEEPER'S WORDS THAT ASK ASK THE QUESTION AGAIN (above, WHEN A QUESTION WAS ASKED). Only
         # here: under an open question, words that ask, and no act. A note asks nothing, and words under
         # a closed question take no turn and ask nobody.
-        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }
+        # AN EDIT IS THE SAME ASKING, NOT ANOTHER (review of PR 295, 2026-10-14: two asking replies, the
+        # second replacing the first, gave first, thrall-reply, thrall-reply). Words that replace words
+        # which already asked - under an open question, so they counted - add no entry; words that
+        # replace a note do, because the note asked nothing.
+        $editsAnAsking = ($replaces -and $replaced.asks -and -not $replaced.arrivedAfterClosing)
+        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker -and -not $editsAnAsking) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }
     }
     return ""
 }

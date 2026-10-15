@@ -9,6 +9,15 @@
         @{ Name = "a-closed-question-is-reminded"
            Find = '    if ($question.state -cne "open") { return ("question " + $question.number + " is " + $question.state + ", and only an open question is asked again. "'
            Replace = '    if ($false) { return ("question " + $question.number + " is " + $question.state + ", and only an open question is asked again. "' }
+        @{ Name = "an-answered-question-is-reminded"
+           Find = '    if ("$($question.turn)" -cne $script:HordeDecisionFirstTurn) { return ("question " + $question.number + " has been answered'
+           Replace = '    if ($false) { return ("question " + $question.number + " has been answered' }
+        @{ Name = "an-edit-asks-again"
+           Find = '        $editsAnAsking = ($replaces -and $replaced.asks -and -not $replaced.arrivedAfterClosing)'
+           Replace = '        $editsAnAsking = $false' }
+        @{ Name = "an-edit-of-a-note-asks-nothing"
+           Find = '        $editsAnAsking = ($replaces -and $replaced.asks -and -not $replaced.arrivedAfterClosing)'
+           Replace = '        $editsAnAsking = $replaces' }
         @{ Name = "a-reminder-adds-no-entry"
            Find = '    Add-HordeDecisionAsked -Question $question -Ev $Ev -How "remind" -By "$($Ev.actor)" -Note $note'
            Replace = '' }
@@ -19,10 +28,10 @@
            Find = '    Add-HordeDecisionHistory -Question $question -Ev $Ev -Note $(if ($note -ne "") { "asked again: " + $note } else { "asked again" })'
            Replace = '' }
         @{ Name = "any-speaker-asks-again"
-           Find = '        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }'
+           Find = '        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker -and -not $editsAnAsking) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }'
            Replace = '        Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker' }
         @{ Name = "a-reply-never-asks-again"
-           Find = '        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }'
+           Find = '        if ($script:HordeDecisionNoteSpeakers -ccontains $speaker -and -not $editsAnAsking) { Add-HordeDecisionAsked -Question $question -Ev $Ev -How "thrall-reply" -By $speaker }'
            Replace = '' }
         @{ Name = "a-follow-up-asks-nothing-again"
            Find = '    if ([int]$question.followsUp -ge 1 -and $State.questions.ContainsKey([int]$question.followsUp)) {'

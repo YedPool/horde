@@ -138,6 +138,10 @@ $blank = Invoke-Decisions @("remind", "3", "-Note", "   ")
 Check ($blank.code -ne 0 -and $blank.out -like "*'note' is blank*" -and (Get-RecordCount) -eq $before) "and a blank one"
 $bare = Invoke-Decisions @("remind", "3", "-Note")
 Check ($bare.code -ne 0 -and $bare.out -like "*takes a note as -Note <text>*" -and (Get-RecordCount) -eq $before) "-Note with no text after it is refused at the command line, and nothing is written"
+$dashed = Invoke-Decisions @("remind", "3", "-Note", "-still waiting")
+Check ($dashed.code -ne 0 -and (Get-RecordCount) -eq $before -and $dashed.out -notlike "*Asked again*") "a note that starts with a dash is read as a flag and refused, and nothing is written"
+$help = Invoke-HordeCliProcess -Root $root -HordeArgs @("help") -Env @{ HORDE_HOME = $hordeHome }
+Check ($help.out -like "*remind <number> ``[-Note <text, not starting with a dash>``]*" -and $help.out -like "*does not start with a dash*") "and the command's usage and help both say a note may not start with one"
 $stray = Invoke-Decisions @("show", "1", "extra")
 Check ($stray.code -ne 0 -and $stray.out -like "*decisions show takes no further word on its command line*" -and $stray.out -notlike "*NoteText*") "a stray word after another verb is refused as that, never as a flag nobody typed"
 $edge = "y" * 200
@@ -179,9 +183,37 @@ Check ($plain.code -eq 0 -and @($plain.lines | Where-Object { $_ -like "*last as
 Check ($null -ne $listed[1].PSObject.Properties["asked"] -and $null -ne $listed[1].PSObject.Properties["askedCount"] -and $null -ne $listed[1].PSObject.Properties["lastAskedAt"]) "list -Json carries asked, askedCount and lastAskedAt on every question"
 
 Write-Host ""
+Write-Host "=== a question he has answered is not reminded: it would go back in front of him ===" -ForegroundColor Cyan
+# Review of PR 295 (2026-10-14): remind refused only a CLOSED question, so an answered one - off his
+# list, the turn the keeper's - could be pushed to the top of his Date order. Three new questions, 5
+# then 6 then 7; he answers 5. The twin is 6: not answered, older than 7, so a reminder taken moves it
+# up, and the same move for 5 would put 5 at the top.
+$g = Write-File "g.json" '{"title":"Should the nightly build also run on Sundays?","kind":"yes-no","whatItIs":"It skips Sundays today.","group":"Builds","askedBy":"orc-e"}'
+$h = Write-File "h.json" '{"title":"Should the voice tests keep their logs for a week?","kind":"yes-no","whatItIs":"They keep a day today.","group":"Voice","askedBy":"orc-e"}'
+$k = Write-File "k.json" '{"title":"Should the spare machine sleep at night?","kind":"yes-no","whatItIs":"It never sleeps today.","group":"Builds","askedBy":"orc-e"}'
+$add5 = Invoke-Decisions @("add", "-File", $g)
+$add6 = Invoke-Decisions @("add", "-File", $h)
+$add7 = Invoke-Decisions @("add", "-File", $k)
+$answer5 = Invoke-Decisions @("answer", "5", "-Text", "Yes, Sundays too.")
+$listed = Get-Listed
+$orderBefore = Get-PageOrder
+Check ($add5.code -eq 0 -and $add6.code -eq 0 -and $add7.code -eq 0 -and $answer5.code -eq 0 -and "$($listed[5].thread.turn)" -ceq "warchief" -and "$($listed[6].thread.turn)" -ceq "founder") "CONTROL: question 5 is answered - the turn is the keeper's - and 6 is still his to answer"
+Test-PageOrder $orderBefore "7,6,5,4,2,1,3" "CONTROL: by date 7 leads, then 6, then 5"
+$before = Get-RecordCount
+$answered = Invoke-Decisions @("remind", "5", "-Note", "once more")
+$listed = Get-Listed
+Check ($answered.code -ne 0 -and $answered.out -like "*question 5 has been answered and is off the founder's list, and a reminder would put it back in front of him*" -and $answered.out -like "*-FollowsUp 5*" -and $answered.out -like "*reply -Note*") "REMIND OF A QUESTION HE HAS ANSWERED IS REFUSED, and says to ask a follow-up, or to say it as a note"
+Check ((Get-RecordCount) -eq $before -and (Format-Asked $listed[5]) -ceq "first|orc-e|" -and [int]$listed[5].askedCount -eq 1 -and "$($listed[5].lastAskedAt)" -ceq "$($listed[5].addedAt)") "and nothing is written: its asked list and its last-asked time are as they were"
+Test-PageOrder (Get-PageOrder) $orderBefore "and the page's Date order is unchanged"
+$unanswered = Invoke-Decisions @("remind", "6", "-Note", "once more")
+$listed = Get-Listed
+Check ($unanswered.code -eq 0 -and (Get-RecordCount) -eq $before + 1 -and (Format-Asked $listed[6]) -ceq "first|orc-e|;remind|warchief|once more") "TWIN: the same reminder of a question he has not answered is taken, one record"
+Test-PageOrder (Get-PageOrder) "6,7,5,4,2,1,3" "and that one moves to the top of the Date order"
+
+Write-Host ""
 Write-Host "=== the state left behind ===" -ForegroundColor Cyan
 $kinds = @(Get-ChildItem -LiteralPath $store -File -Filter "*.json" | Sort-Object Name | ForEach-Object { (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($_.FullName, $utf8))).kind })
-Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-reminded,question-reminded,question-reminded,question-closed,message-said,message-said,question-added") "the store holds one question-reminded record for each reminder taken - three - and none for the eight refused; the rest is the day as it went"
+Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-reminded,question-reminded,question-reminded,question-closed,message-said,message-said,question-added,question-added,question-added,question-added,message-said,question-reminded") "the store holds one question-reminded record for each reminder taken - four - and none for the ten refused; the rest is the day as it went"
 $first = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText((Join-Path $store "0000000001.json"), $utf8))
 Check ("$($first.at)" -ceq $oldAt -and $null -eq $first.data.PSObject.Properties["asked"]) "the old record is untouched: nothing was written back into it"
 

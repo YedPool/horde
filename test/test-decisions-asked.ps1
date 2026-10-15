@@ -67,6 +67,11 @@ Check (@($v.history | Where-Object { $_.note -ceq "asked again: raised again in 
 Check ((Format-Asked (Get-View $s 2)) -ceq "first|orc-e|") "CONTROL: the other question is not touched"
 $s = Get-Fold @((New-Added 1 1), (New-Closed 2 1), (New-Reminded 3 1 -Note "once more"))
 Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|" -and (Get-Ignored $s) -like "3: question 1 is closed, and only an open question is asked again*-FollowsUp 1") "A REMINDER OF A CLOSED QUESTION DOES NOT APPLY: it is ignored with the reason and what to do instead, and the list is as it was"
+$s = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Speaker "founder" -Route "chat-recorded"), (New-Reminded 3 1 -Note "once more"))
+Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|" -and "$((Get-View $s 1).lastAskedAt)" -ceq (Get-At 1) -and (Get-Ignored $s) -like "3: question 1 has been answered and is off the founder's list, and a reminder would put it back in front of him*-FollowsUp 1*reply -Note*") "A REMINDER OF A QUESTION HE HAS ANSWERED DOES NOT APPLY: the turn is the keeper's, so it is ignored with the reason, and its last-asked time stays"
+$s = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Speaker "founder" -Route "chat-recorded"), (New-Said 3 1), (New-Reminded 4 1 -Note "once more"))
+Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|;thrall-reply|warchief|;remind|warchief|once more" -and @($s.ignored).Count -eq 0) "TWIN: once the keeper's words have asked again and the turn is his once more, a reminder applies"
+
 $s = Get-Fold @((New-Added 1 1), (New-Reminded 2 7))
 Check (@($s.ignored).Count -eq 1 -and (Get-Ignored $s) -like "2: it is about question 7, and there is no question 7") "a reminder of a question that does not exist does not apply either"
 
@@ -80,6 +85,12 @@ $s = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Speaker "founder" -Route "chat-r
 Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|") "the founder's own words are an answer, not an asking: no entry"
 $s = Get-Fold @((New-Added 1 1), (New-Closed 2 1), (New-Said 3 1))
 Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|" -and [int](Get-View $s 1).thread.count -eq 1) "the keeper's words under a closed question ask nobody: no entry"
+$s = Get-Fold @((New-Added 1 1), (New-Said 2 1), (New-Said 3 1))
+Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|;thrall-reply|warchief|" -and [int](Get-View $s 1).thread.count -eq 2) "AN EDIT ASKS ONCE: two asking replies, the second replacing the first, are one thrall-reply entry"
+$s = Get-Fold @((New-Added 1 1), (New-Said 2 1), (New-Said 3 1 -Speaker "founder" -Route "chat-recorded"), (New-Said 4 1))
+Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|;thrall-reply|warchief|;thrall-reply|warchief|") "TWIN: two asking replies with his words between them replace nothing, and are two entries"
+$s = Get-Fold @((New-Added 1 1), (New-Said 2 1 -NoteOnly), (New-Said 3 1))
+Check ((Format-Asked (Get-View $s 1)) -ceq "first|orc-e|;thrall-reply|warchief|" -and "$((Get-View $s 1).lastAskedAt)" -ceq (Get-At 3)) "and asking words that replace a note are an entry: the note asked nothing"
 
 Write-Host ""
 Write-Host "--- a follow-up ---" -ForegroundColor Cyan

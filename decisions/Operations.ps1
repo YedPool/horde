@@ -75,11 +75,13 @@
 
 # A QUESTION IS NEVER PUT BACK IN FRONT OF THE FOUNDER (his words, 2026-10-12: "once he answers a
 # question it goes away from his list, even if there is a follow-up; a follow-up is a brand-new
-# question, never the old one reopened in place"). Two requests would put one back, and both are
+# question, never the old one reopened in place"). Three requests would put one back, and all are
 # refused, each with what to do instead:
 #   reopen                       a closed question opened again under its old number;
 #   say, the keeper's words that ASK, under an open question that is no longer his turn
-#                                (Complete-HordeDecisionSayData): they would pass the turn back to him.
+#                                (Complete-HordeDecisionSayData): they would pass the turn back to him;
+#   remind, of an open question that is no longer his turn (decisions/Rules.ps1,
+#                                Step-HordeDecisionReminded): it would move it up his Date order.
 # What is left to ask is asked as a NEW question (add, with followsUp naming the old one), which shows
 # him the old question and his answer as folded context. RECORDS ALREADY IN A STORE ARE FACTS: a
 # question reopened, or asked again under its number, before this rule stays in front of him as it
@@ -105,8 +107,8 @@ $script:HordeDecisionOperations = [ordered]@{
     reopen = @{ writes = $true;  kind = "question-reopened"; content = "Get-HordeDecisionReopenContent"; retired = $script:HordeDecisionReopenRetired }
     rank   = @{ writes = $true;  kind = "question-ranked";   content = "Get-HordeDecisionRankContent" }
     # remind: the keeper asks an open question again (decisions/Rules.ps1, WHEN A QUESTION WAS ASKED).
-    # Whether the question is open is the fold's to say (Step-HordeDecisionReminded), like every rule
-    # that needs the list.
+    # Whether the question is open, and still his turn, is the fold's to say (Step-HordeDecisionReminded),
+    # like every rule that needs the list.
     remind = @{ writes = $true;  kind = "question-reminded"; content = "Get-HordeDecisionRemindContent" }
     say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData"; parts = "Get-HordeDecisionSayParts" }
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
