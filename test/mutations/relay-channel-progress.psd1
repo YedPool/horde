@@ -14,13 +14,7 @@
     Target = "channels\progress\Channel.ps1"
     Suite  = "test\test-relay-channel-progress.ps1"
     Mutations = @(
-        # --- which file ---
-        @{ Name = "default-file-not-under-the-home"
-           Find = 'return [System.IO.Path]::Combine($HordeHome, "progress", "changelog.jsonl")'
-           Replace = 'return [System.IO.Path]::Combine($HordeHome, "changelog.jsonl")' }
-        @{ Name = "progress-file-setting-ignored"
-           Find = 'if ($Setting -cne "") { return $Setting }'
-           Replace = '' }
+        # --- which file: test\mutations\relay-channel-progress-settings.psd1 (channels\progress\Settings.ps1) ---
         # --- one line, read strictly ---
         @{ Name = "bytes-not-utf8-taken"
            Find = '$strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true'
