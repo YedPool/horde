@@ -327,6 +327,16 @@ function ConvertTo-HordeDecisionsChannelQuestion {
         if ($null -ne $q.thread.PSObject.Properties["unread"]) { $q.thread.PSObject.Properties.Remove("unread") }
         if ($null -ne $q.thread.PSObject.Properties["messages"]) { foreach ($m in @($q.thread.messages)) { if ($null -ne $m.PSObject.Properties["unreadBy"]) { $m.PSObject.Properties.Remove("unreadBy") } } }
     }
+    # WHEN IT WAS ASKED, AS MUCH AS THE PAGE READS: the first entry and the last, beside askedCount and
+    # lastAskedAt, which the view already carries (decisions/page/list.js reads asked[0] and lastAskedAt,
+    # nothing else of the list). The whole list stays in show and list -Json. Review of PR 295,
+    # 2026-10-14: an entry is 82 bytes, 276 with a 200-character note and up to 1276 under 5.1, whose
+    # ConvertTo-Json writes ' < > & as six characters each; a question reminded 100 times was 27.6 KB under
+    # 7 and up to 127 KB under 5.1, past a page, and so withheld from his phone - the most-nagged question.
+    if ($null -ne $q.PSObject.Properties["asked"]) {
+        $asked = @($q.asked)
+        if ($asked.Count -gt 2) { $q.asked = @($asked[0], $asked[$asked.Count - 1]) }
+    }
     return (ConvertTo-Json -InputObject $q -Compress -Depth 20)
 }
 

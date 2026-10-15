@@ -431,6 +431,38 @@ try {
     Check (@($okPages | ForEach-Object { @($_.body.withheld) } | Where-Object { [int]$_.number -eq [int]$huge.value.number -and "$($_.reason)".Contains("too large") }).Count -ge 1) "the question larger than any page is withheld by number, and says it is too large - never cut"
 
     Write-Host ""
+    Write-Host "--- the most-asked question reaches the phone: it carries the first and the last time it was asked ---" -ForegroundColor Cyan
+    # Review of PR 295 (2026-10-14): each reminder is an entry of the question's asked list, up to 1276
+    # bytes under 5.1 with a note full of ' < > &, and a question reminded 100 times outgrew a page and
+    # was withheld from his phone. The phone gets the first entry and the last, with askedCount and
+    # lastAskedAt; the whole list stays in list -Json. A world of its own, so the pages above keep theirs.
+    $W = New-World
+    $nag = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Should the night build keep the spare machine awake?"; kind = "yes-no"; whatItIs = "It sleeps at midnight today."; group = "builds"; askedBy = "orc-e" } }
+    $nagNumber = [int]$nag.value.number
+    $noteBase = "it's <still> waiting & blocking the 'release' "
+    $taken = 0
+    foreach ($i in 1..100) {
+        $note = ($noteBase * 5).Substring(0, 196) + ("{0:D3}" -f $i) + "."
+        $r = Invoke-HordeDecision -Operation "remind" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = $nagNumber; note = $note }
+        if ($r.state -ceq "known" -and $r.value.outcome -ceq "done") { $taken++ }
+    }
+    $listedView = @((Invoke-HordeDecision -Operation "list" -Root $W.store -Request @{ state = "open" }).value.questions | Where-Object { [int]$_.number -eq $nagNumber })[0]
+    Check ($taken -eq 100 -and [int]$listedView.askedCount -eq 101 -and @($listedView.asked).Count -eq 100) ("CONTROL: 100 reminders with a 200-character note are taken, and list carries 100 entries of the 101 (" + $taken + " taken)")
+    $sentBytes = $utf8.GetByteCount((ConvertTo-HordeDecisionsChannelQuestion -Question $listedView))
+    $fullBytes = $utf8.GetByteCount((ConvertTo-Json -InputObject $listedView -Compress -Depth 20))
+    $budget = Get-HordeRelayChannelBodyBudget -Context $W.ctx -Recipients 1
+    $tick = @(Invoke-Tick $W)
+    $mail = @(Get-PhoneMail $W)
+    $o = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
+    $onPhone = @($o.body.questions | Where-Object { [int]$_.number -eq $nagNumber })
+    $phoneAsked = @(); if ($onPhone.Count -eq 1) { $phoneAsked = @($onPhone[0].asked) }
+    Check ($o.ok -and $onPhone.Count -eq 1 -and @($o.body.withheld).Count -eq 0) ("THE MOST-ASKED QUESTION REACHES THE PHONE, withheld from nothing (" + (@($tick) -join " | ") + ")")
+    Check ($phoneAsked.Count -eq 2 -and $phoneAsked[0].how -ceq "first" -and $phoneAsked[0].by -ceq "orc-e" -and $phoneAsked[1].how -ceq "remind" -and "$($phoneAsked[1].note)".EndsWith("100.") -and [int]$onPhone[0].askedCount -eq 101 -and "$($onPhone[0].lastAskedAt)" -ceq "$($phoneAsked[1].at)") "it carries the first entry and the last, the count of 101 and the last-asked time - all the page reads"
+    Check ($sentBytes -lt 4096 -and $sentBytes -lt $budget -and $fullBytes -gt 20000) ("and it is " + $sentBytes + " bytes as sent, under its page budget of " + $budget + ", where the whole list would be " + $fullBytes)
+    $plain = @($o.body.questions | Where-Object { [int]$_.number -ne $nagNumber })
+    Check ($plain.Count -eq 1 -and @($plain[0].asked).Count -eq 1 -and $plain[0].asked[0].how -ceq "first" -and [int]$plain[0].askedCount -eq 1) "TWIN: a question asked once carries its one entry, not two"
+
+    Write-Host ""
     Write-Host "--- an answer lands once: the first answer wins ---" -ForegroundColor Cyan
     $W = New-World
     $aid = New-Id

@@ -100,5 +100,12 @@
         @{ Name = "bell-does-not-ask-for-its-turn"
            Find = 'failed = [bool]$out.failed; againMs = $bell.againMs }'
            Replace = 'failed = [bool]$out.failed; againMs = 0 }' }
+        # --- out: when it was asked, as much as the page reads (review of PR 295) ---
+        @{ Name = "the-whole-asked-list-goes-to-the-phone"
+           Find = '        if ($asked.Count -gt 2) { $q.asked = @($asked[0], $asked[$asked.Count - 1]) }'
+           Replace = '' }
+        @{ Name = "the-phone-gets-the-first-entry-only"
+           Find = '        if ($asked.Count -gt 2) { $q.asked = @($asked[0], $asked[$asked.Count - 1]) }'
+           Replace = '        if ($asked.Count -gt 1) { $q.asked = @($asked[0]) }' }
     )
 }
