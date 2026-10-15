@@ -42,6 +42,10 @@ try {
     Check $threw "a name that is no tell setting is refused"
     $threw = $false; try { $null = New-HordeWakeTellCondition -Kind "lonely" -Instance "x" -Text "x" } catch { $threw = $true }
     Check $threw "a condition of a kind nobody declared is refused"
+    # EVERY KIND THE WATCHER MAKES IS ONE THE SENDER TAKES. A kind left out of the list throws where the tick
+    # makes the condition, and the warchief is never told of it - the end of the silent probes was one.
+    $taken = @(@("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended") | Where-Object { $k = $_; try { $null = New-HordeWakeTellCondition -Kind $k -Instance "x" -Text "x"; $true } catch { $false } })
+    Check ($taken.Count -eq 6) ("every kind of condition the watcher makes is one the sender takes, the end of the silent probes too (" + ($taken -join ",") + ")")
     $idA = Get-HordeWakeTellMessageId -Condition (Cond 1)
     Check ($idA -ceq (Get-HordeWakeTellMessageId -Condition (Cond 1)) -and $idA -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') "the same condition is the same message id, every time"
     Check ($idA -cne (Get-HordeWakeTellMessageId -Condition (Cond 2)) -and $idA -cne (Get-HordeWakeTellMessageId -Condition (Cond 1 "gave-up" "two")) -and $idA -cne (Get-HordeWakeTellMessageId -Condition (Cond 1 "bad-mail"))) "another session, another instance or another kind is another message"
