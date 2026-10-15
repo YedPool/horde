@@ -138,7 +138,7 @@
            Find = 'if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }'
            Replace = '' }
         @{ Name = "movement-releases-nobody"
-           Find = 'if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }'
+           Find = 'if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger -Risen (Get-HordeWakeEntryValue $silence "risen") }'
            Replace = '' }
         @{ Name = "a-limit-is-journaled-every-tick"
            Find = '$Run.limited = $limitedNow.seen'

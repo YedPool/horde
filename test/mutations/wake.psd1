@@ -94,17 +94,17 @@
            Find = '$wait = $wait * [System.Math]::Max(1.0, [double]$Settings.silentProbeStretch) }'
            Replace = '$wait = $wait * [double]$Settings.silentProbeStretch }' }
         @{ Name = "the-silences-probes-are-not-counted"
-           Find = '$next.probes = $sent + @($Entries | Where-Object'
-           Replace = '$next.probes = 0 + @($Entries | Where-Object' }
+           Find = '$next.probes = $sent + $probedNow'
+           Replace = '$next.probes = 0 + $probedNow' }
         @{ Name = "the-end-of-the-probes-is-said-every-pass"
-           Find = 'if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add('
-           Replace = 'if ($next.probes -ge $most) { [void]$out.Add(' }
+           Find = 'if ($sent -lt $most -and $next.probes -ge $most) {'
+           Replace = 'if ($next.probes -ge $most) {' }
         @{ Name = "the-end-of-the-probes-is-never-said"
-           Find = 'if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add('
-           Replace = 'if ($false) { [void]$out.Add(' }
+           Find = 'if ($sent -lt $most -and $next.probes -ge $most) {'
+           Replace = 'if ($false) {' }
         @{ Name = "the-count-of-probes-is-not-saved"
-           Find = 'quietSince = $since; probes = $sent }'
-           Replace = 'quietSince = $since; probes = 0 }' }
+           Find = 'quietSince = $since; probes = $sent; probeAt = $lastProbe }'
+           Replace = 'quietSince = $since; probes = 0; probeAt = $lastProbe }' }
         @{ Name = "a-count-of-probes-that-is-none-is-read"
            Find = 'if (-not ($pp.Value -is [int] -or $pp.Value -is [long]) -or $pp.Value -lt 0 -or $pp.Value -gt 1000000) { return'
            Replace = 'if ($false) { return' }

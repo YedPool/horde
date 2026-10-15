@@ -503,20 +503,21 @@ function Get-HordeWakeDecisions {
         # whose mail is taken, and the silence alone was not saved by a watcher before this one. When
         # neither knows one - a silence saved by such a watcher with no ledger beside it - the probe
         # is sent: waiting for a time nobody kept would be the silence that never ends again.
+        # held is why nobody is probed on this pass, or $null when ONE session is.
+        $held = $null
         if ($SilentProbes -ge [int]$Settings.maxSilentProbes) {
             $slow = [double]$Settings.silentSlowProbeSeconds
             $lastSlow = $lastOfAny
             if ($SilentProbeAt -is [datetime] -and $SilentProbeAt -le $Now -and ($lastSlow -isnot [datetime] -or $SilentProbeAt -gt $lastSlow)) { $lastSlow = $SilentProbeAt }
             if ($lastSlow -is [datetime] -and ($Now - $lastSlow).TotalSeconds -lt $slow) {
-                foreach ($r in $ready) { $r.action = "wait"; $r.reason = ("the fleet is silent: " + $SilentProbes + " probes went unanswered, and now one session of the fleet is asked every " + [int]$slow + " s; " + [int][System.Math]::Ceiling($slow - ($Now - $lastSlow).TotalSeconds) + " s are left. It ends when a session acknowledges mail") }
-                $ready = @()
-            } else {
-                $ready = @($ready | Sort-Object -Property probed, nothing, attempts, rank, oldest, id)
-                $allowed = [System.Math]::Min($allowed, 1)
+                $held = ("the fleet is silent: " + $SilentProbes + " probes went unanswered, and now one session of the fleet is asked every " + [int]$slow + " s; " + [int][System.Math]::Ceiling($slow - ($Now - $lastSlow).TotalSeconds) + " s are left. It ends when a session acknowledges mail")
             }
         }
         elseif ($lastOfAny -is [datetime] -and ($Now - $lastOfAny).TotalSeconds -lt $longest) {
-            foreach ($r in $ready) { $r.action = "wait"; $r.reason = ("the fleet is silent: one session of the fleet is asked every " + $longest + " s, and " + [int][System.Math]::Ceiling($longest - ($Now - $lastOfAny).TotalSeconds) + " s are left") }
+            $held = ("the fleet is silent: one session of the fleet is asked every " + $longest + " s, and " + [int][System.Math]::Ceiling($longest - ($Now - $lastOfAny).TotalSeconds) + " s are left")
+        }
+        if ($null -ne $held) {
+            foreach ($r in $ready) { $r.action = "wait"; $r.reason = $held }
             $ready = @()
         } else {
             $ready = @($ready | Sort-Object -Property probed, nothing, attempts, rank, oldest, id)
