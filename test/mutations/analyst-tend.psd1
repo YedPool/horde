@@ -18,11 +18,11 @@
            Replace = '' }
         @{ Name = "start-not-marked-starting"
            Find = '$s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now'
-           Replace = '$s.sessionId = ""; $s.phase = "gone"; $s.startedAt = $now' }
+           Replace = '$s.sessionId = ""; $s.phase = "none"; $s.startedAt = $now' }
         # A spawn that failed or timed out stays starting and is never taken for nothing happened.
         @{ Name = "failed-spawn-forgotten"
            Find = '"; waiting for a handover all the same")'
-           Replace = '"; waiting for a handover all the same"); $s.phase = "gone"' }
+           Replace = '"; waiting for a handover all the same"); $s.phase = "none"' }
         # One no-answer alert for a run of unacked rounds, cleared only by a newer ack.
         @{ Name = "no-answer-told-every-round"
            Find = 'if (@($s.told) -ccontains "no-answer") { continue }'
@@ -32,6 +32,6 @@
            Replace = '$s.lastAckId = $newestAcked[0].id }' }
         @{ Name = "no-answer-cleared-without-new-ack"
            Find = 'if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) {'
-           Replace = 'if ($true) {' }
+           Replace = 'if ($newestAcked.Count -eq 1) {' }
     )
 }
