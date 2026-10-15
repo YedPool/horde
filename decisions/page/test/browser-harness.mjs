@@ -9,7 +9,8 @@
 //                    throws, as a page whose storage is refused; window.mountError is what
 //                    mounting threw, if anything
 //   ?expanded=0      mounted with expanded: false, as the window mounts it
-// and hands a list in by window.hostList(questions).
+// and hands a list in by window.hostList(questions). /cards.html is the phone's decisions page with its
+// cards first (CARDS_HOST, below).
 //
 // Each driver prints one line per check, "[PASS] name" or "[FAIL] name: detail", then "[DONE] n"; the
 // suite turns each into a check of its own. Chrome runs --headless=new: no window is ever shown.
@@ -42,17 +43,40 @@ const HOST = [
   "window.hostList = function (qs) { return window.doc ? window.doc.setList({ state: 'known', value: { questions: qs } }) : 'not mounted: ' + window.mountError; };",
   "</script></body></html>"
 ].join("\n");
-const FILES = { "/list.js": ["list.js", "text/javascript; charset=utf-8"], "/list.css": ["list.css", "text/css; charset=utf-8"] };
+// /cards.html: the phone's decisions page as app.js puts it together (surfaces/pwa/page/app.js, docOf and
+// drawDecisionCards) - the cards first, drawn by decision-cards.js from doc.lanes() on every onDraw, a tap
+// on a card is doc.setLane - under the phone's own style sheet. window.lanesDoc is the lanes document the
+// cards are drawn from (null: none has come), window.redrawCards() draws them again after it is set.
+const CARDS_HOST = [
+  "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+  "<link rel=\"stylesheet\" href=\"/app/app.css\"><link rel=\"stylesheet\" href=\"/list.css\"></head><body><div id=\"lists\"><div id=\"cards\" class=\"decision-cards\"></div><div id=\"list\"></div></div>",
+  "<script src=\"/list.js\"></script><script type=\"module\">",
+  "import { renderDecisionCards } from '/app/decision-cards.js';",
+  "const cards = document.getElementById('cards');",
+  "window.lanesDoc = null;",
+  "function drawCards() { if (!window.doc) return; while (cards.firstChild) cards.removeChild(cards.firstChild); for (const c of renderDecisionCards(document, window.lanesDoc, window.doc.lanes(), { chosen: window.doc.lane(), onChoose: (l) => window.doc.setLane(l) })) cards.appendChild(c); }",
+  "window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), { onDraw: drawCards });",
+  "window.redrawCards = drawCards;",
+  "window.hostList = function (qs) { return window.doc.setList({ state: 'known', value: { questions: qs } }); };",
+  "window.hostReady = true;",
+  "</script></body></html>"
+].join("\n");
+// Served path -> [file under decisions/page, or under the repository when it starts with "/", type].
+const JS = "text/javascript; charset=utf-8";
+const CSS = "text/css; charset=utf-8";
+const FILES = { "/list.js": ["list.js", JS], "/list.css": ["list.css", CSS],
+  "/app/app.css": ["/surfaces/pwa/page/app.css", CSS], "/app/decision-cards.js": ["/surfaces/pwa/page/decision-cards.js", JS],
+  "/app/lane-card.js": ["/surfaces/pwa/page/lane-card.js", JS], "/relay/protocol.js": ["/relay/js/protocol.js", JS] };
 
 // The page served, Chrome started on a phone-sized screen with touch, and the means to drive it.
 export async function openBrowser(pageDir, chromePath, profileDir) {
   const server = http.createServer((req, res) => {
     const path = new URL(req.url, "http://localhost").pathname;
-    if (path === "/host.html") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(HOST); return; }
+    if (path === "/host.html" || path === "/cards.html") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(path === "/host.html" ? HOST : CARDS_HOST); return; }
     const f = FILES[path];
     if (!f) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { "content-type": f[1], "cache-control": "no-store" });
-    res.end(readFileSync(join(pageDir, f[0])));
+    res.end(readFileSync(f[0].startsWith("/") ? join(pageDir, "..", "..", f[0]) : join(pageDir, f[0])));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const origin = "http://127.0.0.1:" + server.address().port;
