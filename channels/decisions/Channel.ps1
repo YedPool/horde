@@ -263,12 +263,16 @@ function Invoke-HordeDecisionsChannelApply {
     # face or PIN at that moment, never with a key an unlocked page holds. A session-signed answer to one
     # is refused by name - needs-passkey - and listed apart in the receipts, so the phone asks the
     # passkey and sends it again. A store that cannot say makes the answer wait, never pass unguarded.
+    # FAILS CLOSED (review of PR 302): only an item that says it was signed by a fresh passkey skips the
+    # look; one that says nothing of its proof is looked at like a session's.
     $proofProp = $Item.PSObject.Properties["proof"]
-    if ($null -ne $proofProp -and "$($proofProp.Value)" -cne "webauthn") {
+    $proofSaid = $(if ($null -eq $proofProp) { "" } else { "$($proofProp.Value)" })
+    if ($proofSaid -cne "webauthn") {
         $flagged = Invoke-HordeDecision -Operation "show" -Request @{ number = [int]$r.value.number } -Root $Context.decisionsRoot
         if ($flagged.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("whether question " + $r.value.number + " needs a fresh passkey cannot be said now: " + $flagged.reason) } }
-        if ($flagged.state -ceq "known" -and "$($flagged.value.outcome)" -ceq "done" -and $null -ne $flagged.value.question.PSObject.Properties["needsPasskey"] -and $flagged.value.question.needsPasskey -eq $true) {
-            return [pscustomobject]@{ outcome = "refused"; reason = ("needs-passkey: question " + $r.value.number + " is answered only with a fresh passkey, and this answer was signed by an unlocked session (" + $proofProp.Value + ")") }
+        if ($flagged.state -ceq "known" -and "$($flagged.value.outcome)" -cne "done") { return [pscustomobject]@{ outcome = "refused"; reason = ("question " + $r.value.number + " cannot be shown (" + $flagged.value.outcome + "), so whether it needs a fresh passkey cannot be said, and a session answer to it is not taken") } }
+        if ($flagged.state -ceq "known" -and $null -ne $flagged.value.question.PSObject.Properties["needsPasskey"] -and $flagged.value.question.needsPasskey -eq $true) {
+            return [pscustomobject]@{ outcome = "refused"; reason = ("needs-passkey: question " + $r.value.number + " is answered only with a fresh passkey, and this answer was signed by an unlocked session (" + $(if ($proofSaid -ceq "") { "no proof named" } else { $proofSaid }) + ")") }
         }
     }
     # A STALE ANSWER NEVER WINS (the header): checked against the store, whatever route answered last.

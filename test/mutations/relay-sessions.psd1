@@ -26,6 +26,12 @@
         @{ Name = "end-all-ignored"
            Find = 'if ([long]$p.endedAt -gt 0 -and'
            Replace = 'if ($false -and' }
+        @{ Name = "end-all-trusts-a-fast-phone-clock"
+           Find = '(([long]$vouch.notBefore - [long]$p.skewMs) -le [long]$p.endedAt'
+           Replace = '([long]$vouch.notBefore -le [long]$p.endedAt' }
+        @{ Name = "new-vouch-never-idle"
+           Find = 'if ($isNew -and [long]$p.nowMs - [long]$vouch.notBefore -gt [long]$p.idleMs + [long]$p.skewMs) {'
+           Replace = 'if ($false) {' }
         @{ Name = "envelope-time-outside-window"
            Find = 'if ($ts -lt [long]$vouch.notBefore -or $ts -gt [long]$vouch.notAfter) {'
            Replace = 'if ($false) {' }

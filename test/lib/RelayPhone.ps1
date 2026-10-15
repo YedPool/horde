@@ -143,8 +143,9 @@ function New-HordeTestPhoneSession {
     # the window (the hard cap refuses over 480 in the writer); -Seq the vouch counter; -Machine,
     # -Horde and -PhoneKeyId what it binds; -Signer another phone's passkey (a vouch it did not make).
     param($Phone, [Parameter(Mandatory = $true)][string]$Machine, [string]$Horde = "work", [string]$PhoneKeyId = "", [long]$Seq = 1,
-        $NotBefore = $null, [long]$Minutes = 480, $Signer = $null)
-    $k = New-HordeRelayP256Key -Use "ecdsa"
+        $NotBefore = $null, [long]$Minutes = 480, $Signer = $null, $Key = $null)
+    # -Key: a session key another vouch already names (one key vouched for by two passkeys).
+    $k = $(if ($null -ne $Key) { $Key } else { New-HordeRelayP256Key -Use "ecdsa" })
     $pub = ConvertTo-HordeRelayP256Public -Key $k
     if ($PhoneKeyId -ceq "") { $PhoneKeyId = Get-HordeRelayKeyId -Public $Phone.agreePublic }
     $nb = $(if ($null -eq $NotBefore) { ConvertTo-HordeRelayRecordMs -Time ([datetime]::UtcNow.AddSeconds(-5)) } else { ConvertTo-HordeRelayRecordMs -Time $NotBefore })

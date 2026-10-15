@@ -181,6 +181,23 @@ function Add-HordeRelaySessionPolicies {
     $idle = [long]3600000
     try { $idle = Get-HordeRelaySessionIdleMs -HordeHome $Context.hordeHome } catch { $broken = ("the setting idleMinutes is refused: " + $_.Exception.Message) }
     $skew = Get-HordeRelaySessionSkewMs -HordeHome $Context.hordeHome
+    # EVERY RECENT RECORD OF EVERY TRUSTED PASSKEY IS VERIFIED BEFORE ANY POLICY IS BUILT (review of PR
+    # 302): one record that does not verify stops every session, as the header says - not only those of
+    # the passkeys checked after it. The founder's signature is checked again whenever it is used.
+    $verified = @{}
+    if ($broken -ceq "") {
+        foreach ($e in @($Records.vouches)) {
+            if (-not $Senders.ContainsKey($e.record.by) -or $Senders[$e.record.by].proof -cne "webauthn") { continue }
+            # Long past its cap a vouch says nothing a phone still needs; it is not verified again.
+            if ([long]$e.vouch.notAfter + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
+            $s = $Senders[$e.record.by]
+            $wa = Test-HordeRelayWebAuthnAssertion -Public $s.public -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $e.record.authenticatorData) `
+                -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $e.record.clientDataJSON) -Signature (ConvertFrom-HordeRelayBase64Url -Text $e.record.signature) `
+                -Challenge (Get-HordeRelaySessionVouchChallenge -Text $e.vouch.text) -RpId $s.rpId -Origins @($s.origins) -RequireUserVerification $true
+            if (-not $wa.ok) { $broken = ("the recorded vouch " + $e.record.vouchId + " does not verify under its passkey: " + $wa.reason); break }
+            $verified[$e.record.vouchId] = $true
+        }
+    }
     foreach ($k in @($Senders.Keys)) {
         $s = $Senders[$k]
         if ($s.proof -cne "webauthn") { $out[$k] = $s; continue }
@@ -192,13 +209,8 @@ function Add-HordeRelaySessionPolicies {
             foreach ($e in @($Records.vouches)) {
                 if ($e.record.by -cne $k) { continue }
                 if ([long]$e.vouch.seq -gt $highest) { $highest = [long]$e.vouch.seq }
-                # Long past its cap a vouch says nothing a phone still needs; it is not verified again.
-                if ([long]$e.vouch.notAfter + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
-                # The founder's signature, checked again whenever it is used (the header).
-                $wa = Test-HordeRelayWebAuthnAssertion -Public $s.public -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $e.record.authenticatorData) `
-                    -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $e.record.clientDataJSON) -Signature (ConvertFrom-HordeRelayBase64Url -Text $e.record.signature) `
-                    -Challenge (Get-HordeRelaySessionVouchChallenge -Text $e.vouch.text) -RpId $s.rpId -Origins @($s.origins) -RequireUserVerification $true
-                if (-not $wa.ok) { $broken = ("the recorded vouch " + $e.record.vouchId + " does not verify under its passkey: " + $wa.reason); break }
+                # Only what was verified above (long past its cap, a vouch is left out).
+                if (-not $verified.ContainsKey($e.record.vouchId)) { continue }
                 $seen = [long]0
                 if ($Records.state.seen.ContainsKey($e.record.vouchId)) { $seen = [long]$Records.state.seen[$e.record.vouchId] }
                 $vouches[$e.record.vouchId] = [pscustomobject]@{ vouch = $e.vouch; recordedAt = [long]$e.record.recordedAt; lastSeen = $seen }
@@ -272,6 +284,7 @@ function Get-HordeRelaySessionStatus {
     if ($null -eq $recs) { $recs = Read-HordeRelaySessionRecords -HordeHome $HordeHome }
     if (-not $recs.ok) { return $null }
     try { $idle = Get-HordeRelaySessionIdleMs -HordeHome $HordeHome } catch { return $null }
+    $skew = Get-HordeRelaySessionSkewMs -HordeHome $HordeHome
     $mine = @(@($recs.vouches) | Where-Object { $_.record.by -ceq $From } | Sort-Object -Property @{ Expression = { [long]$_.record.recordedAt } } | Select-Object -Last $script:HordeRelaySessionStatusMost)
     $list = New-Object System.Collections.ArrayList
     $held = @{}
@@ -281,7 +294,8 @@ function Get-HordeRelaySessionStatus {
         $last = [long]$e.record.recordedAt
         if ($recs.state.seen.ContainsKey($v.vouchId) -and [long]$recs.state.seen[$v.vouchId] -gt $last) { $last = [long]$recs.state.seen[$v.vouchId] }
         $state = "live"
-        if ([long]$recs.endedAt -gt 0 -and ([long]$v.notBefore -le [long]$recs.endedAt -or [long]$e.record.recordedAt -le [long]$recs.endedAt)) { $state = "session-ended" }
+        # The same rule as relay/Session.ps1's: notBefore is the phone's clock, counted back skewMs.
+        if ([long]$recs.endedAt -gt 0 -and (([long]$v.notBefore - $skew) -le [long]$recs.endedAt -or [long]$e.record.recordedAt -le [long]$recs.endedAt)) { $state = "session-ended" }
         elseif ($NowMs -gt [long]$v.notAfter) { $state = "session-expired" }
         elseif ($NowMs - $last -gt $idle) { $state = "session-idle" }
         [void]$list.Add([pscustomobject]@{ vouchId = $v.vouchId; state = $state })

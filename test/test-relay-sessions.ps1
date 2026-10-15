@@ -199,16 +199,19 @@ try {
 
     Write-Host ""
     Write-Host "--- idle: the PC's own clock ---" -ForegroundColor Cyan
-    # Last use at T0+1m. 59 minutes later: taken. Then 61 minutes after that: refused.
+    # Last use at T0+1m. 59 minutes later: taken; 50 minutes after that (110 after the vouch was
+    # recorded): taken, so each use restarts the clock. Then 61 minutes after the last use: refused.
     $r = Send-SessionAnswer -World $W -Session $s1 -Text "Within the hour." -At $T0.AddMinutes(60)
     Check ((Test-Said $W "Within the hour.") -and -not $r.turn.text.Contains("session-idle")) ("59 minutes after the last use the session answers (" + $r.turn.text + ")")
-    $r = Send-SessionAnswer -World $W -Session $s1 -Text "Past the hour." -At $T0.AddMinutes(121)
+    $r = Send-SessionAnswer -World $W -Session $s1 -Text "Again within the hour." -At $T0.AddMinutes(110)
+    Check ((Test-Said $W "Again within the hour.") -and -not $r.turn.text.Contains("session-idle")) ("50 minutes after the last use, 110 after unlock, it answers: each use restarts the PC's idle clock (" + $r.turn.text + ")")
+    $r = Send-SessionAnswer -World $W -Session $s1 -Text "Past the hour." -At $T0.AddMinutes(171)
     Check ($r.turn.text.Contains("session-idle") -and -not (Test-Said $W "Past the hour.")) ("61 minutes after the last use it is refused as session-idle (" + $r.turn.text + ")")
-    $st = Get-HordeRelaySessionStatus -HordeHome $W.home -From $W.phone.keyId -NowMs (ConvertTo-HordeRelayRecordMs -Time $T0.AddMinutes(121))
+    $st = Get-HordeRelaySessionStatus -HordeHome $W.home -From $W.phone.keyId -NowMs (ConvertTo-HordeRelayRecordMs -Time $T0.AddMinutes(171))
     $mine = @(@($st.vouches) | Where-Object { $_.vouchId -ceq $s1.vouchId }) | Select-Object -First 1
     Check ($null -ne $mine -and $mine.state -ceq "session-idle" -and [long]$st.idleMs -eq 3600000) "what the phone is told says session-idle, with the PC's idle limit of 60 minutes"
     # A refused envelope keeps no session alive: still idle a minute later.
-    $r = Send-SessionAnswer -World $W -Session $s1 -Text "Still past it." -At $T0.AddMinutes(122)
+    $r = Send-SessionAnswer -World $W -Session $s1 -Text "Still past it." -At $T0.AddMinutes(172)
     Check ($r.turn.text.Contains("session-idle")) "a refused envelope does not wake the session (the idle clock moves only for one the journal took)"
 
     Write-Host ""
@@ -311,40 +314,94 @@ try {
     [void](Send-ToMachine $W2 $pkAfter.text)
     $t = Invoke-Turn $W2 $endedAt.AddMinutes(2)
     Check ((Test-Said $W2 "Per passkey after end-all.") -and $t.text.Contains("done")) ("a per-passkey envelope after end-all is still applied (" + $t.text + ")")
-    $s4 = New-HordeTestPhoneSession -Phone $W2.phone -Machine $W2.machine -NotBefore $endedAt.AddMinutes(3) -Seq 10
-    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Unlocked after end-all." -At $endedAt.AddMinutes(4) -WithVouch
+    $s4 = New-HordeTestPhoneSession -Phone $W2.phone -Machine $W2.machine -NotBefore $endedAt.AddMinutes(14) -Seq 10
+    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Unlocked after end-all." -At $endedAt.AddMinutes(15) -WithVouch
     Check ((Test-Said $W2 "Unlocked after end-all.") -and -not $r.turn.text.Contains("session-")) ("a NEW unlock after end-all is taken (" + $r.turn.text + ")")
 
     Write-Host ""
     Write-Host "--- revoking the device voids its sessions ---" -ForegroundColor Cyan
-    $r = Send-SessionAnswer -World $W2 -Session $sB -Phone $B -Text "Phone B before revoke." -At $endedAt.AddMinutes(5) -WithVouch
+    $r = Send-SessionAnswer -World $W2 -Session $sB -Phone $B -Text "Phone B before revoke." -At $endedAt.AddMinutes(16) -WithVouch
     # sB was made before end-all: B unlocks again first.
-    $sB2 = New-HordeTestPhoneSession -Phone $B -Machine $W2.machine -NotBefore $endedAt.AddMinutes(5) -Seq 2
-    $r = Send-SessionAnswer -World $W2 -Session $sB2 -Phone $B -Text "Phone B, unlocked again." -At $endedAt.AddMinutes(6) -WithVouch
+    $sB2 = New-HordeTestPhoneSession -Phone $B -Machine $W2.machine -NotBefore $endedAt.AddMinutes(16) -Seq 2
+    $r = Send-SessionAnswer -World $W2 -Session $sB2 -Phone $B -Text "Phone B, unlocked again." -At $endedAt.AddMinutes(17) -WithVouch
     Check ((Test-Said $W2 "Phone B, unlocked again.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: phone B's session answers before its device is revoked (" + $r.turn.text + ")")
     $rev = Revoke-HordeRelayTrust -HordeHome $W2.home -Subject "device" -Id $B.deviceId -Reason "phone lost"
     Check ($rev.state -ceq "known") "the device is revoked"
-    $r = Send-SessionAnswer -World $W2 -Session $sB2 -Phone $B -Text "Phone B after revoke." -At $endedAt.AddMinutes(7)
+    $r = Send-SessionAnswer -World $W2 -Session $sB2 -Phone $B -Text "Phone B after revoke." -At $endedAt.AddMinutes(18)
     Check ($r.turn.text.Contains("refused") -and -not (Test-Said $W2 "Phone B after revoke.")) ("after the revoke its session answer is refused (" + $r.turn.text + ")")
-    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Phone A after B's revoke." -At $endedAt.AddMinutes(8)
+    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Phone A after B's revoke." -At $endedAt.AddMinutes(19)
     Check ((Test-Said $W2 "Phone A after B's revoke.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: the other device's session still answers (" + $r.turn.text + ")")
 
     Write-Host ""
     Write-Host "--- the window's front edge, and damaged records ---" -ForegroundColor Cyan
-    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Before notBefore." -At ([System.DateTimeOffset]::FromUnixTimeMilliseconds($s4.notBefore - 1000).UtcDateTime) -Pc $endedAt.AddMinutes(9)
+    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Before notBefore." -At ([System.DateTimeOffset]::FromUnixTimeMilliseconds($s4.notBefore - 1000).UtcDateTime) -Pc $endedAt.AddMinutes(20)
     Check ($r.turn.text.Contains("session-expired") -and -not (Test-Said $W2 "Before notBefore.")) ("an envelope dated before the session's notBefore is refused as session-expired (" + $r.turn.text + ")")
     $vf = Join-Path $W2.home ("relay\sessions\vouches\" + $s4.vouchId + ".json")
     $orig = [System.IO.File]::ReadAllText($vf)
     [System.IO.File]::WriteAllText($vf, $orig.Replace('"recordedAt":', '"recordedAt": '), [System.Text.Encoding]::ASCII)
-    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Records damaged." -At $endedAt.AddMinutes(10)
+    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Records damaged." -At $endedAt.AddMinutes(21)
     Check ($r.turn.text.Contains("session-unknown") -and $r.turn.text.Contains("cannot be read") -and -not (Test-Said $W2 "Records damaged.")) ("a damaged session record stops every session until it is repaired (" + $r.turn.text + ")")
-    $pkD = New-HordeTestPhoneEnvelope -Phone $W2.phone -Kind "answer" -Channel "decisions" -Body (New-AnswerBody $W2 1 "Passkey while damaged.") -To $W2.agree -Now $endedAt.AddMinutes(11)
+    $pkD = New-HordeTestPhoneEnvelope -Phone $W2.phone -Kind "answer" -Channel "decisions" -Body (New-AnswerBody $W2 1 "Passkey while damaged.") -To $W2.agree -Now $endedAt.AddMinutes(22)
     [void](Send-ToMachine $W2 $pkD.text)
-    $t = Invoke-Turn $W2 $endedAt.AddMinutes(11)
+    $t = Invoke-Turn $W2 $endedAt.AddMinutes(22)
     Check ((Test-Said $W2 "Passkey while damaged.") -and $t.text.Contains("done")) ("a per-passkey envelope is still applied while the session records are damaged (" + $t.text + ")")
     [System.IO.File]::WriteAllText($vf, $orig, [System.Text.Encoding]::ASCII)
-    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Records repaired." -At $endedAt.AddMinutes(12)
+    $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Records repaired." -At $endedAt.AddMinutes(23)
     Check ((Test-Said $W2 "Records repaired.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: repaired, the session answers again (" + $r.turn.text + ")")
+
+    # --- review of PR 302: the two must-fix rules, each beside its twin, in a world of their own ---
+    Write-Host ""
+    Write-Host "--- an unlock the PC never saw is idle from its own notBefore ---" -ForegroundColor Cyan
+    $W3 = New-World
+    $B3 = [datetime]::UtcNow.AddSeconds(-2)
+    $s5 = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3 -Seq 1
+    $r = Send-SessionAnswer -World $W3 -Session $s5 -Text "First use 71 minutes after unlock." -At $B3.AddMinutes(71) -WithVouch
+    Check ($r.turn.text.Contains("session-idle") -and -not (Test-Said $W3 "First use 71 minutes after unlock.")) ("a first use past the idle limit (60) and the skew (10) after unlock is refused as session-idle, though the PC never held the vouch (" + $r.turn.text + ")")
+    Check (-not (Test-Path -LiteralPath (Join-Path $W3.home ("relay\sessions\vouches\" + $s5.vouchId + ".json")))) "and that vouch is not recorded"
+    $s6 = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(60) -Seq 2
+    $r = Send-SessionAnswer -World $W3 -Session $s6 -Text "First use 69 minutes after unlock." -At $B3.AddMinutes(129) -WithVouch
+    Check ((Test-Said $W3 "First use 69 minutes after unlock.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: a first use within the idle limit and the skew is taken (" + $r.turn.text + ")")
+
+    Write-Host ""
+    Write-Host "--- end-all holds against a phone clock running ahead ---" -ForegroundColor Cyan
+    $end3 = Stop-HordeRelaySessions -HordeHome $W3.home -Reason "suite end-all against a fast phone" -Now $B3.AddMinutes(130)
+    Check ($end3.state -ceq "known") "every session is ended at the PC's T+130"
+    # The phone runs 9 minutes fast: unlocked at the PC's T+130, it writes notBefore T+139. The page was
+    # offline, so the PC never recorded the vouch; a thief's first answer comes at the PC's T+132.
+    $s7 = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(139) -Seq 3
+    $r = Send-SessionAnswer -World $W3 -Session $s7 -Text "Fast clock, after end-all." -At $B3.AddMinutes(140) -Pc $B3.AddMinutes(132) -WithVouch
+    Check ($r.turn.text.Contains("session-ended") -and -not (Test-Said $W3 "Fast clock, after end-all.")) ("a vouch whose notBefore a fast phone clock put after the end-all is still ended (" + $r.turn.text + ")")
+    $s8 = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(141) -Seq 4
+    $r = Send-SessionAnswer -World $W3 -Session $s8 -Text "Unlocked well after end-all." -At $B3.AddMinutes(142) -WithVouch
+    Check ((Test-Said $W3 "Unlocked well after end-all.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: an unlock more than the skew after the end-all is taken (" + $r.turn.text + ")")
+
+    Write-Host ""
+    Write-Host "--- an envelope under a vouch the PC could not record waits, never taken as new ---" -ForegroundColor Cyan
+    # Route 1, the name is another passkey's record: phone C vouches for a session key, then phone A
+    # vouches for the very same key. A's vouch verifies, but its record's name is taken.
+    $C3 = Add-PhoneTo -World $W3
+    $sC = New-HordeTestPhoneSession -Phone $C3 -Machine $W3.machine -NotBefore $B3.AddMinutes(142) -Seq 1
+    $o = Send-Opening -World $W3 -Session $sC -At $B3.AddMinutes(143) -Phone $C3
+    Check ($o.text.Contains("is open")) ("CONTROL: phone C's session over the key is open (" + $o.text + ")")
+    $sA = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(142) -Seq 5 -Key $sC.key
+    Check ($sA.vouchId -ceq $sC.vouchId) "CONTROL: phone A's vouch names the same key, so the same vouchId"
+    $r = Send-SessionAnswer -World $W3 -Session $sA -Text "Under a vouch recorded as another's." -At $B3.AddMinutes(144) -WithVouch
+    Check ($r.turn.text.Contains("could not be recorded") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("an envelope whose new vouch's name is another passkey's record waits, not taken (" + $r.turn.text + ")")
+    # Route 2, the write itself fails: the vouches folder refuses new files for a moment.
+    $vdir = Join-Path $W3.home "relay\sessions\vouches"
+    $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $denied = $false
+    try {
+        $null = & icacls.exe $vdir /deny ("*" + $who + ":(WD,AD)")
+        $probe = Join-Path $vdir ("probe-" + (New-Id) + ".tmp")
+        try { [System.IO.File]::WriteAllText($probe, "x"); [System.IO.File]::Delete($probe) } catch { $denied = $true }
+        Check ($denied) "CONTROL: the vouches folder refuses a new file while denied"
+        $s9 = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(144) -Seq 6
+        $r = Send-SessionAnswer -World $W3 -Session $s9 -Text "Under a vouch that could not be written." -At $B3.AddMinutes(145) -WithVouch
+        Check ($r.turn.text.Contains("could not be recorded") -and -not (Test-Said $W3 "Under a vouch that could not be written.")) ("an envelope whose new vouch could not be written waits, not taken (" + $r.turn.text + ")")
+    } finally { $null = & icacls.exe $vdir /remove:d ("*" + $who) }
+    $t = Invoke-Turn $W3 $B3.AddMinutes(146)
+    Check ((Test-Said $W3 "Under a vouch that could not be written.") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("CONTROL TWIN: once the folder takes files again the waiting envelope is taken; the other passkey's name still never is (" + $t.text + ")")
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome

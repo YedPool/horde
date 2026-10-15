@@ -484,9 +484,22 @@ function Complete-HordeRelayInbox {
         if ($gate.transient) { [void]$held.Add($rk + ": " + $gate.why); continue }
         if ($gate.why -cne "") {
             [void]$refused.Add($rk + ": " + $gate.why); $settled[[long]$p.item.seq] = $true
-            # What the phone is told (channels/Sessions.ps1, Get-HordeRelaySessionStatus): the code only.
+            # What the phone is told (channels/Sessions.ps1, Get-HordeRelaySessionStatus): the code only,
+            # and only for a refusal given AFTER both signatures verified (relay/Session.ps1, checks 4
+            # to 7) - review of PR 302: anything earlier may be a relay's forgery, which must neither
+            # tell the phone something nor push the real refusals out of the newest kept.
             $code = Get-HordeRelaySessionCode -Reason $gate.why
-            if ($p.envelope.sig.alg -ceq "session" -and $code -cne "") { $null = Add-HordeRelaySessionRefusal -HordeHome $Context.hordeHome -From $h.from -VouchId $p.envelope.sig.vouchId -Code $code -NowMs $nowMs }
+            if ($p.envelope.sig.alg -ceq "session" -and @("session-stale", "session-ended", "session-expired", "session-idle") -ccontains $code) {
+                $null = Add-HordeRelaySessionRefusal -HordeHome $Context.hordeHome -From $h.from -VouchId $p.envelope.sig.vouchId -Code $code -NowMs $nowMs
+            }
+            continue
+        }
+        # A NEW VOUCH IS TAKEN ONLY ONCE IT IS RECORDED (review of PR 302, must-fix 2): the vouch was
+        # recorded above, so the gate now finds it held. One still new here was not recorded - the
+        # write threw, was not confirmed on disk, or the name is another passkey's record - and every
+        # envelope under it would be judged new, its idle clock never kept. It waits, and comes again.
+        if ($p.envelope.sig.alg -ceq "session" -and $null -ne $gate.verified -and $null -ne $gate.verified.PSObject.Properties["newVouch"] -and $gate.verified.newVouch) {
+            [void]$held.Add($rk + ": its session's vouch " + $p.envelope.sig.vouchId + " could not be recorded on this PC, so it waits")
             continue
         }
         $verdict = Register-HordeRelayJournalReceived -Envelope $p.envelope -Senders $gate.senders -RecipientKeyIds @($Context.openingKeys.Keys) -Channel $h.channel -Kind $h.kind -HordeHome $Context.hordeHome -Now $Now

@@ -165,10 +165,14 @@ function Get-HordeRelaySessionSigningInput {
 #      verifies under the vouched key over the envelope's signed bytes and this vouchId;
 #   3. it binds this horde, machine and mailbox; its phone key is trusted now (else session-ended);
 #   4. a vouch the PC does not hold yet has a seq above the highest it holds (else session-stale);
-#   5. not ended: no "end all" at or after the vouch's notBefore or the time the PC recorded it;
+#   5. not ended: no "end all" at or after the vouch's notBefore less skewMs, or the time the PC
+#      recorded it;
 #   6. the window: the envelope's time and the PC's clock inside [notBefore, notAfter] (the PC's clock
 #      may be behind notBefore by skewMs, a phone clock running ahead); else session-expired;
-#   7. idle: the PC took an envelope under it, or recorded it, within idleMs of now; else session-idle.
+#   7. idle: the PC took an envelope under it, or recorded it, within idleMs of now - and a vouch it
+#      does not hold yet was made within idleMs (plus skewMs) of now; else session-idle.
+# The caller (channels/Port.ps1) takes an envelope under a NEW vouch only once that vouch is recorded:
+# isNew in the value says so, and an envelope whose vouch could not be recorded waits.
 # Revoking the device takes it out of the senders altogether, so nothing of it reaches here.
 
 function Test-HordeRelaySessionEnvelope {
@@ -206,10 +210,18 @@ function Test-HordeRelaySessionEnvelope {
     $isNew = ($null -eq $held)
     if ($isNew -and [long]$vouch.seq -le [long]$p.highestSeq) { $fail.reason = ("session-stale: the vouch's seq " + $vouch.seq + " is not above " + $p.highestSeq + ", the highest this PC holds of this passkey"); return $fail }
     $recordedAt = $(if ($isNew) { [long]$p.nowMs } else { [long]$held.recordedAt })
-    if ([long]$p.endedAt -gt 0 -and ([long]$vouch.notBefore -le [long]$p.endedAt -or $recordedAt -le [long]$p.endedAt)) { $fail.reason = ("session-ended: every phone session was ended at the PC at " + $p.endedAt + " ms"); return $fail }
+    # notBefore is the PHONE's clock, which may run up to skewMs ahead (review of PR 302, must-fix 1):
+    # a vouch made just before an end-all on a fast phone would otherwise outlive it. So the end counts
+    # back skewMs from notBefore - which also means an honest unlock within skewMs after an end-all is
+    # ended too, and the founder answers with the passkey for those few minutes.
+    if ([long]$p.endedAt -gt 0 -and (([long]$vouch.notBefore - [long]$p.skewMs) -le [long]$p.endedAt -or $recordedAt -le [long]$p.endedAt)) { $fail.reason = ("session-ended: every phone session was ended at the PC at " + $p.endedAt + " ms"); return $fail }
     $ts = [long]$h.ts
     if ($ts -lt [long]$vouch.notBefore -or $ts -gt [long]$vouch.notAfter) { $fail.reason = ("session-expired: the envelope's time " + $ts + " is outside the session's window " + $vouch.notBefore + " to " + $vouch.notAfter); return $fail }
     if ([long]$p.nowMs -gt [long]$vouch.notAfter -or [long]$p.nowMs + [long]$p.skewMs -lt [long]$vouch.notBefore) { $fail.reason = ("session-expired: the PC's clock " + $p.nowMs + " is outside the session's window " + $vouch.notBefore + " to " + $vouch.notAfter); return $fail }
+    # A VOUCH THE PC DOES NOT HOLD YET is idle from its own notBefore (review of PR 302, must-fix 2): an
+    # unlock that never reached the PC must not be usable for its first answer hours later. The skew
+    # is allowed for, as notBefore is the phone's clock.
+    if ($isNew -and [long]$p.nowMs - [long]$vouch.notBefore -gt [long]$p.idleMs + [long]$p.skewMs) { $fail.reason = ("session-idle: this session was unlocked " + [long](([long]$p.nowMs - [long]$vouch.notBefore) / 60000) + " minutes ago and the PC never saw it used; the limit is " + [long]([long]$p.idleMs / 60000)); return $fail }
     $last = $recordedAt
     if (-not $isNew -and [long]$held.lastSeen -gt $last) { $last = [long]$held.lastSeen }
     if ([long]$p.nowMs - $last -gt [long]$p.idleMs) { $fail.reason = ("session-idle: the PC has not seen this session used for " + [long](([long]$p.nowMs - $last) / 60000) + " minutes; the limit is " + [long]([long]$p.idleMs / 60000)); return $fail }
