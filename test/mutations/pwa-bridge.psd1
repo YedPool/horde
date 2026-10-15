@@ -33,5 +33,17 @@
         @{ Name = "the-bridge-hands-on-a-part-that-is-not-text"
            Find = 'answerId: String(a.id), part: typeof a.part === "string" ? a.part : "" });'
            Replace = 'answerId: String(a.id), part: a.part === undefined ? "" : String(a.part) });' }
+        @{ Name = "a-clean-refresh-leaves-the-old-notice"
+           Find = '      emit("notice", r.anomalies.join(" "));'
+           Replace = '      if (r.anomalies.length) emit("notice", r.anomalies.join(" "));' }
+        @{ Name = "a-failed-read-is-the-last-good-one"
+           Find = 'if (!relayDown) lastGoodAt = now();'
+           Replace = 'lastGoodAt = now();' }
+        @{ Name = "a-failed-read-not-told"
+           Find = 'emit("read-changed", { locked: false, relayDown, said: relayDown ? r.diagnostics.slice() : [], lastGoodAt });'
+           Replace = '' }
+        @{ Name = "a-locked-read-not-told"
+           Find = 'emit("read-changed", { locked, relayDown, said: locked ? [] : [viewError], lastGoodAt });'
+           Replace = '' }
     )
 }

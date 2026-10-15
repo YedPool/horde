@@ -18,7 +18,12 @@
 # object that ends with them; a service must outlive both. WHETHER the scheduler would end an ordinary
 # child with the pass was NOT measured here: a process WMI creates is the WMI host's child and nobody's
 # job, so the question does not arise. It runs in the caller's logon session, so a window it opens is
-# on the person's desktop. The script this replaces started its two services the same way. It is
+# on the person's desktop ONLY WHEN THE CALLER IS IN THE PERSON'S SESSION. The supervisor's scheduled
+# pass is not (cli/ServicesTend.ps1, since 2026-10-14: it runs whether or not anyone is signed in):
+# measured 2026-10-14 on Windows 11 26200, a process Win32_Process.Create made from such a job was in
+# session 0, where no window is seen. So the adapter's Desktop answer is the same test as idle's: a
+# process that cannot see the person's input cannot show them a window either. The script this
+# replaces started its two services the same way. It is
 # reached through the [wmiclass] accelerator, which Windows PowerShell 5.1 carries itself, not through
 # the CIM cmdlets: those are found through PSModulePath, and a PSModulePath another shell left behind
 # breaks module discovery in 5.1 (platform/windows/Firewall.ps1 met the same thing).
@@ -96,6 +101,16 @@ function Get-HordeWindowsSessionSeesPerson {
     if ($Interactive -ne $true) { return "this process is not interactive, so it is not in the session the person types in" }
     if ([int]$SessionId -eq 0) { return "this process is in session 0, where no person types" }
     return ""
+}
+
+function Get-HordeWindowsServiceDesktop {
+    # The port's Desktop: known "here" when a process started from this one opens its windows on the
+    # person's desktop; unknown with the reason otherwise (header). The two parameters are the
+    # process's own facts, for a suite.
+    param($Interactive = [System.Environment]::UserInteractive, $SessionId = $null)
+    $blind = Get-HordeWindowsSessionSeesPerson -Interactive $Interactive -SessionId $SessionId
+    if ($blind -eq "") { return (New-HordeKnown -Value "here") }
+    return (New-HordeUnknown -Reason $blind)
 }
 
 function Get-HordeWindowsIdleSeconds {
@@ -252,6 +267,7 @@ function Register-HordeWindowsServiceHost {
         IdleSeconds = { Get-HordeWindowsIdleSeconds }
         Start       = { param($Launch) Start-HordeWindowsService -Launch $Launch }
         CloseWindow = { param($ProcessId, $Handle) Close-HordeWindowsServiceWindow -ProcessId $ProcessId -Handle $Handle }
+        Desktop     = { Get-HordeWindowsServiceDesktop }
     }
     Register-HordeServiceHost @blocks
 }

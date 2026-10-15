@@ -56,5 +56,101 @@
         @{ Name = "add-dir-dropped"
            Find = '        $argv.Add("--add-dir"); $argv.Add("" + $dir)'
            Replace = '' }
+        # Issue #214: the turn receipt and the input box.
+        @{ Name = "turn-contains-not-equals"
+           Find = '        if ($null -ne $said -and $said.Trim() -ceq $want) { return "taken" }'
+           Replace = '        if ($null -ne $said -and $said.Contains($want)) { return "taken" }' }
+        @{ Name = "meta-line-is-a-turn"
+           Find = '            if ($d["isMeta"] -eq $true) { continue }'
+           Replace = '' }
+        @{ Name = "other-session-turn-counts"
+           Find = '        if ($d["sessionId"] -cne $SessionId) { continue }'
+           Replace = '' }
+        @{ Name = "turn-before-the-mark-counts"
+           Find = '-Offset ([long]$Mark.size)'
+           Replace = '-Offset 0' }
+        @{ Name = "shrunk-transcript-not-reread"
+           Find = '        if ($Offset -gt $stream.Length) { return (New-HordeUnknown'
+           Replace = '        if ($Offset -gt $stream.Length) { $Offset = 0 }; if ($false) { return (New-HordeUnknown' }
+        @{ Name = "no-transcript-no-mark"
+           Find = '    if ($t.state -eq "absent") { return (New-HordeKnown -Value ([pscustomobject]@{ size = [long]0 })) }'
+           Replace = '' }
+        @{ Name = "box-wrap-not-joined"
+           Find = '    return (New-HordeKnown -Value ([bool](($b.value.body -replace ''\s'', '''') -ceq ($Line -replace ''\s'', ''''))))'
+           Replace = '    return (New-HordeKnown -Value ([bool]($b.value.body.Trim() -ceq $Line.Trim())))' }
+        @{ Name = "box-not-the-lowest"
+           Find = '    for ($k = $rules.Count - 1; $k -ge 1; $k--) {'
+           Replace = '    for ($k = 1; $k -lt $rules.Count; $k++) {' }
+        @{ Name = "box-without-glyph"
+           Find = '        if ($first.Length -eq 0 -or $first[0] -ne $script:ClaudeCodePromptGlyph) { continue }'
+           Replace = '        if ($first.Length -eq 0) { continue }' }
+        @{ Name = "no-box-as-empty"
+           Find = '    return (New-HordeUnknown -Reason "no input box of this harness can be read on the pane''s screen")'
+           Replace = '    return (New-HordeKnown -Value $false)' }
+        @{ Name = "sidechain-is-a-turn"
+           Find = '        if ($d["isSidechain"] -eq $true) { continue }'
+           Replace = '' }
+        @{ Name = "queued-notification-is-a-turn"
+           Find = '            if ($o -isnot [System.Collections.IDictionary] -or $o["kind"] -cne "human") { continue }'
+           Replace = '' }
+        @{ Name = "queued-command-not-a-receipt"
+           Find = '            if ($a -isnot [System.Collections.IDictionary] -or $a["type"] -cne "queued_command") { continue }'
+           Replace = '            continue' }
+        @{ Name = "unparsed-row-a-silent-no"
+           Find = '    if ($unreadable) { return "unreadable" }'
+           Replace = '' }
+        @{ Name = "case-twin-keys-dropped"
+           Find = '        try { $doc = $ser.DeserializeObject($row) } catch { $doc = $null }'
+           Replace = '        try { $doc = $ser.DeserializeObject($row.ToLowerInvariant()) } catch { $doc = $null }' }
+        @{ Name = "turn-end-of-any-session"
+           Find = '-and $d["sessionId"] -ceq $SessionId -and $d["isSidechain"] -ne $true) { return (New-HordeKnown -Value $true) }'
+           Replace = ') { return (New-HordeKnown -Value $true) }' }
+        @{ Name = "any-system-row-ends-a-turn"
+           Find = '$d["type"] -ceq "system" -and $d["subtype"] -ceq "turn_duration"'
+           Replace = '$d["type"] -ceq "system"' }
+        @{ Name = "named-rule-not-a-rule"
+           Find = '    for ($i = 0; $i -lt 8; $i++) { if ($t[$i] -ne $script:ClaudeCodeBoxRule) { return $false } }'
+           Replace = '    if ($t.Trim($script:ClaudeCodeBoxRule).Length -ne 0) { return $false }' }
+        @{ Name = "rule-may-start-with-a-label"
+           Find = '    for ($i = 0; $i -lt 8; $i++) {'
+           Replace = '    for ($i = 0; $i -lt 0; $i++) {' }
+        @{ Name = "dialog-read-as-a-box"
+           Find = '        if ($body -cmatch ''\A\s*[0-9]+\.\s'') { return (New-HordeUnknown'
+           Replace = '        if ($false) { return (New-HordeUnknown' }
+        @{ Name = "busy-read-as-ready"
+           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
+           Replace = '    foreach ($r in @()) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)' }
+        @{ Name = "box-not-anchored"
+           Find = '        foreach ($r in $below) { if ('
+           Replace = '        foreach ($r in @()) { if (' }
+        @{ Name = "choice-under-the-box-ready"
+           Find = ' -or ("" + $r) -cmatch ''(\A|\s)[0-9]+\.\s'') { return (New-HordeUnknown -Reason "a dialog of choices'
+           Replace = ') { return (New-HordeUnknown -Reason "a dialog of choices' }
+        @{ Name = "glyph-under-the-box-ready"
+           Find = '("" + $r).IndexOf($script:ClaudeCodePromptGlyph) -ge 0 -or '
+           Replace = '' }
+        @{ Name = "busy-read-only-below"
+           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
+           Replace = '    foreach ($r in @($b.value.below)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)' }
+        # F's nit of round 3: the mark as a status item, never inside a sentence.
+        @{ Name = "busy-read-in-a-sentence"
+           Find = '    foreach ($r in @($Screen)) { if (("" + $r).Trim() -cmatch $script:ClaudeCodeBusyItem)'
+           Replace = '    foreach ($r in @($Screen)) { if (("" + $r).Contains($script:ClaudeCodeBusyMark))' }
+        @{ Name = "busy-last-item-missed"
+           Find = '(?:[)\u00B7,]|\z)'
+           Replace = '(?:[)\u00B7,])' }
+        # F's nit of round 4: spinner forms not seen on 2.1.299.
+        @{ Name = "busy-comma-before-missed"
+           Find = '(?:\A|[(\u00B7,]|'
+           Replace = '(?:\A|[(\u00B7]|' }
+        @{ Name = "busy-comma-after-missed"
+           Find = '\s*(?:[)\u00B7,]|\z)'
+           Replace = '\s*(?:[)\u00B7]|\z)' }
+        @{ Name = "busy-ellipsis-missed"
+           Find = '|\.\.\.|\u2026)\s*'
+           Replace = ')\s*' }
+        @{ Name = "busy-capital-missed"
+           Find = '(?i:esc to interrupt)'
+           Replace = '(?:esc to interrupt)' }
     )
 }

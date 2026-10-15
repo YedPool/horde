@@ -74,7 +74,7 @@ if ($null -eq $node) {
         $passes = @($lines | Where-Object { $_.StartsWith("[PASS] ") }).Count
         $doneLine = @($lines | Where-Object { $_.StartsWith("[DONE] ") })
         # NO CLOSING LINE MEANS NOT RUN: a script that stopped half way printed some passes and no [DONE].
-        Check ($p.ExitCode -eq 0 -and $doneLine.Count -eq 1 -and $passes -ge 25) ("the sorting's checks ran to their end (" + $passes + " passed; exit " + $p.ExitCode + "; " + $errTask.Result.Trim() + ")")
+        Check ($p.ExitCode -eq 0 -and $doneLine.Count -eq 1 -and $passes -ge 40) ("the sorting's checks ran to their end (" + $passes + " passed; exit " + $p.ExitCode + "; " + $errTask.Result.Trim() + ")")
     } finally { $p.Dispose() }
 }
 

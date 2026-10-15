@@ -111,8 +111,8 @@
            Find = 'if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty: its writer stopped before writing it" } }'
            Replace = '' }
         @{ Name = "cut-json-throws"
-           Find = 'try { $data = $text | ConvertFrom-Json } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }'
-           Replace = '$data = $text | ConvertFrom-Json' }
+           Find = 'try { $data = ConvertFrom-HordeJson $text } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }'
+           Replace = '$data = ConvertFrom-HordeJson $text' }
         @{ Name = "non-object-read-as-a-record"
            Find = 'if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not a JSON object" } }'
            Replace = '' }

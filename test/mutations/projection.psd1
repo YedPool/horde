@@ -184,8 +184,8 @@
            Replace = 'if ($false) {' }
         # Sources are parameters, and reading writes nothing.
         @{ Name = "injected-process-table-ignored"
-           Find = 'identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir -Processes $Processes'
-           Replace = 'identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir' }
+           Find = 'identity = (Get-HordeIdentity -ClaudeDir $agentDirs.X2 -ProjectsDir $ProjectsDir -CodexDir $agentDirs.W8 -Processes $Processes'
+           Replace = 'identity = (Get-HordeIdentity -ClaudeDir $agentDirs.X2 -ProjectsDir $ProjectsDir -CodexDir $agentDirs.W8' }
         @{ Name = "plain-read-of-a-control-file"
            Find = 'try { return ((Read-HordeSharedText -Path $Record.source) | ConvertFrom-Json) } catch { return $null }'
            Replace = 'try { return ([System.IO.File]::ReadAllText($Record.source) | ConvertFrom-Json) } catch { return $null }' }
@@ -206,7 +206,7 @@
            Find = 'if ($run.closed.state -ne "known" -or -not [bool]$run.closed.value) { return "it is in a run that is open, or may be" }'
            Replace = 'if ($false) { return "it is in a run that is open, or may be" }' }
         @{ Name = "scope-control-file-ignored"
-           Find = 'if ($C.identity.records.ContainsKey($Id)) { return "a control file names it" }'
+           Find = 'if (-not $NotItsControlFile -and $C.identity.records.ContainsKey($Id)) { return "a control file names it" }'
            Replace = 'if ($false) { return "a control file names it" }' }
         @{ Name = "scope-duplicate-control-files-ignored"
            Find = 'if (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0) { return "two control files name it" }'

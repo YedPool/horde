@@ -25,7 +25,12 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:ActWorldSessions.ContainsKey($id)) { $x = $script:ActWorldSessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "no control file yet" } } `
     -ReadMode { param($id, $view) if ($script:ActWorldSessions.ContainsKey($id) -and $null -ne $script:ActWorldSessions[$id].mode) { New-HordeKnown -Value $script:ActWorldSessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
-    -CloseText @("bye", "`r")
+    -CloseText @("bye", "`r") `
+    -TurnMark { param($id, $view) New-HordeKnown -Value ([pscustomobject]@{ n = $script:ActWorldTyped.Count }) } `
+    -TurnSeen { param($id, $view, $mark, $line)
+        # The fake harness takes every line typed with Enter as a turn (issue #214).
+        $h = $script:ActWorldSessions[$id].handle
+        New-HordeKnown -Value ([bool](@($script:ActWorldTyped | Select-Object -Skip ([int]$mark.n) | Where-Object { $_.handle -ceq $h -and $_.text -ceq $line -and $_.submit }).Count -gt 0)) }
 
 Register-HordeHostActor -Name "fakehost" `
     -Own { New-HordeKnown -Value $script:ActWorldTerm } `
@@ -66,6 +71,6 @@ function New-HordeActWorldContext {
     $ctx.processStart = { param($p) if ($script:ActWorldProcs.ContainsKey([int]$p)) { $script:ActWorldProcs[[int]$p] } else { $null } }
     $ctx.sleep = { param($ms) Start-Sleep -Milliseconds 20 }
     $ctx.alert = { param($m) }
-    $ctx.bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; pollMs = 50 }
+    $ctx.bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; receiptSeconds = 1; retrySeconds = 1; pollMs = 50 }
     return $ctx
 }

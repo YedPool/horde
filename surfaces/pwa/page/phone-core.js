@@ -80,6 +80,20 @@
 // or a machine the relay will not take (another account's, a spent grant), is told so in this file's own
 // words, and nothing is left half made. Without accounts (a memory or binding relay) nothing changes.
 //
+// AN ANSWER IS KEPT UNTIL THE PC HAS APPLIED IT (the founder, 2026-10-14, relay fixes 3 and 4: the runner
+// was down 2 h 38 min, twenty answers waited with nothing shown, and one envelope never arrived and
+// nothing said so). A machine whose snapshot carries receipts (channels/decisions/Channel.ps1, WHAT
+// BECAME OF EACH ANSWER) has every answer sent to it kept in this phone's OUTBOX (the store, outbox/<id>):
+// the answer's ids, the seq of every envelope that carried it, that envelope whole (signed by the
+// passkey and sealed to the machine), and his words SEALED TO THIS PHONE'S OWN KEY - so nothing
+// decrypted is stored, and the words show again after a reload once the horde is unlocked. answers()
+// says what became of each (relay/js/protocol.js, answerState): sent, received by PC, applied or
+// refused; applied and refused leave the outbox. resend() sends again what the PC reports MISSING - as
+// a NEW envelope under a new seq, because the journal refuses a late one for good - and what it never
+// saw at the end of the stream - as the same envelope put again - each at most once in ten minutes. The
+// machine applies by answerId, so a resend lands once. A machine without receipts keeps nothing here:
+// there is nothing that would ever confirm it.
+//
 // THE SEQUENCE OF WHAT THE PHONE SENDS is per channel, counted in the store with update() so two tabs
 // cannot spend one seq (the machine's journal refuses a seq at or below the last, relay/Journal.ps1).
 //
@@ -101,10 +115,31 @@
 // id and line number of the last entry read (progressRead) - so the log opens where he left it, with
 // how many are new. An id and a number, never a word of the log; read back guarded (progressPosition),
 // so a damaged record is no position. The position only ever moves forward.
+//
+// THE CARDS (channels/cards) come through the same mailbox and the same refresh, machine to phone only:
+// one whole snapshot per machine, of which the session keeps the newest it opened (by its envelope's seq),
+// in memory only. THE FOUNDER RUNS TWO MACHINES, and each is its own pairing here, opening only its own
+// machine's envelopes. So a refresh also offers a cards envelope it cannot open to every other UNLOCKED
+// pairing of the same horde, and cards() merges what all of them hold, by machine name
+// (relay/js/protocol.js, mergeCards). A card's stream is its own pairing's progress log, filtered on the
+// page to its lane with its own machine's map (progress() hands the map over as areas).
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
+// THE NOTICES (channels/notices) come through the same mailbox and the same refresh: what the machine
+// decided the founder should be told (notices/Decide.ps1 - a session's `horde notify` line, a followed
+// lane's new progress entry, a session cut off for the hour), each with the FOLLOW SWITCHES that machine
+// holds. The phone keeps the notices by id (one notice, however many envelopes carry it) and each
+// machine's switches from its newest envelope: THE PHONE SHOWS WHAT THE MACHINE HOLDS, never a switch it
+// only asked for. A cards envelope of another machine is opened by that machine's own pairing, and so is
+// its notices envelope. Read or unread is this phone's own (noticesRead on the stored entry: ids, the
+// newest 500), and goes nowhere. A SWITCH IS SENT LIKE AN ANSWER: the passkey signs it (user
+// verification), it is sealed to the machine of the card, and only a passkey session sends one.
 const ENTRY = "horde/";
+// THE OUTBOX (the header, AN ANSWER IS KEPT UNTIL THE PC HAS APPLIED IT): one record per horde entry.
+const OUTBOX = "outbox/";
+const OUTBOX_INFO = "horde-phone/outbox/v1 answer";
+const OUTBOX_MOST = 200;
 const RELAY_DOWN = "The relay could not be read just now; the phone will try again.";
 const RELAY_REFUSED = "The relay did not take it just now.";
 const relaySaid = (reason) => "the relay said: " + String(reason || "").slice(0, 200);
@@ -130,9 +165,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress() });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map() });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
+  const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
 
   async function entryOf(id) {
@@ -140,25 +176,39 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     if (!e) throw fail("there is no such horde on this phone");
     return e;
   }
-  async function nextSeq(id, channel) {
-    let seq = 0;
+  // THE SEQ IS SPENT ONLY ONCE THE PASSKEY HAS SIGNED (review of PR 262, M1): it was spent before the
+  // prompt, so every prompt cancelled or timed out left a hole the machine reported missing - and a hole
+  // is noise that can push a real loss out of the receipt's list. So the next seq is read, the envelope
+  // signed under it, and only then claimed, in one update that takes it only if no other tab has: one
+  // that lost the race signs again under the next.
+  async function claimSeq(id, channel, seq) {
+    let won = false;
     await store.update(ENTRY + id, (e) => {
       if (!e) throw fail("there is no such horde on this phone");
       const counts = { ...(e.seq || {}) };
-      counts[channel] = (counts[channel] || 0) + 1;
-      seq = counts[channel];
+      if ((counts[channel] || 0) >= seq) return e;
+      counts[channel] = seq;
+      won = true;
       return { ...e, seq: counts };
     });
-    return seq;
+    return won;
   }
   function assertWith(e, prf = false) {
     // relay/js/protocol.js's passkey: user verification required by the authenticator adapter.
     return async (challenge) => authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge, prfInput: prf ? prfInput(e.horde, e.machine) : null });
   }
-  async function sealAndSign(e, kind, channel, body, assert) {
-    const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq: await nextSeq(e.id, channel), ts: now(), recipientPublic: P.unb64u(e.machineAgreePublic), body });
-    // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it.
-    return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header), ts: parts.header.ts };
+  // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it - and,
+  // for an answer signed again, when he FIRST sent it (A STALE ANSWER NEVER WINS, in the header).
+  async function sealAndSign(e, kind, channel, body, assert, ts = null) {
+    for (let tries = 0; tries < 3; tries++) {
+      const held = await store.get(ENTRY + e.id);
+      if (!held) throw fail("there is no such horde on this phone");
+      const seq = ((held.seq && held.seq[channel]) || 0) + 1;
+      const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq, ts: ts === null ? now() : ts, recipientPublic: P.unb64u(e.machineAgreePublic), body });
+      const text = await P.signEnvelope(parts, assert);
+      if (await claimSeq(e.id, channel, seq)) return { text, key: P.replayKey(parts.header), ts: parts.header.ts, seq };
+    }
+    throw fail("Another window of this app sent at the same moment, three times over: nothing was sent. Send it again.");
   }
 
   // The PRF wrap from what a passkey get() just gave, while the session still holds the key's bytes
@@ -213,6 +263,46 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     }
   }
 
+  // One opened notices envelope into a session's memory (THE NOTICES, in the header): each notice once by
+  // its id; the switches of the envelope of the highest seq stand.
+  function takeNotices(e, s, opened, item, anomalies) {
+    const g = s.notices;
+    if (opened.header.kind !== "notices" || g.keys.has(opened.key)) return;
+    g.keys.add(opened.key);
+    const r = P.readNotices(opened.body, e.horde, e.machine);
+    if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+    if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " notice(s) that do not hold together were left out");
+    for (const x of r.value.notices) if (!g.byId.has(x.id)) g.byId.set(x.id, x);
+    if (opened.header.seq > g.followsSeq) { g.follows = r.value.follows; g.followsSeq = opened.header.seq; }
+  }
+  // One opened cards envelope into a session's memory (THE CARDS, in the header): the newest by seq stands.
+  function takeCards(e, s, opened, item, anomalies) {
+    if (opened.header.kind !== "snapshot") return;
+    if (s.cards && s.cards.seq >= opened.header.seq) return;
+    const r = P.readCardsSnapshot(opened.body, e.horde, e.machine);
+    // A refusal is kept for the Progress tab's one line when no cards stand (cards-why.js); a good one clears it.
+    if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); s.cardsRefused = r.reason; return; }
+    if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " card(s) that do not hold together were left out");
+    s.cards = { entry: e.id, seq: opened.header.seq, value: r.value };
+    s.cardsRefused = "";
+  }
+  // Whether an envelope that no pairing opened says it is cards from a PC of e's horde that this phone has
+  // NO pairing for (locked or not): only the Progress tab's one line rests on it (cards-why.js), so its
+  // unverified header is enough - a forged one can do no more than show that line.
+  async function cardsFromUnpaired(e, text) {
+    let h = null;
+    try { h = JSON.parse(text).header; } catch (x) { return false; }
+    if (!h || h.channel !== "cards" || typeof h.from !== "string") return false;
+    for (const x of await store.list(ENTRY)) if (x.horde === e.horde && x.machine === h.from) return false;
+    return true;
+  }
+  // The other unlocked pairings of e's horde, each with its session: who else may open a cards envelope.
+  async function siblingsOf(e) {
+    const out = [];
+    for (const x of await store.list(ENTRY)) if (x.id !== e.id && x.horde === e.horde && sessions.has(x.id)) out.push({ e: x, s: sessions.get(x.id) });
+    return out;
+  }
+
   // Put a sealed pairing response in its offer's mailbox. true when the relay took it; what the relay
   // said otherwise goes to diagnostics, never the screen.
   async function sendSealed(id) {
@@ -221,6 +311,42 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     const put = await relay.put(p.mailbox, p.key, p.sealed);
     if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); return false; }
     return true;
+  }
+
+  // THE OUTBOX (the header). Its record: { v: 1, items: [{ answerId, number, part, wordingVersion,
+  // snapshot, sealed: { enc, box }, seqs, envelope: { key, text }, sentAt, lastSentAt, lastResendAt }] }.
+  function slotOf(number, part) { return String(number) + ":" + (part || ""); }
+  async function outboxOf(id) {
+    const x = await store.get(OUTBOX + id);
+    return x && Array.isArray(x.items) ? x.items : [];
+  }
+  function answerStateOf(s, item, receipt, at) { return P.answerState(item, receipt, s.view ? s.view.ts : 0, at); }
+  // His words, opened with the session's key, or null when they cannot be (another key's, or damaged).
+  async function openKept(s, item) {
+    if (s.outboxText.has(item.answerId)) return s.outboxText.get(item.answerId);
+    try {
+      const text = P.fromUtf8(await P.hpkeOpen(s.privateKey, s.publicPoint, P.unb64u(item.sealed.enc), P.utf8(OUTBOX_INFO), P.utf8(item.answerId), P.unb64u(item.sealed.box)));
+      s.outboxText.set(item.answerId, text);
+      return text;
+    } catch (x) { return null; }
+  }
+  // One answer into the outbox, or one more envelope of it: his words sealed to this phone's own key, the
+  // envelope the relay took kept whole (signed, and sealed to the machine), and its seq added.
+  // A NEW ANSWER TO A QUESTION AND PART TAKES THE PLACE OF EVERY OLDER ONE STILL WAITING THERE (review of
+  // PR 262, M2): kept, an older answer lost on the way would be sent again after the newer one and
+  // stand as his answer. stuck: this send was the one re-sign of an answer stuck at received (S1).
+  async function keepAnswer(id, s, a, env, stuck = false) {
+    const sealed = await P.hpkeSeal(s.publicPoint, P.utf8(OUTBOX_INFO), P.utf8(a.answerId), P.utf8(a.text));
+    s.outboxText.set(a.answerId, a.text);
+    const at = now();
+    const slot = slotOf(a.number, a.part || "");
+    await store.update(OUTBOX + id, (x) => {
+      const items = ((x && x.items) || []).filter((y) => y.answerId === a.answerId || slotOf(y.number, y.part) !== slot);
+      const i = items.findIndex((y) => y.answerId === a.answerId);
+      if (i >= 0) items[i] = { ...items[i], seqs: items[i].seqs.concat([env.seq]), envelope: { key: env.key, text: env.text }, lastSentAt: at, stuckResent: items[i].stuckResent === true || stuck };
+      else items.push({ answerId: a.answerId, number: a.number, part: a.part || "", wordingVersion: a.wordingVersion, snapshot: a.snapshot, sealed: { enc: P.b64u(sealed.enc), box: P.b64u(sealed.sealed) }, seqs: [env.seq], envelope: { key: env.key, text: env.text }, signedAt: env.ts, sentAt: at, lastSentAt: at, lastResendAt: 0 });
+      return { v: 1, items };
+    });
   }
 
   function summary(e) {
@@ -339,7 +465,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
 
     lock(id) { const s = sessions.get(id); if (s) { wipe(s.pkcs8); sessions.delete(id); } },
 
-    async forget(id) { this.lock(id); pairings.delete(id); await store.delete(ENTRY + id); },
+    // The outbox first: an entry gone with its outbox left would leave words no session can open.
+    async forget(id) { this.lock(id); pairings.delete(id); await store.delete(OUTBOX + id); await store.delete(ENTRY + id); },
 
     // Read the horde's phone mailbox and return the newest complete snapshot this phone can open:
     // { snapshot, seq, questions, pageKeyByNumber, withheld, notShown, counts, anomalies, stale, diagnostics }:
@@ -358,6 +485,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const said = [];
       let first = true;
       let restarted = false;
+      const siblings = await siblingsOf(e);
       for (let round = 0; round < 64; round++) {
         const r = (first && waitMs > 0) ? await relay.watch(mailbox, s.cursor, 256, waitMs) : await relay.get(mailbox, s.cursor, 256);
         first = false;
@@ -373,6 +501,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
             s.seen.clear();
             s.chat.ids.clear();
             s.progress.ids.clear();
+            s.notices.keys.clear();
             restarted = true;
             continue;
           }
@@ -382,13 +511,26 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           const o = await P.openEnvelope(item.text, { keyId: e.machine, signPublic: P.unb64u(e.machineSignPublic) }, { privateKey: s.privateKey, publicPoint: s.publicPoint });
           // Another machine's envelope, or one sealed to another phone key, is not an anomaly: the
           // mailbox is the horde's. A forged or broken one from "this" machine is.
-          if (!o.ok) { if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") anomalies.push("item " + item.seq + ": " + o.reason); continue; }
+          if (!o.ok) {
+            if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") { anomalies.push("item " + item.seq + ": " + o.reason); continue; }
+            // ANOTHER MACHINE OF THIS HORDE: its cards, opened by its own pairing (THE CARDS, in the header).
+            let took = false;
+            for (const x of siblings) {
+              const so = await P.openEnvelope(item.text, { keyId: x.e.machine, signPublic: P.unb64u(x.e.machineSignPublic) }, { privateKey: x.s.privateKey, publicPoint: x.s.publicPoint });
+              if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); took = true; break; }
+              if (so.ok && so.value.header.channel === "notices") { takeNotices(x.e, x.s, so.value, item, anomalies); took = true; break; }
+            }
+            if (!took && o.reason === "not from the machine this phone paired with" && await cardsFromUnpaired(e, item.text)) s.cardsUnpaired = true;
+            continue;
+          }
+          if (o.value.header.channel === "cards") { takeCards(e, s, o.value, item, anomalies); continue; }
+          if (o.value.header.channel === "notices") { takeNotices(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "chat") { takeChat(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "progress") { takeProgress(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel !== "decisions" || o.value.header.kind !== "snapshot") continue;
           const page = P.readSnapshotPage(o.value.body, e.horde, e.machine);
           if (!page.ok) { anomalies.push("item " + item.seq + ": " + page.reason); continue; }
-          s.pages.push({ key: o.value.key, seq: o.value.header.seq, relaySeq: item.seq, page: page.value });
+          s.pages.push({ key: o.value.key, seq: o.value.header.seq, relaySeq: item.seq, ts: o.value.header.ts, page: page.value });
         }
         s.cursor = r.value.next;
         if (r.value.items.length < 256) break;
@@ -426,7 +568,20 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };
+      return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
+    },
+
+    // The cards of the horde (THE CARDS, in the header): this pairing's and every other unlocked pairing's
+    // of the same horde, merged by machine name - relay/js/protocol.js's mergeCards. Needs an unlocked session.
+    async cards(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const all = [s, ...(await siblingsOf(e)).map((x) => x.s)];
+      const held = all.map((x) => x.cards).filter((x) => x);
+      // Why there are none, when there are none (cards-why.js): a refused snapshot, or cards from a PC not paired.
+      const refused = (all.find((x) => x.cardsRefused) || { cardsRefused: "" }).cardsRefused;
+      return { ...P.mergeCards(held), mode: s.mode, refused, unpaired: all.some((x) => x.cardsUnpaired) };
     },
 
     // He has read as far as the entry entryId (or, with none, to the newest): kept on this device, an id
@@ -442,9 +597,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (index > log.readIndex) {
         const read = { id: log.items[index].id, n: log.items[index].n };
         await store.update(ENTRY + id, (x) => { if (!x) throw fail("there is no such horde on this phone"); return { ...x, progressRead: read }; });
-        return { ...P.progressLog({ ...s.progress, position: read }), mode: s.mode };
+        return { ...P.progressLog({ ...s.progress, position: read }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
       }
-      return { ...log, mode: s.mode };
+      return { ...log, mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };
     },
 
     // One line of the founder to the Thrall, signed with the passkey (user verification) and put into the
@@ -468,6 +623,52 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       return { key: env.key, seq: put.value.seq };
     },
 
+    // The notices of the horde (THE NOTICES, in the header): this pairing's and every other unlocked pairing's
+    // of the same horde, newest first, read or unread as this phone keeps it, and each machine's switches:
+    // { items, unread, follows: { <pairing id>: { <lane>: true|false } } }. Needs an unlocked session.
+    async notices(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const all = [{ e, s }, ...(await siblingsOf(e))];
+      const read = new Set(e.noticesRead || []);
+      const held = all.map((x) => ({ entry: x.e.id, machine: x.e.label || x.e.machine, notices: [...x.s.notices.byId.values()] }));
+      const list = P.noticeList(held, read);
+      const follows = {};
+      for (const x of all) follows[x.e.id] = { ...x.s.notices.follows };
+      return { ...list, follows };
+    },
+
+    // He has read these notices (ids), or with none given every notice the phone holds: kept on this phone
+    // only, the newest 500 ids. The notices, as notices() answers them.
+    async markNoticesRead(id, ids = null) {
+      const now = await this.notices(id);
+      const want = ids === null ? now.items.map((x) => x.id) : ids.filter((x) => typeof x === "string" && /^[0-9a-f]{32}$/.test(x));
+      await store.update(ENTRY + id, (x) => {
+        if (!x) throw fail("there is no such horde on this phone");
+        const kept = (x.noticesRead || []).filter((k) => want.indexOf(k) < 0);
+        return { ...x, noticesRead: kept.concat(want).slice(-500) };
+      });
+      return this.notices(id);
+    },
+
+    // The FOLLOW SWITCH of one lane of one machine's card (THE NOTICES, in the header): entry is the pairing
+    // whose machine sent the card, lane its lane id or "thrall". Signed with the passkey and put into that
+    // machine's mailbox; the switch shows as set once the machine's next notices envelope carries it. { key }.
+    async follow(id, { entry = id, lane, on }) {
+      const owner = await entryOf(id);
+      const e = await entryOf(entry);
+      if (e.horde !== owner.horde) throw fail("that card is of another horde");
+      const s = sessions.get(e.id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode !== "passkey") throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to change what you follow.");
+      const body = P.followBody({ setId: P.hex(P.randomBytes(16)), machine: e.machine, lane: String(lane), on: on === true });
+      const env = await sealAndSign(e, "follow", "notices", body, assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Tap the switch again."); }
+      return { key: env.key };
+    },
+
     // The founder's answer to one question of the snapshot on screen, signed with the passkey (user
     // verification) and put into the machine's mailbox. answerId is the page's id for these words: the
     // same words sent again carry it, and the machine stores them once. { key, seq }.
@@ -489,13 +690,100 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (Number(q.question.wordingVersion) !== wordingVersion) throw fail("question " + number + " is shown in wording " + q.question.wordingVersion + ", not " + wordingVersion + ": the answer was not sent. Read it again and answer.");
       if (part !== "" && !/^[a-z]$/.test(part)) throw fail("the part answered is not one of the question's parts: the answer was not sent.");
       const takesParts = Number(v.answers) >= 2;
+      // NOTHING UNCONFIRMED IS EVER DROPPED TO MAKE ROOM (review of PR 262): with the outbox full, the
+      // answer is not sent, and he is told why. What this answer replaces does not count.
+      if (Array.isArray(v.receipts)) {
+        const slot = slotOf(number, takesParts ? part : "");
+        const held = (await outboxOf(id)).filter((i) => i.answerId !== answerId && slotOf(i.number, i.part) !== slot);
+        if (held.length >= OUTBOX_MOST) throw fail("Not sent: " + OUTBOX_MOST + " answers are still waiting for the PC to confirm them. Once it is running again they go, and this one can be sent.");
+      }
       // To a machine that does not read a part's answer, the part's letter goes before the words.
       const words = (part !== "" && !takesParts) ? "(" + part + ") " + text : text;
       const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "" });
       const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Press Enter to try again; the same words are never saved twice."); }
+      // KEPT UNTIL APPLIED, by a machine that says what became of its answers (its snapshot has receipts).
+      if (Array.isArray(v.receipts)) await keepAnswer(id, s, { answerId, number, part: takesParts ? part : "", wordingVersion, snapshot: q.pageKey, text: words }, env);
       return { key: env.key, seq: put.value.seq };
+    },
+
+    // The answers this phone keeps for the horde, each with what became of it (relay/js/protocol.js,
+    // answerState): [{ answerId, number, part, text, state, warning, sentAt }], his words opened with the
+    // session's key. An answer the snapshot on screen says is applied or refused leaves the store here, and is
+    // still answered so for the rest of the session. Needs an unlocked session.
+    async answers(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const receipt = s.view ? P.receiptFor(s.view.receipts, e.deviceKeyId) : null;
+      const at = now();
+      const out = [];
+      const settled = [];
+      for (const item of await outboxOf(id)) {
+        const st = answerStateOf(s, item, receipt, at);
+        // WORDS THAT CANNOT BE READ STILL STAND AS AN ANSWER (review of PR 262, S3): the question shows
+        // answered, pending, with a line that says its words are not readable here - never empty.
+        const text = await openKept(s, item);
+        const a = { answerId: item.answerId, number: item.number, part: item.part, text, unreadable: text === null, state: st.state, warning: st.warning, sentAt: item.sentAt };
+        out.push(a);
+        if (st.state === "applied" || st.state === "refused") { settled.push(item.answerId); s.settled.set(item.answerId, a); }
+      }
+      if (settled.length) await store.update(OUTBOX + id, (x) => ({ v: 1, items: ((x && x.items) || []).filter((i) => settled.indexOf(i.answerId) < 0) }));
+      for (const [answerId, a] of s.settled) if (!out.some((x) => x.answerId === answerId)) out.push(a);
+      return out;
+    },
+
+    // Send again what the PC has not confirmed and is due (relay/js/protocol.js, answerState): a missing
+    // answer as a NEW envelope signed by the passkey, one lost at the end of the stream as the same
+    // envelope put again. Each at most once per ANSWER_RESEND_MS, whether it went or not. { resent,
+    // problems }: how many went, and the phone's own words for each that did not. Needs an unlocked
+    // session; one that cannot sign sends again only what needs no new signature.
+    // sign: false sends again only what needs no new signature (the page is hidden, or another window
+    // of the app holds the lock: bridge.js). AT MOST ONE ANSWER IS SIGNED AGAIN A CALL (review of PR 262,
+    // S4): one passkey prompt a refresh, never a train of them; the rest wait for the next.
+    async resend(id, { sign = true } = {}) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const receipt = s.view ? P.receiptFor(s.view.receipts, e.deviceKeyId) : null;
+      let resent = 0;
+      let signed = 0;
+      let cannot = 0;
+      const problems = [];
+      const items = await outboxOf(id);
+      for (const item of items) {
+        const st = answerStateOf(s, item, receipt, now());
+        if (!st.due) continue;
+        // NEVER AN ANSWER THAT IS NOT HIS LATEST to its question and part (review of PR 262, M2).
+        if (items.some((i) => i !== item && slotOf(i.number, i.part) === slotOf(item.number, item.part) && Number(i.signedAt || i.sentAt) > Number(item.signedAt || item.sentAt))) continue;
+        if (st.resend === "resign" && s.mode !== "passkey") { cannot += 1; continue; }
+        if (st.resend === "resign" && (!sign || signed >= 1)) continue;
+        if (st.resend === "resign") signed += 1;
+        // THE RATE LIMIT IS WRITTEN FIRST: a send that fails, or a page closed half way, is not tried
+        // again before the interval is out.
+        await store.update(OUTBOX + id, (x) => ({ v: 1, items: ((x && x.items) || []).map((i) => (i.answerId === item.answerId ? { ...i, lastResendAt: now() } : i)) }));
+        const again = "The answer to question " + item.number + " could not be sent again just now; it will be tried again.";
+        try {
+          if (st.resend === "reput") {
+            const put = await relay.put(e.machineMailbox, item.envelope.key, item.envelope.text);
+            if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); problems.push(again); continue; }
+            resent += 1;
+            continue;
+          }
+          const text = await openKept(s, item);
+          if (text === null) { problems.push("The answer to question " + item.number + " cannot be read back on this phone, so it cannot be sent again. Answer it again."); continue; }
+          const body = P.answerBody({ answerId: item.answerId, machine: e.machine, snapshot: item.snapshot, number: item.number, wordingVersion: item.wordingVersion, text, part: item.part });
+          // Signed under the time he FIRST sent it: an older answer stays the older one at the PC.
+          const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e), Number(item.signedAt || item.sentAt));
+          const put = await relay.put(e.machineMailbox, env.key, env.text);
+          if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); problems.push(again); continue; }
+          await keepAnswer(id, s, { ...item, text }, env, st.stuck === true);
+          resent += 1;
+        } catch (x) { problems.push("The answer to question " + item.number + " was not sent again: the passkey did not sign it. It will be tried again."); }
+      }
+      if (cannot) problems.push("Unlocked by the recovery code, this phone cannot sign: " + cannot + " answer" + (cannot === 1 ? " the PC is missing waits" : "s the PC is missing wait") + " until you unlock with the passkey.");
+      return { resent, problems };
     }
   };
 }

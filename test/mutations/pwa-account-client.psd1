@@ -31,5 +31,29 @@
         @{ Name = "deletion-sent-without-its-words"
            Find = 'call("DELETE", "/v1/account", { confirm: DELETE_CONFIRM })'
            Replace = 'call("DELETE", "/v1/account", {})' }
+        @{ Name = "offline-at-two-minutes-exactly"
+           Find = 'answer.now - seen > OFFLINE_AFTER_MS ? "offline"'
+           Replace = 'answer.now - seen >= OFFLINE_AFTER_MS ? "offline"' }
+        @{ Name = "offline-by-the-phones-clock"
+           Find = 'answer.now - seen > OFFLINE_AFTER_MS ? "offline"'
+           Replace = 'Date.now() - seen > OFFLINE_AFTER_MS ? "offline"' }
+        @{ Name = "never-heard-is-offline"
+           Find = 'const state = seen === null ? "never" :'
+           Replace = 'const state = seen === null ? "offline" :' }
+        @{ Name = "judged-without-the-relays-now"
+           Find = 'if (!answer || !Number.isSafeInteger(answer.now) || !Array.isArray(answer.machines)) return [];'
+           Replace = 'if (!answer || !Array.isArray(answer.machines)) return [];' }
+        @{ Name = "banner-without-the-horde"
+           Find = '"machine " + m.keyId.slice(0, 12)) + (typeof m.horde === "string" && m.horde ? " (" + m.horde + ")" : "");'
+           Replace = '"machine " + m.keyId.slice(0, 12));' }
+        @{ Name = "missing-horde-shown-as-undefined"
+           Find = '(typeof m.horde === "string" && m.horde ? " (" + m.horde + ")" : "")'
+           Replace = '(" (" + String(m.horde) + ")")' }
+        @{ Name = "banner-does-not-say-kept"
+           Find = '". Your answers are kept and will be applied when it is back."'
+           Replace = '". Your answers could not be sent."' }
+        @{ Name = "waiting-hook-says-zero"
+           Find = 'Number.isSafeInteger(options.waiting) && options.waiting > 0 ?'
+           Replace = 'Number.isSafeInteger(options.waiting) && options.waiting >= 0 ?' }
     )
 }

@@ -103,5 +103,53 @@
         @{ Name = "contract-read-per-session"
            Find = '$pattern = "$($Contract.verbs.definitions.''session-id''.pattern)"'
            Replace = '$pattern = "$((Get-HordeLinkContract).verbs.definitions.''session-id''.pattern)"' }
+        # membershipComplete, verbs version 2 (ledger core-projection L-101): every guard of the claim
+        # that the list names every session the node has.
+        @{ Name = "membership-store-read-whole-unchecked"
+           Find = 'if ("$(Get-HordeLinkProp $a ''state'')" -ceq "known" -and $v -is [bool] -and $v) { return "" }'
+           Replace = 'return ""' }
+        @{ Name = "membership-no-declaration-reason-lost"
+           Find = 'if ("$(Get-HordeLinkProp $decl ''state'')" -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "membership-no-declaration-claims"
+           Find = 'if ($stores.Count -eq 0) { return @('
+           Replace = 'if ($false) { return @(' }
+        # An undeclared store only ever takes the claim away (review of PR #243).
+        @{ Name = "membership-undeclared-store-ignored"
+           Find = 'if ($stores -ccontains $s) { continue }'
+           Replace = 'continue' }
+        @{ Name = "membership-undeclared-store-without-folder-counts"
+           Find = 'if ($has -is [bool] -and -not $has) { continue }'
+           Replace = '' }
+        @{ Name = "membership-undeclared-pane-folder-trusted"
+           Find = 'if ($s -ceq "X1") { [void]$gaps.Add("the store X1 is not declared'
+           Replace = 'if ($false) { [void]$gaps.Add("the store X1 is not declared' }
+        @{ Name = "membership-store-naming-nothing-counts"
+           Find = 'if ($script:HordeNodeDeclarableStores -cnotcontains $s) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "membership-store-id-case-ignored"
+           Find = 'if ($script:HordeNodeDeclarableStores -cnotcontains $s) {'
+           Replace = 'if ($script:HordeNodeDeclarableStores -notcontains $s) {' }
+        @{ Name = "membership-x1-declarable"
+           Find = '$script:HordeNodeDeclarableStores = @("X2", "W8", "W1", "W5")'
+           Replace = '$script:HordeNodeDeclarableStores = @("X2", "W8", "W1", "X1", "W5")' }
+        @{ Name = "membership-ignores-the-scope"
+           Find = 'if ($scope -ne "" -and $scope -ne "all") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "membership-reports-without-rosters"
+           Find = 'W5 = @("W3", "W4", "W5")'
+           Replace = 'W5 = @("W5")' }
+        @{ Name = "membership-ignores-a-cut-list"
+           Find = '-Missing (@(Get-HordeNodeMembershipGaps -View $View) + @($cut))'
+           Replace = '-Missing @(Get-HordeNodeMembershipGaps -View $View)' }
+        @{ Name = "membership-sent-to-a-version-1-hub"
+           Find = '-Membership:($State.verbsVersion -ge $script:HordeNodeMembershipVerbs)'
+           Replace = '-Membership' }
+        @{ Name = "verbs-version-not-negotiated"
+           Find = '$State.verbsVersion = [Math]::Max(1, (Select-HordeLinkProtocol'
+           Replace = '$State.verbsVersion = 1; $null = [Math]::Max(1, (Select-HordeLinkProtocol' }
+        @{ Name = "node-offers-only-verbs-version-1"
+           Find = '$script:HordeNodeVerbsVersions = @(1, 2)'
+           Replace = '$script:HordeNodeVerbsVersions = @(1)' }
     )
 }

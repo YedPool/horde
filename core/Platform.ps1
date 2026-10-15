@@ -54,12 +54,17 @@ function Read-HordeWindowsProcessTable {
     # UNMEASURED: a process started before a daylight-saving change and read after it, and above all
     # one started in the hour the clocks repeat, where a local time names two instants and the
     # conversion can land an hour off - which would read a live process as a reused pid.
+    #
+    # parent: the pid that started the process, as Windows recorded it, for notices/Sender.ps1, which
+    # proves which session runs `horde notify` by walking up from its own process (notices/Sender.ps1
+    # says why the walk checks each parent's start time: Windows never updates this number, so a parent
+    # that ended leaves it naming whatever later took that pid).
     return (Invoke-HordeRead -What "the process table" -Read {
         $t = @{}
-        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, Name, CreationDate, CommandLine -ErrorAction Stop)) {
+        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, Name, CreationDate, CommandLine -ErrorAction Stop)) {
             $created = $null
             if ($null -ne $p.CreationDate) { $created = ([datetime]$p.CreationDate).ToUniversalTime() }
-            $t[[int]$p.ProcessId] = [pscustomobject]@{ pid = [int]$p.ProcessId; name = "$($p.Name)"; created = $created; commandLine = $p.CommandLine }
+            $t[[int]$p.ProcessId] = [pscustomobject]@{ pid = [int]$p.ProcessId; parent = [int]$p.ParentProcessId; name = "$($p.Name)"; created = $created; commandLine = $p.CommandLine }
         }
         return $t
     })

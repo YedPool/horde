@@ -25,7 +25,10 @@
 #      - the app itself in headless Chrome (browser-signin.mjs): the sign-in screen, Sign in with Google
 #        through the provider and back, the cookie as Chrome keeps it, the Account screen, Sign out, a
 #        refused sign-in said on the screen - when Chrome is installed; without it that part is skipped
-#        and the suite exits 3;
+#        and the suite exits 3. The suite starts the browser itself (test/lib/Browser.ps1), in a
+#        kill-on-close job of its own, and ends it with its profile in the finally block, however the
+#        driver ends: until 2026-10-14 the driver started it, and every driver killed on its timeout
+#        left a browser running and a horde-cf-accounts-* folder in %TEMP%;
 #   3. A SECOND DEV WITH THE ALLOWLIST SWITCHED ON: the listed account signs in, another does not.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the tree);
@@ -38,6 +41,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "test\lib\Browser.ps1")
 . (Join-Path $root "relays\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 . (Join-Path $root "relay\Pairing.ps1")
@@ -83,6 +87,7 @@ $devs = New-Object System.Collections.ArrayList
 . (Join-Path $here "Harness.ps1")
 
 $partial = $false
+$browser = $null
 try {
     $fake = Start-FakeProvider
     Check ($fake.issuer -cmatch '\Ahttp://127\.0\.0\.1:[0-9]+\z') ("CONTROL: the fake provider listens on this machine (" + $fake.issuer + ")")
@@ -222,9 +227,22 @@ try {
     $list = (Send-To -Url ($O + "/v1/account") -Cookie $A1).text | ConvertFrom-Json
     Check (@($list.machines).Count -eq 1 -and $list.machines[0].keyId -ceq $kid -and $list.machines[0].horde -ceq "work" -and $list.account.email -ceq "founder@example.test") "the account lists the machine"
     Check (@(((Send-To -Url ($O + "/v1/account") -Cookie $B1).text | ConvertFrom-Json).machines).Count -eq 0) "and the other account lists none"
+    # WHEN THE MACHINE WAS LAST HEARD FROM (worker/presence.js; the phone's offline banner, 2026-10-14):
+    # only a verified signed request of the machine sets it; it rides on the account's answer, beside the
+    # relay's own now, to that account's phones only.
+    $lastSeen = { $v = (Send-To -Url ($O + "/v1/account") -Cookie $A1).text | ConvertFrom-Json; return @($v.machines | Where-Object { $_.keyId -ceq $kid })[0].lastSeenAt }
+    $localNow = [System.DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Check (($list.now -is [long] -or $list.now -is [int]) -and [System.Math]::Abs([double]$list.now - [double]$localNow) -lt 10000) ("the answer carries the relay's own now, a whole number of ms (" + $list.now + ")")
+    Check ($null -eq $list.machines[0].lastSeenAt -and @($list.machines[0].PSObject.Properties.Name) -contains "lastSeenAt") "a machine registered but not yet heard from is listed with lastSeenAt null: never seen"
 
+    $heardFrom = [System.DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $r1 = Receive-HordeRelayItems -Connection $mc -Mailbox "work/phone" -Since 0
     Check ($r1.state -ceq "known" -and @($r1.value.items).Count -eq 1 -and $r1.value.items[0].text -ceq "hello from account a") ("the machine's own adapter, signing each request, reads the phone's mailbox in its account (" + $r1.reason + ")")
+    $seen1 = & $lastSeen
+    $seenView = (Send-To -Url ($O + "/v1/account") -Cookie $A1).text | ConvertFrom-Json
+    Check ($null -ne $seen1 -and $seen1 % 1000 -eq 0 -and $seen1 -ge ($heardFrom - ($heardFrom % 1000) - 5000) -and $seen1 -le $seenView.now) ("a verified machine request records lastSeenAt, to the second, by the relay's clock (" + $seen1 + ", now " + $seenView.now + ")")
+    $bText = (Send-To -Url ($O + "/v1/account") -Cookie $B1).text
+    Check (-not $bText.Contains($kid) -and -not $bText.Contains("" + $seen1)) "a phone of another account never sees it: its answer names neither the machine nor its time"
     $p1 = Send-HordeRelayItem -Connection $mc -Mailbox ("work/" + $kid) -Text "from the machine" -Key "m-1"
     $w1 = Wait-HordeRelayItems -Connection $mc -Mailbox ("work/" + $kid) -Since 0 -Max 10 -TimeoutMs 3000
     $k1 = Confirm-HordeRelayItems -Connection $mc -Mailbox ("work/" + $kid) -Through 1
@@ -281,10 +299,16 @@ try {
     Check ((Send-To -Url ($O + $target) -Authorization $pathFor).code -eq 401) "a signature for one mailbox does not open another"
     $originFor = New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin "https://relay.example.test" -Method "GET" -Target $target
     Check ((Send-To -Url ($O + $target) -Authorization $originFor).code -eq 401) "a signature made for another deployment's origin is refused"
+    # Past a second boundary, so a request that wrongly counted would show as a later second.
+    $seenBefore = & $lastSeen
+    Start-Sleep -Milliseconds 1100
     $unreg = New-HordeCloudflareRelayMachineAuthorization -Key $other.key -KeyId $other.keyId -Origin $O -Method "GET" -Target $target
     Check ((Send-To -Url ($O + $target) -Authorization $unreg).code -eq 401) "a machine nobody registered is refused"
     $claimed = New-HordeCloudflareRelayMachineAuthorization -Key $other.key -KeyId $kid -Origin $O -Method "GET" -Target $target
     Check ((Send-To -Url ($O + $target) -Authorization $claimed).code -eq 401) "and so is one signing under a registered machine's key id with its own key"
+    # No request is refused here for this alone: this key's refused signatures are counted (worker/limits.js),
+    # and the checks above and below spend nearly all of a minute's. The two just made are the case.
+    Check ((& $lastSeen) -eq $seenBefore) ("an unverified or failed-signature request does not record lastSeenAt: one signed under the machine's key id by another key, one by a key nobody registered - the machine's time stays " + $seenBefore)
 
     Write-Host ""
     Write-Host "--- revoke: the key signs nothing more ---" -ForegroundColor Cyan
@@ -292,6 +316,7 @@ try {
     Check ((Send-To -Url ($O + "/v1/account/machines/" + $kid) -Method "DELETE" -Cookie $A1 -Origin "https://evil.example.test").code -eq 401) "nor can another site's page, with the account's cookie"
     $still = Receive-HordeRelayItems -Connection $mc -Mailbox "work/phone" -Since 0
     Check ($still.state -ceq "known") "CONTROL: the machine still reads"
+    Check ((& $lastSeen) -gt $seenBefore) "CONTROL: and that verified request is heard, a later second"
     $rm = Send-To -Url ($O + "/v1/account/machines/" + $kid) -Method "DELETE" -Cookie $A1 -Origin $O
     Check ($rm.code -eq 200) ("the account's phone removes the machine (" + $rm.text + ")")
     $gone = Receive-HordeRelayItems -Connection $mc -Mailbox "work/phone" -Since 0
@@ -323,17 +348,11 @@ try {
 
     Write-Host ""
     Write-Host "--- the app itself, in headless Chrome ---" -ForegroundColor Cyan
-    $chrome = @(
-        (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
-        (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
-        (Join-Path ${env:LOCALAPPDATA} "Google\Chrome\Application\chrome.exe")
-    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if ($null -eq $chrome) {
+    $chrome = Find-HordeTestChrome
+    if ($chrome -eq "") {
         Write-Host "  [SKIP] Chrome is not installed here, so the app's sign-in is not run in a browser" -ForegroundColor Yellow
         $partial = $true
     } else {
-        $profileDir = Join-Path $work "chrome"
-        [void][System.IO.Directory]::CreateDirectory($profileDir)
         # The first machine again, with a NEW offer - its old grant is spent, a new one is not - so the
         # app's Account screen has one machine to list and to remove.
         $again = Invoke-SignIn -Dev $dev -Provider $fake
@@ -341,7 +360,8 @@ try {
         $back = Send-To -Url ($O + "/v1/account/machines") -Method "POST" -Body (Get-Registration -OfferText $offer3.value.text) -Cookie ("__Host-horde-session=" + $again.session) -Origin $O
         $mc3 = (Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $O; hordeHome = $m1.home }).value
         Check ($back.code -eq 200 -and (Receive-HordeRelayItems -Connection $mc3 -Mailbox "work/phone" -Since 0).state -ceq "known") "a removed machine paired again with a new offer is registered again, and reads"
-        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, $chrome, $profileDir, "build-box") -WorkDir $work -TimeoutSeconds 180
+        $browser = Start-HordeTestBrowser -Chrome $chrome -Parent $work -ExtraArgs @("--window-size=412,915")
+        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, ("" + $browser.port), "build-box") -WorkDir $work -TimeoutSeconds 180
         $lines = @(("" + $r.out) -split "`r?`n" | Where-Object { $_ -ne "" })
         foreach ($l in $lines) { if ($l -clike "[[]PASS[]] *") { Check $true $l.Substring(7) } elseif ($l -clike "[[]FAIL[]] *") { Check $false $l.Substring(7) } }
         Check ($r.code -eq 0 -and @($lines | Where-Object { $_ -ceq "[DONE] 0" }).Count -eq 1 -and @($lines | Where-Object { $_ -clike "[[]PASS[]] *" }).Count -ge 18) ("the browser's checks ran to their end (" + $r.code + "; " + ("" + $r.err).Trim() + ")")
@@ -365,6 +385,12 @@ try {
     }
     Check ($b.session -ne "") "CONTROL: that same account signed in to the first dev, whose allowlist is off: signup is public by default"
 } finally {
+    # The browser first: its whole job ended and its profile removed, whatever the driver did.
+    if ($null -ne $browser) {
+        $bProfile = $browser.profile
+        $bEnd = Stop-HordeTestBrowser -Browser $browser
+        Check ($bEnd.left -eq 0 -and $bEnd.profileGone -and @(Get-HordeTestBrowserProcesses -ProfileDir $bProfile).Count -eq 0) ("the browser the suite started is ended, every process of it, and its profile removed (" + $bEnd.said + ")")
+    }
     foreach ($dv in @($devs)) { Stop-HordeCloudflareRelayDev -Dev $dv }
     foreach ($p in @($script:procs)) { try { if (-not $p.HasExited) { $p.StandardInput.BaseStream.Close(); if (-not $p.WaitForExit(10000)) { $p.Kill() } } } catch { }; $p.Dispose() }
     $http.Dispose()

@@ -22,8 +22,8 @@
            Find = 'return { ...x, progressRead: read }; });'
            Replace = 'return { ...x }; });' }
         @{ Name = "progress-place-not-read-back"
-           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode };'
-           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode };' }
+           Find = 'return { ...P.progressLog({ ...s.progress, position: e.progressRead }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };'
+           Replace = 'return { ...P.progressLog({ ...s.progress, position: null }), mode: s.mode, areas: s.cards ? s.cards.value.areas : [] };' }
         @{ Name = "progress-notice-not-read"
            Find = 'g.notices.push({ ...r.value, seq: h.seq });'
            Replace = '' }
@@ -37,8 +37,8 @@
            Find = 'if (best && best.seq < e.lastSnapshotSeq) {'
            Replace = 'if (false) {' }
         @{ Name = "sequence-not-counted-up"
-           Find = 'counts[channel] = (counts[channel] || 0) + 1;'
-           Replace = 'counts[channel] = 1;' }
+           Find = 'const seq = ((held.seq && held.seq[channel]) || 0) + 1;'
+           Replace = 'const seq = 1;' }
         @{ Name = "answer-bound-to-snapshot-hash-not-page"
            Find = 'snapshot: q.pageKey, number, wordingVersion, text: words,'
            Replace = 'snapshot: e.machine + "/decisions/" + v.snapshot, number, wordingVersion, text: words,' }
@@ -119,5 +119,26 @@
         @{ Name = "passkey-error-message-shown"
            Find = 'const name = x && typeof x.name === "string" && /^[A-Za-z]{1,40}$/.test(x.name) ? x.name : "";'
            Replace = 'const name = x ? x.name + ": " + x.message : "";' }
+        @{ Name = "a-cards-envelope-of-a-lower-seq-replaces-the-held-one"
+           Find = 'if (s.cards && s.cards.seq >= opened.header.seq) return;'
+           Replace = '' }
+        @{ Name = "another-machines-cards-not-opened-by-its-pairing"
+           Find = 'if (so.ok && so.value.header.channel === "cards") { takeCards(x.e, x.s, so.value, item, anomalies); took = true; break; }'
+           Replace = '' }
+        @{ Name = "a-refused-cards-snapshot-not-kept"
+           Find = 'anomalies.push("item " + item.seq + ": " + r.reason); s.cardsRefused = r.reason; return; }'
+           Replace = 'anomalies.push("item " + item.seq + ": " + r.reason); return; }' }
+        @{ Name = "a-refusal-outlives-good-cards"
+           Find = '    s.cardsRefused = "";'
+           Replace = '' }
+        @{ Name = "cards-from-an-unpaired-pc-not-noticed"
+           Find = 'if (!took && o.reason === "not from the machine this phone paired with" && await cardsFromUnpaired(e, item.text)) s.cardsUnpaired = true;'
+           Replace = '' }
+        @{ Name = "a-locked-pairing-is-a-stranger"
+           Find = 'for (const x of await store.list(ENTRY)) if (x.horde === e.horde && x.machine === h.from) return false;'
+           Replace = '' }
+        @{ Name = "cards-why-not-handed-to-the-page"
+           Find = 'return { ...P.mergeCards(held), mode: s.mode, refused, unpaired: all.some((x) => x.cardsUnpaired) };'
+           Replace = 'return { ...P.mergeCards(held), mode: s.mode };' }
     )
 }

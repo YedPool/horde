@@ -8,4 +8,4 @@
 # path | old -> new | YYYY-MM-DD | reason.
 #
 # path | mentions | why this file may name the surface
-cli/RelayDeploy.ps1 | 2 | horde relay deploy builds the phone app with New-HordePwaSite for the hosted relay to serve, so neither port names the other
+cli/RelayDeploy.ps1 | 3 | horde relay deploy builds the phone app with New-HordePwaSite for the hosted relay to serve, so neither port names the other; and hands the supervisor's check the list of files the site serves (Get-HordePwaSiteFiles)

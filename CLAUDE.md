@@ -3,6 +3,17 @@
 Every session started here inherits this file, subsessions included. The reasons behind each rule
 are in `CONTRIBUTING.md`; read the matching section before arguing with one.
 
+## The founder reads you on his phone (README, "What the founder sees on his phone")
+
+- The Thrall's answers in its chat show on the founder's phone app, and he can reply from there.
+  Decisions-list questions and progress entries show there too.
+- Never tell him you cannot reach him on the phone. An Orc reaches him through a decisions question,
+  a progress entry, or a notice.
+- When he asks to be told when something is done, run `horde notify -Text "<one line>"` at that
+  moment. The line reaches his phone's Notices at once and is never muted.
+  - Keep it to one plain line with no secrets.
+  - There are at most 10 an hour per session.
+
 ## Done means the fleet runs on it (CONTRIBUTING 1 and 2)
 
 - A piece is not finished when its tests pass. It is finished when the live fleet uses it for real
@@ -46,6 +57,9 @@ reason.
 - Each review round: the suites covering the changed files, plus `tools\Mutate.ps1 -Changed <base-ref>`.
   `-Changed` is a review-round accelerator only: it is blind to edited helpers, config and schemas,
   and to a guard added above a mutant. Never merge on it alone.
+- `test\test-host-names.ps1` and `test\test-mutation-specs.ps1` are in every PR's targeted set:
+  run them on the final head, in a clean tree, before every merge, by any Orc. They read the whole
+  repository, so any PR can break them (2026-10-14: PRs 278, 279 and 288 left main red on both).
 - Once per PR, on the final head merged with current `main`: the full suite and the full mutation
   specs. "Mergeable" is not "green".
 - Reviewers read the code and write targeted probes; they do not rerun the author's suites.

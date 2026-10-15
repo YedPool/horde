@@ -165,7 +165,7 @@
            Find = 'if ($uncheckablePids.ContainsKey($pp)) { [void]$unsure.Add($pp) } else { [void]$list.Add($pp) }'
            Replace = '[void]$list.Add($pp)' }
         @{ Name = "node-host-ignored"
-           Find = '} elseif ($script:HordeClaudeHostNames -icontains "$($p.name)") { [void]$hosts.Add($pp) }'
+           Find = '} elseif ($hostPids.ContainsKey($pp)) { [void]$hosts.Add($pp) }'
            Replace = '}' }
         @{ Name = "orphan-names-not-provisional"
            Find = 'provisional = @{ orphanProcesses = $script:HordeOrphanProvisional } }'

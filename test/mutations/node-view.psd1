@@ -1,0 +1,21 @@
+# Mutations of the node command's view (cli/commands/node.ps1): horde node serve must build its view
+# with ConvertTo-HordeNodeViewDocument (ledger core-projection L-100) and carry the session stores its
+# policy declares (L-101). Run:
+#   powershell -File tools\Mutate.ps1 -Spec test\mutations\node-view.psd1
+# test\test-projection.ps1's ended section runs the command's own view block over a fixture projection,
+# so the mutant is caught by what the block serves, not by its text.
+@{
+    Target = "cli\commands\node.ps1"
+    Suite  = "test\test-projection.ps1"
+    Environment = @{ HORDE_SKIP_REALITY = "1"; HORDE_FAIL_FAST = "1"; HORDE_SECTIONS = "ended" }
+    PassCodes = @(3)
+    Mutations = @(
+        @{ Name = "node-serves-ended-sessions"
+           Find = '$doc = ConvertTo-HordeNodeViewDocument -Projection (Get-HordeProjection -Platform $platform)'
+           Replace = '$doc = ConvertTo-HordeSessionViewDocument -Projection (Get-HordeProjection -Platform $platform)' }
+        # The view carries the session stores the node's policy declares (ledger core-projection L-101).
+        @{ Name = "node-view-drops-the-declared-stores"
+           Find = '$doc["sessionStores"] = Get-HordeNodeSessionStores'
+           Replace = '$null = Get-HordeNodeSessionStores' }
+    )
+}

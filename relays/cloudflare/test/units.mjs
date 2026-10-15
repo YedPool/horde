@@ -18,6 +18,7 @@ const C = await load("relays/cloudflare/worker/cookies.js");
 const A = await load("relays/cloudflare/worker/allowlist.js");
 const O = await load("relays/cloudflare/worker/oidc.js");
 const W = await load("relays/cloudflare/worker/site.js");
+const PR = await load("relays/cloudflare/worker/presence.js");
 const subtle = globalThis.crypto.subtle;
 
 let failures = 0;
@@ -182,6 +183,30 @@ const v = (t, e = expect) => J.verifyIdToken(t, keyFor, e);
   const req = (o) => new Request("https://relay.example.test/v1/x", { method: "POST", headers: o ? { Origin: o } : {} });
   const site = W.siteOf(env);
   check(W.fromSite(req("https://relay.example.test"), site) && !W.fromSite(req("https://evil.example"), site) && !W.fromSite(req(null), site), "a request is from the site only when its Origin is the site's own");
+}
+
+// --- 8. when a machine was last heard from (presence.js): kept on every request, written at most each 30 s ---
+{
+  const t0 = 1760000000123;
+  check(PR.SEEN_WRITE_MS === 30000, "a machine's last heard time is written at most once per 30 s");
+  const first = PR.noteSeen(undefined, t0);
+  check(first.write && first.held.at === t0 && first.held.wroteAt === t0, "the first time a machine is heard (or the first after an eviction) is written at once");
+  let held = first.held;
+  let writes = 0;
+  let exact = true;
+  for (let ms = 1000; ms <= 90000; ms += 1000) { const n = PR.noteSeen(held, t0 + ms); held = n.held; if (n.write) writes++; if (held.at !== t0 + ms) exact = false; }
+  check(exact, "memory holds every request's time exactly, written or not");
+  check(writes === 3, "the throttle writes at most once per 30 s: a request every second for 90 s is three writes, at 30, 60 and 90 s", String(writes));
+  const before = PR.noteSeen(first.held, t0 + 29999);
+  check(!before.write && before.held.at === t0 + 29999 && before.held.wroteAt === t0, "a moment before 30 s nothing is written, but memory holds the exact time");
+  check(PR.noteSeen(first.held, t0 + 30000).write, "at 30 s it is written");
+  check(PR.noteSeen({ at: t0 + 5000, wroteAt: t0 }, t0 + 1000).held.at === t0 + 5000, "a request that finishes out of order never moves the time back");
+  const evicted = PR.noteSeen(undefined, t0 + 1000, t0 + 5000);
+  check(evicted.write && evicted.held.at === t0 + 5000, "nor does the first request after an eviction move storage back: it writes the later of what storage held and now");
+  check(PR.noteSeen(undefined, t0 + 9000, t0 + 5000).held.at === t0 + 9000 && PR.noteSeen(undefined, t0, "x").held.at === t0, "and a later now, or a stored value that is not a time, is simply now");
+  check(PR.lastSeenOf({ at: t0 + 40000, wroteAt: t0 }, t0) === t0 + 40000 - ((t0 + 40000) % 1000) && PR.lastSeenOf(undefined, t0) === t0 - (t0 % 1000), "a phone is shown the later of memory and storage, cut to the whole second");
+  check(PR.lastSeenOf({ at: t0, wroteAt: t0 }, t0 + 31000) === t0 + 31000 - ((t0 + 31000) % 1000), "storage counts when it is the later (another instance wrote it)");
+  check(PR.lastSeenOf(undefined, undefined) === null, "a machine never heard from is null, not zero and not now");
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

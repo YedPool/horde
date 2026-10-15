@@ -20,5 +20,8 @@
         @{ Name = "version-not-from-the-files"
            Find = '$all.Write($bytes[$p], 0, $bytes[$p].Length)'
            Replace = '$null = $p' }
+        @{ Name = "the-page-is-not-told-its-version"
+           Find = '    $bytes["app/config.json"] = $ascii.GetBytes($configText.Replace(''{"schemaVersion":1,'', ''{"schemaVersion":1,"version":"'' + $version + ''",''))'
+           Replace = '' }
     )
 }

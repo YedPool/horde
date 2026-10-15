@@ -15,7 +15,7 @@
            Find = '(New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words)))'
            Replace = '(New-HordeUnknown -Reason ("the relay refused the " + $What))' }
         @{ Name = "no-default-origin"
-           Find = 'if ($null -eq $origin -or "$origin" -eq "") { $origin = (Get-HordeCloudflareRelayDeployment).origin }'
+           Find = '            $origin = $dep.value.origin'
            Replace = '' }
         @{ Name = "request-not-authorized"
            Find = '[void]$req.Headers.TryAddWithoutValidation("Authorization", $auth.value)'

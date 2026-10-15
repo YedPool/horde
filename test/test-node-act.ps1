@@ -39,6 +39,48 @@ $script:stopRefused = 0
 $script:stopDenied = $false
 $script:promptRefused = $false
 $script:noOpRefused = $false
+# THE TURN RECEIPT'S WORLD (issue #214): what each pane's input box holds, the user turns the fixture
+# harness recorded, and the ways an Enter is lost. A line is lost by pattern: -clike against the box's
+# text when Enter is pressed. loseFirstLike loses only the Enter typed with the text, so the one extra
+# Enter submits it; loseAllLike loses every Enter; dropTurnLike empties the box and records no turn.
+$script:box = @{}
+$script:turns = New-Object System.Collections.ArrayList
+$script:loseFirstLike = ""
+$script:loseAllLike = ""
+$script:dropTurnLike = ""
+$script:lateLooks = 0
+$script:noTranscript = $false
+$script:noScreen = $false
+# TIME, TURNS THAT TAKE IT, AND A SESSION THAT IS NOT READY AT ONCE (PR 239 round 2). The clock is the
+# context's: every wait sleeps on it, so a wait's bound is wall time here as in the node. A submitted line
+# starts a turn that runs turnMs; a line submitted while one runs is QUEUED, as measured on 2026-10-14
+# (an enqueue, then a turn once the running one ends), not a turn. Until readyAtMs (or ever, with
+# neverReady) the screen shows no box and every key typed is LOST, as the measured start-up lost one;
+# slowScreenMs is what each look at the screen costs, as a host call can take up to its own timeout.
+$script:clockMs = 0.0
+$script:turnMs = 0
+$script:busyUntil = @{}
+$script:queued = @{}
+$script:ends = New-Object System.Collections.ArrayList
+$script:readyAtMs = 0
+$script:neverReady = $false
+$script:slowScreenMs = 0
+$script:noModeLine = $false
+# What each host call costs on the clock, and what one read of the mode record costs (review of PR 239,
+# S-a and S-b): every call counted at the host's own timeout, and a mode read that ends past the limit.
+# hostCallMs is one TERMINAL call (F's re-check of round 3): the first host makes two for a typed line
+# with its Enter, with submitPauseMs between them, and two for its end of a pane, so this fixture charges
+# the same; Own, Resolve and Start are charged one each (more than the first host's Resolve costs).
+$script:hostCallMs = 0
+$script:submitPauseMs = 0
+# ownMs, when set, is what Own costs in place of hostCallMs: the first host's Own makes no terminal call
+# at all, so the worst-case runs shift the whole timeline by it, to line a typed line up with its guard.
+$script:ownMs = $null
+# THE SCREEN A SESSION THAT IS NOT READY SHOWS (PR 239 round 4): screenRows, when set, is what the
+# fixture host shows in place of its STARTING screen; textAt is the clock at every screen read.
+$script:screenRows = $null
+$script:textAt = New-Object System.Collections.ArrayList
+$script:slowModeMs = 0
 $script:alerts = New-Object System.Collections.ArrayList
 # How many texts had been typed when a session's mode was first read, by session id.
 $script:readAt = @{}
@@ -46,19 +88,62 @@ $noOp = "Reply with OK only."
 $hub = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 $modeOf = @{ careful = "ask"; edit = "edits"; look = "plan" }
 
-Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
+function Step-Fixture {
+    # Let the world's time pass: a turn whose time is up ends, and a line queued behind it becomes a turn.
+    foreach ($h in @($script:busyUntil.Keys)) {
+        if ($script:clockMs -lt [double]$script:busyUntil[$h]) { continue }
+        [void]$script:ends.Add([pscustomobject]@{ handle = $h; at = $script:busyUntil[$h] })
+        $script:busyUntil.Remove($h)
+        if ($script:queued.ContainsKey($h)) {
+            [void]$script:turns.Add([pscustomobject]@{ handle = $h; text = $script:queued[$h] }); $script:queued.Remove($h)
+            $script:busyUntil[$h] = $script:clockMs + $script:turnMs
+        }
+    }
+}
+function Test-FixtureReady { return [bool](-not $script:neverReady -and $script:clockMs -ge $script:readyAtMs) }
+
+function Register-FixtureHarness {
+    # harness-a; -Blind registers it without the turn receipt, as a kind that cannot tell; -NoReady
+    # without InputReady and -NoTurnDone without TurnDone, each a kind that cannot tell that one thing.
+    param([switch]$Blind, [switch]$NoReady, [switch]$NoTurnDone)
+    $receipt = @{}
+    if (-not $Blind) {
+        $receipt["TurnMark"] = { param($id, $view) New-HordeKnown -Value ([pscustomobject]@{ n = $script:turns.Count; e = $script:ends.Count }) }
+        $receipt["TurnSeen"] = { param($id, $view, $mark, $line)
+            Step-Fixture
+            if ($script:noTranscript) { return (New-HordeKnown -Value $false) }
+            $h = $script:sessions[$id].handle
+            $hit = $false
+            for ($i = [int]$mark.n; $i -lt $script:turns.Count; $i++) { if ($script:turns[$i].handle -ceq $h -and $script:turns[$i].text -ceq $line) { $hit = $true } }
+            if ($hit -and $script:lateLooks -gt 0) { $script:lateLooks--; $hit = $false }
+            New-HordeKnown -Value $hit }
+        $receipt["InputHolds"] = { param($screen, $line) if (-not ("" + @($screen)[0]).StartsWith("BOX:")) { New-HordeUnknown -Reason "no box on the fixture screen" } else { New-HordeKnown -Value (@($screen)[0] -ceq ("BOX:" + $line)) } }
+        if (-not $NoTurnDone) {
+            $receipt["TurnDone"] = { param($id, $view, $mark)
+                Step-Fixture
+                $h = $script:sessions[$id].handle
+                New-HordeKnown -Value ([bool](@($script:ends | Select-Object -Skip ([int]$mark.e) | Where-Object { $_.handle -ceq $h }).Count -gt 0)) }
+        }
+        if (-not $NoReady) {
+            $receipt["InputReady"] = { param($screen) if (("" + @($screen)[0]).StartsWith("BOX:") -and @($screen)[1] -ceq "IDLE") { New-HordeKnown -Value $true } else { New-HordeUnknown -Reason ("the fixture screen shows " + @($screen)[0]) } }
+        }
+    }
+Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" @receipt `
     -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "no control file yet" } } `
-    -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
+    -ReadMode { param($id, $view) $script:clockMs += $script:slowModeMs; if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode -and -not $script:noModeLine) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
     -CloseText @("bye", "`r")
+}
+Register-FixtureHarness
 
 # The fixture terminal: named explicitly by Own, as the real host names the node's own (review of #96).
 $fakeTerm = [pscustomobject]@{ socket = "C:\fake\terminal-1"; guiPid = 1; guiStart = "1" }
 Register-HordeHostActor -Name "fakehost" `
-    -Own { if ($script:noOwn) { New-HordeUnknown -Reason "2 terminals are running; which one is this node's own cannot be told" } else { New-HordeKnown -Value $fakeTerm } } `
-    -Resolve { param($n) if ($n -ceq "harness-a") { New-HordeKnown -Value "C:\bin\harness-a.exe" } else { New-HordeUnknown -Reason ("no " + $n) } } `
+    -Own { if ($null -ne $script:ownMs) { $script:clockMs += $script:ownMs } else { $script:clockMs += $script:hostCallMs }; if ($script:noOwn) { New-HordeUnknown -Reason "2 terminals are running; which one is this node's own cannot be told" } else { New-HordeKnown -Value $fakeTerm } } `
+    -Resolve { param($n) $script:clockMs += $script:hostCallMs; if ($n -ceq "harness-a") { New-HordeKnown -Value "C:\bin\harness-a.exe" } else { New-HordeUnknown -Reason ("no " + $n) } } `
     -Start { param($term, $prog, $argv, $cwd, $envMap)
+        $script:clockMs += $script:hostCallMs
         $h = "" + (100 + $script:panes.Count)
         [void]$script:panes.Add([pscustomobject]@{ handle = $h; program = $prog; argv = @($argv); cwd = $cwd; env = $envMap; term = $term })
         $sidv = $argv[[array]::IndexOf(@($argv), "--id") + 1]
@@ -73,15 +158,38 @@ Register-HordeHostActor -Name "fakehost" `
         $script:sessions[$sidv] = [pscustomobject]@{ pid = $pidv; procStart = $claimed; name = $nm; mode = $mode; handle = $h }
         New-HordeKnown -Value ([pscustomobject]@{ handle = $h; program = $prog; cwd = $cwd }) } `
     -Send { param($term, $h, $t, $submit)
+        $script:clockMs += $script:hostCallMs
+        if ("" + $t -ne "" -and $submit) { $script:clockMs += $script:hostCallMs + $script:submitPauseMs }
         if ("" + $t -cmatch '[\x00-\x1F]') { return (New-HordeUnknown -Reason "the fixture host, like the real one, types printable text only") }
         if ($script:noOpRefused -and "" + $t -ceq "Reply with OK only.") { return (New-HordeUnknown -Reason "the fixture host refuses this text") }
         if ($script:promptRefused -and "" + $t -ne "" -and "" + $t -cne "bye" -and "" + $t -cne "Reply with OK only.") { return (New-HordeUnknown -Reason "the fixture host refuses this text") }
-        if ("" + $t -ne "") { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = $t }) }
-        if ($submit) { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = "<enter>" }) }
-        if ($submit -and "" + $t -eq "" -and -not $script:stubborn) { foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } } }
+        Step-Fixture
+        $taking = Test-FixtureReady
+        if ("" + $t -ne "") { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = $t; at = $script:clockMs }); if ($taking) { $script:box[$h] = ("" + $script:box[$h]) + $t } }
+        if ($submit) {
+            [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = "<enter>"; at = $script:clockMs })
+            if (-not $taking) { return (New-HordeKnown -Value $true) }
+            $held = "" + $script:box[$h]
+            $lost = ($script:loseAllLike -ne "" -and $held -clike $script:loseAllLike) -or ($script:loseFirstLike -ne "" -and "" + $t -ne "" -and $held -clike $script:loseFirstLike)
+            if (-not $lost) {
+                $script:box[$h] = ""
+                # The close text then Enter: the fixture harness exits.
+                if ($held -ceq "bye") { if (-not $script:stubborn) { foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } } } }
+                elseif ($held -ne "" -and $script:busyUntil.ContainsKey($h)) { $script:queued[$h] = $held }
+                elseif ($held -ne "" -and -not ($script:dropTurnLike -ne "" -and $held -clike $script:dropTurnLike)) { [void]$script:turns.Add([pscustomobject]@{ handle = $h; text = $held }); $script:busyUntil[$h] = $script:clockMs + $script:turnMs }
+            }
+        }
         New-HordeKnown -Value $true } `
+    -Text { param($term, $h)
+        Step-Fixture
+        [void]$script:textAt.Add($script:clockMs)
+        $script:clockMs += $script:slowScreenMs + $script:hostCallMs
+        if ($script:noScreen) { return (New-HordeUnknown -Reason "the fixture host shows no screen") }
+        if (-not (Test-FixtureReady)) { if ($null -ne $script:screenRows) { return (New-HordeKnown -Value ([string[]]@($script:screenRows))) }; return (New-HordeKnown -Value ([string[]]@("STARTING", ""))) }
+        New-HordeKnown -Value ([string[]]@(("BOX:" + $script:box[$h]), $(if ($script:busyUntil.ContainsKey($h)) { "BUSY" } else { "IDLE" }))) } `
     -Live { param($term, $h, $expect) New-HordeKnown -Value $true } `
     -Stop { param($term, $h, $expect)
+        $script:clockMs += 2 * $script:hostCallMs
         # Like the real host: ends a pane only for the expected process, alive with its start time.
         if ($script:stopDenied -or $null -eq $expect -or -not $script:procs.ContainsKey([int]$expect.pid) -or "" + $script:procs[[int]$expect.pid] -cne "" + $expect.procStart) { $script:stopRefused++; return (New-HordeUnknown -Reason "nothing was ended: the expected process is not proven") }
         [void]$script:stopped.Add($h); foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } }; New-HordeKnown -Value $true }
@@ -104,8 +212,8 @@ function New-Context {
         readConfig = { param($c) [pscustomobject]@{ policy = $c.policy; layers = $c.layers; problems = @(@($c.PSObject.Properties["layerProblems"] | ForEach-Object { $_.Value }) | ForEach-Object { $_ }) } }
         alert = { param($m) [void]$script:alerts.Add($m) }
         processStart = { param($p) if ($script:procs.ContainsKey([int]$p)) { $script:procs[[int]$p] } else { $null } }
-        sleep = { param($ms) }; now = { [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime() }
-        bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; pollMs = 100 }
+        sleep = { param($ms) $script:clockMs += $ms }; clock = { $script:clockMs }; now = { [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime() }
+        bounds = [pscustomobject]@{ identifySeconds = 2; readySeconds = 2; modeSeconds = 2; closeSeconds = 2; receiptSeconds = 1; retrySeconds = 1; turnEndSeconds = 5; spawnSeconds = 60; hostCallSeconds = 1; pollMs = 100 }
         workdirExists = { param($p) Test-Path -LiteralPath $p -PathType Container }
     }
 }
@@ -121,7 +229,10 @@ function CloseWith { param($CloseArgs, [string]$From = $hub) return (Invoke-Hord
 function PromptFile { param($Ctx, [string]$Sid) return (Join-Path (Join-Path $Ctx.records $Sid) "prompt.txt") }
 function PromptLine { param($Ctx, [string]$Sid) return ("Read " + (PromptFile $Ctx $Sid) + " and do what it says.") }
 function Typed { return @($script:sent | ForEach-Object { $_.text }) }
-function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0; $script:stopDenied = $false; $script:promptRefused = $false; $script:noOpRefused = $false; $script:alerts.Clear(); $script:readAt.Clear() }
+function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0; $script:stopDenied = $false; $script:promptRefused = $false; $script:noOpRefused = $false; $script:alerts.Clear(); $script:readAt.Clear()
+    $script:box.Clear(); $script:turns.Clear(); $script:loseFirstLike = ""; $script:loseAllLike = ""; $script:dropTurnLike = ""; $script:lateLooks = 0; $script:noTranscript = $false; $script:noScreen = $false
+    $script:clockMs = 0.0; $script:turnMs = 0; $script:busyUntil.Clear(); $script:queued.Clear(); $script:ends.Clear(); $script:readyAtMs = 0; $script:neverReady = $false; $script:slowScreenMs = 0; $script:noModeLine = $false; $script:hostCallMs = 0; $script:slowModeMs = 0
+    $script:submitPauseMs = 0; $script:screenRows = $null; $script:textAt.Clear(); $script:ownMs = $null }
 
 try {
 Write-Host ""
@@ -214,13 +325,8 @@ Reset; $script:offByMicros = $true
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
 Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*never reported its process*") "a reported start 100 microseconds off the live one is another process: start times are compared to the microsecond, not the millisecond"
 Check ((Test-HordeNodeSameStart "133000000000000207" "133000000000000200") -eq $true -and (Test-HordeNodeSameStart "133000000000001200" "133000000000000200") -eq $false) "the same instant read to 100 ns matches; 100 microseconds apart does not"
-# Back to the reporting adapter for what follows.
-Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
-    -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; New-HordeKnown -Value ([string[]]$a) } `
-    -Preconditions { param($n) @() } `
-    -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "none" } } `
-    -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "none" } } `
-    -CloseText @("bye", "`r")
+# Back to the reporting adapter, with its turn receipt, for what follows.
+Register-FixtureHarness
 
 Write-Host ""
 Write-Host "--- a wrong-mode session that cannot be ended (review of #104, F2) ---" -ForegroundColor Cyan
@@ -304,6 +410,436 @@ $ctxP = New-Context
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxP
 $rec = Read-HordeNodeSpawnRecord -Dir $ctxP.records -SessionId $o.sessionId
 Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*prompt could not be typed*" -and $null -ne $o.expect -and "$($rec.value.outcome)" -ceq "running-no-prompt") ("a prompt the host will not type fails the spawn, with the process to close it by, recorded as running without its work (" + $o.state + " " + $o.reason + ")")
+
+Write-Host ""
+Write-Host "--- a typed line counts only once it is a turn in the transcript (issue #214) ---" -ForegroundColor Cyan
+function SpawnOnce { param([scriptblock]$Tune = $null) $c = New-Context; if ($null -ne $Tune) { & $Tune $c }; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value; line = (PromptLine $c $o.sessionId) } }
+function Alive { param($O) return [bool]($null -ne $O.expect -and $script:procs.ContainsKey([int]$O.expect.pid) -and @($script:stopped).Count -eq 0) }
+Reset
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.noOpTurn)" -ceq "taken" -and "$($x.rec.promptTurn)" -ceq "taken" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("CONTROL: both turns seen at once: done, no extra Enter (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:loseFirstLike = "*"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|<enter>|" + $x.line + "|<enter>|<enter>")) ("the first Enter of each line lost: ONE extra Enter per line, as its box still held it, and done (" + $x.o.state + " " + $x.o.reason + " / " + ((Typed) -join "|") + ")")
+Reset; $script:loseAllLike = "Read *"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and $x.o.reason -like ("*session " + $x.o.sessionId + "*") -and $x.o.reason -like ("*pane " + $x.rec.handle + "*") -and $x.o.reason -like "*LEFT RUNNING*" -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "prompt-not-submitted") ("every Enter of the prompt line lost: failed prompt-not-submitted, naming the session and its pane, and the session is left running (" + $x.o.state + " " + $x.o.reason + ")")
+Check (((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>|<enter>") -and $x.o.reason -like "*ONE more Enter*") ("...with exactly one extra Enter for that line, never two (" + ((Typed) -join "|") + ")")
+Reset; $script:loseAllLike = "*"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted: the no-op line*" -and (Alive $x.o) -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|<enter>")) ("every Enter of the no-op line lost: failed prompt-not-submitted, one extra Enter, the prompt line never typed after it, the session left running (" + $x.o.reason + " / " + ((Typed) -join "|") + ")")
+Reset; $script:loseAllLike = "Reply*"; [void]$script:turns.Add([pscustomobject]@{ handle = "100"; text = $noOp })
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted: the no-op line*" -and $x.rec.handle -ceq "100") ("a turn holding the same line in that pane BEFORE it was typed is not its receipt (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:lateLooks = 5
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("a turn that arrives late but inside the wait: done, no extra Enter (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:noTranscript = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and $x.o.reason -like "*did not hold the line*" -and (Alive $x.o) -and ((Typed) -join "|") -ceq ($noOp + "|<enter>")) ("no transcript ever, the box emptied: not done, and no extra Enter (" + $x.o.reason + ")")
+Reset; $script:dropTurnLike = "Read *"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and (Alive $x.o) -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("the box already empty with no turn: no extra Enter, failed prompt-not-submitted (" + $x.o.reason + ")")
+# A kind that cannot tell readiness, so the unreadable screen is met first at the extra Enter: with
+# InputReady, an unreadable screen is a session never ready (above), and nothing is typed at all.
+Reset; $script:noScreen = $true; $script:loseAllLike = "Read *"
+Register-FixtureHarness -NoReady
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*could not be read*" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("a screen the host cannot show: no extra Enter is pressed blind (" + $x.o.reason + ")")
+Reset
+Register-FixtureHarness -Blind
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-unconfirmed:*cannot tell*" -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "prompt-unconfirmed" -and ((Typed) -join "|") -ceq ($noOp + "|<enter>|" + $x.line + "|<enter>")) ("a harness that cannot tell: NOT done, said plainly, the session left running, no extra Enter (" + $x.o.state + " " + $x.o.reason + ")")
+
+Write-Host ""
+Write-Host "--- nothing is typed before the session is ready for keys (PR 239 round 2) ---" -ForegroundColor Cyan
+function FirstTypedAt { $f = @($script:sent | Where-Object { $_.text -cne "bye" } | Select-Object -First 1); if ($f.Count -eq 0) { return $null }; return [double]$f[0].at }
+Reset
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.ready)" -ceq "ready") ("CONTROL: a session ready at once is typed into at once, and done (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:readyAtMs = 1500
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.ready)" -ceq "ready" -and (FirstTypedAt) -ge 1500) ("a session ready late, inside the wait: nothing typed until it is ready (first key at " + (FirstTypedAt) + " ms), then done (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:neverReady = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $x.o.reason -like ("*session " + $x.o.sessionId + "*") -and $x.o.reason -like ("*pane " + $x.rec.handle + "*") -and $x.o.reason -like "*LEFT RUNNING*") ("a session never ready: failed not-ready, naming the session and its pane (" + $x.o.reason + ")")
+Check ($script:sent.Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.ready)" -ceq "not-ready" -and $null -ne $x.o.expect -and @($script:alerts | Where-Object { $_ -like "*never became ready*" }).Count -eq 1) ("...nothing at all typed, the session left running with its process to close it by, recorded not-ready, and an alert raised (" + ((Typed) -join "|") + ")")
+Reset; $script:neverReady = $true; $script:slowScreenMs = 20000
+$ctxS = New-Context; $ctxS.bounds.readySeconds = 60
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxS
+Check ("$($o.state)" -ceq "failed" -and $o.reason -clike "not-ready:*" -and $script:clockMs -le (60000 + 20000 + 2000)) ("each look at the screen costing 20 s, the readiness wait still ends by its 60 s on the clock, plus the one look in flight (" + $script:clockMs + " ms in all) (S3)")
+Reset; $script:neverReady = $true
+$ctxD = New-Context; $ctxD.bounds.readySeconds = 600; $ctxD.bounds.spawnSeconds = 5
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxD
+Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*own limit of 5 s*" -and $script:clockMs -le 5200) ("a wait longer than the spawn's own limit ends at that limit, and the reason says so (" + $script:clockMs + " ms: " + $o.reason + ")")
+Reset; $script:readyAtMs = 1500
+Register-FixtureHarness -NoReady
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "failed" -and "$($x.rec.ready)" -ceq "cannot-tell" -and (FirstTypedAt) -lt 1500 -and $x.o.reason -clike "prompt-not-submitted:*") ("a kind that cannot tell readiness is typed into at once, as before - here before it was ready, so its keys were lost - and the turn receipt still keeps it from being called done (" + $x.o.reason + ")")
+Reset
+Register-FixtureHarness -NoReady
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.ready)" -ceq "cannot-tell") "CONTROL: a kind that cannot tell, ready at once, is done"
+
+Write-Host ""
+Write-Host "--- not ready: kept only when its mode is proven, else ended by its process, nothing typed (review of PR 239, S-d) ---" -ForegroundColor Cyan
+Reset; $script:neverReady = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $x.o.reason -like "*reads edits, as asked*LEFT RUNNING*" -and $script:sent.Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready" -and $script:readAt[$x.o.sessionId] -eq 0) ("never ready, its mode record reading the level asked for: kept, the mode read with nothing typed (" + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $x.o.reason -like "*reports the level bypass and was asked for edits*not kept*ended it by its process*" -and $script:sent.Count -eq 0 -and @($script:stopped).Count -eq 1 -and -not $script:procs.ContainsKey([int]$script:sessions[$x.o.sessionId].pid) -and $null -eq $x.o.expect -and "$($x.rec.outcome)" -ceq "not-ready-closed" -and "$($x.rec.closedAt)" -ne "") ("never ready, its mode wrong: ended by the host by its process, no close text typed into the unready box (" + ((Typed) -join "|") + " / " + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:noModeLine = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*mode could not be read*not kept*ended it by its process*" -and $script:sent.Count -eq 0 -and @($script:stopped).Count -eq 1 -and -not $script:procs.ContainsKey([int]$script:sessions[$x.o.sessionId].pid) -and "$($x.rec.outcome)" -ceq "not-ready-closed") ("never ready, its mode unreadable: ended by the host, nothing typed (" + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:stopDenied = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*could NOT be ended*" -and $script:sent.Count -eq 0 -and $null -ne $x.o.expect -and $script:procs.ContainsKey([int]$x.o.expect.pid) -and "$($x.rec.outcome)" -ceq "unkept-running" -and @($script:alerts | Where-Object { $_ -like "ALERT:*$($x.o.sessionId)*could not be ended*" }).Count -eq 1) ("never ready, its mode wrong, and the host will not end it: failed with its process to close it by, recorded still running, an alert raised (" + $x.o.reason + ")")
+
+Write-Host ""
+Write-Host "--- a session that was not ready has its screen captured into the record, never a secret (PR 239 round 4) ---" -ForegroundColor Cyan
+$rule = ([string][char]0x2500) * 40
+$dialog = @("", "", "Do you trust the files in this folder?", "", $rule, (" " + [char]0x276F + " 1. Yes, proceed"), "   2. No, exit   ", "", "", "")
+$dialogKept = @("Do you trust the files in this folder?", "", $rule, " ? 1. Yes, proceed", "   2. No, exit")
+function RecText { param($O) return [System.IO.File]::ReadAllText((Join-Path $script:lastRecords ($O.sessionId + ".json"))) }
+# The screen's rows are kept in the session's own folder, never in the record (F's re-check of round 4).
+function ScreenText { param($X) $f = "" + $X.rec.screen.file; if ($f -ne "" -and (Test-Path -LiteralPath $f -PathType Leaf)) { return [System.IO.File]::ReadAllText($f) }; return "" }
+function ScreenRows { param($X) $t = ScreenText $X; if ($t -eq "") { return [string[]]@() }; return [string[]]@(($t | ConvertFrom-Json).rows) }
+function SpawnRec { param([scriptblock]$Tune = $null) $c = New-Context; if ($null -ne $Tune) { & $Tune $c }; $script:lastRecords = $c.records; $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $c; $r = Read-HordeNodeSpawnRecord -Dir $c.records -SessionId $o.sessionId; return [pscustomobject]@{ o = $o; rec = $r.value } }
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
+$x = SpawnRec
+Check ("$($x.rec.outcome)" -ceq "not-ready-closed" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq ($dialogKept -join "|") -and $x.o.reason -like "*its screen as it was then, the last 5 rows, is kept for 7 days in this node's own folder of the session, this user's alone*" -and @($script:stopped).Count -eq 1) ("never ready with a dialog up, then ended: the dialog's screen is kept in the session's own folder - blank rows trimmed, the box rule as it is, the prompt glyph as '?' - and the reason says where (" + (@(ScreenRows $x) -join "|") + " / " + $x.o.reason + ")")
+Reset; $script:neverReady = $true; $script:screenRows = $dialog
+$x = SpawnRec
+Check ("$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq ($dialogKept -join "|") -and $x.o.reason -like "*its screen as it was then*LEFT RUNNING*") ("never ready, its mode proven, so kept: its screen is captured too (" + $x.o.reason + ")")
+# A made-up credential, planted: never a real one (it is in this file, in the open).
+$planted = "ghp_" + "Zq7vK2mN9xR4tW8yB3cF6hJ1pL5sD0gA2eUi"
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", ("export GH_TOKEN=" + $planted), $rule, (" " + [char]0x276F + " 1. Continue"))
+$x = SpawnRec
+$everywhere = $x.o.reason + "`n" + (RecText $x.o) + "`n" + (ScreenText $x) + "`n" + (@($script:alerts) -join "`n")
+$pieces = @(0..([int][math]::Floor($planted.Length / 8) - 1) | ForEach-Object { $planted.Substring($_ * 8, 8) })
+$leaked = @($pieces | Where-Object { $everywhere.Contains($_) })
+Check ("$($x.rec.screen.state)" -ceq "withheld" -and @(ScreenRows $x).Count -eq 0 -and $x.o.reason -like "*screen was WITHHELD because it looked like it held an access token*" -and $leaked.Count -eq 0 -and -not (RecText $x.o).Contains("Configure the token")) ("a screen with a planted made-up token: withheld whole, the kind said, and not one 8-character piece of it in the reason, the record or an alert (" + $leaked.Count + " found; " + $x.o.reason + ")")
+Check (@($pieces).Count -ge 4 -and @($pieces | Where-Object { ("export GH_TOKEN=" + $planted).Contains($_) }).Count -eq @($pieces).Count) "CONTROL: the leak check has pieces to look for, and finds every one in the screen it was planted in"
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @(("export GH_TOKEN=" + $planted)) + @(1..60 | ForEach-Object { "row " + $_ })
+$x = SpawnRec
+Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("row 60")) ("the token in a row ABOVE the 40 kept: the screen is still withheld whole, as read, not only as kept (" + $x.rec.screen.state + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @(("Note" + [char]0x00E9 + "password=s3cretValue1"))
+$x = SpawnRec
+Check ("$($x.rec.screen.state)" -ceq "withheld" -and -not (RecText $x.o).Contains("s3cretValue1")) ("a password=value right after a letter outside ASCII is withheld; its 12-character value is read by the named kind in every reading, so the kept-only case is the short one among the WITHHELD cases below (" + $x.rec.screen.state + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("Configure the token:", "gh auth login --with-token < your-token-file", $rule)
+$x = SpawnRec
+Check ("$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -like "*--with-token < your-token-file*" -and (ScreenText $x).Contains("your-token-file") -and -not (RecText $x.o).Contains("your-token-file")) "CONTROL: the same screen with no token in its row is shown: its screen file has it, and the record itself holds no row"
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
+$x = SpawnRec { param($c) $c.bounds.readySeconds = 600; $c.bounds.spawnSeconds = 5 }
+Check ("$($x.rec.screen.state)" -ceq "skipped" -and @(ScreenRows $x).Count -eq 0 -and $x.o.reason -like "*its screen was not read: this spawn's own limit had run out*" -and @($script:textAt | Where-Object { $_ -ge 5000 }).Count -le 1 -and @($script:stopped).Count -eq 1) ("no time left: no screen read for the report past the limit (the one read at 5000 ms is the readiness wait's last look, at its end), the report says so, and the session is still ended (" + $x.o.reason + ")")
+$long = @(1..100 | ForEach-Object { ("row " + $_.ToString("000") + " ") + ("x" * 52) })
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $long
+$x = SpawnRec
+$kept = @(ScreenRows $x)
+Check ($kept.Count -eq 40 -and $kept[0] -clike "row 061 *" -and $kept[39] -clike "row 100 *" -and $x.o.reason -like "*the last 40 rows, the 60 rows above them left out*") ("a screen of 100 rows: the LAST 40 kept, and the reason says 60 were left out (" + $kept[0] + " .. " + $kept[39] + ")")
+$wide = @(1..40 | ForEach-Object { ("row " + $_.ToString("000") + " ") + ("y" * 192) })
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $wide
+$x = SpawnRec
+$kept = @(ScreenRows $x)
+Check (($kept -join "`n").Length -le 4000 -and ($kept -join "`n").Length -gt 3500 -and $kept[$kept.Count - 1] -clike "row 040 *" -and $kept.Count -lt 40) ("40 rows of 200 characters: cut to at most 4000 characters from the top (" + $kept.Count + " rows, " + ($kept -join "`n").Length + " characters)")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = @("a  ", "", "", "", ("b`tc" + [char]0x00A0 + "d" + [char]0x00E9), "")
+$x = SpawnRec
+Check ((@(ScreenRows $x) -join "|") -ceq "a||b c d?") ("a run of blank rows is kept as one, a tab and a no-break space read as spaces, any other character as '?' (" + (@(ScreenRows $x) -join "|") + ")")
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:noScreen = $true
+$x = SpawnRec
+Check ("$($x.rec.screen.state)" -ceq "unreadable" -and $x.o.reason -like "*its screen could not be read: the fixture host shows no screen*") ("a screen the host cannot read: said so (" + $x.o.reason + ")")
+Reset; $script:turnMs = 600000
+$x = SpawnRec
+Check ("$($x.rec.outcome)" -ceq "not-ready" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq "BOX:|BUSY" -and $x.o.reason -like "*no-op line's turn did not end*its screen as it was then*LEFT RUNNING*") ("the no-op's turn never ended: kept, and its screen captured (" + $x.o.reason + ")")
+Reset; $script:readyAtMs = 9500
+$x = SpawnRec { param($c) $c.bounds.spawnSeconds = 10; $c.bounds.readySeconds = 60 }
+Check ($x.o.reason -like "*so the no-op line was not typed*" -and "$($x.rec.screen.state)" -ceq "shown" -and (@(ScreenRows $x) -join "|") -ceq "BOX:|IDLE") ("too near the limit for the no-op line: its screen captured (" + $x.o.reason + ")")
+Reset
+$x = SpawnRec
+Check ("$($x.o.state)" -ceq "done" -and $null -eq $x.rec.screen) "a session kept and done gets no capture"
+Reset; $script:reportMode = "bypass"
+$x = SpawnRec
+Check ("$($x.o.state)" -ceq "refused" -and $null -eq $x.rec.screen) "a session ended for its wrong mode gets no capture"
+Reset; $script:loseAllLike = "Read *"
+$x = SpawnRec
+Check ($x.o.reason -clike "prompt-not-submitted:*" -and $null -eq $x.rec.screen) "a prompt not submitted gets no capture"
+
+Write-Host ""
+Write-Host "--- a secret wrapped, split or under a name is withheld too; the rows are this user's alone, for a week (F's re-check of round 4) ---" -ForegroundColor Cyan
+# F's probe4, every case: made-up values assembled from pieces, never a credential. Each one was SHOWN on
+# 5b2f471 (measured 2026-10-14), because each half, or each piece, is too short for any shape.
+$scrRows = $null
+$scrActor = [pscustomobject]@{ name = "screenhost"; text = { param($t, $h) New-HordeKnown -Value ([string[]]$script:scrRows) } }
+$scrCtx = [pscustomobject]@{ clock = { 0.0 }; bounds = [pscustomobject]@{} }
+function ScreenOf { param([string[]]$Rows) $script:scrRows = $Rows; return (Get-HordeNodeScreenReport -Context $scrCtx -Actor $scrActor -Target "t" -Handle "1") }
+$cloud = "wJalrXUtnFEMI/K7MDENG" + "/bPxRfiCYEXAMPLEKEY"
+$gh2 = "ghp_" + "A1b2C3d4E5f6G7h8I9j0" + "K1l2M3n4O5p6Q7r8"
+$zw = [string][char]0x200B
+$mustWithhold = [ordered]@{
+    "a 40-character cloud secret wrapped mid-token after its NAME=" = @(("export AWS_SECRET_ACCESS_KEY=" + $cloud.Substring(0, 20)), $cloud.Substring(20))
+    "a 40-character cloud secret wrapped mid-token, no name before it" = @(("echo " + $cloud.Substring(0, 20)), $cloud.Substring(20))
+    "a ghp token wrapped 6 characters into its body" = @(("git push https://x@github " + $gh2.Substring(0, 10)), $gh2.Substring(10))
+    "a ghp token split by a zero-width space (one '?' as kept)" = @(("echo " + $gh2.Substring(0, 12) + $zw + $gh2.Substring(12)))
+    "DB_PASSWORD=value, whose underscore hides the name from the name=value kind" = @(("DB_PASS" + "WORD=Hunter2Hunter2"))
+    "a client_secret member, the kind looked for only when named" = @(('{"client_' + 'secret": "s3cr3tValue9"}'))
+}
+# Only the screen as READ shows this one: a no-break space is white space to the sentence kind, removing
+# it joins the words, and its row is above the 40 kept.
+$mustWithhold["a password in a sentence with a no-break space, in a row above the 40 kept"] = @(("pass" + "word" + [char]0x00A0 + "is Hunter22x")) + @(1..60 | ForEach-Object { "row " + $_ })
+# Only the rows as KEPT show this one (the after-merge mutation net of PR 239: screen-secret-kept-unchecked
+# survived). A letter outside ASCII before the name leaves no word boundary as read, nor once removed; as
+# '?' it does. The value is under 8 characters, so the named kind, which reads the name past any prefix,
+# takes it in no reading. Measured 2026-10-14 on 07ed58f with core/Secrets.ps1, each reading in each form:
+# raw none, ASCII-only none, trimmed none, kept "a password or key written as name=value".
+$mustWithhold["a short password=value right after a letter outside ASCII, a word boundary only as kept"] = @(("Note" + [char]0x00E9 + "pass" + "word=s3cr3t"))
+foreach ($k in $mustWithhold.Keys) {
+    $s = ScreenOf $mustWithhold[$k]
+    Check ("$($s.state)" -ceq "withheld" -and @($s.rows).Count -eq 0) ("WITHHELD: " + $k + " (" + $s.state + ": " + $s.said + ")")
+}
+# CONTROL: the same instrument shows an ordinary screen: a welcome box, a long folder path, a session id,
+# a commit id, a numbered dialog and a footer - nothing in it a secret - every row of it, as kept.
+$plain = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30)), "Welcome to the harness!", "  cwd: C:\work\code\app-worktrees\act-a3\agents\harness-a", ("  session 3f2a9c1e-" + "7b4d-4e21-9a0c-5d6e7f8a9b0c"), ("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), " Do you trust the files in this folder?", " 1. Yes, proceed", "   2. No, exit", "  ? for shortcuts")
+$s = ScreenOf $plain
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $plain.Count -and @($s.rows)[2] -clike "*act-a3\agents\harness-a") ("CONTROL: an ordinary screen with no secret, a path, a session id and a commit id in it, is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
+$s = ScreenOf @(("Note" + [char]0x00E9 + "passwordless sign-in is on"))
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq 1) ("CONTROL: the same letter outside ASCII before a word that is no name=value is shown (" + $s.state + ")")
+# KNOWN LIMIT, on purpose: rows joined by nothing can fuse two harmless rows into one long mixed run, and
+# a placeholder after a NAME= reads as a value once the name is spaced. Both are withheld: a screen lost,
+# never a secret shown. If either is ever shown again, that is a deliberate change to this rule.
+$s = ScreenOf @(("  at 5b2f4718c0d" + "e9a1b2c3d4e5f6a7b8c9d0e1f2a3"), "Do you trust the files in this folder?")
+Check ("$($s.state)" -ceq "withheld") ("KNOWN LIMIT: a 40-character commit id at a row's end, a capitalised word starting the next, is withheld (" + $s.said + ")")
+$s = ScreenOf @("export GH_TOKEN=<your token here>")
+Check ("$($s.state)" -ceq "withheld") ("KNOWN LIMIT: GH_TOKEN=<your token here>, a placeholder, is withheld, as token=<...> always was (" + $s.said + ")")
+$s = ScreenOf @(("export AWS_REGION=" + "us-east-1"), ("echo " + "wJalrXUtnFEMI"), "/bPxRfiCYE")
+Check ("$($s.state)" -ceq "shown") ("CONTROL: a short value after a NAME=, and two short pieces that are no key even joined, are shown (" + $s.state + ")")
+# F's re-check of round 5: the harness wraps a token onto an INDENTED row or inside a BORDERED box, and an
+# underscore turned to a space breaks api_key and access_key, which take a dash or nothing, never a space.
+# Each was SHOWN on 5b0690c (F's probe5, 2026-10-14). Made-up values, assembled from pieces.
+$bar = [string][char]0x2502
+$mustWithhold5 = [ordered]@{
+    "a cloud secret wrapped onto a row indented 2 (SHOULD ONE)" = @(("  echo " + $cloud.Substring(0, 20)), ("  " + $cloud.Substring(20)))
+    "a ghp token wrapped onto a row indented 5, under a tool-output corner (SHOULD ONE)" = @(("  " + [char]0x23BF + "  echo " + $gh2.Substring(0, 10)), ("     " + $gh2.Substring(10)))
+    "a cloud secret wrapped inside a box with vertical-bar borders (SHOULD ONE)" = @(($bar + " key " + $cloud.Substring(0, 20) + " " + $bar), ($bar + " " + $cloud.Substring(20) + "     " + $bar))
+    "a ghp token wrapped inside a box drawn with ASCII bars (SHOULD ONE)" = @(("| echo " + $gh2.Substring(0, 10) + " |"), ("|   " + $gh2.Substring(10) + " |"))
+    "SOME_API_KEY=value, whose spaced form breaks api_key (SHOULD TWO)" = @(("SOME_API" + "_KEY=abcd1234efgh"))
+    "AWS_ACCESS_KEY=short value, whose spaced form breaks access_key (SHOULD TWO)" = @(("export AWS_ACCESS" + "_KEY=Zq81mmPxQw2"))
+}
+# GUARDS, withheld on 5b0690c too: each is caught by one of the older readings and NOT by the trimmed one,
+# so each keeps that reading alive. A terminal's own wrap of an INDENTED row starts the rest at the left
+# edge (the trimmed reading breaks there), with or without a zero-width space in it; a key with slashes
+# straight after NAME= (only the '=' spaced shows it to the slash-key look).
+$mustWithhold5["GUARD: a cloud secret on an indented row, wrapped by the terminal to the left edge"] = @(("  echo " + $cloud.Substring(0, 20)), $cloud.Substring(20))
+$mustWithhold5["GUARD: a ghp token wrapped by the terminal to the left edge, split by a zero-width space"] = @(("  echo " + $gh2.Substring(0, 10)), ($gh2.Substring(10, 6) + $zw + $gh2.Substring(16)))
+$mustWithhold5["GUARD: a cloud secret straight after a NAME= that is none of the six names"] = @(("export CLOUD_VALUE=" + $cloud))
+foreach ($k in $mustWithhold5.Keys) {
+    $s = ScreenOf $mustWithhold5[$k]
+    Check ("$($s.state)" -ceq "withheld" -and @($s.rows).Count -eq 0) ("WITHHELD: " + $k + " (" + $s.state + ": " + $s.said + ")")
+}
+# CONTROL: a bordered, indented screen with no secret in it - a welcome box, a tip, a folder path, a short
+# id - is still shown, every row; the trimmed join fuses its rows and finds nothing.
+$boxed = @(((" " + [char]0x256D) + ([string][char]0x2500 * 30) + [char]0x256E), (" " + $bar + " Welcome to the harness!       " + $bar), (" " + $bar + "   /help for help              " + $bar), (" " + $bar + "   cwd: C:\work\code\app       " + $bar), ((" " + [char]0x2570) + ([string][char]0x2500 * 30) + [char]0x256F), ("  " + [char]0x23BF + "  Read 12 lines"),"     id 3f2a9c1e", "| ? for shortcuts |")
+$s = ScreenOf $boxed
+Check ("$($s.state)" -ceq "shown" -and @($s.rows).Count -eq $boxed.Count) ("CONTROL: a bordered and indented screen with no secret is still shown, every row (" + $s.state + ", " + @($s.rows).Count + " rows)")
+# KNOWN LIMIT (F's nit of round 5): a tip row that STARTS with the spinner's phrase and a comma reads busy.
+# That only makes a not-ready screen look busy - the safe way - and is pinned in the harness's own suite.
+
+# The rows are in the session's own folder, which is this user's alone; the record holds none of them.
+Reset; $script:neverReady = $true; $script:reportMode = "bypass"; $script:screenRows = $dialog
+$x = SpawnRec
+$sf = "" + $x.rec.screen.file
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+function RuleSids { param([string]$Path) return @((Get-Acl -LiteralPath $Path).Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique) }
+$sfSids = @(RuleSids $sf)
+$recSids = @(RuleSids (Join-Path $script:lastRecords ($x.o.sessionId + ".json")))
+Check ($sf -ceq (Join-Path (Join-Path $script:lastRecords $x.o.sessionId) "screen.json") -and $sfSids.Count -eq 1 -and $sfSids[0] -ceq $me.Value) ("the screen's rows are in <records>\<sid>\screen.json, whose every access rule is this user's alone (" + ($sfSids -join ",") + ")")
+Check ($recSids.Count -gt 1 -and -not (RecText $x.o).Contains("Do you trust")) ("CONTROL: the record beside it takes the folder's wider rules (" + $recSids.Count + " identities), and holds no row of the screen")
+Check (("" + (ScreenText $x | ConvertFrom-Json).takenAt) -ceq "2026-10-05T12:00:00.0000000Z") "the screen file says when it was taken, by the node's clock, for the week it is kept"
+# A record with no folder of its own (as one read back without promptDir): the screen is read, never kept.
+$bare = [pscustomobject]@{ sessionId = "s1"; handle = "p" }
+$script:scrRows = $dialog
+$said = Save-HordeNodeScreenReport -Context ([pscustomobject]@{ clock = { 0.0 }; now = { [datetime]::UtcNow }; records = $work; bounds = [pscustomobject]@{} }) -Actor $scrActor -Target "t" -Record $bare
+Check ("$($bare.screen.state)" -ceq "unkept" -and "$($bare.screen.file)" -ceq "" -and $null -eq $bare.screen.PSObject.Properties["rows"] -and $said -like "*read but not kept*") ("a record with no folder of its own keeps no rows: " + $said)
+# A record naming a folder that exists but is not this session's own: no rows are written there.
+$elsewhereDir = Join-Path $work ("not-own-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $elsewhereDir -Force | Out-Null
+$named = [ordered]@{ sessionId = "s2"; handle = "p"; promptDir = $elsewhereDir }
+$said = Save-HordeNodeScreenReport -Context ([pscustomobject]@{ clock = { 0.0 }; now = { [datetime]::UtcNow }; records = $work; bounds = [pscustomobject]@{} }) -Actor $scrActor -Target "t" -Record $named
+Check ("$($named.screen.state)" -ceq "unkept" -and @(Get-ChildItem -LiteralPath $elsewhereDir -Force).Count -eq 0) ("a record naming another folder as its own keeps no rows, and writes nothing there: " + $said)
+
+# A WEEK: every spawn deletes the screen files taken more than 7 days before its clock, and unreadable ones.
+$ret = Join-Path $work ("retention-" + [guid]::NewGuid().ToString("N"))
+function PlantScreen { param([string]$Name, [string]$Body) $d = Join-Path $ret $Name; New-Item -ItemType Directory -Path $d -Force | Out-Null; [System.IO.File]::WriteAllText((Join-Path $d "prompt.txt"), "the prompt"); if ($null -ne $Body) { [System.IO.File]::WriteAllText((Join-Path $d "screen.json"), $Body) }; return (Join-Path $d "screen.json") }
+$oldF = PlantScreen "11111111-1111-4111-8111-111111111111" '{ "takenAt": "2026-09-28T11:59:00.0000000Z", "rows": ["old"] }'
+$freshF = PlantScreen "22222222-2222-4222-8222-222222222222" '{ "takenAt": "2026-09-28T12:01:00.0000000Z", "rows": ["fresh"] }'
+$badF = PlantScreen "33333333-3333-4333-8333-333333333333" 'not json'
+$otherF = PlantScreen "not-a-session" '{ "takenAt": "2020-01-01T00:00:00Z", "rows": ["x"] }'
+$swept = Remove-HordeNodeOldScreens -Dir $ret -Now ([datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime())
+Check ($swept -eq 2 -and -not (Test-Path -LiteralPath $oldF) -and -not (Test-Path -LiteralPath $badF) -and (Test-Path -LiteralPath (Join-Path (Split-Path $oldF) "prompt.txt"))) ("a screen taken 7 days and a minute before the clock, and one that cannot be read, are deleted - and only the screen file (" + $swept + " deleted)")
+Check ((Test-Path -LiteralPath $freshF) -and (Test-Path -LiteralPath $otherF)) "CONTROL: one taken 6 days 23 h 59 min before is kept, and a folder not named as a session is never looked in"
+# By a spawn, under its lock: a screen planted a week and more before the fixture's clock is gone after it.
+Reset
+$cR = New-Context
+$oldInRec = Join-Path (Join-Path $cR.records "44444444-4444-4444-8444-444444444444") "screen.json"
+New-Item -ItemType Directory -Path (Split-Path $oldInRec) -Force | Out-Null
+[System.IO.File]::WriteAllText($oldInRec, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
+$null = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $cR
+Check (-not (Test-Path -LiteralPath $oldInRec) -and (Test-Path -LiteralPath (Split-Path $oldInRec))) "a spawn deletes a screen file past its week from its records, and leaves the folder"
+# A takenAt AFTER the clock (the clock was set back): more than a week ahead is deleted, as a week behind is
+# (F's nit of round 5: it was kept until the clock caught up).
+$futF = PlantScreen "55555555-5555-4555-8555-555555555555" '{ "takenAt": "2026-10-12T12:01:00.0000000Z", "rows": ["ahead"] }'
+$nearF = PlantScreen "66666666-6666-4666-8666-666666666666" '{ "takenAt": "2026-10-12T11:59:00.0000000Z", "rows": ["near"] }'
+$swept = Remove-HordeNodeOldScreens -Dir $ret -Now ([datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime())
+Check ($swept -eq 1 -and -not (Test-Path -LiteralPath $futF)) ("a screen whose takenAt is 7 days and a minute AFTER the clock is deleted (" + $swept + " deleted)")
+Check (Test-Path -LiteralPath $nearF) "CONTROL: one 6 days 23 h 59 min after the clock is kept"
+# AT SERVE START (F's re-check of round 5): a node that never spawns again still sweeps, when it starts,
+# by the same rule and under the same lock.
+Reset
+$cS = New-Context
+$oldAtStart = Join-Path (Join-Path $cS.records "77777777-7777-4777-8777-777777777777") "screen.json"
+$freshAtStart = Join-Path (Join-Path $cS.records "88888888-8888-4888-8888-888888888888") "screen.json"
+New-Item -ItemType Directory -Path (Split-Path $oldAtStart), (Split-Path $freshAtStart) -Force | Out-Null
+[System.IO.File]::WriteAllText($oldAtStart, '{ "takenAt": "2026-09-01T00:00:00Z", "rows": ["old"] }')
+[System.IO.File]::WriteAllText($freshAtStart, '{ "takenAt": "2026-10-04T00:00:00Z", "rows": ["fresh"] }')
+$held = Enter-HordeNodeSpawnLock -Dir $cS.records
+# An exception from the code under test is a FAILED CHECK of its own, not a broken suite (the after-merge
+# mutation net of PR 239: with the null-lock guard gone, the sweep went on with no lock and threw, and the
+# suite ended with exit 1 and no failed check, so the mutant was no catch).
+$lines = @(); $thrown = ""
+try { try { $lines = @(Invoke-HordeNodeReconcile -Context $cS) } catch { $thrown = $_.Exception.Message } } finally { $held.Dispose() }
+Check ($thrown -ceq "") ("with the spawn lock held, serve start throws nothing (" + $thrown + ")")
+Check ((Test-Path -LiteralPath $oldAtStart) -and @($lines | Where-Object { $_ -like "ALERT: old screens were not swept at serve start*spawn lock*" }).Count -eq 1) ("with the spawn lock held, serve start sweeps nothing and says so (" + ($lines -join " | ") + ")")
+$lines = @(Invoke-HordeNodeReconcile -Context $cS)
+Check (-not (Test-Path -LiteralPath $oldAtStart) -and (Test-Path -LiteralPath (Split-Path $oldAtStart)) -and @($lines | Where-Object { $_ -like "deleted 1 screen(s)*" }).Count -eq 1) ("serve start deletes a screen past its week, with no spawn, and leaves the folder (" + ($lines -join " | ") + ")")
+Check (Test-Path -LiteralPath $freshAtStart) "CONTROL: a screen within its week is kept at serve start"
+
+Write-Host ""
+Write-Host "--- the prompt is typed only once the no-op's turn has ENDED (review of PR 239, M1) ---" -ForegroundColor Cyan
+Reset; $script:turnMs = 3000
+$x = SpawnOnce
+$noopEnd = @($script:ends | Select-Object -First 1)
+$promptAt = [double](@($script:sent | Where-Object { $_.text -clike "Read *" })[0].at)
+Check ("$($x.o.state)" -ceq "done" -and "$($x.rec.noOpEnd)" -ceq "ended" -and $noopEnd.Count -eq 1 -and $promptAt -ge [double]$noopEnd[0].at -and $script:queued.Count -eq 0) ("a no-op turn of 3 s: the prompt is typed after it ended (" + $promptAt + " ms, the turn ended at " + $noopEnd[0].at + " ms), so it is a turn and not queued: done (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:turnMs = 3000
+Register-FixtureHarness -NoTurnDone
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "prompt-not-submitted:*" -and "$($x.rec.noOpEnd)" -ceq "cannot-tell") ("THE FIXTURE CAN FAIL: without the wait for the turn's end, the prompt typed during the 3 s no-op turn is queued, its receipt wait of 1 s passes, and the spawn is wrongly failed - the false FAILED of M1 (" + $x.o.reason + ")")
+Reset; $script:turnMs = 600000
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready: the no-op line's turn did not end*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready") ("a no-op turn that never ends: failed not-ready, the prompt never typed, the session left running (" + $x.o.reason + ")")
+
+Write-Host ""
+Write-Host "--- no line is typed once too little of the spawn's limit is left for its wait (review of PR 239, S-b) ---" -ForegroundColor Cyan
+# The limit is 10 s; a line's wait is receiptSeconds + retrySeconds, 2 s here.
+$lim10 = { param($c) $c.bounds.spawnSeconds = 10 }
+$lim10r = { param($c) $c.bounds.spawnSeconds = 10; $c.bounds.readySeconds = 60 }
+Reset; $script:slowModeMs = 15000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready: less than 2 s*the prompt was not typed*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0 -and (Alive $x.o) -and "$($x.rec.outcome)" -ceq "not-ready" -and $script:clockMs -ge 10000) ("the limit passed before the prompt (the mode read ended at " + $script:clockMs + " ms): the prompt is not typed, and the session, its mode proven, is left running (" + $x.o.reason + ")")
+Reset; $script:slowModeMs = 9000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready: less than 2 s*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0) ("1 s of the limit left, less than a line's wait: the prompt is not typed (" + $x.o.reason + ")")
+Reset; $script:slowModeMs = 5000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "done" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 1) ("CONTROL: 5 s of the limit left, the prompt is typed and taken (" + $x.o.state + " " + $x.o.reason + ")")
+Reset; $script:readyAtMs = 9500
+$x = SpawnOnce $lim10r
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -like "*so the no-op line was not typed*" -and $script:sent.Count -eq 0 -and (Alive $x.o)) ("ready with 0.5 s of the limit left: not even the no-op line is typed, and the not-ready rule decides the session (" + $x.o.reason + ")")
+Reset; $script:readyAtMs = 5000
+$x = SpawnOnce $lim10r
+Check ("$($x.o.state)" -ceq "done") ("CONTROL: ready with 5 s left, the no-op line and the prompt are typed (" + $x.o.reason + ")")
+Reset; $script:hostCallMs = 3000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "failed" -and $x.o.reason -clike "not-ready:*" -and $script:sent.Count -eq 0) ("the limit counts from the act's start: three host calls before the pane spent 9 of its 10 s, so nothing is typed (" + $x.o.reason + ")")
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 15000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("a wrong mode found past the limit: no close text, whose calls the limit does not count; the host ends the pane by its process (" + ((Typed) -join "|") + ")")
+# The close text and its wait (2 items x hostCallSeconds 1 s + closeSeconds 2 s = 4 s here) only while they fit.
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 7000
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("a wrong mode found with 3 s of the limit left, less than the close text and its wait: no close text, the host ends the pane (F's re-check) (" + ((Typed) -join "|") + ")")
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 4500
+$x = SpawnOnce $lim10
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 1) ("CONTROL: with 5.5 s left the close text is typed (" + ((Typed) -join "|") + ")")
+# Bounds with no hostCallSeconds count the first host's 20 s a call, never 0 (F's nit of round 4): with
+# about 25 s left, 2 items x 20 s + 2 s does not fit, so no close text; at 1 s a call it would.
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 35000
+$x = SpawnOnce { param($c) $c.bounds.PSObject.Properties.Remove("hostCallSeconds") }
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("no hostCallSeconds in the bounds, about 25 s left: each call counted at 20 s, so no close text, the host ends the pane (" + ((Typed) -join "|") + ")")
+Reset; $script:reportMode = "bypass"; $script:slowModeMs = 35000
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 1) ("CONTROL: the same with hostCallSeconds 1 types the close text (" + ((Typed) -join "|") + ")")
+Reset
+Register-FixtureHarness -Blind
+$script:reportMode = "bypass"
+try { $x = SpawnOnce } finally { Register-FixtureHarness }
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1) ("a wrong mode after a no-op line whose turn cannot be told: no close text after it, the host ends the pane (F's nit) (" + ((Typed) -join "|") + ")")
+
+# Inside one line's submit: past the limit the box is not looked at, and the extra Enter needs its wait.
+$script:subLooks = @{ text = 0; enter = 0 }
+$script:subTextMs = 0
+$subActor = [pscustomobject]@{ name = "stubhost"
+    send = { param($t, $h, $x, $s) if ("" + $x -eq "") { $script:subLooks.enter++ }; New-HordeKnown -Value $true }
+    text = { param($t, $h) $script:subLooks.text++; $script:clockMs += $script:subTextMs; New-HordeKnown -Value ([string[]]@("BOX:held")) } }
+$subAdapter = [pscustomobject]@{ name = "stub"; turnMark = { param($i, $v) New-HordeKnown -Value 0 }; turnSeen = { param($i, $v, $m, $l) New-HordeKnown -Value $false }; inputHolds = { param($s, $l) New-HordeKnown -Value $true }
+    inputReady = { param($s) New-HordeKnown -Value $true } }
+function SubmitWith { param($DeadlineIn)
+    $script:subLooks.text = 0; $script:subLooks.enter = 0; $script:clockMs = 0.0
+    $c = New-Context; if ($null -ne $DeadlineIn) { $c | Add-Member -NotePropertyName deadlineMs -NotePropertyValue ([double]$DeadlineIn) -Force }
+    return (Submit-HordeNodeLine -Context $c -Actor $subActor -Target $fakeTerm -Adapter $subAdapter -Handle "1" -SessionId "s" -Line "held") }
+$u = SubmitWith $null
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 1 -and $script:subLooks.enter -eq 1) ("CONTROL: with no limit, a line still in the box gets its box looked at and ONE extra Enter (" + $u.reason + ")")
+$u = SubmitWith 500
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 0 -and $script:subLooks.enter -eq 0 -and $u.reason -like "*limit ran out, so the box was not looked at*" -and $script:clockMs -ge 1000) ("the limit passed during the receipt wait: the wait still ran its whole 1 s (to " + $script:clockMs + " ms), and no host call after it - the box is not looked at, no extra Enter (" + $u.reason + ")")
+$u = SubmitWith 1500
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 1 -and $script:subLooks.enter -eq 1 -and $script:clockMs -ge 2000) ("0.5 s of the limit left after the receipt wait: the box is looked at, ONE extra Enter, and its retry wait runs its whole 1 s past the limit (to " + $script:clockMs + " ms) (" + $u.reason + ")")
+$script:subTextMs = 1000
+$u = SubmitWith 1500
+$script:subTextMs = 0
+Check ("$($u.state)" -ceq "not-taken" -and $script:subLooks.text -eq 1 -and $script:subLooks.enter -eq 0 -and $u.reason -like "*limit ran out while the box was read*no other Enter*") ("the limit ran out WHILE the box was read: no extra Enter, a host call past the limit (" + $u.reason + ")")
+# F'S PROBE OF ROUND 3, on a slow host: every terminal call 20 s, a typed line with its Enter two of them
+# and 250 ms between, the shipped receipt and retry waits; the line's turn reaches the transcript 300 ms
+# after the Enter that submits it. -FirstLost loses the Enter typed with the text, so only the extra
+# Enter submits it.
+$script:slow = @{ turnAt = $null; enters = 0; firstLost = $false }
+$slowActor = [pscustomobject]@{ name = "slowhost"
+    send = { param($t, $h, $x, $sub) if ("" + $x -ne "") { $script:clockMs += 40250 } else { $script:clockMs += 20000 }; $script:slow.enters++; if (-not ($script:slow.firstLost -and $script:slow.enters -eq 1)) { $script:slow.turnAt = $script:clockMs + 300 }; New-HordeKnown -Value $true }
+    text = { param($t, $h) $script:clockMs += 20000; New-HordeKnown -Value ([string[]]@("BOX:held")) } }
+$slowAdapter = [pscustomobject]@{ name = "stub"; turnMark = { param($i, $v) New-HordeKnown -Value 0 }
+    turnSeen = { param($i, $v, $m, $l) New-HordeKnown -Value ([bool]($null -ne $script:slow.turnAt -and $script:clockMs -ge $script:slow.turnAt)) }
+    inputHolds = { param($sc, $l) New-HordeKnown -Value ($null -eq $script:slow.turnAt) } }
+function SlowSubmit { param([double]$DeadlineMs, [switch]$FirstLost)
+    $script:clockMs = 0.0; $script:slow.turnAt = $null; $script:slow.enters = 0; $script:slow.firstLost = [bool]$FirstLost
+    $c = New-Context; $c.bounds.receiptSeconds = 20; $c.bounds.retrySeconds = 10; $c.bounds.pollMs = 500
+    $c | Add-Member -NotePropertyName deadlineMs -NotePropertyValue $DeadlineMs -Force
+    $r = Submit-HordeNodeLine -Context $c -Actor $slowActor -Target $fakeTerm -Adapter $slowAdapter -Handle "1" -SessionId "s" -Line "held"
+    return [pscustomobject]@{ r = $r; turnAt = $script:slow.turnAt; endMs = $script:clockMs } }
+$f1 = SlowSubmit -DeadlineMs 30000
+Check ("$($f1.r.state)" -ceq "taken") ("a typed line whose send took 40.25 s, past the limit at 30 s, its turn at " + $f1.turnAt + " ms: its receipt wait runs whole and SEES it - not judged on one look (" + $f1.r.state + " " + $f1.r.reason + ")")
+$f2 = SlowSubmit -DeadlineMs 95000 -FirstLost
+Check ("$($f2.r.state)" -ceq "taken" -and $f2.r.extraEnter) ("F's probe: the first Enter lost, the extra Enter sent at 80.25 s inside the limit at 95 s, its turn at " + $f2.turnAt + " ms after the limit: its retry wait runs whole and sees it, so a submitted line is never reported not taken (" + $f2.r.state + " " + $f2.r.reason + ")")
+Check ($f2.endMs -le 80250 + 20000 + 10000 + 500) ("...and the whole wait past the limit is bounded: the Enter and the retry wait, " + $f2.endMs + " ms")
+$c = New-Context; $script:clockMs = 5000.0; $c | Add-Member -NotePropertyName deadlineMs -NotePropertyValue 4000.0 -Force
+$script:subLooks.text = 0
+$w = Wait-HordeNodeReady -Context $c -Actor $subActor -Target $fakeTerm -Adapter $subAdapter -Handle "1"
+Check ("$($w.state)" -ceq "not-ready" -and $script:subLooks.text -eq 0 -and $w.reason -like "*limit ran out before the screen was looked at*") ("past the limit the readiness wait makes no host call (" + $w.reason + ")")
+$c.deadlineMs = 9000.0
+$w = Wait-HordeNodeReady -Context $c -Actor $subActor -Target $fakeTerm -Adapter $subAdapter -Handle "1"
+Check ("$($w.state)" -ceq "ready" -and $script:subLooks.text -eq 1) "CONTROL: inside the limit it looks, and is ready"
+
+Write-Host ""
+Write-Host "--- a stuck no-op line gets no close text, and the reason names it (review of PR 239, S1 and S2) ---" -ForegroundColor Cyan
+Reset; $script:reportMode = "bypass"; $script:loseAllLike = "Reply*"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 0 -and @($script:stopped).Count -eq 1 -and -not $script:procs.ContainsKey([int]$script:sessions[$x.o.sessionId].pid)) ("a wrong level with the no-op line stuck in the box: no close text typed after it, the host ends the pane by its process, refused (" + ((Typed) -join "|") + ")")
+Reset; $script:reportMode = "bypass"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -ceq "bye" }).Count -eq 1) "CONTROL: a wrong level with the no-op taken is closed by its close text first, as before"
+Reset; $script:noModeLine = $true; $script:loseAllLike = "Reply*"
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "refused" -and $x.o.reason -like "*could not be read back*" -and $x.o.reason -like "*no-op line 'Reply with OK only.' never became a turn (not-taken*") ("a mode that cannot be read while the no-op line never became a turn: the refusal names the stuck no-op (" + $x.o.reason + ")")
+Reset; $script:noModeLine = $true
+$x = SpawnOnce
+Check ("$($x.o.state)" -ceq "refused" -and $x.o.reason -notlike "*never became a turn*") "CONTROL: with the no-op taken, the refusal does not blame it"
 
 Write-Host ""
 Write-Host "--- refused before anything starts: a profile that needs a key (round 1: this had no test) ---" -ForegroundColor Cyan
@@ -418,12 +954,75 @@ function Real-Context {
     $c = New-HordeNodeActContext -Root $root -HordeHome $h1 -Namespace ([pscustomobject]@{ device = $device; space = "windows" })
     $c.descriptors = $descriptors; $c.builtin = @(Read-HordeEngineLayerText -Text ([System.IO.File]::ReadAllText((Join-Path $fx "builtin.json")) -replace ',\s*\{ "name": "beta"[^}]*\}', '') -Layer "L0" -Source "fixture L0")
     $c.processStart = { param($p) if ($script:procs.ContainsKey([int]$p)) { $script:procs[[int]$p] } else { $null } }
-    $c.sleep = { param($ms) }; $c.now = { [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime() }
-    $c.bounds = [pscustomobject]@{ identifySeconds = 2; modeSeconds = 2; closeSeconds = 2; pollMs = 100 }
+    $c.sleep = { param($ms) $script:clockMs += $ms }; $c.clock = { $script:clockMs }; $c.now = { [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime() }
+    $c.bounds = [pscustomobject]@{ identifySeconds = 2; readySeconds = 2; modeSeconds = 2; closeSeconds = 2; receiptSeconds = 1; retrySeconds = 1; turnEndSeconds = 5; spawnSeconds = 60; hostCallSeconds = 1; pollMs = 100 }
     $c.environment = @{}; $c.alert = { param($m) [void]$script:alerts.Add($m) }
     return $c
 }
 $rc = Real-Context
+# THE WAITS FIT THE HUB'S (issue #214; review of PR 239, S3 and S-a; F's re-check of round 3). Every wait
+# before the decision shares ONE limit, spawnSeconds from the act's start, measured by wall time on the
+# context's clock. Past it no host call starts; a typed line's own waits run whole; the close text is
+# typed only while it and its wait fit. The sum counts TERMINAL calls at c = 20 s each: the first host
+# makes two for a typed line with its Enter (and 250 ms between) and two for its end of a pane. The longest
+# tail past the limit is a no-op line typed just inside its wait L, its send and receipt wait running to
+# max(2c + 0.25 + receiptSeconds - L, c + retrySeconds) past it, then the host's end (2c) and its wait.
+# Then every path is RUN below on the fixture with the shipped bounds and each terminal call costing 20 s.
+$dctx = New-HordeNodeActContext -Root $root -HordeHome $h1 -Namespace ([pscustomobject]@{ device = $device; space = "windows" })
+$db = $dctx.bounds
+$hostH = [double]$db.hostCallSeconds
+$closeItems = @((Get-HordeLaunchAdapter -Name "harness-a").value.closeText).Count
+$line = [double]$db.receiptSeconds + [double]$db.retrySeconds
+$lineTail = [math]::Max(2 * $hostH + 0.25 + [double]$db.receiptSeconds - $line, $hostH + [double]$db.retrySeconds)
+$kill = 2 * $hostH + [double]$db.closeSeconds
+$afterLine = [double]$db.spawnSeconds + $lineTail + $kill
+$closeText = [double]$db.spawnSeconds + $kill
+$unreadyEnd = [double]$db.spawnSeconds + $hostH + $kill
+$worst = [math]::Max([math]::Max($afterLine, $closeText), $unreadyEnd)
+Check ($hostH -eq 20 -and $closeItems -eq 2 -and $line -ge 20 -and $line -le 30 -and $worst -le 225 -and [double]$db.readySeconds -ge 30 -and [double]$db.turnEndSeconds -ge 30) ("a typed line's turn is waited for 20 to 30 s, the session's readiness and the no-op's end each at least 30 s, and a spawn's longest path, every terminal call counted at 20 s, is " + $worst + " s (a typed line then the host's end " + $afterLine + " s, a close with its close text " + $closeText + " s, never ready " + $unreadyEnd + " s), at least 15 s inside the hub's 240 s for the harness's own reads")
+function Measure-WorstSpawn {
+    # Run every path of a spawn on the fixture, with -Bounds and every terminal call costing 20 s; returns
+    # the longest act's milliseconds on the clock, and the case that took it.
+    param($Bounds)
+    $cases = New-Object System.Collections.ArrayList
+    # Own at 19.4 s puts a look's end at 99.9 s, so a session ready at 90 s has its no-op line typed 30.1 s
+    # before a 130 s limit: the longest tail the sum above names.
+    foreach ($own in @(20000, 19400)) {
+        foreach ($rdy in @(0, 90000, 105000, 115000, 120000)) {
+            foreach ($k in @("done", "never-ready", "never-ready-wrong", "never-ready-wrong-denied", "wrong", "wrong-stubborn-denied", "noop-lost-wrong", "noop-lost-wrong-denied", "noop-first-lost-wrong", "prompt-lost", "turn-never-ends", "no-mode-stubborn", "unproven")) { [void]$cases.Add(@($rdy, $k, $own)) }
+        }
+    }
+    $most = 0.0; $which = ""
+    foreach ($cs in $cases) {
+        Reset; $script:hostCallMs = 20000; $script:submitPauseMs = 250; $script:readyAtMs = $cs[0]; $script:ownMs = $cs[2]
+        switch ($cs[1]) {
+            "never-ready" { $script:neverReady = $true }
+            "never-ready-wrong" { $script:neverReady = $true; $script:reportMode = "bypass" }
+            "never-ready-wrong-denied" { $script:neverReady = $true; $script:reportMode = "bypass"; $script:stopDenied = $true }
+            "wrong" { $script:reportMode = "bypass" }
+            "wrong-stubborn-denied" { $script:reportMode = "bypass"; $script:stubborn = $true; $script:stopDenied = $true }
+            "noop-lost-wrong" { $script:loseAllLike = "Reply*"; $script:reportMode = "bypass"; $script:stubborn = $true }
+            "noop-lost-wrong-denied" { $script:loseAllLike = "Reply*"; $script:reportMode = "bypass"; $script:stopDenied = $true }
+            "noop-first-lost-wrong" { $script:loseFirstLike = "Reply*"; $script:reportMode = "bypass"; $script:stubborn = $true }
+            "prompt-lost" { $script:loseAllLike = "Read *" }
+            "turn-never-ends" { $script:turnMs = 10000000 }
+            "no-mode-stubborn" { $script:noModeLine = $true; $script:stubborn = $true; $script:stopDenied = $true }
+            "unproven" { $script:noIdentify = $true }
+        }
+        $cw = New-Context; $cw.bounds = $Bounds.PSObject.Copy()
+        $null = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $cw
+        if ($script:clockMs -gt $most) { $most = $script:clockMs; $which = $cs[1] + " ready at " + $cs[0] + " ms, Own " + $cs[2] + " ms" }
+    }
+    return [pscustomobject]@{ ms = $most; case = $which }
+}
+$wm = Measure-WorstSpawn -Bounds $db
+Check ($wm.ms -le 240000 -and $wm.ms -le 1000 * $worst -and $wm.ms -ge 1000 * $worst - 1000) ("RUN with the shipped bounds and every terminal call costing 20 s, the longest spawn took " + $wm.ms + " ms on the clock (" + $wm.case + "): inside the sum above and the hub's 240 s (S-a, F's re-check): within 1 s of the sum, so the runs reach the tail it names")
+$wide = $db.PSObject.Copy(); $wide.spawnSeconds = 200
+$wm2 = Measure-WorstSpawn -Bounds $wide
+Check ($wm2.ms -gt 240000) ("THE MEASURE CAN FAIL: with a limit of 200 s the same runs go past the hub's 240 s (" + $wm2.ms + " ms, " + $wm2.case + ")")
+$c1 = & $dctx.clock
+Start-Sleep -Milliseconds 30
+Check ((& $dctx.clock) - $c1 -ge 25) "the node's own clock is wall time in milliseconds, so its waits are bounded by the stopwatch"
 Check ($rc.note -like "*acts: OFF*no policy file*") ("a node with no policy says, as it starts serving, that it acts on nothing (" + $rc.note + ")")
 Set-Pol 3
 Reset

@@ -5,7 +5,7 @@
 # opened the page, and the same data could be printed or sent across a link unchanged.
 #
 # THE STATUS RECORD, version 1 (approved 2026-10-06). One file per Orc, status.txt, in that Orc's own
-# folder, replaced whole each time: exactly six lines of ASCII,
+# folder, replaced whole each time: six lines of ASCII, or seven with the optional last one,
 #
 #   horde-orc-status 1
 #   orc: <one capital letter>
@@ -13,24 +13,51 @@
 #   doing: <what it is doing now>          at most 120 characters, plain words
 #   finished: <the last thing it finished>  at most 120 characters, plain words
 #   blocked: <no, or one sentence saying what stops all its work>
+#   waiting on: <who, since when, unblocked by what>   OPTIONAL; the whole line at most 200 characters
 #
-# The file's own modified time is the "as of": an Orc never writes a time, and a stale record is
-# visible because its age is shown.
+# THE SEVENTH LINE is still version 1: the record's own checker (check-status.py, kept in the decisions
+# page Orc's folder; its line 18, added 2026-10-07) has accepted it since 2026-10-07, and the
+# fleet adopted it in every record on 2026-10-13. A six-line record is as good as it was; a seventh line
+# is read only when it begins exactly "waiting on: " with something after it. Its most is the
+# checker's, 200 characters for the WHOLE line (so 188 for the value), not 120, because the real lines
+# run long: the eight real ones read 2026-10-14 were 77 to 136 characters (values of 65 to 124). It may
+# hold a date and a time ("the reviewer, since 2026-10-07 13:00, unblocked by a yes on ..."). Before
+# this reader knew the line, every Orc that wrote it was "no status written".
+#   TWO RULES ON IT ARE THIS READER'S, stricter than the checker, which checks only its key and length:
+# its value is held to doing's and finished's plain words (no bare pull-request or issue number, no
+# file path), and it holds no control character (the checker looks for those in the first six lines
+# only). And a seventh line with another key is named, "line 7 is not 'waiting on: ...'", where the
+# checker says only that the record has seven lines.
+#
+# The file's own modified time is the "as of": an Orc never writes the record's time (a waiting-on
+# line's "since" is when the wait began), and a stale record is visible because its
+# age is shown.
 #
 # A RECORD IS READ WHOLE OR NOT AT ALL. A file that is missing, or that breaks any rule below, is
 # shown as "no status written" with what was wrong - NEVER as its half-read fields, and never as a
 # guess. The rules are the record's own checker's, ported: a byte-order mark; a byte that is not
-# ASCII; a line count that is not six; a first line that is not the header; a line that is not its
-# "key: value" with something after the colon; doing or finished over 120 characters; doing or
-# finished holding a bare pull-request or issue number or a file path (the record is read cold by a
-# person: "the fix for garbled mail", not "PR 68"). Two rules are this reader's own. It has no table
+# ASCII; a line count that is not six or seven, an eighth line named as one too many; a first line
+# that is not the header; a line that is not its "key: value" with something after the colon, a
+# seventh line that is not "waiting on" among them; doing or finished over 120 characters, or the
+# waiting-on line over 200; doing, finished or waiting on holding a bare pull-request or issue number
+# or a file path (the record is read cold by a person: "the fix for garbled mail", not "PR 68"). Two rules are this reader's own. It has no table
 # of who sits where, so the orc line is ONE capital letter, and two folders that both claim one letter
 # are both "no status written", since which is that Orc cannot be told. And a record holds no control
 # character but the ends of its lines: the checker lets one through, and this reader hands a record
 # on to be drawn.
 #
-# WHAT THIS DOES NOT SAY, and the panel must not pretend to: working or idle, sessions open, waiting
-# on a person. Those come from the fleet's activity and the list of questions, not from this file.
+# A RETIRED LANE HAS NO ROW (C's ruling, 2026-10-14, the rule the cards channel has had since PR 255).
+# A folder that holds status.retired.txt and NO status.txt is a lane that ended: it is given no row at
+# all, is not shown as "no status written", and is not counted - not among the Orcs, not among the
+# folders past the most read (it is passed over before that count, or old lanes would push live ones
+# out). A folder with BOTH files is a lane that came back, read from its status.txt as any other; a
+# folder with NEITHER is "no status written", as it always was. The retired file is never read. The
+# rule is one function, Test-HordeFleetStatusRetired, and channels/cards calls it, so the panel and the
+# phone cannot drift apart on which lanes are gone.
+#
+# WHAT THIS DOES NOT SAY, and the panel must not pretend to: working or idle, or sessions open. Those
+# come from the fleet's activity, not from this file. Waiting on a person is said only as the Orc's own
+# seventh line says it; the questions that wait on the reader are counted from the list of questions.
 #
 # WHERE THE FILES ARE, AND HOW MANY FOLDERS ARE READ, ARE THE MODULE'S SETTINGS (core/ModuleSettings.ps1,
 # module "fleet", a person's file <HordeHome>\settings\fleet.json):
@@ -62,9 +89,16 @@
 $script:HordeFleetStatusHeader = "horde-orc-status 1"
 $script:HordeFleetStatusKeys = @("orc", "lane", "doing", "finished", "blocked")
 $script:HordeFleetStatusFile = "status.txt"
+# What a lane that ended renames its status.txt to (header: A RETIRED LANE HAS NO ROW).
+$script:HordeFleetStatusRetiredFile = "status.retired.txt"
 # The longest doing and finished may be, in characters (the record's rule 2).
 $script:HordeFleetStatusMostChars = 120
-# A record is six short lines. A file far past that is not one, and is not read into memory to find out.
+# The optional seventh line (header): its key, and the longest the whole line may be, in characters.
+$script:HordeFleetStatusWaitingKey = "waiting on"
+$script:HordeFleetStatusMostWaitingChars = 200
+# A record is seven short lines at most. A file far past that is not one, and is not read into memory
+# to find out. The widest record the rules allow, with a lane and a blocked sentence of 1,000 characters
+# each, is 2,510 bytes (test/test-fleet-status.ps1): the seventh line leaves the cap far above it.
 $script:HordeFleetStatusMostBytes = 8192
 # How many of the folders that claim one letter are named in each one's problem; the rest are counted.
 # Measured 2026-10-06 with every one named: 1,000 folders claiming one letter made 11 MB of answer,
@@ -127,7 +161,7 @@ function Get-HordeFleetStatusSource {
 
 function ConvertFrom-HordeFleetStatusBytes {
     # One status record from the bytes of its file, as { problems; fields }: fields is the five values
-    # by key, and is $null whenever problems is not empty (header, A RECORD IS READ WHOLE OR NOT AT
+    # by key, and a sixth, "waiting on", only when the record has its seventh line; it is $null whenever problems is not empty (header, A RECORD IS READ WHOLE OR NOT AT
     # ALL). A PURE FUNCTION of the bytes.
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     $problems = New-Object System.Collections.ArrayList
@@ -142,13 +176,13 @@ function ConvertFrom-HordeFleetStatusBytes {
     # Latin-1 maps each byte to one character, so nothing is lost or merged before the lines are split.
     $text = [System.Text.Encoding]::GetEncoding(28591).GetString($body)
     # A CONTROL CHARACTER IS NO PART OF A RECORD: the only bytes below a space it may hold are the ends
-    # of its six lines. An escape, a NUL or a backspace in a field was handed on as "written" (measured
+    # of its lines. An escape, a NUL or a backspace in a field was handed on as "written" (measured
     # 2026-10-06 by the review of this reader), to be shown by whatever draws the record.
     if ($text.Replace("`r`n", "`n") -cmatch '[\x00-\x09\x0B-\x1F\x7F]') { [void]$problems.Add("holds a control character") }
     $lines = New-Object System.Collections.ArrayList
     foreach ($l in ($text.Replace("`r`n", "`n") -split "`n")) { [void]$lines.Add($l) }
     while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq "") { $lines.RemoveAt($lines.Count - 1) }
-    if ($lines.Count -ne 6) { [void]$problems.Add("has " + $lines.Count + " lines, and a record is 6") }
+    if ($lines.Count -lt 6 -or $lines.Count -gt 7) { [void]$problems.Add("has " + $lines.Count + " lines, and a record is 6, or 7 with its waiting-on line" + $(if ($lines.Count -gt 7) { ", so line 8 is one too many" } else { "" })) }
     if ($lines.Count -eq 0 -or $lines[0] -cne $script:HordeFleetStatusHeader) { [void]$problems.Add("does not begin with the line '" + $script:HordeFleetStatusHeader + "'") }
     $fields = [ordered]@{}
     for ($i = 0; $i -lt $script:HordeFleetStatusKeys.Count; $i++) {
@@ -166,14 +200,37 @@ function ConvertFrom-HordeFleetStatusBytes {
         }
         $fields[$key] = $value
     }
+    # THE OPTIONAL SEVENTH LINE (header): its key exactly, something after it, the whole line at the
+    # checker's most, and its value held to the plain words of doing and finished.
+    if ($lines.Count -eq 7) {
+        $waitLine = $lines[6]
+        $waitKey = $script:HordeFleetStatusWaitingKey
+        if (-not $waitLine.StartsWith($waitKey + ": ", [System.StringComparison]::Ordinal) -or $waitLine.Substring($waitKey.Length + 2).Trim() -eq "") {
+            [void]$problems.Add("line 7 is not '" + $waitKey + ": ...'")
+        } else {
+            $waiting = $waitLine.Substring($waitKey.Length + 2)
+            if ($waitLine.Length -gt $script:HordeFleetStatusMostWaitingChars) { [void]$problems.Add("the " + $waitKey + " line is " + $waitLine.Length + " characters, and the most is " + $script:HordeFleetStatusMostWaitingChars) }
+            if ($waiting -match $script:HordeFleetStatusBareReference) { [void]$problems.Add($waitKey + " holds a bare reference or a path, where plain words are wanted") }
+            $fields[$waitKey] = $waiting
+        }
+    }
     if ($problems.Count -gt 0) { return [pscustomobject]@{ problems = @($problems); fields = $null } }
     return [pscustomobject]@{ problems = @(); fields = $fields }
 }
 
+function Test-HordeFleetStatusRetired {
+    # True when the folder is a retired lane (header): status.retired.txt is there and status.txt is
+    # not. The one statement of the rule; channels/cards/Channel.ps1 calls it too.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return ((-not [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusFile))) -and [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusRetiredFile)))
+}
+
 function Read-HordeFleetStatusFolder {
     # One Orc's folder, as the plain record the panel shows: { folder; written; problems; orc; lane;
-    # doing; finished; blocked; blockedBy; ageSeconds }. When written is false every field of the
-    # record is empty: nothing of a file that broke a rule is passed on.
+    # doing; finished; blocked; blockedBy; ageSeconds }, and waitingOn after them only when the record
+    # has its seventh line (header): ABSENT, not empty, when it has none. When written is false every
+    # field of the record is empty and there is no waitingOn: nothing of a file that broke a rule is
+    # passed on.
     param([Parameter(Mandatory = $true)][string]$Path, [datetime]$Now = [datetime]::UtcNow)
     $out = [ordered]@{ folder = (Split-Path -Leaf $Path); written = $false; problems = @(); orc = ""; lane = ""; doing = ""; finished = ""; blocked = $false; blockedBy = ""; ageSeconds = -1 }
     $file = Join-Path $Path $script:HordeFleetStatusFile
@@ -181,7 +238,7 @@ function Read-HordeFleetStatusFolder {
     $bytes = $null; $wroteAt = $null
     try {
         $info = New-Object System.IO.FileInfo($file)
-        if ($info.Length -gt $script:HordeFleetStatusMostBytes) { $out.problems = @("is " + $info.Length + " bytes, far more than six lines, and was not read"); return [pscustomobject]$out }
+        if ($info.Length -gt $script:HordeFleetStatusMostBytes) { $out.problems = @("is " + $info.Length + " bytes, far more than a record's seven lines, and was not read"); return [pscustomobject]$out }
         $wroteAt = $info.LastWriteTimeUtc
         # Shared for reading, writing and deleting: an Orc replaces the file whole, and a reader must
         # never be why that fails.
@@ -199,6 +256,7 @@ function Read-HordeFleetStatusFolder {
     # highest state, for the reason "No" (measured 2026-10-06 by the review of this reader). Compared
     # by code point with case set aside, so no machine's language reads the word differently.
     if (-not [string]::Equals($record.fields["blocked"].Trim(), "no", [System.StringComparison]::OrdinalIgnoreCase)) { $out.blocked = $true; $out.blockedBy = $record.fields["blocked"].Trim() }
+    if ($record.fields.Contains($script:HordeFleetStatusWaitingKey)) { $out.waitingOn = $record.fields[$script:HordeFleetStatusWaitingKey] }
     return [pscustomobject]$out
 }
 
@@ -228,6 +286,8 @@ function Get-HordeFleetStatus {
     catch { return (& $none "unreadable" ("the folder of status records could not be listed: " + $_.Exception.Message)) }
     # THE SAME FOLDERS EVERY TIME (header): by name, by code point, letter case set aside.
     [System.Array]::Sort($paths, [System.StringComparer]::OrdinalIgnoreCase)
+    # A RETIRED LANE HAS NO ROW (header), and is passed over before the most read is counted.
+    $paths = [string[]]@($paths | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })
     $most = [int]$Settings.values.statusFoldersRead
     $notRead = [Math]::Max(0, $paths.Length - $most)
     $orcs = @($paths | Select-Object -First $most | ForEach-Object { Read-HordeFleetStatusFolder -Path $_ -Now $Now })
@@ -241,6 +301,7 @@ function Get-HordeFleetStatus {
         foreach ($o in $group.Group) {
             $o.written = $false; $o.problems = @("says it is Orc " + $group.Name + ", and so does another folder (" + $names + "), so which is that Orc cannot be told")
             $o.orc = ""; $o.lane = ""; $o.doing = ""; $o.finished = ""; $o.blocked = $false; $o.blockedBy = ""
+            $o.PSObject.Properties.Remove("waitingOn")
         }
     }
     $sorted = @($orcs | Sort-Object -Property @{ Expression = { if ($_.written) { 0 } else { 1 } } }, @{ Expression = { $_.orc } }, @{ Expression = { $_.folder } })

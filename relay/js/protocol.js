@@ -4,7 +4,7 @@
 //
 // THE SPECIFICATION IS THE POWERSHELL. Each section names the machine-side file whose strings it
 // copies: relay/Envelope.ps1, relay/Hpke.ps1, relay/Pairing.ps1, relay/Trust.ps1 and
-// channels/decisions/Channel.ps1, channels/chat/Channel.ps1 and channels/progress/Channel.ps1. A string here that differs from its twin there is a bug here; the
+// channels/decisions/Channel.ps1, channels/chat/Channel.ps1, channels/progress/Channel.ps1 and channels/cards/Channel.ps1. A string here that differs from its twin there is a bug here; the
 // end-to-end suites (test/test-relay-phone-e2e.ps1, surfaces/pwa/test/test-pwa-phone-e2e.ps1) put
 // what this file makes through the real machine code.
 //
@@ -473,7 +473,10 @@ export function newestSnapshot(pages) {
     const first = ordered[0].page;
     best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood,
       // The highest version of answer the machine says it reads; 1 for a machine whose snapshot says nothing.
-      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1 };
+      answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1,
+      // What became of the founder's answers (receiptFor), as the machine said it; undefined from a
+      // machine before receipts. ts: when the machine signed the snapshot's newest page, 0 if unknown.
+      receipts: first.receipts, ts: Math.max(0, ...ordered.map((p) => (Number.isSafeInteger(p.ts) ? p.ts : 0))) };
   }
   return best;
 }
@@ -569,6 +572,127 @@ export function withDays(items, offsetMinutes) {
     out.push(it);
   }
   return out;
+}
+
+// --- what became of each answer (channels/decisions/Channel.ps1, WHAT BECAME OF EACH ANSWER) ---
+
+// THE FOUNDER'S ANSWERS ARE KEPT ON THE PHONE UNTIL THE PC SAYS THEY ARE APPLIED (the founder, 2026-10-14,
+// relay fixes 3 and 4: the runner was down 2 h 38 min, twenty answers waited, and one never arrived with
+// nothing said). Each answer is in one of these states, shown beside it in these words:
+//   sent       the relay took the put; nothing more is known yet;
+//   received   the PC has journaled an envelope that carried it (its seq at or below the receipt's
+//              through, and not among its missing);
+//   applied    the decisions list wrote the record: the receipt lists its answerId as applied;
+//   refused    the list refused it for good: never sent again.
+// An answer held longer than ANSWER_WARN_MS without being applied or refused carries a warning line.
+export const ANSWER_WORDS = { sent: "sent", received: "received by PC", applied: "applied", refused: "refused by the PC" };
+export const ANSWER_WARNING = "Not confirmed by the PC for over an hour. It stays here, and is sent again until the PC confirms it.";
+export const ANSWER_REFUSED_NOTE = "The PC refused this answer. Answer again if it still stands.";
+// How long an answer may wait unconfirmed before the warning (the outage it answers was 2 h 38 min: an
+// hour says so well inside it); how often one answer is sent again at most; and how long after the
+// answer was last put a receipt from the PC must be before an answer it does not know of counts as
+// lost at the end of the stream (the clocks of the phone and the PC may differ by minutes).
+export const ANSWER_WARN_MS = 60 * 60 * 1000;
+export const ANSWER_RESEND_MS = 10 * 60 * 1000;
+export const ANSWER_TAIL_GRACE_MS = 10 * 60 * 1000;
+// How long an answer may say received by PC before it is signed again once (answerState, S1).
+export const ANSWER_STUCK_MS = 2 * 60 * 60 * 1000;
+// What stands for his words when this phone cannot read them back (withAnswers): still answered.
+export const ANSWER_UNREADABLE = "(Your answer is kept on this phone, but its words cannot be read here.)";
+const RECEIPT_LIMITS = { streams: 64, ids: 256 };
+
+// The receipt for one passkey (from, its key id) out of a snapshot's receipts member: { through, missing,
+// applied, refused } - missing a Set of seqs, applied and refused Sets of answerIds - or null when the
+// snapshot has no receipts member (a machine from before receipts) or the member does not hold together.
+// A machine with receipts and none for this passkey yet is a receipt of nothing: through 0.
+export function receiptFor(receipts, from) {
+  if (!Array.isArray(receipts) || receipts.length > RECEIPT_LIMITS.streams) return null;
+  const empty = { through: 0, checked: 0, missing: new Set(), applied: new Set(), refused: new Set() };
+  for (const r of receipts) {
+    if (!r || typeof r !== "object" || typeof r.from !== "string" || !KEY_ID.test(r.from)) return null;
+    if (r.from !== from) continue;
+    const seqs = Array.isArray(r.missing) ? r.missing : null;
+    const ids = (x) => Array.isArray(x) && x.length <= RECEIPT_LIMITS.ids && x.every((i) => typeof i === "string" && KEY_ID.test(i));
+    if (!Number.isSafeInteger(r.through) || r.through < 0 || !seqs || seqs.length > RECEIPT_LIMITS.ids || !seqs.every((s) => Number.isSafeInteger(s) && s > 0) || !ids(r.applied) || !ids(r.refused)) return null;
+    // checked: the lowest seq the machine looked at for holes (channels/decisions, checked). A receipt
+    // that does not say counts as one that looked at nothing below through: every seq under it unknown.
+    const checked = Number.isSafeInteger(r.checked) && r.checked >= 0 && r.checked <= r.through ? r.checked : r.through;
+    return { through: r.through, checked, missing: new Set(seqs), applied: new Set(r.applied), refused: new Set(r.refused) };
+  }
+  return empty;
+}
+
+// What became of one kept answer: { state, resend, due, warning }.
+//   item     { answerId, seqs (the seqs of every envelope that carried it), sentAt, lastSentAt, lastResendAt }
+//   receipt  receiptFor's answer for this phone's passkey
+//   receiptTs  the time the PC signed the snapshot that carried the receipt (its envelope's ts), 0 for none
+// resend says how it is to be sent again, "" for not at all: "resign" - its newest envelope is MISSING
+// (the PC took a later one of this phone, so the journal refuses that seq for good: only a new envelope,
+// signed again, carries it); "reput" - the PC has taken nothing as late as its newest envelope though it
+// spoke well after it was put (lost at the end of the stream: the same envelope is put again, and the
+// relay or the journal drops it if it was not lost after all). due: a resend is wanted and the last
+// send of it is ANSWER_RESEND_MS behind.
+export function answerState(item, receipt, receiptTs, now) {
+  const r = receipt || { through: 0, checked: 0, missing: new Set(), applied: new Set(), refused: new Set() };
+  const seqs = Array.isArray(item.seqs) ? item.seqs : [];
+  // A SEQ IS KNOWN TO HAVE ARRIVED only between checked and through, and not missing (review of PR 262,
+  // M1: below the cut of the missing list a hole used to read as received, and was never sent again).
+  const arrived = (s) => s <= r.through && s >= r.checked && !r.missing.has(s);
+  const lost = (s) => r.missing.has(s) || (s <= r.through && s < r.checked);
+  let state = "sent";
+  if (r.applied.has(item.answerId)) state = "applied";
+  else if (r.refused.has(item.answerId)) state = "refused";
+  else if (seqs.some(arrived)) state = "received";
+  let resend = "";
+  let stuck = false;
+  if (state === "sent" && receipt && seqs.length) {
+    const newest = Math.max(...seqs);
+    if (lost(newest)) resend = "resign";
+    else if (newest > r.through && Number(receiptTs) > Number(item.lastSentAt) + ANSWER_TAIL_GRACE_MS) resend = "reput";
+  }
+  // RECEIVED FOR HOURS AND NEVER LISTED (review of PR 262, S1): more applied in one turn than a receipt
+  // lists, or a refusal pushed out of its list, would say received for ever. Signed again ONCE: the PC
+  // answers the same id as the record it is, and lists it again.
+  if (state === "received" && receipt && item.stuckResent !== true && now - Number(item.sentAt) > ANSWER_STUCK_MS) { resend = "resign"; stuck = true; }
+  const last = Math.max(Number(item.lastSentAt) || 0, Number(item.lastResendAt) || 0);
+  const due = resend !== "" && now - last >= ANSWER_RESEND_MS;
+  const warning = (state === "sent" || state === "received") && now - Number(item.sentAt) > ANSWER_WARN_MS;
+  return { state, resend, due, warning, stuck };
+}
+
+// The snapshot's questions with the answers this phone keeps drawn into them (the bridge's list): an
+// answer not yet applied is HIS MESSAGE under its question - so the question shows as answered, with
+// his words, and never as an empty slot (the founder's rule, 2026-10-14) - marked local, with its state
+// in words (receipt) and the warning or the refusal under it (receiptNote). An applied answer is in
+// the snapshot's own thread by then; his last message there with the same words and part is marked
+// applied. answers: [{ number, part, text, state, warning, sentAt }]. Copies; nothing handed in changes.
+export function withAnswers(questions, answers) {
+  const list = Array.isArray(answers) ? answers : [];
+  // Numbered past EVERY message of the list, as the bridge numbers a saved answer (bridge.js, say): the
+  // document then takes a drawn answer for the one it was just told is saved.
+  let top = 0;
+  for (const q of questions || []) for (const m of (q.thread && Array.isArray(q.thread.messages)) ? q.thread.messages : []) { const n = Number(m.sequence); if (Number.isSafeInteger(n) && n > top) top = n; }
+  return (questions || []).map((q) => {
+    const mine = list.filter((a) => a.number === q.number);
+    if (!mine.length) return q;
+    const thread = q.thread && typeof q.thread === "object" ? q.thread : { count: 0, turn: "founder", messages: [] };
+    const messages = (Array.isArray(thread.messages) ? thread.messages : []).map((m) => ({ ...m }));
+    for (const a of mine.filter((x) => x.state === "applied" && !x.unreadable)) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.speaker === "founder" && m.text === a.text && (m.part || "") === (a.part || "")) { messages[i] = { ...m, receipt: ANSWER_WORDS.applied }; break; }
+      }
+    }
+    let k = 0;
+    for (const a of mine.filter((x) => x.state !== "applied").sort((x, y) => x.sentAt - y.sentAt)) {
+      k += 1;
+      const m = { sequence: top + k, speaker: "founder", route: "phone", text: a.unreadable || typeof a.text !== "string" ? ANSWER_UNREADABLE : a.text, at: new Date(Number(a.sentAt) || 0).toISOString(), local: true, receipt: ANSWER_WORDS[a.state] || ANSWER_WORDS.sent,
+        receiptNote: a.state === "refused" ? ANSWER_REFUSED_NOTE : (a.warning ? ANSWER_WARNING : "") };
+      if (a.part) m.part = a.part;
+      messages.push(m);
+    }
+    return { ...q, thread: { ...thread, messages } };
+  });
 }
 
 // --- the chat channel (channels/chat/Channel.ps1) ---
@@ -848,4 +972,192 @@ export function progressLog({ entries = [], notices = [], position = null }) {
   }
   const last = items.length ? items[items.length - 1] : null;
   return { items, unread: items.length - 1 - readIndex, readIndex, newest: last ? { id: last.id, n: last.n } : null, stopped, skipped };
+}
+
+// --- the cards channel (channels/cards/Channel.ps1) ---
+
+// THE FLEET AT A GLANCE, machine to phone only: one whole snapshot per machine - a card per lane and one
+// for the Thrall, with the map of which lanes each area of the progress log belongs to. Only the latest
+// is kept in the mailbox; the phone keeps the newest it opened, by its envelope's seq. A lane's card opens
+// its STREAM: the progress log, filtered to that lane (entryLanes). The phone sends nothing on this channel.
+const CARD_FORMS = ["standard", "other", "missing", "unreadable"];
+const CARD_LANE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/;
+const CARD_TEXT = 400;
+const cardText = (v) => (typeof v === "string" && v.length <= CARD_TEXT && PLAIN.test(v) ? v : "");
+const cardCount = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+const cardList = (v, ok) => (Array.isArray(v) ? v.filter(ok) : []);
+// What the phone says of a card's form, in its own words.
+export const CARD_FORM_WORDS = {
+  standard: "",
+  other: "This lane's status is not in the standard form; it is shown as it stands.",
+  missing: "This lane has no status file.",
+  unreadable: "This lane's status file could not be read."
+};
+// What the phone says of a card's form: its own sentence, and for a status file not in the standard form
+// the rules it breaks, as the machine's status reader words them (fleet/StatusPanel.ps1,
+// ConvertFrom-HordeFleetStatusBytes; plain words, held to cardText like every text of a card).
+export function cardFormNote(form, problems) {
+  if (form === "other" && problems) return "This lane's status is not in the standard form. What the status reader says of it: " + problems + ". It is shown as it stands.";
+  return CARD_FORM_WORDS[form] || "";
+}
+// The one sentence the stream page says of how far back it goes (channels/progress/Channel.ps1,
+// keepEnvelopes: the phone holds the last 100 envelopes of the log).
+export const STREAM_LIMIT_WORDS = "This phone holds only the newest part of the progress log (its last 100 sends), so a quiet lane may show few of its older updates here.";
+
+// A cards body, read: { ok, reason, value } with value { snapshot, made, name, thrall, cards, cardsLeftOut,
+// areas }. A card that does not hold together is dropped and counted in value.dropped; a text past its
+// length or holding a control character is shown as none.
+export function readCardsSnapshot(bodyBytes, horde, machine) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return no("the cards body is not JSON"); }
+  if (!b || b.v !== 1 || b.kind !== "cards-snapshot") return no("not a version 1 cards snapshot");
+  if (b.horde !== horde || b.machine !== machine) return no("the cards body names another horde or machine");
+  if (typeof b.snapshot !== "string" || !/^[0-9a-f]{64}$/.test(b.snapshot)) return no("the cards snapshot has no hash");
+  if (!Array.isArray(b.cards) || !b.thrall || typeof b.thrall !== "object" || !Array.isArray(b.areas)) return no("the cards snapshot has no cards, Thrall or areas");
+  const name = cardText(b.name).trim();
+  if (!name) return no("the cards snapshot names no machine");
+  let dropped = 0;
+  const cards = [];
+  // ONE ID IS ONE CARD, and "thrall" is the Thrall's (surfaces/pwa/page/lane-card.js, THRALL_LANE): a lane
+  // card by that id never opened, and a second card of one id was drawn as the first (review of PR 244).
+  const lanesSeen = new Set(["thrall"]);
+  for (const c of b.cards) {
+    if (!c || typeof c !== "object" || typeof c.lane !== "string" || !CARD_LANE.test(c.lane) || CARD_FORMS.indexOf(c.form) < 0 || lanesSeen.has(c.lane)) { dropped++; continue; }
+    lanesSeen.add(c.lane);
+    // The note is the form's sentence, then why the card has an id of its own when another lane folder
+    // of the machine gives the same one (idNote; F, review of PR 244: a card named lane-5, never why).
+    cards.push({ lane: c.lane, name: cardText(c.name) || c.lane, form: c.form, asOf: timeOf(c.asOf), now: cardText(c.now), lastDone: cardText(c.lastDone), waitingOn: cardText(c.waitingOn),
+      blocked: c.blocked === "yes" || c.blocked === "no" ? c.blocked : "", blockedText: cardText(c.blockedText), note: [cardFormNote(c.form, cardText(c.problems)), cardText(c.idNote)].filter((x) => x).join(" "),
+      tasksOpen: cardCount(c.tasksOpen), doneWeek: cardCount(c.doneWeek), refused: cardList(c.refused, (x) => typeof x === "string" && WORD.test(x.toLowerCase())) });
+  }
+  const t = b.thrall;
+  const census = t.census && typeof t.census === "object" && cardCount(t.census.running) !== null && cardCount(t.census.waiting) !== null ? { running: t.census.running, waiting: t.census.waiting } : null;
+  const thrall = { asOf: timeOf(t.asOf), now: cardText(t.now), hasStatus: t.hasStatus === true, orcs: cardCount(t.orcs) || 0, working: cardCount(t.working) || 0, waitingFounder: cardCount(t.waitingFounder) || 0,
+    blocked: cardCount(t.blocked) || 0, unknown: cardCount(t.unknown) || 0, waitingFounderLanes: cardList(t.waitingFounderLanes, (x) => typeof x === "string" && CARD_LANE.test(x)), census };
+  const areas = [];
+  for (const a of b.areas) {
+    if (!a || typeof a.area !== "string" || !a.area.trim() || a.area.length > 60 || !PLAIN.test(a.area) || !Array.isArray(a.lanes)) continue;
+    const lanes = a.lanes.filter((x) => typeof x === "string" && CARD_LANE.test(x));
+    if (lanes.length) areas.push({ area: a.area, lanes });
+  }
+  return { ok: true, reason: "", value: { snapshot: b.snapshot, made: timeOf(b.made), name, thrall, cards, cardsLeftOut: cardCount(b.cardsLeftOut) || 0, areas, areasLeftOut: cardCount(b.areasLeftOut) || 0, dropped } };
+}
+
+// The lanes a log entry belongs to: the lanes it names itself (lane, comma separated), which WIN over its
+// area; else the lanes the map gives its area (compared with case and outer spaces set aside); else none -
+// an entry of no lane is shown only in the Thrall's stream.
+export function entryLanes(entry, areas) {
+  const own = String(entry && entry.lane || "").split(",").map((x) => x.trim()).filter((x) => x);
+  if (own.length) return own;
+  const area = String(entry && entry.area || "").trim().toLowerCase();
+  if (!area) return [];
+  for (const a of areas || []) if (a.area.trim().toLowerCase() === area) return a.lanes.slice();
+  return [];
+}
+
+// The cards of every machine the phone holds a snapshot of, MERGED BY MACHINE NAME: per name, the newest
+// snapshot (by when it was made, then by its envelope's seq) stands; two pairings that report one name
+// show it once. snapshots: [{ entry, seq, value }] (value readCardsSnapshot's). -> { machines, thrall,
+// cards }: machines [{ name, entry, made, areas, cardsLeftOut, areasLeftOut }] by name; thrall one card per machine;
+// cards every lane card, each with its machine's name and entry, ordered by lane, then machine.
+export function mergeCards(snapshots) {
+  const byName = new Map();
+  for (const s of snapshots || []) {
+    if (!s || !s.value) continue;
+    const had = byName.get(s.value.name);
+    if (!had || s.value.made > had.value.made || (s.value.made === had.value.made && s.seq > had.seq)) byName.set(s.value.name, s);
+  }
+  const names = [...byName.keys()].sort();
+  const machines = [], thrall = [], cards = [];
+  for (const name of names) {
+    const s = byName.get(name);
+    machines.push({ name, entry: s.entry, made: s.value.made, areas: s.value.areas, cardsLeftOut: s.value.cardsLeftOut, areasLeftOut: s.value.areasLeftOut || 0 });
+    thrall.push({ ...s.value.thrall, machine: name, entry: s.entry });
+    for (const c of s.value.cards) cards.push({ ...c, machine: name, entry: s.entry });
+  }
+  cards.sort((a, b) => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.machine < b.machine ? -1 : a.machine > b.machine ? 1 : 0));
+  return { machines, thrall, cards };
+}
+
+// A lane's stream: the items of a progress log (progressLog's) that belong to the lane, in their order.
+// lane "" is the Thrall's: every item.
+export function laneStream(items, lane, areas) {
+  if (!lane) return items.slice();
+  return items.filter((it) => entryLanes(it, areas).indexOf(lane) >= 0);
+}
+
+// HIS PLACE MOVES ONLY IN THE WHOLE LOG OF THE PICKED HORDE: true for the stream { entry, lane } only when it
+// is the Thrall's (lane "", the whole log) of the picked pairing. A lane's stream skips other lanes'
+// entries, so reading on in it, or "Mark all read" there, would mark those read unseen; another
+// pairing's log keeps no place of the picked one's (surfaces/pwa/page/app.js, readAsSeen).
+export function streamMovesPlace(stream, picked) {
+  return !!stream && stream.lane === "" && stream.entry === picked;
+}
+
+// "4 min ago", "3 h ago", "2 days ago": how old a card's word is, from its time and now (milliseconds);
+// "" for no time. A time ahead of now (a clock off by a little) is "just now".
+export function ageWords(at, nowMs) {
+  if (!(at > 0) || !(nowMs > 0)) return "";
+  const min = Math.floor((nowMs - at) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return min + " min ago";
+  const h = Math.floor(min / 60);
+  if (h < 48) return h + " h ago";
+  return Math.floor(h / 24) + " days ago";
+}
+
+// --- the notices channel (channels/notices/Channel.ps1; notices/Decide.ps1 decides what is one) ---
+
+// The follow switch of one lane, as the phone signs it with the passkey and seals it to that lane's machine:
+// exactly these members, in this order, which the machine reads strictly (Read-HordeNoticesChannelFollow).
+// lane: the card's lane id, or "thrall"; machine: the key id of the machine whose card it is.
+const NOTICE_LANE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/;
+export function followBody({ setId, machine, lane, on }) {
+  if (!/^[0-9a-f]{32}$/.test(setId)) throw new Error("a setId is 32 lower-case hex");
+  if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
+  if (typeof lane !== "string" || !NOTICE_LANE.test(lane)) throw new Error("the lane is a card's lane id");
+  if (on !== true && on !== false) throw new Error("on is true or false");
+  return utf8(JSON.stringify({ v: 1, setId, machine, lane, on }));
+}
+
+// A notices body, read: { ok, reason, value: { follows: { lane: true|false }, notices: [{ n, id, said (ms),
+// kind, from, text, lane, entry }], dropped } }. A notice that does not hold together is dropped and
+// counted; the switches are what the machine holds, as it sent them.
+const NOTICE_KINDS = ["notify", "progress", "cutoff"];
+export function readNotices(bodyBytes, horde, machine) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return no("the notices body is not JSON"); }
+  if (!b || b.v !== 1 || b.kind !== "notices") return no("not a version 1 notices body");
+  if (b.horde !== horde || b.machine !== machine) return no("the notices body names another horde or machine");
+  if (!b.follows || typeof b.follows !== "object" || Array.isArray(b.follows) || !Array.isArray(b.notices)) return no("the notices body has no switches or no notices");
+  const follows = {};
+  for (const k of Object.keys(b.follows)) if (NOTICE_LANE.test(k) && (b.follows[k] === true || b.follows[k] === false)) follows[k] = b.follows[k];
+  const notices = [];
+  let dropped = 0;
+  for (const x of b.notices) {
+    const ok = x && Number.isSafeInteger(x.n) && x.n > 0 && typeof x.id === "string" && /^[0-9a-f]{32}$/.test(x.id) && NOTICE_KINDS.indexOf(x.kind) >= 0 &&
+      typeof x.from === "string" && x.from.length <= 60 && PLAIN.test(x.from) && typeof x.text === "string" && x.text.length <= 2000 && PLAIN.test(x.text) &&
+      typeof x.lane === "string" && (x.lane === "" || NOTICE_LANE.test(x.lane)) && typeof x.entry === "string" && (x.entry === "" || ENTRY_ID.test(x.entry));
+    if (!ok) { dropped++; continue; }
+    notices.push({ n: x.n, id: x.id, said: timeOf(x.ts), kind: x.kind, from: x.from || "Horde", text: x.text, lane: x.lane, entry: x.entry });
+  }
+  return { ok: true, reason: "", value: { follows, notices, dropped } };
+}
+
+// The notices of every machine the phone holds, NEWEST FIRST, each once (by its id), with read or unread:
+// held [{ entry (the pairing), machine (its name, for words), notices }], read a Set of the ids he has read.
+// -> { items: [{ ...notice, entry, machine, read }], unread }. A notice of the same time is ordered by its
+// machine's number for it, newest first.
+export function noticeList(held, read) {
+  const seen = new Set();
+  const items = [];
+  for (const h of held || []) for (const x of h.notices || []) {
+    if (seen.has(x.id)) continue;
+    seen.add(x.id);
+    items.push({ ...x, entry: h.entry, machine: h.machine, read: !!(read && read.has(x.id)) });
+  }
+  items.sort((a, b) => (b.said - a.said) || (b.n - a.n));
+  return { items, unread: items.filter((x) => !x.read).length };
 }

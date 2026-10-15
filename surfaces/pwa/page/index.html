@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   surfaces/pwa/page/index.html - the founder's phone app: every horde's open questions, answered with
-  a passkey, its chat with the horde's Thrall, each line signed with the passkey, and the fleet's progress log to read. Served as app/index.html of the site New-HordePwaSite assembles (surfaces/pwa/Site.ps1),
+  a passkey, its chat with the horde's Thrall, each line signed with the passkey, and the fleet's progress to read: a card per lane and one for the Thrall, each opening its part of the progress log, with a Follow switch; and his notices, newest first. Served as app/index.html of the site New-HordePwaSite assembles (surfaces/pwa/Site.ps1),
   beside the mounts it names by relative address: ../list/ (the decisions document, unchanged),
   ../relay/ (the protocol the test phone runs too) and ../surface/bridge-messages.json.
 
@@ -45,7 +45,9 @@
   <button type="button" id="tabDecisions" role="tab" aria-selected="true">Decisions</button>
   <button type="button" id="tabChat" role="tab" aria-selected="false">Chat</button>
   <button type="button" id="tabProgress" role="tab" aria-selected="false">Progress</button>
+  <button type="button" id="tabNotices" role="tab" aria-selected="false">Notices</button>
 </div>
+<div id="pcOffline" role="status"></div>
 </header>
 <div id="notice" hidden></div>
 <div id="announceBox" hidden>
@@ -63,6 +65,7 @@
 <section id="accountView" hidden>
   <h1>Your account</h1>
   <p id="accountWho" class="hint"></p>
+  <p id="appVersion" class="hint"></p>
   <h2>Machines</h2>
   <p class="hint">Each machine reaches the relay with the key this phone registered when it paired. Remove one and it reaches nothing more, until it is paired again with a new offer.</p>
   <ul id="machineList"></ul>
@@ -148,14 +151,35 @@
 </div>
 
 <div id="progress" hidden>
-  <div id="progressNote" class="status" role="status" hidden></div>
-  <div id="progressLog" aria-live="polite"></div>
-  <div id="progressEmpty" class="hint" hidden>No progress has come from the machine yet. Entries appear here once the machine trusts this phone, its runner turns, and something is written to its progress log.</div>
-  <div id="progressFoot">
-    <span id="progressCount" role="status"></span>
-    <button type="button" id="progressAllRead" aria-label="Mark all read">Mark all read</button>
-    <button type="button" id="progressNewest" class="primary" aria-label="Jump to newest">Jump to newest</button>
+  <div id="cardsPage">
+    <div id="cardsNote" class="status" role="status" hidden></div>
+    <div id="cardsList"></div>
   </div>
+  <div id="streamPage" hidden>
+    <div id="streamHead">
+      <button type="button" id="streamBack" aria-label="Back to all cards">All cards</button>
+      <span id="streamTitle"></span>
+    </div>
+    <div id="cardsWhy" class="status" role="status" hidden></div>
+    <div id="streamLimit" class="hint" hidden></div>
+    <div id="progressNote" class="status" role="status" hidden></div>
+    <div id="progressLog" aria-live="polite"></div>
+    <div id="progressEmpty" class="hint" hidden>No progress has come from the machine yet. Entries appear here once the machine trusts this phone, its runner turns, and something is written to its progress log.</div>
+    <div id="progressFoot">
+      <span id="progressCount" role="status"></span>
+      <button type="button" id="progressAllRead" aria-label="Mark all read">Mark all read</button>
+      <button type="button" id="progressNewest" class="primary" aria-label="Jump to newest">Jump to newest</button>
+    </div>
+  </div>
+</div>
+
+<div id="notices" hidden>
+  <div id="noticesHead">
+    <span id="noticesCount" role="status"></span>
+    <button type="button" id="noticesAllRead" aria-label="Mark all notices read">Mark all read</button>
+  </div>
+  <div id="noticesList" aria-live="polite"></div>
+  <div id="noticesEmpty" class="hint" hidden>No notices yet. A notice comes when a session you asked to tell you something does, or when a lane you follow posts progress: turn on Follow on its card in Progress.</div>
 </div>
 
 <div id="keys" hidden>

@@ -26,12 +26,13 @@ CLAUDE.md | 1 | the agent-session rules file carries the name the harness itself
 CONTRIBUTING.md | 1 | the working rules name CLAUDE.md, the session rules file whose name the harness fixes, as the short form of this document
 core/Identity.ps1 | 72 | identifies a session from the harness's own control files, process names and transcripts; these reads move behind the AgentPort in the engines plan's step A4
 core/ownership.json | 35 | the ownership table catalogues the stores of the system being replaced, and several of them are the harness's own control files, transcripts and status files
+core/json-parse-allowlist.txt | 2 | the raw JSON parse list (issue #274) names by path the two files in this harness's folder that still call ConvertFrom-Json; each line leaves when its file moves to ConvertFrom-HordeJson
 core/RestorePlan.ps1 | 10 | checks each resume kind's argv for the restore plan, and the kinds are named per harness until the engines plan's steps K1 and R3 take them out
 core/Roles.ps1 | 2 | reads the old system's session records, whose key field carries the harness's name; the name belongs to the store being read on the way out
 hosts/wezterm/allowlist.txt | 2 | the host's own allowlist lists CLAUDE.md, the session rules file whose name the harness fixes
 schema/pane-session.v1.json | 5 | documents the existing pane-session file exactly as the harness's SessionStart hook writes it, including where the harness keeps it
 schema/restore-plan.v1.json | 6 | the restore plan's resume kinds and agent field name the harness that produced each argv, until the engines plan's step K1 makes the kind the harness field
-test/mutations/identity.psd1 | 10 | mutations of core code that names the harness must quote that code exactly to apply
+test/mutations/identity.psd1 | 9 | mutations of core code that names the harness must quote that code exactly to apply
 test/mutations/restore-plan.psd1 | 6 | mutations of core code that names the harness must quote that code exactly to apply
 test/test-identity.ps1 | 187 | tests core/Identity.ps1, which reads the harness's control files and processes, and must name what it builds and reads
 test/test-ownership.ps1 | 13 | asserts the ownership table's rows for the harness's own stores, quoting the table
@@ -140,6 +141,7 @@ test/fixtures/projection/fleet/wezfleet/registry/sessions/aaaaaaaa-0000-4000-800
 test/fixtures/projection/fleet/wezfleet/registry/sessions/aaaaaaaa-0000-4000-8000-000000000032.json | 1 | the old registry record names this harness's session id field (claudeSessionId), the store's own key; the fixture keeps it
 test/fixtures/projection/fleet/wezfleet/registry/sessions/aaaaaaaa-0000-4000-8000-000000000033.json | 1 | the old registry record names this harness's session id field (claudeSessionId), the store's own key; the fixture keeps it
 test/mutations/faults.psd1 | 2 | mutants of the fault checks that read this harness's processes; they move with them in engines A4
-test/mutations/projection.psd1 | 8 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4
+test/mutations/projection.psd1 | 6 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4
 test/test-session-seat.ps1 | 3 | builds old-system session records, whose key field carries the harness's name, and hands the identity reader a folder through its parameter of that name, to test finding the session that holds a role
+test/test-notices.ps1 | 3 | builds the agent's control files in its own folder, a fleet record whose key field carries the harness's name, and hands the identity reader a folder through its parameter of that name, to prove which session runs horde notify
 test/lib/WindowProbe.ps1 | 2 | builds old-system session records, whose key field carries the harness's name, and a control file in the folder of that name the harness keeps them in, for scenarios that need the session holding a role to be found running

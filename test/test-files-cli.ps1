@@ -62,7 +62,7 @@ Write-Host ""
 Write-Host "--- before anything is shared ---" -ForegroundColor Cyan
 Check ($sessionVariable -cmatch '\A[A-Z][A-Z0-9_]{3,}\z') "CONTROL: core names the variable that says which session is asking"
 $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("help") -Env @{ HORDE_HOME = $hordeHome }
-Check ($r.code -eq 0 -and $r.out -like "*horde files share <path> -Title <one line> ``[-Editable``] | files list*") "horde help lists the command with its usage"
+Check ($r.code -eq 0 -and $r.out -like "*horde files share <path> -Title <one line> ``[-Editable``] ``[-Force``] | files list*") "horde help lists the command with its usage"
 $r = Invoke-Files -Arguments @("list")
 Check ($r.code -eq 0 -and $r.out.Trim() -ceq "no files have been shared") ("with nothing shared, the list says so and exits 0 (" + $r.code + ")")
 Check (-not (Test-Path -LiteralPath $hordeHome)) "and listing made no home"
@@ -265,6 +265,184 @@ $r = Invoke-Files -Arguments @("share", $figures, "-Title", "In another home") -
 $saidThree = [regex]::Match($r.out, '(?m)^shared ([0-9a-f]{32}) version 1: In another home ')
 Check ($r.code -eq 0 -and $saidThree.Success -and $saidThree.Groups[1].Value -cne $figuresId) "the same session sharing the same path in another home, which has another key, gets another file id"
 
+
+# THE DENY LIST, THROUGH THE COMMAND (files/Deny.ps1; its rules are attacked in test/test-files-deny.ps1).
+# A user's profile of this suite's own: USERPROFILE is set for each child, so the folders that are
+# refused are folders this suite made, holding dummy words. WHICH folders are an agent harness's is
+# read from each adapter's own stores.json, as the code reads it, so no harness is named here
+# (CONTRIBUTING 14); every variable an adapter says can move its store is emptied for the child, and
+# the first of them is aimed at a folder of this suite's, so the real stores are never looked at.
+$home4 = Join-Path $script:work "home-four"
+$store4 = Join-Path $home4 "store\files"
+$profile4 = Join-Path $script:work "profile"
+New-Item -ItemType Directory -Path $profile4 | Out-Null
+$harnessFolders = New-Object System.Collections.ArrayList
+$harnessVariables = New-Object System.Collections.ArrayList
+foreach ($storesFile in @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | Sort-Object Name | ForEach-Object { Join-Path $_.FullName "stores.json" } | Where-Object { Test-Path -LiteralPath $_ })) {
+    foreach ($storeRoot in @(([System.IO.File]::ReadAllText($storesFile) | ConvertFrom-Json).roots)) {
+        if ($null -ne $storeRoot.PSObject.Properties["profile"]) { [void]$harnessFolders.Add("" + $storeRoot.profile) }
+        if ($null -ne $storeRoot.PSObject.Properties["env"]) { [void]$harnessVariables.Add("" + $storeRoot.env) }
+    }
+}
+$movedStore = Join-Path $script:work "a-harness-store-moved-by-its-variable"
+function Invoke-Deny {
+    # horde files <arguments> in the fourth home, as a user whose profile is this suite's: { code; out }.
+    param([string[]]$Arguments)
+    $childEnv = @{ HORDE_HOME = $home4; USERPROFILE = $profile4 }
+    $childEnv[$sessionVariable] = "cli-session-1"
+    foreach ($variable in $harnessVariables) { $childEnv[$variable] = "" }
+    if ($harnessVariables.Count -gt 0) { $childEnv[$harnessVariables[0]] = $movedStore }
+    return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("files") + $Arguments) -Env $childEnv)
+}
+function Get-Store4Names { if (-not (Test-Path -LiteralPath $store4)) { return "" }; return (@(Get-ChildItem -LiteralPath $store4 -Force | Sort-Object Name | ForEach-Object { $_.Name }) -join ",") }
+function Test-Denied {
+    # Did the command exit 1, say why with words like -Like, and leave the fourth home's store as it was?
+    param([string[]]$Arguments, [string]$Like)
+    $before = Get-Store4Names
+    $r = Invoke-Deny -Arguments $Arguments
+    $ok = ($r.code -eq 1 -and $r.out -like ("*not shared: *" + $Like + "*") -and (Get-Store4Names) -ceq $before)
+    if (-not $ok) { Write-Host ("         got: exit " + $r.code + ": " + $r.out.Trim()) -ForegroundColor Red }
+    return $ok
+}
+function Test-Allowed {
+    param([string[]]$Arguments)
+    $r = Invoke-Deny -Arguments $Arguments
+    if ($r.code -ne 0) { Write-Host ("         got: exit " + $r.code + ": " + $r.out.Trim()) -ForegroundColor Red }
+    return ($r.code -eq 0 -and $r.out -like "*shared * version *")
+}
+function New-Dummy { param([string]$Path, [string]$Text = "dummy words, and no secret") [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $Path)); [System.IO.File]::WriteAllText($Path, $Text); return $Path }
+$neverSaid = "Nothing there is ever shared, and -Force does not change that"
+
+Write-Host ""
+Write-Host "--- the deny list: a name that holds a word of it, from both sides, and -Force ---" -ForegroundColor Cyan
+$plainNote = New-Dummy (Join-Path $docs "plain-note.md")
+Check (Test-Allowed @("share", $plainNote, "-Title", "A plain note")) "CONTROL: as that user, an ordinary file is shared"
+# Two names here, one line each way: every word, at every place in a name, is test/test-files-deny.ps1's.
+foreach ($named in @("api-key.txt", "auth.json")) {
+    $namedFile = New-Dummy (Join-Path $docs $named) $(if ($named -like "*.json") { '{"dummy":1}' } else { "dummy words, and no secret" })
+    Check (Test-Denied @("share", $namedFile, "-Title", "Named like a secret") ("its name, '" + $named + "', holds '*share it again with -Force")) ($named + " is refused, naming the file and the word, and the line says -Force shares it")
+    Check (Test-Allowed @("share", $namedFile, "-Title", "Named like a secret, and none", "-Force")) "with -Force it is shared"
+}
+Check (Test-Allowed @("share", (New-Dummy (Join-Path $docs "keyboard.md")), "-Title", "A keyboard")) "CONTROL: keyboard.md is shared with no -Force"
+$r = Invoke-Deny -Arguments @("list", "-Force")
+Check ($r.code -eq 1 -and $r.out -like "*-Force belongs to files share*") "list given -Force is refused: it is a flag of share"
+
+Write-Host ""
+Write-Host "--- the deny list: each place from both sides, and -Force ---" -ForegroundColor Cyan
+Check ([System.IO.Directory]::Exists($store4)) "CONTROL: the fourth home is there, with its store"
+$inHome4 = New-Dummy (Join-Path $home4 "settings\notes.json") '{"dummy":1}'
+Check (Test-Denied @("share", $inHome4, "-Title", "From the home") "is under the Horde home") "a file in the Horde home's settings folder is refused as the Horde home"
+Check (Test-Denied @("share", $inHome4, "-Title", "From the home", "-Force") ("is under the Horde home*" + $neverSaid)) "with -Force it is refused all the same, and the line says -Force does not change that"
+Check (Test-Allowed @("share", (New-Dummy ($home4 + "-beside\notes.md")), "-Title", "Beside the home")) "CONTROL: a file in a folder whose name only begins with the home's is shared"
+$inSecrets4 = New-Dummy (Join-Path $profile4 ".horde-secrets\client.json") '{"dummy":1}'
+Check (Test-Denied @("share", $inSecrets4, "-Title", "A client file", "-Force") ("is under a .horde-secrets folder*" + $neverSaid)) "a file under .horde-secrets in the profile is refused as that, with -Force too, and the line says -Force does not change that"
+Check (Test-Denied @("share", (New-Dummy (Join-Path $script:work "a-copy\.horde-secrets\client.md")), "-Title", "A copy", "-Force") ("is under a folder named '.horde-secrets': a folder named .horde, or one whose name begins with .horde-, is Horde's own*" + $neverSaid)) "a folder of that name anywhere on the way to the file is refused, -Force or not: it is one of Horde's own folders by its name"
+$inSsh4 = New-Dummy (Join-Path $profile4 ".ssh\notes.txt")
+Check (Test-Denied @("share", $inSsh4, "-Title", "From .ssh") "is under the folder the user's SSH keys are kept in") "a file under .ssh in the profile is refused as that"
+Check (Test-Denied @("share", $inSsh4, "-Title", "From .ssh, and no secret", "-Force") ("is under the folder the user's SSH keys are kept in*" + $neverSaid)) "with -Force it is refused all the same, and the line says -Force does not change that"
+Check ($harnessFolders.Count -ge 1) ("CONTROL: the adapters declare " + $harnessFolders.Count + " folders in the profile, and " + $harnessVariables.Count + " variables that move a store")
+$nth = 0
+foreach ($harnessFolder in $harnessFolders) {
+    $nth++
+    $inHarness = New-Dummy (Join-Path (Join-Path $profile4 $harnessFolder) "projects\notes.md")
+    Check (Test-Denied @("share", $inHarness, "-Title", "From a harness") "is under a folder an agent harness keeps its own files in") ("a file under harness folder " + $nth + " of the profile is refused as a harness's own folder")
+    if ($nth -eq 1) {
+        Check (Test-Allowed @("share", $inHarness, "-Title", "From a harness, and no secret", "-Force")) "with -Force it is shared: the place is lifted"
+        $signInThere = New-Dummy (Join-Path (Join-Path $profile4 $harnessFolder) "auth.json") '{"dummy":1}'
+        Check (Test-Denied @("share", $signInThere, "-Title", "Named like a sign-in", "-Force") "its name, 'auth.json', holds 'auth', as a file of secrets is named, and it is under a folder an agent harness keeps its own files in*-Force shares other files from such a folder, and never one that is named so") "but a file NAMED as a secret in that folder is refused even with -Force, and the line says it is the name, in that place"
+    }
+}
+if ($harnessVariables.Count -gt 0) {
+    $inMoved = New-Dummy (Join-Path $movedStore "notes.md")
+    Check (Test-Denied @("share", $inMoved, "-Title", "From a moved store") "is under a folder an agent harness keeps its own files in") "a file under the folder a harness's variable moves its store to is refused the same"
+} else { Write-Host "  [SKIP] NO ADAPTER DECLARES A VARIABLE THAT MOVES ITS STORE, so a moved store was not tested through the command." -ForegroundColor Yellow }
+
+Write-Host ""
+Write-Host "--- what a text file holds: a private key never, a token unless -Force ---" -ForegroundColor Cyan
+# Assembled from pieces at run time, as test/test-secrets.ps1 does; neither was ever a credential.
+# Every kind and every way of writing one is test/test-files-deny.ps1's.
+$keyLine4 = "-----BEGIN RSA PRIV" + "ATE KEY-----"
+$holdsKey = New-Dummy (Join-Path $docs "a-report.md") ("# A report`n`n" + $keyLine4 + "`nMIIEow" + "IBAAKCAQEAx9Qm`n")
+Check (Test-Denied @("share", $holdsKey, "-Title", "A report", "-Force") "what it holds looks like a private key*A file that holds one is never shared, and -Force does not change that") "a Markdown file holding a private key's first line is refused even with -Force, and the line says so"
+$token4 = "gh" + "p_" + ("Ab1" * 12)
+$holdsToken = New-Dummy (Join-Path $docs "a-note.md") ("The value is " + $token4 + " and more words.")
+$before = Get-Store4Names
+$r = Invoke-Deny -Arguments @("share", $holdsToken, "-Title", "A note")
+Check ($r.code -eq 1 -and $r.out -like "*not shared: what it holds looks like an access token, by its shape*share it again with -Force*" -and -not $r.out.Contains("Ab1Ab1") -and (Get-Store4Names) -ceq $before) "a Markdown file holding a token of a known shape is refused, the line names the kind and repeats nothing of what was found"
+
+Check (Test-Allowed @("share", $holdsToken, "-Title", "A note, and no secret", "-Force")) "with -Force it is shared"
+# A SECRET UNDER ITS OWN NAME: the made-up client file of a sign-in provider, under a name that says
+# nothing. Until the second round of the review (2026-10-13) it was shared with no -Force.
+$clientValue4 = "GOC" + "SPX-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1w"
+$holdsClient = New-Dummy (Join-Path $docs "web-client.json") ('{"web":{"client_id":"made-up.apps.example.com","client_' + 'secret":"' + $clientValue4 + '"}}')
+$before = Get-Store4Names
+$r = Invoke-Deny -Arguments @("share", $holdsClient, "-Title", "A client file")
+Check ($r.code -eq 1 -and $r.out -like "*not shared: what it holds looks like a secret written under a name such as client_secret or password*share it again with -Force*" -and -not $r.out.Contains("Ab3dEf6h") -and (Get-Store4Names) -ceq $before) "a JSON file holding a secret under the member name client_secret is refused, and the line names the kind and repeats nothing of the value"
+Check (Test-Allowed @("share", $holdsClient, "-Title", "A client file, and made up", "-Force")) "with -Force it is shared"
+
+Write-Host ""
+Write-Host "--- the deny list judges where the file really is: a junction ---" -ForegroundColor Cyan
+$sshJunction = Join-Path $script:work "docs\a-junction"
+$null = & cmd.exe /c ("mklink /J `"" + $sshJunction + "`" `"" + (Join-Path $profile4 ".ssh") + "`" >nul 2>nul")
+Check ([System.IO.File]::Exists((Join-Path $sshJunction "notes.txt"))) "CONTROL: a junction outside .ssh was made to it"
+Check (Test-Denied @("share", (Join-Path $sshJunction "notes.txt"), "-Title", "By a junction") "is under the folder the user's SSH keys are kept in") "a file in .ssh named through a junction outside it is refused as .ssh, not only as a link"
+$homeJunction = Join-Path $script:work "docs\a-junction-to-the-home"
+$null = & cmd.exe /c ("mklink /J `"" + $homeJunction + "`" `"" + $home4 + "`" >nul 2>nul")
+Check (Test-Denied @("share", (Join-Path $homeJunction "settings\notes.json"), "-Title", "By a junction", "-Force") "is under the Horde home") "and a file in the home named through a junction is refused as the home, -Force or not"
+# BY A DRIVE LETTER OVER THE FOLDER (subst): NOT RUN THROUGH THE COMMAND ANY MORE. Until 2026-10-13
+# this suite made a subst drive over .ssh, and one over an ordinary folder, and ran the real command
+# on a path on it. A drive letter is seen by every process of the user while it exists, and a suite
+# must not change what other processes see (test/lib/SuiteFiles.ps1, Get-HordeDriveLetterMakers). The
+# command runs in a child process, where nothing of this suite's can answer for Windows, so those
+# two cases cannot be run here without a real letter. WHERE THEY WENT: a drive over .ssh and over the
+# home is test/test-files-deny.ps1's, and one file by a drive over its folder being the next version
+# of the same id is test/test-files-store.ps1's, both with a PowerShell drive of the process's own.
+# WHAT NO SUITE RUNS NOW: the real command, end to end, on a path on a real drive-letter alias.
+
+Write-Host ""
+Write-Host "--- the other refusals of the review, through the command ---" -ForegroundColor Cyan
+$pngAsHtm = Join-Path $docs "a-picture.htm"; [System.IO.File]::WriteAllBytes($pngAsHtm, $pngAgain)
+Check (Test-Denied @("share", $pngAsHtm, "-Title", "Renamed") "it holds a NUL byte") "a PNG renamed .htm, the one text extension not tried above"
+$sneakedPng = Join-Path $docs ("picture.pn" + [char]0xAD + "g"); [System.IO.File]::WriteAllBytes($sneakedPng, $pngAgain)
+Check (Test-Denied @("share", $sneakedPng, "-Title", "A look-alike extension") "is not one that is shared") "a PNG whose extension holds a soft hyphen (.pn<U+00AD>g) is refused: it is not the extension .png"
+$tooDeep = New-Dummy (Join-Path $docs "deep.json") (("[" * 513) + ("]" * 513))
+Check (Test-Denied @("share", $tooDeep, "-Title", "Too deep") "it is nested more than 512 deep") "a .json file nested 513 deep is refused"
+$loneHalf = New-Dummy (Join-Path $docs "lone-half.json") ('"' + [char]92 + 'ud800"')
+Check (Test-Denied @("share", $loneHalf, "-Title", "Half a pair") "the first half of a surrogate pair, not followed by its second half") "a .json file holding half a surrogate pair as an escape is refused"
+Check (Test-Denied @("share", $plainNote, "-Title", ("report" + [char]0x202E + "txt.exe")) "turns the direction of the text round it (U+202E)") "a title holding a character that turns text round is refused, and the line names it"
+Check (Test-Denied @("share", ($docs.Substring(0, 2) + "NUL.txt"), "-Title", "A device") "is a name Windows keeps for a device") "a device's name behind a bare drive letter (C:NUL.txt) is refused as a device"
+$shortOfNote = ""
+try { $shortOfNote = (New-Object -ComObject Scripting.FileSystemObject).GetFile((New-Dummy (Join-Path $docs "a long name holding a secret word.md"))).ShortPath } catch { $shortOfNote = "" }
+if ($shortOfNote -ne "" -and (Split-Path -Leaf $shortOfNote) -like "*~*" -and (Split-Path -Leaf $shortOfNote) -notlike "*secret*") {
+    Check (Test-Denied @("share", ("\\?\" + $shortOfNote), "-Title", "By a short name") "holds 'secret'") ("opened by its 8.3 short name, which holds no word (" + (Split-Path -Leaf $shortOfNote) + "), a file is refused for the name the disk holds")
+} else { Write-Host "  [SKIP] A NAME OPENED BY ITS 8.3 SHORT NAME COULD NOT BE TESTED: this volume gave the file no short name without the word in it." -ForegroundColor Yellow }
+
+Write-Host ""
+Write-Host "--- PowerShell 7: the share refuses in plain words, and makes nothing ---" -ForegroundColor Cyan
+$pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+if ($null -ne $pwsh) {
+    $home7 = Join-Path $script:work "home-under-seven"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $pwsh.Source
+    $psi.Arguments = "-NoProfile -File `"" + (Join-Path $root "horde.ps1") + "`" files share `"" + $plainNote + "`" -Title Seven"
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $home7
+    $psi.EnvironmentVariables[$sessionVariable] = "cli-session-1"
+    $seven = [System.Diagnostics.Process]::Start($psi)
+    $sevenErr = $seven.StandardError.ReadToEndAsync()
+    $sevenOut = $seven.StandardOutput.ReadToEnd() + "`n" + $sevenErr.Result
+    $seven.WaitForExit()
+    $sevenCode = $seven.ExitCode
+    $seven.Dispose()
+    Check ($sevenCode -eq 1 -and $sevenOut -like "*not shared: files are shared under Windows PowerShell 5.1 only, and this is PowerShell 7*run the command with powershell.exe*") ("run under PowerShell 7, a share exits 1 and says in plain words that files are shared under 5.1 only (" + $sevenCode + ")")
+    Check ($sevenOut -notlike "*Cannot find an overload*" -and $sevenOut -notlike "*FileStream*") "and not with the error of a constructor that runtime does not have"
+    Check (-not (Test-Path -LiteralPath $home7)) "it made no home, no keys folder and no key: it did not stop half way"
+} else { Write-Host "  [SKIP] POWERSHELL 7 IS NOT ON THIS MACHINE (no pwsh.exe), so the refusal under it was NOT run here." -ForegroundColor Yellow }
+
+# The two junctions first, by their own entries, so that removing the folder never follows one.
+foreach ($madeJunction in @($sshJunction, $homeJunction)) {
+    if ([System.IO.Directory]::Exists($madeJunction) -and (([System.IO.File]::GetAttributes($madeJunction) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { [System.IO.Directory]::Delete($madeJunction) }
+}
 if ((Split-Path -Leaf $script:work) -match '\Ahorde-files-cli-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) {
     # A link first, by its own entry, so that removing the folder never follows one.
     $leftLink = Join-Path $script:work "docs\link.md"

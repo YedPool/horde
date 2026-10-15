@@ -21,6 +21,12 @@ const { createPhone } = await load("app/phone-core.js");
 const AC = await load("app/account-client.js");
 const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
+const LC = await load("app/lane-card.js");
+const DC = await load("app/decision-cards.js");
+const NV = await load("app/notices-view.js");
+const CW = await load("app/cards-why.js");
+const AU = await load("app/app-update.js");
+const RB = await load("app/read-banner.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -67,12 +73,12 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 }
 // answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
 // says nothing of them, as every machine's did before a part could be answered by itself.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [] } = {}) {
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(receipts === undefined ? {} : { receipts }) })));
   }
   return out;
 }
@@ -968,6 +974,80 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check(calls[calls.length - 1].address === "https://relay.example.test/v1/mailboxes/work/phone/items?since=0&max=1", "with no relay origin it speaks to the page's own origin", calls[calls.length - 1].address);
 }
 
+// --- 10c. A HUNG REQUEST CANNOT FREEZE THE PHONE (the founder's phone heard nothing new from 02:36 on
+// 2026-10-14: a fetch with no timeout that never settles inside the live refresh left the poll loop
+// waiting for ever, and every later poll returned at once because one was "still running") ---
+{
+  // Every wait here is bounded, so the code before the fix FAILS these checks instead of hanging the suite.
+  const within = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r("still waiting"), ms))]);
+  const signals = [];
+  // A fetch that never answers and never hears its abort: the worst a frozen request can do.
+  const deaf = (address, init) => { signals.push(init && init.signal); return new Promise(() => {}); };
+  class NoSocket { constructor() { throw new Error("no socket in this check"); } }
+  const t = R.httpTransport("https://relay.example.test", deaf, NoSocket, { requestMs: 100 });
+  const g = await within(t.get("work/phone", 0, 5), 2000);
+  check(g !== "still waiting" && g.state === "unknown" && g.reason.indexOf("did not answer") >= 0, "A READ THE RELAY NEVER ANSWERS comes back unknown when its time is up, though the fetch never heard its abort", JSON.stringify(g));
+  const p = await within(t.put("work/phone", "k-1", "text"), 2000);
+  const k = await within(t.ack("work/phone", 3), 2000);
+  const w0 = await within(t.watch("work/phone", 0, 5, 0), 2000);
+  check([p, k, w0].every((x) => x !== "still waiting" && x.state === "unknown"), "and so does a put, an ack and a watch of 0 ms (a read): every request the transport makes by fetch", JSON.stringify([p, k, w0]));
+  check(signals.length === 4 && signals.every((s) => s && s.aborted === true), "each of them handed fetch a signal, and aborted it, so a real browser lets the request go", String(signals.map((s) => s && s.aborted)));
+  // A response whose headers came but whose body never ends is the same freeze, one step later.
+  const tb = R.httpTransport("https://relay.example.test", async () => ({ status: 200, json: () => new Promise(() => {}) }), NoSocket, { requestMs: 100 });
+  const gb = await within(tb.get("work/phone", 0, 5), 2000);
+  check(gb !== "still waiting" && gb.state === "unknown", "a body that never ends is cut by the same time", JSON.stringify(gb));
+  const seen = [];
+  const prompt = async (address, init) => { seen.push(init.signal); return { status: 200, json: async () => ({ items: [] }) }; };
+  const tp = R.httpTransport("https://relay.example.test", prompt, NoSocket, { requestMs: 100 });
+  const ok = await tp.get("work/phone", 0, 5);
+  await new Promise((r) => setTimeout(r, 250));
+  check(ok.state === "known" && seen[0] && seen[0].aborted === false, "a read answered in time is known, and its timer goes with it: nothing is aborted after", JSON.stringify(ok));
+  check(R.REQUEST_MS === 20000, "a request is given 20 s, under the 25 s a watch waits", String(R.REQUEST_MS));
+  const td = R.httpTransport("https://relay.example.test", prompt, NoSocket);
+  await td.get("work/phone", 0, 5);
+  check(seen.length === 2 && seen[1] && typeof seen[1].aborted === "boolean", "and the transport a deployment makes (no time given) has the timeout too");
+
+  // THROUGH THE LIVE REFRESH: the bridge's poll loop over the real relay client and phone. Reads go by
+  // fetch through the http transport (the shipped path); the rest of the relay is a memory one.
+  const mem = R.memoryTransport();
+  let hang = false;
+  let reads = 0;
+  const fetchFn = async (address, init) => {
+    reads++;
+    if (hang) return new Promise(() => {});
+    const u = new URL(address);
+    const box = u.pathname.split("/").slice(3, 5).join("/");
+    const r = await mem.get(box, Number(u.searchParams.get("since")), Number(u.searchParams.get("max")));
+    return { status: 200, json: async () => r.value };
+  };
+  const ht = R.httpTransport("https://relay.example.test", fetchFn, NoSocket, { requestMs: 100 });
+  const mixed = { put: mem.put, ack: mem.ack, watch: mem.watch, get: ht.get };
+  const m = await newMachine("work");
+  const a = await pairedApp(mixed, m);
+  await sendSnapshot(mem, m, [a.phoneKey], [question(1, "One?")]);
+  const notices = [];
+  const br = createBridge(a.phone, { loadKinds: async () => ({}), waitMs: 50 });
+  br.on("notice", (words) => notices.push(words));
+  const picked = await within(br.request("pick", { id: a.paired.id }), 3000);
+  check(picked !== "still waiting" && picked.state === "known" && reads >= 1, "CONTROL: with a relay that answers, the horde is picked and its list read through fetch", JSON.stringify(picked).slice(0, 200));
+  await new Promise((r) => setTimeout(r, 400));
+  const healthy = reads;
+  check(healthy >= 3, "CONTROL: the live refresh polls again and again while the relay answers (" + healthy + " reads)");
+  hang = true;
+  const hungAt = reads;
+  await new Promise((r) => setTimeout(r, 1500));
+  check(reads >= hungAt + 3, "A READ THAT NEVER ANSWERS NO LONGER STOPS THE LIVE REFRESH: it is given up, and the next polls run (" + (reads - hungAt) + " reads after the relay froze)");
+  // The error path: a refresh whose first read hangs says the relay could not be read, and returns.
+  const r1 = await within(br.request("refresh"), 3000);
+  check(r1 !== "still waiting" && notices.some((n) => n.indexOf("could not be read") >= 0), "and a refresh whose read never answers ends, saying the relay could not be read", JSON.stringify(notices.slice(-2)));
+  hang = false;
+  // A relay that could not be read is asked again after the loop's pause (5 s), not in a busy loop.
+  const back = reads;
+  for (let i = 0; i < 70 && reads < back + 3; i++) await new Promise((r) => setTimeout(r, 100));
+  check(reads >= back + 3, "once the relay answers again the loop carries on reading (" + (reads - back) + " reads)");
+  await br.request("lock", { id: a.paired.id });
+}
+
 // --- 11. the icons the build draws are whole PNGs ---
 {
   const { inflateSync, crc32 } = await import("node:zlib");
@@ -1092,6 +1172,718 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   await bridge.request("lock", { id: a.paired.id });
   const locked = await bridge.request("list");
   check(locked.state === "unknown" && (!locked.value || !locked.value.notShown), "and a locked horde's list carries no such line");
+}
+
+// --- 14. is the PC there? the offline banner, by the relay's clock (the founder, 2026-10-14, fix 2) ---
+{
+  const t0 = 1760000000000;
+  const mach = (keyId, lastSeenAt, label = "build-box", horde = "work") => ({ keyId, horde, label, registeredAt: t0 - 86400000, lastSeenAt });
+  const k1 = "1".repeat(32), k2 = "2".repeat(32), k3 = "3".repeat(32);
+  const offline = (answer) => AC.presenceOf(answer).filter((m) => m.state === "offline");
+  const at = (age) => ({ now: t0, machines: [mach(k1, t0 - age)] });
+  check(AC.OFFLINE_AFTER_MS === 120000, "two minutes is the line");
+  check(offline(at(121000)).length === 1 && offline(at(121000))[0].keyId === k1, "the banner appears after 120 s by the relay's clock");
+  check(offline(at(119000)).length === 0 && AC.presenceOf(at(119000))[0].state === "online", "not before");
+  check(offline(at(120000)).length === 0 && offline(at(120001)).length === 1, "and exactly 120 s is not yet over it: over means over");
+  const realNow = Date.now;
+  let skewed;
+  try {
+    Date.now = () => t0 + 3 * 86400000;
+    skewed = [AC.presenceOf(at(30000))[0].state, AC.presenceOf(at(121000))[0].state];
+    Date.now = () => t0 - 3 * 86400000;
+    skewed.push(AC.presenceOf(at(30000))[0].state, AC.presenceOf(at(121000))[0].state);
+  } finally { Date.now = realNow; }
+  check(skewed.join(",") === "online,offline,online,offline", "a wrong phone clock, days fast or days slow, does not change it: only the relay's now and lastSeenAt count", skewed.join(","));
+  check(AC.presenceOf({ now: t0, machines: [mach(k1, t0 - 2000)] })[0].state === "online" && offline({ now: t0 + 300000, machines: [mach(k1, t0 - 2000)] }).length === 1 && offline({ now: t0 + 301000, machines: [mach(k1, t0 + 300000)] }).length === 0, "it clears when heard again: the next answer with a fresh lastSeenAt has no banner");
+  const many = AC.presenceOf({ now: t0, machines: [mach(k1, t0 - 600000, "build-box"), mach(k2, t0 - 5000, "laptop"), mach(k3, t0 - 900000, "", "personal")] });
+  const off = many.filter((m) => m.state === "offline");
+  check(off.length === 2 && off[0].name === "build-box (work)" && off[1].name === "machine " + k3.slice(0, 12) + " (personal)", "one banner per offline machine, by its name: its label and horde, or its key id's start when it has no label", JSON.stringify(off.map((m) => m.name)));
+  const bare = AC.presenceOf({ now: t0, machines: [{ keyId: k1, label: "build-box", lastSeenAt: t0 - 600000 }, { keyId: k2, label: "", horde: "", lastSeenAt: t0 - 600000 }] });
+  check(bare[0].name === "build-box" && bare[1].name === "machine " + k2.slice(0, 12), "a machine whose answer names no horde is named without one: never '(undefined)'", JSON.stringify(bare.map((m) => m.name)));
+  const never = AC.presenceOf({ now: t0, machines: [mach(k1, null)] });
+  check(never.length === 1 && never[0].state === "never" && never[0].lastSeenAt === null, "a never-seen machine gets no offline banner: it is 'never', quietly");
+  check(AC.presenceOf({ now: t0, machines: [{ keyId: k1, horde: "work", label: "x" }] })[0].state === "never" && AC.presenceOf({ now: t0, machines: [mach(k1, 0)] })[0].state === "never", "and so is one whose answer carries no lastSeenAt at all (a relay from before this), or a zero");
+  check(AC.presenceOf({ machines: [mach(k1, t0 - 600000)] }).length === 0 && AC.presenceOf({ now: "1760000000000", machines: [mach(k1, t0 - 600000)] }).length === 0 && AC.presenceOf(null).length === 0 && AC.presenceOf({ now: t0, machines: "x" }).length === 0, "an answer without the relay's own now as a whole number says nothing about anyone: no clock, no banner");
+  const m = off[0];
+  const words = AC.offlineWords(m, (ms) => "T" + ms);
+  check(words === "PC build-box (work) offline since T" + m.lastSeenAt + ". Your answers are kept and will be applied when it is back.", "the banner says the PC's name, the time it was last heard in the phone's own local time, and that the answers are kept", words);
+  check(!/lost|deleted|not sent|failed/i.test(words), "and nothing that says an answer is lost");
+  check(AC.offlineWords(m, () => "T", { waiting: 3 }).endsWith(" 3 answers are waiting.") && AC.offlineWords(m, () => "T", { waiting: 1 }).endsWith(" 1 answer is waiting.") && AC.offlineWords(m, () => "T", { waiting: 0 }) === AC.offlineWords(m, () => "T"), "the hook for later: a count of answers waiting adds one sentence, and none adds nothing");
+}
+
+// --- 10e. the cards: one snapshot per machine, merged by machine name; a card's stream is its lane's part of the log ---
+const cardsBody = (m, { name, made = "2026-10-13T20:00:00Z", cards = [], areas = [], thrall = {}, left = 0, areasLeft = undefined, hash = P.hex(P.randomBytes(32)) }) => P.utf8(JSON.stringify({ v: 1, kind: "cards-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, made, name,
+  thrall: { asOf: "", now: "", hasStatus: false, orcs: cards.length, working: cards.length, waitingFounder: 0, blocked: 0, unknown: 0, waitingFounderLanes: [], census: null, refused: [], ...thrall }, cards, cardsLeftOut: left, areas, areasLeftOut: areasLeft }));
+const card = (lane, extra = {}) => ({ lane, name: "lane " + lane, form: "standard", asOf: "2026-10-13T19:56:00Z", now: "doing " + lane, lastDone: "did " + lane, waitingOn: "nothing", blocked: "no", blockedText: "", note: "", tasksOpen: 3, doneWeek: 2, refused: [], ...extra });
+async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m, { kind: "snapshot", channel: "cards", body, phones: [phone] }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
+{
+  const t = R.memoryTransport();
+  const m1 = await newMachine("work");
+  const m2 = await newMachine("work");
+  const a = await pairedApp(t, m1);
+  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  await a.phone.announce(p2.id);
+  const k2 = await phoneKeyOf(t, m2);
+  await a.phone.refresh(a.paired.id);
+  const none = await a.phone.cards(a.paired.id);
+  check(none.machines.length === 0 && none.cards.length === 0 && none.thrall.length === 0, "CONTROL: before any machine sends cards there are none, and the page falls back to the whole log", JSON.stringify(none));
+  const areas = [{ area: "Form fill", lanes: ["C"] }, { area: "Horde", lanes: ["C", "E"] }];
+  await sendCards(t, m1, a.phoneKey, cardsBody(m1, { name: "office-pc", cards: [card("E"), card("C", { blocked: "yes", blockedText: "waits for a device" })], areas, thrall: { waitingFounderLanes: ["B"] } }));
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "home-pc", cards: [card("G")], areas: [] }));
+  const first = await a.phone.refresh(a.paired.id);
+  let c = await a.phone.cards(a.paired.id);
+  check(first.anomalies.length === 0 && c.machines.map((x) => x.name).join(",") === "home-pc,office-pc", "TWO MACHINES MERGED: one refresh of ONE pairing shows the cards of both machines of the horde, the other's opened by its own pairing", JSON.stringify({ an: first.anomalies, m: c.machines.map((x) => x.name) }));
+  check(c.cards.map((x) => x.lane + "@" + x.machine).join(",") === "C@office-pc,E@office-pc,G@home-pc" && c.cards.find((x) => x.lane === "G").entry === p2.id && c.cards.find((x) => x.lane === "E").entry === a.paired.id, "each card names its machine and the pairing whose log its stream is, ordered by lane", JSON.stringify(c.cards.map((x) => [x.lane, x.machine, x.entry])));
+  check(c.thrall.length === 2 && c.thrall.find((x) => x.machine === "office-pc").waitingFounderLanes.join(",") === "B", "there is a Thrall card per machine, with that machine's fleet");
+  const cc = c.cards.find((x) => x.lane === "C");
+  check(cc.blocked === "yes" && cc.blockedText === "waits for a device" && cc.tasksOpen === 3 && cc.doneWeek === 2 && cc.asOf === Date.parse("2026-10-13T19:56:00Z"), "a card carries blocked, its words, its task counts and the time its status was written", JSON.stringify(cc));
+  // The same machine name from a newer snapshot of the other pairing replaces it; an older replay does not.
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "office-pc", made: "2026-10-13T21:00:00Z", cards: [card("H")] }));
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.cards(a.paired.id);
+  check(c.machines.length === 1 && c.machines[0].name === "office-pc" && c.machines[0].entry === p2.id && c.cards.map((x) => x.lane).join(",") === "H", "MERGED BY NAME: two pairings that report one machine name show it once, the newest snapshot standing", JSON.stringify(c.machines));
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "home-pc", made: "2026-10-13T22:00:00Z", cards: [card("G")] }));
+  const replay = await machineEnvelope(m1, { kind: "snapshot", channel: "cards", body: cardsBody(m1, { name: "office-pc", made: "2026-10-13T23:00:00Z", cards: [card("OLD")] }), phones: [a.phoneKey], seq: 1 });
+  await t.put("work/phone", replay.key, replay.text);
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.cards(a.paired.id);
+  check(c.cards.every((x) => x.lane !== "OLD"), "a cards envelope of a lower seq than one already held is never shown, whatever time it claims", JSON.stringify(c.cards.map((x) => x.lane)));
+  // Streams: the progress log filtered by lane, with the map of its own machine.
+  await sendProgress(t, m1, a.phoneKey, entriesBody(m1, [entry("s1", 1, { area: "Form fill" }), entry("s2", 2, { area: "Horde", lane: "E,F" }), entry("s3", 3, { area: "This PC" }), entry("s4", 4, { area: "Form fill", lane: "E" }), entry("s5", 5, { area: "HORDE " }), entry("s6", 6)]));
+  await a.phone.refresh(a.paired.id);
+  const g = await a.phone.progress(a.paired.id);
+  check(JSON.stringify(g.areas) === JSON.stringify(areas), "the log comes with its machine's area-to-lane map", JSON.stringify(g.areas));
+  const ids = (lane) => P.laneStream(g.items, lane, g.areas).map((x) => x.id).join(",");
+  check(ids("E") === "s2,s4,s5" && ids("F") === "s2", "AN ENTRY TAGGED FOR TWO LANES shows under both (s2: E,F)", ids("E") + " / " + ids("F"));
+  check(ids("C") === "s1,s5" && ids("E").indexOf("s1") < 0, "AN ENTRY'S OWN LANE WINS OVER ITS AREA: s4 is Form fill but names E, so it shows under E and not under C; and an area is matched with case and outer spaces aside (s5)", ids("C"));
+  check(["B", "C", "E", "F", "G"].every((l) => ids(l).split(",").indexOf("s3") < 0 && ids(l).split(",").indexOf("s6") < 0) && ids("") === "s1,s2,s3,s4,s5,s6", "AN UNTAGGED, UNMAPPED ENTRY shows ONLY in the Thrall's stream, which is the whole log", ids(""));
+  check(P.entryLanes({ lane: " E , F ", area: "Form fill" }, areas).join(",") === "E,F" && P.entryLanes({ lane: "", area: "" }, areas).length === 0 && P.entryLanes({ area: "Horde" }, []).length === 0, "a lane list is split on commas and trimmed; no lane and no area, or no map, is no lane");
+  // The body, read strictly.
+  const other = { horde: "work", keyId: "b".repeat(32) };
+  check(!P.readCardsSnapshot(cardsBody(other, { name: "x" }), "work", m1.keyId).ok && !P.readCardsSnapshot(cardsBody({ horde: "personal", keyId: m1.keyId }, { name: "x" }), "work", m1.keyId).ok && !P.readCardsSnapshot(cardsBody(m1, { name: "" }), "work", m1.keyId).ok && !P.readCardsSnapshot(P.utf8("{"), "work", m1.keyId).ok, "a cards body of another machine or horde, with no machine name, or not JSON, is refused");
+  const bad = P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("ok"), card("bad lane!"), card("Z", { form: "made-up" }), card("Y", { now: "a\u0007bell", tasksOpen: -1 })] }), "work", m1.keyId);
+  check(bad.ok && bad.value.dropped === 2 && bad.value.cards.map((x) => x.lane).join(",") === "ok,Y" && bad.value.cards[1].now === "" && bad.value.cards[1].tasksOpen === null, "a card with a bad lane or form is dropped and counted; a text with a control character is shown as none, a count that is no count as not known", JSON.stringify(bad.value && bad.value.cards));
+  check(P.CARD_FORM_WORDS.other.indexOf("not in the standard form") >= 0 && P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("Q", { form: "unreadable", note: "machine words" })] }), "work", m1.keyId).value.cards[0].note === P.CARD_FORM_WORDS.unreadable, "what a card says of its form is the phone's own sentence, never the machine's words");
+  check(P.ageWords(Date.parse("2026-10-13T19:56:00Z"), Date.parse("2026-10-13T20:00:30Z")) === "4 min ago" && P.ageWords(1000, 1000 + 3 * 3600000) === "3 h ago" && P.ageWords(1000, 1000 + 72 * 3600000) === "3 days ago" && P.ageWords(0, 5) === "" && P.ageWords(5000, 1000) === "just now", "a card's age is said in plain words");
+  check(P.STREAM_LIMIT_WORDS.indexOf("last 100") >= 0, "the stream page says how far back the phone's log goes");
+  // Through the bridge: cards, and another machine's log by its pairing.
+  const br = createBridge(a.phone, { loadKinds: async () => ({}) });
+  const evs = [];
+  br.on("cards-changed", (rec) => evs.push(rec));
+  await br.request("pick", { id: a.paired.id });
+  const rec = await br.request("cards");
+  const of = await br.request("progress", { of: p2.id });
+  check(rec.state === "known" && rec.value.machines.length === 2 && evs.length === 1 && evs[0].state === "known" && of.state === "known" && Array.isArray(of.value.items), "the bridge answers cards, pushes cards-changed with every refresh, and opens another pairing's log for that machine's card");
+  // The machine is sent nothing on this channel.
+  const before = (await t.get(m1.mailbox, 0, 256)).value.items.length;
+  await a.phone.refresh(a.paired.id);
+  check((await t.get(m1.mailbox, 0, 256)).value.items.length === before, "the phone sends nothing on the cards channel");
+  // THE ONE CARD (lane-card.js): a pure render of a lane and one slot, the tap the page's.
+  const fake = () => {
+    // appendChild THROWS on what is not a node, as the page's does ("parameter 1 is not of type 'Node'"): a
+    // stand-in that takes anything cannot see a badge handed in as a number (review of PR 244).
+    const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener(n, f) { this.on[n] = f; } });
+    return { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+  };
+  const dump = (n, skipBadge) => (skipBadge && n.className === "card-badge") ? "<badge>" : n.tag + "." + (n.className || "") + "[" + (n.textContent || "") + "]" + (n.attrs && n.attrs["data-lane"] ? "@" + n.attrs["data-lane"] : "") + "(" + (n.kids || []).map((k) => dump(k, skipBadge)).join("") + ")";
+  const lanesDoc = await a.phone.cards(a.paired.id);
+  const nowMs = Date.parse("2026-10-13T20:00:00Z");
+  const plain = LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs });
+  const doc = fake();
+  const badge = doc.createElement("span"); badge.textContent = "2 open";
+  let opened = null;
+  const filled = LC.renderLaneCard(doc, lanesDoc, "G", { nowMs, badge, onOpen: (o) => { opened = o; } });
+  const slotOf = (n) => n.kids[0].kids.find((k) => k.className === "card-badge");
+  check(plain !== null && filled !== null && dump(plain, true) === dump(filled, true) && slotOf(plain).kids.length === 0 && slotOf(filled).kids[0] === badge, "A PAGE FILLS THE ONE SLOT: the card is the same with and without a badge, and the badge is in its slot", dump(filled, false));
+  check(LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: "3" }) !== null && slotOf(LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: "3" })).textContent === "3", "a badge may be a short text");
+  filled.on.click();
+  check(opened && opened.lane === "G" && opened.machine === "home-pc" && opened.entry === p2.id && typeof plain.on.click === "undefined", "the tap does what the page passed in, told the lane, the machine and the pairing; with nothing passed in a tap does nothing", JSON.stringify(opened));
+  const th = LC.renderLaneCard(fake(), lanesDoc, LC.THRALL_LANE, { machine: "home-pc", nowMs });
+  check(LC.THRALL_LANE === "thrall" && th !== null && th.attrs["data-lane"] === "thrall" && th.className.indexOf("thrall") >= 0 && LC.renderLaneCard(fake(), lanesDoc, "NOPE", { nowMs }) === null, "the Thrall's card is lane thrall; a lane the document does not hold renders nothing");
+  const view = LC.laneCardView(lanesDoc, "G", { nowMs });
+  check(view.title === "G - lane G" && view.from === "home-pc, 4 min ago" && view.lines.map((l) => l.label).join(",") === "Now,Last done,Waiting on,Blocked" && view.stats === "Tasks open 3 - done this week 2", "the card's words: its lane and name, its machine and age, now, last done, waiting on, blocked and the task counts", JSON.stringify(view));
+  // Review of PR 244, the round's additions.
+  check((() => { try { fake().createElement("b").appendChild(3); return false; } catch (x) { return true; } })(), "CONTROL: the stand-in document refuses a number where a node goes, as a browser does");
+  const badgeOf = (b) => { try { const box = LC.renderLaneCard(fake(), lanesDoc, "G", { nowMs, badge: b }); return slotOf(box).textContent + "/" + slotOf(box).kids.length; } catch (x) { return "threw: " + x.message; } };
+  check(badgeOf(3) === "3/0" && badgeOf(0) === "0/0" && badgeOf(null) === "/0" && badgeOf("") === "/0", "A BADGE THAT IS A NUMBER is shown as its digits, 0 too; null and empty text leave the slot empty", [badgeOf(3), badgeOf(0), badgeOf(null), badgeOf("")].join(" | "));
+  const bare = { machines: [{ name: "pc", made: 0 }], thrall: [{ machine: "pc", entry: "e", orcs: 2, working: 2, waitingFounder: 0, blocked: 0, unknown: 0, hasStatus: false, census: null }], cards: [] };
+  check((() => { try { const tv = LC.laneCardView(bare, LC.THRALL_LANE, { nowMs }); return tv !== null && tv.lines.every((l) => l.label !== "Waiting on the founder"); } catch (x) { return false; } })(), "a Thrall entry with no list of lanes waiting on the founder draws, with no such line");
+  const dupes = P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("thrall"), card("A"), card("A", { now: "the second A" }), card("B")] }), "work", m1.keyId);
+  check(dupes.ok && dupes.value.dropped === 2 && dupes.value.cards.map((x) => x.lane).join(",") === "A,B" && dupes.value.cards[0].now === "doing A", "ONE ID IS ONE CARD: a lane card with the Thrall's id, and a second card of one id, are dropped and counted; the first stands", JSON.stringify(dupes.value && dupes.value.cards.map((x) => [x.lane, x.now])));
+  const why = (extra) => P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("Q", { form: "other", ...extra })] }), "work", m1.keyId).value.cards[0].note;
+  check(why({ problems: "its orc is not one capital letter" }).indexOf("not in the standard form") >= 0 && why({ problems: "its orc is not one capital letter" }).indexOf("its orc is not one capital letter") >= 0 && why({ problems: "a\u0007bell" }) === P.CARD_FORM_WORDS.other && why({}) === P.CARD_FORM_WORDS.other && P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("Q", { problems: "has 5 lines" })] }), "work", m1.keyId).value.cards[0].note === "", "A LANE NOT IN THE STANDARD FORM says which rules it breaks, in the status reader's words; words with a control character, or none, leave the phone's own sentence; a standard card says nothing", why({ problems: "its orc is not one capital letter" }));
+  const idWords = "Another lane folder here (orc-f-first) gives the same id, F, so this card has its own.";
+  const renamed = (extra) => P.readCardsSnapshot(cardsBody(m1, { name: "x", cards: [card("lane-5", extra)] }), "work", m1.keyId).value.cards[0].note;
+  check(renamed({ idNote: idWords }) === idWords && renamed({ form: "other", problems: "its orc is not one capital letter", idNote: idWords }) === P.cardFormNote("other", "its orc is not one capital letter") + " " + idWords && renamed({ form: "missing", idNote: idWords }) === P.CARD_FORM_WORDS.missing + " " + idWords && renamed({ idNote: "a\u0007bell" }) === "" && renamed({}) === "", "A CARD WITH AN ID OF ITS OWN says why on the phone, after what its form says; words with a control character, or none, add nothing", renamed({ form: "other", problems: "x", idNote: idWords }));
+  const lo = P.readCardsSnapshot(cardsBody(m1, { name: "pc", left: 3, areasLeft: 7 }), "work", m1.keyId);
+  const lom = P.mergeCards([{ entry: "e1", seq: 1, value: lo.value }]);
+  check(lo.ok && lo.value.cardsLeftOut === 3 && lo.value.areasLeftOut === 7 && lom.machines[0].cardsLeftOut === 3 && lom.machines[0].areasLeftOut === 7 && P.readCardsSnapshot(cardsBody(m1, { name: "pc", areasLeft: -2 }), "work", m1.keyId).value.areasLeftOut === 0, "CARDS AND AREAS LEFT OUT are read from the snapshot and carried per machine for the page to say; a count that is no count is none", JSON.stringify(lom.machines));
+  check(P.streamMovesPlace({ entry: "e1", lane: "" }, "e1") && !P.streamMovesPlace({ entry: "e1", lane: "E" }, "e1") && !P.streamMovesPlace({ entry: "e2", lane: "" }, "e1") && !P.streamMovesPlace(null, "e1"), "HIS PLACE MOVES ONLY IN THE WHOLE LOG of the picked pairing: never in a lane's stream, never in another pairing's log, never on the cards page");
+  const twin = P.mergeCards([{ entry: "e1", seq: 1, value: { ...lo.value, name: "pc", made: 1 } }, { entry: "e2", seq: 1, value: { ...lo.value, name: "pc", made: 2 } }]);
+  check(twin.machines.length === 1 && twin.machines[0].entry === "e2", "KNOWN LIMIT: two machines that send one name are merged as one, the newest standing - machines are told apart by the name each is given (its machineName setting), so two must be named apart");
+  a.phone.lock(p2.id);
+  c = await a.phone.cards(a.paired.id);
+  check(c.machines.every((x) => x.entry !== p2.id), "a locked pairing's cards are not shown");
+  a.phone.lock(a.paired.id);
+  check((await throwsAsync(() => a.phone.cards(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no cards");
+}
+
+// --- 10e2. WHY THERE ARE NO CARDS: the one line the Progress tab's fallback shows (cards-why.js) ---
+{
+  const t = R.memoryTransport();
+  const m1 = await newMachine("work");
+  const a = await pairedApp(t, m1);
+  await a.phone.refresh(a.paired.id);
+  const none = await a.phone.cards(a.paired.id);
+  check(none.refused === "" && none.unpaired === false && CW.cardsFallbackLine(none) === "No cards from your PC yet.", "NO SNAPSHOT YET: the fallback says no cards have come from the PC", JSON.stringify(none));
+  // A snapshot from the paired PC that does not read: the reason, short, in the phone's own words.
+  await sendCards(t, m1, a.phoneKey, P.utf8("{"));
+  const bad = await a.phone.refresh(a.paired.id);
+  const refused = await a.phone.cards(a.paired.id);
+  check(bad.anomalies.length === 1 && refused.machines.length === 0 && refused.refused === "the cards body is not JSON" && CW.cardsFallbackLine(refused) === "Cards could not be read: the cards body is not JSON.", "A REFUSED SNAPSHOT: the fallback says the cards could not be read, and why", JSON.stringify(refused));
+  // A PC of the horde this phone has no pairing for sends cards: the phone can tell, by who sent them.
+  const t2 = R.memoryTransport();
+  const p1 = await newMachine("home");
+  const stranger = await newMachine("home");
+  const b = await pairedApp(t2, p1);
+  await sendCards(t2, stranger, b.phoneKey, cardsBody(stranger, { name: "other-pc", cards: [card("E")] }));
+  await b.phone.refresh(b.paired.id);
+  const unp = await b.phone.cards(b.paired.id);
+  check(unp.machines.length === 0 && unp.unpaired === true && unp.refused === "" && CW.cardsFallbackLine(unp) === "This phone is not paired to the PC that sends cards.", "CARDS FROM A PC THIS PHONE IS NOT PAIRED TO: the fallback says so", JSON.stringify(unp));
+  // A PC this phone IS paired to, its pairing locked: its cards are not opened, and it is no stranger.
+  const m2 = await newMachine("work");
+  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  await a.phone.announce(p2.id);
+  const k2 = await phoneKeyOf(t, m2);
+  a.phone.lock(p2.id);
+  await sendCards(t, m2, k2, cardsBody(m2, { name: "home-pc", cards: [card("G")] }));
+  await a.phone.refresh(a.paired.id);
+  const lockedSib = await a.phone.cards(a.paired.id);
+  check(lockedSib.machines.length === 0 && lockedSib.unpaired === false, "CONTROL: cards from a PC this phone is paired to, its pairing locked, are not said to come from a PC it is not paired to", JSON.stringify(lockedSib));
+  // CONTROL: cards present, no line at all; and a refusal a later good snapshot replaces is not said.
+  await sendCards(t, m1, a.phoneKey, cardsBody(m1, { name: "office-pc", cards: [card("E")] }));
+  await a.phone.refresh(a.paired.id);
+  const good = await a.phone.cards(a.paired.id);
+  check(good.machines.length === 1 && good.refused === "" && CW.cardsFallbackLine(good) === "", "CONTROL: with cards present there is no line", JSON.stringify(good));
+  check(CW.cardsFallbackLine({ machines: [], refused: "x".repeat(500) + "\u0007" }).length <= 140 && CW.cardsFallbackLine({ machines: [], refused: "a\u0007bell" }) === "Cards could not be read: abell." && CW.cardsFallbackLine({ machines: [], refused: "ok", unpaired: true }).indexOf("Cards could not be read") === 0 && CW.cardsFallbackLine(null) === "No cards from your PC yet.", "the reason is cut short and plain ASCII; a refusal is said before a stranger PC; nothing known is no cards yet");
+}
+
+// --- 10e3. THE DECISIONS PAGE'S CARDS (decision-cards.js, decision 74): the Progress tab's card, its slot the lane's count ---
+{
+  const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener(n, f) { this.on[n] = f; } });
+  const fake = { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+  const text = (n) => (n.textContent || "") + (n.kids || []).map(text).join("");
+  const slotOf = (card) => card.kids[0].kids.find((k) => k.className === "card-badge");
+  const nameOf = (card) => card.kids[0].kids.find((k) => k.className === "card-name").textContent;
+  const lanesDoc = { machines: [{ name: "pc", made: 0 }], thrall: [{ machine: "pc", entry: "e", orcs: 3, working: 2, waitingFounder: 1, blocked: 0, unknown: 0, hasStatus: true, now: "routing", census: null }],
+    cards: [{ lane: "B", name: "lane B", machine: "pc", entry: "e", form: "standard", asOf: "", now: "building", lastDone: "", waitingOn: "", blocked: "no", tasksOpen: 1, doneWeek: 0 }, { lane: "E", name: "E", machine: "pc", entry: "e", form: "standard", asOf: "", now: "reviewing", lastDone: "", waitingOn: "", blocked: "no", tasksOpen: 0, doneWeek: 2 }] };
+  const counts = [{ lane: "thrall", open: 2, blocksAll: false }, { lane: "B", open: 3, blocksAll: true }, { lane: "H", open: 1, blocksAll: false }];
+  const view = DC.decisionCardsView(lanesDoc, counts, "");
+  check(view.map((v) => v.lane + ":" + v.open + (v.blocksAll ? "!" : "")).join(",") === "all:6!,thrall:2,B:3!,E:0,H:1", "ONE CARD PER LANE, ALL QUESTIONS FIRST: All with every lane's count summed and the blocks mark if any lane has it; the Thrall's next; then every lane by name - one the lanes document has and that asks nothing (E) with 0, one that asks and has no card (H) too", JSON.stringify(view));
+  check(DC.decisionCardsView(lanesDoc, counts, "").map((v) => v.lane + ":" + v.open).join(",") !== "all:5,thrall:2,B:3,E:0,H:1" && DC.decisionCardsView(null, [], "").map((v) => v.lane + ":" + v.open).join(",") === "all:0", "MUST-FAIL TWIN: a sum that left out a lane would read 5 and is not what is drawn; with no lanes document and nothing to answer there is the All card alone, at 0");
+  check(DC.decisionCardsView(null, counts, "").map((v) => v.lane).join(",") === "all,thrall,B,H" && DC.decisionCardsView(lanesDoc, [{ lane: "", open: 9 }, null, { lane: "C", open: "x" }], "").map((v) => v.lane + ":" + v.open).join(",") === "all:0,thrall:0,B:0,C:0,E:0", "with no lanes document the lanes that ask are the cards; a count with no lane is dropped, and one that is no number counts 0");
+  let chose = null;
+  const cards = DC.renderDecisionCards(fake, lanesDoc, counts, { chosen: "B", onChoose: (l) => { chose = l; }, nowMs: 0 });
+  check(cards.length === 5 && cards.map(nameOf).join("|") === "All questions|Thrall|B - lane B|E|Orc H", "THE SAME CARD: a lane of the lanes document is drawn with its own name (lane-card.js), one it lacks by its Orc's name, All questions by that name", cards.map(nameOf).join("|"));
+  check(text(slotOf(cards[2])) === "3 open \u26D4 blocks all work" && slotOf(cards[2]).kids[0].kids[0].className === "dq-blocks" && text(slotOf(cards[3])) === "0 open" && cards[2].className.indexOf("dq-blocking") >= 0 && cards[3].className.indexOf("dq-blocking") < 0,
+    "THE BLOCKS MARK is words and a sign in the slot beside the count, never a colour alone; a lane that blocks nothing has the count alone", text(slotOf(cards[2])) + " / " + text(slotOf(cards[3])));
+  check(cards[2].attrs["aria-pressed"] === "true" && cards[2].className.indexOf("chosen") >= 0 && cards[0].attrs["aria-pressed"] === "false" && cards.filter((c) => c.attrs["aria-pressed"] === "true").length === 1, "the chosen lane's card, and it alone, says it is chosen, to a screen reader as well");
+  check(cards[1].kids.some((k) => k.className === "card-line") && cards[4].kids.length === 1, "a card of the lanes document keeps its lines (the Thrall's Now and Fleet); a lane known only by name is its head alone");
+  cards[4].on.click(); const h = chose; cards[0].on.click();
+  check(h === "H" && chose === "", "a tap on a card chooses its lane; a tap on All questions chooses all (\"\")", JSON.stringify([h, chose]));
+  const all = DC.renderDecisionCards(fake, null, [], { nowMs: 0 });
+  check(all.length === 1 && all[0].attrs["aria-pressed"] === "true" && typeof all[0].on.click === "undefined", "nothing to answer anywhere: the All card alone, chosen; with no onChoose a tap does nothing");
+  check(LC.renderLaneCard(fake, lanesDoc, "Q", { nowMs: 0 }) === null && nameOf(LC.renderLaneCard(fake, lanesDoc, "Q", { nowMs: 0, orName: "Orc Q" })) === "Orc Q" && nameOf(LC.renderLaneCard(fake, lanesDoc, "B", { nowMs: 0, orName: "Orc B" })) === "B - lane B", "lane-card.js: orName draws a lane the document lacks by that name, and never replaces a card the document has; without it such a lane is still no card");
+}
+
+// --- 10g. A NEW VERSION OF THE APP (app-update.js): reload once, never on the first install, never over his words ---
+{
+  const d = (o) => AU.reloadDecision({ hadController: true, reloaded: false, busy: false, ...o });
+  check(d({}) === "reload", "a new worker taking over a page that had one reloads it");
+  check(d({ hadController: false }) === "none", "THE FIRST INSTALL never reloads: there was no worker before");
+  check(d({ reloaded: true }) === "none" && d({ reloaded: true, busy: true }) === "none", "ONCE: a page that has reloaded (or begun to) never reloads again");
+  check(d({ busy: true }) === "wait", "WITH UNSENT WORDS it waits, and the page says a new version is ready");
+  check(AU.UPDATE_READY_WORDS === "A new version is ready - it loads when you finish.", "the waiting line is the founder's words");
+  check(AU.draftsHeld(null) === false && AU.draftsHeld("{}") === false && AU.draftsHeld("not json") === false && AU.draftsHeld('{"3":"half an answer"}') === true && AU.draftsHeld('{"3":""}') === true, "a draft kept by the document counts as unsent words; none, or an empty keeping, does not");
+  const T = 1000000000;
+  check(AU.updateDue(0, T) === true && AU.updateDue(T, T + 599999) === false && AU.updateDue(T, T + 600000) === true && AU.updateDue(T, T - 5) === true && AU.UPDATE_EVERY_MS === 600000, "THE UPDATE CHECK, at most once in 10 minutes: first time due, again only after 10 minutes, and a clock set back is due");
+  const v = "0123456789abcdef", w = "fedcba9876543210";
+  check(AU.versionWords(v, v) === "Version " + v + "." && AU.versionWords(v, "") === "Version " + v + "." && AU.versionWords(v, w) === "Version " + v + " - update pending (" + w + ")." && AU.versionWords("", "") === "Version not known." && AU.versionWords("<b>", w) === "Version not known.", "THE ACCOUNT SCREEN SAYS THE VERSION the page was built as; a worker of another says update pending; anything that is not a version is not shown");
+}
+
+// --- 10h. A READ THAT FAILS IS SAID, WITH THE TIME OF THE LAST ONE THAT WORKED (read-banner.js, bridge.js read-changed) ---
+{
+  const base = R.memoryTransport();
+  let fault = null; // null: the relay answers; else the reason every read and watch answers with
+  const t = { ...base, get: (...x) => (fault ? Promise.resolve({ state: "unknown", value: null, reason: fault }) : base.get(...x)), watch: (...x) => (fault ? Promise.resolve({ state: "unknown", value: null, reason: fault }) : base.watch(...x)) };
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  let clockNow = Date.parse("2026-10-14T02:36:00Z");
+  const br = createBridge(a.phone, { loadKinds: async () => ({}), now: () => clockNow });
+  const reads = [];
+  br.on("read-changed", (rec) => reads.push(rec));
+  const notes = [];
+  br.on("notice", (w) => notes.push(w));
+  const at = (ms) => (ms === Date.parse("2026-10-14T02:36:00Z") ? "02:36" : "other " + ms);
+  const bannerOf = (rec, session = null) => RB.readBanner(RB.readFailure(rec, session), rec.lastGoodAt, at);
+  await br.request("pick", { id: a.paired.id });
+  const good = reads[reads.length - 1];
+  check(reads.length === 1 && good.relayDown === false && good.lastGoodAt === clockNow && bannerOf(good) === "", "CONTROL: a read that works says so, with its time, and there is no banner", JSON.stringify(reads));
+  fault = "the relay answered the read with 401: not signed in";
+  clockNow += 3 * 3600000;
+  await br.request("refresh");
+  const r401 = reads[reads.length - 1];
+  check(notes[notes.length - 1].indexOf("could not be read") >= 0, "the failed read is said as a notice", JSON.stringify(notes));
+  check(r401.relayDown === true && RB.readFailure(r401) === "signed-out" && bannerOf(r401) === "Not signed in to the relay - sign in again. Last updated 02:36.", "A 401 ON THE MAILBOX READ shows the sign-in banner and the last-updated time - the time of the last read that worked, not of the failure", bannerOf(r401));
+  fault = "the relay's watch failed";
+  await br.request("refresh");
+  const rNet = reads[reads.length - 1];
+  check(RB.readFailure(rNet) === "unreachable" && bannerOf(rNet) === "Cannot reach the relay. Last updated 02:36." && RB.readFailure(rNet, { state: "unknown", status: 401 }) === "signed-out" && RB.readFailure(rNet, { state: "known", status: 200, value: { signedIn: false } }) === "signed-out" && RB.readFailure(rNet, { state: "known", status: 200, value: { signedIn: true } }) === "unreachable" && RB.readFailure(rNet, { state: "unknown", status: 0 }) === "unreachable", "A WATCH THAT FAILS is the relay out of reach - unless the relay's session says he is signed out (an expired sign-in refused at the socket)");
+  fault = null;
+  clockNow += 60000;
+  await br.request("refresh");
+  const back = reads[reads.length - 1];
+  check(notes[notes.length - 1] === "", "and a clean read says a notice of nothing, so the page clears the old one only then", JSON.stringify(notes));
+  check(back.relayDown === false && back.lastGoodAt === clockNow && bannerOf(back) === "", "A SUCCESSFUL READ CLEARS IT, and is the new last-updated time", JSON.stringify(back));
+  await br.request("lock", { id: a.paired.id });
+  await br.request("refresh");
+  const lk = reads[reads.length - 1];
+  check(lk.locked === true && RB.readFailure(lk) === "locked" && bannerOf(lk).indexOf("This horde is locked - unlock to read.") === 0, "a read of a locked horde says it is locked", bannerOf(lk));
+  check(RB.readBanner("", 5, at) === "" && RB.readBanner("unreachable", 0, at) === "Cannot reach the relay." && RB.readFailure(null) === "", "no failure is no banner; with no read that ever worked there is no time to say");
+}
+
+// --- 10f. the notices: each once, newest first, read kept on the phone; the follow switch sent like an answer ---
+const noticeOf = (n, extra = {}) => ({ v: 1, n, id: P.hex(P.randomBytes(16)), ts: "2026-10-14T03:0" + n + ":00.000Z", kind: "notify", from: "E", text: "line " + n, lane: "", entry: "", ...extra });
+const noticesBody = (m, { follows = {}, notices = [] }) => P.utf8(JSON.stringify({ v: 1, kind: "notices", horde: m.horde, machine: m.keyId, follows, notices }));
+async function sendNotices(t, m, phone, body, seq) { const e = await machineEnvelope(m, { kind: "notices", channel: "notices", body, phones: [phone], ...(seq ? { seq } : {}) }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
+{
+  const t = R.memoryTransport();
+  const m1 = await newMachine("work");
+  const m2 = await newMachine("work");
+  const a = await pairedApp(t, m1);
+  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  await a.phone.announce(p2.id);
+  const k2 = await phoneKeyOf(t, m2);
+  await a.phone.refresh(a.paired.id);
+  let nv = await a.phone.notices(a.paired.id);
+  check(nv.items.length === 0 && nv.unread === 0, "CONTROL: before any machine sends notices there are none");
+  const n1 = noticeOf(1), n2 = noticeOf(2, { kind: "progress", from: "Orc E", text: "Merged: the cards", lane: "E", entry: "p-1" }), n3 = noticeOf(3);
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: true }, notices: [n1, n2] }));
+  // The same notice again in a later envelope (a backfill beside a live one) is one notice.
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: true }, notices: [n2, n3] }));
+  await sendNotices(t, m2, k2, noticesBody(m2, { follows: {}, notices: [noticeOf(4, { from: "G" })] }));
+  const r1 = await a.phone.refresh(a.paired.id);
+  nv = await a.phone.notices(a.paired.id);
+  check(r1.anomalies.length === 0 && nv.items.map((x) => x.text).join("|") === "line 4|line 3|Merged: the cards|line 1" && nv.unread === 4, "NEWEST FIRST, EACH ONCE: the notices of both machines of the horde, a notice carried twice shown once, all unread", JSON.stringify({ an: r1.anomalies, t: nv.items.map((x) => x.text) }));
+  check(nv.items.find((x) => x.text === "line 4").entry === p2.id && nv.items.find((x) => x.id === n2.id).entry === a.paired.id && nv.follows[a.paired.id].E === true && Object.keys(nv.follows[p2.id]).length === 0, "each notice names the pairing it came by, and each machine's switches are what it sent", JSON.stringify(nv.follows));
+  const read = await a.phone.markNoticesRead(a.paired.id, [n2.id]);
+  check(read.unread === 3 && read.items.find((x) => x.id === n2.id).read === true, "a notice marked read is read, and the count goes down");
+  const stored = await a.store.get("horde/" + a.paired.id);
+  check(Array.isArray(stored.noticesRead) && stored.noticesRead.indexOf(n2.id) >= 0 && JSON.stringify(stored).indexOf("Merged: the cards") < 0, "read is kept on this phone, as ids only: no word of a notice is stored");
+  const all = await a.phone.markNoticesRead(a.paired.id);
+  check(all.unread === 0, "mark all read reads every notice the phone holds");
+  // THE SWITCHES OF THE NEWEST ENVELOPE STAND: an envelope of a lower seq, arriving later, changes nothing.
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: false }, notices: [] }), 1);
+  await a.phone.refresh(a.paired.id);
+  check((await a.phone.notices(a.paired.id)).follows[a.paired.id].E === true, "a switch from an older envelope of the machine never overrules a newer one");
+  await sendNotices(t, m1, a.phoneKey, noticesBody(m1, { follows: { E: false, thrall: true }, notices: [] }));
+  await a.phone.refresh(a.paired.id);
+  nv = await a.phone.notices(a.paired.id);
+  check(nv.follows[a.paired.id].E === false && nv.follows[a.paired.id].thrall === true, "THE PHONE SHOWS WHAT THE MACHINE HOLDS: the newest envelope's switches stand");
+  // The body, read strictly.
+  check(!P.readNotices(noticesBody({ horde: "work", keyId: m2.keyId }, {}), "work", m1.keyId).ok && !P.readNotices(P.utf8('{"v":1,"kind":"notices"}'), "work", m1.keyId).ok && !P.readNotices(P.utf8("{"), "work", m1.keyId).ok, "a notices body of another machine, with no switches or notices, or not JSON, is refused");
+  const bad = P.readNotices(noticesBody(m1, { follows: { "E": true, "bad lane!": true, F: "yes" }, notices: [noticeOf(1), noticeOf(2, { kind: "made-up" }), noticeOf(3, { text: "a\u0007bell" }), noticeOf(4, { id: "short" })] }), "work", m1.keyId);
+  check(bad.ok && bad.value.dropped === 3 && bad.value.notices.length === 1 && JSON.stringify(bad.value.follows) === '{"E":true}', "a notice of a kind the phone does not know, with a control character, or with no id is dropped and counted; a switch that is not a lane's true or false is left out", JSON.stringify(bad.value));
+  // THE FOLLOW SWITCH, sent like an answer.
+  const before = (await t.get(m1.mailbox, 0, 256)).value.items.length;
+  const sent = await a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "E", on: true });
+  const items = (await t.get(m1.mailbox, 0, 256)).value.items;
+  const got = await machineOpens(m1, items[items.length - 1].text);
+  check(items.length === before + 1 && got.header.channel === "notices" && got.header.kind === "follow" && got.header.from === (await a.store.get("horde/" + a.paired.id)).deviceKeyId && sent.key === P.replayKey(got.header), "a switch goes to the card's machine, on the notices channel, as kind follow, from this phone's passkey", JSON.stringify(got.header));
+  check(Object.keys(got.body).join(",") === "v,setId,machine,lane,on" && got.body.machine === m1.keyId && got.body.lane === "E" && got.body.on === true && /^[0-9a-f]{32}$/.test(got.body.setId), "its body is exactly what the machine reads: version, setId, the machine's key id, the lane and on", JSON.stringify(got.body));
+  const viaSibling = await a.phone.follow(a.paired.id, { entry: p2.id, lane: "thrall", on: false });
+  const items2 = (await t.get(m2.mailbox, 0, 256)).value.items;
+  const got2 = await machineOpens(m2, items2[items2.length - 1].text);
+  check(!!viaSibling.key && got2.body.machine === m2.keyId && got2.body.lane === "thrall" && got2.body.on === false, "a card of the horde's other machine sends its switch to THAT machine, sealed to it", JSON.stringify(got2.body));
+  check((await throwsAsync(() => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "bad lane!", on: true }))).indexOf("lane") >= 0, "a lane that is not a card's lane is never sent");
+  check((() => { try { P.followBody({ setId: "x", machine: m1.keyId, lane: "E", on: true }); return false; } catch (x) { return true; } })() && (() => { try { P.followBody({ setId: P.hex(P.randomBytes(16)), machine: m1.keyId, lane: "E", on: "yes" }); return false; } catch (x) { return true; } })(), "a switch body with a setId that is no id, or an on that is not true or false, is never made");
+  // Through the bridge.
+  const br = createBridge(a.phone, { loadKinds: async () => ({}) });
+  const evs = [];
+  br.on("notices-changed", (rec) => evs.push(rec));
+  await br.request("pick", { id: a.paired.id });
+  const rec = await br.request("notices");
+  const f = await br.request("follow", { entry: a.paired.id, lane: "F", on: true });
+  const rr = await br.request("notices-read", { ids: [n1.id] });
+  check(rec.state === "known" && rec.value.items.length === 4 && evs.length === 1 && evs[0].state === "known" && f.ok === true && rr.state === "known", "the bridge answers notices, pushes notices-changed with every refresh, sends a switch and marks notices read");
+  // A session that cannot sign sends no switch.
+  a.phone.lock(a.paired.id);
+  await a.phone.recover(a.paired.id, a.paired.recoveryCode);
+  check((await throwsAsync(() => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "E", on: false }))).indexOf("recovery code") >= 0, "unlocked with the recovery code, a switch is refused in words: only the passkey signs one");
+  a.phone.lock(a.paired.id);
+  check((await throwsAsync(() => a.phone.notices(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no notices");
+}
+{
+  // THE VIEW (notices-view.js), with a stand-in document whose clicks bubble as a browser's do.
+  const fake = () => {
+    const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, parent: null,
+      appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); k.parent = this; this.kids.push(k); return k; },
+      setAttribute(a, v) { this.attrs[a] = v; }, addEventListener(a, f) { (this.on[a] = this.on[a] || []).push(f); },
+      // A click goes to the node, then up through its parents until a handler stops it.
+      click() { const ev = { stopped: false, prevented: false, stopPropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; } }; for (let x = this; x && !ev.stopped; x = x.parent) for (const f of x.on.click || []) f(ev); return ev; } });
+    return { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+  };
+  const doc = fake();
+  const card = doc.createElement("button");
+  let cardOpened = 0;
+  card.addEventListener("click", () => { cardOpened++; });
+  const plainSlot = doc.createElement("span");
+  card.appendChild(plainSlot);
+  plainSlot.click();
+  check(cardOpened === 1, "CONTROL: in the stand-in, a tap on what a card holds opens the card, as in a browser");
+  let wanted = null;
+  const sw = NV.renderFollowSwitch(doc, { held: false, onToggle: (v) => { wanted = v; } });
+  card.appendChild(sw);
+  const ev = sw.click();
+  check(wanted === true && cardOpened === 1 && ev.stopped && sw.attrs.role === "switch" && sw.attrs["aria-checked"] === "false" && sw.textContent === "Follow", "THE SWITCH'S TAP IS ITS OWN: off, a tap asks for on, and the card it sits in is not opened", JSON.stringify({ wanted, cardOpened }));
+  const on = NV.renderFollowSwitch(doc, { held: true, onToggle: (v) => { wanted = v; } });
+  on.click();
+  check(wanted === false && on.attrs["aria-checked"] === "true" && on.textContent === "Following", "on, it says Following, and a tap asks for off");
+  wanted = null;
+  const busy = NV.renderFollowSwitch(doc, { held: true, sending: true, onToggle: (v) => { wanted = v; } });
+  busy.click();
+  check(wanted === null && busy.textContent === "Sending..." && busy.className.indexOf("sending") >= 0, "while a change is on its way it says Sending..., and a tap does nothing");
+  const nowMs = Date.parse("2026-10-14T03:10:00Z");
+  let openedItem = null;
+  const unread = NV.renderNoticeItem(doc, { id: "a".repeat(32), said: Date.parse("2026-10-14T03:06:00Z"), kind: "notify", from: "E", text: "the build <b>is</b> green", read: false }, { nowMs, onOpen: (x) => { openedItem = x; } });
+  const head = unread.kids[0];
+  check(unread.className.indexOf("unread") >= 0 && head.kids[0].textContent === "E" && head.kids[1].textContent === "Unread" && head.kids[2].textContent === "4 min ago" && !!head.kids[2].attrs.title && unread.kids[1].textContent === "the build <b>is</b> green", "A NOTICE says who it is from, that it is unread, when in plain words with the exact time as its title, and its words as text, never markup", JSON.stringify(head.kids.map((k) => k.textContent)));
+  unread.click();
+  check(!!openedItem && openedItem.from === "E", "a tap on a notice is the page's");
+  const readOne = NV.renderNoticeItem(doc, { id: "b".repeat(32), said: 0, kind: "notify", from: "E", text: "x", read: true }, { nowMs });
+  check(readOne.className.indexOf("unread") < 0 && readOne.kids[0].kids.length === 2 && readOne.kids[0].kids[1].textContent === "", "a read notice has no unread mark, and one with no time says no time, never a guess");
+  check(JSON.stringify(NV.noticeTarget({ kind: "progress", lane: "E", entry: "e1", machine: "pc" })) === '{"entry":"e1","lane":"E","machine":"pc"}' && NV.noticeTarget({ kind: "notify", lane: "", entry: "e1" }) === null && NV.noticeTarget({ kind: "cutoff", lane: "" }) === null, "a followed lane's notice opens that lane's stream; a notify line and a cut-off open nothing");
+  check(NV.noticesTabWords(0) === "Notices" && NV.noticesTabWords(3) === "Notices (3)", "THE UNREAD COUNT on the tab: none says nothing, three says (3)");
+  check(P.noticeList([{ entry: "e", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }, { id: "y", said: 5, n: 2 }, { id: "z", said: 9, n: 3 }] }], new Set(["x"])).items.map((i) => i.id + (i.read ? "r" : "")).join(",") === "z,y,xr" && P.noticeList([{ entry: "e", notices: [{ id: "x", said: 1, n: 1 }] }], new Set()).unread === 1, "the list is newest first by time, then by the machine's number; the count is of unread ones");
+  // EACH ONCE, IN THE LIST ITSELF: phone-core's takeNotices keeps one per id within one pairing, so the
+  // end-to-end check above cannot see this rule (PR 259's after-merge mutation net: a-notice-is-shown-twice
+  // survived). Here two held envelopes, of two pairings, carry the same notice.
+  const twice = P.noticeList([{ entry: "e1", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }] }, { entry: "e2", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }] }], new Set());
+  const twoIds = P.noticeList([{ entry: "e1", machine: "pc", notices: [{ id: "x", said: 5, n: 1 }] }, { entry: "e2", machine: "pc", notices: [{ id: "y", said: 5, n: 1 }] }], new Set());
+  check(twice.items.length === 1 && twice.items[0].entry === "e1" && twice.unread === 1, "A NOTICE TWO ENVELOPES CARRY IS SHOWN ONCE, by its id, and counted once", JSON.stringify(twice));
+  check(twoIds.items.length === 2 && twoIds.unread === 2, "CONTROL: two notices of two ids are shown twice", JSON.stringify(twoIds));
+}
+
+// --- 15. what became of each answer: kept until applied, shown answered while on its way, sent again when missing (the founder, 2026-10-14, relay fixes 3 and 4) ---
+{
+  // A phone on a clock of the suite's own, beginning at the real time (the machine's snapshots carry the
+  // real time, and the phone compares them with its own).
+  const clock = { now: Date.now() };
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const store = memoryStore();
+  const auth = softAuthenticator({ origin, prf: true });
+  const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
+  let phone = make();
+  const paired = await phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  await phone.announce(paired.id);
+  const phoneKey = await phoneKeyOf(t, m);
+  const from = (await store.get("horde/" + paired.id)).deviceKeyId;
+  const receipt = (over = {}) => [{ from, through: 0, checked: 1, missing: [], applied: [], refused: [], ...over }];
+  const lastAnswer = async () => { const items = (await t.get(m.mailbox, 0, 256)).value.items; for (let i = items.length - 1; i >= 0; i--) { const o = await machineOpens(m, items[i].text); if (o.header.channel === "decisions") return { ...o, key: items[i].key }; } return null; };
+  const kept = async () => { const x = await store.get("outbox/" + paired.id); return x && Array.isArray(x.items) ? x.items : []; };
+  const stateOf = async (answerId) => { const a = (await phone.answers(paired.id)).find((x) => x.answerId === answerId); return a ? a.state + (a.warning ? "+warning" : "") : "none"; };
+
+  // A MACHINE FROM BEFORE RECEIPTS: nothing would ever confirm an answer, so none is kept.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2 });
+  await phone.refresh(paired.id);
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Old machine.", answerId: P.hex(P.randomBytes(16)) });
+  check((await kept()).length === 0 && (await phone.answers(paired.id)).length === 0, "to a machine whose snapshot has no receipts, an answer is sent as before and nothing is kept");
+
+  // SENT, THEN RECEIVED, THEN APPLIED.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt() });
+  await phone.refresh(paired.id);
+  const id1 = P.hex(P.randomBytes(16));
+  const sentAt = clock.now;
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Yes, kept.", answerId: id1 });
+  const env1 = await lastAnswer();
+  check(env1.body.answerId === id1 && (await stateOf(id1)) === "sent", "AN ANSWER SHOWS SENT once the relay took it", await stateOf(id1));
+  const box = await kept();
+  check(box.length === 1 && box[0].answerId === id1 && box[0].seqs.join(",") === String(env1.header.seq) && box[0].envelope.key === env1.key && JSON.stringify(box).indexOf("Yes, kept.") < 0, "THE OUTBOX KEEPS IT: its ids, the seq and the envelope the relay took, and its words only sealed to the phone's own key - never as text", JSON.stringify(box[0] && { seqs: box[0].seqs, key: box[0].envelope.key }));
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt({ through: env1.header.seq }) });
+  await phone.refresh(paired.id);
+  check((await stateOf(id1)) === "received" && (await kept()).length === 1, "THEN RECEIVED BY PC, when the receipt's through reaches its seq - and still kept", await stateOf(id1));
+
+  // A RELOAD: the words come back from the outbox, and the question stands answered, never empty.
+  phone = make();
+  await phone.unlock(paired.id);
+  const bridge = createBridge(phone, { loadKinds: async () => ({}) });
+  const rec = await bridge.request("pick", { id: paired.id });
+  const q1 = rec.value.questions.find((q) => q.number === 1);
+  const mine = q1.thread.messages[q1.thread.messages.length - 1];
+  check(rec.state === "known" && mine.speaker === "founder" && mine.text === "Yes, kept." && mine.local === true && mine.receipt === "received by PC" && mine.receiptNote === "", "A PENDING ANSWER SHOWS AS ANSWERED, NEVER EMPTY: after a reload the question carries his words as his last message, marked received by PC", JSON.stringify(mine));
+  check(rec.value.questions.find((q) => q.number === 2).thread.messages.length === 0, "CONTROL: a question he did not answer has nothing drawn into it");
+  const said = await bridge.request("say", { number: 2, text: "Only a.", wording: 1, id: P.hex(P.randomBytes(16)), part: "a" });
+  const after = await bridge.request("list");
+  const q2 = after.value.questions.find((q) => q.number === 2);
+  const part = q2.thread.messages[q2.thread.messages.length - 1];
+  check(said.ok === true && part.part === "a" && part.text === "Only a." && part.receipt === "sent" && Number(part.sequence) >= said.sequence, "a part answered by itself is drawn under its part, marked sent, at the sequence the page waits for", JSON.stringify({ said, part }));
+
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { thread: { count: 1, turn: "warchief", messages: [{ sequence: 3, speaker: "founder", text: "Yes, kept." }] } }), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt({ through: env1.header.seq, applied: [id1] }) });
+  await bridge.request("refresh");
+  const rec2 = await bridge.request("list");
+  const msgs = rec2.value.questions.find((q) => q.number === 1).thread.messages;
+  check((await stateOf(id1)) === "applied" && msgs.length === 1 && msgs[0].receipt === "applied" && !msgs[0].local, "THEN APPLIED: the receipt lists its answerId, and his message in the snapshot's own thread is marked applied - drawn once, not twice", JSON.stringify(msgs));
+  check((await kept()).every((i) => i.answerId !== id1) && (await kept()).length === 1, "THE OUTBOX KEEPS AN ANSWER UNTIL APPLIED, and not after: the applied one is gone from it, the part still on its way is not");
+
+  // MISSING: the PC took a later envelope of this phone, so the journal refuses this seq for good.
+  const id3 = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Lost on the way.", answerId: id3 });
+  const env3 = await lastAnswer();
+  const t3 = clock.now;
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?", { kind: "parts", parts: ["(a) A?", "(b) B?"] })], { answers: 2, receipts: receipt({ through: env3.header.seq + 1, missing: [env3.header.seq], applied: [id1] }) });
+  await phone.refresh(paired.id);
+  clock.now = t3 + 60 * 1000;
+  const early = await phone.resend(paired.id);
+  check(early.resent === 0 && (await lastAnswer()).header.seq === env3.header.seq, "a missing answer is not sent again before the interval since it was sent", JSON.stringify(early));
+  clock.now = t3 + P.ANSWER_RESEND_MS + 1000;
+  const first = await phone.resend(paired.id);
+  const env3b = await lastAnswer();
+  const k3 = (await kept()).find((i) => i.answerId === id3);
+  check(first.resent === 1 && env3b.header.seq > env3.header.seq && env3b.body.answerId === id3 && env3b.body.text === "Lost on the way." && env3b.body.snapshot === env3.body.snapshot && k3.seqs.join(",") === env3.header.seq + "," + env3b.header.seq, "A REPORTED-MISSING ANSWER IS RESENT: a NEW envelope, under a new seq, signed again, with the same answerId and words - the machine applies it once", JSON.stringify({ first, seqs: k3 && k3.seqs }));
+  const again = await phone.resend(paired.id);
+  check(again.resent === 0, "and not again at once");
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env3b.header.seq + 1, missing: [env3.header.seq, env3b.header.seq], applied: [id1] }) });
+  await phone.refresh(paired.id);
+  clock.now = t3 + P.ANSWER_RESEND_MS + 2 * 60 * 1000;
+  const tooSoon = await phone.resend(paired.id);
+  clock.now = t3 + 2 * P.ANSWER_RESEND_MS + 2000;
+  const seqBefore = (await lastAnswer()).header.seq;
+  await bridge.request("refresh");
+  const second = { resent: (await lastAnswer()).header.seq > seqBefore ? 1 : 0 };
+  check(tooSoon.resent === 0 && second.resent === 1, "missing again, it is resent ONCE PER INTERVAL: not two minutes after the last, and again once the interval is out - by the bridge's own refresh", JSON.stringify({ tooSoon, second }));
+
+  // A WARNING after an hour unconfirmed; none before.
+  clock.now = t3 + P.ANSWER_WARN_MS - 1000;
+  const before = await stateOf(id3);
+  clock.now = t3 + P.ANSWER_WARN_MS + 1000;
+  const pastHour = await stateOf(id3);
+  const warned = (await bridge.request("refresh")).value.questions.find((q) => q.number === 1).thread.messages.slice(-1)[0];
+  check(before.indexOf("+warning") < 0 && pastHour.endsWith("+warning") && warned.receiptNote === P.ANSWER_WARNING && warned.text === "Lost on the way.", "AN ANSWER PENDING PAST AN HOUR SHOWS A WARNING, under his words; a minute before the hour it does not", before + " / " + pastHour + " / " + JSON.stringify(warned));
+
+  // LOST AT THE END OF THE STREAM: the PC spoke well after the put and has nothing as late; the same
+  // envelope is put again, and no seq is spent.
+  const id4 = P.hex(P.randomBytes(16));
+  clock.now = Date.now() - 30 * 60 * 1000;
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Lost at the tail.", answerId: id4 });
+  const env4 = await lastAnswer();
+  await t.ack(m.mailbox, (await t.get(m.mailbox, 0, 256)).value.items.slice(-1)[0].seq);
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env3b.header.seq + 1, missing: [env3.header.seq, env3b.header.seq], applied: [id1] }) });
+  await phone.refresh(paired.id);
+  clock.now = Date.now();
+  const tail = await phone.resend(paired.id);
+  const back = (await t.get(m.mailbox, 0, 256)).value.items.find((i) => i.key === env4.key);
+  check(tail.resent >= 1 && !!back && back.text === (await kept()).find((i) => i.answerId === id4).envelope.text, "an answer the PC never saw though it spoke well after is put again as the very envelope it was", JSON.stringify(tail));
+  check((await phone.resend(paired.id)).resent === 0, "and not again within the interval, though no new envelope was made for it");
+
+  // REFUSED: never sent again, and gone from the outbox once shown.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env4.header.seq, applied: [id1], refused: [id4] }) });
+  await phone.refresh(paired.id);
+  check((await stateOf(id4)) === "refused" && (await kept()).every((i) => i.answerId !== id4), "an answer the PC refused says so, and leaves the outbox: it is never sent again");
+
+  // A SESSION THAT CANNOT SIGN sends nothing that needs a new signature; the passkey's session does.
+  const id5 = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Needs a signature.", answerId: id5 });
+  const env5 = await lastAnswer();
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?")], { answers: 2, receipts: receipt({ through: env5.header.seq + 1, missing: [env5.header.seq], applied: [id1], refused: [id4] }) });
+  phone.lock(paired.id);
+  await phone.recover(paired.id, paired.recoveryCode);
+  await phone.refresh(paired.id);
+  clock.now += P.ANSWER_RESEND_MS + 1000;
+  const unsigned = await phone.resend(paired.id);
+  const stillHead = (await lastAnswer()).header.seq;
+  await phone.unlock(paired.id);
+  await phone.refresh(paired.id);
+  const signed = await phone.resend(paired.id);
+  check(unsigned.resent === 0 && stillHead === env5.header.seq && signed.resent === 1 && (await lastAnswer()).header.seq > env5.header.seq, "a missing answer is not sent again from a recovery session, which cannot sign; the passkey's session sends it", JSON.stringify({ unsigned, signed }));
+  check((await kept()).length > 0, "CONTROL: an answer is still kept");
+  await phone.forget(paired.id);
+  check((await store.get("outbox/" + paired.id)) === undefined, "forgetting the horde forgets what it kept to send");
+
+  // THE STATE BY ITSELF.
+  const item = { answerId: id1, seqs: [5], sentAt: 0, lastSentAt: 0, lastResendAt: 0 };
+  const rc = (o) => P.receiptFor([{ from, through: 0, missing: [], applied: [], refused: [], ...o }], from);
+  check(P.answerState(item, rc({ through: 4 }), 0, 1).state === "sent" && P.answerState(item, rc({ through: 5 }), 0, 1).state === "received" && P.answerState(item, rc({ through: 6, missing: [5] }), 0, 1).state === "sent" && P.answerState(item, rc({ through: 6, applied: [id1] }), 0, 1).state === "applied", "answerState: sent below through, received at it, not received when its seq is missing, applied by its id");
+  check(P.answerState(item, rc({ through: 6, missing: [5] }), 0, P.ANSWER_RESEND_MS).resend === "resign" && P.answerState(item, rc({ through: 4 }), P.ANSWER_TAIL_GRACE_MS + 1, P.ANSWER_RESEND_MS).resend === "reput" && P.answerState(item, rc({ through: 4 }), P.ANSWER_TAIL_GRACE_MS - 1, P.ANSWER_RESEND_MS).resend === "", "missing is signed again; unseen past the grace is put again; unseen within it is waited for");
+  const others = P.receiptFor([{ from: "b".repeat(32), through: 9, missing: [], applied: [id1], refused: [] }, { from, through: 1, missing: [], applied: [], refused: [] }], from);
+  check(others.through === 1 && !others.applied.has(id1), "receiptFor reads this passkey's receipt only, never another phone's");
+  check(P.receiptFor(undefined, from) === null && P.receiptFor([{ from, through: -1, missing: [], applied: [], refused: [] }], from) === null && P.receiptFor([{ from, through: 1, missing: [], applied: ["not hex"], refused: [] }], from) === null && P.receiptFor([], from).through === 0, "receiptFor: none from a machine before receipts, none from one that does not hold together, nothing yet from one with no stream for this passkey");
+}
+
+// --- 15b. the review of PR 262: a hole below the list is lost, a stale answer is never sent, one prompt, nothing dropped ---
+{
+  const clock = { now: Date.now() };
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const mem = memoryStore();
+  // A store whose reads of the outbox can be made to fail (S3), and a passkey that can be made to refuse (M1b).
+  const fails = { outbox: false };
+  const store = { ...mem, get: async (k) => { if (fails.outbox && k.startsWith("outbox/")) throw new Error("the store could not be read"); return mem.get(k); } };
+  const soft = softAuthenticator({ origin, prf: true });
+  const refuse = { next: 0 };
+  let prompts = 0;
+  const auth = { create: (o) => soft.create(o), get: async (o) => { if (!o.prfInput) prompts += 1; if (refuse.next > 0) { refuse.next -= 1; const x = new Error("The operation either timed out or was not allowed."); x.name = "NotAllowedError"; throw x; } return soft.get(o); } };
+  const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
+  const phone = make();
+  const paired = await phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  await phone.announce(paired.id);
+  const phoneKey = await phoneKeyOf(t, m);
+  const from = (await mem.get("horde/" + paired.id)).deviceKeyId;
+  const receipt = (over = {}) => [{ from, through: 0, checked: 1, missing: [], applied: [], refused: [], ...over }];
+  const qs = [question(1, "One?"), question(2, "Two?"), question(3, "Three?")];
+  const snap = (over) => sendSnapshot(t, m, [phoneKey], qs, { answers: 2, receipts: receipt(over) });
+  const lastAnswer = async () => { const items = (await t.get(m.mailbox, 0, 256)).value.items; for (let i = items.length - 1; i >= 0; i--) { const o = await machineOpens(m, items[i].text); if (o.header.channel === "decisions") return o; } return null; };
+  const kept = async () => { const x = await mem.get("outbox/" + paired.id); return x && Array.isArray(x.items) ? x.items : []; };
+  const seqNow = async () => ((await mem.get("horde/" + paired.id)).seq || {}).decisions || 0;
+  await snap({});
+  await phone.refresh(paired.id);
+
+  // M1b, ATTACKED: a prompt that never signs spends no seq.
+  const before = await seqNow();
+  refuse.next = 1;
+  const why = await throwsAsync(() => phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Never signed.", answerId: P.hex(P.randomBytes(16)) }));
+  const after = await seqNow();
+  await phone.answer(paired.id, { number: 3, wordingVersion: 1, text: "Signed.", answerId: P.hex(P.randomBytes(16)) });
+  check(why !== "" && after === before && (await lastAnswer()).header.seq === before + 1, "A PROMPT THAT NEVER SIGNS SPENDS NO SEQ: the next answer goes under the very next number, so a cancelled prompt leaves no hole", JSON.stringify({ before, after, sent: (await lastAnswer()).header.seq }));
+
+  // M1, ATTACKED (probe P1): 16 lost, 18..49 holes, 50 arrived; the list holds the newest 32 and checked is 18.
+  const holes = []; for (let s = 18; s <= 49; s++) holes.push(s);
+  const lostItem = { answerId: P.hex(P.randomBytes(16)), seqs: [16], sentAt: 0, lastSentAt: 0, lastResendAt: 0 };
+  const cut = P.receiptFor([{ from, through: 50, checked: 18, missing: holes, applied: [], refused: [] }], from);
+  const st16 = P.answerState(lostItem, cut, 1, P.ANSWER_RESEND_MS);
+  check(st16.state === "sent" && st16.resend === "resign" && st16.due, "A SEQ BELOW THE RECEIPT'S CHECKED IS MISSING, NOT RECEIVED: 16, under a list cut at the newest 32, is signed again", JSON.stringify(st16));
+  check(P.answerState({ ...lostItem, seqs: [20] }, P.receiptFor([{ from, through: 50, checked: 18, missing: holes.filter((x) => x !== 20), applied: [], refused: [] }], from), 1, 1).state === "received", "CONTROL: a seq from checked up, not missing, is received");
+  check(P.answerState(lostItem, P.receiptFor([{ from, through: 50, missing: [], applied: [], refused: [] }], from), 1, P.ANSWER_RESEND_MS).resend === "resign", "a receipt that does not say how far down it looked vouches for nothing below through");
+
+  // M2, ATTACKED (probe P2): A "deploy now" is lost; B "do NOT deploy" to the same question replaces it.
+  const idA = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "A: deploy now", answerId: idA });
+  const envA = await lastAnswer();
+  clock.now += 60 * 1000;
+  const idB = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "B: do NOT deploy", answerId: idB });
+  const envB = await lastAnswer();
+  check((await kept()).every((i) => i.answerId !== idA) && (await kept()).some((i) => i.answerId === idB), "A NEW ANSWER TO A QUESTION DROPS THE OLDER ONE STILL WAITING THERE: A is no longer kept, B is");
+  check((await kept()).some((i) => i.number === 3), "CONTROL: an answer to another question is kept beside it");
+  await snap({ through: envB.header.seq, checked: 1, missing: [envA.header.seq], applied: [idB] });
+  await phone.refresh(paired.id);
+  clock.now += P.ANSWER_RESEND_MS + 1000;
+  const r2 = await phone.resend(paired.id);
+  const after2 = await lastAnswer();
+  check(after2.body.answerId !== idA && after2.header.seq === envB.header.seq, "A STALE ANSWER IS NEVER SENT AGAIN: with A reported missing and B applied, nothing of A goes out", JSON.stringify({ r2, last: after2.body.text }));
+
+  // THE RE-SIGN KEEPS THE FIRST SIGNING TIME, so the PC can tell an older answer from a newer one.
+  const idC = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "C: lost once.", answerId: idC });
+  const envC = await lastAnswer();
+  await snap({ through: envC.header.seq + 1, checked: 1, missing: [envC.header.seq], applied: [idB] });
+  await phone.refresh(paired.id);
+  clock.now += 2 * P.ANSWER_RESEND_MS;
+  await phone.resend(paired.id);
+  const envC2 = await lastAnswer();
+  check(envC2.body.answerId === idC && envC2.header.seq > envC.header.seq && envC2.header.ts === envC.header.ts, "AN ANSWER SIGNED AGAIN CARRIES THE TIME IT WAS FIRST SIGNED: a new envelope, a new seq, the old time", JSON.stringify({ first: envC.header.ts, again: envC2.header.ts }));
+
+  // S4: one prompt a refresh; none while hidden; none without the lock; recovery says why.
+  const idD = P.hex(P.randomBytes(16));
+  const idE = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "D: lost.", answerId: idD });
+  const envD = await lastAnswer();
+  await phone.answer(paired.id, { number: 3, wordingVersion: 1, text: "E: lost.", answerId: idE });
+  const envE = await lastAnswer();
+  await snap({ through: envE.header.seq + 1, checked: 1, missing: [envD.header.seq, envE.header.seq], applied: [idB, idC] });
+  clock.now += 2 * P.ANSWER_RESEND_MS;
+  let visible = false;
+  let held = true;
+  const bridge = createBridge(phone, { loadKinds: async () => ({}), visible: () => visible, lock: (name, fn) => fn(held) });
+  await bridge.request("pick", { id: paired.id });
+  const p0 = prompts;
+  await bridge.request("refresh");
+  check(prompts === p0 && (await lastAnswer()).header.seq === envE.header.seq + 0, "HIDDEN, THE PAGE SIGNS NOTHING AGAIN: no passkey prompt while he cannot see it", String(prompts - p0));
+  visible = true; held = false;
+  await bridge.request("refresh");
+  check(prompts === p0, "nor while another window of the app holds the lock");
+  held = true;
+  await bridge.request("refresh");
+  const one = prompts - p0;
+  await bridge.request("refresh");
+  const two = prompts - p0;
+  check(one === 1 && two === 2, "two answers missing at once cost ONE prompt a refresh, never two at once", JSON.stringify({ one, two }));
+  const idF = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "F: lost.", answerId: idF });
+  const envF = await lastAnswer();
+  await snap({ through: envF.header.seq + 1, checked: 1, missing: [envF.header.seq], applied: [idB, idC, idD, idE] });
+  phone.lock(paired.id);
+  await phone.recover(paired.id, paired.recoveryCode);
+  await phone.refresh(paired.id);
+  clock.now += 2 * P.ANSWER_RESEND_MS;
+  const ro = await phone.resend(paired.id);
+  check(ro.resent === 0 && ro.problems.some((x) => x.indexOf("recovery code") >= 0 && x.indexOf("cannot sign") >= 0), "A RECOVERY SESSION SAYS IT CANNOT SEND AGAIN what the PC is missing", JSON.stringify(ro));
+  await phone.unlock(paired.id);
+  await phone.refresh(paired.id);
+
+  // S1: received for hours and never listed: signed again once, and only once.
+  const idG = P.hex(P.randomBytes(16));
+  await phone.answer(paired.id, { number: 3, wordingVersion: 1, text: "G: received, never listed.", answerId: idG });
+  const envG = await lastAnswer();
+  await snap({ through: envG.header.seq, checked: 1, missing: [], applied: [idB, idC, idD, idE, idF] });
+  await phone.refresh(paired.id);
+  clock.now += P.ANSWER_STUCK_MS + P.ANSWER_RESEND_MS;
+  const s1 = await phone.resend(paired.id);
+  const envG2 = await lastAnswer();
+  clock.now += 2 * P.ANSWER_RESEND_MS;
+  const s1b = await phone.resend(paired.id);
+  check(s1.resent === 1 && envG2.body.answerId === idG && envG2.header.seq > envG.header.seq && s1b.resent === 0, "AN ANSWER RECEIVED FOR HOURS AND NEVER LISTED IS SIGNED AGAIN ONCE - the PC answers it as its record and lists it again - and only once", JSON.stringify({ s1, s1b }));
+
+  // S3: words that cannot be read, and a store that cannot be read, still show the question answered.
+  const xs = await kept();
+  await mem.put("outbox/" + paired.id, { v: 1, items: xs.map((i) => (i.answerId === idG ? { ...i, sealed: { enc: i.sealed.enc, box: P.b64u(P.randomBytes(40)) } } : i)) });
+  const phone2 = make();
+  await phone2.unlock(paired.id);
+  const bridge2 = createBridge(phone2, { loadKinds: async () => ({}) });
+  const rec = await bridge2.request("pick", { id: paired.id });
+  const q3 = rec.value.questions.find((q) => q.number === 3).thread.messages.slice(-1)[0];
+  check(!!q3 && q3.speaker === "founder" && q3.text === P.ANSWER_UNREADABLE && q3.local === true, "AN ANSWER WHOSE WORDS CANNOT BE READ STILL STANDS: the question shows answered, pending, saying its words cannot be read here", JSON.stringify(q3));
+  fails.outbox = true;
+  const rec2 = await bridge2.request("refresh");
+  fails.outbox = false;
+  const q3b = rec2.value.questions.find((q) => q.number === 3).thread.messages.slice(-1)[0];
+  check(!!q3b && q3b.speaker === "founder" && q3b.local === true, "A READ OF THE OUTBOX THAT FAILS KEEPS WHAT WAS LAST READ: the question is not emptied", JSON.stringify(q3b));
+
+  // TWO ANSWERS SENT AT ONCE (two windows, or two parts in a row) never share a seq: the one that loses
+  // the claim signs again under the next.
+  await Promise.all([
+    phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "At once, one.", answerId: P.hex(P.randomBytes(16)) }),
+    phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "At once, two.", answerId: P.hex(P.randomBytes(16)) })
+  ]);
+  const both = [];
+  for (const it of (await t.get(m.mailbox, 0, 256)).value.items) { const o = await machineOpens(m, it.text); if (o.header.channel === "decisions" && o.body.text.startsWith("At once")) both.push(o.header.seq); }
+  check(both.length === 2 && both[0] !== both[1], "two answers signed at the same moment go under two seqs, never one", JSON.stringify(both));
+  // AN OUTBOX THAT HOLDS TWO ANSWERS TO ONE QUESTION (kept by an earlier build) sends the older one never.
+  await mem.put("outbox/" + paired.id, { v: 1, items: [
+    { answerId: P.hex(P.randomBytes(16)), number: 2, part: "", wordingVersion: 1, snapshot: "x", sealed: { enc: "", box: "" }, seqs: [900], envelope: { key: "old", text: "old" }, signedAt: 1, sentAt: 1, lastSentAt: 1, lastResendAt: 0 },
+    { answerId: P.hex(P.randomBytes(16)), number: 2, part: "", wordingVersion: 1, snapshot: "x", sealed: { enc: "", box: "" }, seqs: [901], envelope: { key: "new", text: "new" }, signedAt: 2, sentAt: clock.now, lastSentAt: clock.now, lastResendAt: 0 }
+  ] });
+  await snap({ through: 901, checked: 1, missing: [900] });
+  await phone.refresh(paired.id);
+  const legacy = await phone.resend(paired.id);
+  check(legacy.resent === 0 && legacy.problems.length === 0, "an older answer to a question that has a newer one waiting is never sent again, even from an outbox that holds both", JSON.stringify(legacy));
+
+  // THE OUTBOX NEVER DROPS AN UNCONFIRMED ANSWER TO MAKE ROOM: full, a new answer is not sent.
+  const filler = []; for (let i = 0; i < 200; i++) filler.push({ answerId: P.hex(P.randomBytes(16)), number: 1000 + i, part: "", wordingVersion: 1, snapshot: "x", sealed: { enc: "", box: "" }, seqs: [1], envelope: { key: "k" + i, text: "t" }, signedAt: 1, sentAt: clock.now, lastSentAt: clock.now, lastResendAt: 0 });
+  await mem.put("outbox/" + paired.id, { v: 1, items: filler });
+  const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const full = await throwsAsync(() => phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "One too many.", answerId: P.hex(P.randomBytes(16)) }));
+  check(full.indexOf("Not sent") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await kept()).length === 200, "A FULL OUTBOX REFUSES THE NEW ANSWER, saying why, and drops none of the 200 still waiting", full);
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

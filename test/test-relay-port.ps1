@@ -14,6 +14,9 @@
 #     put receipt or ack, and every kind of malformed, stale, repeated, conflicting, reordered or
 #     excess item (test/lib/HostileRelay.ps1) comes back unknown or is dropped with an anomaly that
 #     says why. The cursor never moves backwards and never past an item that was not delivered.
+#   - WHICH FILES HOLD RELAYS' SECRETS is one answer for every relay that says: known only when each of
+#     them answered known or absent, and unknown - naming the relay, repeating nothing it said that
+#     was not a path or a description - when one threw, lied or could not tell.
 #
 # Every conformance case for the real relays is test/test-relay-conformance.ps1.
 
@@ -574,5 +577,169 @@ $null = Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { pa
     -PutKeeping { param($s, $m, $k, $t, $from) $u = New-HordeUnknown -Reason "the mailbox holds its most"; $u | Add-Member -NotePropertyName status -NotePropertyValue 507; return $u }
 $a = Send-HordeRelayItem -Connection (Conn "fixture-good") -Mailbox $mb -Text "page" -Key $streamKey -KeepFrom 10
 Check ($a.state -ceq "unknown" -and $null -ne $a.PSObject.Properties["status"] -and $a.status -eq 507) "a trimming put the relay refuses as full comes back unknown, carrying the relay's status (507)"
+
+Write-Host ""
+Write-Host "--- which files hold relays' secrets: every relay that says is asked, and one that cannot tell makes the whole answer unknown ---" -ForegroundColor Cyan
+# relays/Port.ps1, WHICH FILES ON THIS MACHINE HOLD A RELAY'S SECRETS. The caller is deciding whether a
+# file may leave the machine, so what is pinned here is that the answer is never a list with a hole in it.
+function RegSecret {
+    # A fixture relay registered again, with -Block as its word on its secret files, or with none.
+    param([string]$Name, $Block = $null)
+    $script:HordeRelays.Remove($Name)
+    if ($null -eq $Block) { return (Register-HordeRelay -Folder (Join-Path $fx $Name) -Connect {} -Put {} -Get {} -Watch {} -Ack {}) }
+    return (Register-HordeRelay -Folder (Join-Path $fx $Name) -Connect {} -Put {} -Get {} -Watch {} -Ack {} -SecretFiles $Block)
+}
+$null = RegSecret "fixture-good"
+$a = Get-HordeRelaySecretFiles
+Check (@(Get-HordeRelayNames).Count -ge 3 -and $a.state -ceq "known" -and @($a.value.files).Count -eq 0 -and @($a.value.asked).Count -eq 0) ("relays that hand over no such block keep no secret file and are not asked: known, no files, nobody asked (" + @(Get-HordeRelayNames).Count + " loaded)")
+$loaded = $script:HordeRelays.Clone()
+$script:HordeRelays.Clear()
+$a = Get-HordeRelaySecretFiles
+$none = @(Get-HordeRelayNames).Count
+foreach ($k in @($loaded.Keys)) { $script:HordeRelays[$k] = $loaded[$k] }
+Check ($none -eq 0 -and $a.state -ceq "known" -and @($a.value.files).Count -eq 0 -and @($a.value.asked).Count -eq 0) "with no relay loaded at all the answer is known and empty, not a failure"
+Check (@(Get-HordeRelayNames).Count -eq $loaded.Count) "CONTROL: the relays are loaded again"
+
+$script:secretAsks = New-Object System.Collections.ArrayList
+$script:secretSays = $null
+$null = RegSecret "fixture-good" { param($h) [void]$script:secretAsks.Add($h); if ($script:secretSays -is [scriptblock]) { return (& $script:secretSays) }; return $script:secretSays }
+Check ($null -ne (Get-HordeRelay -Name "fixture-good").secretFiles -and $null -eq (Get-HordeRelay -Name "fixture-local-only").secretFiles) "a relay hands the block over at registration, and one that hands none has none"
+$script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:/keys/../vault/client.json"; what = "the sign-in client file" }, @{ path = "D:\tool\login.toml"; what = "a login" }) })
+$a = Get-HordeRelaySecretFiles -HordeHome "C:\some\home"
+Check ($a.state -ceq "known" -and @($a.value.files).Count -eq 2 -and (@($a.value.asked) -join ",") -ceq "fixture-good") ("a relay that names two files: known, both, and the relay is among those asked (" + $a.state + ")")
+Check ($script:secretAsks.Count -eq 1 -and $script:secretAsks[0] -ceq "C:\some\home") ("the relay is asked once, and handed the Horde home the caller named (" + ($script:secretAsks -join "|") + ")")
+$f0 = @($a.value.files)[0]
+$f1 = @($a.value.files)[1]
+Check ($f0.relay -ceq "fixture-good" -and $f0.what -ceq "the sign-in client file" -and $f1.relay -ceq "fixture-good" -and $f1.what -ceq "a login") "each file says which relay's it is and what it is, in the relay's own few words"
+Check ($f0.path -ceq "C:\vault\client.json") ("a path is handed back whole: its dot-dot folded away and its slashes the system's, so it names the file it opens (" + $f0.path + ")")
+Check ($f1.path -ceq "D:\tool\login.toml") "a path on another drive is absolute too, and is kept"
+# A NETWORK OR DEVICE PATH IS A FILE LIKE ANY OTHER (round 2 of the review of PR 238, 2026-10-14):
+# handed over whole, so files/ can ask it which file it is. Round 1 made each of these a relay that
+# could not tell, which refused every share on a machine whose relay file is on a network share.
+foreach ($elsewhere in @(@("\\server\share\login.toml", "\\server\share\login.toml"), @("\\localhost\C$\vault\client.json", "\\localhost\C$\vault\client.json"), @("\\.\C:\vault\client.json", "\\.\C:\vault\client.json"), @("\\?\C:\vault\client.json", "\\?\C:\vault\client.json"), @("//server/share/login.toml", "\\server\share\login.toml"), @("\/server\share\login.toml", "\\server\share\login.toml"), @("\\server\share\a\..\login.toml", "\\server\share\login.toml"))) {
+    $script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\fine.json"; what = "a key" }, @{ path = $elsewhere[0]; what = "a login" }) })
+    $a = Get-HordeRelaySecretFiles
+    Check ($a.state -ceq "known" -and @($a.value.files).Count -eq 2 -and @($a.value.files)[1].path -ceq $elsewhere[1]) ("a relay that names a file as " + $elsewhere[0] + " is known, and the path is handed over whole (" + $a.state + ")")
+}
+$script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:/vault/fine.json"; what = "a key" }) })
+Check ((Get-HordeRelaySecretFiles).state -ceq "known") "CONTROL: a local path written with forward slashes is still a local path"
+Check ((@($f0.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "relay,path,what") "and a file is those three things and nothing else the relay may have added"
+$script:secretAsks.Clear()
+$a = Get-HordeRelaySecretFiles
+Check ($a.state -ceq "known" -and $script:secretAsks.Count -eq 1 -and $script:secretAsks[0] -ceq "") "with no home named the relay is handed none, and reads its user's own"
+$script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = [pscustomobject]@{ path = "C:\vault\only.json"; what = "a key" } })
+$a = Get-HordeRelaySecretFiles
+Check ($a.state -ceq "known" -and @($a.value.files).Count -eq 1 -and @($a.value.files)[0].path -ceq "C:\vault\only.json") "one file, which arrives unrolled, is still a list of one"
+$script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = [pscustomobject]@{ path = "C:\vault\only.json"; what = ("w" * 80) } })
+Check ((Get-HordeRelaySecretFiles).state -ceq "known") "a description of exactly 80 characters is allowed"
+foreach ($quiet in @(
+        @{ says = (New-HordeAbsent -Note "keeps none"); what = "absent" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @() })); what = "known, with an empty list" })) {
+    $script:secretSays = $quiet.says
+    $a = Get-HordeRelaySecretFiles
+    Check ($a.state -ceq "known" -and @($a.value.files).Count -eq 0 -and (@($a.value.asked) -join ",") -ceq "fixture-good") ("a relay that answers " + $quiet.what + " keeps none here: known, no files, and it was asked")
+}
+
+# ONE THAT CANNOT TELL, BESIDE ONE THAT CAN: the whole answer is unknown, and nothing of the other's is
+# handed over beside it.
+$null = RegSecret "fixture-local-only" { param($h) New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "D:\other\token.bin"; what = "a token" }) }) }
+$script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = "a key" }) })
+$a = Get-HordeRelaySecretFiles
+Check ($a.state -ceq "known" -and (@($a.value.files | ForEach-Object { $_.relay + "=" + $_.path }) -join ",") -ceq "fixture-good=C:\vault\client.json,fixture-local-only=D:\other\token.bin" -and (@($a.value.asked) -join ",") -ceq "fixture-good,fixture-local-only") ("CONTROL: two relays that both can tell: known, every file of both, in the relays' name order (" + (@($a.value.asked) -join ",") + ")")
+$script:secretSays = New-HordeUnknown -Reason "its settings do not read"
+$a = Get-HordeRelaySecretFiles
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("'fixture-good'") -and "$($a.reason)".Contains("its settings do not read")) ("one relay that cannot tell makes the whole answer unknown, naming it and its reason (" + $a.reason + ")")
+Check (-not "$($a.reason)".Contains("fixture-local-only") -and $null -ne $a.PSObject.Properties["relays"] -and (@($a.relays) -join ",") -ceq "fixture-good") "the relay that could tell is not blamed: the answer's relays are exactly those that could not"
+Check ($null -eq $a.value -and $null -eq $a.PSObject.Properties["files"] -and -not "$($a.reason)".Contains("token.bin")) "and nothing the other relay named is handed over beside the unknown: a list with a hole in it cannot be read as the whole list"
+$null = RegSecret "fixture-local-only"
+
+# EVERYTHING A RELAY CAN GET WRONG IS "COULD NOT TELL", never a throw and never a file believed.
+$longWords = "x" * 81
+foreach ($case in @(
+        @{ says = { throw "the vault is locked" }; like = "the vault is locked"; why = "a block that throws" },
+        @{ says = { return "C:\vault\client.json" }; like = "not an answer"; why = "something that is not an answer" },
+        @{ says = { return $null }; like = "not an answer"; why = "nothing at all" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ paths = @("C:\vault\client.json") })); like = "without files"; why = "a known answer with no files in it" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @("C:\vault\client.json") })); like = "not an absolute path"; why = "a file that is a bare string, not { path; what }" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "keys\client.json"; what = "a key" }) })); like = "not an absolute path"; why = "a relative path"; never = "keys\client.json" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:client.json"; what = "a key" }) })); like = "not an absolute path"; why = "a path on a drive but not from its root (C:client.json)" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "\keys\client.json"; what = "a key" }) })); like = "not an absolute path"; why = "a path from the root of no drive" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = ""; what = "a key" }) })); like = "not an absolute path"; why = "an empty path" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = 42; what = "a key" }) })); like = "not an absolute path"; why = "a path that is a number" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ what = "a key" }) })); like = "not an absolute path"; why = "no path" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\a.json"; what = "a key" }, [pscustomobject]@{ path = "b.json"; what = "a key" }) })); like = "secret file 2 of 2"; why = "a second file that is wrong after a first that is right" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json" }) })); like = "what it is"; why = "no description" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = "" }) })); like = "what it is"; why = "an empty description" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = $longWords }) })); like = "what it is"; why = "a description of 81 characters - room for a secret"; never = $longWords },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = "a key`nand more" }) })); like = "what it is"; why = "a description of two lines" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = ("a cl" + [char]0xE9) }) })); like = "what it is"; why = "a description that is not ASCII" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = 7 }) })); like = "what it is"; why = "a description that is a number" })) {
+    $script:secretSays = $case.says
+    $threw = $false
+    $a = $null
+    try { $a = Get-HordeRelaySecretFiles } catch { $threw = $true }
+    $quoted = ($case.ContainsKey("never") -and $null -ne $a -and "$($a.reason)".Contains($case.never))
+    Check (-not $threw -and $null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains("'fixture-good'") -and "$($a.reason)".Contains($case.like) -and -not $quoted) ("a relay that answers with " + $case.why + " could not tell: unknown, naming it, never a throw" + $(if ($case.ContainsKey("never")) { ", and what it said is not repeated" } else { "" }))
+}
+$script:secretSays = New-HordeKnown -Value ([pscustomobject]@{ files = @([pscustomobject]@{ path = "C:\vault\client.json"; what = "a key" }) })
+$script:secretAsks.Clear()
+foreach ($notHome in @("some\home", "C:home", "\home")) {
+    $a = Get-HordeRelaySecretFiles -HordeHome $notHome
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an absolute folder") -and $script:secretAsks.Count -eq 0) ("a Horde home that is not an absolute folder (" + $notHome + ") is refused before any relay is asked")
+}
+Check ((Get-HordeRelaySecretFiles -HordeHome "C:\some\home").state -ceq "known" -and $script:secretAsks.Count -eq 1) "CONTROL: and the same question with an absolute home is asked"
+# THE TEST OF AN ABSOLUTE PATH IS core/ModuleSettings.ps1's, COPIED NOT LOADED: the port reads no setting
+# and must not make its every caller load the settings reader, so the two are compared here.
+. (Join-Path $root "core\ModuleSettings.ps1")
+$pathCases = @("C:\a\b.json", "c:/a/b.json", "\\server\share\b.json", "//server/share/b.json", "C:b.json", "\a\b.json", "/a/b.json", "a\b.json", "b.json", ".\b.json", "..\b.json", "C:", "\\", "", "C:\a|b.json", " C:\a\b.json")
+$differ = @($pathCases | Where-Object { (Test-HordeRelayAbsolutePath $_) -ne (Test-HordeModuleSettingFolder -Path $_) })
+$yes = @($pathCases | Where-Object { Test-HordeRelayAbsolutePath $_ }).Count
+Check ($differ.Count -eq 0) ("the port's test of an absolute path answers as core/ModuleSettings.ps1's does for every one of " + $pathCases.Count + " paths (" + $differ.Count + " differ: " + ($differ -join " , ") + ")")
+Check ($yes -eq 4) ("CONTROL: and those paths are of both kinds: " + $yes + " absolute, " + ($pathCases.Count - $yes) + " not")
+Check (-not (Test-HordeRelayAbsolutePath $null) -and -not (Test-HordeRelayAbsolutePath 42) -and -not (Test-HordeRelayAbsolutePath @("C:\a\b.json", "C:\c.json"))) "and what is not a string at all is not a path"
+$null = RegSecret "fixture-good"
+
+Write-Host ""
+Write-Host "--- a first run: a relay's own steps, checked, never thrown, never repeated in a refusal ---" -ForegroundColor Cyan
+# relays/Port.ps1, A RELAY THAT IS DEPLOYED MAY SAY WHAT A NEW MACHINE STILL NEEDS (2026-10-14).
+$script:setupSays = $null
+$script:setupAsked = ""
+function RegSetup {
+    param([string]$Name)
+    $script:HordeRelays.Remove($Name)
+    return (Register-HordeRelay -Folder (Join-Path $fx $Name) -Connect { param($o) New-HordeKnown -Value @{} } -Put { param($s, $m, $k, $t) } -Get { param($s, $m, $since, $max) } -Watch { param($s, $m, $since, $max, $ms) } -Ack { param($s, $m, $through) } `
+        -Setup { param($HordeHome) $script:setupAsked = $HordeHome; if ($script:setupSays -is [scriptblock]) { & $script:setupSays } else { $script:setupSays } })
+}
+$okStep = [pscustomobject]@{ name = "where it answers"; done = $true; said = "it answers at https://relay.example.test"; next = ""; notes = @("register https://relay.example.test/cb") }
+$todoStep = [pscustomobject]@{ name = "sign-in client"; done = $false; said = "there is no client file"; next = "download it"; notes = @() }
+$script:setupSays = New-HordeKnown -Value ([pscustomobject]@{ origin = "https://relay.example.test"; steps = @($okStep, $todoStep); beforeDeploy = "log in once" })
+$null = RegSetup "fixture-good"
+$a = Get-HordeRelaySetup -Name "fixture-good" -HordeHome "C:\some\home"
+Check ($a.state -ceq "known" -and $script:setupAsked -ceq "C:\some\home" -and $a.value.origin -ceq "https://relay.example.test" -and @($a.value.steps).Count -eq 2 -and $a.value.steps[0].done -eq $true -and $a.value.steps[1].next -ceq "download it" -and @($a.value.steps[0].notes).Count -eq 1 -and $a.value.beforeDeploy -ceq "log in once") "a relay's own steps are handed back whole, asked for the home given"
+$a = Get-HordeRelaySetup -Name "fixture-local-only"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("says nothing of a first run")) "a relay with no such block says nothing of a first run"
+$a = Get-HordeRelaySetup -Name "no-such-relay"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("no relay named")) "a relay that is not loaded is unknown"
+$planted = "GOCSPX-plantedInASetupAnswer000"
+foreach ($case in @(
+        @{ says = { throw "broke" }; why = "a throw"; like = "failed to say" },
+        @{ says = "not an answer"; why = "something that is not an answer"; like = "not an answer" },
+        @{ says = (New-HordeUnknown -Reason "its settings do not read"); why = "unknown"; like = "its settings do not read" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = "http://relay.example.test"; steps = @($okStep); beforeDeploy = "" })); why = "an origin that is not https"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @(); beforeDeploy = "" })); why = "no steps at all"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = "yes"; said = "x"; next = ""; notes = @() }); beforeDeploy = "" })); why = "done that is not true or false"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $false; said = "x"; next = ""; notes = @() }); beforeDeploy = "" })); why = "a step not done with nothing to do"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = "x"; next = "do it"; notes = @() }); beforeDeploy = "" })); why = "a step done with something still to do"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = ("a secret " + $planted + "`nsecond line"); next = ""; notes = @() }); beforeDeploy = "" })); why = "words of two lines"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = "x"; next = ""; notes = @(("n" * 601)) }); beforeDeploy = "" })); why = "a note too long to be one"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = "x"; next = "" }); beforeDeploy = "" })); why = "a step with no notes member"; like = "not steps" })) {
+    $script:setupSays = $case.says
+    $null = RegSetup "fixture-good"
+    $threw = $false
+    $a = $null
+    try { $a = Get-HordeRelaySetup -Name "fixture-good" } catch { $threw = $true }
+    Check (-not $threw -and $null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like) -and -not "$($a.reason)".Contains($planted)) ("a relay that answers the first run with " + $case.why + " is unknown, never a throw, and nothing it said is repeated (" + $(if ($null -ne $a) { $a.reason } else { "threw" }) + ")")
+}
+$null = RegSecret "fixture-good"
 
 Complete-HordeSuite -Success "the relay port refuses what it cannot vouch for, checks every answer, and never believes an item"

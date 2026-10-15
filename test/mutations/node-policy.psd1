@@ -86,5 +86,18 @@
         @{ Name = "policy-bytes-unchecked"
            Find = '    try { Assert-HordeAsciiBytes -Bytes $bytes -What ("the node policy at " + $Path) } catch {'
            Replace = '    try { } catch {' }
+        # The session stores a node declares, in their own file (ledger core-projection L-101).
+        @{ Name = "empty-session-store-declaration-allowed"
+           Find = 'if ($stores.Count -eq 0) { [void]$problems.Add('
+           Replace = 'if ($false) { [void]$problems.Add(' }
+        @{ Name = "session-store-declared-twice-allowed"
+           Find = 'foreach ($s in $stores) { if (-not $seen.Add("" + $s)) {'
+           Replace = 'foreach ($s in $stores) { if ($false) {' }
+        @{ Name = "no-declaration-file-declares-stores"
+           Find = 'return (New-HordeAbsent -Note ("this node declares no session stores: there is no " + $Path))'
+           Replace = 'return (New-HordeKnown -Value @("X2"))' }
+        @{ Name = "session-stores-schema-unchecked"
+           Find = 'foreach ($b in @(Test-HordeSchema -Value $doc -Schema (Get-HordeSchema -Name "node-session-stores.v1")))'
+           Replace = 'foreach ($b in @())' }
     )
 }

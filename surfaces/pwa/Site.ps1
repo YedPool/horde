@@ -26,7 +26,7 @@
 #   app/sw.js       its VERSION (a hash of every other file of the shell) and its SHELL (their paths)
 #                   are written into the two placeholder lines it carries, so a new deployment is a new
 #                   worker and a new cache.
-# and three are made: app/config.json, { schemaVersion, transport, relayOrigin, lockAfterHiddenSeconds }
+# and three are made: app/config.json, { schemaVersion, version, transport, relayOrigin, lockAfterHiddenSeconds }
 # - which relay transport the app uses (surfaces/pwa/page/relay-client.js, transportFromConfig), where
 # the relay is, and how long the app may stay hidden before it locks every horde (300 s, the founder's
 # five minutes, decided 2026-10-10; a suite builds with less to see it happen) - and app/icon-192.png and app/icon-512.png, the icons an installable app needs at those sizes
@@ -49,6 +49,12 @@ $script:HordePwaSiteFiles = [ordered]@{
     "app/app.css" = "surfaces/pwa/page/app.css"
     "app/app.js" = "surfaces/pwa/page/app.js"
     "app/phone-core.js" = "surfaces/pwa/page/phone-core.js"
+    "app/lane-card.js" = "surfaces/pwa/page/lane-card.js"
+    "app/decision-cards.js" = "surfaces/pwa/page/decision-cards.js"
+    "app/notices-view.js" = "surfaces/pwa/page/notices-view.js"
+    "app/cards-why.js" = "surfaces/pwa/page/cards-why.js"
+    "app/app-update.js" = "surfaces/pwa/page/app-update.js"
+    "app/read-banner.js" = "surfaces/pwa/page/read-banner.js"
     "app/keywrap.js" = "surfaces/pwa/page/keywrap.js"
     "app/relay-client.js" = "surfaces/pwa/page/relay-client.js"
     "app/account-client.js" = "surfaces/pwa/page/account-client.js"
@@ -213,6 +219,10 @@ function New-HordePwaSite {
     $shellText = "const SHELL = [" + ((@($shell) | ForEach-Object { '"' + $_ + '"' }) -join ", ") + "];"
     $worker = $worker.Replace($script:HordePwaVersionPlaceholder, ('const VERSION = "' + $version + '";')).Replace($script:HordePwaShellPlaceholder, $shellText)
     $bytes["app/sw.js"] = $ascii.GetBytes($worker)
+    # THE PAGE'S OWN VERSION, in its config: the hash cannot be inside a file it hashes, so it is written
+    # into config.json after the hash is taken (of the config without it). The page shows it on the Account
+    # screen and compares it with the worker's (surfaces/pwa/page/app-update.js).
+    $bytes["app/config.json"] = $ascii.GetBytes($configText.Replace('{"schemaVersion":1,', '{"schemaVersion":1,"version":"' + $version + '",'))
     try {
         foreach ($site in @($bytes.Keys)) {
             $dest = Join-Path $outFull ($site -replace '/', '\')

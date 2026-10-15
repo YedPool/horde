@@ -11,7 +11,7 @@
            Find = '$base = $base * 2'
            Replace = '$base = $base * 3' }
         @{ Name = "backoff-not-capped"
-           Find = '    $base = [System.Math]::Min($base, [double]$Settings.backoffMaxMs)'
+           Find = '    $base = [System.Math]::Min($base, $most)'
            Replace = '' }
         @{ Name = "no-jitter"
            Find = '    $ms = $base - $spread + ($Random.NextDouble() * 2 * $spread)'
@@ -64,11 +64,11 @@
            Replace = '-and $AgainMs -gt 0) { return [int]$AgainMs }' }
         # --- the heartbeat (core/Heartbeat.ps1) ---
         @{ Name = "no-heartbeat"
-           Find = '$beat = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns'
+           Find = '$beat = Write-HordeHeartbeatQuietly @beatArgs'
            Replace = '$beat = New-HordeKnown -Value "written"' }
         @{ Name = "heartbeat-without-start"
-           Find = '-ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns'
-           Replace = '-ProcessId $beatSelf.pid -TickSeconds $beatTick -Pass $turns' }
+           Find = 'ProcessStartedAt = $beatSelf.startedAt; TickSeconds'
+           Replace = 'TickSeconds' }
         @{ Name = "heartbeat-failure-ends-the-run"
            Find = 'if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ('
            Replace = 'if ($beat.state -cne "known") { throw $beat.reason }; if ($false) { $beatFailed = $true; $null = & $Say (' }
@@ -84,5 +84,43 @@
         @{ Name = "tick-ignores-the-jitter"
            Find = '    $wait = [double]$Settings.backoffMaxMs * (1 + [double]$Settings.backoffJitterPercent / 100)'
            Replace = '    $wait = [double]$Settings.backoffMaxMs' }
+        # --- the backoff's cap: a live PC never looks offline on the phone (2026-10-14) ---
+        @{ Name = "backoff-cap-not-used-by-the-run"
+           Find = '-Random $Random -CapMs (Get-HordeRelayRunBackoffCap -Inbox $in -Context $ctx)'
+           Replace = '-Random $Random' }
+        @{ Name = "backoff-cap-forgets-the-jitter"
+           Find = '[System.Math]::Floor([double]$CapMs / (1 + [double]$Settings.backoffJitterPercent / 100))'
+           Replace = '[double]$CapMs' }
+        @{ Name = "backoff-cap-past-the-offline-line"
+           Find = '$script:HordeRelayRunBackoffCapMs = 45000'
+           Replace = '$script:HordeRelayRunBackoffCapMs = 72000' }
+        @{ Name = "relay-limit-refusal-capped"
+           Find = '@(429, 507) -contains [int]$Inbox.status) { return 0 }'
+           Replace = '@(429, 507) -contains [int]$Inbox.status) { return $script:HordeRelayRunBackoffCapMs }' }
+        @{ Name = "own-turn-refusal-capped"
+           Find = '($Context.refusedWith.ContainsKey(429) -or $Context.refusedWith.ContainsKey(507))) { return 0 }'
+           Replace = '($false)) { return 0 }' }
+        @{ Name = "cap-from-the-sticky-full-map"
+           Find = '$null -ne $Context.PSObject.Properties["refusedWith"] -and ($Context.refusedWith.ContainsKey(429) -or $Context.refusedWith.ContainsKey(507))'
+           Replace = '$null -ne $Context.PSObject.Properties["full"] -and $Context.full.Count -gt 0' }
+        @{ Name = "nothing-capped"
+           Find = '    return $script:HordeRelayRunBackoffCapMs'
+           Replace = '    return 0' }
+            # --- review of PR 249 ---
+        @{ Name = "unproved-keys-handed-on"
+           Find = '    if ("" + $why -eq "") { return $made }'
+           Replace = '    return $made' }
+        @{ Name = "signing-key-not-tried"
+           Find = 'if ("" + $why -ne "") { return ("the signing key "'
+           Replace = 'if ($false) { return ("the signing key "' }
+        @{ Name = "agreement-keys-not-tried"
+           Find = '    foreach ($id in @($Context.openingKeys.Keys)) {'
+           Replace = '    foreach ($id in @()) {' }
+        @{ Name = "healthy-beat-while-keys-down"
+           Find = 'if ($null -eq $ctx) { $beatArgs["Condition"] = "keys-unavailable";'
+           Replace = 'if ($false) { $beatArgs["Condition"] = "keys-unavailable";' }
+        @{ Name = "keys-opened-unproved"
+           Find = 'if ($null -eq $ctx) { $made = @(& $OpenContext $HordeHome $Connection $DecisionsRoot) | Select-Object -Last 1;'
+           Replace = 'if ($null -eq $ctx) { $made = New-HordeRelayRunContext -HordeHome $HordeHome -Connection $Connection -DecisionsRoot $DecisionsRoot;' }
     )
 }

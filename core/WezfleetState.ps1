@@ -234,11 +234,15 @@ function Read-HordeRuns {
 }
 
 function Read-HordeWezfleetState {
-    # Every wezfleet store the view reads. Returns { root; registry; claims; runs; looseDir }.
+    # Every wezfleet store the view reads. Returns { root; present; registry; claims; runs; looseDir }.
+    # present: whether the root folder exists at all. A machine with no wezfleet has no root, and then
+    # no store under it can hold anything; a root that exists and cannot be read whole is another case,
+    # and the stores' completeness says so (core/Projection.ps1, Test-HordeSessionProvenEnded).
     param([string]$Root = (Get-HordeWezfleetRoot))
     return [pscustomobject]@{
         PSTypeName = "Horde.WezfleetState"
         root = $Root
+        present = [bool](Test-Path -LiteralPath $Root -PathType Container)
         registry = (Read-HordeRegistry -Root $Root)
         claims = (Read-HordeClaims -Root $Root)
         runs = (Read-HordeRuns -Root $Root)

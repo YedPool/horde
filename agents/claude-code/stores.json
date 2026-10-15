@@ -1,8 +1,9 @@
 {
   "schemaVersion": 1,
-  "why": "Where this harness keeps its control files and transcripts. Horde never writes inside them (core/MetricsStore.ps1, Get-HordeAgentStoreRoots). CLAUDE_CONFIG_DIR moves the store (metrics design 2.1), so both it and the default folder are protected. Its transcripts, session files and their subagents folders, are under projects (metrics design 2.1, VERIFIED 2026-09-30); horde metrics collect looks there.",
+  "why": "Where this harness keeps its control files and transcripts. Horde never writes inside them (core/MetricsStore.ps1, Get-HordeAgentStoreRoots). CLAUDE_CONFIG_DIR moves the store (metrics design 2.1), so both it and the default folder are protected. Its transcripts, session files and their subagents folders, are under projects (metrics design 2.1, VERIFIED 2026-09-30); horde metrics collect looks there. Beside the default folder, in the profile itself, it keeps one file of its own, .claude.json (its account and its settings): a root here too, so that horde files share refuses it as it refuses the folder (review of the files deny list, 2026-10-13). It is a file, so no transcript folder is ever found under it.",
   "roots": [
     { "profile": ".claude" },
+    { "profile": ".claude.json" },
     { "env": "CLAUDE_CONFIG_DIR" }
   ],
   "transcripts": [ { "folder": "projects", "extension": ".jsonl" } ]

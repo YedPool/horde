@@ -2,17 +2,27 @@
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\files-command.psd1
 # Each makes the command take what it must refuse, or say or exit wrongly; test\test-files-cli.ps1,
 # which runs the real command as its own process, must fail for every one. One run of that suite
-# starts about 35 processes (measured 2026-10-13 on a throttled machine: about 25 s).
+# starts about 100 processes (measured 2026-10-13 on a throttled machine: about 100 s).
 @{
     Target = "cli\commands\files.ps1"
     Suite  = "test\test-files-cli.ps1"
+    Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "list-takes-shares-flags-in-silence"
-           Find = 'foreach ($flag in @("Path", "Title", "Editable")) { if ($PSBoundParameters.ContainsKey($flag)) {'
+           Find = 'foreach ($flag in @("Path", "Title", "Editable", "Force")) { if ($PSBoundParameters.ContainsKey($flag)) {'
            Replace = 'foreach ($flag in @()) { if ($PSBoundParameters.ContainsKey($flag)) {' }
         @{ Name = "list-given-a-path-not-refused"
-           Find = 'foreach ($flag in @("Path", "Title", "Editable")) {'
-           Replace = 'foreach ($flag in @("Title", "Editable")) {' }
+           Find = 'foreach ($flag in @("Path", "Title", "Editable", "Force")) {'
+           Replace = 'foreach ($flag in @("Title", "Editable", "Force")) {' }
+        @{ Name = "list-given-force-not-refused"
+           Find = 'foreach ($flag in @("Path", "Title", "Editable", "Force")) {'
+           Replace = 'foreach ($flag in @("Path", "Title", "Editable")) {' }
+        @{ Name = "force-not-handed-on"
+           Find = '-Editable:$Editable -Force:$Force'
+           Replace = '-Editable:$Editable' }
+        @{ Name = "force-given-whatever-was-typed"
+           Find = '-Editable:$Editable -Force:$Force'
+           Replace = '-Editable:$Editable -Force' }
         @{ Name = "share-with-no-path-not-named"
            Find = 'if ("$Path" -eq "") { throw "share needs the path of the file to share" }'
            Replace = '' }

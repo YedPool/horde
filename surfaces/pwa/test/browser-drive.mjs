@@ -13,19 +13,24 @@
 // THE SITE is served by a small HTTP server here, on 127.0.0.1, under the origin http://localhost:<port>
 // (a secure context, so WebAuthn and the service worker run; Chrome is told localhost is 127.0.0.1).
 //
-//   node browser-drive.mjs <site folder> <relay root> <chrome.exe> <profile folder>
+//   node browser-drive.mjs <site folder> <relay root> <browser debugging port>
 //
 // The first line printed is { ok, value: { origin } }; then one JSON command per line on stdin, one
-// JSON answer per line on stdout, as app-phone.mjs. Chrome and the server end with the "exit" command
-// or when stdin closes.
+// JSON answer per line on stdout, as app-phone.mjs. The server ends with the "exit" command or when
+// stdin closes.
+//
+// THE BROWSER IS NOT THIS SCRIPT'S. The suite starts it (test/lib/Browser.ps1, in a kill-on-close job
+// of the suite's own, with --host-resolver-rules=MAP localhost 127.0.0.1) and ends it, with its
+// profile, in its finally, however this script ends. Until 2026-10-14 this script spawned Chrome and
+// ended it in shutdown(), and a script killed first left the browser running (test/lib/Browser.ps1 has
+// the measurement). So there is nothing here to clean up on exit or on a signal.
 import http from "node:http";
-import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, existsSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import { join, normalize, extname, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { folderTransport } from "./folder-relay.mjs";
 
-const [, , siteDir, relayRoot, chromePath, profileDir] = process.argv;
+const [, , siteDir, relayRoot, debugPort] = process.argv;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ascii = (v) => JSON.stringify(v).replace(/[^\x20-\x7e]/g, (ch) => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
 const say = (v) => process.stdout.write(ascii(v) + "\n");
@@ -48,13 +53,8 @@ server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.del
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const origin = "http://localhost:" + server.address().port;
 
-// --- Chrome ---
-const chrome = spawn(chromePath, ["--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profileDir, "--no-first-run", "--no-default-browser-check", "--disable-extensions",
-  "--disable-background-networking", "--disable-sync", "--disable-component-update", "--host-resolver-rules=MAP localhost 127.0.0.1", "--window-size=412,915", "about:blank"], { stdio: "ignore" });
-let portFile = join(profileDir, "DevToolsActivePort");
-for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100);
-if (!existsSync(portFile)) { say({ ok: false, reason: "Chrome did not open its debugging port" }); process.exit(1); }
-const debugPort = readFileSync(portFile, "utf8").split(/\r?\n/)[0];
+// --- Chrome: the suite's, reached on its debugging port (header) ---
+if (!/^[0-9]{1,5}$/.test(String(debugPort))) { say({ ok: false, reason: "no browser debugging port was given" }); process.exit(1); }
 let targets = [];
 for (let i = 0; i < 50 && !targets.some((t) => t.type === "page"); i++) { try { targets = await (await fetch("http://127.0.0.1:" + debugPort + "/json/list")).json(); } catch (e) { /* not yet */ } if (!targets.some((t) => t.type === "page")) await sleep(100); }
 const page = targets.find((t) => t.type === "page");
@@ -80,12 +80,16 @@ on("Log.entryAdded", (p) => { if (p.entry.level === "error" || /Content Security
 const relay = folderTransport(relayRoot);
 // The relayFail command: every put refused, as a relay that will not take one (the announcement's failure).
 let failPuts = false;
+// The readFail command: every read and watch refused with the reason given, as a relay that answers 401
+// to a phone whose sign-in it no longer takes; "" reads again.
+let failReads = "";
 on("Runtime.bindingCalled", async (p) => {
   if (p.name !== "hordeRelayBinding") return;
   let answer;
   try {
     const c = JSON.parse(p.payload);
     if (c.op === "put") answer = failPuts ? { state: "unknown", value: null, reason: "the relay is down (a stand-in)" } : await relay.put(c.mailbox, c.key, c.text);
+    else if (failReads && (c.op === "get" || c.op === "watch")) answer = { state: "unknown", value: null, reason: failReads };
     else if (c.op === "get") answer = await relay.get(c.mailbox, c.since, c.max);
     else if (c.op === "watch") answer = await relay.watch(c.mailbox, c.since, c.max, Math.min(c.timeoutMs, 3000));
     else if (c.op === "ack") answer = await relay.ack(c.mailbox, c.through);
@@ -95,6 +99,9 @@ on("Runtime.bindingCalled", async (p) => {
 });
 
 await cdp("Page.enable");
+// Every page load counted, so a suite can see that a new version reloads the page once and no more.
+let loads = 0;
+on("Page.loadEventFired", () => { loads++; });
 await cdp("Runtime.enable");
 await cdp("Log.enable");
 await cdp("Emulation.setDeviceMetricsOverride", { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true });
@@ -169,6 +176,15 @@ const commands = {
     return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
   },
   async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
+  async readFail(c) { failReads = String(c.reason || ""); return { failReads }; },
+  // The notice line, once it holds c.text (or, with c.gone, once it does not); c.hold keeps watching after.
+  async noticeHeld(c) {
+    const has = "(" + notice + ").indexOf(" + JSON.stringify(c.text) + ") >= 0";
+    const ok = await until(c.gone ? "!(" + has + ")" : has, c.ms || 20000);
+    // c.hold: left so for that long first - refreshes and redraws meanwhile - to see that the words stay.
+    if (ok && c.hold) await sleep(c.hold);
+    return { ok: !!ok, notice: await evaluate(notice) };
+  },
   // The next passkey prompt refused, as Chrome refuses one the founder cancels (a NotAllowedError), once.
   // In the page and not by the virtual authenticator: told that user verification fails and then that it
   // succeeds again, Chrome's virtual authenticator kept refusing every prompt after (measured 2026-10-11).
@@ -220,6 +236,7 @@ const commands = {
         shown: !document.getElementById('progress').hidden, doc: !document.getElementById('doc').hidden, chat: !document.getElementById('chat').hidden, keys: !document.getElementById('keys').hidden,
         tab: document.getElementById('tabProgress').textContent, selected: document.getElementById('tabProgress').getAttribute('aria-selected'), count: document.getElementById('progressCount').textContent,
         items: items.length, ids: items.map((b) => b.getAttribute('data-id')), onScreen,
+        cardsWhy: document.getElementById('cardsWhy').hidden ? '' : document.getElementById('cardsWhy').textContent,
         firstChips: first ? Array.from(first.querySelectorAll('.progress-head .chip')).map((c) => c.textContent) : [],
         firstTime: first && first.querySelector('.stamp') ? first.querySelector('.stamp').textContent : '',
         firstTitle: first ? first.querySelector('.progress-title').textContent : '', titleWeight: first ? Number(getComputedStyle(first.querySelector('.progress-title')).fontWeight) : 0,
@@ -249,6 +266,95 @@ const commands = {
     for (let i = 0; i < c.screens; i++) { await evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.5))"); await sleep(350); }
     await sleep(900);
     return await commands.progressState();
+  },
+  // THE CARDS of the Progress tab: which page stands (the cards, or a stream), the cards drawn, and the
+  // stream's title and entries.
+  async cardsState() {
+    return await evaluate(`(() => {
+      const $ = (id) => document.getElementById(id);
+      const flat = (e) => e.innerText.replace(/\\s+/g, " ").trim();
+      const cards = Array.from(document.querySelectorAll("#cardsList .card")).map((c) => ({ lane: c.getAttribute("data-lane"), thrall: c.classList.contains("thrall"), text: flat(c) }));
+      // An entry's words whether it is folded or open (a folded entry hides its chips and text, and innerText
+      // drops what is hidden): what the stream HOLDS. What can be SEEN is entriesState's.
+      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map((e) => e.textContent.replace(/\\s+/g, " ").trim());
+      return { progress: !$("progress").hidden, cardsPage: !$("cardsPage").hidden, streamPage: !$("streamPage").hidden, title: $("streamTitle").textContent, cards, items: items.length, texts: items, notice: ${notice} };
+    })()`);
+  },
+  // ENTRIES FOLDED AND OPEN (app.js, openEntries): for each entry of the stream, whether it is folded, its
+  // line's role and aria-expanded, its height, and what of it can be SEEN - checkVisibility and a box of
+  // some height, not only that the node is there (every part of a folded entry is still in the DOM).
+  // tagged: the node is the one entriesTag marked, so a redraw that rebuilt the log can be told apart.
+  async entriesState() {
+    return await evaluate(`(() => {
+      const seen = (e) => !!e && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && e.getBoundingClientRect().height > 0;
+      return Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => {
+        const line = b.querySelector(':scope > .progress-line'), title = line ? line.querySelector('.progress-title') : null, when = b.querySelector('.progress-when');
+        const text = b.querySelector(':scope > .progress-text'), head = b.querySelector(':scope > .progress-head'), stamp = b.querySelector('.progress-head .stamp');
+        return { id: b.getAttribute('data-id'), folded: b.classList.contains('collapsed'), role: line ? line.getAttribute('role') : null, expanded: line ? line.getAttribute('aria-expanded') : null,
+          focusable: !!line && line.tabIndex === 0, height: Math.round(b.getBoundingClientRect().height), title: title ? title.textContent : '', titleSeen: seen(title),
+          titleCut: !!title && title.scrollWidth > title.clientWidth, when: when ? when.textContent : '', whenSeen: seen(when), textSeen: seen(text), headSeen: seen(head),
+          stamp: stamp ? stamp.textContent : '', tagged: b.hordeTag === true };
+      });
+    })()`);
+  },
+  async entriesTag() {
+    return await evaluate("Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => { b.hordeTag = true; return 1; }).length");
+  },
+  // A real touch on one part of one entry: "line" its title, "when" its folded line's time, "text" its body,
+  // "head" a chip of its head, "stamp" its head's time stamp. The entry is first brought to the middle of
+  // the screen, as a thumb would.
+  async entryTouch(c) {
+    const sel = "#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "]";
+    const part = { line: " > .progress-line .progress-title", when: " .progress-when", text: " > .progress-text", head: " > .progress-head .chip", stamp: " .progress-head .stamp" }[c.part];
+    await evaluate("document.querySelector(" + JSON.stringify(sel) + ").scrollIntoView({ block: 'center' })");
+    await sleep(300);
+    const at = await centre(sel + part);
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(500);
+    return await commands.entriesState();
+  },
+  // A real key on one entry's line, focused as the Tab key would: "Enter" or " ".
+  async entryKey(c) {
+    await evaluate("document.querySelector(" + JSON.stringify("#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "] > .progress-line") + ").focus()");
+    const k = c.key === " " ? { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " } : { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" };
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", ...k });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode });
+    await sleep(400);
+    return { scrollY: Math.round(await evaluate("window.scrollY")), entries: await commands.entriesState() };
+  },
+  async cardsWait(c) {
+    const found = await until("document.querySelectorAll('#cardsList .card').length >= " + Number(c.count), c.timeoutMs || 30000);
+    await sleep(500);
+    return { found: !!found, ...(await commands.cardsState()) };
+  },
+  // A real touch on a card's line, away from its follow switch: it opens that lane's stream.
+  async cardTouch(c) {
+    const at = await centre(c.thrall ? "#cardsList .card.thrall .card-line" : "#cardsList .card[data-lane=" + JSON.stringify(c.lane) + "] .card-line");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await until(shown("streamPage") + " && document.querySelectorAll('#progressLog .progress-item').length > 0", 10000);
+    await sleep(900);
+    return await commands.cardsState();
+  },
+  async streamBack() {
+    await evaluate("document.getElementById('streamBack').click()", true);
+    await until(shown("cardsPage"), 10000);
+    await sleep(500);
+    return await commands.cardsState();
+  },
+  // Whether the page says the words given anywhere a line about the relay stands (the notice), in time.
+  async noticeWait(c) {
+    const found = await until("(" + notice + ").indexOf(" + JSON.stringify(c.text) + ") >= 0 && !document.getElementById('notice').hidden", c.timeoutMs || 15000);
+    return { found: !!found, notice: await evaluate(notice) };
+  },
+  // The instrument's control: words put in the notice as the page's say() puts them, found by noticeWait,
+  // then the notice put back as it was.
+  async noticeProbe(c) {
+    await evaluate("(() => { const n = document.getElementById('notice'); n.dataset.was = n.textContent; n.textContent = " + JSON.stringify(c.text) + "; n.hidden = false; })()");
+    const seen = await commands.noticeWait({ text: c.text, timeoutMs: 2000 });
+    await evaluate("(() => { const n = document.getElementById('notice'); n.textContent = n.dataset.was || ''; n.hidden = !n.textContent; delete n.dataset.was; })()");
+    return seen;
   },
   // A real touch on one of the foot's keys.
   async progressTouch(c) {
@@ -328,6 +434,41 @@ const commands = {
     const want = c.shown ? "!document.getElementById('notShown').hidden" : "document.getElementById('notShown').hidden";
     await until(shown("doc") + " && " + want, c.ms || 20000);
     return await evaluate("({ shown: !document.getElementById('notShown').hidden, words: document.getElementById('notShown').textContent, page: document.body.innerText })");
+  },
+  // A NEW VERSION OF THE APP (app-update.js). firstInstall: the page marked, then left until its first
+  // worker controls it - the mark must survive, as the first install never reloads. newWorker: sw.js
+  // changed on the server, as a deployment changes it, and the page told to look (registration.update());
+  // with c.draft, words are left in the chat composer first. { reloaded, loads, notice }.
+  async firstInstall() {
+    await evaluate("window.hordeMark = 1");
+    const controlled = !!(await until("!!navigator.serviceWorker.controller", 15000));
+    await sleep(1500);
+    return { controlled, mark: await evaluate("window.hordeMark === 1"), loads };
+  },
+  async newWorker(c) {
+    await evaluate("window.hordeMark = 1; document.getElementById('chatText').value = " + JSON.stringify(c.draft || ""));
+    const before = loads;
+    const sw = join(siteDir, "app", "sw.js");
+    writeFileSync(sw, readFileSync(sw, "utf8") + "// deployment " + Date.now() + "\n");
+    await evaluate("navigator.serviceWorker.getRegistration().then((r) => r.update()).then(() => true)");
+    const reloaded = !!(await until("window.hordeMark !== 1", c.ms || 10000));
+    if (reloaded) await until(shown("lockedView") + " || " + shown("doc") + " || " + shown("emptyView"), 15000);
+    await sleep(2000);
+    return { reloaded, loads: loads - before, notice: await evaluate(notice) };
+  },
+  // The words left by newWorker taken away, then the page hidden and shown: the safe moment.
+  async finishDraft() {
+    await evaluate("window.hordeMark = 1; document.getElementById('chatText').value = ''");
+    const before = loads;
+    await evaluate("(() => { for (const v of ['hidden', 'visible']) { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => v }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => v === 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); } })()");
+    const reloaded = !!(await until("window.hordeMark !== 1", 10000));
+    if (reloaded) await until(shown("lockedView") + " || " + shown("doc"), 15000);
+    await sleep(2000);
+    return { reloaded, loads: loads - before, notice: await evaluate(notice) };
+  },
+  // The version the worker in control says it is (sw.js answers on a port).
+  async workerVersion() {
+    return await evaluate("new Promise((res) => { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(e.data.version); navigator.serviceWorker.controller.postMessage({ ask: 'version' }, [ch.port2]); setTimeout(() => res(''), 3000); })");
   },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
@@ -448,9 +589,7 @@ const commands = {
 };
 
 async function shutdown() {
-  try { await cdp("Browser.close"); } catch (e) { /* it may be gone */ }
-  await sleep(500);
-  try { if (chrome.exitCode === null) execFileSync("taskkill", ["/PID", String(chrome.pid), "/T", "/F"], { stdio: "ignore" }); } catch (e) { /* gone */ }
+  // The browser is the suite's to end (header); this script ends only what it started: its server.
   server.close();
 }
 

@@ -37,7 +37,29 @@ Check (($files -ccontains "relay/Envelope.ps1") -and ($files -ccontains "relay/B
 Check (($files -ccontains "relays/Port.ps1") -and (@($files | Where-Object { $_ -clike "relays/*/Relay.ps1" }).Count -ge 1) -and -not ($files -clike "relays/*/test/*")) "CONTROL: the relays ship and are scanned, their test fixtures not"
 Check (($files -ccontains "conversations/Port.ps1") -and (@($files | Where-Object { $_ -clike "agents/*/Conversation.ps1" }).Count -ge 1) -and -not ($files -clike "agents/*/test/*")) "CONTROL: the conversation port and its adapters ship and are scanned, their test fixtures not"
 Check (($files -ccontains "wakers/Port.ps1") -and (@($files | Where-Object { $_ -clike "wakers/*/Waker.ps1" }).Count -ge 1) -and -not ($files -clike "wakers/*/test/*")) "CONTROL: the waker port and its adapters ship and are scanned, their test fixtures not"
+Check (($files -ccontains "files/Share.ps1") -and ($files -ccontains "files/Deny.ps1") -and ($files -ccontains "files/Store.ps1")) "CONTROL: the files module ships and is scanned: until 2026-10-13 its folder was not on the list, and these guards passed without reading it"
+Check (($files -ccontains "channels/Port.ps1") -and ($files -ccontains "channels/cards/Channel.ps1") -and ($files -ccontains "notices/Store.ps1")) "CONTROL: the channels and notices ship and are scanned: until 2026-10-14 their folders were not on the list"
 Check (@($files | Where-Object { @($_ -split '/') -contains "test" }).Count -eq 0) "no file in a test folder is scanned: a suite may override a function in its own process"
+
+Write-Host ""
+Write-Host "--- the list of shipped folders is whole ---" -ForegroundColor Cyan
+# Every guard built on this list passes a folder that is off it without reading it (files/ until
+# 2026-10-13; channels/ and notices/ until 2026-10-14). So a top-level folder holding code outside a
+# test or node_modules folder must be on it.
+$unlisted = @(Get-HordeUnlistedCodeFolders -Root $root)
+Check ($unlisted.Count -eq 0) ("every top-level folder holding shipped code is on HordeShippedCodeFolders (missing: " + ($unlisted -join ", ") + ")")
+$fakeRoot = Join-Path $env:TEMP ("horde-fnfolders-" + [guid]::NewGuid().ToString("N"))
+try {
+    foreach ($p in @("core/A.ps1", "newcode/deep/B.js", "docsonly/README.md", "testonly/test/C.ps1", "deps/node_modules/x/D.js", "test/E.ps1", "core/node_modules/F.js")) {
+        $full = Join-Path $fakeRoot $p
+        New-Item -ItemType Directory -Force (Split-Path -Parent $full) | Out-Null
+        [System.IO.File]::WriteAllText($full, "# fixture")
+    }
+    $fakeUnlisted = @(Get-HordeUnlistedCodeFolders -Root $fakeRoot)
+    Check (($fakeUnlisted -join ",") -ceq "newcode") ("CONTROL: an unlisted folder with code in a subfolder is found; a listed one, one without code, and code only under test or node_modules are not (got: " + ($fakeUnlisted -join ",") + ")")
+} finally {
+    if ((Split-Path -Leaf $fakeRoot) -match '^horde-fnfolders-[0-9a-f]{32}$') { Remove-Item -LiteralPath $fakeRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
 $defs = @(Get-HordeTopFunctionDefinitions -Root $root -Files $files)
 Check (@($defs | Where-Object { $_.name -ceq "<parse error>" }).Count -eq 0) ("every shipped file parses (" + (@($defs | Where-Object { $_.name -ceq "<parse error>" } | ForEach-Object { $_.file }) -join ", ") + ")")
 Check ($defs.Count -ge 200) ("CONTROL: the parse found the shipped functions (" + $defs.Count + ")")

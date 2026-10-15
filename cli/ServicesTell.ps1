@@ -55,13 +55,45 @@ $script:HordeServiceTellSentences = [ordered]@{
     "apply"            = "a new revision could not be put in place; the old one keeps running"
     "stuck"            = "its process should have ended and could not be ended"
     "start-unrecorded" = "a start of it was interrupted and it keeps no heartbeat, so whether it is running cannot be told"
+    "keys-unavailable" = "it is running and cannot use this machine's keys, so nothing from the phone is opened; it is restarted, more slowly each time, and should work once someone has signed in"
+    "unwell"           = "it is running and says it cannot do its work; it is restarted, more slowly each time"
+    "update-held"      = "an update is held, neither confirmed nor rolled back, because its new revision says it cannot work; it is confirmed once that mends"
+    "update-withdrawn" = "an update was held too long and is withdrawn, not pinned; it is taken again later"
+    "no-desktop"       = "it needs the person's desktop, which the pass that runs before anyone signs in cannot reach; it is started once someone signs in"
 }
 $script:HordeServiceTellNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
+
+# THE HOSTED PHONE PAGE (cli/RelayPublish.ps1) is told in the same way: one fixed sentence for each
+# outcome, chosen by its what alone, and the commit only when it is a commit id. Its notices are of the
+# kind "page", and do not say "needs attention" when the news is that it was deployed.
+$script:HordeServiceTellPageSentences = [ordered]@{
+    "deployed"      = "the supervisor deployed the phone page and checked it: the hosted page serves the new version"
+    "deploy-failed" = "the supervisor's deploy of the phone page failed; it is tried again an hour later at the earliest, or a person runs: horde relay deploy"
+    "check-failed"  = "the supervisor deployed the phone page, but the hosted page did not then serve exactly what was built; it is tried again an hour later at the earliest"
+    "worker-changed" = "the relay's Worker changed since the last deploy, so the supervisor did not deploy the phone page; a person reads the change, then runs: horde relay deploy"
+    "worker-unmeasured" = "files the relay's Worker shares with the phone page changed, and whether the Worker itself changed could not be measured, so the supervisor did not deploy; a person checks, then runs: horde relay deploy"
+    "not-on-main"   = "the checkout the supervisor runs from is on a commit that is not on origin/main, so it never deploys the phone page from it"
+    "no-record"     = "nothing records a clean commit the hosted phone page was deployed from, so the supervisor does not deploy it; one deploy by hand from a clean checkout (horde relay deploy) records it"
+    "unreadable"    = "what changed since the phone page was last deployed could not be read, so the supervisor did not deploy it"
+    "dirty"         = "the checkout the phone page is built from has changes of its own, so the supervisor did not deploy it"
+}
+
+function Format-HordeServicePageNoticeBody {
+    # PURE. The words of one notice about the hosted phone page (above).
+    param([Parameter(Mandatory = $true)]$Notice)
+    $what = "" + $Notice.what
+    $said = $(if ($script:HordeServiceTellPageSentences.Contains($what)) { $script:HordeServiceTellPageSentences[$what] } else { "it needs a person" })
+    $rev = ""
+    $named = $Notice.PSObject.Properties["revision"]
+    if ($null -ne $named -and "" + $named.Value -cmatch '\A[0-9a-f]{7,40}\z') { $rev = " (commit " + ("" + $named.Value).Substring(0, 7) + ")" }
+    return ("HORDE SERVICES - phone page" + $(if ($what -ceq "deployed") { "" } else { " needs attention" }) + "`n" + $said + $rev + "`nIts log: relay\publish-log.txt in the Horde home")
+}
 
 function Format-HordeServiceNoticeBody {
     # PURE. The words of one notice (header): the service's name and fixed sentences, by the notice's
     # kind and its what - never its text. A name that is not a service name is not repeated either.
     param([Parameter(Mandatory = $true)]$Notice)
+    if ("" + $Notice.kind -ceq "page") { return (Format-HordeServicePageNoticeBody -Notice $Notice) }
     $service = "a service"
     $named = $Notice.PSObject.Properties["service"]
     if ($null -ne $named -and "" + $named.Value -cmatch $script:HordeServiceTellNamePattern) { $service = "service " + $named.Value }
@@ -69,6 +101,8 @@ function Format-HordeServiceNoticeBody {
     $said = New-Object System.Collections.ArrayList
     $what = $Notice.PSObject.Properties["what"]
     if ($null -ne $what) { foreach ($w in @(("" + $what.Value) -split ",")) { if ($script:HordeServiceTellSentences.Contains($w) -and -not $said.Contains($script:HordeServiceTellSentences[$w])) { [void]$said.Add($script:HordeServiceTellSentences[$w]) } } }
+    # A condition is told as "unwell" only when its own word has no sentence here (core/Services.ps1).
+    if ($said.Count -gt 1 -and $said.Contains($script:HordeServiceTellSentences["unwell"])) { $said.Remove($script:HordeServiceTellSentences["unwell"]) }
     if ($said.Count -eq 0) { [void]$said.Add("it needs a person") }
     return ("HORDE SERVICES - needs attention`n" + $service + ": " + ($said -join "; ") + "`nSee it with: horde services status")
 }

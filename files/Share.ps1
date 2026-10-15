@@ -35,7 +35,16 @@
 #   and may not depend on the runtime that works it out (Get-HordeFilesId).
 #
 # WHAT IS REFUSED, each with its reason, and nothing is written for any of them:
-#   - a title that is empty, holds a control character, or is longer than the setting maxTitleChars;
+#   - a share made under any runtime but Windows PowerShell 5.1 (files/Key.ps1 says why), before
+#     anything is looked at or made;
+#   - a title that is empty, holds a control character, a line or paragraph separator or a
+#     character that turns the direction of text, or is longer than the setting maxTitleChars;
+#   - A FILE IN A PLACE, OR OF A NAME, ON THE DENY LIST (files/Deny.ps1): the Horde home,
+#     .horde-secrets and .ssh whatever the caller says; an agent harness's own folders, and a name
+#     a file of secrets has, unless the caller gives -Force - which lifts the folder and never
+#     such a name inside it;
+#   - A TEXT FILE THAT HOLDS A CREDENTIAL BY ITS SHAPE (files/Deny.ps1): a private key whatever
+#     the caller says, a token of a known shape unless the caller gives -Force;
 #   - a path that names no file, or names a folder; a path in the device form, one holding a name
 #     Windows keeps for a device, and one naming a stream inside a file (files/Path.ps1);
 #   - A NETWORK PATH, in every spelling, and a file on a network drive - this machine's own drive
@@ -70,6 +79,7 @@
 . (Join-Path $PSScriptRoot "Store.ps1")
 . (Join-Path $PSScriptRoot "Key.ps1")
 . (Join-Path $PSScriptRoot "Path.ps1")
+. (Join-Path $PSScriptRoot "Deny.ps1")
 . (Join-Path $PSScriptRoot "Text.ps1")
 # Which session is asking: the one definition, core's.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Identity.ps1")
@@ -100,15 +110,24 @@ function Get-HordeFilesTypes {
 
 function Get-HordeFilesType {
     # The type a file's NAME says it is: { ok; type; magic; reason }. No byte is read here.
+    # AN EXTENSION IS ONE OF THE TABLE'S ONLY WHEN IT IS THAT, CODE UNIT FOR CODE UNIT, once A to Z
+    # are folded by the code's own hand (ConvertTo-HordeAsciiLower). Until 2026-10-13 it was lowered
+    # by the runtime's case table and looked up in the table by its own comparer, and both let a
+    # look-alike in. Measured that day on Windows PowerShell 5.1: a PNG named picture.pn<U+00AD>g was
+    # shared as image/png, because the table's comparer (a culture-aware one) does not see a soft
+    # hyphen; and under PowerShell 7.6 the case table makes U+212A, the Kelvin sign, a "k". So an
+    # extension holding any character outside ASCII is none of the table's.
     param([Parameter(Mandatory = $true)][string]$Path)
-    $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+    $extension = ConvertTo-HordeAsciiLower -Text ([System.IO.Path]::GetExtension($Path))
     $types = Get-HordeFilesTypes
     if ($extension -ceq ".svg") { return [pscustomobject]@{ ok = $false; type = ""; magic = ""; reason = "an SVG file is not shared: it is a picture that can carry script" } }
-    if (-not $types.Contains($extension)) {
+    $known = $null
+    foreach ($listed in @($types.Keys)) { if ([string]::Equals($listed, $extension, [System.StringComparison]::Ordinal)) { $known = $types[$listed] } }
+    if ($null -eq $known) {
         $shown = $extension; if ($shown -eq "") { $shown = "no extension" }
         return [pscustomobject]@{ ok = $false; type = ""; magic = ""; reason = ("its type (" + $shown + ") is not one that is shared; the types are " + (@($types.Keys) -join ", ")) }
     }
-    return [pscustomobject]@{ ok = $true; type = $types[$extension].type; magic = $types[$extension].magic; reason = "" }
+    return [pscustomobject]@{ ok = $true; type = $known.type; magic = $known.magic; reason = "" }
 }
 
 function Test-HordeFilesMagic {
@@ -189,30 +208,53 @@ function Get-HordeFilesId {
     try { return ((ConvertTo-HordeAsciiLower -Text ([System.BitConverter]::ToString($mac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace("-", ""))).Substring(0, 32)) } finally { $mac.Dispose() }
 }
 
+function Get-HordeFilesTitleProblem {
+    # Why -Title is not one line of plain text, or "" when it is. Asked of a title before it is
+    # recorded and of every record that is read. A control character, as before; and, since the
+    # review of 2026-10-13, the two separators that break a line without being one (U+2028, U+2029)
+    # and the characters that turn the direction of the text round them (U+061C, U+200E, U+200F,
+    # U+202A to U+202E, U+2066 to U+2069): a title holding U+202E can show as other words than it
+    # holds, and a title is what the founder reads to know what a file is.
+    param([AllowEmptyString()][string]$Title)
+    if ($Title -cmatch '\p{Cc}') { return "the title holds a control character; a title is one line" }
+    if ($Title -cmatch '[\u2028\u2029]') { return "the title holds a line or paragraph separator (U+2028 or U+2029); a title is one line" }
+    if ($Title -cmatch '[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]') { return ("the title holds a character that turns the direction of the text round it (U+" + ([int][char]$Matches[0]).ToString("X4") + "), so it could show as other words than it holds; a title is plain text") }
+    return ""
+}
+
 function Add-HordeFilesShare {
     # Share the file at -Path under -Title. Returns { outcome: shared | refused; reason; record; attempts }.
     #   shared   the bytes and the record are in the store; record is what was written.
     #   refused  nothing was written to the store; reason says why, in words a person can act on.
     # Throws only for what is not the caller's doing: a refused settings file, a store folder that
     # cannot be written, or a record whose flush could not be confirmed.
-    # -Root, -Asking and -Now are for a caller that must not use the real store, session or clock.
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Title, [switch]$Editable,
-        [string]$HordeHome = "", [string]$Root = "", $Asking = $null, [datetime]$Now = [datetime]::UtcNow)
+    # -Force is the caller saying the file holds no secret: it lifts what files/Deny.ps1 says it
+    # lifts, and nothing else here.
+    # -Root, -Asking and -Now are for a caller that must not use the real store, session or clock,
+    # and -RepoRoot for one that must not read the real agent folders (files/Deny.ps1).
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Title, [switch]$Editable, [switch]$Force,
+        [string]$HordeHome = "", [string]$Root = "", $Asking = $null, [datetime]$Now = [datetime]::UtcNow, [string]$RepoRoot = "")
+    $refuse = { param([string]$Why) return [pscustomobject]@{ outcome = "refused"; reason = $Why; record = $null; attempts = 0 } }
+    # BEFORE ANYTHING ELSE, so that a runtime that cannot finish a share never starts one.
+    $runtime = Get-HordeFilesRuntimeRefusal
+    if ($runtime -ne "") { return (& $refuse $runtime) }
     $settings = Get-HordeFilesSettings -HordeHome $HordeHome
     $store = $Root
     if ($store -eq "") { $store = Get-HordeFilesStoreRoot -HordeHome $HordeHome }
-    $refuse = { param([string]$Why) return [pscustomobject]@{ outcome = "refused"; reason = $Why; record = $null; attempts = 0 } }
 
     $name = $Title.Trim()
     if ($name -eq "") { return (& $refuse "a shared file needs a title: give -Title") }
-    if ($name -cmatch '\p{Cc}') { return (& $refuse "the title holds a control character; a title is one line") }
+    $unclear = Get-HordeFilesTitleProblem -Title $name
+    if ($unclear -ne "") { return (& $refuse $unclear) }
     if ($name.Length -gt $settings.maxTitleChars) { return (& $refuse ("the title is " + $name.Length + " characters; the longest is " + $settings.maxTitleChars + " (the setting maxTitleChars)")) }
 
     if ($Path.Trim() -eq "") { return (& $refuse "no file was named") }
-    # FROM THE TEXT, BEFORE ANYTHING TOUCHES THE DISK OR THE NETWORK. A network path first: looking at
-    # one sends the user's sign-in to the host it names. Then a device, which opens, and a stream,
-    # which cannot be told later.
-    $unfit = Get-HordeNetworkPathRefusal -Path $Path
+    # FROM THE TEXT, BEFORE ANYTHING TOUCHES THE DISK OR THE NETWORK: looking at a network path sends
+    # the user's sign-in to the host it names. A DRIVE LETTER THAT STANDS FOR A NETWORK DRIVE FIRST,
+    # from the system's table of names, because the network question asks a letter's type and for
+    # such a letter that alone looks the host up (core/PathText.ps1 has the measurement). Then the
+    # network question; then a device, which opens, and a stream, which cannot be told later.
+    $unfit = Get-HordeFilesPlaceRefusal -Path $Path
     if ($unfit -eq "") { $unfit = Get-HordeFilesPathRefusal -Path $Path }
     if ($unfit -ne "") { return (& $refuse $unfit) }
     $full = ""
@@ -220,9 +262,12 @@ function Add-HordeFilesShare {
     # THE NETWORK QUESTION IS ASKED BEFORE THIS LINE TOO, not only after it: handed a network drive's
     # letter it has not seen, this resolver looked the server up (measured 2026-10-13, 1289 ms).
     try { $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path) } catch { return (& $refuse ("'" + $Path + "' is not a path of a file")) }
-    # AND AGAIN OF WHAT IT RESOLVED TO: a relative path, or a PowerShell drive over a share, shows
-    # that it is a network path only here. Still nothing has asked the disk about it.
-    $network = Get-HordeNetworkPathRefusal -Path $full
+    # AND ALL THREE AGAIN OF WHAT IT RESOLVED TO: a relative path, or a PowerShell drive over a share,
+    # shows that it is a network path only here. Still nothing has asked the disk about it. THE DEVICE
+    # AND STREAM QUESTION TOO: measured 2026-10-13, C:NUL.txt passed it as written - its one part
+    # reads as "C" before the colon - and is the device name NUL.txt once it is resolved.
+    $network = Get-HordeFilesPlaceRefusal -Path $full
+    if ($network -eq "") { $network = Get-HordeFilesPathRefusal -Path $full }
     if ($network -ne "") { return (& $refuse $network) }
     if ([System.IO.Directory]::Exists($full)) { return (& $refuse ("'" + $full + "' is a folder; one file is shared at a time")) }
     if (-not [System.IO.File]::Exists($full)) { return (& $refuse ("there is no file '" + $full + "'")) }
@@ -233,6 +278,11 @@ function Add-HordeFilesShare {
     $kind = $null
     $source = $null
     try {
+        # THE DENY LIST, OF THE HANDLE'S OWN PATH AND BEFORE A BYTE IS READ (files/Deny.ps1). It is
+        # asked before the link test on purpose: a link into a place that is never shared is refused
+        # as that place, whatever the link test would have said of the link.
+        $denied = Get-HordeFilesDenyRefusal -FinalPath $real -HordeHome $HordeHome -RepoRoot $RepoRoot -Force:$Force -Handle $opened.stream.SafeFileHandle
+        if ($denied -ne "") { return (& $refuse $denied) }
         # The link test: of the path that was written, and then of the handle's own. The second is
         # asked behind the long-path prefix: measured 2026-10-13, a path of 578 characters without
         # it could not be looked at, and what cannot be looked at is treated as a link.
@@ -248,10 +298,15 @@ function Add-HordeFilesShare {
     if ($kind.magic -eq "") {
         $notText = Get-HordeFilesTextProblem -Bytes $source.bytes -Type $kind.type
         if ($notText -ne "") { return (& $refuse $notText) }
+        # WHAT THE TEXT HOLDS, now that it is known to be text and before anything is kept
+        # (files/Deny.ps1): a private key whatever the caller says, a token of a known shape
+        # unless the caller gives -Force. A picture and a PDF are not looked into.
+        $holds = Get-HordeFilesContentRefusal -Bytes $source.bytes -Force:$Force
+        if ($holds -ne "") { return (& $refuse $holds) }
     }
 
     # THE KEY, LAST OF ALL THAT CAN REFUSE THE FILE ITSELF: a first share that is refused makes no key.
-    $keyed = Get-HordeFilesKey -HordeHome $HordeHome -Root $store -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs
+    $keyed = Get-HordeFilesKey -HordeHome $HordeHome -HeldTries $settings.heldReadTries -HeldWaitMs $settings.heldReadWaitMs
     if (-not $keyed.ok) { return (& $refuse $keyed.reason) }
     $session = Get-HordeFilesSession -Asking $Asking
     $fileId = Get-HordeFilesId -Session $session -FullPath $real -Key $keyed.key
@@ -299,7 +354,7 @@ function Get-HordeFilesRecordProblem {
     if ((& $value "fileId") -isnot [string] -or (& $value "fileId") -cne $Entry.fileId) { return "its fileId is not the one in its name" }
     if (-not (& $whole "version") -or (& $value "version") -ne $Entry.version) { return "its version is not the one in its name" }
     $title = & $value "title"
-    if ($title -isnot [string] -or $title.Trim() -eq "" -or $title -cmatch '\p{Cc}') { return "its title is not one line of text" }
+    if ($title -isnot [string] -or $title.Trim() -eq "" -or (Get-HordeFilesTitleProblem -Title $title) -ne "") { return "its title is not one line of text" }
     $type = & $value "type"
     if ($type -isnot [string] -or @((Get-HordeFilesTypes).Values | ForEach-Object { $_.type }) -cnotcontains $type) { return "its type is not one that is shared" }
     if (-not (& $whole "size") -or (& $value "size") -lt 0) { return "its size is not a count of bytes" }

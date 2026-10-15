@@ -78,6 +78,6 @@ export async function handleRotation(request, env, url, limits) {
   if (!handed.ok) return fail();
   const adopted = await machineKeyOf(env, a.keyId).adopt({ owner: handed.owner, publicKey: rec.value.successorSignPublic, nonce: a.nonce, now });
   if (!adopted.ok) { await old.restore(handed.owner); return fail(); }
-  await accountOf(env, owner.account).moveMachine({ from: rec.value.signKeyId, entry: { keyId: a.keyId, horde: owner.horde, label: owner.label, registeredAt: now } });
+  await accountOf(env, owner.account).moveMachine({ from: rec.value.signKeyId, entry: { keyId: a.keyId, horde: owner.horde, label: owner.label, registeredAt: now }, now });
   return answer(200, { keyId: a.keyId, horde: owner.horde, from: rec.value.signKeyId });
 }

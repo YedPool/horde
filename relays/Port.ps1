@@ -90,6 +90,31 @@
 #   Deploy  param([string]$Site, [scriptblock]$Say, [string]$HordeHome) -> known { origin }
 # Publish-HordeRelay runs it and checks its answer as it checks every other; Get-HordeRelayDeployable
 # names the relays that have one.
+# A relay that is deployed may also hand -Bundle: what it would deploy as its own code, built from a
+# tree of the repository (any commit's, exported) WITHOUT NETWORK OR LOGIN, as one hash:
+#   Bundle  param([string]$Tree, [string]$Work) -> known { sha256 }
+# Two trees whose bundles hash alike would deploy the same code. The supervisor uses it to tell whether
+# a change to a file the relay's code shares with the phone app changes the relay (cli/RelayPublish.ps1);
+# Get-HordeRelayBundle runs it and checks its answer. -Work is the caller's scratch folder.
+#
+# A RELAY THAT IS DEPLOYED MAY SAY WHAT A NEW MACHINE STILL NEEDS BEFORE ITS FIRST DEPLOY (2026-10-14).
+# Horde's first person to install it on a fresh machine was stuck: nothing said what to set up, and the
+# hosted relay's origin was the founder's own, so a deploy would have gone there. `horde setup`
+# (cli/Setup.ps1) walks the steps of a first run in order, and the ones that belong to a relay - where it
+# will answer, the sign-in client it needs, the tools it is deployed with - are that relay's to say,
+# because nothing outside its folder may name it (CONTRIBUTING rule 14). So such a relay also hands
+#   Setup   param([string]$HordeHome) -> known { origin; steps; beforeDeploy }
+#           origin        "" while none is chosen, else the https origin it will answer at
+#           steps         its own steps, in order, each { name; done; said; next; notes }: name 1 to 60
+#                         printable characters; done true or false; said, what is the case, 1 to 1000;
+#                         next, the ONE thing to do, "" when done and 1 to 1000 when not; notes, 0 to
+#                         8 lines of 1 to 600 to show beside the step whether it is done or not
+#           beforeDeploy  "" or 1 to 400 printable characters: what to do once before the first deploy
+#                         that this machine cannot check (a login kept by another tool, say)
+# and Get-HordeRelaySetup -Name [-HordeHome] runs it and checks its answer, never throwing for the
+# relay: a block that throws, or answers with anything else, is unknown, with the reason. IT READS AND
+# DOES NOTHING: settings and files only, no network, no process, no file written - the person asked
+# what to do, not for it to be done - and NO SECRET IS EVER IN IT, since every word of it is printed.
 #
 # A RELAY THAT COUNTS REQUESTS (the hosted one: a request a day per account is its limit) may also hand
 # Register-HordeRelay -RunWatchMs: how long a long-running runner's watch waits on it (cli/RelayRun.ps1).
@@ -157,6 +182,48 @@
 #     mailbox that is not being trimmed is one that fills.
 # test/test-relay-conformance.ps1 holds every relay that hands the block over to what is written here.
 #
+# WHICH FILES ON THIS MACHINE HOLD A RELAY'S SECRETS, ASKED WITHOUT NAMING A RELAY (2026-10-13). Sharing a
+# file with a phone (files/) refuses the files in secret places, and one secret file it cannot know of:
+# the file a hosted relay's deploy reads its sign-in client from. WHERE THAT FILE IS, IS A SETTING OF
+# THAT ONE RELAY - it may point anywhere and the file may have any name - and nothing outside a relay's
+# own folder may name the relay to read its setting (CONTRIBUTING rule 14). A survey of the 17 settings
+# declarations in the repository on that day found it the only setting that names a secret file. So the
+# question is the port's to answer for every caller: a relay that keeps a secret in a file on this
+# machine also hands Register-HordeRelay
+#   SecretFiles param([string]$HordeHome) -> known { files }, each { path; what }
+#               path is absolute; what is a few fixed words for a person - "the sign-in client file" -
+#               and NEVER a secret, a setting's value or anything read from the file. Absent when it
+#               keeps none here; unknown, with the reason, when it cannot tell - its settings do not
+#               read, a setting is not an absolute path.
+# and Get-HordeRelaySecretFiles [-HordeHome] asks every loaded relay that handed one over and gives ONE
+# answer: known { files; asked } - every entry as { relay; path; what }, asked the relays that were
+# asked - only when EVERY one of them answered known or absent; unknown, naming each relay that could
+# not tell and why (and carrying their names as its member relays), when any did not. ONE RELAY THAT
+# CANNOT TELL MAKES THE WHOLE ANSWER UNKNOWN, ON PURPOSE: the caller is deciding whether a file may
+# leave the machine, and a list with a hole in it read as the whole list is the one mistake this exists
+# to stop, so the caller can fail closed. A relay with no such block keeps no secret file and is not
+# asked; with no relay loaded at all the answer is known and empty.
+#   - IT ASKS FOR PATHS AND NOTHING ELSE. Nothing here connects to a relay, starts a process, or opens,
+#     lists or tests for a secret file: a file that is not there yet is still named, because the
+#     question is where a secret WOULD be. The block reads its relay's settings, and that is all.
+#   - THE PORT NEVER THROWS FOR THE RELAY, here as everywhere: a block that throws, answers with
+#     something that is not an answer, or names a file by a path that is not absolute or by words that
+#     are not 1 to 80 printable ASCII characters, is a relay that could not tell.
+#   - EVERY PATH IS HANDED BACK WHOLE: absolute, and with its "." and ".." parts folded away
+#     ([System.IO.Path]::GetFullPath, which reads no disk), so a setting written C:\a\..\b\key.json is
+#     named as the file it opens. A link, a junction and a short 8.3 name are NOT resolved - that would
+#     mean reading the disk - so a caller that compares paths must bring its own to the same form.
+#     A NETWORK OR DEVICE PATH (\\server\share\..., \\.\C:\..., \\?\...) is handed back the same way
+#     and is a file like any other: what it leads to is the caller's to ask (files/Deny.ps1 asks it
+#     which file it is), not a reason for the relay to be one that could not tell.
+#   - AN OPTIONAL BLOCK, NOT A CAPABILITY OF THE CLOSED LIST, for the reason the watch in slices and the
+#     trim are not: nothing picks a relay by it (Find-HordeRelay -Require), and a "yes" there is a claim
+#     about what the far end can do, shown by a case - this is a fact about this machine's disk.
+# A CALLER MUST HAVE LOADED THE RELAYS, at its own script level, exactly as every other caller of the
+# port does (Get-HordeRelayFiles): a relay that was never loaded is never asked, and the answer's asked
+# is how a caller sees who was. test/test-relay-conformance.ps1 holds every relay that hands the block
+# over to what is written here.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -195,6 +262,9 @@ $script:HordeRelayStreamKeyPattern = '\A([0-9a-f]{32}/[a-z][a-z0-9-]{0,31}/)([1-
 # Printable ASCII, space to tilde: an envelope's canonical text is a subset (no whitespace at all), and
 # a text with no line break can be stored one per line by any relay.
 $script:HordeRelayTextPattern = '\A[\x20-\x7E]+\z'
+# What a relay may call one of its secret files (the header, WHICH FILES ON THIS MACHINE HOLD A RELAY'S
+# SECRETS): a few printable words on one line. 80 is room for a phrase and not for a file's contents.
+$script:HordeRelaySecretWhatPattern = '\A[\x20-\x7E]{1,80}\z'
 
 function Get-HordeRelayRoot {
     return $PSScriptRoot
@@ -249,7 +319,10 @@ function Register-HordeRelay {
         [scriptblock]$WatchOpen = $null,
         [scriptblock]$WatchWait = $null,
         [scriptblock]$WatchClose = $null,
-        [scriptblock]$PutKeeping = $null
+        [scriptblock]$PutKeeping = $null,
+        [scriptblock]$SecretFiles = $null,
+        [scriptblock]$Bundle = $null,
+        [scriptblock]$Setup = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -268,8 +341,8 @@ function Register-HordeRelay {
     }
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
-        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping
-        connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
+        watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles
+        bundle = $Bundle; setup = $Setup; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }
@@ -298,6 +371,64 @@ function Publish-HordeRelay {
     $o = Get-HordeRelayMember $a.value "origin"
     if (-not $o.has -or $o.value -isnot [string] -or $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy without the https origin it answers at")) }
     return (New-HordeKnown -Value ([pscustomobject]@{ relay = $Name; origin = $o.value }) -ObservedAt $a.observedAt)
+}
+
+function Get-HordeRelayBundle {
+    # Relay -Name's code as it would be deployed from the tree -Tree, bundled (header, DEPLOYING): known
+    # { sha256 } or unknown with the reason. Never throws for the relay.
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Tree, [Parameter(Mandatory = $true)][string]$Work)
+    if (-not $script:HordeRelays.ContainsKey($Name)) { return (New-HordeUnknown -Reason ("no relay named '" + $Name + "' is loaded")) }
+    $r = $script:HordeRelays[$Name]
+    if ($null -eq $r.bundle) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' cannot bundle its code")) }
+    try { $a = & $r.bundle $Tree $Work }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to bundle its code") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the bundle with something that is not an answer")) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' did not bundle its code: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
+    $h = Get-HordeRelayMember $a.value "sha256"
+    if (-not $h.has -or $h.value -isnot [string] -or $h.value -cnotmatch '\A[0-9a-f]{64}\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the bundle without its hash")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ sha256 = $h.value }))
+}
+
+function Test-HordeRelaySetupText {
+    # Is -Value printable ASCII of -Min to -Max characters (the header, A RELAY THAT IS DEPLOYED MAY SAY)?
+    param($Value, [int]$Min, [int]$Max)
+    if ($Value -isnot [string]) { return $false }
+    if ($Value.Length -lt $Min -or $Value.Length -gt $Max) { return $false }
+    return ($Value.Length -eq 0 -or $Value -cmatch '\A[\x20-\x7E]+\z')
+}
+
+function Get-HordeRelaySetup {
+    # Relay -Name's own steps of a first run (the header, A RELAY THAT IS DEPLOYED MAY SAY): known
+    # { origin; steps; beforeDeploy }, every step { name; done; said; next; notes }, or unknown with the
+    # reason. Never throws for the relay. NOTHING THE RELAY SAID IS REPEATED IN A REFUSAL.
+    param([Parameter(Mandatory = $true)][string]$Name, [string]$HordeHome = "")
+    if (-not $script:HordeRelays.ContainsKey($Name)) { return (New-HordeUnknown -Reason ("no relay named '" + $Name + "' is loaded")) }
+    $r = $script:HordeRelays[$Name]
+    if ($null -eq $r.setup) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' says nothing of a first run")) }
+    try { $a = & $r.setup $HordeHome }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to say what a first run needs") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the first run with something that is not an answer")) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' cannot say what a first run needs: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
+    $bad = New-HordeUnknown -Reason ("relay '" + $Name + "' answered the first run with steps that are not steps")
+    $o = Get-HordeRelayMember $a.value "origin"
+    if (-not $o.has -or -not (Test-HordeRelaySetupText $o.value 0 200) -or ($o.value -ne "" -and $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z')) { return $bad }
+    $b = Get-HordeRelayMember $a.value "beforeDeploy"
+    if (-not $b.has -or -not (Test-HordeRelaySetupText $b.value 0 400)) { return $bad }
+    $st = Get-HordeRelayMember $a.value "steps"
+    if (-not $st.has) { return $bad }
+    $steps = New-Object System.Collections.ArrayList
+    foreach ($s in @($(if ($null -ne $st.value) { $st.value } else { @() }))) {
+        $n = Get-HordeRelayMember $s "name"; $d = Get-HordeRelayMember $s "done"; $said = Get-HordeRelayMember $s "said"
+        $next = Get-HordeRelayMember $s "next"; $notes = Get-HordeRelayMember $s "notes"
+        if (-not $n.has -or -not (Test-HordeRelaySetupText $n.value 1 60) -or -not $d.has -or $d.value -isnot [bool]) { return $bad }
+        if (-not $said.has -or -not (Test-HordeRelaySetupText $said.value 1 1000) -or -not $next.has) { return $bad }
+        if ($(if ($d.value) { $next.value -cne "" } else { -not (Test-HordeRelaySetupText $next.value 1 1000) })) { return $bad }
+        $lines = @($(if ($notes.has -and $null -ne $notes.value) { $notes.value } else { @() }))
+        if (-not $notes.has -or $lines.Count -gt 8 -or @($lines | Where-Object { -not (Test-HordeRelaySetupText $_ 1 600) }).Count -gt 0) { return $bad }
+        [void]$steps.Add([pscustomobject]@{ name = $n.value; done = $d.value; said = $said.value; next = $next.value; notes = [string[]]@($lines) })
+    }
+    if ($steps.Count -eq 0) { return $bad }
+    return (New-HordeKnown -Value ([pscustomobject]@{ origin = $o.value; steps = @($steps.ToArray()); beforeDeploy = $b.value }))
 }
 
 function Get-HordeRelay {
@@ -734,4 +865,93 @@ function Confirm-HordeRelayItems {
     $t = Get-HordeRelayMember $a.value "through"
     if (-not $t.has -or -not (Test-HordeRelayCursor $t.value) -or [long]$t.value -ne [long]$Through) { return (New-HordeUnknown -Reason ("relay '" + $Connection.relay.name + "' was asked to ack through " + $Through + " and answered through " + $t.value)) }
     return (New-HordeKnown -Value ([pscustomobject]@{ mailbox = $Mailbox; through = [long]$Through }) -ObservedAt $a.observedAt)
+}
+
+function Test-HordeRelayAbsolutePath {
+    # Is this an absolute path, one that means the same from every current folder and drive? It is
+    # core/ModuleSettings.ps1's Test-HordeModuleSettingFolder, COPIED AND NOT LOADED: that file brings the
+    # settings reader and its four files with it, which every caller of the port would then pay for, and
+    # the port reads no setting. test/test-relay-port.ps1 fails if the two ever answer differently.
+    # IsPathRooted says yes to C:x and \x, which are not (measured there, 2026-10-07), so on Windows the
+    # answer is the pattern; it is still asked first, because it throws on a character no path may hold.
+    param($Path)
+    if ($Path -isnot [string] -or $Path -eq "") { return $false }
+    $rooted = $false
+    try { $rooted = [System.IO.Path]::IsPathRooted($Path) } catch { return $false }
+    if ([System.IO.Path]::DirectorySeparatorChar -eq [char]'\') { return [bool]($Path -cmatch '\A(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])') }
+    return $rooted
+}
+
+function Read-HordeRelaySecretFiles {
+    # One relay's own word on which files here hold its secrets, checked (the header, WHICH FILES ON THIS
+    # MACHINE HOLD A RELAY'S SECRETS): known, a list of { relay; path; what } that may be empty, or
+    # unknown with why this relay could not tell. Never throws for the relay.
+    param($Relay, [string]$HordeHome)
+    $name = $Relay.name
+    try { $a = & $Relay.secretFiles $HordeHome }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $name + "' failed to say which files hold its secrets") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $name + "' answered which files hold its secrets with something that is not an answer")) }
+    if ($a.state -ceq "unknown") { return (New-HordeUnknown -Reason ("relay '" + $name + "' cannot tell which files hold its secrets: " + $a.reason)) }
+    $out = New-Object System.Collections.ArrayList
+    # Absent is "none here", and so is a known list with nothing in it. (The word comes first in the
+    # comparison only so that this line is not a second match for the find string of
+    # test\mutations\relay-port.psd1's absent-answer-passed-on, which must occur once.)
+    if ("absent" -ceq $a.state) { return (New-HordeKnown -Value @($out.ToArray())) }
+    $member = Get-HordeRelayMember $a.value "files"
+    if (-not $member.has) { return (New-HordeUnknown -Reason ("relay '" + $name + "' answered which files hold its secrets without files")) }
+    # A one-element list arrives unrolled, and an empty one as $null: both are lists here.
+    $raw = @()
+    if ($null -ne $member.value) { $raw = @($member.value) }
+    $n = 0
+    foreach ($it in $raw) {
+        $n++
+        # NOTHING THE RELAY SAID IS REPEATED IN A REFUSAL: a path that is not one, or words too long to
+        # be a description, may be anything at all.
+        $at = "relay '" + $name + "' named secret file " + $n + " of " + $raw.Count
+        $path = Get-HordeRelayMember $it "path"
+        if (-not $path.has -or -not (Test-HordeRelayAbsolutePath $path.value)) { return (New-HordeUnknown -Reason ($at + " by something that is not an absolute path")) }
+        # A NETWORK OR DEVICE PATH IS HANDED OVER AS IT IS, MADE WHOLE (round 2 of the review of PR
+        # 238, 2026-10-14). Round 1 made such a relay one that could not tell, which refused EVERY
+        # share on a machine whose relay file sits on a network share or a redirected profile
+        # folder, with no setting to fix it. The caller asks such a file which file it is instead
+        # (files/Deny.ps1, the relays' own files): measured that day, \\localhost\C$\..., \\.\C:\...
+        # and the plain path give one volume serial number and file index.
+        $whole = ""
+        try { $whole = [System.IO.Path]::GetFullPath($path.value) } catch { $whole = "" }
+        if ($whole -eq "") { return (New-HordeUnknown -Reason ($at + " by a path that cannot be read as one")) }
+        $what = Get-HordeRelayMember $it "what"
+        if (-not $what.has -or $what.value -isnot [string] -or $what.value -cnotmatch $script:HordeRelaySecretWhatPattern) { return (New-HordeUnknown -Reason ($at + " without saying what it is in 1 to 80 printable characters")) }
+        [void]$out.Add([pscustomobject]@{ relay = $name; path = $whole; what = [string]$what.value })
+    }
+    return (New-HordeKnown -Value @($out.ToArray()))
+}
+
+function Get-HordeRelaySecretFiles {
+    # Which files on this machine hold relays' secrets (the header, the section of that name): known
+    # { files; asked } - files every { relay; path; what } of every loaded relay that keeps one, asked
+    # the names of the relays that were asked - or unknown, naming each relay that could not tell and
+    # why, with their names as its member relays. -HordeHome is the Horde home whose settings are read
+    # (empty: this user's own). Reads settings only: no relay is contacted and no secret file is touched.
+    param([string]$HordeHome = "")
+    if ($HordeHome -ne "" -and -not (Test-HordeRelayAbsolutePath $HordeHome)) { return (New-HordeUnknown -Reason ("which files hold relays' secrets was not asked: the Horde home '" + $HordeHome + "' is not an absolute folder")) }
+    $files = New-Object System.Collections.ArrayList
+    $asked = New-Object System.Collections.ArrayList
+    $cannot = New-Object System.Collections.ArrayList
+    $why = New-Object System.Collections.ArrayList
+    foreach ($n in @(Get-HordeRelayNames)) {
+        $r = $script:HordeRelays[$n]
+        if ($null -eq $r.secretFiles) { continue }
+        [void]$asked.Add($n)
+        $a = Read-HordeRelaySecretFiles -Relay $r -HordeHome $HordeHome
+        if ($a.state -cne "known") { [void]$cannot.Add($n); [void]$why.Add($a.reason); continue }
+        foreach ($f in @($a.value)) { [void]$files.Add($f) }
+    }
+    # ONE RELAY THAT CANNOT TELL MAKES THE WHOLE ANSWER UNKNOWN (the header): what the others named is
+    # not handed over beside it, so a list with a hole in it cannot be read as the whole list.
+    if ($cannot.Count -gt 0) {
+        $u = New-HordeUnknown -Reason ("which files hold relays' secrets is not known: " + ($why -join "; "))
+        $u | Add-Member -NotePropertyName relays -NotePropertyValue @($cannot.ToArray())
+        return $u
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ files = @($files.ToArray()); asked = @($asked.ToArray()) }))
 }

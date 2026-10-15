@@ -523,6 +523,10 @@ try {
     $moved = Send-To -Url ($O + "/v1/machines/rotation") -Method "POST" -Body $body -Authorization $auth
     $mj = Get-Json $moved
     Check ($moved.code -eq 200 -and $mj.keyId -ceq $s2.keyId -and $mj.from -ceq $r2.kid) ("the rotation, signed by the new key with the old key's vouch, moves the registration (" + $moved.text + ")")
+    # The rotation is a request the relay verified, signed by the new key: the machine is heard under it at
+    # once (worker/presence.js), so the phone's PC offline banner does not wait for its next request.
+    $heardNew = @((Get-Json (Send-To -Url ($O + "/v1/account") -Cookie $rotP.cookie)).machines | Where-Object { $_.keyId -ceq $s2.keyId })
+    Check ($heardNew.Count -eq 1 -and $null -ne $heardNew[0].lastSeenAt -and $heardNew[0].lastSeenAt -gt 0) ("a rotation request counts as heard for the NEW key (" + $(if ($heardNew.Count -eq 1) { $heardNew[0].lastSeenAt } else { "not listed" }) + ")")
     Check ((Send-To -Url ($O + "/v1/machines/rotation") -Method "POST" -Body $body -Authorization $auth).code -eq 401) "the same request again is a replay, refused"
     Check ((Send-To -Url ($O + "/v1/machines/rotation") -Method "POST" -Body $body -Authorization (Get-SignedAuthorization -Dev $X -Signer $s2 -Method "POST" -Target "/v1/machines/rotation" -Body $body)).code -eq 401) "and the record presented again, freshly signed, moves nothing: single use, the old key is nobody's now"
     Check ((Send-Signed -Dev $X -Signer $s2 -Target "/v1/mailboxes/work/phone/items?since=0&max=1").code -eq 200) "CONTROL: the new key reads"

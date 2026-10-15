@@ -77,6 +77,23 @@
 # backoffJitterPercent either way, so machines that lost one relay together do not come back together
 # (the design's resilience rule; the long-poll itself is the wait when all is well). One good turn
 # resets it.
+# THE BACKOFF IS CAPPED AT 45 s, JITTER INCLUDED, unless the relay itself asked to be left (2026-10-14,
+# the phone's PC offline banner). The hosted relay hears this machine only when it asks it something,
+# and the founder's phone calls the PC offline after 120 s without that (the phone's account client,
+# OFFLINE_AFTER_MS). Uncapped, the backoff grew to about 72 s at the seventh failure in a row, and with
+# a 60 s watch the relay then heard the machine only about every 132 s: the banner came and went while
+# answers were still being applied. A longer pause also gains nothing: an idle run already asks the
+# relay about once a minute, so waiting longer than that does not relieve it. So the watch's ceiling
+# (60 s) plus the cap stays under 110 s, ten seconds inside the line. Which is which:
+#   - CAPPED (the run's own trouble, or the relay merely unreachable): the keys would not open, a channel
+#     failed for a reason of its own, the watch failed with no status, or with any status but these;
+#   - NOT CAPPED, the settings' own backoffMaxMs (the relay ASKED to be left, and a longer pause is what
+#     it asked for): THIS TURN's watch or one of THIS TURN's puts refused with 429 (a rate, or the
+#     account's day) or 507 (channels/Port.ps1, refusedWith, cleared at the top of every turn).
+#     NEVER the mark of a mailbox the relay holds full (channels/Port.ps1, full): it stays set for as
+#     long as the mailbox does, so a turn that failed for another reason - one dropped watch socket -
+#     would wait the long backoff too, and the relay would hear the machine only every 132 s (review of
+#     PR 252, 2026-10-14). A turn whose own put is refused as full is not capped; one that is not, is.
 #
 # A CLEAN STOP. The loop ends after the turn in which a stop is asked (<HORDE_HOME>\relay\run.stop, made
 # by `horde relay stop`), or after -MaxTurns, or on Ctrl+C; in every case it lets go of its keys. The
@@ -106,6 +123,20 @@
 # longest a turn can last between two beats is its watch plus the longest backoff, moved by the jitter -
 # so a run that is waiting out a long backoff, as designed, is never read as dead. A write that fails
 # never ends the loop: it costs the heartbeat and one line said once, nothing else.
+#
+# A RUN THAT BEATS IS NOT A RUN THAT WORKS, so the heartbeat says which (review of PR 249, MUST 1).
+# The supervisor runs whether or not anyone is signed in (cli/ServicesTend.ps1), and a run it starts
+# before anyone has signed in since the machine started may not be able to use this machine's keys:
+# the agreement key is a software key protected under the account's logon (relay/Keys.ps1), and with
+# no logon there may be nothing to unlock it. Such a run used to beat on every turn while it could not
+# open one answer from the phone. Now the keys are PROVED - opened, and each used once (a signature
+# made and checked, an agreement made with a throwaway peer) - before the run's first healthy beat,
+# and every turn the keys are not open beats the condition keys-unavailable, with why
+# (core/Heartbeat.ps1). The supervisor never calls such a run alive: it restarts it with a back-off
+# and tells the warchief once (core/Services.ps1). The run itself goes on trying its keys every turn,
+# at its own back-off, so once they open - the person has signed in, or a run started after that - it
+# beats well again. Keys that were opened and proved stay open for the run's life; the hourly reopen
+# that fails keeps them (it says so) and is not a condition.
 #
 # THE SETTINGS are core/ModuleSettings.ps1's, module relay-run (<HORDE_HOME>\settings\relay-run.json),
 # read when the run starts. A file that fails its checks refuses the run, in its own words.
@@ -173,17 +204,37 @@ function Get-HordeRelayRunSettings {
     return (New-HordeKnown -Value $s.values)
 }
 
+# THE BACKOFF CAP when the relay did not ask to be left (BACKOFF, in the header), jitter included: the
+# relay port's longest watch plus this stays under the phone's 120 s offline line, with 10 s to spare.
+$script:HordeRelayRunBackoffCapMs = 45000
+
 function Get-HordeRelayRunBackoffMs {
     # The wait after -Failures failures in a row: min doubled per failure past the first, capped at max,
     # moved by up to jitter percent either way by -Random (a System.Random, so a suite can fix the seed).
-    param([Parameter(Mandatory = $true)][int]$Failures, [Parameter(Mandatory = $true)]$Settings, [Parameter(Mandatory = $true)]$Random)
+    # -CapMs over 0 caps the wait WITH its jitter: the base is held to CapMs / (1 + jitter), so the waits
+    # still spread and none is over CapMs.
+    param([Parameter(Mandatory = $true)][int]$Failures, [Parameter(Mandatory = $true)]$Settings, [Parameter(Mandatory = $true)]$Random, [long]$CapMs = 0)
     if ($Failures -le 0) { return 0 }
+    $most = [double]$Settings.backoffMaxMs
+    if ($CapMs -gt 0) { $most = [System.Math]::Min($most, [System.Math]::Floor([double]$CapMs / (1 + [double]$Settings.backoffJitterPercent / 100))) }
     $base = [double]$Settings.backoffMinMs
-    for ($i = 1; $i -lt $Failures -and $base -lt [double]$Settings.backoffMaxMs; $i++) { $base = $base * 2 }
-    $base = [System.Math]::Min($base, [double]$Settings.backoffMaxMs)
+    for ($i = 1; $i -lt $Failures -and $base -lt $most; $i++) { $base = $base * 2 }
+    $base = [System.Math]::Min($base, $most)
     $spread = $base * [double]$Settings.backoffJitterPercent / 100
     $ms = $base - $spread + ($Random.NextDouble() * 2 * $spread)
     return [int][System.Math]::Max(0, [System.Math]::Round($ms))
+}
+
+function Get-HordeRelayRunBackoffCap {
+    # This failed turn's cap on its backoff (BACKOFF, in the header): 0 - none, the settings' own
+    # backoffMaxMs - when the relay asked to be left IN THIS TURN: -Inbox (the watch's answer, or $null
+    # when the turn never watched) refused with 429 or 507, or -Context's refusedWith (the statuses this
+    # turn's puts were refused with) holding either. Never the sticky full mark (the header).
+    # Otherwise $script:HordeRelayRunBackoffCapMs.
+    param($Inbox = $null, $Context = $null)
+    if ($null -ne $Inbox -and $null -ne $Inbox.PSObject.Properties["status"] -and @(429, 507) -contains [int]$Inbox.status) { return 0 }
+    if ($null -ne $Context -and $null -ne $Context.PSObject.Properties["refusedWith"] -and ($Context.refusedWith.ContainsKey(429) -or $Context.refusedWith.ContainsKey(507))) { return 0 }
+    return $script:HordeRelayRunBackoffCapMs
 }
 
 function Get-HordeRelayRunStopPath {
@@ -338,13 +389,42 @@ function Invoke-HordeRelayRunSendCheck {
     } finally { $Watching.sinceLook.Restart() }
 }
 
+function Test-HordeRelayRunContextKeys {
+    # Use each key of a run's context once (relay/Keys.ps1, Test-HordeRelayKeyWorks): the signing key,
+    # and every agreement key that may open. "" when all work, else which did not and why.
+    param([Parameter(Mandatory = $true)]$Context)
+    $why = Test-HordeRelayKeyWorks -KeyObject $Context.signKey -Use "sign"
+    if ("" + $why -ne "") { return ("the signing key " + $Context.signKeyId + " could not be used: " + $why) }
+    foreach ($id in @($Context.openingKeys.Keys)) {
+        $why = Test-HordeRelayKeyWorks -KeyObject $Context.openingKeys[$id] -Use "agree"
+        if ("" + $why -ne "") { return ("the agreement key " + $id + " could not be used: " + $why) }
+    }
+    return ""
+}
+
+function Open-HordeRelayRunProvenContext {
+    # The run's context with its keys PROVED (the header): known, or unknown with why. A context whose
+    # keys opened and cannot be used is closed again, never handed on.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)]$Connection, [string]$DecisionsRoot = "")
+    $made = New-HordeRelayRunContext -HordeHome $HordeHome -Connection $Connection -DecisionsRoot $DecisionsRoot
+    if ($made.state -cne "known") { return $made }
+    $why = ""
+    try { $why = Test-HordeRelayRunContextKeys -Context $made.value } catch { $why = $_.Exception.Message }
+    if ("" + $why -eq "") { return $made }
+    Close-HordeRelayRunContext -Context $made.value
+    return (New-HordeUnknown -Reason ("the keys opened and cannot be used - " + $why))
+}
+
 function Invoke-HordeRelayRun {
     # The loop (the header). -Connection is a relays/Port.ps1 connection the caller made; -Say receives
     # each line the loop has to say (the command prints them). Returns { turns; failures; stoppedBy }.
-    # -MaxTurns 0 runs until stopped. -Random is for a suite that fixes the jitter.
+    # -MaxTurns 0 runs until stopped. -Random is for a suite that fixes the jitter. -OpenContext
+    # { param($HordeHome, $Connection, $DecisionsRoot) } opens the run's context with its keys proved
+    # (Open-HordeRelayRunProvenContext), for a suite whose keys fail and then open.
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)]$Connection, [Parameter(Mandatory = $true)][scriptblock]$Say,
-        [int]$MaxTurns = 0, [string]$DecisionsRoot = "", $Random = $null, [scriptblock]$Sleep = $null)
+        [int]$MaxTurns = 0, [string]$DecisionsRoot = "", $Random = $null, [scriptblock]$Sleep = $null, [scriptblock]$OpenContext = $null)
     if ($HordeHome -ceq "") { $HordeHome = Get-HordeHome }
+    if ($null -eq $OpenContext) { $OpenContext = { param($H, $C, $D) Open-HordeRelayRunProvenContext -HordeHome $H -Connection $C -DecisionsRoot $D } }
     if ($null -eq $Random) { $Random = New-Object System.Random }
     if ($null -eq $Sleep) { $Sleep = { param($Ms, $Why) Start-Sleep -Milliseconds $Ms } }
     $settings = Get-HordeRelayRunSettings -HordeHome $HordeHome
@@ -383,12 +463,11 @@ function Invoke-HordeRelayRun {
             if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }
             if ($MaxTurns -gt 0 -and $turns -ge $MaxTurns) { $stoppedBy = "turns"; break }
             $turns++
-            # One small write a turn; a failure is said the first time it happens, and when it mends.
-            $beat = Write-HordeHeartbeatQuietly -Path $beatPath -At ([datetime]::UtcNow) -ProcessId $beatSelf.pid -ProcessStartedAt $beatSelf.startedAt -TickSeconds $beatTick -Pass $turns
-            if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ("the heartbeat could not be written, and the run goes on without it: " + $beat.reason) }
-            elseif ($beat.state -ceq "known" -and $beatFailed) { $beatFailed = $false; $null = & $Say "the heartbeat is being written again" }
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $failed = ""
+            $in = $null
+            # What the relay refused THIS turn's puts with: begun empty each turn (BACKOFF, in the header).
+            if ($null -ne $ctx -and $null -ne $ctx.PSObject.Properties["refusedWith"]) { $ctx.refusedWith.Clear() }
             $empty = $false
             if ($null -eq $ctx -or ([datetime]::UtcNow - $lastCheck).TotalMinutes -ge $set.retiredAgreeCheckMinutes) {
                 # The periodic check: release what is past its grace, then open the keys again, keeping
@@ -396,7 +475,7 @@ function Invoke-HordeRelayRun {
                 $released = Remove-HordeRelayRetiredAgreeKeys -HordeHome $HordeHome
                 if ($released.state -ceq "known" -and @($released.value.released).Count -gt 0) { $null = & $Say ("released the retired agreement key(s) of generation " + (@($released.value.released) -join ", ")) }
                 elseif ($released.state -cne "known") { $null = & $Say ("retired agreement keys were not checked: " + $released.reason) }
-                if ($null -eq $ctx) { $made = New-HordeRelayRunContext -HordeHome $HordeHome -Connection $Connection -DecisionsRoot $DecisionsRoot }
+                if ($null -eq $ctx) { $made = @(& $OpenContext $HordeHome $Connection $DecisionsRoot) | Select-Object -Last 1; if (-not (Test-HordeAnswer $made)) { $made = New-HordeUnknown -Reason "opening the keys did not answer" } }
                 else { $made = Update-HordeRelayRunContext -Context $ctx }
                 if ($made.state -ceq "known") {
                     $moved = ($null -eq $ctx -or $made.value.mailbox -cne $ctx.mailbox)
@@ -406,6 +485,13 @@ function Invoke-HordeRelayRun {
                 elseif ($null -eq $ctx) { $failed = "this machine's relay keys cannot be opened: " + $made.reason }
                 else { $null = & $Say ("the keys could not be opened again, so the run goes on with those it has: " + $made.reason) }
             }
+            # One small write a turn, AFTER the keys were tried, so the first beat of a run is never a
+            # healthy one it has not earned (the header). A failure is said once, and when it mends.
+            $beatArgs = @{ Path = $beatPath; At = ([datetime]::UtcNow); ProcessId = $beatSelf.pid; ProcessStartedAt = $beatSelf.startedAt; TickSeconds = $beatTick; Pass = $turns }
+            if ($null -eq $ctx) { $beatArgs["Condition"] = "keys-unavailable"; $beatArgs["Why"] = $failed }
+            $beat = Write-HordeHeartbeatQuietly @beatArgs
+            if ($beat.state -cne "known" -and -not $beatFailed) { $beatFailed = $true; $null = & $Say ("the heartbeat could not be written, and the run goes on without it: " + $beat.reason) }
+            elseif ($beat.state -ceq "known" -and $beatFailed) { $beatFailed = $false; $null = & $Say "the heartbeat is being written again" }
             if ($failed -ceq "") {
                 $r1 = Invoke-HordeRelayUnfinished -Context $ctx
                 foreach ($l in @(Get-HordeRelayRunLines -Report $r1.value)) { $null = & $Say $l }
@@ -439,7 +525,7 @@ function Invoke-HordeRelayRun {
             $last = ($MaxTurns -gt 0 -and $turns -ge $MaxTurns)
             if ($failed -cne "") {
                 $failures++
-                $wait = Get-HordeRelayRunBackoffMs -Failures $failures -Settings $set -Random $Random
+                $wait = Get-HordeRelayRunBackoffMs -Failures $failures -Settings $set -Random $Random -CapMs (Get-HordeRelayRunBackoffCap -Inbox $in -Context $ctx)
                 $null = & $Say ($failed + "; waiting " + $wait + " ms (failure " + $failures + " in a row)")
                 if (-not $last) { $null = Wait-HordeRelayRunSliced -Ms $wait -Why "backoff" -Sleep $Sleep -StopPath $stopPath -StartedMs $startedMs }
             } else {

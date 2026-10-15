@@ -34,13 +34,27 @@
 #      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
 #      down moves his place, Jump to newest marks nothing, a reload opens at his place, Mark all read; the
 #      tab is reached by touch from the other views, and a lock takes the log off the page.
+#  12. the cards (the founder's phone, 2026-10-14): a real cards envelope from a run is drawn, the Thrall's
+#      card first and one per lane; a touch on the Thrall's card opens the whole log, and on a lane's card
+#      that lane's stream, its area's entries only;
+#  12b. the stream's entries folded (the founder asked, 2026-10-14): each opens as one line, its title and
+#      its day and time, nothing else to be seen and all of one height, a long title cut; a touch opens one
+#      and folds it by its head or title, a button inside does its own thing; one opened stays open while a
+#      new entry redraws the log; leaving the stream forgets; Enter and Space toggle; aria-expanded follows;
+#  13. a relay refusing every read with 401: the entry sent meanwhile is not drawn, and arrives once reads
+#      come back; meanwhile the page says so and keeps saying it, with the sign-in banner and the time of
+#      the last read that worked;
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
+# The suite starts the browser itself (test/lib/Browser.ps1), in a kill-on-close job of its own, and
+# ends it with its profile in the finally block, however the driver ends: until 2026-10-14 the driver
+# started it, and a driver that died first left the browser running.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "test\lib\Browser.ps1")
 # No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
 . (Join-Path $root "test\lib\FleetPin.ps1")
 $fleetPin = Enter-HordeTestEmptyFleet
@@ -54,12 +68,8 @@ foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
 Set-StrictMode -Version Latest
 
 $node = Get-Command -Name "node" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-$chrome = @(
-    (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
-    (Join-Path ${env:LOCALAPPDATA} "Google\Chrome\Application\chrome.exe")
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
-if ($null -eq $node -or $null -eq $chrome) {
+$chrome = Find-HordeTestChrome
+if ($null -eq $node -or $chrome -eq "") {
     Write-Host ("  [SKIP] " + $(if ($null -eq $node) { "node" } else { "Chrome" }) + " is not installed here, so the app is not run in a browser") -ForegroundColor Yellow
     Check ($true) "CONTROL: the suite reached its skip honestly"
     Complete-HordeSuite -Success "skipped: no node or no Chrome" -PassCode 3
@@ -75,10 +85,10 @@ $work = Join-Path $env:TEMP ("horde-pwa-browser-" + [guid]::NewGuid().ToString("
 $hh = Join-Path $work "home"
 $mailboxes = Join-Path $work "relay"
 $site = Join-Path $work "site"
-$profile = Join-Path $work "chrome"
-New-Item -ItemType Directory -Path (Join-Path $hh "settings"), $mailboxes, $profile -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $hh "settings"), $mailboxes -Force | Out-Null
 $keysMade = @()
 $drv = $null
+$browser = $null
 $canDecide = $false
 $thrall = $null
 $fake = Join-Path $work "fleet-messenger"
@@ -134,9 +144,10 @@ try {
     $canDecide = ($q.state -ceq "known" -and $q.value.outcome -ceq "done")
     if (-not $canDecide) { Write-Host "  [SKIP] the decisions list cannot add a question under this runtime (issue #173): the scenario is not run" -ForegroundColor Yellow }
     if ($canDecide -and $built.state -ceq "known") {
+    $browser = Start-HordeTestBrowser -Chrome $chrome -Parent $work -ExtraArgs @("--host-resolver-rules=MAP localhost 127.0.0.1", "--window-size=412,915")
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $node.Source
-    $psi.Arguments = '"' + (Join-Path $here "browser-drive.mjs") + '" "' + $site + '" "' + $mailboxes + '" "' + $chrome + '" "' + $profile + '"'
+    $psi.Arguments = '"' + (Join-Path $here "browser-drive.mjs") + '" "' + $site + '" "' + $mailboxes + '" ' + $browser.port
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
@@ -153,6 +164,8 @@ try {
     Write-Host "--- 1. the app loads under its policy, and pairs with Chrome's passkey ---" -ForegroundColor Cyan
     $open = Invoke-Browser @{ cmd = "open" }
     Check ($open.ok -and $open.value.empty) "the app starts, shows that it holds no horde yet"
+    $fi = Invoke-Browser @{ cmd = "firstInstall" }
+    Check ($fi.ok -and $fi.value.controlled -and $fi.value.mark) ("THE FIRST INSTALL DOES NOT RELOAD: the first worker takes control of the page and the page stays as it was (" + $(if ($fi.ok) { ConvertTo-Json $fi.value -Compress } else { $fi.reason }) + ")")
     $offer = New-HordeRelayPairingOffer -HordeHome $hh -RpId "localhost" -Origins @($origin)
     $paired = Invoke-Browser @{ cmd = "pair"; offer = $offer.value.text; label = "Founder phone" }
     Check ($paired.ok -and $paired.value.paired -and $paired.value.fingerprint -cmatch '\A[0-9]{4}-[0-9]{4}-[0-9]{4}\z') ("Chrome makes the passkey and the app shows a fingerprint (" + $(if ($paired.ok) { $paired.value.fingerprint + $paired.value.notice } else { $paired.reason }) + ")")
@@ -235,6 +248,17 @@ try {
     Check ($cached.ok -and $paths.Count -ge 10 -and $extra.Count -eq 0) ("the worker's cache holds the shell and nothing else (" + $paths.Count + " files; not shell: " + ($extra -join ", ") + ")")
 
     Write-Host ""
+    Write-Host "--- 6b. a new version: the page reloads once, never over his words ---" -ForegroundColor Cyan
+    $wv = Invoke-Browser @{ cmd = "workerVersion" }
+    Check ($wv.ok -and $wv.value -ceq $built.value.version) ("the worker in control says its version, the site's (" + $(if ($wv.ok) { $wv.value } else { $wv.reason }) + ")")
+    $held = Invoke-Browser @{ cmd = "newWorker"; draft = "half a line to the Thrall"; ms = 6000 }
+    Check ($held.ok -and -not $held.value.reloaded -and $held.value.loads -eq 0 -and $held.value.notice.Contains("A new version is ready - it loads when you finish.")) ("WITH A DRAFT OPEN a new worker does not reload the page; it says a new version is ready (" + $(if ($held.ok) { ConvertTo-Json $held.value -Compress } else { $held.reason }) + ")")
+    $fin = Invoke-Browser @{ cmd = "finishDraft" }
+    Check ($fin.ok -and $fin.value.reloaded -and $fin.value.loads -eq 1) ("the draft gone, the page hidden and shown again loads the new version, once (" + $(if ($fin.ok) { ConvertTo-Json $fin.value -Compress } else { $fin.reason }) + ")")
+    $nw = Invoke-Browser @{ cmd = "newWorker" }
+    Check ($nw.ok -and $nw.value.reloaded -and $nw.value.loads -eq 1 -and -not $nw.value.notice.Contains("new version")) ("A NEW WORKER TAKING CONTROL reloads the page once, and no more (" + $(if ($nw.ok) { ConvertTo-Json $nw.value -Compress } else { $nw.reason }) + ")")
+
+    Write-Host ""
     Write-Host "--- 7. the recovery code reads, and never answers ---" -ForegroundColor Cyan
     # A second question first: the one he answered is out of his list, and has no field to type in.
     $q2 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Which chime of the three?"; kind = "yes-no"; whatItIs = "Three chimes were tried."; group = "voice"; askedBy = "orc-b" } }
@@ -272,6 +296,11 @@ try {
     $seen3 = Invoke-Browser @{ cmd = "waitText"; text = $partsTitle }
     Check ($q3.state -ceq "known" -and $q3.value.outcome -ceq "done" -and $seen3.ok -and $seen3.value.found) "CONTROL: a question of two parts is asked, and the app shows it"
     $pa = Invoke-Browser @{ cmd = "answerPart"; question = $partsTitle; part = 0; text = "The second chime."; mailbox = $mailbox }
+    # ON ITS WAY, IT SAYS SO (the founder, 2026-10-14): before any run has taken it, the part folds to
+    # Answered with what became of it - sent - and never to an empty field.
+    $pending = $null
+    for ($i = 0; $i -lt 40; $i++) { $pending = Invoke-Browser @{ cmd = "parts"; question = $partsTitle }; if ($pending.ok -and $null -ne $pending.value -and $pending.value.folded[0] -eq $true) { break }; Start-Sleep -Milliseconds 250 }
+    Check ($pending.ok -and $null -ne $pending.value -and $pending.value.folded[0] -eq $true -and "$($pending.value.marks[0])" -ceq "Answered, sent") ("BEFORE THE PC HAS IT, the part stands answered and says it is sent (" + $(if ($pending.ok) { ConvertTo-Json $pending.value -Compress } else { $pending.reason }) + ")")
     # Two turns, as for the first answer above: one takes the answer in, the next sends the snapshot that holds it.
     $run = Invoke-Run -Turns 1
     $run = Invoke-Run -Turns 1
@@ -312,6 +341,15 @@ try {
     $run = Invoke-Run -Turns 1
     $wholeAgain = Invoke-Browser @{ cmd = "notShown"; shown = $false }
     Check ($wholeAgain.ok -and -not $wholeAgain.value.shown -and $wholeAgain.value.words -ceq "") ("the next snapshot, with nothing left out, takes the line away (" + $(if ($wholeAgain.ok) { "shown " + $wholeAgain.value.shown } else { $wholeAgain.reason }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 8d. reads that fail are said, with the time of the last that worked ---" -ForegroundColor Cyan
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "the relay answered the read with 401: not signed in" }
+    $nb = Invoke-Browser @{ cmd = "noticeHeld"; text = "Not signed in to the relay - sign in again."; hold = 8000 }
+    Check ($nb.ok -and $nb.value.ok -and $nb.value.notice -cmatch 'Not signed in to the relay - sign in again\. Last updated [0-9]{2}:[0-9]{2}\.' -and $nb.value.notice.Contains("The relay could not be read just now")) ("A 401 ON THE MAILBOX READ shows the sign-in banner and the last-updated time, and it stays (" + $(if ($nb.ok) { $nb.value.notice } else { $nb.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "" }
+    $ng = Invoke-Browser @{ cmd = "noticeHeld"; text = "Not signed in to the relay"; gone = $true }
+    Check ($ng.ok -and $ng.value.ok -and -not $ng.value.notice.Contains("Not signed in")) ("a successful read clears it (" + $(if ($ng.ok) { $ng.value.notice } else { $ng.reason }) + ")")
 
     Write-Host ""
     Write-Host "--- 9. hidden, it locks itself; shown again, nothing openedshows first ---" -ForegroundColor Cyan
@@ -380,6 +418,7 @@ try {
     $pt = Invoke-Browser @{ cmd = "progressTab" }
     Check ($pt.ok -and $pt.value.shown -and -not $pt.value.doc -and -not $pt.value.chat -and -not $pt.value.keys -and $pt.value.selected -ceq "true") "a third tab, Progress, beside Decisions and Chat, shows the log, and the other views and the answering row go"
     $pw = Invoke-Browser @{ cmd = "progressWait"; text = "Progress entry 40" }
+    Check ($pw.ok -and $pw.value.cardsWhy -ceq "No cards from your PC yet.") ("WITH NO CARDS the tab falls back to the whole log under one plain line saying why (" + $(if ($pw.ok) { $pw.value.cardsWhy } else { $pw.reason }) + ")")
     $ids = @(); if ($pw.ok) { $ids = @($pw.value.ids) }
     Check ($pw.ok -and $pw.value.found -and $pw.value.items -eq 41 -and $ids[0].EndsWith("-01") -and $ids[39].EndsWith("-40") -and $ids[40].EndsWith("-41")) ("the entries are drawn oldest to newest in the order they were written, though their times are not in order (" + $(if ($pw.ok) { "" + $pw.value.items } else { $pw.reason }) + ")")
     Check ($pw.ok -and (@($pw.value.firstChips) -join "|") -ceq "Form fill|Started|Lane F|T-0096") ("an entry's chips: the area's plain name first, its kind in a plain word, and the lane and task when it names them (" + $(if ($pw.ok) { @($pw.value.firstChips) -join "|" } else { "" }) + ")")
@@ -390,7 +429,10 @@ try {
     $unread0 = $(if ($pw.ok -and $pw.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
     Check ($pw.ok -and $unread0 -gt 20 -and $unread0 -lt 41 -and $pw.value.count -ceq ("" + $unread0 + " new") -and $null -eq $pw.value.mark -and $pw.value.scrollY -eq 0) ("never read before, it opens at its start; what stands on the screen is read, and the tab and the foot count the rest (" + $(if ($pw.ok) { $pw.value.tab } else { "" }) + ")")
     Check ($pw.ok -and [math]::Abs($pw.value.footBottom - $pw.value.innerHeight) -le 1 -and $pw.value.newestInView -and $pw.value.scrollWidth -le $pw.value.innerWidth) "at phone width nothing scrolls sideways, and Jump to newest stands at the foot of the screen"
-    $ro = Invoke-Browser @{ cmd = "progressReadOn"; screens = 5 }
+    # Half a screen, not five halves: folded to one line (section 12b) an entry is about 49 px, so 13 stand on
+    # the first screen and five halves read the whole log, leaving nothing for Jump to newest to jump past
+    # (measured 2026-10-14: 28 new, then 0). The rule of what is seen is unchanged; the entries are shorter.
+    $ro = Invoke-Browser @{ cmd = "progressReadOn"; screens = 1 }
     $unread1 = $(if ($ro.ok -and $ro.value.tab -cmatch '\AProgress \(([0-9]+)\)\z') { [int]$Matches[1] } else { -1 })
     Check ($ro.ok -and $unread1 -gt 8 -and $unread1 -lt $unread0 -and $ro.value.newestInView) ("as he reads down, his place moves on with him - " + $unread0 + " new, then " + $unread1 + " - and Jump to newest is still on the screen")
     $jump = Invoke-Browser @{ cmd = "progressTouch"; which = "newest" }
@@ -425,6 +467,144 @@ try {
     Check ($lk.ok -and $lk.value.logBefore -gt 0) ("CONTROL: the log held entries when the lock was touched (" + $(if ($lk.ok) { $lk.value.logBefore } else { $lk.reason }) + ")")
     Check ($lk.ok -and $lk.value.logAtOnce -eq 0) ("and it is gone in the same moment as the touch, before the bridge has answered (" + $(if ($lk.ok) { "" + $lk.value.logAtOnce + " left" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
+
+    Write-Host ""
+    Write-Host "--- 12. the cards: a real cards envelope is drawn, and a touch opens the Thrall's and a lane's stream ---" -ForegroundColor Cyan
+    # The founder's phone heard nothing new from 02:36 on 2026-10-14; the diagnosis found the cards
+    # themselves work, and this keeps it so: the envelope is the real `horde relay run`'s, from two lane
+    # status files under the suite's home and the map of areas to lanes.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-cards.json"), '{"schemaVersion": 1, "settings": {"sendIntervalMs": 0, "machineName": "office-pc"}}', $utf8)
+    # A card's lane is its Orc's letter (the status file's orc line); the map of areas names lanes so.
+    $laneWork = [ordered]@{ "F" = "formfill"; "V" = "voice" }
+    foreach ($orc in @($laneWork.Keys)) {
+        $laneDir = Join-Path $hh ("progress\lanes\" + $laneWork[$orc])
+        [void][System.IO.Directory]::CreateDirectory($laneDir)
+        [System.IO.File]::WriteAllText((Join-Path $laneDir "status.txt"), ("horde-orc-status 1`norc: " + $orc + "`nlane: " + $laneWork[$orc] + "`ndoing: working on " + $laneWork[$orc] + "`nfinished: the first part`nblocked: no`nwaiting on: nothing`n"), $utf8)
+    }
+    [System.IO.File]::WriteAllText((Join-Path $hh "progress\area-lanes.json"), '{"v":1,"areas":{"Form fill":"F","Ask Orah voice":"V"}}', $utf8)
+    $run = Invoke-Run -Turns 2
+    Check ($run.code -eq 0) ("CONTROL: a run with two lanes written sends its cards (exit " + $run.code + ")")
+    $null = Invoke-Browser @{ cmd = "progressTab" }
+    $cw = Invoke-Browser @{ cmd = "cardsWait"; count = 3 }
+    $drawn = @(); if ($cw.ok) { $drawn = @($cw.value.cards) }
+    $laneCards = @($drawn | Where-Object { -not $_.thrall } | ForEach-Object { $_.lane } | Sort-Object)
+    Check ($cw.ok -and $cw.value.found -and $cw.value.cardsPage -and -not $cw.value.streamPage -and $drawn.Count -eq 3 -and $drawn[0].thrall -and ($laneCards -join ",") -ceq "F,V") ("the cards are drawn live, the Thrall's first and one per lane (" + $(if ($cw.ok) { ($drawn | ForEach-Object { $_.lane }) -join ", " } else { $cw.reason }) + ")")
+    Check ($cw.ok -and @($drawn | Where-Object { -not $_.thrall -and $laneWork.Contains($_.lane) -and $_.text.Contains("working on " + $laneWork[$_.lane]) }).Count -eq 2) ("each lane's card says what its status file says it is doing (" + $(if ($cw.ok) { ($drawn | ForEach-Object { $_.text }) -join " | " } else { "" }) + ")")
+    # The whole log: section 11's entries and what was written after them, one a line.
+    $whole = @(Get-Content -LiteralPath $logFile | Where-Object { $_.Trim() }).Count
+    $th = Invoke-Browser @{ cmd = "cardTouch"; thrall = $true }
+    Check ($th.ok -and $th.value.streamPage -and -not $th.value.cardsPage -and $th.value.title -ceq "Thrall - the whole fleet, office-pc" -and $th.value.items -eq $whole -and $whole -ge 41) ("a touch on the Thrall's card opens the whole log (" + $(if ($th.ok) { $th.value.title + ": " + $th.value.items + " of " + $whole + " entries" } else { $th.reason }) + ")")
+    $bk = Invoke-Browser @{ cmd = "streamBack" }
+    Check ($bk.ok -and $bk.value.cardsPage -and @($bk.value.cards).Count -eq 3) "and Back goes back to the cards"
+    $ff = Invoke-Browser @{ cmd = "cardTouch"; lane = "F" }
+    $ffTexts = @(); if ($ff.ok) { $ffTexts = @($ff.value.texts) }
+    Check ($ff.ok -and $ff.value.streamPage -and $ff.value.title -ceq "F, office-pc" -and $ff.value.items -eq 21 -and @($ffTexts | Where-Object { -not $_.Contains("Form fill") }).Count -eq 0) ("a touch on a lane's card opens that lane's stream: only the entries of its area (" + $(if ($ff.ok) { $ff.value.title + ": " + $ff.value.items + " entries" } else { $ff.reason }) + ")")
+    $null = Save-Shot "cards-lane-stream"
+    $null = Invoke-Browser @{ cmd = "streamBack" }
+
+    Write-Host ""
+    Write-Host "--- 12b. a stream's entries start folded to one line, title and time; a tap opens one ---" -ForegroundColor Cyan
+    # The founder, 2026-10-14: "I want the entries in the progress cards to initialize collapsed, showing the
+    # title and the datetime - only expanding if i click on them." Every check of what is shown reads what can
+    # be SEEN (entriesState: checkVisibility and a box of some height): a folded entry still holds its text
+    # and chips in the page, so a check of the DOM alone would pass with everything showing.
+    function Get-PwaEntry($state, $id) { $hit = @(@($state) | Where-Object { $null -ne $_ -and $_.id -ceq $id }); if ($hit.Count -gt 0) { $hit[0] } else { $null } }
+    function Get-PwaEntriesWords($state) { (@($state) | ForEach-Object { $_.id.Substring($_.id.Length - 2) + ":" + $(if ($_.folded) { "folded" } else { "open" }) + "/" + $_.expanded + "/" + $_.height }) -join " " }
+    $null = Invoke-Browser @{ cmd = "cardTouch"; lane = "F" }
+    $es = Invoke-Browser @{ cmd = "entriesState" }
+    $ents = @(); if ($es.ok) { $ents = @($es.value) }
+    Check ($es.ok -and $ents.Count -eq 21 -and @($ents | Where-Object { -not $_.folded -or $_.expanded -cne "false" -or $_.role -cne "button" -or -not $_.focusable }).Count -eq 0) ("the lane's stream opens with every entry folded, its one line a control saying aria-expanded false (" + $(if ($es.ok) { Get-PwaEntriesWords $ents } else { $es.reason }) + ")")
+    Check ($ents.Count -eq 21 -and @($ents | Where-Object { -not $_.titleSeen -or -not $_.whenSeen -or $_.title -ceq "" -or $_.when -cne $_.stamp -or $_.when -cnotmatch '\A[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}\z' }).Count -eq 0) ("each folded line shows its title and the same day and time its head's stamp shows (" + $(if ($ents.Count) { $ents[0].title + " | " + $ents[0].when } else { "" }) + ")")
+    Check ($ents.Count -eq 21 -and @($ents | Where-Object { $_.textSeen -or $_.headSeen }).Count -eq 0) "and nothing else can be seen: no text, no chips"
+    $heights = @($ents | ForEach-Object { $_.height } | Sort-Object -Unique)
+    Check ($ents.Count -eq 21 -and $heights.Count -eq 1 -and $heights[0] -gt 0 -and $heights[0] -le 60) ("every folded entry is one line, all of one height (" + ($heights -join ", ") + " px)")
+    # One entry, touched part by part; its neighbour must not move.
+    $aId = $(if ($ents.Count -ge 4) { $ents[2].id } else { "" })
+    $tw = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "when" }
+    $a = $(if ($tw.ok) { Get-PwaEntry $tw.value $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen -and $a.headSeen) ("CONTROL: the same check of what can be seen finds the text and chips of an entry opened by a touch on its folded line's time (" + $(if ($tw.ok) { Get-PwaEntriesWords @($a) } else { $tw.reason }) + ")")
+    Check ($null -ne $a -and -not $a.whenSeen -and $a.title -ceq $ents[2].title) "open, it is drawn as before: its head's stamp stands for the time, the line's own time is gone"
+    Check ($tw.ok -and @($tw.value | Where-Object { $_.id -cne $aId -and (-not $_.folded -or $_.textSeen) }).Count -eq 0) ("and every other entry stays folded (" + $(if ($tw.ok) { Get-PwaEntriesWords $tw.value } else { "" }) + ")")
+    $stampBefore = $(if ($null -ne $a) { $a.stamp } else { "" })
+    $ts = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "stamp" }
+    $a = $(if ($ts.ok) { Get-PwaEntry $ts.value $aId })
+    Check ($null -ne $a -and $a.stamp -cne $stampBefore -and $a.stamp.Length -gt $stampBefore.Length) ("CONTROL: the touch on the open entry's stamp landed: it shows the exact time (" + $(if ($null -ne $a) { $a.stamp } else { $ts.reason }) + ")")
+    Check ($null -ne $a -and -not $a.folded -and $a.textSeen) "and a button in an open entry does its own thing only: the entry stays open"
+    $null = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "stamp" }
+    $tt = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "text" }
+    $a = $(if ($tt.ok) { Get-PwaEntry $tt.value $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "a touch on an open entry's text leaves it open"
+    $th2 = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "head" }
+    $a = $(if ($th2.ok) { Get-PwaEntry $th2.value $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false" -and -not $a.textSeen -and $a.titleSeen -and $a.whenSeen) "a touch on its head folds it again to its one line"
+    $tl = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "line" }
+    $a = $(if ($tl.ok) { Get-PwaEntry $tl.value $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "a touch on a folded entry's title opens it"
+    $tl = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "line" }
+    $a = $(if ($tl.ok) { Get-PwaEntry $tl.value $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false" -and -not $a.textSeen) "and a touch on an open entry's title folds it"
+    # A NEW ENTRY REBUILDS THE WHOLE LOG (drawProgress): what he opened must survive that.
+    $null = Invoke-Browser @{ cmd = "entryTouch"; id = $aId; part = "line" }
+    $tagged = Invoke-Browser @{ cmd = "entriesTag" }
+    # The longest title an entry may have: a progress title holds 100 characters (channels/progress/Channel.ps1,
+    # relay/js/protocol.js PROGRESS_LIMITS), and a longer one is refused before it reaches the phone (a first
+    # draft of this check wrote 125 and the entry never arrived).
+    $longTitle = "Folded line test: a title of the most a progress entry may hold, far wider than one phone line, okay"
+    Check ($longTitle.Length -eq 100) ("CONTROL: the long title is exactly the most a title may hold (" + $longTitle.Length + " characters)")
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261014T080000Z-78","ts":"2026-10-14T08:00:00Z","kind":"progress","area":"Form fill","title":"' + $longTitle + '","text":"Happened: written while an entry was open."}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $nwe = Invoke-Browser @{ cmd = "progressWait"; text = "Folded line test" }
+    $er = Invoke-Browser @{ cmd = "entriesState" }
+    $after = @(); if ($er.ok) { $after = @($er.value) }
+    $newE = Get-PwaEntry $after "20261014T080000Z-78"
+    $a = Get-PwaEntry $after $aId
+    Check ($run.code -eq 0 -and $nwe.ok -and $nwe.value.found -and $tagged.ok -and $tagged.value -eq 21 -and $after.Count -eq 22 -and $null -ne $newE -and @($after | Where-Object { $_.tagged }).Count -eq 0) ("CONTROL: the new entry arrived and the log was drawn anew: not one entry is a node drawn before it (exit " + $run.code + "; found " + $(if ($nwe.ok) { $nwe.value.found } else { $nwe.reason }) + "; tagged " + $(if ($tagged.ok) { $tagged.value } else { $tagged.reason }) + "; " + $after.Count + " entries)")
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) ("an entry opened before a new entry arrived is still open after the redraw (" + $(if ($er.ok) { Get-PwaEntriesWords $after } else { $er.reason }) + ")")
+    Check ($after.Count -eq 22 -and @($after | Where-Object { $_.id -cne $aId -and (-not $_.folded -or $_.textSeen) }).Count -eq 0) "and the rest, the new one among them, are folded"
+    $shortCut = @($after | Where-Object { $_.folded -and $_.id -cne "20261014T080000Z-78" -and $_.titleCut })
+    Check ($after.Count -eq 22 -and $shortCut.Count -eq 0) "CONTROL: a short title on a folded line is not cut"
+    Check ($null -ne $newE -and $newE.titleCut -and $newE.title -ceq $longTitle -and $newE.whenSeen -and $newE.height -eq $heights[0]) ("a long title is cut at the edge of its one line, its time still shown, and the entry is the height of every other folded one (" + $(if ($null -ne $newE) { "" + $newE.height + " px" } else { "not drawn" }) + ")")
+    $null = Save-Shot "stream-folded"
+    # LEAVING THE STREAM FORGETS: Back to the cards and in again starts folded.
+    $null = Invoke-Browser @{ cmd = "streamBack" }
+    $null = Invoke-Browser @{ cmd = "cardTouch"; lane = "F" }
+    $re = Invoke-Browser @{ cmd = "entriesState" }
+    Check ($re.ok -and @($re.value).Count -eq 22 -and @($re.value | Where-Object { -not $_.folded -or $_.expanded -cne "false" -or $_.textSeen }).Count -eq 0) ("leaving the stream and opening it again starts every entry folded, the one open before as well (" + $(if ($re.ok) { Get-PwaEntriesWords $re.value } else { $re.reason }) + ")")
+    # THE KEYS: Enter and Space on the focused line, as from a keyboard.
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = "Enter" }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "Enter on a folded line opens it, and aria-expanded says true"
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = "Enter" }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false" -and -not $a.textSeen) "Enter again folds it, and aria-expanded says false"
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = " " }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and -not $a.folded -and $a.expanded -ceq "true" -and $a.textSeen) "Space opens it as well"
+    $k = Invoke-Browser @{ cmd = "entryKey"; id = $aId; key = " " }
+    $a = $(if ($k.ok) { Get-PwaEntry $k.value.entries $aId })
+    Check ($null -ne $a -and $a.folded -and $a.expanded -ceq "false") "and folds it"
+    $null = Invoke-Browser @{ cmd = "streamBack" }
+
+    Write-Host ""
+    Write-Host "--- 13. a relay that refuses every read: the page must say so ---" -ForegroundColor Cyan
+    $null = Invoke-Browser @{ cmd = "cardTouch"; thrall = $true }
+    $probe = Invoke-Browser @{ cmd = "noticeProbe"; text = "Probe: a line in the notice" }
+    Check ($probe.ok -and $probe.value.found) "CONTROL: the check below can see a line in the notice: words put there as the page puts them are found"
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "the relay answered the read with 401: sign in again" }
+    [System.IO.File]::AppendAllText($logFile, ('{"v":1,"id":"20261014T070000Z-77","ts":"2026-10-14T07:00:00Z","kind":"note","area":"Form fill","title":"Written while the relay refused","text":"Means: the phone must not draw this until it can read."}' + "`n"), $utf8)
+    $run = Invoke-Run -Turns 1
+    $nw = Invoke-Browser @{ cmd = "noticeWait"; text = "could not be read"; timeoutMs = 15000 }
+    $during = Invoke-Browser @{ cmd = "cardsState" }
+    Check ($run.code -eq 0 -and $during.ok -and $during.value.streamPage -and $during.value.items -ge 41 -and -not (@($during.value.texts) -join " ").Contains("Written while the relay refused")) ("CONTROL: while every read is refused, the entry the run sent is not drawn: the refusal is in force (exit " + $run.code + "; " + $(if ($during.ok) { "stream " + $during.value.streamPage + ", " + $during.value.items + " entries, title '" + $during.value.title + "'" } else { $during.reason }) + ")")
+    # THE NOTICE FIX (it was PENDING): a failed read used to be said by the bridge and wiped by the next draw of
+    # the list (app.js, render). Now the relay's line stays until a read comes back clean, and the read banner
+    # (read-banner.js) says he must sign in again, with the time of the last read that worked.
+    $readSaid = $nw.ok -and $nw.value.found
+    Check ($readSaid -and $nw.value.notice -cmatch 'Not signed in to the relay - sign in again\. Last updated [0-9]{2}:[0-9]{2}\.') ("a relay refusing every read with 401 IS said on the page: the line stays, with the sign-in banner and the last-updated time (notice now '" + $(if ($nw.ok) { $nw.value.notice } else { $nw.reason }) + "')")
+    $null = Invoke-Browser @{ cmd = "readFail"; reason = "" }
+    $rw = Invoke-Browser @{ cmd = "progressWait"; text = "Written while the relay refused" }
+    Check ($rw.ok -and $rw.value.found) ("once the relay is read again, the entry written meanwhile arrives with no reload (" + $(if ($rw.ok) { "" + $rw.value.items + " entries" } else { $rw.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "streamBack" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }
     Check ($probs.ok -and @($probs.value).Count -eq 0) ("no exception, no console error and no policy violation in the whole run (" + $(if ($probs.ok) { @($probs.value) -join " | " } else { $probs.reason }) + ")")
@@ -433,6 +613,11 @@ try {
     Remove-HordeTestChatThrall -Thrall $thrall
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     if ($null -ne $drv) { try { $drv.p.StandardInput.WriteLine('{"cmd":"exit"}'); if (-not $drv.p.WaitForExit(20000)) { $drv.p.Kill() } } catch { } ; $drv.p.Dispose() }
+    if ($null -ne $browser) {
+        $bProfile = $browser.profile
+        $bEnd = Stop-HordeTestBrowser -Browser $browser
+        Check ($bEnd.left -eq 0 -and $bEnd.profileGone -and @(Get-HordeTestBrowserProcesses -ProfileDir $bProfile).Count -eq 0) ("the browser the suite started is ended, every process of it, and its profile removed (" + $bEnd.said + ")")
+    }
     $env:HORDE_HOME = $realHome
     foreach ($k in @($keysMade)) { try { [void](Remove-HordeRelayKey -Name $k.n -Scope $k.s) } catch { } }
     $left = @($keysMade | Where-Object { (Find-HordeRelayCngKey -Name $_.n -Scope $_.s) -cne "" })
@@ -445,4 +630,4 @@ try {
 }
 
 if (-not $canDecide) { Complete-HordeSuite -Success "skipped under this runtime: the decisions list cannot add a question (issue #173)" -PassCode 3 }
-Complete-HordeSuite -Success "in headless Chrome at phone size the app pairs with Chrome's passkey, draws the question with the window's document, sends answers by Enter and by touch that land once, unlocks by PRF, starts offline from its worker, keeps nothing opened, and reads but never answers by its recovery code"
+Complete-HordeSuite -Success "in headless Chrome at phone size the app pairs with Chrome's passkey, draws the question with the window's document, sends answers by Enter and by touch that land once, unlocks by PRF, starts offline from its worker, keeps nothing opened, reads but never answers by its recovery code, and draws the cards and opens their streams"

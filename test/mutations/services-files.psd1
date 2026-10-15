@@ -29,7 +29,7 @@
            Find = 'if ($v -ne "" -and $v -cnotmatch $script:HordeServiceRevisionPattern) {'
            Replace = 'if ($false) {' }
         @{ Name = "phase-without-intent-accepted"
-           Find = 'if (@("update", "rollback", "heal") -cnotcontains $s.intent) {'
+           Find = 'if (@("update", "rollback", "withdraw", "heal") -cnotcontains $s.intent) {'
            Replace = 'if ($false) {' }
         @{ Name = "phase-without-time-accepted"
            Find = 'if ($s.phaseSince -isnot [datetime]) { return (& $bad "it is part way through something and does not say since when") }'
@@ -101,5 +101,9 @@
         @{ Name = "exit-record-without-a-code-taken"
            Find = 'if ($have["code"] -isnot [int] -and $have["code"] -isnot [long]) { return (New-HordeUnknown -Reason "its exit record holds no code") }'
            Replace = 'if ($have["code"] -isnot [int] -and $have["code"] -isnot [long]) { return (New-HordeKnown -Value 0) }' }
+            # --- review of PR 249, round 2 ---
+        @{ Name = "withdraw-not-a-state"
+           Find = 'if (@("update", "rollback", "withdraw", "heal") -cnotcontains $s.intent)'
+           Replace = 'if (@("update", "rollback", "heal") -cnotcontains $s.intent)' }
     )
 }

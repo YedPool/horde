@@ -62,8 +62,14 @@
 # A crash between the post and the record leaves the set untold; the next pass posts the same notice
 # with the same id, and the messenger (idempotent.post) keeps it as one.
 #
-# ONE PER HOME: a named mutex (Local\, ending in a fingerprint of the home). A second notify for the
-# same home says so and leaves. ASKED TO STOP (the window closed), it does not drop an answer still in
+# ONE PER HOME: a named mutex (Global\, ending in a fingerprint of the home). A second notify for the
+# same home says so and leaves. GLOBAL, NOT LOCAL (review of PR 249, SHOULD 1): Local\ is one session's
+# namespace, and the relay runner that turns the bell (channels/decisions) may run in session 0 - the
+# supervisor starts it whether or not anyone is signed in - while the window's notify runs in the
+# person's session; with a Local\ name each would hold its own and both would ring. Where the runtime
+# lets it (Windows PowerShell 5.1), the mutex is made open to this account alone, so another account
+# can neither take the bell nor hold it; elsewhere it has the default protection. A name some other
+# account holds and this one cannot open is the bell held elsewhere: nothing rings from here. ASKED TO STOP (the window closed), it does not drop an answer still in
 # its quiet period: it stays until that period ends and rings, for at most $script:HordeDecisionNotifyLingerSeconds,
 # then leaves; what is still untold rings at the next start.
 #
@@ -156,7 +162,7 @@ function Read-HordeDecisionNotifyRecord {
     } catch { return (& $no "refused" "could not be read") }
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (& $no "refused" "gives a key twice") }
     $parsed = $null
-    try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
+    try { $parsed = ConvertFrom-HordeJson $text } catch { $parsed = $null }
     if ($null -eq $parsed) { return (& $no "refused" "could not be read as JSON") }
     if ($parsed -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $parsed.PSObject.Properties["schemaVersion"] -or "$($parsed.schemaVersion)" -cne "1" -or $null -eq $parsed.PSObject.Properties["rung"]) { return (& $no "refused" "is not version 1 with a list named rung") }
     $entries = New-Object System.Collections.ArrayList
@@ -318,6 +324,27 @@ function Get-HordeDecisionNotifyName {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { $hash = -join ($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($HordeHome).TrimEnd('\').ToLowerInvariant())) | ForEach-Object { $_.ToString("x2") }) } finally { $sha.Dispose() }
     return ("horde-" + $script:HordeDecisionNotifyModule + "-" + $hash.Substring(0, 16))
+}
+
+function Get-HordeDecisionNotifyMutexName {
+    # The one bell of -HordeHome, in the namespace every session of this machine shares (the header).
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    return ("Global\" + (Get-HordeDecisionNotifyName -HordeHome $HordeHome))
+}
+
+function New-HordeDecisionNotifyMutex {
+    # The bell's mutex, not yet held, or $null when it exists and this account may not open it.
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    $name = Get-HordeDecisionNotifyMutexName -HordeHome $HordeHome
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $rules = New-Object System.Security.AccessControl.MutexSecurity
+        $rules.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule($me.User, [System.Security.AccessControl.MutexRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $made = $false
+        try { return [System.Threading.Mutex]::new($false, $name, [ref]$made, $rules) }
+        catch [System.Management.Automation.MethodException] { return [System.Threading.Mutex]::new($false, $name) }
+    } catch [System.UnauthorizedAccessException] { return $null }
+    finally { $me.Dispose() }
 }
 
 function Get-HordeDecisionNotifyStoreMark {
@@ -493,7 +520,8 @@ function Invoke-HordeDecisionNotifyTurn {
         if ($null -ne $wakeAt) { $left = [int][Math]::Max(200, [Math]::Min(3600000, ([datetime]$wakeAt - $now).TotalMilliseconds)) }
         return [pscustomobject]@{ outcome = "idle"; said = ""; againMs = $left }
     }
-    $mutex = New-Object System.Threading.Mutex($false, ("Local\" + (Get-HordeDecisionNotifyName -HordeHome $HordeHome)))
+    $mutex = New-HordeDecisionNotifyMutex -HordeHome $HordeHome
+    if ($null -eq $mutex) { return [pscustomobject]@{ outcome = "elsewhere"; said = ""; againMs = 0 } }
     $mine = $false
     try { $mine = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $mine = $true }
@@ -534,11 +562,11 @@ function Invoke-HordeDecisionNotifyLoop {
     if ($null -eq $Clock) { $Clock = { return [datetime]::UtcNow } }
     if ($null -eq $Sleep) { $Sleep = { param([double]$Seconds) $ms = [int][Math]::Max(50, $Seconds * 1000); if ($null -ne $Stop) { [void]$Stop.WaitOne($ms) } else { Start-Sleep -Milliseconds $ms } } }
     if ($null -ne $Status) { $Status["running"] = $true }
-    $mutex = New-Object System.Threading.Mutex($false, ("Local\" + (Get-HordeDecisionNotifyName -HordeHome $hordeHome)))
+    $mutex = New-HordeDecisionNotifyMutex -HordeHome $hordeHome
     $held = $false
-    try { $held = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
+    if ($null -ne $mutex) { try { $held = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true } }
     if (-not $held) {
-        $mutex.Dispose()
+        if ($null -ne $mutex) { $mutex.Dispose() }
         $line = "not run: notify is already running for this home, and it rings for what waits"
         if ($null -ne $Status) { $Status["said"] = $line; $Status["running"] = $false }
         Write-Output $line

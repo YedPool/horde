@@ -22,12 +22,12 @@
 # an alias X hides function X. A name built at run time cannot be seen by a parse; none of these forms
 # is used in shipped code (grep, 2026-10-02), and the review of this guard listed them as its limit.
 #
-# WHAT SHIPS: every .ps1 under core/, remote/, transports/, messengers/, decisions/, fleet/, platform/, surfaces/, tools/, cli/, hosts/, agents/, relay/, relays/, conversations/ and wakers/, and
+# WHAT SHIPS: every .ps1 under core/, remote/, transports/, messengers/, decisions/, fleet/, platform/, surfaces/, tools/, cli/, hosts/, agents/, relay/, relays/, conversations/, wakers/, files/, channels/ and notices/, and
 # horde.ps1, except anything in a folder named test. A suite may override a core function on purpose
 # (test/test-identity.ps1 replaces Get-HordeProcessTable with a tripwire), and each suite runs in its
 # own process.
 
-$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers")
+$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "decisions", "fleet", "platform", "surfaces", "tools", "cli", "hosts", "agents", "relay", "relays", "conversations", "wakers", "files", "channels", "notices")
 $script:HordeShippedCodeFiles = @("horde.ps1")
 
 function Get-HordeShippedScriptFiles {
@@ -44,6 +44,41 @@ function Get-HordeShippedScriptFiles {
             if (@($rel -split '/') -contains "test") { continue }
             [void]$out.Add($rel)
         }
+    }
+    return $out.ToArray()
+}
+
+# THE LIST MUST BE WHOLE. Every guard built on Get-HordeShippedScriptFiles (function names, the core
+# load, param shadow, the raw JSON parse lint) passes a folder that is not on the list without reading
+# it. files/ was off it until 2026-10-13; channels/ and notices/ until 2026-10-14, when 15 raw
+# ConvertFrom-Json calls in 7 of their files had never been counted. A folder is code that ships when
+# it holds a script (.ps1, .psm1, .js, .mjs) outside every folder named test or node_modules.
+$script:HordeCodeExtensions = @(".ps1", ".psm1", ".js", ".mjs")
+
+function Get-HordeUnlistedCodeFolders {
+    # The top-level folders under -Root that hold shipped code and are not in HordeShippedCodeFolders.
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $out = New-Object System.Collections.ArrayList
+    foreach ($top in @(Get-ChildItem -LiteralPath $rootFull -Directory -Force)) {
+        if ($top.Name.StartsWith(".") -or $top.Name -ieq "test" -or $top.Name -ieq "node_modules") { continue }
+        if ($script:HordeShippedCodeFolders -contains $top.Name) { continue }
+        # A walk that never enters a test or node_modules folder, rather than a recursive listing
+        # filtered afterwards: a node_modules tree is thousands of files.
+        $stack = New-Object System.Collections.Stack
+        $stack.Push($top.FullName)
+        $found = $false
+        while ($stack.Count -gt 0 -and -not $found) {
+            $dir = $stack.Pop()
+            foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force)) {
+                if ($script:HordeCodeExtensions -contains $f.Extension.ToLowerInvariant()) { $found = $true; break }
+            }
+            foreach ($d in @(Get-ChildItem -LiteralPath $dir -Directory -Force)) {
+                if ($d.Name -ieq "test" -or $d.Name -ieq "node_modules") { continue }
+                $stack.Push($d.FullName)
+            }
+        }
+        if ($found) { [void]$out.Add($top.Name) }
     }
     return $out.ToArray()
 }

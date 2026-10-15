@@ -7,6 +7,7 @@
 # once - and it changes no byte of it.
 #
 # WHAT IS REQUIRED, and what was decided where the rule had a choice:
+#   - A REFUSAL SAYS WHERE AND NEVER WHAT: the position of the byte, never the byte.
 #   - STRICT UTF-8. A sequence that is no character REFUSES; nothing is replaced by U+FFFD. The
 #     decoder is .NET's with throwing on, measured 2026-10-13 against 23 byte strings: it refuses a
 #     bad byte at the start, in the middle and at the end, a sequence cut short at the end, every
@@ -26,7 +27,9 @@
 #     shared. An empty .json is REFUSED: it holds no JSON value.
 #   - A .json FILE MUST BE EXACTLY ONE JSON TEXT, by RFC 8259 and not by any of the platform's three
 #     parsers: files/Json.cs has the measurement of what each wrongly takes and wrongly refuses. A
-#     mark, if there is one, is stepped over; the grammar starts after it.
+#     mark, if there is one, is stepped over; the grammar starts after it. Two things the grammar
+#     allows are refused too, because the readers of a shared file do not take them: more than 512
+#     objects and arrays open at once, and half of a surrogate pair written alone as an escape.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
@@ -34,8 +37,8 @@ function Get-HordeFilesJsonProblem {
     # Why -Bytes, from -Offset, is not exactly one JSON text, or "". The checker is compiled once a
     # process, on first use, from the neighbour file (relay/BackendCng.ps1 does the same for its own).
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes, [int]$Offset = 0)
-    if (-not ([System.Management.Automation.PSTypeName]"HordeFilesJsonV1").Type) { Add-Type -Path (Join-Path $PSScriptRoot "Json.cs") }
-    return [HordeFilesJsonV1]::Problem($Bytes, $Offset)
+    if (-not ([System.Management.Automation.PSTypeName]"HordeFilesJsonV2").Type) { Add-Type -Path (Join-Path $PSScriptRoot "Json.cs") }
+    return [HordeFilesJsonV2]::Problem($Bytes, $Offset)
 }
 
 function Get-HordeFilesTextProblem {
@@ -48,10 +51,43 @@ function Get-HordeFilesTextProblem {
     $strict = New-Object System.Text.UTF8Encoding($false, $true)
     try { $null = $strict.GetCharCount($Bytes) }
     catch {
-        $failure = $_.Exception
-        while ($failure -isnot [System.Text.DecoderFallbackException] -and $null -ne $failure.InnerException) { $failure = $failure.InnerException }
-        $which = ""
-        if ($failure -is [System.Text.DecoderFallbackException] -and $null -ne $failure.BytesUnknown) { $which = " (the bytes " + [System.BitConverter]::ToString([byte[]]$failure.BytesUnknown) + ")" }
+        # WHERE, AND NEVER WHAT. Until 2026-10-13 the reason printed the bytes themselves, as
+        # hex. A reason is printed and logged, and a refusal must not repeat what the file
+        # holds: those bytes are part of whatever the file is, a key saved in another encoding
+        # as well as a letter of a legacy code page. The position is enough to find them.
+        # The exception's own Index is not that position: measured 2026-10-13 on Windows
+        # PowerShell 5.1, a bad byte at 37 was said to be at 36, one at 300 at 298, one at 0 at
+        # -1. So the file is asked instead how long a beginning of it is still UTF-8, by halves:
+        # a decoder that is not told the bytes have ended takes a character cut short for a
+        # character still coming, so it throws for a beginning only when a byte in it is wrong.
+        $which = " (it ends in the middle of a character)"
+        $readsToTheEnd = $true
+        try { $null = $strict.GetDecoder().GetCharCount($Bytes, 0, $Bytes.Length, $false) } catch { $readsToTheEnd = $false }
+        if (-not $readsToTheEnd) {
+            $stillText = 0
+            $notText = $Bytes.Length
+            while (($notText - $stillText) -gt 1) {
+                $half = $stillText + [int][System.Math]::Floor(($notText - $stillText) / 2)
+                $reads = $true
+                try { $null = $strict.GetDecoder().GetCharCount($Bytes, 0, $half, $false) } catch { $reads = $false }
+                if ($reads) { $stillText = $half } else { $notText = $half }
+            }
+            # THE BYTE THAT IS WRONG IS NOT ALWAYS WHERE THE BAD SEQUENCE STARTS (the review's next
+            # round, 2026-10-13): of 61 62 C3 28 the wrong byte is 28, byte 3, and the character it
+            # broke began at C3, byte 2. So when the beginning before the wrong byte ends inside a
+            # character (it does not read when told the bytes end there), the position walks back
+            # over that character's continuation bytes (80 to BF, at most three) to its first byte.
+            # Positions count from 0, as the NUL's above does and as this did before.
+            $wrong = $notText - 1
+            $from = $wrong
+            $whole = $true
+            try { $null = $strict.GetDecoder().GetCharCount($Bytes, 0, $wrong, $true) } catch { $whole = $false }
+            if (-not $whole) {
+                $from = $wrong - 1
+                while ($from -gt 0 -and $from -gt ($wrong - 4) -and $Bytes[$from] -ge 0x80 -and $Bytes[$from] -le 0xBF) { $from-- }
+            }
+            $which = " (it stops being UTF-8 at byte " + $from + ")"
+        }
         return ("it is not UTF-8: it holds a byte sequence that is no character in UTF-8" + $which + "; text is shared as UTF-8")
     }
     if ($Type -ceq "application/json") {

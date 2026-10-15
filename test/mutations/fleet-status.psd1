@@ -20,11 +20,11 @@
            Find = 'if (@($body | Where-Object { $_ -gt 127 }).Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-number-of-lines"
-           Find = 'if ($lines.Count -ne 6) {'
+           Find = 'if ($lines.Count -lt 6 -or $lines.Count -gt 7) {'
            Replace = 'if ($lines.Count -lt 6) {' }
         @{ Name = "fewer-lines-accepted"
-           Find = 'if ($lines.Count -ne 6) {'
-           Replace = 'if ($lines.Count -gt 6) {' }
+           Find = 'if ($lines.Count -lt 6 -or $lines.Count -gt 7) {'
+           Replace = 'if ($lines.Count -gt 7) {' }
         @{ Name = "any-first-line"
            Find = 'if ($lines.Count -eq 0 -or $lines[0] -cne $script:HordeFleetStatusHeader) {'
            Replace = 'if ($lines.Count -eq 0) {' }
@@ -58,6 +58,50 @@
         @{ Name = "finished-not-held-to-the-rules"
            Find = 'if ($key -ceq "doing" -or $key -ceq "finished") {'
            Replace = 'if ($key -ceq "doing") {' }
+        # --- the optional seventh line, waiting on (adopted 2026-10-13)
+        @{ Name = "a-seventh-line-refused"
+           Find = 'if ($lines.Count -lt 6 -or $lines.Count -gt 7) {'
+           Replace = 'if ($lines.Count -ne 6) {' }
+        @{ Name = "an-eighth-line-accepted"
+           Find = 'if ($lines.Count -lt 6 -or $lines.Count -gt 7) {'
+           Replace = 'if ($lines.Count -lt 6 -or $lines.Count -gt 8) {' }
+        @{ Name = "the-line-too-many-not-named"
+           Find = '$(if ($lines.Count -gt 7) { ", so line 8 is one too many" } else { "" })'
+           Replace = '""' }
+        @{ Name = "a-seventh-line-of-any-key"
+           Find = 'if (-not $waitLine.StartsWith($waitKey + ": ", [System.StringComparison]::Ordinal) -or'
+           Replace = 'if ($false -and'
+        }
+        @{ Name = "the-waiting-key-in-any-letter-case"
+           Find = '$waitLine.StartsWith($waitKey + ": ", [System.StringComparison]::Ordinal)'
+           Replace = '$waitLine.StartsWith($waitKey + ": ", [System.StringComparison]::OrdinalIgnoreCase)' }
+        @{ Name = "a-waiting-key-with-nothing-after-it"
+           Find = ' -or $waitLine.Substring($waitKey.Length + 2).Trim() -eq "") {'
+           Replace = ') {' }
+        @{ Name = "a-waiting-line-of-any-length"
+           Find = 'if ($waitLine.Length -gt $script:HordeFleetStatusMostWaitingChars) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-waiting-cap-one-short"
+           Find = 'if ($waitLine.Length -gt $script:HordeFleetStatusMostWaitingChars) {'
+           Replace = 'if ($waitLine.Length -ge $script:HordeFleetStatusMostWaitingChars) {' }
+        @{ Name = "the-waiting-cap-on-the-value-alone"
+           Find = 'if ($waitLine.Length -gt $script:HordeFleetStatusMostWaitingChars) {'
+           Replace = 'if ($waiting.Length -gt $script:HordeFleetStatusMostWaitingChars) {' }
+        @{ Name = "the-waiting-cap-is-doing-s"
+           Find = '$script:HordeFleetStatusMostWaitingChars = 200'
+           Replace = '$script:HordeFleetStatusMostWaitingChars = 120' }
+        @{ Name = "bare-references-accepted-while-waiting"
+           Find = 'if ($waiting -match $script:HordeFleetStatusBareReference) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-waiting-value-not-passed-on"
+           Find = '$fields[$waitKey] = $waiting'
+           Replace = '$null = $waiting' }
+        @{ Name = "waiting-on-not-handed-to-the-panel"
+           Find = 'if ($record.fields.Contains($script:HordeFleetStatusWaitingKey)) { $out.waitingOn = '
+           Replace = 'if ($false) { $out.waitingOn = ' }
+        @{ Name = "waiting-on-always-there-though-empty"
+           Find = '$out = [ordered]@{ folder = (Split-Path -Leaf $Path); written = $false;'
+           Replace = '$out = [ordered]@{ waitingOn = ""; folder = (Split-Path -Leaf $Path); written = $false;' }
         # --- this reader's own
         @{ Name = "any-text-names-an-orc"
            Find = 'if ($key -ceq "orc" -and $value -cnotmatch ''\A[A-Z]\z'') {'
@@ -68,6 +112,9 @@
         @{ Name = "two-folders-one-letter-both-shown"
            Find = '| Where-Object { $_.Count -gt 1 })) {'
            Replace = '| Where-Object { $_.Count -gt 2 })) {' }
+        @{ Name = "a-twin-keeps-its-waiting-on"
+           Find = '$o.PSObject.Properties.Remove("waitingOn")'
+           Replace = '$null = $o' }
         @{ Name = "every-claimant-of-a-letter-is-named"
            Find = '$names = @($claimants | Select-Object -First $script:HordeFleetStatusMostNamed) -join ", "'
            Replace = '$names = @($claimants) -join ", "' }
@@ -139,6 +186,16 @@
         @{ Name = "the-count-of-unread-not-handed-on"
            Find = 'orcs = $sorted; notRead = $notRead; findings = $findings }'
            Replace = 'orcs = $sorted; notRead = 0; findings = $findings }' }
+        # --- a retired lane has no row (C's ruling, 2026-10-14) ---
+        @{ Name = "a-retired-lane-has-a-row-again"
+           Find = '$paths = [string[]]@($paths | Where-Object { -not (Test-HordeFleetStatusRetired -Path $_) })'
+           Replace = '' }
+        @{ Name = "a-folder-with-both-files-is-retired"
+           Find = 'return ((-not [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusFile))) -and'
+           Replace = 'return ((-not $false) -and' }
+        @{ Name = "a-folder-with-neither-file-is-retired"
+           Find = '-and [System.IO.File]::Exists((Join-Path $Path $script:HordeFleetStatusRetiredFile)))'
+           Replace = '-and $true)' }
         # --- a refused settings file refuses the reading, and no default stands in ---
         @{ Name = "a-refused-settings-file-is-read"
            Find = 'if (@("defaults", "read") -ccontains $state) { return $null }'

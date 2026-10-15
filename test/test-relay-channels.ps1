@@ -205,6 +205,24 @@ function Invoke-Tick {
     if ($null -ne $t -and $t -isnot [string] -and $null -ne $t.PSObject.Properties["lines"]) { return @($t.lines) }
     return @($t)
 }
+function Get-PhoneReceiptsText {
+    # The receipts member of the newest snapshot in the phone's mailbox, as JSON text ("" for none).
+    param($World)
+    $mail = @(Get-PhoneMail $World)
+    if ($mail.Count -eq 0) { return "" }
+    $o = Open-HordeTestPhoneEnvelope -Phone $World.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $World.id.sign.public
+    if (-not $o.ok -or $null -eq $o.body.PSObject.Properties["receipts"]) { return "" }
+    return (ConvertTo-Json -InputObject @($o.body.receipts) -Compress -Depth 5)
+}
+function Get-PhoneReceipts {
+    # The receipt for the world's phone's passkey in the newest snapshot, or $null.
+    param($World)
+    $mail = @(Get-PhoneMail $World)
+    if ($mail.Count -eq 0) { return $null }
+    $o = Open-HordeTestPhoneEnvelope -Phone $World.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $World.id.sign.public
+    if (-not $o.ok -or $null -eq $o.body.PSObject.Properties["receipts"]) { return $null }
+    return (@($o.body.receipts | Where-Object { $_.from -ceq $World.phone.keyId }) | Select-Object -First 1)
+}
 function Get-Member2 { param($Object, [string]$Name) if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) { return $null }; return $Object.$Name }
 
 try {
@@ -775,6 +793,24 @@ try {
     Check ((@(1..4 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures $_ -Settings $flat -Random $rnd }) -join ",") -ceq "500,1000,1500,1500" -and (Get-HordeRelayRunBackoffMs -Failures 0 -Settings $flat -Random $rnd) -eq 0) "with no jitter it is exactly 500, 1000, then the cap of 1500; and no wait after no failure"
     $spread = @(1..200 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures 1 -Settings $set -Random $rnd } | Sort-Object -Unique)
     Check ($spread.Count -gt 50) ("CONTROL: the jitter does vary (" + $spread.Count + " distinct waits in 200)")
+    # THE CAP (cli/RelayRun.ps1, BACKOFF): a live PC must not look offline on the founder's phone, which
+    # says so after 120 s without a request from it (2026-10-14).
+    $cap = $script:HordeRelayRunBackoffCapMs
+    $hi = New-Object psobject; $hi | Add-Member -MemberType ScriptMethod -Name NextDouble -Value { 0.9999999 }
+    $capped = @(foreach ($s in @($set, [pscustomobject]@{ backoffMinMs = 1000; backoffMaxMs = 3600000; backoffJitterPercent = 100 }, [pscustomobject]@{ backoffMinMs = 60000; backoffMaxMs = 3600000; backoffJitterPercent = 0 })) { foreach ($f in 1..40) { Get-HordeRelayRunBackoffMs -Failures $f -Settings $s -Random $hi -CapMs $cap; foreach ($k in 1..5) { Get-HordeRelayRunBackoffMs -Failures $f -Settings $s -Random $rnd -CapMs $cap } } })
+    $most = ($capped | Measure-Object -Maximum).Maximum
+    Check ($cap -eq 45000 -and $most -le $cap) ("the backoff never exceeds the cap at any failure count, its jitter included, whatever the settings (" + $most + " ms at most, cap " + $cap + ")")
+    Check (($script:HordeRelayWatchMsMax + $cap) -lt 110000 -and ($script:HordeRelayWatchMsMax + $most) -lt 120000) ("watch plus the largest backoff stays under the offline line: the port's longest watch " + $script:HordeRelayWatchMsMax + " ms plus " + $most + " ms is under 110 s, inside the phone's 120 s")
+    $capSpread = @(1..200 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures 12 -Settings $set -Random $rnd -CapMs $cap } | Sort-Object -Unique)
+    Check ($capSpread.Count -gt 50 -and ($capSpread | Measure-Object -Minimum).Minimum -ge 30000) ("and capped, the waits still spread, so machines that lost one relay together do not come back together (" + $capSpread.Count + " distinct)")
+    Check ((Get-HordeRelayRunBackoffMs -Failures 8 -Settings $set -Random $hi) -gt 70000) "CONTROL: uncapped, the seventh doubling's wait is over 70 s, as the review measured"
+    $refusedWith = { param([int]$Status) $u = New-HordeUnknown -Reason "refused"; $u | Add-Member -NotePropertyName status -NotePropertyValue $Status; return $u }
+    Check ((Get-HordeRelayRunBackoffCap -Inbox (& $refusedWith 429) -Context $null) -eq 0 -and (Get-HordeRelayRunBackoffCap -Inbox (& $refusedWith 507) -Context $null) -eq 0) "a watch the relay refused with 429 or 507 keeps the settings' own longest backoff: the relay asked to be left"
+    Check ((Get-HordeRelayRunBackoffCap -Inbox $null -Context ([pscustomobject]@{ full = @{}; refusedWith = @{ 507 = $true } })) -eq 0 -and (Get-HordeRelayRunBackoffCap -Inbox $null -Context ([pscustomobject]@{ full = @{}; refusedWith = @{ 429 = $true } })) -eq 0) "and so does a turn one of whose own puts the relay refused with 507 or 429"
+    # Review of PR 252: the full mark stays set while the mailbox stays full, so judging by it made one
+    # dropped watch socket wait the long backoff, and the relay heard the machine only every 132 s.
+    Check ((Get-HordeRelayRunBackoffCap -Inbox (New-HordeUnknown -Reason "the watch socket dropped") -Context ([pscustomobject]@{ full = @{ "work/phone" = [pscustomobject]@{ mailbox = "work/phone" } }; refusedWith = @{} })) -eq $cap -and (Get-HordeRelayRunBackoffCap -Inbox $null -Context ([pscustomobject]@{ full = @{ "work/phone" = $true }; refusedWith = @{ 500 = $true } })) -eq $cap) "with the mailbox full, a local failure is still capped: only this turn's own refusal lifts the cap"
+    Check ((Get-HordeRelayRunBackoffCap -Inbox (New-HordeUnknown -Reason "unreachable") -Context ([pscustomobject]@{ full = @{} })) -eq $cap -and (Get-HordeRelayRunBackoffCap -Inbox (& $refusedWith 500) -Context $null) -eq $cap -and (Get-HordeRelayRunBackoffCap -Inbox $null -Context $null) -eq $cap) "a turn whose trouble is its own, or a relay that is down, is capped"
     $W = New-World
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50}}', $utf8)
     [void](Send-ToMachine $W (Get-Answer $W).text)
@@ -837,17 +873,29 @@ try {
     $hostileConn = Connect-HordeRelay -Name "hostile" -Options @{}
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 4 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms, $Why) if ("$Why" -cne "pace") { [void]$slept.Add($Ms) } }
     Check ($r.failures -eq 4 -and (@($slept) -join ",") -ceq "100,200,400" -and (@($said) -join " ").Contains("the mailbox could not be read")) ("a relay that keeps failing is waited for 100, 200, 400 ms - doubled, capped - and said each time (" + (@($slept) -join ",") + ")")
+    # The run itself holds a failing relay to the cap (BACKOFF): settings that would wait 60 s on the
+    # second failure wait 45 s, so the relay still hears this machine inside the phone's offline line.
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50, "backoffMinMs": 30000, "backoffMaxMs": 3600000, "backoffJitterPercent": 0}}', $utf8)
+    $said.Clear()
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 3 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms, $Why) }
+    $waitsSaid = (@($said | Where-Object { $_ -match "; waiting [0-9]+ ms" } | ForEach-Object { [regex]::Match($_, "waiting ([0-9]+) ms").Groups[1].Value }) -join ",")
+    Check ($r.failures -eq 3 -and $waitsSaid -ceq "30000,45000,45000") ("and a run whose relay cannot be read waits 30 s, then 45 s, never the 60 s its settings would give (" + $waitsSaid + ")")
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50, "backoffMinMs": 100, "backoffMaxMs": 400, "backoffJitterPercent": 0}}', $utf8)
     $slept.Clear()
     $heal = { param($Ms, $Why) if ("$Why" -ceq "pace") { return }; [void]$slept.Add($Ms); if ($slept.Count -ge 2) { Set-HordeHostileRelayFaults -Faults @() } }
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 4 -Say { param($Line) [void]$said.Add($Line) } -Sleep $heal
     Set-HordeHostileRelayFaults -Faults @()
     Check ($r.failures -eq 0 -and (@($slept) -join ",") -ceq "100,200") ("once the relay answers again the run goes on, and its failures in a row start again from none (" + (@($slept) -join ",") + ", " + $r.failures + ")")
     # A MINIMUM TURN (finding 5): a watch that returns at once with nothing - watchMs 0, or a relay that
-    # does not wait - is not allowed to spin; the turn is padded to minTurnMs.
-    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 300}}', $utf8)
+    # does not wait - is not allowed to spin; the turn is padded to minTurnMs. 1000, the shipped default,
+    # and not 300: a turn of this suite's six channels took 245 to 277 ms on the measuring box before the
+    # notices channel (pads of 55, 23 and 41 ms), and about 15 to 30 ms more with it (two journal reads
+    # of 5 to 11 ms and a Tick of 2 to 8 ms, measured 2026-10-14), so at 300 no turn was left to pad and
+    # the check failed for want of anything to measure, not for spinning.
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 1000}}', $utf8)
     $paced = New-Object System.Collections.ArrayList
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say { param($Line) } -Sleep { param($Ms, $Why) if ("$Why" -ceq "pace") { [void]$paced.Add($Ms) } }
-    Check ($paced.Count -ge 2 -and @($paced | Where-Object { $_ -gt 300 -or $_ -le 0 }).Count -eq 0) ("turns that found nothing at once are padded to the minimum turn, not spun (" + (@($paced) -join ",") + ")")
+    Check ($paced.Count -ge 2 -and @($paced | Where-Object { $_ -gt 1000 -or $_ -le 0 }).Count -eq 0) ("turns that found nothing at once are padded to the minimum turn, not spun (" + (@($paced) -join ",") + ")")
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 10}}', $utf8)
     $r = $null
     $low = New-Object System.Collections.ArrayList
@@ -884,6 +932,31 @@ try {
         Set-Item -Path Function:\Find-HordeRelayTrustedSenders -Value $origFind
         Check ($inReads -le 1 -and $openReads -le 2 -and @(Get-Said $W2.store).Count -eq 5) ("five answers in one batch read the trust store once to judge and once a channel to open (" + $inReads + ", " + $openReads + ")")
     }
+    # KEYS PROVED BEFORE A HEALTHY BEAT (review of PR 249, MUST 1): a run started before anyone has
+    # signed in may not be able to use its keys. It beats keys-unavailable, never well, until they open.
+    $WK = New-World
+    [System.IO.File]::WriteAllText((Join-Path $WK.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 50, "backoffMinMs": 100, "backoffMaxMs": 100, "backoffJitterPercent": 0}}', $utf8)
+    Check ((Test-HordeRelayRunContextKeys -Context $WK.ctx) -ceq "") "CONTROL: a context whose keys work is proved: each key is used once"
+    Check ((Test-HordeRelayRunContextKeys -Context ([pscustomobject]@{ signKey = $null; signKeyId = "k1"; openingKeys = @{} })) -like "the signing key k1 could not be used*") "a context whose signing key cannot be used is not proved, and says which key"
+    Check ((Test-HordeRelayRunContextKeys -Context ([pscustomobject]@{ signKey = $WK.ctx.signKey; signKeyId = "k1"; openingKeys = @{ "a1" = $null } })) -like "the agreement key a1 could not be used*") "and so is one whose agreement key cannot be used"
+    $origProve = ${function:Test-HordeRelayRunContextKeys}
+    function Test-HordeRelayRunContextKeys { param($Context) return "Keyset does not exist" }
+    $unproved = Open-HordeRelayRunProvenContext -HordeHome $WK.home -Connection $WK.conn
+    Set-Item -Path Function:\Test-HordeRelayRunContextKeys -Value $origProve
+    Check ($unproved.state -ceq "unknown" -and $unproved.reason -like "the keys opened and cannot be used - Keyset does not exist*") "keys that open and cannot be used are not handed to the run: the context is closed again, and why is said"
+    $script:keyOpens = 0
+    $failThenOpen = { param($H, $C, $D) $script:keyOpens++; if ($script:keyOpens -le 2) { return (New-HordeUnknown -Reason "Keyset does not exist") }; return (Open-HordeRelayRunProvenContext -HordeHome $H -Connection $C -DecisionsRoot $D) }
+    $beatsSeen = New-Object System.Collections.ArrayList
+    $sawBeat = { param($Ms, $Why) $b = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $WK.home); [void]$beatsSeen.Add($(if ($b.state -ceq "known") { "" + $b.value.condition + "|" + $b.value.why } else { "none" })) }
+    $said = New-Object System.Collections.ArrayList
+    $r = Invoke-HordeRelayRun -HordeHome $WK.home -Connection $WK.conn -MaxTurns 2 -Say { param($Line) [void]$said.Add($Line) } -Sleep $sawBeat -OpenContext $failThenOpen
+    $after = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $WK.home)
+    Check ($r.failures -eq 2 -and $after.value.condition -ceq "keys-unavailable" -and $after.value.why -like "*relay keys cannot be opened: Keyset does not exist*" -and @($beatsSeen | Where-Object { -not "$_".StartsWith("keys-unavailable|") }).Count -eq 0) ("a run whose keys cannot be opened beats keys-unavailable with why, and never once beats well (" + (@($beatsSeen) -join " / ") + ")")
+    Check ((@($said) -join " ") -like "*this machine's relay keys cannot be opened: Keyset does not exist; waiting 100 ms*") "and backs off, saying why"
+    $r = Invoke-HordeRelayRun -HordeHome $WK.home -Connection $WK.conn -MaxTurns 2 -Say { param($Line) [void]$said.Add($Line) } -OpenContext $failThenOpen
+    $after = Read-HordeHeartbeat -Path (Get-HordeRelayRunHeartbeatPath -HordeHome $WK.home)
+    Check ($script:keyOpens -eq 3 -and $r.failures -eq 0 -and $after.value.condition -ceq "" -and (@($said) -join " ").Contains("watching " + $WK.ctx.mailbox)) ("once the keys open - the person has signed in - the next start proves them and beats well (" + $after.value.condition + ")")
+
     Remove-Item Function:\Remove-HordeRelayRetiredAgreeKeys
 
     if ($script:canDecide) {
@@ -960,6 +1033,237 @@ try {
     $shown = Invoke-HordeDecision -Operation "show" -Root $O.store -Request @{ number = 2 }
     $old = @(Get-Said $O.store | Where-Object { $_.data.number -eq 2 })
     Check ((Has $t "done") -and $old.Count -eq 1 -and $null -eq (Get-Member2 $old[0].data "part") -and $shown.value.question.thread.turn -ceq "warchief") ("AN EARLIER PHONE'S ANSWER TO ALL THE PARTS AT ONCE - version 1, no part - is still taken, as an answer to the whole question (" + $t.text + ")")
+
+    Write-Host ""
+    Write-Host "--- receipts: what became of each answer goes back to the phone, by id, never its words (the founder, 2026-10-14) ---" -ForegroundColor Cyan
+    $R = New-World
+    Use-World $R
+    $words = "Receipt words that must never be in a receipt."
+    $badSettings = Join-Path $R.home "settings\decisions.json"
+    [System.IO.File]::WriteAllText($badSettings, "{ this is not json", $utf8)
+    $aid = New-Id
+    $first = Get-Answer $R -AnswerId $aid -Text $words
+    [void](Send-ToMachine $R $first.text)
+    $t = Invoke-Turn $R
+    Remove-Item -LiteralPath $badSettings
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "retry") -and $null -ne $rc -and $rc.through -eq [long]$first.header.seq -and @($rc.missing).Count -eq 0 -and @($rc.applied) -cnotcontains $aid -and @($rc.refused) -cnotcontains $aid) ("A RECEIVED ANSWER IS ACKED AS RECEIVED: journaled and not yet in the list, the snapshot's receipt for the phone's passkey holds its seq at or below through, and the id is neither applied nor refused (" + $t.text + "; " + $(if ($null -ne $rc) { ConvertTo-Json $rc -Compress } else { "no receipt" }) + ")")
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "done") -and $null -ne $rc -and @($rc.applied) -ccontains $aid -and @(Get-Said $R.store).Count -eq 1) ("THEN APPLIED: once the list takes it, the next snapshot's receipt lists its answerId as applied (" + $t.text + ")")
+    Check (-not (Get-PhoneReceiptsText $R).Contains("Receipt words")) "a receipt holds ids and numbers, never an answer's words"
+    $again = Get-Answer $R -AnswerId $aid -Text $words
+    [void](Send-ToMachine $R $again.text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "(replayed)") -and @(Get-Said $R.store).Count -eq 1 -and @(@($rc.applied) | Where-Object { $_ -ceq $aid }).Count -eq 1 -and $rc.through -eq [long]$again.header.seq) ("A RESENT ANSWER IS APPLIED ONCE: the same answerId in a new envelope is the first record answered again, and the receipt lists it once (" + $t.text + ")")
+    $other = Get-Answer $R -AnswerId $aid -Text "Other words under the same id."
+    [void](Send-ToMachine $R $other.text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "already used for a different request") -and @($rc.applied) -ccontains $aid -and @($rc.refused) -cnotcontains $aid) "an id once applied stays applied: other words sent under it later are refused by the list, and the receipt never says the first answer was refused"
+    $lostSeq = [long]$R.phone.seq["decisions"] + 1
+    $R.phone.seq["decisions"] = $lostSeq
+    $after = Get-Answer $R -Text "Sent after one that was lost."
+    [void](Send-ToMachine $R $after.text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "missing") -and @($rc.missing) -contains $lostSeq -and $rc.through -eq [long]$after.header.seq) ("A MISSING ID IS REPORTED: an envelope of the phone that never arrived is a seq below through the journal never recorded, and the receipt lists it as missing (" + $(if ($null -ne $rc) { ConvertTo-Json $rc -Compress } else { "no receipt" }) + ")")
+    $late = New-HordeTestPhoneEnvelope -Phone $R.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "The lost one, arriving late." -Machine $R.id.sign.keyId -Snapshot (Get-SentKey $R)) -To $R.agree -Seq $lostSeq
+    [void](Send-ToMachine $R $late.text)
+    $t = Invoke-Turn $R
+    Check ((Has $t "out of order") -and @(Get-Said $R.store | Where-Object { $_.data.text -ceq "The lost one, arriving late." }).Count -eq 0) ("CONTROL: the lost envelope arriving late is refused for good as out of order - so only a NEW envelope heals it, which is what the phone sends (" + $t.text + ")")
+    $refusedId = New-Id
+    [void](Send-ToMachine $R (Get-Answer $R -AnswerId $refusedId -Number 9).text)
+    $t = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ((Has $t "there is no question 9") -and @($rc.refused) -ccontains $refusedId -and @($rc.applied) -cnotcontains $refusedId) ("an answer refused for good is listed refused, so the phone stops sending it (" + $t.text + ")")
+    # A RESTART FORGETS NOTHING: a new run's context, with no memory, reads the ledger back.
+    $R2ctx = New-HordeRelayRunContext -HordeHome $R.home -Connection $R.conn
+    Close-HordeRelayRunContext -Context $R.ctx
+    $R.ctx = $R2ctx.value
+    $null = Invoke-Tick $R
+    $rc = Get-PhoneReceipts $R
+    Check ($null -ne $rc -and @($rc.applied) -ccontains $aid -and @($rc.refused) -ccontains $refusedId -and @($rc.missing) -contains $lostSeq) "after a restart the next run's first snapshot carries the same receipts: the ledger is kept on disk, the rest is the journal's"
+    $headBefore = Get-PhoneHead $R
+    $null = Invoke-Tick $R
+    Check ((Get-PhoneHead $R) -eq $headBefore) "CONTROL: a look with no new receipt and no new record sends nothing"
+    $refused2 = New-Id
+    [void](Send-ToMachine $R (Get-Answer $R -AnswerId $refused2 -Number 9).text)
+    $null = Invoke-Turn $R
+    $null = Invoke-Tick $R
+    Check ((Get-PhoneHead $R) -gt $headBefore -and @((Get-PhoneReceipts $R).refused) -ccontains $refused2) "a change of the receipts alone - an answer refused, no record written - sends a new snapshot"
+    # THE LEDGER STAYS SMALL: its newest 64 applied and 16 refused.
+    $L = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    foreach ($i in 1..70) { $null = Add-HordeDecisionsChannelReceipt -Context $L -From ("a" * 32) -AnswerId ($i.ToString("x32")) -Outcome "done" }
+    foreach ($i in 1..20) { $null = Add-HordeDecisionsChannelReceipt -Context $L -From ("a" * 32) -AnswerId ((100 + $i).ToString("x32")) -Outcome "refused" }
+    $null = Add-HordeDecisionsChannelReceipt -Context $L -From ("a" * 32) -AnswerId ((200).ToString("x32")) -Outcome "retry"
+    $kept = (Get-HordeDecisionsChannelLedger -Context $L).streams[("a" * 32)]
+    Check ($kept.applied.Count -eq 64 -and $kept.applied[0] -ceq (7).ToString("x32") -and $kept.applied[63] -ceq (70).ToString("x32") -and $kept.refused.Count -eq 16 -and $kept.refused[15] -ceq (120).ToString("x32") -and $kept.applied -cnotcontains (200).ToString("x32")) ("the ledger keeps the newest 64 applied and 16 refused, and a retry adds nothing (" + $kept.applied.Count + ", " + $kept.refused.Count + ")")
+    $receiptBytes = $utf8.GetByteCount((Get-HordeDecisionsChannelReceipts -Context $L).text)
+    Check ($receiptBytes -gt 2000 -and $receiptBytes -lt 4096) ("a receipt at its fullest for one passkey is small: " + $receiptBytes + " bytes")
+
+    Write-Host ""
+    Write-Host "--- the review of PR 262: a hole below the missing list is never received, a stale answer never wins ---" -ForegroundColor Cyan
+    # M1, ATTACKED: the journal holds 1..15, 17 and 50 of a passkey - 16 truly lost, 18..49 spent by
+    # prompts that never signed. The newest 32 holes are 18..49; 16 is below them.
+    $H = New-World
+    Use-World $H
+    $hs = (Find-HordeRelayTrustedSenders -HordeHome $H.home).value
+    foreach ($n in (@(1..15) + @(17, 50))) {
+        $e = New-HordeTestPhoneEnvelope -Phone $H.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Machine $H.id.sign.keyId -Snapshot (Get-SentKey $H)) -To $H.agree -Seq $n
+        $null = Register-HordeRelayJournalReceived -Envelope (Read-HordeRelayEnvelope -Text $e.text).value -Senders $hs -RecipientKeyIds @($H.ctx.openingKeys.Keys) -Channel "decisions" -Kind "answer" -HordeHome $H.home
+    }
+    $hr = (Get-HordeDecisionsChannelReceipts -Context $H.ctx).text | ConvertFrom-Json
+    $hp = @($hr | Where-Object { $_.from -ceq $H.phone.keyId })[0]
+    Check ($null -ne $hp -and $hp.through -eq 50 -and @($hp.missing).Count -eq 32 -and @($hp.missing) -notcontains 16 -and $hp.checked -eq 18 -and $hp.checked -gt 16) ("A HOLE BELOW THE MISSING LIST IS NOT PASSED OFF AS RECEIVED: the list holds the newest 32 holes, and checked says it looked no lower than 18 - so 16, below it, is unknown to the phone, never received (" + $(if ($null -ne $hp) { ConvertTo-Json $hp -Compress } else { "none" }) + ")")
+    $hr2 = (Get-HordeDecisionsChannelReceipts -Context $R.ctx).text | ConvertFrom-Json
+    $rp = @($hr2 | Where-Object { $_.from -ceq $R.phone.keyId })[0]
+    Check ($null -ne $rp -and $rp.checked -eq 1) "CONTROL: a stream whose every hole fits the list says it looked down to 1"
+    # M2, ATTACKED: B "do NOT deploy" is applied; A "deploy now", signed BEFORE B to the same question,
+    # arrives after it - a lost answer sent again.
+    $G = New-World
+    Use-World $G
+    $signedA = [datetime]::UtcNow.AddMinutes(-9)
+    $idB = New-Id
+    [void](Send-ToMachine $G (Get-Answer $G -AnswerId $idB -Text "B: do NOT deploy").text)
+    $t = Invoke-Turn $G
+    $idA = New-Id
+    $staleA = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $idA -Text "A: deploy now" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now $signedA
+    [void](Send-ToMachine $G $staleA.text)
+    $t = Invoke-Turn $G
+    $null = Invoke-Tick $G
+    $gr = Get-PhoneReceipts $G
+    $gsaid = @(Get-Said $G.store)
+    Check ((Has $t "superseded") -and $gsaid.Count -eq 1 -and $gsaid[0].data.text -ceq "B: do NOT deploy" -and @($gr.refused) -ccontains $idA -and @($gr.applied) -ccontains $idB) ("A STALE ANSWER NEVER WINS: an answer signed before the one already applied to the same question is refused as superseded, listed refused, and his newer answer stands (" + $t.text + ")")
+    $againB = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $idB -Text "B: do NOT deploy" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now $signedA
+    [void](Send-ToMachine $G $againB.text)
+    $t = Invoke-Turn $G
+    Check ((Has $t "(replayed)") -and -not (Has $t "superseded") -and @(Get-Said $G.store).Count -eq 1) ("CONTROL: the applied answer itself, sent again under an older time, is the record it already is - not superseded (" + $t.text + ")")
+    $null = Invoke-HordeDecision -Operation "add" -Root $G.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Another question for the stale check."; kind = "yes-no"; whatItIs = "Another."; group = "voice"; askedBy = "orc-b" } }
+    $null = Invoke-Tick $G
+    $otherQ = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number 2 -Text "an old answer to another question" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now $signedA
+    [void](Send-ToMachine $G $otherQ.text)
+    $t = Invoke-Turn $G
+    Check ((Has $t "done") -and -not (Has $t "superseded")) ("CONTROL: an older time to ANOTHER question is no reason to refuse it (" + $t.text + ")")
+    $G2ctx = New-HordeRelayRunContext -HordeHome $G.home -Connection $G.conn
+    Close-HordeRelayRunContext -Context $G.ctx
+    $G.ctx = $G2ctx.value
+    $staleC = New-HordeTestPhoneEnvelope -Phone $G.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "C: older still" -Machine $G.id.sign.keyId -Snapshot (Get-SentKey $G)) -To $G.agree -Now ([datetime]::UtcNow.AddMinutes(-8))
+    [void](Send-ToMachine $G $staleC.text)
+    $t = Invoke-Turn $G
+    Check ((Has $t "superseded") -and @(Get-Said $G.store | Where-Object { $_.data.number -eq 1 }).Count -eq 1) ("after a restart the newest signing time of each question is still known: a stale answer is still superseded (" + $t.text + ")")
+    # S-A (review of PR 266), ATTACKED: the newest answer in the STORE wins, whatever its route or passkey.
+    $X = New-World
+    Use-World $X
+    $before = [datetime]::UtcNow.AddMinutes(-5)
+    $win = Invoke-HordeDecision -Operation "say" -Root $X.store -Request @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "At my desk: do NOT deploy."; wordingVersion = 1 }
+    Check ($win.state -ceq "known" -and $win.value.outcome -ceq "done") "CONTROL: he answers question 1 at the PC window"
+    $lostA = New-HordeTestPhoneEnvelope -Phone $X.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "From the phone, earlier: deploy now." -Machine $X.id.sign.keyId -Snapshot (Get-SentKey $X)) -To $X.agree -Now $before
+    [void](Send-ToMachine $X $lostA.text)
+    $t = Invoke-Turn $X
+    $xs = @(Get-Said $X.store | Where-Object { $_.data.speaker -ceq "founder" })
+    Check ((Has $t "superseded") -and (Has $t "window") -and $xs.Count -eq 1 -and $xs[0].data.text -ceq "At my desk: do NOT deploy.") ("THE WINDOW'S ANSWER, THEN THE PHONE'S OLDER ONE SENT AGAIN: the phone's is refused as superseded, and his answer at the desk stands (" + $t.text + ")")
+    $newerP = New-HordeTestPhoneEnvelope -Phone $X.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "From the phone, later: deploy after all." -Machine $X.id.sign.keyId -Snapshot (Get-SentKey $X)) -To $X.agree -Now ([datetime]::UtcNow.AddSeconds(1))
+    [void](Send-ToMachine $X $newerP.text)
+    $t = Invoke-Turn $X
+    Check ((Has $t "done") -and @(Get-Said $X.store | Where-Object { $_.data.text -ceq "From the phone, later: deploy after all." }).Count -eq 1) ("CONTROL: a phone answer given AFTER the window's is taken (" + $t.text + ")")
+    # Two seconds on, so that an answer can be signed between the phone's last and the window's next.
+    Start-Sleep -Seconds 2
+    $win2 = Invoke-HordeDecision -Operation "say" -Root $X.store -Request @{ id = (New-Id); actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "At my desk again: hold."; wordingVersion = 1 }
+    $stale2 = New-HordeTestPhoneEnvelope -Phone $X.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "From the phone, before the desk again." -Machine $X.id.sign.keyId -Snapshot (Get-SentKey $X)) -To $X.agree -Now ([System.DateTimeOffset]::Parse("" + (@(Get-Said $X.store) | Select-Object -Last 1).at, [System.Globalization.CultureInfo]::InvariantCulture).AddMilliseconds(-500).UtcDateTime)
+    [void](Send-ToMachine $X $stale2.text)
+    $t = Invoke-Turn $X
+    Check ($win2.value.outcome -ceq "done" -and (Has $t "superseded")) ("CONTROL: a newer answer at the window is taken, and from then on it is the one a phone answer is held to: one signed after the phone's last answer and half a second before the window's is refused - the NEWEST answer counts, not the first (" + $t.text + ")")
+    # ANOTHER PASSKEY: his second phone answers; this phone's older answer, sent again, must lose.
+    $Y = New-World
+    Use-World $Y
+    $phone2 = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $Y.home -Phone $phone2)
+    [void](Send-ToMachine $Y (Get-Answer $Y -Phone $phone2 -Text "Second phone: do NOT deploy.").text)
+    $t = Invoke-Turn $Y
+    Check ((Has $t "done")) ("CONTROL: the second phone's answer is taken (" + $t.text + ")")
+    $oldY = New-HordeTestPhoneEnvelope -Phone $Y.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "First phone, earlier: deploy now." -Machine $Y.id.sign.keyId -Snapshot (Get-SentKey $Y)) -To $Y.agree -Now ([datetime]::UtcNow.AddMinutes(-4))
+    [void](Send-ToMachine $Y $oldY.text)
+    $t = Invoke-Turn $Y
+    Check ((Has $t "superseded") -and (Has $t "phone") -and @(Get-Said $Y.store | Where-Object { $_.data.text -ceq "First phone, earlier: deploy now." }).Count -eq 0) ("ANOTHER PASSKEY'S NEWER ANSWER, THEN THIS PHONE'S OLDER ONE: refused as superseded (" + $t.text + ")")
+    $newY = New-HordeTestPhoneEnvelope -Phone $Y.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "First phone, later: deploy after all." -Machine $Y.id.sign.keyId -Snapshot (Get-SentKey $Y)) -To $Y.agree -Now ([datetime]::UtcNow.AddSeconds(1))
+    [void](Send-ToMachine $Y $newY.text)
+    $t = Invoke-Turn $Y
+    Check ((Has $t "done") -and @(Get-Said $Y.store | Where-Object { $_.data.text -ceq "First phone, later: deploy after all." }).Count -eq 1) ("CONTROL: this phone's answer signed after the other passkey's is taken (" + $t.text + ")")
+    $newY2 = New-HordeTestPhoneEnvelope -Phone $phone2 -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Text "Second phone, later still: hold." -Machine $Y.id.sign.keyId -Snapshot (Get-SentKey $Y)) -To $Y.agree -Now ([datetime]::UtcNow.AddSeconds(3))
+    [void](Send-ToMachine $Y $newY2.text)
+    $t = Invoke-Turn $Y
+    Check ((Has $t "done")) ("CONTROL: and the other passkey's newer answer after that is taken too (" + $t.text + ")")
+    # A STORE THAT CANNOT BE READ MAKES THE ANSWER WAIT, never pass unguarded.
+    $badY = Join-Path $Y.home "settings\decisions.json"
+    [System.IO.File]::WriteAllText($badY, "{ this is not json", $utf8)
+    [void](Send-ToMachine $Y (Get-Answer $Y -Text "While the list cannot be read.").text)
+    $t = Invoke-Turn $Y
+    Remove-Item -LiteralPath $badY
+    Check ((Has $t "retry") -and (Has $t "whether a newer answer") -and @(Get-Said $Y.store | Where-Object { $_.data.text -ceq "While the list cannot be read." }).Count -eq 0) ("while the list cannot be read the answer waits, unapplied, and says it is the guard that cannot look (" + $t.text + ")")
+    # A PHONE ANSWER COUNTS BY WHEN IT WAS SIGNED, NOT WHEN IT LANDED: the runner was down, B (signed 5
+    # minutes ago) and C (3 minutes ago) land in one turn; B is recorded now, after C was signed, and C
+    # is still the newer.
+    $null = Invoke-HordeDecision -Operation "add" -Root $Y.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "A question answered while the runner was down."; kind = "yes-no"; whatItIs = "Another."; group = "voice"; askedBy = "orc-b" } }
+    $null = Invoke-Tick $Y
+    $downB = New-HordeTestPhoneEnvelope -Phone $Y.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number 2 -Text "Down, first." -Machine $Y.id.sign.keyId -Snapshot (Get-SentKey $Y)) -To $Y.agree -Now ([datetime]::UtcNow.AddMinutes(-5))
+    $downC = New-HordeTestPhoneEnvelope -Phone $Y.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number 2 -Text "Down, second." -Machine $Y.id.sign.keyId -Snapshot (Get-SentKey $Y)) -To $Y.agree -Now ([datetime]::UtcNow.AddMinutes(-3))
+    [void](Send-ToMachine $Y $downB.text)
+    [void](Send-ToMachine $Y $downC.text)
+    $t = Invoke-Turn $Y
+    Check (-not (Has $t "superseded: question 2") -and @(Get-Said $Y.store | Where-Object { $_.data.number -eq 2 }).Count -eq 2) ("two answers queued while the runner was down both land: the later-signed one is newer than the one recorded a moment before it (" + $t.text + ")")
+    # THE PART RULE (review of PR 268): an answer is held only to answers to ITS part of the question.
+    $Z = New-World
+    Use-World $Z
+    $zq = Invoke-HordeDecision -Operation "add" -Root $Z.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Two things about the chime, part by part."; kind = "parts"; whatItIs = "Parts."; parts = @("(a) Which chime?", "(b) How loud?"); group = "voice"; askedBy = "orc-b" } }
+    $zn = [int]$zq.value.number
+    $null = Invoke-Tick $Z
+    $zb = Invoke-HordeDecision -Operation "say" -Root $Z.store -Request @{ id = (New-Id); actor = "founder"; number = $zn; speaker = "founder"; route = "window"; text = "Window (b): loud."; wordingVersion = 1; part = "b" }
+    Check ($zq.value.outcome -ceq "done" -and $zb.value.outcome -ceq "done") "CONTROL: a question of two parts, and part (b) answered at the window"
+    $early = [datetime]::UtcNow.AddMinutes(-5)
+    $pa = New-HordeTestPhoneEnvelope -Phone $Z.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number $zn -Part "a" -Text "Phone (a), earlier: the second chime." -Machine $Z.id.sign.keyId -Snapshot (Get-SentKey $Z)) -To $Z.agree -Now $early
+    [void](Send-ToMachine $Z $pa.text)
+    $t = Invoke-Turn $Z
+    Check ((Has $t "done") -and -not (Has $t "superseded") -and @(Get-Said $Z.store | Where-Object { $_.data.text -ceq "Phone (a), earlier: the second chime." }).Count -eq 1) ("A PART (a) ANSWER SIGNED BEFORE THE WINDOW'S PART (b) ANSWER IS TAKEN: another part is no reason to refuse it (" + $t.text + ")")
+    $pb = New-HordeTestPhoneEnvelope -Phone $Z.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number $zn -Part "b" -Text "Phone (b), earlier: quiet." -Machine $Z.id.sign.keyId -Snapshot (Get-SentKey $Z)) -To $Z.agree -Now $early.AddSeconds(1)
+    [void](Send-ToMachine $Z $pb.text)
+    $t = Invoke-Turn $Z
+    Check ((Has $t "superseded") -and @(Get-Said $Z.store | Where-Object { $_.data.text -ceq "Phone (b), earlier: quiet." }).Count -eq 0) ("A PART (b) ANSWER SIGNED BEFORE THE WINDOW'S PART (b) ANSWER IS REFUSED as superseded (" + $t.text + ")")
+    # Two seconds on, then part (a) at the window: an answer to (b) signed between the window's (b) and
+    # its (a) is newer than every answer to (b), and only an older answer to (a) stands after it.
+    Start-Sleep -Seconds 2
+    $za = Invoke-HordeDecision -Operation "say" -Root $Z.store -Request @{ id = (New-Id); actor = "founder"; number = $zn; speaker = "founder"; route = "window"; text = "Window (a): the first chime."; wordingVersion = 1; part = "a" }
+    $between = [System.DateTimeOffset]::Parse("" + (@(Get-Said $Z.store) | Select-Object -Last 1).at, [System.Globalization.CultureInfo]::InvariantCulture).AddMilliseconds(-500).UtcDateTime
+    $pb2 = New-HordeTestPhoneEnvelope -Phone $Z.phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -Number $zn -Part "b" -Text "Phone (b), between: medium." -Machine $Z.id.sign.keyId -Snapshot (Get-SentKey $Z)) -To $Z.agree -Now $between
+    [void](Send-ToMachine $Z $pb2.text)
+    $t = Invoke-Turn $Z
+    Check ($za.value.outcome -ceq "done" -and (Has $t "done") -and -not (Has $t "superseded") -and @(Get-Said $Z.store | Where-Object { $_.data.text -ceq "Phone (b), between: medium." }).Count -eq 1) ("A PART (b) ANSWER SIGNED AFTER THE WINDOW'S (b) BUT BEFORE THE WINDOW'S (a) IS TAKEN (" + $t.text + ")")
+    # S2, ATTACKED: 20 passkeys' streams; the most recently active and the one sealed to sort LAST by id.
+    $Q = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    $qroot = Get-HordeRelayJournalRoot -HordeHome $Q.hordeHome
+    $qids = @(1..20 | ForEach-Object { $_.ToString("x32") })
+    foreach ($i in 0..19) {
+        $d = Get-HordeRelayJournalStreamDir -Root $qroot -Direction "in" -From $qids[$i] -Channel "decisions"
+        [void][System.IO.Directory]::CreateDirectory($d)
+        [System.IO.Directory]::SetLastWriteTimeUtc($d, [datetime]::UtcNow.AddDays(-30 + $i))
+    }
+    [System.IO.Directory]::SetLastWriteTimeUtc((Get-HordeRelayJournalStreamDir -Root $qroot -Direction "in" -From $qids[18] -Channel "decisions"), [datetime]::UtcNow.AddDays(-400))
+    $qr = @((Get-HordeDecisionsChannelReceipts -Context $Q -Prefer @($qids[18])).text | ConvertFrom-Json | ForEach-Object { $_.from })
+    Check ($qr.Count -eq 16 -and $qr -ccontains $qids[19] -and $qr -ccontains $qids[18] -and $qr -cnotcontains $qids[0]) ("PAST 16 PASSKEYS, the phone sealed to and the most recently active get receipts, the longest idle do not (" + ($qr.Count) + ")")
+    # A FAILED MOVE OF THE LEDGER LEAVES NO TEMP FILE.
+    $T = [pscustomobject]@{ hordeHome = (New-TestHome); state = @{} }
+    $tpath = Get-HordeDecisionsChannelReceiptsPath -Context $T
+    [void][System.IO.Directory]::CreateDirectory($tpath)
+    $why = Add-HordeDecisionsChannelReceipt -Context $T -From ("c" * 32) -AnswerId ("d" * 32) -Outcome "done"
+    $tmps = @([System.IO.Directory]::GetFiles([System.IO.Path]::GetDirectoryName($tpath), "*.tmp"))
+    Check ($why -cne "" -and $tmps.Count -eq 0) ("a ledger that cannot be moved into place says why and leaves no temp file behind (" + $tmps.Count + ")")
     }
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin

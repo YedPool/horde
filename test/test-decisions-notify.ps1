@@ -530,7 +530,11 @@ Check (@(Told)[-1] -eq 3 -and @(Told).Count -eq ($toldBefore + 1)) "the set is i
 $t = Turn
 Check ($script:posts.Count -eq ($before + 1) -and $t.said -ceq "") "the next turn rings nothing more"
 # ONE BELL A HOME: while a notify loop holds the home's bell (the window is open), a turn stands aside.
-$bellName = "Local\" + (Get-HordeDecisionNotifyName -HordeHome $hordeHome)
+$bellName = Get-HordeDecisionNotifyMutexName -HordeHome $hordeHome
+Check ($bellName.StartsWith("Global\") -and $bellName.EndsWith((Get-HordeDecisionNotifyName -HordeHome $hordeHome))) "the bell is named in the namespace every session shares, Global\, so a runner in session 0 and the window's notify in the person's session hold ONE bell (review of PR 249)"
+$own = New-HordeDecisionNotifyMutex -HordeHome $hordeHome
+Check ($null -ne $own -and $own.WaitOne(0)) "CONTROL: this account can make and hold it"
+if ($null -ne $own) { $own.ReleaseMutex(); $own.Dispose() }
 $gate = New-Object System.Threading.ManualResetEvent($false)
 $got = New-Object System.Threading.ManualResetEvent($false)
 $holder = [powershell]::Create()

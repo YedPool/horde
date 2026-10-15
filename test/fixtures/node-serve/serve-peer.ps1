@@ -12,6 +12,8 @@
 # -ActOutcome makes the node serve acts (the act path's A3) with a fixture act that counts itself in
 # -Counter["acts"] and returns that outcome state; -ActThrows makes the act throw instead. -ActDelayMs
 # holds the act that long first, so a hub that stops waiting loses the answer.
+# -MembershipOnVersion1 makes a node that offers only verbs version 1 and still sends sessions.list's
+# membershipComplete, as a faulty or forged node would, so the hub's own version check is what is tested.
 param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Endpoint,
@@ -26,6 +28,7 @@ param(
     [string]$ActOutcome = "",
     [switch]$ActThrows,
     [int]$ActDelayMs = 0,
+    [switch]$MembershipOnVersion1,
     $Counter = $null,
     $Ready = $null
 )
@@ -35,6 +38,7 @@ foreach ($f in @("Tristate", "Platform", "Namespace")) { . (Join-Path $Root ("co
 foreach ($t in @(Get-HordeTransportFiles)) { . $t }
 . (Join-Path $Root "remote\NodeServe.ps1")
 . (Join-Path $Root "cli\NodeServe.ps1")
+if ($MembershipOnVersion1) { $script:HordeNodeVerbsVersions = @(1); $script:HordeNodeMembershipVerbs = 1 }
 $deviceId = $Endpoint
 $node = [pscustomobject]@{ deviceId = $deviceId; deviceName = "fixture-node" }
 $manifest = New-HordeNodeManifest -Root $Root -Node $node -Space "windows"

@@ -95,6 +95,9 @@
 #   untrimmed  by mailbox: a put there asked for a trim and the relay took the put without trimming -
 #              a relay with no such thing, or a hosted one deployed before it. Nothing failed, and the
 #              mailbox is growing toward full: worth one plain line.
+#   refusedWith  by status: every status a put was refused with since the runner last emptied it, which
+#              it does at the top of each turn - so the runner judges a failed turn's backoff by what the
+#              relay said THIS turn, never by the sticky full mark (cli/RelayRun.ps1, BACKOFF).
 #
 # Answers are core/tristate; the channels' outcomes are words. Nothing here prints: the runner does.
 #
@@ -181,7 +184,7 @@ function New-HordeRelayRunContext {
     return (New-HordeKnown -Value ([pscustomobject]@{
         hordeHome = $HordeHome; horde = $id.value.horde; signKeyId = $id.value.sign.keyId; signKey = $id.value.sign.key
         agreeKeyId = $id.value.agree.keyId; openingKeys = $open.value.keys; mailbox = $id.value.mailbox; connection = $Connection
-        decisionsRoot = $DecisionsRoot; cursor = [long]0; acked = [long]0; state = @{}; full = @{}; untrimmed = @{}
+        decisionsRoot = $DecisionsRoot; cursor = [long]0; acked = [long]0; state = @{}; full = @{}; untrimmed = @{}; refusedWith = @{}
     }))
 }
 
@@ -197,6 +200,7 @@ function Update-HordeRelayRunContext {
     $made.value.state = $Context.state
     # What the puts have told the run is the run's too, and is about the relay, not the keys.
     $made.value.full = $Context.full; $made.value.untrimmed = $Context.untrimmed
+    if ($null -ne $Context.PSObject.Properties["refusedWith"]) { $made.value.refusedWith = $Context.refusedWith }
     if ($made.value.mailbox -ceq $Context.mailbox) { $made.value.cursor = $Context.cursor; $made.value.acked = $Context.acked }
     Close-HordeRelayRunContext -Context $Context
     return $made
@@ -300,6 +304,9 @@ function Send-HordeRelayChannelSaved {
         $status = $put.PSObject.Properties["status"]
         if ($null -ne $status) {
             $refused | Add-Member -NotePropertyName status -NotePropertyValue ([int]$status.Value)
+            # Every status a put was refused with, for the runner to judge THIS turn's backoff by
+            # (cli/RelayRun.ps1, BACKOFF); the runner empties it at the top of each turn.
+            if ($null -ne $Context.PSObject.Properties["refusedWith"]) { $Context.refusedWith[[int]$status.Value] = $true }
             # FULL IS NOT ONE MORE FAILURE: it is kept, with the relay's own words, for the runner to say
             # plainly and to tell the warchief of.
             if ([int]$status.Value -eq 507) {

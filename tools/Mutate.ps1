@@ -182,6 +182,15 @@ function Get-HordeFailLines {
     return @(($Out -split "`r?`n") | Where-Object { $_ -match '^\s*\[FAIL\]' } | ForEach-Object { $_.Trim() })
 }
 
+function Get-HordeErrorLines {
+    param([string]$Out)
+    # The unexpected errors test\lib\Suite.ps1 printed ([ERROR] at the start of a line), shown under a
+    # mutant that broke its suite so the reader sees WHICH read broke it - most often a member the mutant
+    # dropped, read plainly under strict mode, which test\test-mutation-specs.ps1's rule says to read
+    # through Get-HordeTestMember instead.
+    return @(($Out -split "`r?`n") | Where-Object { $_ -match '^\s*\[ERROR\]' } | Select-Object -First 3 | ForEach-Object { $_.Trim() })
+}
+
 function Get-HordeOccurrences {
     param([string]$Text, [string]$Find)
     $n = 0; $i = 0
@@ -282,7 +291,10 @@ try {
                 if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
                 elseif ($passCodes -contains $run.code) { $row.outcome = "survived" }
                 elseif ($row.failures.Count -gt 0) { $row.outcome = "caught" }
-                else { $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch") }
+                else {
+                    $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch")
+                    $row.failures = @(Get-HordeErrorLines -Out $run.out)
+                }
             }
         }
         [System.IO.File]::WriteAllText($target, $original)

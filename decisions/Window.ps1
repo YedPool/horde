@@ -138,6 +138,7 @@ foreach ($surfaceFile in @(Get-HordeSurfaceFiles)) { . $surfaceFile }
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\WindowFollowPort.ps1")
 foreach ($followerFile in @(Get-HordeWindowFollowerFiles)) { . $followerFile }
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\SessionSeat.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\HostWindow.ps1")
 foreach ($finderFile in @(Get-HordeHostWindowFinderFiles)) { . $finderFile }
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "fleet\StatusPanel.ps1")
@@ -377,7 +378,7 @@ function Read-HordeDecisionWindowProbe {
     if ("$Path" -eq "" -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     try {
         if ((Get-Item -LiteralPath $Path).Length -gt $script:HordeDecisionWindowSideFileBytes) { return $null }
-        $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        $parsed = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8))
         if ($null -eq $parsed -or ($parsed.n -isnot [int] -and $parsed.n -isnot [long]) -or [long]$parsed.n -lt 1) { return $null }
         $keys = @()
         if ($null -ne $parsed.PSObject.Properties["keys"]) { $keys = @($parsed.keys | Where-Object { $null -ne $_ }) }
@@ -392,7 +393,7 @@ function Get-HordeDecisionWindowFleet {
     # ages every second without changing; compared with its age in whole minutes, the line is redrawn
     # when something was written or a minute turned, not every time it is read.
     $status = Get-HordeFleetStatus
-    $coarse = @($status.orcs | ForEach-Object { "" + $_.folder + "|" + $_.written + "|" + $_.orc + "|" + $_.lane + "|" + $_.doing + "|" + $_.finished + "|" + $_.blocked + "|" + $_.blockedBy + "|" + (@($_.problems) -join ";") + "|" + [Math]::Floor($_.ageSeconds / 60) })
+    $coarse = @($status.orcs | ForEach-Object { "" + $_.folder + "|" + $_.written + "|" + $_.orc + "|" + $_.lane + "|" + $_.doing + "|" + $_.finished + "|" + $(if ($null -ne $_.PSObject.Properties["waitingOn"]) { $_.waitingOn } else { "" }) + "|" + $_.blocked + "|" + $_.blockedBy + "|" + (@($_.problems) -join ";") + "|" + [Math]::Floor($_.ageSeconds / 60) })
     return [pscustomobject]@{ status = $status; signature = ($status.state + "|" + $status.reason + "|" + $status.notRead + "|" + (@($status.findings) -join ";") + "|" + ($coarse -join "`n")) }
 }
 
@@ -436,7 +437,7 @@ function ConvertFrom-HordeDecisionWindowDrawn {
     param([AllowNull()][AllowEmptyString()][string]$Text, $Bounds = $script:HordeDecisionWindowReportBounds)
     $bad = { param([string]$Why) return [pscustomobject]@{ ok = $false; value = $null; reason = ("the page's report " + $Why) } }
     $drawn = $null
-    try { $drawn = "$Text" | ConvertFrom-Json } catch { $drawn = $null }
+    try { $drawn = ConvertFrom-HordeJson "$Text" } catch { $drawn = $null }
     if ($null -eq $drawn -or $drawn -isnot [System.Management.Automation.PSCustomObject]) { return (& $bad "is not one JSON object") }
     $has = { param($Object, [string]$Name) return ($null -ne $Object -and $Object -is [System.Management.Automation.PSCustomObject] -and $null -ne $Object.PSObject.Properties[$Name]) }
     foreach ($name in @("v", "draws", "counts", "headings", "lines", "sub", "fleet", "notice", "foot", "text", "left")) { if (-not (& $has $drawn $name)) { return (& $bad ("has no member " + $name)) } }

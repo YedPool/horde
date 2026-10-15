@@ -27,8 +27,9 @@
 #     local file's id.
 #   - LOOKING IS ALREADY THE HARM. Asking whether a network path exists, or opening it, sends the
 #     user's sign-in to whatever host the path names.
-# So Get-HordeNetworkPathRefusal is asked FIRST, and it touches no disk and no network. It is
-# core/PathText.ps1's, so that there is one copy for every caller (files/Share.ps1 loads it):
+# So whether a path is on this machine's own drives is asked FIRST (Get-HordeFilesPlaceRefusal, below),
+# and the asking touches no disk and no network. The two questions behind it are core/PathText.ps1's,
+# so that there is one copy for every caller: what a drive letter stands for, and then:
 #   - A UNC PATH IN ANY SPELLING is refused from its text: two separators of either kind first
 #     (\\server, //server, \/server; Windows reads them all as one), and the prefixed forms
 #     \\?\UNC\, \\.\UNC\ and \??\UNC\, in either case and with either separator.
@@ -56,7 +57,10 @@
 #     KNOWN COST: a path on a PowerShell drive whose name is not one letter (Temp:\x.md) is refused
 #     by the same rule; a session names files by their paths.
 #
-# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It loads nothing.
+# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
+
+# The questions asked of a path before it is opened: the one copy, core's.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\PathText.ps1")
 
 function Get-HordeFilesPathRefusal {
     # Why the path, AS WRITTEN, is not one a file is opened from, or "" when it may be opened. A
@@ -124,4 +128,110 @@ function Open-HordeFilesSource {
     finally { if ($null -eq $where -or -not $where.ok) { $stream.Dispose() } }
     if (-not $where.ok) { return [pscustomobject]@{ ok = $false; stream = $null; path = ""; reason = $where.reason } }
     return [pscustomobject]@{ ok = $true; stream = $stream; path = $where.path; reason = "" }
+}
+
+function Get-HordeFilesPlaceRefusal {
+    # Why -Path is not on one of this machine's own drives, in the words of a share, or "" when
+    # nothing says so. The two questions are core's (core/PathText.ps1), and THE ORDER IS PART OF
+    # THE RULE: what the drive letter stands for is asked first, because for a letter that stands
+    # for a network drive the network question itself looks the host up (core has the
+    # measurement). Core's reasons say only that the path is not on this machine's own drives;
+    # what that means for a share is said here. Asked of the path as written and again of the path
+    # it resolves to, before anything looks at the disk.
+    param([AllowEmptyString()][string]$Path)
+    $why = Get-HordeDriveAliasRefusal -Path $Path
+    if ($why -eq "") { $why = Get-HordeNetworkPathRefusal -Path $Path }
+    if ($why -eq "") { return "" }
+    return ($why + ". A file is shared from one of this machine's own drives: name it by its local path, or copy it to a local folder")
+}
+
+function Initialize-HordeFilesPlaceNative {
+    # One more question for Windows, defined once a process under a name of its own (a loaded type
+    # cannot be given another member, and HordeNative.FilePath may be loaded already): CreateFileW,
+    # to open a FOLDER, which .NET's FileStream cannot. Get-HordeFilesFolderFinalPath asks with it.
+    if (([System.Management.Automation.PSTypeName]"HordeNative.FilePlace").Type) { return }
+    Add-Type -Namespace HordeNative -Name FilePlace -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string lpFileName, int dwDesiredAccess, int dwShareMode, System.IntPtr lpSecurityAttributes, int dwCreationDisposition, int dwFlagsAndAttributes, System.IntPtr hTemplateFile);'
+}
+
+function Initialize-HordeFilesIdentityNative {
+    # WHICH FILE an open handle is, as the file system numbers it: GetFileInformationByHandle's volume
+    # serial number and file index. Two names of one file (a hard link) give one answer, which no
+    # path can (files/Deny.ps1, the relays' own files). Defined once a process, under a name of its own.
+    if (([System.Management.Automation.PSTypeName]"HordeNative.FileIdentity").Type) { return }
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace HordeNative {
+    public static class FileIdentity {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Info {
+            public uint Attributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+            public uint VolumeSerial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out Info info);
+        public static string Of(SafeFileHandle handle) {
+            Info info;
+            if (handle == null || handle.IsInvalid || !GetFileInformationByHandle(handle, out info)) { return ""; }
+            return info.VolumeSerial.ToString("x8") + ":" + info.IndexHigh.ToString("x8") + info.IndexLow.ToString("x8");
+        }
+    }
+}
+"@
+}
+
+function Get-HordeFilesHandleIdentity {
+    # The identity of an open file (Initialize-HordeFilesIdentityNative), or "" when Windows would not
+    # give it. KNOWN LIMIT: the file index is 64 bits; a volume whose ids are 128 bits (ReFS) may give
+    # two files one index, which errs towards refusing.
+    param([Parameter(Mandatory = $true)]$Handle)
+    Initialize-HordeFilesIdentityNative
+    return [HordeNative.FileIdentity]::Of($Handle)
+}
+
+function Get-HordeFilesPathIdentity {
+    # The identity of the file at -Path: { state: ok | absent | unknown; id }. It is opened for its
+    # attributes only (FILE_READ_ATTRIBUTES, 0x80): not one byte of it is read.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    Initialize-HordeFilesPlaceNative
+    # OPEN_EXISTING (3), and FILE_FLAG_BACKUP_SEMANTICS (0x02000000) as for a folder, so that whatever
+    # the relay named opens.
+    $openExisting = 3
+    $backupSemantics = 0x02000000
+    $handle = [HordeNative.FilePlace]::CreateFileW($Path, 0x80, 7, [System.IntPtr]::Zero, $openExisting, $backupSemantics, [System.IntPtr]::Zero)
+    $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($handle.IsInvalid) {
+        if (@(2, 3) -contains $code) { return [pscustomobject]@{ state = "absent"; id = "" } }
+        return [pscustomobject]@{ state = "unknown"; id = "" }
+    }
+    try { $id = Get-HordeFilesHandleIdentity -Handle $handle } finally { $handle.Dispose() }
+    if ($id -eq "") { return [pscustomobject]@{ state = "unknown"; id = "" } }
+    return [pscustomobject]@{ state = "ok"; id = $id }
+}
+
+function Get-HordeFilesFolderFinalPath {
+    # Where the FOLDER at -Path really is: { state: ok | absent | unknown; path }. path is what
+    # Windows says of the open folder (\\?\C:\...), by the same question a shared file's handle is
+    # asked, so a folder and a file inside it are compared like with like. Measured 2026-10-13, one
+    # folder opened by its plain path, a junction, a symbolic link, a subst drive, in capitals, and
+    # with a dot or a blank after its name: one final path for all seven.
+    #   absent   nothing has that name (Win32 2 or 3): no file can be inside it.
+    #   unknown  it is there and could not be opened or asked: the caller must not take it for absent.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    Initialize-HordeFilesPlaceNative
+    # No access is asked for (0): only the name is wanted. Every sharing mode (7), so nobody is kept
+    # out. OPEN_EXISTING (3). FILE_FLAG_BACKUP_SEMANTICS (0x02000000), without which a folder does
+    # not open.
+    $handle = [HordeNative.FilePlace]::CreateFileW($Path, 0, 7, [System.IntPtr]::Zero, 3, 0x02000000, [System.IntPtr]::Zero)
+    $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($handle.IsInvalid) {
+        if ($code -eq 2 -or $code -eq 3) { return [pscustomobject]@{ state = "absent"; path = "" } }
+        return [pscustomobject]@{ state = "unknown"; path = "" }
+    }
+    # Asked as a file's is: the one function, handed the handle the way a stream holds it.
+    try { $final = Get-HordeFilesFinalPath -Stream ([pscustomobject]@{ SafeFileHandle = $handle }) } finally { $handle.Dispose() }
+    if ($final -eq "") { return [pscustomobject]@{ state = "unknown"; path = "" } }
+    return [pscustomobject]@{ state = "ok"; path = $final }
 }
