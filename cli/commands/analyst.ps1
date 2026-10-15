@@ -66,7 +66,7 @@ $HordeCommand = @{
         if ($null -ne $tools["Notify"]) { $relayTools["Notify"] = { param($Line) return (Send-HordeAnalystFounderNotice -Text $Line -HordeHome $hordeHome) } }
         $relayState = [System.IO.Path]::Combine($hordeHome, "analyst", "relay-watch.json")
         if ($Verb -eq "tend") {
-            $done = Invoke-HordeAnalystPass -Tools $tools -Policy $policy -Folder $folder
+            $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
             foreach ($l in @($done.lines)) { Write-Output ("analyst: " + $l) }
             foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output $l }
             if ($done.problem -ne "") { throw $done.problem }
@@ -84,7 +84,7 @@ $HordeCommand = @{
                 $policy = Get-HordeAnalystPolicy -HordeHome $hordeHome
                 if (-not $policy.ok) { $problem = $policy.reason }
                 else {
-                    $done = Invoke-HordeAnalystPass -Tools $tools -Policy $policy -Folder $folder
+                    $done = Invoke-HordeAnalystLockedPass -Tools $tools -Policy $policy -Folder $folder
                     foreach ($l in @($done.lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z analyst: " + $l) }
                     $problem = $done.problem
                     foreach ($l in @((Invoke-HordeRelayWatch -Tools $relayTools -Policy $policy.values -StatePath $relayState -Origin $relayOrigin).lines)) { Write-Output ((Get-Date).ToUniversalTime().ToString("s") + "Z " + $l) }

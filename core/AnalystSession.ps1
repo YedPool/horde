@@ -142,7 +142,7 @@ function New-HordeAnalystState {
     # The supervisor's state as a fresh supervisor holds it: no session known.
     return [pscustomobject]@{
         v = 1; sessionId = ""; phase = "none"; previousSessionId = ""; startedAt = $null; startReason = ""
-        lastRoundAt = $null; lastWakeAt = $null; findingsOffset = [long]0
+        lastRoundAt = $null; lastWakeAt = $null; findingsOffset = [long]0; lastAckId = ""
         rounds = @(); told = @()
         contextTokens = [long]-1; contextAt = $null; transcriptLength = [long]-1
     }
@@ -173,6 +173,7 @@ function Read-HordeAnalystState {
         if ($script:HordeAnalystPhases -cnotcontains $s.phase) { throw "its phase is not one of none, running, starting" }
         $s.previousSessionId = "" + $doc.previousSessionId
         $s.startReason = "" + $doc.startReason
+        $s.lastAckId = $(if ($null -ne $doc.PSObject.Properties["lastAckId"]) { "" + $doc.lastAckId } else { "" })
         $s.startedAt = ConvertFrom-HordeAnalystTime -Text $doc.startedAt
         $s.lastRoundAt = ConvertFrom-HordeAnalystTime -Text $doc.lastRoundAt
         $s.lastWakeAt = ConvertFrom-HordeAnalystTime -Text $doc.lastWakeAt
@@ -203,7 +204,7 @@ function Write-HordeAnalystState {
         v = 1; sessionId = "" + $State.sessionId; phase = "" + $State.phase; previousSessionId = "" + $State.previousSessionId
         startedAt = (ConvertTo-HordeAnalystTimeText $State.startedAt); startReason = "" + $State.startReason
         lastRoundAt = (ConvertTo-HordeAnalystTimeText $State.lastRoundAt); lastWakeAt = (ConvertTo-HordeAnalystTimeText $State.lastWakeAt)
-        findingsOffset = [long]$State.findingsOffset
+        findingsOffset = [long]$State.findingsOffset; lastAckId = "" + $State.lastAckId
         rounds = @($rounds | ForEach-Object { [ordered]@{ id = $_.id; kind = $_.kind; at = (ConvertTo-HordeAnalystTimeText $_.at); sessionId = $_.sessionId; alerted = [bool]$_.alerted; woken = "" + $_.woken } })
         told = @($State.told)
         contextTokens = [long]$State.contextTokens; contextAt = (ConvertTo-HordeAnalystTimeText $State.contextAt); transcriptLength = [long]$State.transcriptLength

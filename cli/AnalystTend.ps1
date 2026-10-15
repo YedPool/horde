@@ -45,6 +45,8 @@ $script:HordeAnalystTakenStages = @("accepted", "handed-over", "seen")
 # How long the spawn script may take: the fleet tool waits for the new tab to open, about 30 s for a
 # launch on this fleet; three minutes leaves room for a slow, throttled machine.
 $script:HordeAnalystSpawnSeconds = 180
+# The machine-wide lock every pass holds (Invoke-HordeAnalystLockedPass).
+$script:HordeAnalystLockName = "Global\HordeAnalystTend"
 # The longest mail to the analyst: a long message belongs in a file the mail names.
 $script:HordeAnalystMailMostChars = 20000
 # One fixed sentence for each thing the warchief is told (FIXED WORDS, core/AnalystRounds.ps1).
@@ -54,7 +56,7 @@ $script:HordeAnalystTellSentences = [ordered]@{
     "no-spawn-over-cap"      = "The fleet analyst's context is over its cap, and no spawn script is set, so no fresh session was started. Start one; it starts from its handover file."
     "started-gone"           = "The supervisor started a fresh fleet analyst in your window, because the last one's session had ended. It starts from its handover file."
     "started-over-cap"       = "The supervisor started a fresh fleet analyst in your window, because the last one's context was over its cap. The old session gets no more rounds; close it when you choose."
-    "spawn-failed"           = "The supervisor could not start a fresh fleet analyst: its spawn script failed. The status of the analyst supervisor says more."
+    "spawn-failed"           = "The supervisor's spawn script did not report that a fresh fleet analyst started. It waits for a handover all the same; nothing more is started until one is written or you start one. The status of the analyst supervisor says more."
     "start-silent"           = "A fresh fleet analyst was started and has not written its handover file in the time allowed. Look at its tab; nothing more is started until it does or you start one."
     "start-too-soon-gone"    = "The fleet analyst's session has ended again within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
     "start-too-soon-over-cap" = "The fleet analyst went over its context cap within minutes of the last start; no new one is started yet. The status of the analyst supervisor says more."
@@ -192,18 +194,24 @@ function Invoke-HordeAnalystPass {
             $due = ($round.action -cne "none")
         }
         "start" {
+            # STARTING IS WRITTEN BEFORE THE SPAWN RUNS (review of PR 306): a pass killed while the spawn
+            # script runs - a service restarted for an update, up to $script:HordeAnalystSpawnSeconds -
+            # leaves the script going, and the next pass must find "starting", not "running and gone".
+            $s.previousSessionId = $s.sessionId; $s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now; $s.startReason = $d.reason
+            $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
+            Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent")
+            Write-HordeAnalystState -Path $sp.state -State $s
             $r = $null
             try { $r = Invoke-HordeAnalystTool -Tools $Tools -Name "Spawn" -With @(("" + $v.spawnScript), $sp.handover, $d.reason, $v) } catch { $r = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
             if ($null -ne $r -and $r.ok -eq $true) {
                 & $say ("started a fresh analyst session: " + $d.why)
-                $s.previousSessionId = $s.sessionId; $s.sessionId = ""; $s.phase = "starting"; $s.startedAt = $now; $s.startReason = $d.reason
-                $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
-                Clear-HordeAnalystTold -State $s -Keys @("started-gone", "started-over-cap", "spawn-failed", "start-silent")
                 & $say (Send-HordeAnalystTell -State $s -Key ("started-" + $d.reason) -Tools $Tools -Values $v)
             } else {
-                & $say ("the spawn script failed: " + $(if ($null -ne $r) { "" + $r.detail } else { "it did not answer" }))
-                # A failed start counts as a start for the wait between starts: no spawn every minute.
-                $s.startedAt = $now
+                # A SPAWN THAT FAILED OR TIMED OUT MAY STILL HAVE STARTED ONE: its child can go on after the
+                # timeout, and a non-zero exit can follow a tab that opened. So it stays "starting" and
+                # waits for a handover (startWaitMinutes, then the warchief is told) - it is never taken
+                # for "nothing happened", which would start a second session later.
+                & $say ("the spawn script did not report success: " + $(if ($null -ne $r) { "" + $r.detail } else { "it did not answer" }) + "; waiting for a handover all the same")
                 & $say (Send-HordeAnalystTell -State $s -Key "spawn-failed" -Tools $Tools -Values $v)
             }
         }
@@ -211,15 +219,20 @@ function Invoke-HordeAnalystPass {
     }
     if ($d.tell -ne "") { & $say (Send-HordeAnalystTell -State $s -Key $d.tell -Tools $Tools -Values $v) }
 
-    # 4. Rounds with no ack: told once to the warchief and the founder.
+    # 4. Rounds with no ack: told ONCE for a run of them (review of PR 306: a wedged session that is still
+    #    alive gets a round every half hour, and telling each one was up to 48 alerts a day). The run ends,
+    #    and the next one may be told, only when an ack arrives: a round newer than the last ack seen.
     $acks = Read-HordeAnalystAcks -Path $paths.acks
     if ($acks.state -ceq "known") {
-        $late = @(Get-HordeAnalystAckAlerts -Now $now -Rounds @($s.rounds) -Acked ([string[]]$acks.value) -Policy $v)
+        $ackedIds = [string[]]$acks.value
+        $newestAcked = @($s.rounds | Where-Object { $ackedIds -ccontains $_.id } | Sort-Object at | Select-Object -Last 1)
+        if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) { $s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer") }
+        $late = @(Get-HordeAnalystAckAlerts -Now $now -Rounds @($s.rounds) -Acked $ackedIds -Policy $v)
         foreach ($id in $late) {
             $one = @($s.rounds | Where-Object { $_.id -ceq $id })[0]
             $one.alerted = $true
             & $say ("round " + $id + " has no ack after " + $v.ackMinutes + " minutes")
-            Clear-HordeAnalystTold -State $s -Keys @("no-answer")
+            if (@($s.told) -ccontains "no-answer") { continue }
             & $say (Send-HordeAnalystTell -State $s -Key "no-answer" -Tools $Tools -Values $v -Extra ("`nRound: " + $id))
             if ($null -ne $Tools["Notify"] -and $v.notifyFounder -eq $true) {
                 $n = $null
@@ -232,7 +245,9 @@ function Invoke-HordeAnalystPass {
     # 5. The round, to a session that is running and was not just replaced.
     $target = $(if ($s.phase -ceq "running" -and $d.action -ceq "keep" -or $d.action -ceq "adopt") { $s.sessionId } else { "" })
     $over = ($null -ne $context -and [long]$context.value.tokens -gt [long]$v.contextCapTokens -and $d.action -ceq "keep")
-    if ($due -and $target -ne "" -and -not $over -and ($f.state -ceq "known" -or $round.action -ceq "heartbeat")) {
+    # An unreadable findings file holds back nothing else (review of PR 306): the mail and the heartbeat
+    # still go, and the findings' place is kept until the file can be read.
+    if ($due -and $target -ne "" -and -not $over) {
         $id = New-HordeAnalystRoundId -Now $now -Kind $round.action
         $carried = @($mailItems | Where-Object { @($round.mail) -ccontains $_.id })
         $moved = New-Object System.Collections.ArrayList
@@ -262,6 +277,28 @@ function Invoke-HordeAnalystPass {
     elseif ($due -and $target -eq "") { & $say ("a round is due and no running analyst can take it: it waits") }
     Write-HordeAnalystState -Path $sp.state -State $s
     return [pscustomobject]@{ lines = @($lines.ToArray()); problem = ""; state = $s }
+}
+
+function Invoke-HordeAnalystLockedPass {
+    # ONE PASS AT A TIME ON THIS MACHINE (review of PR 306): a hand `horde analyst tend` while `run` is
+    # passing would read the same "running and gone" and both would run the spawn script - two analysts.
+    # So every pass, the loop's and a hand one, holds the machine-wide named mutex -LockName for its whole
+    # length. A pass that cannot have it within -WaitSeconds does nothing and says so; a spawn holds it up
+    # to $script:HordeAnalystSpawnSeconds, so a hand tend then is told to try again. An abandoned mutex (a
+    # pass killed while holding it) is taken: the state that pass wrote is what this one reads.
+    param([Parameter(Mandatory = $true)]$Tools, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)][string]$Folder,
+          [string]$LockName = $script:HordeAnalystLockName, [int]$WaitSeconds = 30)
+    $mutex = New-Object System.Threading.Mutex($false, $LockName)
+    $held = $false
+    try {
+        try { $held = $mutex.WaitOne([System.TimeSpan]::FromSeconds($WaitSeconds)) } catch [System.Threading.AbandonedMutexException] { $held = $true }
+        if (-not $held) { return [pscustomobject]@{ lines = @("another pass of the analyst's supervisor is running on this machine; this one did nothing"); problem = ""; state = $null; skipped = $true } }
+        $done = Invoke-HordeAnalystPass -Tools $Tools -Policy $Policy -Folder $Folder
+        return [pscustomobject]@{ lines = $done.lines; problem = $done.problem; state = $done.state; skipped = $false }
+    } finally {
+        if ($held) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
 }
 
 function Test-HordeAnalystHomeIsATests {

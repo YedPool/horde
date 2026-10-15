@@ -74,6 +74,10 @@ $script:HordeAnalystSettings = New-HordeModuleSettings -Module "analyst" -Settin
        what = "First words, comma separated, that make a mail from the warchief wake the analyst at once." },
     @{ name = "ackMinutes"; kind = "whole"; default = 15; min = 1; max = 240
        what = "How long, in minutes, a round may wait for its ack before the warchief and the founder are told." },
+    # Review of PR 305: a burst of URGENT mail or now findings must not be a burst of wakes. Five minutes
+    # is short against any alarm the analyst acts on, and long against a script writing ten in a row.
+    @{ name = "nowGapMinutes"; kind = "whole"; default = 5; min = 0; max = 60
+       what = "The least time, in minutes, between a round and the next round that wakes the analyst at once." },
     # THE SESSION (core/AnalystSession.ps1). 120k is the warchief's cap of 2026-10-14: a fresh start
     # measured 62k to 67k, so a session gets about ten wakes of 4.7k each before it is replaced.
     @{ name = "contextCapTokens"; kind = "whole"; default = 120000; min = 20000; max = 2000000
@@ -210,7 +214,10 @@ function Read-HordeAnalystFindings {
     # order (ConvertFrom-HordeAnalystFindingLine's shape), offset where the next pass reads from. No file
     # is no findings yet. A file SHORTER than -Offset was replaced, not appended to: it is read from its
     # start and restarted says so. Unknown, with the reason, when the file cannot be read.
-    param([Parameter(Mandatory = $true)][string]$Path, [long]$Offset = 0)
+    # A LINE LONGER THAN ONE READ (review of PR 305): with no newline in the whole window it would stop the
+    # reader for ever. Once its newline is found further on, it is skipped as one unreadable item; until
+    # then it is a line still being written, and waits. -ReadMost is for a suite.
+    param([Parameter(Mandatory = $true)][string]$Path, [long]$Offset = 0, [long]$ReadMost = $script:HordeAnalystReadMostBytes)
     if ($Offset -lt 0) { $Offset = 0 }
     $stream = $null
     try {
@@ -222,7 +229,7 @@ function Read-HordeAnalystFindings {
         }
         $restarted = $false
         if ($stream.Length -lt $Offset) { $Offset = 0; $restarted = $true }
-        $want = [long][System.Math]::Min($stream.Length - $Offset, $script:HordeAnalystReadMostBytes)
+        $want = [long][System.Math]::Min($stream.Length - $Offset, $ReadMost)
         $bytes = New-Object byte[] $want
         [void]$stream.Seek($Offset, [System.IO.SeekOrigin]::Begin)
         $got = 0
@@ -231,6 +238,21 @@ function Read-HordeAnalystFindings {
         $end = -1
         for ($i = $got - 1; $i -ge 0; $i--) { if ($bytes[$i] -eq 10) { $end = $i; break } }
         $items = New-Object System.Collections.ArrayList
+        if ($end -lt 0 -and $got -ge $ReadMost) {
+            $chunk = New-Object byte[] 65536
+            $pos = $Offset + $got
+            while ($true) {
+                $n = $stream.Read($chunk, 0, $chunk.Length)
+                if ($n -le 0) { break }
+                for ($i = 0; $i -lt $n; $i++) {
+                    if ($chunk[$i] -eq 10) {
+                        $long = [pscustomobject]@{ id = ("unreadable@" + $Offset); wake = "round"; at = $null; bad = ("it is longer than " + $ReadMost + " bytes, so it was skipped unread") }
+                        return (New-HordeKnown -Value ([pscustomobject]@{ items = @($long); offset = ($pos + $i + 1); restarted = $restarted }))
+                    }
+                }
+                $pos += $n
+            }
+        }
         if ($end -lt 0) { return (New-HordeKnown -Value ([pscustomobject]@{ items = @(); offset = $Offset; restarted = $restarted })) }
         $text = (New-Object System.Text.UTF8Encoding($false, $false)).GetString($bytes, 0, $end + 1)
         $at = $Offset
@@ -337,7 +359,16 @@ function Get-HordeAnalystRoundDecision {
     $fids = [string[]]@($carry | ForEach-Object { "" + $_.id })
     $mids = [string[]]@($Mail | Where-Object { $null -ne $_ } | ForEach-Object { "" + $_.id })
     $answer = { param($Action, $Why, $Next) return [pscustomobject]@{ action = $Action; why = $Why; findings = $(if ($Action -ceq "now" -or $Action -ceq "round") { $fids } else { [string[]]@() }); mail = $(if ($Action -ceq "now" -or $Action -ceq "round") { $mids } else { [string[]]@() }); nextAt = $Next } }
-    if ($urgent -gt 0) { return (& $answer "now" ("" + $urgent + " item(s) marked to wake it at once") $null) }
+    if ($urgent -gt 0) {
+        # At once - but never twice within nowGapMinutes of the last round (a burst is one wake).
+        $gap = $Policy.PSObject.Properties["nowGapMinutes"]
+        $gapMinutes = $(if ($null -ne $gap) { [int]$gap.Value } else { 0 })
+        if ($null -ne $LastRoundAt -and $gapMinutes -gt 0) {
+            $free = ([datetime]$LastRoundAt).ToUniversalTime().AddMinutes($gapMinutes)
+            if ($utcNow -lt $free) { return (& $answer "none" ("" + $urgent + " item(s) marked to wake it at once wait out the " + $gapMinutes + "-minute gap since the last round") $free) }
+        }
+        return (& $answer "now" ("" + $urgent + " item(s) marked to wake it at once") $null)
+    }
     $waiting = $fids.Count + $mids.Count
     if ($waiting -gt 0) {
         if ($null -eq $LastRoundAt) { return (& $answer "round" ("" + $waiting + " item(s) waiting, and no round has been sent before") $null) }

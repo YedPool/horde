@@ -18,6 +18,8 @@
 //     onOpen   called with { lane, machine, entry } when the card is tapped - entry the phone's pairing
 //              whose machine sent it; no onOpen, and a tap does nothing
 //     nowMs    the time the card's age is said against; left out, now
+//     orName   the name to draw a lane the lanes document has no card for under (bareView, below):
+//              its name and its slot alone. Left out, such a lane is no card (null)
 //   laneCardView(lanes, laneId, { machine, nowMs }) -> the same card as plain data, or null: what
 //     renderLaneCard draws, for a page or a suite that wants the words without elements.
 //
@@ -72,8 +74,16 @@ export function laneCardView(lanes, laneId, { machine = "", nowMs = Date.now() }
   };
 }
 
-export function renderLaneCard(doc, lanes, laneId, { machine = "", badge = null, onOpen = null, nowMs = Date.now() } = {}) {
-  const v = laneCardView(lanes, laneId, { machine, nowMs });
+// A LANE KNOWN ONLY BY NAME: a lane the lanes document has no card for (no machine has sent one, or the
+// lane keeps no status record) is drawn, when the page hands in orName, as the same card with that name,
+// its slot, and nothing else - the decisions page has a card for every lane that asked a question
+// (decision-cards.js). With no orName, such a lane is no card, as before.
+function bareView(laneId, orName) {
+  return { lane: laneId, machine: "", entry: undefined, thrall: laneId === THRALL_LANE, blocked: false, title: orName, from: "", lines: [], stats: "", note: "" };
+}
+
+export function renderLaneCard(doc, lanes, laneId, { machine = "", badge = null, onOpen = null, nowMs = Date.now(), orName = "" } = {}) {
+  const v = laneCardView(lanes, laneId, { machine, nowMs }) || (orName && typeof laneId === "string" ? bareView(laneId, orName) : null);
   if (!v) return null;
   const el = (tag, className, words) => { const e = doc.createElement(tag); if (className) e.className = className; if (words !== undefined) e.textContent = words; return e; };
   const box = el("button", "card" + (v.thrall ? " thrall" : "") + (v.blocked ? " blocked" : ""));
