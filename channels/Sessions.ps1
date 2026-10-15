@@ -235,6 +235,21 @@ function Add-HordeRelaySessionVouch {
     return (Write-HordeRelayRecordFile -Dir ([System.IO.Path]::Combine((Get-HordeRelaySessionsDir -HordeHome $HordeHome), "vouches")) -Name ($Sig.vouchId + ".json") -Text $text)
 }
 
+function Get-HordeRelaySessionRecordOwner {
+    # The passkey (by) of the vouch record filed under -VouchId, or "" when there is none or it does not
+    # read: what tells a vouch whose name is another passkey's - which waiting can never cure - from a
+    # write that failed and may succeed next turn.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)][string]$VouchId)
+    if ($VouchId -cnotmatch '\A[0-9a-f]{32}\z') { return "" }
+    try {
+        $f = Read-HordeRelayRecordFile -Path ([System.IO.Path]::Combine((Get-HordeRelaySessionsDir -HordeHome $HordeHome), "vouches", ($VouchId + ".json")))
+        if (-not $f.ok -or -not $f.found) { return "" }
+        $r = Read-HordeRelayRecordText -Text $f.text -Spec (Get-HordeRelaySessionRecordSpec) -Kind "horde-relay-session-record" -What "the session record"
+        if (-not $r.ok) { return "" }
+        return "" + $r.value.by
+    } catch { return "" }
+}
+
 function Register-HordeRelaySessionSeen {
     # The PC took an envelope under -VouchId at -NowMs: the idle clock starts again. "" or why not.
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)][string]$VouchId, [long]$NowMs)

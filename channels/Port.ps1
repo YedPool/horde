@@ -499,6 +499,14 @@ function Complete-HordeRelayInbox {
         # write threw, was not confirmed on disk, or the name is another passkey's record - and every
         # envelope under it would be judged new, its idle clock never kept. It waits, and comes again.
         if ($p.envelope.sig.alg -ceq "session" -and $null -ne $gate.verified -and $null -ne $gate.verified.PSObject.Properties["newVouch"] -and $gate.verified.newVouch) {
+            # A NAME THAT IS ANOTHER PASSKEY'S never frees itself, so waiting would hold the envelope
+            # every turn, unacked, until the relay's caps (review of PR 302): refused by name, for good.
+            $owner = Get-HordeRelaySessionRecordOwner -HordeHome $Context.hordeHome -VouchId $p.envelope.sig.vouchId
+            if ($owner -cne "" -and $owner -cne $h.from) {
+                [void]$refused.Add($rk + ": session-refused: the vouch id " + $p.envelope.sig.vouchId + " belongs to another passkey's session on this PC")
+                $settled[[long]$p.item.seq] = $true
+                continue
+            }
             [void]$held.Add($rk + ": its session's vouch " + $p.envelope.sig.vouchId + " could not be recorded on this PC, so it waits")
             continue
         }

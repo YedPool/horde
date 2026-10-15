@@ -391,7 +391,9 @@ try {
     $sA = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(142) -Seq 5 -Key $sC.key
     Check ($sA.vouchId -ceq $sC.vouchId) "CONTROL: phone A's vouch names the same key, so the same vouchId"
     $r = Send-SessionAnswer -World $W3 -Session $sA -Text "Under a vouch recorded as another's." -At $B3.AddMinutes(144) -WithVouch
-    Check ($r.turn.text.Contains("vouch " + $sA.vouchId + " could not be recorded") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("an envelope whose new vouch's name is another passkey's record waits, not taken (" + $r.turn.text + ")")
+    Check ($r.turn.text.Contains("session-refused: the vouch id " + $sA.vouchId + " belongs to another passkey") -and -not $r.turn.text.Contains("held ") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("an envelope whose new vouch's name is another passkey's record is refused by name on its first turn, not held (" + $r.turn.text + ")")
+    $t = Invoke-Turn $W3 $B3.AddMinutes(144)
+    Check (-not $t.text.Contains($sA.vouchId) -and [long]$W3.ctx.acked -eq [long]$W3.ctx.cursor) ("and it is acked: the next turn does not see it again (" + $t.text + ")")
     # Route 2, the write itself fails: the vouches folder refuses new files for a moment.
     $vdir = Join-Path $W3.home "relay\sessions\vouches"
     $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value

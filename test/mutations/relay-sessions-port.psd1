@@ -13,6 +13,9 @@
         @{ Name = "unrecorded-vouch-taken"
            Find = 'if ($p.envelope.sig.alg -ceq "session" -and $null -ne $gate.verified -and $null -ne $gate.verified.PSObject.Properties["newVouch"] -and $gate.verified.newVouch) {'
            Replace = 'if ($false) {' }
+        @{ Name = "another-passkeys-name-held-for-ever"
+           Find = 'if ($owner -cne "" -and $owner -cne $h.from) {'
+           Replace = 'if ($false) {' }
         @{ Name = "idle-clock-never-restarted"
            Find = '$why = Register-HordeRelaySessionSeen -HordeHome $Context.hordeHome -VouchId $p.envelope.sig.vouchId -NowMs $nowMs'
            Replace = '$why = ""' }
