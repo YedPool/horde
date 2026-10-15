@@ -178,6 +178,10 @@ $script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
 #     design refuses. So a one-shot `horde decisions` command, a new process each time, still reads
 #     every record; a small on-disk index would be the follow-up if that ever matters.
 #   - ITS SIZE is the records' text: about 0.8 MB for the live store of 264 records.
+#   - WHAT IT CANNOT SEE: a record overwritten in place with the same size AND the same write time is
+#     not seen by a running process until it restarts. Records are written once, by a rename of a new
+#     file (Add-HordeDecisionRecord), so nothing in Horde does that; a hand that edits a record must
+#     restart the runner, as it must for any file a process has read.
 $script:HordeDecisionStoreCodeStamp = [System.BitConverter]::ToString((New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([System.IO.File]::ReadAllBytes($PSCommandPath))).Replace("-", "")
 if ($null -eq (Get-Variable -Name HordeDecisionStoreCache -Scope Script -ErrorAction SilentlyContinue) -or "$($script:HordeDecisionStoreCacheStamp)" -cne $script:HordeDecisionStoreCodeStamp) {
     $script:HordeDecisionStoreCache = @{}
@@ -341,6 +345,17 @@ function ConvertFrom-HordeDecisionRecordText {
     return [pscustomobject]@{ kind = "ok"; data = $data; reason = "" }
 }
 
+function Clear-HordeDecisionStoreCache {
+    # Let go of everything kept for the store folder -Root: its texts here, and the checks Rules.ps1
+    # keeps under its stamps, when Rules.ps1 is loaded. For a folder that is gone or is a file: no fold
+    # of it will come to drop them (review of PR 310, note 2).
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $key = [System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant()
+    $script:HordeDecisionStoreCache.Remove($key)
+    $checks = Get-Variable -Name HordeDecisionCheckCache -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $checks) { foreach ($k in @($checks.Keys | Where-Object { $_.StartsWith($key + "|", [System.StringComparison]::Ordinal) })) { $checks.Remove($k) } }
+}
+
 function Get-HordeDecisionRecords {
     # Every record of the store, in sequence order, damaged ones included. Returns
     #   { state: ok | absent | unknown; reason; last; records; strays }
@@ -364,10 +379,10 @@ function Get-HordeDecisionRecords {
     # A FILE of the store's name is not "no store yet": every write there fails, so a read that said
     # "an empty list" would be an answer no write could ever agree with (measured 2026-10-06).
     if ([System.IO.File]::Exists($Root)) {
-        $script:HordeDecisionStoreCache.Remove([System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant())
+        Clear-HordeDecisionStoreCache -Root $Root
         return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' is a file, not a folder"); last = [long]0; records = @(); strays = @() }
     }
-    if (-not [System.IO.Directory]::Exists($Root)) { $script:HordeDecisionStoreCache.Remove([System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant()); return $none }
+    if (-not [System.IO.Directory]::Exists($Root)) { Clear-HordeDecisionStoreCache -Root $Root; return $none }
     $names = $null
     $infos = @{}
     $cacheKey = [System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant()

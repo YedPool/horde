@@ -25,8 +25,11 @@
            Find = ' -or "$($script:HordeDecisionStoreCacheStamp)" -cne $script:HordeDecisionStoreCodeStamp) {'
            Replace = ') {' }
         @{ Name = "a-store-that-is-gone-keeps-its-cache"
-           Find = 'if (-not [System.IO.Directory]::Exists($Root)) { $script:HordeDecisionStoreCache.Remove([System.IO.Path]::GetFullPath($Root).TrimEnd("\").ToLowerInvariant()); return $none }'
+           Find = 'if (-not [System.IO.Directory]::Exists($Root)) { Clear-HordeDecisionStoreCache -Root $Root; return $none }'
            Replace = 'if (-not [System.IO.Directory]::Exists($Root)) { return $none }' }
+        @{ Name = "a-store-that-is-gone-keeps-its-checks"
+           Find = 'foreach ($k in @($checks.Keys | Where-Object { $_.StartsWith($key + "|", [System.StringComparison]::Ordinal) })) { $checks.Remove($k) }'
+           Replace = 'foreach ($k in @($checks.Keys | Where-Object { $_.StartsWith($key + "|", [System.StringComparison]::Ordinal) })) { $null = $k }' }
         @{ Name = "cached-record-handed-out-without-its-stamp"
            Find = '            $rec | Add-Member -NotePropertyName stamp -NotePropertyValue $stamp'
            Replace = '' }

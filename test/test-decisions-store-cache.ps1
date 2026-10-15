@@ -164,7 +164,7 @@ try {
     Check (@(Get-Cached $store).Count -ge 1) "and the same version loaded again keeps it"
     Remove-Item -LiteralPath $store -Recurse -Force
     $none = Get-HordeDecisionRecords -Root $store
-    Check ($none.state -ceq "absent" -and $null -eq $script:HordeDecisionStoreCache[(Get-Key $store)]) "a store folder that is gone is absent, and its cache is let go"
+    Check ($none.state -ceq "absent" -and $null -eq $script:HordeDecisionStoreCache[(Get-Key $store)] -and @($script:HordeDecisionCheckCache.Keys | Where-Object { $_ -clike ((Get-Key $store) + "|*") }).Count -eq 0) "a store folder that is gone is absent, and its texts and its checks are let go"
 } finally {
     if ((Split-Path -Leaf $script:work) -match '^horde-decisions-cache-test-[0-9a-f]{32}$') { Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue }
 }
