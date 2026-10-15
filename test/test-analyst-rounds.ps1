@@ -25,6 +25,7 @@ try {
     Check ($d.state -ceq "defaults" -and $d.values.roundMinutes -eq 30 -and $d.values.ackMinutes -eq 15) "rounds every 30 minutes, an ack within 15"
     Check ($d.values.heartbeatHours -eq 6) "the heartbeat is after 6 hours with no wake, not 2 (the warchief, 2026-10-14)"
     Check ($d.values.wakeNowMarkers -ceq "URGENT,QUESTION") "URGENT and QUESTION wake it at once by default"
+    Check ($d.values.nowGapMinutes -eq 5) "at-once rounds are at least 5 minutes apart by default"
     $c = Get-HordeAnalystSettings -HordeHome (Home-With "changed" '{ "schemaVersion": 1, "settings": { "heartbeatHours": 2, "wakeNowMarkers": "URGENT,STOP-NOW" } }')
     Check ($c.state -ceq "read" -and $c.values.heartbeatHours -eq 2 -and $c.values.wakeNowMarkers -ceq "URGENT,STOP-NOW") "a person's file sets the heartbeat and the markers"
     $r = Get-HordeAnalystSettings -HordeHome (Home-With "refused" '{ "schemaVersion": 1, "settings": { "heartbeatHours": 0 } }')
@@ -70,6 +71,11 @@ try {
     Check ($x.action -ceq "now" -and @($x.mail).Count -eq 2 -and @($x.findings).Count -eq 1) "URGENT mail wakes it at once, and carries everything else waiting"
     $x = Get-HordeAnalystRoundDecision -Now $t0 -LastRoundAt $t0.AddMinutes(-1) -LastWakeAt $recent -Mail @($mQuestion) -Policy $p
     Check ($x.action -ceq "now") "QUESTION mail wakes it at once too, a minute after a round (the warchief, 2026-10-14)"
+    $pg = [pscustomobject]@{ roundMinutes = 30; heartbeatHours = 6; nowGapMinutes = 5 }
+    $x = Get-HordeAnalystRoundDecision -Now $t0 -LastRoundAt $t0.AddMinutes(-1) -LastWakeAt $recent -Mail @($mUrgent) -Policy $pg
+    Check ($x.action -ceq "none" -and $x.nextAt -eq $t0.AddMinutes(4)) "URGENT a minute after a round waits out the 5-minute gap: a burst is one wake (review of PR 305)"
+    $x = Get-HordeAnalystRoundDecision -Now $t0 -LastRoundAt $t0.AddMinutes(-5) -LastWakeAt $recent -Mail @($mUrgent) -Policy $pg
+    Check ($x.action -ceq "now") "and goes once the gap is over"
     $x = Get-HordeAnalystRoundDecision -Now $t0 -LastRoundAt $recent -LastWakeAt $recent -Findings @($fNow) -Policy $p
     Check ($x.action -ceq "now" -and @($x.findings) -ceq "still") "a finding marked now (a fleet gone still) wakes it at once"
     $x = Get-HordeAnalystRoundDecision -Now $t0 -LastRoundAt $t0.AddHours(-3) -LastWakeAt $t0.AddHours(-3) -Findings @($fNever) -Policy $p
@@ -106,6 +112,15 @@ try {
     [System.IO.File]::WriteAllText($fp, (Line "fresh") + "`n", $utf8)
     $d2 = Read-HordeAnalystFindings -Path $fp -Offset $b.value.offset
     Check ($d2.value.restarted -and @($d2.value.items).Count -eq 1 -and $d2.value.items[0].id -ceq "fresh") "a file shorter than the place was replaced: read from its start, and said"
+    $lp = Join-Path $work "long.jsonl"
+    [System.IO.File]::WriteAllText($lp, (("x" * 300) + "`n" + (Line "after-long") + "`n"), $utf8)
+    $l1 = Read-HordeAnalystFindings -Path $lp -Offset 0 -ReadMost 200
+    Check ($l1.state -ceq "known" -and @($l1.value.items).Count -eq 1 -and $l1.value.items[0].bad -like "*longer than 200 bytes*" -and $l1.value.offset -eq 301) "a line longer than one read is skipped as one unreadable item, not a reader stopped for ever (review of PR 305)"
+    $l2 = Read-HordeAnalystFindings -Path $lp -Offset $l1.value.offset -ReadMost 200
+    Check (@($l2.value.items).Count -eq 1 -and $l2.value.items[0].id -ceq "after-long") "and the line after it is read"
+    [System.IO.File]::WriteAllText($lp, ("y" * 300), $utf8)
+    $l3 = Read-HordeAnalystFindings -Path $lp -Offset 0 -ReadMost 200
+    Check (@($l3.value.items).Count -eq 0 -and $l3.value.offset -eq 0) "a long line with no newline yet is still being written: it waits"
     $bads = @(
         @('{"v":2,"id":"a","at":"2026-10-14T12:00:00Z","source":"m","wake":"round","text":"t"}', "its v is not 1"),
         @('{"v":1,"id":"a b","at":"2026-10-14T12:00:00Z","source":"m","wake":"round","text":"t"}', "its id is*"),
