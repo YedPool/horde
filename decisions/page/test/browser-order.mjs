@@ -191,8 +191,11 @@ try {
   k = await rankOf(7);
   check(head(r, 1) === "3" && r.order.split(",").indexOf("7") > r.order.split(",").indexOf("19") && k.buttons[0].text === "Importance: Low" && !k.buttons[0].pending, "THE LIST THAT HOLDS IT RE-SORTS: 3 leads alone, 7 stands among the low ones, and its button says Low", r.order + " / " + k.buttons[0].text);
   // A REFUSAL PUTS THE BUTTON BACK AND SAYS WHY.
+  // The view followed question 7 down the page (THE VIEW FOLLOWS HIM): back to the head, where 3 now leads.
+  await evaluate("scrollTo(0, 0), true");
+  await settle();
   k = await rankOf(3);
-  check(!!k && k.buttons.length === 2, "CONTROL: question 3 shows its two buttons", JSON.stringify(k) + " " + await evaluate("Array.from(document.querySelectorAll('#list .hd-q')).slice(0,3).map((w) => w.className + ' ' + w.textContent.slice(0, 60)).join(' || ')"));
+  check(!!k && k.buttons.length === 2 && k.buttons[1].y > 0 && k.buttons[1].y < 915, "CONTROL: question 3 shows its two buttons, in view", JSON.stringify(k));
   await touch(k.buttons[1].x, k.buttons[1].y);
   k = await rankOf(3);
   await touch(k.levels[0].x, k.levels[0].y);
