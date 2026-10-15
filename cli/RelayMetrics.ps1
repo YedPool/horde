@@ -32,6 +32,9 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+# The pc files are read through core/JsonText.ps1's one parse, which keeps every string a string (issue 274).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
+
 $script:HordeRelayMetricsFolder = "metrics"
 $script:HordeRelayMetricsNames = @("polls", "emptyPolls", "retries", "backoffWaits", "backoffMs")
 $script:HordeRelayMetricsAscii = New-Object System.Text.ASCIIEncoding
@@ -94,7 +97,7 @@ function Read-HordeRelayRunCounts {
     $path = Get-HordeRelayMetricsPath -HordeHome $HordeHome -Kind "pc" -Day $Day
     try {
         if (-not [System.IO.File]::Exists($path)) { return $out }
-        $j = [System.IO.File]::ReadAllText($path, $script:HordeRelayMetricsAscii) | ConvertFrom-Json
+        $j = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($path, $script:HordeRelayMetricsAscii))
         foreach ($h in @($j.hours)) {
             $hour = "" + $h.hour
             if ($hour -cnotmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}\z' -or -not $hour.StartsWith($Day)) { continue }
