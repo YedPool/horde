@@ -1,7 +1,7 @@
 # DOES A SUITE'S HEADLESS BROWSER - EVERY PROCESS OF IT - END, AND ITS PROFILE GO, HOWEVER THE SUITE ENDS?
 #
-# test/lib/Browser.ps1 is the one launcher the browser suites use (relays/cloudflare/test/
-# test-cloudflare-accounts.ps1, surfaces/pwa/test/test-pwa-browser.ps1). Before it, each node driver
+# test/lib/Browser.ps1 is the one launcher the browser suites use (the hosted relay's
+# accounts suite, surfaces/pwa/test/test-pwa-browser.ps1). Before it, each node driver
 # spawned Chrome itself, and on 2026-10-14 four headless browsers (about 0.4 GB each) were found running
 # with no suite, and 130 horde-cf-accounts-* folders in %TEMP% (the launcher's header has why).
 #

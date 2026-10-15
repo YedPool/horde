@@ -331,7 +331,7 @@ function Get-HordeAnalystRoundDecision {
         [AllowEmptyCollection()][object[]]$Mail = @(),
         [Parameter(Mandatory = $true)]$Policy
     )
-    $now = $Now.ToUniversalTime()
+    $utcNow = $Now.ToUniversalTime()
     $carry = @($Findings | Where-Object { $null -ne $_ -and "" + $_.wake -cne "never" })
     $urgent = @($carry | Where-Object { "" + $_.wake -ceq "now" }).Count + @($Mail | Where-Object { $null -ne $_ -and "" + $_.marker -cne "" }).Count
     $fids = [string[]]@($carry | ForEach-Object { "" + $_.id })
@@ -342,12 +342,12 @@ function Get-HordeAnalystRoundDecision {
     if ($waiting -gt 0) {
         if ($null -eq $LastRoundAt) { return (& $answer "round" ("" + $waiting + " item(s) waiting, and no round has been sent before") $null) }
         $due = ([datetime]$LastRoundAt).ToUniversalTime().AddMinutes([int]$Policy.roundMinutes)
-        if ($now -ge $due) { return (& $answer "round" ("" + $waiting + " item(s) waiting, and the last round was " + [int]($now - ([datetime]$LastRoundAt).ToUniversalTime()).TotalMinutes + " minutes ago") $null) }
+        if ($utcNow -ge $due) { return (& $answer "round" ("" + $waiting + " item(s) waiting, and the last round was " + [int]($utcNow - ([datetime]$LastRoundAt).ToUniversalTime()).TotalMinutes + " minutes ago") $null) }
         return (& $answer "none" ("" + $waiting + " item(s) wait for the next round") $due)
     }
     if ($null -eq $LastWakeAt) { return (& $answer "heartbeat" "nothing waits, and no wake of it is known" $null) }
     $beat = ([datetime]$LastWakeAt).ToUniversalTime().AddHours([int]$Policy.heartbeatHours)
-    if ($now -ge $beat) { return (& $answer "heartbeat" ("nothing waits, and it has not been woken for " + [int]($now - ([datetime]$LastWakeAt).ToUniversalTime()).TotalHours + " hours") $null) }
+    if ($utcNow -ge $beat) { return (& $answer "heartbeat" ("nothing waits, and it has not been woken for " + [int]($utcNow - ([datetime]$LastWakeAt).ToUniversalTime()).TotalHours + " hours") $null) }
     return (& $answer "none" "nothing waits" $beat)
 }
 
