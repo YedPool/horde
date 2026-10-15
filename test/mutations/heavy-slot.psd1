@@ -10,7 +10,7 @@
            Find = '    if ($held) { $mutex.ReleaseMutex() }'
            Replace = '    if ($false) { $mutex.ReleaseMutex() }' }
         @{ Name = "slot-waited-for-ever"
-           Find = 'try { $script:held = $mutex.WaitOne([int](& $left) * 1000) }'
+           Find = 'try { $script:held = $mutex.WaitOne([int][math]::Min($slice, (& $left) * 1000)) }'
            Replace = 'try { $script:held = $mutex.WaitOne() }' }
         @{ Name = "killed-holder-run-not-waited-for"
            Find = '    if ($null -ne $orphan) {'
@@ -21,11 +21,19 @@
         @{ Name = "memory-not-waited-for"
            Find = '    while ((Get-HordeHeavySlotFreeGB) -lt $MinFreeGB) {'
            Replace = '    while ($false) {' }
-        @{ Name = "run-past-its-time-left-running"
-           Find = '    if ($null -ne $run -and -not $run.HasExited) { Stop-HordeHeavySlotTree -Id $run.Id; $null = $run.WaitForExit(10000) }'
-           Replace = '    if ($false) { Stop-HordeHeavySlotTree -Id $run.Id; $null = $run.WaitForExit(10000) }' }
+        @{ Name = "job-does-not-kill-on-close"
+           Find = 'l.basic.flags = KILL_ON_JOB_CLOSE;'
+           Replace = 'l.basic.flags = 0;' }
+        @{ Name = "job-not-ended-in-finally"
+           Find = '        $null = [HordeHeavySlotJobV1]::Terminate($job.job)'
+           Replace = '        $null = $true'
+           Expect = "survives"
+           Reason = "closing the job's last handle in finally ends every process of it anyway (kill on close), so ending the job first and waiting until none is alive is a second statement of the rule: it makes the processes gone BEFORE the slot is released rather than a moment after, which no check can time" }
+        @{ Name = "unplanned-error-not-coded"
+           Find = '    $script:code = 127'
+           Replace = '    $script:code = 125' }
         @{ Name = "run-code-lost"
-           Find = '    $script:code = $run.ExitCode'
+           Find = '    $script:code = [HordeHeavySlotJobV1]::ExitCode($job.process)'
            Replace = '    $script:code = 0' }
         @{ Name = "missing-script-run-anyway"
            Find = 'if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $script:code = 126;'

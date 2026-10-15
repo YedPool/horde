@@ -15,27 +15,35 @@
 # queue. So the slot is a machine-wide named mutex, and memory is waited for only by its holder.
 #
 # WHAT IT DOES, in order:
-#   1. waits for the mutex -SlotName, up to -WaitSeconds;
-#   2. A HOLDER THAT WAS KILLED leaves the mutex abandoned, and Windows hands it to the next waiter. Its
-#      run may still be going: killing a PowerShell does not kill the child it started. So the holder
-#      writes a record (-HolderFile: the run's process id, start time and script) when it starts the
-#      run, and a later holder that finds a record of a run still alive - the same id AND the same
-#      start time, so a reused id is not mistaken for it - waits for that run to end first;
+#   1. waits for the mutex -SlotName, up to -WaitSeconds, in short slices so Ctrl+C can break the wait;
+#   2. A HOLDER THAT WAS KILLED leaves the mutex abandoned, and Windows hands it to the next waiter. Its run
+#      dies with it (step 4's job), but a run of an older gate, or one started some other way, may not. So
+#      the holder keeps a record (-HolderFile: the run's process id, start time and script), and a later
+#      holder that finds a record of a run still alive - the same id AND the same start time, so a reused
+#      id is not mistaken for it - waits for that run to end first. A record that cannot be read is
+#      ignored: refusing on it would block every run for ever;
 #   3. waits, still holding the slot, until free memory is at least -MinFreeGB;
 #   4. runs the script - a .ps1 under Windows PowerShell 5.1, a .mjs under node - with standard input
-#      closed (an empty file) and PSModulePath cleared, output to -Out, for at most -RunSeconds; past
-#      that its whole process tree is ended and the run is reported TIMEOUT;
-#   5. ALWAYS, in finally (an error, Ctrl+C, a timeout): a run still alive is ended with its tree, so the
-#      slot is never released while a run of it goes on; the record is removed; the mutex is released.
+#      closed and PSModulePath cleared, output to -Out, for at most -RunSeconds, INSIDE A KILL-ON-CLOSE
+#      JOB OBJECT that allows no breakaway. It is created suspended, put in the job, recorded (step 2),
+#      and only then resumed, so every process it ever starts is in the job - a grandchild whose middle
+#      parent exited too (npx, cmd, node and Chrome all hand over that way; taskkill /T from the run's id
+#      cannot reach those, measured for Chrome in test/lib/Browser.ps1). And when this gate is killed,
+#      Windows closes the job's handle with it and every process of the run dies;
+#   5. ALWAYS, in finally (an error, Ctrl+C, a timeout, a normal end): the whole job is ended - a run past
+#      its time, and anything a finished run left behind - before the record is removed and the mutex
+#      released. An error nobody planned for (node missing, the mutex refused) is said, with exit 127,
+#      before the closing line, never after it.
 # Every exit says why in plain words, and the LAST line is always "heavy-slot: released exit=<n>"
-# (CONTRIBUTING 15, rule 7: a run without its closing line proves nothing).
+# (CONTRIBUTING 15, rule 7: a run without its closing line proves nothing), written to the console's own
+# output so a stopped pipeline cannot swallow it.
 #
 # EXIT CODES: the script's own; 124 the run passed -RunSeconds; 125 the slot, a killed holder's run or
-# the memory was not had within -WaitSeconds (nothing was run); 126 the script is not there.
+# the memory was not had within -WaitSeconds (nothing was run); 126 the script is not there; 127 an
+# error the gate did not plan for. A suite that itself exits 124 to 127 reads the same: tell them apart by
+# the gate's own words above the closing line.
 #
-# A holder killed with taskkill /F runs no finally: its mutex is abandoned (step 2 covers its run), and
-# its record stays until the next holder reads and replaces it. A suite uses its own -SlotName and
-# -HolderFile, so a test never takes or frees the machine's real slot.
+# A suite uses its own -SlotName and -HolderFile, so a test never takes or frees the machine's real slot.
 
 param(
     [Parameter(Mandatory = $true)][string]$Script,
@@ -50,10 +58,73 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
+if (-not ([System.Management.Automation.PSTypeName]"HordeHeavySlotJobV1").Type) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class HordeHeavySlotJobV1 {
+    [StructLayout(LayoutKind.Sequential)] struct BASIC_LIMIT { public long a, b; public uint flags; public UIntPtr c, d; public uint e; public UIntPtr f; public uint g, h; }
+    [StructLayout(LayoutKind.Sequential)] struct IO_COUNTERS { public ulong a, b, c, d, e, f; }
+    [StructLayout(LayoutKind.Sequential)] struct EXTENDED_LIMIT { public BASIC_LIMIT basic; public IO_COUNTERS io; public UIntPtr p, j, pp, jp; }
+    [StructLayout(LayoutKind.Sequential)] struct ACCOUNTING { public long a, b, c, d; public uint pageFaults, total, active, terminated; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct STARTUPINFO {
+        public int cb; public string reserved, desktop, title; public int x, y, xSize, ySize, xChars, yChars, fill, flags;
+        public short showWindow, reserved2; public IntPtr reserved3, stdIn, stdOut, stdErr; }
+    [StructLayout(LayoutKind.Sequential)] struct PROCESS_INFORMATION { public IntPtr process, thread; public int pid, tid; }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr a, string n);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr j, int c, ref EXTENDED_LIMIT i, int l);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr j, IntPtr p);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool QueryInformationJobObject(IntPtr j, int c, out ACCOUNTING i, int l, IntPtr r);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr j, uint code);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool CreateProcess(string app, System.Text.StringBuilder cmd, IntPtr pa, IntPtr ta,
+        bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr t);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr p, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr p, out uint code);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    const uint CREATE_SUSPENDED = 0x4, CREATE_NO_WINDOW = 0x08000000, CREATE_UNICODE_ENVIRONMENT = 0x400;
+    // KILL_ON_JOB_CLOSE (0x2000) and nothing else: no BREAKAWAY_OK (0x800), no SILENT_BREAKAWAY_OK (0x1000).
+    const uint KILL_ON_JOB_CLOSE = 0x2000;
+
+    // Create cmd SUSPENDED in a new kill-on-close job: { job, process, thread, pid }. Nothing runs until
+    // Resume. On any failure nothing is left and every handle is closed.
+    public static long[] Create(string exe, string cmd, string dir) {
+        IntPtr j = CreateJobObject(IntPtr.Zero, null);
+        if (j == IntPtr.Zero) throw new Win32Exception();
+        EXTENDED_LIMIT l = new EXTENDED_LIMIT();
+        l.basic.flags = KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(j, 9, ref l, Marshal.SizeOf(l))) { int e = Marshal.GetLastWin32Error(); CloseHandle(j); throw new Win32Exception(e); }
+        STARTUPINFO si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(si);
+        PROCESS_INFORMATION pi;
+        if (!CreateProcess(exe, new System.Text.StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, IntPtr.Zero, dir, ref si, out pi)) {
+            int e = Marshal.GetLastWin32Error(); CloseHandle(j); throw new Win32Exception(e);
+        }
+        if (!AssignProcessToJobObject(j, pi.process)) {
+            int e = Marshal.GetLastWin32Error(); TerminateProcess(pi.process, 1); CloseHandle(pi.thread); CloseHandle(pi.process); CloseHandle(j); throw new Win32Exception(e);
+        }
+        return new long[] { j.ToInt64(), pi.process.ToInt64(), pi.thread.ToInt64(), pi.pid };
+    }
+    public static void Resume(long thread) { if (ResumeThread(new IntPtr(thread)) == 0xFFFFFFFF) throw new Win32Exception(); CloseHandle(new IntPtr(thread)); }
+    // Has the process ended within ms?
+    public static bool Wait(long process, uint ms) { return WaitForSingleObject(new IntPtr(process), ms) == 0; }
+    public static int ExitCode(long process) { uint c; if (!GetExitCodeProcess(new IntPtr(process), out c)) return -1; return unchecked((int)c); }
+    // How many processes of the job are alive now, or -1 when the job cannot be read.
+    public static int Active(long j) { ACCOUNTING a; if (!QueryInformationJobObject(new IntPtr(j), 1, out a, Marshal.SizeOf(typeof(ACCOUNTING)), IntPtr.Zero)) return -1; return (int)a.active; }
+    public static bool Terminate(long j) { return TerminateJobObject(new IntPtr(j), 1); }
+    public static void Close(long h) { CloseHandle(new IntPtr(h)); }
+}
+'@
+}
+
 function Get-HordeHeavySlotFreeGB { return [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2) }
 
+function Write-HordeHeavySlotLine { param([string]$Line) [Console]::Out.WriteLine($Line) }
+
 function Get-HordeHeavySlotLiveRun {
-    # The run a holder record names, if that very process is still alive: { pid; script } or $null.
+    # The run a holder record names, if that very process is still alive: { pid; script; process } or $null.
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     $rec = $null
@@ -67,82 +138,106 @@ function Get-HordeHeavySlotLiveRun {
     return [pscustomobject]@{ pid = $runPid; script = $rec[2].Trim(); process = $p }
 }
 
-function Stop-HordeHeavySlotTree {
-    # End a process and every process it started, by its id.
-    param([int]$Id)
-    # Started as a process, not called: under Windows PowerShell 5.1 a native command's error stream,
-    # redirected, is raised as an error, and taskkill writes there for a process already gone.
-    $null = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\taskkill.exe") -ArgumentList @("/T", "/F", "/PID", ("" + $Id)) -WindowStyle Hidden -Wait -PassThru
-}
+function ConvertTo-HordeHeavySlotArg { param([string]$A) if ($A -match '\s') { return ('"' + $A + '"') } return $A }
 
 if ($Worktree -eq "") { $Worktree = (Get-Location).Path }
 # powershell -File hands a list to a [string[]] as ONE string, so a comma separates the run's arguments.
 $ScriptArgs = @(@($ScriptArgs) | ForEach-Object { ("" + $_) -split "," } | Where-Object { $_ -ne "" })
-# Start-Process joins its arguments with spaces and quotes none of them: an argument with a space is quoted here.
-function ConvertTo-HordeHeavySlotArg { param([string]$A) if ($A -match '\s') { return ('"' + $A + '"') } return $A }
 $name = ($SlotName -replace '[^A-Za-z0-9-]', '-')
-if ($HolderFile -eq "") { $HolderFile = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-heavy-slot-" + $name + ".txt") }
+# The record lives where every agent of this user finds it, whatever TEMP each was given.
+if ($HolderFile -eq "") { $HolderFile = Join-Path (Join-Path $env:LOCALAPPDATA "horde") ("heavy-slot-" + $name + ".txt") }
 $path = Join-Path $Worktree $Script
 if ($Out -eq "") { $Out = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-heavy-slot-" + [System.IO.Path]::GetFileNameWithoutExtension($Script) + ".txt") }
 
 # The body is a block, so each early exit is a return from it, and the code and the closing line come
-# after it whatever happened. Its state lives in the script scope, where finally reads it.
+# after it whatever happened. Its state lives in the script scope, where catch and finally read it.
 $script:code = 125
 $script:mutex = $null
 $script:held = $false
-$script:run = $null
+$script:job = $null
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $left = { [int][math]::Max(0, $WaitSeconds - $clock.Elapsed.TotalSeconds) }
+$slice = 500
 $main = {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $script:code = 126; Write-Output ("heavy-slot: there is no script " + $path + "; nothing was run"); return }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $script:code = 126; Write-HordeHeavySlotLine ("heavy-slot: there is no script " + $path + "; nothing was run"); return }
     $script:mutex = New-Object System.Threading.Mutex($false, $SlotName)
-    Write-Output ("heavy-slot: waiting for the slot " + $SlotName + " for " + $Script)
-    try { $script:held = $mutex.WaitOne([int](& $left) * 1000) }
-    catch [System.Threading.AbandonedMutexException] { $script:held = $true; Write-Output "heavy-slot: the last holder was killed before it released the slot" }
-    if (-not $held) { Write-Output ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run"); return }
+    Write-HordeHeavySlotLine ("heavy-slot: waiting for the slot " + $SlotName + " for " + $Script)
+    # In slices, so Ctrl+C is seen between them: one long WaitOne cannot be broken.
+    while (-not $held) {
+        try { $script:held = $mutex.WaitOne([int][math]::Min($slice, (& $left) * 1000)) }
+        catch [System.Threading.AbandonedMutexException] { $script:held = $true; Write-HordeHeavySlotLine "heavy-slot: the last holder was killed before it released the slot" }
+        if (-not $held -and (& $left) -le 0) { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for the slot; nothing was run"); return }
+    }
 
+    # Measured 2026-10-14 on this PC: a holder killed with Stop-Process did NOT leave the mutex abandoned
+    # for the next waiter, whose WaitOne simply returned true, so the record, not the mutex, says a holder
+    # did not finish: a record still there with its run gone is a holder that never reached its finally.
     $orphan = Get-HordeHeavySlotLiveRun -Path $HolderFile
+    if ($null -eq $orphan -and (Test-Path -LiteralPath $HolderFile -PathType Leaf)) { Write-HordeHeavySlotLine "heavy-slot: the last holder did not finish cleanly (its record was left), and its run is gone" }
     if ($null -ne $orphan) {
-        Write-Output ("heavy-slot: a killed holder's run is still going (" + $orphan.script + ", process " + $orphan.pid + "): waiting for it to end first")
-        if (-not $orphan.process.WaitForExit([int](& $left) * 1000)) { Write-Output ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for that run to end; nothing was run"); return }
+        Write-HordeHeavySlotLine ("heavy-slot: a killed holder's run is still going (" + $orphan.script + ", process " + $orphan.pid + "): waiting for it to end first")
+        while (-not $orphan.process.WaitForExit($slice)) {
+            if ((& $left) -le 0) { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for that run to end; nothing was run"); return }
+        }
     }
 
     $said = $false
     while ((Get-HordeHeavySlotFreeGB) -lt $MinFreeGB) {
-        if ((& $left) -le 0) { Write-Output ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); return }
-        if (-not $said) { Write-Output ("heavy-slot: holding the slot, waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + ")"); $said = $true }
+        if ((& $left) -le 0) { Write-HordeHeavySlotLine ("heavy-slot: gave up after " + $WaitSeconds + " s waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + "); nothing was run"); return }
+        if (-not $said) { Write-HordeHeavySlotLine ("heavy-slot: holding the slot, waiting for " + $MinFreeGB + " GB of free memory (now " + (Get-HordeHeavySlotFreeGB) + ")"); $said = $true }
         Start-Sleep -Milliseconds ([math]::Min(5000, [math]::Max(200, (& $left) * 1000)))
     }
 
-    Write-Output ("heavy-slot: running " + $Script + " with " + (Get-HordeHeavySlotFreeGB) + " GB free, output in " + $Out)
+    Write-HordeHeavySlotLine ("heavy-slot: running " + $Script + " with " + (Get-HordeHeavySlotFreeGB) + " GB free, output in " + $Out)
     $empty = Join-Path ([System.IO.Path]::GetTempPath()) "horde-heavy-slot-empty-stdin.txt"
     [System.IO.File]::WriteAllText($empty, "")
     $env:PSModulePath = ""
-    if ($Script -like "*.mjs") { $file = "node"; $argv = @($path) + @($ScriptArgs) }
-    else { $file = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"; $argv = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $path) + @($ScriptArgs) }
-    $argv = @($argv | ForEach-Object { ConvertTo-HordeHeavySlotArg $_ })
-    $script:run = Start-Process -FilePath $file -ArgumentList $argv -WorkingDirectory $Worktree -RedirectStandardOutput $Out -RedirectStandardError ($Out + ".err") -RedirectStandardInput $empty -NoNewWindow -PassThru
-    # Read the handle at once: a Process from Start-Process -PassThru that nobody opened a handle on
-    # can report no ExitCode once it has exited (Windows PowerShell 5.1).
-    $null = $run.Handle
-    [System.IO.File]::WriteAllText($HolderFile, ("" + $run.Id + "`n" + $run.StartTime.ToUniversalTime().Ticks + "`n" + $Script + "`n"))
-    # Past its time, the run is ended by finally below, with every process it started - one place ends
-    # every run still alive, whatever the way out.
-    if (-not $run.WaitForExit($RunSeconds * 1000)) {
-        $script:code = 124
-        Write-Output ("heavy-slot: TIMEOUT - " + $Script + " ran past " + $RunSeconds + " s and was ended with every process it started")
-        return
+    if ($Script -like "*.mjs") {
+        $exe = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $argv = @($path) + @($ScriptArgs)
+    } else {
+        $exe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $argv = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $path) + @($ScriptArgs)
     }
-    $run.WaitForExit()
-    $script:code = $run.ExitCode
+    # The redirections are cmd's, so the run's own streams go to the files and the job holds cmd and the
+    # run together. /s: the outer quotes are cmd's, everything inside is the line as written.
+    $inner = '"' + $exe + '" ' + ((@($argv) | ForEach-Object { ConvertTo-HordeHeavySlotArg $_ }) -join " ") + ' < "' + $empty + '" > "' + $Out + '" 2> "' + $Out + '.err"'
+    $cmdExe = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $made = [HordeHeavySlotJobV1]::Create($cmdExe, ('"' + $cmdExe + '" /d /s /c "' + $inner + '"'), $Worktree)
+    $script:job = [pscustomobject]@{ job = [long]$made[0]; process = [long]$made[1]; pid = [int]$made[3] }
+    # Recorded BEFORE it runs: a holder killed at any moment after this leaves a record of a live run.
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($HolderFile))
+    $start = (Get-Process -Id $job.pid).StartTime.ToUniversalTime().Ticks
+    [System.IO.File]::WriteAllText($HolderFile, ("" + $job.pid + "`n" + $start + "`n" + $Script + "`n"))
+    [HordeHeavySlotJobV1]::Resume([long]$made[2])
+    $runClock = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not [HordeHeavySlotJobV1]::Wait($job.process, $slice)) {
+        if ($runClock.Elapsed.TotalSeconds -ge $RunSeconds) {
+            # Ended in finally below, with every process of the job.
+            $script:code = 124
+            Write-HordeHeavySlotLine ("heavy-slot: TIMEOUT - " + $Script + " ran past " + $RunSeconds + " s and was ended with every process it started")
+            return
+        }
+    }
+    $script:code = [HordeHeavySlotJobV1]::ExitCode($job.process)
 }
-try { & $main } finally {
-    if ($null -ne $run -and -not $run.HasExited) { Stop-HordeHeavySlotTree -Id $run.Id; $null = $run.WaitForExit(10000) }
-    if ($null -ne $run) {
-        try { if (Test-Path -LiteralPath $HolderFile) { $first = ([System.IO.File]::ReadAllText($HolderFile) -split "`n")[0].Trim(); if ($first -eq ("" + $run.Id)) { Remove-Item -LiteralPath $HolderFile -Force } } } catch { }
+try { & $main }
+catch {
+    $script:code = 127
+    Write-HordeHeavySlotLine ("heavy-slot: ERROR - " + $_.Exception.Message)
+}
+finally {
+    if ($null -ne $job) {
+        # The whole job, always: a run past its time, and whatever a finished run left behind.
+        $null = [HordeHeavySlotJobV1]::Terminate($job.job)
+        $c = [System.Diagnostics.Stopwatch]::StartNew()
+        while ([HordeHeavySlotJobV1]::Active($job.job) -gt 0 -and $c.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 100 }
+        [HordeHeavySlotJobV1]::Close($job.process)
+        [HordeHeavySlotJobV1]::Close($job.job)
+        try { if (Test-Path -LiteralPath $HolderFile) { $first = ([System.IO.File]::ReadAllText($HolderFile) -split "`n")[0].Trim(); if ($first -eq ("" + $job.pid)) { Remove-Item -LiteralPath $HolderFile -Force } } } catch { }
     }
     if ($held) { $mutex.ReleaseMutex() }
     if ($null -ne $mutex) { $mutex.Dispose() }
-    Write-Output ("heavy-slot: released exit=" + $code)
+    Write-HordeHeavySlotLine ("heavy-slot: released exit=" + $code)
 }
 exit $code

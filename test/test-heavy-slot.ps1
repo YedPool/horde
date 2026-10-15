@@ -4,7 +4,8 @@
 # rollout): pass and fail pass the run's code through; two runs never overlap; a holder killed with its
 # run still going does not let the next run start until that run ends; a slot held too long, and memory
 # never free, each give up in plain words instead of waiting for ever; a run past its time is ended with
-# every process it started; a missing script runs nothing. Every case uses its own slot name and holder
+# every process it started; a grandchild left by a run is ended with it; a killed gate takes its run with it;
+# an error the gate did not plan for is said before the closing line; a missing script runs nothing. Every case uses its own slot name and holder
 # file, so this suite never takes or frees the machine's real slot.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -107,20 +108,72 @@ try {
     Check ((Get-GateText "reused") -notmatch "still going") "and did not wait on a process that only shares the id"
 
     Write-Host ""
-    Write-Host "--- a killed holder's run still going holds back the next run ---" -ForegroundColor Cyan
+    Write-Host "--- a killed gate takes its run with it ---" -ForegroundColor Cyan
     $slot = New-Slot
-    $k1 = Start-Gate -Slot $slot -Tag "orphan" -Seconds 6
-    Check (Wait-For { (Get-Times "orphan").start -gt 0 }) "the first run started"
-    # Kill the GATE only, as a closed window or a killed agent does: its run keeps going.
+    $k1 = Start-Gate -Slot $slot -Tag "killed" -Seconds 6
+    Check (Wait-For { (Get-Times "killed").start -gt 0 }) "the run started"
+    # Kill the GATE only, as a closed window or a killed agent does: the job's handle closes with it.
     Stop-Process -Id $k1.Id -Force
     $k1.WaitForExit()
-    $k2 = Start-Gate -Slot $slot -Tag "after" -Seconds 0
+    Start-Sleep -Seconds 1
+    $left = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { ("" + $_.CommandLine) -like "*-Tag killed*" })
+    Check ($left.Count -eq 0) ("the run died with its gate (" + $left.Count + " left)")
+    Check ((Get-Times "killed").end -eq 0) "and never reached its end"
+    $k2 = Start-Gate -Slot $slot -Tag "afterkill" -Seconds 0 -More @("-WaitSeconds", "10")
     $k2.WaitForExit()
-    $to = Get-Times "orphan"; $ta = Get-Times "after"
-    Check ($to.end -gt 0) "CONTROL: the killed gate's run went on to its end"
-    Check ($ta.start -ge $to.end) "the next run started only after that run ended"
-    Check ((Get-GateText "after") -match "killed holder's run is still going") "and it said why it waited"
-    Check ($k2.ExitCode -eq 0) ("and then ran, exit 0 (" + $k2.ExitCode + ")")
+    Check ($k2.ExitCode -eq 0) ("the next run had the abandoned slot at once, exit 0 (" + $k2.ExitCode + ")")
+    Check ((Get-GateText "afterkill") -match "did not finish cleanly") "and said the last holder did not finish cleanly"
+
+    Write-Host ""
+    Write-Host "--- a recorded run still going, started outside a gate's job, holds back the next run ---" -ForegroundColor Cyan
+    # A run of an older gate, or one started some other way, does not die with its gate: the record covers it.
+    $slot = New-Slot
+    $o = Start-Process -FilePath $shell -ArgumentList @("-NoProfile", "-File", (Join-Path $work "sleeper.ps1"), "-Tag", "outside", "-Seconds", "5", "-Log", (Join-Path $work "outside.log")) -NoNewWindow -PassThru
+    Check (Wait-For { (Get-Times "outside").start -gt 0 }) "a run started outside any gate"
+    [System.IO.File]::WriteAllText((Join-Path $work ($slot.Substring(6) + ".holder")), ("" + $o.Id + "`n" + $o.StartTime.ToUniversalTime().Ticks + "`n" + "outside.ps1`n"))
+    $k3 = Start-Gate -Slot $slot -Tag "behind" -Seconds 0 -More @("-WaitSeconds", "30")
+    $k3.WaitForExit()
+    $to = Get-Times "outside"; $tb = Get-Times "behind"
+    Check ($to.end -gt 0 -and $tb.start -ge $to.end) "the next run started only after the recorded run ended"
+    Check ((Get-GateText "behind") -match "still going") "and it said why it waited"
+
+    Write-Host ""
+    Write-Host "--- a grandchild left behind by a run is ended with the run ---" -ForegroundColor Cyan
+    # The run starts a grandchild through cmd, which exits at once, then the run itself ends: the shape
+    # of npx, node and Chrome, which taskkill /T from the run's id cannot reach.
+    $spawner = 'param([string]$Tag, [string]$Log, [string]$Sleeper)' + "`n" +
+        '& cmd.exe /c start "" /b powershell.exe -NoProfile -File $Sleeper -Tag $Tag -Seconds 20 -Log $Log' + "`n" +
+        'Start-Sleep -Seconds 2' + "`n" + 'exit 0' + "`n"
+    [System.IO.File]::WriteAllText((Join-Path $work "spawner.ps1"), $spawner)
+    # CONTROL: run directly, the grandchild outlives the run.
+    $sp = Start-Process -FilePath $shell -ArgumentList @("-NoProfile", "-File", (Join-Path $work "spawner.ps1"), "-Tag", "ctlgrand", "-Log", (Join-Path $work "ctlgrand.log"), "-Sleeper", (Join-Path $work "sleeper.ps1")) -NoNewWindow -PassThru
+    $sp.WaitForExit()
+    $ctl = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { ("" + $_.CommandLine) -like "*-Tag ctlgrand*" })
+    Check ($ctl.Count -gt 0) "CONTROL: run directly, the grandchild is still running after its run ended"
+    foreach ($c in $ctl) { Stop-Process -Id $c.ProcessId -Force -ErrorAction SilentlyContinue }
+    $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-Worktree", $work, "-Script", "spawner.ps1",
+        "-ScriptArgs", ("-Tag,grand,-Log," + (Join-Path $work "grand.log") + ",-Sleeper," + (Join-Path $work "sleeper.ps1")), "-MinFreeGB", "0",
+        "-SlotName", (New-Slot), "-HolderFile", (Join-Path $work "grand.holder"), "-Out", (Join-Path $work "grand.out.txt"))
+    $gp = Start-Process -FilePath $shell -ArgumentList $argv -RedirectStandardOutput (Join-Path $work "grand.gate.txt") -RedirectStandardError (Join-Path $work "grand.gate.err") -NoNewWindow -PassThru
+    $null = $gp.Handle; $gp.WaitForExit()
+    Check ($gp.ExitCode -eq 0) ("through the gate the run ended with 0 (" + $gp.ExitCode + ")")
+    Check ((Get-Times "grand").start -gt 0) "and its grandchild had started"
+    Start-Sleep -Seconds 1
+    $gl = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { ("" + $_.CommandLine) -like "*-Tag grand *" })
+    Check ($gl.Count -eq 0) ("the grandchild was ended with the run (" + $gl.Count + " left)")
+
+    Write-Host ""
+    Write-Host "--- an error the gate did not plan for is said before the closing line ---" -ForegroundColor Cyan
+    # A slot name Windows refuses: the mutex cannot be made.
+    $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-Worktree", $work, "-Script", "sleeper.ps1", "-MinFreeGB", "0",
+        "-SlotName", ("Local\" + ("x" * 300)), "-HolderFile", (Join-Path $work "err.holder"))
+    $ep = Start-Process -FilePath $shell -ArgumentList $argv -RedirectStandardOutput (Join-Path $work "err.gate.txt") -RedirectStandardError (Join-Path $work "err.gate.err") -NoNewWindow -PassThru
+    $null = $ep.Handle; $ep.WaitForExit()
+    Check ($ep.ExitCode -eq 127) ("exit 127 (" + $ep.ExitCode + ")")
+    Check ((Get-GateText "err") -match "heavy-slot: ERROR - ") "it says the error"
+    Check ((Get-LastLine "err") -ceq "heavy-slot: released exit=127") ("and the closing line is still last (" + (Get-LastLine "err") + ")")
+    $errText = "" + [System.IO.File]::ReadAllText((Join-Path $work "err.gate.err"))
+    Check ($errText.Trim() -eq "") ("and nothing escapes on the error stream (" + $errText.Trim().Length + " characters)")
 
     Write-Host ""
     Write-Host "--- a slot held too long, and memory never free, give up in words ---" -ForegroundColor Cyan
@@ -159,4 +212,4 @@ try {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "the local gate runs one heavy run at a time, waits for a killed holder's run, gives up in words, and ends a run past its time"
+Complete-HordeSuite -Success "the local gate runs one heavy run at a time, ends every process a run started, waits for a recorded run still going, gives up in words, and always ends on its closing line"
