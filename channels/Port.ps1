@@ -65,7 +65,8 @@
 #   6. open every journaled record no channel has finished (Get-HordeRelayJournalUnfinished) - the ones
 #      just recorded, and any a killed run left - with Unprotect-HordeRelayEnvelope against the senders
 #      trusted NOW, hand the body to its channel's Accept, and mark it done when the channel is done
-#      with it, or refuses it for good.
+#      with it, or refuses it for good. A BATCH THAT HOLDS A DATA ITEM runs this step between 4 and the
+#      data items (Complete-HordeRelayInbox), so a photo's manifest is opened before its parts are judged.
 # Exactly once is therefore the journal's (each envelope recorded once) plus the channel's (its act is
 # idempotent by the record); nothing here holds state that a crash could lose.
 #
@@ -417,7 +418,9 @@ function Receive-HordeRelayInbox {
     # taken: the replay keys journaled; refused: lines saying what was refused for good and why; held:
     # lines for what could not be judged now and comes again; missing: lines for envelopes of a sender
     # that the journal saw skipped (dropped, delayed or withheld by the relay: design Q11, "shown as
-    # missing, never as silence"). Unknown when the relay could not be read.
+    # missing, never as silence"); data: a line for each data item taken or waiting; opened: when the batch
+    # held a data item, the Invoke-HordeRelayUnfinished report of step 6 run before them, else $null.
+    # Unknown when the relay could not be read.
     #
     # -Between, WITH -SliceMs, ON A RELAY THAT WATCHES IN SLICES (relays/Port.ps1, A WATCH IN SLICES): the
     # same one watch, held open and waited on -SliceMs at a time, and after every slice in which nothing
@@ -477,39 +480,16 @@ function Complete-HordeRelayInbox {
     # Keyed ORDINALLY (review round 3 of PR 285): [ordered]@{} ignores case, so two reasons that differ
     # only in case - a hex digest, a photo id - would be folded into one line.
     $dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)
+    $dataItems = New-Object System.Collections.ArrayList
     foreach ($it in @($w.value.items)) {
         $r = Read-HordeRelayEnvelope -Text $it.text
         if (-not $r.ok) {
-            # A DATA ITEM (the header, DATA KINDS): to its kind's Take alone, settled whatever it says.
+            # A DATA ITEM (the header, DATA KINDS) is set aside, and judged after the envelopes (below).
             $dk = Get-HordeRelayDataKindOf -Text $it.text
-            if ($null -ne $dk) {
-                $settled[[long]$it.seq] = $true
-                $got = $null
-                try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker failed: " + $_.Exception.Message); continue }
-                $said = $(if ($null -ne $got -and $null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
-                if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayDataOutcomes -cnotcontains "$($got.outcome)") { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker answered with something that is not taken, pending or refused"); continue }
-                if ("$($got.outcome)" -ceq "refused") {
-                    if (-not $dataRefused.Contains($said)) { $dataRefused[$said] = New-Object System.Collections.ArrayList }
-                    [void]$dataRefused[$said].Add([long]$it.seq)
-                } else { [void]$data.Add("item " + $it.seq + ": " + $said) }
-                continue
-            }
+            if ($null -ne $dk) { [void]$dataItems.Add([pscustomobject]@{ item = $it; kind = $dk }); continue }
             [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue
         }
         [void]$parsed.Add([pscustomobject]@{ item = $it; envelope = $r.value })
-    }
-    # ONE LINE A REASON (review of PR 285): data items refused for the same reason - every part of a photo
-    # a runtime cannot take says the same thing - are one line naming how many, not a line each. A reason
-    # that names its part (a digest, a number) stays a line of its own. "items A to B" only when they are
-    # every seq from A to B; otherwise each is named, or, past 8, how many and the first and last
-    # (review round 3 of PR 285): items of other reasons, or envelopes, may lie between them.
-    foreach ($why in @($dataRefused.Keys)) {
-        $seqs = @($dataRefused[$why])
-        $span = $(if ($seqs.Count -eq 1) { "item " + $seqs[0] }
-            elseif ([long]$seqs[$seqs.Count - 1] - [long]$seqs[0] -eq $seqs.Count - 1) { "items " + $seqs[0] + " to " + $seqs[$seqs.Count - 1] + " (" + $seqs.Count + ")" }
-            elseif ($seqs.Count -le 8) { "items " + ($seqs -join ", ") }
-            else { $seqs.Count.ToString() + " items, the first " + $seqs[0] + " and the last " + $seqs[$seqs.Count - 1] })
-        [void]$refused.Add($span + ": " + $why)
     }
     # Sorted by sender and that sender's seq (step 2). The relay's own order is not trusted to be theirs.
     $ordered = @($parsed | Sort-Object @{ Expression = { $_.envelope.header.from } }, @{ Expression = { [long]$_.envelope.header.seq } })
@@ -528,6 +508,48 @@ function Complete-HordeRelayInbox {
         }
         else { [void]$refused.Add($rk + ": " + $verdict.value.why) }
     }
+    # ENVELOPES ARE OPENED BEFORE DATA ITEMS ARE JUDGED (review round 4 of PR 285): step 6 runs here, on
+    # what was just journaled, when the batch holds a data item - so a photo's signed manifest is
+    # verified and accepted before its parts are judged, and they are taken at once, never left in the
+    # pending area for junk to crowd. Until round 4 data came first, and every genuine photo's parts
+    # waited there for a manifest in the same batch. A BATCH WITH NO DATA ITEM - every chat line,
+    # answer, follow and receipt - takes exactly the path it always did: nothing is opened here, and the
+    # runner's own step 6 opens it after this returns (test-relay-channels, test-relay-channel-chat). What
+    # is opened here is said by the runner from opened, in the words of its own step 6.
+    $opened = $null
+    if ($dataItems.Count -gt 0) {
+        $un = Invoke-HordeRelayUnfinished -Context $Context -Now $Now
+        if ($un.state -ceq "known") { $opened = $un.value }
+    }
+    foreach ($d in $dataItems) {
+        # To its kind's Take alone, settled whatever it says.
+        $it = $d.item
+        $dk = $d.kind
+        $settled[[long]$it.seq] = $true
+        $got = $null
+        try { $got = @(& $dk.take $Context $it.text) | Select-Object -Last 1 } catch { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker failed: " + $_.Exception.Message); continue }
+        $said = $(if ($null -ne $got -and $null -ne $got.PSObject.Properties["reason"]) { "$($got.reason)" } else { "" })
+        if ($null -eq $got -or $null -eq $got.PSObject.Properties["outcome"] -or $script:HordeRelayDataOutcomes -cnotcontains "$($got.outcome)") { [void]$refused.Add("item " + $it.seq + ": " + $dk.name + " refused: its taker answered with something that is not taken, pending or refused"); continue }
+        if ("$($got.outcome)" -ceq "refused") {
+            if (-not $dataRefused.Contains($said)) { $dataRefused[$said] = New-Object System.Collections.ArrayList }
+            [void]$dataRefused[$said].Add([long]$it.seq)
+        } else { [void]$data.Add("item " + $it.seq + ": " + $said) }
+    }
+    # ONE LINE A REASON (review of PR 285): data items refused for the same reason - every part of a photo
+    # a runtime cannot take says the same thing - are one line naming how many, not a line each. A reason
+    # that names its part (a digest, a number) stays a line of its own. "items A to B" only when they are
+    # every seq from A to B; otherwise each is named, or, past 8, how many and the first and last
+    # (review round 3 of PR 285): items of other reasons, or envelopes, may lie between them. The seqs
+    # are SORTED first (review round 4): the relay's order is not trusted, and 3, 1, 5 read as a range
+    # of its first and last was "items 3 to 5 (3)".
+    foreach ($why in @($dataRefused.Keys)) {
+        $seqs = @(@($dataRefused[$why]) | Sort-Object)
+        $span = $(if ($seqs.Count -eq 1) { "item " + $seqs[0] }
+            elseif ([long]$seqs[$seqs.Count - 1] - [long]$seqs[0] -eq $seqs.Count - 1) { "items " + $seqs[0] + " to " + $seqs[$seqs.Count - 1] + " (" + $seqs.Count + ")" }
+            elseif ($seqs.Count -le 8) { "items " + ($seqs -join ", ") }
+            else { $seqs.Count.ToString() + " items, the first " + $seqs[0] + " and the last " + $seqs[$seqs.Count - 1] })
+        [void]$refused.Add($span + ": " + $why)
+    }
     # Step 5: the cursor and the ack move to the last item before the first one held. Items the port
     # dropped are its anomalies and are behind its own cursor already.
     $through = $Context.cursor
@@ -543,7 +565,7 @@ function Complete-HordeRelayInbox {
         if ($ack.state -ceq "known") { $Context.acked = $through }
         else { [void]$held.Add("the relay was not acked through " + $through + ": " + $ack.reason) }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; data = @($data.ToArray()) }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; data = @($data.ToArray()); opened = $opened }))
 }
 
 function Invoke-HordeRelayUnfinished {
