@@ -699,4 +699,47 @@ Check ($yes -eq 4) ("CONTROL: and those paths are of both kinds: " + $yes + " ab
 Check (-not (Test-HordeRelayAbsolutePath $null) -and -not (Test-HordeRelayAbsolutePath 42) -and -not (Test-HordeRelayAbsolutePath @("C:\a\b.json", "C:\c.json"))) "and what is not a string at all is not a path"
 $null = RegSecret "fixture-good"
 
+Write-Host ""
+Write-Host "--- a first run: a relay's own steps, checked, never thrown, never repeated in a refusal ---" -ForegroundColor Cyan
+# relays/Port.ps1, A RELAY THAT IS DEPLOYED MAY SAY WHAT A NEW MACHINE STILL NEEDS (2026-10-14).
+$script:setupSays = $null
+$script:setupAsked = ""
+function RegSetup {
+    param([string]$Name)
+    $script:HordeRelays.Remove($Name)
+    return (Register-HordeRelay -Folder (Join-Path $fx $Name) -Connect { param($o) New-HordeKnown -Value @{} } -Put { param($s, $m, $k, $t) } -Get { param($s, $m, $since, $max) } -Watch { param($s, $m, $since, $max, $ms) } -Ack { param($s, $m, $through) } `
+        -Setup { param($HordeHome) $script:setupAsked = $HordeHome; if ($script:setupSays -is [scriptblock]) { & $script:setupSays } else { $script:setupSays } })
+}
+$okStep = [pscustomobject]@{ name = "where it answers"; done = $true; said = "it answers at https://relay.example.test"; next = ""; notes = @("register https://relay.example.test/cb") }
+$todoStep = [pscustomobject]@{ name = "sign-in client"; done = $false; said = "there is no client file"; next = "download it"; notes = @() }
+$script:setupSays = New-HordeKnown -Value ([pscustomobject]@{ origin = "https://relay.example.test"; steps = @($okStep, $todoStep); beforeDeploy = "log in once" })
+$null = RegSetup "fixture-good"
+$a = Get-HordeRelaySetup -Name "fixture-good" -HordeHome "C:\some\home"
+Check ($a.state -ceq "known" -and $script:setupAsked -ceq "C:\some\home" -and $a.value.origin -ceq "https://relay.example.test" -and @($a.value.steps).Count -eq 2 -and $a.value.steps[0].done -eq $true -and $a.value.steps[1].next -ceq "download it" -and @($a.value.steps[0].notes).Count -eq 1 -and $a.value.beforeDeploy -ceq "log in once") "a relay's own steps are handed back whole, asked for the home given"
+$a = Get-HordeRelaySetup -Name "fixture-local-only"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("says nothing of a first run")) "a relay with no such block says nothing of a first run"
+$a = Get-HordeRelaySetup -Name "no-such-relay"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("no relay named")) "a relay that is not loaded is unknown"
+$planted = "GOCSPX-plantedInASetupAnswer000"
+foreach ($case in @(
+        @{ says = { throw "broke" }; why = "a throw"; like = "failed to say" },
+        @{ says = "not an answer"; why = "something that is not an answer"; like = "not an answer" },
+        @{ says = (New-HordeUnknown -Reason "its settings do not read"); why = "unknown"; like = "its settings do not read" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = "http://relay.example.test"; steps = @($okStep); beforeDeploy = "" })); why = "an origin that is not https"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @(); beforeDeploy = "" })); why = "no steps at all"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = "yes"; said = "x"; next = ""; notes = @() }); beforeDeploy = "" })); why = "done that is not true or false"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $false; said = "x"; next = ""; notes = @() }); beforeDeploy = "" })); why = "a step not done with nothing to do"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = "x"; next = "do it"; notes = @() }); beforeDeploy = "" })); why = "a step done with something still to do"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = ("a secret " + $planted + "`nsecond line"); next = ""; notes = @() }); beforeDeploy = "" })); why = "words of two lines"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = "x"; next = ""; notes = @(("n" * 601)) }); beforeDeploy = "" })); why = "a note too long to be one"; like = "not steps" },
+        @{ says = (New-HordeKnown -Value ([pscustomobject]@{ origin = ""; steps = @([pscustomobject]@{ name = "x"; done = $true; said = "x"; next = "" }); beforeDeploy = "" })); why = "a step with no notes member"; like = "not steps" })) {
+    $script:setupSays = $case.says
+    $null = RegSetup "fixture-good"
+    $threw = $false
+    $a = $null
+    try { $a = Get-HordeRelaySetup -Name "fixture-good" } catch { $threw = $true }
+    Check (-not $threw -and $null -ne $a -and $a.state -ceq "unknown" -and "$($a.reason)".Contains($case.like) -and -not "$($a.reason)".Contains($planted)) ("a relay that answers the first run with " + $case.why + " is unknown, never a throw, and nothing it said is repeated (" + $(if ($null -ne $a) { $a.reason } else { "threw" }) + ")")
+}
+$null = RegSecret "fixture-good"
+
 Complete-HordeSuite -Success "the relay port refuses what it cannot vouch for, checks every answer, and never believes an item"

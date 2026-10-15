@@ -9,14 +9,14 @@
     Suite  = "test\test-decisions-page-order.ps1"
     Mutations = @(
         @{ Name = "the-oldest-question-first"
-           Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (Number(b.number) - Number(a.number)); }'
-           Replace = '  function newestFirst(a, b) { return (askedAt(a) - askedAt(b)) || (Number(b.number) - Number(a.number)); }' }
+           Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (numberOf(b) - numberOf(a)); }'
+           Replace = '  function newestFirst(a, b) { return (askedAt(a) - askedAt(b)) || (numberOf(b) - numberOf(a)); }' }
         @{ Name = "asked-in-one-instant-the-lower-number-first"
-           Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (Number(b.number) - Number(a.number)); }'
-           Replace = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (Number(a.number) - Number(b.number)); }' }
+           Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (numberOf(b) - numberOf(a)); }'
+           Replace = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (numberOf(a) - numberOf(b)); }' }
         @{ Name = "the-time-is-not-compared-at-all"
-           Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (Number(b.number) - Number(a.number)); }'
-           Replace = '  function newestFirst(a, b) { return (Number(b.number) - Number(a.number)); }' }
+           Find = '  function newestFirst(a, b) { return (askedAt(b) - askedAt(a)) || (numberOf(b) - numberOf(a)); }'
+           Replace = '  function newestFirst(a, b) { return (numberOf(b) - numberOf(a)); }' }
         @{ Name = "a-question-with-no-time-stands-first"
            Find = '    return isNaN(t) ? 0 : t;'
            Replace = '    return isNaN(t) ? 8640000000000000 : t;' }
@@ -30,11 +30,11 @@
            Find = '    if (key === "blocks") { return function (a, b) {'
            Replace = '    if (key === "blocks-never") { return function (a, b) {' }
         @{ Name = "blocking-sorts-by-the-importances-words"
-           Find = 'return (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }'
-           Replace = 'return (placeIn(IMPORTANCES, a.blocks, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.blocks, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }' }
+           Find = 'return way * (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }'
+           Replace = 'return way * (placeIn(IMPORTANCES, a.blocks, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.blocks, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }' }
         @{ Name = "task-importance-sorts-by-the-blocking"
-           Find = 'return (placeIn(IMPORTANCES, a.importance, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }'
-           Replace = 'return (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }' }
+           Find = 'return way * (placeIn(IMPORTANCES, a.importance, DEFAULT_IMPORTANCE) - placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }'
+           Replace = 'return way * (placeIn(BLOCKINGS, a.blocks, DEFAULT_BLOCKS) - placeIn(BLOCKINGS, b.blocks, DEFAULT_BLOCKS)) || newestFirst(a, b); }; }' }
         @{ Name = "a-tie-in-importance-is-left-as-it-came"
            Find = 'placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }'
            Replace = 'placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)); }; }' }
@@ -63,13 +63,31 @@
            Find = '  var DEFAULT_ORDER = "date";'
            Replace = '  var DEFAULT_ORDER = "importance";' }
         @{ Name = "the-list-handed-in-is-sorted-in-place"
-           Find = '  function inOrder(list, key) { return listOf(list).slice().sort(compareBy(orderOf(key))); }'
-           Replace = '  function inOrder(list, key) { return listOf(list).sort(compareBy(orderOf(key))); }' }
+           Find = '  function inOrder(list, key, turned) { return listOf(list).slice().sort(compareBy(orderOf(key), turned === true)); }'
+           Replace = '  function inOrder(list, key, turned) { return listOf(list).sort(compareBy(orderOf(key), turned === true)); }' }
         @{ Name = "what-is-not-a-list-is-sorted"
-           Find = '  function inOrder(list, key) { return listOf(list).slice().sort(compareBy(orderOf(key))); }'
-           Replace = '  function inOrder(list, key) { return list.slice().sort(compareBy(orderOf(key))); }' }
+           Find = '  function inOrder(list, key, turned) { return listOf(list).slice().sort(compareBy(orderOf(key), turned === true)); }'
+           Replace = '  function inOrder(list, key, turned) { return list.slice().sort(compareBy(orderOf(key), turned === true)); }' }
         @{ Name = "the-sorting-is-not-handed-out"
-           Find = 'order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };'
-           Replace = 'order: { orders: ORDERS.map(function (o) { return o.key; }) } };' }
+           Find = 'order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder }, lanes:'
+           Replace = 'order: { orders: ORDERS.map(function (o) { return o.key; }) }, lanes:' }
+        @{ Name = "turned-over-is-never-turned"
+           Find = '    var way = turned === true ? -1 : 1;'
+           Replace = '    var way = 1;' }
+        @{ Name = "anything-truthy-turns-it-over"
+           Find = 'sort(compareBy(orderOf(key), turned === true)); }'
+           Replace = 'sort(compareBy(orderOf(key), !!turned)); }' }
+        @{ Name = "turned-over-the-ties-turn-too"
+           Find = 'placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || newestFirst(a, b); }; }'
+           Replace = 'placeIn(IMPORTANCES, b.importance, DEFAULT_IMPORTANCE)) || way * newestFirst(a, b); }; }' }
+        @{ Name = "the-date-never-turns-over"
+           Find = '    return function (a, b) { return way * newestFirst(a, b); };'
+           Replace = '    return newestFirst;' }
+        @{ Name = "the-turn-is-not-handed-to-the-sort"
+           Find = 'sort(compareBy(orderOf(key), turned === true)); }'
+           Replace = 'sort(compareBy(orderOf(key), false)); }' }
+        @{ Name = "a-question-with-no-number-is-NaN-again"
+           Find = '  function numberOf(q) { var n = Number(q.number); return isNaN(n) ? 0 : n; }'
+           Replace = '  function numberOf(q) { return Number(q.number); }' }
     )
 }
