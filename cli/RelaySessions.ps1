@@ -35,7 +35,7 @@ function Get-HordeRelaySessionLines {
     }
     if ($n -eq 0) { [void]$out.Insert(0, "no phone session is held by this machine") }
     else { [void]$out.Insert(0, ("" + $n + " phone session(s) held by this machine (the newest " + 8 + " of each passkey):")) }
-    if ($null -ne $idle) { [void]$out.Add("idle limit: " + [long]($idle / 60000) + " minutes (setting idleMinutes, module relay-sessions); no maximum session length")) }
+    if ($null -ne $idle) { [void]$out.Add("idle limit: " + [long]($idle / 60000) + " minutes (setting idleMinutes, module relay-sessions); no maximum session length") }
     if ([long]$recs.endedAt -gt 0) { [void]$out.Add("every session was last ended at " + [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$recs.endedAt).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") + " UTC") }
     [void]$out.Add("end them all with: horde relay sessions end")
     return @($out.ToArray())
