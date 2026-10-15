@@ -186,7 +186,10 @@ function Invoke-HordeAnalystPass {
         "adopt" {
             & $say ("adopted session " + $d.sessionId + ": " + $d.why)
             $s.sessionId = $d.sessionId; $s.phase = "running"; $s.contextTokens = [long]-1; $s.transcriptLength = [long]-1; $s.contextAt = $null
-            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap")
+            # A NEW SESSION STARTS A NEW RUN (review of PR 306): the last one's untold-until-ack "no-answer"
+            # would silence a fresh session that writes its handover and never acks. Its old rounds stay
+            # marked alerted, so clearing here tells nothing about them again.
+            Clear-HordeAnalystTold -State $s -Keys @("no-analyst", "start-silent", "no-spawn-gone", "no-spawn-over-cap", "spawn-failed", "start-too-soon-gone", "start-too-soon-over-cap", "no-answer", "no-answer-founder")
             # It was awake when it wrote the handover: a session that has just said who it is is not
             # sent a heartbeat for having been silent before the supervisor knew it.
             if ($null -eq $s.lastWakeAt -or $handover.value.writtenAt -gt $s.lastWakeAt) { $s.lastWakeAt = $handover.value.writtenAt }
@@ -226,19 +229,22 @@ function Invoke-HordeAnalystPass {
     if ($acks.state -ceq "known") {
         $ackedIds = [string[]]$acks.value
         $newestAcked = @($s.rounds | Where-Object { $ackedIds -ccontains $_.id } | Sort-Object at | Select-Object -Last 1)
-        if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) { $s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer") }
+        if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) { $s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }
         $late = @(Get-HordeAnalystAckAlerts -Now $now -Rounds @($s.rounds) -Acked $ackedIds -Policy $v)
         foreach ($id in $late) {
             $one = @($s.rounds | Where-Object { $_.id -ceq $id })[0]
             $one.alerted = $true
             & $say ("round " + $id + " has no ack after " + $v.ackMinutes + " minutes")
-            if (@($s.told) -ccontains "no-answer") { continue }
-            & $say (Send-HordeAnalystTell -State $s -Key "no-answer" -Tools $Tools -Values $v -Extra ("`nRound: " + $id))
-            if ($null -ne $Tools["Notify"] -and $v.notifyFounder -eq $true) {
-                $n = $null
-                try { $n = Invoke-HordeAnalystTool -Tools $Tools -Name "Notify" -With @(("The fleet analyst has not answered round " + $id + " for " + $v.ackMinutes + " minutes; the warchief was told.")) } catch { $n = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
-                & $say $(if ($null -ne $n -and $n.ok -eq $true) { "told the founder: no answer to round " + $id } else { "could not tell the founder: " + $(if ($null -ne $n) { "" + $n.detail } else { "the notifier did not answer" }) })
-            }
+            if (-not (@($s.told) -ccontains "no-answer")) { & $say (Send-HordeAnalystTell -State $s -Key "no-answer" -Tools $Tools -Values $v -Extra ("`nRound: " + $id)) }
+            # THE FOUNDER'S NOTICE HAS ITS OWN TOLD KEY (review of PR 306): tied to the warchief's tell, telling
+            # switched off or fleet mail failing left "no-answer" untold, so every late round notified the
+            # founder again - up to 48 a day - each saying the warchief was told when he was not.
+            if ((@($s.told) -ccontains "no-answer-founder") -or $null -eq $Tools["Notify"] -or $v.notifyFounder -ne $true) { continue }
+            $warchief = $(if (@($s.told) -ccontains "no-answer") { "the warchief was told." } else { "the warchief was not told." })
+            $n = $null
+            try { $n = Invoke-HordeAnalystTool -Tools $Tools -Name "Notify" -With @(("The fleet analyst has not answered round " + $id + " for " + $v.ackMinutes + " minutes; " + $warchief)) } catch { $n = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+            if ($null -ne $n -and $n.ok -eq $true) { $s.told = [string[]]@(@($s.told) + "no-answer-founder"); & $say ("told the founder: no answer to round " + $id + "; " + $warchief) }
+            else { & $say ("could not tell the founder: " + $(if ($null -ne $n) { "" + $n.detail } else { "the notifier did not answer" })) }
         }
     } else { & $say ("the acks: " + $acks.reason) }
 
