@@ -129,6 +129,8 @@ try {
   check(capped.height <= 12 * capped.line + 1 && capped.height >= 11 * capped.line, "and only up to twelve lines; past them it scrolls", capped.height + " px, line " + capped.line);
 
   // ---------------- 3. SEND SENDS, AND KEEPS THE CARET ----------------
+  // The words typed above are a draft kept in this origin's storage: cleared, so the boxes start empty.
+  await evaluate("localStorage.clear(), true");
   await load("/host.html?say=ok");
   await hostList(LIST);
   await tapAt(3, ".hd-box > textarea");
