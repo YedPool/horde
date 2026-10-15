@@ -20,6 +20,12 @@
 #      Collapse all folds them all and the button says Expand all, a second unfolds them all; neither
 #      touches the order or his place; what he folds or unfolds question by question is kept through a
 #      list that arrives; an order chosen still sorts and turns.
+# And by decisions/page/test/browser-cards.mjs (the founder's decision 74, the same day: cards first,
+# one per lane with its open count and a mark when one blocks all its work, and All questions):
+#   5. THE CARDS on the phone's page as app.js puts it together: what is counted (answered, closed,
+#      parts, follow-ups, no askedBy) with a must-fail twin; the mark in words and a sign; a tap shows
+#      that lane's questions, All shows everything; a background refresh keeps the card and what is
+#      folded; sorting inside a card; the card kept on this device; the lanes document's own cards.
 # The drivers share decisions/page/test/browser-harness.mjs, and run one after the other.
 # The sorting itself, case by case, is test/test-decisions-page-order.ps1; the window, driven by its
 # probe, is test/e2e/e2e-decisions-order.ps1.
@@ -85,6 +91,7 @@ function Invoke-DecisionsBrowserDriver {
 
 Invoke-DecisionsBrowserDriver -Driver "browser-order.mjs" -Title "the order line, tapped" -Least 24
 Invoke-DecisionsBrowserDriver -Driver "browser-fold.mjs" -Title "Collapse all and Expand all, tapped" -Least 19
+Invoke-DecisionsBrowserDriver -Driver "browser-cards.mjs" -Title "the cards, tapped" -Least 21
 
 # The folder goes, with every profile in it.
 for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $work); $i++) {

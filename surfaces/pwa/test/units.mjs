@@ -22,6 +22,7 @@ const AC = await load("app/account-client.js");
 const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
 const LC = await load("app/lane-card.js");
+const DC = await load("app/decision-cards.js");
 const NV = await load("app/notices-view.js");
 const CW = await load("app/cards-why.js");
 const AU = await load("app/app-update.js");
@@ -1365,6 +1366,34 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   const good = await a.phone.cards(a.paired.id);
   check(good.machines.length === 1 && good.refused === "" && CW.cardsFallbackLine(good) === "", "CONTROL: with cards present there is no line", JSON.stringify(good));
   check(CW.cardsFallbackLine({ machines: [], refused: "x".repeat(500) + "\u0007" }).length <= 140 && CW.cardsFallbackLine({ machines: [], refused: "a\u0007bell" }) === "Cards could not be read: abell." && CW.cardsFallbackLine({ machines: [], refused: "ok", unpaired: true }).indexOf("Cards could not be read") === 0 && CW.cardsFallbackLine(null) === "No cards from your PC yet.", "the reason is cut short and plain ASCII; a refusal is said before a stranger PC; nothing known is no cards yet");
+}
+
+// --- 10e3. THE DECISIONS PAGE'S CARDS (decision-cards.js, decision 74): the Progress tab's card, its slot the lane's count ---
+{
+  const node = (tag) => ({ tag, className: "", textContent: "", type: "", attrs: {}, kids: [], on: {}, appendChild(k) { if (!k || typeof k !== "object" || typeof k.tag !== "string") throw new TypeError("parameter 1 is not of type 'Node'"); this.kids.push(k); return k; }, setAttribute(n, v) { this.attrs[n] = v; }, addEventListener(n, f) { this.on[n] = f; } });
+  const fake = { createElement: node, createTextNode: (t) => ({ tag: "#text", textContent: t, kids: [] }) };
+  const text = (n) => (n.textContent || "") + (n.kids || []).map(text).join("");
+  const slotOf = (card) => card.kids[0].kids.find((k) => k.className === "card-badge");
+  const nameOf = (card) => card.kids[0].kids.find((k) => k.className === "card-name").textContent;
+  const lanesDoc = { machines: [{ name: "pc", made: 0 }], thrall: [{ machine: "pc", entry: "e", orcs: 3, working: 2, waitingFounder: 1, blocked: 0, unknown: 0, hasStatus: true, now: "routing", census: null }],
+    cards: [{ lane: "B", name: "lane B", machine: "pc", entry: "e", form: "standard", asOf: "", now: "building", lastDone: "", waitingOn: "", blocked: "no", tasksOpen: 1, doneWeek: 0 }, { lane: "E", name: "E", machine: "pc", entry: "e", form: "standard", asOf: "", now: "reviewing", lastDone: "", waitingOn: "", blocked: "no", tasksOpen: 0, doneWeek: 2 }] };
+  const counts = [{ lane: "thrall", open: 2, blocksAll: false }, { lane: "B", open: 3, blocksAll: true }, { lane: "H", open: 1, blocksAll: false }];
+  const view = DC.decisionCardsView(lanesDoc, counts, "");
+  check(view.map((v) => v.lane + ":" + v.open + (v.blocksAll ? "!" : "")).join(",") === "all:6!,thrall:2,B:3!,E:0,H:1", "ONE CARD PER LANE, ALL QUESTIONS FIRST: All with every lane's count summed and the blocks mark if any lane has it; the Thrall's next; then every lane by name - one the lanes document has and that asks nothing (E) with 0, one that asks and has no card (H) too", JSON.stringify(view));
+  check(DC.decisionCardsView(lanesDoc, counts, "").map((v) => v.lane + ":" + v.open).join(",") !== "all:5,thrall:2,B:3,E:0,H:1" && DC.decisionCardsView(null, [], "").map((v) => v.lane + ":" + v.open).join(",") === "all:0", "MUST-FAIL TWIN: a sum that left out a lane would read 5 and is not what is drawn; with no lanes document and nothing to answer there is the All card alone, at 0");
+  check(DC.decisionCardsView(null, counts, "").map((v) => v.lane).join(",") === "all,thrall,B,H" && DC.decisionCardsView(lanesDoc, [{ lane: "", open: 9 }, null, { lane: "C", open: "x" }], "").map((v) => v.lane + ":" + v.open).join(",") === "all:0,thrall:0,B:0,C:0,E:0", "with no lanes document the lanes that ask are the cards; a count with no lane is dropped, and one that is no number counts 0");
+  let chose = null;
+  const cards = DC.renderDecisionCards(fake, lanesDoc, counts, { chosen: "B", onChoose: (l) => { chose = l; }, nowMs: 0 });
+  check(cards.length === 5 && cards.map(nameOf).join("|") === "All questions|Thrall|B - lane B|E|Orc H", "THE SAME CARD: a lane of the lanes document is drawn with its own name (lane-card.js), one it lacks by its Orc's name, All questions by that name", cards.map(nameOf).join("|"));
+  check(text(slotOf(cards[2])) === "3 open \u26D4 blocks all work" && slotOf(cards[2]).kids[0].kids[0].className === "dq-blocks" && text(slotOf(cards[3])) === "0 open" && cards[2].className.indexOf("dq-blocking") >= 0 && cards[3].className.indexOf("dq-blocking") < 0,
+    "THE BLOCKS MARK is words and a sign in the slot beside the count, never a colour alone; a lane that blocks nothing has the count alone", text(slotOf(cards[2])) + " / " + text(slotOf(cards[3])));
+  check(cards[2].attrs["aria-pressed"] === "true" && cards[2].className.indexOf("chosen") >= 0 && cards[0].attrs["aria-pressed"] === "false" && cards.filter((c) => c.attrs["aria-pressed"] === "true").length === 1, "the chosen lane's card, and it alone, says it is chosen, to a screen reader as well");
+  check(cards[1].kids.some((k) => k.className === "card-line") && cards[4].kids.length === 1, "a card of the lanes document keeps its lines (the Thrall's Now and Fleet); a lane known only by name is its head alone");
+  cards[4].on.click(); const h = chose; cards[0].on.click();
+  check(h === "H" && chose === "", "a tap on a card chooses its lane; a tap on All questions chooses all (\"\")", JSON.stringify([h, chose]));
+  const all = DC.renderDecisionCards(fake, null, [], { nowMs: 0 });
+  check(all.length === 1 && all[0].attrs["aria-pressed"] === "true" && typeof all[0].on.click === "undefined", "nothing to answer anywhere: the All card alone, chosen; with no onChoose a tap does nothing");
+  check(LC.renderLaneCard(fake, lanesDoc, "Q", { nowMs: 0 }) === null && nameOf(LC.renderLaneCard(fake, lanesDoc, "Q", { nowMs: 0, orName: "Orc Q" })) === "Orc Q" && nameOf(LC.renderLaneCard(fake, lanesDoc, "B", { nowMs: 0, orName: "Orc B" })) === "B - lane B", "lane-card.js: orName draws a lane the document lacks by that name, and never replaces a card the document has; without it such a lane is still no card");
 }
 
 // --- 10g. A NEW VERSION OF THE APP (app-update.js): reload once, never on the first install, never over his words ---
