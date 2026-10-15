@@ -351,6 +351,19 @@ function Send-HordeCloudflareRelayPut {
     return (New-HordeKnown -Value $out -ObservedAt $a.observedAt)
 }
 
+function Close-HordeCloudflareRelayJoin {
+    # A JOIN REQUEST ENDED (relays/Port.ps1, Close-HordeRelayJoinAtRelay; worker/join.js): told to the
+    # relay by this machine's signed request, so the account's one pending slot is free at once, and a
+    # rejected request's address is blocked there for the hour. Known { freed } as the relay said it -
+    # false for a request that was no longer pending - or the relay's unknown. The port checked the
+    # request id and the outcome before this.
+    param($State, [string]$Request, [string]$Outcome)
+    $a = Invoke-HordeCloudflareRelayHttp -State $State -Method "POST" -Path ("/v1/account/join/" + $Request + "/close") -Body ('{"outcome":' + (ConvertTo-HordeCloudflareRelayJsonString $Outcome) + '}') -What "join close"
+    if ($a.state -cne "known") { return $a }
+    $f = $a.value.PSObject.Properties["freed"]
+    return (New-HordeKnown -Value ([pscustomobject]@{ freed = ($null -ne $f -and $f.Value -is [bool] -and $f.Value) }) -ObservedAt $a.observedAt)
+}
+
 function Invoke-HordeCloudflareRelayWatch {
     # The blocking watch: known { items } - empty when the time ran out - or unknown. It is the watch in
     # slices, opened, waited on in one slice as long as the watch, and let go of: one code path for both.
@@ -433,6 +446,10 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     -Bundle {
         param([string]$Tree, [string]$Work)
         return (Get-HordeCloudflareRelayBundleHash -Tree $Tree -Work $Work)
+    } `
+    -JoinClose {
+        param($State, [string]$Request, [string]$Outcome)
+        return (Close-HordeCloudflareRelayJoin -State $State -Request $Request -Outcome $Outcome)
     } `
     -RunWatchMs $script:HordeCloudflareRelayRunWatchMs `
     -SecretFiles {
