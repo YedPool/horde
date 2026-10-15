@@ -404,6 +404,47 @@ try {
     Check (@($w.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 2 -and $w.notices.Count -eq 2) "after an ack, the next unacked round is told again"
 
     Write-Host ""
+    Write-Host "--- review of PR 306: the founder's notice does not wait on the warchief's tell ---" -ForegroundColor Cyan
+    # Telling off, and fleet mail failing every time: either way the founder hears once per run of
+    # unacked rounds, and the notice says the warchief was NOT told.
+    foreach ($case in @("off", "failing")) {
+        $q = $(if ($case -ceq "off") { New-Rig ("quiet-" + $case) -Settings '"tellWarchief": false' } else { New-Rig ("quiet-" + $case) })
+        if ($case -ceq "failing") { $q.tools["Tell"] = { param($Key, $Body, $Values) return [pscustomobject]@{ ok = $false; detail = "the mail store is locked" } } }
+        Write-Handover -Folder $q.folder -Sid $sidA -At $t0
+        $q.listing = New-Listing -Live @($sidA)
+        $q.now = $t0.AddMinutes(1); $null = Pass $q
+        foreach ($m in @(2, 33, 64, 95, 126)) { Finding $q ("alarm:q" + $m); $q.now = $t0.AddMinutes($m); $null = Pass $q }
+        $q.now = $t0.AddMinutes(150); $null = Pass $q
+        Check ($q.posts.Count -eq 5 -and $q.notices.Count -eq 1) ("warchief telling " + $case + ": five unacked rounds tell the founder once (" + $q.notices.Count + ")")
+        Check ($q.notices.Count -ge 1 -and $q.notices[0] -like "*the warchief was not told*" -and $q.notices[0] -notlike "*the warchief was told.*") ("warchief telling " + $case + ": and the notice says the warchief was not told")
+        Ack $q ((State $q).rounds[-1].id)
+        Finding $q "alarm:q-after-ack"
+        $q.now = $t0.AddMinutes(160); $null = Pass $q
+        $q.now = $t0.AddMinutes(176); $null = Pass $q
+        Check ($q.notices.Count -eq 2) ("warchief telling " + $case + ": after an ack, the next run tells the founder again")
+    }
+    Check ($w.notices[0] -like "*the warchief was told.*") "when the warchief's tell is taken, the notice says so"
+
+    Write-Host ""
+    Write-Host "--- review of PR 306: a fresh session that never acks is still told ---" -ForegroundColor Cyan
+    # The old session's run was told and never acked; a new session is adopted and never acks either.
+    # Its unacked rounds must be told, not silenced by the old session's run.
+    $sw = New-Rig "swap"
+    Write-Handover -Folder $sw.folder -Sid $sidA -At $t0
+    $sw.listing = New-Listing -Live @($sidA)
+    $sw.now = $t0.AddMinutes(1); $null = Pass $sw
+    foreach ($m in @(2, 33)) { Finding $sw ("alarm:s" + $m); $sw.now = $t0.AddMinutes($m); $null = Pass $sw }
+    $sw.now = $t0.AddMinutes(50); $null = Pass $sw
+    Check ($sw.notices.Count -eq 1) "the first session's unacked rounds are told once"
+    $sw.listing = New-Listing -Live @($sidB) -Gone @($sidA)
+    Write-Handover -Folder $sw.folder -Sid $sidB -At $t0.AddMinutes(55)
+    $sw.now = $t0.AddMinutes(56); $null = Pass $sw
+    Check ((State $sw).sessionId -ceq $sidB) "the fresh session is adopted"
+    foreach ($m in @(60, 91)) { Finding $sw ("alarm:s" + $m); $sw.now = $t0.AddMinutes($m); $null = Pass $sw }
+    $sw.now = $t0.AddMinutes(110); $null = Pass $sw
+    Check ($sw.notices.Count -eq 2 -and @($sw.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 2) ("the fresh session's unacked rounds are told too (" + $sw.notices.Count + ")")
+
+    Write-Host ""
     Write-Host "--- review of PR 306: an unreadable findings file holds back no URGENT mail ---" -ForegroundColor Cyan
     $u = New-Rig "unreadable"
     Write-Handover -Folder $u.folder -Sid $sidA -At $t0
