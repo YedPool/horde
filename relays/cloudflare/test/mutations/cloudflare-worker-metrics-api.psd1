@@ -1,0 +1,42 @@
+# Mutations of the day's summary (relays/cloudflare/worker/metrics-api.js): only a machine, the relay-wide
+# view only for an owner's, its own account's hours for any, a day that is a date. Run:
+#   powershell -File tools\Mutate.ps1 -Spec relays\cloudflare\test\mutations\cloudflare-worker-metrics-api.psd1
+# relays\cloudflare\test\test-cloudflare-metrics.ps1 must fail for every one (part 2, against a dev).
+# Every find string occurs once.
+@{
+    Target = "relays\cloudflare\worker\metrics-api.js"
+    Suite  = "relays\cloudflare\test\test-cloudflare-metrics.ps1"
+    Environment = @{ HORDE_FAIL_FAST = "1" }
+    Mutations = @(
+        @{ Name = "a-phone-reads-the-metrics"
+           Find = '  if (!who || who.kind !== "machine") return refuse(403, "only a registered machine reads the relay''s metrics");'
+           Replace = '  if (!who) return refuse(403, "only a registered machine reads the relay''s metrics");' }
+        @{ Name = "any-machine-reads-the-relay-wide-view"
+           Find = '  if (scope === "relay" && !owner) return refuse(403,'
+           Replace = '  if (false) return refuse(403,' }
+        @{ Name = "no-scope-is-always-relay-wide"
+           Find = '  const scope = asked || (owner ? "relay" : "account");'
+           Replace = '  const scope = asked || "relay";' }
+        @{ Name = "an-owner-email-makes-any-account-an-owner"
+           Find = '  return (await relayBudgetOf(env).pinnedOwner({ account: who.account, emails })) === true;'
+           Replace = '  return true;' }
+        @{ Name = "an-owner-by-email-never-an-owner"
+           Find = '  if (emails.length === 0 || !env.RELAY_BUDGET) return false;'
+           Replace = '  return false;' }
+        @{ Name = "summary-calls-free"
+           Find = '  if (!g.ok) return refusalOf(g);'
+           Replace = '' }
+        @{ Name = "no-brake"
+           Find = '  if (!brake.ok) return refuseWith('
+           Replace = '  if (false) return refuseWith(' }
+        @{ Name = "brake-set-only-when-answered"
+           Find = '  lastRead.set(device, now);'
+           Replace = '' }
+        @{ Name = "any-day-asked"
+           Find = '  if (day === null) return refuse(400, "day must be a date, YYYY-MM-DD");'
+           Replace = '' }
+        @{ Name = "account-view-is-every-account"
+           Find = '  const s = await m.summary({ day, account });'
+           Replace = '  const s = await m.summary({ day, account: null });' }
+    )
+}

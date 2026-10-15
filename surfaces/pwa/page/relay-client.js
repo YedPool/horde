@@ -244,9 +244,19 @@ export function refusalCodeOf(reason) {
   return m ? m[1] : "";
 }
 
+// WHICH ATTEMPT A REQUEST IS (the hosted relay's request metrics, its retry header). Every request says it in x-horde-attempt: 1, plus the requests in a row before it that came
+// back unknown - so the request after a failure says it is a retry, and the first after a success says
+// 1 again. The relay only counts it. A browser cannot put a header on a WebSocket, so a watch carries the
+// same number as attempt=<n> in its query. At most 999, the most the relay reads.
+export const ATTEMPT_HEADER = "x-horde-attempt";
+const ATTEMPT_MAX = 999;
+
 export function httpTransport(origin, fetchFn, WebSocketCtor, { requestMs = REQUEST_MS } = {}) {
   const url = (mailbox, op) => origin + "/v1/mailboxes/" + mailbox + "/" + op;
   const words = refusalWords;
+  let failedInARow = 0;
+  const attempt = () => String(Math.min(ATTEMPT_MAX, failedInARow + 1));
+  const settle = (a) => { failedInARow = a && a.state === "known" ? 0 : failedInARow + 1; return a; };
   const answerOf = async (response, what) => {
     let body = null;
     try { body = await response.json(); } catch (x) { body = null; }
@@ -260,10 +270,10 @@ export function httpTransport(origin, fetchFn, WebSocketCtor, { requestMs = REQU
     const late = new Promise((resolve) => { timer = setTimeout(() => { abort.abort(); resolve(unknown("the relay did not answer the " + what + " in " + requestMs + " ms")); }, requestMs); });
     const asked = (async () => answerOf(await fetchFn(address, {
       method, credentials: "same-origin", cache: "no-store", redirect: "error", signal: abort.signal,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      headers: body === undefined ? { [ATTEMPT_HEADER]: attempt() } : { "Content-Type": "application/json", [ATTEMPT_HEADER]: attempt() },
       body: body === undefined ? undefined : JSON.stringify(body)
     }), what))();
-    return Promise.race([asked, late]).finally(() => clearTimeout(timer));
+    return Promise.race([asked, late]).finally(() => clearTimeout(timer)).then(settle);
   };
   const read = (mailbox, since, max, what) => exchange("GET", url(mailbox, "items") + "?since=" + since + "&max=" + max, undefined, what);
   return {
@@ -278,10 +288,10 @@ export function httpTransport(origin, fetchFn, WebSocketCtor, { requestMs = REQU
         settled = true;
         clearTimeout(timer);
         try { socket.close(); } catch (x) { /* already closed */ }
-        resolve(a);
+        resolve(settle(a));
       };
       const timer = setTimeout(() => finish(known({ items: [] })), timeoutMs);
-      try { socket = new WebSocketCtor(url(mailbox, "watch").replace(/^http/, "ws") + "?since=" + since + "&max=" + max + "&timeoutMs=" + timeoutMs); }
+      try { socket = new WebSocketCtor(url(mailbox, "watch").replace(/^http/, "ws") + "?since=" + since + "&max=" + max + "&timeoutMs=" + timeoutMs + "&attempt=" + attempt()); }
       catch (x) { finish(unknown("the relay's watch could not be opened")); return; }
       socket.onmessage = (event) => {
         let body = null;

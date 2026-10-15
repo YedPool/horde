@@ -34,6 +34,9 @@
         @{ Name = "allowlist-not-stored"
            Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist";'
            Replace = ';' }
+        @{ Name = "metrics-salt-not-stored"
+           Find = '; METRICS_SALT = "metricsSalt" }'
+           Replace = ' }' }
         @{ Name = "bad-origin-deployed-anyway"
            Find = 'if ($dep.state -cne "known") { return $dep }'
            Replace = 'if ($dep.state -cne "known") { $dep = New-HordeKnown -Value ([pscustomobject]@{ name = "relay"; origin = "https://relay.example.workers.dev"; callback = "/auth/google/callback" }) }' }

@@ -49,8 +49,8 @@
            Find = 'abort.abort(); resolve(unknown("the relay did not answer'
            Replace = 'resolve(unknown("the relay did not answer' }
         @{ Name = "http-request-timer-outlives-its-answer"
-           Find = '.finally(() => clearTimeout(timer));'
-           Replace = ';' }
+           Find = '.finally(() => clearTimeout(timer)).then(settle);'
+           Replace = '.then(settle);' }
         @{ Name = "http-request-time-not-20-s"
            Find = 'export const REQUEST_MS = 20000;'
            Replace = 'export const REQUEST_MS = 60000;' }

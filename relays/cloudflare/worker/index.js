@@ -21,6 +21,7 @@ import { handleAuth, isAuthPath } from "./signin.js";
 import { refuse } from "./answers.js";
 import { handleStatus, isStatusPath } from "./status.js";
 import { withStrictHeaders } from "./headers.js";
+import { withMetrics } from "./metrics-request.js";
 
 export { Mailbox } from "./mailbox.js";
 export { Session } from "./sessions.js";
@@ -28,6 +29,7 @@ export { Account } from "./accounts.js";
 export { MachineKey } from "./machines.js";
 export { Address } from "./address.js";
 export { RelayBudget } from "./relay-budget.js";
+export { Metrics } from "./metrics-store.js";
 
 // A write to a file is refused by the asset store itself (405, measured 2026-10-11 against the local
 // dev): no check of the method is needed here.
@@ -36,20 +38,25 @@ async function serveFile(request, env, url) {
   return env.ASSETS.fetch(request);
 }
 
+// EVERY REQUEST IS COUNTED AFTER IT IS ANSWERED (metrics-request.js, withMetrics): the answer goes out
+// first and untouched, and the counting runs in ctx.waitUntil, where nothing it does - or fails to do -
+// can reach the request.
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const auth = isAuthPath(url.pathname);
     const status = isStatusPath(url.pathname);
     const api = auth || status || isApiPath(url.pathname);
-    let response;
-    try {
-      if (auth) response = await handleAuth(request, env, url);
-      else if (status) response = await handleStatus(request, env, url);
-      else response = api ? await handleApi(request, env, url) : await serveFile(request, env, url);
-    } catch (e) {
-      response = refuse(500, "the relay failed this request");
-    }
-    return withStrictHeaders(response, api);
+    return withMetrics(request, env, ctx, url, async () => {
+      let response;
+      try {
+        if (auth) response = await handleAuth(request, env, url);
+        else if (status) response = await handleStatus(request, env, url);
+        else response = api ? await handleApi(request, env, url) : await serveFile(request, env, url);
+      } catch (e) {
+        response = refuse(500, "the relay failed this request");
+      }
+      return withStrictHeaders(response, api);
+    });
   }
 };

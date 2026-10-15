@@ -944,9 +944,13 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   replies.push({ status: 200, body: { through: 3 } });
   const k = await t.ack("work/phone", 3);
   check(k.state === "known" && calls[calls.length - 1].address.endsWith("/v1/mailboxes/work/phone/ack") && JSON.parse(calls[calls.length - 1].init.body).through === 3, "an ack is a POST of { through } to the mailbox's ack");
+  // WHICH ATTEMPT (the relay's request metrics): 1 after a success, and one more for each unknown in a row.
+  const attempts = calls.slice(0, 5).map((c) => c.init.headers[R.ATTEMPT_HEADER]).join(",");
+  check(attempts === "1,1,1,2,3", "every request says which attempt it is: 1 after an answer, one more after each failure in a row (put, read, refused read, read that is not JSON, ack)", attempts);
+  check(R.ATTEMPT_HEADER === "x-horde-attempt" && calls[0].init.headers["Content-Type"] === "application/json", "in the header the relay reads, beside the put's content type", JSON.stringify(calls[0].init.headers));
   const w = t.watch("work/phone", 4, 9, 10000);
   const s0 = sockets[0];
-  check(s0.address === "wss://relay.example.test/v1/mailboxes/work/phone/watch?since=4&max=9&timeoutMs=10000", "a watch opens a WebSocket on the mailbox's watch, at the same host", s0.address);
+  check(s0.address === "wss://relay.example.test/v1/mailboxes/work/phone/watch?since=4&max=9&timeoutMs=10000&attempt=1", "a watch opens a WebSocket on the mailbox's watch, at the same host, saying in its query which attempt it is (a socket carries no header)", s0.address);
   s0.onmessage({ data: JSON.stringify({ items: [{ seq: 5, key: "e", text: "five" }] }) });
   const wv = await w;
   check(wv.state === "known" && wv.value.items[0].seq === 5 && s0.closed, "the relay's one message is the watch's answer, and the socket is closed");

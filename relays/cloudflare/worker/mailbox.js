@@ -79,11 +79,18 @@
 // 2026-10-11 against the local dev: Node's WebSocket fired close 10 s after the close frame). Per mailbox, not across mailboxes: a machine pairing a phone while its runner runs watches two
 // mailboxes at once, rightly, and one slot for both would have them evict each other in turn.
 //
+// A WATCH'S END IS COUNTED HERE (metrics-request.js, recordWatchEnd), where it is seen: whether it ended
+// with no item - its time ran out or its client closed it - and how long it was held, by the kind of its
+// device. One the relay ended - a newer watch of its device replaced it, or its account was deleted - is
+// not an empty watch: it is counted under that code (watch-replaced, account-gone). The attachment carries what that needs (at, device, local); a socket
+// accepted by a deployment from before it has no at, and is counted as held 0 s.
+//
 // THE OBJECT NEVER OPENS A TEXT, and never logs anything.
 import { DurableObject } from "cloudflare:workers";
 import { keyProblem, itemTextProblem, streamOf, BATCH_CHARS } from "./rules.js";
 import { CODES } from "./answers.js";
 import { accountOf } from "./accounts.js";
+import { recordWatchEnd } from "./metrics-request.js";
 
 const HEAD = "head";
 const FLOOR = "floor";
@@ -254,7 +261,7 @@ export class Mailbox extends DurableObject {
   // The account was deleted (accounts.js): every waiting socket closed, everything held deleted, and a
   // tombstone kept for GONE_MS, so a put already past the account's gate is refused, not kept.
   async wipe() {
-    for (const ws of this.ctx.getWebSockets()) end(ws, DELETED, CODES.gone, "the account was deleted");
+    for (const ws of this.ctx.getWebSockets()) { this.watchEnded(ws, false, CODES.gone); end(ws, DELETED, CODES.gone, "the account was deleted"); }
     const storage = this.ctx.storage;
     await storage.deleteAlarm();
     await storage.deleteAll(); // everything the mailbox held
@@ -272,9 +279,10 @@ export class Mailbox extends DurableObject {
     const max = Number(url.searchParams.get("max"));
     const timeoutMs = Number(url.searchParams.get("timeoutMs"));
     const device = url.searchParams.get("device") || "";
+    const local = url.searchParams.get("local") === "1";
     if (await this.ctx.storage.get(GONE)) return new Response(JSON.stringify({ error: "this mailbox was deleted with its account", code: CODES.mailboxGone }), { status: 410, headers: { "Content-Type": "application/json" } });
     if (device !== "") {
-      for (const old of this.ctx.getWebSockets(device)) end(old, REPLACED, CODES.replaced, "replaced by a newer watch of this device");
+      for (const old of this.ctx.getWebSockets(device)) { this.watchEnded(old, false, CODES.replaced); end(old, REPLACED, CODES.replaced, "replaced by a newer watch of this device"); }
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
@@ -284,7 +292,7 @@ export class Mailbox extends DurableObject {
       server.send(JSON.stringify(now));
       shut(server, 1000, "items");
     } else {
-      server.serializeAttachment({ since, max, until: Date.now() + timeoutMs + GRACE_MS });
+      server.serializeAttachment({ since, max, until: Date.now() + timeoutMs + GRACE_MS, at: Date.now(), device, local });
     }
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -295,9 +303,10 @@ export class Mailbox extends DurableObject {
     for (const ws of this.ctx.getWebSockets()) {
       const w = ws.deserializeAttachment();
       if (!w) continue;
-      if (Date.now() > w.until) { ws.serializeAttachment(null); shut(ws, 1000, "expired"); continue; }
+      if (Date.now() > w.until) { this.watchEnded(ws, true); ws.serializeAttachment(null); shut(ws, 1000, "expired"); continue; }
       const now = await this.read(w.since, w.max);
       if (now.items.length === 0) continue;
+      this.watchEnded(ws, false);
       ws.serializeAttachment(null);
       ws.send(JSON.stringify(now));
       shut(ws, 1000, "items");
@@ -306,8 +315,19 @@ export class Mailbox extends DurableObject {
 
   // A watch takes no messages: the client only waits.
   async webSocketMessage(ws) { shut(ws, 1008, "a watch takes no messages"); }
-  async webSocketClose(ws, code) { shut(ws, 1000, "closed"); }
-  async webSocketError(ws) { shut(ws, 1011, "error"); }
+  // A client that closes a watch still waiting ends it with nothing: counted as an empty watch.
+  async webSocketClose(ws, code) { this.watchEnded(ws, true); ws.serializeAttachment(null); shut(ws, 1000, "closed"); }
+
+  // A waiting watch ends (the header, A WATCH'S END IS COUNTED HERE): counted once, while its attachment
+  // still says it was waiting. Never throws.
+  watchEnded(ws, empty, outcome = "ok") {
+    let w = null;
+    try { w = ws.deserializeAttachment(); } catch (e) { w = null; }
+    if (!w) return;
+    const now = Date.now();
+    recordWatchEnd(this.env, this.ctx, { device: w.device, empty, heldMs: Number.isFinite(w.at) ? now - w.at : 0, now, local: w.local === true, outcome });
+  }
+  async webSocketError(ws) { this.watchEnded(ws, true); ws.serializeAttachment(null); shut(ws, 1011, "error"); }
 }
 
 // The account's mailbox (the header, ITS NAME). epoch is the account's (accounts.js); "" for the test

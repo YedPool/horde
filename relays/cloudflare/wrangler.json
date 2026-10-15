@@ -26,14 +26,16 @@
       { "name": "ACCOUNT", "class_name": "Account" },
       { "name": "MACHINE_KEY", "class_name": "MachineKey" },
       { "name": "ADDRESS", "class_name": "Address" },
-      { "name": "RELAY_BUDGET", "class_name": "RelayBudget" }
+      { "name": "RELAY_BUDGET", "class_name": "RelayBudget" },
+      { "name": "METRICS", "class_name": "Metrics" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Mailbox"] },
     { "tag": "v2", "new_sqlite_classes": ["Session", "Account", "MachineKey"] },
     { "tag": "v3", "new_sqlite_classes": ["Address"] },
-    { "tag": "v4", "new_sqlite_classes": ["RelayBudget"] }
+    { "tag": "v4", "new_sqlite_classes": ["RelayBudget"] },
+    { "tag": "v5", "new_sqlite_classes": ["Metrics"] }
   ],
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }]
 }

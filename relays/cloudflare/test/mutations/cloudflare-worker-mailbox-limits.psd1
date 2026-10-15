@@ -46,7 +46,7 @@
            Find = 'if (next !== null) { await storage.setAlarm(next); return; }'
            Replace = 'if (next !== null) { return; }' }
         @{ Name = "watch-not-replaced"
-           Find = 'for (const old of this.ctx.getWebSockets(device)) end(old, REPLACED, CODES.replaced, "replaced by a newer watch of this device");'
+           Find = 'for (const old of this.ctx.getWebSockets(device)) { this.watchEnded(old, false, CODES.replaced); end(old, REPLACED, CODES.replaced, "replaced by a newer watch of this device"); }'
            Replace = '' }
         @{ Name = "watch-not-tagged-by-device"
            Find = 'this.ctx.acceptWebSocket(server, device !== "" ? [device] : []);'
@@ -55,7 +55,7 @@
            Find = 'try { ws.send(JSON.stringify({ error: words, code })); } catch (e) { /* already closed */ }'
            Replace = '' }
         @{ Name = "wipe-ends-no-watch"
-           Find = 'for (const ws of this.ctx.getWebSockets()) end(ws, DELETED, CODES.gone, "the account was deleted");'
+           Find = 'for (const ws of this.ctx.getWebSockets()) { this.watchEnded(ws, false, CODES.gone); end(ws, DELETED, CODES.gone, "the account was deleted"); }'
            Replace = '' }
         @{ Name = "put-not-charged"
            Find = '    if (owner) {'

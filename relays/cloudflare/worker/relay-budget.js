@@ -71,6 +71,16 @@ export class RelayBudget extends DurableObject {
     return held === account;
   }
 
+  // Is account already pinned to one of emails (the running version's owner emails)? READ ONLY: it pins
+  // nothing, prunes nothing and is not one of the calls counted above - the request metrics' summary
+  // (metrics-api.js) asks it to tell an owner by email, and metrics never move a budget.
+  async pinnedOwner({ account, emails }) {
+    if (typeof account !== "string" || !Array.isArray(emails)) return false;
+    const storage = this.ctx.storage;
+    for (const email of emails) if (typeof email === "string" && (await storage.get(PIN + email)) === account) return true;
+    return false;
+  }
+
   // The owners of the running version, and nothing else (status.js): the pins pruned to them.
   async syncOwners({ emails }) { await this.prune(emails); return true; }
 
