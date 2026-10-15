@@ -49,15 +49,26 @@ function Get-HordeJoinChannelId {
     return (ConvertTo-HordeRelayHex -Bytes $first)
 }
 
+function Get-HordeJoinChannelNoticeCap {
+    # How many join requests an hour every trusted device is told of, and asked about, one by one: the
+    # hosted relay takes 6 an account an hour, so an honest flood never passes it.
+    return 6
+}
+
 function Get-HordeJoinChannelWho {
     # The new phone as every notice and question names it: its name, browser, country and time (UTC).
     param($Request)
     $t = [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$Request.requestedAt).UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", [System.Globalization.CultureInfo]::InvariantCulture)
     $parts = @("'" + $Request.label + "'")
-    if ("" + $Request.agent -cne "") { $parts += $Request.agent }
     $parts += $(if ("" + $Request.country -cne "") { $Request.country } else { "country unknown" })
     $parts += $t
-    return ($parts -join ", ")
+    # THE BROWSER IS THE NEW PHONE'S OWN WORDS (review of PR 301): up to 200 characters anyone signed in
+    # chose, so it is said as what the phone says, printable ASCII only, and cut to 80.
+    $agent = [regex]::Replace("" + $Request.agent, '[^\x20-\x7E]', '')
+    if ($agent.Length -gt 80) { $agent = $agent.Substring(0, 77) + "..." }
+    $who = $parts -join ", "
+    if ($agent -cne "") { $who += " (the new phone says its browser is: " + $agent + ")" }
+    return $who
 }
 
 function Read-HordeJoinChannelBody {
@@ -69,7 +80,8 @@ function Read-HordeJoinChannelBody {
     if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the body is not a JSON object"; return $fail }
     $dups = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($dups.Count -gt 0) { $fail.reason = ("the body has a member more than once: " + $dups[0]); return $fail }
-    try { $b = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the body is not JSON"; return $fail }
+    # ConvertFrom-HordeJson (core/JsonText.ps1): a date-shaped request id stays text under PowerShell 7.
+    try { $b = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the body is not JSON"; return $fail }
     if ($b -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the body is not a JSON object"; return $fail }
     $want = $(if ($Kind -ceq "approve") { @("device", "request", "transcript", "v") } else { @("request", "v") })
     $names = @($b.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
@@ -177,9 +189,26 @@ function Invoke-HordeJoinChannelTick {
                 if ($why -cne "") { & $fail $why } else { [void]$lines.Add("join: answered the request " + $id + " from " + $who + " with an offer") }
             }
             if (-not $j.steps.ContainsKey("noticed")) {
-                $n = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $now -Text ("A new phone asks to join this PC: " + $who + ". If this is not your phone, reject it and change your Google password. To approve, type the number it shows on a trusted phone, or at this PC (horde relay joins).")
+              # A CAP ON WHAT EVERY DEVICE IS TOLD (review of PR 301): someone in the account rotating addresses,
+              # or a relay putting requests of its own, must not flood the notices and the questions. At most
+              # Get-HordeJoinChannelNoticeCap requests an hour are told and asked; past it, one summary line an
+              # hour, and the rest stay listed by horde relay joins. They are still answered and still end.
+              $toldHour = @($all.value | Where-Object { $_.steps.ContainsKey("noticed") -and "" + $_.steps["noticed"] -ceq "" -and [long]$_.stepsAt["noticed"] -ge ((ConvertTo-HordeRelayRecordMs -Time $now) - 3600000) }).Count
+              if ($toldHour -ge (Get-HordeJoinChannelNoticeCap)) {
+                $summed = @($all.value | Where-Object { $_.steps.ContainsKey("summary") -and [long]$_.stepsAt["summary"] -ge ((ConvertTo-HordeRelayRecordMs -Time $now) - 3600000) }).Count
+                if ($summed -eq 0) {
+                    $n = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $now -Text ("More new phones asked to join this PC this hour than " + (Get-HordeJoinChannelNoticeCap) + "; the rest are not told one by one. If you did not ask, change your Google password; horde relay joins lists them.")
+                    if ($n.outcome -ceq "failed") { & $fail ("the notice was not written: " + $n.reason) } else { & $step "summary" "" }
+                }
+                & $step "noticed" "held back: over the hour's cap"
+                & $step "asked" "held back"
+              } else {
+                $n = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $now -Text ("A new phone asks to join this PC. If this is not your phone, reject it and change your Google password. It is " + $who + ". To approve, type the number it shows on a trusted phone, or at this PC (horde relay joins).")
                 if ($n.outcome -ceq "failed") { & $fail ("the notice was not written: " + $n.reason) } else { & $step "noticed" "" }
+              }
             }
+            $fresh = Get-HordeRelayJoin -HordeHome $Context.hordeHome -Request $id -Now $now
+            if ($fresh.state -ceq "known") { $j = $fresh.value }
             if (-not $j.steps.ContainsKey("asked")) {
                 $a = Invoke-HordeDecision -Operation "add" -Root $Context.decisionsRoot -Now $now -Request @{ id = (Get-HordeJoinChannelId -For ("ask " + $id)); actor = "warchief"; importance = "high"
                     question = @{ title = ("A new phone asks to join: " + $who); kind = "do-then-say"; group = "security"; askedBy = "relay"
@@ -217,11 +246,11 @@ function Invoke-HordeJoinChannelTick {
                 $tl = Close-HordeRelayJoinAtRelay -Connection $Context.connection -Request $id -Outcome $outcome
                 if ($tl.state -ceq "known") { & $step "told" $(if ($tl.value.asked) { "freed " + $tl.value.freed } else { "no join route" }) } else { & $fail ("the relay was not told the request ended: " + $tl.reason) }
             }
-            if (-not $j.steps.ContainsKey("endnoticed")) {
+            if (-not $j.steps.ContainsKey("endnoticed") -and "" + $j.steps["noticed"] -ceq "") {
                 $n = Submit-HordeSystemNotice -HordeHome $Context.hordeHome -Now $now -Text ("The new phone " + $who + " was " + $outcome + ": " + $j.closed.reason + ".")
                 if ($n.outcome -ceq "failed") { & $fail ("the notice was not written: " + $n.reason) } else { & $step "endnoticed" "" }
             }
-            if ($j.steps.ContainsKey("asked") -and -not $j.steps.ContainsKey("unasked")) {
+            if ($j.steps.ContainsKey("asked") -and "" + $j.steps["asked"] -cmatch '\A[0-9]+\z' -and -not $j.steps.ContainsKey("unasked")) {
                 $c = Invoke-HordeDecision -Operation "close" -Root $Context.decisionsRoot -Now $now -Request @{ id = (Get-HordeJoinChannelId -For ("close " + $id)); actor = "warchief"; number = [int]$j.steps["asked"]; outcome = ("The new phone was " + $outcome + ": " + $j.closed.reason) }
                 if ($c.state -ceq "known" -and ($c.value.outcome -cne "refused" -or ("" + $c.value.reason).Contains("already closed"))) { & $step "unasked" "" }
                 else { & $fail ("the decisions question was not closed: " + $(if ($c.state -ceq "known") { $c.value.reason } else { $c.reason })) }

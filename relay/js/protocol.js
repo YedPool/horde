@@ -314,7 +314,7 @@ export async function readOffer(text, now = Date.now()) {
   if (!Array.isArray(o.origins) || o.origins.length < 1 || o.origins.length > 8 || !o.origins.every((x) => typeof x === "string")) return no("the offer's origins are not a list of origins");
   if (!Number.isSafeInteger(o.issuedAt) || !Number.isSafeInteger(o.expiresAt)) return no("the offer's times are not whole numbers");
   if (now >= o.expiresAt) return no("the pairing offer has expired: ask the machine for a new one");
-  // The account grant (ACCOUNT GRANT, below) is the relay's to verify; here only its shape: 64 bytes.
+  // The account grant (ACCOUNT GRANT, below): its shape here, 64 bytes; its signature below.
   if (typeof o.grant !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(o.grant)) return no("the offer's account grant is not a signature");
   let signPoint, agreePoint;
   try { signPoint = unb64u(o.signPublic); agreePoint = unb64u(o.agreePublic); } catch (x) { return no("the offer's keys are not base64url"); }
@@ -322,6 +322,13 @@ export async function readOffer(text, now = Date.now()) {
     if (await keyId(signPoint) !== o.machine) return no("the offer's signing key is not the machine it names");
     if (await keyId(agreePoint) !== o.agreeKeyId) return no("the offer's agreement key is not the one it names");
   } catch (x) { return no("the offer's keys are not P-256 points"); }
+  // THE GRANT IS VERIFIED HERE TOO, under the very key the offer names (review of PR 301, a must-fix): a
+  // phone that asked to join gets its offer through the relay, and a relay could otherwise make an offer
+  // naming a machine's key and name with no machine behind them. Only the holder of the signing key
+  // signs its grant, so an offer whose grant does not verify is not that machine's.
+  let grantSig;
+  try { grantSig = unb64u(o.grant); } catch (x) { return no("the offer's account grant is not a signature"); }
+  if (!(await verifyMachineSignature(signPoint, accountGrantBytes(o), grantSig))) return no("the offer's account grant is not signed by the machine it names: it is not that machine's offer");
   return { ok: true, reason: "", value: { ...o, text, signPoint, agreePoint } };
 }
 export async function pairingChallenge(offerText) { return sha256(utf8(PAIRING_CHALLENGE_DOMAIN + offerText)); }

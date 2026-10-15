@@ -63,10 +63,10 @@ function New-NewPhone {
 }
 function Send-Join {
     # The new phone's request into the machine's mailbox, as the relay's join route puts it.
-    param($Np, [string]$Key = "", [long]$ExpiresInMs = 600000, [string]$Machine = "", [string]$Label = "Pixel 9")
+    param($Np, [string]$Key = "", [long]$ExpiresInMs = 600000, [string]$Machine = "", [string]$Label = "Pixel 9", [string]$Agent = "Chrome on Android")
     $nowMs = ConvertTo-HordeRelayRecordMs -Time (Get-Clock)
     $t = ConvertTo-HordeRelayRecordText -Spec (Get-HordeRelayJoinRequestSpec) -Values @{ v = 1; kind = "horde-relay-join-request"; request = $Np.request; horde = "work"
-        machine = $(if ($Machine -cne "") { $Machine } else { $script:id.sign.keyId }); label = $Label; agent = "Chrome on Android"; requestKey = (ConvertTo-HordeRelayBase64Url -Bytes $Np.public)
+        machine = $(if ($Machine -cne "") { $Machine } else { $script:id.sign.keyId }); label = $Label; agent = $Agent; requestKey = (ConvertTo-HordeRelayBase64Url -Bytes $Np.public)
         country = "IL"; requestedAt = $nowMs; expiresAt = ($nowMs + $ExpiresInMs) }
     return (Send-HordeRelayItem -Connection $script:conn -Mailbox $script:ctx.mailbox -Text $t -Key $(if ($Key -cne "") { $Key } else { "join/" + $Np.request }))
 }
@@ -104,9 +104,9 @@ function Send-Passkey {
 }
 function Start-Join {
     # Request, answer, passkey, transcript: a join waiting for its number. The new phone.
-    param([string]$Label = "Pixel 9")
+    param([string]$Label = "Pixel 9", [string]$Agent = "Chrome on Android")
     $np = New-NewPhone
-    [void](Send-Join -Np $np -Label $Label)
+    [void](Send-Join -Np $np -Label $Label -Agent $Agent)
     [void](Invoke-Turn)
     $np.offerText = Get-Offer -Np $np
     if ($np.offerText -cne "") { [void](Send-Passkey -Np $np); [void](Invoke-Turn) }
@@ -175,7 +175,7 @@ try {
     $tx = @(Get-Transcripts | Where-Object { $_.kind -ceq "request" })
     Check ($tx.Count -eq 1 -and $tx[0].text.Contains('"request":"' + $s.request + '"') -and -not $tx[0].text.Contains($s.number) -and -not $tx[0].text.Contains($s.number.Replace("-", ""))) "the trusted phone is sent the transcript - and never the number"
     $notes = @(Get-NoticeTexts)
-    Check (@($notes | Where-Object { $_.Contains("A new phone asks to join this PC: 'Stranger', Chrome on Android, IL") -and $_.Contains("If this is not your phone, reject it and change your Google password") }).Count -eq 1) ("EVERY TRUSTED DEVICE IS TOLD of the request, naming the device, browser, country and time (" + ($notes -join " | ") + ")")
+    Check (@($notes | Where-Object { $_.StartsWith("A new phone asks to join this PC. If this is not your phone, reject it and change your Google password. It is 'Stranger', IL, ") -and $_.Contains("(the new phone says its browser is: Chrome on Android)") }).Count -eq 1) ("EVERY TRUSTED DEVICE IS TOLD of the request, naming the device, browser, country and time (" + ($notes -join " | ") + ")")
     $qs = Invoke-HordeDecision -Operation "list" -Root $script:ctx.decisionsRoot -Request @{}
     $asked = @($(if ($qs.state -ceq "known") { @($qs.value.questions) } else { @() }) | Where-Object { "$($_.title)".StartsWith("A new phone asks to join: 'Stranger'") })
     Check ($asked.Count -eq 1) "and it is a decisions question"
@@ -213,7 +213,11 @@ try {
     Check (@(Get-NoticeTexts | Where-Object { $_.Contains("'Founder new phone'") -and $_.Contains("was approved") }).Count -eq 1) "a notice says it was approved"
     $again = Approve-HordeRelayJoin -HordeHome $hh -Request $f.request -Number $f.number -Now (Get-Clock)
     Check (-not $again.ok -and $again.reason.Contains("closed")) "an approved request is approved once: again, it is refused"
-    $third = Start-Join -Label "Third"
+    $longAgent = ("Mozilla/5.0 " + ("x" * 150) + " TAIL-NEVER-SHOWN")
+    $third = Start-Join -Label "Third" -Agent $longAgent
+    $tn = @(Get-NoticeTexts | Where-Object { $_.Contains("'Third'") })
+    $shownAgent = $(if ($tn.Count -eq 1 -and $tn[0] -cmatch 'the new phone says its browser is: ([^)]*)\)') { $Matches[1] } else { "" })
+    Check ($shownAgent.StartsWith("Mozilla/5.0 x") -and $shownAgent.Length -le 80 -and -not $tn[0].Contains("TAIL-NEVER-SHOWN")) ("THE BROWSER TEXT IS THE NEW PHONE'S OWN WORDS, said as such and cut to 80 characters (" + $shownAgent.Length + ")")
     Check ((Get-Join $third).open) "ONCE THE PENDING ONE ENDED, a new request is taken (the twin of the refusal above)"
     foreach ($n in 1..2) { $null = Approve-HordeRelayJoin -HordeHome $hh -Request $third.request -Number $wrongF -Now (Get-Clock) }
     $a3 = Approve-HordeRelayJoin -HordeHome $hh -Request $third.request -Number $wrongF -Now (Get-Clock)
@@ -299,6 +303,39 @@ try {
     $rc = Start-Join -Label "Rejected by the command"
     $rej = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "reject", $rc.request) -Env @{ HORDE_HOME = $hh }
     Check ($rej.code -eq 0 -and (Get-DeviceState $rc) -ceq "revoked" -and (Get-Join $rc).closed.outcome -ceq "rejected") ("horde relay reject rejects it (exit " + $rej.code + ")")
+    $null = Invoke-Turn
+
+    Write-Host ""
+    Write-Host "--- 9. a cap on what every device is told: a flood is one summary line ---" -ForegroundColor Cyan
+    $toldBefore = @(Get-NoticeTexts | Where-Object { $_.StartsWith("A new phone asks to join this PC.") }).Count
+    Check ($toldBefore -ge (Get-HordeJoinChannelNoticeCap)) ("CONTROL: this hour has told of " + $toldBefore + " requests already, the cap being " + (Get-HordeJoinChannelNoticeCap))
+    $flood = @()
+    foreach ($n in 1..3) {
+        $fl = Start-Join -Label ("Flood " + $n)
+        $flood += $fl
+        $null = Reject-HordeRelayJoin -HordeHome $hh -Request $fl.request -Reason "flood"
+        $null = Invoke-Turn
+    }
+    $texts = @(Get-NoticeTexts)
+    Check (@($texts | Where-Object { $_.Contains("'Flood ") }).Count -eq 0) "PAST THE CAP no request is told one by one, nor its end"
+    Check (@($texts | Where-Object { $_.StartsWith("More new phones asked to join this PC this hour than ") }).Count -eq 1) "one summary line says more asked, once in the hour"
+    $qs = Invoke-HordeDecision -Operation "list" -Root $script:ctx.decisionsRoot -Request @{ state = "all" }
+    Check (@($(if ($qs.state -ceq "known") { @($qs.value.questions) } else { @() }) | Where-Object { "$($_.title)".Contains("'Flood ") }).Count -eq 0) "and no question is asked for them"
+    Check (@($flood | Where-Object { (Get-Join $_).closed.outcome -ceq "rejected" -and (Get-ReplyCount $_) -eq 1 }).Count -eq 3) "they are still answered, and still end"
+
+    Write-Host ""
+    Write-Host "--- 10. an approve or reject body read as text, a date-shaped field never a date ---" -ForegroundColor Cyan
+    $dateBody = $utf8.GetBytes('{"v":1,"request":"2026-10-14T10:00:00Z"}')
+    $rd = Read-HordeJoinChannelBody -Body $dateBody -Kind "reject"
+    Check (-not $rd.ok -and $rd.reason -ceq "the request is not a join request id") ("a date-shaped request is refused as text that is no request id (" + $rd.reason + ")")
+    $pwsh = Get-Command -Name "pwsh" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $pwsh) { Write-Host "  [SKIP] pwsh is not installed here: the PowerShell 7 reading is not checked" -ForegroundColor Yellow }
+    else {
+        $probe = Join-Path $work "date-probe.ps1"
+        [System.IO.File]::WriteAllText($probe, ('. "' + (Join-Path $root "core\JsonText.ps1") + '"' + "`n" + '$b = ConvertFrom-HordeJson -Text ''{"v":1,"request":"2026-10-14T10:00:00Z","transcript":"2026-10-14T10:00:00.000Z"}''' + "`n" + 'Write-Output ($b.request.GetType().Name + " " + $b.transcript.GetType().Name + " " + $b.request)'), $utf8)
+        $p7 = & $pwsh.Source -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probe
+        Check ("$p7" -ceq "String String 2026-10-14T10:00:00Z") ("UNDER POWERSHELL 7 the join channel's reader keeps a date-shaped field text, never a DateTime (" + $p7 + ")")
+    }
 } finally {
     Close-HordeRelayRunContext -Context $script:ctx
     Exit-HordeTestEmptyFleet -Pin $fleetPin

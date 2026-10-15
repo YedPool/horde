@@ -585,7 +585,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       for (const [request, j] of s.joins) {
         if (j.closed || !j.transcript || j.transcript.expiresAt < now()) continue;
         const t = j.transcript;
-        out.push({ request, label: t.label, agent: t.agent, country: t.country, requestedAt: t.requestedAt, expiresAt: t.expiresAt });
+        // THE BROWSER IS THE NEW PHONE'S OWN WORDS (review of PR 301): printable ASCII, cut to 80, and the page
+        // says whose they are.
+        const agent = String(t.agent || "").replace(/[^\x20-\x7e]/g, "");
+        out.push({ request, label: t.label, agent: agent.length > 80 ? agent.slice(0, 77) + "..." : agent, country: t.country, requestedAt: t.requestedAt, expiresAt: t.expiresAt });
       }
       return out;
     },

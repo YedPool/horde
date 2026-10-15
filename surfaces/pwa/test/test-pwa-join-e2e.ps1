@@ -152,7 +152,7 @@ try {
     $run = Invoke-Run -Turns 2
     $sdev = Get-DeviceOf "Stranger"
     Check ($rj.ok -and $null -ne $sdev -and $sdev.state -ceq "revoked") ("its signed reject reaches the machine: the stranger's passkey is revoked, never trusted (" + $(if ($null -ne $sdev) { $sdev.state } else { "none" }) + ")")
-    Check (@(Get-NoticeTexts | Where-Object { $_.Contains("'Stranger'") -and $_.Contains("rejected") }).Count -eq 1 -and @(Get-NoticeTexts | Where-Object { $_.Contains("A new phone asks to join this PC: 'Stranger'") }).Count -eq 1) "every trusted device is told: the request, and that it was rejected"
+    Check (@(Get-NoticeTexts | Where-Object { $_.Contains("'Stranger'") -and $_.Contains("rejected") }).Count -eq 1 -and @(Get-NoticeTexts | Where-Object { $_.Contains("A new phone asks to join this PC. If this is not your phone") -and $_.Contains("It is 'Stranger'") }).Count -eq 1) "every trusted device is told: the request, and that it was rejected"
     $sc = Invoke-App "S" @{ cmd = "pairConfirmed"; id = $sp.value.id }
     Check ($sc.ok -and -not $sc.value.confirmed) "the stranger's phone is never told it is confirmed"
 

@@ -913,7 +913,7 @@ async function showJoinBox(h) {
   if (!j) { joinShown = ""; return; }
   if (joinShown !== j.request) { $("joinNumber").value = ""; announceSaid("joinStatus", ""); }
   joinShown = j.request;
-  $("joinWho").textContent = "'" + j.label + "', " + (j.agent || "a browser") + ", " + (j.country || "country unknown") + ", " + dayTime(j.requestedAt) + ".";
+  $("joinWho").textContent = "'" + j.label + "', " + (j.country || "country unknown") + ", " + dayTime(j.requestedAt) + "." + (j.agent ? " The new phone says its browser is: " + j.agent : "");
 }
 $("joinApprove").addEventListener("click", async () => {
   if (!joinShown) return;

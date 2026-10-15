@@ -145,8 +145,8 @@ function Read-HordeRelayJoinFolder {
 
 function Get-HordeRelayJoins {
     # Every join request this machine received, as it stands at -Now: known list of { request (the
-    # received record); steps (hashtable step -> note); closed (the closed record or $null); offer (the
-    # offered id or ""); device (the trust store's device the offer enrolled, or $null); expired; open }
+    # received record); steps (hashtable step -> note); stepsAt (step -> when, ms); closed (the closed record or $null); offer (the
+    # offered id or ""; stepsAt the time of each step, ms); device (the trust store's device the offer enrolled, or $null); expired; open }
     # - open: not closed and not past its expiresAt. Unknown when a record or the trust store is damaged.
     param([string]$HordeHome = "", $Now = $null)
     try {
@@ -163,13 +163,14 @@ function Get-HordeRelayJoins {
         $q = $r.value
         if ($r.name -cne ($q.request + ".json")) { return (New-HordeUnknown -Reason ("the join record " + $r.name + " is filed under another request's name")) }
         $st = @{}
-        foreach ($s in @($steps.records | Where-Object { $_.value.request -ceq $q.request })) { $st[$s.value.step] = $s.value.note }
+        $sa = @{}
+        foreach ($s in @($steps.records | Where-Object { $_.value.request -ceq $q.request })) { $st[$s.value.step] = $s.value.note; $sa[$s.value.step] = $s.value.at }
         $c = @($closed.records | Where-Object { $_.value.request -ceq $q.request } | ForEach-Object { $_.value }) | Select-Object -First 1
         $offer = $(if ($st.ContainsKey("offered")) { "" + $st["offered"] } else { "" })
         $dev = $null
         if ($offer -cne "") { $dev = @($store.devices | Where-Object { $_.offer -ceq $offer }) | Select-Object -First 1 }
         $expired = ($nowMs -gt $q.expiresAt)
-        [void]$out.Add([pscustomobject]@{ request = $q; steps = $st; closed = $c; offer = $offer; device = $dev; expired = $expired; open = ($null -eq $c -and -not $expired) })
+        [void]$out.Add([pscustomobject]@{ request = $q; steps = $st; stepsAt = $sa; closed = $c; offer = $offer; device = $dev; expired = $expired; open = ($null -eq $c -and -not $expired) })
     }
     return (New-HordeKnown -Value @($out.ToArray()))
 }
