@@ -132,6 +132,8 @@
 /* The switch for the answered (list.js, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR) stands at the head of
    the same line, across from it; on its own it says its state in words, and on it is in the page's ink. */
 .hd-showans[aria-checked="true"] { color: var(--ink); }
+/* Reached by keys (list.js, THE SWITCH IS REACHED BY KEYS): a clear ring while it has the keyboard, as a fold's heading has. */
+.hd-showans:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .hd-foldline { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 12px; padding: 0 14px 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
 /* WHAT STANDS OUT ABOUT A QUESTION (list.js, drawTags): a small line above what was said under it -
    "Important", "Blocks all work" in the page's own ink, and for a follow-up the pressable words
