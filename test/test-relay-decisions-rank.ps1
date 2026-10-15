@@ -18,7 +18,7 @@
 #   - NEVER AN ANSWER: a rank body sent as an answer, and an answer body sent as a rank, change nothing;
 #     a kind the channel does not name is refused by name;
 #   - THE UNLOCKED SESSION (PR 302): a session-signed rank is applied with no prompt, except on a question
-#     flagged needsPasskey (needs-passkey, then applied by passkey); never from a passkey never paired, a
+#     flagged needsPasskey (needs-passkey, then applied by passkey); stale by its own signed time; never from a passkey never paired, a
 #     forged vouch, or a revoked device.
 # Each refusal has its must-accept twin: the same envelope with the one thing put right is applied.
 #
@@ -388,11 +388,11 @@ try {
     Check ($np.state -ceq "known" -and $np.value.outcome -ceq "done") "CONTROL: a question flagged needsPasskey is added"
     $nNp = [int]$np.value.number
     $null = Invoke-HordeRelayChannelTicks -Context $U.ctx
-    $sess = New-HordeTestPhoneSession -Phone $U.phone -Machine $U.id.sign.keyId -NotBefore ([datetime]::UtcNow.AddSeconds(-30))
+    $sess = New-HordeTestPhoneSession -Phone $U.phone -Machine $U.id.sign.keyId -NotBefore ([datetime]::UtcNow.AddMinutes(-10))
     $sendSession = {
-        param($World, $Session, [byte[]]$Body, $Phone = $null, [switch]$WithVouch)
+        param($World, $Session, [byte[]]$Body, $Phone = $null, [switch]$WithVouch, $Now = $null)
         if ($null -eq $Phone) { $Phone = $World.phone }
-        $e = New-HordeTestPhoneSessionEnvelope -Phone $Phone -Session $Session -Kind "rank" -Channel "decisions" -Body $Body -To $World.agree -WithVouch:$WithVouch
+        $e = New-HordeTestPhoneSessionEnvelope -Phone $Phone -Session $Session -Kind "rank" -Channel "decisions" -Body $Body -To $World.agree -WithVouch:$WithVouch -Now $Now
         [void](Send-ToMachine $World $e.text)
         return (Invoke-Turn $World)
     }
@@ -424,10 +424,16 @@ try {
     Check ((Has $t "refused") -and -not (Has $t "done") -and (Get-Words $U 1) -ceq "high/part") ("a session whose vouch another passkey signed ranks nothing (" + $t.text + ")")
     $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "low")
     Check ((Has $t "done") -and (Get-Words $U 1) -ceq "low/part") ("CONTROL TWIN: his own live session still ranks (" + $t.text + ")")
+    # A STALE RANK NEVER WINS, WHICHEVER KEY SIGNED IT: the session envelope's own signed time is what counts.
+    $null = Invoke-HordeDecision -Operation "rank" -Root $U.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; importance = "high" }
+    $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "normal") -Now ([datetime]::UtcNow.AddMinutes(-2))
+    Check ((Has $t "superseded") -and (Get-Words $U 1) -ceq "high/part") ("a session-signed change signed before a newer rank from the command line is refused as superseded (" + $t.text + ")")
+    $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "normal") -Now ([datetime]::UtcNow.AddSeconds(1))
+    Check ((Has $t "done") -and (Get-Words $U 1) -ceq "normal/part") ("MUST-ACCEPT: one signed after it is applied (" + $t.text + ")")
     # REVOKED: the device revoked, its session ranks nothing.
     [void](Revoke-HordeRelayTrust -HordeHome $U.home -Subject "device" -Id $U.phone.deviceId -Reason "phone lost")
-    $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "high")
-    Check ((Has $t "refused") -and -not (Has $t "done") -and (Get-Words $U 1) -ceq "low/part") ("after the device is revoked its session's change of rank is refused, and nothing is ranked (" + $t.text + ")")
+    $t = & $sendSession $U $sess (Get-RankBody $U -Number 1 -Level "high") -Now ([datetime]::UtcNow.AddSeconds(2))
+    Check ((Has $t "refused") -and -not (Has $t "done") -and (Get-Words $U 1) -ceq "normal/part") ("after the device is revoked its session's change of rank is refused, and nothing is ranked (" + $t.text + ")")
 
 } finally {
     $env:HORDE_HOME = $realHome
