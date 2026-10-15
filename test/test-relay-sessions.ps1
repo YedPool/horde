@@ -386,7 +386,7 @@ try {
     $sA = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(142) -Seq 5 -Key $sC.key
     Check ($sA.vouchId -ceq $sC.vouchId) "CONTROL: phone A's vouch names the same key, so the same vouchId"
     $r = Send-SessionAnswer -World $W3 -Session $sA -Text "Under a vouch recorded as another's." -At $B3.AddMinutes(144) -WithVouch
-    Check ($r.turn.text.Contains("could not be recorded") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("an envelope whose new vouch's name is another passkey's record waits, not taken (" + $r.turn.text + ")")
+    Check ($r.turn.text.Contains("vouch " + $sA.vouchId + " could not be recorded") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("an envelope whose new vouch's name is another passkey's record waits, not taken (" + $r.turn.text + ")")
     # Route 2, the write itself fails: the vouches folder refuses new files for a moment.
     $vdir = Join-Path $W3.home "relay\sessions\vouches"
     $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -398,7 +398,7 @@ try {
         Check ($denied) "CONTROL: the vouches folder refuses a new file while denied"
         $s9 = New-HordeTestPhoneSession -Phone $W3.phone -Machine $W3.machine -NotBefore $B3.AddMinutes(144) -Seq 6
         $r = Send-SessionAnswer -World $W3 -Session $s9 -Text "Under a vouch that could not be written." -At $B3.AddMinutes(145) -WithVouch
-        Check ($r.turn.text.Contains("could not be recorded") -and -not (Test-Said $W3 "Under a vouch that could not be written.")) ("an envelope whose new vouch could not be written waits, not taken (" + $r.turn.text + ")")
+        Check ($r.turn.text.Contains("vouch " + $s9.vouchId + " could not be recorded") -and -not (Test-Said $W3 "Under a vouch that could not be written.")) ("an envelope whose new vouch could not be written waits, not taken (" + $r.turn.text + ")")
     } finally { $null = & icacls.exe $vdir /remove:d ("*" + $who) }
     $t = Invoke-Turn $W3 $B3.AddMinutes(146)
     Check ((Test-Said $W3 "Under a vouch that could not be written.") -and -not (Test-Said $W3 "Under a vouch recorded as another's.")) ("CONTROL TWIN: once the folder takes files again the waiting envelope is taken; the other passkey's name still never is (" + $t.text + ")")
