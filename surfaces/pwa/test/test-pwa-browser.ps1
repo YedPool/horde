@@ -46,14 +46,12 @@
 #      the last read that worked;
 #  14. the unlocked session (design note "Unlocked session", 2026-10-14), its passkey prompts COUNTED by
 #      the virtual authenticator's signature counter: what Chrome gives when the app is left is measured
-#      and said; against today's PC (every section above) each envelope is the passkey's, as before; against
-#      a PC that keeps sessions, an unlock and then three answers and a chat line are ONE prompt, an answer
-#      to a needsPasskey question one more, and after the idle limit, after the app was away past its
-#      setting and after a reload the next answer asks once again - each must-pass beside its control.
-#      THE PC THAT KEEPS SESSIONS IS NOT BUILT YET (relay/Session.ps1: until its next commit the PC refuses a
-#      session envelope by name), so its snapshot is made by the real decisions channel's own code with the
-#      session member of relay/js/protocol.js's sessionStatus in its receipt (Send-SessionSnapshot), and what
-#      the phone sends is read and verified by the PC's own reader and WebAuthn verifier - not applied.
+#      and said; against the real PC, which keeps sessions (the unlocked session's PC side, relay/Session.ps1
+#      and channels/Sessions.ps1), an unlock and then three answers and a chat line are ONE prompt and land
+#      once, an answer to a needsPasskey question one more, and after the PC's idle limit (its own setting,
+#      one minute here), after the app was away past its setting and after a reload the next answer asks
+#      once again - each must-pass beside its control, every session envelope read and verified by the
+#      PC's own reader and WebAuthn verifier before the run takes it.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 # The suite starts the browser itself (test/lib/Browser.ps1), in a kill-on-close job of its own, and
@@ -125,36 +123,6 @@ function Invoke-Run {
     return (Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "run", "-Relay", "local", "-RelayRoot", $mailboxes, "-MaxTurns", "" + $Turns) -Env @{ HORDE_HOME = $hh })
 }
 function Get-Said { if (-not (Test-Path -LiteralPath $store)) { return @() }; return @(Get-ChildItem -LiteralPath $store -Filter "*.json" | Sort-Object Name | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json } | Where-Object { $_.kind -ceq "message-said" -and $_.data.route -ceq "phone" }) }
-function Send-SessionSnapshot {
-    # Section 14's PC that keeps sessions (the header): the snapshot of the open questions as the decisions
-    # channel makes it - its receipts the journal's own - with -Session, the session member relay/js/
-    # protocol.js's sessionStatus reads, in the founder passkey's receipt, and -NeedsPasskey the numbers
-    # of the questions flagged so; sealed and signed by the machine's own identity, put by the channel's
-    # own send. "" when it is put, else why not.
-    param([Parameter(Mandatory = $true)][string]$Session, [int[]]$NeedsPasskey = @())
-    $c = Connect-HordeRelay -Name "local" -Options @{ root = $mailboxes }
-    if ($c.state -cne "known") { return $c.reason }
-    $ctx = New-HordeRelayRunContext -HordeHome $hh -Connection $c.value
-    if ($ctx.state -cne "known") { return $ctx.reason }
-    try {
-        $rec = Get-HordeDecisionsChannelReceipts -Context $ctx.value
-        $from = [regex]::Match($rec.text, '\A\[\{"from":"([0-9a-f]{32})",').Groups[1].Value
-        if ($from -ceq "") { return ("no receipt to put the session in: " + $rec.text) }
-        $script:founderPasskey = $from
-        $receipts = $rec.text.Replace('{"from":"' + $from + '",', '{"from":"' + $from + '","session":' + $Session + ',')
-        $list = Invoke-HordeDecision -Operation "list" -Request @{ state = "open"; messages = $true } -Root $store
-        if ($list.state -cne "known" -or $list.value.outcome -cne "done") { return "the list could not be read" }
-        foreach ($q in @($list.value.questions)) { if (@($NeedsPasskey) -contains [int]$q.number) { $q | Add-Member -NotePropertyName needsPasskey -NotePropertyValue $true -Force } }
-        $phones = Find-HordeRelayPhoneKeys -HordeHome $hh
-        $recipients = @($phones.value | ForEach-Object { , ([byte[]]$_.public) })
-        $pages = New-HordeDecisionsChannelPages -Horde $ctx.value.horde -Machine $ctx.value.signKeyId -List $list.value -Budget (Get-HordeRelayChannelBodyBudget -Context $ctx.value -Recipients $recipients.Count) -Receipts $receipts
-        foreach ($body in @($pages.bodies)) {
-            $put = Send-HordeRelayChannelEnvelope -Context $ctx.value -Channel "decisions" -Kind "snapshot" -Body ([byte[]]$body) -Recipients $recipients -Mailbox (New-HordeRelayMailbox -Horde $ctx.value.horde -Reader "phone")
-            if ($put.state -cne "known") { return $put.reason }
-        }
-        return ""
-    } finally { Close-HordeRelayRunContext -Context $ctx.value }
-}
 function Get-MachineEnvelopes {
     # What the phone has put into the machine's mailbox, each read by the PC's own reader: from item -Skip on.
     param([int]$Skip = 0)
@@ -658,17 +626,26 @@ try {
 
     Write-Host ""
     Write-Host "--- 14. the unlocked session: one passkey prompt for an unlock and the answers after it ---" -ForegroundColor Cyan
-    # WHAT THE BROWSER GIVES when the app is left, measured: another tab in front, and the frozen lifecycle.
+    # WHAT THE BROWSER GIVES when the app is left, measured: the frozen lifecycle, then another tab in front.
     $vp = Invoke-Browser @{ cmd = "visibilityProbe" }
     $heard = $(if ($vp.ok) { @($vp.value.after.heard) -join ", " } else { $vp.reason })
     Write-Host ("  [INFO] what headless Chrome gives the page: with another tab in front its visibilityState is '" + $(if ($vp.ok) { $vp.value.during } else { "?" }) + "'; it heard: " + $heard + $(if ($vp.ok -and $vp.value.frozenRefused) { "; the frozen lifecycle state was refused: " + $vp.value.frozenRefused } else { "" }))
     $realAway = ($vp.ok -and $vp.value.during -ceq "hidden" -and $heard.Contains("visibilitychange:hidden") -and $heard.Contains("visibilitychange:visible"))
     Check ($vp.ok -and $vp.value.after.state -ceq "visible") ("MEASURED: what Chrome reports when the app is left is recorded, and the page is in front again after (" + $heard + ")")
-    # Fresh questions: an answered one leaves his list (2026-10-12), and nothing here applies an answer.
+    # THE PC'S IDLE LIMIT, its own setting (channels/Sessions.ps1, idleMinutes), at its least: one minute.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-sessions.json"), '{"schemaVersion": 1, "settings": {"idleMinutes": 1}}', $utf8)
+    # Fresh questions: an answered one leaves his list (2026-10-12). The fourth is flagged needsPasskey.
     $sTitles = @("Should the session answer number one go?", "Should the session answer number two go?", "Should the session answer number three go?", "Deploy the relay to production right now?", "Answer this after the idle limit?", "Answer this after the app was away?", "Answer this after the page reloaded?")
     $sNums = @()
-    foreach ($t in $sTitles) { $qa = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = $t; kind = "yes-no"; whatItIs = "Section 14."; group = "voice"; askedBy = "orc-e" } }; $sNums += $(if ($qa.state -ceq "known" -and $null -ne $qa.value.PSObject.Properties["number"]) { [int]$qa.value.number } else { Write-Host ("  [WHY] '" + $t + "' was not added: " + (ConvertTo-Json $qa -Compress -Depth 4)); 0 }) }
-    Check (@($sNums | Where-Object { $_ -gt 0 }).Count -eq 7) "CONTROL: seven questions are asked for the session"
+    for ($i = 0; $i -lt $sTitles.Count; $i++) {
+        $req = @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = $sTitles[$i]; kind = "yes-no"; whatItIs = "Section 14."; group = "voice"; askedBy = "orc-e" } }
+        if ($i -eq 3) { $req["needsPasskey"] = $true }
+        $qa = Invoke-HordeDecision -Operation "add" -Root $store -Request $req
+        $sNums += $(if ($qa.state -ceq "known" -and $null -ne $qa.value.PSObject.Properties["number"]) { [int]$qa.value.number } else { Write-Host ("  [WHY] '" + $sTitles[$i] + "' was not added: " + (ConvertTo-Json $qa -Compress -Depth 4)); 0 })
+    }
+    Check (@($sNums | Where-Object { $_ -gt 0 }).Count -eq 7) "CONTROL: seven questions are asked for the session, one flagged needsPasskey"
+    $landedBefore = @(Get-Said).Count
+    Check ($landedBefore -ge 3) ("CONTROL: the answers of the sections above landed at the real PC (" + $landedBefore + " record(s))")
     $vouchKeys = @{}
     function Test-SessionEnvelope {
         # The PC's own reader and verifier on one envelope the phone sent: a vouch it carries is the founder
@@ -689,21 +666,19 @@ try {
         if (-not (Test-HordeRelayEs256Signature -Public $script:vouchKeys[$s.vouchId] -Bytes $signed -Signature $s.value -AllowHighS)) { return "the session signature does not verify" }
         return ""
     }
-    # TODAY'S PC: every answer above LANDED, and today's PC lands only a passkey's signature (relay/Envelope.ps1
-    # refuses a session signature by name until the PC side is built): so each went the older-PC path.
-    $landed = @(Get-Said)
-    Check ($landed.Count -ge 3) ("AGAINST TODAY'S PC, which says nothing of sessions, the answers above went signed by the passkey and landed, as before (" + $landed.Count + " record(s))")
+    function Get-Landed { param([string]$Text) return @(Get-Said | Where-Object { $_.data.text -ceq $Text }).Count }
+    # THE REAL PC: a run sends the snapshot of the new questions, with this passkey's session status.
+    $run = Invoke-Run -Turns 1
     $null = Invoke-Browser @{ cmd = "lock" }
     $c0 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $skip = Get-MachineCount
     $null = Invoke-Browser @{ cmd = "unlock" }
     $c1 = (Invoke-Browser @{ cmd = "assertions" }).value
     Check ($c1 -eq $c0 + 1) ("CONTROL: the counter sees every prompt - the unlock is one (" + $c0 + " -> " + $c1 + ")")
-    $skip = Get-MachineCount
-    $put = Send-SessionSnapshot -Session '{"idleMs":3600000,"vouches":[],"needsPasskey":[]}' -NeedsPasskey @($sNums[3])
     $w = Invoke-Browser @{ cmd = "waitText"; text = $sTitles[6] }
-    Check ($put -ceq "" -and $w.ok -and $w.value.found) ("CONTROL: a snapshot from a PC that keeps sessions, made by the channel's own code, is drawn (" + $put + ")")
     $ss = $null
     for ($i = 0; $i -lt 40; $i++) { $ss = Invoke-Browser @{ cmd = "sessions" }; if ($ss.ok -and @($ss.value.list).Count -ge 1 -and $ss.value.list[0].keeps -eq $true) { break }; Start-Sleep -Milliseconds 250 }
+    Check ($run.code -eq 0 -and $w.ok -and $w.value.found -and $ss.ok -and $ss.value.list[0].keeps -eq $true -and $ss.value.list[0].idleMs -eq 60000) ("CONTROL: the real PC's snapshot is drawn, and it says the PC keeps sessions, with its own idle limit (" + $(if ($ss.ok) { ConvertTo-Json $ss.value.list -Compress } else { $ss.reason }) + ")")
     Check ($ss.ok -and $ss.value.list[0].open -and $ss.value.account -cmatch 'an unlocked session is open until [0-9]{2}:[0-9]{2}\.') ("THE ACCOUNT SCREEN SAYS a session is open, and until when (" + $(if ($ss.ok) { $ss.value.account } else { $ss.reason }) + ")")
     $a1 = Invoke-Browser @{ cmd = "answer"; text = "One, no prompt."; via = "enter"; mailbox = $mailbox; question = $sTitles[0] }
     $a2 = Invoke-Browser @{ cmd = "answer"; text = "Two, no prompt."; via = "enter"; mailbox = $mailbox; question = $sTitles[1] }
@@ -719,25 +694,29 @@ try {
     $kinds = @($sentS | Where-Object { $_.ok } | ForEach-Object { $_.value.header.channel + "/" + $_.value.header.kind })
     Check ($sentS.Count -eq 5 -and @($why | Where-Object { $_ -cne "" }).Count -eq 0 -and ($kinds -join ",") -ceq "trust/session,decisions/answer,decisions/answer,decisions/answer,chat/line") ("the opening envelope, the three answers and the line are session-signed under the vouch, as the PC's own reader and WebAuthn verifier read them (" + ($kinds -join ",") + "; " + ($why -join "|") + ")")
     $vouchId1 = $(if ($sentS.Count -and $sentS[0].ok) { $sentS[0].value.sig.vouchId } else { "" })
+    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 1
+    $posts = @(Get-HordeTestFleetPosts -Folder $fake)
+    Check ((Get-Landed "One, no prompt.") -eq 1 -and (Get-Landed "Two, no prompt.") -eq 1 -and (Get-Landed "Three, no prompt.") -eq 1 -and @($posts | Where-Object { $_.body.EndsWith("A line, no prompt.") }).Count -eq 1) "THE REAL PC TAKES THEM: the three session-signed answers land once each, and the line is posted to the Thrall once"
+    # needsPasskey: one more prompt, signed by the passkey, and the PC takes it.
     $skip = Get-MachineCount
     $np = Invoke-Browser @{ cmd = "answer"; text = "Yes, deploy."; via = "enter"; mailbox = $mailbox; question = $sTitles[3] }
     $c3 = (Invoke-Browser @{ cmd = "assertions" }).value
-    $npEnv = @(Get-MachineEnvelopes -Skip $skip)
-    Check ($np.value.put -and $c3 -eq $c2 + 1 -and $npEnv.Count -eq 1 -and $npEnv[0].ok -and $npEnv[0].value.sig.alg -ceq "webauthn.get") ("A QUESTION FLAGGED needsPasskey costs exactly one more prompt, and goes signed by the passkey (" + ($c3 - $c2) + ")")
-    # IDLE: the PC's limit, 3 s here, read from its status; the page ends the session at that moment.
-    $put = Send-SessionSnapshot -Session ('{"idleMs":3000,"vouches":[{"vouchId":"' + $vouchId1 + '","state":"live"}],"needsPasskey":[]}')
+    $npEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
+    $run = Invoke-Run -Turns 1
+    Check ($np.value.put -and $c3 -eq $c2 + 1 -and $npEnv.Count -eq 1 -and $npEnv[0].value.sig.alg -ceq "webauthn.get" -and (Get-Landed "Yes, deploy.") -eq 1) ("A QUESTION FLAGGED needsPasskey costs exactly one more prompt, goes signed by the passkey, and lands (" + ($c3 - $c2) + ")")
+    # IDLE: the PC's limit, one minute here, as its status says; the page ends the session at that moment.
     $idle = $null
-    for ($i = 0; $i -lt 60; $i++) { $idle = Invoke-Browser @{ cmd = "sessions" }; if ($idle.ok -and @($idle.value.list).Count -ge 1 -and -not $idle.value.list[0].open) { break }; Start-Sleep -Milliseconds 250 }
-    Check ($put -ceq "" -and $idle.ok -and -not $idle.value.list[0].open -and $idle.value.notice.Contains("not used for as long as your PC allows") -and $idle.value.account.Contains("no unlocked session is open")) ("PAST THE PC'S IDLE LIMIT the page ends the session itself and says so, the Account screen too (" + $(if ($idle.ok) { $idle.value.notice } else { $idle.reason }) + ")")
+    for ($i = 0; $i -lt 150; $i++) { $idle = Invoke-Browser @{ cmd = "sessions" }; if ($idle.ok -and @($idle.value.list).Count -ge 1 -and -not $idle.value.list[0].open) { break }; Start-Sleep -Milliseconds 500 }
+    Check ($idle.ok -and -not $idle.value.list[0].open -and $idle.value.notice.Contains("not used for as long as your PC allows") -and $idle.value.account.Contains("no unlocked session is open")) ("PAST THE PC'S IDLE LIMIT the page ends the session itself and says so, the Account screen too (" + $(if ($idle.ok) { $idle.value.notice } else { $idle.reason }) + ")")
     $skip = Get-MachineCount
     $ai = Invoke-Browser @{ cmd = "answer"; text = "After the idle."; via = "enter"; mailbox = $mailbox; question = $sTitles[4] }
     $c4 = (Invoke-Browser @{ cmd = "assertions" }).value
-    $aiEnv = @(Get-MachineEnvelopes -Skip $skip)
-    $vouchId2 = $(if ($aiEnv.Count -and $aiEnv[0].ok) { $aiEnv[0].value.sig.vouchId } else { "" })
+    $aiEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
+    $vouchId2 = $(if ($aiEnv.Count) { $aiEnv[0].value.sig.vouchId } else { "" })
     Check ($ai.value.put -and $c4 -eq $c3 + 1 -and $aiEnv.Count -eq 1 -and (Test-SessionEnvelope $aiEnv[0]) -ceq "" -and $vouchId2 -cne $vouchId1 -and $null -ne $aiEnv[0].value.sig.vouch) ("then the next answer asks for the passkey once, for a new vouch, and goes under it (" + ($c4 - $c3) + ")")
-    # AWAY: past the setting (1 s in this build) the session ends; the horde stays open to read.
-    $put = Send-SessionSnapshot -Session ('{"idleMs":3600000,"vouches":[{"vouchId":"' + $vouchId2 + '","state":"live"}],"needsPasskey":[]}')
-    for ($i = 0; $i -lt 40; $i++) { $ss = Invoke-Browser @{ cmd = "sessions" }; if ($ss.ok -and @($ss.value.list).Count -ge 1 -and $ss.value.list[0].idleMs -eq 3600000) { break }; Start-Sleep -Milliseconds 250 }
+    # AWAY: past the setting (1 s in this build) the session ends; the horde stays open to read. At once,
+    # inside the PC's one minute.
     $brief = $(if ($realAway) { Invoke-Browser @{ cmd = "away"; ms = 300 } } else { Invoke-Browser @{ cmd = "hide"; ms = 300 } })
     if (-not $realAway) { $null = Invoke-Browser @{ cmd = "show" } }
     $ss = Invoke-Browser @{ cmd = "sessions" }
@@ -750,8 +729,10 @@ try {
     $skip = Get-MachineCount
     $aa = Invoke-Browser @{ cmd = "answer"; text = "After the away."; via = "enter"; mailbox = $mailbox; question = $sTitles[5] }
     $c5 = (Invoke-Browser @{ cmd = "assertions" }).value
-    $aaEnv = @(Get-MachineEnvelopes -Skip $skip)
+    $aaEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
     Check ($aa.value.put -and $c5 -eq $c4 + 1 -and $aaEnv.Count -eq 1 -and (Test-SessionEnvelope $aaEnv[0]) -ceq "" -and $aaEnv[0].value.sig.vouchId -cne $vouchId2) ("and the next answer asks for the passkey once again (" + ($c5 - $c4) + ")")
+    $run = Invoke-Run -Turns 1
+    Check ((Get-Landed "After the idle.") -eq 1 -and (Get-Landed "After the away.") -eq 1) "and the real PC takes both answers, each under its new vouch"
     # RELOAD: the key is gone with the page; the unlock is the one prompt, and the answer after it none.
     $null = Invoke-Browser @{ cmd = "reload" }
     $ss = Invoke-Browser @{ cmd = "sessions" }
@@ -763,7 +744,8 @@ try {
     $ar = Invoke-Browser @{ cmd = "answer"; text = "After the reload."; via = "enter"; mailbox = $mailbox; question = $sTitles[6] }
     $c7 = (Invoke-Browser @{ cmd = "assertions" }).value
     $arEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
-    Check ($ar.value.put -and $c6 -eq $c5 + 1 -and $c7 -eq $c6 -and $arEnv.Count -eq 1 -and (Test-SessionEnvelope $arEnv[0]) -ceq "" -and $arEnv[0].value.sig.vouchId -cne $aaEnv[0].value.sig.vouchId) ("then it asks again: the unlock is one prompt, and the answer after it none, under a new vouch (" + ($c6 - $c5) + " then " + ($c7 - $c6) + ")")
+    $run = Invoke-Run -Turns 1
+    Check ($ar.value.put -and $c6 -eq $c5 + 1 -and $c7 -eq $c6 -and $arEnv.Count -eq 1 -and (Test-SessionEnvelope $arEnv[0]) -ceq "" -and $arEnv[0].value.sig.vouchId -cne $aaEnv[0].value.sig.vouchId -and (Get-Landed "After the reload.") -eq 1) ("then it asks again: the unlock is one prompt, and the answer after it none, under a new vouch the real PC takes (" + ($c6 - $c5) + " then " + ($c7 - $c6) + ")")
     $dump = Invoke-Browser @{ cmd = "dump" }
     Check ($dump.ok -and -not $dump.value.Contains("sessionPublicKey") -and -not $dump.value.Contains("privateKey") -and $dump.value.Contains('"vouchSeq":')) "Chrome's storage holds the vouch counter and no session key"
     $probs = Invoke-Browser @{ cmd = "problems" }
