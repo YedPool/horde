@@ -24,8 +24,8 @@
            Replace = 'return @($script:HordeDecisionSettings.Keys | Sort-Object -Descending | ForEach-Object { $script:HordeDecisionSettings[$_] })' }
         # --- the table ---
         @{ Name = "text-that-is-not-json-quoted-by-the-parser"
-           Find = 'try { $table = ($Text | ConvertFrom-Json) } catch { throw ($From + " is not JSON") }'
-           Replace = '$table = ($Text | ConvertFrom-Json)' }
+           Find = 'try { $table = (ConvertFrom-HordeJson $Text) } catch { throw ($From + " is not JSON") }'
+           Replace = '$table = (ConvertFrom-HordeJson $Text)' }
         @{ Name = "table-of-another-version-read"
            Find = 'if ($null -eq $versionProp -or $versionProp.Value -ne 1 -or $null -eq $settingsProp -or $settingsProp.Value -isnot [System.Management.Automation.PSCustomObject]) {'
            Replace = 'if ($null -eq $versionProp -or $null -eq $settingsProp -or $settingsProp.Value -isnot [System.Management.Automation.PSCustomObject]) {' }

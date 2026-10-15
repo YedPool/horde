@@ -78,9 +78,9 @@ try {
 
     Write-Host ""
     Write-Host "--- the instrument sees a raw call known to be in this repository ---" -ForegroundColor Cyan
-    # agents/claude-code/Conversation.ps1 parses each transcript line with ConvertFrom-Json itself (its
-    # own -DateKind switch, line 164 when the seam landed). A scan that missed it would pass everything.
-    $known = "agents/claude-code/Conversation.ps1"
+    # core/Roles.ps1 reads its role, session and claim records with ConvertFrom-Json itself (three calls
+    # when the seam landed). A scan that missed them would pass everything.
+    $known = "core/Roles.ps1"
     $counts = Get-HordeRawJsonParseCounts -Root $root
     Check ([int]$counts[$known] -ge 1) ("the scan counts the raw calls in " + $known + " (" + $counts[$known] + ")")
     # And the real repository goes RED when one real file is left off a copy of its list.
