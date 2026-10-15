@@ -126,6 +126,17 @@ button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: va
 .chip.kind-merged, .chip.kind-done, .chip.kind-decision { color: var(--accent); border-color: var(--accent); }
 .progress-title { font-weight: 600; margin: 4px 0 2px; }
 .progress-text p { margin: 2px 0; white-space: pre-wrap; }
+/* AN ENTRY FOLDED (app.js, openEntries) is its one line and nothing else: the title cut with an ellipsis and
+   its day and time, so every folded entry is the same height and a screen holds a swath of them. Open, it
+   is drawn as before, the head's stamp standing for the line's time. */
+.progress-item.collapsed { cursor: pointer; }
+.progress-item.collapsed > :not(.progress-line) { display: none; }
+.progress-item.collapsed .progress-line { display: flex; align-items: baseline; gap: 8px; }
+.progress-item.collapsed .progress-title { flex: 1 1 auto; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-when { flex: 0 0 auto; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); white-space: nowrap; }
+.progress-item:not(.collapsed) .progress-when { display: none; }
+.progress-item:not(.collapsed) .progress-head, .progress-line { cursor: pointer; }
+.progress-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .progress-note { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); margin-top: 4px; }
 .progress-correction { margin: 8px 0 0 12px; padding: 6px 0 2px 10px; border-left: 3px solid var(--warn); }
 .progress-new { margin: 6px 0 0; padding: 4px 0; text-align: center; color: var(--accent); font-weight: 600; font-size: var(--small-px); line-height: var(--small-line-px); border-bottom: 2px solid var(--accent); }
