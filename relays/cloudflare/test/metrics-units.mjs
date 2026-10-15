@@ -36,7 +36,7 @@ function memoryStorage() {
     map: m, written,
     async get(k) { if (Array.isArray(k)) { const out = new Map(); for (const x of k) if (m.has(x)) out.set(x, structuredClone(m.get(x))); return out; } return m.has(k) ? structuredClone(m.get(k)) : undefined; },
     async put(k, v) { if (typeof k === "string") { m.set(k, structuredClone(v)); written.add(k); return; } for (const [x, y] of Object.entries(k)) { m.set(x, structuredClone(y)); written.add(x); } },
-    async list({ start = "", end = null } = {}) { const out = new Map(); for (const k of [...m.keys()].sort()) { if (k < start) continue; if (end !== null && k >= end) continue; out.set(k, structuredClone(m.get(k))); } return out; },
+    async list({ start = "", end = null, limit = Infinity } = {}) { const out = new Map(); for (const k of [...m.keys()].sort()) { if (out.size >= limit) break; if (k < start) continue; if (end !== null && k >= end) continue; out.set(k, structuredClone(m.get(k))); } return out; },
     async delete(keys) { let n = 0; for (const k of keys) if (m.delete(k)) n++; return n; },
     async getAlarm() { return alarm; },
     async setAlarm(t) { alarm = t; },
@@ -56,6 +56,8 @@ function memoryStorage() {
   check(M.kindOf({ kind: "phone" }) === "phone" && M.kindOf({ kind: "machine" }) === "machine" && M.kindOf({ kind: "test" }) === "anonymous", "a principal's kind is the kind it was vouched as; the test principal is anonymous");
   check(M.kindOf(null, hdr({ Authorization: "Horde-Machine key=x" })) === "machine" && M.kindOf(null, hdr({ Cookie: "a=b; __Host-horde-session=zz" })) === "phone" && M.kindOf(null, hdr({ "User-Agent": "phone machine" })) === "anonymous", "with none, the shape of its credentials; nothing of the user agent");
   check(M.outcomeOf(200, "") === "ok" && M.outcomeOf(101, "") === "ok" && M.outcomeOf(303, "") === "ok" && M.outcomeOf(429, "relay-daily-limit") === "relay-daily-limit" && M.outcomeOf(507, "mailbox-full") === "mailbox-full", "an answer below 400 is ok, and a refusal with a code is its code");
+  check(M.outcomeOf(101, "rate-limited", true) === "rate-limited" && M.outcomeOf(101, "relay-daily-limit", true) === "relay-daily-limit" && M.outcomeOf(101, "", true) === "refused", "A WATCH REFUSED AS A SOCKET (101, its refusal noted) is counted under its code, never ok");
+  check(M.outcomeOf(101, "", false) === "ok" && M.outcomeOf(101, "rate-limited", false) === "ok", "TWIN: an opened watch with nothing noted is ok");
   check(M.outcomeOf(401, "") === "unauthenticated" && M.outcomeOf(404, "") === "not-found" && M.outcomeOf(429, "") === "rate-limited" && M.outcomeOf(418, "") === "refused" && M.outcomeOf(500, "") === "error" && M.outcomeOf(400, "marker-code") === "bad-request", "a refusal with no code, or a code not on the list, is a word for its status", M.outcomeOf(400, "marker-code"));
   check(M.latencyBucketOf(0) === "lt50ms" && M.latencyBucketOf(49) === "lt50ms" && M.latencyBucketOf(50) === "lt200ms" && M.latencyBucketOf(999) === "lt1s" && M.latencyBucketOf(4999) === "lt5s" && M.latencyBucketOf(5000) === "more", "the latency buckets at their edges");
   const req = (h) => ({ headers: new Headers(h) });
@@ -95,6 +97,8 @@ function entry(over = {}) { return { now: T0, route: "items.put", kind: "phone",
   const g = rows.get("2026-10-14T19|items.get|phone|ok");
   const w = rows.get("2026-10-14T19|watch|phone|ok");
   check(g.count === 1 && g.retries === 1 && g.latency.lt1s === 1 && w.count === 0 && w.emptyWatch === 1 && w.watchSeconds === 59 && rows.get("2026-10-14T19|items.get|machine|rate-limited").count === 1 && fb.accounts.length === 1 && fb.accounts[0][1].count === 1, "a retry, a watch's end (no count of its own) and a refusal each land on their own key", JSON.stringify(fb));
+  const ended = new M.Recorder().record(entry({ route: "watch", counted: false, emptyWatch: false, outcome: "watch-replaced", account: null }), { ...SET, flushCount: 1 });
+  check(ended.rows.length === 1 && ended.rows[0][0] === "2026-10-14T19|watch|phone|watch-replaced" && ended.rows[0][1].count === 0 && ended.rows[0][1].emptyWatch === 0, "a watch the relay replaced is counted under watch-replaced, not as an empty watch", JSON.stringify(ended.rows));
   check(new M.Recorder().record(entry({ route: "marker-route" }), SET) === null && new M.Recorder().record(entry({ outcome: "marker" }), SET) === null, "an entry whose parts are not on the lists is not counted at all");
 }
 
@@ -144,6 +148,18 @@ function entry(over = {}) { return { now: T0, route: "items.put", kind: "phone",
   const own = (await book.summary(M.dayKeyOf(T0), { now: T0 })).own.find((x) => x.hour === M.hourOf(T0));
   check(n === 3 && own.alarms === 1 && own.rowsDeleted === 3, "and counts itself on its own line: one alarm, three rows deleted (row, account, own line)", JSON.stringify(own) + " n=" + n);
   check(st.alarmAt() === T0 + DAY_MS, "and sets the next alarm a day on");
+  // A BACKLOG IS DELETED A CAPPED RUN AT A TIME (review of PR 300).
+  const big = memoryStorage();
+  const bb = new B.MetricsBook(big);
+  for (let h = 0; h < 5; h++) { const r = new M.Recorder(); await bb.add(r.record(entry({ now: old - h * HOUR_MS, account: null }), { ...SET, flushCount: 1 }), { now: old - h * HOUR_MS }); }
+  // Five old hours: five request rows and five own lines, ten old rows in all; a cap of six a run.
+  const oldKeys = () => [...big.map.keys()].filter((k) => k.slice(2, 15) < M.cutoffHourOf(T0, 30)).length;
+  const n1 = await bb.alarm({ now: T0, maxDelete: 6 });
+  const left1 = oldKeys();
+  const soon = big.alarmAt();
+  const n2 = await bb.alarm({ now: T0 + 60000, maxDelete: 6 });
+  check(n1 === 6 && left1 === 4 && soon === T0 + 60000, "a run deletes at most its cap, and sets the next run a minute on to go on (" + n1 + " deleted, " + left1 + " old rows left)");
+  check(n2 === 4 && oldKeys() === 0 && big.alarmAt() === T0 + 60000 + DAY_MS, "and the next run finishes the backlog and goes back to a day on (" + n2 + " deleted)");
   const twin = memoryStorage();
   const tb = new B.MetricsBook(twin);
   await tb.add(mk(young), { now: young });

@@ -23,6 +23,15 @@
         @{ Name = "an-owner-by-email-never-an-owner"
            Find = '  if (emails.length === 0 || !env.RELAY_BUDGET) return false;'
            Replace = '  return false;' }
+        @{ Name = "summary-calls-free"
+           Find = '  if (!g.ok) return refusalOf(g);'
+           Replace = '' }
+        @{ Name = "no-brake"
+           Find = '  if (!brake.ok) return refuseWith('
+           Replace = '  if (false) return refuseWith(' }
+        @{ Name = "brake-set-only-when-answered"
+           Find = '  lastRead.set(device, now);'
+           Replace = '' }
         @{ Name = "any-day-asked"
            Find = '  if (day === null) return refuse(400, "day must be a date, YYYY-MM-DD");'
            Replace = '' }

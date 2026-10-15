@@ -179,7 +179,7 @@ export async function handleApi(request, env, url) {
     return refuse(401, who && who.refusal ? who.refusal : "this relay answers only a signed-in phone or a registered machine");
   }
   noteWho(request, who);
-  if (url.pathname === METRICS_SUMMARY_PATH) return handleMetricsSummary(request, env, url, who);
+  if (url.pathname === METRICS_SUMMARY_PATH) return handleMetricsSummary(request, env, url, who, limits);
   if (isAccountPath(url.pathname)) return handleAccountApi(request, env, url, who, limits);
   // THE RELAY-WIDE OBJECT'S CALLS (relay-budget.js), for a suite: only the test principal of a local dev
   // (auth.js, which never vouches for a request to a deployed Worker) reads them; anyone else is told

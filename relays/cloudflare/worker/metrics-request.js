@@ -71,7 +71,7 @@ async function count(request, env, url, response, started, ended, copy, settings
   const who = note.who || null;
   const account = who && who.kind !== "test" && typeof who.account === "string" ? await accountHashOf(env && env[SALT_BINDING], who.account) : null;
   const entry = {
-    now: ended, route, kind: kindOf(who, request), outcome: outcomeOf(status, code),
+    now: ended, route, kind: kindOf(who, request), outcome: outcomeOf(status, code, Boolean(note.code)),
     bytesIn: lengthOf(request.headers.get("Content-Length")), bytesOut: status === 101 ? 0 : told !== null ? lengthOf(told) : read.bytes,
     latencyMs: ended - started, retry: attemptOf(request, url, route) > 1, account
   };
@@ -107,11 +107,13 @@ export async function withMetrics(request, env, ctx, url, handle) {
 // device is the watch's device tag ("phone:...", "machine:...", or "" for the test principal). local is
 // what the Worker said of the watch's request: made to this machine itself, where the test override of
 // the settings is honoured (metrics.js, THE SETTINGS) - the object cannot see the request's host.
-export function recordWatchEnd(env, ctx, { device, empty, heldMs, now, local }) {
+// outcome is "ok" for a watch that ended by itself or its client, or the code the relay ended it with
+// (watch-replaced, account-gone): those are not empty watches, and are counted apart.
+export function recordWatchEnd(env, ctx, { device, empty, heldMs, now, local, outcome = "ok" }) {
   try {
     const kind = typeof device === "string" && device.startsWith("phone:") ? "phone" : typeof device === "string" && device.startsWith("machine:") ? "machine" : "anonymous";
     const settings = metricsSettingsOf(env, local ? new URL("http://127.0.0.1/") : null);
-    const batch = recorder.record({ now, route: "watch", kind, outcome: "ok", counted: false, emptyWatch: empty, watchSeconds: Math.max(0, Math.round(heldMs / 1000)) }, settings);
+    const batch = recorder.record({ now, route: "watch", kind, outcome, counted: false, emptyWatch: empty, watchSeconds: Math.max(0, Math.round(heldMs / 1000)) }, settings);
     if (batch) {
       const p = flush(env, batch, settings).catch(() => {});
       if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(p);

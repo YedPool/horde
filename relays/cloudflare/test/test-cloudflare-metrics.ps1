@@ -16,9 +16,10 @@
 #      CALLS ARE A LINE OF THEIR OWN (8); and THE PC'S PULL MAKES ONE REQUEST A DAY AND WRITES ITS FILE (7).
 #   3. A DEV WHOSE METRICS OBJECT REFUSES EVERY FLUSH (failFlush): every user request answered as ever,
 #      and as fast (3).
-#   4. A DEV WITH A TINY DAY: METRICS NEVER MOVE A BUDGET COUNTER (4) - the account's day and the relay's
-#      day both run out after exactly the requests the users made, however many flushes and summary reads
-#      went on beside them.
+#   4. A DEV WITH A TINY DAY: METRICS' OWN CALLS NEVER MOVE A BUDGET COUNTER (4) - the relay's day runs out
+#      after exactly the requests made, however many flushes went on beside them - while A SUMMARY CALL IS
+#      COUNTED like any request of its account (review of PR 300), and ITS BRAKE holds: of calls in
+#      parallel one passes, and a refused call brakes the next.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the tree);
 # without them parts 2 to 4 are skipped, said so, and the suite exits 3, never 0. A key store too: the
@@ -281,6 +282,35 @@ try {
     Check ($hashes.Count -eq 2 -and @($hashes | Where-Object { $_ -cnotmatch '\A[0-9a-f]{16}\z' }).Count -eq 0 -and -not $sum.text.Contains($ownerSub) -and -not $sum.text.Contains($otherSub) -and -not $sum.text.Contains("example.test") -and -not $sum.text.Contains("boss-")) ("two accounts, each under a 16-hex hash: no account id and no email in it (" + ($hashes -join ",") + ")")
 
     Write-Host ""
+    Write-Host "--- a phone's watch refused by a limit is counted under its code, not ok ---" -ForegroundColor Cyan
+    # A third account's phone spends its read burst (worker/limits.js, readBurst), then opens a watch: the
+    # relay answers it as an opened socket whose one message is the refusal (api.js, refuseWatch).
+    $p3 = New-Phone -Dev $M -Sub "100000000000000002104"
+    Add-Expected $expected "auth.start|anonymous|ok"; Add-Expected $expected "auth.callback|anonymous|ok"
+    $burst = 0
+    $limited = $null
+    for ($i = 0; $i -lt 80; $i++) {
+        $a = Send-To -Url ($O + "/v1/mailboxes/work/p3/items?since=0&max=1") -Cookie $p3.cookie
+        if ($a.code -eq 200) { $burst++ } else { $limited = $a; break }
+    }
+    Add-Expected $expected "items.get|phone|ok" $burst
+    Add-Expected $expected "items.get|phone|rate-limited"
+    $refusedUp = Get-UpgradeStatus -Origin $O -Path "/v1/mailboxes/work/p3/watch?since=0&max=5&timeoutMs=20000" -Cookie $p3.cookie -PageOrigin $O
+    Add-Expected $expected "watch|phone|rate-limited"
+    Check ($burst -ge 40 -and $null -ne $limited -and $limited.code -eq 429 -and $refusedUp.Contains("101")) ("the phone's reads run out after its burst (" + $burst + " taken), and its watch is answered as an opened socket (" + $refusedUp + ")")
+    $rw = $null
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        Start-Sleep -Milliseconds 500
+        $rw = Get-Summary -Dev $M -Machine $mo -Day $day -Scope "relay"
+        $reads++
+        $rwc = (Get-RowCounts $rw.json).counts
+    } while ($sw.ElapsedMilliseconds -lt 20000 -and (Compare-Counts -Actual $rwc -Expected $expected) -ne "")
+    $rwDiff = Compare-Counts -Actual $rwc -Expected $expected
+    Check ($rwDiff -ceq "" -and $rwc["watch|phone|rate-limited"] -eq 1) ("A REFUSED WATCH IS COUNTED UNDER ITS CODE: watch|phone|rate-limited 1, and every other row exactly as before (" + $(if ($rwDiff -ne "") { $rwDiff } else { "ok" }) + ")")
+    Check ($rwc["watch|phone|ok"] -eq 1) ("TWIN: the phone's watch that opened is still the one ok watch (" + $rwc["watch|phone|ok"] + ")")
+
+    Write-Host ""
     Write-Host "--- who reads what: the relay-wide view only for an owner's machine ---" -ForegroundColor Cyan
     $xr = Get-Summary -Dev $M -Machine $mx -Day $day -Scope "relay"
     Check ($xr.code -eq 403 -and -not $xr.text.Contains("requests")) ("ANOTHER ACCOUNT'S MACHINE IS REFUSED the relay-wide view, 403 (" + $xr.code + ")")
@@ -362,40 +392,63 @@ try {
     $fread = Get-Json (Send-To -Url ($O + "/v1/mailboxes/work/f/items?since=0&max=20") -Cookie $fp.cookie)
     Check ($fp.session -ne "" -and $fm.reg.code -eq 200 -and (@($codes | Sort-Object -Unique) -join ",") -ceq "200" -and @(Get-HordeTestMember $fread "items").Count -eq 10) ("A FAILING METRICS OBJECT NEVER FAILS A USER'S REQUEST: sign-in, pairing, ten puts and ten reads, every one answered and every item kept (" + (@($codes | Group-Object | ForEach-Object { $_.Name + " x" + $_.Count }) -join ", ") + ")")
     Check ($slowest -lt 3000) ("nor slows one: the slowest put and read together took " + $slowest + " ms on a local dev")
-    # AN OWNER BY EMAIL (PR 281's pins): its machine reads the relay-wide view once its email is pinned to
-    # its account - which its first mailbox request does - and not before; the summary itself pins nothing.
+    # AN OWNER BY EMAIL (PR 281's pins): the first account whose verified email is an owner's is pinned to
+    # it by its first counted request - a summary call is one - and reads the relay-wide view; a second
+    # account with the same email is not that owner.
     $ep = New-Phone -Dev $F -Sub "100000000000000002103" -Email $ownerEmail
     $em = New-Machine -Dev $F -Cookie $ep.cookie -Label "email-box"
-    $before = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
-    $again = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
-    $pin = Send-To -Url ($O + "/v1/mailboxes/work/e/items?since=0&max=1") -Cookie $ep.cookie
-    $after = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
+    $first = Get-Summary -Dev $F -Machine $em -Day $day -Scope "relay"
     $asPc = Get-Summary -Dev $F -Machine $em -Day $day
-    Check ($ep.session -ne "" -and $em.reg.code -eq 200 -and $before.code -eq 403 -and $again.code -eq 403) ("AN OWNER BY EMAIL whose email is not yet pinned to its account is refused the relay-wide view, and asking twice pins nothing (" + $before.code + "," + $again.code + ")")
-    Check ($pin.code -eq 200 -and $after.code -eq 200 -and ("" + (Get-HordeTestMember $after.json "scope")) -ceq "relay" -and ("" + (Get-HordeTestMember $asPc.json "scope")) -ceq "relay") ("once its first mailbox request pinned the email to it, its machine reads the relay-wide view, asked by name or as the PC asks (" + $pin.code + "," + $after.code + ")")
+    $ep2 = New-Phone -Dev $F -Sub "100000000000000002105" -Email $ownerEmail
+    $em2 = New-Machine -Dev $F -Cookie $ep2.cookie -Label "email-box-2"
+    $second = Get-Summary -Dev $F -Machine $em2 -Day $day -Scope "relay"
+    $secondPc = Get-Summary -Dev $F -Machine $em2 -Day $day
+    Check ($ep.session -ne "" -and $em.reg.code -eq 200 -and $first.code -eq 200 -and ("" + (Get-HordeTestMember $first.json "scope")) -ceq "relay" -and ("" + (Get-HordeTestMember $asPc.json "scope")) -ceq "relay") ("AN OWNER BY EMAIL: the first account with the owner's email is pinned to it by its first request, and its machine reads the relay-wide view, by name or as the PC asks (" + $first.code + ")")
+    Check ($ep2.session -ne "" -and $em2.reg.code -eq 200 -and $second.code -eq 403 -and ("" + (Get-HordeTestMember $secondPc.json "scope")) -ceq "account") ("and a second account with the same email is not that owner: refused the relay-wide view, given its own (" + $second.code + ")")
     $fs = Get-Summary -Dev $F -Machine $fm -Day $day -Scope "relay"
     Check ($fs.code -eq 200 -and @(Get-HordeTestMember $fs.json "requests").Count -eq 0 -and ((@(@(Get-HordeTestMember $fs.json "own") | ForEach-Object { [long](Get-HordeTestMember $_ "flushes") }) | Measure-Object -Sum).Sum) -eq 0) "CONTROL: the object really refused them all: it holds no row and counted no flush"
     Stop-Dev -Dev $F
 
     Write-Host ""
-    Write-Host "--- 4. metrics never move a budget counter ---" -ForegroundColor Cyan
-    # An account's day of 6 and a relay's day of 6 (one held back for the owner, leased one at a time):
-    # the owner's phone makes 2 mailbox requests, then everything metrics can do happens - a flush on every
-    # request, its machine's summary reads, a watch's end - and then exactly 4 more requests are taken.
-    $B = Start-Dev -Name "budget" -Limits '{"requestsPerDay":6,"relayRequestsPerDay":6,"relayOwnerReserve":1,"relayRequestLease":1}' -Metrics '{"flushCount":1,"summaryEveryMs":1}' -More $owners
+    Write-Host "--- 4. metrics' own calls move no budget; a summary call is counted, and braked ---" -ForegroundColor Cyan
+    # A relay's day of 6 (one held back for the owner, leased one at a time) and an account's day of 6; the
+    # brake a minute. The owner's phone makes 2 mailbox requests; its machine asks for 3 summaries AT
+    # ONCE - one passes the brake and is counted, two are refused unasked; another account's machine is
+    # refused the relay-wide view (counted: it passed the gate) and then braked. A flush on every request
+    # besides. That is 4 of the day: the owner then takes exactly 2 more. Were summary calls free it would
+    # be 4; were the flushes counted, fewer.
+    $B = Start-Dev -Name "budget" -Limits '{"requestsPerDay":6,"relayRequestsPerDay":6,"relayOwnerReserve":1,"relayRequestLease":1}' -Metrics '{"flushCount":1,"summaryEveryMs":60000}' -More $owners
     $O = $B.origin
     $bp = New-Phone -Dev $B -Sub $ownerSub
     $bm = New-Machine -Dev $B -Cookie $bp.cookie -Label "budget-box"
+    $bx = New-Phone -Dev $B -Sub "100000000000000002106"
+    $bxm = New-Machine -Dev $B -Cookie $bx.cookie -Label "public-box"
     $read = { Send-To -Url ($O + "/v1/mailboxes/work/b/items?since=0&max=1") -Cookie $bp.cookie }
     $two = @(1, 2 | ForEach-Object { (& $read).code })
-    $sums = @(1, 2, 3, 4, 5 | ForEach-Object { (Get-Summary -Dev $B -Machine $bm -Day $day -Scope "relay").code })
-    $sumsAcc = @(1, 2, 3 | ForEach-Object { (Get-Summary -Dev $B -Machine $bm -Day $day -Scope "account").code })
+    # THREE CALLS IN PARALLEL, each signed on its own.
+    $target = "/v1/metrics/summary?day=" + $day + "&scope=relay"
+    $pending = New-Object System.Collections.ArrayList
+    $reqs = New-Object System.Collections.ArrayList
+    foreach ($k in 1, 2, 3) {
+        $auth = New-HordeCloudflareRelayMachineAuthorization -Key $bm.signer.key -KeyId $bm.signer.keyId -Origin $O -Method "GET" -Target $target -Body (New-Object byte[] 0)
+        $rq = New-Object System.Net.Http.HttpRequestMessage((New-Object System.Net.Http.HttpMethod("GET")), ($O + $target))
+        [void]$rq.Headers.TryAddWithoutValidation("Authorization", $auth)
+        [void]$reqs.Add($rq)
+    }
+    foreach ($rq in $reqs) { [void]$pending.Add($http.SendAsync($rq)) }
+    $par = @($pending | ForEach-Object { $r = $_.GetAwaiter().GetResult(); try { [pscustomobject]@{ code = [int]$r.StatusCode; text = $r.Content.ReadAsStringAsync().GetAwaiter().GetResult() } } finally { $r.Dispose() } })
+    foreach ($rq in $reqs) { $rq.Dispose() }
+    $parCodes = @($par | ForEach-Object { $_.code } | Sort-Object)
+    Check ((@($two) -join ",") -ceq "200,200" -and ($parCodes -join ",") -ceq "200,429,429" -and @($par | Where-Object { $_.code -eq 429 -and $_.text.Contains("rate-limited") }).Count -eq 2) ("THE BRAKE: of three summary calls at once, exactly one passes; the other two are refused, rate-limited (" + ($parCodes -join ",") + ")")
+    $xRefused = Get-Summary -Dev $B -Machine $bxm -Day $day -Scope "relay"
+    $xNext = Get-Summary -Dev $B -Machine $bxm -Day $day -Scope "account"
+    Check ($xRefused.code -eq 403 -and $xNext.code -eq 429) ("a REFUSED call brakes the next as an answered one does: 403, then 429 (" + $xRefused.code + "," + $xNext.code + ")")
     Start-Sleep -Milliseconds 1500
     $rest = New-Object System.Collections.ArrayList
-    for ($i = 0; $i -lt 8; $i++) { $c = (& $read).code; [void]$rest.Add($c); if ($c -ne 200) { break } }
-    $taken = @($rest | Where-Object { $_ -eq 200 }).Count
-    Check ((@($two) -join ",") -ceq "200,200" -and (@($sums + $sumsAcc | Sort-Object -Unique) -join ",") -ceq "200") ("two mailbox requests, then eight summary reads and a flush for every request, all answered (" + (@($sums + $sumsAcc) -join ",") + ")")
-    Check ($taken -eq 4 -and @($rest)[-1] -eq 429) ("METRICS NEVER MOVE A BUDGET COUNTER: the day of six still had exactly four requests left, then refused (" + (@($rest) -join ",") + ")")
+    for ($i = 0; $i -lt 8; $i++) { $c = & $read; [void]$rest.Add($c); if ($c.code -ne 200) { break } }
+    $taken = @($rest | Where-Object { $_.code -eq 200 }).Count
+    $last = @($rest)[-1]
+    Check ($taken -eq 2 -and $last.code -eq 429 -and $last.text.Contains("relay-daily-limit")) ("THE BUDGET MOVES FOR A SUMMARY CALL AND FOR NOTHING ELSE OF METRICS: of the relay's day of six, 2 reads, 1 summary and 1 refused summary leave exactly 2, then relay-daily-limit - free summaries would have left 4, counted flushes fewer (" + (@($rest | ForEach-Object { $_.code }) -join ",") + ")")
     Stop-Dev -Dev $B
 } finally {
     foreach ($dv in @($devs)) { Stop-HordeCloudflareRelayDev -Dev $dv }

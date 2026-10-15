@@ -21,9 +21,12 @@
         @{ Name = "any-code-is-an-outcome"
            Find = 'if (typeof code === "string" && OUTCOMES.includes(code) && code !== "ok") return code;'
            Replace = 'if (typeof code === "string" && code !== "") return code;' }
+        @{ Name = "a-refused-watch-counted-ok"
+           Find = '  if (status < 400 && !refused) return "ok";'
+           Replace = '  if (status < 400) return "ok";' }
         @{ Name = "a-refusal-counted-ok"
-           Find = '  if (status < 400) return "ok";'
-           Replace = '  if (status < 500) return "ok";' }
+           Find = '  if (status < 400 && !refused) return "ok";'
+           Replace = '  if (status < 500 && !refused) return "ok";' }
         @{ Name = "latency-edge-moved"
            Find = 'const LATENCY_EDGES = [50, 200, 1000, 5000];'
            Replace = 'const LATENCY_EDGES = [51, 200, 1000, 5000];' }

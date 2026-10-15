@@ -39,9 +39,10 @@ import { DAY_MS } from "./throttle.js";
 
 export const ROUTES = Object.freeze(["items.get", "items.put", "watch", "ack", "account.view", "account.machines", "account.phones", "pair.register", "rotation", "auth.start", "auth.callback", "auth.session", "other"]);
 export const KINDS = Object.freeze(["phone", "machine", "anonymous"]);
-// The refusal codes the relay answers with (answers.js, CODES; the watch-replaced message is not an
-// answer), then a word for each status refused with no code.
-export const OUTCOMES = Object.freeze(["ok", "rate-limited", "daily-limit", "mailbox-full", "machines-cap", "phones-cap", "mailboxes-cap", "account-full", "account-gone", "mailbox-gone", "account-deleting", "relay-daily-limit", "relay-full",
+// The refusal codes the relay answers with (answers.js, CODES; watch-replaced is the end of a watch a
+// newer one of its device replaced, counted where the watch ends), then a word for each status refused
+// with no code.
+export const OUTCOMES = Object.freeze(["ok", "rate-limited", "daily-limit", "mailbox-full", "machines-cap", "phones-cap", "mailboxes-cap", "account-full", "account-gone", "mailbox-gone", "account-deleting", "relay-daily-limit", "relay-full", "watch-replaced",
   "bad-request", "unauthenticated", "forbidden", "not-found", "bad-method", "conflict", "gone", "too-large", "not-websocket", "refused", "error"]);
 const STATUS_WORDS = Object.freeze({ 400: "bad-request", 401: "unauthenticated", 403: "forbidden", 404: "not-found", 405: "bad-method", 409: "conflict", 410: "gone", 413: "too-large", 426: "not-websocket", 429: "rate-limited" });
 // The latency histogram's buckets: under 50 ms, under 200 ms, under 1 s, under 5 s, more.
@@ -144,9 +145,11 @@ export function kindOf(who, request) {
   return "anonymous";
 }
 
-// The outcome of an answer of status, refused with code (or none), from OUTCOMES.
-export function outcomeOf(status, code) {
-  if (status < 400) return "ok";
+// The outcome of an answer of status, refused with code (or none), from OUTCOMES. refused says the
+// relay refused it whatever its status: a phone's watch refused by a limit is answered as an opened
+// socket (101) whose one message is the refusal (api.js, refuseWatch) - counted under its code, never ok.
+export function outcomeOf(status, code, refused = false) {
+  if (status < 400 && !refused) return "ok";
   if (typeof code === "string" && OUTCOMES.includes(code) && code !== "ok") return code;
   if (STATUS_WORDS[status]) return STATUS_WORDS[status];
   return status >= 500 ? "error" : "refused";

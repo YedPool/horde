@@ -23,6 +23,9 @@ const ACCOUNT = "a:";
 const OWN = "o:";
 // The storage API reads, writes and deletes at most 128 keys in one call.
 const BATCH = 128;
+// The most rows one alarm run deletes, and how soon the next run goes on when it reached that (alarm).
+export const MAX_DELETE = 1280;
+const AGAIN_MS = 60 * 1000;
 
 function chunks(list) {
   const out = [];
@@ -98,16 +101,21 @@ export class MetricsBook {
     return { requests, accounts, own };
   }
 
-  // The daily alarm: every row of an hour older than retentionDays is deleted, then the next alarm set.
-  async alarm({ now, retentionDays = METRICS.retentionDays } = {}) {
+  // The daily alarm: the rows of hours older than retentionDays are deleted, AT MOST maxDelete A RUN (review
+  // of PR 300: a backlog - a relay whose alarm did not run for a while - is never listed or deleted in one
+  // unbounded go). A run that reached the cap sets the next alarm a minute on, to go on where it stopped;
+  // one that did not, a day on.
+  async alarm({ now, retentionDays = METRICS.retentionDays, maxDelete = MAX_DELETE } = {}) {
     const cutoff = cutoffHourOf(now, retentionDays);
     let deleted = 0;
     for (const prefix of [ROW, ACCOUNT, OWN]) {
-      const old = [...(await this.storage.list({ start: prefix, end: prefix + cutoff })).keys()];
+      const room = maxDelete - deleted;
+      if (room <= 0) break;
+      const old = [...(await this.storage.list({ start: prefix, end: prefix + cutoff, limit: room })).keys()];
       for (const part of chunks(old)) deleted += await this.storage.delete(part);
     }
     await this.own(now, { alarms: 1, rowsDeleted: deleted });
-    await this.storage.setAlarm(now + DAY_MS);
+    await this.storage.setAlarm(now + (deleted >= maxDelete ? AGAIN_MS : DAY_MS));
     return deleted;
   }
 }

@@ -16,22 +16,29 @@
 // a share of requests, not a right to read every account's counts). ITS OWN ACCOUNT'S HOURS - count,
 // bytes in and out, under its account hash - for any machine.
 //
-// A SUMMARY READ IS THE METRICS OBJECT'S OWN CALL: it is not one of the account's requests (accounts.js,
-// admit, is never asked: metrics never touch a budget), it is not counted among the request rows
-// (metrics-request.js), and the object counts it on its own line (summaryReads). So that a machine cannot
-// use it to call the object as fast as it likes, one key reads at most once a summaryEveryMs (a minute)
-// from one isolate; the PC reads once a day.
+// A SUMMARY CALL IS A REQUEST LIKE ANY OTHER OF THE ACCOUNT'S (review of PR 300, Orc E): with sign-up
+// open, any account's machine may ask, so each call goes through the account's gate (accounts.js, admit,
+// as a read) and is counted in the account's day and the relay-wide day (budget.js) - a machine cannot
+// loop it for free. What metrics never touch is the budget's counts from their OWN calls: the flushes and
+// the alarm (metrics-request.js, metrics-book.js). A call is not counted among the request rows
+// (metrics-request.js); the object counts the reads that reach it on its own line (summaryReads).
+// THE BRAKE: one device asks at most once a summaryEveryMs (a minute) from one isolate - the PC asks once
+// a day. It is checked and SET FIRST, before anything is awaited, for every call after authentication,
+// whatever then becomes of the call: calls in parallel see the first one's mark, and a refused call
+// brakes the next as an answered one does.
 //
 // WHAT A SUMMARY CAN HOLD is only what metrics.js lets a row hold: an hour, a route, a kind and an outcome
 // from their fixed lists, a 16-hex account hash, and whole numbers. The day asked for is a date, checked.
-import { answer, refuse, refuseWith, CODES } from "./answers.js";
+import { answer, refuse, refuseWith, refusalOf, CODES } from "./answers.js";
+import { accountOf } from "./accounts.js";
 import { ownersOf, tierOf, ownerEmailsOf } from "./budget.js";
 import { relayBudgetOf } from "./relay-budget.js";
 import { metricsSettingsOf, dayOrNull, accountHashOf, SALT_BINDING } from "./metrics.js";
 import { metricsObjectOf, METRICS_SUMMARY_PATH } from "./metrics-request.js";
 
 export { METRICS_SUMMARY_PATH };
-// When each machine key last read a summary from this isolate (the header). Bounded: oldest forgotten.
+// When each device last asked for a summary in this isolate (the header, THE BRAKE). Bounded: oldest
+// forgotten.
 const lastRead = new Map();
 const LAST_READ_MAX = 1024;
 
@@ -44,7 +51,21 @@ async function isOwner(env, who) {
   return (await relayBudgetOf(env).pinnedOwner({ account: who.account, emails })) === true;
 }
 
-export async function handleMetricsSummary(request, env, url, who) {
+// THE BRAKE (the header): true when device may ask now, and the mark set for now either way it goes.
+function braked(device, now, everyMs) {
+  const last = lastRead.get(device);
+  if (last !== undefined && now - last < everyMs) return { ok: false, retryAfterMs: everyMs - (now - last) };
+  lastRead.delete(device);
+  if (lastRead.size >= LAST_READ_MAX) lastRead.delete(lastRead.keys().next().value);
+  lastRead.set(device, now);
+  return { ok: true };
+}
+
+export async function handleMetricsSummary(request, env, url, who, limits) {
+  const settings = metricsSettingsOf(env, url);
+  const now = Date.now();
+  const brake = braked(String((who && who.device) || ""), now, settings.summaryEveryMs);
+  if (!brake.ok) return refuseWith(429, CODES.rate, "this device asked for a summary a moment ago: wait", brake.retryAfterMs);
   if (request.method !== "GET") return refuse(405, "the summary is read with GET");
   if (!who || who.kind !== "machine") return refuse(403, "only a registered machine reads the relay's metrics");
   const day = dayOrNull(url.searchParams.get("day"));
@@ -54,10 +75,9 @@ export async function handleMetricsSummary(request, env, url, who) {
   // a machine that is not an owner's.
   const asked = url.searchParams.get("scope");
   if (asked !== null && asked !== "relay" && asked !== "account") return refuse(400, "scope is relay or account");
-  const settings = metricsSettingsOf(env, url);
-  const now = Date.now();
-  const last = lastRead.get(who.keyId);
-  if (last !== undefined && now - last < settings.summaryEveryMs) return refuseWith(429, CODES.rate, "this machine read a summary a moment ago: wait", settings.summaryEveryMs - (now - last));
+  // COUNTED as a read of the account's, in its day and the relay's (the header).
+  const g = await accountOf(env, who.account).admit({ device: who.device, epoch: who.epoch, op: "get", mailbox: "", now, limits, owners: ownersOf(env) });
+  if (!g.ok) return refusalOf(g);
   const owner = asked === "account" ? false : await isOwner(env, who);
   const scope = asked || (owner ? "relay" : "account");
   if (scope === "relay" && !owner) return refuse(403, "only a machine of one of the relay's owner accounts reads the relay-wide metrics; ask with scope=account for your own");
@@ -68,9 +88,6 @@ export async function handleMetricsSummary(request, env, url, who) {
     account = await accountHashOf(env[SALT_BINDING], who.account);
     if (account === null) return refuse(503, "this relay keeps no account metrics: it has no metrics salt");
   }
-  lastRead.delete(who.keyId);
-  if (lastRead.size >= LAST_READ_MAX) lastRead.delete(lastRead.keys().next().value);
-  lastRead.set(who.keyId, now);
   const s = await m.summary({ day, account });
   if (scope === "account") return answer(200, { day, scope, account, accounts: s.accounts });
   return answer(200, { day, scope, requests: s.requests, accounts: s.accounts, own: s.own });

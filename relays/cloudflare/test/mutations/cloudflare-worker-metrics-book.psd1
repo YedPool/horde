@@ -33,7 +33,13 @@
            Find = '    for (const prefix of [ROW, ACCOUNT, OWN]) {'
            Replace = '    for (const prefix of [ROW, OWN]) {' }
         @{ Name = "alarm-not-set-again"
-           Find = '    await this.storage.setAlarm(now + DAY_MS);'
+           Find = '    await this.storage.setAlarm(now + (deleted >= maxDelete ? AGAIN_MS : DAY_MS));'
+           Replace = '' }
+        @{ Name = "a-capped-run-waits-a-day"
+           Find = '(deleted >= maxDelete ? AGAIN_MS : DAY_MS)'
+           Replace = '(DAY_MS)' }
+        @{ Name = "no-cap-on-a-run"
+           Find = '      if (room <= 0) break;'
            Replace = '' }
         @{ Name = "no-first-alarm"
            Find = '    await this.keepAlarm(now);'
