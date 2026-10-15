@@ -67,6 +67,13 @@
 # forever after the envelope is gone; one challenge cannot be both without changing what
 # relay/Envelope.ps1 verifies and what every stored phone record means. An envelope signed by the
 # passkey still takes a vouch in (channels/trust): an older phone keeps working.
+# WHAT THIS GIVES UP, AND THE REMEDY (review of PR 289 by Orc E):
+#   - PRIVACY: the vouch crosses the relay IN PLAIN TEXT in the machine's mailbox, so the relay can link
+#     a phone identity key to the passkey that vouched for it. The sealed envelope used to hide that.
+#     Nothing in it is secret (a public key, a public signature), and it grants the relay nothing.
+#   - A COPY STAYS VALID: a vouch is a fixed statement, so an old copy of it is taken again for as long
+#     as its passkey is trusted - a phone key cannot be revoked on its own. The remedy for a lost phone
+#     is to revoke its PASSKEY (horde relay trust revoke), which stops every key it vouched for.
 # NOTHING IS TRUSTED THAT WAS NOT BEFORE: a vouch item by a pending, expired, revoked or unknown
 # device, for another horde, by another key than it names, or with no signature, is refused and changes
 # nothing; the phone sends it again only at its next unlock, never in a loop.
