@@ -254,6 +254,11 @@ try {
     Check ($r.turn.text.Contains("session-refused") -and -not (Test-Said $W2 "A under B's vouch.")) ("an envelope from one device under another device's vouch is refused as session-refused (" + $r.turn.text + ")")
     $r = Send-SessionAnswer -World $W2 -Session $sB -Phone $W2.phone -Text "A under B's vouch, bare." -At $T0.AddMinutes(3)
     Check ($r.turn.text.Contains("session-") -and -not (Test-Said $W2 "A under B's vouch, bare.")) ("and under its vouchId alone it is refused too (" + $r.turn.text + ")")
+    # Phone A's own passkey signs a vouch that names phone B's passkey as its device (and A's phone
+    # key): the assertion is A's, so only the rule that a vouch is its sender's own refuses it.
+    $named = New-HordeTestPhoneSession -Phone $B -Machine $W2.machine -NotBefore $T0 -Seq 50 -PhoneKeyId (Get-HordeRelayKeyId -Public $W2.phone.agreePublic) -Signer $W2.phone
+    $r = Send-SessionAnswer -World $W2 -Session $named -Phone $W2.phone -Text "A's vouch naming B." -At $T0.AddMinutes(3) -WithVouch
+    Check ($r.turn.text.Contains("another passkey's") -and -not (Test-Said $W2 "A's vouch naming B.")) ("a vouch signed by the sender's own passkey but naming another device is refused as session-refused (" + $r.turn.text + ")")
     $thief = New-HordeTestPhone
     $forged = New-HordeTestPhoneSession -Phone $W2.phone -Machine $W2.machine -NotBefore $T0 -Seq 5 -Signer $thief
     $r = Send-SessionAnswer -World $W2 -Session $forged -Text "Forged vouch." -At $T0.AddMinutes(4) -WithVouch
