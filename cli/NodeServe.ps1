@@ -15,7 +15,8 @@
 # Messaging (R21 slice 4) runs through Invoke-HordeNodeServeStep too: delivery itself is the
 # messenger's, handed in, and nothing here types into a session.
 #
-# WHAT IT DOES NOT. Install itself to start at logon (that is an install step, `horde install`), stream
+# WHAT IT DOES NOT. Install itself to start at logon (a long-lived piece is kept running by the supervisor,
+# from its definition in settings\service-definitions.json, and `horde services schedule`), stream
 # observe.since (R12b, after lifecycle step 11), or read a binding record (R12b, after Phase 3 step 3.8).
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).

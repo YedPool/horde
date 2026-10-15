@@ -46,7 +46,8 @@
 // entries, oldest at the top, in the order they were written, to be read on from wherever he stopped.
 // Each shows its time, its title in bold, its text as short paragraphs with their labels (Asked, Happened,
 // Means, Next) in bold, and small chips: the area's plain name first, the kind, and the lane and task only
-// when the entry names them. HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
+// when the entry names them. EACH STARTS FOLDED to one line, its title and its day and time, and a tap opens
+// it to all of that (the founder asked, 2026-10-14; openEntries, below). HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
 // opens under the last entry he read, with a line where the new ones begin and their count on the tab;
 // the place moves on as he reads down, entry by entry; Jump to newest and Mark all read stand at the foot
 // of the screen always. A correction is shown on the entry it corrects, and in its own place. The log is
@@ -99,6 +100,7 @@ import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
 import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
+import { renderDecisionCards } from "./decision-cards.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
@@ -193,12 +195,21 @@ function memoryStorage() {
 }
 function docOf(id) {
   if (docs[id]) return docs[id];
+  // THE CARDS FIRST (decision-cards.js), in a box of their own above the list: the list's box is
+  // list.js's, which keeps in it only what it draws.
+  const cards = document.createElement("div");
+  cards.className = "decision-cards";
+  cards.setAttribute("role", "group");
+  cards.setAttribute("aria-label", "Questions by lane");
+  $("lists").appendChild(cards);
   const box = document.createElement("div");
   box.className = "horde-list";
   $("lists").appendChild(box);
   const storage = memoryStorage();
   const doc = window.HordeDecisionsDocument.mount(box, {
     topInset: () => $("bar").getBoundingClientRect().bottom,
+    // Every draw - a list that arrives, a lane chosen, an answer saved - draws the cards' numbers again.
+    onDraw: () => drawDecisionCards(id),
     onChange: showCounts,
     storage,
     say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
@@ -206,8 +217,16 @@ function docOf(id) {
     sayPart: (number, letter, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId, part: letter })),
     act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId }))
   });
-  docs[id] = { box, doc, kinds: false, storage };
+  docs[id] = { box, cards, doc, kinds: false, storage };
   return docs[id];
+}
+// The cards of one horde's decisions page: its lanes' counts from its list, drawn as the Progress tab's cards
+// when that horde is the one picked and its lanes document has come (cardsLast), and by name alone otherwise.
+function drawDecisionCards(id) {
+  const d = docs[id];
+  if (!d) return;
+  while (d.cards.firstChild) d.cards.removeChild(d.cards.firstChild);
+  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane) })) d.cards.appendChild(card);
 }
 function showCounts() {
   const d = current && docs[current];
@@ -238,7 +257,7 @@ async function pick(id) {
   drawTabs();
   const h = hordes.find((x) => x.id === id);
   if (!h) { show(hordes.length ? "lockedView" : "emptyView"); return; }
-  for (const k of Object.keys(docs)) docs[k].box.hidden = k !== id;
+  for (const k of Object.keys(docs)) { docs[k].box.hidden = k !== id; docs[k].cards.hidden = k !== id; }
   const rec = await bridge.request("pick", { id });
   render(h, rec);
 }
@@ -258,7 +277,11 @@ function render(h, rec) {
   }
   const d = docOf(h.id);
   d.box.hidden = false;
+  d.cards.hidden = false;
   show(PANES[pane].view);
+  // The decisions page's cards are the Progress tab's (decision-cards.js): its lanes document, asked for once here
+  // too; cards-changed brings every later one.
+  if (pane === "decisions" && !cardsLast) bridge.request("cards").then(drawCards);
   showAnnounceBox(h, rec);
   if (pane === "chat") bridge.request("chat").then(drawChat);
   if (pane === "progress") { bridge.request("cards").then(drawCards); requestStream(); }
@@ -448,8 +471,13 @@ let progressMark = -1;
 let progressLast = null;
 // The entries that have been on his screen since the horde was unlocked (by id): what "seen" means below.
 const seenEntries = new Set();
+// EVERY ENTRY STARTS FOLDED to one line, its title and its day and time (the founder asked, 2026-10-14: "to
+// be able to see a swath of progress at once without all the details"); a tap opens one. The ones he opened
+// (by id) stay open while the stream is redrawn under him - a new entry rebuilds the whole log - and are
+// forgotten when a stream is opened anew (drawProgress, opening). Kept in memory only: nothing stored, nothing sent.
+const openEntries = new Set();
 let watcher = null;
-function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; }
+function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; drawDecisionCards(current); }
 function clearProgress() { const log = $("progressLog"); while (log.firstChild) log.removeChild(log.firstChild); progressDrawn = ""; progressLast = null; seenEntries.clear(); if (watcher) { watcher.disconnect(); watcher = null; } }
 function showProgressCount(v) {
   const n = v ? v.unread : 0;
@@ -464,6 +492,17 @@ function paragraphsInto(box, paragraphs) {
     line.appendChild(document.createTextNode(p.text));
     box.appendChild(line);
   }
+}
+// An entry folded or open: its class (app.css hides all but the one line) and its line's aria-expanded.
+function foldEntry(box, open) {
+  box.classList.toggle("collapsed", !open);
+  box.querySelector(".progress-line").setAttribute("aria-expanded", open ? "true" : "false");
+}
+function toggleEntry(box) {
+  const id = box.getAttribute("data-id");
+  const open = !openEntries.has(id);
+  if (open) openEntries.add(id); else openEntries.delete(id);
+  foldEntry(box, open);
 }
 function chip(words, kind) { const c = document.createElement("span"); c.className = "chip " + kind; c.textContent = words; return c; }
 // --- the cards ---
@@ -500,6 +539,7 @@ function drawCards(rec) {
   if (!rec || rec.state !== "known") return;
   const v = rec.value;
   cardsLast = v;
+  drawDecisionCards(current);
   if ($("progress").hidden) return;
   // NO MACHINE HAS SENT CARDS: the whole log, as before cards were, under one plain line saying why (cards-why.js).
   if (v.machines.length === 0) { $("cardsWhy").textContent = cardsFallbackLine(v); if (!stream) { stream = { entry: current, lane: "", title: "", fallback: true }; requestStream(); } return; }
@@ -601,7 +641,7 @@ function drawProgress(rec, own = true) {
   const sig = current + "/" + streamKey() + "/" + v.items.length + "/" + (v.newest ? v.newest.id : "") + "/" + v.items.reduce((n, it) => n + it.corrections.length, 0);
   if (sig === progressDrawn) return;
   const opening = progressDrawn === "";
-  if (opening) progressMark = v.readIndex;
+  if (opening) { progressMark = v.readIndex; openEntries.clear(); }
   progressDrawn = sig;
   const log = $("progressLog");
   while (log.firstChild) log.removeChild(log.firstChild);
@@ -621,8 +661,23 @@ function drawProgress(rec, own = true) {
     const stamp = timeStamp(it.said, "", "progress/" + it.id, dayTime);
     if (stamp) head.appendChild(stamp);
     box.appendChild(head);
-    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; box.appendChild(title);
-    const text = document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
+    // THE ONE LINE: the title, and - shown only while folded (app.css), the head standing for it when open -
+    // the same day and time the head's stamp shows. It is the entry's control: Enter or Space toggles it.
+    const line = document.createElement("div"); line.className = "progress-line";
+    line.setAttribute("role", "button"); line.tabIndex = 0;
+    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; line.appendChild(title);
+    const when = dayTime(it.said);
+    if (when) { const w = document.createElement("span"); w.className = "progress-when"; w.textContent = when; line.appendChild(w); }
+    box.appendChild(line);
+    line.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleEntry(box); } });
+    // Folded, a tap anywhere on it opens it. Open, a tap on its head or its title folds it; a button or a
+    // link anywhere in it (the stamp, say) does its own thing only.
+    box.addEventListener("click", (e) => {
+      const t = e.target instanceof Element ? e.target : e.target.parentElement;
+      if (!box.classList.contains("collapsed") && (!t || t.closest("button, a") || !t.closest(".progress-head, .progress-line"))) return;
+      toggleEntry(box);
+    });
+    const text =document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
     if (it.corrects) { const n = document.createElement("div"); n.className = "progress-note"; n.textContent = it.correctsTitle ? "This corrects: " + it.correctsTitle : "This corrects an earlier entry that is not on this phone."; box.appendChild(n); }
     // A CORRECTION IS SHOWN ON THE ENTRY IT CORRECTS, as well as in its own place further down.
     for (const c of it.corrections) {
@@ -632,6 +687,7 @@ function drawProgress(rec, own = true) {
       const cx = document.createElement("div"); cx.className = "progress-text"; paragraphsInto(cx, c.paragraphs); cb.appendChild(cx);
       box.appendChild(cb);
     }
+    foldEntry(box, openEntries.has(it.id));
     log.appendChild(box);
   });
   if (opening) {
@@ -935,7 +991,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

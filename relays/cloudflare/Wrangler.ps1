@@ -11,10 +11,11 @@
 # --ignore-scripts, because nothing in the lock needs an install script to run (measured 2026-10-11:
 # wrangler 4.149.0 ran dev and its runtime with none) and a script is code run at install time.
 #
-# WHERE IT IS DEPLOYED is wrangler.json's too, and only there: the Worker's name, and in its vars the
-# origin it answers at (https://<name>.<account subdomain>.workers.dev) and the path Google sign-in will
-# return to (reserved now; sign-in is the next pull request). Get-HordeCloudflareRelayDeployment reads
-# them for the adapter's default origin and the deploy; the Worker reads them as bindings.
+# WHERE IT IS DEPLOYED: wrangler.json's vars hold the shipped relay's origin and the path Google sign-in
+# returns to; a home that hosts its own relay names its origin in the setting relayOrigin (Settings.ps1,
+# Get-HordeCloudflareRelayDeployment, the one answer). The production config is written with that
+# answer's Worker name and origin (-Deployment); a test config with the dev's own (-Origin). The Worker
+# reads the origin as a binding.
 #
 # THE CONFIG IT RUNS WITH IS WRITTEN, NOT USED IN PLACE. wrangler.json beside this file is the one
 # production config; New-HordeCloudflareRelayConfig writes a copy into a work folder outside the tree,
@@ -158,14 +159,18 @@ function New-HordeCloudflareRelayConfig {
     # (test runs only). -CommittedTestBinding adds test-bindings.json exactly as committed, placeholder
     # and all: only for the suite that shows the Worker refuses the placeholder. With either, -Origin
     # (http to this machine) replaces HORDE_RELAY_ORIGIN and -ExtraVars adds a suite's own vars over the rest.
+    # A production config takes -Deployment instead (Get-HordeCloudflareRelayDeployment's { name; origin }):
+    # the Worker's name and HORDE_RELAY_ORIGIN are the home's, and without it nothing is written.
     # Known: the config's path. Unknown when wrangler.json holds a test binding, the token is too short
-    # to count, or the origin is not this machine's.
+    # to count, the origin is not this machine's, or a production config has no deployment.
     param([Parameter(Mandatory = $true)][string]$Out, [Parameter(Mandatory = $true)][string]$Site, [string]$TestToken = "", [switch]$CommittedTestBinding,
-        [string]$Origin = "", [hashtable]$ExtraVars = @{})
+        [string]$Origin = "", [hashtable]$ExtraVars = @{}, $Deployment = $null)
     $text = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "wrangler.json"), [System.Text.Encoding]::UTF8)
     if (Test-HordeCloudflareRelayHasTestBinding -Text $text) { return (New-HordeUnknown -Reason ("wrangler.json names a " + $script:HordeCloudflareRelayTestPrefix + " binding: the production config must never carry the test binding, nor any other test-only one")) }
     $isTest = $TestToken -ne "" -or $CommittedTestBinding
     if (-not $isTest -and ($Origin -ne "" -or $ExtraVars.Count -gt 0)) { return (New-HordeUnknown -Reason "-Origin and -ExtraVars are for a test config only") }
+    if ($isTest -and $null -ne $Deployment) { return (New-HordeUnknown -Reason "-Deployment is for a production config only") }
+    if (-not $isTest -and ($null -eq $Deployment -or ("" + $Deployment.name) -cnotmatch '\A[a-z0-9][a-z0-9-]{0,62}\z' -or ("" + $Deployment.origin) -cnotmatch '\Ahttps://')) { return (New-HordeUnknown -Reason "a production config needs a deployment: Get-HordeCloudflareRelayDeployment's Worker name and https origin") }
     if ($Origin -ne "" -and $Origin -cnotmatch '\Ahttp://127\.0\.0\.1:[0-9]{1,5}\z') { return (New-HordeUnknown -Reason "a test origin is http://127.0.0.1:<port>") }
     $cfg = $text | ConvertFrom-Json
     $slash = { param([string]$p) ([System.IO.Path]::GetFullPath($p)) -replace '\\', '/' }
@@ -182,21 +187,14 @@ function New-HordeCloudflareRelayConfig {
         if ($Origin -ne "") { $vars["HORDE_RELAY_ORIGIN"] = $Origin }
         foreach ($k in @($ExtraVars.Keys)) { $vars[$k] = $ExtraVars[$k] }
         $cfg | Add-Member -NotePropertyName vars -NotePropertyValue ([pscustomobject]$vars) -Force
+    } else {
+        $cfg.name = "" + $Deployment.name
+        $cfg.vars | Add-Member -NotePropertyName HORDE_RELAY_ORIGIN -NotePropertyValue ("" + $Deployment.origin) -Force
     }
     [void][System.IO.Directory]::CreateDirectory($Out)
     $path = Join-Path $Out "wrangler.json"
     [System.IO.File]::WriteAllText($path, ($cfg | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding -ArgumentList $false))
     return (New-HordeKnown -Value $path)
-}
-
-function Get-HordeCloudflareRelayDeployment {
-    # Where the production relay answers, from wrangler.json, its one source: { name; origin; callback }.
-    # The Worker's name is the origin's first label (<name>.<account subdomain>.workers.dev); a config
-    # where the two disagree would deploy one Worker and send every machine to another, so it throws.
-    $cfg = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "wrangler.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    $origin = "" + $cfg.vars.HORDE_RELAY_ORIGIN
-    if ($origin -cnotmatch ('\Ahttps://' + [regex]::Escape("" + $cfg.name) + '\.[a-z0-9-]+\.workers\.dev\z')) { throw ("wrangler.json's HORDE_RELAY_ORIGIN '" + $origin + "' is not https://" + $cfg.name + ".<account subdomain>.workers.dev") }
-    return [pscustomobject]@{ name = "" + $cfg.name; origin = $origin; callback = "" + $cfg.vars.HORDE_RELAY_GOOGLE_CALLBACK }
 }
 
 function Get-HordeCloudflareRelayFreePort {

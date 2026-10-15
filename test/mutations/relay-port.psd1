@@ -129,8 +129,8 @@
            Find = 'if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay ''" + $Name + "'' was not deployed: "'
            Replace = 'if ($false) { return (New-HordeUnknown -Reason ("relay ''" + $Name + "'' was not deployed: "' }
         @{ Name = "deploy-origin-may-be-plain-http"
-           Find = '-cnotmatch ''\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z'''
-           Replace = '-cnotmatch ''\Ahttps?://[a-z0-9.-]+(:[0-9]{1,5})?\z''' }
+           Find = '$o.value -isnot [string] -or $o.value -cnotmatch ''\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z'''
+           Replace = '$o.value -isnot [string] -or $o.value -cnotmatch ''\Ahttps?://[a-z0-9.-]+(:[0-9]{1,5})?\z''' }
         # --- a refusal's status and Retry-After (the founder's first live use, 2026-10-11)
         @{ Name = "refusal-status-not-carried"
            Find = 'if ($null -ne $st -and ($st.Value -is [int]'
