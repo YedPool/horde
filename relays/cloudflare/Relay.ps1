@@ -10,8 +10,9 @@
 # CONNECT takes Options, plain data so a fresh runspace can be handed the same (the conformance suite
 # does):
 #   origin         https://<host>[:port], or http://127.0.0.1|localhost[:port] for a local dev only;
-#                  when not given, the production origin wrangler.json names (Wrangler.ps1,
-#                  Get-HordeCloudflareRelayDeployment), so `horde relay run -Relay cloudflare` needs no flag
+#                  when not given, the home's relayOrigin, or the shipped relay's origin when that is
+#                  unset (Settings.ps1, Get-HordeCloudflareRelayDeployment), so `horde relay run -Relay
+#                  cloudflare` needs no flag
 #   authorization  optional, for a suite only: the whole Authorization header value every request
 #                  carries - the test authenticator's bearer token of a local dev (worker/auth.js).
 #   hordeHome      optional: the Horde home whose relay identity signs (empty: this user's own).
@@ -80,6 +81,7 @@ $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
 . (Join-Path $PSScriptRoot "Bundle.ps1")
 . (Join-Path $PSScriptRoot "RequestSigner.ps1")
 . (Join-Path $PSScriptRoot "SecretFiles.ps1")
+. (Join-Path $PSScriptRoot "Setup.ps1")
 Add-Type -AssemblyName System.Net.Http
 
 # https with a host name, or plain http to this machine only. No path, no user, no wildcard.
@@ -387,15 +389,19 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
             if ($null -ne $Options -and $null -ne $Options.PSObject.Properties[$Name]) { return $Options.$Name }
             return $null
         }
+        $hordeHome = & $get "hordeHome"
+        if ($null -eq $hordeHome) { $hordeHome = "" }
+        if ($hordeHome -isnot [string] -or ($hordeHome -ne "" -and -not [System.IO.Path]::IsPathRooted($hordeHome))) { return (New-HordeUnknown -Reason "Options.hordeHome is an absolute folder") }
         $origin = & $get "origin"
-        if ($null -eq $origin -or "$origin" -eq "") { $origin = (Get-HordeCloudflareRelayDeployment).origin }
+        if ($null -eq $origin -or "$origin" -eq "") {
+            $dep = Get-HordeCloudflareRelayDeployment -HordeHome $hordeHome
+            if ($dep.state -cne "known") { return (New-HordeUnknown -Reason ("the cloudflare relay has no origin to connect to: " + $dep.reason)) }
+            $origin = $dep.value.origin
+        }
         if ($origin -isnot [string] -or $origin -cnotmatch $script:HordeCloudflareRelayOriginPattern) { return (New-HordeUnknown -Reason "the cloudflare relay needs Options.origin: https://<host>[:port], or http://127.0.0.1[:port] for a local dev") }
         $auth = & $get "authorization"
         if ($null -eq $auth) { $auth = "" }
         if ($auth -isnot [string] -or ($auth -ne "" -and $auth -cnotmatch $script:HordeCloudflareRelayAuthorizationPattern)) { return (New-HordeUnknown -Reason "Options.authorization is one line of printable ASCII") }
-        $hordeHome = & $get "hordeHome"
-        if ($null -eq $hordeHome) { $hordeHome = "" }
-        if ($hordeHome -isnot [string] -or ($hordeHome -ne "" -and -not [System.IO.Path]::IsPathRooted($hordeHome))) { return (New-HordeUnknown -Reason "Options.hordeHome is an absolute folder") }
         # TLS 1.2 at least, for Windows PowerShell on a .NET that would otherwise offer older ones.
         if ($origin.StartsWith("https:")) { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 }
         $http = New-Object System.Net.Http.HttpClient
@@ -455,4 +461,8 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     -SecretFiles {
         param([string]$HordeHome)
         return (Get-HordeCloudflareRelaySecretFiles -HordeHome $HordeHome)
+    } `
+    -Setup {
+        param([string]$HordeHome)
+        return (Get-HordeCloudflareRelaySetup -HordeHome $HordeHome)
     }

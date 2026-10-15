@@ -127,5 +127,33 @@
         @{ Name = "cards-fallback-line-never-shown"
            Find = '$("cardsWhy").hidden = !stream || !stream.fallback;'
            Replace = '$("cardsWhy").hidden = true;' }
+        # A stream's entries folded to one line (the founder asked, 2026-10-14; test-pwa-browser section 12b).
+        @{ Name = "progress-entries-start-open"
+           Find = 'foldEntry(box, openEntries.has(it.id));'
+           Replace = 'foldEntry(box, true);' }
+        @{ Name = "progress-open-entry-folded-by-a-redraw"
+           Find = 'progressDrawn = sig;'
+           Replace = 'progressDrawn = sig; openEntries.clear();' }
+        @{ Name = "progress-open-entry-kept-across-streams"
+           Find = 'if (opening) { progressMark = v.readIndex; openEntries.clear(); }'
+           Replace = 'if (opening) { progressMark = v.readIndex; }' }
+        @{ Name = "progress-button-in-an-entry-folds-it"
+           Find = 't.closest("button, a") || '
+           Replace = '' }
+        @{ Name = "progress-tap-on-text-folds-it"
+           Find = ' || !t.closest(".progress-head, .progress-line")'
+           Replace = '' }
+        @{ Name = "progress-line-deaf-to-keys"
+           Find = 'if (e.key === "Enter" || e.key === " ")'
+           Replace = 'if (e.key === "Enter")' }
+        @{ Name = "progress-aria-expanded-stuck"
+           Find = 'setAttribute("aria-expanded", open ? "true" : "false")'
+           Replace = 'setAttribute("aria-expanded", "false")' }
+        @{ Name = "progress-line-not-a-control"
+           Find = 'line.setAttribute("role", "button"); line.tabIndex = 0;'
+           Replace = '' }
+        @{ Name = "progress-folded-line-has-no-time"
+           Find = 'if (when) { const w'
+           Replace = 'if (false) { const w' }
     )
 }
