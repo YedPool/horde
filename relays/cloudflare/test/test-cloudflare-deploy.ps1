@@ -207,7 +207,7 @@ try {
     Clear-Log
     $d = Deploy
     $runs = @(Read-Log)
-    Check ($d.answer.state -ceq "known" -and $d.answer.value.origin -ceq "https://my-relay.example.workers.dev" -and $runs.Count -eq 4 -and @($runs | Where-Object { $_.config.name -cne "my-relay" -or $_.config.origin -cne "https://my-relay.example.workers.dev" }).Count -eq 0) ("another home's relayOrigin deploys its own Worker, my-relay, at its own origin (" + $d.answer.state + " " + $d.answer.reason + ")")
+    Check ($d.answer.state -ceq "known" -and $d.answer.value.origin -ceq "https://my-relay.example.workers.dev" -and $runs.Count -eq 6 -and @($runs | Where-Object { $_.config.name -cne "my-relay" -or $_.config.origin -cne "https://my-relay.example.workers.dev" }).Count -eq 0) ("another home's relayOrigin deploys its own Worker, my-relay, at its own origin (" + $d.answer.state + " " + $d.answer.reason + ")")
     Set-Settings -Client (Write-Client -WithCallback) -More @{ signInAllowlistOn = $false; signInAllowlist = "founder@example.com" }
     Clear-Log
     $d = Deploy
@@ -349,7 +349,7 @@ try {
     Clear-Log
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
     $runs = @(Read-Log)
-    Check ($shipped -clike "https://relay.*.workers.dev" -and $r.code -eq 0 -and $r.out.Contains("it answers at " + $shipped) -and $runs.Count -eq 4 -and @($runs | Where-Object { $_.config.name -cne "relay" -or $_.config.origin -cne $shipped }).Count -eq 0) ("with no relayOrigin, horde relay deploy deploys the shipped relay, at wrangler.json's origin (exit " + $r.code + ")")
+    Check ($shipped -clike "https://relay.*.workers.dev" -and $r.code -eq 0 -and $r.out.Contains("it answers at " + $shipped) -and $runs.Count -eq 6 -and @($runs | Where-Object { $_.config.name -cne "relay" -or $_.config.origin -cne $shipped }).Count -eq 0) ("with no relayOrigin, horde relay deploy deploys the shipped relay, at wrangler.json's origin (exit " + $r.code + ")")
     Set-Settings -Client (Write-Client -WithCallback)
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-Relay", "local") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("cannot be deployed")) "relay deploy -Relay local is refused"
