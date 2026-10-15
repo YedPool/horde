@@ -1,7 +1,7 @@
 # Mutations of the hosted relay's join requests (relays/cloudflare/worker/join.js; phone-started pairing):
 # the address's block, what a refusal spends, a request taken once, the request key's check, the
 # country, and what a reject does. Run:
-#   powershell -File tools\Mutate.ps1 -Spec test\mutations\relay-cloudflare-join.psd1
+#   powershell -File tools\Mutate.ps1 -Spec relays\cloudflare\test\mutations\cloudflare-worker-join.psd1
 # relays\cloudflare\test\test-cloudflare-join.ps1 must fail for every one. Every find string occurs once.
 #
 # NOT HERE, and why: the field shape checks other than the request key's (each is one regex the suite's
