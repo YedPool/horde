@@ -77,7 +77,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # same flag reply takes as a switch, so its text arrives as the next word on the command line
     # (NoteText, cli/commands/decisions.ps1): a flag cannot be a switch to one verb and a text to another.
     # noteText says this verb takes that word; it is no flag anybody types, so it is not among the flags.
-    remind = @{ number = $true;  flags = @("Note", "Id", "Json");                   usage = "remind <number> [-Note <text>] [-Id <32 hex>] [-Json]"; noteText = $true }
+    remind = @{ number = $true;  flags = @("Note", "Id", "Json");                   usage = "remind <number> [-Note <text, not starting with a dash>] [-Id <32 hex>] [-Json]"; noteText = $true }
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }

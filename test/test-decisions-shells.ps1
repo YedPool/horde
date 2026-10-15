@@ -7,7 +7,8 @@
 # 7.6.6), and the decisions module read its own new record back through it. Every other decisions
 # suite runs under 5.1 only, so none of them could go red for this. This one runs the shipped horde.ps1
 # as its own process (test/lib/Cli.ps1) under EACH shell, on a clean home it made:
-#   - add, list, show, answer and close, each exiting 0 with the answer it promises;
+#   - add, list, show, remind (with a note), a reply that asks, answer and close, each exiting 0 with
+#     the answer it promises, and the asked list (PR 295) they leave behind;
 #   - a date-shaped text a person typed (a group note, an outcome) comes back exactly as typed;
 #   - every timestamp in the answers is text, as the store holds it;
 #   - a store written by one shell is read whole by the other: nothing unreadable, nothing not understood.
@@ -61,6 +62,12 @@ function Invoke-Decisions {
     return [pscustomobject]@{ code = $r.code; out = $r.out; json = $j }
 }
 
+function Format-Asked {
+    # A question's asked list as "how|by|note;..." from the answer as parsed.
+    param($Row)
+    return (@(@(Get-HordeTestMember $Row "asked") | ForEach-Object { "" + (Get-HordeTestMember $_ "how") + "|" + (Get-HordeTestMember $_ "by") + "|" + (Get-HordeTestMember $_ "note") }) -join ";")
+}
+
 function Show-Out { param($Run) if ($Run.code -ne 0) { Write-Host ("         " + "$($Run.out)".Trim()) -ForegroundColor Red } }
 
 function Test-AllText {
@@ -95,7 +102,7 @@ try {
 
 foreach ($sh in $shells) {
     Write-Host ""
-    Write-Host ("--- " + $sh.name + ": add, list, show, answer, close on a clean home ---") -ForegroundColor Cyan
+    Write-Host ("--- " + $sh.name + ": add, list, show, remind, reply, answer, close on a clean home ---") -ForegroundColor Cyan
     $h = New-TestHome ("home-" + ($sh.exe -replace '[^a-zA-Z0-9]', ''))
     $homes[$sh.name] = $h
     $n = $sh.name
@@ -118,6 +125,15 @@ foreach ($sh in $shells) {
     Check (Test-AllText (@(Get-HordeTestMember $q "addedAt") + @(@(Get-HordeTestMember $q "history") | ForEach-Object { Get-HordeTestMember $_ "at" }))) ($n + ": show's timestamps are the store's text, not dates")
     Show-Out $show
 
+    # ASKED AGAIN (PR 295): a reminder with a note - date-shaped, so pwsh 7's parser would turn it into
+    # a [datetime] if anything read it through the plain parse - and the keeper's reply that asks.
+    $remind = Invoke-Decisions -Shell $sh.exe -HomeDir $h -HordeArgs @("remind", "1", "-Note", $typedDate, "-Json")
+    Check ($remind.code -eq 0 -and (Get-HordeTestMember $remind.json "value.outcome") -ceq "done") ($n + ": remind 1 -Note exits 0 and says done (exit " + $remind.code + ")")
+    Show-Out $remind
+    $reply = Invoke-Decisions -Shell $sh.exe -HomeDir $h -HordeArgs @("reply", "1", "-Text", "Still need your call on this one.", "-Json")
+    Check ($reply.code -eq 0 -and (Get-HordeTestMember $reply.json "value.outcome") -ceq "done") ($n + ": a reply that asks exits 0 and says done (exit " + $reply.code + ")")
+    Show-Out $reply
+
     $answer = Invoke-Decisions -Shell $sh.exe -HomeDir $h -HordeArgs @("answer", "1", "-Text", "yes", "-Json")
     Check ($answer.code -eq 0 -and (Get-HordeTestMember $answer.json "value.outcome") -ceq "done") ($n + ": answer 1 exits 0 and says done (exit " + $answer.code + ")")
     Show-Out $answer
@@ -130,7 +146,9 @@ foreach ($sh in $shells) {
     $rows = @(Get-HordeTestMember $all.json "value.questions")
     Check ($all.code -eq 0 -and $rows.Count -eq 1 -and (Get-HordeTestMember $rows[0] "state") -ceq "closed") ($n + ": list -State all shows question 1 closed")
     Check ((Get-HordeTestMember $rows[0] "outcome") -ceq $typedDate) ($n + ": a date-shaped outcome comes back exactly as typed")
-    Check ((Get-HordeTestMember $rows[0] "thread.count") -eq 1) ($n + ": the answer is kept in the question's conversation")
+    Check ((Get-HordeTestMember $rows[0] "thread.count") -eq 2) ($n + ": the reply and the answer are kept in the question's conversation")
+    Check ((Format-Asked $rows[0]) -ceq ("first|me|;remind|warchief|" + $typedDate + ";thrall-reply|warchief|") -and (Get-HordeTestMember $rows[0] "askedCount") -eq 3) ($n + ": its asked list is first, the reminder with its note exactly as typed, and the reply that asked")
+    Check (Test-AllText (@(Get-HordeTestMember $rows[0] "lastAskedAt") + @(@(Get-HordeTestMember $rows[0] "asked") | ForEach-Object { Get-HordeTestMember $_ "at" }))) ($n + ": lastAskedAt and every asked time are the store's text")
     Check (Test-AllText @((Get-HordeTestMember $rows[0] "closedAt"), (Get-HordeTestMember $rows[0] "updatedAt"))) ($n + ": closedAt and updatedAt are the store's text")
     Check (@(Get-HordeTestMember $all.json "value.unreadable").Count -eq 0 -and @(Get-HordeTestMember $all.json "value.notUnderstood").Count -eq 0 -and @(Get-HordeTestMember $all.json "value.ignored").Count -eq 0) ($n + ": nothing in the store is unreadable, ignored or not understood")
     Show-Out $all
@@ -145,6 +163,7 @@ if ($shells.Count -eq 2) {
         $rows = @(Get-HordeTestMember $read.json "value.questions")
         $what = $reader.name + " reads what " + $writer.name + " wrote"
         Check ($read.code -eq 0 -and $rows.Count -eq 1 -and (Get-HordeTestMember $rows[0] "state") -ceq "closed" -and (Get-HordeTestMember $rows[0] "outcome") -ceq $typedDate) ($what + ": question 1, closed, its outcome exactly as typed")
+        Check ((Format-Asked $rows[0]) -ceq ("first|me|;remind|warchief|" + $typedDate + ";thrall-reply|warchief|") -and (Test-AllText (@(Get-HordeTestMember $rows[0] "lastAskedAt") + @(@(Get-HordeTestMember $rows[0] "asked") | ForEach-Object { Get-HordeTestMember $_ "at" })))) ($what + ": the reminder, its note exactly as typed, and the reply that asked, every time as text")
         Check (@(Get-HordeTestMember $read.json "value.unreadable").Count -eq 0 -and @(Get-HordeTestMember $read.json "value.notUnderstood").Count -eq 0 -and @(Get-HordeTestMember $read.json "value.ignored").Count -eq 0) ($what + ": nothing unreadable, ignored or not understood")
         Show-Out $read
     }
@@ -159,4 +178,4 @@ Check ((Get-RealStoreListing) -ceq $realBefore) "the real decisions store is exa
 }
 
 if ($partial) { Complete-HordeSuite -Success "decisions works under 5.1; under PowerShell 7 it was NOT RUN (no pwsh.exe)" -PassCode 3 }
-Complete-HordeSuite -Success "decisions adds, lists, shows, answers and closes under both shells, and each reads what the other wrote"
+Complete-HordeSuite -Success "decisions adds, lists, shows, reminds, replies, answers and closes under both shells, and each reads what the other wrote"
