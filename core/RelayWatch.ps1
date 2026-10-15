@@ -38,9 +38,9 @@
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 
-# THE SAME RULE AS THE RELAY'S OWN CLIENT FILE (relays/cloudflare/GoogleClient.ps1, its length bounds), and
-# a client_id named twice is refused as PR 275's deploy check refuses it (Get-HordeCloudflareRelayLocation-
-# ClientId, "no single client_id"; PR 275 was not on main when this was written, so its rule is copied here).
+# THE SAME RULE AS THE RELAY ADAPTER'S OWN GOOGLE CLIENT FILE (its GoogleClient.ps1, its length bounds), and
+# a client_id named twice is refused as PR 275's deploy check refuses it ("no single client_id"; PR 275 was
+# not on main when this was written, so its rule is copied here, by value, not by name).
 $script:HordeRelayClientIdPattern = '\A[0-9]{1,32}-[a-z0-9]{1,64}\.apps\.googleusercontent\.com\z'
 $script:HordeRelayGoogleHost = "accounts.google.com"
 # A check that takes longer than this is a failure: a relay that does not answer in 15 s is down to a phone.

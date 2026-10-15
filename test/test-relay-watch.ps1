@@ -108,7 +108,7 @@ try {
     $sync.mode = "two"; $h = Health
     Check (-not $h.ok -and $h.why -like "*names client_id more than once*") "a client_id named twice fails, as PR 275's deploy check refuses it"
     $sync.mode = "longid"; $h = Health
-    Check (-not $h.ok -and $h.why -like "*not the shape*") "a client id past the client file's length bounds fails (relays/cloudflare/GoogleClient.ps1)"
+    Check (-not $h.ok -and $h.why -like "*not the shape*") "a client id past the client file's length bounds fails (the relay adapter's GoogleClient.ps1)"
     $sync.mode = "elsewhere"; $h = Health
     Check (-not $h.ok -and $h.why -like "*not https://accounts.google.com*") "a sign-in that redirects elsewhere fails"
     $sync.mode = "up"
