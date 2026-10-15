@@ -166,6 +166,26 @@ try {
     Check ($fr.tells -eq 2 -and $fr.notices -eq 1) "then quiet; and the founder's notice was tried once for the outage"
 
     Write-Host ""
+    Write-Host "--- review of PR 307: a founder told 'down' is told 'back', even if the warchief never was ---" -ForegroundColor Cyan
+    # The warchief's mail fails all through the outage, so the outage is never marked told; the founder's
+    # notice went. When the relay comes back, the founder must hear it, not be left with 'down'.
+    $nb = [pscustomobject]@{ now = $t0; tells = (New-Object System.Collections.ArrayList); notices = (New-Object System.Collections.ArrayList) }
+    $nt = @{
+        Now = { return $nb.now }.GetNewClosure(); Fetch = $fetch
+        Tell = { param($Body) [void]$nb.tells.Add($Body); return [pscustomobject]@{ ok = $false; detail = "the fleet mail failed" } }.GetNewClosure()
+        Notify = { param($Line) [void]$nb.notices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+    }
+    $snb = Join-Path $work "never-told.json"
+    $sync.mode = "500"
+    foreach ($m in @(0, 5, 10)) { $nb.now = $t0.AddMinutes(300 + $m); $null = Invoke-HordeRelayWatch -Tools $nt -Policy $policy -StatePath $snb -Origin $origin }
+    Check ($nb.notices.Count -eq 1 -and $nb.notices[0] -like "The relay check fails*" -and -not (Read-HordeRelayWatchState -Path $snb).value.alerted) "the warchief's mail fails throughout: the founder was told it is down once, the outage is not marked told"
+    $sync.mode = "up"
+    foreach ($m in @(15, 20, 25)) { $nb.now = $t0.AddMinutes(300 + $m); $null = Invoke-HordeRelayWatch -Tools $nt -Policy $policy -StatePath $snb -Origin $origin }
+    Check ($nb.notices.Count -eq 2 -and $nb.notices[1] -like "The relay is back*") ("two healthy checks: the founder is told it is back (" + $nb.notices.Count + " notices)")
+    Check (@($nb.tells | Where-Object { $_ -like "RELAY BACK*" }).Count -eq 0) "and the warchief, never told it was down, is not told it is back"
+    Check (-not (Read-HordeRelayWatchState -Path $snb).value.notified) "and the outage is closed"
+
+    Write-Host ""
     Write-Host "--- review of PR 307: a state file that cannot be read is told, not a silent stop ---" -ForegroundColor Cyan
     $bad = Join-Path $work "bad-state.json"
     [System.IO.File]::WriteAllText($bad, "not json", $utf8)

@@ -112,8 +112,9 @@ function Get-HordeRelayWatchDecision {
                             alerted = [bool]$State.alerted; notified = [bool]$State.notified; lastWhy = "" + $State.lastWhy }
     if ($Health.ok) {
         $s.healthy = $s.healthy + 1
-        if (-not $s.alerted) {
-            # Not told of an outage: a blip is forgotten at once.
+        if (-not $s.alerted -and -not $s.notified) {
+            # Nobody told of an outage: a blip is forgotten at once. (Review of PR 307: a founder told "down"
+            # whose warchief's tell was never taken is still owed "back", so notified keeps the outage open.)
             $s.failures = 0; $s.downSince = $null; $s.lastWhy = ""; $s.notified = $false
             return [pscustomobject]@{ state = $s; alert = ""; why = "" }
         }
@@ -206,12 +207,15 @@ function Invoke-HordeRelayWatch {
         }
     } elseif ($d.alert -ceq "recovered") {
         [void]$lines.Add("relay watch: recovered - " + $d.why)
-        $w = Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + ".") -Who "the warchief"
+        # Each is told "back" only if it was told "down": a warchief whose down-tell was never taken is
+        # not sent a "back" for an outage he never heard of.
+        $w = $(if ($s.alerted) { Send-HordeRelayWatchWord -Tools $Tools -Name "Tell" -Text ("RELAY BACK`nThe hosted relay at " + $Origin + " passes its check again; " + $d.why + ".") -Who "the warchief" }
+               else { [pscustomobject]@{ ok = $true; line = "relay watch: the warchief was never told it was down, so he is not told it is back" } })
         [void]$lines.Add($w.line)
         # A recovery the warchief did not take stays owed: the next healthy check tells it again, and the
         # notice goes with the tell that was taken, so it is sent once.
         if ($w.ok) {
-            [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ".") -Who "the founder's phone").line)
+            if ($s.notified) { [void]$lines.Add((Send-HordeRelayWatchWord -Tools $Tools -Name "Notify" -Text ("The relay is back; " + $d.why + ".") -Who "the founder's phone").line) }
             $s.alerted = $false; $s.notified = $false; $s.failures = 0; $s.healthy = 0; $s.downSince = $null; $s.lastWhy = ""
         }
     } elseif (-not $health.ok) {
