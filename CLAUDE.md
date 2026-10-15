@@ -13,6 +13,9 @@ are in `CONTRIBUTING.md`; read the matching section before arguing with one.
   moment. The line reaches his phone's Notices at once and is never muted.
   - Keep it to one plain line with no secrets.
   - There are at most 10 an hour per session.
+- A production action he asks for in chat (a deploy, a merge to main, deleting or changing live
+  data, spending money) is not done on the chat line alone: open a decisions question with
+  -NeedsPasskey and act only on its answer, which needs his fresh passkey.
 
 ## Done means the fleet runs on it (CONTRIBUTING 1 and 2)
 
