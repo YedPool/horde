@@ -108,11 +108,20 @@ try {
   check(!!r && sorted(r.main) === "1,3" && r.lane === "B" && r.cards.find((c) => c.name === "Orc B").chosen && r.cards.filter((c) => c.chosen).length === 1,
     "A TAP ON ORC B'S CARD shows B's questions alone (1 and 3), and its card alone is chosen", r ? r.main + " / " + cardWords(r) : "no card");
   check(!!r && r.heads.some((h) => /With Thrall \(1\)/.test(h)) && r.done === "2", "and B's answered question stands alone in its fold (With Thrall (1))", r ? r.heads.join(" | ") : "");
-  check(!!r && r.barTop !== null && r.barTop >= 0 && r.barTop < 60, "and the head of B's questions is brought onto the screen: the order line at the top of the view", r ? "order line at " + r.barTop : "");
+  check(!!r && r.barTop !== null && r.barTop >= 0 && r.barTop < 915, "and B's two questions, shorter than the screen, are on it with the order line above them", r ? "order line at " + r.barTop : "");
   r = await tapCard("All questions");
   check(!!r && sorted(r.main) === "1,3,6,7,8,9,10,12" && r.lane === "" && r.cards[0].chosen, "A TAP ON ALL QUESTIONS shows everything again", r ? r.main : "");
   r = await tapCard("Thrall");
   check(!!r && sorted(r.main) === "6,7,8" && r.lane === "thrall", "the Thrall's card shows the questions of M, of nobody named and of no askedBy", r ? r.main : "");
+  // A LANE OF MANY QUESTIONS, longer than the screen: the tap must bring the head of its list up, or the
+  // screen would still show the cards and the list would change below them unseen.
+  const manyB = [];
+  for (let n = 30; n < 42; n++) manyB.push(question(n, { askedBy: "Orc B" }));
+  await hostList(list(manyB));
+  await tapCard("All questions");
+  r = await tapCard("Orc B");
+  check(!!r && r.lane === "B" && r.main.split(",").length === 14 && r.barTop !== null && r.barTop >= 0 && r.barTop < 60, "A TAP ON A CARD WHOSE LANE IS LONGER THAN THE SCREEN brings the head of its questions up: the order line at the top of the view", r ? "order line at " + r.barTop + ", " + r.main.split(",").length + " questions" : "");
+  await hostList(list());
 
   // ---------------- 4. A BACKGROUND REFRESH KEEPS THE CARD AND WHAT IS FOLDED ----------------
   r = await tapCard("Orc C");

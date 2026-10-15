@@ -91,7 +91,7 @@ function Invoke-DecisionsBrowserDriver {
 
 Invoke-DecisionsBrowserDriver -Driver "browser-order.mjs" -Title "the order line, tapped" -Least 24
 Invoke-DecisionsBrowserDriver -Driver "browser-fold.mjs" -Title "Collapse all and Expand all, tapped" -Least 19
-Invoke-DecisionsBrowserDriver -Driver "browser-cards.mjs" -Title "the cards, tapped" -Least 20
+Invoke-DecisionsBrowserDriver -Driver "browser-cards.mjs" -Title "the cards, tapped" -Least 21
 
 # The folder goes, with every profile in it.
 for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $work); $i++) {
