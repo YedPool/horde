@@ -153,12 +153,36 @@ function Get-HordeWakeLedgerEntry {
     # for one mail (its mailAt), and when another mail has become the oldest - the session took the one
     # it was being asked about - nothing is held against the new one. An entry that records no mail
     # (one written before entries did) is for whatever mail there is.
+    # WHILE ANY MAIL IS HANDED OVER, THE ENTRY STANDS FOR ITS OWN MAIL, WHATEVER IS THE OLDEST UNREAD. Another
+    # mail being the oldest unread was read as "the session took the one it was asked about" - but mail
+    # handed over is out of the unread and not taken. A session nudged six times for one mail and given
+    # up on had that mail handed over; a second mail arrived and was the oldest unread, so the entry was
+    # rebuilt for it; when the first came back unread 600 s on, the entry was the second's, and the first
+    # had a fresh budget - six more nudges and a second gave-up, and again at every new mail, for a session
+    # that takes turns and never acknowledges (review of the before-live fixes). So while handedOverCount
+    # is above 0 the entry is kept, with its mailAt, its count and its back-off, and a nudge sent then is
+    # counted in it (the callers keep its mailAt, Get-HordeWakeEntryMailAt). The entry still goes only on
+    # evidence the mail was taken: nothing unread AND nothing handed over (Update-HordeWakeLedger).
     param($Ledger, [string]$Id, $State = $null)
     if ($null -eq $Ledger -or -not $Ledger.ContainsKey($Id)) { return $null }
     $entry = $Ledger[$Id]
     $mailAt = Get-HordeWakeEntryValue $entry "mailAt"
+    if ($null -ne $State -and (Get-HordeWakeHandedOver $State) -gt 0) { return $entry }
     if ($null -ne $State -and $mailAt -is [datetime] -and $State.oldestUnreadAt -is [datetime] -and $State.oldestUnreadAt -ne $mailAt) { return $null }
     return $entry
+}
+
+function Get-HordeWakeEntryMailAt {
+    # The mail an entry written now is for: the mail of -Entry, the entry it replaces, when that names one,
+    # and otherwise -State's oldest unread, or $null. An entry handed back by Get-HordeWakeLedgerEntry is
+    # for the mail it names - the oldest unread, or the mail handed over that it was kept for - and a
+    # nudge counted in it must not move it to another mail's time: that was the fresh budget again.
+    param($Entry, $State)
+    $mailAt = Get-HordeWakeEntryValue $Entry "mailAt"
+    if ($mailAt -is [datetime]) { return $mailAt }
+    $mailAt = Get-HordeWakeEntryValue $State "oldestUnreadAt"
+    if ($mailAt -is [datetime]) { return $mailAt }
+    return $null
 }
 
 function Get-HordeWakeEntryValue {
@@ -558,8 +582,7 @@ function Set-HordeWakeLedgerAsked {
     $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $Id -State $State
     $count = 1
     if ($null -ne $had) { $count = [int]$had.attempts + 1 }
-    $mailAt = Get-HordeWakeEntryValue $State "oldestUnreadAt"
-    if ($mailAt -isnot [datetime]) { $mailAt = Get-HordeWakeEntryValue $had "mailAt" }
+    $mailAt = Get-HordeWakeEntryMailAt -Entry $had -State $State
     $freeAt = $null
     if ($next.ContainsKey($Id)) { $freeAt = Get-HordeWakeEntryValue $next[$Id] "freeAt" }
     if ($Free) { $freeAt = $Now }
@@ -608,9 +631,8 @@ function Update-HordeWakeLedger {
         # now. An entry for another mail is not carried over (Get-HordeWakeLedgerEntry).
         $stateNow = $null
         if ($null -ne $States -and $States.ContainsKey($id) -and "$($States[$id].state)" -ceq "known") { $stateNow = $States[$id].value }
-        $mailAt = $null
-        if ($null -ne $stateNow -and $stateNow.oldestUnreadAt -is [datetime]) { $mailAt = $stateNow.oldestUnreadAt }
         $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $stateNow
+        $mailAt = Get-HordeWakeEntryMailAt -Entry $had -State $stateNow
         if ("$($Outcomes[$id])" -ceq "nothing") {
             $kept = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "nothing" -NothingAt $Now -MailAt $mailAt
             if ($null -ne $had) { $kept = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had }
@@ -664,7 +686,7 @@ function Update-HordeWakeLedger {
             $had = Get-HordeWakeLedgerEntry -Ledger $next -Id "$id" -State $a.value
             if ((Get-HordeWakeEntryValue $had "probeAt") -is [datetime]) { continue }
             $seen = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "limited" -MailAt $a.value.oldestUnreadAt -ProbeAt $Now
-            if ($null -ne $had) { $seen = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $had) -MailAt $a.value.oldestUnreadAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now -Carry $had }
+            if ($null -ne $had) { $seen = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $had) -MailAt (Get-HordeWakeEntryMailAt -Entry $had -State $a.value) -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now -Carry $had }
             $next["$id"] = $seen
         }
     }

@@ -625,6 +625,54 @@ Check ($script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts
 $ack = HandOver -Seconds 3600 -AckAt 900 -NewMailAt 1002
 Check ($ack.entryAtAck -eq $false) "CONTROL: the session acknowledges the mail - nothing unread, nothing handed over - and its entry is dropped on that pass"
 Check (($ack.nudges -join ",") -ceq "0,600,1005,1605,2205,2805,3405" -and $ack.gave.Count -eq 0 -and $script:ledger[(Sid 1)].attempts -eq 5 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "mailAt") -eq (At 1002)) ("CONTROL: a NEW mail after it has a budget of its own: nudged at once and counted from one, the two nudges of the mail before not held against it (" + ($ack.nudges -join ",") + ")")
+# A NEW MAIL DURING A HAND-OVER DOES NOT RESET THE OLD MAIL'S BUDGET (review of the before-live fixes).
+function HandOverTwo {
+    # The loop of HandOver over ONE session with TWO mails: the first unread a minute before the start,
+    # the second arriving at -SecondAt. After every nudge the hook hands over every mail then unread
+    # (stamped then), and 600 s after its stamp a mail is unread again under its own time. Nobody ever
+    # acknowledges either. Returns when (s) each nudge was typed and the gave-up lines.
+    param([int]$Seconds, [int]$SecondAt)
+    Start-Case
+    $mails = @([pscustomobject]@{ at = -60; handed = $null }, [pscustomobject]@{ at = $SecondAt; handed = $null })
+    $nudges = New-Object System.Collections.ArrayList
+    $gave = New-Object System.Collections.ArrayList
+    for ($t = 0; $t -le $Seconds; $t += 3) {
+        foreach ($m in $mails) { if ($null -ne $m.handed -and ($t - $m.handed) -ge 600) { $m.handed = $null } }
+        $here = @($mails | Where-Object { $_.at -le $t })
+        $unread = @($here | Where-Object { $null -eq $_.handed })
+        $over = @($here | Where-Object { $null -ne $_.handed })
+        $oldest = $null; if ($unread.Count -gt 0) { $oldest = At (($unread | Measure-Object -Property at -Minimum).Minimum) }
+        $handedAt = $null; if ($over.Count -gt 0) { $handedAt = At (($over | Measure-Object -Property handed -Minimum).Minimum) }
+        Seat 1 @{ UnreadCount = $unread.Count; OldestUnreadAt = $oldest; HandedOverCount = $over.Count; OldestHandedOverAt = $handedAt }
+        $r = Pass $t
+        foreach ($e in @($r.entries)) {
+            if ($e.kind -ceq "gave-up") { [void]$gave.Add($e) }
+            if ($e.kind -cne "nudge") { continue }
+            [void]$nudges.Add($t)
+            foreach ($m in $unread) { $m.handed = $t }
+        }
+    }
+    return [pscustomobject]@{ nudges = $nudges.ToArray(); gave = $gave.ToArray() }
+}
+# THE SEQUENCE THE REVIEW FOLLOWED THROUGH: six nudges for the first mail and given up; it is handed over,
+# a second arrives - and the entry was rebuilt for the second, so when the first came back unread it had a
+# fresh budget: six more nudges and a second gave-up, for a session that takes turns and never acknowledges.
+$late = HandOverTwo -Seconds 14400 -SecondAt 3102
+Check (($late.nudges -join ",") -ceq "0,600,1200,1800,2400,3000" -and (Rang 1) -eq 6) ("a mail arriving while the one given up on is handed over is not knocked for, and the first mail coming back is not either: six nudges in four hours, no more (" + ($late.nudges -join ",") + ")")
+Check ($late.gave.Count -eq 1 -and $script:ledger.ContainsKey((Sid 1)) -and $script:ledger[(Sid 1)].attempts -eq 6 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "gaveUp") -eq $true -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "mailAt") -eq (At -60)) ("and it is given up on ONCE, its entry still the first mail's (" + $late.gave.Count + " gave-up lines)")
+$early = HandOverTwo -Seconds 14400 -SecondAt 702
+Check ($early.nudges.Count -eq 6 -and $early.gave.Count -eq 1 -and $script:ledger[(Sid 1)].attempts -eq 6 -and (Get-HordeWakeEntryValue $script:ledger[(Sid 1)] "mailAt") -eq (At -60)) ("a mail arriving during a hand-over BEFORE the cap is knocked for under the same count, and the entry keeps the first mail's time: six nudges in all, given up on once (" + ($early.nudges -join ",") + "; " + $early.gave.Count + " gave-up lines)")
+# THE NUDGE COUNTED DURING A HAND-OVER KEEPS THE ENTRY'S MAIL: recorded under the new mail's time, the entry
+# would be the new mail's when the first came back unread with nothing handed over, and the first would
+# have a fresh budget again.
+$heldLedger = @{ (Sid 1) = (New-HordeWakeLedgerRow -Attempts 2 -LastAttemptAt (At 0) -LastOutcome "woken" -MailAt (At -60)) }
+$heldDuring = [pscustomobject]@{ unreadCount = 1; oldestUnreadAt = (At 100); handedOverCount = 1 }
+$heldAsked = Set-HordeWakeLedgerAsked -Ledger $heldLedger -Id (Sid 1) -Now (At 120) -State $heldDuring
+Check ($heldAsked[(Sid 1)].attempts -eq 3 -and (Get-HordeWakeEntryValue $heldAsked[(Sid 1)] "mailAt") -eq (At -60)) "a nudge counted while the entry's mail is handed over and another is the oldest unread is the entry's third, under the entry's own mail"
+$heldBack = [pscustomobject]@{ unreadCount = 2; oldestUnreadAt = (At -60); handedOverCount = 0 }
+Check ((Get-HordeWakeEntryValue (Get-HordeWakeLedgerEntry -Ledger $heldAsked -Id (Sid 1) -State $heldBack) "attempts") -eq 3) "and when that mail comes back unread beside the other, nothing handed over, the entry is still its own, count and all"
+$heldTaken = [pscustomobject]@{ unreadCount = 1; oldestUnreadAt = (At 100); handedOverCount = 0 }
+Check ($null -eq (Get-HordeWakeLedgerEntry -Ledger $heldAsked -Id (Sid 1) -State $heldTaken)) "CONTROL: another mail the oldest unread and NOTHING handed over is the mail taken: the entry is not held against the new one"
 Reset-HordeMemoryWaker
 
 Write-Host ""

@@ -560,6 +560,12 @@
         @{ Name = "a-new-oldest-mail-inherits-the-old-count"
            Find = '-and $State.oldestUnreadAt -ne $mailAt) { return $null }'
            Replace = '-and $false) { return $null }' }
+        @{ Name = "a-mail-arriving-during-a-hand-over-resets-the-old-mails-budget"
+           Find = 'if ($null -ne $State -and (Get-HordeWakeHandedOver $State) -gt 0) { return $entry }'
+           Replace = '' }
+        @{ Name = "a-nudge-during-a-hand-over-moves-the-entry-to-another-mail"
+           Find = '    $mailAt = Get-HordeWakeEntryValue $Entry "mailAt"'
+           Replace = '    $mailAt = $null' }
         @{ Name = "given-up-on-forgotten-after-nothing"
            Find = '-NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had }'
            Replace = '-NothingAt $Now -MailAt $mailAt -Carry $had }' }
