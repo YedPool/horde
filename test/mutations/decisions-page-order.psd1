@@ -69,8 +69,8 @@
            Find = '  function inOrder(list, key, turned) { return listOf(list).slice().sort(compareBy(orderOf(key), turned === true)); }'
            Replace = '  function inOrder(list, key, turned) { return list.slice().sort(compareBy(orderOf(key), turned === true)); }' }
         @{ Name = "the-sorting-is-not-handed-out"
-           Find = 'order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };'
-           Replace = 'order: { orders: ORDERS.map(function (o) { return o.key; }) } };' }
+           Find = 'order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder }, lanes:'
+           Replace = 'order: { orders: ORDERS.map(function (o) { return o.key; }) }, lanes:' }
         @{ Name = "turned-over-is-never-turned"
            Find = '    var way = turned === true ? -1 : 1;'
            Replace = '    var way = 1;' }

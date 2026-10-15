@@ -158,6 +158,14 @@ button.stamp { min-height: 0; padding: 0; border: 0; background: none; color: va
 .card-line b { font-weight: 600; }
 .card-stats { margin-top: 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
 .card-note { margin-top: 4px; color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); }
+/* THE DECISIONS PAGE'S CARDS (decision-cards.js): the same cards, first on the page, one per lane with its open
+   questions in the slot; the chosen one in the accent all round, and a lane whose question blocks all its work
+   marked in words and a sign beside the count, its edge in the warning colour as well. */
+.decision-cards { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 12px; }
+.decision-cards[hidden] { display: none; }
+.card.chosen { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.card.dq-blocking { border-left: 4px solid var(--warn); }
+.dq-blocks { color: var(--warn); }
 /* THE FOLLOW SWITCH, in a card's one slot (lane-card.js): what the machine holds, and a word while a change is on its way. */
 .follow { display: inline-block; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; font-weight: 600; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); cursor: pointer; }
 .follow[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
