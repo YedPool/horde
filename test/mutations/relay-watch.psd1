@@ -18,8 +18,19 @@
            Replace = '' }
         # A recovery the warchief did not take stays owed.
         @{ Name = "recovery-cleared-though-not-taken"
-           Find = ' passes its check again; " + $d.why + ".") -Who "the warchief"'
-           Replace = ' passes its check again; " + $d.why + ".") -Who "the warchief"; $w = [pscustomobject]@{ ok = $true; line = $w.line }' }
+           Find = ' passes its check again; " + $d.why + ".") -Who "the warchief" }'
+           Replace = ' passes its check again; " + $d.why + ".") -Who "the warchief" | ForEach-Object { $_.ok = $true; $_ } }' }
+        # Each is told "back" only if it was told "down".
+        @{ Name = "warchief-told-back-though-never-told-down"
+           Find = '$w = $(if ($s.alerted) { Send-HordeRelayWatchWord'
+           Replace = '$w = $(if ($true) { Send-HordeRelayWatchWord' }
+        @{ Name = "founder-told-back-though-never-told-down"
+           Find = 'if ($s.notified) { [void]$lines.Add('
+           Replace = 'if ($true) { [void]$lines.Add(' }
+        # A founder told "down" whose warchief never took it is still owed "back": no blip reset.
+        @{ Name = "founder-told-down-forgotten-as-a-blip"
+           Find = 'if (-not $s.alerted -and -not $s.notified) {'
+           Replace = 'if (-not $s.alerted) {' }
         # One blip tells nobody.
         @{ Name = "down-on-first-failure"
            Find = '$s.failures -ge [int]$Policy.relayFailuresBeforeAlert) {'

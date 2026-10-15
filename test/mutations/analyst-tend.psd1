@@ -25,11 +25,28 @@
            Replace = '"; waiting for a handover all the same"); $s.phase = "none"' }
         # One no-answer alert for a run of unacked rounds, cleared only by a newer ack.
         @{ Name = "no-answer-told-every-round"
-           Find = 'if (@($s.told) -ccontains "no-answer") { continue }'
-           Replace = 'if ($false) { continue }' }
+           Find = 'if (-not (@($s.told) -ccontains "no-answer")) { & $say'
+           Replace = 'if ($true) { & $say' }
         @{ Name = "no-answer-never-cleared-by-ack"
-           Find = '$s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer") }'
+           Find = '$s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }'
            Replace = '$s.lastAckId = $newestAcked[0].id }' }
+        # The founder's notice has its own told key: once a run, whether or not the warchief's tell was taken.
+        @{ Name = "founder-notified-every-round"
+           Find = 'if ((@($s.told) -ccontains "no-answer-founder") -or'
+           Replace = 'if ($false -or' }
+        @{ Name = "founder-key-never-recorded"
+           Find = '{ $s.told = [string[]]@(@($s.told) + "no-answer-founder"); & $say'
+           Replace = '{ & $say' }
+        @{ Name = "founder-key-not-cleared-by-ack"
+           Find = 'Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }'
+           Replace = 'Clear-HordeAnalystTold -State $s -Keys @("no-answer") }' }
+        @{ Name = "founder-told-warchief-was-told-when-not"
+           Find = '"the warchief was not told."'
+           Replace = '"the warchief was told."' }
+        # A new session starts a new run: adoption clears both no-answer keys.
+        @{ Name = "adoption-keeps-no-answer-keys"
+           Find = '"start-too-soon-over-cap", "no-answer", "no-answer-founder")'
+           Replace = '"start-too-soon-over-cap")' }
         @{ Name = "no-answer-cleared-without-new-ack"
            Find = 'if ($newestAcked.Count -eq 1 -and $newestAcked[0].id -cne $s.lastAckId) {'
            Replace = 'if ($newestAcked.Count -eq 1) {' }
