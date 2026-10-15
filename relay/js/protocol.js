@@ -326,6 +326,15 @@ export async function readOffer(text, now = Date.now()) {
   // phone that asked to join gets its offer through the relay, and a relay could otherwise make an offer
   // naming a machine's key and name with no machine behind them. Only the holder of the signing key
   // signs its grant, so an offer whose grant does not verify is not that machine's.
+  // WHAT THIS DOES NOT STOP, and it is narrower than it reads (Orc E's review, 2026-10-15): a grant
+  // signs the horde, the offer, the key id, the expiry and the label, and NOTHING about the account - no
+  // account id, no email. Registration (the relay's account route) checks only that the grant verifies
+  // under the key it names, and the spent-grant record only stops a replay of the same offer. So anyone
+  // signed in to the account - and the relay operator, who holds the code and the storage - can make a
+  // fresh key, sign its own grant, and register a MADE-UP machine under any label. This check blocks
+  // IMPERSONATING AN EXISTING MACHINE: putting forward a real PC's key id and name without holding that
+  // PC's key. Against a made-up one what stands is that the founder picks the machine by its label, and
+  // that an account member already holds his sign-in.
   let grantSig;
   try { grantSig = unb64u(o.grant); } catch (x) { return no("the offer's account grant is not a signature"); }
   if (!(await verifyMachineSignature(signPoint, accountGrantBytes(o), grantSig))) return no("the offer's account grant is not signed by the machine it names: it is not that machine's offer");
