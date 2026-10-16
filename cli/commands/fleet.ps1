@@ -54,13 +54,21 @@ $HordeCommand = @{
         # The mail goes through the messenger port, to the one loaded messenger that posts a body untyped,
         # once per message id, and wakes its target (decisions/Notify.ps1 asks the same three).
         . (Join-Path $root "core\Device.ps1")
+        . (Join-Path $root "core\Identity.ps1")
         . (Join-Path $root "messengers\Port.ps1")
         foreach ($m in @(Get-HordeMessengerFiles)) { if (@(Get-HordeMessengerNames) -cnotcontains (Split-Path -Leaf (Split-Path -Parent $m))) { . $m } }
         $post = {
             param($sessionId, $label, $body, $messageId)
             $found = Find-HordeMessenger -Require @("body.untyped", "idempotent.post", "wake")
             if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("no messenger can deliver it: " + $found.reason)) }
-            $from = [pscustomobject]@{ deviceId = (Get-HordeDeviceId); sessionId = "horde-fleet-wake" }
+            # THE SENDER MUST BE ONE THE FLEET'S MAIL CAN NAME: a session id or a hub label. A made-up
+            # sender name was held at once as bad-from, so every real wake marked its sessions failed though
+            # they ran (found by hosts/wezterm/test/e2e/e2e-fleet.ps1; probed on the shipped messenger). The
+            # waking session's own id when it has one (core/Identity.ps1); else the master's label, M: a wake
+            # is the master's act (decided by M and F, 2026-10-16), run from its own terminal.
+            $me = Get-HordeSelfSessionId
+            $from = [pscustomobject]@{ deviceId = (Get-HordeDeviceId); sessionId = $(if ($me.state -ceq "known") { "" + $me.value } else { "horde-fleet-wake" }) }
+            if ($me.state -cne "known") { $from | Add-Member -NotePropertyName "label" -NotePropertyValue "M" }
             $message = [pscustomobject]@{ messageId = $messageId; sessionId = $sessionId; from = $from; body = $body; ttlSeconds = 86400 }
             if ("" + $label -cmatch '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z') { $message | Add-Member -NotePropertyName "label" -NotePropertyValue $label }
             $a = Send-HordeMessengerMessage -Messenger $found.value -Message $message
