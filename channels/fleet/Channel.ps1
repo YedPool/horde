@@ -67,6 +67,12 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\Hibernate.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\StatusPanel.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "orcs\Registry.ps1")
+# The agent adapter, for its Scrub: the variables its harness sets for a session (the Start seam clears them
+# from a child). Dot-sourced here, at this scope, as its blocks need its helpers (fleet/Port.ps1); only the
+# agents' files, never a terminal's. Registering again replaces, so another loader does no harm.
+foreach ($script:HordeFleetChannelAdapter in @(Get-HordeFleetAdapterFiles -Root (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)))) {
+    if ((Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $script:HordeFleetChannelAdapter))) -ceq "agents") { . $script:HordeFleetChannelAdapter }
+}
 
 $script:HordeFleetChannelFolder = $PSScriptRoot
 $script:HordeFleetChannelSettings = New-HordeModuleSettings -Module "relay-fleet" -Settings @(
@@ -515,20 +521,40 @@ function Get-HordeFleetChannelBusyReal {
     return (New-HordeKnown -Value ([pscustomobject]@{ hibernating = [bool]$hibernating; waking = @($waking.ToArray()) }))
 }
 
+function Get-HordeFleetChannelScrub {
+    # The environment a started child must NOT inherit: the variables the loaded agent adapter says its harness
+    # sets for a session (its Scrub), as a list of names. Known; unknown when no one adapter can say - the start
+    # is then refused, because a child that inherits a session's id sends the mail it makes in that session's name.
+    $a = Resolve-HordeFleetAdapter -Kind "agent"
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("which variables name a session cannot be told: " + $a.reason)) }
+    $map = $null
+    try { $map = & $a.value.scrub } catch { return (New-HordeUnknown -Reason ("the agent adapter could not say which variables name a session: " + $_.Exception.Message)) }
+    return (New-HordeKnown -Value @($map.Keys | Where-Object { $null -eq $map[$_] } | ForEach-Object { "" + $_ }))
+}
+
 function Start-HordeFleetChannelCommand {
     # THE REAL SPAWN: `horde fleet <verb> <args>` in a hidden, detached process of its own, which this
     # channel does not wait for. Known { pid; start } - start the process's start time as ticks text, so a
     # reused pid is not mistaken for it later; unknown when it could not be started. -Words are checked
     # here to be plain words, so nothing a phone sent reaches a command line unchecked.
-    param([Parameter(Mandatory = $true)][string[]]$Words)
+    param([Parameter(Mandatory = $true)][string[]]$Words, [string]$HordeScript = "", [string[]]$Scrub = $null)
     foreach ($w in $Words) { if ($w -cnotmatch '\A[A-Za-z0-9-]{1,32}\z') { return (New-HordeUnknown -Reason ("'" + $w + "' is not a plain word for a command line")) } }
-    $horde = [System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), "horde.ps1")
+    # THE CHILD HAS NO SESSION. The relay runner may itself have been started from a session's pane and so
+    # holds its id; a wake's mail would then be sent in that session's name. The child is started without
+    # every variable the agent adapter names, and the mail it sends is Horde's own.
+    if ($null -eq $Scrub) {
+        $sc = Get-HordeFleetChannelScrub
+        if ($sc.state -cne "known") { return (New-HordeUnknown -Reason $sc.reason) }
+        $Scrub = @($sc.value)
+    }
+    $horde = $(if ($HordeScript -ne "") { $HordeScript } else { [System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), "horde.ps1") })
     if (-not [System.IO.File]::Exists($horde)) { return (New-HordeUnknown -Reason ("horde.ps1 is not at " + $horde)) }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
     $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + $horde + "`" fleet " + ($Words -join " ")
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    foreach ($n in $Scrub) { [void]$psi.EnvironmentVariables.Remove($n) }
     $p = $null
     try { $p = [System.Diagnostics.Process]::Start($psi) } catch { return (New-HordeUnknown -Reason ("the command could not be started: " + $_.Exception.Message)) }
     try {

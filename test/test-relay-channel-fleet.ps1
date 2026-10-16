@@ -567,7 +567,34 @@ try {
     Check ($rr.state -ceq "known" -and @($rr.value.lines).Count -eq 1 -and $rr.value.lines[0] -like "*20261013-000000*" -and @($rr.value.records).Count -eq 3) "a record that cannot be read is said and passed over; the others are still shown"
     $bad = Start-HordeFleetChannelCommand -Words @("wake", "2026; calc")
     Check ($bad.state -ceq "unknown" -and $bad.reason -like "*plain word*") "the real start refuses a word that is not plain, so nothing a phone sent reaches a command line unchecked"
-
+    # THE CHILD HAS NO SESSION: a real child process, started by the real start, reports what it inherited. The
+    # names are built at run time: the harness's own names are written only in its adapter's folder.
+    $sessionVar = [string]::Concat("CLA", "UDE_CODE_SESSION_ID")
+    $otherVar = [string]::Concat("CLA", "UDE_PID")
+    $keepVar = "HORDE_FLEET_TEST_KEEP"; $outVar = "HORDE_FLEET_TEST_OUT"
+    $saved = @{}
+    foreach ($n in @($sessionVar, $otherVar, $keepVar, $outVar)) { $saved[$n] = [System.Environment]::GetEnvironmentVariable($n) }
+    $probe = Join-Path $W.home "probe.ps1"
+    [System.IO.File]::WriteAllText($probe, ('[System.IO.File]::WriteAllText($env:' + $outVar + ', ("session=[" + $env:' + $sessionVar + ' + "] other=[" + $env:' + $otherVar + ' + "] keep=[" + $env:' + $keepVar + ' + "]"))'))
+    $ask = {
+        param($ScrubArgs, [string]$OutFile)
+        [System.Environment]::SetEnvironmentVariable($outVar, $OutFile)
+        $go = Start-HordeFleetChannelCommand -Words @("wake", "20261015-221030") -HordeScript $probe @ScrubArgs
+        for ($i = 0; $i -lt 100 -and $go.state -ceq "known" -and -not (Test-Path -LiteralPath $OutFile); $i++) { Start-Sleep -Milliseconds 200 }
+        $seen = $(if (Test-Path -LiteralPath $OutFile) { [System.IO.File]::ReadAllText($OutFile) } else { "(the child wrote nothing" + $(if ($go.state -cne "known") { ": " + $go.reason } else { "" }) + ")" })
+        return $seen
+    }
+    try {
+        [System.Environment]::SetEnvironmentVariable($sessionVar, "11111111-2222-4333-8444-555555555555")
+        [System.Environment]::SetEnvironmentVariable($otherVar, "4242")
+        [System.Environment]::SetEnvironmentVariable($keepVar, "kept")
+        $seen = & $ask @{} (Join-Path $W.home "probe-default.txt")
+        Check ($seen -ceq "session=[] other=[] keep=[kept]") ("THE STARTED CHILD SEES NO SESSION ID, nor any other variable the agent adapter names, and keeps the rest (" + $seen + ")")
+        $seen = & $ask @{ Scrub = [string[]]@() } (Join-Path $W.home "probe-none.txt")
+        Check ($seen -ceq "session=[11111111-2222-4333-8444-555555555555] other=[4242] keep=[kept]") ("CONTROL: told to clear nothing, the same child sees them - so the probe can see a session id, and the clearing is the Scrub's (" + $seen + ")")
+    } finally {
+        foreach ($n in $saved.Keys) { [System.Environment]::SetEnvironmentVariable($n, $saved[$n]) }
+    }
     Write-Host ""
     Write-Host "--- 8. the real registry: the channel's reader and tier write against orcs/Registry.ps1 ---" -ForegroundColor Cyan
     $R = New-World

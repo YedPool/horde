@@ -82,6 +82,9 @@
         @{ Name = "a-word-that-is-not-plain-reaches-the-command-line"
            Find = 'if ($w -cnotmatch ''\A[A-Za-z0-9-]{1,32}\z'') {'
            Replace = 'if ($false) {' }
+        @{ Name = "the-started-child-inherits-a-session"
+           Find = 'foreach ($n in $Scrub) { [void]$psi.EnvironmentVariables.Remove($n) }'
+           Replace = '' }
         @{ Name = "the-snapshot-is-sent-every-turn"
            Find = 'if ($hash -ceq $d.hash -and $sameKeys) {'
            Replace = 'if ($false) {' }
