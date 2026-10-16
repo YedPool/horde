@@ -275,7 +275,7 @@ Check ((Said "the PR head * already contains main *: the head is what is checked
 Check (-not [System.IO.Directory]::Exists($script:guardRuns[0].checkout) -and @([System.IO.Directory]::GetDirectories((Join-Path $c.work "runs"))).Count -eq 0) "the scratch checkout is removed afterwards"
 $ledgerCalls = @(Get-LedgerCalls $c)
 Check ($ledgerCalls.Count -eq 2 -and $ledgerCalls[0] -ceq "show T-0247" -and $ledgerCalls[1] -ceq "merged T-0247 --pr YedPool/horde#1 --by F --state done") ("the ledger is read first and its merged event written after: " + ($ledgerCalls -join " | "))
-Check (@($script:told).Count -eq 1 -and $script:told[0] -clike ("HORDE MERGE: F merged YedPool/horde#1 as " + $main + ".*Task T-0247 is now done.*Guards green on " + $c1.Substring(0, 8) + " + " + $heads["1"].Substring(0, 8) + ".")) ("M is told the PR, the merge sha, the task and its state: " + (@($script:told) -join " "))
+Check (@($script:told).Count -eq 1 -and $script:told[0] -clike ("HORDE MERGE: F merged YedPool/horde#1 as " + $main + ".*Task T-0247 is now done.*Guards green on " + $c1.Substring(0, 8) + " + " + $heads["1"].Substring(0, 8) + ".")) ("the warchief is told the PR, the merge sha, the task and its state: " + (@($script:told) -join " "))
 Check ($script:told[0] -cnotlike "*PR 1*") "and nothing the PR's author wrote (its title) is in the message"
 Check (@($script:mailed).Count -eq 1 -and $script:mailed[0] -ceq $script:told[0]) "the analyst is mailed the same message"
 Check ((Said "progress draft: F merged YedPool/horde#1 - PR 1 (T-0247, now done)") -and (Said ("MERGED YedPool/horde#1 as " + $main))) "the merge and a one-line progress draft are printed"
@@ -286,7 +286,7 @@ $r = Invoke-Case -Case $c -Pr "YedPool/horde#2" -State "waiting" -On "lane:K"
 Check ($r.outcome -ceq "merged" -and (Get-Main $c) -ceq $r.mergeSha) ("a PR behind main whose merge is green is merged: " + $r.outcome)
 Check ($script:guardRuns[0].commit -cne $heads["2"] -and (($script:guardRuns[0].parents) -join " ") -ceq ($c1 + " " + $heads["2"])) "the guards ran on the merge of main and the head, not on the head"
 Check (@(Get-LedgerCalls $c)[1] -ceq "merged T-0247 --pr YedPool/horde#2 --by F --state waiting --on lane:K") "a waiting state reaches the ledger with who it waits on"
-Check ($script:told[0] -clike "*Task T-0247 is now waiting, waiting on lane:K.*(checked as their merge, *") "M is told it waits, and that the merge result was checked"
+Check ($script:told[0] -clike "*Task T-0247 is now waiting, waiting on lane:K.*(checked as their merge, *") "the warchief is told it waits, and that the merge result was checked"
 Check (@($script:waited).Count -eq 1) "an UNKNOWN that turns MERGEABLE is waited on once and goes on"
 
 Write-Host "== main moves while the guards run"
@@ -341,11 +341,11 @@ $r = Invoke-Case -Case $c -State "progress" -Reason "the docs are left"
 Check ($r.outcome -ceq "merged-unfinished" -and (Get-Main $c) -ceq $r.mergeSha -and $r.why -clike "*the ledger event was not written*") ("a ledger failure after the merge says the merge happened and the ledger did not: " + $r.why)
 Check ((Said "THE MERGE HAPPENED, BUT THE LEDGER WAS NOT WRITTEN: stand-in ledger: the ledger file is locked")) "it says so loudly, with the ledger's words"
 Check ((Said "run this by hand: & 'python' 'C:\fleet\task.py' 'merged' 'T-0247' '--pr' 'YedPool/horde#1' '--by' 'F' '--state' 'progress' '--reason' 'the docs are left'")) "and prints the exact command to run"
-Check (@($script:told).Count -eq 1 -and @($script:mailed).Count -eq 1) "M and the analyst are still told"
+Check (@($script:told).Count -eq 1 -and @($script:mailed).Count -eq 1) "the warchief and the analyst are still told"
 
 $c = New-Case
 $r = Invoke-Case -Case $c -TellFails
-Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "*M was not told*" -and (Said "COULD NOT TELL M: no session holds the role of warchief")) ("M not told: merged, said loudly: " + $r.why)
+Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "*the warchief was not told*" -and (Said "COULD NOT TELL THE WARCHIEF: no session holds the role of warchief")) ("the warchief not told: merged, said loudly: " + $r.why)
 Check ((Said "    HORDE MERGE: F merged YedPool/horde#1 as *") -and @(Get-LedgerCalls $c).Count -eq 2) "the message is printed for a person to send, and the ledger was still written"
 $c = New-Case
 $r = Invoke-Case -Case $c -MailFails
@@ -390,7 +390,7 @@ foreach ($shell in @("powershell.exe", "pwsh.exe")) {
     Check ($run.code -eq 1 -and $run.out -clike ("*MERGED YedPool/horde#1 as " + $main + "*") -and $main -cne $c1) ("the happy path merges and says so (" + $run.code + ")")
     Check ($run.out -clike "*test\test-host-names.ps1 is green*test\test-mutation-specs.ps1 is green*") "  the guards ran through the real guard runner and were read green"
     Check (@(Get-LedgerCalls $c)[-1] -ceq "merged T-0247 --pr YedPool/horde#1 --by F --state done") "  the ledger event was written through the settings' program"
-    Check ($run.out -clike "*COULD NOT TELL M: this Horde home is under the temp folder, so it is a test's: nobody is told*" -and $run.out -clike "*MERGED, NOT FINISHED:*M was not told*") "  a test's home tells M nothing, and the command exits 1 saying so rather than pretend"
+    Check ($run.out -clike "*COULD NOT TELL THE WARCHIEF: this Horde home is under the temp folder, so it is a test's: nobody is told*" -and $run.out -clike "*MERGED, NOT FINISHED:*the warchief was not told*") "  a test's home tells the warchief nothing, and the command exits 1 saying so rather than pretend"
     $mailDir = Join-Path $c.home "analyst\mail"
     $mails = @(if ([System.IO.Directory]::Exists($mailDir)) { [System.IO.Directory]::GetFiles($mailDir, "*.txt") })
     Check ($mails.Count -eq 1 -and [System.IO.File]::ReadAllText($mails[0]) -clike ("HORDE MERGE: F merged YedPool/horde#1 as " + $main + "*")) "  the analyst's mail is left in the (test) home's analyst folder, as horde analyst mail leaves one"

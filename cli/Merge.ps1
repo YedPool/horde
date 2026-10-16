@@ -374,8 +374,8 @@ function Invoke-HordeMerge {
     }
     $message = Format-HordeMergeMessage -Request $Request -MergeSha $mergeSha -Check $check
     $t = Invoke-HordeMergeTool -Tools $Tools -Name "Tell" -With @($message)
-    if ($t.ok -eq $true) { & $say "told M" }
-    else { & $say ("COULD NOT TELL M: " + $t.detail); [void]$problems.Add("M was not told: send M the message below") }
+    if ($t.ok -eq $true) { & $say "told the warchief" }
+    else { & $say ("COULD NOT TELL THE WARCHIEF: " + $t.detail); [void]$problems.Add("the warchief was not told: send the warchief the message below") }
     $a = Invoke-HordeMergeTool -Tools $Tools -Name "Mail" -With @($message)
     if ($a.ok -eq $true) { & $say ("mailed the analyst: " + $a.detail) }
     else { & $say ("COULD NOT MAIL THE ANALYST: " + $a.detail); [void]$problems.Add("the analyst was not mailed: horde analyst mail -Text with the message below") }

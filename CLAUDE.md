@@ -42,7 +42,7 @@ git worktree add -b <branch> ../horde-worktrees/<name> origin/main
 - One logical change per commit. One concern per pull request.
 - Merge with `horde merge OWNER/REPO#N -Task T-NNNN -State done|waiting|progress -By <lane>`: it runs
   the two text guards on the merge result, merges with `gh pr merge --merge`, records the ledger event
-  and tells M and the analyst. Never squash.
+  and tells the warchief and the analyst. Never squash.
 - Never switch branches in a checkout where a suite is running.
 
 ## Before replacing old code, write its knowledge ledger (CONTRIBUTING 5)
