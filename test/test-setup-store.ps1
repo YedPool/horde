@@ -42,7 +42,7 @@ $d = Get-HordeSetupStorePolicyDecision -Policy 2 -Elevated $false
 Check ($d.done -and $d.said -clike "*nothing to change*" -and $d.next -ceq "") "AutoDownload = 2 is done, and says nothing needs changing"
 foreach ($bad in @($null, 0, 1, 4)) {
     $d = Get-HordeSetupStorePolicyDecision -Policy $bad -Elevated $false
-    Check (-not $d.done -and $d.next -clike "this needs an elevated run*AutoDownload to 2*") ("MUST FAIL: policy " + $(if ($null -eq $bad) { "unset" } else { $bad }) + " is not done; not elevated, the one sentence says it needs an elevated run and what it will set")
+    Check (-not $d.done -and $d.next -clike "needs one elevated run of horde setup*AutoDownload to 2*") ("MUST FAIL: policy " + $(if ($null -eq $bad) { "unset" } else { $bad }) + " is not done; not elevated, the one sentence says it needs an elevated run and what it will set")
 }
 $d = Get-HordeSetupStorePolicyDecision -Policy $null -Elevated $true
 Check (-not $d.done -and $d.next -ceq "" -and $d.said -clike "*AutoDownload is unset*") "unset and elevated: not done, and no sentence about waiting for an elevated run"
@@ -58,7 +58,7 @@ Check (-not $d.done -and $d.kind -ceq "missing" -and $d.said -clike "PowerShell 
 $d = Get-HordeSetupPowerShellDecision -Resolved $msiPath -MsiPath $msiPath -MsiVersion "7.5.3.0" -Elevated $false
 Check ($d.done -and @($d.notes).Count -eq 0 -and $d.said -clike "*7.5.3.0*nothing to change*") "the MSI copy only: done, no note, nothing to change"
 $d = Get-HordeSetupPowerShellDecision -Resolved $storePwsh -MsiPath $msiPath -MsiVersion "" -Elevated $false
-Check ($d.next -clike "this needs an elevated run*MSI*" -and $d.next -notlike "*uninstall*") "not elevated: one sentence says it needs an elevated run and what it will install, and no uninstall"
+Check ($d.next -clike "needs one elevated run of horde setup*MSI*" -and $d.next -notlike "*uninstall*") "not elevated: one sentence says it needs an elevated run and what it will install, and no uninstall"
 Check ((Get-HordeSetupPowerShellDecision -Resolved "" -MsiPath $msiPath -MsiVersion "" -Elevated $true).next -ceq "") "elevated: no wait sentence"
 
 Write-Host "--- 4. winget's text ---" -ForegroundColor Cyan
@@ -138,7 +138,7 @@ $probes = @{
 $ctx = [pscustomobject]@{ probes = $probes }
 $st = $code["store-updates-off"]
 $c = & $st.check $ctx
-Check (-not $c.done -and $c.next -clike "this needs an elevated run*") "store policy unset, not elevated: to do, with the one sentence"
+Check (-not $c.done -and $c.next -clike "needs one elevated run of horde setup*") "store policy unset, not elevated: to do, with the one sentence"
 Check ($null -eq (& $st.fix $ctx) -and $script:state.setCalls -eq 0) "not elevated: the fix tries nothing and writes nothing"
 $script:state.elevated = $true
 $f = & $st.fix $ctx
@@ -149,7 +149,7 @@ Check ($c.done -and $c.said -clike "*nothing to change*" -and $script:state.setC
 $ps = $code["powershell-msi"]
 $script:state.elevated = $false
 $c = & $ps.check $ctx
-Check (-not $c.done -and $c.next -clike "this needs an elevated run*" -and $null -eq (& $ps.fix $ctx) -and $script:state.installCalls -eq 0) "Store pwsh, not elevated: to do, one sentence, nothing installed"
+Check (-not $c.done -and $c.next -clike "needs one elevated run of horde setup*" -and $null -eq (& $ps.fix $ctx) -and $script:state.installCalls -eq 0) "Store pwsh, not elevated: to do, one sentence, nothing installed"
 $script:state.elevated = $true
 $script:state.installOk = $false
 $f = & $ps.fix $ctx

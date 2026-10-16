@@ -8,8 +8,8 @@
            Find = 'if ($null -ne $Policy -and [int]$Policy -eq 2) {'
            Replace = 'if ($null -ne $Policy) {' }
         @{ Name = "policy-not-elevated-says-nothing"
-           Find = '$next = $(if ($Elevated) { "" } else { "this needs an elevated run: horde setup will set '
-           Replace = '$next = $(if ($true) { "" } else { "this needs an elevated run: horde setup will set ' }
+           Find = '$next = $(if ($Elevated) { "" } else { "needs one elevated run of horde setup (a PowerShell window opened as administrator); it will set '
+           Replace = '$next = $(if ($true) { "" } else { "needs one elevated run of horde setup (a PowerShell window opened as administrator); it will set ' }
         @{ Name = "store-path-matches-any-windowsapps-word"
            Find = "'(?i)\\WindowsApps\\'"
            Replace = "'(?i)WindowsApps'" }

@@ -62,6 +62,7 @@ $script:said = New-Object System.Collections.ArrayList
 # The Store and PowerShell 7 steps (cli/SetupStore.ps1) read the real registry and search path unless told
 # otherwise; this suite is about the rest, so they read a pretend machine that is already as it should be.
 $fakeMachine = Join-Path $work "pretend-machine.json"
+
 [System.IO.File]::WriteAllText($fakeMachine, '{ "elevated": false, "storePolicy": 2, "pwshResolved": "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "msiVersion": "7.5.3", "actions": [] }')
 $script:sayLines = New-Object System.Collections.ArrayList
 $script:pairHomes = New-Object System.Collections.ArrayList
@@ -114,7 +115,7 @@ function Report {
     [void]$script:said.Add(($lines -join "`n"))
     return [pscustomobject]@{ report = $r; lines = $lines; next = $lines[-1]; states = (@($r.steps | ForEach-Object { $_.id + "=" + $_.state }) -join " ") }
 }
-function Last-Step { param($R) return $R.report.steps[-1] }
+function Last-Step { param($R) return @($R.report.steps | Where-Object { @("store-updates-off", "powershell-msi") -cnotcontains $_.id })[-1] }
 
 try {
     Write-Host ""
@@ -195,7 +196,7 @@ try {
     }
     $probes = @{ identity = $idProbe; makeIdentity = $makeOk; trust = $noPhone; schedule = $schedProbe; elevated = { $false }; installSchedule = { param($HordeHome, $Root) $script:installs++; $script:scheduled = $true } }
     $x = Report $hh $probes
-    Check ($x.states -clike "requirements=done store-updates-off=done powershell-msi=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-scheduled=todo") ("the identity is made, the relay runner's service written, and scheduling it is next (" + $x.states + ")")
+    Check ($x.states -clike "requirements=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-scheduled=todo store-updates-off=done powershell-msi=done") ("the identity is made, the relay runner's service written, and scheduling it is next (" + $x.states + ")")
     $read = Get-HordeServiceDefinitions -HordeHome $hh
     $svc = $(if ($read.state -ceq "read" -and @($read.services).Count -eq 1) { $read.services[0] } else { $null })
     Check ((Test-Ascii $defsPath) -and $null -ne $svc -and $svc.name -ceq "relay-runner" -and (@($svc.start.words) -join " ") -ceq "relay run" -and $svc.start.named["Relay"] -ceq "cloudflare" -and $svc.hordeHome -ceq $hh -and $svc.checkout -ceq $root -and (@($svc.stop.words) -join " ") -ceq "relay stop" -and $svc.alive.path -ceq (Get-HordeRelayRunHeartbeatPath -HordeHome $hh)) ("the file is ASCII, and the real definitions reader takes it: the relay run of this checkout, for this home, alive by the runner's own heartbeat (" + $read.state + " " + (@($read.findings) -join "; ") + ")")
@@ -245,7 +246,7 @@ try {
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
     $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions) | Where-Object { $_.group -ceq "Setup" })
     Check (@($x.report.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" -and $_.said -clike "added question 1: Horde is set up on * - does it reach your phone?" }).Count -eq 1 -and $qs.Count -eq 1 -and $qs[0].title -ceq ("Horde is set up on " + $env:COMPUTERNAME + " - does it reach your phone?") -and $qs[0].askedBy -ceq "horde setup") ("setup adds the test question through the shipped decisions list, once (" + $x.states + ")")
-    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done store-updates-off=done powershell-msi=done home=done relay-settings=done machine-identity=done runner-defined=done runner-scheduled=done runner-serving=done phone-paired=done test-question=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("the test question added, every step is done: all set (" + $x.states + ")")
+    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-scheduled=done runner-serving=done phone-paired=done test-question=fixed store-updates-off=done powershell-msi=done" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("the test question added, every step is done: all set (" + $x.states + ")")
     $before = Get-Tree $hh
     $x = Report $hh $probes
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
