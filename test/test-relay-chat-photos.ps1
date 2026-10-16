@@ -345,7 +345,12 @@ try {
     Check ($turn.Contains("refused (expired)") -and $turn.Contains("after it was signed")) ("a manifest whose window is longer than the setting is refused (" + $turn + ")")
     # THE HOUR (the founder's choice, 2026-10-16): a photo sent while the PC was off waits for it up to an
     # hour - the window the phone names (relay/js/protocol.js, PHOTO_WINDOW_MS) and the PC's default.
-    $P6c = New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -SignedAt ([datetime]::UtcNow.AddMinutes(-50)) -ExpiresInMs 3600000
+    # The PC's journal is older than the photo, as a real one is: this world's was made a moment ago, and
+    # takes nothing sent more than its clock skew (600 s) before that (relay/Journal.ps1).
+    $marker = Join-Path $W.home "relay\journal\journal.json"
+    $older = (Get-HordeChatPhotoNow -Now ([datetime]::UtcNow.AddHours(-2)))
+    [System.IO.File]::WriteAllText($marker, ('{"v":1,"kind":"horde-relay-journal","createdAt":' + $older + '}'), (New-Object System.Text.UTF8Encoding $false))
+    $P6c =New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -SignedAt ([datetime]::UtcNow.AddMinutes(-50)) -ExpiresInMs 3600000
     $null = Send-Manifest $W $P6c
     $turn = Invoke-Turn $W
     Check ($turn.Contains("accepted (receiving)") -and -not $turn.Contains("refused (expired)")) ("THE HOUR: a photo signed 50 minutes before the PC came on, with the phone's one-hour window, is taken by the default setting (" + $turn + ")")
@@ -641,6 +646,8 @@ try {
     $null = Send-Manifest $G $PJ
     $pendS = @(Get-ChildItem -LiteralPath (Join-Path $G.home "relay\chat\photos\pending") -File | Where-Object { $_.Name.Contains($PJ.id + "-1-") })
     Check ($pendS.Count -eq 2 -and @($in.value.data | Where-Object { $_.Contains("waits for its manifest") }).Count -eq 4) ("in the pending area, junk and real part 1 wait side by side under their digests (" + $pendS.Count + ")")
+    # The next batch brings the manifest: no data item in it, so it is journaled, and opened by step 6.
+    $null = Receive-HordeRelayInbox -Context $G.ctx -TimeoutMs 0
     $un = Invoke-HordeRelayUnfinished -Context $G.ctx
     Check (@($un.value.done | Where-Object { $_.Contains("3 had come already") }).Count -eq 1) ("opened, the manifest takes the three real parts and drops the junk (" + (@($un.value.done) -join "; ") + ")")
     $t = Invoke-Tick $G
@@ -662,7 +669,7 @@ try {
     Use-World $E
     $in = Receive-HordeRelayInbox -Context $E.ctx -TimeoutMs 0
     $takenE = @($in.value.data | Where-Object { $_.Contains("of photo " + $PE.id + " taken") })
-    Check ($in.state -ceq "known" -and $takenE.Count -eq 3 -and @(Get-ChildItem -LiteralPath $pendE -File -ErrorAction SilentlyContinue | Where-Object { $_.Name.Contains($PE.id) }).Count -eq 0 -and @($in.value.refused | Where-Object { $_.Contains("its photo has 3 parts") }).Count -eq 1) ("SAME BATCH: junk put after a genuine photo's parts, under 4 new ids and 48 under its own, takes none of its place: its 3 parts are taken at once, and the 48 refused against its manifest (" + (@($in.value.refused) -join "; ") + ")")
+    Check ($in.state -ceq "known" -and $takenE.Count -eq 3 -and @(Get-ChildItem -LiteralPath $pendE -File -ErrorAction SilentlyContinue | Where-Object { $_.Name.Contains($PE.id) }).Count -eq 0 -and @($in.value.refused | Where-Object { $_.Contains("its photo has 3 parts") }).Count -eq 48) ("SAME BATCH: junk put after a genuine photo's parts, under 4 new ids and 48 under its own, takes none of its place: its 3 parts are taken at once, and the 48 refused against its manifest, a line each since each reason names its part (" + $takenE.Count + " taken; " + @($in.value.refused | Where-Object { $_.Contains("its photo has 3 parts") }).Count + " refused so; " + ((@($in.value.refused) | Select-Object -First 3) -join "; ") + ")")
     $t = Invoke-Tick $E
     $fE = @(Get-InboxFiles $E | Where-Object { Test-SameBytes ([System.IO.File]::ReadAllBytes($_.FullName)) $imgE })
     Check ($fE.Count -eq 1) ("and the photo completes (" + $t + ")")
