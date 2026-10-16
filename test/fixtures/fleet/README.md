@@ -35,14 +35,33 @@ What the phone shows. Replaced whole each time.
 | `lastResult` | `{ setId, outcome, reason }` for the last request the PC answered |
 
 - `running.phase`: `"asking"` (sessions asked to park), `"parking"` (waiting for them to park and
-  exit), `"done"`.
+  exit), `"done"` (every session has exited or been marked still-awake; the hibernation is about to
+  move into `hibernations`, and the next snapshot has `running: null`).
+- A hibernation is in `running` OR in `hibernations`, never both: it moves to `hibernations` when
+  its phase ends.
 - `running.sessions[]` and `hibernations[].sessions[]`: `{ label, role, state }`, role `"orc"` or
-  `"warg"`. A hibernation's state is `"asleep"`, `"woken"`, `"still-awake"` (it was running when a
-  wake came, so it was left alone) or `"failed"`.
+  `"warg"`.
+- A running hibernation's session state is one of:
+  - `"asked"`: told by mail to park at its next turn end.
+  - `"parked"`: its PARKED file is written; waiting for it to be idle so it can exit.
+  - `"exited"`: it exited cleanly and is asleep.
+  - `"still-awake"`: it did not park within 15 minutes, so it was left running.
+  - `"failed"`: something went wrong; the reason is in the PC's record.
+- A finished hibernation's session state is one of:
+  - `"asleep"`: not woken yet.
+  - `"woken"`: resumed in a new window.
+  - `"still-awake"`: it never went to sleep (it did not park in time), or a wake found it already
+    running and left it alone.
+  - `"failed"`: a wake tried and could not bring it back.
 - `more`: how many sessions were left out of the list to keep the snapshot small, `0` when none.
 - `startedAt`, `at`: UTC, `yyyy-mm-ddThh:mm:ssZ`.
 - `lastResult.outcome`: `"done"`, `"refused"` (will not be done; the reason says why) or `"retry"`
   (not done now; ask again, usually after re-reading the snapshot).
+- `lastResult` is `null` until the PC has answered its first request. It is never left out.
+- `never` and `tiers` do not overlap: an Orc in `never` is left out of `tiers`. A `tier` request that
+  names an Orc in `never` is answered `refused`.
+- Only one hibernation runs at a time: a `hibernate` request while `running` is not `null` is
+  answered `retry`. So no two hibernations start in the same second, and an id names exactly one.
 
 ## Phone to PC: one body per request
 
@@ -53,3 +72,12 @@ Each carries `v`, `setId` and `machine` (above), and exactly the members listed.
 | `tier.json` | move one Orc to a tier | `orc`, `tier` (1 or 2), `version` |
 | `hibernate.json` | put tier 2 to sleep | `tier` (always 2), `version` |
 | `wake.json` | wake one hibernation | `hibernationId` (`yyyymmdd-hhmmss`) |
+
+- The envelope: relay channel `fleet`, sender the founder; the envelope kind is the request name
+  (`tier`, `hibernate`, `wake`).
+- Signing (M's decision, 2026-10-16): all three ride the founder's unlocked session. The phone adds
+  `fleet tier`, `fleet hibernate` and `fleet wake` to SESSION_SIGNED, and the PC's Accept takes
+  `webauthn` or `session` proof for each. Hibernate asks for an on-page confirm first ("Hibernate N
+  Tier 2 Orcs? Wake brings them back") instead of a fresh passkey, because Wake undoes it.
+- `wake` carries no `version` on purpose: a hibernation id does not depend on the Orc registry. Do
+  not add one for symmetry.
