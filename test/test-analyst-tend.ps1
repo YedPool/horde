@@ -388,6 +388,32 @@ try {
     Check ($spawned.Count -eq 1) ("two passes at once: exactly one spawn (" + $spawned.Count + "; " + ($said -join " || ") + ")")
     Check ((State $two).phase -ceq "starting") "and the second pass found it starting"
 
+    # A pass that cannot have the lock in time does NOTHING: another runspace holds it past -WaitSeconds,
+    # and this pass, which would otherwise adopt the analyst its handover names, must not.
+    $lk = New-Rig "locked"
+    Write-Handover -Folder $lk.folder -Sid $sidA -At $t0
+    $lk.listing = New-Listing -Live @($sidA)
+    $lk.now = $t0.AddMinutes(1)
+    $heldName = "Local\HordeAnalystTendSuite" + [guid]::NewGuid().ToString("N")
+    $heldMark = Join-Path $work "lock-held.txt"
+    $holder = [powershell]::Create()
+    [void]$holder.AddScript({
+        param($Name, $Mark)
+        $m = New-Object System.Threading.Mutex($false, $Name)
+        [void]$m.WaitOne()
+        [System.IO.File]::WriteAllText($Mark, "held")
+        Start-Sleep -Seconds 6
+        $m.ReleaseMutex(); $m.Dispose()
+    }).AddArgument($heldName).AddArgument($heldMark)
+    $hh = $holder.BeginInvoke()
+    $waited = 0; while (-not [System.IO.File]::Exists($heldMark) -and $waited -lt 200) { Start-Sleep -Milliseconds 50; $waited++ }
+    Check ([System.IO.File]::Exists($heldMark)) "CONTROL: another runspace holds the lock"
+    $skip = $null
+    try { $skip = Invoke-HordeAnalystLockedPass -Tools $lk.tools -Policy $lk.policy -Folder $lk.folder -LockName $heldName -WaitSeconds 1 } catch { $skip = $null }
+    [void]$holder.EndInvoke($hh); $holder.Dispose()
+    Check ($null -ne $skip -and (Get-HordeTestMember $skip "skipped") -eq $true -and ((@(Get-HordeTestMember $skip "lines") -join " ") -like "*another pass*did nothing*")) "a pass that cannot have the lock in time does nothing, and says so"
+    Check ((State $lk).sessionId -cne $sidA) "and it adopted nothing"
+
     Write-Host ""
     Write-Host "--- review of PR 306: no-answer is told once for a run of unacked rounds ---" -ForegroundColor Cyan
     $w = New-Rig "wedged"
@@ -402,6 +428,18 @@ try {
     $w.now = $t0.AddMinutes(160); $null = Pass $w
     $w.now = $t0.AddMinutes(176); $null = Pass $w
     Check (@($w.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 2 -and $w.notices.Count -eq 2) "after an ack, the next unacked round is told again"
+
+    # Only a NEWER ack ends a run: the first round is acked, then the session wedges. The old ack is
+    # still in the file at every pass, and must not reopen no-answer for each late round after it.
+    $oa = New-Rig "old-ack"
+    Write-Handover -Folder $oa.folder -Sid $sidA -At $t0
+    $oa.listing = New-Listing -Live @($sidA)
+    $oa.now = $t0.AddMinutes(1); $null = Pass $oa
+    Finding $oa "alarm:o2"; $oa.now = $t0.AddMinutes(2); $null = Pass $oa
+    Ack $oa ((State $oa).rounds[-1].id)
+    foreach ($m in @(33, 64, 95, 126)) { Finding $oa ("alarm:o" + $m); $oa.now = $t0.AddMinutes($m); $null = Pass $oa }
+    $oa.now = $t0.AddMinutes(150); $null = Pass $oa
+    Check ($oa.posts.Count -eq 5 -and @($oa.tells | Where-Object { $_.key -ceq "no-answer" }).Count -eq 1 -and $oa.notices.Count -eq 1) ("an old ack does not reopen the run: four late rounds after it are told once (" + @($oa.tells | Where-Object { $_.key -ceq "no-answer" }).Count + " tells, " + $oa.notices.Count + " notices)")
 
     Write-Host ""
     Write-Host "--- review of PR 306: the founder's notice does not wait on the warchief's tell ---" -ForegroundColor Cyan
