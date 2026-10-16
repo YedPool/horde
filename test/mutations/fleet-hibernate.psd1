@@ -91,5 +91,20 @@
         @{ Name = "ask-id-random"
            Find = 'return (ConvertTo-HordeTextUuid -Text ("horde-fleet-hibernate/" + $Id + "/" + $SessionId))'
            Replace = 'return ([guid]::NewGuid().ToString())' }
+        @{ Name = "tier-takes-every-orc-with-a-tier"
+           Find = '$null -ne $_.tier -and "" + $_.tier -ceq ("" + $Tier)'
+           Replace = '$null -ne $_.tier' }
+        @{ Name = "tier-without-a-field-is-not-said"
+           Find = 'if ($withField.Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "tier-refuses-an-orc-that-is-not-running"
+           Find = 'if (@($orcs | Where-Object { "" + $_.label -ceq $letter }).Count -gt 0) { [void]$running.Add($letter) }'
+           Replace = '[void]$running.Add($letter)' }
+        @{ Name = "tier-and-names-together"
+           Find = 'if (@($Names).Count -gt 0 -or $null -ne $Selector) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "tier-with-an-unreadable-registry-goes-on"
+           Find = 'if ($null -eq $rows -or "" + $rows.state -cne "known") {'
+           Replace = 'if ($false) {' }
     )
 }

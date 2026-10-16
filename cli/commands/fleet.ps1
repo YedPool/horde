@@ -134,13 +134,10 @@ $HordeCommand = @{
                 Caller = { $me = Get-HordeSelfSessionId; if ($me.state -ceq "known") { "" + $me.value } else { "" } }
                 State = { param($sid) Get-HordeWakeState -Waker $waker -Id $sid -Full }
                 Exit = { param($sid, $why) Send-HordeWakeExit -Waker $waker -Id $sid -Reason $why }
-                # The Orc registry's rows { id; tier }, read through its own reader when this build has one
-                # (orcs/Registry.ps1, another pull request): a build without it answers an empty list, which
-                # Get-HordeFleetTierIds says in words, rather than failing.
+                # The Orc registry's rows { id; tier }, through its own reader (orcs/Registry.ps1, the dash). A
+                # row with no tier member selects nothing, said in words (Get-HordeFleetTierIds).
                 Tiers = {
-                    $reg = Join-Path $root "orcs\Registry.ps1"
-                    if (-not (Test-Path -LiteralPath $reg -PathType Leaf)) { return (New-HordeKnown -Value @()) }
-                    . $reg
+                    . (Join-Path $root "orcs\Registry.ps1")
                     $dash = Get-HordeOrcDash
                     if (-not $dash.ok) { return (New-HordeUnknown -Reason ("" + $dash.reason)) }
                     return (New-HordeKnown -Value @(@($dash.orcs) | ForEach-Object { $row = [ordered]@{ id = "" + $_.id }; if ($null -ne $_.PSObject.Properties["tier"]) { $row["tier"] = $_.tier }; [pscustomobject]$row }))
