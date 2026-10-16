@@ -1,7 +1,7 @@
 // Builds small SYNTHETIC transcript folders for the reader's tests and for the end-to-end scenario.
 // Nothing here is copied from a real transcript: ids are made up, text is invented, and only the
 // shape of the records matches what the harness writes (checked against the format notes in
-// reader.mjs). Usable as a module, or as a script:  node make-projects.mjs <projects-dir> <registry-dir>
+// reader.mjs). Usable as a module, or as a script:  node make-projects.mjs <projects-dir> <registry-dir> [minutes-since-the-hit]
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,7 +85,10 @@ export function writeRegistry(dir) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const now = Date.now() - 3600 * 1000;
-  writeProjects(process.argv[2], now, now + 60000);
+  // argv[4]: how many minutes ago the stopped session hit its limit (default 10: young enough that a
+  // first-ever watch run still reports it).
+  const hitAgo = Number(process.argv[4] || 10) * 60000;
+  const now = Date.now() - hitAgo - 60000;
+  writeProjects(process.argv[2], now, Date.now() - hitAgo);
   writeRegistry(process.argv[3]);
 }
