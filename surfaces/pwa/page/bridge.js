@@ -31,6 +31,10 @@
 //   announce {id}         ONE passkey prompt that announces the phone: the pairing screen's Finish pairing
 //                         (phone-core.js, THE ANNOUNCEMENT IS NO BUTTON); unlock carries it by itself
 //   pairConfirmed {id, waitMs}  has the machine said the founder confirmed this phone: { confirmed }
+//   join {horde, machine, label, agent}  this phone asks to join that machine: { request, expiresAt }
+//   joinOffer {request, waitMs}  the machine's answer, opened: { offerText, expired } ("" while none)
+//   joinRequests          the picked horde's open requests from new phones (never a number)
+//   approveJoin {request, number}  rejectJoin {request}  the passkey's approval or reject
 //   unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
 //   chat                  the picked horde's chat with its Thrall: { state, value: { session, items,
 //                         mode } } as phone-core's chat answers it; a locked or empty horde answers
@@ -75,7 +79,7 @@
 // own words what it could not send.
 import { withAnswers } from "../relay/protocol.js";
 
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -220,9 +224,16 @@ export function createBridge(phone, options = {}) {
     act: async () => ({ ok: true, sequence: LOCAL_ACT_SEQUENCE, local: true }),
     hordes: async () => hordes(),
     pick: async (a) => { if (String(a.id || "") !== picked) lastGoodAt = 0; picked = String(a.id || ""); view = null; viewError = ""; const rec = await refresh(); poll(); return rec; },
-    pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || "") }); await hordes(); return r; },
+    pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || ""), joined: a.joined === true }); await hordes(); return r; },
     sendPairing: async (a) => ({ relayed: await phone.sendPairing(String(a.id || "")) }),
     announce: async (a) => { const r = await phone.announce(String(a.id)); await hordes(); return r; },
+    // ADD THIS PHONE and A NEW PHONE ASKS TO JOIN (phone-core.js): the new phone's request and the
+    // machine's answer; the picked horde's open requests, and its passkey's approval or reject.
+    join: async (a) => phone.join({ horde: String(a.horde || ""), machine: String(a.machine || ""), label: String(a.label || ""), agent: String(a.agent || "") }),
+    joinOffer: async (a) => phone.joinOffer(String(a.request || ""), { waitMs: Math.max(0, Math.min(Number(a.waitMs) || 0, 25000)) }),
+    joinRequests: async () => (picked ? phone.joinRequests(picked) : []),
+    approveJoin: async (a) => phone.approveJoin(picked, { request: String(a.request || ""), number: String(a.number || "") }),
+    rejectJoin: async (a) => phone.rejectJoin(picked, { request: String(a.request || "") }),
     pairConfirmed: async (a) => phone.pairConfirmed(String(a.id || ""), { waitMs: Math.max(0, Math.min(Number(a.waitMs) || 0, 25000)) }),
     unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     recover: async (a) => { const r = await phone.recover(String(a.id), String(a.code || "")); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },

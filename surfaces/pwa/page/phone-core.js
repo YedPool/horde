@@ -93,6 +93,21 @@
 // itself under the trusted passkey, and a second copy is the same record (relay/Trust.ps1, THE VOUCH
 // TRAVELS BY ITSELF, says why one assertion cannot be both the envelope's signature and the vouch).
 //
+// ADD THIS PHONE (phone-started pairing; relay/Join.ps1 has the protocol, design-phone-started-pairing.md
+// its threats). A phone signed in to the account asks to join one machine of it (join): a request with a
+// fresh request key, which trusts nothing. The machine answers at once with a pairing offer sealed to that
+// key (joinOffer opens it); the founder taps once more and this phone pairs with it exactly as with a
+// scanned offer (pair: the passkey prompt needs that tap), and shows the 12-digit number. He types it on a
+// TRUSTED device - the PC, or a trusted phone (below) - which compares it with its own; only then is this
+// passkey trusted, and the confirmed record brings Finish pairing. A request is never sent twice by itself.
+//
+// A NEW PHONE ASKS TO JOIN, on a TRUSTED phone: the machine sends the transcript (channel join, kind
+// request) sealed to the trusted phones. joinRequests lists the open ones - who, browser, country, time,
+// never a number. approveJoin takes the number the founder typed from the new phone, computes the number
+// from the transcript ITSELF and compares; only on a match does the passkey sign (user verification) an
+// approval of the request, the device and the transcript's hash - the number never leaves this phone.
+// rejectJoin signs a reject the same way. A recovery or read-only session does neither.
+//
 // A RELAY WITH ACCOUNTS (account-client.js) knows a machine only by the signing key a signed-in phone
 // registered to its account. So pair() registers the offer's machine - with the offer's ACCOUNT GRANT,
 // relay/Pairing.ps1 - FIRST, before a passkey is made or anything is sent: a phone that is not signed in,
@@ -182,9 +197,12 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const sessions = new Map();
   // Sealed pairing responses not yet known to have arrived, by horde id (THE PAIRING RESPONSE...).
   const pairings = new Map();
+  // This phone's own join requests (ADD THIS PHONE, in the header), by request id: the request key that
+  // opens the machine's answer. In memory only: a page closed loses it, and he taps Add this phone again.
+  const joining = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map() });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map(), joins: new Map() });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
@@ -294,6 +312,23 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     for (const x of r.value.notices) if (!g.byId.has(x.id)) g.byId.set(x.id, x);
     if (opened.header.seq > g.followsSeq) { g.follows = r.value.follows; g.followsSeq = opened.header.seq; }
   }
+  // One opened join envelope (A NEW PHONE ASKS TO JOIN, in the header): a transcript to approve, or the
+  // word that a request ended. In memory only, like the rest of what a session opens.
+  function takeJoin(e, s, opened, item, anomalies) {
+    const h = opened.header;
+    if (h.kind === "request") {
+      const r = P.readJoinTranscript(P.fromUtf8(opened.body), e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      const was = s.joins.get(r.value.request);
+      if (!was || !was.closed) s.joins.set(r.value.request, { transcript: r.value, closed: "" });
+    } else if (h.kind === "closed") {
+      let b = null;
+      try { b = JSON.parse(P.fromUtf8(opened.body)); } catch (x) { b = null; }
+      if (!b || typeof b.request !== "string" || !/^[0-9a-f]{32}$/.test(b.request) || typeof b.outcome !== "string") { anomalies.push("item " + item.seq + ": a join request's end that does not hold together"); return; }
+      const was = s.joins.get(b.request);
+      s.joins.set(b.request, { transcript: was ? was.transcript : null, closed: b.outcome.slice(0, 16) });
+    }
+  }
   // One opened cards envelope into a session's memory (THE CARDS, in the header): the newest by seq stands.
   function takeCards(e, s, opened, item, anomalies) {
     if (opened.header.kind !== "snapshot") return;
@@ -400,7 +435,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // response, recoveryCode, prf, pairMailbox, relayed }: relayed says whether the relay took it, and
     // response is the plain text for Copy and Share. The recovery code is shown ONCE, to be written
     // down; it is not kept anywhere.
-    async pair({ offerText, label }) {
+    // joined: the offer is a join request's answer (ADD THIS PHONE): its machine is on the account already,
+    // so no registration is asked - nothing between the tap and the passkey prompt but local work.
+    async pair({ offerText, label, joined = false }) {
       const read = await P.readOffer(offerText, now());
       if (!read.ok) throw fail(read.reason);
       const o = read.value;
@@ -409,7 +446,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       if (host !== o.rpId && !host.endsWith("." + o.rpId)) throw fail("this app at " + origin + " cannot make passkeys for " + o.rpId);
       if (!P.validLabel(label)) throw fail("name this phone in 1 to 64 plain characters, with no quote or backslash");
       for (const e of await store.list(ENTRY)) { if (e.horde === o.horde && e.machine === o.machine) throw fail("this phone is already paired with that machine of " + o.horde + "; forget that pairing first"); }
-      if (account) {
+      if (account && !joined) {
         const reg = await account.registerMachine(o);
         if (reg.state !== "known") { diagnostics.push(relaySaid(reg.reason)); throw fail(reg.status === 401 ? SIGN_IN_FIRST : NOT_REGISTERED); }
       }
@@ -484,6 +521,110 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       }
       if (pairings.has(id)) p.confirmCursor = r.value.next;
       return { confirmed: false };
+    },
+
+    // ADD THIS PHONE (the header): ask to join the machine of a horde this phone's account holds. A request
+    // only - it trusts nothing and is never sent again by itself. { request, expiresAt }. On a relay with
+    // accounts the relay's join route takes it and holds the limits (one pending, so many an hour; its
+    // refusal is said in this file's words); on one without, the item goes into the machine's mailbox.
+    async join({ horde, machine, label, agent = "" }) {
+      if (!P.validLabel(label)) throw fail("name this phone in 1 to 64 plain characters, with no quote or backslash");
+      const kind = String(agent || "").replace(/[^\x20\x21\x23-\x5b\x5d-\x7e]/g, "").slice(0, 200);
+      const key = await newPhoneKey();
+      wipe(key.pkcs8);
+      const request = P.hex(P.randomBytes(16));
+      const requestKey = P.b64u(key.publicPoint);
+      let expiresAt = now() + P.JOIN_TTL_MS;
+      if (account) {
+        const r = await account.requestJoin({ machine, request, label, agent: kind, requestKey });
+        if (r.state !== "known") {
+          diagnostics.push(relaySaid(r.reason));
+          const words = { "join-pending": "Another phone's request to join is waiting: approve or reject it on a trusted device, or wait for it to expire (10 minutes).", "join-blocked": "A request from this network was rejected: no request is taken from it for an hour.", "rate-limited": "Too many requests to join this hour: try again later." };
+          throw fail(words[r.code] || (r.status === 401 ? SIGN_IN_FIRST : "The relay did not take the request to join; nothing was sent. Try again."));
+        }
+        if (r.value && Number.isSafeInteger(r.value.expiresAt)) expiresAt = r.value.expiresAt;
+      } else {
+        const text = P.joinRequestText({ request, horde, machine, label, agent: kind, requestKey, country: "", requestedAt: now(), expiresAt });
+        const put = await relay.put(horde + "/" + machine, P.joinKey(request), text);
+        if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(RELAY_REFUSED + " The request to join was not sent. Try again."); }
+      }
+      joining.set(request, { horde, machine, label, privateKey: key.privateKey, publicPoint: key.publicPoint, expiresAt, cursor: 0 });
+      return { request, expiresAt };
+    },
+
+    // The machine's answer to a join request this phone made: the offer, opened with the request key, or
+    // "" while none has come (or the request expired). waitMs > 0 watches first. Pair with it (pair()) on
+    // the next tap: the passkey prompt needs one.
+    async joinOffer(request, { waitMs = 0 } = {}) {
+      const j = joining.get(request);
+      if (!j) throw fail("this phone holds no such request to join: tap Add this phone again");
+      if (now() > j.expiresAt) { joining.delete(request); return { offerText: "", expired: true }; }
+      const mb = P.joinReplyMailbox(j.horde, request);
+      const r = waitMs > 0 ? await relay.watch(mb, j.cursor, 16, waitMs) : await relay.get(mb, j.cursor, 16);
+      if (r.state !== "known") { diagnostics.push(relaySaid(r.reason)); return { offerText: "", expired: false }; }
+      for (const item of r.value.items) {
+        const text = await P.openJoinOffer(item.text, { request, horde: j.horde, privateKey: j.privateKey, publicPoint: j.publicPoint });
+        if (!text) continue;
+        const o = await P.readOffer(text, now());
+        // The answer must be the machine this phone asked, of the horde it asked: anything else is not it.
+        if (!o.ok || o.value.machine !== j.machine || o.value.horde !== j.horde) continue;
+        return { offerText: text, expired: false };
+      }
+      j.cursor = r.value.next;
+      return { offerText: "", expired: false };
+    },
+
+    // A NEW PHONE ASKS TO JOIN (the header), as this unlocked horde's machine sent it to the trusted phones:
+    // [{ request, label, agent, country, requestedAt, expiresAt }] still open. The number is never here:
+    // the founder reads it on the new phone and types it in approveJoin.
+    async joinRequests(id) {
+      await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const out = [];
+      for (const [request, j] of s.joins) {
+        if (j.closed || !j.transcript || j.transcript.expiresAt < now()) continue;
+        const t = j.transcript;
+        // THE BROWSER IS THE NEW PHONE'S OWN WORDS (review of PR 301): printable ASCII, cut to 80, and the page
+        // says whose they are.
+        const agent = String(t.agent || "").replace(/[^\x20-\x7e]/g, "");
+        out.push({ request, label: t.label, agent: agent.length > 80 ? agent.slice(0, 77) + "..." : agent, country: t.country, requestedAt: t.requestedAt, expiresAt: t.expiresAt });
+      }
+      return out;
+    },
+
+    // APPROVE A NEW PHONE: number is what the founder typed from the NEW phone's screen. This phone computes
+    // the number from the transcript itself and compares; only on a match does its passkey sign the
+    // approval - the request, the device and the transcript's hash, never the number. { key }.
+    async approveJoin(id, { request, number }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to approve a new phone."); }
+      const j = s.joins.get(request);
+      if (!j || !j.transcript || j.closed) throw fail("That request to join is not open on this phone.");
+      if (j.transcript.expiresAt < now()) throw fail("That request to join has expired.");
+      const typed = String(number || "").replace(/[ -]/g, "");
+      const want = (await P.joinNumber(j.transcript)).replace(/-/g, "");
+      if (!/^[0-9]{12}$/.test(typed) || !P.equalBytes(P.utf8(typed), P.utf8(want))) throw fail("That number does not match the new phone's. If the new phone shows another number, it is not the phone that asked: reject it.", "mismatch");
+      const body = P.joinApproveBody({ request, device: j.transcript.device, transcript: await P.joinTranscriptHash(j.transcript.text) });
+      const env = await sealAndSign(e, "approve", "join", body, assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Approve again."); }
+      return { key: env.key };
+    },
+
+    // REJECT A NEW PHONE: signed with the passkey like an approval. { key }.
+    async rejectJoin(id, { request }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Not sent: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to reject a new phone."); }
+      if (!/^[0-9a-f]{32}$/.test(String(request || ""))) throw fail("That is not a request to join.");
+      const env = await sealAndSign(e, "reject", "join", P.joinRejectBody({ request }), assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Reject again."); }
+      return { key: env.key };
     },
 
     // Unlock with the passkey: its PRF output unwraps the phone key. A passkey that gives none unlocks
@@ -585,6 +726,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           if (o.value.header.channel === "notices") { takeNotices(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "chat") { takeChat(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel === "progress") { takeProgress(e, s, o.value, item, anomalies); continue; }
+          if (o.value.header.channel === "join") { takeJoin(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel !== "decisions" || o.value.header.kind !== "snapshot") continue;
           const page = P.readSnapshotPage(o.value.body, e.horde, e.machine);
           if (!page.ok) { anomalies.push("item " + item.seq + ": " + page.reason); continue; }

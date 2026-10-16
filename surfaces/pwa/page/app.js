@@ -175,7 +175,7 @@ bridge.on("read-changed", async (rec) => {
 
 // --- the screens ---
 
-const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress", "notices"];
+const VIEWS = ["signInView", "joinView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress", "notices"];
 // The views of an unlocked horde, each a tab of the bar: the pane's name, and the view and the tab it is.
 const PANES = { decisions: { view: "doc", tab: "tabDecisions" }, chat: { view: "chat", tab: "tabChat" }, progress: { view: "progress", tab: "tabProgress" }, notices: { view: "notices", tab: "tabNotices" } };
 function show(view) {
@@ -184,6 +184,7 @@ function show(view) {
   $("viewTabs").hidden = !Object.keys(PANES).some((p) => PANES[p].view === view);
   // Shown again by render() for an unlocked horde the machine has not answered yet.
   $("announceBox").hidden = true;
+  $("joinBox").hidden = true;
   showReadBanner();
 }
 // Which view of an unlocked horde is up: its questions, its chat, or the progress log.
@@ -287,6 +288,7 @@ function render(h, rec) {
   // too; cards-changed brings every later one.
   if (pane === "decisions" && !cardsLast) bridge.request("cards").then(drawCards);
   showAnnounceBox(h, rec);
+  showJoinBox(h);
   if (pane === "chat") bridge.request("chat").then(drawChat);
   if (pane === "progress") { bridge.request("cards").then(drawCards); requestStream(); }
   if (pane === "notices") bridge.request("notices").then(drawNotices);
@@ -773,13 +775,17 @@ $("pairBtn").addEventListener("click", async () => {
   say("action", "");
   $("pairBtn").disabled = true;
   try {
-    paired = await bridge.request("pair", { offer: $("offerText").value, label: $("labelText").value.trim() });
+    const joined = joinedRequest;
+    joinedRequest = "";
+    paired = await bridge.request("pair", { offer: $("offerText").value, label: $("labelText").value.trim(), joined: joined !== "" });
     $("offerText").value = "";
     $("fingerprint").textContent = paired.fingerprint;
     $("recoveryCode").textContent = paired.recoveryCode;
     $("responseText").value = paired.response;
     $("shareResponse").hidden = typeof navigator.share !== "function";
     showRelayed(paired.relayed);
+    // A phone that asked to join: its number is typed on a trusted device, which compares it.
+    if (joined) $("relayStatus").textContent = "Type this number on one of your trusted devices: a trusted phone's join request, or at the PC: horde relay approve " + joined + " <number>.";
     $("wroteCode").checked = false;
     confirmed = false;
     showFinish();
@@ -843,6 +849,85 @@ $("finishBtn").addEventListener("click", async () => {
 });
 $("pairLater").addEventListener("click", () => { if (paired) leavePairing(); });
 
+// --- add this phone (phone-started pairing: phone-core.js, ADD THIS PHONE) ---
+// The founder taps Add this phone beside a machine of his account; this phone asks to join it, the
+// machine answers with an offer, and ONE MORE TAP makes the passkey (an iPhone starts that prompt only
+// from a tap) - then the pairing screen as for a scanned offer, its number to type on a trusted device.
+let joinWith = null;
+// The request a pairing about to start answers (the pair handler reads it once).
+let joinedRequest = "";
+function openJoin(m) {
+  joinWith = { horde: String(m.horde), machine: String(m.keyId), label: typeof m.label === "string" && m.label ? m.label : "machine " + String(m.keyId).slice(0, 12), request: "", offerText: "" };
+  $("joinTo").textContent = "Ask " + joinWith.label + " (" + joinWith.horde + ") to add this phone. Nothing is trusted until you type the number this phone will show on one of your trusted devices.";
+  $("joinWait").hidden = true;
+  $("joinContinue").hidden = true;
+  $("joinAsk").disabled = false;
+  show("joinView");
+}
+$("joinCancel").addEventListener("click", () => { joinWith = null; pick(current || (hordes[0] && hordes[0].id) || ""); });
+$("joinAsk").addEventListener("click", async () => {
+  if (!joinWith) return;
+  say("action", "");
+  $("joinAsk").disabled = true;
+  try {
+    const r = await bridge.request("join", { horde: joinWith.horde, machine: joinWith.machine, label: $("joinLabel").value.trim(), agent: navigator.userAgent || "" });
+    joinWith.request = r.request;
+    $("joinWait").textContent = "Waiting for " + joinWith.label + " to answer. It expires in 10 minutes and is never sent again by itself.";
+    $("joinWait").hidden = false;
+    watchJoinOffer(joinWith);
+  } catch (e) { say("action", messageOf(e)); $("joinAsk").disabled = false; }
+});
+// Watches for the machine's answer while the screen is up; never a spin, never a prompt by itself.
+async function watchJoinOffer(w) {
+  while (joinWith === w && !$("joinView").hidden && !w.offerText) {
+    const began = Date.now();
+    let r = null;
+    try { r = await bridge.request("joinOffer", { request: w.request, waitMs: 20000 }); } catch (e) { r = null; }
+    if (joinWith !== w) return;
+    if (r && r.expired) { $("joinWait").textContent = "The request expired with no answer. Tap Add this phone to ask again."; $("joinAsk").disabled = false; return; }
+    if (r && r.offerText) { w.offerText = r.offerText; $("joinWait").textContent = joinWith.label + " answered. Continue to make this phone's passkey."; $("joinContinue").hidden = false; return; }
+    const left = 2000 - (Date.now() - began);
+    if (left > 0) await new Promise((done) => setTimeout(done, left));
+  }
+}
+// THE TAP THAT MAKES THE PASSKEY: the same pairing as a scanned offer, from the offer the machine sent.
+$("joinContinue").addEventListener("click", async () => {
+  if (!joinWith || !joinWith.offerText) return;
+  $("offerText").value = joinWith.offerText;
+  $("labelText").value = $("joinLabel").value.trim();
+  const request = joinWith.request;
+  joinWith = null;
+  joinedRequest = request;
+  $("pairBtn").click();
+});
+
+// --- a new phone asks to join, on a trusted phone (phone-core.js, A NEW PHONE ASKS TO JOIN) ---
+let joinShown = "";
+async function showJoinBox(h) {
+  if (!h || !h.unlocked) return;
+  let list = [];
+  try { list = await bridge.request("joinRequests"); } catch (e) { list = []; }
+  if (h.id !== current) return;
+  const j = list[0];
+  $("joinBox").hidden = !j;
+  if (!j) { joinShown = ""; return; }
+  if (joinShown !== j.request) { $("joinNumber").value = ""; announceSaid("joinStatus", ""); }
+  joinShown = j.request;
+  $("joinWho").textContent = "'" + j.label + "', " + (j.country || "country unknown") + ", " + dayTime(j.requestedAt) + "." + (j.agent ? " The new phone says its browser is: " + j.agent : "");
+}
+$("joinApprove").addEventListener("click", async () => {
+  if (!joinShown) return;
+  announceSaid("joinStatus", "");
+  try { await bridge.request("approveJoin", { request: joinShown, number: $("joinNumber").value }); announceSaid("joinStatus", "Approved. The machine trusts the new phone at its next turn."); $("joinNumber").value = ""; }
+  catch (e) { announceSaid("joinStatus", messageOf(e)); }
+});
+$("joinReject").addEventListener("click", async () => {
+  if (!joinShown) return;
+  announceSaid("joinStatus", "");
+  try { await bridge.request("rejectJoin", { request: joinShown }); announceSaid("joinStatus", "Rejected. If it was not your phone, change your Google password."); }
+  catch (e) { announceSaid("joinStatus", messageOf(e)); }
+});
+
 // --- the account ---
 
 // A refused sign-in's words, by the code word the hosted relay's sign-in puts after #signin-refused
@@ -897,6 +982,14 @@ async function openAccount() {
     });
     li.appendChild(what);
     li.appendChild(rm);
+    // ADD THIS PHONE (phone-core.js): offered for a machine this phone is not paired with.
+    if (!hordes.some((h) => h.horde === m.horde && h.machine === m.keyId)) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.textContent = "Add this phone";
+      add.addEventListener("click", () => openJoin(m));
+      li.appendChild(add);
+    }
     list.appendChild(li);
   }
   $("machineEmpty").hidden = machines.length > 0;
