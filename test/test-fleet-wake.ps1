@@ -264,7 +264,7 @@ $lock = Join-Path $dir "waking.lock"
 $held = @{ text = "" }
 $peek = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000; ProcessStart = $deps.ProcessStart; Self = $deps.Self
     Host = [pscustomobject]@{ name = "peek"; placement = $null; describe = $deps.Host.describe
-        open = { $held.text = [System.IO.File]::ReadAllText($lock); & $deps.Host.open }.GetNewClosure() } }
+        open = { $held.text = Read-HordeSharedText -Path $lock; & $deps.Host.open }.GetNewClosure() } }
 [void](Invoke-HordeFleetWake -Id $HID -Deps $peek -HordeHome $h -Only @("X"))
 Check ($held.text -like ("pid 777 start " + $SELFSTART + " at *")) ("while it runs, the lock names this wake's process and its start time (" + $held.text.Trim() + ")")
 $S = "134000000000000000"

@@ -155,8 +155,9 @@ $v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt
 Check ($v.state -ceq "stopped") "one that started at the very moment counts as already running"
 $v = Verdict $snap $OTHER "C:\work\live"
 Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") "with no -Since, the guard's own rule stands: unknown"
-Set-ControlFiles @(@{ sid = $LIVE; pid = 4242; ps = "not-a-time"; cwd = "C:\work\live" })
+$table["4242"] = "?"
 $v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5)
+$table["4242"] = $START
 Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") ("a running session whose start cannot be read may be the new id: unknown (" + $v.state + "/" + $v.kind + ")")
 
 Section "the real process lookup"
@@ -164,6 +165,7 @@ $mine = Get-ClaudeCodeFleetProcessStart -ProcessId $PID
 Check ($mine -ceq ("" + (Get-Process -Id $PID).StartTime.ToFileTimeUtc())) ("this process's own start time is read as FILETIME ticks (" + $mine + ")")
 $none = Get-ClaudeCodeFleetProcessStart -ProcessId 999999991
 Check ($none -ceq "") "a pid no process has reads as not running"
+Usual-World
 $r = Read-ClaudeCodeFleetRecords -Dirs @($dir)
 Check ("" + $r.error -eq "" -and @($r.records).Count -eq 3) "CONTROL: the default lookup reads the same folder"
 
