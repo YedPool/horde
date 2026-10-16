@@ -194,6 +194,14 @@ Check (Throws { Hib -Names @("K1") -DryRun } "named K1") "a Warg is not an Orc t
 $script:w.lane = $null
 Check (Throws { Hib -Names @("sleeping-sessions") -DryRun } "lane folders could not be read") "a lane name with no lane folders to read is refused, and says so"
 
+Section "a dry run changes nothing"
+Reset-World
+$before = Count-Records
+$r = Hib -Names @("K", "L") -DryRun
+Check ((Count-Records) -eq $before -and -not (Test-Path -LiteralPath (Get-HordeFleetHibernationsDir -HordeHome $script:hh))) "no record, no hibernations folder"
+Check ($script:w.posts.Count -eq 0 -and $script:w.exits.Count -eq 0 -and $script:w.states.Count -eq 0) "no mail, no exit command, not even a box read"
+Check (@($r.lines | Where-Object { $_ -like "*PARKED-K.md*" }).Count -eq 1 -and @($r.lines | Where-Object { $_ -like "*dry run*" }).Count -eq 1) "it prints the plan: each session and where it would park"
+
 Section "the tier selection: the Orcs the registry puts in tier 2, running ones only, and their Wargs"
 Reset-World
 $script:w.lane = [pscustomobject]@{ state = "read"; reason = ""; orcs = @(
@@ -225,13 +233,6 @@ $r = Hib -Tier 2
 $rec = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
 Check ("" + $rec.phase -ceq "done" -and (Outcome $r "K") -ceq "exited" -and (Count-Records) -eq ($before + 1)) "a tier run is recorded and finished like a named one"
 Check ("" + (Get-HordeTestMember $rec "selection.kind") -ceq "orcs" -and (@(Get-HordeTestMember $rec "selection.labels") -join ",") -ceq "K") ("its record says which Orcs were chosen, by their labels (" + (@(Get-HordeTestMember $rec "selection.labels") -join ",") + ")")
-
-Reset-World
-$before = Count-Records
-$r = Hib -Names @("K", "L") -DryRun
-Check ((Count-Records) -eq $before -and -not (Test-Path -LiteralPath (Get-HordeFleetHibernationsDir -HordeHome $script:hh))) "no record, no hibernations folder"
-Check ($script:w.posts.Count -eq 0 -and $script:w.exits.Count -eq 0 -and $script:w.states.Count -eq 0) "no mail, no exit command, not even a box read"
-Check (@($r.lines | Where-Object { $_ -like "*PARKED-K.md*" }).Count -eq 1 -and @($r.lines | Where-Object { $_ -like "*dry run*" }).Count -eq 1) "it prints the plan: each session and where it would park"
 
 Section "the run: ask, park, exit - Wargs before their Orc"
 Reset-World
