@@ -26,8 +26,12 @@
 # sessions and returns the ones to record. -All and -Labels are the first two; the Orc registry's tiers
 # (an Orc's id is its lane folder name) will be a third, with no change here.
 #
-# THE ID IS THE TIME, UTC, TO THE SECOND. Its folder is made with CreateDirectory semantics checked
-# first: a second record in the same second is refused, never merged into the first.
+# THE ID IS THE TIME, UTC, TO THE SECOND. Its record.json is claimed with CreateNew, one step in the file
+# system, before anything else: a second record in the same second is refused, never merged into the
+# first (review of PR 318, finding a).
+#
+# EACH SESSION KEEPS ITS PROCESS, { pid; start } as the harness names it, so a wake can tell that very
+# process still running under another id (second review of PR 318, P1).
 #
 # WRITTEN WHOLE OR NOT AT ALL: to a temporary file beside it, then renamed over it in one step
 # (core/FileAtomic.ps1). The text is ASCII: any other character is written as a \u escape.
@@ -232,6 +236,8 @@ function New-HordeFleetRecord {
         if ("" + $c.parent -cmatch $script:HordeFleetSessionPattern) { $s["parent"] = "" + $c.parent }
         if ("" + $c.transcriptPath -ne "") { $s["transcriptPath"] = "" + $c.transcriptPath }
         if ($null -ne $Placed -and $Placed.ContainsKey("" + $c.sessionId)) { $s["placement"] = $Placed["" + $c.sessionId] }
+        $pr = $c.PSObject.Properties["process"]
+        if ($null -ne $pr -and $null -ne $pr.Value -and "" + $pr.Value.pid -cmatch '\A[0-9]{1,10}\z' -and "" + $pr.Value.start -cmatch '\A[0-9]{1,19}\z') { $s["process"] = [pscustomobject][ordered]@{ pid = "" + $pr.Value.pid; start = "" + $pr.Value.start } }
         if ("" + $c.label -ne "" -and "" + $c.cwd -ne "" -and [System.IO.Path]::IsPathRooted("" + $c.cwd)) {
             $pf = Join-Path ("" + $c.cwd) ("PARKED-" + $c.label + ".md")
             if ([bool](& $ParkedExists $pf)) { $s["parkedFile"] = $pf }
@@ -267,14 +273,39 @@ function Invoke-HordeFleetRecord {
         $placed = $pl.value.placed
         foreach ($n in @($pl.value.notes)) { [void]$notes.Add("placement unknown for " + $n) }
     } else { [void]$notes.Add("no placement was read: " + $(if ($null -ne $pl) { $pl.reason } else { "the host answered nothing" })) }
+    # Each chosen session's own process, as the harness names it (second review of PR 318, P1): a wake
+    # then tells that very process still running under another id from a new one.
+    $procs = @{}
+    foreach ($r in @(& $Deps.Agent.running $snapshot)) { if ($null -ne $r -and "" + $r.sessionId -ne "") { $procs["" + $r.sessionId] = $r } }
+    foreach ($c in $chosen) { if ($procs.ContainsKey("" + $c.sessionId)) { $c | Add-Member -NotePropertyName "process" -NotePropertyValue $procs["" + $c.sessionId] -Force } }
     $at = & $Deps.Now
     $id = New-HordeFleetHibernationId -At $at
     $dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $HordeHome) $id
-    if (Test-Path -LiteralPath $dir) { throw ("a hibernation was already recorded at " + $id + "; ids are the second they were taken, so try again in a second") }
-    $parked = $null
-    if ($null -ne $Deps.PSObject.Properties["ParkedExists"]) { $parked = $Deps.ParkedExists }
-    $record = New-HordeFleetRecord -Id $id -At $at -Chosen $chosen -AgentName $Deps.Agent.name -HostName $Deps.Host.name -Selection $Selection -Placed $placed -ParkedExists $parked
+    $taken = "a hibernation was already recorded at " + $id + "; ids are the second they were taken, so try again in a second"
+    # THE CLAIM IS ONE STEP (review of PR 318, finding a): record.json is created with CreateNew, which the
+    # file system grants to one caller only, BEFORE anything else is done. A check followed by a folder
+    # made with -Force let a second run of the same second in between, and the two merged into one record;
+    # so there is no separate check: the claim is the only gate.
+    # The empty file is then replaced whole by the writer; a run that fails after its claim removes it.
     [void](New-Item -ItemType Directory -Path $dir -Force)
-    $path = Write-HordeFleetRecord -Dir $dir -Record $record
+    $path = Join-Path $dir "record.json"
+    try { (New-Object System.IO.FileStream($path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)).Dispose() }
+    catch {
+        # A constructor's error reaches PowerShell wrapped; the file being there is an IOException inside.
+        $e = $_.Exception
+        while ($null -ne $e -and $e -isnot [System.IO.IOException]) { $e = $e.InnerException }
+        if ($null -ne $e -and (Test-Path -LiteralPath $path)) { throw $taken }
+        throw
+    }
+    try {
+        $parked = $null
+        if ($null -ne $Deps.PSObject.Properties["ParkedExists"]) { $parked = $Deps.ParkedExists }
+        $record = New-HordeFleetRecord -Id $id -At $at -Chosen $chosen -AgentName $Deps.Agent.name -HostName $Deps.Host.name -Selection $Selection -Placed $placed -ParkedExists $parked
+        $path = Write-HordeFleetRecord -Dir $dir -Record $record
+    } catch {
+        if ((Test-Path -LiteralPath $path -PathType Leaf) -and (Get-Item -LiteralPath $path).Length -eq 0) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        if (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue).Count -eq 0) { Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue }
+        throw
+    }
     return [pscustomobject]@{ id = $id; path = $path; record = $record; notes = @($notes) }
 }

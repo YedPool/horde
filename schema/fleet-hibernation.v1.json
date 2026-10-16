@@ -83,6 +83,16 @@
         "cwd": { "$ref": "#/definitions/path" },
         "transcriptPath": { "$ref": "#/definitions/path" },
         "placement": { "$ref": "#/definitions/placement" },
+        "process": {
+          "type": "object",
+          "required": ["pid", "start"],
+          "additionalProperties": false,
+          "description": "The process that ran it when it was recorded, as the harness adapter names it: its pid and its start time (FILETIME ticks). A wake treats that very process still running, under any id, as this session running. Left out when the harness could not name it; a wake then does not narrow its check of the session's folder.",
+          "properties": {
+            "pid": { "type": "string", "pattern": "^[0-9]{1,10}$" },
+            "start": { "type": "string", "pattern": "^[0-9]{1,19}$" }
+          }
+        },
         "parkedFile": { "$ref": "#/definitions/path", "description": "Its PARKED-<label>.md, when the file was there." },
         "state": { "$ref": "#/definitions/state" },
         "history": { "type": "array", "items": { "$ref": "#/definitions/historyEntry" }, "description": "Every state it has been in, oldest first; the last is state." },
