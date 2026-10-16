@@ -69,6 +69,7 @@ $script:HordeServiceTellNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
 $script:HordeServiceTellPageSentences = [ordered]@{
     "deployed"      = "the supervisor deployed the phone page and checked it: the hosted page serves the new version"
     "deploy-failed" = "the supervisor's deploy of the phone page failed; it is tried again an hour later at the earliest, or a person runs: horde relay deploy"
+    "deploy-needs-action" = "the supervisor deployed the relay and it IS live, but its sign-in failed the check after the deploy, so nobody can sign in; a person acts now: deploy again from a fixed checkout (horde relay deploy), then check that the relay's /auth/google redirects to Google"
     "check-failed"  = "the supervisor deployed the phone page, but the hosted page did not then serve exactly what was built; it is tried again an hour later at the earliest"
     "worker-changed" = "the relay's Worker changed since the last deploy, so the supervisor did not deploy the phone page; a person reads the change, then runs: horde relay deploy"
     "worker-unmeasured" = "files the relay's Worker shares with the phone page changed, and whether the Worker itself changed could not be measured, so the supervisor did not deploy; a person checks, then runs: horde relay deploy"

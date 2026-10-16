@@ -309,6 +309,29 @@ $a = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; followsUp = 1e30; 
 Check ((Test-Refused $a "'followsUp' is not a question's number") -and (Get-Files $r) -ceq $filesWere) ("a follow-up of a number no question can have is refused, not thrown on (" + (Get-Outcome $a) + ")")
 $a = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; followsUp = 4; question = (New-Question) }
 Check ((Test-Refused $a "'followsUp' names question 4, and the list has no question 4 to show with this one; the highest number given is 3") -and (Get-Files $r) -ceq $filesWere) "A FOLLOW-UP OF A QUESTION THAT IS NOT THERE is refused - a question cannot follow itself or one not yet asked - and nothing is added"
+
+Write-Host ""
+Write-Host "--- needs a passkey: written only as true, shown only when true ---" -ForegroundColor Cyan
+$p = New-TestStore
+$keyed = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = (New-Question @{ title = "Is a question marked as needing a passkey recorded so?" }) }
+$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000001.json")) | ConvertFrom-Json
+Check ((Get-Outcome $keyed) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "needsPasskey,number,question" -and (Get-HordeTestMember $rec.data "needsPasskey") -eq $true -and (Get-HordeTestMember $keyed.value.question "needsPasskey") -eq $true) "add with needsPasskey true writes needsPasskey true into the record, and the view hands it back as true"
+$unkeyed = Add-Q $p @{ title = "Is a question with no passkey mark the record it always was?" }
+$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000002.json")) | ConvertFrom-Json
+Check ((Get-Outcome $unkeyed) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $null -eq $unkeyed.value.question.PSObject.Properties["needsPasskey"]) "CONTROL: add without needsPasskey writes no needsPasskey member, and the view has none"
+$falseKey = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $false; question = (New-Question @{ title = "Is needsPasskey false written down at all?" }) }
+$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000003.json")) | ConvertFrom-Json
+Check ((Get-Outcome $falseKey) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $null -eq $falseKey.value.question.PSObject.Properties["needsPasskey"]) "add with needsPasskey false writes nothing: the record is byte for byte the unmarked one, and the view has no needsPasskey"
+$pFiles = Get-Files $p
+foreach ($bad in @(
+    @{ what = "needsPasskey as the word yes"; key = "yes" }
+    @{ what = "needsPasskey as the number 1"; key = 1 }
+)) {
+    $a = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $bad.key; question = (New-Question @{ title = "Is a needsPasskey that is not true or false refused?" }) }
+    Check ((Test-Refused $a "needsPasskey") -and (Get-Files $p) -ceq $pFiles) ($bad.what + " is not a boolean: refused by name, and no question is added")
+}
+$listedKeys = Invoke-Op $p "list" @{ state = "all" }
+Check ((Get-Outcome $listedKeys) -ceq "done" -and (@($listedKeys.value.questions | ForEach-Object { "" + $_.number + ":" + [bool](Get-HordeTestMember $_ "needsPasskey") + ":" + ($null -ne $_.PSObject.Properties["needsPasskey"]) }) -join ",") -ceq "1:True:True,2:False:False,3:False:False") "a list read again from the records shows needsPasskey on the marked question only"
 # THE WORDS ARE PART OF WHAT MAKES A REQUEST THE SAME: one id, the same question, another importance is
 # another request, and is refused as that.
 $id = New-Id
@@ -330,7 +353,10 @@ Check ((Get-Outcome $replay) -ceq "replayed" -and $replay.value.sequence -eq 5 -
 $filesWere = Get-Files $r
 Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; importance = "high" }) "it changes nothing: question 1 already has that importance and that blocking") -and (Get-Files $r) -ceq $filesWere) "a ranking that changes nothing, under a new id, is refused as that"
 Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1 }) "the ranking names neither word") -and (Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; importance = "urgent" }) "request.importance is 'urgent'") -and (Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; blocks = "all"; title = "x" }) "request has 'title'") -and (Get-Files $r) -ceq $filesWere) "a ranking that names neither word, a word that is none of the list's, or a field of the question is refused"
-Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "founder"; number = 1; blocks = "none" }) "'founder' is not a role that may change the list") -and (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 99; blocks = "none" }).state -ceq "absent" -and (Get-Files $r) -ceq $filesWere) "only the keeper ranks, and a question that is not there is absent"
+Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "orc-b"; number = 1; blocks = "none" }) "'orc-b' is not a role that may rank a question") -and (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 99; blocks = "none" }).state -ceq "absent" -and (Get-Files $r) -ceq $filesWere) "only the keeper and the founder rank, and a question that is not there is absent"
+# THE FOUNDER RANKS HIS OWN LIST (his little buttons, 2026-10-14): the same operation, his own record.
+$his = Invoke-Op $r "rank" @{ id = (New-Id); actor = "founder"; number = 1; blocks = "none" }
+Check ((Get-Outcome $his) -ceq "done" -and $his.value.question.blocks -ceq "none" -and (@($his.value.question.history) | Select-Object -Last 1).actor -ceq "founder" -and (Test-Refused (Invoke-Op $r "update" @{ id = (New-Id); actor = "founder"; number = 1; changes = @{ group = "x" } }) "'founder' is not a role that may change the list")) "the founder ranks a question in a record of his own, and still changes nothing else of it"
 $null = Invoke-Op $r "close" @{ id = (New-Id); actor = "warchief"; number = 3; outcome = "Done." }
 Check ((Test-Refused (Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 3; importance = "high" }) "question 3 is closed, and only an open question is ranked") -and (Get-Listed $r) -ceq "1:open,2:open,3:closed,4:open") "a closed question is not ranked"
 $down = Invoke-Op $r "rank" @{ id = (New-Id); actor = "warchief"; number = 1; blocks = "part" }

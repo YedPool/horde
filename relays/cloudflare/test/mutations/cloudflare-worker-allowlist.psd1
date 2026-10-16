@@ -22,5 +22,8 @@
         @{ Name = "any-shape-read"
            Find = 'Object.keys(o).sort().join(",") !== "emails,on,subs" || typeof o.on !== "boolean"'
            Replace = 'false' }
+        @{ Name = "unclean-binding-read"
+           Find = 'if (!cleanSecret(text)) return { state: "broken" };'
+           Replace = '' }
     )
 }

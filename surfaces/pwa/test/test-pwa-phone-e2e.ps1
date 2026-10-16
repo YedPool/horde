@@ -320,7 +320,12 @@ try {
     Check ($null -ne $v2 -and @($v2.items[0].corrections).Count -eq 1 -and $v2.items[0].corrections[0].title -ceq "Not merged after all" -and $v2.items[3].correctsTitle -ceq "Ruled-line fix merged") "the correction is shown on the entry it corrects, and in its own place"
     $dump = Invoke-App @{ cmd = "dump" }
     Check ($dump.ok -and -not $dump.value.Contains("Ruled-line") -and -not $dump.value.Contains("quiet room") -and $dump.value.Contains('"progressRead":{"id":"20261012T170000Z-02","n":2}')) "the store holds his place and no word of the log"
-    Check ((Get-MailboxHead (Join-Path $mailboxes ("work\" + $id.value.sign.keyId))) -eq $mailHead) "and the app put nothing into the machine's mailbox for any of it: progress goes one way"
+    # THE UNLOCK opens a session with a PC that keeps them (surfaces/pwa/page/phone-core.js, THE UNLOCKED
+    # SESSION): its one opening envelope, channel trust and kind session, is the unlock's, not the log's.
+    $machineBox = Join-Path $mailboxes ("work\" + $id.value.sign.keyId)
+    $since = @(Get-ChildItem -LiteralPath $machineBox -Filter "*.item" | Where-Object { $_.Name -match '\A([0-9]{16})-' -and [long]$Matches[1] -gt $mailHead } | ForEach-Object { $t = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::ASCII); Read-HordeRelayEnvelope -Text $t.Substring($t.IndexOf([char]10) + 1) })
+    $notOpening = @($since | Where-Object { -not ($_.ok -and $_.value.header.channel -ceq "trust" -and $_.value.header.kind -ceq "session") })
+    Check ($notOpening.Count -eq 0 -and $since.Count -le 1) ("and the app put nothing into the machine's mailbox for any of it but the unlock's session opening: progress goes one way (" + $since.Count + " put, " + $notOpening.Count + " not an opening)")
 
     Write-Host ""
     Write-Host "--- 10. an answer the relay loses is shown answered, reported missing, sent again and applied once ---" -ForegroundColor Cyan

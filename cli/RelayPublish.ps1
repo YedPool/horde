@@ -392,11 +392,17 @@ function Invoke-HordeRelayPublishStep {
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     $lines = New-Object System.Collections.ArrayList
     $now = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Now"
-    $say = { param([string]$Line, [switch]$Log) [void]$lines.Add("phone page: " + $Line); if ($Log) { Write-HordeRelayPublishLog -HordeHome $HordeHome -At $now -Line $Line } }
+    # THE LOG'S TIME AND HOME, under names no other code uses. A block finds the variables it names where
+    # it RUNS, not where it was made, and $log below runs inside Invoke-HordeRelayDeploy and the relay's
+    # deploy, where $Now (names ignore case) is a clock block and $HordeHome is theirs: named $now, the
+    # log handed that block to -At and every automatic deploy failed (live, 2026-10-14T20:41:29Z;
+    # test/test-relay-publish-real-deploy.ps1). Not GetNewClosure: its block sees global functions only.
+    $relayPublishLogAt = $now; $relayPublishLogHome = $HordeHome
+    $say = { param([string]$Line, [switch]$Log) [void]$lines.Add("phone page: " + $Line); if ($Log) { Write-HordeRelayPublishLog -HordeHome $relayPublishLogHome -At $relayPublishLogAt -Line $Line } }
     $kept = Read-HordeRelayPublishState -HordeHome $HordeHome
     if ($kept.state -ceq "unknown") { & $say ("LEFT ALONE - " + $kept.reason); return @($lines.ToArray()) }
     $s = $(if ($kept.state -ceq "known") { $kept.value } else { New-HordeRelayPublishState })
-    $queue = { param([string]$What, [string]$Key, [string]$Revision) $null = Add-HordeRelayPublishNotice -State $s -What $What -Key $Key -Revision $Revision -Id (Invoke-HordeRelayPublishTool -Tools $Tools -Name "NewId") -At $now }
+    $queue = { param([string]$What, [string]$Key, [string]$Revision) $null = Add-HordeRelayPublishNotice -State $s -What $What -Key $Key -Revision $Revision -Id (Invoke-HordeRelayPublishTool -Tools $Tools -Name "NewId") -At $relayPublishLogAt }
     # The id of the record as it is now: what a failure keeps (header, THE RULE 5).
     $recordId = { $r = Read-HordeRelayDeployed -HordeHome $HordeHome; if ($r.state -ceq "known") { return ("" + $r.value.id) }; return "" }
     # The look is a block of its own, so each of its ends is a return from IT, and the state is written
@@ -467,10 +473,12 @@ function Invoke-HordeRelayPublishStep {
         }
         if ($d.action -ceq "warn") { & $warn $d.what $d.key $d.reason; return }
         # A TRY THAT FAILS waits an hour (header, THE RULE 5), keeping the id of the record as it is then.
-        $failed = { param([string]$What, [string]$Why)
-            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = (& $recordId) }
-            & $queue $What ("failed:" + $h.commit) $h.commit
-            & $say ("FAILED - " + $Why + "; tried again an hour from now at the earliest") -Log
+        # Its time is the log's own name (above, THE LOG'S TIME AND HOME), never $now: it is called right
+        # after the deploy answers, needs-action included, and must not depend on where $now resolves.
+        $failed = { param([string]$What, [string]$Why, [string]$Label = "FAILED", [string]$KeyPrefix = "failed:")
+            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $relayPublishLogAt; what = $What; recordId = (& $recordId) }
+            & $queue $What ($KeyPrefix + $h.commit) $h.commit
+            & $say ($Label + " - " + $Why + "; tried again an hour from now at the earliest") -Log
         }
         # ON ORIGIN/MAIN, fetched now (S1): never a deploy from a branch.
         $on = $null
@@ -511,12 +519,18 @@ function Invoke-HordeRelayPublishStep {
         }
         $s.attempt = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now }
         Write-HordeRelayPublishState -State $s -HordeHome $HordeHome
-        $log = { param($Line) Write-HordeRelayPublishLog -HordeHome $HordeHome -At $now -Line ("  " + $Line) }
+        # It runs inside the deploy, so it names the log's own variables only (above, THE LOG'S TIME AND HOME).
+        $log = { param($Line) Write-HordeRelayPublishLog -HordeHome $relayPublishLogHome -At $relayPublishLogAt -Line ("  " + $Line) }
         $r = $null
         try { $r = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Deploy" -With @($HordeHome, $log, $Checkout, $h.commit) } catch { $r = New-HordeUnknown -Reason "the deploy failed" -ErrorRecord $_ }
         $s.attempt = $null
         if ((Test-HordeAnswer $r) -and $r.state -ceq "unknown" -and $r.reason -ceq (Get-HordeRelayDeployBusyReason)) { & $say "waits - another deploy is running; the next pass looks again" -Log; return }
         if ((Test-HordeAnswer $r) -and $r.state -ceq "unknown" -and $r.reason -ceq $script:HordeRelayPublishMovedReason) { & $say "waits - the checkout moved off the commit that was checked; the next pass looks again" -Log; return }
+        # MARKED LIVE (relays/Port.ps1, DEPLOYING): it went out and a check after it failed, so the relay
+        # IS running it, broken. Told as its own outcome, never "deploy-failed" (review of PR 275); it
+        # still waits an hour like a failure, and its reason carries the way back.
+        $live = $(if (Test-HordeAnswer $r) { $r.PSObject.Properties["live"] } else { $null })
+        if ($null -ne $live -and $live.Value -eq $true -and $r.state -ceq "unknown") { & $failed "deploy-needs-action" ("deploy-needs-action: " + $r.reason) "NEEDS ACTION" "needs-action:"; return }
         if (-not (Test-HordeAnswer $r) -or $r.state -cne "known") { & $failed "deploy-failed" ("the deploy did not work: " + $(if (Test-HordeAnswer $r) { $r.reason } else { "it did not answer" })); return }
         # The deploy recorded this commit: the base has moved, and what was checked up to is spent.
         $s.checked = $null; $origin = "" + $r.value.origin

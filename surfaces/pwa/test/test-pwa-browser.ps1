@@ -9,11 +9,12 @@
 # CSS pixels, a common Android width), with touch.
 #   1. the app loads under its strict policy with no error; it pairs with a Chrome passkey that the
 #      machine enrolls, the two fingerprints agree, and the passkey is confirmed;
-#   2. it announces its key - the button says why it is shut until the recovery code is written down, a
-#      relay that refuses and a passkey that does not sign are each said beside it, and the horde's own
-#      view offers "Announce this phone" until the machine answers (the founder's first live use,
-#      2026-10-11); a run sends the snapshot; the question is drawn by the window's own document
-#      (list.js);
+#   2. NO ANNOUNCE BUTTON (the founder, 2026-10-14): once the machine's signed word that he typed the
+#      number arrives, the pairing screen offers Finish pairing - one tap, ONE passkey prompt, counted -
+#      shut and saying why until the recovery code is written down; a relay that refuses and a passkey
+#      that does not sign are each said beside it, and the horde's own view says, with no button, that
+#      the machine has not answered yet; a run takes the key in and sends the snapshot; the question is
+#      drawn by the window's own document (list.js). The unlock path is test-pwa-announce-browser.ps1's;
 #   3. Shift+Enter and the row's New line add lines and send nothing; the answer typed and sent with a
 #      real Enter lands once, his words exactly, signed by Chrome's WebAuthn;
 #   4. at phone width nothing scrolls sideways and the answering row stands on the screen;
@@ -29,10 +30,18 @@
 #      scrolls sideways and the composer stands at the foot; with the page scrolled to its end the other
 #      view's tab is still on the screen and a touch opens it, both ways, and the phone's Back goes back
 #      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page;
-#  10b. a photo: a touch on Photo opens the picker; a 3000 by 2000 JPEG with a camera block is shrunk by
+#  10b. the chat opens at its newest message (the founder, 2026-10-15): a long chat (80 more lines, some
+#      wrapping) opens at its newest message, clear of the composer, whether the window stood at the top or
+#      part way down the questions, and again on return to the app; Jump to latest is hidden within 48 px
+#      of the bottom and shown above it, a real button at least 44 px tall in the composer's own band; a
+#      refresh and new lines while he reads back keep his place, and the button and a polite live region
+#      say how many came; a touch, Space or Enter jumps, Shift+Tab reaches it with a visible ring; his own
+#      line sent takes him down; its words stand out from its face by 4.5 to 1, light and dark;
+#  10c. a photo: a touch on Photo opens the picker; a 3000 by 2000 JPEG with a camera block is shrunk by
 #      Chrome's own canvas, signed by ONE assertion of Chrome's passkey and put in parts; a real run writes
 #      it to the PC's inbox at 1600 px with no camera block left, and posts one line; an HTML page called
-#      .jpg is refused on the phone with nothing sent;
+#      .jpg is refused on the phone with nothing sent; his own photo sent while scrolled up takes him down,
+#      and one arriving while he reads back (from another window) keeps his place and counts as new;
 #  11. the progress tab (the founder asked for it, 2026-10-12): a changelog under the suite's home is sent by
 #      a run and drawn oldest to newest in the order written, each entry with its time, bold title, labelled
 #      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
@@ -48,6 +57,19 @@
 #  13. a relay refusing every read with 401: the entry sent meanwhile is not drawn, and arrives once reads
 #      come back; meanwhile the page says so and keeps saying it, with the sign-in banner and the time of
 #      the last read that worked;
+#  14. the unlocked session (design note "Unlocked session", 2026-10-14), its passkey prompts COUNTED by
+#      the virtual authenticator's signature counter: what Chrome gives when the app is left is measured
+#      and said; against the real PC, which keeps sessions (the unlocked session's PC side, relay/Session.ps1
+#      and channels/Sessions.ps1), an unlock and then three answers and a chat line are ONE prompt and land
+#      once, an answer to a needsPasskey question one more, and after the PC's idle limit (its own setting,
+#      one minute here), after the app was away past its setting and after a reload the next answer asks
+#      once again - each must-pass beside its control, every session envelope read and verified by the
+#      PC's own reader and WebAuthn verifier before the run takes it;
+#  15. THE SHIPPED TIMES (the founder's Q75 (c), 2026-10-15: keep the session through a switch-away of up
+#      to 10 minutes): with config.json as New-HordePwaSite builds it by default, and with no times in it
+#      at all (app.js's own fallbacks), a session survives 9 minutes hidden and is gone after 11 - beside a
+#      CONTROL with the old five-minute lock, which ends it at 9. Nothing is waited: the page's clock is
+#      moved between hidden and shown, and the return check in app.js measures the time hidden by it.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 # The suite starts the browser itself (test/lib/Browser.ps1), in a kill-on-close job of its own, and
@@ -119,6 +141,14 @@ function Invoke-Run {
     return (Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "run", "-Relay", "local", "-RelayRoot", $mailboxes, "-MaxTurns", "" + $Turns) -Env @{ HORDE_HOME = $hh })
 }
 function Get-Said { if (-not (Test-Path -LiteralPath $store)) { return @() }; return @(Get-ChildItem -LiteralPath $store -Filter "*.json" | Sort-Object Name | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json } | Where-Object { $_.kind -ceq "message-said" -and $_.data.route -ceq "phone" }) }
+function Get-MachineEnvelopes {
+    # What the phone has put into the machine's mailbox, each read by the PC's own reader: from item -Skip on.
+    param([int]$Skip = 0)
+    $box = Join-Path $mailboxes ($mailbox -replace '/', '\')
+    $items = @(Get-ChildItem -LiteralPath $box -Filter "*.item" | Sort-Object Name)
+    return @($items | Select-Object -Skip $Skip | ForEach-Object { $t = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::ASCII); Read-HordeRelayEnvelope -Text $t.Substring($t.IndexOf([char]10) + 1) })
+}
+function Get-MachineCount { return @(Get-ChildItem -LiteralPath (Join-Path $mailboxes ($mailbox -replace '/', '\')) -Filter "*.item").Count }
 function Save-Shot {
     # A picture of the phone's screen, for a person: kept when HORDE_PWA_SHOTS names a folder.
     param([string]$Name)
@@ -130,7 +160,8 @@ function Save-Shot {
 
 try {
     $env:HORDE_HOME = $hh
-    $built = New-HordePwaSite -Out $site -Transport "binding" -LockAfterHiddenSeconds 2
+    # Away 1 s ends the unlocked session (section 14) before 2 s hidden locks the horde (section 9).
+    $built = New-HordePwaSite -Out $site -Transport "binding" -LockAfterHiddenSeconds 2 -SessionAwaySeconds 1
     Check ($built.state -ceq "known") "CONTROL: the site is built as it ships, with the local test transport"
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "work"}}', $utf8)
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 200}}', $utf8)
@@ -176,26 +207,37 @@ try {
     $done = Complete-HordeRelayPairing -HordeHome $hh -Response $(if ($paired.ok) { $paired.value.response } else { "" })
     Check ($done.ok -and $done.value.fingerprint -ceq $paired.value.fingerprint) ("the machine enrolls Chrome's passkey and computes the same fingerprint (" + $(if ($done.ok) { $done.value.fingerprint } else { $done.reason }) + ")")
     Check ($done.ok -and $done.value.device.prf -eq $true) "and records that the passkey has PRF"
+    $before = Invoke-Browser @{ cmd = "finishState" }
+    Check ($before.ok -and -not $before.value.finishShown -and $before.value.waiting -and @($before.value.announceButtons).Count -eq 0) ("BEFORE THE MACHINE'S WORD the pairing screen waits, Finish pairing is not offered, and no button anywhere offers to announce (" + $(if ($before.ok) { ConvertTo-Json $before.value -Compress } else { $before.reason }) + ")")
     $confirmed = Confirm-HordeRelayDevice -HordeHome $hh -Id $(if ($done.ok) { $done.value.device.id } else { "none" }) -Fingerprint $(if ($paired.ok) { $paired.value.fingerprint } else { "" })
     Check ($confirmed.ok -and $confirmed.value.device.state -ceq "trusted") "the founder confirms it at the machine"
+    # What horde relay pair does once he typed the number (cli/RelayPair.ps1, Send-HordeRelayPairConfirmed).
+    $word = New-HordeRelayPairingConfirmedText -HordeHome $hh -Offer $offer.value.offer -Device $(if ($done.ok) { $done.value.device.id } else { "none" })
+    $lc = Connect-HordeRelay -Name "local" -Options @{ root = $mailboxes }
+    $told = $(if ($word.state -ceq "known" -and $lc.state -ceq "known") { Send-HordeRelayItem -Connection $lc.value -Mailbox $offer.value.pairMailbox -Text $word.value.text -Key $word.value.key } else { $null })
+    Check ($null -ne $told -and $told.state -ceq "known") "the machine puts its signed word that the phone is confirmed into the offer's pairing mailbox"
 
     Write-Host ""
-    Write-Host "--- 2. the key is announced, and the window's document draws the question ---" -ForegroundColor Cyan
-    $why = Invoke-Browser @{ cmd = "announceWhy" }
-    Check ($why.ok -and $why.value.before.disabled -and $why.value.before.why -and $why.value.before.words.Contains("recovery code") -and -not $why.value.after.disabled -and -not $why.value.after.why) ("while the recovery-code box is not ticked the announce button is shut and says why; ticked, it opens and the reason goes (" + $(if ($why.ok) { $why.value.before.words } else { $why.reason }) + ")")
+    Write-Host "--- 2. Finish pairing - one tap, one passkey prompt - announces the key, and the window's document draws the question ---" -ForegroundColor Cyan
+    $why = Invoke-Browser @{ cmd = "finishWhy" }
+    Check ($why.ok -and $why.value.appeared -and $why.value.before.finishDisabled -and $why.value.before.why -and $why.value.before.whyWords.Contains("recovery code") -and -not $why.value.after.finishDisabled -and -not $why.value.after.why) ("once the machine's word arrives Finish pairing appears; while the recovery-code box is not ticked it is shut and says why; ticked, it opens (" + $(if ($why.ok) { $why.value.before.whyWords } else { $why.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "countPrompts" }
     $null = Invoke-Browser @{ cmd = "relayFail"; on = $true }
-    $f1 = Invoke-Browser @{ cmd = "announceTry" }
+    $f1 = Invoke-Browser @{ cmd = "finishTry" }
     $null = Invoke-Browser @{ cmd = "relayFail"; on = $false }
-    Check ($f1.ok -and $f1.value.status.Contains("The relay did not take it") -and -not $f1.value.status.Contains("a stand-in") -and $f1.value.paired -and $f1.value.recovery) ("an announcement the relay refuses says so beside its button, in the app's words, and the pairing screen stays with its code (" + $(if ($f1.ok) { $f1.value.status } else { $f1.reason }) + ")")
+    Check ($f1.ok -and $f1.value.status.Contains("The relay did not take it") -and -not $f1.value.status.Contains("a stand-in") -and $f1.value.paired -and $f1.value.recovery) ("a Finish pairing the relay refuses says so beside its button, in the app's words, and the pairing screen stays with its code (" + $(if ($f1.ok) { $f1.value.status } else { $f1.reason }) + ")")
+    $p1 = Invoke-Browser @{ cmd = "prompts" }
+    Check ($p1.ok -and $p1.value -eq 1) ("ONE TAP, ONE PASSKEY PROMPT: Finish pairing asked the passkey once (" + $(if ($p1.ok) { $p1.value } else { $p1.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "passkeyRefusesOnce" }
-    $f2 = Invoke-Browser @{ cmd = "announceTry" }
-    Check ($f2.ok -and $f2.value.status.Contains("did not sign the announcement") -and $f2.value.paired) ("an announcement the passkey does not sign says so beside its button (" + $(if ($f2.ok) { $f2.value.status } else { $f2.reason }) + ")")
-    $ann = Invoke-Browser @{ cmd = "announce" }
-    Check ($ann.ok -and $ann.value.enabledAfterTick -and $ann.value.doc -and $ann.value.recoveryCleared) ("the announce key opens only once the code is written down; after it the list shows and the code leaves the screen (" + $(if ($ann.ok) { $ann.value.notice } else { $ann.reason }) + ")")
+    $f2 = Invoke-Browser @{ cmd = "finishTry" }
+    Check ($f2.ok -and $f2.value.status.Contains("did not sign") -and $f2.value.paired) ("a Finish pairing the passkey does not sign says so beside its button (" + $(if ($f2.ok) { $f2.value.status } else { $f2.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "countPrompts" }
+    $ann = Invoke-Browser @{ cmd = "finish" }
+    Check ($ann.ok -and $ann.value.enabledAfterTick -and $ann.value.doc -and $ann.value.recoveryCleared) ("Finish pairing opens once the code is written down; after it the list shows and the code leaves the screen (" + $(if ($ann.ok) { $ann.value.notice } else { $ann.reason }) + ")")
+    $p2 = Invoke-Browser @{ cmd = "prompts" }
+    Check ($p2.ok -and $p2.value -eq 1) ("and that announcement was one passkey prompt (" + $(if ($p2.ok) { $p2.value } else { $p2.reason }) + ")")
     $box = Invoke-Browser @{ cmd = "announceBox" }
-    Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet")) ("until the machine answers, the horde's own view says so and offers Announce this phone (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
-    $again = Invoke-Browser @{ cmd = "announceNow"; mailbox = $mailbox }
-    Check ($again.ok -and $again.value.put -and $again.value.status.StartsWith("Announced.")) ("and its button announces the phone again, from that view (" + $(if ($again.ok) { $again.value.status } else { $again.reason }) + ")")
+    Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet") -and $box.value.buttons -eq 0) ("until the machine answers, the horde's own view says so, and offers no button (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
     $run = Invoke-Run -Turns 2
     Check ($run.code -eq 0 -and $run.out.Contains("is now in the trust store") -and $run.out.Contains("snapshot of 1 open question(s)")) ("a run takes the app's key and sends the snapshot (exit " + $run.code + ")")
     $seen = Invoke-Browser @{ cmd = "waitText"; text = $title }
@@ -400,7 +442,69 @@ try {
     Check ($b1.ok -and $b1.value.doc -and -not $b1.value.chat -and $b2.ok -and $b2.value.chat -and -not $b2.value.doc) ("the phone's Back goes back to the questions, and Back again to the chat (" + $(if ($b1.ok) { ConvertTo-Json $b1.value -Compress } else { $b1.reason }) + " " + $(if ($b2.ok) { ConvertTo-Json $b2.value -Compress } else { $b2.reason }) + ")")
 
     Write-Host ""
-    Write-Host "--- 10b. a photo from the Photo button: shrunk by Chrome, ONE passkey tap, whole on the PC, one line to the Thrall ---" -ForegroundColor Cyan
+    Write-Host "--- 10b. the chat opens at its newest message, and Jump to latest (the founder, 2026-10-15) ---" -ForegroundColor Cyan
+    # A LONG CHAT: 80 more lines, every seventh long enough to wrap over many lines at phone width.
+    $longChat = @()
+    for ($i = 1; $i -le 80; $i++) {
+        $t = "long chat line " + $i
+        if ($i % 7 -eq 0) { $t += " " + ("which goes on long enough to wrap over several lines on a phone screen, " * 6) }
+        $longChat += @{ role = $(if ($i % 2 -eq 1) { "assistant" } else { "user" }); text = $t }
+    }
+    Add-HordeTestChatTurns -Thrall $thrall -Turns $longChat
+    $null = Invoke-Run -Turns 2
+    $lw = Invoke-Browser @{ cmd = "chatWait"; text = "long chat line 80" }
+    Check ($lw.ok -and $lw.value.found) "CONTROL: the 80 lines of the long chat are drawn"
+    function Show-Place { param($r) if ($r.ok) { return (ConvertTo-Json $r.value -Compress -Depth 4) } else { return $r.reason } }
+    # THE CHAT OPENS AT ITS NEWEST MESSAGE, whatever window it inherits from the other tab.
+    foreach ($from in @("top", "middle")) {
+        $op = Invoke-Browser @{ cmd = "chatOpen"; from = $from }
+        Check ($op.ok -and $op.value.items -ge 80 -and $op.value.dist -le 1 -and $op.value.lastText.StartsWith("long chat line 80") -and $op.value.lastBottom -le ($op.value.composeTop + 0.5) -and $op.value.lastBottom -gt 0 -and -not $op.value.jumpShown) ("opened from the questions with the window at the " + $from + " of the page (" + $(if ($op.ok) { $op.value.inherited } else { "?" }) + " px), the chat opens at its newest message, clear of the composer, with no Jump to latest (" + (Show-Place $op) + ")")
+    }
+    # THE STICK THRESHOLD: 30 px up is still the bottom; 300 px up is away, and the button shows.
+    $near = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 30 }
+    Check ($near.ok -and $near.value.dist -ge 25 -and -not $near.value.jumpShown) ("30 px above the bottom counts as the bottom: no button (" + (Show-Place $near) + ")")
+    $up = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    Check ($up.ok -and $up.value.jumpShown -and $up.value.jumpText -ceq "Jump to latest" -and $up.value.jumpTag -ceq "BUTTON" -and $up.value.jumpType -ceq "button") ("scrolled up, a real button says Jump to latest (" + (Show-Place $up) + ")")
+    Check ($up.ok -and $up.value.jumpH -ge 44 -and $up.value.jumpBottom -le ($up.value.textTop + 0.5) -and $up.value.jumpTop -ge ($up.value.composeTop - 0.5) -and $up.value.jumpRight -le 412 -and $up.value.jumpLeft -ge 0) ("at phone size it is at least 44 px tall, inside the composer's own band above the field: it covers neither the field nor a message (" + (Show-Place $up) + ")")
+    # A REFRESH WHILE HE READS BACK KEEPS HIS PLACE.
+    $rf = Invoke-Browser @{ cmd = "chatRefresh" }
+    Check ($up.ok -and $rf.ok -and $rf.value.firstKey -ceq $up.value.firstKey -and [math]::Abs($rf.value.firstTop - $up.value.firstTop) -le 2 -and [math]::Abs($rf.value.dist - $up.value.dist) -le 2 -and $rf.value.jumpShown -and $rf.value.news -ceq "") ("a refresh while he is scrolled up keeps his place - the same message where it stood - and says nothing (" + (Show-Place $rf) + ")")
+    # NEW LINES WHILE HE READS BACK: his place is kept, and the button and the live region say how many.
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "assistant"; text = "fresh line one" }, @{ role = "assistant"; text = "fresh line two" })
+    $null = Invoke-Run -Turns 2
+    $fw = Invoke-Browser @{ cmd = "chatWait"; text = "fresh line two" }
+    Start-Sleep -Milliseconds 500
+    $nw = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($fw.ok -and $fw.value.found -and $nw.ok -and $nw.value.firstKey -ceq $up.value.firstKey -and [math]::Abs($nw.value.firstTop - $up.value.firstTop) -le 2) ("two lines arriving while he is scrolled up do not move him (" + (Show-Place $nw) + ")")
+    Check ($nw.ok -and $nw.value.jumpShown -and $nw.value.jumpText -ceq "Jump to latest (2 new)" -and $nw.value.news -ceq "2 new messages below. Jump to latest to read them." -and $nw.value.newsLive -ceq "polite" -and -not $nw.value.newsHidden) ("the button says Jump to latest (2 new), and a polite live region says it once (" + (Show-Place $nw) + ")")
+    $rf2 = Invoke-Browser @{ cmd = "chatRefresh" }
+    Check ($rf2.ok -and $rf2.value.jumpText -ceq "Jump to latest (2 new)" -and $rf2.value.firstKey -ceq $up.value.firstKey) "a refresh after them keeps the count and his place"
+    # ONE TAP: the newest message.
+    $jt = Invoke-Browser @{ cmd = "chatJumpTouch" }
+    Check ($jt.ok -and $jt.value.dist -le 1 -and $jt.value.lastText -ceq "fresh line two" -and $jt.value.lastBottom -le ($jt.value.composeTop + 0.5) -and -not $jt.value.jumpShown -and $jt.value.news -ceq "") ("a touch on Jump to latest goes to the newest message, and the button goes (" + (Show-Place $jt) + ")")
+    # BACK TO THE APP, after reading back: the chat opens at its newest message again.
+    $null = Invoke-Browser @{ cmd = "chatScrollTo"; to = "top" }
+    $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
+    $null = Invoke-Browser @{ cmd = "show" }
+    Start-Sleep -Milliseconds 1500
+    $rt = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($rt.ok -and $rt.value.items -ge 80 -and $rt.value.dist -le 1 -and $rt.value.lastText -ceq "fresh line two" -and -not $rt.value.jumpShown) ("back to the app, the chat opens at its newest message (" + (Show-Place $rt) + ")")
+    # THE KEYBOARD: in the Tab order with a visible ring; Space and Enter each jump.
+    foreach ($key in @("Space", "Enter")) {
+        $null = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+        $kj = Invoke-Browser @{ cmd = "chatJumpKey"; key = $key }
+        Check ($kj.ok -and $kj.value.focused.focus -ceq "chatJump" -and $kj.value.focused.focusVisible -and $kj.value.focused.outline -match '\Asolid [1-9]') ("Shift+Tab from the composer reaches Jump to latest, with a visible focus ring (" + $(if ($kj.ok) { ConvertTo-Json $kj.value.focused -Compress } else { $kj.reason }) + ")")
+        Check ($kj.ok -and $kj.value.after.dist -le 1 -and -not $kj.value.after.jumpShown -and $kj.value.after.focus -ceq "chatText") ($key + " on it goes to the newest message, and the focus goes on to the composer (" + $(if ($kj.ok) { ConvertTo-Json $kj.value.after -Compress } else { $kj.reason }) + ")")
+    }
+    # HIS OWN LINE, SENT WHILE SCROLLED UP, TAKES HIM TO THE BOTTOM.
+    $null = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    $own = Invoke-Browser @{ cmd = "chatSend"; text = "Back down to the bottom."; via = "enter"; mailbox = $mailbox }
+    Start-Sleep -Milliseconds 500
+    $od = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($own.ok -and $own.value.put -and $od.ok -and $od.value.dist -le 1 -and $od.value.lastText -ceq "Back down to the bottom." -and -not $od.value.jumpShown) ("his own line sent while scrolled up takes him to the bottom, where it stands (" + (Show-Place $od) + ")")
+    $ct = Invoke-Browser @{ cmd = "chatContrast" }
+    Check ($ct.ok -and $ct.value.light.ratio -ge 4.5 -and $ct.value.dark.ratio -ge 4.5) ("Jump to latest's words stand out from its face by at least 4.5 to 1, light and dark (" + $(if ($ct.ok) { ConvertTo-Json $ct.value -Compress } else { $ct.reason }) + ")")
+    Write-Host "--- 10c. a photo from the Photo button: shrunk by Chrome, ONE passkey tap, whole on the PC, one line to the Thrall ---" -ForegroundColor Cyan
     # A real picture, 3000 by 2000, drawn here and saved as a JPEG with a made-up camera block (APP1 Exif
     # holding a "GPS" marker) put in after its first two bytes, as a phone camera's would be.
     Add-Type -AssemblyName System.Drawing
@@ -418,7 +522,11 @@ try {
     $photoPath = Join-Path $work "camera.jpg"
     [System.IO.File]::WriteAllBytes($photoPath, $camera)
     Check ([System.Text.Encoding]::ASCII.GetString($camera).Contains("GPSLAT-SECRET")) ("CONTROL: the picture picked carries a camera block with a location marker (" + $camera.Length + " bytes)")
+    # Sent while he reads back: HIS OWN PHOTO, SENT, takes him to the bottom, as his own line does.
+    $null = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
     $pp = Invoke-Browser @{ cmd = "chatPhoto"; path = $photoPath; mailbox = $mailbox; parts = 2 }
+    $pd = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($pp.ok -and $pd.ok -and $pd.value.dist -le 1 -and -not $pd.value.jumpShown) ("his own photo, sent while scrolled up, takes him to the bottom (" + $(if ($pd.ok) { ConvertTo-Json $pd.value -Compress -Depth 4 } else { $pd.reason }) + ")")
     Check ($pp.ok -and $pp.value.chooser) ("a touch on Photo opens the phone's picker (" + $(if ($pp.ok) { ConvertTo-Json $pp.value -Compress } else { $pp.reason }) + ")")
     Check ($pp.ok -and $pp.value.prompts -eq 1 -and $pp.value.put -ge 2) ("the photo is ONE passkey signature - the same as a line - and its manifest and parts are put (" + $(if ($pp.ok) { "" + $pp.value.prompts + " signature(s), " + $pp.value.put + " put(s)" } else { $pp.reason }) + ")")
     Check ($pp.ok -and $pp.value.thumbs -eq 1) "the chat shows the photo sent as a small picture"
@@ -439,6 +547,22 @@ try {
     [System.IO.File]::WriteAllText($fake1, "<!DOCTYPE html><html><script>alert(1)</script></html>", $utf8)
     $np = Invoke-Browser @{ cmd = "chatPhoto"; path = $fake1; mailbox = $mailbox; expectNone = $true }
     Check ($np.ok -and $np.value.put -eq 0 -and $np.value.prompts -eq 0 -and $np.value.notice.Contains("not a picture")) ("an HTML page called .jpg is refused on the phone by its first bytes, in a plain line, with no passkey asked and nothing sent (" + $(if ($np.ok) { $np.value.notice } else { $np.reason }) + ")")
+    # A PHOTO ARRIVING WHILE HE READS BACK (chat-scroll.js; the founder, 2026-10-15): one that comes into the
+    # chat without his touch here - as one sent from another window of the app - neither yanks him down
+    # nor goes uncounted: it is a new message for Jump to latest.
+    $sbmp = New-Object System.Drawing.Bitmap 64, 48
+    $sgfx = [System.Drawing.Graphics]::FromImage($sbmp); $sgfx.Clear([System.Drawing.Color]::SteelBlue); $sgfx.Dispose()
+    $smallPath = Join-Path $work "small.jpg"
+    $sbmp.Save($smallPath, [System.Drawing.Imaging.ImageFormat]::Jpeg); $sbmp.Dispose()
+    $up2 = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    $pb = Invoke-Browser @{ cmd = "chatPhotoBehind"; path = $smallPath; mailbox = $mailbox; id = ("b" * 32) }
+    $pbSaid = $(if ($pb.ok) { ConvertTo-Json $pb.value -Compress -Depth 4 } else { $pb.reason })
+    Check ($up2.ok -and $up2.value.jumpShown -and $pb.ok -and $pb.value.sent.ok -and $pb.value.put -ge 2 -and $pb.value.place.firstKey -ceq $up2.value.firstKey -and [math]::Abs($pb.value.place.firstTop - $up2.value.firstTop) -le 2 -and $pb.value.place.dist -gt 48) ("A PHOTO ARRIVING while he is scrolled up does not move him: the same message stands where it stood (" + $pbSaid + ")")
+    Check ($pb.ok -and $pb.value.place.jumpShown -and $pb.value.place.jumpText -ceq "Jump to latest (1 new)" -and $pb.value.place.news -ceq "1 new message below. Jump to latest to read it.") ("and it counts as a new message: Jump to latest (1 new), said once in the live region (" + $pbSaid + ")")
+    $run = Invoke-Run -Turns 2
+    $landed2 = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    Check ($landed2.Count -eq 2) ("and the PC takes it too (" + $landed2.Count + " file(s) in its inbox; exit " + $run.code + ")")
+    $null = Invoke-Browser @{ cmd = "chatJumpTouch" }
     $null = Save-Shot "phone-chat-photo"
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
@@ -652,6 +776,181 @@ try {
     Check ($rw.ok -and $rw.value.found) ("once the relay is read again, the entry written meanwhile arrives with no reload (" + $(if ($rw.ok) { "" + $rw.value.items + " entries" } else { $rw.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "streamBack" }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
+
+    Write-Host ""
+    Write-Host "--- 14. the unlocked session: one passkey prompt for an unlock and the answers after it ---" -ForegroundColor Cyan
+    # WHAT THE BROWSER GIVES when the app is left, measured: the frozen lifecycle, then another tab in front.
+    $vp = Invoke-Browser @{ cmd = "visibilityProbe" }
+    $heard = $(if ($vp.ok) { @($vp.value.after.heard) -join ", " } else { $vp.reason })
+    Write-Host ("  [INFO] what headless Chrome gives the page: with another tab in front its visibilityState is '" + $(if ($vp.ok) { $vp.value.during } else { "?" }) + "'; it heard: " + $heard + $(if ($vp.ok -and $vp.value.frozenRefused) { "; the frozen lifecycle state was refused: " + $vp.value.frozenRefused } else { "" }))
+    $realAway = ($vp.ok -and $vp.value.during -ceq "hidden" -and $heard.Contains("visibilitychange:hidden") -and $heard.Contains("visibilitychange:visible"))
+    Check ($vp.ok -and $vp.value.after.state -ceq "visible") ("MEASURED: what Chrome reports when the app is left is recorded, and the page is in front again after (" + $heard + ")")
+    # THE PC'S IDLE LIMIT, its own setting (channels/Sessions.ps1, idleMinutes), at its least: one minute.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-sessions.json"), '{"schemaVersion": 1, "settings": {"idleMinutes": 1}}', $utf8)
+    # Fresh questions: an answered one leaves his list (2026-10-12). The fourth is flagged needsPasskey.
+    $sTitles = @("Should the session answer number one go?", "Should the session answer number two go?", "Should the session answer number three go?", "Deploy the relay to production right now?", "Answer this after the idle limit?", "Answer this after the app was away?", "Answer this after the page reloaded?")
+    $sNums = @()
+    for ($i = 0; $i -lt $sTitles.Count; $i++) {
+        $req = @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = $sTitles[$i]; kind = "yes-no"; whatItIs = "Section 14."; group = "voice"; askedBy = "orc-e" } }
+        if ($i -eq 3) { $req["needsPasskey"] = $true }
+        $qa = Invoke-HordeDecision -Operation "add" -Root $store -Request $req
+        $sNums += $(if ($qa.state -ceq "known" -and $null -ne $qa.value.PSObject.Properties["number"]) { [int]$qa.value.number } else { Write-Host ("  [WHY] '" + $sTitles[$i] + "' was not added: " + (ConvertTo-Json $qa -Compress -Depth 4)); 0 })
+    }
+    Check (@($sNums | Where-Object { $_ -gt 0 }).Count -eq 7) "CONTROL: seven questions are asked for the session, one flagged needsPasskey"
+    $landedBefore = @(Get-Said).Count
+    Check ($landedBefore -ge 3) ("CONTROL: the answers of the sections above landed at the real PC (" + $landedBefore + " record(s))")
+    $vouchKeys = @{}
+    function Test-SessionEnvelope {
+        # The PC's own reader and verifier on one envelope the phone sent: a vouch it carries is the founder
+        # passkey's assertion over relay/Session.ps1's challenge; the session signature verifies under the
+        # vouched key. "" when it holds, else what does not.
+        param($Read)
+        if (-not $Read.ok) { return ("not read: " + $Read.reason) }
+        $s = $Read.value.sig
+        if ($s.alg -cne "session") { return ("signed " + $s.alg) }
+        if ($null -ne $s.vouch) {
+            $snd = (Find-HordeRelayTrustedSenders -HordeHome $hh).value[$Read.value.header.from]
+            $wa = Test-HordeRelayWebAuthnAssertion -Public $snd.public -AuthenticatorData $s.authenticatorData -ClientDataJson $s.clientDataJson -Signature $s.signature -Challenge (Get-HordeRelaySessionVouchChallenge -Text $s.vouch.text) -RpId $snd.rpId -Origins @($snd.origins) -RequireUserVerification $true
+            if (-not ($wa.ok -and $wa.userVerified)) { return ("the vouch does not verify: " + $wa.reason) }
+            $script:vouchKeys[$s.vouchId] = $s.vouch.sessionPublic
+        }
+        if (-not $script:vouchKeys.ContainsKey($s.vouchId)) { return "a vouchId no vouch was seen for" }
+        $signed = Get-HordeRelaySessionSigningInput -VouchId $s.vouchId -Signed (Get-HordeRelaySigningInput -HeaderText $Read.value.headerText -RecipientsText $Read.value.recipientsText -CtText $Read.value.ctText)
+        if (-not (Test-HordeRelayEs256Signature -Public $script:vouchKeys[$s.vouchId] -Bytes $signed -Signature $s.value -AllowHighS)) { return "the session signature does not verify" }
+        return ""
+    }
+    function Get-Landed { param([string]$Text) return @(Get-Said | Where-Object { $_.data.text -ceq $Text }).Count }
+    # THE REAL PC: a run sends the snapshot of the new questions, with this passkey's session status.
+    $run = Invoke-Run -Turns 1
+    $null = Invoke-Browser @{ cmd = "lock" }
+    $c0 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $skip = Get-MachineCount
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $c1 = (Invoke-Browser @{ cmd = "assertions" }).value
+    Check ($c1 -eq $c0 + 1) ("CONTROL: the counter sees every prompt - the unlock is one (" + $c0 + " -> " + $c1 + ")")
+    $w = Invoke-Browser @{ cmd = "waitText"; text = $sTitles[6] }
+    $ss = $null
+    for ($i = 0; $i -lt 40; $i++) { $ss = Invoke-Browser @{ cmd = "sessions" }; if ($ss.ok -and @($ss.value.list).Count -ge 1 -and $ss.value.list[0].keeps -eq $true) { break }; Start-Sleep -Milliseconds 250 }
+    Check ($run.code -eq 0 -and $w.ok -and $w.value.found -and $ss.ok -and $ss.value.list[0].keeps -eq $true -and $ss.value.list[0].idleMs -eq 60000) ("CONTROL: the real PC's snapshot is drawn, and it says the PC keeps sessions, with its own idle limit (" + $(if ($ss.ok) { ConvertTo-Json $ss.value.list -Compress } else { $ss.reason }) + ")")
+    Check ($ss.ok -and $ss.value.list[0].open -and $ss.value.account -cmatch 'an unlocked session is open until [0-9]{2}:[0-9]{2}\.') ("THE ACCOUNT SCREEN SAYS a session is open, and until when (" + $(if ($ss.ok) { $ss.value.account } else { $ss.reason }) + ")")
+    $a1 = Invoke-Browser @{ cmd = "answer"; text = "One, no prompt."; via = "enter"; mailbox = $mailbox; question = $sTitles[0] }
+    $a2 = Invoke-Browser @{ cmd = "answer"; text = "Two, no prompt."; via = "enter"; mailbox = $mailbox; question = $sTitles[1] }
+    $a3 = Invoke-Browser @{ cmd = "answer"; text = "Three, no prompt."; via = "touch"; mailbox = $mailbox; question = $sTitles[2] }
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "chat" }
+    $cl = Invoke-Browser @{ cmd = "chatSend"; text = "A line, no prompt."; via = "enter"; mailbox = $mailbox }
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
+    $c2 = (Invoke-Browser @{ cmd = "assertions" }).value
+    Check ($a1.value.put -and $a2.value.put -and $a3.value.put -and $cl.value.put -and $c2 -eq $c1) ("ONE PROMPT IN ALL: the unlock, then three answers and a chat line, sent with no passkey prompt (" + ($c2 - $c0) + " assertion(s) since the lock)")
+    Write-Host "  [NOT RUN] a photo: the phone's photo send is PR 285's (feature/chat-photos), not on this branch's base; it goes through the same sealAndSign and SESSION_SIGNED names it" -ForegroundColor Yellow
+    $sentS = @(Get-MachineEnvelopes -Skip $skip)
+    $why = @($sentS | ForEach-Object { Test-SessionEnvelope $_ })
+    $kinds = @($sentS | Where-Object { $_.ok } | ForEach-Object { $_.value.header.channel + "/" + $_.value.header.kind })
+    Check ($sentS.Count -eq 5 -and @($why | Where-Object { $_ -cne "" }).Count -eq 0 -and ($kinds -join ",") -ceq "trust/session,decisions/answer,decisions/answer,decisions/answer,chat/line") ("the opening envelope, the three answers and the line are session-signed under the vouch, as the PC's own reader and WebAuthn verifier read them (" + ($kinds -join ",") + "; " + ($why -join "|") + ")")
+    $vouchId1 = $(if ($sentS.Count -and $sentS[0].ok) { $sentS[0].value.sig.vouchId } else { "" })
+    $run = Invoke-Run -Turns 1
+    $run = Invoke-Run -Turns 1
+    $posts = @(Get-HordeTestFleetPosts -Folder $fake)
+    Check ((Get-Landed "One, no prompt.") -eq 1 -and (Get-Landed "Two, no prompt.") -eq 1 -and (Get-Landed "Three, no prompt.") -eq 1 -and @($posts | Where-Object { $_.body.EndsWith("A line, no prompt.") }).Count -eq 1) "THE REAL PC TAKES THEM: the three session-signed answers land once each, and the line is posted to the Thrall once"
+    # needsPasskey: one more prompt, signed by the passkey, and the PC takes it.
+    $skip = Get-MachineCount
+    $np = Invoke-Browser @{ cmd = "answer"; text = "Yes, deploy."; via = "enter"; mailbox = $mailbox; question = $sTitles[3] }
+    $c3 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $npEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
+    $run = Invoke-Run -Turns 1
+    Check ($np.value.put -and $c3 -eq $c2 + 1 -and $npEnv.Count -eq 1 -and $npEnv[0].value.sig.alg -ceq "webauthn.get" -and (Get-Landed "Yes, deploy.") -eq 1) ("A QUESTION FLAGGED needsPasskey costs exactly one more prompt, goes signed by the passkey, and lands (" + ($c3 - $c2) + ")")
+    # IDLE: the PC's limit, one minute here, as its status says; the page ends the session at that moment.
+    $idle = $null
+    for ($i = 0; $i -lt 150; $i++) { $idle = Invoke-Browser @{ cmd = "sessions" }; if ($idle.ok -and @($idle.value.list).Count -ge 1 -and -not $idle.value.list[0].open) { break }; Start-Sleep -Milliseconds 500 }
+    Check ($idle.ok -and -not $idle.value.list[0].open -and $idle.value.notice.Contains("not used for as long as your PC allows") -and $idle.value.account.Contains("no unlocked session is open")) ("PAST THE PC'S IDLE LIMIT the page ends the session itself and says so, the Account screen too (" + $(if ($idle.ok) { $idle.value.notice } else { $idle.reason }) + ")")
+    $skip = Get-MachineCount
+    $ai = Invoke-Browser @{ cmd = "answer"; text = "After the idle."; via = "enter"; mailbox = $mailbox; question = $sTitles[4] }
+    $c4 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $aiEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
+    $vouchId2 = $(if ($aiEnv.Count) { $aiEnv[0].value.sig.vouchId } else { "" })
+    Check ($ai.value.put -and $c4 -eq $c3 + 1 -and $aiEnv.Count -eq 1 -and (Test-SessionEnvelope $aiEnv[0]) -ceq "" -and $vouchId2 -cne $vouchId1 -and $null -ne $aiEnv[0].value.sig.vouch) ("then the next answer asks for the passkey once, for a new vouch, and goes under it (" + ($c4 - $c3) + ")")
+    # AWAY: past the setting (1 s in this build) the session ends; the horde stays open to read. At once,
+    # inside the PC's one minute.
+    $brief = $(if ($realAway) { Invoke-Browser @{ cmd = "away"; ms = 300 } } else { Invoke-Browser @{ cmd = "hide"; ms = 300 } })
+    if (-not $realAway) { $null = Invoke-Browser @{ cmd = "show" } }
+    $ss = Invoke-Browser @{ cmd = "sessions" }
+    Check ($ss.ok -and $ss.value.list[0].open) ("CONTROL: away for less than the setting, the session stays open (" + $(if ($realAway) { "another tab in front" } else { "the page told it is hidden: Chrome gave no hidden state" }) + ")")
+    $gone = $(if ($realAway) { Invoke-Browser @{ cmd = "away"; ms = 1600 } } else { Invoke-Browser @{ cmd = "hide"; ms = 1600 } })
+    if (-not $realAway) { $null = Invoke-Browser @{ cmd = "show" } }
+    $ss = Invoke-Browser @{ cmd = "sessions" }
+    Check ($ss.ok -and @($ss.value.list).Count -eq 1 -and -not $ss.value.list[0].open -and $ss.value.notice.Contains("in the background too long")) ("AWAY PAST THE SETTING the session ends and the page says so, the horde still open to read (" + $(if ($ss.ok) { $ss.value.notice } else { $ss.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "waitText"; text = $sTitles[5] }
+    $skip = Get-MachineCount
+    $aa = Invoke-Browser @{ cmd = "answer"; text = "After the away."; via = "enter"; mailbox = $mailbox; question = $sTitles[5] }
+    $c5 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $aaEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
+    Check ($aa.value.put -and $c5 -eq $c4 + 1 -and $aaEnv.Count -eq 1 -and (Test-SessionEnvelope $aaEnv[0]) -ceq "" -and $aaEnv[0].value.sig.vouchId -cne $vouchId2) ("and the next answer asks for the passkey once again (" + ($c5 - $c4) + ")")
+    $run = Invoke-Run -Turns 1
+    Check ((Get-Landed "After the idle.") -eq 1 -and (Get-Landed "After the away.") -eq 1) "and the real PC takes both answers, each under its new vouch"
+    # RELOAD: the key is gone with the page; the unlock is the one prompt, and the answer after it none.
+    $null = Invoke-Browser @{ cmd = "reload" }
+    $ss = Invoke-Browser @{ cmd = "sessions" }
+    Check ($ss.ok -and @($ss.value.list).Count -eq 0) "A RELOAD: the page holds no session, nothing unlocked"
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $c6 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $null = Invoke-Browser @{ cmd = "waitText"; text = $sTitles[6] }
+    $skip = Get-MachineCount
+    $ar = Invoke-Browser @{ cmd = "answer"; text = "After the reload."; via = "enter"; mailbox = $mailbox; question = $sTitles[6] }
+    $c7 = (Invoke-Browser @{ cmd = "assertions" }).value
+    $arEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
+    $run = Invoke-Run -Turns 1
+    Check ($ar.value.put -and $c6 -eq $c5 + 1 -and $c7 -eq $c6 -and $arEnv.Count -eq 1 -and (Test-SessionEnvelope $arEnv[0]) -ceq "" -and $arEnv[0].value.sig.vouchId -cne $aaEnv[0].value.sig.vouchId -and (Get-Landed "After the reload.") -eq 1) ("then it asks again: the unlock is one prompt, and the answer after it none, under a new vouch the real PC takes (" + ($c6 - $c5) + " then " + ($c7 - $c6) + ")")
+
+    Write-Host ""
+    Write-Host "--- 15. the shipped times: a session survives 9 minutes hidden and is gone after 11 (Q75 (c)) ---" -ForegroundColor Cyan
+    # The PC's idle limit back to an hour, past every time here, and a new question so a run sends a
+    # snapshot that says so.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-sessions.json"), '{"schemaVersion": 1, "settings": {"idleMinutes": 60}}', $utf8)
+    $q15 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Is the session still open after the switch-away?"; kind = "yes-no"; whatItIs = "Section 15."; group = "voice"; askedBy = "orc-e" } }
+    $run = Invoke-Run -Turns 1
+    Check ($q15.state -ceq "known" -and $run.code -eq 0) "CONTROL: the PC's idle limit is an hour, and a run sends a snapshot that says so"
+    $shipped = New-HordePwaSite -Out (Join-Path $work "site-shipped") -Transport "binding"
+    $shippedConfig = $(if ($shipped.state -ceq "known") { [System.IO.File]::ReadAllText((Join-Path $shipped.value.out "app\config.json"), $utf8) | ConvertFrom-Json } else { $null })
+    Check ($null -ne $shippedConfig -and $null -ne $shippedConfig.PSObject.Properties["lockAfterHiddenSeconds"] -and $null -ne $shippedConfig.PSObject.Properties["sessionAwaySeconds"]) ("CONTROL: a site built with no times given, as a deployment builds it, names both (" + $(if ($null -ne $shippedConfig) { "lock " + $shippedConfig.lockAfterHiddenSeconds + " s, away " + $shippedConfig.sessionAwaySeconds + " s" } else { $shipped.reason }) + ")")
+    $configPath = Join-Path $site "app\config.json"
+    $configOriginal = [System.IO.File]::ReadAllText($configPath, $utf8)
+    function Test-HiddenFor {
+        # config.json served with -Times only (none: neither key), the page reloaded and unlocked (one prompt),
+        # the PC's hour drawn; then hidden for -Minutes by the moved clock, and shown. Is a session open after?
+        param([hashtable]$Times, [int]$Minutes)
+        $c = $configOriginal | ConvertFrom-Json
+        [void]$c.PSObject.Properties.Remove("lockAfterHiddenSeconds")
+        [void]$c.PSObject.Properties.Remove("sessionAwaySeconds")
+        foreach ($k in $Times.Keys) { $c | Add-Member -NotePropertyName $k -NotePropertyValue $Times[$k] }
+        [System.IO.File]::WriteAllText($configPath, (ConvertTo-Json $c -Compress), $utf8)
+        $null = Invoke-Browser @{ cmd = "reload" }
+        $served = Invoke-Browser @{ cmd = "servedConfig" }
+        $null = Invoke-Browser @{ cmd = "unlock" }
+        $st = $null
+        for ($i = 0; $i -lt 60; $i++) { $st = Invoke-Browser @{ cmd = "sessions" }; if ($st.ok -and @($st.value.list).Count -ge 1 -and $st.value.list[0].open -and $st.value.list[0].idleMs -eq 3600000) { break }; Start-Sleep -Milliseconds 250 }
+        $ready = ($served.ok -and (ConvertTo-Json $served.value -Compress) -ceq (ConvertTo-Json $c -Compress) -and $st.ok -and @($st.value.list).Count -ge 1 -and $st.value.list[0].open -and $st.value.list[0].idleMs -eq 3600000)
+        if (-not $ready) { return [pscustomobject]@{ ready = $false; open = $false; said = ("not ready: served " + $(if ($served.ok) { ConvertTo-Json $served.value -Compress } else { $served.reason }) + "; sessions " + $(if ($st.ok) { ConvertTo-Json $st.value.list -Compress } else { $st.reason })) } }
+        $null = Invoke-Browser @{ cmd = "hide"; ms = 50 }
+        $null = Invoke-Browser @{ cmd = "clock"; ms = $Minutes * 60000 }
+        $null = Invoke-Browser @{ cmd = "show" }
+        Start-Sleep -Milliseconds 1500
+        $after = Invoke-Browser @{ cmd = "sessions" }
+        $null = Invoke-Browser @{ cmd = "clock"; ms = 0 }
+        return [pscustomobject]@{ ready = $true; open = ($after.ok -and @($after.value.list | Where-Object { $_.open }).Count -ge 1); said = $(if ($after.ok) { (ConvertTo-Json $after.value.list -Compress) + " " + $after.value.notice } else { $after.reason }) }
+    }
+    $old9 = Test-HiddenFor -Times @{ lockAfterHiddenSeconds = 300; sessionAwaySeconds = 600 } -Minutes 9
+    Check ($old9.ready -and -not $old9.open) ("CONTROL: with the old five-minute lock, 9 minutes hidden ends the session - so this check can fail (" + $old9.said + ")")
+    $shippedTimes = @{ lockAfterHiddenSeconds = $(if ($null -ne $shippedConfig) { $shippedConfig.lockAfterHiddenSeconds } else { 0 }); sessionAwaySeconds = $(if ($null -ne $shippedConfig) { $shippedConfig.sessionAwaySeconds } else { 0 }) }
+    $ship9 = Test-HiddenFor -Times $shippedTimes -Minutes 9
+    Check ($ship9.ready -and $ship9.open) ("WITH THE SHIPPED TIMES a session survives 9 minutes hidden: the founder's Q75 (c) (" + $ship9.said + ")")
+    $ship11 = Test-HiddenFor -Times $shippedTimes -Minutes 11
+    Check ($ship11.ready -and -not $ship11.open) ("and is gone after 11 (" + $ship11.said + ")")
+    $none9 = Test-HiddenFor -Times @{} -Minutes 9
+    Check ($none9.ready -and $none9.open) ("WITH NO TIMES IN config.json, app.js's own: a session survives 9 minutes hidden (" + $none9.said + ")")
+    $none11 = Test-HiddenFor -Times @{} -Minutes 11
+    Check ($none11.ready -and -not $none11.open) ("and is gone after 11 (" + $none11.said + ")")
+    [System.IO.File]::WriteAllText($configPath, $configOriginal, $utf8)
+    $dump = Invoke-Browser @{ cmd = "dump" }
+    Check ($dump.ok -and -not $dump.value.Contains("sessionPublicKey") -and -not $dump.value.Contains("privateKey") -and $dump.value.Contains('"vouchSeq":')) "Chrome's storage holds the vouch counter and no session key"
     $probs = Invoke-Browser @{ cmd = "problems" }
     Check ($probs.ok -and @($probs.value).Count -eq 0) ("no exception, no console error and no policy violation in the whole run (" + $(if ($probs.ok) { @($probs.value) -join " | " } else { $probs.reason }) + ")")
     }

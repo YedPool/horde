@@ -10,19 +10,19 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "snapshot-carries-no-receipts"
-           Find = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"receipts":'' + $Receipts + ''}'''
-           Replace = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + ''}''' }
+           Find = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1,"receipts":'' + $Receipts + ''}'''
+           Replace = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1}''' }
         @{ Name = "pages-are-not-handed-the-receipts"
            Find = '-OnePage:$onePage -Receipts $receipts.text'
            Replace = '-OnePage:$onePage' }
         @{ Name = "accept-records-nothing"
-           Find = '$null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.answerId -Outcome $out.outcome'
+           Find = '$null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.answerId -Outcome $ledgerOutcome'
            Replace = '$null = $out' }
         @{ Name = "refused-is-never-recorded"
-           Find = 'if ($Outcome -cne "done" -and $Outcome -cne "refused") { return "" }'
-           Replace = 'if ($Outcome -cne "done") { return "" }' }
+           Find = 'if ($Outcome -cne "done" -and $Outcome -cne "refused" -and $Outcome -cne "needs-passkey") { return "" }'
+           Replace = 'if ($Outcome -cne "done" -and $Outcome -cne "needs-passkey") { return "" }' }
         @{ Name = "retry-is-recorded-as-refused"
-           Find = 'if ($Outcome -cne "done" -and $Outcome -cne "refused") { return "" }'
+           Find = 'if ($Outcome -cne "done" -and $Outcome -cne "refused" -and $Outcome -cne "needs-passkey") { return "" }'
            Replace = 'if ($Outcome -ceq "") { return "" }' }
         @{ Name = "a-refusal-overrides-an-applied-answer"
            Find = 'if ($mine.applied -ccontains $AnswerId -or $mine.refused -ccontains $AnswerId) { return "" }'

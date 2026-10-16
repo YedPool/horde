@@ -96,8 +96,9 @@
 # member of its data, if any, that holds question fields (schema/decision-question.v1). apply: the
 # function that applies it to the list, or returns why it cannot.
 # about: "question" when its data names one question by number, "list" when it is about the whole
-# list. actors: who may write it - "keepers" (the roles that keep the list, $HordeDecisionActors) or
-# "speakers" (the roles that speak under a question, $HordeDecisionSpeakers). counts: the members of
+# list. actors: who may write it - "keepers" (the roles that keep the list, $HordeDecisionActors),
+# "speakers" (the roles that speak under a question, $HordeDecisionSpeakers) or "rankers" (the keepers
+# and the founder: $HordeDecisionRankers below). counts: the members of
 # its data that are counts, each with the largest it may be, held here because the schema has no
 # "maximum" (see THE LARGEST NUMBER below).
 $script:HordeDecisionEventKinds = [ordered]@{
@@ -105,7 +106,7 @@ $script:HordeDecisionEventKinds = [ordered]@{
     "question-updated"  = @{ data = "question-updated";  words = "changes";  apply = "Step-HordeDecisionUpdated";  about = "question"; actors = "keepers";  counts = @{} }
     "question-closed"   = @{ data = "question-closed";   words = "";         apply = "Step-HordeDecisionClosed";   about = "question"; actors = "keepers";  counts = @{} }
     "question-reopened" = @{ data = "question-reopened"; words = "";         apply = "Step-HordeDecisionReopened"; about = "question"; actors = "keepers";  counts = @{} }
-    "question-ranked"   = @{ data = "question-ranked";   words = "";         apply = "Step-HordeDecisionRanked";   about = "question"; actors = "keepers";  counts = @{} }
+    "question-ranked"   = @{ data = "question-ranked";   words = "";         apply = "Step-HordeDecisionRanked";   about = "question"; actors = "rankers";  counts = @{} }
     "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number" } }
     "messages-read"     = @{ data = "messages-read";     words = "";         apply = "Step-HordeDecisionRead";     about = "list";     actors = "speakers"; counts = @{ upTo = "sequence" } }
 }
@@ -124,6 +125,12 @@ $script:HordeDecisionStates = @("open", "closed")
 # THE ACTOR IS WHAT THE CALLER SAYS IT IS. Nothing here proves it; a caller across a link must have it
 # set by the link, not taken from the request.
 $script:HordeDecisionActors = @("warchief")
+# WHO MAY RANK A QUESTION (the founder, 2026-10-14: "I want to be able to change importance level and
+# blockingness level by clicking on a little button next to a decision"): the keepers, and the founder
+# himself - from the decisions window, or from his phone through the relay channel, which has verified
+# his passkey's signature first (channels/decisions/Channel.ps1, A CHANGE OF RANK FROM THE PHONE). The
+# two words are his order of HIS list; nothing else of a question is his to change.
+$script:HordeDecisionRankers = @("warchief", "founder")
 
 # WHO MAY SPEAK UNDER A QUESTION: a closed list. The founder is not a session role of core/roles.json:
 # it is the person the list is kept for. shown: how a way of showing names the speaker. then: whose
@@ -329,6 +336,7 @@ function Get-HordeDecisionKindActors {
     param([Parameter(Mandatory = $true)][string]$Kind)
     $entry = $script:HordeDecisionEventKinds[$Kind]
     if ($null -ne $entry -and "$($entry.actors)" -ceq "speakers") { return [pscustomobject]@{ roles = @($script:HordeDecisionSpeakers.Keys); may = "speak under a question, or mark what was said there as read" } }
+    if ($null -ne $entry -and "$($entry.actors)" -ceq "rankers") { return [pscustomobject]@{ roles = @($script:HordeDecisionRankers); may = "rank a question" } }
     return [pscustomobject]@{ roles = @($script:HordeDecisionActors); may = "change the list" }
 }
 
@@ -795,6 +803,10 @@ function Step-HordeDecisionAdded {
     if (Test-HordeDecisionMember -Object $Ev.data -Name "blocks") { $question["blocks"] = [string]$Ev.data.blocks }
     $question["followsUp"] = 0
     if (Test-HordeDecisionMember -Object $Ev.data -Name "followsUp") { $question["followsUp"] = [int]$Ev.data.followsUp }
+    # needsPasskey: written only as true (decisions/Operations.ps1, Get-HordeDecisionAddContent); a
+    # record without it - every one written before it existed - is a question that needs none.
+    $question["needsPasskey"] = $false
+    if ((Test-HordeDecisionMember -Object $Ev.data -Name "needsPasskey") -and ($Ev.data.needsPasskey -eq $true)) { $question["needsPasskey"] = $true }
     $question["partsAnswered"] = (New-Object System.Collections.Specialized.OrderedDictionary)
     $question["addedAt"] = "$($Ev.at)"
     $question["updatedAt"] = "$($Ev.at)"
@@ -1290,6 +1302,9 @@ function ConvertTo-HordeDecisionView {
     $view["importanceShown"] = (Get-HordeDecisionRankShown -Name "importance" -Word "$($Question.importance)")
     $view["blocks"] = "$($Question.blocks)"
     $view["blocksShown"] = (Get-HordeDecisionRankShown -Name "blocks" -Word "$($Question.blocks)")
+    # Handed out only when true, so the view of every other question - and every snapshot of one - is
+    # what it was before the mark existed.
+    if ((Test-HordeDecisionMember -Object $Question -Name "needsPasskey") -and [bool]$Question["needsPasskey"]) { $view["needsPasskey"] = $true }
     if ([int]$Question.followsUp -ge 1) { $view["followsUp"] = (ConvertTo-HordeDecisionFollowsUpView -State $State -Number ([int]$Question.followsUp)) }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages

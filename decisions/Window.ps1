@@ -15,9 +15,12 @@
 # None of the four knows another. A later way of showing the list - a file for a phone, a view across
 # a link - is another surface under the same bridge, and nothing here but the choice of surface moves.
 #
-# WHAT THE PAGE MAY ASK is the closed list below, ten requests, and nothing else (surfaces/Port.ps1
+# WHAT THE PAGE MAY ASK is the closed list below, eleven requests, and nothing else (surfaces/Port.ps1
 # checks every message before a handler sees it): setup, kinds, list, fleet, attachment, report, say,
-# say-part, act, hand-back. say-part is say for the answer to ONE PART of a question of parts (the
+# say-part, act, rank, hand-back. rank is his little button beside a question (the founder, 2026-10-14):
+# one of the two words beside it - which (importance or blocks) and the level he picked - written by the
+# operation rank as the founder, the same operation `horde decisions rank` asks; done and answered as a
+# save is (the event said, by the page's own id). say-part is say for the answer to ONE PART of a question of parts (the
 # page sends each part by itself: decisions/page/list.js): the same words and the part's letter. It
 # is a request of its own because a request takes exactly the arguments it declares, and say's are
 # the four it always took.
@@ -350,6 +353,39 @@ function Invoke-HordeDecisionWindowSay {
         arrivedAfterClosing = [bool]($null -ne $message -and $message.arrivedAfterClosing); saidToEarlierWording = [bool]($null -ne $message -and $message.saidToEarlierWording) }
 }
 
+function Invoke-HordeDecisionWindowRank {
+    # The request rank (header): -Arguments is { number; which; level; id } as the page sent them -
+    # which is "importance" or "blocks", level the word he picked. A PURE FUNCTION of them and of what
+    # -Invoke answers, as Invoke-HordeDecisionWindowSay is: it never throws for anything the page sent,
+    # and whether the level is one of the list's is the operation's to say. Returns
+    #   { ok = true; sequence; replayed }   the question has that level now
+    #   { ok = false; reason }              it has not, and why, in the operation's own sentences
+    param($Arguments, [scriptblock]$Invoke = $null)
+    $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why } }
+    $get = { param([string]$Name) if ($Arguments -is [System.Collections.IDictionary]) { if ($Arguments.Contains($Name)) { return $Arguments[$Name] }; return $null }; if ($null -ne $Arguments -and $null -ne $Arguments.PSObject.Properties[$Name]) { return $Arguments.PSObject.Properties[$Name].Value }; return $null }
+    $number = & $get "number"; $which = & $get "which"; $level = & $get "level"; $id = & $get "id"
+    if (($number -isnot [int] -and $number -isnot [long]) -or [long]$number -lt 1) { return (& $no "Not changed: the question's number did not arrive as a whole number from 1.") }
+    if ($which -isnot [string] -or @("importance", "blocks") -cnotcontains $which) { return (& $no "Not changed: what to change did not arrive as importance or blocks.") }
+    if ($level -isnot [string]) { return (& $no "Not changed: the level did not arrive as a word.") }
+    if ($id -isnot [string] -or $id -cnotmatch '\A[0-9a-f]{32}\z') { return (& $no "Not changed: the request carried no id of 32 lowercase hex digits.") }
+    if ($null -eq $Invoke) { $Invoke = { param($Request) return (Invoke-HordeDecision -Operation "rank" -Request $Request) } }
+    $request = [ordered]@{ id = $id; actor = $script:HordeDecisionWindowSpeaker; number = [long]$number }
+    $request[$which] = $level
+    $answer = $null
+    try { $answer = & $Invoke $request } catch { return (& $no ("Not changed: the list could not be asked: " + $_.Exception.Message)) }
+    if ($null -eq $answer) { return (& $no "Not changed: the list gave no answer.") }
+    # Absent (no such question) and unknown both say why in the answer's own reason.
+    if ("$($answer.state)" -cne "known") { return (& $no ("Not changed: " + $answer.reason)) }
+    $value = $answer.value
+    if ("$($value.outcome)" -ceq "refused") {
+        $why = "$($value.reason)"
+        $found = @($value.findings | ForEach-Object { "" + $_ } | Where-Object { $_ -ne "" -and $_ -cne $why })
+        if ($found.Count -gt 0) { $why = $why + ": " + ($found -join "; ") }
+        return (& $no ("Not changed: " + $why))
+    }
+    return [pscustomobject]@{ ok = $true; sequence = [long]$value.sequence; replayed = [bool]("$($value.outcome)" -ceq "replayed") }
+}
+
 function Invoke-HordeDecisionWindowHandBack {
     # The request hand-back (header, ESCAPE HANDS THE KEYBOARD BACK): { handed; state; reason }.
     # -Hand answers the follow port's verb, for a test that hands one in. The port is asked ONLY
@@ -567,6 +603,17 @@ function New-HordeDecisionWindowBridge {
                 if ($said.ok) { $State.dirtyAt = [datetime]::UtcNow }
                 $State.reportDue = $true
                 return $said }
+        }
+        # HIS LITTLE BUTTON (header): one word beside a question, changed by the operation rank. With a
+        # helper it is taken and its outcome pushed as the event said, by the page's own id, as a save is.
+        "rank" = @{
+            args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; which = @{ type = "string"; most = 10 }; level = @{ type = "string"; most = 32 }; id = @{ type = "string"; most = 32 } }
+            run = { param($Arguments, $State, $Window)
+                if ($null -ne $State.helper) { Add-HordeDecisionWindowJob -State $State -Kind "rank" -Value $Arguments; return [pscustomobject]@{ taken = $true; id = "" + $Arguments["id"] } }
+                $ranked = Invoke-HordeDecisionWindowRank -Arguments $Arguments
+                if ($ranked.ok) { $State.dirtyAt = [datetime]::UtcNow }
+                $State.reportDue = $true
+                return $ranked }
         }
         # ESCAPE (header): the keyboard goes back to the terminal window this one stands beside.
         "hand-back" = @{ run = { param($Arguments, $State, $Window) return (Invoke-HordeDecisionWindowHandBack -State $State) } }
@@ -800,6 +847,14 @@ function Step-HordeDecisionWindowHelper {
             $State.reportDue = $true
             if ($null -ne $Window) { & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "said" -Value ([pscustomobject]@{ id = "" + $job.value["id"]; result = $said })) }
         }
+        if ($job.kind -ceq "rank") {
+            # A CHANGE OF RANK is answered as a save is, by the page's own id; the list read again carries it.
+            $ranked = $out
+            if ($failed -ne "" -or $null -eq $ranked) { $ranked = [pscustomobject]@{ ok = $false; reason = ("Not changed: the helper failed: " + $(if ($failed -ne "") { $failed } else { "no answer" })) } }
+            if ($ranked.ok) { Add-HordeDecisionWindowJob -State $State -Kind "list" }
+            $State.reportDue = $true
+            if ($null -ne $Window) { & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "said" -Value ([pscustomobject]@{ id = "" + $job.value["id"]; result = $ranked })) }
+        }
     }
     if ($helper.queue.Count -eq 0) { return }
     $next = $helper.queue[0]
@@ -807,6 +862,8 @@ function Step-HordeDecisionWindowHelper {
     $helper.job = $next
     if ($next.kind -ceq "list") {
         [void]$helper.shell.AddScript('param($Told) $s = $global:HordeDecisionHelperState; $s.told = $Told; $r = Get-HordeDecisionWindowList -State $s; [pscustomobject]@{ record = $r; json = (ConvertTo-HordeSurfaceJson -Value $r); title = (Get-HordeDecisionWindowTitle -Record $r) }').AddArgument($State.told)
+    } elseif ($next.kind -ceq "rank") {
+        [void]$helper.shell.AddScript('param($Arguments) Invoke-HordeDecisionWindowRank -Arguments $Arguments').AddArgument($next.value)
     } else {
         [void]$helper.shell.AddScript('param($Arguments) Invoke-HordeDecisionWindowSay -Arguments $Arguments').AddArgument($next.value)
     }

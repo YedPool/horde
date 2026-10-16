@@ -18,6 +18,7 @@
         "question": {"type": "object", "description": "The new question, schema/decision-question.v1."},
         "importance": {"type": "string", "enum": ["high", "normal", "low"], "description": "How much the task the question belongs to matters overall. Left out, the question reads as normal."},
         "blocks": {"type": "string", "enum": ["all", "part", "none"], "description": "How much of that task's work stands still until the question is answered. Left out, the question reads as part."},
+        "needsPasskey": {"type": "boolean", "description": "True marks a question that changes something important (a production deploy): from the phone it is answered only with a fresh passkey. Left out or false, the question needs none and the record names nothing."},
         "followsUp": {"$ref": "#/definitions/number"}
       }
     },

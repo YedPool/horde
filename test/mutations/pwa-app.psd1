@@ -68,21 +68,28 @@
         @{ Name = "open-time-lost-on-redraw"
            Find = 't.setAttribute("aria-label", exact); show();'
            Replace = 't.setAttribute("aria-label", exact); t.textContent = short;' }
+        # --- THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14) ---
         @{ Name = "why-left-after-the-tick"
-           Find = '$("announceWhy").hidden = $("wroteCode").checked;'
+           Find = '$("finishWhy").hidden = !confirmed || $("wroteCode").checked;'
+           Replace = '$("finishWhy").hidden = !confirmed;' }
+        @{ Name = "finish-offered-before-the-machines-word"
+           Find = '$("finishBtn").hidden = !confirmed;'
+           Replace = '$("finishBtn").hidden = false;' }
+        @{ Name = "finish-never-offered"
+           Find = 'if (r && r.confirmed && paired && paired.id === id) { confirmed = true; showFinish(); return; }'
            Replace = '' }
-        @{ Name = "announce-failure-only-in-the-notice"
-           Find = '} catch (e) { announceSaid("announceStatus", messageOf(e)); }'
-           Replace = '} catch (e) { say("action", messageOf(e)); }' }
+        @{ Name = "finish-failure-only-in-the-notice"
+           Find = 'catch (e) { announceSaid("finishStatus", messageOf(e)); }'
+           Replace = 'catch (e) { say("action", messageOf(e)); }' }
+        @{ Name = "finish-sends-nothing"
+           Find = 'try { await bridge.request("announce", { id: paired.id }); await leavePairing(); }'
+           Replace = 'try { await leavePairing(); }' }
         @{ Name = "announce-box-never-shown"
            Find = '$("announceBox").hidden = !waiting;'
            Replace = '$("announceBox").hidden = true;' }
         @{ Name = "announce-box-kept-after-a-snapshot"
            Find = 'if (rec && rec.state === "known") heard.add(h.id);'
            Replace = '' }
-        @{ Name = "announce-now-sends-nothing"
-           Find = 'await bridge.request("announce", { id: current });'
-           Replace = 'await Promise.resolve();' }
         @{ Name = "pane-switch-not-a-history-entry"
            Find = 'if (!fromHistory && which !== pane) { try { history.pushState('
            Replace = 'if (false) { try { history.pushState(' }
@@ -148,5 +155,9 @@
         @{ Name = "progress-folded-line-has-no-time"
            Find = 'if (when) { const w'
            Replace = 'if (false) { const w' }
+        # --- section 15: a config.json with no times keeps the session through 9 minutes hidden (Q75 (c)) ---
+        @{ Name = "lock-fallback-back-to-five-minutes"
+           Find = 'config.lockAfterHiddenSeconds : 600);'
+           Replace = 'config.lockAfterHiddenSeconds : 300);' }
     )
 }

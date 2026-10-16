@@ -121,8 +121,8 @@
            Find = 'if ($b.settles) { $s.failure = $null;'
            Replace = 'if ($b.settles) {' }
         @{ Name = "failure-keeps-no-record-id"
-           Find = '            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = (& $recordId) }'
-           Replace = '            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now; what = $What; recordId = "" }' }
+           Find = '            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $relayPublishLogAt; what = $What; recordId = (& $recordId) }'
+           Replace = '            $s.failure = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $relayPublishLogAt; what = $What; recordId = "" }' }
         @{ Name = "told-every-pass"
            Find = '    if (@($State.told) -ccontains $k) { return $State }'
            Replace = '' }

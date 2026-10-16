@@ -9,6 +9,8 @@
 //
 //   var doc = HordeDecisionsDocument.mount(element, { topInset, onDraw, onChange, say, sayPart, storage, prefs });
 //     say(number, text, wording, id)  ->  a promise of { ok: true, sequence, ... } or { ok: false, reason }
+//     rank(number, which, level, id)  ->  a promise of { ok } or { ok: false, reason }: which is
+//                                         "importance" or "blocks" (HIS LITTLE BUTTONS)
 //     sayPart(number, letter, text, wording, id)   the same, for the answer to ONE PART of a question
 //                                         of parts; a host that has none is handed the part through
 //                                         say, as the words "(b) ..." (see A QUESTION OF SEVERAL PARTS)
@@ -17,6 +19,8 @@
 //                                         that keeps drafts in memory only still keeps the order)
 //     expanded                            false: every question opens folded (the window); left out,
 //                                         unfolded (header, EVERY QUESTION STARTS UNFOLDED)
+//     answered                            true: the answered are shown until he chooses (the window);
+//                                         left out, hidden (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR)
 //   doc.setKinds(record)     the answer of the kinds operation, as { state, value, reason }
 //   doc.setList(record)      the answer of the list operation; says what it did: "drawn", "same"
 //                            (the very answer already drawn: nothing is touched) or "unread" (the
@@ -113,6 +117,35 @@
 // later opens as the button last left them. Rows that are only read (With Thrall, History) stay one
 // line each until he unfolds one. A host may open folded instead (expanded: false - the window).
 //
+// ONE STAGE, AND A BOX TO ANSWER IN (the founder, 2026-10-15: "Clicking on a decision to get more info
+// now seems to have two stages of info showing - either make it one stage or make it more evident to
+// the user. Also, the input box for where to type the decision answer needs to be more clearly
+// delineated"). Unfolded, a question's details are one run, in reading order: what stands out about
+// it, what was said (whole), its context - parts, options, what it is, the recommendation, files and
+// references - and LAST the label "Your answer" over the box. Before, the context was drawn under the
+// field, so an unfolded question showed details, the field, then more details: two showings. One tap
+// on a folded question shows the whole run at once. Folded, the details give way (the context goes,
+// what was said before is one line each) but the box stays: the window's run of answering is the box
+// of every question, with nothing unfolded to reach it (test/e2e/e2e-decisions-answering.ps1), and F2
+// folds the context with the caret still in the box. The box has an edge drawn as a shadow inside it
+// (never a border, for the sharp letters of list.css), a clear ring while the caret is in it, a least
+// height of two lines (three on a phone) that grows with the words up to twelve, and its Send key
+// attached at its foot, which does what Enter does there.
+//
+// THE ANSWERED ARE HIDDEN UNTIL ASKED FOR (the founder, 2026-10-15: "By default you need to not show
+// questions that are answered - should be toggleable on top across from the sort by"). The folds of
+// the answered - With Thrall (answered, the keeper's turn) and History (closed) - are not drawn until
+// a switch at the head of the page, "Show answered and closed: off", is pressed; then they stand as
+// they always have, and the switch says on. A keyboard reaches it as it reaches the folds, never by
+// Tab: Ctrl+Down from a field when no fold is drawn, or Up from the first fold (THE SWITCH IS
+// REACHED BY KEYS); Space or Enter turns it. It stands at the head of the line under the order line, across from
+// Collapse all: on the order line itself a phone's 412 px wrapped it to two lines and a tap on an order
+// missed (measured for Collapse all, EVERY QUESTION STARTS UNFOLDED). What he chose is kept on this
+// device beside the order; a press touches neither the order, nor what is folded, nor his place. A
+// question he answers still goes green and folds to Answered where it stands, then leaves for the
+// hidden fold, and the view keeps the question at its top where it was (THE VIEW FOLLOWS HIM). A host
+// may show them until he chooses (answered: true - the window, whose scenarios read With Thrall).
+//
 // ONE LANE AT A TIME (the founder's decision 74, 2026-10-14: cards first, one per lane with its open
 // questions and a mark when one of them blocks all its work, and one for all the questions; a tap on
 // a card shows that lane's questions). The cards are the host's to draw - the phone draws the same
@@ -123,6 +156,10 @@
 //
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
+//
+// HIS LITTLE BUTTONS (the founder, 2026-10-14): beside each question still on his list, an Importance and
+// a Blocking button saying its two words; a press opens the three levels, and picking one hands it to
+// the host (options.rank). The list re-sorts when a list holding the new level arrives (drawRank).
 //
 // WHAT BECAME OF AN ANSWER, WHEN THE HOST KNOWS (the phone, 2026-10-14). A message may carry receipt:
 // the host's own words for what became of it ("sent", "received by PC", "applied"), and receiptNote: a
@@ -199,6 +236,12 @@
   var SAVE_ECHO_MS = 3000;
   // How many lines a saved answer rests at while the caret is not in it (header, ROOM IS KEPT).
   var REST_LINES = 2;
+  // THE ANSWER BOX'S WORDS (header, ONE STAGE, AND A BOX TO ANSWER IN): the label above it, the label
+  // above a question of parts, and its key.
+  var BOX_WORDS = { label: "Your answer", parts: "Your answers, one for each part", send: "Send" };
+  // Each page mounted takes its own prefix for the ids that tie a label to its field: the phone mounts
+  // one page per horde, and two of them must never hold the same id.
+  var mounts = 0;
   // The sub-lines of an unfolded question, in order: the field, the label before it ("" for none),
   // and how a list is shown - "each" a line per item, "joined" one line.
   var SUB_LINES = [
@@ -368,6 +411,14 @@
   var KEEPER_LANE = "thrall";
   var LANE_WORD = /^(thrall|[A-Z][0-9]{0,3})$/;
   var LANE_KEY = "horde-decisions-lane-v1";
+  // THE ANSWERED ARE HIDDEN UNTIL ASKED FOR: where the choice is kept ("1" shown, "0" hidden), the folds
+  // it hides - With Thrall (answered, the keeper's turn) and History (closed) - and the switch's words.
+  // The words name both: History also holds questions closed without his answer (review of PR 311).
+  var ANSWERED_KEY = "horde-decisions-answered-shown-v1";
+  var ANSWERED_FOLDS = { thrall: true, history: true };
+  var ANSWERED_WORDS = { on: "Show answered and closed: on", off: "Show answered and closed: off",
+    onSays: "Answered and closed questions are shown, under With Thrall and History. Press to hide them",
+    offSays: "Answered and closed questions are hidden. Press to show them, under With Thrall and History" };
   function laneWord(word) { word = textOf(word); return LANE_WORD.test(word) ? word : ""; }
   function laneOf(q) {
     var name = textOf(q && q.askedBy);
@@ -399,6 +450,8 @@
 
   function mount(root, options) {
     options = options || {};
+    mounts += 1;
+    var idPrefix = "hd" + mounts + "-";
     // Where the view begins: below whatever the host keeps fixed at the top, which only the host knows.
     var topInset = (typeof options.topInset === "function") ? options.topInset : function () { return 0; };
     var onDraw = (typeof options.onDraw === "function") ? options.onDraw : function () {};
@@ -410,6 +463,9 @@
     // request is handed the words through say with the part's letter before them, "(b) ...": one
     // message a part, which a store of any version keeps and an earlier page reads into the part.
     var sayPart = (typeof options.sayPart === "function") ? options.sayPart : function (number, letter, text, wording, id) { return say(number, "(" + letter + ") " + text, wording, id); };
+    // rank(number, "importance" or "blocks", level, id): his little button (HIS LITTLE BUTTONS, at drawRank);
+    // a promise of { ok } or { ok: false, reason }, as say.
+    var rank = (typeof options.rank === "function") ? options.rank : function () { return Promise.resolve({ ok: false, reason: "this page has nobody to change it with." }); };
     var storage = options.storage || null;
     if (!storage) { try { storage = window.localStorage; } catch (e) { storage = null; } }
     // WHERE THE CHOSEN ORDER IS KEPT: its own place, because a host may keep drafts in memory only (the
@@ -427,6 +483,11 @@
     // lane is all of them.
     var laneChosen = "";
     try { laneChosen = laneWord(prefs ? prefs.getItem(LANE_KEY) : ""); } catch (e) { laneChosen = ""; }
+    // WHETHER THE ANSWERED ARE SHOWN (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR): his choice on
+    // this device first, kept beside the order; with none, the host's (answered: true - the window),
+    // else hidden.
+    var answeredShown = options.answered === true;
+    try { var answeredKept = prefs ? prefs.getItem(ANSWERED_KEY) : null; if (answeredKept === "1" || answeredKept === "0") { answeredShown = answeredKept === "1"; } } catch (e) { /* the host's default stands */ }
     var kinds = Object.create(null);
     var questions = [];
     var lastJson = null;
@@ -760,7 +821,7 @@
       folds.parked = inOrder(folds.parked, orderKey, orderTurned);
       var foldNames = { thrall: "With " + KEEPER, parked: "Parked", history: "History" };
       folds.history.sort(function (a, b) { return textOf(b.closedAt).localeCompare(textOf(a.closedAt)) || (b.number - a.number); });
-      FOLDS.forEach(function (f) { if (folds[f].length) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
+      FOLDS.forEach(function (f) { if (folds[f].length && (answeredShown || ANSWERED_FOLDS[f] !== true)) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
       return heads;
     }
 
@@ -816,6 +877,9 @@
       var standing = standingOf(line.q);
       var resting = document.activeElement !== field && !!standing && field.value === textOf(standing.text);
       var shown = (resting && lines > REST_LINES) ? REST_LINES : lines;
+      // The box is never shorter than its least height (list.css: two lines, three on a phone), so a
+      // resting answer shows that many lines and says how many more it has past them.
+      shown = Math.max(shown, Math.round((parseFloat(window.getComputedStyle(field).minHeight) || 0) / linePx));
       field.style.height = "calc(" + shown + " * var(--line-px))";
       line.more.textContent = shown < lines ? ("+" + (lines - shown) + (lines - shown === 1 ? " line" : " lines")) : "";
     }
@@ -1161,8 +1225,11 @@
       run();
     }, true);
     // Ctrl+Down: to the folded lines, where Enter or Space opens one and Up and Down go between them.
+    // With no fold drawn (the answered hidden and nothing parked), to the switch for the answered
+    // instead, so a press of Space can show them (THE SWITCH IS REACHED BY KEYS, at the switch).
     function toFolds() {
       for (var i = 0; i < drawnHeads.length; i += 1) { if (isFold(drawnHeads[i].head)) { drawnHeads[i].tri.focus(); onChange(); return; } }
+      toSwitch();
     }
 
     function toggleContext(q) {
@@ -1268,6 +1335,31 @@
       }
       if (key === "ArrowRight" && plain && !e.shiftKey && field.value === "" && rec) { e.preventDefault(); setValue(line, rec); return; }
       if (key === "F2" || ((key === " " || e.code === "Space") && e.ctrlKey)) { e.preventDefault(); toggleContext(q); }
+    }
+    // THE SEND KEY ATTACHED TO A BOX does what Enter does in that field, by the very same handler (one
+    // path for a key and a tap): the words are sent and the caret goes on. An empty box sends nothing;
+    // the tap only puts the caret in it.
+    function sendFrom(line, field) {
+      if (document.activeElement !== field) { field.focus({ preventScroll: true }); }
+      if (field.value.trim() === "") { return; }
+      arrived.at = 0;
+      onKey({ key: "Enter", code: "Enter", ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, isComposing: false, preventDefault: function () {} }, line, field);
+    }
+    // A field in its box, with its Send key attached at the box's foot. A press on the key keeps the
+    // caret (and a phone's keyboard) where it is: the press itself takes no focus.
+    function boxed(field, send, says) {
+      var box = make("div", "hd-box");
+      var key = make("button", "hd-send", BOX_WORDS.send);
+      key.type = "button";
+      key.tabIndex = -1;
+      key.setAttribute("aria-label", says);
+      key.addEventListener("pointerdown", function (e) { e.preventDefault(); });
+      key.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      key.addEventListener("click", function (e) { e.stopPropagation(); send(); });
+      // A press on the box's own edge or padding is a press in its field.
+      box.addEventListener("click", function (e) { if (e.target === box) { field.focus(); } });
+      box.appendChild(field); box.appendChild(key);
+      return { box: box, key: key };
     }
 
     function drawMessage(m, who) {
@@ -1383,6 +1475,118 @@
       box.hidden = !box.firstChild;
       return drawn;
     }
+    // HIS LITTLE BUTTONS (the founder, 2026-10-14: "I want to be able to change importance level and
+    // blockingness level by clicking on a little button next to a decision to change it"). Above what
+    // stands out about a question still on his list, two small buttons say its two words in plain
+    // words - "Importance: High", "Blocking: Part". A press does not change anything by itself: it opens
+    // the three levels under the button, the one in force ticked, so a press that missed changes nothing;
+    // a press on another level asks the host (options.rank) and closes them, and on the one in force
+    // just closes them. Escape, or a press anywhere else, closes them too.
+    // THE ORDER MOVES WHEN THE HOST HAS MADE THE CHANGE, NOT BEFORE: until a list arrives that holds the
+    // new level, the button says it with "(sending)" and the question stays where it stands, so what
+    // he sees in place is never more than what is so. A refusal puts the button back and says why.
+    var RANK_BUTTONS = [
+      { key: "importance", label: "Importance", levels: IMPORTANCES, fallback: DEFAULT_IMPORTANCE, words: { high: "High", normal: "Normal", low: "Low" } },
+      { key: "blocks", label: "Blocking", levels: BLOCKINGS, fallback: DEFAULT_BLOCKS, words: { all: "All", part: "Part", none: "None" } }
+    ];
+    // By "<number>:<key>": the change on its way, { level, id, ok }; and which button's levels are open.
+    var rankPending = Object.create(null);
+    var rankOpen = "";
+    // The tick beside the level in force: a check mark, made from its code so the source stays ASCII.
+    var RANK_TICK = String.fromCharCode(0x2713);
+    function rankWordOf(q, b) { var w = textOf(q[b.key]); return w === "" ? b.fallback : w; }
+    function rankShown(b, level) { return b.words[level] || capital(level); }
+    function redrawRank(number) { var line = lineOf(number); if (line) { drawRank(line.q, line.rankBox); onChange(); } }
+    // A change the list now holds - or one the host said is made, once a list has come since - is done.
+    function settleRanks() {
+      Object.keys(rankPending).forEach(function (k) {
+        var p = rankPending[k];
+        var at = k.indexOf(":");
+        var number = Number(k.slice(0, at));
+        var b = RANK_BUTTONS.filter(function (x) { return x.key === k.slice(at + 1); })[0];
+        var q = questions.filter(function (x) { return x.number === number; })[0];
+        if (!q || !b || rankWordOf(q, b) === p.level || p.ok === true) { delete rankPending[k]; }
+      });
+    }
+    function pickRank(q, b, level) {
+      var k = q.number + ":" + b.key;
+      rankOpen = "";
+      if (level === rankWordOf(q, b) && !rankPending[k]) { redrawRank(q.number); return; }
+      var id = newId();
+      rankPending[k] = { level: level, id: id, ok: false };
+      redrawRank(q.number);
+      Promise.resolve().then(function () { return rank(q.number, b.key, level, id); }).then(function (result) {
+        var p = rankPending[k];
+        if (!p || p.id !== id) { return; }
+        if (result && result.ok === true) {
+          var now = questions.filter(function (x) { return x.number === q.number; })[0];
+          if (now && rankWordOf(now, b) === level) { delete rankPending[k]; } else { p.ok = true; }
+        } else {
+          delete rankPending[k];
+          showToast(b.label + " of question " + q.number + " not changed: " + textOf(result && result.reason ? result.reason : "no reason was given"), null);
+        }
+        redrawRank(q.number);
+      }, function (error) {
+        var p = rankPending[k];
+        if (p && p.id === id) { delete rankPending[k]; }
+        showToast(b.label + " of question " + q.number + " not changed: " + textOf(error && error.message ? error.message : error), null);
+        redrawRank(q.number);
+      });
+    }
+    // The two buttons of -q into -box (emptied first), and the levels of the one that is open. Nothing for
+    // a question that is not on his list: closed, or answered.
+    function drawRank(q, box) {
+      while (box.firstChild) { box.removeChild(box.firstChild); }
+      box.hidden = textOf(q.state) !== LISTED_STATE || stateOf(q).answered;
+      if (box.hidden) { return; }
+      RANK_BUTTONS.forEach(function (b) {
+        var k = q.number + ":" + b.key;
+        var p = rankPending[k];
+        var level = p ? p.level : rankWordOf(q, b);
+        var open = rankOpen === k;
+        var btn = make("button", "hd-rank-btn" + (p ? " pending" : ""), b.label + ": " + rankShown(b, level) + (p ? " (sending)" : ""));
+        btn.type = "button";
+        btn.tabIndex = -1;
+        btn.setAttribute("data-rank", b.key);
+        btn.setAttribute("aria-haspopup", "true");
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        btn.setAttribute("aria-label", b.label + " of question " + q.number + ": " + rankShown(b, level) + (p ? ", being sent" : "") + ". Press to change it.");
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          // One button's levels open at a time: another question's that were open close.
+          var was = rankOpen;
+          rankOpen = was === k ? "" : k;
+          drawRank(q, box);
+          if (was !== "" && Number(was.slice(0, was.indexOf(":"))) !== q.number) { redrawRank(Number(was.slice(0, was.indexOf(":")))); }
+          onChange();
+        });
+        box.appendChild(btn);
+        if (!open) { return; }
+        var pick = make("div", "hd-rank-pick");
+        pick.setAttribute("role", "group");
+        pick.setAttribute("aria-label", b.label + " of question " + q.number);
+        b.levels.forEach(function (w) {
+          var now = w === level;
+          var opt = make("button", "hd-rank-opt" + (now ? " now" : ""), (now ? RANK_TICK + " " : "") + rankShown(b, w));
+          opt.type = "button";
+          opt.setAttribute("data-level", w);
+          opt.setAttribute("aria-pressed", now ? "true" : "false");
+          opt.setAttribute("aria-label", now ? (b.label + ": " + rankShown(b, w) + ", as it is now") : ("Set " + b.label.toLowerCase() + " of question " + q.number + " to " + rankShown(b, w)));
+          opt.addEventListener("click", function (e) { e.stopPropagation(); pickRank(q, b, w); });
+          pick.appendChild(opt);
+        });
+        // ESCAPE CLOSES THE LEVELS AND GOES NO FURTHER: the window's own Escape hands the keyboard back.
+        pick.addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); rankOpen = ""; drawRank(q, box); btn.focus(); onChange(); } });
+        box.appendChild(pick);
+      });
+    }
+    document.addEventListener("pointerdown", function (e) {
+      if (rankOpen === "" || (e.target && e.target.closest && e.target.closest(".hd-rank"))) { return; }
+      var number = Number(rankOpen.slice(0, rankOpen.indexOf(":")));
+      rankOpen = "";
+      redrawRank(number);
+    });
+
     // The context of an unfolded question, its sub-numbered lines, into -box (emptied first).
     // readOnly: a row of With Thrall or History (isOpen).
     function drawSubs(q, box, readOnly) {
@@ -1429,6 +1633,9 @@
         toggleContext(q);
       });
       var ans = make("div", "hd-ans");
+      var rankBox = make("div", "hd-rank");
+      ans.appendChild(rankBox);
+      drawRank(q, rankBox);
       var tagBox = make("div", "hd-tags");
       ans.appendChild(tagBox);
       var tags = drawTags(q, tagBox);
@@ -1445,6 +1652,7 @@
       mark.appendChild(markFull); mark.appendChild(markShort); mark.appendChild(more);
       var fields = [];
       var field;
+      var ansLabel;
       if (info) {
         // A field per part (header, A QUESTION OF SEVERAL PARTS), across the whole row.
         var values = partValuesOf(q, info);
@@ -1472,7 +1680,8 @@
           pdone.hidden = true;
           var prefusal = make("div", "hd-refusal");
           prefusal.hidden = true;
-          prow.appendChild(label); prow.appendChild(pf); prow.appendChild(pdone); prow.appendChild(prefusal);
+          var pbox = boxed(pf, function () { sendFrom(drawn, pf); }, "Send the answer to part " + part.letter + " of question " + q.number);
+          prow.appendChild(label); prow.appendChild(pbox.box); prow.appendChild(pdone); prow.appendChild(prefusal);
           box.appendChild(prow);
           fields.push(pf);
           rows.push({ el: prow, mark: pmark, done: pdone, refusal: prefusal });
@@ -1480,16 +1689,24 @@
         fl.appendChild(box); fl.appendChild(mark);
         fl.classList.add("parts");
         field = fields[0];
+        // Each part's field is named by its own words (its aria-label); this line says what they are.
+        ansLabel = make("div", "hd-anslab", BOX_WORDS.parts);
       } else {
         field = make("textarea", "hd-field");
         field.rows = 1;
+        field.id = idPrefix + "answer-" + q.number;
         field.setAttribute("dir", "auto");
-        field.setAttribute("aria-label", "Your answer to question " + q.number);
         field.spellcheck = false;
         field.placeholder = recOf(q);
         field.value = valueOf(q);
         fields.push(field);
-        fl.appendChild(field); fl.appendChild(mark);
+        // THE LABEL IS TIED TO ITS FIELD (for and id): what it says is what a screen reader names the
+        // field, the question's number in words only a screen reader reads.
+        ansLabel = make("label", "hd-anslab", BOX_WORDS.label);
+        ansLabel.htmlFor = field.id;
+        ansLabel.appendChild(make("span", "hd-sr", " to question " + q.number));
+        var single = boxed(field, function () { sendFrom(drawn, field); }, "Send the answer to question " + q.number);
+        fl.appendChild(single.box); fl.appendChild(mark);
       }
       var markNote = make("div", "hd-marknote");
       markNote.hidden = true;
@@ -1501,13 +1718,17 @@
       done.type = "button";
       done.tabIndex = -1;
       done.hidden = true;
+      // ONE STAGE (header): the context stands in the one run of details, after what was said and
+      // before the label and the box - never under the box, where it read as a second showing.
+      var subBox = make("div", "hd-sub");
+      ans.appendChild(subBox);
+      var subs = drawSubs(q, subBox);
+      if (!subBox.hidden) { ans.classList.add("wide"); }
+      ans.appendChild(ansLabel);
       ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
-      var subBox = make("div", "hd-sub");
-      wrap.appendChild(subBox);
-      var subs = drawSubs(q, subBox);
-      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, rankBox: rankBox, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, ansLabel: ansLabel, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
       done.addEventListener("click", function (e) { e.stopPropagation(); if (!drawn.parts) { unfold(drawn); } });
       rows.forEach(function (r, i) { r.done.addEventListener("click", function (e) { e.stopPropagation(); unfold(drawn, i); }); });
       fields.forEach(function (f) {
@@ -1536,9 +1757,11 @@
       line.wrap.classList.toggle("dim", !!(dim && dim(q)));
       line.tri.setAttribute("aria-expanded", open ? "true" : "false");
       line.tri.setAttribute("aria-label", (open ? "Fold the context of question " : "Unfold the context of question ") + q.number);
+      drawRank(q, line.rankBox);
       line.tags = drawTags(q, line.tagBox);
       line.said = drawTalk(q, line.talk, line.ans);
       line.subs = drawSubs(q, line.subBox);
+      if (!line.subBox.hidden) { line.ans.classList.add("wide"); }
       refresh(line);
     }
 
@@ -1633,8 +1856,51 @@
     foldButton.type = "button";
     foldButton.tabIndex = -1;
     foldButton.addEventListener("click", function () { setExpanded(!openFirst); });
+    // THE SWITCH FOR THE ANSWERED (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR), at the head of
+    // the same line, across from Collapse all: a switch that says its state in words.
+    // THE SWITCH IS REACHED BY KEYS, but never by Tab: as the order's buttons, the run of Enter and Tab
+    // is the fields' (a field takes Tab for its own: header, THE KEYS). It stands with the folds
+    // instead, above the first of them: Ctrl+Down from a field comes to it when no fold is drawn, and
+    // Up from the first fold's heading comes to it. There Space or Enter turns it (a button's own
+    // press), Down goes to the first fold, and Shift+Tab or Ctrl+Up back to the list, as from a fold.
+    var answeredButton = make("button", "hd-showans");
+    answeredButton.type = "button";
+    answeredButton.tabIndex = -1;
+    answeredButton.setAttribute("role", "switch");
+    answeredButton.addEventListener("click", function () { setAnsweredShown(!answeredShown); });
+    answeredButton.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" && !e.ctrlKey && !e.altKey) {
+        e.preventDefault(); e.stopPropagation();
+        for (var i = 0; i < drawnHeads.length; i += 1) { if (isFold(drawnHeads[i].head)) { drawnHeads[i].tri.focus(); onChange(); return; } }
+      } else if ((e.key === "Tab" && e.shiftKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
+        e.preventDefault(); e.stopPropagation();
+        var shown = mainLines();
+        if (shown.length) { enter(shown[shown.length - 1]); }
+      }
+    });
+    function toSwitch() {
+      if (answeredButton.offsetParent === null) { return; }
+      answeredButton.focus();
+      onChange();
+    }
+    foldLine.appendChild(answeredButton);
     foldLine.appendChild(foldButton);
     drawFoldButton();
+    drawAnsweredButton();
+    function drawAnsweredButton() {
+      answeredButton.textContent = answeredShown ? ANSWERED_WORDS.on : ANSWERED_WORDS.off;
+      answeredButton.setAttribute("aria-checked", answeredShown ? "true" : "false");
+      answeredButton.setAttribute("aria-label", answeredShown ? ANSWERED_WORDS.onSays : ANSWERED_WORDS.offSays);
+    }
+    // The answered shown or hidden: kept on this device, and the page drawn as any redraw is - the
+    // question at the top of the view stays where it was (THE VIEW FOLLOWS HIM); the order and what is
+    // folded are not touched.
+    function setAnsweredShown(on) {
+      answeredShown = on === true;
+      try { if (prefs) { prefs.setItem(ANSWERED_KEY, answeredShown ? "1" : "0"); } } catch (e) { /* only the remembering is lost */ }
+      if (lastJson === null) { drawAnsweredButton(); return; }
+      draw();
+    }
     function drawFoldButton() {
       foldButton.textContent = openFirst ? FOLD_WORDS.collapse : FOLD_WORDS.expand;
       foldButton.setAttribute("aria-label", openFirst ? FOLD_WORDS.collapseSays : FOLD_WORDS.expandSays);
@@ -1757,6 +2023,7 @@
               e.preventDefault(); e.stopPropagation();
               var to = folds[at + (e.key === "ArrowDown" ? 1 : -1)];
               if (to) { to.tri.focus(); onChange(); }
+              else if (e.key === "ArrowUp" && at === 0) { toSwitch(); }
             } else if ((e.key === "Tab" && e.shiftKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
               e.preventDefault(); e.stopPropagation();
               var shown = mainLines();
@@ -1812,6 +2079,7 @@
       Object.keys(headEls).forEach(function (k) { if (!used[k]) { delete headEls[k]; } });
       drawOrderBar();
       drawFoldButton();
+      drawAnsweredButton();
       order(root, [orderBar, foldLine].concat(groups));
       // In the page now, so what is folded can be told from what is shown: each line's state again.
       drawnLines.forEach(function (line) { refresh(line); fit(line); });
@@ -1918,9 +2186,15 @@
       var t = e.target;
       pressed = { at: Date.now(), own: !!(t && t.closest && t.closest(".hd-qt, .hd-head, button, textarea")) };
     }, true);
+    // Nor when a key moved the keyboard in that moment (Ctrl+Down to the switch, then Space): the
+    // keyboard is where he sent it, and the field taking it back undid the press (measured 2026-10-16,
+    // browser-details.mjs: the switch turned on, and the caret was then in the first field).
     window.addEventListener("focus", function () {
+      var had = document.activeElement;
       window.setTimeout(function () {
         if (focusedLine() || (pressed.own && Date.now() - pressed.at < 600)) { return; }
+        var now = document.activeElement;
+        if (now && now !== had && now !== document.body && now !== document.documentElement) { return; }
         takeKeyboard();
       }, 120);
     });
@@ -1965,6 +2239,8 @@
         if (json === lastJson) { return "same"; }
         lastJson = json;
         questions = record.value.questions;
+        // A change of rank the list now holds is done (HIS LITTLE BUTTONS), before the list is drawn.
+        settleRanks();
         // The first list this page is ever handed: every question in it counts as seen (NEW, above).
         if (seen === null) { loadSeen(); }
         if (seen === null) { seen = Object.create(null); questions.forEach(function (q) { seen[q.number] = true; }); keepSeen(); }
@@ -2020,6 +2296,10 @@
       // one button does (header, EVERY QUESTION STARTS UNFOLDED).
       expanded: function () { return openFirst; },
       setExpanded: setExpanded,
+      // Whether the answered are shown (With Thrall and History), and choosing it, as the switch does
+      // (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR).
+      answeredShown: function () { return answeredShown; },
+      setAnsweredShown: setAnsweredShown,
       // THE CARDS' NUMBERS AND THE LANE CHOSEN (decision 74): lanes() is, for each lane with a
       // question he has still to answer, { lane, open, blocksAll }, counted over the whole list
       // whatever lane is chosen; lane() the lane chosen, "" for all; setLane(lane) chooses one ("" or
@@ -2034,6 +2314,8 @@
       // answer of the reader's standing, parked how many open ones are set aside.
       // thrall how many wait on the keeper, history how many are closed, fresh how many are new;
       // toAnswer counts the list as drawn: questions of his turn that hold no answer of his yet.
+      // thrall too counts what is drawn, so it reads 0 while the With Thrall fold is hidden (THE
+      // ANSWERED ARE HIDDEN UNTIL ASKED FOR); history counts the list, drawn or not.
       counts: function () {
         var open = 0, waiting = 0, other = 0, run = 0, toAnswer = 0, aside = 0, thrall = 0, fresh = 0;
         questions.forEach(function (q) {

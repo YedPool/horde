@@ -314,7 +314,7 @@ export async function readOffer(text, now = Date.now()) {
   if (!Array.isArray(o.origins) || o.origins.length < 1 || o.origins.length > 8 || !o.origins.every((x) => typeof x === "string")) return no("the offer's origins are not a list of origins");
   if (!Number.isSafeInteger(o.issuedAt) || !Number.isSafeInteger(o.expiresAt)) return no("the offer's times are not whole numbers");
   if (now >= o.expiresAt) return no("the pairing offer has expired: ask the machine for a new one");
-  // The account grant (ACCOUNT GRANT, below) is the relay's to verify; here only its shape: 64 bytes.
+  // The account grant (ACCOUNT GRANT, below): its shape here, 64 bytes; its signature below.
   if (typeof o.grant !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(o.grant)) return no("the offer's account grant is not a signature");
   let signPoint, agreePoint;
   try { signPoint = unb64u(o.signPublic); agreePoint = unb64u(o.agreePublic); } catch (x) { return no("the offer's keys are not base64url"); }
@@ -322,6 +322,22 @@ export async function readOffer(text, now = Date.now()) {
     if (await keyId(signPoint) !== o.machine) return no("the offer's signing key is not the machine it names");
     if (await keyId(agreePoint) !== o.agreeKeyId) return no("the offer's agreement key is not the one it names");
   } catch (x) { return no("the offer's keys are not P-256 points"); }
+  // THE GRANT IS VERIFIED HERE TOO, under the very key the offer names (review of PR 301, a must-fix): a
+  // phone that asked to join gets its offer through the relay, and a relay could otherwise make an offer
+  // naming a machine's key and name with no machine behind them. Only the holder of the signing key
+  // signs its grant, so an offer whose grant does not verify is not that machine's.
+  // WHAT THIS DOES NOT STOP, and it is narrower than it reads (Orc E's review, 2026-10-15): a grant
+  // signs the horde, the offer, the key id, the expiry and the label, and NOTHING about the account - no
+  // account id, no email. Registration (the relay's account route) checks only that the grant verifies
+  // under the key it names, and the spent-grant record only stops a replay of the same offer. So anyone
+  // signed in to the account - and the relay operator, who holds the code and the storage - can make a
+  // fresh key, sign its own grant, and register a MADE-UP machine under any label. This check blocks
+  // IMPERSONATING AN EXISTING MACHINE: putting forward a real PC's key id and name without holding that
+  // PC's key. Against a made-up one what stands is that the founder picks the machine by its label, and
+  // that an account member already holds his sign-in.
+  let grantSig;
+  try { grantSig = unb64u(o.grant); } catch (x) { return no("the offer's account grant is not a signature"); }
+  if (!(await verifyMachineSignature(signPoint, accountGrantBytes(o), grantSig))) return no("the offer's account grant is not signed by the machine it names: it is not that machine's offer");
   return { ok: true, reason: "", value: { ...o, text, signPoint, agreePoint } };
 }
 export async function pairingChallenge(offerText) { return sha256(utf8(PAIRING_CHALLENGE_DOMAIN + offerText)); }
@@ -417,6 +433,208 @@ export async function vouchChallenge(horde, agreePublic) { return sha256(utf8("h
 export function phoneKeyBody(agreePublic, vouch) {
   return utf8('{"v":1,"agreePublic":"' + b64u(agreePublic) + '","authenticatorData":"' + b64u(vouch.authenticatorData) + '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"}');
 }
+// relay/Trust.ps1's PHONE VOUCH ITEM (THE VOUCH TRAVELS BY ITSELF): the vouch, by itself, put into the
+// machine's mailbox - ONE passkey assertion announces the phone, so it can ride the unlock's prompt.
+// Its one canonical text (Get-HordeRelayPhoneVouchSpec: these members, in this order), and the relay
+// key it goes under: one per passkey and phone key, so a put made again stores once.
+export function phoneVouchText({ horde, by, agreePublic, vouch }) {
+  if (typeof horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (!KEY_ID.test(by)) throw new Error("the voucher is a key id");
+  if (!(agreePublic instanceof Uint8Array) || agreePublic.length !== 65) throw new Error("the phone key is a 65-byte point");
+  return '{"v":1,"kind":"horde-relay-phone-vouch","horde":"' + horde + '","by":"' + by + '","agreePublic":"' + b64u(agreePublic) + '","authenticatorData":"' + b64u(vouch.authenticatorData) +
+    '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"}';
+}
+export function phoneVouchKey(by, phoneKeyId) { return "vouch/" + by + "/" + phoneKeyId; }
+
+// --- phone-started pairing (relay/Join.ps1) ---
+
+// The join request item, in relay/Join.ps1's canonical form (Get-HordeRelayJoinRequestSpec). On the
+// hosted relay its join route writes it (the phone sends the fields); a relay with no accounts takes it
+// from the phone as written here, under the key joinKey(request).
+const JOIN_TEXT = /^[\x20\x21\x23-\x5b\x5d-\x7e]{0,200}$/;
+export function joinRequestText({ request, horde, machine, label, agent, requestKey, country = "", requestedAt, expiresAt }) {
+  if (!/^[0-9a-f]{32}$/.test(request) || !KEY_ID.test(machine)) throw new Error("the request and the machine are ids");
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (!validLabel(label)) throw new Error("name this phone in 1 to 64 plain characters, with no quote or backslash");
+  if (!JOIN_TEXT.test(agent) || !/^[A-Z]{0,2}$/.test(country)) throw new Error("the browser and the country are plain short text");
+  if (!/^[A-Za-z0-9_-]{87}$/.test(requestKey)) throw new Error("the request key is a P-256 point");
+  return '{"v":1,"kind":"horde-relay-join-request","request":"' + request + '","horde":"' + horde + '","machine":"' + machine + '","label":"' + label + '","agent":"' + agent +
+    '","requestKey":"' + requestKey + '","country":"' + country + '","requestedAt":' + requestedAt + ',"expiresAt":' + expiresAt + "}";
+}
+export function joinKey(request) { return "join/" + request; }
+export function joinReplyMailbox(horde, request) { return horde + "/jr-" + request; }
+export const JOIN_TTL_MS = 600000;
+// The machine's answer (relay/Join.ps1, New-HordeRelayJoinOfferSealedText): the offer's text sealed to the
+// request key. The offer text inside, or null when it does not open or is not for this request.
+const JOIN_OFFER = /^\{"v":1,"kind":"horde-relay-join-offer","request":"([0-9a-f]{32})","requestKeyId":"([0-9a-f]{32})","enc":"([A-Za-z0-9_-]{87})","ct":"([A-Za-z0-9_-]{1,8192})"\}$/;
+export async function openJoinOffer(text, { request, horde, privateKey, publicPoint }) {
+  const m = typeof text === "string" ? JOIN_OFFER.exec(text) : null;
+  if (!m || m[1] !== request) return null;
+  const kid = await keyId(publicPoint);
+  if (m[2] !== kid) return null;
+  try {
+    const plain = await hpkeOpen(privateKey, publicPoint, unb64u(m[3]), utf8("horde-relay/join/v1 offer-key"), utf8("horde-relay/join/v1 offer aad\n" + horde + "\n" + request + "\n" + kid), unb64u(m[4]));
+    return fromUtf8(plain);
+  } catch (x) { return null; }
+}
+// The transcript a trusted phone is sent (Get-HordeRelayJoinTranscriptSpec), read: { ok, reason, value }
+// with value its members and text the exact text, which the approval's hash covers.
+const TRANSCRIPT = new RegExp('^\\{"v":1,"kind":"horde-relay-join-transcript","request":"([0-9a-f]{32})","horde":"([a-z0-9][a-z0-9-]{0,62})","machine":"([0-9a-f]{32})","offer":"([0-9a-f]{32})",' +
+  '"challenge":"([A-Za-z0-9_-]{43})","device":"([0-9a-f]{32})","credentialId":"([A-Za-z0-9_-]{1,8192})","publicKey":"([A-Za-z0-9_-]{87})","rpId":"([a-z0-9.-]{1,253})",' +
+  '"label":"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{1,64})","agent":"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{0,512})","country":"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{0,512})","requestedAt":' + RECORD_INT + ',"expiresAt":' + RECORD_INT + '\\}$');
+export function readJoinTranscript(text, horde, machine) {
+  const m = typeof text === "string" ? TRANSCRIPT.exec(text) : null;
+  if (!m) return { ok: false, reason: "a join request's transcript that is not in its canonical form", value: null };
+  if (m[2] !== horde || m[3] !== machine) return { ok: false, reason: "a join transcript for another horde or machine", value: null };
+  return { ok: true, reason: "", value: { text, request: m[1], horde: m[2], machine: m[3], offer: m[4], challenge: m[5], device: m[6], credentialId: m[7], publicKey: m[8], rpId: m[9], label: m[10], agent: m[11], country: m[12], requestedAt: Number(m[13]), expiresAt: Number(m[14]) } };
+}
+// What an approval carries of the transcript: SHA-256 of the domain and its text, base64url.
+export async function joinTranscriptHash(text) { return b64u(await sha256(utf8("horde-relay/join/v1 transcript\n" + text))); }
+// The number the new phone shows, as THIS phone computes it from the transcript (relay/Pairing.ps1's
+// fingerprint over the offer's challenge, the passkey's point, its credential id and the rpId).
+export async function joinNumber(t) { return pairingFingerprint({ challenge: unb64u(t.challenge), publicPoint: unb64u(t.publicKey), credentialId: unb64u(t.credentialId), rpId: t.rpId }); }
+export function joinApproveBody({ request, device, transcript }) { return utf8(JSON.stringify({ v: 1, request, device, transcript })); }
+export function joinRejectBody({ request }) { return utf8(JSON.stringify({ v: 1, request })); }
+
+// relay/Trust.ps1's device id: the first 16 bytes of SHA-256 of the credential id, as hex.
+export async function deviceIdOf(credentialId) { return hex((await sha256(credentialId)).slice(0, 16)); }
+
+// relay/Pairing.ps1's CONFIRMED RECORD (TELLING THE PHONE IT IS CONFIRMED): the machine's word, in the
+// offer's pairing mailbox, that the founder typed this phone's number there. It grants nothing; it only
+// says a passkey prompt now is worth showing. { ok, reason, value: { confirmedAt } }; never throws.
+export const CONFIRMED_DOMAIN = "horde-relay/pairing/v1 confirmed\n";
+export function confirmedBytes({ horde, offer, device, confirmedAt }) { return utf8(CONFIRMED_DOMAIN + horde + "\n" + offer + "\n" + device + "\n" + confirmedAt); }
+export function pairingConfirmedKey(offer) { return "confirmed/" + offer; }
+const CONFIRMED = /^\{"v":1,"kind":"horde-relay-pairing-confirmed","horde":"([a-z0-9][a-z0-9-]{0,62})","offer":"([0-9a-f]{32})","device":"([0-9a-f]{32})","confirmedAt":(0|[1-9][0-9]{0,15}),"sig":"([A-Za-z0-9_-]{86})"\}$/;
+export async function readPairingConfirmed(text, { horde, offer, device, signPublic }) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  const m = typeof text === "string" && text.length < 1024 ? CONFIRMED.exec(text) : null;
+  if (!m) return no("not a confirmed record in its canonical form");
+  if (m[1] !== horde || m[2] !== offer || m[3] !== device) return no("a confirmed record for another horde, offer or device");
+  const confirmedAt = Number(m[4]);
+  if (!Number.isSafeInteger(confirmedAt)) return no("its time is not a whole number");
+  let sig;
+  try { sig = unb64u(m[5]); } catch (x) { return no("its signature is not base64url"); }
+  if (!(await verifyMachineSignature(signPublic, confirmedBytes({ horde, offer, device, confirmedAt }), sig))) return no("its signature is not the machine's");
+  return { ok: true, reason: "", value: { confirmedAt } };
+}
+
+// --- the unlocked session (relay/Session.ps1 is the specification; relay/Sessions.ps1 what the PC takes) ---
+
+// ONE PASSKEY PROMPT PER UNLOCK, NOT PER ANSWER. At unlock the page makes a SESSION KEY (ECDSA P-256,
+// extractable: false, page memory only, never stored, never sent) and the unlock's one passkey
+// assertion signs the VOUCH for it: its challenge is SHA-256 of the domain and the vouch text. The
+// session key then signs answers, chat lines and photo manifests with no prompt. The PC decides
+// whether the session is alive by its own clock and records; the phone acts on the refusal codes.
+//
+// THE WIRE, each byte as relay/Session.ps1 writes it:
+//   vouch text   {"v":1,"kind":"horde-relay-session-vouch","sessionPublicKey":"<b64u point>","deviceKeyId":"<hex>",
+//                 "phoneKeyId":"<hex>","horde":"<horde>","machine":"<hex>","mailbox":"<horde>/<machine>",
+//                 "notBefore":<ms>,"notAfter":<ms>,"seq":<n>,"vouchId":"<hex>"}   (no spaces, this order)
+//                vouchId = keyId(sessionPublicKey); notAfter after notBefore, with NO maximum (below); seq the
+//                device's vouch counter, above its last (a new vouch at or below it is session-stale).
+//   challenge    SHA-256("horde-relay/session/v1 vouch\n" + vouch text): the unlock assertion's challenge.
+//   signed       "horde-relay/session/v1 envelope\n" + vouchId + "\n", then the envelope's signedBytes:
+//                what the session key signs (ECDSA P-256 SHA-256, r || s as WebCrypto gives it).
+//   sig          {"alg":"session","vouchId":"<hex>","value":"<b64u>"}, and on the FIRST envelope of a
+//                session (and after session-unknown) {"alg":"session","vouchId":"<hex>","value":"<b64u>",
+//                "vouch":"<b64u of the vouch text>","authenticatorData":"..","clientDataJSON":"..","signature":".."}.
+//   header       unchanged: from is the PASSKEY's key id (deviceKeyId), seq the same per-channel stream.
+//   opening      right after unlock the page sends ONE envelope on channel trust, kind session, body
+//                sessionOpenBody(vouchId), carrying the vouch: the PC journals the vouch and starts its
+//                idle clock. Any other envelope may carry the vouch too, so none waits for it.
+// WHAT DOES NOT TRAVEL: the away lock (switching away or screen off, 10 minutes by default) is the
+// page's own setting - the PC cannot see it. The idle limit is the PC's setting, enforced by the PC, and
+// told to the phone in sessionStatus (idleMs) so the page can lock at the same moment.
+// THERE IS NO MAXIMUM SESSION LENGTH (the founder, Q75 (b), "hard limit: no"). A session ends ONLY by the
+// 60-minute idle rule (enforced by the PC), the 10-minute away lock (the phone), end-all, a revoke of
+// the device or its passkey, or closing the page. notAfter stays in the vouch and the PC still refuses an
+// envelope outside [notBefore, notAfter]; openSession puts it far ahead (SESSION_DEFAULT_LIFETIME_MS).
+// The first pin of this wire (862287ad) had SESSION_MAX_MS, 8 hours: it is gone from both languages.
+export const SESSION_VOUCH_DOMAIN = "horde-relay/session/v1 vouch\n";
+export const SESSION_ENVELOPE_DOMAIN = "horde-relay/session/v1 envelope\n";
+export const SESSION_DEFAULT_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+export const SESSION_IDLE_DEFAULT_MS = 60 * 60 * 1000;
+// The refusal codes (relay/Session.ps1, WHAT THE PC REFUSES): a PC's refusal of a session envelope
+// starts with one of them, and a vouch's state in sessionStatus is "live" or one of them.
+//   session-expired, session-idle, session-ended, session-stale  drop the key; the next send unlocks again
+//   session-unknown   send the vouch with the next envelope
+//   session-refused   never send under that vouch again; unlock again
+//   needs-passkey     answer that question with a fresh passkey assertion (signEnvelope)
+export const SESSION_REFUSALS = ["session-expired", "session-idle", "session-ended", "session-unknown", "session-stale", "session-refused", "needs-passkey"];
+const HORDE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+// A fresh session key: { privateKey (CryptoKey, non-extractable, sign only), publicPoint (65 bytes) }.
+// WebCrypto always lets the PUBLIC half of a key pair be exported; the private half here never can be.
+export async function newSessionKey() {
+  const kp = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  return { privateKey: kp.privateKey, publicPoint: new Uint8Array(await subtle.exportKey("raw", kp.publicKey)) };
+}
+// The canonical vouch text. Throws on a value that is not of its kind or a window the rules refuse.
+export async function sessionVouchText({ sessionPublicKey, deviceKeyId, phoneKeyId, horde, machine, notBefore, notAfter, seq }) {
+  if (!KEY_ID.test(deviceKeyId) || !KEY_ID.test(phoneKeyId) || !KEY_ID.test(machine)) throw new Error("the vouch's key ids are 32 lower-case hex");
+  if (typeof horde !== "string" || !HORDE_NAME.test(horde)) throw new Error("the vouch's horde is not a horde name");
+  for (const n of [notBefore, notAfter, seq]) if (!Number.isSafeInteger(n) || n < 0) throw new Error("the vouch's times and seq are whole numbers from 0 to 2^53-1");
+  if (notAfter <= notBefore) throw new Error("a session's notAfter is after its notBefore");
+  const vouchId = await keyId(sessionPublicKey);
+  return '{"v":1,"kind":"horde-relay-session-vouch","sessionPublicKey":"' + b64u(sessionPublicKey) + '","deviceKeyId":"' + deviceKeyId + '","phoneKeyId":"' + phoneKeyId +
+    '","horde":"' + horde + '","machine":"' + machine + '","mailbox":"' + horde + "/" + machine + '","notBefore":' + notBefore + ',"notAfter":' + notAfter +
+    ',"seq":' + seq + ',"vouchId":"' + vouchId + '"}';
+}
+export async function sessionVouchChallenge(vouchText) { return sha256(utf8(SESSION_VOUCH_DOMAIN + vouchText)); }
+export function sessionSignedBytes(vouchId, ht, rt, ct) { return cat(utf8(SESSION_ENVELOPE_DOMAIN + vouchId + "\n"), signedBytes(ht, rt, ct)); }
+// The sig member's text: { vouchId, value (64 bytes) } and, to carry the vouch, vouch { text,
+// authenticatorData, clientDataJSON, signature } (the assertion's three parts, as WebAuthn gave them).
+export function sessionSigText({ vouchId, value, vouch = null }) {
+  let t = '{"alg":"session","vouchId":"' + vouchId + '","value":"' + b64u(value) + '"';
+  if (vouch) t += ',"vouch":"' + b64u(utf8(vouch.text)) + '","authenticatorData":"' + b64u(vouch.authenticatorData) + '","clientDataJSON":"' + b64u(vouch.clientDataJSON) + '","signature":"' + b64u(vouch.signature) + '"';
+  return t + "}";
+}
+// Unlock: ONE passkey assertion (assert, as signEnvelope's) over the vouch for a new session key.
+// { vouchId, privateKey, publicPoint, notBefore, notAfter, seq, vouch: { text, authenticatorData,
+// clientDataJSON, signature } } - kept in page memory only. lifetimeMs is how far ahead notAfter is put:
+// far by default, as the session ends by idle, the away lock, end-all, a revoke or the page closing.
+export async function openSession({ assert, deviceKeyId, phoneKeyId, horde, machine, now, lifetimeMs = SESSION_DEFAULT_LIFETIME_MS, seq, key = null }) {
+  const k = key || await newSessionKey();
+  const notBefore = now, notAfter = now + lifetimeMs;
+  const text = await sessionVouchText({ sessionPublicKey: k.publicPoint, deviceKeyId, phoneKeyId, horde, machine, notBefore, notAfter, seq });
+  const a = await assert(await sessionVouchChallenge(text));
+  return { vouchId: await keyId(k.publicPoint), privateKey: k.privateKey, publicPoint: k.publicPoint, notBefore, notAfter, seq,
+    vouch: { text, authenticatorData: a.authenticatorData, clientDataJSON: a.clientDataJSON, signature: a.signature } };
+}
+// Sign sealed parts (sealEnvelope's) with the session key: the envelope's wire text, with the vouch
+// when withVouch. No prompt. The envelope's ts must lie inside [notBefore, notAfter].
+export async function signSessionEnvelope(parts, session, withVouch = false) {
+  const value = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, session.privateKey, sessionSignedBytes(session.vouchId, parts.ht, parts.rt, parts.ctText)));
+  return '{"header":' + parts.ht + ',"recipients":' + parts.rt + ',"ct":"' + parts.ctText + '","sig":' + sessionSigText({ vouchId: session.vouchId, value, vouch: withVouch ? session.vouch : null }) + "}";
+}
+// The body of the opening envelope (channel trust, kind session).
+export function sessionOpenBody(vouchId) {
+  if (!KEY_ID.test(vouchId)) throw new Error("a vouchId is 32 lower-case hex");
+  return utf8('{"v":1,"vouchId":"' + vouchId + '"}');
+}
+// What the PC says of this phone's sessions, from a decisions snapshot's receipts (channels/decisions,
+// WHAT BECAME OF EACH ANSWER): each passkey's receipt may carry
+//   "session":{"idleMs":<the PC's idle limit>,"vouches":[{"vouchId":"<hex>","state":"live"|<a refusal code>}],
+//              "needsPasskey":[<answerIds refused as needs-passkey: answer them again with the passkey>]}
+// { idleMs, vouches (Map vouchId -> state), needsPasskey (Set) }, or null: no receipts, no receipt for
+// this passkey, no session member (a PC from before sessions: it refuses every session envelope, by
+// name, so the phone signs each with the passkey as before), or one that does not hold together.
+const SESSION_STATES = ["live", ...SESSION_REFUSALS];
+export function sessionStatus(receipts, from) {
+  if (!Array.isArray(receipts)) return null;
+  const r = receipts.find((x) => x && typeof x === "object" && x.from === from);
+  const s = r && r.session;
+  if (!s || typeof s !== "object" || !Number.isSafeInteger(s.idleMs) || s.idleMs < 1 || !Array.isArray(s.vouches) || s.vouches.length > 64 ||
+    !Array.isArray(s.needsPasskey) || s.needsPasskey.length > 256) return null;
+  const vouches = new Map();
+  for (const v of s.vouches) {
+    if (!v || typeof v.vouchId !== "string" || !KEY_ID.test(v.vouchId) || !SESSION_STATES.includes(v.state)) return null;
+    vouches.set(v.vouchId, v.state);
+  }
+  if (!s.needsPasskey.every((i) => typeof i === "string" && KEY_ID.test(i))) return null;
+  return { idleMs: s.idleMs, vouches, needsPasskey: new Set(s.needsPasskey) };
+}
 
 // --- the decisions channel (channels/decisions/Channel.ps1) ---
 
@@ -433,6 +651,22 @@ export function answerBody({ answerId, machine, snapshot, number, wordingVersion
   if (part !== "" && !/^[a-z]$/.test(part)) throw new Error("a part is one lower-case letter");
   if (part !== "") return utf8(JSON.stringify({ v: 2, answerId, machine, snapshot, number, wordingVersion, text, part }));
   return utf8(JSON.stringify({ v: 1, answerId, machine, snapshot, number, wordingVersion, text }));
+}
+
+// A CHANGE OF RANK (channels/decisions/Channel.ps1, A CHANGE OF RANK FROM THE PHONE): the founder's tap
+// on the Importance or the Blocking button of a question. Its own members - rankId, never answerId or
+// text - so the machine can never read it as an answer, nor an answer as it. which is "importance" or
+// "blocks", level a word of that one's list (the machine holds it to its rules again).
+export const RANK_LEVELS = { importance: ["high", "normal", "low"], blocks: ["all", "part", "none"] };
+export function rankBody({ rankId, machine, snapshot, number, which, level }) {
+  if (!/^[0-9a-f]{32}$/.test(rankId)) throw new Error("a rankId is 32 lower-case hex");
+  if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
+  if (typeof snapshot !== "string" || snapshot.length > 160 || snapshot.indexOf(machine + "/decisions/") !== 0) throw new Error("the snapshot is that machine's envelope's replay key");
+  if (!Number.isSafeInteger(number) || number < 1) throw new Error("number is a whole number from 1");
+  if (!Object.prototype.hasOwnProperty.call(RANK_LEVELS, which) || RANK_LEVELS[which].indexOf(level) < 0) throw new Error("the change of rank is importance (high, normal or low) or blocks (all, part or none)");
+  const body = { v: 1, rankId, machine, snapshot, number };
+  body[which] = level;
+  return utf8(JSON.stringify(body));
 }
 
 // A snapshot page, read: { ok, reason, value }. The page must be the decisions snapshot of the machine
@@ -474,6 +708,8 @@ export function newestSnapshot(pages) {
     best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood,
       // The highest version of answer the machine says it reads; 1 for a machine whose snapshot says nothing.
       answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1,
+      // Whether the machine takes a change of rank from the phone (rankBody): false from one that does not say.
+      ranks: first.ranks === 1,
       // What became of the founder's answers (receiptFor), as the machine said it; undefined from a
       // machine before receipts. ts: when the machine signed the snapshot's newest page, 0 if unknown.
       receipts: first.receipts, ts: Math.max(0, ...ordered.map((p) => (Number.isSafeInteger(p.ts) ? p.ts : 0))) };

@@ -51,11 +51,17 @@
     // (-Unfold), and ROOM IS KEPT (list.js) was measured in this window. The phone opens unfolded;
     // the button under the order line, or the menu's Unfold all, unfolds them here.
     expanded: false,
+    // THE WINDOW SHOWS THE ANSWERED until he chooses on its switch (list.js, THE ANSWERED ARE HIDDEN
+    // UNTIL ASKED FOR): its scenarios and Ctrl+Down read the With Thrall fold. A one-line flip.
+    answered: true,
     say: say,
     // One part's answer: the request say-part, which is say with the part's letter beside the words
     // (decisions/Window.ps1); it is answered as say is, by the event said.
     sayPart: function (number, letter, text, wording, id) { return asked("say-part", { number: number, text: text, wording: wording, id: id, part: letter }); },
-    act: function (number, what, wording, id) { return asked("act", { number: number, act: what, wording: wording, id: id }); }
+    act: function (number, what, wording, id) { return asked("act", { number: number, act: what, wording: wording, id: id }); },
+    // His little button beside a question: one of its two words, by the request rank (decisions/Window.ps1),
+    // answered as a save is, by the event said.
+    rank: function (number, which, level, id) { return asked("rank", { number: number, which: which, level: level, id: id }); }
   });
 
   // A SAVE IS TAKEN AT ONCE AND ANSWERED LATER (decisions/Window.ps1, THE SLOW WORK GOES TO A HELPER):

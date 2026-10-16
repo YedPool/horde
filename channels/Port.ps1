@@ -5,7 +5,7 @@
 # channel (relay/Envelope.ps1's header): decisions today, chat later. A channel is a folder,
 # channels/<name>/, holding Channel.ps1, which calls Register-HordeRelayChannel with:
 #   name      the envelope channel it owns, one lower-case word;
-#   kinds     the envelope kinds it takes IN on that channel (decisions: answer). Anything else on it is
+#   kinds     the envelope kinds it takes IN on that channel (decisions: answer, rank). Anything else on it is
 #             refused before the journal records it;
 #   senders   who may send it those kinds: "founder" - the founder's trusted passkeys only - or
 #             "horde" - any trusted sender, passkey or peer machine. relay/Trust.ps1 decides who is
@@ -52,7 +52,10 @@
 # THE PATH IN, for every channel at once (Receive-HordeRelayInbox, then Invoke-HordeRelayUnfinished):
 #   1. watch the machine's mailbox from the cursor (relays/Port.ps1 already drops malformed items,
 #      repeats and stale ones, and reports gaps);
-#   2. read each text as an envelope; SORT THE BATCH BY SENDER AND SEQ, so a relay that reorders cannot
+#   2. a PHONE VOUCH ITEM (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF) is no envelope and no channel's:
+#      it is judged at once by Receive-HordeRelayPhoneVouch, against the trust store as it is now,
+#      and settled - done or refused - never journaled;
+#      read each other text as an envelope; SORT THE BATCH BY SENDER AND SEQ, so a relay that reorders cannot
 #      make the journal refuse an earlier envelope as out of order;
 #   3. refuse, before the journal sees it, an envelope of a channel nobody registered, of a kind its
 #      channel does not take, from a sender that channel does not take, not signed by a trusted sender,
@@ -124,7 +127,8 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relays\Port.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Journal.ps1")
-. (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Pairing.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Join.ps1")
+. (Join-Path $PSScriptRoot "Sessions.ps1")
 
 if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayChannels = [ordered]@{} }
 $script:HordeRelayChannelSenders = @("founder", "horde")
@@ -265,17 +269,46 @@ function Get-HordeRelayChannelSenders {
     # trust store's unknown. -Cache, a hashtable a caller keeps for one batch, holds the store's answer
     # after the first read: reading it re-verifies every record (about 63 ms, measured in the review of
     # 48bc492), and a batch of answers read it two or three times an item (finding 5).
-    param($Context, $Channel, [hashtable]$Cache = $null)
-    if ($null -ne $Cache -and $Cache.ContainsKey("all")) { $all = $Cache["all"] }
+    #
+    # EACH PASSKEY CARRIES ITS SESSION MEMBER (channels/Sessions.ps1; relay/Session.ps1, WHAT THE MACHINE
+    # TAKES): what this PC holds of its unlocked sessions, judged at -Now. Built once per -Cache and
+    # dropped from it (Clear-HordeRelaySessionCache) whenever a vouch is recorded or a session used, so
+    # the next envelope of the batch is judged by what the one before it changed.
+    param($Context, $Channel, [hashtable]$Cache = $null, $Now = $null)
+    if ($null -ne $Cache -and $Cache.ContainsKey("built")) { $built = $Cache["built"] }
     else {
-        $all = Find-HordeRelayTrustedSenders -HordeHome $Context.hordeHome
-        if ($null -ne $Cache) { $Cache["all"] = $all }
+        if ($null -ne $Cache -and $Cache.ContainsKey("all")) { $all = $Cache["all"] }
+        else {
+            $all = Find-HordeRelayTrustedSenders -HordeHome $Context.hordeHome -Now $Now
+            if ($null -ne $Cache) { $Cache["all"] = $all }
+        }
+        if ($all.state -cne "known") { return $all }
+        $built = $all
+        $passkeys = @(@($all.value.Keys) | Where-Object { $all.value[$_].proof -ceq "webauthn" })
+        if ($passkeys.Count -gt 0) {
+            $records = Read-HordeRelaySessionRecords -HordeHome $Context.hordeHome
+            $trust = Read-HordeRelayTrustStore -HordeHome $Context.hordeHome -Now $Now
+            $built = New-HordeKnown -Value (Add-HordeRelaySessionPolicies -Context $Context -Senders $all.value -Records $records -Trust $trust -NowMs (ConvertTo-HordeRelayRecordMs -Time $Now))
+        }
+        if ($null -ne $Cache) { $Cache["built"] = $built }
     }
-    if ($all.state -cne "known") { return $all }
-    if ($Channel.senders -ceq "horde") { return $all }
+    if ($Channel.senders -ceq "horde") { return $built }
     $out = @{}
-    foreach ($k in @($all.value.Keys)) { if ($all.value[$k].proof -ceq "webauthn") { $out[$k] = $all.value[$k] } }
+    foreach ($k in @($built.value.Keys)) { if ($built.value[$k].proof -ceq "webauthn") { $out[$k] = $built.value[$k] } }
     return (New-HordeKnown -Value $out)
+}
+
+function Clear-HordeRelaySessionCache {
+    # The senders' session members are stale (a vouch recorded, a session used): built again on next ask.
+    param([hashtable]$Cache = $null)
+    if ($null -ne $Cache -and $Cache.ContainsKey("built")) { $Cache.Remove("built") }
+}
+
+function Get-HordeRelaySessionCode {
+    # The session refusal code a reason starts with (relay/Session.ps1), or "".
+    param([string]$Reason)
+    foreach ($c in @(Get-HordeRelaySessionRefusals)) { if ($Reason.StartsWith($c + ":")) { return $c } }
+    return ""
 }
 
 function Get-HordeRelayChannelBodyBudget {
@@ -391,14 +424,14 @@ function Test-HordeRelayInboundGate {
     # Step 3 of THE PATH IN: why a read envelope must be refused before the journal sees it, or "".
     # { why; channel; senders } - the channel and its senders when it may go on; unknown senders (the
     # trust store unreadable) is not a refusal of this envelope: why is "" and transient is $true.
-    param($Context, $Envelope, [hashtable]$Cache = $null)
+    param($Context, $Envelope, [hashtable]$Cache = $null, $Now = $null)
     $h = $Envelope.header
     # BY NAME, FIRST, ON EVERY CHANNEL (DATA KINDS): a data kind is never an envelope's.
     if ($script:HordeRelayDataKinds.Contains("$($h.kind)")) { return [pscustomobject]@{ why = ("the kind " + $h.kind + " is data, which is never taken as an envelope on any channel"); transient = $false; channel = $null; senders = $null } }
     $ch = Get-HordeRelayChannel -Name $h.channel
     if ($null -eq $ch) { return [pscustomobject]@{ why = ("no channel '" + $h.channel + "' is registered here"); transient = $false; channel = $null; senders = $null } }
     if (@($ch.kinds) -cnotcontains $h.kind) { return [pscustomobject]@{ why = ("the channel " + $ch.name + " takes " + $(if (@($ch.kinds).Count) { @($ch.kinds) -join ", " } else { "nothing in" }) + ", not " + $h.kind); transient = $false; channel = $ch; senders = $null } }
-    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $ch -Cache $Cache
+    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $ch -Cache $Cache -Now $Now
     if ($senders.state -cne "known") { return [pscustomobject]@{ why = ("the trust store cannot be read: " + $senders.reason); transient = $true; channel = $ch; senders = $null } }
     if (-not $senders.value.ContainsKey($h.from)) {
         $who = Find-HordeRelayTrustedSender -HordeHome $Context.hordeHome -KeyId $h.from
@@ -409,7 +442,7 @@ function Test-HordeRelayInboundGate {
     if (-not $verified.ok) { return [pscustomobject]@{ why = $verified.reason; transient = $false; channel = $ch; senders = $null } }
     $forMe = @(@($h.to) | Where-Object { $Context.openingKeys.ContainsKey($_) })
     if ($forMe.Count -eq 0) { return [pscustomobject]@{ why = "it is not addressed to any agreement key of this machine"; transient = $false; channel = $ch; senders = $null } }
-    return [pscustomobject]@{ why = ""; transient = $false; channel = $ch; senders = $senders.value }
+    return [pscustomobject]@{ why = ""; transient = $false; channel = $ch; senders = $senders.value; verified = $verified.value }
 }
 
 function Receive-HordeRelayInbox {
@@ -481,7 +514,28 @@ function Complete-HordeRelayInbox {
     # only in case - a hex digest, a photo id - would be folded into one line.
     $dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)
     $dataItems = New-Object System.Collections.ArrayList
+    $vouched = New-Object System.Collections.ArrayList
+    $joined = New-Object System.Collections.ArrayList
     foreach ($it in @($w.value.items)) {
+        # A PHONE VOUCH ITEM is no envelope: it is its own proof, judged against the trust store as it is
+        # NOW and never journaled (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF). Refused or done, it is
+        # settled; only a trust store that cannot be read holds it for the next turn.
+        if (Test-HordeRelayPhoneVouchText -Text $it.text) {
+            $pv = Receive-HordeRelayPhoneVouch -HordeHome $Context.hordeHome -Text $it.text -Now $Now
+            if ($pv.outcome -ceq "held") { [void]$held.Add("item " + $it.seq + ": " + $pv.reason); continue }
+            $settled[[long]$it.seq] = $true # a vouch, done or refused: acked
+            if ($pv.outcome -ceq "done") { [void]$vouched.Add("item " + $it.seq + ": " + $pv.reason) } else { [void]$refused.Add("item " + $it.seq + ": " + $pv.reason) }
+            continue
+        }
+        # A JOIN REQUEST is no envelope either: a new phone asking to join (relay/Join.ps1), recorded or
+        # refused at once - it grants nothing - and answered by the join channel's Tick.
+        if (Test-HordeRelayJoinRequestText -Text $it.text) {
+            $jr = Receive-HordeRelayJoinRequest -HordeHome $Context.hordeHome -Text $it.text -Key $it.key -Now $Now
+            if ($jr.outcome -ceq "held") { [void]$held.Add("item " + $it.seq + ": " + $jr.reason); continue }
+            $settled[[long]$it.seq] = $true # a join request, recorded or refused: acked
+            if ($jr.outcome -ceq "done") { [void]$joined.Add("item " + $it.seq + ": " + $jr.reason) } else { [void]$refused.Add("item " + $it.seq + ": " + $jr.reason) }
+            continue
+        }
         $r = Read-HordeRelayEnvelope -Text $it.text
         if (-not $r.ok) {
             # A DATA ITEM (the header, DATA KINDS) is set aside, and judged after the envelopes (below).
@@ -493,15 +547,64 @@ function Complete-HordeRelayInbox {
     }
     # Sorted by sender and that sender's seq (step 2). The relay's own order is not trusted to be theirs.
     $ordered = @($parsed | Sort-Object @{ Expression = { $_.envelope.header.from } }, @{ Expression = { [long]$_.envelope.header.seq } })
+    $nowMs = ConvertTo-HordeRelayRecordMs -Time $Now
+    # A VOUCH IS TAKEN BEFORE ANY ENVELOPE UNDER IT (relay/Session.ps1): a phone's seqs are per channel,
+    # so its opening envelope (trust) and its first answer (decisions) may sort either way round, and an
+    # answer judged first would be refused as session-unknown. So every vouch in the batch that verifies
+    # in full - the passkey's assertion, the session signature, the binding, the window - is recorded
+    # first. The vouch is the founder's own signature: recording it says nothing about the envelope,
+    # which is judged and journaled below as any other.
+    foreach ($p in @($parsed)) {
+        $s = $p.envelope.sig
+        if ($s.alg -cne "session" -or $null -eq $s.vouch) { continue }
+        $g = Test-HordeRelayInboundGate -Context $Context -Envelope $p.envelope -Cache $senderCache -Now $Now
+        if ($g.why -cne "" -or $null -eq $g.verified -or -not $g.verified.newVouch) { continue }
+        try { $null = Add-HordeRelaySessionVouch -HordeHome $Context.hordeHome -By $p.envelope.header.from -Sig $s -NowMs $nowMs } catch { [void]$held.Add("the vouch " + $s.vouchId + " could not be recorded: " + $_.Exception.Message) }
+        Clear-HordeRelaySessionCache -Cache $senderCache
+    }
     foreach ($p in $ordered) {
         $h = $p.envelope.header
         $rk = Get-HordeRelayReplayKey -Header $h
-        $gate = Test-HordeRelayInboundGate -Context $Context -Envelope $p.envelope -Cache $senderCache
+        $gate = Test-HordeRelayInboundGate -Context $Context -Envelope $p.envelope -Cache $senderCache -Now $Now
         if ($gate.transient) { [void]$held.Add($rk + ": " + $gate.why); continue }
-        if ($gate.why -cne "") { [void]$refused.Add($rk + ": " + $gate.why); $settled[[long]$p.item.seq] = $true; continue }
+        if ($gate.why -cne "") {
+            [void]$refused.Add($rk + ": " + $gate.why); $settled[[long]$p.item.seq] = $true
+            # What the phone is told (channels/Sessions.ps1, Get-HordeRelaySessionStatus): the code only,
+            # and only for a refusal given AFTER both signatures verified (relay/Session.ps1, checks 4
+            # to 7) - review of PR 302: anything earlier may be a relay's forgery, which must neither
+            # tell the phone something nor push the real refusals out of the newest kept.
+            $code = Get-HordeRelaySessionCode -Reason $gate.why
+            if ($p.envelope.sig.alg -ceq "session" -and @("session-stale", "session-ended", "session-expired", "session-idle") -ccontains $code) {
+                $null = Add-HordeRelaySessionRefusal -HordeHome $Context.hordeHome -From $h.from -VouchId $p.envelope.sig.vouchId -Code $code -NowMs $nowMs
+            }
+            continue
+        }
+        # A NEW VOUCH IS TAKEN ONLY ONCE IT IS RECORDED (review of PR 302, must-fix 2): the vouch was
+        # recorded above, so the gate now finds it held. One still new here was not recorded - the
+        # write threw, was not confirmed on disk, or the name is another passkey's record - and every
+        # envelope under it would be judged new, its idle clock never kept. It waits, and comes again.
+        if ($p.envelope.sig.alg -ceq "session" -and $null -ne $gate.verified -and $null -ne $gate.verified.PSObject.Properties["newVouch"] -and $gate.verified.newVouch) {
+            # A NAME THAT IS ANOTHER PASSKEY'S never frees itself, so waiting would hold the envelope
+            # every turn, unacked, until the relay's caps (review of PR 302): refused by name, for good.
+            $owner = Get-HordeRelaySessionRecordOwner -HordeHome $Context.hordeHome -VouchId $p.envelope.sig.vouchId
+            if ($owner -cne "" -and $owner -cne $h.from) {
+                [void]$refused.Add($rk + ": session-refused: the vouch id " + $p.envelope.sig.vouchId + " belongs to another passkey's session on this PC")
+                $settled[[long]$p.item.seq] = $true
+                continue
+            }
+            [void]$held.Add($rk + ": its session's vouch " + $p.envelope.sig.vouchId + " could not be recorded on this PC, so it waits")
+            continue
+        }
         $verdict = Register-HordeRelayJournalReceived -Envelope $p.envelope -Senders $gate.senders -RecipientKeyIds @($Context.openingKeys.Keys) -Channel $h.channel -Kind $h.kind -HordeHome $Context.hordeHome -Now $Now
         if ($verdict.state -cne "known") { [void]$held.Add($rk + ": the journal could not judge it - " + $verdict.reason); continue }
         $settled[[long]$p.item.seq] = $true
+        if ($verdict.value.fresh -and $p.envelope.sig.alg -ceq "session") {
+            # THE IDLE CLOCK STARTS AGAIN only for an envelope the journal took: a replay or a refusal
+            # keeps no session alive.
+            $why = Register-HordeRelaySessionSeen -HordeHome $Context.hordeHome -VouchId $p.envelope.sig.vouchId -NowMs $nowMs
+            if ($why -cne "") { [void]$held.Add("the session " + $p.envelope.sig.vouchId + " was used, and that could not be kept: " + $why) }
+            Clear-HordeRelaySessionCache -Cache $senderCache
+        }
         if ($verdict.value.fresh) {
             [void]$taken.Add($rk)
             if ([long]$verdict.value.gapBefore -gt 0) { [void]$missing.Add($rk + ": " + $verdict.value.gapBefore + " envelope(s) of this sender before it are missing") }
@@ -565,7 +668,7 @@ function Complete-HordeRelayInbox {
         if ($ack.state -ceq "known") { $Context.acked = $through }
         else { [void]$held.Add("the relay was not acked through " + $through + ": " + $ack.reason) }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; data = @($data.ToArray()); opened = $opened }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; vouched = @($vouched.ToArray()); joined = @($joined.ToArray()); data = @($data.ToArray()); opened = $opened }))
 }
 
 function Invoke-HordeRelayUnfinished {
@@ -583,7 +686,7 @@ function Invoke-HordeRelayUnfinished {
         $list = Get-HordeRelayJournalUnfinished -Channel $name -HordeHome $Context.hordeHome
         if ($list.state -cne "known") { [void]$retry.Add("channel " + $name + ": " + $list.reason); continue }
         foreach ($u in @($list.value)) {
-            $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u -Cache $senderCache
+            $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u -Cache $senderCache -Now $Now
             $line = $u.key + ": " + $outcome.reason
             if ($outcome.outcome -ceq "retry") { [void]$retry.Add($line); continue }
             $mark = Complete-HordeRelayJournalReceived -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome -Now $Now
@@ -596,17 +699,24 @@ function Invoke-HordeRelayUnfinished {
 
 function Invoke-HordeRelayChannelRecord {
     # One unfinished record: open it and hand it to its channel. { outcome; reason }.
-    param($Context, $Channel, $Record, [hashtable]$Cache = $null)
+    # The item also says HOW its sender signed it (proof: webauthn, a fresh passkey assertion; session,
+    # a session key the passkey vouched for at unlock, with its vouchId; es256, a machine), so a channel
+    # can ask for a fresh passkey where it must (channels/decisions, needsPasskey). A session envelope is
+    # judged again here against the PC's session records NOW: ended or past its cap since it was
+    # journaled, it opens nothing.
+    param($Context, $Channel, $Record, [hashtable]$Cache = $null, $Now = $null)
     if ($script:HordeRelayDataKinds.Contains("$($Record.kind)")) { return [pscustomobject]@{ outcome = "refused"; reason = ("the kind " + $Record.kind + " is data, which is never handed to a channel's Accept") } }
     if (@($Channel.kinds) -cnotcontains $Record.kind) { return [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $Channel.name + " no longer takes the kind " + $Record.kind) } }
     $r = Read-HordeRelayEnvelope -Text $Record.text
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("the journaled text is not an envelope: " + $r.reason) } }
-    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel -Cache $Cache
+    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel -Cache $Cache -Now $Now
     if ($senders.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("the trust store cannot be read: " + $senders.reason) } }
     # The senders trusted NOW: a device revoked since the record was made opens nothing.
     $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind
     if (-not $opened.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("not opened: " + $opened.reason) } }
-    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; ts = [long]$r.value.header.ts; body = [byte[]]$opened.value }
+    $proof = $(if ($r.value.sig.alg -ceq "session") { "session" } elseif ($r.value.sig.alg -ceq "ES256") { "es256" } else { "webauthn" })
+    $vouchId = $(if ($proof -ceq "session") { $r.value.sig.vouchId } else { "" })
+    $item = [pscustomobject]@{ from = $Record.from; channel = $Channel.name; kind = $Record.kind; seq = $Record.seq; key = $Record.key; evidence = $Record.evidence; ts = [long]$r.value.header.ts; body = [byte[]]$opened.value; proof = $proof; vouchId = $vouchId }
     $got = $null
     try { $got = & $Channel.accept $Context $item }
     catch { return [pscustomobject]@{ outcome = "retry"; reason = ("the channel " + $Channel.name + " failed: " + $_.Exception.Message) } }

@@ -24,7 +24,10 @@
 #        and words, and with no origin given it connects to the home's relayOrigin, or the shipped one;
 #      - a dev run with test-bindings.json exactly as committed vouches for no one: the placeholder is
 #        too short to be a token, whatever a caller sends;
-#      - the phone's own relay client and http transport, run by node, against this Worker.
+#      - the phone's own relay client and http transport, run by node, against this Worker;
+#      - a Google client id stored with a byte order mark in front (2026-10-14) is not set up: the
+#        sign-in start is 503 and sends nothing to Google, while its clean twin redirects with the id;
+#        the deploy's check after a deploy fails the one and passes the other.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the
 # tree). Without them part 2 is skipped, said so, and the suite exits 3, never 0. Every folder is the
@@ -246,6 +249,47 @@ try {
         Check ($up.status -clike "HTTP/1.1 101*" -and $up.headers["content-security-policy"] -ceq $wantCsp -and $up.headers["x-content-type-options"] -ceq "nosniff" -and $up.headers["strict-transport-security"] -ceq "max-age=63072000; includeSubDomains") ("strict headers on a WebSocket upgrade too (" + $up.status + ")")
 
         Write-Host ""
+        Write-Host "--- the unlocked session's condition: the policy the relay SERVES for /app/index.html keeps foreign script out ---" -ForegroundColor Cyan
+        # Design note "Unlocked session", the content-security policy: a non-extractable session key
+        # cannot be copied out of the page, but any script RUNNING in it could use it. So the header the
+        # relay actually serves must be exactly these directives - read off the wire from the Worker's
+        # dev, not from the page's line - and must fail the day 'unsafe-inline', 'unsafe-eval' or any
+        # script source but 'self' appears in it.
+        $notePolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        function Get-ScriptPolicyFindings {
+            # Why a policy lets foreign script run, or nothing: 'unsafe-inline' or 'unsafe-eval' anywhere,
+            # and a script-src (or default-src when there is none) with any source but 'self'.
+            param([string]$Policy)
+            $out = New-Object System.Collections.ArrayList
+            foreach ($bad in @("'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "'wasm-unsafe-eval'", "'strict-dynamic'")) { if ($Policy.ToLowerInvariant().Contains($bad)) { [void]$out.Add("it allows " + $bad) } }
+            $dirs = @{}
+            foreach ($d in @($Policy.Split(";"))) { $parts = @($d.Trim() -split '\s+' | Where-Object { $_ -ne "" }); if ($parts.Count -gt 0) { $dirs[$parts[0].ToLowerInvariant()] = @($parts | Select-Object -Skip 1) } }
+            foreach ($name in @("script-src", "script-src-elem", "script-src-attr", "worker-src")) {
+                if ($dirs.ContainsKey($name)) { foreach ($src in @($dirs[$name])) { if ($src -cne "'self'") { [void]$out.Add($name + " allows " + $src) } } }
+            }
+            if (-not $dirs.ContainsKey("script-src")) {
+                if (-not $dirs.ContainsKey("default-src")) { [void]$out.Add("there is no script-src and no default-src") }
+                else { foreach ($src in @($dirs["default-src"])) { if ($src -cne "'none'" -and $src -cne "'self'") { [void]$out.Add("default-src allows " + $src) } } }
+            }
+            return @($out)
+        }
+        $servedCsp = "" + $answers["the app's page"].headers["content-security-policy"]
+        Check ($answers["the app's page"].code -eq 200 -and $servedCsp -ceq $notePolicy) ("the relay serves /app/index.html with exactly the design note's policy (" + $servedCsp + ")")
+        $found = @(Get-ScriptPolicyFindings -Policy $servedCsp)
+        Check ($found.Count -eq 0) ("and nothing in it lets foreign script run (" + ($found -join "; ") + ")")
+        foreach ($m in @(
+            @{ what = "'unsafe-inline' in script-src"; policy = $notePolicy.Replace("script-src 'self'", "script-src 'self' 'unsafe-inline'") },
+            @{ what = "'unsafe-eval' in script-src"; policy = $notePolicy.Replace("script-src 'self'", "script-src 'self' 'unsafe-eval'") },
+            @{ what = "a script source of another origin"; policy = $notePolicy.Replace("script-src 'self'", "script-src 'self' https://cdn.example.com") },
+            @{ what = "a script source of any https origin"; policy = $notePolicy.Replace("script-src 'self'", "script-src https:") },
+            @{ what = "no script-src and a default-src of '*'"; policy = $notePolicy.Replace("default-src 'none'; script-src 'self'; ", "default-src *; ") },
+            @{ what = "'unsafe-inline' in style-src only"; policy = $notePolicy.Replace("style-src 'self'", "style-src 'self' 'unsafe-inline'") }
+        )) {
+            Check ($m.policy -cne $notePolicy) ("CONTROL: the copy with " + $m.what + " differs")
+            Check (@(Get-ScriptPolicyFindings -Policy $m.policy).Count -gt 0) ("a served policy with " + $m.what + " would fail this check")
+        }
+
+        Write-Host ""
         Write-Host "--- deny by default ---" -ForegroundColor Cyan
         foreach ($c in @(
                 @{ what = "a read"; m = "GET"; p = ($mbPath + "/items?since=0&max=1"); b = $null },
@@ -395,6 +439,34 @@ try {
                 Check ($pCode -eq 401) ("the placeholder sent as the token is 401: too short to count (" + $pCode + ")")
             }
         } finally { if ($plain.state -ceq "known") { Stop-HordeCloudflareRelayDev -Dev $plain.value } }
+
+        Write-Host ""
+        Write-Host "--- a marked Google client is not set up: it never reaches Google ---" -ForegroundColor Cyan
+        # 2026-10-14: the secrets were stored with a byte order mark in front, and Google refused the id.
+        # A dev with the marked id must refuse to start a sign-in (503); its twin, the same id clean, must
+        # redirect with it - and the deploy's own check (Deploy.ps1) must tell the two apart.
+        $gId = "123456789012-fakeclientforhordetests0000000000.apps.googleusercontent.com"
+        $gSecret = "GOCSPX-fakeSecretForHordeTests0123456"
+        foreach ($t in @(@{ what = "marked"; id = ([string][char]0xFEFF + $gId) }, @{ what = "clean"; id = $gId })) {
+            $gd = Start-HordeCloudflareRelayDev -Work (Join-Path $work ("dev-google-" + $t.what)) -Site $site -Script $tools.value.script -ExtraVars @{ GOOGLE_CLIENT_ID = $t.id; GOOGLE_CLIENT_SECRET = $gSecret }
+            try {
+                Check ($gd.state -ceq "known") ("a dev with the " + $t.what + " client id starts (" + $gd.reason + ")")
+                if ($gd.state -cne "known") { continue }
+                $gRes = $http.GetAsync($gd.value.origin + "/auth/google").GetAwaiter().GetResult()
+                $gCode = [int]$gRes.StatusCode
+                $gLoc = $(if ($null -ne $gRes.Headers.Location) { $gRes.Headers.Location.OriginalString } else { "" })
+                $gText = $gRes.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                $gRes.Dispose()
+                $gCheck = Test-HordeCloudflareRelaySignInClient -Origin $gd.value.origin -ClientId $gId -Tries 1
+                if ($t.what -ceq "marked") {
+                    Check ($gCode -eq 503 -and $gText.Contains("sign-in is not set up") -and $gLoc -eq "") ("with the marked id, the sign-in start is 503 'not set up', and nothing is sent to Google (" + $gCode + ")")
+                    Check ($gCheck.state -ceq "unknown" -and "$($gCheck.reason)".Contains("503")) ("and the deploy's check fails it (" + $gCheck.reason + ")")
+                } else {
+                    Check ($gCode -eq 303 -and (Get-HordeCloudflareRelayLocationClientId -Location $gLoc) -ceq $gId) ("CONTROL: its clean twin redirects to Google with the id exactly (" + $gCode + ")")
+                    Check ($gCheck.state -ceq "known") ("and the deploy's check passes it (" + $gCheck.reason + ")")
+                }
+            } finally { if ($gd.state -ceq "known") { Stop-HordeCloudflareRelayDev -Dev $gd.value } }
+        }
     }
 } finally {
     $http.Dispose()

@@ -40,5 +40,27 @@
         @{ Name = "wrangler-script-setting-unchecked"
            Find = '} elseif (-not (Test-HordeModuleSettingFolder -Path $wrangler) -or -not (Test-Path -LiteralPath $wrangler -PathType Leaf)) {'
            Replace = '} elseif ($false) {' }
+        # THE SECRET VALUES AND THE CHECK AFTER A DEPLOY (2026-10-14, a byte order mark on every secret).
+        @{ Name = "unclean-secret-stored"
+           Find = 'if ($bad -ne "") { return (New-HordeUnknown -Reason ($bad + "; nothing was deployed")) }'
+           Replace = '' }
+        @{ Name = "byte-order-mark-not-named"
+           Find = 'if ($Value.Length -gt 0 -and $Value[0] -eq [char]0xFEFF) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "outer-space-taken"
+           Find = 'if ($Value -cne $Value.Trim()) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "non-ascii-taken"
+           Find = 'if ([int]$c -lt 0x20 -or [int]$c -gt 0x7E) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "failed-check-reported-as-done"
+           Find = 'if ($check.state -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "check-mends-the-id"
+           Find = '[string]::Equals($sent, $ClientId, [System.StringComparison]::Ordinal)'
+           Replace = '($sent.Trim([char]0xFEFF, [char]0x20) -ceq $ClientId)' }
+        @{ Name = "check-origin-unrestricted"
+           Find = 'if ($checkOrigin -ne "" -and $checkOrigin -cnotmatch'
+           Replace = 'if ($false -and $checkOrigin -cnotmatch' }
     )
 }
