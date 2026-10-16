@@ -51,6 +51,8 @@ $script:HordeRelaySessionSettings = New-HordeModuleSettings -Module "relay-sessi
 # with no maximum session length, its notAfter alone would keep every vouch ever made in them.
 $script:HordeRelaySessionRefusedMost = 32
 $script:HordeRelaySessionKeepPastMs = [long]86400000
+# The longest idle limit idleMinutes allows (its max, 480 minutes, in ms): bounds how long past its last use a vouch is kept, so no setting outlasts it.
+$script:HordeRelaySessionIdleMostMs = [long]28800000
 # How many vouches of one passkey the phone is told of in a receipt: the newest.
 $script:HordeRelaySessionStatusMost = 8
 
@@ -124,7 +126,7 @@ function Write-HordeRelaySessionState {
     try {
         $dir = Get-HordeRelaySessionsDir -HordeHome $HordeHome
         [void][System.IO.Directory]::CreateDirectory($dir)
-        $seen = @(@($State.seen.Keys) | Sort-Object | Where-Object { [long]$State.seen[$_] -ge ($NowMs - [long]28800000 - $script:HordeRelaySessionKeepPastMs) } | ForEach-Object { '"' + $_ + '":' + [long]$State.seen[$_] })
+        $seen = @(@($State.seen.Keys) | Sort-Object | Where-Object { [long]$State.seen[$_] -ge ($NowMs - $script:HordeRelaySessionIdleMostMs - $script:HordeRelaySessionKeepPastMs) } | ForEach-Object { '"' + $_ + '":' + [long]$State.seen[$_] })
         $ref = @(@($State.refused) | Select-Object -Last $script:HordeRelaySessionRefusedMost | ForEach-Object { '{"from":"' + $_.from + '","vouchId":"' + $_.vouchId + '","code":"' + $_.code + '","at":' + [long]$_.at + '}' })
         $text = '{"v":1,"seen":{' + ($seen -join ",") + '},"refused":[' + ($ref -join ",") + ']}'
         $path = [System.IO.Path]::Combine($dir, "state.json")
@@ -198,7 +200,7 @@ function Add-HordeRelaySessionPolicies {
             if ([long]$e.vouch.notAfter + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
             $active = [long]$e.record.recordedAt
             if ($Records.state.seen.ContainsKey($e.record.vouchId) -and [long]$Records.state.seen[$e.record.vouchId] -gt $active) { $active = [long]$Records.state.seen[$e.record.vouchId] }
-            if ($active + [long]28800000 + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
+            if ($active + $script:HordeRelaySessionIdleMostMs + $script:HordeRelaySessionKeepPastMs -lt $NowMs) { continue }
             $s = $Senders[$e.record.by]
             $wa = Test-HordeRelayWebAuthnAssertion -Public $s.public -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $e.record.authenticatorData) `
                 -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $e.record.clientDataJSON) -Signature (ConvertFrom-HordeRelayBase64Url -Text $e.record.signature) `
@@ -301,8 +303,8 @@ function Get-HordeRelaySessionStatus {
     # now, and any vouch it refused that it does not hold, with the code. $null when the records cannot
     # be read: a receipt then says nothing of sessions, and the phone signs with its passkey as before.
     # CHEAP ON PURPOSE: asked on every look of the decisions channel, it reads this folder and nothing
-    # else - no signature is verified and the trust store is not read. A phone key no longer trusted is
-    # sealed nothing anyway, so it never reads the "live" this may say of it.
+    # else - no signature is verified and the trust store is not read. Its caller, the decisions
+    # receipts (channels/decisions/Channel.ps1), asks it only for a passkey trusted now.
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)][string]$From, [long]$NowMs, $Records = $null)
     $recs = $Records
     if ($null -eq $recs) { $recs = Read-HordeRelaySessionRecords -HordeHome $HordeHome }
