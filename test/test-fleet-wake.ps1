@@ -38,6 +38,9 @@ function Reset-World {
     # What the stand-in terminal was asked, in order: "release <id>" and "spawn <id>"; releaseFails holds
     # the ids whose no-restore marker cannot be removed.
     $world.order = New-Object System.Collections.ArrayList; $world.releaseFails = @()
+    # The fleet registry's pane per session id, as its hook writes it when a session starts; staleRegistry
+    # holds the ids whose row is never updated (the row still names the old pane). registryReads counts reads.
+    $world.registry = @{}; $world.staleRegistry = @(); $world.registryReads = 0
     # The process table the lock is judged by: pid -> start ticks text, "?" when unreadable.
     $world.procs = @{ "777" = $SELFSTART }
 }
@@ -71,8 +74,8 @@ Register-HordeFleetHost -Name "stand-in" `
             $how = $world.onSpawn[$id]; if ($null -eq $how) { $how = "start" }
             $procId = 1000 + [int]$pane
             switch ($how) {
-                "start" { $world.live[$id] = @{ pid = $procId; cwd = $req.cwd; state = "running" } }
-                "rotate" { $world.live[$NEW] = @{ pid = $procId; cwd = $req.cwd; state = "running" }; $world.paneOf["" + $procId] = $pane }
+                "start" { $world.live[$id] = @{ pid = $procId; cwd = $req.cwd; state = "running" }; if (@($world.staleRegistry) -cnotcontains $id) { $world.registry[$id] = $pane } else { $world.registry[$id] = "5" } }
+                "rotate" { $world.live[$NEW] = @{ pid = $procId; cwd = $req.cwd; state = "running" }; $world.paneOf["" + $procId] = $pane; $world.registry[$NEW] = $pane }
                 "elsewhere" { $world.live[$NEW] = @{ pid = $procId; cwd = $req.cwd; state = "running" }; $world.paneOf["" + $procId] = "999" }
                 default { }
             }
@@ -97,6 +100,7 @@ $deps = [pscustomobject]@{
     WaitSeconds = 5; PollMs = 1000
     ProcessStart = { param($p) $v = $world.procs["" + $p]; if ($null -eq $v) { "" } else { $v } }.GetNewClosure()
     Self = { [pscustomobject]@{ pid = 777; start = $SELFSTART } }.GetNewClosure()
+    RegistryPane = { param($sid) $world.registryReads++; $v = $world.registry["" + $sid]; if ($null -eq $v) { New-HordeAbsent -Note "no row" } else { New-HordeKnown -Value $v } }.GetNewClosure()
 }
 
 function Session {
@@ -350,6 +354,22 @@ foreach ($l in @("K", "K1", "K2", "L", "L1")) {
 Check $okOrder ("each woken session's marker is removed immediately before its own spawn (" + ($order -join " | ") + ")")
 Check (@($order | Where-Object { $_ -ceq ("release " + $ids["X"]) }).Count -eq 0) "a session refused as running keeps its marker"
 Check ((State-Of $rec "K1") -ceq "woken" -and @($r.lines | Where-Object { $_ -like "*K1 (22222222)*marker*could not be removed*locked*" }).Count -eq 1) "a marker that cannot be removed does not stop the session's wake, and the wake says so in words"
+
+Section "a woken session whose registry row still names its old pane is woken, with registry-stale"
+# Live finding of 2026-10-16: after a mass resume the fleet registry still named the OLD pane of resumed
+# sessions, so mail could be posted but could not knock them. The wake confirms, within its bounded wait,
+# that the registry row of the woken id names the pane it spawned; if not, it says so and notes it.
+Reset-World
+$h = New-Home
+$world.staleRegistry = @($ids["X"])
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h
+$rec = Read-Rec $h
+$xh = (Get-Session $rec "X").history[-1]
+Check ((State-Of $rec "X") -ceq "woken" -and "" + $xh.reason -like "registry-stale*") ("a session whose registry row names another pane is woken, noted registry-stale (" + $xh.reason + ")")
+Check (@($r.lines | Where-Object { $_ -like "*X (22222222)*registry*still names pane 5*mail*will not knock*" }).Count -eq 1) ("and the wake says, in words, that mail will not knock it until its next turn (" + ($r.lines -join " | ") + ")")
+$kh = (Get-Session $rec "K").history[-1]
+Check ((State-Of $rec "K") -ceq "woken" -and "" + $kh.reason -notlike "*registry-stale*") "CONTROL: one whose row names the pane it was spawned in is woken with no such note"
+Check ($world.registryReads -ge 6 -and $world.spawns.Count -eq 6) "the registry was read for the woken sessions, and nothing was spawned twice"
 
 Section "a session that comes back under a new id"
 Reset-World
