@@ -27,7 +27,7 @@
            Find = '        if (-not $body.ok) {'
            Replace = '        if ($false) {' }
         @{ Name = "another-machines-answer-counts"
-           Find = '        if ($b.machine -cne $me.value.sign.keyId) {'
+           Find = '        if ($b.machine -cne $opening.value.signKeyId) {'
            Replace = '        if ($false) {' }
         @{ Name = "an-answer-to-another-question-counts"
            Find = '        if ($b.number -ne $Number) {'
@@ -44,5 +44,37 @@
         @{ Name = "an-old-answer-replayed-under-a-new-id-counts"
            Find = '        if ((Get-HordeDecisionsChannelAnswerId -From $SignedBy -AnswerId $b.answerId) -cne $Id) {'
            Replace = '        if ($false) {' }
+        # --- a check that cannot be made is a no (review of PR 324) ---
+        @{ Name = "a-check-that-throws-is-a-yes"
+           Find = '        return (& $no ("it could not be checked: " + $_.Exception.Message))'
+           Replace = '        return [pscustomobject]@{ ok = $true; reason = ""; keyId = $SignedBy; signedAt = [long]0 }' }
+        @{ Name = "keys-that-do-not-open-are-not-asked"
+           Find = '        if ($opening.state -cne "known") {'
+           Replace = '        if ($false) {' }
+        @{ Name = "a-record-with-no-envelope-goes-on"
+           Find = '        if (-not $env.ok) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "a-damaged-record-on-the-way-is-stepped-over"
+           Find = '        if (-not $r.ok) { return (& $none ("the journal''s stream of that passkey is damaged: " + $r.reason)) }'
+           Replace = '        if (-not $r.ok) { continue }' }
+        # --- a later answer in the journal (review of PR 324, M2) ---
+        @{ Name = "a-later-answer-is-found-and-ignored"
+           Find = '            if (-not $later.ok) { return (& $no $later.reason) }'
+           Replace = '' }
+        @{ Name = "the-journal-is-never-asked-for-a-later-answer"
+           Find = '        if ($null -ne $LaterParts) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "every-answer-in-the-journal-is-later"
+           Find = '            if ([long]$signed.Groups[1].Value -le $After) { continue }'
+           Replace = '' }
+        @{ Name = "a-later-answer-to-another-part-counts"
+           Find = ' -or @($Parts) -cnotcontains $a.value.part) { continue }'
+           Replace = ') { continue }' }
+        @{ Name = "a-later-answer-to-another-question-counts"
+           Find = ' -or $a.value.number -ne $Number -or '
+           Replace = ' -or ' }
+        @{ Name = "a-later-answer-for-another-machine-counts"
+           Find = ' -or $a.value.machine -cne $Machine -or '
+           Replace = ' -or ' }
     )
 }

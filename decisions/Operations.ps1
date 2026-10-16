@@ -73,10 +73,15 @@
 # journal's own record of the envelope, are written. The keeper's words under it, and the founder's acts
 # (park, unpark), are not answers and are taken as before; so is every word under any other question.
 # This file runs in its caller's process, so a request could claim anything about itself: the proof is
-# worked out again from the evidence, never read from a flag. And because a caller in the same process
-# could also write a record past this file, the operation authorized does not trust the list either: it
-# proves the standing answer again, from the record's evidence, each time it is asked - the one question a
-# production wrapper asks before it acts (`horde decisions authorized <number>`).
+# worked out again from the evidence, never read from a flag. And the operation authorized - the one
+# question a production wrapper asks before it acts (`horde decisions authorized <number>`) - does not
+# trust the list either: it proves the standing answer again each time, asks the relay journal whether a
+# later answer of his exists, and goes ahead only on a plain yes.
+# WHAT THIS IS NOT (security review of PR 324): it stops the chat, window, command-line, session-signed,
+# claimed-flag and mistaken paths. It is NOT a defence against a hostile process running as this Windows
+# user, which can rewrite the trust store, the journal and this store, all plain files - the limit
+# relay/Journal.ps1 already states (THE HONEST LIMIT). channels/decisions/Answer.ps1 says how; a real
+# defence needs an anchor outside this PC, which is a separate design.
 # THE PROOF IS LOADED ONLY WHEN ASKED (Test-HordeDecisionPasskeyAnswer): it reads relay's journal, trust
 # store and keys, which costs about half a second to load (measured 2026-10-16, 340 to 510 ms), and every
 # other request pays nothing for it.
@@ -350,11 +355,11 @@ function Test-HordeDecisionPasskeyAnswer {
     # first time it is asked and only then: { ok; reason; keyId; signedAt }. -Root is the store's folder,
     # as Invoke-HordeDecision was given it, which names the home the proof is read from.
     param([string]$Id, [int]$Number, [AllowEmptyString()][string]$Text, [string]$Part = "", [int]$WordingVersion = 0,
-        [string]$Evidence = "", [string]$SignedBy = "", [string]$Root = "", $Now = $null)
+        [string]$Evidence = "", [string]$SignedBy = "", [string]$Root = "", $Now = $null, [string[]]$LaterParts = $null)
     $proofHome = Get-HordeDecisionHomeOfStore -Root $Root
     if ($null -eq $proofHome) { return [pscustomobject]@{ ok = $false; reason = "this store is in no Horde home, so there is no relay journal to prove a passkey from"; keyId = ""; signedAt = [long]-1 } }
     if ($null -eq (Get-Command -Name "Test-HordeDecisionsChannelPasskeyAnswer" -CommandType Function -ErrorAction SilentlyContinue)) { . $script:HordeDecisionPasskeyProofFile }
-    return (Test-HordeDecisionsChannelPasskeyAnswer -Id $Id -Number $Number -Text $Text -Part $Part -WordingVersion $WordingVersion -Evidence $Evidence -SignedBy $SignedBy -HordeHome $proofHome -Now $Now)
+    return (Test-HordeDecisionsChannelPasskeyAnswer -Id $Id -Number $Number -Text $Text -Part $Part -WordingVersion $WordingVersion -Evidence $Evidence -SignedBy $SignedBy -HordeHome $proofHome -Now $Now -LaterParts $LaterParts)
 }
 
 function Get-HordeDecisionPasskeyRefusal {
@@ -527,13 +532,40 @@ function Get-HordeDecisionShowAnswer {
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
 }
 
+# WHAT AUTHORIZES AN ACTION IS A PLAIN YES (review of PR 324: authorized exited 0 on a proven "no"). His
+# answers are free text, so a yes is read from his words by one strict rule, and anything it cannot read
+# as a yes is not one: his words, trimmed and with runs of spaces made one, start with the word "yes" in
+# any case; hold no question mark; and hold none of the words that take a yes back or make it
+# conditional ($script:HordeDecisionYesTakenBack). "Yes", "yes.", "Yes, deploy it now." authorize; "No",
+# "Yes, but not today", "yes?", "Not yet - yes later", "Deploy it" do not. Erring this way costs him one
+# more tap; the other way would act on a "no". And only a question whose answer can be yes takes one:
+# yes-no, do-then-say, and each part of a question of parts.
+$script:HordeDecisionYesTakenBack = "\b(no|not|nope|never|dont|don't|cant|can't|wont|won't|wait|but|unless|except|if|only|later|stop|hold|cancel|instead|maybe|perhaps)\b|n['\u2019]t\b"
+$script:HordeDecisionYesKinds = @("yes-no", "do-then-say", "parts")
+
+function Test-HordeDecisionPlainYes {
+    # Are the words -Text a plain yes (above)?
+    param([AllowEmptyString()][string]$Text)
+    $t = (($Text -replace '\s+', ' ').Trim()).ToLowerInvariant()
+    if ($t -cnotmatch '\Ayes\b') { return $false }
+    if ($t.Contains("?")) { return $false }
+    if ($t -cmatch $script:HordeDecisionYesTakenBack) { return $false }
+    return $true
+}
+
 function Get-HordeDecisionAuthorizedAnswer {
-    # MAY A PRODUCTION ACTION GO AHEAD ON QUESTION -number? Done only when the founder's STANDING ANSWER -
-    # his newest words under it that answer it (an act, park or unpark, answers nothing), to the part the
-    # request names or else to the whole question - is proven, NOW, signed by a passkey this machine
-    # trusts now, to the wording the question has now (the header, A QUESTION THAT NEEDS A PASSKEY).
-    # Refused otherwise, with the reason; nothing is ever written. It says THAT he signed and WHAT he
-    # signed (authorization.text): whether his words say yes is for the asker to read.
+    # MAY A PRODUCTION ACTION GO AHEAD ON QUESTION -number? Done only when, for the part the request names
+    # - or, on a question of parts, for EVERY part, or else for the whole question - the founder's
+    # STANDING ANSWER is (the header, A QUESTION THAT NEEDS A PASSKEY):
+    #   - proven, now, signed by a passkey this machine trusts now, with no later answer of his to it in
+    #     the relay journal (channels/decisions/Answer.ps1, 6);
+    #   - given to the wording the question has now;
+    #   - a plain yes (above).
+    # THE STANDING ANSWER to a part is his newest answer to that part OR to the whole question, acts (park,
+    # unpark) aside: a "yes" to the whole question does not stand over a later "no" to one part, and a
+    # later "yes" to the whole question stands over an earlier "no" to a part. To the whole of a question
+    # without parts, it is his newest answer to it. Refused otherwise, with the reason and his words;
+    # nothing is ever written. One authorization per part asked about, each with his words.
     param($Request, $State, $Definitions, [datetime]$Now, [string]$Root = "")
     $number = [long]$Request.number
     $notThere = Get-HordeDecisionNumberAnswer -State $State -Number $number -Operation "authorized"
@@ -541,23 +573,34 @@ function Get-HordeDecisionAuthorizedAnswer {
     $question = $State.questions[[int]$number]
     $part = ""
     if (Test-HordeDecisionMember -Object $Request -Name "part") { $part = [string]$Request.part }
-    $what = $(if ($part -ceq "") { "question " + $number } else { "part (" + $part + ") of question " + $number })
     $no = { param($why) return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation "authorized" -Outcome "refused" -Reason $why -Findings @($why) -State $State -More ([ordered]@{ number = [int]$number })) -Definitions $Definitions -Now $Now) }
-    $standing = $null
-    foreach ($m in @($question.thread)) { if ("$($m.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($m.act)" -ceq "" -and "$($m.part)" -ceq $part) { $standing = $m } }
-    if ($null -eq $standing) { return (& $no ($what + " has no answer of the founder's: ask him to answer it on his phone with Face ID")) }
-    $at = "the founder's standing answer to " + $what + " (record " + $standing.sequence + ")"
-    if ("$($standing.route)" -cne "phone") { return (& $no ($at + " was " + (Get-HordeDecisionRouteShown -Route "$($standing.route)") + ", and only his answer on his phone with Face ID authorizes it")) }
-    if (-not [bool]$standing.wordingStated -or [int]$standing.wordingVersion -ne [int]$question.wordingVersion) { return (& $no ($at + " was given to wording " + $standing.wordingVersion + ", and the question is now at wording " + $question.wordingVersion + ": he has not answered what it says now")) }
-    # The record's own id, from the list: the proof holds it to the id made from the signed answer.
-    $id = ""
-    foreach ($k in @($State.ids.Keys)) { if ([long]$State.ids[$k].sequence -eq [long]$standing.sequence) { $id = "$k"; break } }
-    $proof = Test-HordeDecisionPasskeyAnswer -Id $id -Number ([int]$number) -Text ([string]$standing.text) -Part $part -WordingVersion ([int]$standing.wordingVersion) `
-        -Evidence "$($standing.evidence)" -SignedBy "$($standing.signedBy)" -Root $Root -Now $Now
-    if (-not $proof.ok) { return (& $no ($at + " is not proven signed by a passkey this machine trusts: " + $proof.reason)) }
-    $granted = [ordered]@{ sequence = [long]$standing.sequence; signedBy = $proof.keyId; signedAt = [long]$proof.signedAt; wordingVersion = [int]$standing.wordingVersion; text = [string]$standing.text }
-    if ($part -cne "") { $granted["part"] = $part }
-    $value = New-HordeDecisionResult -Operation "authorized" -Outcome "done" -State $State -More ([ordered]@{ number = [int]$number; authorization = [pscustomobject]$granted })
+    $kind = "$(Get-HordeDecisionMember -Object $question -Name 'kind')"
+    if ($script:HordeDecisionYesKinds -cnotcontains $kind) { return (& $no ("question " + $number + " is a question of the kind '" + $kind + "', and only a yes authorizes an action: ask it as a yes-no question")) }
+    $letters = @(Get-HordeDecisionParts -Question $question | ForEach-Object { "$($_.letter)" })
+    if ($part -cne "" -and $letters -cnotcontains $part) { return (& $no ("question " + $number + " has no part (" + $part + ")" + $(if ($letters.Count -gt 0) { "; its parts are: " + (@($letters | ForEach-Object { "(" + $_ + ")" }) -join ", ") } else { "" }))) }
+    $targets = @($(if ($part -cne "") { $part } elseif ($letters.Count -gt 0) { $letters } else { "" }))
+    $granted = New-Object System.Collections.ArrayList
+    foreach ($p in $targets) {
+        $answers = @(@($p, "") | Select-Object -Unique)
+        $what = $(if ($p -ceq "") { "question " + $number } else { "part (" + $p + ") of question " + $number })
+        $standing = $null
+        foreach ($m in @($question.thread)) { if ("$($m.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($m.act)" -ceq "" -and $answers -ccontains "$($m.part)") { $standing = $m } }
+        if ($null -eq $standing) { return (& $no ($what + " has no answer of the founder's: ask him to answer it on his phone with Face ID")) }
+        $at = "the founder's standing answer to " + $what + " (record " + $standing.sequence + ")"
+        if ("$($standing.route)" -cne "phone") { return (& $no ($at + " was " + (Get-HordeDecisionRouteShown -Route "$($standing.route)") + ", and only his answer on his phone with Face ID authorizes it")) }
+        if (-not [bool]$standing.wordingStated -or [int]$standing.wordingVersion -ne [int]$question.wordingVersion) { return (& $no ($at + " was given to wording " + $standing.wordingVersion + ", and the question is now at wording " + $question.wordingVersion + ": he has not answered what it says now")) }
+        # The record's own id, from the list: the proof holds it to the id made from the signed answer.
+        $id = ""
+        foreach ($k in @($State.ids.Keys)) { if ([long]$State.ids[$k].sequence -eq [long]$standing.sequence) { $id = "$k"; break } }
+        $proof = Test-HordeDecisionPasskeyAnswer -Id $id -Number ([int]$number) -Text ([string]$standing.text) -Part "$($standing.part)" -WordingVersion ([int]$standing.wordingVersion) `
+            -Evidence "$($standing.evidence)" -SignedBy "$($standing.signedBy)" -Root $Root -Now $Now -LaterParts $answers
+        if (-not $proof.ok) { return (& $no ($at + " is not proven signed by a passkey this machine trusts: " + $proof.reason)) }
+        if (-not (Test-HordeDecisionPlainYes -Text ([string]$standing.text))) { return (& $no ($at + " is signed by his passkey, but his words are not a plain yes: """ + [string]$standing.text + """. Nothing is authorized; ask him a yes-no question and have him answer Yes")) }
+        $one = [ordered]@{ sequence = [long]$standing.sequence; signedBy = $proof.keyId; signedAt = [long]$proof.signedAt; wordingVersion = [int]$standing.wordingVersion; text = [string]$standing.text }
+        if ($p -cne "") { $one["part"] = $p }
+        [void]$granted.Add([pscustomobject]$one)
+    }
+    $value = New-HordeDecisionResult -Operation "authorized" -Outcome "done" -State $State -More ([ordered]@{ number = [int]$number; authorizations = @($granted.ToArray()) })
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
 }
 

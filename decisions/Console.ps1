@@ -474,12 +474,12 @@ function Format-HordeDecisionAnswer {
         else { [void]$lines.Add("Marked as read: " + $value.marked + " message(s), up to record " + $value.upTo + ".") }
     }
     elseif ($Verb -ceq "authorized") {
-        $g = $value.authorization
-        $signedAt = [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$g.signedAt).UtcDateTime.ToString("yyyy-MM-dd HH:mm", [System.Globalization.CultureInfo]::InvariantCulture) + " UTC"
-        $which = $(if ($null -ne $g.PSObject.Properties["part"]) { "Question " + $value.number + " part (" + $g.part + ")" } else { "Question " + $value.number })
-        [void]$lines.Add($which + " is authorized: the founder's answer (record " + $g.sequence + ") was signed with his passkey " + $g.signedBy + " at " + $signedAt + ", to the wording it has now.")
-        Add-HordeDecisionTextBlock -Lines $lines -Heading "  His words:" -Text ("  " + ("$($g.text)" -replace "\r?\n", "`n  "))
-        [void]$lines.Add("  This says that he signed them; read them before you act on them.")
+        foreach ($g in @($value.authorizations)) {
+            $signedAt = [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$g.signedAt).UtcDateTime.ToString("yyyy-MM-dd HH:mm", [System.Globalization.CultureInfo]::InvariantCulture) + " UTC"
+            $which = $(if ($null -ne $g.PSObject.Properties["part"]) { "Question " + $value.number + " part (" + $g.part + ")" } else { "Question " + $value.number })
+            [void]$lines.Add($which + " is authorized: the founder answered yes (record " + $g.sequence + "), signed with his passkey " + $g.signedBy + " at " + $signedAt + ", to the wording it has now.")
+            Add-HordeDecisionTextBlock -Lines $lines -Heading "  His words:" -Text ("  " + ("$($g.text)" -replace "\r?\n", "`n  "))
+        }
     }
     elseif ($value.outcome -ceq "replayed") {
         [void]$lines.Add("Question " + $value.number + ": this request was already recorded (record " + $value.sequence + "), so nothing was written again.")

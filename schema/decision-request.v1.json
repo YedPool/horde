@@ -86,7 +86,7 @@
     },
     "authorized": {
       "type": "object",
-      "description": "Asks whether the founder's standing answer to a question - his newest answer to it, or to the one part named - is proven signed by a passkey this machine trusts now, to the wording the question has now (decisions/Operations.ps1, A QUESTION THAT NEEDS A PASSKEY). It writes nothing. What a production action asks before it goes ahead.",
+      "description": "Asks whether the founder's standing answer to a question - to the one part named, or to every part of a question of parts, or else to the whole question - is a plain yes proven signed by a passkey this machine trusts now, with no later answer of his in the relay journal, to the wording the question has now (decisions/Operations.ps1, Get-HordeDecisionAuthorizedAnswer). It writes nothing. What a production action asks before it goes ahead.",
       "required": ["number"],
       "additionalProperties": false,
       "properties": {

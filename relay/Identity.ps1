@@ -341,7 +341,8 @@ function Get-HordeRelayGraceKeys {
 function Get-HordeRelayOpeningKeys {
     # The agreement keys that may OPEN at -Now: the current generation's and every retired one still in
     # its grace. Known { keys (hashtable key id -> open key object; the caller disposes them); missing
-    # (reasons for grace keys that would not open) }; the identity's answer when it has none.
+    # (reasons for grace keys that would not open); signKeyId (this machine's key id, which an answer for
+    # it names) }; the identity's answer when it has none.
     param([string]$HordeHome = "", $Now = $null)
     $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Open -Now $Now
     if ($id.state -cne "known") { return $id }
@@ -353,7 +354,7 @@ function Get-HordeRelayOpeningKeys {
         $k = Open-HordeRelayGenerationKey -Record $g.record -Use "agree"
         if ($k.state -ceq "known") { $keys[$g.agreeKeyId] = $k.value.key } else { [void]$missing.Add("generation " + $g.generation + ": " + $k.reason) }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ keys = $keys; missing = @($missing.ToArray()) }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ keys = $keys; missing = @($missing.ToArray()); signKeyId = $id.value.sign.keyId }))
 }
 
 function Remove-HordeRelayRetiredAgreeKeys {

@@ -22,18 +22,21 @@
     "messages": {"type": "array", "items": {"$ref": "#/definitions/inboxItem"}, "description": "What an inbox hands back: what others said that the reader had not read, under every question, oldest first."},
     "upTo": {"type": "integer", "minimum": 0, "description": "For an inbox: the sequence number of the last message handed back, or 0 when there is none; a caller that then marks names this. For a marking: the record it marked up to."},
     "marked": {"type": "integer", "minimum": 0, "description": "For a marking only: how many messages it marked as read. 0 when the reader had already read that far, in which case nothing was written."},
-    "authorization": {
-      "type": "object",
-      "description": "For authorized only, when it is done: the founder's standing answer that his passkey was proven, at the time of asking, to have signed. Whether his words say yes is for the asker to read.",
-      "required": ["sequence", "signedBy", "signedAt", "wordingVersion", "text"],
-      "additionalProperties": false,
-      "properties": {
-        "sequence": {"type": "integer", "minimum": 1, "description": "The record that holds the answer."},
-        "signedBy": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The key id of the passkey that signed it, trusted on this machine at the time of asking."},
-        "signedAt": {"type": "integer", "minimum": 0, "description": "When the passkey signed it: the envelope's own signed time, in milliseconds since 1970 UTC."},
-        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording he answered, which is the wording the question has now."},
-        "text": {"type": "string", "description": "His words, verbatim."},
-        "part": {"type": "string", "pattern": "^[a-z]$", "description": "The part answered, when one was asked about."}
+    "authorizations": {
+      "type": "array",
+      "description": "For authorized only, when it is done: for each part asked about (one entry, with no part, for a question without parts), the founder's standing answer that was proven, at the time of asking, signed by his trusted passkey, with no later answer of his in the relay journal, and read as a plain yes.",
+      "items": {
+        "type": "object",
+        "required": ["sequence", "signedBy", "signedAt", "wordingVersion", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 1, "description": "The record that holds the answer."},
+          "signedBy": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The key id of the passkey that signed it, trusted on this machine at the time of asking."},
+          "signedAt": {"type": "integer", "minimum": 0, "description": "When the passkey signed it: the envelope's own signed time, in milliseconds since 1970 UTC."},
+          "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording he answered, which is the wording the question has now."},
+          "text": {"type": "string", "description": "His words, verbatim."},
+          "part": {"type": "string", "pattern": "^[a-z]$", "description": "The part this authorizes. The record may answer the whole question, which stands for every part he has not answered since."}
+        }
       }
     },
     "kinds": {"type": "object", "description": "The table of question kinds, as the kinds operation gives it: by kind name, each with label (how a list names it), means (one sentence) and list (which list of a question it needs: options, parts, or none). It is decisions/question-kinds.json's table, handed out here so that no caller needs the file."},

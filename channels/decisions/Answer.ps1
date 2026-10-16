@@ -9,11 +9,11 @@
 # A PASSKEY ANSWER IS PROVEN AGAIN FROM ITS EVIDENCE, NEVER TAKEN FROM A FLAG (audit of 2026-10-16, item 17:
 # the passkey rule for production actions was enforced only on the phone path). The list runs in the
 # caller's process, so anything a request says about itself - "signed by a passkey", proof webauthn - any
-# local session could say. What the record holds that a local caller cannot make is a pointer into the
-# relay journal: evidence, the SHA-256 of the journal record that holds the envelope whole, as it was
-# signed (relay/Journal.ps1, EVIDENCE). Test-HordeDecisionsChannelPasskeyAnswer starts from that hash and
-# from nothing else the request asserts, and says yes only when ALL of these hold, each read from this
-# machine's own stores at the time of asking:
+# caller could say. What the record holds instead is a pointer into the relay journal: evidence, the
+# SHA-256 of the journal record that holds the envelope whole, as it was signed (relay/Journal.ps1,
+# EVIDENCE). Test-HordeDecisionsChannelPasskeyAnswer starts from that hash and from nothing else the
+# request asserts, and says yes only when ALL of these hold, each read from this machine's own stores at
+# the time of asking:
 #   1. the signer the record names (signedBy) is a device trusted NOW - not pending, expired or revoked
 #      (relay/Trust.ps1, Find-HordeRelayTrustedSender): a revoked phone's old answers stop counting;
 #   2. the journal of this home holds, in that signer's decisions stream, a record whose hash is the
@@ -27,10 +27,19 @@
 #      wording - and the record's id is the one the channel derives from the signer and that answer's
 #      answerId. So a real passkey answer to one question cannot be pointed at from a record of another,
 #      or from other words.
-# What a local caller can still do is what the journal's own honest limit says (relay/Journal.ps1, THE
-# HONEST LIMIT): whoever can write this home's trust store and journal AND sign as a trusted passkey is
-# the machine's owner. Nothing here can make a passkey signature, so no request, flag or record that a
-# session can write passes these checks without one.
+# And, asked by `horde decisions authorized` (-LaterParts): 6. no LATER answer of his to the same question
+# and part is in the journal (Find-HordeDecisionsChannelLaterAnswer). The journal, not the list, says
+# which of his signed answers is the newest, so a "no" record deleted from the list, or edited so that it
+# reads as something else, does not bring an older "yes" back.
+# WHAT THIS STOPS, AND WHAT IT DOES NOT (security review of PR 324, M1 and M2). It stops every honest and
+# every mistaken way an answer reaches the list without his passkey: words recorded from chat, the
+# window, the command line, a phone answer signed by an unlocked session, a request or a channel item
+# that only CLAIMS a passkey, a real answer pointed at the wrong question, words or wording, a replay of
+# an old answer, and a revoked phone. It is NOT a defence against a hostile process running as this
+# Windows user. The trust store, the journal and the decisions store are plain files that user can write
+# (relay/Journal.ps1, THE HONEST LIMIT, says the same of the journal): such a process can pair a passkey
+# of its own in software, sign an envelope with it, journal it and write the record, and every check
+# here passes. A real defence needs an anchor outside this PC, which is a separate design.
 #
 # THE ID OF AN ANSWER (channels/decisions/Channel.ps1, IN, has the whole rule):
 #   id = the first 16 bytes of SHA-256("horde-relay/decisions/v1 answer id" LF <sender key id> LF <answerId>)
@@ -119,6 +128,68 @@ function Find-HordeDecisionsChannelJournalAnswer {
     return (& $none "this machine's relay journal holds no envelope from that passkey with that evidence")
 }
 
+function Open-HordeDecisionsChannelJournalBody {
+    # The body of a journaled envelope, opened with -Keys (this machine's agreement keys), its signature
+    # NOT asked again: for Find-HordeDecisionsChannelLaterAnswer only, which can only refuse. Every
+    # envelope was verified before the journal took it (relay/Envelope.ps1, step 1); a session's could
+    # not be verified again here without the session records, and one this check cannot read must still
+    # count. $null when it does not open.
+    param([string]$Text, [hashtable]$Keys)
+    $read = Read-HordeRelayEnvelope -Text $Text
+    if (-not $read.ok) { return $null }
+    $e = $read.value
+    $mine = $null
+    foreach ($r in @($e.recipients)) { if ($Keys.ContainsKey($r.kid)) { $mine = $r; break } }
+    if ($null -eq $mine) { return $null }
+    $aad = Get-HordeRelayAsciiBytes -Text ((Get-HordeRelayEnvelopeDomain -Part "aad") + $e.headerText)
+    $info = Get-HordeRelayAsciiBytes -Text (Get-HordeRelayEnvelopeDomain -Part "info")
+    $cek = Unprotect-HordeRelayHpke -RecipientKey $Keys[$mine.kid] -Enc $mine.enc -Info $info -Aad $aad -Sealed $mine.key
+    if ($null -eq $cek -or $cek.Length -ne 32) { return $null }
+    $body = Unprotect-HordeRelayAesGcm -Key $cek -Nonce (ConvertFrom-HordeRelayHex -Text $e.header.nonce) -Aad $aad -Sealed $e.ct
+    [System.Array]::Clear($cek, 0, $cek.Length)
+    if ($null -eq $body) { return $null }
+    return ,([byte[]]$body)
+}
+
+function Find-HordeDecisionsChannelLaterAnswer {
+    # Is there, in this home's journal, an answer to question -Number of this machine (-Machine), to one of
+    # -Parts ("" the whole question), signed after -After (ms)? { ok; reason }: ok when there is none (the
+    # header, 6). The phone resends an answer under the time it first signed, so the standing answer and
+    # its resends are never after it. Every received decisions stream is read, whoever sent it and
+    # however it was signed: a "no" from his other phone, or by an unlocked session, is his word too.
+    # Only envelopes signed after -After are opened, so the cost is the answers since the one asked
+    # about. A stream that cannot be read, or a later envelope that cannot be opened, refuses: what it
+    # says cannot be known.
+    param([string]$HordeHome, [int]$Number, [string[]]$Parts, [long]$After, [string]$Machine, [hashtable]$Keys)
+    $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why } }
+    $ctx = Get-HordeRelayJournalContext -HordeHome $HordeHome
+    if (-not $ctx.ok) { return (& $no ("the relay journal cannot be read to find a later answer: " + $ctx.reason)) }
+    $inDir = [System.IO.Path]::Combine($ctx.root, "in")
+    $names = @()
+    if ([System.IO.Directory]::Exists($inDir)) { $names = @([System.IO.Directory]::GetDirectories($inDir) | ForEach-Object { [System.IO.Path]::GetFileName($_) }) }
+    foreach ($nm in $names) {
+        if ($nm -cnotmatch $script:HordeRelayJournalSenderDirPattern) { return (& $no ("the journal's received streams hold " + $nm + ", which the journal never makes")) }
+        $from = $Matches[1]
+        $dir = Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction "in" -From $from -Channel "decisions"
+        $st = Get-HordeRelayJournalStream -Dir $dir -Direction "in" -From $from -Channel "decisions"
+        if (-not $st.ok) { return (& $no ("the journal's decisions stream from " + $from + " cannot be read to find a later answer: " + $st.reason)) }
+        foreach ($seqText in @($st.seqs.Keys)) {
+            $r = Read-HordeRelayJournalRecord -Dir $dir -Direction "in" -From $from -Channel "decisions" -Seq ([long]$seqText)
+            if (-not $r.ok) { return (& $no ("the journal's decisions stream from " + $from + " is damaged: " + $r.reason)) }
+            if ($r.meta.kind -cne "answer") { continue }
+            $signed = [regex]::Match($r.whole, '\A\{[^\n]*?"ts":([0-9]{1,16}),')
+            if (-not $signed.Success) { return (& $no ("the journal record " + $r.meta.key + " says no signing time")) }
+            if ([long]$signed.Groups[1].Value -le $After) { continue }
+            $body = Open-HordeDecisionsChannelJournalBody -Text $r.envelope -Keys $Keys
+            if ($null -eq $body) { return (& $no ("a later envelope in the journal (" + $r.meta.key + ") cannot be opened here to see what it answers")) }
+            $a = Read-HordeDecisionsChannelAnswer -Body $body
+            if (-not $a.ok -or $a.value.machine -cne $Machine -or $a.value.number -ne $Number -or @($Parts) -cnotcontains $a.value.part) { continue }
+            return (& $no ("a later answer of his to it is in this machine's relay journal (" + $r.meta.key + "), and the list does not hold it as the standing answer: the list lost it or reads it otherwise. Ask him again"))
+        }
+    }
+    return [pscustomobject]@{ ok = $true; reason = "" }
+}
+
 function Test-HordeDecisionsChannelPasskeyAnswer {
     # Did the founder's passkey sign exactly these words, as an answer to question -Number, on this
     # machine (the header, A PASSKEY ANSWER IS PROVEN AGAIN)? { ok; reason; keyId; signedAt }: ok only when
@@ -126,8 +197,9 @@ function Test-HordeDecisionsChannelPasskeyAnswer {
     # envelope's own signed time (ms). Never throws: a check that cannot be made is a no.
     # -Id is the request id the record has (or the request carries); -WordingVersion 0 means not stated.
     # -HordeHome is the home whose journal, trust store and identity are read; "" is Horde's own.
+    # -LaterParts: also ask the journal for a later answer to these parts (the header, 6); $null asks not.
     param([string]$Id, [int]$Number, [AllowEmptyString()][string]$Text, [string]$Part = "", [int]$WordingVersion = 0,
-        [string]$Evidence = "", [string]$SignedBy = "", [string]$HordeHome = "", $Now = $null)
+        [string]$Evidence = "", [string]$SignedBy = "", [string]$HordeHome = "", $Now = $null, [string[]]$LaterParts = $null)
     $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why; keyId = ""; signedAt = [long]-1 } }
     $keys = $null
     try {
@@ -159,14 +231,17 @@ function Test-HordeDecisionsChannelPasskeyAnswer {
         $body = Read-HordeDecisionsChannelAnswer -Body $opened.value
         if (-not $body.ok) { return (& $no ("its envelope holds no answer: " + $body.reason)) }
         $b = $body.value
-        $me = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Now $Now
-        if ($me.state -cne "known") { return (& $no ("this machine's identity cannot be read: " + $me.reason)) }
-        if ($b.machine -cne $me.value.sign.keyId) { return (& $no "the signed answer is for another machine") }
+        # This machine's key id comes with its keys (relay/Identity.ps1): one read of the identity.
+        if ($b.machine -cne $opening.value.signKeyId) { return (& $no "the signed answer is for another machine") }
         if ($b.number -ne $Number) { return (& $no ("the signed answer is to question " + $b.number + ", not " + $Number)) }
         if ($b.text -cne $Text) { return (& $no "the signed answer says other words") }
         if ($b.part -cne $Part) { return (& $no "the signed answer is to another part") }
         if ($b.wordingVersion -ne $WordingVersion) { return (& $no ("the signed answer was given to wording " + $b.wordingVersion + ", not " + $WordingVersion)) }
         if ((Get-HordeDecisionsChannelAnswerId -From $SignedBy -AnswerId $b.answerId) -cne $Id) { return (& $no "its id is not the one made from the signed answer") }
+        if ($null -ne $LaterParts) {
+            $later = Find-HordeDecisionsChannelLaterAnswer -HordeHome $HordeHome -Number $Number -Parts $LaterParts -After ([long]$env.value.header.ts) -Machine $opening.value.signKeyId -Keys $keys
+            if (-not $later.ok) { return (& $no $later.reason) }
+        }
         return [pscustomobject]@{ ok = $true; reason = ""; keyId = $SignedBy; signedAt = [long]$env.value.header.ts }
     } catch {
         return (& $no ("it could not be checked: " + $_.Exception.Message))

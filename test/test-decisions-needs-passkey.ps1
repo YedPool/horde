@@ -84,8 +84,10 @@ function Add-PhoneTo {
     return $p
 }
 function Add-Question {
-    param($World, [string]$Title, [switch]$NeedsPasskey)
-    $req = @{ id = (New-Id); actor = "warchief"; question = @{ title = $Title; kind = "yes-no"; whatItIs = "A question of the needs-passkey suite."; group = "relay"; askedBy = "orc-f" } }
+    param($World, [string]$Title, [switch]$NeedsPasskey, [string]$Kind = "yes-no", [string[]]$Parts = @())
+    $q = @{ title = $Title; kind = $Kind; whatItIs = "A question of the needs-passkey suite."; group = "relay"; askedBy = "orc-f" }
+    if ($Parts.Count -gt 0) { $q["parts"] = $Parts }
+    $req = @{ id = (New-Id); actor = "warchief"; question = $q }
     if ($NeedsPasskey) { $req["needsPasskey"] = $true }
     $a = Invoke-HordeDecision -Operation "add" -Root $World.store -Request $req
     if ($a.state -cne "known" -or $a.value.outcome -cne "done") { throw ("not added: " + $a.reason) }
@@ -109,6 +111,8 @@ function New-World {
     [void](Add-Question $w "Should the new relay worker be deployed to production now?" -NeedsPasskey)
     [void](Add-Question $w "Should the old relay mailboxes be deleted now?" -NeedsPasskey)
     [void](Add-Question $w "Should the production budget be raised now?" -NeedsPasskey)
+    [void](Add-Question $w "Should the release go out in two steps?" -NeedsPasskey -Kind "parts" -Parts @("(a) Deploy the worker now.", "(b) Migrate the database after it."))
+    [void](Add-Question $w "Which budget should production have?" -NeedsPasskey -Kind "value")
     $null = Invoke-HordeRelayChannelTicks -Context $w.ctx
     return $w
 }
@@ -167,7 +171,18 @@ function Invoke-Horde {
     param($World, [string[]]$HordeArgs)
     return (Invoke-HordeCliProcess -Root $root -HordeArgs $HordeArgs -Env @{ HORDE_HOME = $World.home } -Shell $shell)
 }
-function Authorized { param($World, [int]$Number) return (Invoke-HordeDecision -Operation "authorized" -Root $World.store -Request @{ number = $Number }) }
+function Authorized {
+    param($World, [int]$Number, [string]$Part = "")
+    $req = @{ number = $Number }
+    if ($Part -cne "") { $req["part"] = $Part }
+    return (Invoke-HordeDecision -Operation "authorized" -Root $World.store -Request $req)
+}
+function Get-AuthText {
+    # The words of the first authorization of a done answer, or "" for any other answer.
+    param($Answer)
+    if ($Answer.state -cne "known" -or $Answer.value.outcome -cne "done") { return "" }
+    return [string](@($Answer.value.authorizations)[0].text)
+}
 function Send-PasskeyBody {
     # A passkey-signed answer whose body the suite shapes - another machine, a snapshot this machine never
     # sent, a part - put and taken in one turn, now. { turn; envelope; id; evidence }: id is the request
@@ -239,17 +254,18 @@ try {
     Check ($cli.code -eq 0 -and $cli.out.Contains("Question 2 is authorized") -and $cli.out.Contains($W.phone.keyId) -and $cli.out.Contains("Yes, deploy the relay worker.")) ("MUST-ACCEPT: horde decisions authorized 2, the real CLI, exits 0 and names the passkey and his words (exit " + $cli.code + ": " + $cli.out.Trim() + ")")
     $cli = Invoke-Horde $W @("decisions", "authorized", "2", "-Json")
     $j = $null; try { $j = ConvertFrom-HordeJson -Text ($cli.out.Trim() -split "`n")[0] } catch { $j = $null }
-    Check ($cli.code -eq 0 -and $null -ne $j -and "$(Get-HordeTestMember $j 'value.outcome')" -ceq "done" -and "$(Get-HordeTestMember $j 'value.authorization.signedBy')" -ceq $W.phone.keyId -and [long](Get-HordeTestMember $j 'value.authorization.signedAt') -eq [long]$p2.envelope.header.ts) ("and -Json gives the authorization: the passkey and the envelope's own signed time (exit " + $cli.code + ")")
+    $ja = @(Get-HordeTestMember $j 'value.authorizations')
+    Check ($cli.code -eq 0 -and $null -ne $j -and "$(Get-HordeTestMember $j 'value.outcome')" -ceq "done" -and $ja.Count -eq 1 -and "$(Get-HordeTestMember $ja[0] 'signedBy')" -ceq $W.phone.keyId -and [long](Get-HordeTestMember $ja[0] 'signedAt') -eq [long]$p2.envelope.header.ts) ("and -Json gives the authorization: the passkey and the envelope's own signed time (exit " + $cli.code + ")")
     $null = Say $W @{ actor = "founder"; number = 2; speaker = "founder"; route = "window"; text = "Aside for now."; wordingVersion = 1; act = "park" }
     $parked = Authorized $W 2
-    Check ($parked.state -ceq "known" -and $parked.value.outcome -ceq "done" -and "$($parked.value.authorization.text)" -ceq "Yes, deploy the relay worker.") "an act of his after the answer (park) is no answer: the passkey answer still stands, and is authorized"
+    Check ($parked.state -ceq "known" -and $parked.value.outcome -ceq "done" -and (Get-AuthText $parked) -ceq "Yes, deploy the relay worker.") "an act of his after the answer (park) is no answer: the passkey answer still stands, and is authorized"
     $null = Say $W @{ actor = "founder"; number = 2; speaker = "founder"; route = "window"; text = "Back."; wordingVersion = 1; act = "unpark" }
     $ev2 = Get-Evidence $W $p2.envelope
     $id2 = Get-HordeDecisionsChannelAnswerId -From $W.phone.keyId -AnswerId $p2.answerId
     $other = Say $W @{ id = (New-Id); actor = "founder"; number = 2; speaker = "founder"; route = "phone"; text = "Yes, and delete the database too."; wordingVersion = 1; evidence = $ev2; signedBy = $W.phone.keyId }
     Check (Test-RefusedWith $other "*says other words*") ("MUST-REFUSE: the evidence of his real answer to question 2 under other words is refused (" + $other.value.reason + ")")
     $a1 = Authorized $W 1
-    Check ($a1.state -ceq "known" -and $a1.value.outcome -ceq "done" -and "$($a1.value.authorization.text)" -ceq "Yes, play it softly.") "CONTROL TWIN: on question 1 his standing answer is the passkey one, and it is authorized"
+    Check ($a1.state -ceq "known" -and $a1.value.outcome -ceq "done" -and (Get-AuthText $a1) -ceq "Yes, play it softly.") "CONTROL TWIN: on question 1 his standing answer is the passkey one, and it is authorized"
     $later = Say $W @{ actor = "founder"; number = 1; speaker = "founder"; route = "window"; text = "Changed my mind at the desk."; wordingVersion = 1 }
     Check ($later.state -ceq "known" -and $later.value.outcome -ceq "done") "CONTROL: then he answers question 1 again in the window"
     $cli = Invoke-Horde $W @("decisions", "authorized", "1")
@@ -294,23 +310,37 @@ try {
     Write-Host ""
     Write-Host "--- passkey answers the channel never applied, handed straight to the list ---" -ForegroundColor Cyan
     $badSnapshot = $W.machine + "/decisions/999999/" + ("0" * 24)
-    $e1 = Send-PasskeyBody -World $W -Number 4 -Text "Raise it by ten." -Snapshot $badSnapshot
-    Check ($e1.turn.text.Contains("is not a snapshot this machine sent") -and -not (Test-Said $W "Raise it by ten.")) ("CONTROL: a passkey answer naming a snapshot this machine never sent is refused by the channel, and journaled (" + $e1.turn.text + ")")
+    $e1 = Send-PasskeyBody -World $W -Number 4 -Text "Yes, raise it by ten." -Snapshot $badSnapshot
+    Check ($e1.turn.text.Contains("is not a snapshot this machine sent") -and -not (Test-Said $W "Yes, raise it by ten.")) ("CONTROL: a passkey answer naming a snapshot this machine never sent is refused by the channel, and journaled (" + $e1.turn.text + ")")
     # The proof is read from the home of the store asked, not from HORDE_HOME: here HORDE_HOME names an
     # empty home, and the store's own journal still proves the answer.
     $env:HORDE_HOME = New-TestHome
-    $ok1 = Say-Proven $W $e1 4 "Raise it by ten." $e1.id
+    $ok1 = Say-Proven $W $e1 4 "Yes, raise it by ten." $e1.id
     $okA = Authorized $W 4
     $env:HORDE_HOME = $W.home
-    Check ($ok1.state -ceq "known" -and $ok1.value.outcome -ceq "done" -and (Test-Said $W "Raise it by ten.")) ("MUST-ACCEPT: his genuine passkey answer, handed to the list with its evidence and its own id, is taken - proven from the store's own home (" + $(if ($ok1.state -ceq "known") { $ok1.value.reason } else { $ok1.reason }) + ")")
-    Check ($okA.state -ceq "known" -and $okA.value.outcome -ceq "done" -and "$($okA.value.authorization.text)" -ceq "Raise it by ten.") ("and authorized 4 says yes, from the same home (" + $(if ($okA.state -ceq "known") { $okA.value.reason } else { $okA.reason }) + ")")
+    Check ($ok1.state -ceq "known" -and $ok1.value.outcome -ceq "done" -and (Test-Said $W "Yes, raise it by ten.")) ("MUST-ACCEPT: his genuine passkey answer, handed to the list with its evidence and its own id, is taken - proven from the store's own home (" + $(if ($ok1.state -ceq "known") { $ok1.value.reason } else { $ok1.reason }) + ")")
+    Check ((Get-AuthText $okA) -ceq "Yes, raise it by ten.") ("and authorized 4 says yes, from the same home (" + $(if ($okA.state -ceq "known") { $okA.value.reason } else { $okA.reason }) + ")")
     $no4 = Send-Passkey -World $W -Number 4 -Text "No, wait." -At ([datetime]::UtcNow)
-    Check ((Test-Said $W "No, wait.") -and "$((Authorized $W 4).value.authorization.text)" -ceq "No, wait.") ("CONTROL: then he answers no by passkey, and that is the standing answer (" + $no4.turn.text + ")")
+    $aNo = Authorized $W 4
+    Check ((Test-Said $W "No, wait.") -and (Test-RefusedWith $aNo '*(record*) is signed by his passkey, but his words are not a plain yes: "No, wait."*')) ("MUST-REFUSE: then he answers no by passkey: his proven no authorizes nothing, and the reason gives his words (" + $aNo.value.reason + ")")
+    # THE JOURNAL, NOT THE LIST, SAYS WHICH ANSWER IS HIS NEWEST (review of PR 324, M2): his "no" record
+    # edited so that it reads as an act, or taken out of the store, does not bring his older yes back.
+    $noFile = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json" | Where-Object { [System.IO.File]::ReadAllText($_.FullName).Contains('"text":"No, wait."') })[0].FullName
+    $noText = [System.IO.File]::ReadAllText($noFile)
+    [System.IO.File]::WriteAllText($noFile, $noText.Replace('"text":"No, wait."', '"text":"No, wait.","act":"park"'), $utf8)
+    $edited = Authorized $W 4
+    [System.IO.File]::WriteAllText($noFile, $noText, $utf8)
+    Check (Test-RefusedWith $edited "*a later answer of his to it is in this machine's relay journal*") ("MUST-REFUSE: his no record edited into an act leaves his older yes standing in the list, and the journal's later no refuses it (" + $edited.value.reason + ")")
+    [System.IO.File]::Move($noFile, $noFile + ".away")
+    $gone = Authorized $W 4
+    [System.IO.File]::Move($noFile + ".away", $noFile)
+    Check (Test-RefusedWith $gone "*a later answer of his to it is in this machine's relay journal*") ("MUST-REFUSE: his no record taken out of the store does the same (" + $gone.value.reason + ")")
+    Check (Test-RefusedWith (Authorized $W 4) '*not a plain yes: "No, wait."*') "CONTROL: with the record put back, his no stands again"
     $count = Get-StoreCount $W
-    $replayNew = Say-Proven $W $e1 4 "Raise it by ten." (New-Id)
+    $replayNew = Say-Proven $W $e1 4 "Yes, raise it by ten." (New-Id)
     Check ((Test-RefusedWith $replayNew "*its id is not the one made from the signed answer*") -and (Get-StoreCount $W) -eq $count) ("MUST-REFUSE: his old yes, handed over again under a new id to stand over his no, is refused (" + $replayNew.value.reason + ")")
-    $replayOld = Say-Proven $W $e1 4 "Raise it by ten." $e1.id
-    Check ($replayOld.state -ceq "known" -and $replayOld.value.outcome -ceq "replayed" -and (Get-StoreCount $W) -eq $count -and "$((Authorized $W 4).value.authorization.text)" -ceq "No, wait.") "and under its own id it is the first record answered again: nothing is written, and his no still stands"
+    $replayOld = Say-Proven $W $e1 4 "Yes, raise it by ten." $e1.id
+    Check ($replayOld.state -ceq "known" -and $replayOld.value.outcome -ceq "replayed" -and (Get-StoreCount $W) -eq $count -and (Test-RefusedWith (Authorized $W 4) '*not a plain yes: "No, wait."*')) "and under its own id it is the first record answered again: nothing is written, and his no still stands"
     $e3 = Send-PasskeyBody -World $W -Number 4 -Text "Raise it from elsewhere." -Machine ("f" * 32)
     $m3 = Say-Proven $W $e3 4 "Raise it from elsewhere." $e3.id
     Check ($e3.turn.text.Contains("is for another machine") -and (Test-RefusedWith $m3 "*the signed answer is for another machine*")) ("MUST-REFUSE: his passkey answer to another machine's question 4 is refused here (" + $m3.value.reason + ")")
@@ -349,6 +379,44 @@ try {
     Check (Test-RefusedWith $again "*not trusted on this machine now*") ("MUST-REFUSE: the revoked device's real answer handed to the list again is refused (" + $again.value.reason + ")")
 
     Write-Host ""
+    Write-Host "--- only a plain yes authorizes ---" -ForegroundColor Cyan
+    $yesWords = @("Yes", "yes.", "  YES,  deploy it now. ", "Yes, delete the old mailboxes.")
+    $notYes = @("No", "Yes, but not today", "yes?", "Not yet - yes later", "Deploy it", "Yes - don't touch the database", "Yesterday", "yes, wait", "Yes, if the tests pass", ("Yes, don" + [char]0x2019 + "t"), "")
+    Check (@($yesWords | Where-Object { -not (Test-HordeDecisionPlainYes -Text $_) }).Count -eq 0) ("a plain yes is read as one: " + ($yesWords -join " | "))
+    Check (@($notYes | Where-Object { Test-HordeDecisionPlainYes -Text $_ }).Count -eq 0) ("and nothing that is not a plain yes is: " + ($notYes -join " | "))
+    $v6 = Send-PasskeyBody -World $W -Number 6 -Text "Yes"
+    $a6 = Authorized $W 6
+    Check ((Test-Said $W "Yes") -and (Test-RefusedWith $a6 "*of the kind 'value', and only a yes authorizes an action*")) ("MUST-REFUSE: a question that is not answered yes or no authorizes nothing, whatever his words (" + $a6.value.reason + ")")
+
+    Write-Host ""
+    Write-Host "--- a question of parts: a yes to the whole does not stand over a later no to a part ---" -ForegroundColor Cyan
+    $pa = Send-PasskeyBody -World $W -Number 5 -Text "Yes." -Part "a"
+    $pb = Send-PasskeyBody -World $W -Number 5 -Text "Yes, after the worker." -Part "b"
+    $a5 = Authorized $W 5
+    Check ($a5.state -ceq "known" -and $a5.value.outcome -ceq "done" -and (@($a5.value.authorizations | ForEach-Object { "" + $_.part + "=" + $_.text }) -join ";") -ceq "a=Yes.;b=Yes, after the worker.") ("MUST-ACCEPT: his passkey yes to each part authorizes the whole question, one authorization per part (" + $(if ($a5.state -ceq "known") { $a5.value.reason } else { $a5.reason }) + ")")
+    $cli = Invoke-Horde $W @("decisions", "authorized", "5", "-Part", "a")
+    Check ($cli.code -eq 0 -and $cli.out.Contains("Question 5 part (a) is authorized")) ("MUST-ACCEPT: horde decisions authorized 5 -Part a, the real CLI, exits 0 (exit " + $cli.code + ")")
+    $pw = Send-PasskeyBody -World $W -Number 5 -Text "Yes, all of it."
+    $pbn = Send-PasskeyBody -World $W -Number 5 -Text "No, not the database." -Part "b"
+    $a5 = Authorized $W 5
+    Check (Test-RefusedWith $a5 '*standing answer to part (b) of question 5*not a plain yes: "No, not the database."*') ("MUST-REFUSE: his whole-question yes does not stand over his later no to part (b) (" + $a5.value.reason + ")")
+    $a5a = Authorized $W 5 -Part "a"
+    Check ((Get-AuthText $a5a) -ceq "Yes, all of it.") "but part (a) is authorized, by his later yes to the whole question"
+    $cli = Invoke-Horde $W @("decisions", "authorized", "5", "-Part", "b")
+    Check ($cli.code -ne 0 -and $cli.out.Contains("not a plain yes")) ("MUST-REFUSE: horde decisions authorized 5 -Part b, the real CLI, exits non-zero with the reason (exit " + $cli.code + ")")
+    $pw2 = Send-PasskeyBody -World $W -Number 5 -Text "Yes, both now."
+    $a5 = Authorized $W 5
+    Check ($a5.state -ceq "known" -and $a5.value.outcome -ceq "done" -and (@($a5.value.authorizations | ForEach-Object { "" + $_.part + "=" + $_.text }) -join ";") -ceq "a=Yes, both now.;b=Yes, both now.") "MUST-ACCEPT: his later yes to the whole question stands over his earlier no to a part"
+    # Later answers that are not to this question of this machine change nothing: one to question 1, and
+    # one to question 5 of another machine.
+    $other1 = Send-PasskeyBody -World $W -Number 1 -Text "Yes, louder."
+    $other5 = Send-PasskeyBody -World $W -Number 5 -Text "No." -Machine ("e" * 32)
+    $a5 = Authorized $W 5
+    Check ((Get-AuthText $a5) -ceq "Yes, both now.") ("a later answer to another question, or to another machine's question 5, does not undo his yes (" + $(if ($a5.state -ceq "known") { $a5.value.reason } else { $a5.reason }) + ")")
+    $noPart = Authorized $W 2 -Part "a"
+    Check (Test-RefusedWith $noPart "*question 2 has no part (a)*") ("authorized -Part on a question without parts is refused (" + $noPart.value.reason + ")")
+
+    Write-Host ""
     Write-Host "--- the wording moves on ---" -ForegroundColor Cyan
     $upd = Invoke-HordeDecision -Operation "update" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = 2; changes = @{ title = "Should the new relay worker AND the database migration be deployed now?" } }
     Check ($upd.state -ceq "known" -and $upd.value.outcome -ceq "done") "CONTROL: question 2 is reworded"
@@ -356,6 +424,39 @@ try {
     Check (Test-RefusedWith $a2 "*given to wording 1, and the question is now at wording 2*") ("MUST-REFUSE: an answer to the old wording authorizes nothing (" + $a2.value.reason + ")")
     $none = Invoke-Horde $W @("decisions", "authorized", "99")
     Check ($none.code -ne 0 -and $none.out.Contains("there is no question 99")) ("authorized on a question that is not there exits non-zero (exit " + $none.code + ")")
+
+    Write-Host ""
+    Write-Host "--- a proof that cannot be made is a no ---" -ForegroundColor Cyan
+    $proveQ2 = { param($At) return (Test-HordeDecisionsChannelPasskeyAnswer -Id $id2 -Number 2 -Text "Yes, deploy the relay worker." -WordingVersion 1 -Evidence $ev2 -SignedBy $W.phone.keyId -HordeHome $W.home -Now $At) }
+    $good = & $proveQ2 ([datetime]::UtcNow)
+    Check ($good.ok -eq $true) ("CONTROL: his answer to question 2 is proven (" + $good.reason + ")")
+    $thrown = & $proveQ2 "not a time"
+    Check ($thrown.ok -eq $false -and "$($thrown.reason)" -like "it could not be checked:*") ("a check that throws is a no, never a yes (" + $thrown.reason + ")")
+    $stream = Join-Path $W.home ("relay\journal\in\s-" + $W.phone.keyId + "\c-decisions")
+    $recOf = { param($Sent) return (Join-Path $stream (([long]$Sent.envelope.header.seq).ToString("D16", [System.Globalization.CultureInfo]::InvariantCulture) + ".rec")) }
+    # A record newer than question 2's answer, grown by one character: damage, met on the way to it.
+    $f6 = & $recOf $e6
+    $t6 = [System.IO.File]::ReadAllText($f6)
+    [System.IO.File]::WriteAllText($f6, $t6 + "x", (New-Object System.Text.ASCIIEncoding))
+    $dam = & $proveQ2 ([datetime]::UtcNow)
+    [System.IO.File]::WriteAllText($f6, $t6, (New-Object System.Text.ASCIIEncoding))
+    Check ($dam.ok -eq $false -and "$($dam.reason)" -like "*stream of that passkey is damaged*") ("a damaged journal record on the way is a no (" + $dam.reason + ")")
+    # Question 2's own record, its envelope changed into one no reader takes (the same length).
+    $f2 = Get-ChildItem -LiteralPath $stream -Filter "*.rec" | Where-Object { (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.IO.File]::ReadAllBytes($_.FullName)))) -ceq $ev2 } | Select-Object -First 1
+    $t2 = [System.IO.File]::ReadAllText($f2.FullName)
+    $cut = $t2.IndexOf("`n")
+    $bent = $t2.Substring(0, $cut + 1) + $t2.Substring($cut + 1).Replace('{"header":{"v":1,', '{"header":{"v":7,')
+    [System.IO.File]::WriteAllText($f2.FullName, $bent, (New-Object System.Text.ASCIIEncoding))
+    $evBent = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.IO.File]::ReadAllBytes($f2.FullName)))
+    $notEnv = Test-HordeDecisionsChannelPasskeyAnswer -Id $id2 -Number 2 -Text "Yes, deploy the relay worker." -WordingVersion 1 -Evidence $evBent -SignedBy $W.phone.keyId -HordeHome $W.home -Now ([datetime]::UtcNow)
+    [System.IO.File]::WriteAllText($f2.FullName, $t2, (New-Object System.Text.ASCIIEncoding))
+    Check ($bent -cne $t2 -and $notEnv.ok -eq $false -and "$($notEnv.reason)" -like "the journal record it names holds no envelope*") ("a journal record that holds no envelope is a no (" + $notEnv.reason + ")")
+    # This machine's agreement key gone: nothing can be opened, so nothing is proven.
+    $idFile = @(Get-ChildItem -LiteralPath (Join-Path $W.home "relay\identity") -Filter "machine-*.json")[0].FullName
+    $km = [regex]::Match([System.IO.File]::ReadAllText($idFile), '"scope":"([a-z]+)".*"agreeName":"([a-z0-9-]+)"')
+    [void](Remove-HordeRelayKey -Name $km.Groups[2].Value -Scope $km.Groups[1].Value)
+    $locked = & $proveQ2 ([datetime]::UtcNow)
+    Check ($locked.ok -eq $false -and "$($locked.reason)" -like "this machine's keys cannot be opened*") ("with this machine's keys gone, nothing is proven (" + $locked.reason + ")")
 } finally {
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
