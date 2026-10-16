@@ -24,6 +24,7 @@ $ids = @{
     L = "22222222-0000-4000-8000-000000000004"; L1 = "22222222-0000-4000-8000-000000000005"; X = "22222222-0000-4000-8000-000000000006"
 }
 $NEW = "33333333-0000-4000-8000-000000000009"
+$SELFSTART = "133000000000000000"
 $cwds = @{ K = "C:\lanes\k"; K1 = "C:\work\k1"; K2 = "C:\work\k2"; L = "C:\lanes\l"; L1 = "C:\work\l1"; X = "C:\work\x" }
 
 # The world the stand-ins share. live: id -> { pid; cwd; state }. onSpawn: id -> start | rotate |
@@ -33,13 +34,16 @@ function Reset-World {
     $world.live = @{}; $world.error = ""; $world.onSpawn = @{}; $world.paneOf = @{}; $world.spawnFails = @(); $world.postFails = $false
     $world.spawns = New-Object System.Collections.ArrayList; $world.posts = New-Object System.Collections.ArrayList
     $world.free = New-Object System.Collections.ArrayList; $world.nextPane = 40; $world.clock = [datetime]::new(2026, 10, 16, 10, 0, 0, [System.DateTimeKind]::Utc)
-    $world.opened = 0
+    $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList
+    # The process table the lock is judged by: pid -> start ticks text, "?" when unreadable.
+    $world.procs = @{ "777" = $SELFSTART }
 }
 Reset-World
 
 Register-HordeFleetAgent -Name "stand-in" `
     -Snapshot { [pscustomobject]@{ error = $world.error; live = $world.live.Clone() } }.GetNewClosure() `
-    -Verdict { param($snap, $id, $cwd, $ignore)
+    -Verdict { param($snap, $id, $cwd, $ignore, $since)
+        [void]$world.verdicts.Add([pscustomobject]@{ id = $id; ignore = @($ignore); since = $since })
         if ($snap.error -ne "") { return [pscustomobject]@{ state = "unknown"; kind = "reading"; reason = $snap.error; pid = "" } }
         $e = $snap.live[$id]
         if ($null -eq $e) { return [pscustomobject]@{ state = "stopped"; kind = ""; reason = ""; pid = "" } }
@@ -81,6 +85,8 @@ $deps = [pscustomobject]@{
     Agent = $agent.value; Host = $hostA.value
     Post = { param($sid, $label, $body, $mid) [void]$world.posts.Add([pscustomobject]@{ to = $sid; label = $label; body = $body; id = $mid }); if ($world.postFails) { New-HordeUnknown -Reason "the stand-in mailbox is full" } else { New-HordeKnown -Value ([pscustomobject]@{ stage = "accepted" }) } }.GetNewClosure()
     WaitSeconds = 5; PollMs = 1000
+    ProcessStart = { param($p) $v = $world.procs["" + $p]; if ($null -eq $v) { "" } else { $v } }.GetNewClosure()
+    Self = { [pscustomobject]@{ pid = 777; start = $SELFSTART } }.GetNewClosure()
 }
 
 function Session {
@@ -144,7 +150,7 @@ Section "expected starts are on disk before the first spawn"
 Reset-World
 $h = New-Home
 $seen = @{ before = $null }
-$probe = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000
+$probe = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000; ProcessStart = $deps.ProcessStart; Self = $deps.Self
     Host = [pscustomobject]@{ name = "probe"; placement = $null; describe = $deps.Host.describe
         open = { $o = & $deps.Host.open; $seen.before = Get-HordeTestMember (Read-Rec $h) "expectedStarts"; $o }.GetNewClosure() } }
 [void](Invoke-HordeFleetWake -Id $HID -Deps $probe -HordeHome $h)
@@ -164,7 +170,7 @@ Check ((Test-Path -LiteralPath (Join-Path $dir "waking.lock"))) "and the other w
 Reset-World
 $h = New-Home
 $inner = @{ answer = "" }
-$nested = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000
+$nested = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000; ProcessStart = $deps.ProcessStart; Self = $deps.Self
     Host = [pscustomobject]@{ name = "nested"; placement = $null; describe = $deps.Host.describe
         open = { try { [void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h); $inner.answer = "ran" } catch { $inner.answer = $_.Exception.Message }; & $deps.Host.open }.GetNewClosure() } }
 [void](Invoke-HordeFleetWake -Id $HID -Deps $nested -HordeHome $h)
@@ -249,6 +255,55 @@ $h = New-Home
 Check ($world.spawns.Count -eq 2 -and (Spawn-For "K1").mode -ceq "window" -and (Spawn-For "L").mode -ceq "window") "only the labels named are woken, each its own group when its orc is not woken"
 Check ((State-Of (Read-Rec $h) "K") -ceq "recorded") "CONTROL: the others are untouched"
 Check (Throws { Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("Q") } "holds no session labelled Q") "a label the hibernation does not hold is refused"
+
+Section "the waking lock names its owner, and a dead owner's lock is taken over"
+Reset-World
+$h = New-Home
+$dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID
+$lock = Join-Path $dir "waking.lock"
+$held = @{ text = "" }
+$peek = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000; ProcessStart = $deps.ProcessStart; Self = $deps.Self
+    Host = [pscustomobject]@{ name = "peek"; placement = $null; describe = $deps.Host.describe
+        open = { $held.text = [System.IO.File]::ReadAllText($lock); & $deps.Host.open }.GetNewClosure() } }
+[void](Invoke-HordeFleetWake -Id $HID -Deps $peek -HordeHome $h -Only @("X"))
+Check ($held.text -like ("pid 777 start " + $SELFSTART + " at *")) ("while it runs, the lock names this wake's process and its start time (" + $held.text.Trim() + ")")
+$S = "134000000000000000"
+foreach ($case in @(
+        @{ name = "its process is gone"; procs = @{}; takes = $true },
+        @{ name = "its pid now belongs to a process that started 5 s later"; procs = @{ "4242" = ("" + ([long]$S + 50000000)) }; takes = $true },
+        @{ name = "its process runs with that start time"; procs = @{ "4242" = $S }; takes = $false },
+        @{ name = "its process runs, half a second off"; procs = @{ "4242" = ("" + ([long]$S + 5000000)) }; takes = $false },
+        @{ name = "its process's start time cannot be read"; procs = @{ "4242" = "?" }; takes = $false })) {
+    Reset-World
+    foreach ($k in $case.procs.Keys) { $world.procs[$k] = $case.procs[$k] }
+    $h = New-Home
+    $dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID
+    [System.IO.File]::WriteAllText((Join-Path $dir "waking.lock"), ("pid 4242 start " + $S + " at 2026-10-16T09:00:00Z`n"))
+    if ($case.takes) {
+        $r = $null
+        try { $r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("X") } catch { $r = $null }
+        Check ($null -ne $r -and $world.spawns.Count -eq 1 -and @($r.lines | Where-Object { $_ -like "*took over*stale*4242*" }).Count -eq 1) ("a lock whose owner is not alive (" + $case.name + ") is taken over, and the wake says so")
+        Check (-not (Test-Path -LiteralPath (Join-Path $dir "waking.lock"))) ("and the lock is gone when that wake ends (" + $case.name + ")")
+    } else {
+        Check (Throws { Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("X") } "is being woken already") ("a lock whose owner may be alive (" + $case.name + ") still refuses")
+        Check ($world.spawns.Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $dir "waking.lock"))) ("nothing is started, and its lock is left (" + $case.name + ")")
+    }
+}
+
+Section "a sleeper is checked against the sessions that could be its new id only"
+Reset-World
+$h = New-Home
+$dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID
+$rec = Read-Rec $h
+Add-HordeFleetState -Session (Get-Session $rec "X") -State "exited" -At ([datetime]::new(2026, 10, 16, 9, 40, 0, [System.DateTimeKind]::Utc))
+[void](Write-HordeFleetRecord -Dir $dir -Record $rec)
+[void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -DryRun)
+$vx = @($world.verdicts | Where-Object { $_.id -ceq $ids["X"] })[0]
+$vk = @($world.verdicts | Where-Object { $_.id -ceq $ids["K"] })[0]
+$all = @($ids.Values | Sort-Object)
+Check ($null -ne $vx -and ((@($vx.ignore) | Sort-Object) -join ",") -ceq ($all -join ",")) "every session of the record is passed as one that cannot be a sleeper's new id: orcs and wargs share folders"
+Check ($null -ne $vx -and $vx.since -is [datetime] -and $vx.since -eq [datetime]::new(2026, 10, 16, 9, 40, 0, [System.DateTimeKind]::Utc)) "a sleeper with an exit in its history is checked against sessions started after that exit"
+Check ($null -ne $vk -and $vk.since -is [datetime] -and $vk.since -eq [datetime]::new(2026, 10, 16, 9, 15, 0, [System.DateTimeKind]::Utc)) "one with no exit is checked against sessions started after the hibernation was taken: anything older ran beside it"
 
 Section "a dry run changes nothing"
 Reset-World

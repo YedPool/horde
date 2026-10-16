@@ -54,7 +54,7 @@ function Usual-World {
         @{ sid = $REUSED; pid = 6161; ps = $START; cwd = "C:\work\reused" })
 }
 function Read-Snapshot { param([scriptblock]$ListFiles = $null) return (New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords -Dirs @($dir) -ProcessStart $processStart -ListFiles $ListFiles)) }
-function Verdict { param($Snap, [string]$Id, [string]$Cwd = "", [string[]]$Ignore = @()) return (Get-ClaudeCodeFleetVerdict -Snapshot $Snap -SessionId $Id -Cwd $Cwd -Ignore $Ignore) }
+function Verdict { param($Snap, [string]$Id, [string]$Cwd = "", [string[]]$Ignore = @(), $Since = $null) return (Get-ClaudeCodeFleetVerdict -Snapshot $Snap -SessionId $Id -Cwd $Cwd -Ignore $Ignore -Since $Since) }
 
 # NOT ONE try AROUND THE CHECKS (test/test-files-cli.ps1 says why): after an error no check expected, the
 # trap goes on with the next statement of the script, and one try around everything is one statement.
@@ -138,6 +138,26 @@ $v = Verdict $snap $OTHER "C:\work\live" -Ignore @($LIVE)
 Check ($v.state -ceq "stopped") "a session this wake started itself does not block the next one of the same folder"
 $v = Verdict $snap $DEAD "C:\work\live"
 Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") "a dead control file in a folder where another session runs is unknown too, as in the guard"
+
+Section "narrowed for hibernation: only a session that started after the sleeper stopped can be its new id"
+# Orcs and their wargs share folders (13 of 13 sessions recorded on 2026-10-16 sat in 6 folders). The
+# guard's rule refused a sleeper whenever ANY session ran in its folder; a session that was already
+# running while the sleeper still ran under its own id cannot be the sleeper under a new one. -Since is
+# when the sleeper stopped (or the hibernation was taken): only a session started after it counts.
+$startedAt = [DateTime]::FromFileTimeUtc([long]$START)
+Usual-World
+$snap = Read-Snapshot
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5)
+Check ($v.state -ceq "stopped") ("a session that started before the sleeper stopped is not its new id: stopped (" + $v.state + "/" + $v.kind + ")")
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(-5)
+Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") ("CONTROL: one that started after the sleeper stopped may be its new id: unknown (" + $v.state + "/" + $v.kind + ")")
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt
+Check ($v.state -ceq "stopped") "one that started at the very moment counts as already running"
+$v = Verdict $snap $OTHER "C:\work\live"
+Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") "with no -Since, the guard's own rule stands: unknown"
+Set-ControlFiles @(@{ sid = $LIVE; pid = 4242; ps = "not-a-time"; cwd = "C:\work\live" })
+$v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5)
+Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") ("a running session whose start cannot be read may be the new id: unknown (" + $v.state + "/" + $v.kind + ")")
 
 Section "the real process lookup"
 $mine = Get-ClaudeCodeFleetProcessStart -ProcessId $PID
