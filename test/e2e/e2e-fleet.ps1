@@ -49,10 +49,10 @@
 #      the wake's own wait bound.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here)))
+$root = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
-. (Join-Path (Split-Path -Parent $here) "Isolation.ps1")
+. (Join-Path $root "hosts\wezterm\test\Isolation.ps1")
 . (Join-Path $root "core\Tristate.ps1")
 . (Join-Path $root "core\HostAct.ps1")
 . (Join-Path $root "hosts\wezterm\Fleet.ps1")
@@ -77,13 +77,13 @@ $sessDir = Join-Path $profileDir ".claude\sessions"
 $logDir = Join-Path $profileDir "standin-log"
 foreach ($d in @($hordeHome, (Join-Path $hordeHome "settings"), (Join-Path $fleetRoot "registry\sessions"), $sessDir, $logDir, $binDir, $cfgDir, $lane, $masterLane)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 $marker = Join-Path $profileDir "horde-e2e-fleet-profile.marker"
-[System.IO.File]::WriteAllText($marker, "this profile belongs to hosts/wezterm/test/e2e/e2e-fleet.ps1")
+[System.IO.File]::WriteAllText($marker, "this profile belongs to test/e2e/e2e-fleet.ps1")
 $ids = @{}
 foreach ($l in @("M", "Q", "Q1", "Q2")) { $ids[$l] = [guid]::NewGuid().ToString() }
 
 # THE STAND-IN, written as the harness's command, first on PATH.
 $standIn = @'
-# A stand-in for the agent harness, written by hosts/wezterm/test/e2e/e2e-fleet.ps1. Test-only.
+# A stand-in for the agent harness, written by test/e2e/e2e-fleet.ps1. Test-only.
 $marker = Join-Path $env:USERPROFILE "horde-e2e-fleet-profile.marker"
 if (-not (Test-Path -LiteralPath $marker)) { Write-Host "STANDIN REFUSED: this is not the scenario's profile, so nothing is written"; exit 3 }
 $id = ""; $mode = ""

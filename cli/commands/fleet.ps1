@@ -63,7 +63,7 @@ $HordeCommand = @{
             if ($found.state -cne "known") { return (New-HordeUnknown -Reason ("no messenger can deliver it: " + $found.reason)) }
             # THE SENDER MUST BE ONE THE FLEET'S MAIL CAN NAME: a session id or a hub label. A made-up
             # sender name was held at once as bad-from, so every real wake marked its sessions failed though
-            # they ran (found by hosts/wezterm/test/e2e/e2e-fleet.ps1; probed on the shipped messenger). The
+            # they ran (found by test/e2e/e2e-fleet.ps1; probed on the shipped messenger). The
             # waking session's own id when it has one (core/Identity.ps1); else the master's label, M: a wake
             # is the master's act (decided by M and F, 2026-10-16), run from its own terminal.
             $me = Get-HordeSelfSessionId

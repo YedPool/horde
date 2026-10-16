@@ -236,7 +236,7 @@ function Get-ClaudeCodeFleetRunning {
 # THE PROGRAM A WOKEN SESSION IS RESUMED WITH can be named in full (<HORDE_HOME>\settings\
 # claude-code-fleet.json, setting command). Left out, it is the harness's command as the woken pane's shell
 # finds it. WHY A SETTING: a terminal pane takes its PATH from the terminal, not from the process that
-# spawns it (measured 2026-10-16 by hosts/wezterm/test/e2e/e2e-fleet.ps1, whose stand-in, first on the
+# spawns it (measured 2026-10-16 by test/e2e/e2e-fleet.ps1, whose stand-in, first on the
 # spawning PATH, lost to the real command in all four panes); so a scenario that must never start the real
 # harness names its stand-in here.
 $script:ClaudeCodeFleetSettings = New-HordeModuleSettings -Module "claude-code-fleet" -Settings @(

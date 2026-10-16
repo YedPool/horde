@@ -66,7 +66,7 @@ $script:HordeFleetWakeMinFreePercent = 15
 # How long a started session has to show up running. MEASURED 2026-10-16, read only, on this machine's 13
 # running sessions: each one's control file was created 1.4 to 23.4 s after its process started (median
 # 7.6 s; the 23.4 s one was resumed while a dozen others started at once). The isolated end-to-end scenario
-# (hosts/wezterm/test/e2e/e2e-fleet.ps1) measures the spawn-to-running time of its stand-in, which is a
+# (test/e2e/e2e-fleet.ps1) measures the spawn-to-running time of its stand-in, which is a
 # lower bound: a stand-in does not read a transcript. 90 s stays, about four times the slowest real start
 # seen, so one stuck pane still cannot hold the wake for minutes; a slower resume is failed and then held
 # (HELD UNTIL -Retry, above), never started twice.

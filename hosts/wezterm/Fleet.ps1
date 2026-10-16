@@ -31,7 +31,7 @@
 # as they do whenever a test terminal stands beside the person's own. <HORDE_HOME>\settings\
 # wezterm-fleet.json may name one by its socket instead (setting socket); placement is then read from that
 # socket's folder, so a record and its wake speak of the same terminal. The isolated end-to-end scenario
-# (test/e2e/e2e-fleet.ps1 in this folder) is what needs it; a person running two terminals may use it too.
+# (test/e2e/e2e-fleet.ps1) is what needs it; a person running two terminals may use it too.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Tristate.ps1")
