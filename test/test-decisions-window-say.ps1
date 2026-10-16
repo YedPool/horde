@@ -74,7 +74,7 @@ $big = Say 2 ("a" * ($most + 1))
 Check ($big.ok -eq $false -and $big.reason -clike ("*'text' is " + ($most + 1) + " characters long; the most is " + $most + "*never cut*") -and @(Get-Thread 2).Count -eq 0) "words one character longer than a text may be are refused with the rule's sentence, and nothing is stored"
 $bridge = New-HordeDecisionWindowBridge
 Check ([long]$bridge.requests["say"].args["text"].most -eq $most -and (@($bridge.requests["say"].args.Keys | Sort-Object) -join ",") -ceq "id,number,text,wording") "the bridge's own bound on the words is that same number, read from the rules and written nowhere else; say takes number, text, wording and id"
-Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,say-part,act,hand-back") "say is the seventh request of the closed list, and with say-part (one part's answer) and act (his park or unpark), each the same operation, the only ones that write"
+Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,say-part,act,rank,hand-back") "say is the seventh request of the closed list, and with say-part (one part's answer), act (his park or unpark) and rank (his little buttons), the only ones that write"
 
 
 Write-Host ""
@@ -184,6 +184,46 @@ $noPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "to a
 Check (-not $script:sentPart.Contains("part") -and @($script:sentPart.Keys).Count -eq 7) "an empty part is no part: the operation is asked for an answer to the whole question, as say asks"
 $withPart = Invoke-HordeDecisionWindowSay -Arguments @{ number = $pn; text = "x"; wording = 1; id = (New-Id); part = "a" } -Invoke { param($Request) $script:sentPart = $Request; return (New-HordeUnknown -Reason "not asked") }
 Check ($script:sentPart["part"] -ceq "a" -and @($script:sentPart.Keys).Count -eq 8 -and $script:sentPart.route -ceq "window" -and $script:sentPart.speaker -ceq "founder") "with a part, the operation is asked for the same and the part: nothing else is added"
+
+Write-Host ""
+Write-Host "--- his little buttons: rank, the operation horde decisions rank asks, as the founder ---" -ForegroundColor Cyan
+# THE FOUNDER, 2026-10-14: "I want to be able to change importance level and blockingness level by
+# clicking on a little button next to a decision to change it". The page asks rank with which word and
+# the level he picked; the handler asks the operation rank, as the founder, and nothing else.
+function Rank { param($Number, $Which, $Level, $Id = (New-Id)) return (Invoke-HordeDecisionWindowRank -Arguments @{ number = $Number; which = $Which; level = $Level; id = $Id }) }
+function Get-Words { param([int]$Number) $q = (Invoke-HordeDecision -Operation "show" -Request @{ number = $Number }).value.question; return ("" + $q.importance + "/" + $q.blocks) }
+Check ((@($bridge.requests["rank"].args.Keys | Sort-Object) -join ",") -ceq "id,level,number,which" -and "$($bridge.requests['rank'].args['which'].type)" -ceq "string" -and "$($bridge.requests['rank'].args['number'].type)" -ceq "integer") "rank takes the question's number, which word, the level and the page's id - and nothing else"
+$rankId = New-Id
+$up = Rank 1 "importance" "high" $rankId
+$hist = @((Invoke-HordeDecision -Operation "show" -Request @{ number = 1 }).value.question.history)
+Check ($up.ok -eq $true -and $up.replayed -eq $false -and (Get-Words 1) -ceq "high/part" -and $hist[$hist.Count - 1].kind -ceq "question-ranked" -and $hist[$hist.Count - 1].actor -ceq "founder") ("a press that picks High: the question's importance is high, in a ranking record of the founder's own (" + $(if ($up.ok) { "ok" } else { $up.reason }) + ")")
+$filesNow = & $storeFiles
+$upAgain = Rank 1 "importance" "high" $rankId
+Check ($upAgain.ok -eq $true -and $upAgain.replayed -eq $true -and (& $storeFiles) -eq $filesNow) "the same press sent again under its id is that record, and writes nothing"
+$block = Rank 1 "blocks" "all"
+Check ($block.ok -eq $true -and (Get-Words 1) -ceq "high/all") "the Blocking button changes the blocking alone"
+$same = Rank 1 "blocks" "all"
+Check ($same.ok -eq $false -and $same.reason -clike "Not changed:*it changes nothing*" -and (& $storeFiles) -eq ($filesNow + 1)) ("picking the level it already has is refused in the rule's words, and writes nothing (" + $same.reason + ")")
+$badLevel = Rank 1 "importance" "urgent"
+Check ($badLevel.ok -eq $false -and $badLevel.reason -clike "Not changed:*urgent*" -and (Get-Words 1) -ceq "high/all") ("a level that is none of the list's is refused by the operation (" + $badLevel.reason + ")")
+$closedRank = Rank 3 "importance" "low"
+Check ($closedRank.ok -eq $false -and $closedRank.reason -clike "Not changed:*only an open question is ranked*") ("a closed question is not ranked (" + $closedRank.reason + ")")
+$missing = Rank 99 "importance" "low"
+Check ($missing.ok -eq $false -and $missing.reason -clike "Not changed:*99*") ("a question that is not there is not ranked, and the reason names it (" + $missing.reason + ")")
+$before = & $storeFiles
+foreach ($case in @(
+    @{ what = "a word that is neither importance nor blocks"; args = @{ number = 1; which = "title"; level = "x"; id = (New-Id) }; says = "*importance or blocks*" },
+    @{ what = "a level that is a number"; args = @{ number = 1; which = "importance"; level = 3; id = (New-Id) }; says = "*level did not arrive as a word*" },
+    @{ what = "a number that is text"; args = @{ number = "1"; which = "importance"; level = "low"; id = (New-Id) }; says = "*question's number*" },
+    @{ what = "an id that is not 32 hex digits"; args = @{ number = 1; which = "importance"; level = "low"; id = "x" }; says = "*no id of 32 lowercase hex digits*" },
+    @{ what = "no arguments at all"; args = $null; says = "*question's number*" })) {
+    $threw = $false; $answer = $null
+    try { $answer = Invoke-HordeDecisionWindowRank -Arguments $case.args } catch { $threw = $true }
+    Check (-not $threw -and $null -ne $answer -and $answer.ok -eq $false -and $answer.reason -clike $case.says) ($case.what + " is answered not changed, in words, without throwing (" + $(if ($null -ne $answer) { $answer.reason }) + ")")
+}
+Check ((& $storeFiles) -eq $before) "none of them wrote anything"
+$null = Invoke-HordeDecisionWindowRank -Arguments @{ number = 2; which = "blocks"; level = "none"; id = (New-Id) } -Invoke { param($Request) $script:sentRank = $Request; return (New-HordeUnknown -Reason "not asked") }
+Check ((@($script:sentRank.Keys) -join ",") -ceq "id,actor,number,blocks" -and $script:sentRank.actor -ceq "founder" -and $script:sentRank.blocks -ceq "none") "what the handler asks the operation for is a ranking by the founder of that one word: nothing else is added"
 
 } finally {
     $env:HORDE_HOME = $keepHome; $env:WEZFLEET_ROOT = $keepFleet

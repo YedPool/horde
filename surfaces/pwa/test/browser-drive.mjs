@@ -640,6 +640,102 @@ const commands = {
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
     return { put: headOf(c.mailbox) > before, left: await evaluate("document.getElementById('chatText').value"), notice: await evaluate(notice) };
   },
+  // WHERE THE CHAT STANDS (chat-scroll.js; the founder, 2026-10-15): how far the window is from the bottom,
+  // whether the newest message stands clear of the composer, the first message on his screen, and the
+  // Jump to latest button - shown, its words, its size and where it stands - and what the live region says.
+  async chatPlace() {
+    return await evaluate(`(() => {
+      const $ = (id) => document.getElementById(id);
+      const root = document.documentElement;
+      const items = Array.from(document.querySelectorAll('#chatLog .chat-item'));
+      const top = $('bar').getBoundingClientRect().bottom;
+      const first = items.find((el) => el.getBoundingClientRect().bottom > top);
+      const last = items[items.length - 1];
+      const j = $('chatJump'), jr = j.getBoundingClientRect(), tr = $('chatText').getBoundingClientRect(), cr = $('chatCompose').getBoundingClientRect();
+      const a = document.activeElement;
+      return { y: window.scrollY, dist: Math.round(root.scrollHeight - (window.scrollY + window.innerHeight)), items: items.length,
+        lastBottom: last ? last.getBoundingClientRect().bottom : 0, lastText: last ? last.querySelector('.chat-text').textContent : '', composeTop: cr.top,
+        firstKey: first ? first.dataset.key : '', firstTop: first ? first.getBoundingClientRect().top : 0,
+        jumpShown: !j.hidden && jr.height > 0, jumpText: j.textContent, jumpName: j.getAttribute('aria-label') || j.textContent, jumpTag: j.tagName, jumpType: j.type,
+        jumpTop: jr.top, jumpBottom: jr.bottom, jumpLeft: jr.left, jumpRight: jr.right, jumpH: jr.height, jumpW: jr.width, textTop: tr.top,
+        news: $('chatNews').textContent, newsLive: $('chatNews').getAttribute('aria-live'), newsHidden: $('chatNews').hidden,
+        focus: a ? a.id : '', focusVisible: !!(a && a.matches(':focus-visible')), outline: a ? getComputedStyle(a).outlineStyle + ' ' + getComputedStyle(a).outlineWidth : '' };
+    })()`);
+  },
+  // The chat opened from the questions, with the window first put at the top of the page, or part way
+  // down a long one: the window the chat inherits is all the old code looked at.
+  async chatOpen(c) {
+    await evaluate("document.getElementById('tabDecisions').click()", true);
+    await until(shown("doc"), 15000);
+    await evaluate("document.getElementById('lists').style.minHeight = '4000px'");
+    await sleep(200);
+    await evaluate(c.from === "middle" ? "window.scrollTo(0, 2000)" : "window.scrollTo(0, 0)");
+    await sleep(300);
+    const inherited = await evaluate("window.scrollY");
+    await evaluate("document.getElementById('tabChat').click()", true);
+    await until(shown("chat"), 15000);
+    await until("document.querySelectorAll('#chatLog .chat-item').length > 0", 15000);
+    await sleep(800);
+    await evaluate("document.getElementById('lists').style.minHeight = ''");
+    return { inherited, ...(await commands.chatPlace()) };
+  },
+  // The window put dist pixels above the bottom of the page (or at its top), as a finger leaves it.
+  async chatScrollTo(c) {
+    await evaluate(c.to === "top" ? "window.scrollTo(0, 0)" : "window.scrollTo(0, document.documentElement.scrollHeight - window.innerHeight - " + Number(c.dist) + ")");
+    await sleep(400);
+    return await commands.chatPlace();
+  },
+  // A refresh of everything (bridge.js refresh: the chat drawn again from its record), while he stays put.
+  async chatRefresh() {
+    await evaluate("window.HordeBridge.request('refresh')");
+    await sleep(800);
+    return await commands.chatPlace();
+  },
+  // A real touch on Jump to latest.
+  async chatJumpTouch() {
+    const at = await centre("#chatJump");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(500);
+    return await commands.chatPlace();
+  },
+  // THE KEYBOARD: from the composer's field, a real Shift+Tab; where the focus lands and whether its ring
+  // shows; then a real key (Enter or Space) on it.
+  async chatJumpKey(c) {
+    await evaluate("document.getElementById('chatText').focus()", true);
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 });
+    await sleep(200);
+    const focused = await commands.chatPlace();
+    if (c.key === "Space") {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
+    } else {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    }
+    await sleep(500);
+    return { focused, after: await commands.chatPlace() };
+  },
+  // The button's words against its face, light and dark (WCAG contrast ratio), with the page's own colours.
+  async chatContrast() {
+    const ratio = `(() => {
+      const j = document.getElementById('chatJump');
+      const was = j.hidden; j.hidden = false;
+      const rgb = (s) => s.match(/[0-9.]+/g).slice(0, 3).map(Number);
+      const lum = (c) => { const [r, g, b] = c.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const s = getComputedStyle(j);
+      const a = lum(rgb(s.color)), b = lum(rgb(s.backgroundColor));
+      j.hidden = was;
+      return { color: s.color, background: s.backgroundColor, ratio: Math.round(100 * (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) / 100 };
+    })()`;
+    await cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+    const light = await evaluate(ratio);
+    await cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+    const dark = await evaluate(ratio);
+    await cdp("Emulation.setEmulatedMedia", { features: [] });
+    return { light, dark };
+  },
   async chatShot(c) {
     const shot = await cdp("Page.captureScreenshot", { format: "png" });
     writeFileSync(c.path, Buffer.from(shot.data, "base64"));

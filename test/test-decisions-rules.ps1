@@ -865,7 +865,8 @@ $st = Get-Fold @((New-Added 1 1), (New-Ranked 2 9 @{ importance = "high" }))
 Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no question 9*") "nor is a question that is not there"
 $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-ranked" ([ordered]@{ number = 1; importance = "high"; title = "sneaked in" })), (New-Added 3 3))
 Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*is not what a question-ranked record holds*" -and (Get-Numbers $st) -ceq "1,3" -and (Get-Rank $st) -ceq "normal[] part[]") "a ranking record with a member no ranking has is unreadable by name"
-Check ((Get-HordeDecisionKindAbout -Kind "question-ranked") -ceq "question" -and ((Get-HordeDecisionKindActors -Kind "question-ranked").roles -join ",") -ceq "warchief") "a ranking is about one question, and its keepers write it"
+Check ((Get-HordeDecisionKindAbout -Kind "question-ranked") -ceq "question" -and ((Get-HordeDecisionKindActors -Kind "question-ranked").roles -join ",") -ceq "warchief,founder") "a ranking is about one question, and its keepers and the founder write it (his little buttons, 2026-10-14)"
+Check (((Get-HordeDecisionKindActors -Kind "question-closed").roles -join ",") -ceq "warchief" -and ((Get-HordeDecisionKindActors -Kind "question-updated").roles -join ",") -ceq "warchief") "CONTROL: the founder ranks, and nothing else of a question's own records is his to write"
 
 Write-Host ""
 Write-Host "--- a question of parts is answered part by part ---" -ForegroundColor Cyan

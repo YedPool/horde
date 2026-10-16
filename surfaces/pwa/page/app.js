@@ -30,6 +30,9 @@
 // Enter sends, Shift+Enter or the New line key adds a line - over the soft keyboard. A line goes only
 // from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
 // why. The log, like the list, is taken off the page when the horde locks.
+// THE CHAT OPENS AT ITS NEWEST MESSAGE (the founder, 2026-10-15) and keeps his place while he reads back,
+// with Jump to latest while he is away from the bottom: chat-scroll.js has the rule and why it opened at
+// the top or in the middle before.
 //
 // THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14: "that piece should happen automatically on
 // login - I don't see why I should press a button"; phone-core.js has the protocol). DO NOT ADD AN
@@ -108,6 +111,7 @@ import { renderDecisionCards } from "./decision-cards.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
+import { createChatScroll } from "./chat-scroll.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
 import { sessionLines } from "./session-view.js";
 
@@ -222,7 +226,11 @@ function docOf(id) {
     say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
     // One part's answer: the same request with the part's letter, signed and sent by itself.
     sayPart: (number, letter, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId, part: letter })),
-    act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId }))
+    act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId })),
+    // His tap on a question's Importance or Blocking button: signed and sent like an answer, answered
+    // once the PC has said what became of it (bridge.js). Not held as a send in flight: it may wait
+    // minutes for the PC, and an update meanwhile loses only the button's pending mark, never his words.
+    rank: (number, which, level, rankId) => bridge.request("rank", { number, which, level, id: rankId })
   });
   docs[id] = { box, cards, doc, kinds: false, storage };
   return docs[id];
@@ -260,6 +268,7 @@ function drawTabs() {
 async function loadHordes() { hordes = await bridge.request("hordes"); drawTabs(); return hordes; }
 
 async function pick(id) {
+  if (id !== current) chatScroll.open();
   current = id;
   drawTabs();
   const h = hordes.find((x) => x.id === id);
@@ -344,6 +353,8 @@ function pickPane(which, fromHistory = false) {
   if (!fromHistory && which !== pane) { try { history.pushState({ hordePane: which }, ""); } catch (e) { /* a page with no history keeps working */ } }
   // The tab opens on its cards, and a stream at his place each time it is opened, not only the first.
   if (which === "progress" && pane !== "progress") { progressDrawn = ""; stream = null; }
+  // The chat opens at its newest message each time its tab is picked (chat-scroll.js).
+  if (which === "chat" && pane !== "chat") chatScroll.open();
   pane = which;
   for (const p of Object.keys(PANES)) $(PANES[p].tab).setAttribute("aria-selected", which === p ? "true" : "false");
   if (current) pick(current);
@@ -379,12 +390,17 @@ function timeStamp(ms, before, key, shortForm = clockTime) {
   return t;
 }
 function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
+// WHERE THE CHAT STANDS (chat-scroll.js): at the newest message when it opens, his place kept on a refresh
+// while he reads back, and Jump to latest while he is away from the bottom.
+const chatScroll = createChatScroll({ win: window, log: $("chatLog"), compose: $("chatCompose"), button: $("chatJump"), news: $("chatNews"), field: $("chatText"), topInset: () => $("bar").getBoundingClientRect().bottom });
+$("chatJump").addEventListener("click", (e) => chatScroll.jump(e));
+window.addEventListener("scroll", () => { if (!$("chat").hidden) chatScroll.update(); }, { passive: true });
 function drawChat(rec) {
   if ($("chat").hidden || !rec) return;
   if (rec.state !== "known") { clearChat(); $("chatEmpty").hidden = true; say("view", rec.reason || ""); return; }
   const v = rec.value;
   const log = $("chatLog");
-  const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
+  const was = chatScroll.before();
   clearChat();
   for (const it of withDays(v.items)) {
     // The day, on a line of its own, wherever it changes.
@@ -392,12 +408,14 @@ function drawChat(rec) {
     const box = document.createElement("div");
     const who = document.createElement("div");
     const text = document.createElement("div");
+    const key = "chat/" + (it.kind === "line" ? "line/" + it.messageId : "turn/" + it.id);
     box.className = "chat-item " + (it.kind === "line" ? "founder" : it.role);
+    box.dataset.key = key;
     who.className = "chat-who";
     const name = document.createElement("span");
     name.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
     who.appendChild(name);
-    const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", "chat/" + (it.kind === "line" ? "line/" + it.messageId : "turn/" + it.id));
+    const stamp = timeStamp(it.said, it.saidHow === "delivered" ? "Reached the Thrall " : "", key);
     if (stamp) who.appendChild(stamp);
     text.className = "chat-text";
     text.textContent = it.text;
@@ -418,7 +436,7 @@ function drawChat(rec) {
   $("chatText").disabled = !canWrite;
   $("chatSend").disabled = !canWrite;
   $("chatNewline").disabled = !canWrite;
-  if (atEnd) window.scrollTo(0, document.documentElement.scrollHeight);
+  chatScroll.after(was);
 }
 // The page's id for the words in the composer: kept until they are sent, so a line sent again after a
 // failure is the same line, posted once - but only the SAME words: words changed since the last try
@@ -437,7 +455,7 @@ async function sendLine() {
   say("action", "");
   try {
     const r = await bridge.request("chat-send", { text, id: draftId });
-    if (r.ok) { field.value = ""; draftId = ""; } else say("action", r.reason);
+    if (r.ok) { field.value = ""; draftId = ""; chatScroll.sent(); } else say("action", r.reason);
   } catch (e) { say("action", messageOf(e)); } finally { sending = false; settleUpdate(); }
 }
 $("chatText").addEventListener("input", () => { if (!$("chatText").value) draftId = ""; });
@@ -1100,7 +1118,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
@@ -1129,6 +1147,7 @@ document.addEventListener("visibilitychange", () => {
   $("keys").hidden = true;
   $("chat").hidden = true;
   $("progress").hidden = true;
+  chatScroll.open(); // back to the app: the chat opens at its newest message again
   clearTimeout(lockTimer);
   const expired = hiddenAt && Date.now() - hiddenAt >= lockAfterMs();
   hiddenAt = 0;

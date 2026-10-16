@@ -28,6 +28,7 @@ const NV = await load("app/notices-view.js");
 const CW = await load("app/cards-why.js");
 const AU = await load("app/app-update.js");
 const RB = await load("app/read-banner.js");
+const CS = await load("app/chat-scroll.js");
 const SV = await load("app/session-view.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
@@ -84,12 +85,14 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 }
 // answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
 // says nothing of them, as every machine's did before a part could be answered by itself.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined } = {}) {
+// ranks: 1 from a machine that takes a change of rank from the phone (channels/decisions); left out, as
+// every machine's was before the founder's little buttons.
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined, ranks = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(receipts === undefined ? {} : { receipts }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(ranks === undefined ? {} : { ranks }), ...(receipts === undefined ? {} : { receipts }) })));
   }
   return out;
 }
@@ -2094,6 +2097,24 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   check(full.indexOf("Not sent") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await kept()).length === 200, "A FULL OUTBOX REFUSES THE NEW ANSWER, saying why, and drops none of the 200 still waiting", full);
 }
 
+// --- 10i. THE CHAT OPENS AT ITS NEWEST MESSAGE, AND JUMP TO LATEST (chat-scroll.js; the founder, 2026-10-15) ---
+{
+  const at = (scrollTop) => ({ scrollTop, viewHeight: 800, scrollHeight: 5000 });
+  check(CS.distanceFromBottom(at(4200)) === 0 && CS.distanceFromBottom(at(4100)) === 100 && CS.distanceFromBottom({ scrollTop: 0, viewHeight: 800, scrollHeight: 300 }) === 0, "how far the window stands above the bottom; a page shorter than the screen is at its bottom");
+  check(CS.STICK_PX === 48, "the stick threshold is 48 px", String(CS.STICK_PX));
+  check(CS.nearBottom(at(4200)) && CS.nearBottom(at(4200 - 48)) && !CS.nearBottom(at(4200 - 49)), "AT THE BOTTOM means within 48 px of it, and 49 px up is away", JSON.stringify([CS.nearBottom(at(4152)), CS.nearBottom(at(4151))]));
+  check(!CS.showJump(at(4200)) && !CS.showJump(at(4152)) && CS.showJump(at(4151)) && CS.showJump(at(0)), "JUMP TO LATEST HIDES AT THE BOTTOM, and shows away from it");
+  check(CS.placeAfterDraw({ opening: true, near: false }) === "bottom", "AN OPENING GOES TO THE NEWEST MESSAGE, wherever the window stood");
+  check(CS.placeAfterDraw({ opening: false, near: true }) === "bottom", "A REFRESH AT THE BOTTOM STICKS TO THE BOTTOM");
+  check(CS.placeAfterDraw({ opening: false, near: false }) === "keep", "A REFRESH WHILE HE READS BACK KEEPS HIS PLACE");
+  check(CS.keptTop(1000, 120, 120) === 1000 && CS.keptTop(1000, 120, 220) === 1100 && CS.keptTop(1000, 120, 70) === 950 && CS.keptTop(10, 120, 0) === 0, "his place kept: the window moves by what the first message on his screen moved, never above the top");
+  const seen = new Set(["a", "b", "c"]);
+  check(CS.unseenCount(seen, ["a", "b", "c"]) === 0 && CS.unseenCount(seen, ["a", "b", "c", "d", "e"]) === 2 && CS.unseenCount(new Set(), []) === 0, "the new messages are the ones not seen at the bottom");
+  check(CS.jumpWords(0) === "Jump to latest" && CS.jumpWords(2) === "Jump to latest (2 new)" && CS.jumpWords(1) === "Jump to latest (1 new)", "the button's words, with the count of new messages when there are any");
+  check(CS.newsWords(0, 2) === "2 new messages below. Jump to latest to read them." && CS.newsWords(2, 3) === "3 new messages below. Jump to latest to read them." && CS.newsWords(0, 1) === "1 new message below. Jump to latest to read it.", "the live region says the count when it grows");
+  check(CS.newsWords(2, 2) === null && CS.newsWords(3, 0) === null && CS.newsWords(0, 0) === null, "A REFRESH THAT BRINGS NOTHING SAYS NOTHING: the live region is left as it is");
+}
+
 // --- 16. the unlocked session: one passkey prompt per unlock, not per answer (design note "Unlocked session", 2026-10-14) ---
 // phone-core.js, THE UNLOCKED SESSION. Every passkey assertion the phone asks for is counted (asked), and
 // every envelope it puts into the machine's mailbox is opened as the machine would (sentSince). The bytes
@@ -2122,7 +2143,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const qs = [question(1, "One?"), question(2, "Two?"), question(3, "Three?"), question(4, "Deploy to production?", { needsPasskey: true })];
   // A snapshot from the machine with this passkey's receipt, its session member as given (null: none, an older PC).
   const snap = async (session, over = {}) => {
-    await sendSnapshot(t, m, [phoneKey], qs, { answers: 2, receipts: [{ from, through: 0, checked: 1, missing: [], applied: [], refused: [], ...(session ? { session } : {}), ...over }] });
+    await sendSnapshot(t, m, [phoneKey], qs, { answers: 2, ranks: 1, receipts: [{ from, through: 0, checked: 1, missing: [], applied: [], refused: [], ...(session ? { session } : {}), ...over }] });
     await phone.refresh(paired.id);
   };
   let seen = (await t.get(m.mailbox, 0, 1024)).value.items.length;
@@ -2221,6 +2242,17 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   await answer(3, "Three, after it.");
   sent = await sentSince();
   check(asked.length === before && sent[0].sig.alg === "session", "CONTROL: a question beside it, not flagged, goes in session with no prompt");
+
+  // A CHANGE OF RANK goes as an answer does (channels/decisions/Channel.ps1, A SESSION-SIGNED RANK): in
+  // session with no prompt, and with a fresh passkey assertion on a question flagged needsPasskey.
+  before = asked.length;
+  await phone.rank(paired.id, { number: 1, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) });
+  sent = await sentSince();
+  check(asked.length === before && sent.length === 1 && sent[0].header.kind === "rank" && sent[0].sig.alg === "session" && sent[0].sig.vouchId === v1.vouchId && (await verifies({ ...sent[0], sig: { ...sent[0].sig, vouch: opening.sig.vouch } })), "A CHANGE OF RANK IS SIGNED BY THE SESSION KEY, with no prompt", JSON.stringify({ prompts: asked.length - before, kind: sent[0] && sent[0].header.kind, alg: sent[0] && sent[0].sig.alg }));
+  before = asked.length;
+  await phone.rank(paired.id, { number: 4, which: "blocks", level: "all", rankId: P.hex(P.randomBytes(16)) });
+  sent = await sentSince();
+  check(asked.length === before + 1 && sent.length === 1 && sent[0].header.kind === "rank" && sent[0].sig.alg === "webauthn.get", "and a change of rank of a question flagged needsPasskey asks for a fresh passkey assertion, as its answer does", JSON.stringify({ prompts: asked.length - before, alg: sent[0] && sent[0].sig.alg }));
 
   // session-unknown: the vouch rides again.
   await snap(member({ vouches: [{ vouchId: v1.vouchId, state: "session-unknown" }] }));
@@ -2353,6 +2385,67 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
 
   delete subtle.generateKey;
   if (sessionOut) writeFileSync(sessionOut, JSON.stringify(forPowerShell));
+}
+
+// --- 17. HIS LITTLE BUTTONS: a change of rank, signed and sent like an answer, done when the PC says (the founder, 2026-10-14) ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const { phone, paired, phoneKey } = await pairedApp(t, m);
+  const lastToMachine = async () => { const items = (await t.get(m.mailbox, 0, 256)).value.items; const o = await machineOpens(m, items[items.length - 1].text); return { ...o, key: items[items.length - 1].key }; };
+  const base = { rankId: P.hex(P.randomBytes(16)), machine: m.keyId, snapshot: m.keyId + "/decisions/1/" + "0".repeat(24), number: 4 };
+  const body = JSON.parse(P.fromUtf8(P.rankBody({ ...base, which: "blocks", level: "none" })));
+  check(Object.keys(body).join(",") === "v,rankId,machine,snapshot,number,blocks" && body.v === 1 && body.blocks === "none" && !("text" in body) && !("answerId" in body), "the rank body holds a change of rank's members and one word - never an answer's", JSON.stringify(body));
+  for (const [which, level] of [["importance", "urgent"], ["blocks", "high"], ["title", "x"], ["__proto__", "high"], ["importance", ""]]) {
+    check((await throwsAsync(async () => P.rankBody({ ...base, which, level }))).indexOf("importance (high, normal or low) or blocks (all, part or none)") >= 0, "the protocol makes no rank body for " + which + " " + JSON.stringify(level));
+  }
+  // A MACHINE THAT DOES NOT SAY IT TAKES ONE is never sent one: its gate would refuse the kind.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?")], { answers: 2, receipts: [] });
+  await phone.refresh(paired.id);
+  const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const old = await throwsAsync(() => phone.rank(paired.id, { number: 1, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) }));
+  check(old.indexOf("does not take a change of rank") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore, "to a machine whose snapshot does not say ranks, nothing is sent, and he is told to change it at the PC", old);
+  // A MACHINE THAT DOES: one envelope of kind rank, signed by the passkey, bound to the page of the question.
+  const sent = await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?")], { answers: 2, receipts: [], ranks: 1 });
+  await phone.refresh(paired.id);
+  const rid = P.hex(P.randomBytes(16));
+  await phone.rank(paired.id, { number: 2, which: "importance", level: "high", rankId: rid });
+  const got = await lastToMachine();
+  check(got.header.channel === "decisions" && got.header.kind === "rank" && got.sig.alg === "webauthn.get" && got.body.rankId === rid && got.body.number === 2 && got.body.importance === "high" && got.body.machine === m.keyId && got.body.snapshot === sent[0].key, "a tap is one envelope on channel decisions, kind rank, signed by the passkey, naming the snapshot page that carried the question", JSON.stringify(got.body));
+  const notThere = await throwsAsync(() => phone.rank(paired.id, { number: 9, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) }));
+  check(notThere.indexOf("not in the snapshot") >= 0, "a question the snapshot does not hold is not ranked", notThere);
+  // THE BRIDGE answers a tap once the PC has said: applied (the snapshot then shows the new level), or refused.
+  const bridge = createBridge(phone, { loadKinds: async () => ({}) });
+  const lists = [];
+  bridge.on("list-changed", (r) => lists.push(r));
+  await bridge.request("pick", { id: paired.id });
+  let settled = null;
+  const rid2 = P.hex(P.randomBytes(16));
+  const pending = bridge.request("rank", { number: 1, which: "blocks", level: "all", id: rid2 }).then((r) => { settled = r; });
+  await new Promise((r) => setTimeout(r, 30));
+  check(settled === null, "CONTROL: sent, and nothing said by the PC yet, the tap is not answered");
+  // The receipt of this phone's passkey: the key id its envelopes are from.
+  const me = { from: got.header.from, through: 3, checked: 1, missing: [], applied: [rid2], refused: [] };
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [me], ranks: 1 });
+  await bridge.request("refresh", {});
+  await pending;
+  const lastList = lists[lists.length - 1];
+  check(settled && settled.ok === true && lastList.value.questions.find((q) => q.number === 1).blocks === "all", "once the receipt lists it applied, the tap is answered done - and the list pushed before it already holds the new level", JSON.stringify(settled));
+  const rid3 = P.hex(P.randomBytes(16));
+  const refusedP = bridge.request("rank", { number: 2, which: "importance", level: "low", id: rid3 });
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [{ ...me, through: 4, applied: [rid2], refused: [rid3] }], ranks: 1 });
+  await bridge.request("refresh", {});
+  const refused = await refusedP;
+  check(refused.ok === false && refused.reason.indexOf("The PC refused this change") >= 0, "once the receipt lists it refused, the tap is answered not changed, in the phone's own words", JSON.stringify(refused));
+  // NEEDS-PASSKEY: a change the PC held back for a fresh passkey is answered not changed, saying so.
+  const rid4 = P.hex(P.randomBytes(16));
+  const npP = bridge.request("rank", { number: 2, which: "blocks", level: "none", id: rid4 });
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [{ ...me, through: 5, applied: [rid2], refused: [rid3], session: { idleMs: P.SESSION_IDLE_DEFAULT_MS, vouches: [], needsPasskey: [rid4] } }], ranks: 1 });
+  await bridge.request("refresh", {});
+  const np = await npP;
+  check(np.ok === false && np.reason.indexOf("asks for your passkey") >= 0, "once the receipt lists it under session.needsPasskey, the tap is answered not changed, and he is told to confirm with his passkey", JSON.stringify(np));
+  const oldBridge = await bridge.request("rank", { number: 2, which: "importance", level: "sideways", id: P.hex(P.randomBytes(16)) });
+  check(oldBridge.ok === false && oldBridge.reason.indexOf("importance (high, normal or low)") >= 0, "a level that is none of the list's is refused before anything is signed", JSON.stringify(oldBridge));
 }
 
 process.stdout.write("[DONE] " + failures + "\n");
