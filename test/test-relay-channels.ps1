@@ -1122,10 +1122,10 @@ try {
     }
     $hr = (Get-HordeDecisionsChannelReceipts -Context $H.ctx).text | ConvertFrom-Json
     $hp = @($hr | Where-Object { $_.from -ceq $H.phone.keyId })[0]
-    Check ($null -ne $hp -and $hp.through -eq 50 -and @($hp.missing).Count -eq 32 -and @($hp.missing) -notcontains 16 -and $hp.checked -eq 18 -and $hp.checked -gt 16) ("A HOLE BELOW THE MISSING LIST IS NOT PASSED OFF AS RECEIVED: the list holds the newest 32 holes, and checked says it looked no lower than 18 - so 16, below it, is unknown to the phone, never received (" + $(if ($null -ne $hp) { ConvertTo-Json $hp -Compress } else { "none" }) + ")")
+    Check ($null -ne $hp -and $hp.through -eq 50 -and @($hp.missing).Count -eq 32 -and @($hp.missing) -notcontains 16 -and (Test-HordeTestMember $hp "checked") -and $hp.checked -eq 18 -and $hp.checked -gt 16) ("A HOLE BELOW THE MISSING LIST IS NOT PASSED OFF AS RECEIVED: the list holds the newest 32 holes, and checked says it looked no lower than 18 - so 16, below it, is unknown to the phone, never received (" + $(if ($null -ne $hp) { ConvertTo-Json $hp -Compress } else { "none" }) + ")")
     $hr2 = (Get-HordeDecisionsChannelReceipts -Context $R.ctx).text | ConvertFrom-Json
     $rp = @($hr2 | Where-Object { $_.from -ceq $R.phone.keyId })[0]
-    Check ($null -ne $rp -and $rp.checked -eq 1) "CONTROL: a stream whose every hole fits the list says it looked down to 1"
+    Check ($null -ne $rp -and (Test-HordeTestMember $rp "checked") -and $rp.checked -eq 1) "CONTROL: a stream whose every hole fits the list says it looked down to 1"
     # M2, ATTACKED: B "do NOT deploy" is applied; A "deploy now", signed BEFORE B to the same question,
     # arrives after it - a lost answer sent again.
     $G = New-World
