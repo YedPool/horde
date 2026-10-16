@@ -5,7 +5,7 @@
     Suite  = "test\test-setup-store.ps1"
     Mutations = @(
         @{ Name = "any-policy-value-counts-as-off"
-           Find = 'if ($null -ne $Policy -and [int]$Policy -eq 2) {'
+           Find = 'if ($null -ne $Policy -and $n -eq 2) {'
            Replace = 'if ($null -ne $Policy) {' }
         @{ Name = "policy-not-elevated-says-nothing"
            Find = '$next = $(if ($Elevated) { "" } else { "needs one elevated run of horde setup (a PowerShell window opened as administrator); it will set '
@@ -20,8 +20,20 @@
            Find = 'if ($got -cne $inst.sha256) {'
            Replace = 'if ($false) {' }
         @{ Name = "http-address-accepted"
-           Find = '-cnotlike "https://*") {'
-           Replace = '-cnotlike "*://*") {' }
+           Find = '-cnotlike "https://*" -or'
+           Replace = '-cnotlike "*://*" -or' }
+        @{ Name = "x64-not-required"
+           Find = ' -or $url -notmatch ''(?i)x64'')'
+           Replace = ')' }
+        @{ Name = "two-installers-accepted"
+           Find = 'if ($us.Count -gt 1 -or $hs.Count -gt 1) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "installer-folder-inherits-programdata-list"
+           Find = '$sec.SetAccessRuleProtection($true, $false)'
+           Replace = '$sec.SetAccessRuleProtection($false, $false)' }
+        @{ Name = "hash-taken-from-the-path-not-the-held-stream"
+           Find = 'hash         = { param($Stream) Get-HordeSetupStreamHash -Stream $Stream }'
+           Replace = 'hash         = { param($Stream) Get-HordeSetupStreamHash -Stream ([System.IO.File]::OpenRead($Stream.Name)) }' }
         @{ Name = "restart-wanted-is-failure"
            Find = 'if ($code -ne 0 -and $code -ne 3010) {'
            Replace = 'if ($code -ne 0) {' }

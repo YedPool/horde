@@ -489,11 +489,10 @@ function Get-HordeSetupReport {
     $p = Get-HordeSetupDefaultProbes
     $storeProbes = Get-HordeSetupStoreDefaultProbes
     foreach ($k in @($storeProbes.Keys)) { $p[$k] = $storeProbes[$k] }
-    # The pretend machine (cli/SetupStore.ps1): said first, so a run on it is never taken for a real one.
+    # The pretend machine (cli/SetupStore.ps1): the report names it (first line, and the fakeMachine field of -Json), so a run on it is never taken for a real one.
     $fakeMachine = "" + $env:HORDE_SETUP_FAKE_MACHINE
     if ($fakeMachine -ne "") {
         if (-not [System.IO.File]::Exists($fakeMachine)) { throw ("HORDE_SETUP_FAKE_MACHINE names no file: " + $fakeMachine) }
-        & $Say ("horde setup: using the pretend machine in " + $fakeMachine + " (HORDE_SETUP_FAKE_MACHINE); nothing real is read or changed for the Store and PowerShell 7 steps")
         $fakeProbes = Get-HordeSetupFakeStoreProbes -Path $fakeMachine
         foreach ($k in @($fakeProbes.Keys)) { $p[$k] = $fakeProbes[$k] }
     }
@@ -538,7 +537,7 @@ function Get-HordeSetupReport {
             }
         }
         $outstanding = @($lines.ToArray() | Where-Object { $_.state -ceq "todo" })
-        [pscustomobject]@{ home = $HordeHome; relay = $ctx.relay; origin = $ctx.origin; manifestVersion = $man.value.manifestVersion; steps = @($lines.ToArray()); next = (@($outstanding | ForEach-Object { $_.next } | Select-Object -Unique) -join " ; ") }
+        [pscustomobject]@{ home = $HordeHome; relay = $ctx.relay; origin = $ctx.origin; manifestVersion = $man.value.manifestVersion; fakeMachine = $fakeMachine; steps = @($lines.ToArray()); next = (@($outstanding | ForEach-Object { $_.next } | Select-Object -Unique) -join " ; ") }
     }
     $rs = $null
     foreach ($step in @($man.value.steps)) {
@@ -578,6 +577,7 @@ function Format-HordeSetupReport {
     # thing to do, or that every step is done.
     param([Parameter(Mandatory = $true)]$Report)
     $out = New-Object System.Collections.ArrayList
+    if ("" + $Report.fakeMachine -ne "") { [void]$out.Add("horde setup: using the pretend machine in " + $Report.fakeMachine + " (HORDE_SETUP_FAKE_MACHINE); nothing real is read or changed for the Store and PowerShell 7 steps") }
     [void]$out.Add("horde setup: the first run of Horde on this machine, step by step")
     foreach ($s in @($Report.steps)) {
         [void]$out.Add("  " + $(switch -CaseSensitive ($s.state) { "done" { "done  " } "fixed" { "fixed " } default { "TO DO " } }) + $s.title + ": " + $s.said)

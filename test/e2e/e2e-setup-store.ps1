@@ -95,6 +95,12 @@ try {
     Check ((Get-Actions) -ceq "set-store-policy") ("the policy was set, the installer was NOT run (" + (Get-Actions) + ")")
     Check ((Has $s "  TO DO PowerShell 7 from the MSI, not the Microsoft Store: *installing the PowerShell 7 MSI failed: the downloaded installer's SHA-256 *was not run*")) "the reason is said"
 
+    Write-Host "--- 5b. -Json names the pretend machine in the data ---" -ForegroundColor Cyan
+    $j = Run-Setup $h2 @("-Json")
+    $rep = $null
+    try { $rep = ($j.out.Trim() | ConvertFrom-Json) } catch { $rep = $null }
+    Check ($null -ne $rep -and "" + $rep.fakeMachine -ceq $machine) "-Json is one parseable document and its fakeMachine field names the pretend machine"
+
     Write-Host "--- 6. -Steps ---" -ForegroundColor Cyan
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("setup", "-Steps", "-Json") -Env @{ HORDE_HOME = $h2; USERPROFILE = $prof; HORDE_SETUP_FAKE_MACHINE = $machine }
     $listed = $null

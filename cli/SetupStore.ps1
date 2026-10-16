@@ -46,7 +46,10 @@ function Get-HordeSetupStorePolicyDecision {
     # ($null when unset), -Elevated whether this process can write HKLM. 2 is "never download
     # automatically" (the Store's own documented value).
     param($Policy, [bool]$Elevated)
-    if ($null -ne $Policy -and [int]$Policy -eq 2) { return [pscustomobject]@{ done = $true; said = "Store automatic updates are off by policy (AutoDownload = 2); nothing to change"; next = "" } }
+    # Anything but a whole number is treated as not set (a string in that value would throw on a cast).
+    $n = 0
+    if ($null -ne $Policy -and -not [int]::TryParse(("" + $Policy), [ref]$n)) { $Policy = $null }
+    if ($null -ne $Policy -and $n -eq 2) { return [pscustomobject]@{ done = $true; said = "Store automatic updates are off by policy (AutoDownload = 2); nothing to change"; next = "" } }
     $now = $(if ($null -eq $Policy) { "unset" } else { "" + $Policy })
     $said = "Microsoft Store automatic updates are not turned off (" + $script:HordeSetupStoreKeyText + " AutoDownload is " + $now + ")"
     $next = $(if ($Elevated) { "" } else { "needs one elevated run of horde setup (a PowerShell window opened as administrator); it will set " + $script:HordeSetupStoreKeyText + " AutoDownload to 2 (Store automatic updates off)" })
@@ -75,69 +78,127 @@ function Get-HordeSetupPowerShellDecision {
 }
 
 function Read-HordeSetupWingetInstaller {
-    # The installer's address and SHA-256 from `winget show` text: { ok; url; sha256; reason }.
+    # The installer's address and SHA-256 from `winget show` text: { ok; url; sha256; reason }. Exactly
+    # one of each label, or nothing is taken: a text with two installers (arm64 then x64) must not
+    # hand the wrong one to msiexec as administrator.
     param([AllowEmptyString()][string]$Text)
-    $u = [regex]::Match($Text, '(?m)^\s*Installer Url:\s*(\S+)\s*$')
-    $h = [regex]::Match($Text, '(?m)^\s*Installer SHA256:\s*([0-9A-Fa-f]{64})\s*$')
-    if (-not $u.Success -or -not $h.Success) { return [pscustomobject]@{ ok = $false; url = ""; sha256 = ""; reason = "winget show did not give an installer address and SHA-256 for the PowerShell MSI" } }
-    if ($u.Groups[1].Value -cnotlike "https://*") { return [pscustomobject]@{ ok = $false; url = ""; sha256 = ""; reason = "the installer address winget gave is not https" } }
-    return [pscustomobject]@{ ok = $true; url = $u.Groups[1].Value; sha256 = $h.Groups[1].Value.ToLowerInvariant(); reason = "" }
+    $none = { param($why) [pscustomobject]@{ ok = $false; url = ""; sha256 = ""; reason = $why } }
+    $us = @([regex]::Matches($Text, '(?m)^\s*Installer Url:\s*(\S+)\s*$'))
+    $hs = @([regex]::Matches($Text, '(?m)^\s*Installer SHA256:\s*([0-9A-Fa-f]{64})\s*$'))
+    if ($us.Count -eq 0 -or $hs.Count -eq 0) { return (& $none "winget output not understood (a non-English winget prints other labels); nothing installed") }
+    if ($us.Count -gt 1 -or $hs.Count -gt 1) { return (& $none "winget listed more than one installer; nothing installed") }
+    $url = $us[0].Groups[1].Value
+    if ($url -cnotlike "https://*" -or $url -notmatch '(?i)\.msi$' -or $url -notmatch '(?i)x64') { return (& $none "the installer address winget gave is not an https .msi for x64; nothing installed") }
+    return [pscustomobject]@{ ok = $true; url = $url; sha256 = $hs[0].Groups[1].Value.ToLowerInvariant(); reason = "" }
+}
+
+function Get-HordeSetupSecureFolderSecurity {
+    # The access list of the folder the installer is kept in: Administrators and SYSTEM, full control,
+    # and nobody else - inheritance removed, so ProgramData's own list (which lets any user add to it)
+    # does not apply. Built here so a suite can read the rules without a folder.
+    $sec = New-Object System.Security.AccessControl.DirectorySecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @("S-1-5-32-544", "S-1-5-18")) {
+        $who = New-Object System.Security.Principal.SecurityIdentifier($sid)
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    }
+    return $sec
 }
 
 function Install-HordeSetupPowerShellMsi {
-    # winget show -> download -> SHA-256 -> msiexec -> run the new pwsh.exe: { ok; reason; version }.
-    # -Probes: winget { -> text }, download { param($Url, $Folder) -> file path }, hash { param($Path) ->
-    # hex }, msiexec { param($Msi) -> exit code }, run { param($Pwsh) -> version text }. Each step
-    # stops the rest: a hash that differs never reaches msiexec.
-    param([Parameter(Mandatory = $true)][hashtable]$Probes, [Parameter(Mandatory = $true)][string]$MsiPath, [Parameter(Mandatory = $true)][string]$Folder)
+    # winget show -> a folder only administrators can touch -> download -> HOLD the file open (nobody
+    # else may write or delete it) -> SHA-256 of the held stream -> msiexec -> release -> verify.
+    # { ok; reason; version }.
+    # WHY THE FOLDER AND THE HOLD: a temp folder is writable by every process of the same user, which
+    # could swap the file between the hash and msiexec, and msiexec runs as administrator. The folder
+    # is made with its access list BEFORE the file is written, and the open handle (read, share read
+    # only) is kept from before the hash until msiexec ends, so what is hashed is what is run.
+    # -Probes: winget { -> text }, makeFolder { -> path }, download { param($Url, $Folder) -> file path },
+    # hold { param($Path) -> stream }, hash { param($Stream) -> hex }, msiexec { param($Msi) -> exit
+    # code }, release { param($Stream) }, removeFolder { param($Folder) }, run { param($Pwsh) -> version }.
+    # Each step stops the rest: a hash that differs never reaches msiexec.
+    param([Parameter(Mandatory = $true)][hashtable]$Probes, [Parameter(Mandatory = $true)][string]$MsiPath)
+    $fail = { param($why) [pscustomobject]@{ ok = $false; reason = $why; version = "" } }
     $shown = ""
-    try { $shown = "" + (& $Probes.winget) } catch { return [pscustomobject]@{ ok = $false; reason = "winget show failed: " + $_.Exception.Message; version = "" } }
+    try { $shown = "" + (& $Probes.winget) } catch { return (& $fail ("winget show failed: " + $_.Exception.Message)) }
     $inst = Read-HordeSetupWingetInstaller -Text $shown
-    if (-not $inst.ok) { return [pscustomobject]@{ ok = $false; reason = $inst.reason; version = "" } }
-    $msi = ""
-    try { $msi = "" + (& $Probes.download $inst.url $Folder) } catch { return [pscustomobject]@{ ok = $false; reason = "the download failed: " + $_.Exception.Message; version = "" } }
-    $got = ("" + (& $Probes.hash $msi)).ToLowerInvariant()
-    if ($got -cne $inst.sha256) { return [pscustomobject]@{ ok = $false; reason = "the downloaded installer's SHA-256 (" + $got + ") is not the one winget published (" + $inst.sha256 + "); it was not run"; version = "" } }
-    $code = [int](& $Probes.msiexec $msi)
-    # 3010 is "installed, restart wanted": the files are in place.
-    if ($code -ne 0 -and $code -ne 3010) { return [pscustomobject]@{ ok = $false; reason = "msiexec ended with exit " + $code; version = "" } }
+    if (-not $inst.ok) { return (& $fail $inst.reason) }
+    $folder = ""
+    $held = $null
+    try {
+        try { $folder = "" + (& $Probes.makeFolder) } catch { return (& $fail ("the installer's folder could not be made: " + $_.Exception.Message)) }
+        $msi = ""
+        try { $msi = "" + (& $Probes.download $inst.url $folder) } catch { return (& $fail ("the download failed: " + $_.Exception.Message)) }
+        try { $held = & $Probes.hold $msi } catch { return (& $fail ("the downloaded installer could not be held: " + $_.Exception.Message)) }
+        $got = ("" + (& $Probes.hash $held)).ToLowerInvariant()
+        if ($got -cne $inst.sha256) { return (& $fail ("the downloaded installer's SHA-256 (" + $got + ") is not the one winget published (" + $inst.sha256 + "); it was not run")) }
+        $code = [int](& $Probes.msiexec $msi)
+        # 3010 is "installed, restart wanted": the files are in place.
+        if ($code -ne 0 -and $code -ne 3010) { return (& $fail ("msiexec ended with exit " + $code)) }
+    } finally {
+        if ($null -ne $held) { try { & $Probes.release $held } catch { } }
+        if ($folder -ne "") { try { & $Probes.removeFolder $folder } catch { } }
+    }
     $ver = ("" + (& $Probes.run $MsiPath)).Trim()
-    if ($ver -eq "") { return [pscustomobject]@{ ok = $false; reason = "the installer ran but " + $MsiPath + " does not report a version"; version = "" } }
+    if ($ver -eq "") { return (& $fail ("the installer ran but " + $MsiPath + " does not report a version")) }
     return [pscustomobject]@{ ok = $true; reason = ""; version = $ver }
+}
+
+function Get-HordeSetupStreamHash {
+    # SHA-256 (hex) of everything in -Stream, from its start: the hash is of the held handle.
+    param([Parameter(Mandatory = $true)][System.IO.Stream]$Stream)
+    [void]$Stream.Seek(0, [System.IO.SeekOrigin]::Begin)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return (($sha.ComputeHash($Stream) | ForEach-Object { $_.ToString("x2") }) -join "") } finally { $sha.Dispose() }
+}
+
+function Get-HordeSetupHoldProbes {
+    # The probes that hold, hash, release and remove, real in both the real and the pretend install.
+    return @{
+        hold         = { param($Path) [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read) }
+        hash         = { param($Stream) Get-HordeSetupStreamHash -Stream $Stream }
+        release      = { param($Stream) $Stream.Dispose() }
+        removeFolder = { param($Folder) Remove-Item -LiteralPath $Folder -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 function Get-HordeSetupStoreDefaultProbes {
     # The real answers for the two steps, each a block a suite may replace.
     return @{
-        storePolicy    = { $v = [Microsoft.Win32.Registry]::GetValue($script:HordeSetupStoreKey, "AutoDownload", $null); if ($null -eq $v) { $null } else { [int]$v } }
+        # The raw value: a decision treats anything but a whole number as not set.
+        storePolicy    = { [Microsoft.Win32.Registry]::GetValue($script:HordeSetupStoreKey, "AutoDownload", $null) }
         setStorePolicy = { [Microsoft.Win32.Registry]::SetValue($script:HordeSetupStoreKey, "AutoDownload", 2, [Microsoft.Win32.RegistryValueKind]::DWord) }
         pwshResolved   = { $c = @(Get-Command -Name "pwsh" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1); if ($c.Count -eq 1) { "" + $c[0].Source } else { "" } }
         msiVersion     = { $p = Get-HordeSetupMsiPwshPath; if ([System.IO.File]::Exists($p)) { "" + [System.Diagnostics.FileVersionInfo]::GetVersionInfo($p).ProductVersion } else { "" } }
         installMsi     = {
             param($MsiPath)
-            $folder = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-setup-pwsh-" + [guid]::NewGuid().ToString("N"))
-            [void][System.IO.Directory]::CreateDirectory($folder)
-            try {
-                $real = @{
-                    # No `winget install`: it sees the Store copy as installed and refuses (see the header).
-                    winget   = { (& winget.exe show --id Microsoft.PowerShell --source winget --exact --installer-type wix --architecture x64 --disable-interactivity) -join "`n" }
-                    download = {
-                        param($Url, $Dir)
-                        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-                        $f = Join-Path $Dir "PowerShell.msi"
-                        (New-Object System.Net.WebClient).DownloadFile($Url, $f)
-                        $f
-                    }
-                    hash     = { param($Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
-                    msiexec  = {
-                        param($Msi)
-                        $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", ('"' + $Msi + '"'), "/qn", "/norestart", "ADD_PATH=1", "ENABLE_MU=0", "USE_MU=0") -Wait -PassThru
-                        $p.ExitCode
-                    }
-                    run      = { param($Pwsh) if ([System.IO.File]::Exists($Pwsh)) { (& $Pwsh -NoProfile -NoLogo -Command '$PSVersionTable.PSVersion.ToString()') -join "" } else { "" } }
-                }
-                Install-HordeSetupPowerShellMsi -Probes $real -MsiPath $MsiPath -Folder $folder
-            } finally { Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue }
+            $real = Get-HordeSetupHoldProbes
+            # No `winget install`: it sees the Store copy as installed and refuses (see the header).
+            $real.winget = { (& winget.exe show --id Microsoft.PowerShell --source winget --exact --installer-type wix --architecture x64 --disable-interactivity) -join "`n" }
+            $real.makeFolder = {
+                $dir = Join-Path ("" + $env:ProgramData) ("horde-setup-pwsh-" + [guid]::NewGuid().ToString("N"))
+                if ([System.IO.Directory]::Exists($dir)) { throw "the folder already exists" }
+                # Made WITH its access list: there is no moment it is open to other users.
+                [void][System.IO.Directory]::CreateDirectory($dir, (Get-HordeSetupSecureFolderSecurity))
+                $dir
+            }
+            # -TimeoutSec 300: a stalled download must fail the step with a sentence, never hang setup.
+            $real.download = {
+                param($Url, $Dir)
+                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                $f = Join-Path $Dir "PowerShell.msi"
+                $ProgressPreference = "SilentlyContinue"
+                try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri $Url -OutFile $f } catch { throw ("no complete download within 300 seconds (" + $_.Exception.Message + ")") }
+                $f
+            }
+            $real.msiexec = {
+                param($Msi)
+                $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", ('"' + $Msi + '"'), "/qn", "/norestart", "ADD_PATH=1", "ENABLE_MU=0", "USE_MU=0") -Wait -PassThru
+                $p.ExitCode
+            }
+            $real.run = { param($Pwsh) if ([System.IO.File]::Exists($Pwsh)) { (& $Pwsh -NoProfile -NoLogo -Command '$PSVersionTable.PSVersion.ToString()') -join "" } else { "" } }
+            Install-HordeSetupPowerShellMsi -Probes $real -MsiPath $MsiPath
         }
     }
 }
@@ -165,29 +226,24 @@ function Add-HordeSetupFakeAction {
 function Get-HordeSetupFakeStoreProbes {
     # The pretend machine's answers, from the JSON file -Path: elevated, storePolicy (number or null),
     # pwshResolved, msiVersion, wingetText, msiContent (what the "download" holds), actions (what was
-    # changed). The install runs the REAL pipeline (hash check included) over these stand-ins.
+    # changed). The install runs the REAL pipeline (hold and hash included) over these stand-ins.
     param([Parameter(Mandatory = $true)][string]$Path)
     $script:HordeSetupFakePath = $Path
     return @{
         elevated       = { (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).elevated -eq $true }
-        storePolicy    = { $v = (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).storePolicy; if ($null -eq $v) { $null } else { [int]$v } }
+        storePolicy    = { (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).storePolicy }
         setStorePolicy = { Add-HordeSetupFakeAction -Path $script:HordeSetupFakePath -Action "set-store-policy" -Set @{ storePolicy = 2 } }
         pwshResolved   = { "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).pwshResolved }
         msiVersion     = { "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiVersion }
         installMsi     = {
             param($MsiPath)
-            $folder = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-setup-fake-pwsh-" + [guid]::NewGuid().ToString("N"))
-            [void][System.IO.Directory]::CreateDirectory($folder)
-            try {
-                $stand = @{
-                    winget   = { "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).wingetText }
-                    download = { param($Url, $Dir) $f = Join-Path $Dir "PowerShell.msi"; [System.IO.File]::WriteAllText($f, ("" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiContent), [System.Text.Encoding]::ASCII); $f }
-                    hash     = { param($Path2) (Get-FileHash -LiteralPath $Path2 -Algorithm SHA256).Hash }
-                    msiexec  = { param($Msi) Add-HordeSetupFakeAction -Path $script:HordeSetupFakePath -Action "install-msi" -Set @{ msiVersion = "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiWillBe }; 0 }
-                    run      = { param($Pwsh) "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiVersion }
-                }
-                Install-HordeSetupPowerShellMsi -Probes $stand -MsiPath $MsiPath -Folder $folder
-            } finally { Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue }
+            $stand = Get-HordeSetupHoldProbes
+            $stand.winget = { "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).wingetText }
+            $stand.makeFolder = { $d = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-setup-fake-pwsh-" + [guid]::NewGuid().ToString("N")); [void][System.IO.Directory]::CreateDirectory($d); $d }
+            $stand.download = { param($Url, $Dir) $f = Join-Path $Dir "PowerShell.msi"; [System.IO.File]::WriteAllText($f, ("" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiContent), [System.Text.Encoding]::ASCII); $f }
+            $stand.msiexec = { param($Msi) Add-HordeSetupFakeAction -Path $script:HordeSetupFakePath -Action "install-msi" -Set @{ msiVersion = "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiWillBe }; 0 }
+            $stand.run = { param($Pwsh) "" + (Read-HordeSetupFakeMachine -Path $script:HordeSetupFakePath).msiVersion }
+            Install-HordeSetupPowerShellMsi -Probes $stand -MsiPath $MsiPath
         }
     }
 }

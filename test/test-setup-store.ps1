@@ -11,7 +11,10 @@
 #   3. POWERSHELL 7: Store path with no MSI, Store path with the MSI (done, noted), missing, MSI only;
 #      the Store copy is never asked to be removed by setup, only said it can be.
 #   4. WINGET'S TEXT: address and SHA-256 read; no hash, a short hash, an http address each refused.
-#   5. THE INSTALL: a wrong hash never reaches msiexec; each failing stage says which and stops; 3010 is
+#   4b. THE FOLDER AND THE HOLD: the installer's folder lists only SYSTEM and Administrators, with no
+#      inheritance; a held file cannot be written or deleted by anyone else; the hash is of the held stream.
+#   5. THE INSTALL: the folder before the file, the hold before the hash, the release after msiexec;
+#      a wrong hash never reaches msiexec; each failing stage says which and stops; 3010 is
 #      success; a pwsh that reports nothing is a failure.
 #   6. THE STEPS, with counted stand-ins: not elevated tries nothing; elevated fixes once; a second run
 #      changes nothing and says so; a failed install is a to-do with the reason, never a "fixed".
@@ -47,6 +50,8 @@ foreach ($bad in @($null, 0, 1, 4)) {
 $d = Get-HordeSetupStorePolicyDecision -Policy $null -Elevated $true
 Check (-not $d.done -and $d.next -ceq "" -and $d.said -clike "*AutoDownload is unset*") "unset and elevated: not done, and no sentence about waiting for an elevated run"
 Check ((Get-HordeSetupStorePolicyDecision -Policy 0 -Elevated $true).said -clike "*AutoDownload is 0*") "the value found is named"
+$d = Get-HordeSetupStorePolicyDecision -Policy "not a number" -Elevated $true
+Check (-not $d.done -and $d.said -clike "*AutoDownload is unset*") "MUST FAIL: a value that is not a whole number is treated as not set, and does not throw"
 
 Write-Host "--- 3. PowerShell 7 ---" -ForegroundColor Cyan
 $d = Get-HordeSetupPowerShellDecision -Resolved $storePwsh -MsiPath $msiPath -MsiVersion "" -Elevated $true
@@ -66,10 +71,52 @@ $sha = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
 $good = "Found PowerShell [Microsoft.PowerShell]`n  Installer Type: wix`n  Installer Url: https://example.invalid/PowerShell-7.5.3-win-x64.msi`n  Installer SHA256: " + $sha + "`n"
 $i = Read-HordeSetupWingetInstaller -Text $good
 Check ($i.ok -and $i.url -ceq "https://example.invalid/PowerShell-7.5.3-win-x64.msi" -and $i.sha256 -ceq $sha.ToLowerInvariant()) "the address and the SHA-256 are read, the hash in lower case"
-Check (-not (Read-HordeSetupWingetInstaller -Text "Installer Url: https://x/y.msi`n").ok) "MUST FAIL: no hash"
-Check (-not (Read-HordeSetupWingetInstaller -Text ("Installer Url: https://x/y.msi`nInstaller SHA256: abc123`n")).ok) "MUST FAIL: a short hash"
-Check (-not (Read-HordeSetupWingetInstaller -Text ("Installer Url: http://x/y.msi`nInstaller SHA256: " + $sha + "`n")).ok) "MUST FAIL: an http address"
-Check (-not (Read-HordeSetupWingetInstaller -Text "").ok) "MUST FAIL: empty text"
+$r = Read-HordeSetupWingetInstaller -Text "Installer Url: https://x/y-x64.msi`n"
+Check (-not $r.ok) "MUST FAIL: no hash"
+Check (-not (Read-HordeSetupWingetInstaller -Text ("Installer Url: https://x/y-x64.msi`nInstaller SHA256: abc123`n")).ok) "MUST FAIL: a short hash"
+Check (-not (Read-HordeSetupWingetInstaller -Text ("Installer Url: http://x/y-x64.msi`nInstaller SHA256: " + $sha + "`n")).ok) "MUST FAIL: an http address"
+Check (-not (Read-HordeSetupWingetInstaller -Text ("Installer Url: https://x/y-x64.exe`nInstaller SHA256: " + $sha + "`n")).ok) "MUST FAIL: an address that is not an .msi"
+Check (-not (Read-HordeSetupWingetInstaller -Text ("Installer Url: https://x/y-arm64.msi`nInstaller SHA256: " + $sha + "`n")).ok) "MUST FAIL: an address with no x64 in it"
+$r = Read-HordeSetupWingetInstaller -Text ""
+Check (-not $r.ok -and $r.reason -ceq "winget output not understood (a non-English winget prints other labels); nothing installed") "MUST FAIL: empty text says the output was not understood"
+$r = Read-HordeSetupWingetInstaller -Text ("Installateur-URL: https://x/y-x64.msi`nSHA256: " + $sha + "`n")
+Check (-not $r.ok -and $r.reason -clike "winget output not understood*") "MUST FAIL: other labels (a non-English winget) say so"
+$two = "  Installer Url: https://example.invalid/PowerShell-7.5.3-win-arm64.msi`n  Installer SHA256: " + ("1" * 64) + "`n  Installer Url: https://example.invalid/PowerShell-7.5.3-win-x64.msi`n  Installer SHA256: " + $sha + "`n"
+$r = Read-HordeSetupWingetInstaller -Text $two
+Check (-not $r.ok -and $r.reason -ceq "winget listed more than one installer; nothing installed") "MUST FAIL: two installers (arm64 then x64) are refused, not guessed between"
+Check (-not (Read-HordeSetupWingetInstaller -Text ($good + "  Installer SHA256: " + $sha + "`n")).ok) "MUST FAIL: two hash lines are refused"
+
+Write-Host "--- 4b. the installer's folder and the hold ---" -ForegroundColor Cyan
+$sec = Get-HordeSetupSecureFolderSecurity
+$rules = @($sec.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
+$sids = @($rules | ForEach-Object { $_.IdentityReference.Value } | Sort-Object)
+Check ($sec.AreAccessRulesProtected) "the folder's access list does not inherit ProgramData's"
+Check (($sids -join ",") -ceq "S-1-5-18,S-1-5-32-544" -and $rules.Count -eq 2) ("only SYSTEM and Administrators are named (" + ($sids -join ",") + ")")
+Check (@($rules | Where-Object { $_.AccessControlType -ne "Allow" -or ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl }).Count -eq 0) "each has full control, as an allow"
+Check (@($rules | Where-Object { -not ($_.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ObjectInherit) }).Count -eq 0) "and it passes to the file made inside"
+Check (-not ($sids -contains "S-1-5-32-545") -and -not ($sids -contains "S-1-1-0") -and -not ($sids -contains "S-1-5-11")) "MUST FAIL: Users, Everyone and Authenticated Users are not in it"
+$holdTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-setup-hold-test-" + [guid]::NewGuid().ToString("N"))
+[void][System.IO.Directory]::CreateDirectory($holdTmp)
+try {
+    $hf = Join-Path $holdTmp "h.bin"
+    [System.IO.File]::WriteAllText($hf, "pretend-msi")
+    $hp = Get-HordeSetupHoldProbes
+    $stream = & $hp.hold $hf
+    $writeRefused = $false
+    try { $w = [System.IO.File]::Open($hf, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite); $w.Dispose() } catch { $writeRefused = $true }
+    $delRefused = $false
+    try { [System.IO.File]::Delete($hf) } catch { $delRefused = $true }
+    $readOk = $false
+    try { $rd = [System.IO.File]::Open($hf, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read); $rd.Dispose(); $readOk = $true } catch { $readOk = $false }
+    $viaStream = & $hp.hash $stream
+    Check ($writeRefused -and $delRefused) "MUST FAIL: while held, the file cannot be opened for writing or deleted by anyone else"
+    Check ($readOk) "while held, it can still be read (msiexec can run it)"
+    & $hp.release $stream
+    Check ($viaStream -ceq (Get-FileHash -LiteralPath $hf -Algorithm SHA256).Hash.ToLowerInvariant()) "the hash of the held stream is the file's SHA-256"
+    $writableAfter = $false
+    try { $w2 = [System.IO.File]::Open($hf, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite); $w2.Dispose(); $writableAfter = $true } catch { $writableAfter = $false }
+    Check ($writableAfter) "after the release the file is writable again (the hold was the only thing in the way)"
+} finally { Remove-Item -LiteralPath $holdTmp -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host "--- 5. the install pipeline ---" -ForegroundColor Cyan
 $script:calls = New-Object System.Collections.ArrayList
@@ -79,48 +126,57 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-setup-store-test-" + 
 $pretend = Join-Path $tmp "pretend.bin"
 [System.IO.File]::WriteAllText($pretend, $script:msiBytes)
 $script:hashOf = (Get-FileHash -LiteralPath $pretend -Algorithm SHA256).Hash
-$script:wingetText = "Installer Url: https://example.invalid/p.msi`nInstaller SHA256: " + $script:hashOf + "`n"
+$script:wingetText = "Installer Url: https://example.invalid/p-x64.msi`nInstaller SHA256: " + $script:hashOf + "`n"
+$script:heldObject = [pscustomobject]@{ marker = "the held stream" }
 function New-Stand {
     $script:calls.Clear()
     return @{
-        winget   = { [void]$script:calls.Add("winget"); $script:wingetText }
-        download = { param($Url, $Dir) [void]$script:calls.Add("download:" + $Url); $f = Join-Path $Dir "p.msi"; [System.IO.File]::WriteAllText($f, $script:msiBytes); $f }
-        hash     = { param($Path) [void]$script:calls.Add("hash"); (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
-        msiexec  = { param($Msi) [void]$script:calls.Add("msiexec"); 0 }
-        run      = { param($Pwsh) [void]$script:calls.Add("run:" + $Pwsh); "7.5.3" }
+        winget       = { [void]$script:calls.Add("winget"); $script:wingetText }
+        makeFolder   = { [void]$script:calls.Add("makeFolder"); $script:tmp2 = Join-Path $tmp ("f" + [guid]::NewGuid().ToString("N")); [void][System.IO.Directory]::CreateDirectory($script:tmp2); $script:tmp2 }
+        download     = { param($Url, $Dir) [void]$script:calls.Add("download:" + $Url); $f = Join-Path $Dir "p.msi"; [System.IO.File]::WriteAllText($f, $script:msiBytes); $f }
+        hold         = { param($Path) [void]$script:calls.Add("hold"); $script:heldObject }
+        hash         = { param($Stream) [void]$script:calls.Add($(if ([object]::ReferenceEquals($Stream, $script:heldObject)) { "hash-of-held" } else { "hash-of-something-else" })); $script:hashOf }
+        msiexec      = { param($Msi) [void]$script:calls.Add("msiexec"); 0 }
+        release      = { param($Stream) [void]$script:calls.Add("release") }
+        removeFolder = { param($Folder) [void]$script:calls.Add("removeFolder") }
+        run          = { param($Pwsh) [void]$script:calls.Add("run:" + $Pwsh); "7.5.3" }
     }
 }
 try {
-    $r = Install-HordeSetupPowerShellMsi -Probes (New-Stand) -MsiPath $msiPath -Folder $tmp
-    Check ($r.ok -and $r.version -ceq "7.5.3" -and ($script:calls -join ",") -ceq ("winget,download:https://example.invalid/p.msi,hash,msiexec,run:" + $msiPath)) ("the stages run in order: " + ($script:calls -join ","))
+    $r = Install-HordeSetupPowerShellMsi -Probes (New-Stand) -MsiPath $msiPath
+    Check ($r.ok -and $r.version -ceq "7.5.3" -and ($script:calls -join ",") -ceq ("winget,makeFolder,download:https://example.invalid/p-x64.msi,hold,hash-of-held,msiexec,release,removeFolder,run:" + $msiPath)) ("the stages run in order: the folder before the file, the hold before the hash, the hash of the held stream, the release after msiexec (" + ($script:calls -join ",") + ")")
     $s = New-Stand
-    $script:wingetText = "Installer Url: https://example.invalid/p.msi`nInstaller SHA256: " + ("0" * 64) + "`n"
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
-    Check (-not $r.ok -and $r.reason -clike "*SHA-256*it was not run" -and $script:calls -cnotcontains "msiexec") "MUST FAIL: a wrong hash never reaches msiexec"
-    $script:wingetText = "Installer Url: https://example.invalid/p.msi`nInstaller SHA256: " + $script:hashOf + "`n"
+    $script:wingetText = "Installer Url: https://example.invalid/p-x64.msi`nInstaller SHA256: " + ("0" * 64) + "`n"
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
+    Check (-not $r.ok -and $r.reason -clike "*SHA-256*it was not run" -and $script:calls -cnotcontains "msiexec" -and $script:calls -ccontains "release" -and $script:calls -ccontains "removeFolder") "MUST FAIL: a wrong hash never reaches msiexec, and the hold and the folder are still let go"
+    $script:wingetText = "Installer Url: https://example.invalid/p-x64.msi`nInstaller SHA256: " + $script:hashOf + "`n"
     $s = New-Stand
     $s.winget = { throw "winget is not installed" }
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
-    Check (-not $r.ok -and $r.reason -clike "winget show failed*not installed*" -and $script:calls.Count -eq 0) "MUST FAIL: no winget stops before any download"
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
+    Check (-not $r.ok -and $r.reason -clike "winget show failed*not installed*" -and $script:calls.Count -eq 0) "MUST FAIL: no winget stops before any folder or download"
     $s = New-Stand
     $s.winget = { "nothing useful" }
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
-    Check (-not $r.ok -and $r.reason -clike "winget show did not give*") "MUST FAIL: winget text with no address stops"
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
+    Check (-not $r.ok -and $r.reason -clike "winget output not understood*") "MUST FAIL: winget text with no address stops"
     $s = New-Stand
-    $s.download = { throw "offline" }
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
-    Check (-not $r.ok -and $r.reason -clike "the download failed: offline" -and $script:calls -cnotcontains "msiexec") "MUST FAIL: a failed download stops"
+    $s.makeFolder = { throw "access denied" }
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
+    Check (-not $r.ok -and $r.reason -clike "the installer's folder could not be made: access denied") "MUST FAIL: no secure folder, nothing is downloaded"
+    $s = New-Stand
+    $s.download = { throw "no complete download within 300 seconds" }
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
+    Check (-not $r.ok -and $r.reason -clike "the download failed: no complete download within 300 seconds" -and $script:calls -cnotcontains "msiexec" -and $script:calls -ccontains "removeFolder") "MUST FAIL: a stalled download fails with a sentence, and the folder goes"
     $s = New-Stand
     $s.msiexec = { param($Msi) [void]$script:calls.Add("msiexec"); 1603 }
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
-    Check (-not $r.ok -and $r.reason -ceq "msiexec ended with exit 1603" -and @($script:calls | Where-Object { $_ -clike "run:*" }).Count -eq 0) "MUST FAIL: msiexec exit 1603 is a failure and pwsh is not run"
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
+    Check (-not $r.ok -and $r.reason -ceq "msiexec ended with exit 1603" -and @($script:calls | Where-Object { $_ -clike "run:*" }).Count -eq 0 -and $script:calls -ccontains "release") "MUST FAIL: msiexec exit 1603 is a failure, pwsh is not run, the hold is released"
     $s = New-Stand
     $s.msiexec = { param($Msi) [void]$script:calls.Add("msiexec"); 3010 }
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
     Check ($r.ok) "exit 3010 (restart wanted) is success: the files are in place"
     $s = New-Stand
     $s.run = { param($Pwsh) "" }
-    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath -Folder $tmp
+    $r = Install-HordeSetupPowerShellMsi -Probes $s -MsiPath $msiPath
     Check (-not $r.ok -and $r.reason -clike "*does not report a version") "MUST FAIL: a pwsh.exe that reports no version is not an install"
 } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 
