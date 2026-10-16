@@ -85,7 +85,7 @@ function Invoke-HordeOrcCommand {
     param([Parameter(Mandatory = $true)][string]$Verb, [string[]]$Rest = @(), [string]$BackBurner = "", [string]$Version = "", [string]$File = "", [switch]$Json, [string]$HordeHome = "", [string]$By = "")
     $usage = { param($m) $e = New-Object System.ArgumentException($m); $e.Data["horde.usage"] = $true; throw $e }
     # An empty remainder can arrive as one empty word (measured 2026-10-15: `horde orcs list` bound one).
-    $rest = @($Rest | Where-Object { $null -ne $_ -and "$_" -ne "" })
+    $words = @($Rest | Where-Object { $null -ne $_ -and "$_" -ne "" })
     $ver = [long]-1
     if ($Version -ne "") {
         if ($Version -cnotmatch '\A[0-9]{1,15}\z') { & $usage ("-Version is the registry version the change was drawn from, a whole number (horde orcs list shows it), not '" + $Version + "'") }
@@ -96,7 +96,7 @@ function Invoke-HordeOrcCommand {
     if (-not $paths.ok) { return [pscustomobject]@{ lines = @(); failure = $paths.reason } }
     $dash = Get-HordeOrcDash -Paths $paths
     if ($Verb -ceq "list") {
-        if ($rest.Count -gt 0) { & $usage "list takes no words" }
+        if ($words.Count -gt 0) { & $usage "list takes no words" }
         if (-not $dash.ok) { return [pscustomobject]@{ lines = @(); failure = $dash.reason } }
         if ($Json) {
             # The same document the phone is sent (ConvertTo-HordeOrcDashDocument), and the notes beside it.
@@ -108,7 +108,7 @@ function Invoke-HordeOrcCommand {
     }
     if ($By -eq "") { $By = Resolve-HordeOrcBy }
     if ($Verb -ceq "seed") {
-        if ($File -eq "" -or $rest.Count -gt 0) { & $usage "seed takes -File <seed.json> and nothing else" }
+        if ($File -eq "" -or $words.Count -gt 0) { & $usage "seed takes -File <seed.json> and nothing else" }
         if (-not [System.IO.File]::Exists($File)) { return [pscustomobject]@{ lines = @(); failure = ("there is no seed file at " + $File) } }
         $text = [System.IO.File]::ReadAllText($File, (New-Object System.Text.UTF8Encoding($false, $true)))
         $seed = $null
@@ -124,29 +124,29 @@ function Invoke-HordeOrcCommand {
     $request = $null
     switch -CaseSensitive ($Verb) {
         "order" {
-            if ($rest.Count -eq 0) { & $usage "order names every Orc on the list, first to last: horde orcs order <id> <id> ... [-BackBurner <id,id>]" }
+            if ($words.Count -eq 0) { & $usage "order names every Orc on the list, first to last: horde orcs order <id> <id> ... [-BackBurner <id,id>]" }
             $back = @("$BackBurner".Split([char]',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object { Resolve-HordeOrcId -Given $_ -Dash $dash })
-            $request = @{ order = @($rest | ForEach-Object { Resolve-HordeOrcId -Given $_ -Dash $dash }); backBurner = @($back) }
+            $request = @{ order = @($words | ForEach-Object { Resolve-HordeOrcId -Given $_ -Dash $dash }); backBurner = @($back) }
         }
         "backburner" {
-            if ($rest.Count -ne 2 -or @("on", "off") -cnotcontains $rest[1]) { & $usage "backburner takes an id and on or off: horde orcs backburner <id> on" }
-            $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash); on = ($rest[1] -ceq "on") }
+            if ($words.Count -ne 2 -or @("on", "off") -cnotcontains $words[1]) { & $usage "backburner takes an id and on or off: horde orcs backburner <id> on" }
+            $request = @{ id = (Resolve-HordeOrcId -Given $words[0] -Dash $dash); on = ($words[1] -ceq "on") }
         }
         "name" {
-            if ($rest.Count -lt 2) { & $usage "name takes an id and the name: horde orcs name <id> ""<name>""" }
-            $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash); name = (@($rest | Select-Object -Skip 1) -join " ") }
+            if ($words.Count -lt 2) { & $usage "name takes an id and the name: horde orcs name <id> ""<name>""" }
+            $request = @{ id = (Resolve-HordeOrcId -Given $words[0] -Dash $dash); name = (@($words | Select-Object -Skip 1) -join " ") }
         }
         "domain" {
-            if ($rest.Count -lt 2) { & $usage "domain takes an id and the domain line: horde orcs domain <id> ""<one line>""" }
-            $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash); domain = (@($rest | Select-Object -Skip 1) -join " ") }
+            if ($words.Count -lt 2) { & $usage "domain takes an id and the domain line: horde orcs domain <id> ""<one line>""" }
+            $request = @{ id = (Resolve-HordeOrcId -Given $words[0] -Dash $dash); domain = (@($words | Select-Object -Skip 1) -join " ") }
         }
         "retire" {
-            if ($rest.Count -ne 1) { & $usage "retire takes one id: horde orcs retire <id>" }
-            $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash) }
+            if ($words.Count -ne 1) { & $usage "retire takes one id: horde orcs retire <id>" }
+            $request = @{ id = (Resolve-HordeOrcId -Given $words[0] -Dash $dash) }
         }
         "tier" {
-            if ($rest.Count -ne 2 -or @("1", "2") -cnotcontains $rest[1]) { & $usage "tier takes an id and 1 or 2: horde orcs tier <id> 1" }
-            $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash); tier = [int]$rest[1] }
+            if ($words.Count -ne 2 -or @("1", "2") -cnotcontains $words[1]) { & $usage "tier takes an id and 1 or 2: horde orcs tier <id> 1" }
+            $request = @{ id = (Resolve-HordeOrcId -Given $words[0] -Dash $dash); tier = [int]$words[1] }
         }
         default { & $usage ("'" + $Verb + "' is not a verb of horde orcs; the verbs are: " + ($script:HordeOrcVerbs -join ", ")) }
     }

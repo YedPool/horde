@@ -557,7 +557,7 @@ function Get-HordeOrcStatus {
     # file's last write, -WaitingOn its waiting-on value, -SessionTimes when each of its open sessions
     # last moved, -BlocksAllSince when each of its open questions that blocks all was added.
     param($StatusAt, [string]$WaitingOn = "", [object[]]$SessionTimes = @(), [object[]]$BlocksAllSince = @(), [Parameter(Mandatory = $true)][datetime]$Now, [int]$WorkingMinutes = 15)
-    $now = $Now.ToUniversalTime()
+    $utcNow = $Now.ToUniversalTime()
     $causes = New-Object System.Collections.ArrayList
     $blocked = $false
     if (Test-HordeOrcWaiting -WaitingOn $WaitingOn) { $blocked = $true; if ($null -ne $StatusAt) { [void]$causes.Add([datetime]$StatusAt) } }
@@ -569,11 +569,11 @@ function Get-HordeOrcStatus {
     } else {
         foreach ($t in @(@($StatusAt) + @($SessionTimes))) { if ($null -ne $t -and ($null -eq $since -or [datetime]$t -gt $since)) { $since = [datetime]$t } }
         $word = "idle"
-        if ($null -ne $since -and ($now - $since).TotalMinutes -le $WorkingMinutes) { $word = "working" }
+        if ($null -ne $since -and ($utcNow - $since).TotalMinutes -le $WorkingMinutes) { $word = "working" }
     }
     $age = ""; $text = $word
     if ($word -cne "working") {
-        if ($null -ne $since) { $age = Format-HordeOrcAge -Seconds ([Math]::Max(0, ($now - $since).TotalSeconds)); $text = $word + " " + $age }
+        if ($null -ne $since) { $age = Format-HordeOrcAge -Seconds ([Math]::Max(0, ($utcNow - $since).TotalSeconds)); $text = $word + " " + $age }
         else { $text = $word + ", since when is not known" }
     }
     $sinceText = $(if ($null -ne $since) { $since.ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) } else { "" })
