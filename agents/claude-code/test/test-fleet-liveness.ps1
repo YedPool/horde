@@ -54,7 +54,7 @@ function Usual-World {
         @{ sid = $REUSED; pid = 6161; ps = $START; cwd = "C:\work\reused" })
 }
 function Read-Snapshot { param([scriptblock]$ListFiles = $null) return (New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords -Dirs @($dir) -ProcessStart $processStart -ListFiles $ListFiles)) }
-function Verdict { param($Snap, [string]$Id, [string]$Cwd = "", [string[]]$Ignore = @(), $Since = $null) return (Get-ClaudeCodeFleetVerdict -Snapshot $Snap -SessionId $Id -Cwd $Cwd -Ignore $Ignore -Since $Since) }
+function Verdict { param($Snap, [string]$Id, [string]$Cwd = "", [string[]]$Ignore = @(), $Since = $null, $Process = $null) return (Get-ClaudeCodeFleetVerdict -Snapshot $Snap -SessionId $Id -Cwd $Cwd -Ignore $Ignore -Since $Since -Process $Process) }
 
 # NOT ONE try AROUND THE CHECKS (test/test-files-cli.ps1 says why): after an error no check expected, the
 # trap goes on with the next statement of the script, and one try around everything is one statement.
@@ -144,21 +144,46 @@ Section "narrowed for hibernation: only a session that started after the sleeper
 # guard's rule refused a sleeper whenever ANY session ran in its folder; a session that was already
 # running while the sleeper still ran under its own id cannot be the sleeper under a new one. -Since is
 # when the sleeper stopped (or the hibernation was taken): only a session started after it counts.
+# THE NARROWING NEEDS THE SLEEPER'S OWN PROCESS (review of PR 318): a session can change its id inside
+# the same process (/clear, /resume, a compaction), and that process started before the sleeper "stopped".
+# So -Since is used only with -Process, the pid and start time recorded for the sleeper: that very process
+# running under any id is the sleeper running, and only OTHER processes are narrowed. With no -Process
+# (an older record) the guard's own rule stands.
 $startedAt = [DateTime]::FromFileTimeUtc([long]$START)
+$gone = [pscustomobject]@{ pid = "9393"; start = $START }
 Usual-World
 $snap = Read-Snapshot
-$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5)
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5) -Process $gone
 Check ($v.state -ceq "stopped") ("a session that started before the sleeper stopped is not its new id: stopped (" + $v.state + "/" + $v.kind + ")")
-$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(-5)
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(-5) -Process $gone
 Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") ("CONTROL: one that started after the sleeper stopped may be its new id: unknown (" + $v.state + "/" + $v.kind + ")")
-$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt -Process $gone
 Check ($v.state -ceq "stopped") "one that started at the very moment counts as already running"
 $v = Verdict $snap $OTHER "C:\work\live"
 Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") "with no -Since, the guard's own rule stands: unknown"
 $table["4242"] = "?"
-$v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5)
+$v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5) -Process $gone
 $table["4242"] = $START
 Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") ("a running session whose start cannot be read may be the new id: unknown (" + $v.state + "/" + $v.kind + ")")
+# P1 of the review: the sleeper OTHER was recorded in pid 4242, and that same process now runs as LIVE.
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5) -Process ([pscustomobject]@{ pid = "4242"; start = $START })
+Check ($v.state -ceq "running" -and $v.pid -ceq "4242" -and $v.reason -like "*4242*") ("its own recorded process still running under another id is the sleeper running, however early it started (" + $v.state + "/" + $v.kind + ": " + $v.reason + ")")
+$v = Verdict $snap $OTHER "C:\work\elsewhere" -Process ([pscustomobject]@{ pid = "4242"; start = $START })
+Check ($v.state -ceq "running") "in whatever folder it now runs"
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5) -Process ([pscustomobject]@{ pid = "4242"; start = ("" + ([long]$START - 50000000)) })
+Check ($v.state -ceq "stopped") ("CONTROL: the same pid with another start time is another process, and is narrowed like any other (" + $v.state + ")")
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5)
+Check ($v.state -ceq "unknown" -and $v.kind -ceq "rotated") ("with no recorded process -Since is not used: the guard's own rule, unknown (" + $v.state + "/" + $v.kind + ")")
+$v = Verdict $snap $OTHER "C:\work\live" -Since $startedAt.AddMinutes(5) -Process ([pscustomobject]@{ pid = ""; start = "" })
+Check ($v.state -ceq "unknown") "and so with an empty one"
+
+Section "a running session whose folder cannot be read may be the sleeper"
+# P2 of the review: a live control file with no cwd was compared as a folder of its own and passed over.
+Set-ControlFiles @(@{ sid = $LIVE; pid = 4242; ps = $START; cwd = "" })
+$v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Since $startedAt.AddMinutes(-5) -Process $gone
+Check ($v.state -ceq "unknown" -and $v.reason -like "*4242*") ("a live session with no folder in its control file is unknown, never passed over (" + $v.state + "/" + $v.kind + ")")
+$v = Verdict (Read-Snapshot) $OTHER "C:\work\live" -Ignore @($LIVE)
+Check ($v.state -ceq "stopped") "CONTROL: unless it is one the wake started itself"
 
 Section "the real process lookup"
 $mine = Get-ClaudeCodeFleetProcessStart -ProcessId $PID
@@ -168,6 +193,11 @@ Check ($none -ceq "") "a pid no process has reads as not running"
 Usual-World
 $r = Read-ClaudeCodeFleetRecords -Dirs @($dir)
 Check ("" + $r.error -eq "" -and @($r.records).Count -eq 3) "CONTROL: the default lookup reads the same folder"
+
+Section "the running sessions carry their start time, for a record to keep"
+Usual-World
+$run = @(Get-ClaudeCodeFleetRunning -Snapshot (Read-Snapshot))
+Check ($run.Count -eq 1 -and $run[0].sessionId -ceq $LIVE -and $run[0].pid -ceq "4242" -and $run[0].start -ceq $START) ("each live session comes with its pid and its process start time (" + (@($run | ForEach-Object { $_.sessionId + "/" + $_.pid + "/" + $_.start }) -join ", ") + ")")
 
 Section "the resume line and the environment"
 Check ((Get-ClaudeCodeFleetResumeLine -SessionId $LIVE) -ceq ("claude --resume " + $LIVE)) "the resume line is exactly the program, --resume and the id"
