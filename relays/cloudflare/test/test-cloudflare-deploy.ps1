@@ -18,7 +18,18 @@
 #   3. a wrangler that fails: at a secret, nothing is deployed; at the deploy, it says so; and what it
 #      printed reaches the founder with the values hidden;
 #   4. which relay: the one that can be deployed, and a refusal for one that cannot;
-#   5. the shipped command, end to end: horde relay deploy, its success and failure, and its refusals.
+#   5. the shipped command, end to end: horde relay deploy, its success and failure, and its refusals;
+#   6. the check after a deploy (2026-10-14): the relay's sign-in must send Google the client file's id,
+#      byte for byte - a matching Location passes, and a marked, spaced, doubled or missing id, or a
+#      relay whose sign-in is not set up, reports the deploy failed with no value in the reason. EVERY
+#      deploy here is checked against test/fake-signin-start.cjs (the setting deployCheckOrigin), never
+#      the real relay;
+#   7. every secret's value, refused before wrangler runs when it begins with a byte order mark, holds a
+#      character that is not printable ASCII, or has a space at either end - each rule with a twin that
+#      must pass;
+#   8. the bytes wrangler is given under Windows PowerShell 5.1 with a console whose input encoding is
+#      UTF-8 WITH a preamble, as the founder's was on 2026-10-14: the value and nothing before it - with
+#      a CONTROL that a plain start in that same console does put EF BB BF first, so the check can fail.
 #
 # NODE IS NEEDED (the fake is a node script, as wrangler is). Without it the suite skips and exits 3.
 
@@ -51,6 +62,32 @@ $dep = [pscustomobject]@{ name = "relay"; origin = $homeOrigin; callback = "/aut
 $callback = $dep.origin + $dep.callback
 $env:HORDE_FAKE_WRANGLER_LOG = $log
 $env:HORDE_FAKE_WRANGLER_FAIL = ""
+$node = Find-HordeCloudflareRelayNode
+$bom = [string][char]0xFEFF
+# The check after a failed comparison asks again; here it asks as often, but without the wait.
+$script:HordeCloudflareRelayCheckWaitMs = 50
+$starts = @{}
+$script:startProcs = New-Object System.Collections.ArrayList
+
+function Start-FakeStart {
+    # A stand-in for the relay's sign-in start (fake-signin-start.cjs) answering in -Mode: its origin.
+    param([string]$Mode)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $node
+    $psi.Arguments = '"' + (Join-Path $here "fake-signin-start.cjs") + '" ' + $clientId + ' ' + $Mode
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    [void]$script:startProcs.Add($p)
+    $null = $p.StandardError.ReadToEndAsync()
+    $line = $p.StandardOutput.ReadLineAsync()
+    if (-not $line.Wait(30000) -or "" + $line.Result -cnotmatch '\APORT ([0-9]+)\z') { throw ("the fake sign-in start did not start: " + $line.Result) }
+    return ("http://127.0.0.1:" + $Matches[1])
+}
+foreach ($m in @("same", "mark", "space", "none", "two")) { $starts[$m] = Start-FakeStart -Mode $m }
 
 function Write-Client {
     # A client file of the suite's own: -Text as is, or a well-formed web client.
@@ -65,9 +102,11 @@ function Write-Client {
 }
 function Set-Settings {
     # The relay's settings file in the suite's home: -Raw as is, or googleClientFile and wranglerScript.
-    param([string]$Client = "", [string]$Wrangler = $fake, [string]$Raw = "", [hashtable]$More = @{}, [string]$Origin = $homeOrigin)
+    # The check after the deploy asks the suite's stand-in (-Check, the matching one by default), never
+    # the real relay. -Origin is the home's relayOrigin (empty: none, so the shipped relay).
+    param([string]$Client = "", [string]$Wrangler = $fake, [string]$Raw = "", [hashtable]$More = @{}, [string]$Check = $starts["same"], [string]$Origin = $homeOrigin)
     if ($Raw -eq "") {
-        $set = @{ googleClientFile = $Client; wranglerScript = $Wrangler }
+        $set = @{ googleClientFile = $Client; wranglerScript = $Wrangler; deployCheckOrigin = $Check }
         if ($Origin -ne "") { $set["relayOrigin"] = $Origin }
         foreach ($k in @($More.Keys)) { $set[$k] = $More[$k] }
         $Raw = (@{ schemaVersion = 1; settings = $set } | ConvertTo-Json -Depth 4)
@@ -225,7 +264,155 @@ try {
     Check ($r.code -ne 0 -and $r.out.Contains("cannot be deployed")) "relay deploy -Relay local is refused"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-MaxTurns", "1") -Env $cliEnv
     Check ($r.code -ne 0 -and $r.out.Contains("-MaxTurns does not belong to relay deploy")) "a flag of another verb is refused"
+
+    Write-Host ""
+    Write-Host "--- 6. the check after a deploy: the client id sign-in sends Google ---" -ForegroundColor Cyan
+    $ok = Test-HordeCloudflareRelaySignInClient -Origin $starts["same"] -ClientId $clientId -Tries 1
+    Check ($ok.state -ceq "known") ("a Location whose client_id is the client file's passes (" + $ok.reason + ")")
+    $no = Test-HordeCloudflareRelaySignInClient -Origin $starts["mark"] -ClientId $clientId -Tries 1
+    Check ($no.state -ceq "unknown" -and "$($no.reason)".Contains("byte for byte") -and -not (Holds-Value ("" + $no.reason))) ("one whose client_id has a byte order mark in front fails, and the reason holds no value (" + $no.reason + ")")
+    Check ((Get-HordeCloudflareRelayLocationClientId -Location ("https://x/?a=1&client_id=" + [System.Uri]::EscapeDataString($bom + "id"))) -ceq ($bom + "id")) "CONTROL: the client_id is read back decoded, mark and all, so the comparison sees it"
+    Set-Settings -Client (Write-Client -WithCallback)
+    Clear-Log
+    $d = Deploy
+    Check ($d.answer.state -ceq "known" -and ($d.said -join "`n").Contains("checked: the relay's sign-in sends Google the client file's id")) ("a deploy whose relay sends the client file's id is checked and passes (" + $d.answer.reason + ")")
+    $bad = @(
+        @{ what = "a byte order mark in front of the id"; mode = "mark"; like = "byte for byte" },
+        @{ what = "a space after the id"; mode = "space"; like = "byte for byte" },
+        @{ what = "the id twice"; mode = "two"; like = "no single client_id" },
+        @{ what = "a sign-in that is not set up (503)"; mode = "none"; like = "answered 503" }
+    )
+    foreach ($c in $bad) {
+        Set-Settings -Client (Write-Client -WithCallback) -Check $starts[$c.mode]
+        Clear-Log
+        $d = Deploy
+        $why = "" + $d.answer.reason
+        $liveMember = $d.answer.PSObject.Properties["live"]
+        Check ($d.answer.state -ceq "unknown" -and $null -ne $liveMember -and $liveMember.Value -eq $true -and $why.Contains("relay 'cloudflare' IS deployed, but its sign-in failed the check after the deploy") -and $why -notmatch 'not deployed' -and $why.Contains($c.like) -and $why.Contains("deploy again from a fixed checkout") -and $why.Contains($starts[$c.mode] + "/auth/google redirects to Google") -and @(Read-Log).Count -eq 4 -and -not (Holds-Value ($why + ($d.said -join " ")))) ("a relay whose sign-in sends " + $c.what + ": the deploy is reported failed, says the Worker is live and the way back, with no value in the reason (" + $why + ")")
+    }
+    # Not 127.0.0.1, so refused - yet on this machine, so a mutant that took it would contact nothing.
+    Set-Settings -Client (Write-Client -WithCallback) -Check "http://localhost:9"
+    Clear-Log
+    $d = Deploy
+    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("deployCheckOrigin") -and @(Read-Log).Count -eq 0) ("the check can be pointed only at a stand-in on this machine: anything else is refused before wrangler runs (" + $d.answer.reason + ")")
+    $cliEnv["HORDE_FAKE_WRANGLER_FAIL"] = ""
+    Set-Settings -Client (Write-Client -WithCallback) -Check $starts["mark"]
+    Clear-Log
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
+    Check ($r.code -ne 0 -and $r.out.Contains("IS deployed, but its sign-in failed the check after the deploy") -and $r.out.Contains("byte for byte") -and -not (Holds-Value $r.out)) ("horde relay deploy whose check fails exits non-zero and says why, with no value (exit " + $r.code + ")")
+    # IT WENT OUT: the founder must act on a live relay, so the real command never says "not deployed"
+    # here, and does say the way back (review of PR 275).
+    Check ($r.out -notmatch 'not deployed' -and $r.out.Contains("deploy again from a fixed checkout") -and $r.out.Contains($starts["mark"] + "/auth/google redirects to Google")) ("and it never says 'not deployed', and names the way back (" + (($r.out -split "`r?`n" | Where-Object { $_ -match 'deploy' } | Select-Object -Last 2) -join " | ") + ")")
+    # ITS MUST-KEEP TWIN: a failure before anything is deployed still says so, in the shipped command.
+    Set-Settings -Client (Write-Client -WithCallback) -Check "http://localhost:9"
+    Clear-Log
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
+    Check ($r.code -ne 0 -and $r.out.Contains("the relay was not deployed") -and $r.out.Contains("relay 'cloudflare' was not deployed") -and $r.out -notmatch 'IS deployed' -and @(Read-Log).Count -eq 0) ("CONTROL: a deploy refused before wrangler runs still says 'not deployed' (exit " + $r.code + ")")
+
+    Write-Host ""
+    Write-Host "--- 7. every secret's value, before wrangler runs ---" -ForegroundColor Cyan
+    $twins = @(
+        @{ rule = "a byte order mark in front"; refuse = ($bom + $clientId); pass = $clientId; like = "byte order mark" },
+        @{ rule = "a space at either end"; refuse = ($clientSecret + " "); pass = ("GOCSPX-inner space-0123456"); like = "begins or ends with a space" },
+        @{ rule = "a space in front"; refuse = (" " + $clientSecret); pass = $clientSecret; like = "begins or ends with a space" },
+        @{ rule = "a character that is not ASCII"; refuse = ("GOCSPX-caf" + [char]0x00E9 + "0123456"); pass = "GOCSPX-cafe0123456"; like = "not printable ASCII" },
+        @{ rule = "a control character"; refuse = ("GOCSPX-a`tb0123456"); pass = "GOCSPX-a b0123456"; like = "not printable ASCII" }
+    )
+    foreach ($t in $twins) {
+        $r1 = Test-HordeCloudflareRelaySecretValue -Name "GOOGLE_CLIENT_SECRET" -Value $t.refuse
+        $r2 = Test-HordeCloudflareRelaySecretValue -Name "GOOGLE_CLIENT_SECRET" -Value $t.pass
+        Check ($r1.Contains($t.like) -and $r1.Contains("GOOGLE_CLIENT_SECRET") -and -not $r1.Contains($t.refuse.Trim([char]0xFEFF, ' '))) ("a value with " + $t.rule + " is refused, naming the secret and not the value (" + $r1 + ")")
+        Check ($r2 -ceq "") ("its twin without it passes (" + $r2 + ")")
+    }
+    # THROUGH THE DEPLOY: the reader is swapped for one that hands back the marked value, as no client file
+    # can (GoogleClient.ps1's patterns refuse it first), so the deploy's own check is what refuses.
+    $realRead = ${function:Read-HordeCloudflareRelayGoogleClient}
+    $realAllow = ${function:ConvertTo-HordeCloudflareRelayAllowlist}
+    try {
+        $through = @(
+            @{ what = "a client id with a byte order mark"; id = ($bom + $clientId); secret = $clientSecret; allow = ""; name = "GOOGLE_CLIENT_ID"; like = "byte order mark" },
+            @{ what = "a client secret with a space after it"; id = $clientId; secret = ($clientSecret + " "); allow = ""; name = "GOOGLE_CLIENT_SECRET"; like = "begins or ends with a space" },
+            @{ what = "a client secret that is not ASCII"; id = $clientId; secret = ($clientSecret + [char]0x00E9); allow = ""; name = "GOOGLE_CLIENT_SECRET"; like = "not printable ASCII" },
+            @{ what = "an allowlist with a byte order mark"; id = $clientId; secret = $clientSecret; allow = ($bom + '{"on":false,"emails":[],"subs":[]}'); name = "HORDE_RELAY_SIGNIN_ALLOWLIST"; like = "byte order mark" }
+        )
+        Set-Settings -Client (Write-Client -WithCallback)
+        foreach ($c in $through) {
+            $script:planted = $c
+            Set-Item -Path function:script:Read-HordeCloudflareRelayGoogleClient -Value { param($Path, $RepoRoot) New-HordeKnown -Value ([pscustomobject]@{ clientId = $script:planted.id; clientSecret = $script:planted.secret; redirectUris = @() }) }
+            if ($c.allow -ne "") { Set-Item -Path function:script:ConvertTo-HordeCloudflareRelayAllowlist -Value { param($Values) New-HordeKnown -Value $script:planted.allow } }
+            else { Set-Item -Path function:script:ConvertTo-HordeCloudflareRelayAllowlist -Value $realAllow }
+            Clear-Log
+            $d = Deploy
+            $why = "" + $d.answer.reason
+            Check ($d.answer.state -ceq "unknown" -and $why.Contains($c.name) -and $why.Contains($c.like) -and $why.Contains("nothing was deployed") -and $why.Contains("relay 'cloudflare' was not deployed") -and $null -eq $d.answer.PSObject.Properties["live"] -and @(Read-Log).Count -eq 0 -and -not $why.Contains($clientSecret) -and -not $why.Contains($clientId)) ("" + $c.what + ": refused before wrangler runs, naming the secret and not its value (" + $why + ")")
+        }
+        $script:planted = @{ id = $clientId; secret = "GOCSPX-inner space-0123456" }
+        Set-Item -Path function:script:Read-HordeCloudflareRelayGoogleClient -Value { param($Path, $RepoRoot) New-HordeKnown -Value ([pscustomobject]@{ clientId = $script:planted.id; clientSecret = $script:planted.secret; redirectUris = @() }) }
+        Set-Item -Path function:script:ConvertTo-HordeCloudflareRelayAllowlist -Value $realAllow
+        Clear-Log
+        $d = Deploy
+        $runs = @(Read-Log)
+        Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[1].stdin -ceq "GOCSPX-inner space-0123456") ("CONTROL: through the same swapped reader, clean values deploy, a space inside one included (" + $d.answer.reason + ")")
+    } finally {
+        Set-Item -Path function:script:Read-HordeCloudflareRelayGoogleClient -Value $realRead
+        Set-Item -Path function:script:ConvertTo-HordeCloudflareRelayAllowlist -Value $realAllow
+    }
+
+    Write-Host ""
+    Write-Host "--- 8. the bytes wrangler is given, under Windows PowerShell 5.1 with a UTF-8 console ---" -ForegroundColor Cyan
+    # A child Windows PowerShell 5.1 sets its console's input encoding to UTF-8 with a preamble, then
+    # runs `secret put` through the deploy's own Invoke-HordeCloudflareRelayNode, and - the CONTROL - a
+    # plain Process.Start in that same console, each against the fake wrangler with its own log.
+    $probe = Join-Path $work "stdin-probe.ps1"
+    $probeText = @'
+param([string]$Root, [string]$Fake, [string]$Log, [string]$Raw)
+$ErrorActionPreference = "Stop"
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $true
+$enc = [Console]::InputEncoding
+. (Join-Path $Root "relays\cloudflare\Wrangler.ps1")
+$node = Find-HordeCloudflareRelayNode
+$r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @($Fake, "secret", "put", "GOOGLE_CLIENT_ID") -Env @{ HORDE_FAKE_WRANGLER_LOG = $Log } -WorkDir (Split-Path -Parent $Log) -StdIn "VALUE-1" -TimeoutSeconds 60
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $node
+$psi.Arguments = '"' + $Fake + '" secret put GOOGLE_CLIENT_ID'
+$psi.UseShellExecute = $false
+$psi.RedirectStandardInput = $true
+$psi.RedirectStandardOutput = $true
+$psi.CreateNoWindow = $true
+$psi.EnvironmentVariables["HORDE_FAKE_WRANGLER_LOG"] = $Raw
+$p = [System.Diagnostics.Process]::Start($psi)
+$b = [System.Text.Encoding]::ASCII.GetBytes("VALUE-1")
+$p.StandardInput.BaseStream.Write($b, 0, $b.Length)
+$p.StandardInput.BaseStream.Close()
+$null = $p.StandardOutput.ReadToEnd()
+$p.WaitForExit()
+"PS=" + $PSVersionTable.PSVersion.Major + ";CP=" + $enc.CodePage + ";PRE=" + $enc.GetPreamble().Length + ";AFTERCP=" + [Console]::InputEncoding.CodePage + ";AFTERPRE=" + [Console]::InputEncoding.GetPreamble().Length + ";CODE=" + $r.code
+'@
+    [System.IO.File]::WriteAllText($probe, $probeText, $utf8)
+    $fixedLog = Join-Path $work "stdin-fixed.log"
+    $rawLog = Join-Path $work "stdin-raw.log"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $probe + '" -Root "' + $root + '" -Fake "' + $fake + '" -Log "' + $fixedLog + '" -Raw "' + $rawLog + '"'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $pp = [System.Diagnostics.Process]::Start($psi)
+    $perr = $pp.StandardError.ReadToEndAsync()
+    $pout = $pp.StandardOutput.ReadToEnd()
+    $null = $pp.WaitForExit(120000)
+    $said = ("" + $pout).Trim()
+    Check ($said.Contains("PS=5;CP=65001;PRE=3;")) ("CONTROL: the child is Windows PowerShell 5.1 with a UTF-8 console input encoding that has a preamble (" + $said + " " + ("" + $perr.Result).Trim() + ")")
+    $readLog = { param($p) if (Test-Path -LiteralPath $p) { @([System.IO.File]::ReadAllLines($p) | Where-Object { $_ -ne "" } | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() } }
+    $rawRuns = @(& $readLog $rawLog)
+    $fixedRuns = @(& $readLog $fixedLog)
+    $markLatin1 = [string][char]0xEF + [char]0xBB + [char]0xBF
+    Check ($rawRuns.Count -eq 1 -and $rawRuns[0].stdin -ceq ($markLatin1 + "VALUE-1")) ("CONTROL: in that console a plain start puts EF BB BF before the value, so the next check can fail (" + $(if ($rawRuns.Count -eq 1) { (@([System.Text.Encoding]::GetEncoding(28591).GetBytes($rawRuns[0].stdin) | Select-Object -First 4) -join ",") } else { "no run" }) + ")")
+    Check ($fixedRuns.Count -eq 1 -and $fixedRuns[0].stdin -ceq "VALUE-1" -and $said.Contains("CODE=0")) ("the deploy's own run gives wrangler the value and nothing before it (" + $(if ($fixedRuns.Count -eq 1) { (@([System.Text.Encoding]::GetEncoding(28591).GetBytes($fixedRuns[0].stdin) | Select-Object -First 4) -join ",") } else { "no run" }) + ")")
+    Check ($said.Contains(";AFTERCP=65001;AFTERPRE=3;")) ("and the console's input encoding is put back as it was (" + $said + ")")
 } finally {
+    foreach ($p in @($script:startProcs)) { try { if (-not $p.HasExited) { $p.StandardInput.BaseStream.Close(); if (-not $p.WaitForExit(10000)) { $p.Kill() } } } catch { }; $p.Dispose() }
     $env:HORDE_FAKE_WRANGLER_LOG = $null
     $env:HORDE_FAKE_WRANGLER_FAIL = $null
     if ($work -like "*horde-cf-deploy-test-*" -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }

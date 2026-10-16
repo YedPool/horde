@@ -18,8 +18,9 @@
 // admits the account (allowlist.js). A refusal sends the browser back to the app with #signin-refused,
 // and says why in the Horde-Signin-Refused header - the Worker's own words, never the provider's.
 //
-// The client id and secret are Worker secrets the deploy stores (Deploy.ps1). A Worker without them
-// refuses to start a sign-in at all, in words.
+// The client id and secret are Worker secrets the deploy stores (Deploy.ps1). A Worker without them -
+// or with one that is not clean, a byte order mark in front above all (google-client.js) - refuses to
+// start a sign-in at all, in words, and so never sends Google a marked id.
 //
 // THE LIMITS ON SIGNING IN (limits.js), each refused in the same way as a broken sign-in - back to the
 // app, with a code word after #signin-refused: (the app says it in its own words) and the
@@ -36,6 +37,7 @@ import { readCookie, cookieHeader, clearedCookieHeader, SESSION_COOKIE, SIGNIN_C
 import { providerOf, newSignIn, authorizeUrl, exchangeCode, keyCache } from "./oidc.js";
 import { verifyIdToken } from "./jwt.js";
 import { readAllowlist, admits } from "./allowlist.js";
+import { googleClientOf } from "./google-client.js";
 import { newSessionId, sessionOf, SESSION_MS } from "./sessions.js";
 import { ACCOUNT_PREFIX, accountOf } from "./accounts.js";
 import { addressOf } from "./address.js";
@@ -48,6 +50,7 @@ const START = "/auth/google";
 const SIGNOUT = "/auth/signout";
 const SESSION = "/auth/session";
 const SIGNIN_MS = 600000;
+const NOT_SET_UP = "sign-in is not set up on this relay: deploy it with the Google client";
 const APP = "/app/index.html";
 const PENDING = /^([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})\.([0-9]{13})$/;
 // The provider's keys, cached for this isolate (oidc.js).
@@ -70,12 +73,13 @@ function redirect(location, cookies, extra = {}) {
 
 async function start(request, env, url) {
   const site = siteOf(env);
-  if (typeof env.GOOGLE_CLIENT_ID !== "string" || env.GOOGLE_CLIENT_ID === "" || typeof env.GOOGLE_CLIENT_SECRET !== "string" || env.GOOGLE_CLIENT_SECRET === "") return refuse(503, "sign-in is not set up on this relay: deploy it with the Google client");
+  const client = googleClientOf(env);
+  if (!client) return refuse(503, NOT_SET_UP);
   const started = await addressOf(env, clientAddressOf(request, env, url)).signInStart({ now: Date.now(), limits: limitsOf(env, url) });
   if (!started.ok) return redirect(site.origin + APP + "#signin-refused:" + LIMIT_WORDS.busy, [], { "Horde-Signin-Refused": "too many sign-ins were started from this address: wait a minute", "Retry-After": String(Math.max(1, Math.ceil(started.retryAfterMs / 1000))) });
   const s = await newSignIn();
   const pending = s.state + "." + s.nonce + "." + s.verifier + "." + Date.now();
-  const location = authorizeUrl(providerOf(env, url), { clientId: env.GOOGLE_CLIENT_ID, redirectUri: site.callbackUrl, state: s.state, nonce: s.nonce, challenge: s.challenge });
+  const location = authorizeUrl(providerOf(env, url), { clientId: client.clientId, redirectUri: site.callbackUrl, state: s.state, nonce: s.nonce, challenge: s.challenge });
   return redirect(location, [cookieHeader(SIGNIN_COOKIE, pending, SIGNIN_MS / 1000)]);
 }
 
@@ -91,10 +95,12 @@ async function callback(request, env, url) {
   const now = Date.now();
   if (now - Number(m[4]) > SIGNIN_MS || Number(m[4]) > now) return refused("the sign-in took longer than ten minutes");
   if (typeof code !== "string" || code.length < 1 || code.length > 2048) return refused("the provider sent no code");
+  const client = googleClientOf(env);
+  if (!client) return refused(NOT_SET_UP);
   const provider = providerOf(env, url);
-  const ex = await exchangeCode(provider, { code, clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, redirectUri: site.callbackUrl, verifier: m[3] });
+  const ex = await exchangeCode(provider, { code, clientId: client.clientId, clientSecret: client.clientSecret, redirectUri: site.callbackUrl, verifier: m[3] });
   if (!ex.ok) return refused(ex.reason);
-  const v = await verifyIdToken(ex.idToken, (kid) => keys(provider, kid), { issuers: provider.issuers, audience: env.GOOGLE_CLIENT_ID, nonce: m[2], now, maxAgeMs: SIGNIN_MS });
+  const v = await verifyIdToken(ex.idToken, (kid) => keys(provider, kid), { issuers: provider.issuers, audience: client.clientId, nonce: m[2], now, maxAgeMs: SIGNIN_MS });
   if (!v.ok) return refused(v.reason);
   if (!admits(readAllowlist(env.HORDE_RELAY_SIGNIN_ALLOWLIST), v.claims)) return refused("this account is not on this relay's sign-in allowlist");
   const accountId = ACCOUNT_PREFIX + v.claims.sub;
