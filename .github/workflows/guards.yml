@@ -16,7 +16,11 @@
 #
 # ONE JOB, THE GUARDS ONE AFTER ANOTHER, each allowed to fail so all four always report, then one verdict
 # step that turns the job red if any failed. One job and not four because Windows minutes are billed
-# double on a private repository; a newer push to the same PR cancels the run in progress.
+# double on a private repository. A newer push to the same PR cancels the PR's run in progress; a run on
+# main is never cancelled, so every merge to main gets its own verdict.
+#
+# GREEN IS EXIT 0 AND THE CLOSING BANNER (CONTRIBUTING 15 rule 7: a suite with no closing banner was NOT
+# RUN). Each guard's output is kept in a log, and the verdict reads the last "==== ... ====" line of it.
 
 name: guards
 
@@ -31,7 +35,7 @@ permissions:
 
 concurrency:
   group: guards-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   guards:
@@ -43,30 +47,32 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+          # The guards need no token: nothing here pushes, so none is left in the checkout's git config.
+          persist-credentials: false
 
       - name: test-host-names
         id: hostnames
         continue-on-error: true
         shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-host-names.ps1; exit $LASTEXITCODE
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-host-names.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-host-names.log"); exit $LASTEXITCODE
 
       - name: test-mutation-specs
         id: specs
         continue-on-error: true
         shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-mutation-specs.ps1; exit $LASTEXITCODE
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-mutation-specs.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-mutation-specs.log"); exit $LASTEXITCODE
 
       - name: test-json-parse-allowlist
         id: jsonparse
         continue-on-error: true
         shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-json-parse-allowlist.ps1; exit $LASTEXITCODE
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-json-parse-allowlist.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-json-parse-allowlist.log"); exit $LASTEXITCODE
 
       - name: test-function-names
         id: functionnames
         continue-on-error: true
         shell: powershell
-        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-function-names.ps1; exit $LASTEXITCODE
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-function-names.ps1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "test-function-names.log"); exit $LASTEXITCODE
 
       - name: verdict
         if: ${{ !cancelled() }}
@@ -83,11 +89,21 @@ jobs:
             "test-json-parse-allowlist" = $env:JSONPARSE
             "test-function-names" = $env:FUNCTIONNAMES
           }
-          $lines = @("| guard | outcome |", "| --- | --- |")
-          foreach ($k in $rows.Keys) { $lines += ("| " + $k + " | " + $rows[$k] + " |") }
+          $lines = @("| guard | step | closing banner |", "| --- | --- | --- |")
+          $red = @()
+          foreach ($k in @($rows.Keys)) {
+            $log = Join-Path $env:RUNNER_TEMP ($k + ".log")
+            $banner = "(none: NOT RUN)"
+            if (Test-Path -LiteralPath $log) {
+              $found = @(Get-Content -LiteralPath $log | Where-Object { $_ -match '^==== .+ ====\s*$' } | Select-Object -Last 1)
+              if ($found.Count -gt 0) { $banner = $found[0].Trim() }
+            }
+            $green = ($rows[$k] -eq "success" -and $banner -ne "(none: NOT RUN)" -and $banner -notmatch 'FAILURE')
+            if (-not $green) { $red += $k }
+            $lines += ("| " + $k + " | " + $rows[$k] + " | " + $banner.Replace("|", "/") + " |")
+          }
           $lines += ""
           $lines += "This check notifies and never blocks a merge. horde merge runs test-host-names and test-mutation-specs itself before it merges."
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
-          $red = @($rows.Keys | Where-Object { $rows[$_] -ne "success" })
           if ($red.Count -gt 0) { Write-Output ("::error::not green: " + ($red -join ", ")); exit 1 }
           Write-Output "every guard is green"
