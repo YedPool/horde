@@ -224,7 +224,7 @@ Check ($null -eq (Spawn-For "K1")) ("the sleeper resumed by hand after the first
 Check ((State-Of $rec "K1") -ceq "still-awake" -and (Get-Session $rec "K1").history[-1].reason -like "still running*4711*") "it is left still-awake, with the fresh reading's reason"
 Check (@($r.lines | Where-Object { $_ -like "*K1 (22222222)*refused*still running*4711*" }).Count -eq 1) "and the wake says so, by name"
 Check ((State-Of $rec "K") -ceq "woken" -and (State-Of $rec "K2") -ceq "woken" -and $null -ne (Spawn-For "K2")) "its twin K2, still stopped on the fresh reading, is spawned and woken, and so is the orc"
-$k2v = @($world.verdicts | Where-Object { $_.id -ceq $ids["K2"] })
+$k2v = @($world.verdicts | Where-Object { $_.id -ceq $ids["K2"] -and $null -ne $_.since })
 Check ($k2v.Count -ge 2 -and @($k2v[-1].ignore) -ccontains $NEW) "the re-check passes the ids this wake already started - the orc came back as a new id - as ones that cannot be the sleeper"
 
 Section "the memory gate stops the wake part way"
