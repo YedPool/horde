@@ -9,7 +9,7 @@
 // Prints one line per check, "[PASS] name" or "[FAIL] name: detail", then "[DONE] n", as
 // order-units.mjs; the suite turns each into a check of its own. Chrome runs --headless=new: no
 // window is ever shown. Nothing is written outside the profile folder handed in.
-import { openBrowser, check, question } from "./browser-harness.mjs";
+import { openBrowser, check, question, sleep } from "./browser-harness.mjs";
 
 const [, , pageDir, chromePath, profileDir] = process.argv;
 const { evaluate, load, settle, touch, problems, finish } = await openBrowser(pageDir, chromePath, profileDir);
@@ -132,6 +132,94 @@ try {
   await settle();
   r = await tap("Blocking");
   check(head(r, 1) === "2" && r.firstInView === 2, "CONTROL: a list shorter than the screen re-sorts in view, as it always did", r.order + "; first in view " + r.firstInView);
+
+  // ---------------- 6. HIS LITTLE BUTTONS (the founder, 2026-10-14): importance and blocking, changed by a tap ----------------
+  // The rank buttons of question n as drawn: { text, label, expanded, x, y } each, and the levels open under them.
+  const rankOf = (n) => evaluate(`(() => {
+    const w = Array.from(document.querySelectorAll('#list .hd-q')).find((x) => { const t = x.querySelector('.hd-qt'); return t && t.textContent.indexOf('Question ${n}:') >= 0; });
+    if (!w) return null;
+    const box = w.querySelector('.hd-rank');
+    const at = (b) => { const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+    return { hidden: !box || box.hidden, buttons: Array.from(w.querySelectorAll('.hd-rank-btn')).map((b) => ({ which: b.getAttribute('data-rank'), text: b.textContent, label: b.getAttribute('aria-label'), expanded: b.getAttribute('aria-expanded'), pending: b.classList.contains('pending'), ...at(b) })),
+      levels: Array.from(w.querySelectorAll('.hd-rank-opt')).map((b) => ({ level: b.getAttribute('data-level'), text: b.textContent, label: b.getAttribute('aria-label'), pressed: b.getAttribute('aria-pressed'), ...at(b) })) };
+  })()`);
+  const calls = () => evaluate("window.rankCalls.length");
+  // A list in which question n stands at the given words; the rest as longList has them.
+  const listWith = (changes) => longList().map((q) => (changes[q.number] ? { ...q, ...changes[q.number] } : q));
+  await load("/host.html");
+  await evaluate("localStorage.clear(), true");
+  await load("/host.html");
+  await evaluate("window.hostList(" + JSON.stringify(longList()) + ")");
+  await settle();
+  r = await tap("Task importance");
+  let k = await rankOf(7);
+  check(head(r, 2) === "7,3" && !!k && !k.hidden && k.buttons.map((b) => b.text).join("|") === "Importance: High|Blocking: Part", "EACH QUESTION SHOWS TWO LITTLE BUTTONS saying its levels in words: Importance: High, Blocking: Part", JSON.stringify(k && k.buttons.map((b) => b.text)));
+  check(!!k && /^Importance of question 7: High\. Press to change it\.$/.test(k.buttons[0].label) && k.buttons[0].expanded === "false", "and a screen reader is told what each is, for which question, and what a press does", k ? k.buttons[0].label : "");
+  // A TAP OPENS THE THREE LEVELS - it changes nothing by itself.
+  await touch(k.buttons[0].x, k.buttons[0].y);
+  k = await rankOf(7);
+  check(k.levels.map((l) => l.level).join(",") === "high,normal,low" && k.levels.filter((l) => l.pressed === "true").map((l) => l.level).join() === "high" && k.levels[0].text.indexOf("High") > 0 && k.buttons[0].expanded === "true" && (await calls()) === 0,
+    "A TAP OPENS A PICKER of the three levels, the one in force ticked and pressed - and nothing is sent", JSON.stringify(k.levels.map((l) => [l.text, l.pressed])));
+  check(/^Set importance of question 7 to Low$/.test(k.levels[2].label), "each level says in words what picking it does", k.levels[2].label);
+  // A TAP ON THE LEVEL IN FORCE, OR ANYWHERE ELSE, CLOSES IT AND SENDS NOTHING.
+  await touch(k.levels[0].x, k.levels[0].y);
+  k = await rankOf(7);
+  check(k.levels.length === 0 && (await calls()) === 0, "picking the level it already has closes the picker and sends nothing", String(k.levels.length));
+  await touch(k.buttons[1].x, k.buttons[1].y);
+  k = await rankOf(7);
+  check(k.levels.length === 3 && k.levels.filter((l) => l.pressed === "true").map((l) => l.level).join() === "part", "CONTROL: the Blocking button opens its own three, Part ticked");
+  // The empty margin at the left of the question's own row: nothing there takes a tap.
+  await touch(3, k.buttons[1].y);
+  k = await rankOf(7);
+  check(k.levels.length === 0 && (await calls()) === 0, "A MIS-TAP: a tap anywhere else closes the picker, and nothing is sent");
+  // PICKING ANOTHER LEVEL ASKS THE HOST, AND THE ORDER WAITS FOR ITS ANSWER.
+  await touch(k.buttons[0].x, k.buttons[0].y);
+  k = await rankOf(7);
+  await touch(k.levels[2].x, k.levels[2].y);
+  const sent = await evaluate("window.rankCalls[0]");
+  k = await rankOf(7);
+  r = await read();
+  check((await calls()) === 1 && sent.number === 7 && sent.which === "importance" && sent.level === "low" && /^[0-9a-f]{32}$/.test(sent.id), "picking Low asks the host once: question 7, importance, low, with an id of its own", JSON.stringify(sent));
+  check(k.buttons[0].text === "Importance: Low (sending)" && k.buttons[0].pending && head(r, 2) === "7,3", "WHILE IT IS ON ITS WAY the button says Low, sending, and the question stays where it stands", k.buttons[0].text + " / " + r.order);
+  await evaluate("window.rankAnswer({ ok: true }), true");
+  await settle();
+  k = await rankOf(7);
+  check(k.buttons[0].text === "Importance: Low (sending)", "CONTROL: the host's ok alone does not move it: the list that holds the change does", k.buttons[0].text);
+  await evaluate("window.hostList(" + JSON.stringify(listWith({ 7: { importance: "low" } })) + ")");
+  await settle();
+  r = await read();
+  k = await rankOf(7);
+  check(head(r, 1) === "3" && r.order.split(",").indexOf("7") > r.order.split(",").indexOf("19") && k.buttons[0].text === "Importance: Low" && !k.buttons[0].pending, "THE LIST THAT HOLDS IT RE-SORTS: 3 leads alone, 7 stands among the low ones, and its button says Low", r.order + " / " + k.buttons[0].text);
+  // A REFUSAL PUTS THE BUTTON BACK AND SAYS WHY.
+  // The view followed question 7 down the page (THE VIEW FOLLOWS HIM): back to the head, where 3 now leads.
+  await evaluate("scrollTo(0, 0), true");
+  await settle();
+  k = await rankOf(3);
+  check(!!k && k.buttons.length === 2 && k.buttons[1].y > 0 && k.buttons[1].y < 915, "CONTROL: question 3 shows its two buttons, in view", JSON.stringify(k));
+  await touch(k.buttons[1].x, k.buttons[1].y);
+  k = await rankOf(3);
+  await touch(k.levels[0].x, k.levels[0].y);
+  k = await rankOf(3);
+  check(k.buttons[1].text === "Blocking: All (sending)", "CONTROL: Blocking All is on its way for question 3", k.buttons[1].text);
+  await evaluate("window.rankAnswer({ ok: false, reason: 'superseded by a newer change' }), true");
+  await sleep(100);
+  await settle();
+  k = await rankOf(3);
+  const toast = await evaluate("(document.querySelector('.hd-toast') || {}).textContent || ''");
+  r = await read();
+  check(k.buttons[1].text === "Blocking: Part" && toast.indexOf("not changed: superseded by a newer change") >= 0 && head(r, 1) === "3", "A REFUSAL puts the button back at Part, says why, and moves nothing", k.buttons[1].text + " / " + toast);
+  // THE ORDER LINE STILL WORKS AFTER: turned over, and a tap scrolled a little keeps the page where it was.
+  r = await tap("Task importance");
+  check(r.order.split(",").slice(-1)[0] === "3" && pressedOf(r)[0].text === "Task importance " + UP, "the order still turns over after a change of rank: the least important first, 3 last", r.order);
+  const down2 = await evaluate("(() => { const b = document.querySelector('#list .hd-order').getBoundingClientRect(); const y = Math.max(1, Math.floor(b.top + scrollY + b.height / 4)); scrollTo(0, y); return scrollY; })()");
+  r = await tap("Blocking");
+  check(down2 > 0 && r.scrollY === down2 && r.barInView && r.firstInView === 2, "and scrolled a little, a tap on an order still leaves the order line under the finger, the head of the new order under it", "scrolled from " + down2 + " to " + r.scrollY + ", first in view " + r.firstInView);
+  // NONE FOR A QUESTION NOT ON HIS LIST: one he has answered shows no buttons.
+  await evaluate("scrollTo(0, 0), true");
+  await evaluate("window.hostList(" + JSON.stringify(listWith({ 2: { thread: { count: 1, turn: "warchief", messages: [{ sequence: 40, speaker: "founder", route: "window", text: "Yes." }] } } })) + ")");
+  await settle();
+  const answered = await rankOf(2);
+  check(answered === null || answered.hidden, "a question he has answered shows no buttons", JSON.stringify(answered));
 
   check(problems.length === 0, "no script error in the page", problems.join(" | "));
 } catch (e) {

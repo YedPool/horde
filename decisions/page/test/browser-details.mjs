@@ -174,7 +174,7 @@ try {
   await hostList(SWITCH_LIST());
   let t = await top();
   check(t.done === 0 && t.heads.length === 0 && t.main.split(",").length === 12, "BY DEFAULT THE ANSWERED ARE HIDDEN: no With Thrall, no History, the twelve to answer shown", JSON.stringify(t));
-  check(t.text === "Show answered: off" && t.role === "switch" && t.checked === "false" && /hidden/i.test(t.says), "a switch says so in words - 'Show answered: off' - and to a screen reader (role switch, not checked)", JSON.stringify({ text: t.text, role: t.role, checked: t.checked, says: t.says }));
+  check(t.text === "Show answered and closed: off" && t.role === "switch" && t.checked === "false" && /hidden/i.test(t.says), "a switch says so in words - 'Show answered and closed: off' - and to a screen reader (role switch, not checked)", JSON.stringify({ text: t.text, role: t.role, checked: t.checked, says: t.says }));
   check(t.swTop !== null && t.swTop === t.faTop && t.swLeft < t.faLeft && t.orderOneLine, "it stands at the head of the page across from Collapse all, and the order line stays one line on a phone", JSON.stringify({ sw: t.swTop, fa: t.faTop, oneLine: t.orderOneLine }));
   // His order and a fold of his own, then the page scrolled so the switch is still on the screen.
   const imp = await evaluate("(() => { const b = Array.from(document.querySelectorAll('#list .hd-order-btn')).find((x) => x.textContent.indexOf('Task importance') === 0); const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()");
@@ -186,20 +186,57 @@ try {
   check(was.order === "importance" && was.open.split(",").indexOf("25") < 0 && was.scrollY > 0, "CONTROL: his order is Task importance, question 25 folded by his tap, the page scrolled", JSON.stringify({ order: was.order, open: was.open, scrollY: was.scrollY }));
   await touch(was.x, was.y);
   t = await top();
-  check(t.text === "Show answered: on" && t.checked === "true" && t.done === 3 && t.heads.some((h) => /^With Thrall \(2\)/.test(h)) && t.heads.some((h) => /^History \(1\)/.test(h)), "A TAP SHOWS THEM: the switch says on, With Thrall (2) and History (1) stand below the list as before", JSON.stringify({ text: t.text, heads: t.heads, done: t.done }));
+  check(t.text === "Show answered and closed: on" && t.checked === "true" && t.done === 3 && t.heads.some((h) => /^With Thrall \(2\)/.test(h)) && t.heads.some((h) => /^History \(1\)/.test(h)), "A TAP SHOWS THEM: the switch says on, With Thrall (2) and History (1) stand below the list as before", JSON.stringify({ text: t.text, heads: t.heads, done: t.done }));
   check(t.order === was.order && t.main === was.main && t.open === was.open, "and it touches neither the order nor what is folded", JSON.stringify({ was: [was.order, was.open], now: [t.order, t.open] }));
   check(!!t.first && !!was.first && t.first.n === was.first.n && Math.abs(t.first.top - was.first.top) <= 1 && t.scrollY === was.scrollY, "nor his place: the same question at the same pixel, the page scrolled as it was", JSON.stringify({ was: was.first, now: t.first, y: [was.scrollY, t.scrollY] }));
   await openCards();
   await hostList(SWITCH_LIST());
   t = await top();
-  check(t.text === "Show answered: on" && t.done === 3, "KEPT ON THIS DEVICE: opened again, they are still shown", JSON.stringify({ text: t.text, done: t.done }));
+  check(t.text === "Show answered and closed: on" && t.done === 3, "KEPT ON THIS DEVICE: opened again, they are still shown", JSON.stringify({ text: t.text, done: t.done }));
   await evaluate("scrollTo(0, 0), true"); await settle();
   t = await top();
   await touch(t.x, t.y);
   await openCards();
   await hostList(SWITCH_LIST());
   t = await top();
-  check(t.text === "Show answered: off" && t.done === 0, "and hidden again, kept hidden through opening again", JSON.stringify({ text: t.text, done: t.done }));
+  check(t.text === "Show answered and closed: off" && t.done === 0, "and hidden again, kept hidden through opening again", JSON.stringify({ text: t.text, done: t.done }));
+  // THE SWITCH IS REACHED BY KEYS, never by Tab (review of PR 311): real key presses from a field.
+  // Ctrl+Down with no fold drawn comes to it; Space turns it on; Down goes to the first fold and Up
+  // comes back; Enter turns it off; Shift+Tab goes back to the list. A ring shows where the keyboard is.
+  const press = async (k, code, vk, modifiers = 0, text = undefined) => {
+    await cdp("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key: k, code, windowsVirtualKeyCode: vk, modifiers, text });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: k, code, windowsVirtualKeyCode: vk, modifiers });
+    await sleep(80);
+    await settle();
+  };
+  const AT = `(() => {
+    const a = document.activeElement, sw = document.querySelector('#list .hd-showans'), cs = getComputedStyle(sw);
+    return { onSwitch: a === sw, tri: (a && a.classList.contains('hd-tri')) ? (a.getAttribute('aria-label') || '') : '', field: !!a && a.tagName === 'TEXTAREA',
+      ring: a === sw ? cs.outlineStyle + ' ' + cs.outlineWidth : '', tab: sw.tabIndex, checked: sw.getAttribute('aria-checked'), done: document.querySelectorAll('#list .hd-done').length };
+  })()`;
+  await evaluate("scrollTo(0, 0), document.querySelector('#list .hd-q:not(.hd-done) .hd-box > textarea').focus(), true");
+  await settle();
+  let k = await evaluate(AT);
+  check(k.field && !k.onSwitch && k.tab === -1, "CONTROL: the caret in the first question's field, and the switch out of the Tab run (tabIndex -1)", JSON.stringify(k));
+  await press("ArrowDown", "ArrowDown", 40, 2);
+  k = await evaluate(AT);
+  check(k.onSwitch && k.ring === "solid 1px", "Ctrl+Down with no fold drawn brings the keyboard to the switch, with a ring around it", JSON.stringify(k));
+  await press(" ", "Space", 32, 0, " ");
+  k = await evaluate(AT);
+  check(k.onSwitch && k.checked === "true" && k.done === 3, "Space turns it on: the answered and closed are shown, and the keyboard stays on the switch", JSON.stringify(k));
+  await press("ArrowDown", "ArrowDown", 40);
+  k = await evaluate(AT);
+  check(/With Thrall/.test(k.tri), "Down goes to the first fold, With Thrall", JSON.stringify(k));
+  await press("ArrowUp", "ArrowUp", 38);
+  k = await evaluate(AT);
+  check(k.onSwitch, "Up from the first fold comes back to the switch", JSON.stringify(k));
+  await press("Enter", "Enter", 13, 0, "\r");
+  k = await evaluate(AT);
+  check(k.onSwitch && k.checked === "false" && k.done === 0, "Enter turns it off again", JSON.stringify(k));
+  await press("Tab", "Tab", 9, 8);
+  k = await evaluate(AT);
+  check(k.field && !k.onSwitch, "Shift+Tab goes back to the list, into a question's field", JSON.stringify(k));
+  await evaluate("document.activeElement.blur(), true");
   // A question answered while he reads, one above the view and one in it: each leaves, and the
   // question at the top of the view does not move.
   await evaluate("(() => { const w = " + FIND(27) + "; scrollTo(0, 0); scrollTo(0, w.getBoundingClientRect().top - 60); return true; })()");

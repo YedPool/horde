@@ -653,6 +653,22 @@ export function answerBody({ answerId, machine, snapshot, number, wordingVersion
   return utf8(JSON.stringify({ v: 1, answerId, machine, snapshot, number, wordingVersion, text }));
 }
 
+// A CHANGE OF RANK (channels/decisions/Channel.ps1, A CHANGE OF RANK FROM THE PHONE): the founder's tap
+// on the Importance or the Blocking button of a question. Its own members - rankId, never answerId or
+// text - so the machine can never read it as an answer, nor an answer as it. which is "importance" or
+// "blocks", level a word of that one's list (the machine holds it to its rules again).
+export const RANK_LEVELS = { importance: ["high", "normal", "low"], blocks: ["all", "part", "none"] };
+export function rankBody({ rankId, machine, snapshot, number, which, level }) {
+  if (!/^[0-9a-f]{32}$/.test(rankId)) throw new Error("a rankId is 32 lower-case hex");
+  if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
+  if (typeof snapshot !== "string" || snapshot.length > 160 || snapshot.indexOf(machine + "/decisions/") !== 0) throw new Error("the snapshot is that machine's envelope's replay key");
+  if (!Number.isSafeInteger(number) || number < 1) throw new Error("number is a whole number from 1");
+  if (!Object.prototype.hasOwnProperty.call(RANK_LEVELS, which) || RANK_LEVELS[which].indexOf(level) < 0) throw new Error("the change of rank is importance (high, normal or low) or blocks (all, part or none)");
+  const body = { v: 1, rankId, machine, snapshot, number };
+  body[which] = level;
+  return utf8(JSON.stringify(body));
+}
+
 // A snapshot page, read: { ok, reason, value }. The page must be the decisions snapshot of the machine
 // that signed its envelope, for the horde the phone paired with.
 export function readSnapshotPage(bodyBytes, horde, machine) {
@@ -692,6 +708,8 @@ export function newestSnapshot(pages) {
     best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood,
       // The highest version of answer the machine says it reads; 1 for a machine whose snapshot says nothing.
       answers: Number.isSafeInteger(first.answers) && first.answers >= 1 ? first.answers : 1,
+      // Whether the machine takes a change of rank from the phone (rankBody): false from one that does not say.
+      ranks: first.ranks === 1,
       // What became of the founder's answers (receiptFor), as the machine said it; undefined from a
       // machine before receipts. ts: when the machine signed the snapshot's newest page, 0 if unknown.
       receipts: first.receipts, ts: Math.max(0, ...ordered.map((p) => (Number.isSafeInteger(p.ts) ? p.ts : 0))) };
