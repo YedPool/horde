@@ -14,9 +14,13 @@
 #   - Setup NEVER uninstalls the Store copy: removing it closes every pwsh.exe running from it, which
 #     is the incident again. It says the copy can be removed when no session runs on it.
 #
-# THE PRETEND MACHINE. HORDE_SETUP_FAKE_MACHINE names a JSON file that stands in for the registry, the
-# search path, winget and the installer, so `horde setup` can be driven end to end with nothing real
-# read or changed (test\e2e\e2e-setup-store.ps1). Setup says so in its first line whenever it is set.
+# THE PRETEND MACHINE. The environment variable HORDE_SETUP_FAKE_MACHINE names a JSON file that stands
+# in for the registry, the search path, winget and the installer, so `horde setup` can be driven end to
+# end with nothing real read or changed (test\e2e\e2e-setup-store.ps1). It is an environment variable and
+# not a home setting because a suite must give a home that does not exist yet (the first-run cases, and
+# -Check "not even the home") the stand-in too; HORDE_HOME and USERPROFILE are already how those suites
+# aim the shipped command, and a module setting would have to create the home first. Setup says so in
+# its first line whenever it is set.
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 $script:HordeSetupStoreKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\WindowsStore"
@@ -45,7 +49,7 @@ function Get-HordeSetupStorePolicyDecision {
     if ($null -ne $Policy -and [int]$Policy -eq 2) { return [pscustomobject]@{ done = $true; said = "Store automatic updates are off by policy (AutoDownload = 2); nothing to change"; next = "" } }
     $now = $(if ($null -eq $Policy) { "unset" } else { "" + $Policy })
     $said = "Microsoft Store automatic updates are not turned off (" + $script:HordeSetupStoreKeyText + " AutoDownload is " + $now + ")"
-    $next = $(if ($Elevated) { "" } else { "this needs an elevated run: horde setup will set " + $script:HordeSetupStoreKeyText + " AutoDownload to 2 (Store automatic updates off), so run horde setup again from a PowerShell window opened as administrator" })
+    $next = $(if ($Elevated) { "" } else { "needs one elevated run of horde setup (a PowerShell window opened as administrator); it will set " + $script:HordeSetupStoreKeyText + " AutoDownload to 2 (Store automatic updates off)" })
     return [pscustomobject]@{ done = $false; said = $said; next = $next }
 }
 
@@ -66,7 +70,7 @@ function Get-HordeSetupPowerShellDecision {
     $said = $(if ($store) { "the pwsh on the search path is the Microsoft Store copy (" + $Resolved + "), and there is no MSI install at " + $MsiPath } else { "PowerShell 7 is not installed (no pwsh on the search path, none at " + $MsiPath + ")" })
     $notes = @()
     if ($store) { $notes += ("note: " + $removal) }
-    $next = $(if ($Elevated) { "" } else { "this needs an elevated run: horde setup will install the PowerShell 7 MSI (the winget source's own address, checked against its SHA-256) to " + $MsiPath + ", so run horde setup again from a PowerShell window opened as administrator" })
+    $next = $(if ($Elevated) { "" } else { "needs one elevated run of horde setup (a PowerShell window opened as administrator); it will install the PowerShell 7 MSI (the winget source's own address, checked against its SHA-256) to " + $MsiPath })
     return [pscustomobject]@{ done = $false; kind = $kind; said = $said; notes = [string[]]$notes; next = $next }
 }
 
