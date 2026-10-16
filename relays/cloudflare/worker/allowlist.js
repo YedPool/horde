@@ -14,6 +14,8 @@
 // It is checked at every sign-in, not only the first: switching it on shuts out an account already made
 // as soon as its session ends. Its sessions can be ended sooner: each phone from another's Account
 // screen, or all of them by deleting the account (accounts.js).
+import { cleanSecret } from "./google-client.js";
+
 // Written in lower case by the deploy (SignInAllowlist.ps1, its twin), so one address has one spelling.
 const EMAIL = /^[a-z0-9._%+'-]{1,64}@[a-z0-9.-]{1,253}$/;
 const SUB = /^[0-9]{1,255}$/;
@@ -26,8 +28,11 @@ function listOf(x, pattern) {
 }
 
 // { state: "off" } | { state: "on", emails, subs } | { state: "broken" }.
+// A binding that is not clean printable ASCII - a byte order mark in front (2026-10-14), a space around
+// it - is broken, never mended: JSON.parse would take the space and quietly read the list (google-client.js).
 export function readAllowlist(text) {
   if (text === undefined || text === null) return { state: "off" };
+  if (!cleanSecret(text)) return { state: "broken" };
   let o;
   try { o = JSON.parse(text); } catch (e) { return { state: "broken" }; }
   if (!o || typeof o !== "object" || Array.isArray(o) || Object.keys(o).sort().join(",") !== "emails,on,subs" || typeof o.on !== "boolean") return { state: "broken" };

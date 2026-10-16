@@ -22,6 +22,9 @@
 //   pairing        its pairing bucket (throttle.js)
 //   s:<key id>     when that machine was last heard from (presence.js): written at most once per 30 s
 //   deleting       { account, epoch }: a deletion under way (remove, alarm)
+//   join           the account's ONE pending join request (join.js): { request, machine, address,
+//                  requestedAt, expiresAt }; past its expiresAt it is no longer pending, as if absent
+//   joins          its join-request bucket (throttle.js): joinRequestsPerHour (limits.js)
 // IN MEMORY: each device's put and read buckets. An eviction only refills them, as the idle time
 // would have. And each machine's last heard time, exact; storage's s: is at most 30 s behind it.
 //
@@ -84,6 +87,8 @@ const PAIRING = "pairing";
 const DELETING = "deleting";
 const USAGE = "usage";
 const SEEN = "s:";
+const JOIN = "join";
+const JOINS = "joins";
 // A machine's device, as auth.js names it: "machine:" and its key id. Only a verified signature makes one.
 const MACHINE_DEVICE = "machine:";
 const MINUTE_MS = 60000;
@@ -219,6 +224,57 @@ export class Account extends DurableObject {
     return { ok: true };
   }
 
+  // A machine registered to this account, by its key id: its entry { keyId, horde, label, registeredAt },
+  // or null. A join request names one (join.js), and its horde names the mailbox the request goes to.
+  async machineEntry(keyId) { return (await this.ctx.storage.get(MACHINE + keyId)) || null; }
+
+  // JOIN REQUESTS (join.js, the section of that name): checks (b) and (c) of its order, and (d) as the
+  // address's object already answered it (addressOk). On a yes, the account's one pending slot is held
+  // for request and one of its join tokens spent, together; on a refusal nothing here changes. A repeat
+  // of the pending request itself is a yes again with nothing spent: { ok, repeat, expiresAt }.
+  async joinReserve({ request, machine, address, epoch, addressOk, addressRetryMs, now, limits }) {
+    const storage = this.ctx.storage;
+    const p = await storage.get(PROFILE);
+    if (p === undefined || epoch !== p.epoch) return gone();
+    const held = await storage.get(JOIN);
+    const pending = held !== undefined && held.expiresAt > now;
+    if (pending && held.request === request && held.machine === machine) return { ok: true, repeat: true, requestedAt: held.requestedAt, expiresAt: held.expiresAt };
+    if (pending) return { ok: false, status: 409, code: CODES.joinPending, reason: "another join request of this account is pending: approve or reject it on a trusted device, or wait for it to expire", retryAfterMs: held.expiresAt - now };
+    const t = takeToken(await storage.get(JOINS), now, limits.joinRequestsPerHour, HOUR_MS, limits.joinRequestsPerHour);
+    if (!t.ok) return { ok: false, status: 429, code: CODES.rate, reason: "this account made " + limits.joinRequestsPerHour + " join requests in the last hour, its most: wait", retryAfterMs: t.retryAfterMs };
+    if (addressOk !== true) return { ok: false, status: 429, code: CODES.rate, reason: "this address made its most join requests for an hour: wait", retryAfterMs: addressRetryMs };
+    const requestedAt = now;
+    const expiresAt = now + limits.joinRequestMs;
+    await storage.put({ [JOINS]: t.state, [JOIN]: { request, machine, address, requestedAt, expiresAt } });
+    return { ok: true, repeat: false, requestedAt, expiresAt };
+  }
+
+  // A reservation whose request never reached its mailbox (join.js): the slot freed and the token given
+  // back, so a request that was refused spent nothing. True when request was the one held.
+  async joinRelease({ request, limits }) {
+    const storage = this.ctx.storage;
+    const held = await storage.get(JOIN);
+    if (held === undefined || held.request !== request) return false;
+    await storage.delete(JOIN);
+    // The token back: the reservation took it at b.at and left b.tokens, so one more at that same time
+    // is the bucket as it was before the take (throttle.js refills from there).
+    const b = await storage.get(JOINS);
+    if (b !== undefined) await storage.put(JOINS, { tokens: Math.min(limits.joinRequestsPerHour, b.tokens + 1), at: b.at });
+    return true;
+  }
+
+  // A machine says a join request ended (join.js): { ok, freed, address } - freed, and the address it
+  // came from, only when request is the pending one; a refusal, 403, when the pending one names another
+  // machine. Anything else is not pending (never was, ended, or expired): freed false, nothing changed.
+  async joinClose({ request, keyId, now }) {
+    const storage = this.ctx.storage;
+    const held = await storage.get(JOIN);
+    if (held === undefined || held.expiresAt <= now || held.request !== request) return { ok: true, freed: false, address: "" };
+    if (held.machine !== keyId) return { ok: false, status: 403, reason: "only the machine a join request names may end it" };
+    await storage.delete(JOIN);
+    return { ok: true, freed: true, address: held.address };
+  }
+
   async unlistMachine(keyId) { this.seen.delete(keyId); await this.ctx.storage.delete(SEEN + keyId); return this.ctx.storage.delete(MACHINE + keyId); }
 
   // A rotation moved a machine's registration from one key to its successor (rotation.js). The rotation
@@ -267,7 +323,7 @@ export class Account extends DurableObject {
     const seen = await storage.list({ prefix: SEEN });
     for (const [, ph] of phones) { const s = sessionByObjectId(this.env, ph.id); if (s) await s.end(); }
     for (const [, m] of machines) await machineKeyOf(this.env, m.keyId).release(account);
-    await storage.delete([...phones.keys(), ...machines.keys(), ...seen.keys(), DAY, PAIRING, USAGE]);
+    await storage.delete([...phones.keys(), ...machines.keys(), ...seen.keys(), DAY, PAIRING, USAGE, JOIN, JOINS]);
     this.devices.clear();
     this.seen.clear();
     await storage.setAlarm(Date.now());

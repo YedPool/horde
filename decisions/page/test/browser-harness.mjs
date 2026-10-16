@@ -9,6 +9,7 @@
 //                    throws, as a page whose storage is refused; window.mountError is what
 //                    mounting threw, if anything
 //   ?expanded=0      mounted with expanded: false, as the window mounts it
+//   ?say=ok          a host whose say takes every answer: window.said holds { n, t } for each
 // and hands a list in by window.hostList(questions). Every change of rank the page asks for is kept in
 // window.rankCalls and answered by window.rankAnswer(result). /cards.html is the phone's decisions page
 // with its cards first (CARDS_HOST, below).
@@ -43,6 +44,8 @@ const HOST = [
   "var rank = function (number, which, level, id) { window.rankCalls.push({ number: number, which: which, level: level, id: id }); return new Promise(function (r) { window.rankAnswer = r; }); };",
   "var options = { prefs: prefs, storage: prefs, rank: rank };",
   "if (/expanded=0/.test(location.search)) { options.expanded = false; }",
+  "window.said = [];",
+  "if (/say=ok/.test(location.search)) { options.say = function (n, t) { window.said.push({ n: n, t: t }); return Promise.resolve({ ok: true, sequence: window.said.length }); }; }",
   "window.mountError = '';",
   "try { window.doc = window.HordeDecisionsDocument.mount(document.getElementById('list'), options); } catch (e) { window.mountError = String(e && e.message || e); }",
   "window.hostList = function (qs) { return window.doc ? window.doc.setList({ state: 'known', value: { questions: qs } }) : 'not mounted: ' + window.mountError; };",
@@ -141,7 +144,9 @@ export async function openBrowser(pageDir, chromePath, profileDir) {
     await sleep(150);
     await settle();
   }
-  return { cdp, evaluate, load, settle, touch, problems, finish };
+  // Words typed at the caret as a keyboard types them (one input event per call).
+  async function type(text) { await cdp("Input.insertText", { text }); await settle(); }
+  return { cdp, evaluate, load, settle, touch, type, problems, finish };
 }
 
 // --- the questions, as decisions/Operations.ps1 hands them, at minute m of one morning ---

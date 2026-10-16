@@ -186,6 +186,48 @@ try {
     Check (-not (Read-HordeRelayWatchState -Path $snb).value.notified) "and the outage is closed"
 
     Write-Host ""
+    Write-Host "--- review of PR 307: a 'back' the warchief did not take stays owed ---" -ForegroundColor Cyan
+    # Told 'down'; the first 'back' mail fails. The outage must stay open, the founder's 'back' must wait
+    # for the tell that is taken, and the next healthy check must tell it again.
+    $ob = [pscustomobject]@{ now = $t0; tells = (New-Object System.Collections.ArrayList); backFails = 1; notices = (New-Object System.Collections.ArrayList) }
+    $ot = @{
+        Now = { return $ob.now }.GetNewClosure(); Fetch = $fetch
+        Tell = { param($Body) [void]$ob.tells.Add($Body); $ok = $true; if ($Body -like "RELAY BACK*" -and $ob.backFails -gt 0) { $ob.backFails--; $ok = $false }; return [pscustomobject]@{ ok = $ok; detail = "the fleet mail failed" } }.GetNewClosure()
+        Notify = { param($Line) [void]$ob.notices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+    }
+    $sob = Join-Path $work "back-owed.json"
+    $sync.mode = "500"
+    foreach ($m in @(0, 5)) { $ob.now = $t0.AddMinutes(400 + $m); $null = Invoke-HordeRelayWatch -Tools $ot -Policy $policy -StatePath $sob -Origin $origin }
+    Check ((Read-HordeRelayWatchState -Path $sob).value.alerted -and $ob.notices.Count -eq 1) "told 'down', and the founder notified once"
+    $sync.mode = "up"
+    foreach ($m in @(10, 15)) { $ob.now = $t0.AddMinutes(400 + $m); $null = Invoke-HordeRelayWatch -Tools $ot -Policy $policy -StatePath $sob -Origin $origin }
+    $back = @($ob.tells | Where-Object { $_ -like "RELAY BACK*" })
+    Check ($back.Count -eq 1 -and (Read-HordeRelayWatchState -Path $sob).value.alerted -and $ob.notices.Count -eq 1) ("the 'back' mail failed: the outage stays open and the founder is not yet told (" + $back.Count + " back, " + $ob.notices.Count + " notices)")
+    $ob.now = $t0.AddMinutes(420); $null = Invoke-HordeRelayWatch -Tools $ot -Policy $policy -StatePath $sob -Origin $origin
+    $back = @($ob.tells | Where-Object { $_ -like "RELAY BACK*" })
+    Check ($back.Count -eq 2 -and -not (Read-HordeRelayWatchState -Path $sob).value.alerted -and $ob.notices.Count -eq 2 -and $ob.notices[1] -like "The relay is back*") "the next healthy check tells it again, and the founder hears 'back' once, with it"
+
+    Write-Host ""
+    Write-Host "--- review of PR 307: a founder never told 'down' is not told 'back' ---" -ForegroundColor Cyan
+    # The warchief took 'down' but no notice went (a state from before the notice was sent, or one
+    # written while notices were off): the founder never heard of the outage, so no 'back' reaches him.
+    $nf = [pscustomobject]@{ now = $t0; tells = (New-Object System.Collections.ArrayList); notices = (New-Object System.Collections.ArrayList) }
+    $nft = @{
+        Now = { return $nf.now }.GetNewClosure(); Fetch = $fetch
+        Tell = { param($Body) [void]$nf.tells.Add($Body); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+        Notify = { param($Line) [void]$nf.notices.Add($Line); return [pscustomobject]@{ ok = $true; detail = "" } }.GetNewClosure()
+    }
+    $snf = Join-Path $work "founder-never-told.json"
+    $seed = New-HordeRelayWatchState
+    $seed.failures = 2; $seed.alerted = $true; $seed.notified = $false; $seed.downSince = $t0.AddMinutes(490); $seed.lastCheckAt = $t0.AddMinutes(495); $seed.lastWhy = "planted"
+    Write-HordeRelayWatchState -Path $snf -State $seed
+    Check ((Read-HordeRelayWatchState -Path $snf).value.alerted -and -not (Read-HordeRelayWatchState -Path $snf).value.notified) "CONTROL: the planted state reads back as told to the warchief only"
+    $sync.mode = "up"
+    foreach ($m in @(500, 505)) { $nf.now = $t0.AddMinutes($m); $null = Invoke-HordeRelayWatch -Tools $nft -Policy $policy -StatePath $snf -Origin $origin }
+    Check (@($nf.tells | Where-Object { $_ -like "RELAY BACK*" }).Count -eq 1 -and $nf.notices.Count -eq 0) ("two healthy checks: the warchief is told 'back', the founder is not (" + $nf.notices.Count + " notices)")
+    Check (-not (Read-HordeRelayWatchState -Path $snf).value.alerted) "and the outage is closed"
+
+    Write-Host ""
     Write-Host "--- review of PR 307: a state file that cannot be read is told, not a silent stop ---" -ForegroundColor Cyan
     $bad = Join-Path $work "bad-state.json"
     [System.IO.File]::WriteAllText($bad, "not json", $utf8)

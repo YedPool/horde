@@ -801,7 +801,8 @@ function Add-HordeDecisionsChannelReceipt {
 function Get-HordeDecisionsChannelReceipts {
     # The receipts member of the snapshot (the header, WHAT BECAME OF EACH ANSWER), as JSON text:
     #   [{"from":<passkey key id>,"through":<highest seq journaled>,"missing":[<seqs>],"applied":[<ids>],"refused":[<ids>]}]
-    # one for each founder passkey that has sent this machine an answer. { text; problem }: problem is a
+    # one for each founder passkey that has sent this machine an answer, and for each passkey trusted
+    # now, with its session member (below), answers or none. { text; problem }: problem is a
     # stream the journal could not list, which is left out and said by the Tick. NAMES ARE LISTED, ONE
     # RECORD IS READ: the journal's own stream listing, as every verdict uses it.
     # -Prefer: the passkeys of the phones the snapshot is sealed to, always in it (review of PR 262, S2).
@@ -814,10 +815,21 @@ function Get-HordeDecisionsChannelReceipts {
     # EVERY PHONE SEALED TO HAS A RECEIPT, with what the PC holds of its sessions (the unlocked session,
     # channels/Sessions.ps1): a phone that finds a receipt with no session member, or none at all, is
     # talking to a PC from before sessions and signs every envelope with its passkey.
+    # EVERY TRUSTED PASSKEY HAS ONE TOO, an answer or not (T-0177): before, a passkey got a session
+    # member only once it had a receipt, so a newly paired phone read the PC as one from before sessions
+    # and signed its first answers with the passkey, one prompt each. ONLY A PASSKEY TRUSTED NOW gets a
+    # session member: a revoked, pending or unknown key gets none (and no receipt at all unless it has
+    # answers), and a trust store that does not read gives nobody one - the phone then signs with its
+    # passkey as before. The Tick reads the same store each look (Find-HordeRelayPhoneKeys).
+    $trusted = @{}
+    try {
+        $senders = Find-HordeRelayTrustedSenders -HordeHome $Context.hordeHome
+        if ($senders.state -ceq "known") { foreach ($k in @($senders.value.Keys)) { if ($senders.value[$k].proof -ceq "webauthn") { $trusted["$k"] = $true } } }
+    } catch { $trusted = @{} }
+    $Prefer = @(@($Prefer) + @($trusted.Keys))
     foreach ($k in @($Prefer)) { if ("$k" -cmatch '\A[0-9a-f]{32}\z') { $froms["$k"] = $true } }
     $sessionRecords = $null
     try { $sessionRecords = Read-HordeRelaySessionRecords -HordeHome $Context.hordeHome } catch { $sessionRecords = $null }
-    if ($null -ne $sessionRecords -and $sessionRecords.ok) { foreach ($e in @($sessionRecords.vouches)) { $froms[$e.record.by] = $true } }
     $nowMs = ConvertTo-HordeRelayRecordMs -Time $null
     try {
         if ([System.IO.Directory]::Exists($inDir)) {
@@ -862,9 +874,9 @@ function Get-HordeDecisionsChannelReceipts {
             if ($ledger.streams[$from].ContainsKey("needsPasskey")) { $needsPasskey = @($ledger.streams[$from].needsPasskey) }
         }
         # relay/js/protocol.js's sessionStatus reads this member; none when the session records cannot
-        # be read, and the phone then signs with its passkey as before.
+        # be read, or for a passkey not trusted now, and the phone then signs with its passkey as before.
         $session = ""
-        if ($null -ne $sessionRecords -and $sessionRecords.ok) {
+        if ($trusted.ContainsKey($from) -and $null -ne $sessionRecords -and $sessionRecords.ok) {
             $st = Get-HordeRelaySessionStatus -HordeHome $Context.hordeHome -From $from -NowMs $nowMs -Records $sessionRecords
             if ($null -ne $st) {
                 $vs = @(@($st.vouches) | ForEach-Object { '{"vouchId":"' + $_.vouchId + '","state":"' + $_.state + '"}' })

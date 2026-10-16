@@ -32,7 +32,14 @@
 //   pair {offer, label}   answer a pairing offer, and send the response through the relay:
 //                         { id, fingerprint, response, recoveryCode, prf, pairMailbox, relayed }
 //   sendPairing {id}      send that response through the relay again: { relayed }
-//   announce {id}  unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
+//   announce {id}         ONE passkey prompt that announces the phone: the pairing screen's Finish pairing
+//                         (phone-core.js, THE ANNOUNCEMENT IS NO BUTTON); unlock carries it by itself
+//   pairConfirmed {id, waitMs}  has the machine said the founder confirmed this phone: { confirmed }
+//   join {horde, machine, label, agent}  this phone asks to join that machine: { request, expiresAt }
+//   joinOffer {request, waitMs}  the machine's answer, opened: { offerText, expired } ("" while none)
+//   joinRequests          the picked horde's open requests from new phones (never a number)
+//   approveJoin {request, number}  rejectJoin {request}  the passkey's approval or reject
+//   unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
 //   chat                  the picked horde's chat with its Thrall: { state, value: { session, items,
 //                         mode } } as phone-core's chat answers it; a locked or empty horde answers
 //                         unknown with the reason
@@ -54,7 +61,14 @@
 //                         the same record as notices
 //   follow {entry, lane, on}  the follow switch of a lane of the card of that pairing's machine, signed
 //                         with the passkey and sent: { ok } or { ok: false, reason }
-// EVENTS: list-changed (the list record), chat-changed (the chat record), progress-changed (the progress
+//   sessions              the unlocked session of every unlocked horde (phone-core.js, THE UNLOCKED
+//                         SESSION): [{ id, horde, machine, open, until, idleMs, keeps, words }];
+//                         asking at the moment one's time is up ends it then
+//   session-end {why}     end the unlocked session of every unlocked horde, keeping them open to read:
+//                         why "away" (the app in the background past its setting) or "closed" (the page
+//                         hidden for good); answers the same list as sessions
+// EVENTS: list-changed (the list record), chat-changed (the chat record), session-changed (the sessions
+// list, after an unlock, a lock, a refresh, a send or an end), progress-changed (the progress
 // record), cards-changed (the cards record), notices-changed (the notices record), hordes-changed (the
 // summaries), notice (a sentence), read-changed (how the last read of the mailbox went:
 // { locked, relayDown, said, lastGoodAt } - said the relay's words, lastGoodAt the time of the last read
@@ -85,8 +99,9 @@ import { withAnswers } from "../relay/protocol.js";
 // confirmed: long enough for a PC whose runner is between watches, short of the hour an answer waits.
 const RANK_WAIT_MS = 10 * 60 * 1000;
 const RANK_REFUSED = "The PC refused this change (it may be older than a change made since, or the question has left your list). Nothing was changed.";
+const RANK_NEEDS_PASSKEY = "Not changed: your PC asks for your passkey for this question. Tap it again and confirm with your passkey.";
 const RANK_UNCONFIRMED = "Not confirmed by the PC yet: it shows the new level once the PC has made the change. Tap again to send it again.";
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "rank", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow", "sessions", "session-end"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -129,6 +144,7 @@ export function createBridge(phone, options = {}) {
       try { st = await phone.rankState(r.entry, rankId); } catch (e) { continue; }
       if (st === "applied") r.settle({ ok: true });
       else if (st === "refused") r.settle({ ok: false, reason: RANK_REFUSED });
+      else if (st === "needs-passkey") r.settle({ ok: false, reason: RANK_NEEDS_PASSKEY });
     }
   }
   const look = options.look || { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
@@ -164,6 +180,13 @@ export function createBridge(phone, options = {}) {
     catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
   }
   async function hordes() { const h = await phone.hordes(); emit("hordes-changed", h); return h; }
+  // The unlocked session of every unlocked horde (sessions, in the header), pushed as session-changed.
+  async function sessionsRecord() {
+    const out = [];
+    for (const h of await phone.hordes()) if (h.unlocked) out.push({ id: h.id, horde: h.horde, machine: h.machine, ...(await phone.session(h.id)) });
+    emit("session-changed", out);
+    return out;
+  }
   let locked = true;
   let relayDown = false;
   async function refresh(waitMs = 0) {
@@ -179,7 +202,7 @@ export function createBridge(phone, options = {}) {
       if (!relayDown) lastGoodAt = now();
       emit("read-changed", { locked: false, relayDown, said: relayDown ? r.diagnostics.slice() : [], lastGoodAt });
       view = r.snapshot ? r : null;
-      viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, announce this phone again.";
+      viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, the phone is announced again at its next unlock.";
     } catch (e) {
       view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e);
       emit("read-changed", { locked, relayDown, said: locked ? [] : [viewError], lastGoodAt });
@@ -194,6 +217,7 @@ export function createBridge(phone, options = {}) {
       } catch (e) { /* the next refresh asks again; the answers stay kept */ }
     }
     await loadAnswers();
+    await sessionsRecord();
     const rec = listRecord();
     emit("list-changed", rec);
     // After the list the page re-sorts by: an applied change is answered with its new level drawn.
@@ -238,6 +262,7 @@ export function createBridge(phone, options = {}) {
         // DRAWN AT ONCE: the list with his answer in it, marked sent, before any snapshot comes.
         await loadAnswers();
         emit("list-changed", listRecord());
+        await sessionsRecord();
         return { ok: true, sequence: highestSequence() + 1 };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },
@@ -254,14 +279,22 @@ export function createBridge(phone, options = {}) {
     act: async () => ({ ok: true, sequence: LOCAL_ACT_SEQUENCE, local: true }),
     hordes: async () => hordes(),
     pick: async (a) => { if (String(a.id || "") !== picked) lastGoodAt = 0; picked = String(a.id || ""); view = null; viewError = ""; const rec = await refresh(); poll(); return rec; },
-    pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || "") }); await hordes(); return r; },
+    pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || ""), joined: a.joined === true }); await hordes(); return r; },
     sendPairing: async (a) => ({ relayed: await phone.sendPairing(String(a.id || "")) }),
     announce: async (a) => { const r = await phone.announce(String(a.id)); await hordes(); return r; },
-    unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
+    // ADD THIS PHONE and A NEW PHONE ASKS TO JOIN (phone-core.js): the new phone's request and the
+    // machine's answer; the picked horde's open requests, and its passkey's approval or reject.
+    join: async (a) => phone.join({ horde: String(a.horde || ""), machine: String(a.machine || ""), label: String(a.label || ""), agent: String(a.agent || "") }),
+    joinOffer: async (a) => phone.joinOffer(String(a.request || ""), { waitMs: Math.max(0, Math.min(Number(a.waitMs) || 0, 25000)) }),
+    joinRequests: async () => (picked ? phone.joinRequests(picked) : []),
+    approveJoin: async (a) => phone.approveJoin(picked, { request: String(a.request || ""), number: String(a.number || "") }),
+    rejectJoin: async (a) => phone.rejectJoin(picked, { request: String(a.request || "") }),
+    pairConfirmed: async (a) => phone.pairConfirmed(String(a.id || ""), { waitMs: Math.max(0, Math.min(Number(a.waitMs) || 0, 25000)) }),
+    unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); await sessionsRecord(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     recover: async (a) => { const r = await phone.recover(String(a.id), String(a.code || "")); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     // The summaries are pushed BEFORE the list: a frame that hears list-changed already knows the horde
     // is locked, and draws the locked screen, not an empty list.
-    lock: async (a) => { phone.lock(String(a.id)); const h = await hordes(); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return h; },
+    lock: async (a) => { phone.lock(String(a.id)); const h = await hordes(); await sessionsRecord(); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return h; },
     forget: async (a) => { await phone.forget(String(a.id)); if (String(a.id) === picked) { picked = ""; view = null; emit("list-changed", listRecord()); } return hordes(); },
     refresh: async () => refresh(),
     chat: async () => chatRecord(),
@@ -273,12 +306,19 @@ export function createBridge(phone, options = {}) {
       try { await phone.follow(picked, { entry: String(a.entry || picked), lane: String(a.lane || ""), on: a.on === true }); return { ok: true }; }
       catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },
+    sessions: async () => sessionsRecord(),
+    "session-end": async (a) => {
+      const why = a.why === "closed" ? "closed" : "away";
+      for (const h of await phone.hordes()) if (h.unlocked) phone.endSession(h.id, why);
+      return sessionsRecord();
+    },
     "progress-read": async (a) => progressRecord(() => phone.markProgressRead(picked, a.all === true ? "" : String(a.id || "-"))),
     "chat-send": async (a) => {
       try {
         const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
         await phone.sendLine(picked, { text: String(a.text || ""), messageId: id });
         emit("chat-changed", await chatRecord());
+        await sessionsRecord();
         return { ok: true, id };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     }

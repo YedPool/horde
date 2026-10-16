@@ -159,7 +159,14 @@ try {
         $deviceA = $(if ($null -ne $devA) { $devA.id } else { "" })
         Check ($png -ne "" -and -not (Test-Path -LiteralPath $png)) "the picture of the offer is deleted"
         $boxDir = Join-Path $mailboxes ($offerA.pairMailbox.Replace("/", "\"))
-        Check ((Test-Path -LiteralPath $boxDir) -and @(Get-ChildItem -LiteralPath $boxDir -Filter "*.item").Count -eq 0 -and @(Get-ChildItem -LiteralPath $boxDir -Filter "floor-*").Count -eq 1) "the pairing mailbox is acked through what was read, so the relay keeps nothing"
+        # What is left there is the machine's own word to the phone, and nothing of the phone's
+        # (relay/Pairing.ps1, TELLING THE PHONE IT IS CONFIRMED).
+        $leftItems = @(Get-ChildItem -LiteralPath $boxDir -Filter "*.item" -ErrorAction SilentlyContinue)
+        Check ((Test-Path -LiteralPath $boxDir) -and $leftItems.Count -eq 1 -and @(Get-ChildItem -LiteralPath $boxDir -Filter "floor-*").Count -eq 1) "the pairing mailbox is acked through what was read: the relay keeps nothing of the phone's, only the machine's one word to it"
+        $word = $(if ($leftItems.Count -eq 1) { $t = [System.IO.File]::ReadAllText($leftItems[0].FullName, $ascii); $t.Substring($t.IndexOf("`n") + 1) } else { "" })
+        $wr = Read-HordeRelayRecordText -Text $word -Spec (Get-HordeRelayPairingConfirmedSpec) -Kind "horde-relay-pairing-confirmed"
+        $wordOk = $wr.ok -and $wr.value.offer -ceq $offerA.offer -and $wr.value.device -ceq $deviceA -and (Test-HordeRelayEs256Signature -Public $id.value.sign.public -Bytes (Get-HordeRelayPairingConfirmedBytes -Horde "work" -Offer $wr.value.offer -Device $wr.value.device -ConfirmedAt $wr.value.confirmedAt) -Signature (ConvertFrom-HordeRelayBase64Url -Text $wr.value.sig))
+        Check ($wordOk -and $endA.out.Contains("tap Finish pairing")) ("THAT WORD tells the phone it is confirmed: this offer, this device, signed by the machine's key; and the command says to tap Finish pairing (" + $(if ($wr.ok) { $wr.value.device } else { $wr.reason }) + ")")
         $run = $null
     }
 
