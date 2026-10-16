@@ -8,8 +8,8 @@
     Mutations = @(
         # --- in: the answer ---
         @{ Name = "id-not-bound-to-the-sender"
-           Find = '($script:HordeDecisionsChannelIdDomain + "`n" + $From + "`n" + $AnswerId)'
-           Replace = '($script:HordeDecisionsChannelIdDomain + "`n" + $AnswerId)' }
+           Find = '($Domain + "`n" + $From + "`n" + $AnswerId)'
+           Replace = '($Domain + "`n" + $AnswerId)' }
         @{ Name = "evidence-not-the-records"
            Find = 'wordingVersion = $r.value.wordingVersion; evidence = $Item.evidence'
            Replace = 'wordingVersion = $r.value.wordingVersion; evidence = ("0" * 64)' }
@@ -50,8 +50,8 @@
            Replace = '""' }
         # --- out: what the snapshot says of answers ---
         @{ Name = "the-snapshot-does-not-say-which-answers-are-read"
-           Find = "+ ',`"answers`":' + `$script:HordeDecisionsChannelAnswerHighest + ',`"receipts`":'"
-           Replace = "+ ',`"receipts`":'" }
+           Find = "+ ',`"answers`":' + `$script:HordeDecisionsChannelAnswerHighest + ',`"ranks`":1,`"receipts`":'"
+           Replace = "+ ',`"ranks`":1,`"receipts`":'" }
         @{ Name = "the-snapshot-claims-a-version-this-machine-does-not-read"
            Find = '$script:HordeDecisionsChannelAnswerHighest = 2'
            Replace = '$script:HordeDecisionsChannelAnswerHighest = 3' }
@@ -70,10 +70,10 @@
            Replace = '-Operation "list" -Request @{ state = "all"; messages = $true }' }
         # --- review of 48bc492 ---
         @{ Name = "answer-for-any-machine"
-           Find = '    if ($r.value.machine -cne $Context.signKeyId) {'
+           Find = '    if ($Machine -cne $Context.signKeyId) {'
            Replace = '    if ($false) {' }
         @{ Name = "snapshot-not-asked-of-the-journal"
-           Find = '    if (-not $made.value.sent -or $made.value.kind -cne "snapshot" -or -not $r.value.snapshot.StartsWith($Context.signKeyId + "/decisions/")) {'
+           Find = '    if (-not $made.value.sent -or $made.value.kind -cne "snapshot" -or -not $Snapshot.StartsWith($Context.signKeyId + "/decisions/")) {'
            Replace = '    if ($false) {' }
         @{ Name = "snapshot-without-messages"
            Find = '-Operation "list" -Request @{ state = "open"; messages = $true }'

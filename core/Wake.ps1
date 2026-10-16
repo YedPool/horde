@@ -92,10 +92,10 @@ function Get-HordeWakeSettings {
         # session was asked every longest back-off step - 300 s, twelve lines an hour typed into a
         # fleet that cannot answer - for as long as nobody acknowledged mail, with no end (review of
         # PR 230). Now each probe waits silentProbeStretch times as long as the one before, up to
-        # silentProbeMaxSeconds, and after maxSilentProbes of them no more are sent: with these, at
-        # 5, 10, 20 and 40 minutes and then hourly, twelve probes in a little over eight hours.
-        # NOTHING IS LOST BY STOPPING: the silence ends when any session acknowledges mail, which
-        # the watcher sees on every pass whether it probes or not.
+        # silentProbeMaxSeconds, and after maxSilentProbes of them only the very slow probe below is
+        # sent: with these, at 5, 10, 20 and 40 minutes and then hourly, twelve probes in a little over
+        # eight hours. The silence ends when any session acknowledges mail, which the watcher sees on
+        # every pass whether it probes or not.
         # AT MOST ONE FREE KNOCK A SESSION IN THIS LONG, WHATEVER LIMIT IT IS FOR (Get-HordeWakeHold, A
         # LIMIT THAT IS OVER). The free knock skips the cap and the back-off, and was owed once per
         # limit - told apart by the time the limit ended. A waker whose past limitedUntil SHIFTS, a
@@ -106,6 +106,14 @@ function Get-HordeWakeSettings {
         silentProbeStretch = 2
         silentProbeMaxSeconds = 3600
         maxSilentProbes = 12
+        # AFTER THE LAST OF THOSE, ONE VERY SLOW PROBE GOES ON: one session, in turn, every this long - six
+        # hours. Stopping for good left mail waiting for ever in a fleet where no session takes a turn
+        # by itself: the silence ends on an acknowledgement, and nothing was left that could bring one
+        # about (review of PR 234). Four lines a day into a whole fleet is what finding out costs; and
+        # when the twelfth has gone unanswered the warchief is told (Update-HordeWakeSilence). Counted
+        # from the last probe of the silence, whichever it was, and that time is saved with the
+        # silence, so a watcher started again does not probe at once (Get-HordeWakeDecisions).
+        silentSlowProbeSeconds = 21600
     }
     foreach ($k in @($Overrides.Keys)) {
         if (-not $s.Contains("$k")) { throw ("'" + $k + "' is not a wake setting") }
@@ -145,12 +153,36 @@ function Get-HordeWakeLedgerEntry {
     # for one mail (its mailAt), and when another mail has become the oldest - the session took the one
     # it was being asked about - nothing is held against the new one. An entry that records no mail
     # (one written before entries did) is for whatever mail there is.
+    # WHILE ANY MAIL IS HANDED OVER, THE ENTRY STANDS FOR ITS OWN MAIL, WHATEVER IS THE OLDEST UNREAD. Another
+    # mail being the oldest unread was read as "the session took the one it was asked about" - but mail
+    # handed over is out of the unread and not taken. A session nudged six times for one mail and given
+    # up on had that mail handed over; a second mail arrived and was the oldest unread, so the entry was
+    # rebuilt for it; when the first came back unread 600 s on, the entry was the second's, and the first
+    # had a fresh budget - six more nudges and a second gave-up, and again at every new mail, for a session
+    # that takes turns and never acknowledges (review of the before-live fixes). So while handedOverCount
+    # is above 0 the entry is kept, with its mailAt, its count and its back-off, and a nudge sent then is
+    # counted in it (the callers keep its mailAt, Get-HordeWakeEntryMailAt). The entry still goes only on
+    # evidence the mail was taken: nothing unread AND nothing handed over (Update-HordeWakeLedger).
     param($Ledger, [string]$Id, $State = $null)
     if ($null -eq $Ledger -or -not $Ledger.ContainsKey($Id)) { return $null }
     $entry = $Ledger[$Id]
     $mailAt = Get-HordeWakeEntryValue $entry "mailAt"
+    if ($null -ne $State -and (Get-HordeWakeHandedOver $State) -gt 0) { return $entry }
     if ($null -ne $State -and $mailAt -is [datetime] -and $State.oldestUnreadAt -is [datetime] -and $State.oldestUnreadAt -ne $mailAt) { return $null }
     return $entry
+}
+
+function Get-HordeWakeEntryMailAt {
+    # The mail an entry written now is for: the mail of -Entry, the entry it replaces, when that names one,
+    # and otherwise -State's oldest unread, or $null. An entry handed back by Get-HordeWakeLedgerEntry is
+    # for the mail it names - the oldest unread, or the mail handed over that it was kept for - and a
+    # nudge counted in it must not move it to another mail's time: that was the fresh budget again.
+    param($Entry, $State)
+    $mailAt = Get-HordeWakeEntryValue $Entry "mailAt"
+    if ($mailAt -is [datetime]) { return $mailAt }
+    $mailAt = Get-HordeWakeEntryValue $State "oldestUnreadAt"
+    if ($mailAt -is [datetime]) { return $mailAt }
+    return $null
 }
 
 function Get-HordeWakeEntryValue {
@@ -233,9 +265,14 @@ function Get-HordeWakeLimit {
     #     own repair moves a mailbox to a new session id after a resume, with no turn taken by
     #     anybody (safety review of PR 220). Nothing here reads an inbox as evidence any more;
     #   - the judged session's OWN acknowledgement: it is the one whose state could not be read.
-    # -Acks is session id -> when it last acknowledged mail, for the sessions the pass could reach
-    # and whose acknowledgements its waker could read (Invoke-HordeWakePass). A waker that cannot
-    # read them gives none, and then there is no evidence. THE EDGE: an acknowledgement exactly
+    #   - AN ACKNOWLEDGEMENT THAT IS MERELY RECENT. Any time inside the window was taken, so a restore
+    #     that stamps every session's acknowledgement to now, read by a watcher started just after it,
+    #     released every session whose limit nobody could read for ten minutes (review of PR 234). The
+    #     evidence is an acknowledgement SEEN TO INCREASE between two readings - the same rule that ends
+    #     a silence (Update-HordeWakeAcksRose) - and the first reading after a start compares with nothing.
+    # -Acks is session id -> the acknowledgement time at which it was seen to increase, for the sessions
+    # the pass could reach and whose acknowledgements its waker could read (Invoke-HordeWakePass hands in
+    # only those). A waker that cannot read them gives none, and then there is no evidence. THE EDGE: an acknowledgement exactly
     # movingEvidenceSeconds old still counts, one second older does not - the window is the last
     # 600 s, both ends in - and one dated in the future is no evidence at all.
     # THIS IS ONLY EVER ASKED OF A SESSION THAT IS REACHABLE (Get-HordeWakeHold asks reachable first):
@@ -441,7 +478,8 @@ function Get-HordeWakeDecisions {
     # "rate limit" and are ready again next pass.
     #   -Silent     the fleet is silent (Update-HordeWakeSilence): every nudge is a probe
     #   -SilentProbes  how many probes were sent since it was found silent
-    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook, [switch]$Silent, [int]$SilentProbes = 0, $Acks = $null, [switch]$NoProbe, [string]$Self = "")
+    #   -SilentProbeAt when the last of them was sent, as the silence keeps it, or $null
+    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook, [switch]$Silent, [int]$SilentProbes = 0, $Acks = $null, [switch]$NoProbe, [string]$Self = "", $SilentProbeAt = $null)
     $roles = @(Get-HordeWakerRoles)
     $rows = New-Object System.Collections.ArrayList
     foreach ($t in @($Targets)) {
@@ -482,12 +520,28 @@ function Get-HordeWakeDecisions {
         $longest = Get-HordeWakeSilentProbeSeconds -Probes $SilentProbes -Settings $Settings
         $lastOfAny = $null
         if ($null -ne $Ledger) { foreach ($e in @($Ledger.Values)) { $p = Get-HordeWakeEntryValue $e "probeAt"; if ($p -is [datetime] -and $p -le $Now -and ($null -eq $lastOfAny -or $p -gt $lastOfAny)) { $lastOfAny = $p } } }
+        # AFTER THE LAST OF THEM, ONE VERY SLOW PROBE (Get-HordeWakeSettings, silentSlowProbeSeconds): one
+        # session, in the same turn, every six hours, counted from the last probe of the silence. That
+        # time is -SilentProbeAt, the silence's own (Update-HordeWakeSilence keeps it and it is saved
+        # with it), or the ledger's latest probe, whichever is later: the ledger alone loses an entry
+        # whose mail is taken, and the silence alone was not saved by a watcher before this one. When
+        # neither knows one - a silence saved by such a watcher with no ledger beside it - the probe
+        # is sent: waiting for a time nobody kept would be the silence that never ends again.
+        # held is why nobody is probed on this pass, or $null when ONE session is.
+        $held = $null
         if ($SilentProbes -ge [int]$Settings.maxSilentProbes) {
-            foreach ($r in $ready) { $r.action = "wait"; $r.reason = ("the fleet is silent: " + $SilentProbes + " probes went unanswered and no more are sent; it ends when a session acknowledges mail") }
-            $ready = @()
+            $slow = [double]$Settings.silentSlowProbeSeconds
+            $lastSlow = $lastOfAny
+            if ($SilentProbeAt -is [datetime] -and $SilentProbeAt -le $Now -and ($lastSlow -isnot [datetime] -or $SilentProbeAt -gt $lastSlow)) { $lastSlow = $SilentProbeAt }
+            if ($lastSlow -is [datetime] -and ($Now - $lastSlow).TotalSeconds -lt $slow) {
+                $held = ("the fleet is silent: " + $SilentProbes + " probes went unanswered, and now one session of the fleet is asked every " + [int]$slow + " s; " + [int][System.Math]::Ceiling($slow - ($Now - $lastSlow).TotalSeconds) + " s are left. It ends when a session acknowledges mail")
+            }
         }
         elseif ($lastOfAny -is [datetime] -and ($Now - $lastOfAny).TotalSeconds -lt $longest) {
-            foreach ($r in $ready) { $r.action = "wait"; $r.reason = ("the fleet is silent: one session of the fleet is asked every " + $longest + " s, and " + [int][System.Math]::Ceiling($longest - ($Now - $lastOfAny).TotalSeconds) + " s are left") }
+            $held = ("the fleet is silent: one session of the fleet is asked every " + $longest + " s, and " + [int][System.Math]::Ceiling($longest - ($Now - $lastOfAny).TotalSeconds) + " s are left")
+        }
+        if ($null -ne $held) {
+            foreach ($r in $ready) { $r.action = "wait"; $r.reason = $held }
             $ready = @()
         } else {
             $ready = @($ready | Sort-Object -Property probed, nothing, attempts, rank, oldest, id)
@@ -528,8 +582,7 @@ function Set-HordeWakeLedgerAsked {
     $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $Id -State $State
     $count = 1
     if ($null -ne $had) { $count = [int]$had.attempts + 1 }
-    $mailAt = Get-HordeWakeEntryValue $State "oldestUnreadAt"
-    if ($mailAt -isnot [datetime]) { $mailAt = Get-HordeWakeEntryValue $had "mailAt" }
+    $mailAt = Get-HordeWakeEntryMailAt -Entry $had -State $State
     $freeAt = $null
     if ($next.ContainsKey($Id)) { $freeAt = Get-HordeWakeEntryValue $next[$Id] "freeAt" }
     if ($Free) { $freeAt = $Now }
@@ -546,7 +599,8 @@ function Update-HordeWakeLedger {
     # AN ATTEMPT COUNTS WHATEVER IT CAME TO: woken too, because "woken" is the waker's word and the
     # mail is what proves it - a session that was woken and still has unread mail next pass is asked
     # again after its back-off (a missed wake heals). MAIL TAKEN RESETS IT: a session known to have no
-    # unread mail leaves the ledger, so its next message is knocked for at once.
+    # unread mail, and none handed over to it and not yet acknowledged (below, NOTHING UNREAD IS "MAIL
+    # TAKEN" ONLY WHEN...), leaves the ledger, so its next message is knocked for at once.
     # "nothing" IS NOT AN ATTEMPT: the waker found the mail already taken and rang nobody, so nothing was
     # tried and nothing failed. It does not advance the back-off and is never counted against the session.
     # BUT IT MUST NOT HOLD THE SLOT. The first version left the ledger untouched for it, and the review of
@@ -577,9 +631,8 @@ function Update-HordeWakeLedger {
         # now. An entry for another mail is not carried over (Get-HordeWakeLedgerEntry).
         $stateNow = $null
         if ($null -ne $States -and $States.ContainsKey($id) -and "$($States[$id].state)" -ceq "known") { $stateNow = $States[$id].value }
-        $mailAt = $null
-        if ($null -ne $stateNow -and $stateNow.oldestUnreadAt -is [datetime]) { $mailAt = $stateNow.oldestUnreadAt }
         $had = Get-HordeWakeLedgerEntry -Ledger $next -Id $id -State $stateNow
+        $mailAt = Get-HordeWakeEntryMailAt -Entry $had -State $stateNow
         if ("$($Outcomes[$id])" -ceq "nothing") {
             $kept = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "nothing" -NothingAt $Now -MailAt $mailAt
             if ($null -ne $had) { $kept = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had }
@@ -633,13 +686,27 @@ function Update-HordeWakeLedger {
             $had = Get-HordeWakeLedgerEntry -Ledger $next -Id "$id" -State $a.value
             if ((Get-HordeWakeEntryValue $had "probeAt") -is [datetime]) { continue }
             $seen = New-HordeWakeLedgerRow -Attempts 0 -LastAttemptAt $Now -LastOutcome "limited" -MailAt $a.value.oldestUnreadAt -ProbeAt $Now
-            if ($null -ne $had) { $seen = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $had) -MailAt $a.value.oldestUnreadAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now -Carry $had }
+            if ($null -ne $had) { $seen = New-HordeWakeLedgerRow -Attempts ([int]$had.attempts) -LastAttemptAt $had.lastAttemptAt -LastOutcome "$($had.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $had) -MailAt (Get-HordeWakeEntryMailAt -Entry $had -State $a.value) -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt $Now -Carry $had }
             $next["$id"] = $seen
         }
     }
     foreach ($id in @($next.Keys)) {
+        # NOTHING UNREAD IS "MAIL TAKEN" ONLY WHEN NOTHING IS HANDED OVER EITHER. Mail handed over to a session
+        # is out of unreadCount and is not acknowledged; the fleet's command counts it unread again when
+        # its hold runs out. "Nothing unread" alone was read as taken, and the entry dropped: nudge, the
+        # hook hands the mail over, the entry goes, nobody acknowledges, ten minutes on the mail is
+        # unread again to a session with no entry - a fresh budget - and it is nudged again. Six nudges
+        # an hour for one session, never capped and never given up on (review of PR 234). So the entry
+        # stands while anything is handed over, and goes when the state shows nothing unread AND
+        # nothing handed over - which is how an acknowledgement shows here.
+        # HOW THE ENTRY KNOWS ITS MAIL AGAIN: by mailAt, as always. That is the mail's own time, and the
+        # command reports a hand-over that ran out under that same time (oldestUnreadAt), so the entry
+        # for it applies again, count and all (Get-HordeWakeLedgerEntry; no oldest unread, as during the
+        # hand-over, is no other mail). oldestHandedOverAt is NOT used to know it by: it is when the
+        # hook handed the mail over, a new time at every hand-over, and no time of the mail's.
+        # A waker that cannot say what was handed over (the port's $null) is read as none, as before.
         $taken = $false
-        if ($null -ne $States -and $States.ContainsKey($id)) { $a = $States[$id]; $taken = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -le 0) }
+        if ($null -ne $States -and $States.ContainsKey($id)) { $a = $States[$id]; $taken = ("$($a.state)" -ceq "known" -and $a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -eq 0) }
         $old = (($Now - $next[$id].lastAttemptAt).TotalSeconds -gt $script:HordeWakeLedgerKeepSeconds)
         # A SESSION GIVEN UP ON IS FORGOTTEN ONLY ON EVIDENCE, NEVER BY AGE ALONE AND NEVER FOR WHAT A PASS
         # DID NOT READ. Entries were dropped after a day whatever they said, so a session that never
@@ -760,14 +827,63 @@ function Update-HordeWakeLimited {
     return (Update-HordeWakeSaidOnce -Seen $Seen -Said $said -Known $Known -Now $Now -Kind "usage-limit" -Outcome "limited")
 }
 
+function Update-HordeWakeAcksRose {
+    # WHO WAS SEEN TO ACKNOWLEDGE MAIL, between the last reading and this one: { acks; rose; moved; risen }. The one
+    # rule both a silence's end (Update-HordeWakeSilence) and the release of a session whose limit nobody
+    # could read (Get-HordeWakeLimit) are judged by, kept in one place so the two cannot drift apart.
+    #   -Seen   { acks; rose } from the last pass (the silence's seen carries both), or $null
+    #   -Acks   session id -> when it last acknowledged mail, or $null for never, as this pass read it
+    # acks is the reading to compare the next one with: this pass's, over what was known before of a
+    # session this pass did not read. rose is session id -> the acknowledgement time at which it was
+    # last SEEN TO INCREASE, kept from pass to pass; moved says one did on this pass.
+    # AN INCREASE IS A SESSION SEEN BEFORE NOW SHOWING AN ACKNOWLEDGEMENT NEWER THAN THE ONE IT SHOWED, OR ITS
+    # FIRST. A session seen for the first time proves nothing by what it already had - which is what makes
+    # the first pass after a start, whose reading has nothing before it, no evidence of anything. And
+    # one dated in the future is no increase.
+    # THE READING KEPT IS THE LARGEST TIME SEEN, AND WHAT CANNOT BE READ IS UNKNOWN, NOT ZERO. Each reading
+    # overwrote the last, so a row read as T, then with no time that could be read (acked known, the time
+    # not one), then as T again, rose on the third pass from nothing to T: a silence ended, and every
+    # session limited unknown was released, with nobody having taken a turn (review of the before-live
+    # fixes). An older time read after a newer one did the same. So a session's reading is replaced only
+    # by a newer time. A session seen for the first time is kept as it reads - none, if it reads none - so
+    # its first acknowledgement after that is still a rise.
+    param($Seen = $null, $Acks = @{}, [Parameter(Mandatory = $true)][datetime]$Now)
+    $acksNow = @{}
+    $wasAcks = Get-HordeWakeEntryValue $Seen "acks"
+    if ($wasAcks -is [System.Collections.IDictionary]) { foreach ($id in @($wasAcks.Keys)) { $acksNow["$id"] = $wasAcks[$id] } }
+    $rose = @{}
+    $wasRose = Get-HordeWakeEntryValue $Seen "rose"
+    if ($wasRose -is [System.Collections.IDictionary]) { foreach ($id in @($wasRose.Keys)) { $rose["$id"] = $wasRose[$id] } }
+    $moved = $false
+    if ($Acks -is [System.Collections.IDictionary]) {
+        foreach ($id in @($Acks.Keys)) {
+            $shown = $Acks[$id]
+            if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }
+            if (-not $acksNow.ContainsKey("$id") -or ($shown -is [datetime] -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"]))) { $acksNow["$id"] = $shown }
+        }
+    }
+    # risen: the sessions that rose on THIS pass, for a caller that must know whose it was - a session's own
+    # rise releases nothing of its own (Set-HordeWakeLedgerProbesDue, -Risen).
+    $risen = @($rose.Keys | Where-Object { -not ($wasRose -is [System.Collections.IDictionary] -and $wasRose.Contains($_) -and $wasRose[$_] -eq $rose[$_]) } | ForEach-Object { "$_" } | Sort-Object)
+    return [pscustomobject]@{ acks = $acksNow; rose = $rose; moved = $moved; risen = $risen }
+}
+
 function Update-HordeWakeSilence {
     # WHEN NOBODY IN THE FLEET CAN ANSWER, AND NO WAKER SAYS WHY: { seen; entries; silent; declared;
     # moved; condition }. moved is true on a pass that saw a session take mail, silent before or not:
     # the caller then releases the sessions limited with no known end (Set-HordeWakeLedgerProbesDue). The net under Get-HordeWakeLimit, for a harness that reports no limit.
-    #   -Seen     { silent; quietSince; nudges; acks; probes }, from the last pass, or $null. probes is how
-    #             many nudges were sent since the fleet was found silent: each is a probe, and the
-    #             pass is told the count (Get-HordeWakeDecisions stretches and caps them by it). When
-    #             the last one allowed has been sent, that is said once: kind silent-probes-ended
+    #   -Seen     { silent; quietSince; nudges; acks; probes; probeAt }, from the last pass, or $null.
+    #             probes is how many nudges were sent since the fleet was found silent: each is a
+    #             probe, and the pass is told the count (Get-HordeWakeDecisions stretches and caps them
+    #             by it). probeAt is when the last of them was sent, which the very slow probe after
+    #             the cap is counted from.
+    # AFTER THE LAST STRETCHED PROBE THE WARCHIEF IS TOLD. It was one journal line, silent-probes-ended,
+    # and then nothing at all: a fleet that cannot answer, a watcher that has stopped asking, and
+    # nobody who could look told either (review of PR 234). So the end of the stretched probes is a
+    # FLEET NOTICE - condition silent-probes-ended, about no session, its instance the silence's
+    # quietSince, so it is one notice per silence however often it is met - sent through the tell
+    # sender as fleet-silent is (core/WakeTell.ps1), and journaled once as before. From there one
+    # very slow probe goes on (Get-HordeWakeSettings, silentSlowProbeSeconds).
     #   -Entries  this pass's journal entries; its nudges are read from them
     #   -Acks     session id -> when it last acknowledged mail, or $null for never, for the sessions
     #             this pass could reach and whose acknowledgements its waker could read
@@ -791,20 +907,15 @@ function Update-HordeWakeSilence {
     $before = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = @{}; probes = 0 }
     if ($null -ne $Seen) { $before = $Seen }
     $out = New-Object System.Collections.ArrayList
-    $moved = $false
-    $acksNow = @{}
-    $wasAcks = Get-HordeWakeEntryValue $before "acks"
-    if ($wasAcks -is [System.Collections.IDictionary]) { foreach ($id in @($wasAcks.Keys)) { $acksNow["$id"] = $wasAcks[$id] } }
-    if ($Acks -is [System.Collections.IDictionary]) {
-        foreach ($id in @($Acks.Keys)) {
-            $shown = $Acks[$id]
-            if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }
-            $acksNow["$id"] = $shown
-        }
-    }
+    # WHO ACKNOWLEDGED MAIL SINCE THE LAST PASS (Update-HordeWakeAcksRose). rose is kept in the seen, for the
+    # next pass to judge a session whose limit nobody could read by (Invoke-HordeWakePass, -AcksSeen).
+    $heard = Update-HordeWakeAcksRose -Seen $before -Acks $Acks -Now $Now
+    $moved = $heard.moved
+    $acksNow = $heard.acks
+    $rose = $heard.rose
     if ($moved) {
         if ($before.silent -eq $true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving" -Outcome "moving" -Reason "a session acknowledged mail: the fleet is answering again, and every session is nudged as normal")) }
-        return [pscustomobject]@{ seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0 }; entries = $out.ToArray(); silent = $false; declared = $false; moved = $true; condition = $null }
+        return [pscustomobject]@{ seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0; rose = $rose }; entries = $out.ToArray(); silent = $false; declared = $false; moved = $true; condition = $null; risen = $heard.risen }
     }
     $window = [double]$Settings.fleetSilentMinutes * 60
     $nudges = New-Object System.Collections.ArrayList
@@ -818,12 +929,23 @@ function Update-HordeWakeSilence {
     $sent = 0
     $was = Get-HordeWakeEntryValue $before "probes"
     if ($was -is [int] -or $was -is [long]) { $sent = [int]$was }
-    $next = [pscustomobject]@{ silent = ($before.silent -eq $true); quietSince = $quietSince; nudges = $nudges.ToArray(); acks = $acksNow; probes = 0 }
+    $next = [pscustomobject]@{ silent = ($before.silent -eq $true); quietSince = $quietSince; nudges = $nudges.ToArray(); acks = $acksNow; probes = 0; probeAt = $null; rose = $rose }
     if ($next.silent) {
         $most = [int]$Settings.maxSilentProbes
-        $next.probes = $sent + @($Entries | Where-Object { $null -ne $_ -and @("nudge", "nudge-killed") -ccontains "$($_.kind)" }).Count
-        if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "silent-probes-ended" -Outcome "ended" -Reason ("the fleet has been silent through " + $next.probes + " probes, and no more are sent. Nothing is typed into any session from here; the silence ends, and everybody is nudged as normal, when a session acknowledges mail"))) }
-        return [pscustomobject]@{ seen = $next; entries = $out.ToArray(); silent = $true; declared = $false; moved = $false; condition = $null }
+        $probedNow = @($Entries | Where-Object { $null -ne $_ -and @("nudge", "nudge-killed") -ccontains "$($_.kind)" }).Count
+        $next.probes = $sent + $probedNow
+        $lastProbe = Get-HordeWakeEntryValue $before "probeAt"
+        if ($probedNow -gt 0) { $lastProbe = $Now }
+        if ($lastProbe -is [datetime]) { $next.probeAt = $lastProbe }
+        $condition = $null
+        if ($sent -lt $most -and $next.probes -ge $most) {
+            $every = ([double]$Settings.silentSlowProbeSeconds / 3600).ToString([System.Globalization.CultureInfo]::InvariantCulture) + " hours"
+            [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "silent-probes-ended" -Outcome "ended" -Reason ("the fleet has been silent through " + $next.probes + " probes, and the stretched probes have ended. From here one session is asked every " + $every + ", and the warchief is told; the silence ends, and everybody is nudged as normal, when a session acknowledges mail")))
+            $instance = ""
+            if ($quietSince -is [datetime]) { $instance = $quietSince.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture) }
+            $condition = [pscustomobject]@{ kind = "silent-probes-ended"; subject = ""; instance = $instance; text = ("the fleet has been silent through " + $next.probes + " probes and no session has acknowledged mail. The watcher now asks one session only every " + $every + ", and wakes everybody when one takes mail. Somebody should look: a usage limit, perhaps, or sessions that cannot take a turn.") }
+        }
+        return [pscustomobject]@{ seen = $next; entries = $out.ToArray(); silent = $true; declared = $false; moved = $false; condition = $condition }
     }
     $who = @($nudges | ForEach-Object { $_.id } | Sort-Object -Unique)
     $notWoken = @($nudges | Where-Object { $_.outcome -cne "woken" })
@@ -845,13 +967,19 @@ function Set-HordeWakeLedgerProbesDue {
     # to take mail: a session limited with no known end is then knocked for once, in its fair turn
     # (Get-HordeWakeHold, LIMITED WITH NO KNOWN END). The mark stays until that knock is sent, so the
     # rate limit of one nudge a pass delays a release and never loses it.
-    param($Ledger)
+    # -Risen: the sessions seen to take mail on that pass (Update-HordeWakeSilence's risen). A SESSION'S OWN
+    # ACKNOWLEDGEMENT RELEASES NOTHING OF ITS OWN, as it is no evidence for its own unknown limit
+    # (Get-HordeWakeLimit): its probe is marked due only when ANOTHER session rose. A watcher started
+    # with every acknowledgement stamped, whose judged session then moved its own, knocked it at once
+    # by this path (review of PR 234). Without -Risen every probe is marked, as before.
+    param($Ledger, $Risen = $null)
     $next = @{}
     if ($null -ne $Ledger) {
         foreach ($id in @($Ledger.Keys)) {
             $e = $Ledger[$id]
             $next["$id"] = $e
             if ((Get-HordeWakeEntryValue $e "probeAt") -isnot [datetime]) { continue }
+            if ($null -ne $Risen -and @(@($Risen) | Where-Object { "$_" -cne "$id" }).Count -eq 0) { continue }
             $next["$id"] = New-HordeWakeLedgerRow -Attempts ([int]$e.attempts) -LastAttemptAt $e.lastAttemptAt -LastOutcome "$($e.lastOutcome)" -NothingAt (Get-HordeWakeNothingAt $e) -MailAt (Get-HordeWakeEntryValue $e "mailAt") -GaveUp ((Get-HordeWakeEntryValue $e "gaveUp") -eq $true) -ProbeAt $script:HordeWakeProbeDue -Carry $e
         }
     }
@@ -966,6 +1094,10 @@ function Invoke-HordeWakePass {
     # for the listing).
     #   -Silent           the fleet is silent (Update-HordeWakeSilence): every nudge of this pass is a probe
     #   -SilentProbes     how many probes were sent since it was found silent (the silence's probes)
+    #   -SilentProbeAt    when the last of them was sent (the silence's probeAt), or $null
+    #   -AcksSeen         the last pass's reading of who acknowledged mail - the silence's seen, which keeps
+    #                     it - or $null when there was none: then no acknowledgement can be seen to rise,
+    #                     and nobody's unknown limit is released by one (Get-HordeWakeLimit)
     # mail is session id -> its oldest unread mail's time, or $null, for the sessions whose state was
     # read; limited is session id -> its usage limit's text, for those with unread mail that are limited.
     #   -Only             ONE SESSION, AND NO OTHER: the pass is cut down to this id before any state is
@@ -974,7 +1106,7 @@ function Invoke-HordeWakePass {
     #                     (core/WakeRun.ps1, PROOF). A session that is not in the listing - or a listing
     #                     that cannot be read - is one entry of kind proof-target-absent, and nobody is
     #                     nudged: the pass never falls back to "whoever is ready".
-    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Send, [switch]$Silent, [int]$SilentProbes = 0, [string]$Only = "", [string]$Self = "")
+    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Send, [switch]$Silent, [int]$SilentProbes = 0, [string]$Only = "", [string]$Self = "", $SilentProbeAt = $null, $AcksSeen = $null)
     $shadowPass = (-not $Send)
     # never is session id -> why a session with unread mail is NEVER nudged, for what it is: retired, a
     # reserved label, the watcher's own session (skip). held is session id -> why one is held for what
@@ -1035,9 +1167,16 @@ function Invoke-HordeWakePass {
                 $a = $states[$t.id]
                 if ($a.state -ceq "known" -and "$($t.reachable)" -ceq "yes" -and "$(Get-HordeWakeEntryValue $a.value "acked")" -ceq "known") { $Acks[$t.id] = Get-HordeWakeEntryValue $a.value "lastAckedAt" }
             }
+            # THE EVIDENCE THAT SESSIONS CAN TAKE TURNS IS AN ACKNOWLEDGEMENT SEEN TO INCREASE (Get-HordeWakeLimit):
+            # this reading against the last pass's (-AcksSeen), by the silence's own rule
+            # (Update-HordeWakeAcksRose), and only for a session read in THIS pass as reachable with its
+            # acknowledgements known. With no reading before - the first pass after a start - nothing rose.
+            $heard = Update-HordeWakeAcksRose -Seen $AcksSeen -Acks $Acks -Now $Now
+            $moving = @{}
+            foreach ($who in @($heard.rose.Keys)) { if ($Acks.ContainsKey("$who")) { $moving["$who"] = $heard.rose[$who] } }
             $canLook = Test-HordeWakerConfirms $Waker
             $confirmed = @{}
-            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $Acks -NoProbe:($Only -cne "") -Self $Self)
+            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $moving -NoProbe:($Only -cne "") -Self $Self -SilentProbeAt $SilentProbeAt)
             # THE LOOKS ARE COUNTED AS THEY ARE MADE, not by how many sessions have been looked at: the
             # bound must hold even if one session were looked at twice.
             $looks = 0
@@ -1051,7 +1190,7 @@ function Invoke-HordeWakePass {
                     if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
                     else { $states[$d.id] = $confirmed[$d.id] }
                 }
-                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $Acks -NoProbe:($Only -cne "") -Self $Self)
+                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $moving -NoProbe:($Only -cne "") -Self $Self -SilentProbeAt $SilentProbeAt)
             }
             foreach ($d in $decisions) { if ($d.action -ceq "look") { $d.action = "wait"; $d.reason = "its box and its turn were not read this pass: the pass's looks were used up" } }
             foreach ($t in $targets) {
@@ -1066,7 +1205,7 @@ function Invoke-HordeWakePass {
                 # nudged - else its inbox shows mail and the journal shows nothing done about it.
                 elseif ($a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -gt 0 -and "$($t.retired)" -ceq "no" -and -not (Test-HordeLabelReserved "$($t.label)") -and ($Self -ceq "" -or "$($t.id)" -cne $Self)) { $held[$t.id] = "handed-over mail: " + (Get-HordeWakeHandedOver $a.value) + " handed over to it and not yet acknowledged, and none unread. It is not nudged: it has that mail already, and the fleet counts it unread again if it is never acknowledged" }
                 # A LIMIT IS SAID ONLY OF A SESSION THAT COULD OTHERWISE BE NUDGED: reachable, not retired.
-                $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $Acks
+                $limit = Get-HordeWakeLimit -State $a.value -Now $Now -Settings $Settings -Acks $moving
                 if ($a.value.unreadCount -gt 0 -and "$($t.reachable)" -ceq "yes" -and "$($t.retired)" -ceq "no" -and @("until", "open") -ccontains $limit.kind) {
                     $limited[$t.id] = $limit.text
                     if ($limit.kind -ceq "open") { [void]$open.Add($t.id) }
@@ -1111,7 +1250,7 @@ function Invoke-HordeWakePass {
                 }
                 else { $outcomes[$d.id] = "unknown"; [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "nudge" -Id $d.id -Outcome "unknown" -Reason "$($rang.reason)")) }
             }
-            $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now -Settings $Settings -Silent:$Silent -Open $open.ToArray() -Acks $Acks -Listed $listedIds
+            $nextLedger = Update-HordeWakeLedger -Ledger $Ledger -Decisions $decisions -Outcomes $outcomes -States $states -Now $Now -Settings $Settings -Silent:$Silent -Open $open.ToArray() -Acks $moving -Listed $listedIds
             # THE CAP: a session nudged maxNudgesPerMail times for one mail is given up on, said once.
             $gave = Update-HordeWakeGaveUp -Ledger $nextLedger -Now $Now -Settings $Settings
             $nextLedger = $gave.ledger
@@ -1211,7 +1350,12 @@ function Save-HordeWakeSilence {
     $sent = 0
     $p = Get-HordeWakeEntryValue $Seen "probes"
     if (($p -is [int] -or $p -is [long]) -and $p -gt 0) { $sent = [int]$p }
-    $doc = [ordered]@{ schemaVersion = 1; silent = ((Get-HordeWakeEntryValue $Seen "silent") -eq $true); quietSince = $since; probes = $sent }
+    # And when the last probe was sent, which the very slow probe after the cap is counted from: a watcher
+    # started again would otherwise probe at once, and one restarted every hour would probe every hour.
+    $lastProbe = $null
+    $pa = Get-HordeWakeEntryValue $Seen "probeAt"
+    if ($pa -is [datetime]) { $lastProbe = ConvertTo-HordeWakeTimeText $pa }
+    $doc = [ordered]@{ schemaVersion = 1; silent = ((Get-HordeWakeEntryValue $Seen "silent") -eq $true); quietSince = $since; probes = $sent; probeAt = $lastProbe }
     Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name "silence" -Mode $Mode -HordeHome $HordeHome) -Text (ConvertTo-Json -InputObject $doc -Depth 5 -Compress)
 }
 
@@ -1245,5 +1389,14 @@ function Read-HordeWakeSilence {
         $sent = [int]$pp.Value
     }
     if (-not [bool]$j.silent) { $sent = 0 }
-    return (New-HordeKnown -Value ([pscustomobject]@{ seen = [pscustomobject]@{ silent = [bool]$j.silent; quietSince = $since; nudges = @(); acks = @{}; probes = $sent } }))
+    # probeAt: none in a file written before it was kept, and none for a fleet that was not silent. One
+    # that is there and is no time is a file this does not read.
+    $lastProbe = $null
+    $pt = $j.PSObject.Properties["probeAt"]
+    if ($null -ne $pt -and $null -ne $pt.Value) {
+        try { $lastProbe = ConvertFrom-HordeWakeTimeText $pt.Value } catch { $lastProbe = $null }
+        if ($null -eq $lastProbe) { return (New-HordeUnknown -Reason "what was saved of a silent fleet holds a time of its last probe that is not one") }
+    }
+    if (-not [bool]$j.silent) { $lastProbe = $null }
+    return (New-HordeKnown -Value ([pscustomobject]@{ seen = [pscustomobject]@{ silent = [bool]$j.silent; quietSince = $since; nudges = @(); acks = @{}; probes = $sent; probeAt = $lastProbe } }))
 }

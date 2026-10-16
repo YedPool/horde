@@ -163,7 +163,7 @@
 // never copied). The founder had to give his passkey for every answer. Now the passkey UNLOCK makes a
 // SESSION KEY (ECDSA P-256, extractable false) that lives in this object's memory only - never in the
 // store, never sent - and the unlock's ONE assertion is the vouch for it: its challenge is the vouch's
-// hash (P.openSession). Answers, chat lines and photo manifests (SESSION_SIGNED) are then signed by that
+// hash (P.openSession). Answers, changes of rank, chat lines and photo manifests (SESSION_SIGNED) are then signed by that
 // key with no prompt; everything else (the announcement, a follow switch) is the passkey's as before.
 //   WHEN THE KEY IS USED. Only toward a PC that says it keeps sessions: the snapshot's receipt for this
 //     passkey carries a session member (P.sessionStatus). A PC from before sessions refuses every session
@@ -226,7 +226,8 @@ function passkeyDidNotSign(x) {
 
 // THE UNLOCKED SESSION (the header): what the session key signs, by "<channel> <kind>"; the vouch states
 // that end a session (relay/js/protocol.js, SESSION_REFUSALS); and the words for each way one ends.
-const SESSION_SIGNED = ["decisions answer", "chat line", "chat photo"];
+// A change of rank goes in session too (channels/decisions/Channel.ps1, A SESSION-SIGNED RANK, 2026-10-14).
+const SESSION_SIGNED = ["decisions answer", "decisions rank", "chat line", "chat photo"];
 const SESSION_DEAD = ["session-expired", "session-idle", "session-ended", "session-stale", "session-refused"];
 const AGAIN = " The next answer asks for your passkey once, to open a new one.";
 const SESSION_ENDED = {
@@ -1091,6 +1092,45 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       // KEPT UNTIL APPLIED, by a machine that says what became of its answers (its snapshot has receipts).
       if (Array.isArray(v.receipts)) await keepAnswer(id, s, { answerId, number, part: takesParts ? part : "", wordingVersion, snapshot: q.pageKey, text: words }, env);
       return { key: env.key, seq: put.value.seq };
+    },
+
+    // A CHANGE OF RANK of one question of the snapshot on screen - his tap on its Importance or Blocking
+    // button (decisions/page/list.js) - SENT LIKE AN ANSWER: only from a passkey session, signed as an
+    // answer is (by the unlocked session's key when it may, and always by the passkey on a question
+    // flagged needsPasskey), sealed to the machine of the snapshot, bound to it and to the page
+    // that carried the question (channels/decisions/Channel.ps1, A CHANGE OF RANK FROM THE PHONE). Only to
+    // a machine whose snapshot says it takes one (ranks). Nothing is kept: the snapshot that shows the
+    // new level is its confirmation, and rankState says what the PC said of it. { key, seq }.
+    async rank(id, { number, which, level, rankId }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to change how a question is ranked."); }
+      const v = s.view;
+      if (!v || v.ranks !== true) throw fail("Not changed: this PC does not take a change of rank from the phone yet. Change it at the PC.");
+      const q = v.questions.find((x) => x.question.number === number);
+      if (!q) throw fail("question " + number + " is not in the snapshot this phone holds");
+      const body = P.rankBody({ rankId, machine: e.machine, snapshot: q.pageKey, number, which, level });
+      const flagged = q.question.needsPasskey === true;
+      const env = await sealAndSign(e, "rank", "decisions", body, assertWith(e), null, { passkey: flagged });
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not changed: " + RELAY_REFUSED + " Tap it again."); }
+      return { key: env.key, seq: put.value.seq };
+    },
+
+    // What the PC said of a change of rank, from the receipt in the snapshot on screen: "applied",
+    // "refused", "needs-passkey" (signed in session for a question the PC holds as needsPasskey: tap it
+    // again, and it goes with the passkey), or "sent" while it has said none. Needs an unlocked session.
+    async rankState(id, rankId) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      const receipt = s.view ? P.receiptFor(s.view.receipts, e.deviceKeyId) : null;
+      if (receipt && receipt.applied.has(rankId)) return "applied";
+      if (receipt && receipt.refused.has(rankId)) return "refused";
+      const status = statusOf(e, s);
+      if (status && status.needsPasskey.has(rankId)) return "needs-passkey";
+      return "sent";
     },
 
     // The answers this phone keeps for the horde, each with what became of it (relay/js/protocol.js,

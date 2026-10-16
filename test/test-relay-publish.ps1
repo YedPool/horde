@@ -88,6 +88,8 @@ function New-Tools {
             & $Say "a line the deploy said"
             if ($W.deploy -ceq "busy") { return (New-HordeUnknown -Reason (Get-HordeRelayDeployBusyReason)) }
             if ($W.deploy -ceq "fail") { return (New-HordeUnknown -Reason "a secret could not be stored: not logged in") }
+            # As Publish-HordeRelay passes on a deploy that went out and then failed its check: marked live.
+            if ($W.deploy -ceq "live") { $u = New-HordeUnknown -Reason "relay 'zorbrelay' IS deployed, but its sign-in failed the check after the deploy: Google would refuse it. Sign-in will not work until it is fixed: deploy again from a fixed checkout"; $u | Add-Member -NotePropertyName live -NotePropertyValue $true; return $u }
             # As a real deploy does, the record is written when it ENDS: minutes after the pass began.
             Write-HordeRelayDeployed -HordeHome $HordeHome -Revision ([pscustomobject]@{ commit = $Commit; clean = $true }) -Version $W.built -Relay "zorbrelay" -Origin $origin -At $W.now.AddMinutes(3)
             # Each build differs from the last by the files that changed; sw.js always does.
@@ -165,6 +167,8 @@ try {
         param($Site, $Say, $HordeHome)
         $script:relayDeploys++
         if ($script:relayAnswer -ceq "fail") { return (New-HordeUnknown -Reason "not logged in") }
+        # Went out, then a check after it failed (relays/Port.ps1, DEPLOYING): unknown marked live.
+        if ($script:relayAnswer -ceq "live") { $u = New-HordeUnknown -Reason "its sign-in failed the check after the deploy: Google would refuse it. Sign-in will not work until it is fixed: deploy again from a fixed checkout"; $u | Add-Member -NotePropertyName live -NotePropertyValue $true; return $u }
         return (New-HordeKnown -Value ([pscustomobject]@{ origin = "https://zorbrelay.example" }))
     }
     $sh = Get-HordeRelayPublishShipped -Checkout $repo
@@ -335,6 +339,7 @@ try {
     $l = Pass
     Check ($W.deploys -eq 1 -and (Whats) -ceq "deploy-failed") ("the failed deploy is told (" + (Whats) + ")")
     Check (Says $l "FAILED") "the pass says it failed"
+    Check ((Says $l "the deploy did not work") -and -not (Says $l "IS deployed") -and (Format-HordeServiceNoticeBody -Notice $W.told[0]).Contains("deploy of the phone page failed")) "MUST-KEEP TWIN: a deploy that never went out still reads 'deploy-failed: the deploy did not work'"
     Check ((Read-HordeRelayDeployed -HordeHome $W.home).value.commit -ceq $cA) "a failed deploy changes no record"
     $W.now = $t0.AddMinutes(30); $l = Pass
     Check ($W.deploys -eq 1) "half an hour later it is not tried again"
@@ -348,6 +353,25 @@ try {
     Check ($W.deploys -eq 3 -and (Whats) -ceq "deploy-failed,deployed") ("once it works, that is told (" + (Whats) + ")")
     $st = Read-HordeRelayPublishState -HordeHome $W.home
     Check ($st.state -ceq "known" -and $null -eq $st.value.failure) "and the failure is settled"
+
+    Write-Host ""
+    Write-Host "--- a deploy that went out and failed its check needs action, and is never 'deploy-failed' ---" -ForegroundColor Cyan
+    # Review of PR 275: the relay IS live and broken, so the founder must act; "the deploy did not work"
+    # would tell him the opposite.
+    $W = New-World (New-Home "needs-action"); Seed; $W.deploy = "live"
+    Range @("surfaces/pwa/page/app.js")
+    $l = Pass
+    $all = ($l -join "`n")
+    Check ($W.deploys -eq 1 -and (Whats) -ceq "deploy-needs-action" -and $W.told.Count -eq 1) ("it is told, as its own outcome (" + (Whats) + ")")
+    Check ((Says $l "NEEDS ACTION - deploy-needs-action: relay 'zorbrelay' IS deployed, but its sign-in failed the check after the deploy") -and (Says $l "deploy again from a fixed checkout")) "the pass says it needs action, that the relay IS deployed, and the way back"
+    Check (-not $all.Contains("deploy-failed") -and -not $all.Contains("the deploy did not work") -and $all -notmatch 'not deployed') "and never 'deploy-failed', 'the deploy did not work' or 'not deployed'"
+    $body = Format-HordeServiceNoticeBody -Notice $W.told[0]
+    Check ($body.Contains("needs attention") -and $body.Contains("IS live, but its sign-in failed the check after the deploy") -and $body.Contains("deploy again from a fixed checkout") -and -not $body.Contains("failed;")) ("the notice to the warchief still escalates, in its own fixed words with the way back (" + ($body -replace "`n", " | ") + ")")
+    Check ((Read-HordeRelayDeployed -HordeHome $W.home).value.commit -ceq $cA) "the record is not moved: the page is not taken as current"
+    $st = Read-HordeRelayPublishState -HordeHome $W.home
+    Check ($st.state -ceq "known" -and $null -ne $st.value.failure -and $st.value.failure.what -ceq "deploy-needs-action") "its state is kept as deploy-needs-action, read back as written"
+    $W.now = $t0.AddMinutes(30); $l = Pass
+    Check ($W.deploys -eq 1 -and $W.told.Count -eq 1 -and (Says $l "waits")) "it waits an hour like a failure, and is not told again"
 
     Write-Host ""
     Write-Host "--- the VERSION: required to change only when the files it hashes did ---" -ForegroundColor Cyan
@@ -651,6 +675,12 @@ try {
     $hh = New-Home "hand-failed"; $script:relayAnswer = "fail"
     $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
     Check ($a.state -ceq "unknown" -and -not [System.IO.File]::Exists((Get-HordeRelayDeployedPath -HordeHome $hh))) "a deploy that failed records nothing"
+    Check ($a.reason.Contains("relay 'zorbrelay' was not deployed: not logged in") -and $null -eq $a.PSObject.Properties["live"]) ("CONTROL: a deploy that never went out says 'was not deployed', unmarked (" + $a.reason + ")")
+    $hh = New-Home "hand-live"; $script:relayAnswer = "live"
+    $a = Invoke-HordeRelayDeploy -Relay "zorbrelay" -HordeHome $hh -Revision ([pscustomobject]@{ commit = $cC; clean = $true })
+    $liveMember = $(if (Test-HordeAnswer $a) { $a.PSObject.Properties["live"] } else { $null })
+    Check ($a.state -ceq "unknown" -and $null -ne $liveMember -and $liveMember.Value -eq $true -and $a.reason.StartsWith("relay 'zorbrelay' IS deployed, but its sign-in failed") -and $a.reason -notmatch 'not deployed') ("a deploy that went out and failed its check comes back through the port marked live, worded 'IS deployed, but' (" + $a.reason + ")")
+    Check (-not [System.IO.File]::Exists((Get-HordeRelayDeployedPath -HordeHome $hh))) "and it records nothing, so the page is not taken as current"
     $script:relayAnswer = "ok"
 
     Write-Host ""

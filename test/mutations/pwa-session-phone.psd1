@@ -9,6 +9,15 @@
         @{ Name = "needs-passkey-question-signed-by-session"
            Find = '{ passkey: q.question.needsPasskey === true }'
            Replace = '{ passkey: false }' }
+        @{ Name = "rank-of-a-needs-passkey-question-signed-by-session"
+           Find = 'const flagged = q.question.needsPasskey === true;'
+           Replace = 'const flagged = false;' }
+        @{ Name = "rank-never-signed-by-session"
+           Find = '"decisions answer", "decisions rank", "chat line"'
+           Replace = '"decisions answer", "chat line"' }
+        @{ Name = "rank-needs-passkey-never-said"
+           Find = 'if (status && status.needsPasskey.has(rankId)) return "needs-passkey";'
+           Replace = '' }
         @{ Name = "idle-limit-not-kept"
            Find = 'if (t - k.lastUsedAt >= idleOf(status)) { dropSigner(s, "session-idle"); return null; }'
            Replace = '' }

@@ -155,6 +155,18 @@
 .hd-partmark { flex: 0 0 auto; color: var(--muted); font-size: var(--small-px); white-space: nowrap; }
 .hd-part.answered .hd-partmark { color: var(--ok, #1a7f37); font-weight: 600; }
 .hd-partdone { margin-left: 20px; color: var(--ok, #1a7f37); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; unicode-bidi: plaintext; }
+/* HIS LITTLE BUTTONS (list.js, drawRank): one small line above what stands out about a question -
+   "Importance: Normal" and "Blocking: Part", each a button with an underline as the order's words have;
+   a press opens the three levels under it, the one in force ticked. A change on its way to the host is
+   in the muted ink and says "(sending)" until the list that holds it arrives. */
+.hd-rank { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.hd-rank[hidden], .hd-rank-pick[hidden], .hd-q.answered .hd-rank { display: none; }
+.hd-rank-btn { font: inherit; color: var(--ink); background: none; border: 0; border-radius: 0; margin: 0; padding: 0 2px; min-height: var(--small-line-px); cursor: pointer; white-space: nowrap; box-shadow: inset 0 -1px 0 var(--line); }
+.hd-rank-btn.pending { color: var(--muted); font-style: italic; }
+.hd-rank-btn:focus-visible, .hd-rank-opt:focus-visible { outline: 1px solid var(--accent); }
+.hd-rank-pick { flex: 1 1 100%; display: flex; flex-wrap: wrap; column-gap: 8px; padding: 2px 0 4px 0; }
+.hd-rank-opt { font: inherit; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 3px; margin: 0; padding: 2px 10px; min-height: 32px; cursor: pointer; }
+.hd-rank-opt.now { font-weight: 600; border-color: var(--accent); }
 @media (max-width: 520px) {
   .hd-count { display: none; }
   .hd-ans { flex-basis: 100%; }
