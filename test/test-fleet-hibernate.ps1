@@ -93,6 +93,7 @@ function Reset-World {
         stopAfter = @{}        # label -> polls after its exit before its process is gone (0 default)
         exitAt = @{}; askedAt = @{}; polls = 0; postFail = @{}; caller = ""
         lane = $null
+        tiers = (New-HordeKnown -Value @())
     }
     Get-ChildItem -LiteralPath $script:parked -File -ErrorAction SilentlyContinue | Remove-Item -Force
 }
@@ -139,6 +140,7 @@ function New-Deps {
             if ($o -ceq "submitted") { $after = $(if ($script:w.stopAfter.ContainsKey($l)) { [int]$script:w.stopAfter[$l] } else { 0 }); $script:w.exitAt[$l] = $script:w.polls + $after; if ($after -eq 0) { $script:world.stopped[$sid] = $true } }
             New-HordeKnown -Value ([pscustomobject]@{ id = $sid; outcome = $o; reason = ("stand-in " + $o); at = $script:clock.at }) }
         Caller = { $script:w.caller }
+        Tiers = { $script:w.tiers }
         PollMs = 30000
         ProcessStart = { param($p) if ($p -eq 4242) { "100" } elseif ($p -eq 5151) { "200" } else { "" } }
         Self = { [pscustomobject]@{ pid = 4242; start = "100" } }
@@ -146,9 +148,9 @@ function New-Deps {
 }
 function Next-Minute { $script:clock.at = $script:clock.at.AddMinutes(1) }
 function Hib {
-    param([string[]]$Names, [switch]$DryRun, [int]$WaitMinutes = 15, [scriptblock]$Selector = $null)
+    param([string[]]$Names = @(), [switch]$DryRun, [int]$WaitMinutes = 15, [scriptblock]$Selector = $null, [int]$Tier = 0)
     Next-Minute
-    return (Invoke-HordeFleetHibernate -Deps (New-Deps) -Names $Names -DryRun:$DryRun -WaitMinutes $WaitMinutes -Selector $Selector -HordeHome $script:hh)
+    return (Invoke-HordeFleetHibernate -Deps (New-Deps) -Names $Names -DryRun:$DryRun -WaitMinutes $WaitMinutes -Selector $Selector -HordeHome $script:hh -Tier $Tier)
 }
 function Outcome { param($R, [string]$Label) $o = @($R.outcomes | Where-Object { $_.label -ceq $Label }); if ($o.Count -eq 0) { return "" }; return ("" + $o[0].outcome) }
 function Reason { param($R, [string]$Label) $o = @($R.outcomes | Where-Object { $_.label -ceq $Label }); if ($o.Count -eq 0) { return "" }; return ("" + $o[0].reason) }
@@ -192,7 +194,38 @@ Check (Throws { Hib -Names @("K1") -DryRun } "named K1") "a Warg is not an Orc t
 $script:w.lane = $null
 Check (Throws { Hib -Names @("sleeping-sessions") -DryRun } "lane folders could not be read") "a lane name with no lane folders to read is refused, and says so"
 
-Section "a dry run changes nothing"
+Section "the tier selection: the Orcs the registry puts in tier 2, running ones only, and their Wargs"
+Reset-World
+$script:w.lane = [pscustomobject]@{ state = "read"; reason = ""; orcs = @(
+    [pscustomobject]@{ folder = "k-lane"; written = $true; orc = "K" }, [pscustomobject]@{ folder = "l-lane"; written = $true; orc = "L" },
+    [pscustomobject]@{ folder = "q-lane"; written = $true; orc = "Q" }, [pscustomobject]@{ folder = "ghost-lane"; written = $true; orc = "Z" }) }
+$row = { param($id, $tier) if ($null -eq $tier) { [pscustomobject]@{ id = $id } } else { [pscustomobject]@{ id = $id; tier = $tier } } }
+$script:w.tiers = New-HordeKnown -Value @((& $row "k-lane" 2), (& $row "l-lane" 1), (& $row "q-lane" 2), (& $row "ghost-lane" 2))
+$script:w.questions = @([pscustomobject]@{ number = 7; askedBy = "Orc Q"; waiting = @() })
+$r = Hib -Tier 2 -DryRun
+Check ((@($r.outcomes | Where-Object { $_.outcome -ceq "planned" } | ForEach-Object { $_.label }) -join ",") -ceq "K2,K1,K") ("tier 2 selects K and its Wargs, Wargs first, and not L, whose tier is 1 (" + (@($r.outcomes | ForEach-Object { $_.label + ":" + $_.outcome }) -join ",") + ")")
+Check ((Outcome $r "Q") -ceq "excluded" -and (Reason $r "Q") -like "question:*") "a tier 2 Orc with an open question is still left running, by the same rule as a named one"
+Check ((Outcome $r "L") -ceq "" -and (Outcome $r "L1") -ceq "") "a tier 1 Orc and its Warg are not mentioned at all"
+Check (@($r.lines | Where-Object { $_ -like "hibernate k-lane, q-lane, ghost-lane:*" }).Count -eq 1) ("the lines name the Orcs the tier found; one that does not run (ghost-lane) is passed over, not refused (" + $r.lines[0] + ")")
+$script:w.tiers = New-HordeKnown -Value @((& $row "k-lane" $null), (& $row "l-lane" 1))
+Check (Throws { Hib -Tier 2 -DryRun } "no Orc is in tier 2") "an Orc with no tier set is not in tier 2: nothing selected, said in words"
+$script:w.tiers = New-HordeKnown -Value @((& $row "k-lane"), (& $row "l-lane"))
+Check (Throws { Hib -Tier 2 -DryRun } "no tier field in this build") "rows with no tier field at all (a registry before tiers) select no Orc, and say so"
+$script:w.tiers = New-HordeKnown -Value @()
+Check (Throws { Hib -Tier 2 -DryRun } "lists no Orc") "a registry that lists no Orc selects none, and says so"
+$script:w.tiers = New-HordeUnknown -Reason "a record of the registry could not be read"
+Check (Throws { Hib -Tier 2 -DryRun } "could not be read") "a registry that cannot be read refuses the run, never an empty choice"
+$script:w.tiers = New-HordeKnown -Value @((& $row "k-lane" 2))
+Check (Throws { Hib -Tier 2 -Names @("K") -DryRun } "not given with Orc names") "-Tier with Orc names is refused"
+Check (Throws { Hib -Tier 2 -Selector $all -DryRun } "not given with Orc names or a selector") "-Tier with a selector is refused"
+Check (Throws { Hib -DryRun } "no Orc was named") "neither names nor a tier is refused"
+$before = Count-Records
+foreach ($l in @("K", "K1", "K2")) { $script:w.parkAfter[$l] = 2 }
+$r = Hib -Tier 2
+$rec = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
+Check ("" + $rec.phase -ceq "done" -and (Outcome $r "K") -ceq "exited" -and (Count-Records) -eq ($before + 1)) "a tier run is recorded and finished like a named one"
+Check ("" + (Get-HordeTestMember $rec "selection.kind") -ceq "orcs" -and (@(Get-HordeTestMember $rec "selection.labels") -join ",") -ceq "K") ("its record says which Orcs were chosen, by their labels (" + (@(Get-HordeTestMember $rec "selection.labels") -join ",") + ")")
+
 Reset-World
 $before = Count-Records
 $r = Hib -Names @("K", "L") -DryRun
@@ -398,8 +431,14 @@ Check ($c.code -eq 2) ("a wait of 0 minutes is a usage error (exit " + $c.code +
 $c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "hibernate", "-Orcs", "K", "-DryRun") -Env $cliEnv
 Check ($c.code -eq 1 -and $c.out -like "*cannot be read whole*") ("against a registry that is not there, even a dry run refuses, with the reason (exit " + $c.code + ")")
 Check (-not (Test-Path -LiteralPath (Join-Path $cliEnv.HORDE_HOME "fleet"))) "and leaves nothing in Horde's home"
+$c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "hibernate", "-Tier", "3") -Env $cliEnv
+Check ($c.code -eq 2 -and $c.out -like "*-Tier is 2*") ("a tier other than 2 is a usage error (exit " + $c.code + ")")
+$c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "hibernate", "-Tier", "2", "-Orcs", "K") -Env $cliEnv
+Check ($c.code -eq 2 -and $c.out -like "*not both*") ("-Tier with -Orcs is a usage error (exit " + $c.code + ")")
+$c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "record", "-All", "-Tier", "2") -Env $cliEnv
+Check ($c.code -eq 2 -and $c.out -like "*belong to fleet hibernate*") ("-Tier on another verb is a usage error (exit " + $c.code + ")")
 $c = Invoke-HordeCliProcess -Root $root -HordeArgs @("help") -Env $cliEnv
-Check ($c.code -eq 0 -and $c.out -like "*fleet hibernate -Orcs*") "horde help lists the verb"
+Check ($c.code -eq 0 -and $c.out -like "*fleet hibernate -Orcs*" -and $c.out -like "*fleet hibernate -Tier 2*") "horde help lists the verb, both ways"
 
 Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
 Complete-HordeSuite -Success "hibernate puts to sleep exactly whom it may, each only once parked and idle, Wargs first, and the watcher leaves the sleepers alone"

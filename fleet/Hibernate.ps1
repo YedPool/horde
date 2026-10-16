@@ -19,7 +19,8 @@
 #      (Get-HordeFleetCandidates, which refuses when the registry or the liveness reading cannot be
 #      trusted). THE PLUG POINT: Invoke-HordeFleetHibernate -Selector, a block handed the candidates that
 #      returns the ones to hibernate in the order to ask and end them. The explicit list
-#      (Select-HordeFleetOrcs) is the default; the Orc registry's tiers will be another such block.
+#      (Select-HordeFleetOrcs) is the default; the Orc registry's tiers are another such block (-Tier 2,
+#      Select-HordeFleetTierOrcs): the Orcs the registry puts in the tier, those running, and their Wargs.
 #   3. NEVER SELECTED, each named with one plain word (Get-HordeFleetExclusion):
 #        master                 the session labelled M, or holding the warchief's role
 #        self                   the session running this command: its own box is refused to it, so it
@@ -188,6 +189,44 @@ function Select-HordeFleetOrcs {
         return @($out)
 }
 
+function Get-HordeFleetTierIds {
+    # THE TIER SELECTION'S FIRST HALF: which Orcs the registry puts in tier -Tier. -Rows are the Orc
+    # registry's rows, each { id; tier }, tier a whole number or $null. Returns { ids; said }: said is
+    # the plain words for a selection that comes to nothing, "" otherwise.
+    # IT WORKS WITH OR WITHOUT THE REGISTRY'S TIER FIELD (the registry's tiers are another pull request,
+    # 319): rows that carry no tier member at all select no Orc, and say so, never guess one in. An Orc
+    # whose tier is not set is not in tier 2 either: unset reads as tier 1, which stays awake.
+    param([object[]]$Rows = @(), [int]$Tier = 2)
+    $all = @($Rows)
+    if ($all.Count -eq 0) { return [pscustomobject]@{ ids = @(); said = "the Orc registry lists no Orc, so no Orc is in tier " + $Tier } }
+    $withField = @($all | Where-Object { $null -ne $_.PSObject.Properties["tier"] })
+    if ($withField.Count -eq 0) { return [pscustomobject]@{ ids = @(); said = "the Orc registry has no tier field in this build, so no Orc is in tier " + $Tier } }
+    $ids = @($withField | Where-Object { $null -ne $_.tier -and "" + $_.tier -ceq ("" + $Tier) } | ForEach-Object { "" + $_.id })
+    if ($ids.Count -eq 0) { return [pscustomobject]@{ ids = @(); said = "no Orc is in tier " + $Tier + " in the Orc registry" } }
+    return [pscustomobject]@{ ids = $ids; said = "" }
+}
+
+function Select-HordeFleetTierOrcs {
+    # THE TIER SELECTION'S SECOND HALF (the plug point, Invoke-HordeFleetHibernate -Selector): of
+    # -Candidates, the running Orcs among -Ids (lane folder names, or labels) and their Wargs, in the order
+    # to ask and end them. UNLIKE the explicit list, an Orc that is not running is passed over, not
+    # refused: a tier is a standing list, and an Orc of it that is already asleep or finished is what
+    # hibernating the tier is meant to leave. A function, for the reason Select-HordeFleetOrcs gives.
+    param([object[]]$Candidates = @(), [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Ids, $Status = $null)
+    $running = New-Object System.Collections.ArrayList
+    $orcs = @(@($Candidates) | Where-Object { "" + $_.role -ceq "orc" })
+    foreach ($n in @($Ids | Where-Object { "" + $_ -ne "" })) {
+        $letter = $n
+        if ($null -ne $Status -and "" + $Status.state -ceq "read") {
+            $lane = @(@($Status.orcs) | Where-Object { $_.written -and "" + $_.folder -ceq $n })
+            if ($lane.Count -eq 1) { $letter = "" + $lane[0].orc }
+        }
+        if (@($orcs | Where-Object { "" + $_.label -ceq $letter }).Count -gt 0) { [void]$running.Add($letter) }
+    }
+    if ($running.Count -eq 0) { return @() }
+    return @(Select-HordeFleetOrcs -Candidates $Candidates -Names @($running.ToArray()) -Status $Status)
+}
+
 function Get-HordeFleetExclusion {
     # Why one picked candidate is never hibernated (header, step 3): { reason; detail }, or $null.
     #   -Analysts   the analyst service's session ids
@@ -289,8 +328,12 @@ function Invoke-HordeFleetHibernate {
     #   fleet's park verb, when it comes); Caller () the session running this, or ""; PollMs, ProcessStart,
     #   Self (fleet/Wake.ps1's lock seams)
     # -Selector replaces the explicit-list one (header, step 2); -Names are what the selection says.
-    param([Parameter(Mandatory = $true)]$Deps, [Parameter(Mandatory = $true)][string[]]$Names, [switch]$DryRun, [int]$WaitMinutes = 15,
-          [scriptblock]$Selector = $null, [string]$HordeHome = (Get-HordeHome))
+    # -Tier 2 (`horde fleet hibernate -Tier 2`) selects the Orcs the Orc registry puts in that tier:
+    #   Tiers ()           answer: known list of the registry's rows, each { id; tier }
+    # It names the Orcs it found as -Names, so the lines say which were asked for. A tier that holds no
+    # Orc is refused in words, nothing written. -Tier is not given with -Names or -Selector.
+    param([Parameter(Mandatory = $true)]$Deps, [string[]]$Names = @(), [switch]$DryRun, [int]$WaitMinutes = 15,
+          [scriptblock]$Selector = $null, [string]$HordeHome = (Get-HordeHome), [int]$Tier = 0)
     if ($WaitMinutes -lt 1 -or $WaitMinutes -gt $script:HordeFleetHibernateMostWaitMinutes) { throw ("-WaitMinutes is 1 to " + $script:HordeFleetHibernateMostWaitMinutes + ", not " + $WaitMinutes) }
     $lines = New-Object System.Collections.ArrayList
     $outcomes = New-Object System.Collections.ArrayList
@@ -322,7 +365,18 @@ function Invoke-HordeFleetHibernate {
     if ($null -eq $q -or "" + $q.state -cne "known") { throw ("the founder's decisions list could not be read, so which Orcs wait on him cannot be told and nothing was hibernated: " + $(if ($null -ne $q) { $q.reason } else { "no answer" })) }
     $an = & $Deps.Analysts
     if ($null -eq $an -or "" + $an.state -cne "known") { throw ("the fleet analyst service's files could not be read, so it could not be told apart and nothing was hibernated: " + $(if ($null -ne $an) { $an.reason } else { "no answer" })) }
+    if ($Tier -gt 0) {
+        if (@($Names).Count -gt 0 -or $null -ne $Selector) { throw "-Tier selects the Orcs itself; it is not given with Orc names or a selector, so nothing was hibernated" }
+        $rows = & $Deps.Tiers
+        if ($null -eq $rows -or "" + $rows.state -cne "known") { throw ("the Orc registry could not be read, so which Orcs are in tier " + $Tier + " cannot be told and nothing was hibernated: " + $(if ($null -ne $rows) { $rows.reason } else { "no answer" })) }
+        $tierIds = Get-HordeFleetTierIds -Rows @($rows.value) -Tier $Tier
+        if (@($tierIds.ids).Count -eq 0) { throw ("nothing was hibernated: " + $tierIds.said) }
+        $Names = @($tierIds.ids)
+        $laneStatusTier = & $Deps.Status
+        $Selector = { param($cands) Select-HordeFleetTierOrcs -Candidates $cands -Ids $Names -Status $laneStatusTier }
+    }
     if ($null -eq $Selector) {
+        if (@($Names).Count -eq 0) { throw "no Orc was named, so nothing was hibernated" }
         $laneStatus = & $Deps.Status
         $Selector = { param($cands) Select-HordeFleetOrcs -Candidates $cands -Names $Names -Status $laneStatus }
     }
@@ -378,7 +432,7 @@ function Invoke-HordeFleetHibernate {
         # 4. THE RECORD, through fleet record's own writer, choosing exactly the sessions chosen here.
         $ids = @($chosen | ForEach-Object { "" + $_.sessionId })
         $fixed = { param($cands) @(@($cands) | Where-Object { $ids -ccontains ("" + $_.sessionId) }) }.GetNewClosure()
-        $selection = [pscustomobject][ordered]@{ kind = "orcs"; labels = @($Names); exclude = @() }
+        $selection = [pscustomobject][ordered]@{ kind = "orcs"; labels = @($(if ($Tier -gt 0) { @($chosen | Where-Object { "" + $_.role -ceq "orc" } | ForEach-Object { "" + $_.label }) } else { $Names })); exclude = @() }
         $made = Invoke-HordeFleetRecord -Deps ([pscustomobject]@{ Now = $Deps.Now; Registry = $Deps.Registry; Agent = $Deps.Agent; Host = $Deps.Host }) -Selector $fixed -Selection $selection -HordeHome $HordeHome
         $record = $made.record; $id = $made.id; $dir = Split-Path -Parent $made.path
         foreach ($n in @($made.notes)) { & $say ("  note: " + $n) }
