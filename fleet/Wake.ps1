@@ -126,7 +126,12 @@ function Get-HordeFleetGroups {
     $groups = New-Object System.Collections.ArrayList
     $heads = New-Object System.Collections.ArrayList
     foreach ($s in @($Sessions)) { $h = $headOf["" + $s.sessionId]; if (-not $heads.Contains($h)) { [void]$heads.Add($h) } }
-    foreach ($h in $heads) {
+    # Windows open in the record's order of their orcs, not in the order a warg happened to come first.
+    $order = @{}
+    $i = 0
+    foreach ($s in @($All)) { $order["" + $s.sessionId] = $i; $i++ }
+    $sortedHeads = @($heads | Sort-Object -Property @{ Expression = { if ($order.ContainsKey($_)) { $order[$_] } else { [int]::MaxValue } } })
+    foreach ($h in $sortedHeads) {
         $headSession = $byId[$h]
         $headWin = "" + (Get-HordeFleetMember (Get-HordeFleetMember $headSession "placement") "windowKey")
         $first = @($Sessions | Where-Object { "" + $_.sessionId -ceq $h })
@@ -224,11 +229,11 @@ function Invoke-HordeFleetWake {
     $tell = { param($s, $o, $r) [void]$outcomes.Add([pscustomobject]@{ sessionId = "" + $s.sessionId; label = "" + (Get-HordeFleetMember $s "label"); outcome = $o; reason = $r }) }
 
     if (Test-Path -LiteralPath $lockPath) { throw ("hibernation " + $Id + " is being woken already, or a wake of it was killed: " + $lockPath + " exists. Delete it once no wake of " + $Id + " runs") }
-    $only = @($Only | Where-Object { "" + $_ -ne "" })
+    $onlyLabels = @($Only | Where-Object { "" + $_ -ne "" })
     $sessions = @($record.sessions)
-    if ($only.Count -gt 0) {
-        foreach ($l in $only) { if (@($sessions | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ("hibernation " + $Id + " holds no session labelled " + $l + ", so nothing was woken") } }
-        $sessions = @($sessions | Where-Object { $only -ccontains ("" + (Get-HordeFleetMember $_ "label")) })
+    if ($onlyLabels.Count -gt 0) {
+        foreach ($l in $onlyLabels) { if (@($sessions | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ("hibernation " + $Id + " holds no session labelled " + $l + ", so nothing was woken") } }
+        $sessions = @($sessions | Where-Object { $onlyLabels -ccontains ("" + (Get-HordeFleetMember $_ "label")) })
     }
     $lockStream = $null
     if (-not $DryRun) {

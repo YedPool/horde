@@ -205,7 +205,7 @@ function Get-ClaudeCodeFleetResumeLine {
     # The line a shell runs to resume one session: the program, --resume and the id, nothing else (the
     # guard's resume_target rebuilds exactly this from fixed parts). An id that is not a lower-case uuid
     # is refused, never quoted: the line is run by a shell.
-    param([Parameter(Mandatory = $true)][string]$SessionId)
+    param([string]$SessionId = "")
     if ($SessionId -cnotmatch $script:ClaudeCodeFleetIdPattern) { throw ("'" + $SessionId + "' is not a session id, so no resume line is built for it") }
     return ("claude --resume " + $SessionId)
 }
