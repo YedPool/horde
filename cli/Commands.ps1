@@ -33,6 +33,7 @@ function Get-HordeCommandGroups {
         services = "long-lived pieces kept running and current"
         files = "files shared for the founder to read"
         analyst = "the fleet analyst, kept always on"
+        fleet = "hibernating sessions and waking them"
     }
 }
 

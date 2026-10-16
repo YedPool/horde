@@ -45,3 +45,4 @@ test/test-session-seat.ps1 | 0 -> 3 | 2026-10-07 | builds old-system session rec
 test/lib/WindowProbe.ps1 | 0 -> 2 | 2026-10-07 | builds old-system session records, whose key field carries the harness's name, and a control file in the folder of that name the harness keeps them in, for scenarios that need the session holding a role to be found running
 test/test-notices.ps1 | 0 -> 3 | 2026-10-14 | builds the agent's control files in its own folder, a fleet record whose key field carries the harness's name, and hands the identity reader a folder through its parameter of that name, to prove which session runs horde notify
 core/json-parse-allowlist.txt | 0 -> 2 | 2026-10-14 | the raw JSON parse list of PR 279 is data naming repository paths, and two of its files sit in this harness folder
+test/test-fleet-record.ps1 | 0 -> 1 | 2026-10-16 | builds old-system session records whose key field carries the harness's name, to test which sessions a hibernation records
