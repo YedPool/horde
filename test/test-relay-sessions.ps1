@@ -19,7 +19,8 @@
 #   the vouch carried                              a vouchId the PC does not hold (session-unknown)
 #   a new vouch above the last                     one at or below it (session-stale)
 # and what the phone is told: the session member of its receipt (live, idle, ended), and its
-# needsPasskey list.
+# needsPasskey list - told to every trusted passkey before its first answer, and to no revoked or
+# untrusted one, as the phone's own reader (relay/js/protocol.js, under node) reads it.
 #
 # EVERY HORDE HOME IS A FOLDER OF THE SUITE'S OWN under %TEMP%, never the real one, and never one that
 # answers the founder's phone. Every key is the software provider's, removed in the finally block.
@@ -343,6 +344,67 @@ try {
     Check ($r.turn.text.Contains("refused") -and -not (Test-Said $W2 "Phone B after revoke.")) ("after the revoke its session answer is refused (" + $r.turn.text + ")")
     $r = Send-SessionAnswer -World $W2 -Session $s4 -Text "Phone A after B's revoke." -At $endedAt.AddMinutes(19)
     Check ((Test-Said $W2 "Phone A after B's revoke.") -and -not $r.turn.text.Contains("session-")) ("CONTROL TWIN: the other device's session still answers (" + $r.turn.text + ")")
+
+    Write-Host ""
+    Write-Host "--- every trusted passkey is told of its sessions, before its first answer (T-0177) ---" -ForegroundColor Cyan
+    # A phone paired now, with no answer yet: before T-0177 its passkey had a session member only once a
+    # receipt existed for it, so the phone took the PC for one from before sessions and signed its first
+    # answers with the passkey, one prompt each. Beside it a device paired and never confirmed (pending,
+    # not trusted) and phone B, revoked above with answers on record: neither is told of sessions.
+    $C = Add-PhoneTo -World $W2
+    $D = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $W2.home -Phone $D -NoConfirm)
+    $all = Get-HordeDecisionsChannelReceipts -Context $W2.ctx
+    $byFrom = @{}
+    foreach ($e in @(@(ConvertFrom-HordeJson -Text $all.text) | ForEach-Object { $_ })) { if ($null -ne $e) { $byFrom["$(Get-HordeTestMember $e 'from')"] = $e } }
+    $rcC = $(if ($byFrom.ContainsKey($C.keyId)) { $byFrom[$C.keyId] } else { $null })
+    Check ($null -ne $rcC -and (Test-HordeTestMember $rcC "session") -and [long](Get-HordeTestMember $rcC "session.idleMs") -eq 3600000 -and @(Get-HordeTestMember $rcC "session.vouches").Count -eq 0 -and @(Get-HordeTestMember $rcC "session.needsPasskey").Count -eq 0) ("a newly paired trusted passkey with no answers has a receipt with a session member - the idle limit, no vouches, no needsPasskey - asked with no -Prefer (" + $all.text + ")")
+    Check ($null -ne $rcC -and @(Get-HordeTestMember $rcC "applied").Count -eq 0 -and @(Get-HordeTestMember $rcC "refused").Count -eq 0 -and [long](Get-HordeTestMember $rcC "through") -eq 0) "and it says no answer was received from it: through 0, nothing applied or refused"
+    Check (-not $byFrom.ContainsKey($D.keyId)) "a device paired and never confirmed (not trusted) has no receipt at all"
+    $rcB = $(if ($byFrom.ContainsKey($B.keyId)) { $byFrom[$B.keyId] } else { $null })
+    Check ($null -ne $rcB -and @(Get-HordeTestMember $rcB "applied").Count -gt 0 -and -not (Test-HordeTestMember $rcB "session")) "a revoked passkey keeps the receipt of its answers, but with no session member"
+    $prefB = Get-Receipt $W2 $B.keyId
+    Check ($null -ne $prefB -and -not (Test-HordeTestMember $prefB "session")) "and even named as a phone sealed to (-Prefer), a revoked passkey is told nothing of sessions"
+    $rcA = $(if ($byFrom.ContainsKey($W2.phone.keyId)) { $byFrom[$W2.phone.keyId] } else { $null })
+    Check ($null -ne $rcA -and @(@(Get-HordeTestMember $rcA "session.vouches") | Where-Object { "$(Get-HordeTestMember $_ 'state')" -ceq "live" }).Count -ge 1) "CONTROL TWIN: the trusted phone A that unlocked is told its live session"
+    # THE SNAPSHOT ITSELF: one look of the channel, sealed to phone C, opened as phone C opens it.
+    $null = Invoke-HordeRelayChannelTicks -Context $W2.ctx
+    $mail = @()
+    $got = Receive-HordeRelayItems -Connection $W2.conn -Mailbox "work/phone" -Since 0
+    if ($got.state -ceq "known") { $mail = @($got.value.items | ForEach-Object { $_.text }) }
+    $snapC = $null
+    foreach ($m in $mail) {
+        $o = Open-HordeTestPhoneEnvelope -Phone $C -Text $m -MachineSignPublic $W2.id.sign.public
+        if ($o.ok -and "$(Get-HordeTestMember $o.body 'kind')" -ceq "decisions-snapshot") { $snapC = $o.body }
+    }
+    $inSnap = $null
+    if ($null -ne $snapC) { $inSnap = @(@(Get-HordeTestMember $snapC "receipts") | Where-Object { "$(Get-HordeTestMember $_ 'from')" -ceq $C.keyId }) | Select-Object -First 1 }
+    Check ($null -ne $inSnap -and (Test-HordeTestMember $inSnap "session") -and [long](Get-HordeTestMember $inSnap "session.idleMs") -eq 3600000) ("the snapshot phone C opens carries its session member before its first answer (" + $mail.Count + " item(s) in the phone mailbox)")
+    # THE PHONE'S OWN READER: relay/js/protocol.js's sessionStatus, under node, over the receipts text.
+    $node = Get-Command -Name "node" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $node) { Write-Host "  [SKIP] node is not installed here: the phone's reader is not run" -ForegroundColor Yellow }
+    else {
+        $io = Join-Path $W2.home "phone-reader"
+        New-Item -ItemType Directory -Path $io -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $io "in.json"), ('{"receipts":' + $all.text + ',"from":["' + $C.keyId + '","' + $B.keyId + '","' + $D.keyId + '","' + $W2.phone.keyId + '"]}'), $utf8)
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $node.Source
+        $psi.Arguments = '"' + (Join-Path $here "fixtures\relay\session-status.mjs") + '" "' + (Join-Path $io "in.json") + '" "' + (Join-Path $io "out.json") + '"'
+        $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $errTask = $p.StandardError.ReadToEndAsync()
+        $null = $p.StandardOutput.ReadToEnd()
+        if (-not $p.WaitForExit(60000)) { $p.Kill() }
+        Check ($p.HasExited -and $p.ExitCode -eq 0) ("the phone's reader ran" + $(if ($p.HasExited -and $p.ExitCode -ne 0) { ": " + $errTask.Result } else { "" }))
+        $js = $null
+        try { $js = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText((Join-Path $io "out.json"), $utf8)) } catch { $js = $null }
+        $jsC = $(if ($null -ne $js) { Get-HordeTestMember $js $C.keyId } else { $null })
+        Check ($null -ne $jsC -and [long](Get-HordeTestMember $jsC "idleMs") -eq 3600000 -and @(Get-HordeTestMember $jsC "vouches").Count -eq 0 -and @(Get-HordeTestMember $jsC "needsPasskey").Count -eq 0) "protocol.js's sessionStatus reads the new passkey's receipt as a PC that keeps sessions, idle limit 60 minutes"
+        Check ($null -ne $js -and (Test-HordeTestMember $js $B.keyId) -and $null -eq (Get-HordeTestMember $js $B.keyId)) "and reads the revoked passkey's receipt as a PC from before sessions (null): it signs with its passkey"
+        Check ($null -ne $js -and (Test-HordeTestMember $js $D.keyId) -and $null -eq (Get-HordeTestMember $js $D.keyId)) "and the untrusted passkey, with no receipt, the same"
+        $jsA = $(if ($null -ne $js) { Get-HordeTestMember $js $W2.phone.keyId } else { $null })
+        Check ($null -ne $jsA -and @(@(Get-HordeTestMember $jsA "vouches") | Where-Object { "$(Get-HordeTestMember $_ 'state')" -ceq "live" }).Count -ge 1) "CONTROL TWIN: it reads phone A's live session"
+    }
 
     Write-Host ""
     Write-Host "--- the window's front edge, and damaged records ---" -ForegroundColor Cyan

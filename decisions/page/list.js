@@ -133,8 +133,10 @@
 // THE ANSWERED ARE HIDDEN UNTIL ASKED FOR (the founder, 2026-10-15: "By default you need to not show
 // questions that are answered - should be toggleable on top across from the sort by"). The folds of
 // the answered - With Thrall (answered, the keeper's turn) and History (closed) - are not drawn until
-// a switch at the head of the page, "Show answered: off", is pressed; then they stand as they always
-// have, and the switch says on. It stands at the head of the line under the order line, across from
+// a switch at the head of the page, "Show answered and closed: off", is pressed; then they stand as
+// they always have, and the switch says on. A keyboard reaches it as it reaches the folds, never by
+// Tab: Ctrl+Down from a field when no fold is drawn, or Up from the first fold (THE SWITCH IS
+// REACHED BY KEYS); Space or Enter turns it. It stands at the head of the line under the order line, across from
 // Collapse all: on the order line itself a phone's 412 px wrapped it to two lines and a tap on an order
 // missed (measured for Collapse all, EVERY QUESTION STARTS UNFOLDED). What he chose is kept on this
 // device beside the order; a press touches neither the order, nor what is folded, nor his place. A
@@ -405,11 +407,12 @@
   var LANE_KEY = "horde-decisions-lane-v1";
   // THE ANSWERED ARE HIDDEN UNTIL ASKED FOR: where the choice is kept ("1" shown, "0" hidden), the folds
   // it hides - With Thrall (answered, the keeper's turn) and History (closed) - and the switch's words.
+  // The words name both: History also holds questions closed without his answer (review of PR 311).
   var ANSWERED_KEY = "horde-decisions-answered-shown-v1";
   var ANSWERED_FOLDS = { thrall: true, history: true };
-  var ANSWERED_WORDS = { on: "Show answered: on", off: "Show answered: off",
-    onSays: "Answered questions are shown, under With Thrall and History. Press to hide them",
-    offSays: "Answered questions are hidden. Press to show them, under With Thrall and History" };
+  var ANSWERED_WORDS = { on: "Show answered and closed: on", off: "Show answered and closed: off",
+    onSays: "Answered and closed questions are shown, under With Thrall and History. Press to hide them",
+    offSays: "Answered and closed questions are hidden. Press to show them, under With Thrall and History" };
   function laneWord(word) { word = textOf(word); return LANE_WORD.test(word) ? word : ""; }
   function laneOf(q) {
     var name = textOf(q && q.askedBy);
@@ -1213,8 +1216,11 @@
       run();
     }, true);
     // Ctrl+Down: to the folded lines, where Enter or Space opens one and Up and Down go between them.
+    // With no fold drawn (the answered hidden and nothing parked), to the switch for the answered
+    // instead, so a press of Space can show them (THE SWITCH IS REACHED BY KEYS, at the switch).
     function toFolds() {
       for (var i = 0; i < drawnHeads.length; i += 1) { if (isFold(drawnHeads[i].head)) { drawnHeads[i].tri.focus(); onChange(); return; } }
+      toSwitch();
     }
 
     function toggleContext(q) {
@@ -1727,11 +1733,31 @@
     foldButton.addEventListener("click", function () { setExpanded(!openFirst); });
     // THE SWITCH FOR THE ANSWERED (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR), at the head of
     // the same line, across from Collapse all: a switch that says its state in words.
+    // THE SWITCH IS REACHED BY KEYS, but never by Tab: as the order's buttons, the run of Enter and Tab
+    // is the fields' (a field takes Tab for its own: header, THE KEYS). It stands with the folds
+    // instead, above the first of them: Ctrl+Down from a field comes to it when no fold is drawn, and
+    // Up from the first fold's heading comes to it. There Space or Enter turns it (a button's own
+    // press), Down goes to the first fold, and Shift+Tab or Ctrl+Up back to the list, as from a fold.
     var answeredButton = make("button", "hd-showans");
     answeredButton.type = "button";
     answeredButton.tabIndex = -1;
     answeredButton.setAttribute("role", "switch");
     answeredButton.addEventListener("click", function () { setAnsweredShown(!answeredShown); });
+    answeredButton.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" && !e.ctrlKey && !e.altKey) {
+        e.preventDefault(); e.stopPropagation();
+        for (var i = 0; i < drawnHeads.length; i += 1) { if (isFold(drawnHeads[i].head)) { drawnHeads[i].tri.focus(); onChange(); return; } }
+      } else if ((e.key === "Tab" && e.shiftKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
+        e.preventDefault(); e.stopPropagation();
+        var shown = mainLines();
+        if (shown.length) { enter(shown[shown.length - 1]); }
+      }
+    });
+    function toSwitch() {
+      if (answeredButton.offsetParent === null) { return; }
+      answeredButton.focus();
+      onChange();
+    }
     foldLine.appendChild(answeredButton);
     foldLine.appendChild(foldButton);
     drawFoldButton();
@@ -1872,6 +1898,7 @@
               e.preventDefault(); e.stopPropagation();
               var to = folds[at + (e.key === "ArrowDown" ? 1 : -1)];
               if (to) { to.tri.focus(); onChange(); }
+              else if (e.key === "ArrowUp" && at === 0) { toSwitch(); }
             } else if ((e.key === "Tab" && e.shiftKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
               e.preventDefault(); e.stopPropagation();
               var shown = mainLines();
@@ -2034,9 +2061,15 @@
       var t = e.target;
       pressed = { at: Date.now(), own: !!(t && t.closest && t.closest(".hd-qt, .hd-head, button, textarea")) };
     }, true);
+    // Nor when a key moved the keyboard in that moment (Ctrl+Down to the switch, then Space): the
+    // keyboard is where he sent it, and the field taking it back undid the press (measured 2026-10-16,
+    // browser-details.mjs: the switch turned on, and the caret was then in the first field).
     window.addEventListener("focus", function () {
+      var had = document.activeElement;
       window.setTimeout(function () {
         if (focusedLine() || (pressed.own && Date.now() - pressed.at < 600)) { return; }
+        var now = document.activeElement;
+        if (now && now !== had && now !== document.body && now !== document.documentElement) { return; }
         takeKeyboard();
       }, 120);
     });
@@ -2154,6 +2187,8 @@
       // answer of the reader's standing, parked how many open ones are set aside.
       // thrall how many wait on the keeper, history how many are closed, fresh how many are new;
       // toAnswer counts the list as drawn: questions of his turn that hold no answer of his yet.
+      // thrall too counts what is drawn, so it reads 0 while the With Thrall fold is hidden (THE
+      // ANSWERED ARE HIDDEN UNTIL ASKED FOR); history counts the list, drawn or not.
       counts: function () {
         var open = 0, waiting = 0, other = 0, run = 0, toAnswer = 0, aside = 0, thrall = 0, fresh = 0;
         questions.forEach(function (q) {
