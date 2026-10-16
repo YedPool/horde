@@ -371,6 +371,10 @@ Check ($added.Count -eq 0 -and $removed.Count -eq 0) ("no pane-sessions file app
 Check ($moved.Count -eq 0) ("no pane-sessions file changed hands to another session (" + ($moved -join ",") + ")")
 Check ($ours.Count -eq 0) ("no pane-sessions file names a session or folder of this scenario (" + ($ours -join ",") + ")")
 Write-Host ("  pane-sessions files rewritten by their own live session during the run (not this scenario): " + $rewritten.Count) -ForegroundColor DarkGray
+# A `cli` call loads the person's terminal config, and under this scenario's profile its plugin manager
+# clones its plugins into that profile, with read-only git objects (seen 2026-10-16): those are made
+# writable first, only inside the scenario's own folder.
+if ((Split-Path -Leaf $work) -match '\Ahorde-e2e-fleet-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Get-ChildItem -LiteralPath $work -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false } }
 for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $work); $i++) { try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 500 } }
 Check (-not (Test-Path -LiteralPath $work)) "the scenario's folder - its home, fleet, profile and stand-in - is removed"
 Remove-HordePaneTool
