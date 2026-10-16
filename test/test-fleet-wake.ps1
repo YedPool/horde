@@ -34,7 +34,7 @@ function Reset-World {
     $world.live = @{}; $world.error = ""; $world.onSpawn = @{}; $world.paneOf = @{}; $world.spawnFails = @(); $world.postFails = $false
     $world.spawns = New-Object System.Collections.ArrayList; $world.posts = New-Object System.Collections.ArrayList
     $world.free = New-Object System.Collections.ArrayList; $world.nextPane = 40; $world.clock = [datetime]::new(2026, 10, 16, 10, 0, 0, [System.DateTimeKind]::Utc)
-    $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList
+    $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList; $world.onOpen = $null
     # The process table the lock is judged by: pid -> start ticks text, "?" when unreadable.
     $world.procs = @{ "777" = $SELFSTART }
 }
@@ -56,6 +56,7 @@ Register-HordeFleetHost -Name "stand-in" `
     -Placement { param($refs) New-HordeKnown -Value ([pscustomobject]@{ placed = @{}; notes = @() }) } `
     -Open {
         $world.opened++
+        if ($null -ne $world.onOpen) { & $world.onOpen }
         $spawn = { param($req)
             [void]$world.spawns.Add($req)
             $id = ("" + $req.line).Substring(7)
@@ -194,6 +195,24 @@ $h = New-Home
 $world.error = "the control folder is empty"
 $r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h
 Check ($world.spawns.Count -eq 0 -and @($r.outcomes | Where-Object { $_.outcome -ceq "still-awake" }).Count -eq 6 -and $world.opened -eq 0) "when liveness cannot be read at all, nothing is started and the terminal is not even opened"
+
+Section "each sleeper is checked again, from a fresh reading, right before its own spawn"
+# Minutes can pass between the first reading and a late spawn: every earlier session is waited for. A
+# sleeper resumed by hand meanwhile must not be started a second time (review of PR 318, finding 1).
+# Here K1 is resumed by hand after the first reading - when the terminal is opened, before any spawn -
+# while its twin K2, of the same orc, stays stopped.
+Reset-World
+$h = New-Home
+$world.onOpen = { $world.live[$ids["K1"]] = @{ pid = 4711; cwd = $cwds["K1"]; state = "running" } }.GetNewClosure()
+$world.onSpawn[$ids["K"]] = "rotate"
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K", "K1", "K2")
+$rec = Read-Rec $h
+Check ($null -eq (Spawn-For "K1")) ("the sleeper resumed by hand after the first reading is not spawned (" + ($r.lines -join " | ") + ")")
+Check ((State-Of $rec "K1") -ceq "still-awake" -and (Get-Session $rec "K1").history[-1].reason -like "still running*4711*") "it is left still-awake, with the fresh reading's reason"
+Check (@($r.lines | Where-Object { $_ -like "*K1 (22222222)*refused*still running*4711*" }).Count -eq 1) "and the wake says so, by name"
+Check ((State-Of $rec "K") -ceq "woken" -and (State-Of $rec "K2") -ceq "woken" -and $null -ne (Spawn-For "K2")) "its twin K2, still stopped on the fresh reading, is spawned and woken, and so is the orc"
+$k2v = @($world.verdicts | Where-Object { $_.id -ceq $ids["K2"] })
+Check ($k2v.Count -ge 2 -and @($k2v[-1].ignore) -ccontains $NEW) "the re-check passes the ids this wake already started - the orc came back as a new id - as ones that cannot be the sleeper"
 
 Section "the memory gate stops the wake part way"
 Reset-World
