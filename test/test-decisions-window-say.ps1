@@ -225,6 +225,18 @@ Check ((& $storeFiles) -eq $before) "none of them wrote anything"
 $null = Invoke-HordeDecisionWindowRank -Arguments @{ number = 2; which = "blocks"; level = "none"; id = (New-Id) } -Invoke { param($Request) $script:sentRank = $Request; return (New-HordeUnknown -Reason "not asked") }
 Check ((@($script:sentRank.Keys) -join ",") -ceq "id,actor,number,blocks" -and $script:sentRank.actor -ceq "founder" -and $script:sentRank.blocks -ceq "none") "what the handler asks the operation for is a ranking by the founder of that one word: nothing else is added"
 
+Write-Host ""
+Write-Host "--- a question that needs a passkey: the window's answer is refused, his act is taken ---" -ForegroundColor Cyan
+# The audit of 2026-10-16, item 17 (test/test-decisions-needs-passkey.ps1 has the whole rule): the
+# founder's words typed in the window do not answer a production question; the phone with Face ID does.
+$keyed = Invoke-HordeDecision -Operation "add" -Request @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = @{ title = "Should the relay worker be deployed to production now?"; kind = "yes-no"; whatItIs = "A production deploy."; group = "The study"; askedBy = "Orc F" } }
+$kn = [int]$keyed.value.number
+$before = & $storeFiles
+$typed = Say $kn "Yes, deploy it."
+Check ($typed.ok -eq $false -and $typed.reason -clike ("Not saved: nothing was written: question " + $kn + " needs your passkey: answer it on your phone with Face ID*") -and (& $storeFiles) -eq $before -and @(Get-Thread $kn).Count -eq 0) ("MUST-REFUSE: his answer typed in the window is not saved, and the reason tells him to use his phone (" + $typed.reason + ")")
+$parked = Invoke-HordeDecisionWindowSay -Arguments @{ number = $kn; text = "Later."; wording = 1; id = (New-Id); act = "park" }
+Check ($parked.ok -eq $true -and @(Get-Thread $kn).Count -eq 1) "MUST-ACCEPT TWIN: his act (park) under it answers nothing, and is saved"
+
 } finally {
     $env:HORDE_HOME = $keepHome; $env:WEZFLEET_ROOT = $keepFleet
     if ((Split-Path -Leaf $work) -match '\Ahorde-decisions-window-say-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }

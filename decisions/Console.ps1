@@ -74,6 +74,12 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     rank   = @{ number = $true;  flags = @("Importance", "Blocks", "Id", "Json");   usage = "rank <number> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-Id <32 hex>] [-Json]" }
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
+    # authorized: what a production action asks before it goes ahead. It succeeds only when the founder's
+    # standing answer to the question (to every part of a question of parts) is the plain word yes,
+    # proven signed by his trusted passkey, with no later answer of his in the relay journal
+    # (decisions/Operations.ps1, Get-HordeDecisionAuthorizedAnswer); anything else fails the command,
+    # with the reason. It stops mistakes and every honest path, not a hostile process of this user.
+    authorized = @{ number = $true; flags = @("Part", "Json");                      usage = "authorized <number> [-Part <letter>] [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
     # THE CONVERSATION UNDER A QUESTION. answer: the session that keeps the list writes down what the
     # founder said in chat, in his words - stored as recorded from chat, never as typed by him.
@@ -469,6 +475,14 @@ function Format-HordeDecisionAnswer {
         elseif ([int]$value.marked -eq 0) { [void]$lines.Add("Nothing to mark: everything up to record " + $value.upTo + " was already read.") }
         else { [void]$lines.Add("Marked as read: " + $value.marked + " message(s), up to record " + $value.upTo + ".") }
     }
+    elseif ($Verb -ceq "authorized") {
+        foreach ($g in @($value.authorizations)) {
+            $signedAt = [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$g.signedAt).UtcDateTime.ToString("yyyy-MM-dd HH:mm", [System.Globalization.CultureInfo]::InvariantCulture) + " UTC"
+            $which = $(if ($null -ne $g.PSObject.Properties["part"]) { "Question " + $value.number + " part (" + $g.part + ")" } else { "Question " + $value.number })
+            [void]$lines.Add($which + " is authorized: the founder answered yes (record " + $g.sequence + "), signed with his passkey " + $g.signedBy + " at " + $signedAt + ", to the wording it has now.")
+            Add-HordeDecisionTextBlock -Lines $lines -Heading "  His words:" -Text ("  " + ("$($g.text)" -replace "\r?\n", "`n  "))
+        }
+    }
     elseif ($value.outcome -ceq "replayed") {
         [void]$lines.Add("Question " + $value.number + ": this request was already recorded (record " + $value.sequence + "), so nothing was written again.")
     }
@@ -622,6 +636,13 @@ function Invoke-HordeDecisionCommand {
             if (-not ($have.ContainsKey("Json") -and [bool]$have["Json"])) { $request["messages"] = $true }
         }
         "inbox" { $request["actor"] = $script:HordeDecisionCommandActor }
+        "authorized" {
+            if ($have.ContainsKey("Part")) {
+                $askedPart = "$($have['Part'])".ToLowerInvariant()
+                if ($askedPart -cnotmatch '\A[a-z]\z') { throw ("-Part is the letter of the part whose answer is asked about, as in: -Part b" + $usageNote) }
+                $request["part"] = $askedPart
+            }
+        }
         "mark-read" {
             if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }
             $upToText = "$($have['UpTo'])"

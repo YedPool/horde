@@ -239,7 +239,7 @@ function Get-HordeRelayJournalRecordName {
 }
 
 function Read-HordeRelayJournalRecord {
-    # One record, checked against where it is: { ok; meta; reason }, meta { seq; nonce; key; recordedAt }.
+    # One record, checked against where it is: { ok; meta; reason }, meta { seq; nonce; key; ts; recordedAt; kind }.
     # Anything but a whole record of this direction, stream and seq is damage.
     param([string]$Dir, [string]$Direction, [string]$From, [string]$Channel, [long]$Seq)
     $name = Get-HordeRelayJournalRecordName -Seq $Seq
@@ -255,7 +255,7 @@ function Read-HordeRelayJournalRecord {
     if ($g[1] -cne $Direction -or $g[3] -cne $From -or $g[4] -cne $Channel -or $mSeq -ne $Seq) { return [pscustomobject]@{ ok = $false; meta = $null; reason = ("the record " + $where + " is damaged: it says it is " + $g[1] + "/" + $g[3] + "/" + $g[4] + " seq " + $mSeq + ", not what its name and folder say") } }
     if ($g[2] -cne ($g[3] + "/" + $g[4] + "/" + $mSeq + "/" + $mNonce)) { return [pscustomobject]@{ ok = $false; meta = $null; reason = ("the record " + $where + " is damaged: its key is not its own from, channel, seq and nonce") } }
     if (($r.text.Length - $cut - 1) -ne [long]$g[10]) { return [pscustomobject]@{ ok = $false; meta = $null; reason = ("the record " + $where + " is cut short or grown: its envelope is " + ($r.text.Length - $cut - 1) + " characters, and it was written with " + $g[10]) } }
-    return [pscustomobject]@{ ok = $true; meta = [pscustomobject]@{ seq = $mSeq; nonce = $mNonce; key = $g[2]; recordedAt = [long]$g[9]; kind = $g[5] }; reason = ""
+    return [pscustomobject]@{ ok = $true; meta = [pscustomobject]@{ seq = $mSeq; nonce = $mNonce; key = $g[2]; ts = [long]$g[8]; recordedAt = [long]$g[9]; kind = $g[5] }; reason = ""
         envelope = $r.text.Substring($cut + 1); whole = $r.text }
 }
 
