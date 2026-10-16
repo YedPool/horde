@@ -375,7 +375,12 @@ Write-Host ("  pane-sessions files rewritten by their own live session during th
 # clones its plugins into that profile, with read-only git objects (seen 2026-10-16): those are made
 # writable first, only inside the scenario's own folder.
 if ((Split-Path -Leaf $work) -match '\Ahorde-e2e-fleet-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Get-ChildItem -LiteralPath $work -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false } }
-for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $work); $i++) { try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 500 } }
+# A client still finishing that clone can hold a folder for a few seconds after the terminal is gone (two
+# runs of 2026-10-16 left only empty folders, removable a minute later), so this waits up to a minute.
+for ($i = 0; $i -lt 60 -and (Test-Path -LiteralPath $work); $i++) {
+    try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop }
+    catch { Get-ChildItem -LiteralPath $work -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }; Start-Sleep -Seconds 1 }
+}
 Check (-not (Test-Path -LiteralPath $work)) "the scenario's folder - its home, fleet, profile and stand-in - is removed"
 Remove-HordePaneTool
 
