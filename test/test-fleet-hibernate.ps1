@@ -344,7 +344,7 @@ Check ("" + $asleep.value[$script:sids["K"]] -like ("asleep in hibernation " + $
 # A WAKER OF THIS SUITE'S OWN, registered through the shipped port from a folder of its own (wakers/Port.ps1,
 # -Folder): two orcs, each with one unread mail, idle with an empty box; every nudge is recorded.
 $t = $script:clock.at
-$wkDir = Join-Path $script:work "stand-in-waker"
+$wkDir = Join-Path $script:work "hib-stand-in"
 [void](New-Item -ItemType Directory -Path $wkDir -Force)
 $caps = [ordered]@{ schemaVersion = 1; waker = "hib-stand-in"; capabilities = [ordered]@{} }
 foreach ($cap in @("nudge.pointer-only", "state.box", "state.turn", "nudge.guarded", "state.limit", "state.between-turns")) { $caps.capabilities[$cap] = [ordered]@{ support = "yes"; evidence = "This suite's stand-in answers what the suite seats, read back through the port." } }
