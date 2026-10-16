@@ -35,6 +35,9 @@ function Reset-World {
     $world.spawns = New-Object System.Collections.ArrayList; $world.posts = New-Object System.Collections.ArrayList
     $world.free = New-Object System.Collections.ArrayList; $world.nextPane = 40; $world.clock = [datetime]::new(2026, 10, 16, 10, 0, 0, [System.DateTimeKind]::Utc)
     $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList; $world.onOpen = $null; $world.noWindow = @()
+    # What the stand-in terminal was asked, in order: "release <id>" and "spawn <id>"; releaseFails holds
+    # the ids whose no-restore marker cannot be removed.
+    $world.order = New-Object System.Collections.ArrayList; $world.releaseFails = @()
     # The process table the lock is judged by: pid -> start ticks text, "?" when unreadable.
     $world.procs = @{ "777" = $SELFSTART }
 }
@@ -59,6 +62,7 @@ Register-HordeFleetHost -Name "stand-in" `
         if ($null -ne $world.onOpen) { & $world.onOpen }
         $spawn = { param($req)
             [void]$world.spawns.Add($req)
+            [void]$world.order.Add("spawn " + ("" + $req.line).Substring(7))
             $id = ("" + $req.line).Substring(7)
             if (@($world.spawnFails) -ccontains $id) { return (New-HordeUnknown -Reason "the stand-in terminal refused") }
             $world.nextPane++; $pane = "" + $world.nextPane
@@ -75,7 +79,11 @@ Register-HordeFleetHost -Name "stand-in" `
             New-HordeKnown -Value ([pscustomobject]@{ pane = $pane; window = $win }) }.GetNewClosure()
         $paneOf = { param($p) $v = $world.paneOf["" + $p]; if ($null -eq $v) { New-HordeUnknown -Reason "unreadable" } else { New-HordeKnown -Value $v } }.GetNewClosure()
         New-HordeKnown -Value ([pscustomobject]@{ spawn = $spawn; paneOf = $paneOf }) }.GetNewClosure() `
-    -Describe { param($req) "spawn " + $req.mode + " window=" + $req.window + " pane=" + $req.pane + " " + $req.direction + " " + $req.percent + " cwd=" + $req.cwd + " :: " + $req.line }
+    -Describe { param($req) "spawn " + $req.mode + " window=" + $req.window + " pane=" + $req.pane + " " + $req.direction + " " + $req.percent + " cwd=" + $req.cwd + " :: " + $req.line } `
+    -Release { param($id)
+        [void]$world.order.Add("release " + $id)
+        if (@($world.releaseFails) -ccontains $id) { return (New-HordeUnknown -Reason "the stand-in marker is locked") }
+        New-HordeKnown -Value "removed" }.GetNewClosure()
 $agent = (Resolve-HordeFleetAdapter -Kind "agent")
 $hostA = (Resolve-HordeFleetAdapter -Kind "host")
 Check ($agent.state -ceq "known" -and $hostA.state -ceq "known") "CONTROL: the stand-ins pass the shipped registration and are found by the shipped resolver"
@@ -322,6 +330,26 @@ $rec = Read-Rec $h
 # it to come up after its spawn do not, and need no process (a process still running was refused before).
 $vk = @($world.verdicts | Where-Object { $_.id -ceq $ids["K"] -and $null -ne $_.since })
 Check ($vk.Count -ge 2 -and @($vk | Where-Object { $null -eq $_.process -or "" + $_.process.pid -cne "55" }).Count -eq 0) "the first reading and the re-check before the spawn both pass the session's recorded process (second review of PR 318, P1)"
+
+Section "a session's no-restore marker is removed right before its own spawn, and only its own"
+# A terminal restore refuses a session that has a no-restore marker (park and hibernate write one); a wake
+# that starts the session must take its marker away, after the last liveness check and just before the
+# spawn - never for a session it refused, and a marker that cannot be removed does not stop the wake.
+Reset-World
+$h = New-Home
+$world.live[$ids["X"]] = @{ pid = 8; cwd = $cwds["X"]; state = "running" }
+$world.releaseFails = @($ids["K1"])
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h
+$rec = Read-Rec $h
+$order = @($world.order)
+$okOrder = $true
+foreach ($l in @("K", "K1", "K2", "L", "L1")) {
+    $ri = [array]::IndexOf($order, "release " + $ids[$l]); $si = [array]::IndexOf($order, "spawn " + $ids[$l])
+    if ($ri -lt 0 -or $si -ne $ri + 1) { $okOrder = $false }
+}
+Check $okOrder ("each woken session's marker is removed immediately before its own spawn (" + ($order -join " | ") + ")")
+Check (@($order | Where-Object { $_ -ceq ("release " + $ids["X"]) }).Count -eq 0) "a session refused as running keeps its marker"
+Check ((State-Of $rec "K1") -ceq "woken" -and @($r.lines | Where-Object { $_ -like "*K1 (22222222)*marker*could not be removed*locked*" }).Count -eq 1) "a marker that cannot be removed does not stop the session's wake, and the wake says so in words"
 
 Section "a session that comes back under a new id"
 Reset-World

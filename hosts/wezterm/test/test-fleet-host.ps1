@@ -161,6 +161,27 @@ Check ($sh.state -ceq "known" -and $sh.value -like "*\WindowsApps\pwsh.exe") ("C
 $sh = Resolve-HordeWeztermFleetShell -ProgramFiles "" -Exists { param($p) $true } -OnPath $store
 Check ($sh.state -ceq "known" -and $sh.value -like "*\WindowsApps\pwsh.exe") "and so when no Program Files folder is known"
 
+Section "the terminal restore's no-restore marker"
+# <profile>\.wezurrect\no-restore\<session id>.json tells the terminal's session restore never to bring that
+# session back (park and hibernate write it). A wake removes the marker of the one session it is starting.
+$nr = Join-Path $env:TEMP ("horde-test-fleet-host-norestore-" + [guid]::NewGuid().ToString("N"))
+[void](New-Item -ItemType Directory -Path $nr -Force)
+$sidA = "aaaaaaaa-1111-4111-8111-111111111111"; $sidB = "bbbbbbbb-2222-4222-8222-222222222222"
+foreach ($x in @($sidA, $sidB)) { [System.IO.File]::WriteAllText((Join-Path $nr ($x + ".json")), ('{"v":1,"sessionId":"' + $x + '","by":"test","reason":"hibernated","at":"2026-10-16T10:00:00Z"}')) }
+Check ((Get-HordeWeztermFleetNoRestoreDir -ProfileDir "C:\Users\me") -ceq "C:\Users\me\.wezurrect\no-restore") "the markers live in the profile's .wezurrect\no-restore"
+$a = Remove-HordeWeztermFleetNoRestore -SessionId $sidA -Dir $nr
+Check ($a.state -ceq "known" -and $a.value -ceq "removed" -and -not (Test-Path -LiteralPath (Join-Path $nr ($sidA + ".json"))) -and (Test-Path -LiteralPath (Join-Path $nr ($sidB + ".json")))) "the session's own marker is removed, and only that one"
+$a = Remove-HordeWeztermFleetNoRestore -SessionId $sidA -Dir $nr
+Check ($a.state -ceq "known" -and $a.value -ceq "none") "a missing marker is fine: nothing to remove"
+$a = Remove-HordeWeztermFleetNoRestore -SessionId "..\x" -Dir $nr
+Check ($a.state -ceq "unknown" -and (Test-Path -LiteralPath (Join-Path $nr ($sidB + ".json")))) "an id that is not a session id removes nothing"
+[void](New-Item -ItemType Directory -Path (Join-Path $nr ($sidB + "x.json")) -Force)
+$sidC = $sidB.Substring(0, 35) + "c"
+[void](New-Item -ItemType Directory -Path (Join-Path (Join-Path $nr ($sidC + ".json")) "inner") -Force)
+$a = Remove-HordeWeztermFleetNoRestore -SessionId $sidC -Dir $nr
+Check ($a.state -ceq "unknown" -and $a.reason -like "*could not be removed*") ("a marker that cannot be removed is unknown, with the reason (" + $a.reason + ")")
+Remove-Item -LiteralPath $nr -Recurse -Force -ErrorAction SilentlyContinue
+
 Section "the adapter registers itself"
 $h = Resolve-HordeFleetAdapter -Kind "host"
 Check ($h.state -ceq "known" -and $h.value.name -ceq "wezterm") "loading the file registers the fleet host adapter"
