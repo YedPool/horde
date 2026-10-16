@@ -81,7 +81,7 @@ try {
   check(!!(await until(shown("accountView") + " && document.getElementById('accountWho').textContent.indexOf('founder@example.test') >= 0")), "the Account screen says who is signed in", await evaluate("document.getElementById('accountWho').textContent"));
   const listed = await evaluate("Array.from(document.querySelectorAll('#machineList li')).map((li) => li.textContent).join('|')");
   // The machine read the relay just before (the suite's control): heard from it, at a time of the phone's day.
-  check(new RegExp("^work - " + machineLabel + " - heard from [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$").test(listed) && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, when the relay last heard from it, with a Remove button", listed);
+  check(new RegExp("^work - " + machineLabel + " - heard from [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}RemoveAdd this phone$").test(listed) && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, when the relay last heard from it, with a Remove button - and Add this phone, since this phone is not paired with it (phone-started pairing)", listed);
   // THE BOX IS NEVER HIDDEN (app.js): a live region that is hidden is not in the accessibility tree, so
   // its first line could go unannounced. It is checked unhidden, and empty when nothing is offline.
   const unhidden = "(document.getElementById('pcOffline') && !document.getElementById('pcOffline').hasAttribute('hidden') && document.getElementById('pcOffline').getAttribute('role') === 'status')";
@@ -103,7 +103,7 @@ try {
   const head = "PC " + machineLabel + " (work) offline since ", tail = ". Your answers are kept and will be applied when it is back.";
   const when = typeof banner === "string" && banner.startsWith(head) && banner.endsWith(tail) ? banner.slice(head.length, banner.length - tail.length) : "";
   check(/^[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}$/.test(when) && (await evaluate(unhidden)),"past two minutes by the relay's clock, the PC offline banner stands in the bar, by the machine's name, with the time in the phone's own day, and says the answers are kept", banner);
-  check(/ - offline since [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$/.test(await evaluate("document.querySelector('#machineList li').textContent")), "and the Account screen says so of the machine");
+  check(/ - offline since [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}RemoveAdd this phone$/.test(await evaluate("document.querySelector('#machineList li').textContent")), "and the Account screen says so of the machine");
   await cdp("Fetch.disable");
   onPaused = null;
   await evaluate("document.getElementById('accountBtn').click()", true);

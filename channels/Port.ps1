@@ -52,7 +52,10 @@
 # THE PATH IN, for every channel at once (Receive-HordeRelayInbox, then Invoke-HordeRelayUnfinished):
 #   1. watch the machine's mailbox from the cursor (relays/Port.ps1 already drops malformed items,
 #      repeats and stale ones, and reports gaps);
-#   2. read each text as an envelope; SORT THE BATCH BY SENDER AND SEQ, so a relay that reorders cannot
+#   2. a PHONE VOUCH ITEM (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF) is no envelope and no channel's:
+#      it is judged at once by Receive-HordeRelayPhoneVouch, against the trust store as it is now,
+#      and settled - done or refused - never journaled;
+#      read each other text as an envelope; SORT THE BATCH BY SENDER AND SEQ, so a relay that reorders cannot
 #      make the journal refuse an earlier envelope as out of order;
 #   3. refuse, before the journal sees it, an envelope of a channel nobody registered, of a kind its
 #      channel does not take, from a sender that channel does not take, not signed by a trusted sender,
@@ -106,7 +109,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relays\Port.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Journal.ps1")
-. (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Pairing.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "relay\Join.ps1")
 . (Join-Path $PSScriptRoot "Sessions.ps1")
 
 if ($null -eq (Get-Variable -Name HordeRelayChannels -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeRelayChannels = [ordered]@{} }
@@ -455,7 +458,28 @@ function Complete-HordeRelayInbox {
     $settled = @{}
     # The trusted senders, read once for the whole batch (Get-HordeRelayChannelSenders).
     $senderCache = @{}
+    $vouched = New-Object System.Collections.ArrayList
+    $joined = New-Object System.Collections.ArrayList
     foreach ($it in @($w.value.items)) {
+        # A PHONE VOUCH ITEM is no envelope: it is its own proof, judged against the trust store as it is
+        # NOW and never journaled (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF). Refused or done, it is
+        # settled; only a trust store that cannot be read holds it for the next turn.
+        if (Test-HordeRelayPhoneVouchText -Text $it.text) {
+            $pv = Receive-HordeRelayPhoneVouch -HordeHome $Context.hordeHome -Text $it.text -Now $Now
+            if ($pv.outcome -ceq "held") { [void]$held.Add("item " + $it.seq + ": " + $pv.reason); continue }
+            $settled[[long]$it.seq] = $true # a vouch, done or refused: acked
+            if ($pv.outcome -ceq "done") { [void]$vouched.Add("item " + $it.seq + ": " + $pv.reason) } else { [void]$refused.Add("item " + $it.seq + ": " + $pv.reason) }
+            continue
+        }
+        # A JOIN REQUEST is no envelope either: a new phone asking to join (relay/Join.ps1), recorded or
+        # refused at once - it grants nothing - and answered by the join channel's Tick.
+        if (Test-HordeRelayJoinRequestText -Text $it.text) {
+            $jr = Receive-HordeRelayJoinRequest -HordeHome $Context.hordeHome -Text $it.text -Key $it.key -Now $Now
+            if ($jr.outcome -ceq "held") { [void]$held.Add("item " + $it.seq + ": " + $jr.reason); continue }
+            $settled[[long]$it.seq] = $true # a join request, recorded or refused: acked
+            if ($jr.outcome -ceq "done") { [void]$joined.Add("item " + $it.seq + ": " + $jr.reason) } else { [void]$refused.Add("item " + $it.seq + ": " + $jr.reason) }
+            continue
+        }
         $r = Read-HordeRelayEnvelope -Text $it.text
         if (-not $r.ok) { [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue }
         [void]$parsed.Add([pscustomobject]@{ item = $it; envelope = $r.value })
@@ -541,7 +565,7 @@ function Complete-HordeRelayInbox {
         if ($ack.state -ceq "known") { $Context.acked = $through }
         else { [void]$held.Add("the relay was not acked through " + $through + ": " + $ack.reason) }
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ taken = @($taken.ToArray()); refused = @($refused.ToArray()); held = @($held.ToArray()); missing = @($missing.ToArray()); anomalies = @($w.value.anomalies); cursor = $Context.cursor; acked = $Context.acked; vouched = @($vouched.ToArray()); joined = @($joined.ToArray()) }))
 }
 
 function Invoke-HordeRelayUnfinished {

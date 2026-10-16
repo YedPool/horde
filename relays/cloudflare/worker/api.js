@@ -50,6 +50,9 @@
 //     stream its key names: the conformance suite measures the mailbox's contract through it.)
 //   - NEVER ITSELF: keepFrom is 1 to the key's own seq, or the request is refused, 400, and nothing is put.
 //   - IT COSTS NO REQUEST: it is the put, counted once (limits.js, requestsPerDay).
+//
+// NO PUT OF A JOIN REQUEST: a key starting "join/" is the join route's alone (join.js, JOIN REQUESTS),
+// so a phone or a machine putting one here is refused 403 and nothing is put.
 import { authenticate, authorize } from "./auth.js";
 import { answer, refuse, refusalOf } from "./answers.js";
 import { readJson } from "./body.js";
@@ -58,6 +61,7 @@ import { handleRotation, ROTATION_PATH } from "./rotation.js";
 import { accountOf } from "./accounts.js";
 import { mailboxOf } from "./mailbox.js";
 import { limitsOf } from "./limits.js";
+import { JOIN_KEY_PREFIX } from "./join.js";
 import { mailboxProblem, keyProblem, itemTextProblem, wholeOf, streamOf, MAX_TEXT_CHARS, MAX_BATCH, MAX_WATCH_MS, SEQ_MAX, BODY_BYTES } from "./rules.js";
 
 export const API_ROOT = "/v1/";
@@ -88,6 +92,10 @@ async function put(request, url, box, limits, owner, who) {
   }
   const { body, refusal } = await readJson(request, ["key", "text"], BODY_BYTES);
   if (refusal) return refusal;
+  // A JOIN REQUEST IS PUT ONLY BY THE JOIN ROUTE (join.js), which holds its limits: a phone or a
+  // machine that put one straight into a mailbox would pass them all. Judged on the key alone, before
+  // the text is looked at; the test principal, which has no account to hold limits for, is not held.
+  if (who.kind !== "test" && typeof body.key === "string" && body.key.startsWith(JOIN_KEY_PREFIX)) return refuse(403, "only the relay's join route puts a join request");
   if (keyProblem(body.key)) return refuse(400, "the key is not 1 to 160 of A-Z, a-z, 0-9 and . _ : / -");
   if (typeof body.text === "string" && body.text.length > MAX_TEXT_CHARS) return refuse(413, "the text is longer than the " + MAX_TEXT_CHARS + " characters this relay holds");
   if (itemTextProblem(body.text)) return refuse(400, "the text is not 1 to " + MAX_TEXT_CHARS + " printable ASCII characters");
