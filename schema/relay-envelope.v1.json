@@ -40,10 +40,12 @@
       "type": "object",
       "required": ["alg"],
       "additionalProperties": false,
-      "description": "ES256 carries value; webauthn.get carries authenticatorData, clientDataJSON and signature. Which members go with which alg is checked in code.",
+      "description": "ES256 carries value; webauthn.get carries authenticatorData, clientDataJSON and signature; session (relay/Session.ps1) carries vouchId and value, and on the first envelope of a session also vouch with its passkey assertion (authenticatorData, clientDataJSON, signature). Which members go with which alg is checked in code.",
       "properties": {
-        "alg": { "type": "string", "enum": ["ES256", "webauthn.get"] },
-        "value": { "$ref": "#/definitions/base64url", "description": "ES256: 64 bytes, r || s." },
+        "alg": { "type": "string", "enum": ["ES256", "webauthn.get", "session"] },
+        "vouchId": { "$ref": "#/definitions/keyId", "description": "session: the key id of the session key, which names the vouch it signs under." },
+        "value": { "$ref": "#/definitions/base64url", "description": "ES256 and session: 64 bytes, r || s." },
+        "vouch": { "$ref": "#/definitions/base64url", "description": "session: the vouch text (relay/Session.ps1), whose hash the passkey assertion beside it signs." },
         "authenticatorData": { "$ref": "#/definitions/base64url" },
         "clientDataJSON": { "$ref": "#/definitions/base64url" },
         "signature": { "$ref": "#/definitions/base64url", "description": "webauthn.get: the authenticator's DER signature." }

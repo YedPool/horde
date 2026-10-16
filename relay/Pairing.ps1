@@ -127,6 +127,18 @@
 # cli/RelayPair.ps1), signed by the grant with the rest, so the name a relay lists the machine under is
 # the one the machine gave - the relay cannot rename it, and a phone cannot either.
 #
+# TELLING THE PHONE IT IS CONFIRMED (the founder, 2026-10-14: the announcement "should happen
+# automatically"). The phone that just paired waits on its pairing screen for the machine's word that
+# the founder typed its number, and then asks for ONE passkey prompt, "Finish pairing", which announces
+# it (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF). The word is the CONFIRMED RECORD
+# (New-HordeRelayPairingConfirmedText), kind horde-relay-pairing-confirmed, put into the offer's pairing
+# mailbox under the key confirmed/<offer>: horde, offer, device (the device id the phone computes from
+# its own credential id), confirmedAt and sig, the machine's ES256 signature (low-S) over
+#   "horde-relay/pairing/v1 confirmed" LF horde LF offer LF device LF confirmedAt
+# under the signing key the offer named. It GRANTS NOTHING: it only tells the phone that a prompt now is
+# worth showing. A forged or replayed one costs the founder one prompt whose announcement the machine
+# then refuses, and the phone verifies it anyway, so the relay cannot even do that.
+#
 # Every function that judges the far end's input answers { ok; reason; value } and never throws for it.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
@@ -494,4 +506,42 @@ function Confirm-HordeRelayDevice {
     $c = Add-HordeRelayDeviceConfirmation -HordeHome $HordeHome -Id $Id -Now $Now
     if ($c.state -cne "known") { $fail.reason = $c.reason; return $fail }
     return [pscustomobject]@{ ok = $true; reason = ""; value = $c.value }
+}
+
+function Get-HordeRelayPairingConfirmedSpec {
+    return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "horde", "name", "offer", "hex32", "device", "hex32", "confirmedAt", "int", "sig", "b64u"))
+}
+
+function Get-HordeRelayPairingConfirmedBytes {
+    # What the confirmed record's signature covers (TELLING THE PHONE IT IS CONFIRMED, in the header);
+    # relay/js/protocol.js's confirmedBytes is its twin.
+    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$Offer, [Parameter(Mandatory = $true)][string]$Device, [Parameter(Mandatory = $true)][long]$ConfirmedAt)
+    return ,(Get-HordeRelayAsciiBytes -Text ("horde-relay/pairing/v1 confirmed`n" + $Horde + "`n" + $Offer + "`n" + $Device + "`n" + $ConfirmedAt))
+}
+
+function Get-HordeRelayPairingConfirmedKey {
+    # The relay key the confirmed record is put under: one per offer, so a put made again stores once.
+    param([Parameter(Mandatory = $true)][string]$Offer)
+    return ("confirmed/" + $Offer)
+}
+
+function New-HordeRelayPairingConfirmedText {
+    # The confirmed record for the TRUSTED device -Device that the offer -Offer enrolled, signed by this
+    # machine's signing key (the header). Known { text; key }; unknown when the device is not trusted, is
+    # not that offer's, or the key would not sign.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)][string]$Offer, [Parameter(Mandatory = $true)][string]$Device, $Now = $null)
+    $s = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
+    if (-not $s.ok) { return (New-HordeUnknown -Reason $s.reason) }
+    $d = @($s.devices | Where-Object { $_.id -ceq $Device }) | Select-Object -First 1
+    if ($null -eq $d -or $d.state -cne "trusted") { return (New-HordeUnknown -Reason ("the device " + $Device + " is not trusted, so the phone is not told it is")) }
+    if ($d.offer -cne $Offer) { return (New-HordeUnknown -Reason ("the device " + $Device + " was not enrolled by the offer " + $Offer)) }
+    $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Open -Now $Now
+    if ($id.state -cne "known") { return $id }
+    $at = ConvertTo-HordeRelayRecordMs -Time $Now
+    try {
+        $sig = ConvertTo-HordeRelayBase64Url -Bytes (New-HordeRelayEs256Signature -Key $id.value.sign.key -Bytes (Get-HordeRelayPairingConfirmedBytes -Horde $id.value.horde -Offer $Offer -Device $Device -ConfirmedAt $at))
+    } catch { return (New-HordeUnknown -Reason "this machine's signing key did not sign the confirmed record" -ErrorRecord $_) }
+    finally { $id.value.sign.key.Dispose(); $id.value.agree.key.Dispose() }
+    $text = ConvertTo-HordeRelayRecordText -Spec (Get-HordeRelayPairingConfirmedSpec) -Values @{ v = 1; kind = "horde-relay-pairing-confirmed"; horde = $id.value.horde; offer = $Offer; device = $Device; confirmedAt = $at; sig = $sig }
+    return (New-HordeKnown -Value ([pscustomobject]@{ text = $text; key = (Get-HordeRelayPairingConfirmedKey -Offer $Offer) }))
 }

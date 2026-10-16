@@ -12,8 +12,8 @@
            Replace = '$ordered = @($parsed)' }
         # --- step 3: what the journal never sees ---
         @{ Name = "founder-channel-takes-machines"
-           Find = '    if ($Channel.senders -ceq "horde") { return $all }'
-           Replace = '    return $all' }
+           Find = '    if ($Channel.senders -ceq "horde") { return $built }'
+           Replace = '    return $built' }
         @{ Name = "address-left-to-the-journal"
            Find = '    if ($forMe.Count -eq 0) { return [pscustomobject]@{ why = "it is not addressed to any agreement key of this machine";'
            Replace = '    if ($false) { return [pscustomobject]@{ why = "it is not addressed to any agreement key of this machine";' }

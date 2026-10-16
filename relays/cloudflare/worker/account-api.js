@@ -8,7 +8,11 @@
 //   DELETE /v1/account/machines/<key id>   -> 200 { removed: <key id> }
 //   DELETE /v1/account/phones/<phone id>   -> 200 { signedOut: <phone id> }
 //   DELETE /v1/account                     { confirm: "delete this account" } -> 200 { deleted: true }
-// A phone may do all of these (auth.js); a machine may only remove its own key, and see nothing.
+//   POST   /v1/account/join                { machine, request, label, agent, requestKey } -> 200 { request, expiresAt }
+//   POST   /v1/account/join/<request>/close { outcome }  -> 200 { freed }
+// A phone may do all of these but the last (auth.js); a machine may only remove its own key and end a
+// join request that names it, and see nothing. The join requests' rules, and why, are join.js's
+// (JOIN REQUESTS (phone-started pairing)).
 //
 // WHEN EACH MACHINE WAS LAST HEARD FROM rides on the account's own answer (presence.js): lastSeenAt, to
 // the second, or null for a machine not heard from yet; and now, THE RELAY'S OWN CLOCK at the answer, so
@@ -46,6 +50,7 @@ import { accountOf } from "./accounts.js";
 import { PHONE_ID } from "./sessions.js";
 import { clearedCookieHeader, SESSION_COOKIE } from "./cookies.js";
 import { mailboxProblem } from "./rules.js";
+import { isJoinPath, closedRequestOf, requestJoin, closeJoin } from "./join.js";
 // The words a deletion must carry: the phone's account client's, the one copy of them (SSOT).
 import { DELETE_CONFIRM } from "../../../surfaces/pwa/page/account-client.js";
 import { keyId as keyIdOf, unb64u, accountGrantBytes, verifyMachineSignature, validLabel, PAIRING_LIMITS } from "../../../relay/js/protocol.js";
@@ -142,6 +147,16 @@ export async function handleAccountApi(request, env, url, who, limits) {
     if (!v) return refuse(401, "this account was deleted");
     const phones = v.phones.map((p) => ({ id: p.id, signedInAt: p.signedInAt, expiresAt: p.expiresAt, current: p.id === who.phone }));
     return answer(200, { account: { email: who.email || "" }, machines: v.machines, phones, now });
+  }
+  if (isJoinPath(url.pathname)) {
+    if (request.method !== "POST") return refuse(405, "a join request is made, and ended, with POST");
+    const closing = closedRequestOf(url.pathname);
+    if (closing === null) {
+      if (!authorize(who, "join", "")) return refuse(403, "only a signed-in phone asks to join");
+      return (await gate(env, who, "join", limits)) || requestJoin(request, env, url, who, limits);
+    }
+    if (!authorize(who, "join-close", who.keyId)) return refuse(403, "only the machine a join request names may end it");
+    return (await gate(env, who, "join-close", limits)) || closeJoin(request, env, who, closing, limits);
   }
   const ph = PHONES.exec(url.pathname);
   if (ph) {

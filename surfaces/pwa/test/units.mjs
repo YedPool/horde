@@ -49,8 +49,17 @@ async function newMachine(horde) {
   return m;
 }
 // relay/Pairing.ps1's offer, its members in their order.
-// Its account grant is the relay's to verify, so a phone reads only its shape: here, 64 zero bytes.
-function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null, grant = "A".repeat(86), label = "build-box" } = {}) {
+// Its account grant is signed by the machine's own key, low-S, as relay/Pairing.ps1 signs it: the phone
+// verifies it (relay/js/protocol.js, readOffer). grant, when given, stands in for it.
+const P256_N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+async function machineSign(m, bytes) {
+  const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, m.sign.privateKey, bytes));
+  const s = BigInt("0x" + P.hex(sig.slice(32)));
+  if (s > P256_N / 2n) sig.set(P.unhex((P256_N - s).toString(16).padStart(64, "0")), 32);
+  return sig;
+}
+async function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null, grant = null, label = "build-box" } = {}) {
+  if (grant === null) grant = P.b64u(await machineSign(m, P.accountGrantBytes({ horde: m.horde, offer: id, machine: m.keyId, expiresAt, label })));
   return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + id + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
     '","label":"' + label + '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox +
     '","pairMailbox":"' + (pairMailbox === null ? m.horde + "/pair-" + id : pairMailbox) + '","rpId":"' + rpId +
@@ -94,6 +103,8 @@ async function sendSnapshot(transport, m, phones, questions, opts = {}) {
 }
 // What the machine would open of the phone's answer: the body, by its agreement key.
 async function machineOpens(m, text) {
+  // The phone's vouch item is no envelope (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF): it is on no channel.
+  if (text.startsWith('{"v":1,"kind":"horde-relay-phone-vouch",')) return { header: { channel: "", kind: "phone-vouch" }, sig: null, body: JSON.parse(text) };
   const e = JSON.parse(text);
   const ht = P.headerText(e.header);
   const aad = P.utf8("horde-relay/envelope/v1 aad\n" + ht);
@@ -102,9 +113,10 @@ async function machineOpens(m, text) {
   return { header: e.header, sig: e.sig, body: JSON.parse(P.fromUtf8(await P.gcmOpen(cek, P.unhex(e.header.nonce), aad, P.unb64u(e.ct)))) };
 }
 async function phoneKeyOf(transport, m) {
-  // The phone's announcement, as the trust channel reads it: the agreement key it vouched for.
+  // The phone's announcement, as the machine reads it: the agreement key it vouched for - from the phone
+  // vouch item (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF).
   const r = await transport.get(m.mailbox, 0, 256);
-  for (const it of r.value.items) { const o = await machineOpens(m, it.text); if (o.header.channel === "trust") return P.unb64u(o.body.agreePublic); }
+  for (const it of r.value.items) { if (it.text.startsWith('{"v":1,"kind":"horde-relay-phone-vouch",')) return P.unb64u(JSON.parse(it.text).agreePublic); }
   return null;
 }
 
@@ -115,7 +127,7 @@ function newApp(transport, { prf = true, store = memoryStore(), authenticator = 
 }
 async function pairedApp(transport, m, opts = {}) {
   const app = newApp(transport, opts);
-  const paired = await app.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const paired = await app.phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
   await app.phone.announce(paired.id);
   const phoneKey = await phoneKeyOf(transport, m);
   return { ...app, paired, phoneKey };
@@ -133,7 +145,7 @@ async function pairedApp(transport, m, opts = {}) {
   const opened = await P.hpkeOpen(skR, P.unhex(v.pkRm), P.unhex(v.enc), P.unhex(v.info), P.unhex(e0.aad), P.unhex(e0.ct));
   check(P.hex(opened) === e0.pt, "HPKE Open gives back RFC 9180's plaintext");
   const bad = P.unhex(e0.aad); bad[0] ^= 1;
-  check((await throwsAsync(() => P.hpkeOpen(skR, P.unhex(v.pkRm), P.unhex(v.enc), P.unhex(v.info), bad, P.unhex(e0.ct)))) !== "", "and refuses other additional data");
+  check((await throwsAsync(async () => P.hpkeOpen(skR, P.unhex(v.pkRm), P.unhex(v.enc), P.unhex(v.info), bad, P.unhex(e0.ct)))) !== "", "and refuses other additional data");
 }
 
 // --- 2. base64url has one spelling ---
@@ -146,18 +158,28 @@ async function pairedApp(transport, m, opts = {}) {
 // --- 3. the offer is read as far as a phone can ---
 {
   const m = await newMachine("work");
-  check((await P.readOffer(offerText(m))).ok, "a machine's offer reads");
-  check(!(await P.readOffer(offerText(m, { expiresAt: Date.now() - 1 }))).ok, "an expired offer is refused");
-  check(!(await P.readOffer(offerText(m, { mailbox: "work/other" }))).ok, "an offer whose mailbox is not its horde and machine is refused");
-  check(!(await P.readOffer(offerText(m, { agreeKeyId: "0".repeat(32) }))).ok, "an offer whose agreement key is not the one it names is refused");
-  check(!(await P.readOffer(offerText(m).replace('{"v":1,', '{"v":1,"extra":1,'))).ok, "an offer with a member added is refused");
-  check(!(await P.readOffer(offerText(m).replace(/,"grant":"[^"]*"/, ""))).ok, "an offer with no account grant is refused");
-  check((await P.readOffer(offerText(m))).value.label === "build-box", "an offer names its machine by the label its grant signs");
-  check(!(await P.readOffer(offerText(m).replace(/,"label":"[^"]*"/, ""))).ok && !(await P.readOffer(offerText(m, { label: " padded" }))).ok && !(await P.readOffer(offerText(m, { label: "x".repeat(65) }))).ok, "and one with no label, or a label a record cannot hold, is refused");
-  check(!(await P.readOffer(offerText(m, { grant: "A".repeat(85) }))).ok && !(await P.readOffer(offerText(m, { grant: "A".repeat(84) + "+/" }))).ok, "and one whose grant is not 64 bytes of base64url");
+  check((await P.readOffer((await offerText(m)))).ok, "a machine's offer reads");
+  check(!(await P.readOffer((await offerText(m, { expiresAt: Date.now() - 1 })))).ok, "an expired offer is refused");
+  check(!(await P.readOffer((await offerText(m, { mailbox: "work/other" })))).ok, "an offer whose mailbox is not its horde and machine is refused");
+  check(!(await P.readOffer((await offerText(m, { agreeKeyId: "0".repeat(32) })))).ok, "an offer whose agreement key is not the one it names is refused");
+  check(!(await P.readOffer((await offerText(m)).replace('{"v":1,', '{"v":1,"extra":1,'))).ok, "an offer with a member added is refused");
+  check(!(await P.readOffer((await offerText(m)).replace(/,"grant":"[^"]*"/, ""))).ok, "an offer with no account grant is refused");
+  check((await P.readOffer((await offerText(m)))).value.label === "build-box", "an offer names its machine by the label its grant signs");
+  check(!(await P.readOffer((await offerText(m)).replace(/,"label":"[^"]*"/, ""))).ok && !(await P.readOffer((await offerText(m, { label: " padded" })))).ok && !(await P.readOffer((await offerText(m, { label: "x".repeat(65) })))).ok, "and one with no label, or a label a record cannot hold, is refused");
+  check(!(await P.readOffer((await offerText(m, { grant: "A".repeat(85) })))).ok && !(await P.readOffer((await offerText(m, { grant: "A".repeat(84) + "+/" })))).ok, "and one whose grant is not 64 bytes of base64url");
+  // THE GRANT IS VERIFIED (review of PR 301): a relay that makes an offer naming this machine's keys signs its
+  // grant with a key of its own, and a grant of the right shape is not enough.
+  const relayKey = await newMachine("work");
+  const forgedId = P.hex(P.randomBytes(16));
+  const forgedExp = Date.now() + 300000;
+  const forged = P.b64u(await machineSign(relayKey, P.accountGrantBytes({ horde: "work", offer: forgedId, machine: m.keyId, expiresAt: forgedExp, label: "build-box" })));
+  const fr = await P.readOffer((await offerText(m, { id: forgedId, expiresAt: forgedExp, grant: forged })));
+  check(!fr.ok && fr.reason.indexOf("not signed by the machine") >= 0, "A FORGED OFFER - this machine's keys, a grant signed by another key - is refused", fr.reason);
+  check(!(await P.readOffer((await offerText(m, { grant: "A".repeat(86) })))).ok, "and so is one whose grant is the right shape and signed by nobody");
+  check(!(await P.readOffer((await offerText(m)).replace('"label":"build-box"', '"label":"other-box"'))).ok, "and one whose name was changed after its grant signed it");
   const app = newApp(R.memoryTransport());
-  check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" }), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
-  check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m), label: 'say "hi"' }))).indexOf("name this phone") >= 0, "a label the machine would refuse is refused first");
+  check((await throwsAsync(async () => app.phone.pair({ offerText: (await offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" })), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
+  check((await throwsAsync(async () => app.phone.pair({ offerText: (await offerText(m)), label: 'say "hi"' }))).indexOf("name this phone") >= 0, "a label the machine would refuse is refused first");
 }
 
 // --- 3a. the account grant, and the machine signature check the hosted relay makes (relay/Pairing.ps1) ---
@@ -189,9 +211,9 @@ async function pairedApp(transport, m, opts = {}) {
   const counting = { create: async (a) => { made++; return base.create(a); }, get: (a) => base.get(a) };
   const t = R.memoryTransport();
   const outPhone = createPhone({ store: memoryStore(), authenticator: counting, relay: R.createRelayClient(t), account: said({ state: "unknown", value: null, reason: "the relay answered 401: who are you", status: 401 }), origin });
-  const text = offerText(m);
+  const text = (await offerText(m));
   const o = (await P.readOffer(text)).value;
-  const refused = await throwsAsync(() => outPhone.pair({ offerText: text, label: "Founder phone" }));
+  const refused = await throwsAsync(async () => outPhone.pair({ offerText: text, label: "Founder phone" }));
   check(refused.indexOf("Sign in") >= 0 && made === 0 && (await t.get(o.pairMailbox, 0, 10)).value.items.length === 0, "a phone not signed in is told to sign in, before a passkey is made or anything is sent", refused);
   check(refused.indexOf("401") < 0 && refused.indexOf("who are you") < 0, "and the relay's own words are not on the screen", refused);
   const t2 = R.memoryTransport();
@@ -199,17 +221,17 @@ async function pairedApp(transport, m, opts = {}) {
   const watched = { put: async (...a) => { order.push("put"); return t2.put(...a); }, get: (...a) => t2.get(...a), watch: (...a) => t2.watch(...a), ack: (...a) => t2.ack(...a) };
   const acct = { registerMachine: async (x) => { order.push("register"); calls.push(x); return { state: "known", value: { keyId: x.machine, horde: x.horde, duplicate: false }, reason: "", status: 200 }; } };
   const app = newApp(watched, { account: acct });
-  const text2 = offerText(m, { grant: "B".repeat(85) + "A" });
+  const text2 = (await offerText(m));
   const o2 = (await P.readOffer(text2)).value;
   const paired = await app.phone.pair({ offerText: text2, label: "Founder phone" });
   const sent = calls[calls.length - 1];
   check(paired.relayed === true && order.join(",") === "register,put", "signed in, the phone registers the machine first, then sends its response through the relay", order.join(","));
   check(sent.horde === "work" && sent.offer === o2.offer && sent.machine === m.keyId && sent.label === "build-box" && sent.signPublic === o2.signPublic && sent.expiresAt === o2.expiresAt && sent.grant === o2.grant, "with the offer's horde, id, machine, label, signing key, expiry and account grant", JSON.stringify(sent));
   const bad = createPhone({ store: memoryStore(), authenticator: softAuthenticator({ origin, prf: true }), relay: R.createRelayClient(R.memoryTransport()), account: said({ state: "unknown", value: null, reason: "the relay answered 409: this machine's key is registered to another account", status: 409 }), origin });
-  const why = await throwsAsync(() => bad.pair({ offerText: offerText(m), label: "Founder phone" }));
+  const why = await throwsAsync(async () => bad.pair({ offerText: (await offerText(m)), label: "Founder phone" }));
   check(why.indexOf("did not register") >= 0 && why.indexOf("409") < 0, "a registration the relay refuses stops the pairing, in the app's own words", why);
   const plain = newApp(R.memoryTransport());
-  check((await plain.phone.pair({ offerText: offerText(m), label: "Founder phone" })).relayed === true, "with no accounts (a memory or binding relay), the phone pairs as it always did");
+  check((await plain.phone.pair({ offerText: (await offerText(m)), label: "Founder phone" })).relayed === true, "with no accounts (a memory or binding relay), the phone pairs as it always did");
 }
 {
   const sent = [];
@@ -238,11 +260,11 @@ async function pairedApp(transport, m, opts = {}) {
 // --- 3b. the pairing response goes to the machine through the relay, sealed (relay/Pairing.ps1) ---
 {
   const m = await newMachine("work");
-  check(!(await P.readOffer(offerText(m, { pairMailbox: "work/" + m.keyId }))).ok, "an offer whose pairing mailbox is not its horde and offer is refused (it could send the response to the machine's own mailbox)");
-  check(!(await P.readOffer(offerText(m, { pairMailbox: "other/pair-" + "0".repeat(32) }))).ok, "and one naming another horde's");
+  check(!(await P.readOffer((await offerText(m, { pairMailbox: "work/" + m.keyId })))).ok, "an offer whose pairing mailbox is not its horde and offer is refused (it could send the response to the machine's own mailbox)");
+  check(!(await P.readOffer((await offerText(m, { pairMailbox: "other/pair-" + "0".repeat(32) })))).ok, "and one naming another horde's");
   const t = R.memoryTransport();
   const app = newApp(t);
-  const text = offerText(m);
+  const text = (await offerText(m));
   const o = (await P.readOffer(text)).value;
   const paired = await app.phone.pair({ offerText: text, label: "Founder phone" });
   check(paired.relayed === true && paired.pairMailbox === "work/pair-" + o.offer, "pairing sends the response through the relay, to the offer's own mailbox", JSON.stringify({ relayed: paired.relayed, box: paired.pairMailbox }));
@@ -257,20 +279,20 @@ async function pairedApp(transport, m, opts = {}) {
   try { opened = P.fromUtf8(await P.hpkeOpen(m.agree.privateKey, m.agreePublic, P.unb64u(sv.enc), P.utf8("horde-relay/pairing/v1 response-key"), aad, P.unb64u(sv.ct))); } catch (x) { opened = "did not open: " + x.message; }
   check(opened === paired.response, "the machine's agreement key opens it into the very response Copy shows", opened.slice(0, 80));
   const wrongAad = P.utf8("horde-relay/pairing/v1 response aad\n" + m.horde + "\n" + "0".repeat(32) + "\n" + m.agreeKeyId);
-  check((await throwsAsync(() => P.hpkeOpen(m.agree.privateKey, m.agreePublic, P.unb64u(sv.enc), P.utf8("horde-relay/pairing/v1 response-key"), wrongAad, P.unb64u(sv.ct)))) !== "", "it is bound to its offer: under another offer's id it does not open");
+  check((await throwsAsync(async () => P.hpkeOpen(m.agree.privateKey, m.agreePublic, P.unb64u(sv.enc), P.utf8("horde-relay/pairing/v1 response-key"), wrongAad, P.unb64u(sv.ct)))) !== "", "it is bound to its offer: under another offer's id it does not open");
   check((await app.phone.sendPairing(paired.id)) === true && (await t.get(o.pairMailbox, 0, 256)).value.items.length === 1, "sending again is taken, and stored once");
-  check((await throwsAsync(() => P.sealPairingResponse(o, "x".repeat(6001)))).indexOf("6000") >= 0, "a response over the 6000 characters the machine reads is refused before sealing");
+  check((await throwsAsync(async () => P.sealPairingResponse(o, "x".repeat(6001)))).indexOf("6000") >= 0, "a response over the 6000 characters the machine reads is refused before sealing");
   // A relay that refuses the put: pairing still completes on the phone, says the relay did not take it,
   // and keeps the words the relay said off the screen.
   const down = { ...R.memoryTransport(), put: async () => ({ state: "unknown", value: null, reason: "PHISH: re-pair at evil.example" }) };
   const app2 = newApp(down);
-  const p2 = await app2.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const p2 = await app2.phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
   check(p2.relayed === false && typeof p2.response === "string" && p2.response.indexOf("horde-relay-pairing-response") >= 0, "when the relay refuses, the pairing still stands and the plain response is there for Copy and Share");
   check(JSON.stringify(p2).indexOf("PHISH") < 0, "and nothing the relay said is in what the screen gets");
   const bridge = createBridge(app.phone, { loadKinds: async () => [] });
   check((await bridge.request("sendPairing", { id: paired.id })).relayed === true, "the bridge's sendPairing sends it again");
   await app.phone.announce(paired.id);
-  check((await throwsAsync(() => app.phone.sendPairing(paired.id))).indexOf("no pairing response") >= 0, "once announced, nothing is kept to send again");
+  check((await throwsAsync(async () => app.phone.sendPairing(paired.id))).indexOf("no pairing response") >= 0, "once announced, nothing is kept to send again");
 }
 
 // --- 4. the phone opens only what its machine signed, sealed to it ---
@@ -305,9 +327,9 @@ async function pairedApp(transport, m, opts = {}) {
   const work = await newMachine("work");
   const personal = await newMachine("personal");
   const a = newApp(t);
-  const pw = await a.phone.pair({ offerText: offerText(work), label: "Founder phone" });
+  const pw = await a.phone.pair({ offerText: (await offerText(work)), label: "Founder phone" });
   await a.phone.announce(pw.id);
-  const pp = await a.phone.pair({ offerText: offerText(personal), label: "Founder phone" });
+  const pp = await a.phone.pair({ offerText: (await offerText(personal)), label: "Founder phone" });
   await a.phone.announce(pp.id);
   const hs = await a.phone.hordes();
   check(hs.length === 2 && hs.map((h) => h.horde).sort().join(",") === "personal,work", "one app holds two hordes, each its own pairing");
@@ -365,17 +387,17 @@ async function pairedApp(transport, m, opts = {}) {
   check(Object.keys(ans.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "with exactly the members channels/decisions reads, in order");
   await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "Yes.", answerId: id });
   const seqs = [];
-  for (const it of (await t.get(m.mailbox, 0, 256)).value.items) seqs.push((await machineOpens(m, it.text)).header);
-  check(seqs.filter((h) => h.channel === "decisions").map((h) => h.seq).join(",") === "1,2" && seqs.filter((h) => h.channel === "trust").map((h) => h.seq).join(",") === "1", "each channel counts its own sequence, from 1 and up by one", JSON.stringify(seqs.map((h) => h.channel + h.seq)));
-  check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 5, wordingVersion: 1, text: "x", answerId: id }))).indexOf("not in the snapshot") >= 0, "a question not in the snapshot on screen is not answered");
+  for (const it of (await t.get(m.mailbox, 0, 256)).value.items) if (it.text.startsWith('{"header":')) seqs.push((await machineOpens(m, it.text)).header);
+  check(seqs.filter((h) => h.channel === "decisions").map((h) => h.seq).join(",") === "1,2" && seqs.filter((h) => h.channel === "trust").length === 0, "each channel counts its own sequence, from 1 and up by one; the announcement is a vouch item and spends none", JSON.stringify(seqs.map((h) => h.channel + h.seq)));
+  check((await throwsAsync(async () => a.phone.answer(a.paired.id, { number: 5, wordingVersion: 1, text: "x", answerId: id }))).indexOf("not in the snapshot") >= 0, "a question not in the snapshot on screen is not answered");
   // The recovery code: read, never answer.
   const code = a.paired.recoveryCode;
   a.phone.lock(a.paired.id);
-  check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "x", answerId: id }))).indexOf("locked") >= 0, "a locked horde answers nothing");
+  check((await throwsAsync(async () => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "x", answerId: id }))).indexOf("locked") >= 0, "a locked horde answers nothing");
   await a.phone.recover(a.paired.id, code);
   check((await a.phone.refresh(a.paired.id)).questions.length === 1, "the recovery code unlocks to read");
   const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "x", answerId: id }))).indexOf("Read only") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "and refuses to answer, sending nothing");
+  check((await throwsAsync(async () => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "x", answerId: id }))).indexOf("Read only") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "and refuses to answer, sending nothing");
   // A passkey unlock after the recovery code makes the session a signing one again.
   await a.phone.unlock(a.paired.id);
   check((await a.phone.hordes())[0].mode === "passkey", "the passkey unlocks it to answer again");
@@ -423,10 +445,10 @@ async function pairedApp(transport, m, opts = {}) {
   await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?")]);
   check((await a.phone.refresh(a.paired.id)).questions.length === 1, "it can be read");
   const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  const why = await throwsAsync(() => a.phone.answer(a.paired.id, { number: 1, wordingVersion: 1, text: "Yes.", answerId: P.hex(P.randomBytes(16)) }));
+  const why = await throwsAsync(async () => a.phone.answer(a.paired.id, { number: 1, wordingVersion: 1, text: "Yes.", answerId: P.hex(P.randomBytes(16)) }));
   check(why.indexOf("no PRF") >= 0 && why.indexOf("Read only") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "an answer is refused in plain words, and nothing is sent", why);
   const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
-  const un = await throwsAsync(() => b.unlock(a.paired.id));
+  const un = await throwsAsync(async () => b.unlock(a.paired.id));
   check(un.indexOf("no PRF") >= 0 && un.indexOf("recovery code") >= 0, "after a reload the passkey cannot unlock it, and says the recovery code reads it", un);
   await b.recover(a.paired.id, a.paired.recoveryCode);
   check((await b.refresh(a.paired.id)).questions.length === 1 && (await b.hordes())[0].mode === "recovery", "the recovery code reads it");
@@ -475,7 +497,7 @@ async function pairedApp(transport, m, opts = {}) {
   check(whole.body.v === 1 && !("part" in whole.body) && whole.body.text === "To all of it." && Object.keys(whole.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "an answer to the whole question is version 1 with no part, to that machine too: what every machine reads");
   for (const bad of ["B", "ab", "1", " "]) {
     const count = (await t.get(m.mailbox, 0, 256)).value.items.length;
-    const why = await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "x", answerId: P.hex(P.randomBytes(16)), part: bad }));
+    const why = await throwsAsync(async () => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 1, text: "x", answerId: P.hex(P.randomBytes(16)), part: bad }));
     check(why.indexOf("not one of the question's parts") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === count, "a part of '" + bad + "' is refused in this phone's own words, and nothing is sent", why);
   }
   check(before >= 1, "CONTROL: the mailbox held the part's answer before the whole one");
@@ -548,7 +570,7 @@ async function pairedApp(transport, m, opts = {}) {
   check(bad.ok === false && bad.reason.indexOf("answerId") >= 0, "say with an id that is not an answerId is refused in words");
   const act = await bridge.request("act", { number: 1, act: "park", wording: 1, id: P.hex(P.randomBytes(16)) });
   check(act.ok === true && act.local === true, "park is kept on the phone, said to be local");
-  check((await throwsAsync(() => bridge.request("report", {}))).indexOf("not a request") >= 0 && (await throwsAsync(() => bridge.request("__proto__", {}))).indexOf("not a request") >= 0, "a request off the list, a prototype's name included, is refused");
+  check((await throwsAsync(async () => bridge.request("report", {}))).indexOf("not a request") >= 0 && (await throwsAsync(async () => bridge.request("__proto__", {}))).indexOf("not a request") >= 0, "a request off the list, a prototype's name included, is refused");
   await bridge.request("lock", { id: a.paired.id });
   const locked = await bridge.request("list");
   check(locked.state === "unknown" && locked.reason.indexOf("locked") >= 0, "a locked horde's list is unknown, with the reason");
@@ -580,7 +602,7 @@ async function pairedApp(transport, m, opts = {}) {
 {
   // Finding 3: the offer's id and code are checked, and the response is written by a JSON writer.
   const m = await newMachine("work");
-  const good = offerText(m);
+  const good = (await offerText(m));
   const badCode = good.replace(/"code":"[^"]*"/, '"code":"x\\",\\"prf\\":true,\\"label\\":\\"Evil"');
   // The pairing mailbox is made to follow each bad id, so the id's own check is what refuses it.
   const badOffer = good.replace(/"offer":"[^"]*"/, '"offer":{"nested":1}').replace(/"pairMailbox":"[^"]*"/, '"pairMailbox":"work/pair-[object Object]"');
@@ -601,8 +623,9 @@ async function pairedApp(transport, m, opts = {}) {
   await b.unlock(a.paired.id);
   const v = await b.refresh(a.paired.id);
   check(!JSON.stringify(v.anomalies).includes("evil.example") && v.relayDown === true && v.anomalies.some((x) => x.indexOf("The relay could not be read") === 0), "a relay's own words are not shown: a fixed sentence is", JSON.stringify(v.anomalies));
-  check(v.diagnostics.length === 1 && v.diagnostics[0].indexOf("the relay said: ") === 0 && v.diagnostics[0].length <= 216, "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
-  const why = await throwsAsync(() => b.announce(a.paired.id));
+  // Two of them: the unlock's vouch the relay did not take (the horde not heard from yet), and the read.
+  check(v.diagnostics.length === 2 && v.diagnostics.every((d) => d.indexOf("the relay said: ") === 0 && d.length <= 216), "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
+  const why = await throwsAsync(async () => b.announce(a.paired.id));
   check(!why.includes("evil.example") && why.length > 0, "a put the relay refuses is said in fixed words too", why);
 }
 {
@@ -613,7 +636,7 @@ async function pairedApp(transport, m, opts = {}) {
   await sendSnapshot(t, m, [a.phoneKey], [question(4, "Four?", { wordingVersion: 2 })]);
   await a.phone.refresh(a.paired.id);
   const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  const why = await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 7, text: "Yes.", answerId: P.hex(P.randomBytes(16)) }));
+  const why = await throwsAsync(async () => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 7, text: "Yes.", answerId: P.hex(P.randomBytes(16)) }));
   check(why.indexOf("wording") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "an answer to another wording than the one on screen is refused before anything is signed", why);
 }
 
@@ -628,7 +651,7 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   const a = await pairedApp(t, m);
   const none = await a.phone.chat(a.paired.id);
   check(none.items.length === 0 && none.session === "", "CONTROL: before any turn the chat is empty and names no session");
-  check((await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "hello", messageId: P.hex(P.randomBytes(16)) }))).indexOf("no session") >= 0, "with no session heard of, a line is refused before anything is signed");
+  check((await throwsAsync(async () => a.phone.sendLine(a.paired.id, { text: "hello", messageId: P.hex(P.randomBytes(16)) }))).indexOf("no session") >= 0, "with no session heard of, a line is refused before anything is signed");
   await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t1", "user", "first"), turn("t2", "assistant", "second")], { backfill: true }));
   // A long turn in two parts, the second arriving later; and the first envelope served again.
   const p1 = await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t3", "assistant", "long ", { part: 1, parts: 2 })]));
@@ -668,7 +691,7 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   // Other words under an id already sent are refused on the phone (review of 3d837f0, finding 1), and
   // a receipt's words - the words posted - are what the line shows.
   const headNow = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  const edited = await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "carry on, but slower", messageId: mid }));
+  const edited = await throwsAsync(async () => a.phone.sendLine(a.paired.id, { text: "carry on, but slower", messageId: mid }));
   check(edited.indexOf("other words") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headNow, "other words under a line id already sent are refused before anything is signed", edited);
   const tl = P.chatTimeline({ sent: [{ messageId: "f".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "f".repeat(32), status: "accepted", code: "delivered", text: "posted words", session: "s", seq: 3, ts: 2 }] });
   check(tl.length === 1 && tl[0].text === "posted words", "a line shows the words its receipt says were posted, not what the phone kept", JSON.stringify(tl));
@@ -698,10 +721,10 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   await b.recover(a.paired.id, a.paired.recoveryCode);
   await b.refresh(a.paired.id);
   const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  const viaCode = await throwsAsync(() => b.sendLine(a.paired.id, { text: "from the recovery code", messageId: P.hex(P.randomBytes(16)) }));
+  const viaCode = await throwsAsync(async () => b.sendLine(a.paired.id, { text: "from the recovery code", messageId: P.hex(P.randomBytes(16)) }));
   check(viaCode.indexOf("recovery code") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await b.chat(a.paired.id)).items.length > 0, "unlocked by the recovery code, the chat is read and a line is refused in words, nothing put", viaCode);
   b.lock(a.paired.id);
-  check((await throwsAsync(() => b.chat(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no chat");
+  check((await throwsAsync(async () => b.chat(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no chat");
   const dump = JSON.stringify(await a.store.list(""));
   check(dump.indexOf("carry on") < 0 && dump.indexOf("long reply") < 0 && dump.indexOf("on it") < 0, "nothing of the chat is in the store");
 }
@@ -713,7 +736,7 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   await a.phone.refresh(a.paired.id);
   check((await a.phone.chat(a.paired.id)).items.length === 1, "CONTROL: a passkey without PRF reads the chat");
   const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  const why = await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "from a read-only phone", messageId: P.hex(P.randomBytes(16)) }));
+  const why = await throwsAsync(async () => a.phone.sendLine(a.paired.id, { text: "from a read-only phone", messageId: P.hex(P.randomBytes(16)) }));
   check(why.indexOf("gives no PRF") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "and never writes to it: refused in words, nothing put", why);
   const br = createBridge(a.phone, { loadKinds: async () => ({}) });
   await br.request("pick", { id: a.paired.id });
@@ -829,10 +852,10 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   check(r.unread === 5 && r.readIndex === 2 && JSON.stringify((await a.store.get("horde/" + a.paired.id)).progressRead) === JSON.stringify({ id: "e4", n: 4 }), "reading as far as an entry is kept on the device as that entry's id and line number, and what comes after it is unread", JSON.stringify(r.unread));
   r = await a.phone.markProgressRead(a.paired.id, "e2");
   check(r.unread === 5 && r.readIndex === 2 && (await a.store.get("horde/" + a.paired.id)).progressRead.id === "e4", "the place only moves forward: an earlier entry seen again does not move it back");
-  check((await throwsAsync(() => a.phone.markProgressRead(a.paired.id, "never-sent"))).indexOf("not in the progress log") >= 0 && (await a.store.get("horde/" + a.paired.id)).progressRead.id === "e4", "and never to an entry the phone was not sent");
+  check((await throwsAsync(async () => a.phone.markProgressRead(a.paired.id, "never-sent"))).indexOf("not in the progress log") >= 0 && (await a.store.get("horde/" + a.paired.id)).progressRead.id === "e4", "and never to an entry the phone was not sent");
   // A reload: nothing of the log was stored, the mailbox is read again, and he is back at his place.
   const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
-  check((await throwsAsync(() => b.progress(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no progress");
+  check((await throwsAsync(async () => b.progress(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no progress");
   await b.unlock(a.paired.id);
   await b.refresh(a.paired.id);
   await sendProgress(t, m, a.phoneKey, entriesBody(m, [entry("e10", 10)]));
@@ -1075,7 +1098,7 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   const t = R.memoryTransport();
   const m = await newMachine("work");
   const app = newApp(t);
-  const paired = await app.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const paired = await app.phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
   const h0 = (await app.phone.hordes())[0];
   check(h0.announced === false && h0.heard === false, "a phone just paired is neither announced nor heard from", JSON.stringify(h0));
   await app.phone.announce(paired.id);
@@ -1096,7 +1119,7 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   let refuse = true;
   const auth = { create: (a) => base.create(a), get: async (a) => { if (refuse) { const e = new Error("The operation either timed out or was not allowed. See: https://example.invalid/phish"); e.name = "NotAllowedError"; throw e; } return base.get(a); } };
   const app2 = newApp(t2, { authenticator: auth });
-  const p2 = await app2.phone.pair({ offerText: offerText(m2), label: "Founder phone" });
+  const p2 = await app2.phone.pair({ offerText: (await offerText(m2)), label: "Founder phone" });
   let err = null;
   try { await app2.phone.announce(p2.id); } catch (e) { err = e; }
   const words = err ? err.message : "";
@@ -1105,6 +1128,189 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   refuse = false;
   await app2.phone.announce(p2.id);
   check((await app2.phone.hordes())[0].announced === true && (await phoneKeyOf(t2, m2)) !== null, "announced again once the passkey signs, it goes");
+}
+
+// --- THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14): one passkey prompt, on the unlock ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const base = softAuthenticator({ origin, prf: true });
+  const asked = [];
+  const auth = { create: (a) => base.create(a), get: async (a) => { asked.push(a.challenge); return base.get(a); } };
+  const app = newApp(t, { authenticator: auth });
+  const paired = await app.phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
+  const e0 = await app.store.get("horde/" + paired.id);
+  const want = await P.vouchChallenge("work", P.unb64u(e0.phonePublic));
+  // Finish pairing: ONE assertion, over the vouch's own challenge, put as the phone vouch item.
+  await app.phone.announce(paired.id);
+  const items = (await t.get(m.mailbox, 0, 256)).value.items;
+  check(asked.length === 1 && P.equalBytes(asked[0], want), "Finish pairing asks the passkey ONCE, over the vouch's challenge", String(asked.length));
+  check(items.length === 1 && items[0].key === "vouch/" + e0.deviceKeyId + "/" + e0.phoneKeyId, "and puts one item, under one key per passkey and phone key", JSON.stringify(items.map((i) => i.key)));
+  const v = JSON.parse(items[0].text);
+  check(items[0].text === P.phoneVouchText({ horde: "work", by: e0.deviceKeyId, agreePublic: P.unb64u(e0.phonePublic), vouch: { authenticatorData: P.unb64u(v.authenticatorData), clientDataJSON: P.unb64u(v.clientDataJSON), signature: P.unb64u(v.signature) } }) &&
+    Object.keys(v).join(",") === "v,kind,horde,by,agreePublic,authenticatorData,clientDataJSON,signature", "the item is the vouch in relay/Trust.ps1's canonical form, the members in its order", Object.keys(v).join(","));
+  const cd = JSON.parse(P.fromUtf8(P.unb64u(v.clientDataJSON)));
+  check(cd.challenge === P.b64u(want) && v.signature.length > 0, "SIGNED: its clientDataJSON carries the vouch challenge, and it has a signature");
+
+  // The unlock while the machine has not answered (not heard): ONE prompt that unlocks AND vouches.
+  const t2 = R.memoryTransport();
+  const m2 = await newMachine("work");
+  const asked2 = [];
+  const base2 = softAuthenticator({ origin, prf: true });
+  const app2 = newApp(t2, { authenticator: { create: (a) => base2.create(a), get: async (a) => { asked2.push(a); return base2.get(a); } } });
+  const p2 = await app2.phone.pair({ offerText: (await offerText(m2)), label: "Founder phone" });
+  const e2 = await app2.store.get("horde/" + p2.id);
+  app2.phone.lock(p2.id);
+  check(e2.wraps.prf !== undefined, "CONTROL: a passkey that gives PRF at creation wraps the key under it at once");
+  const u = await app2.phone.unlock(p2.id);
+  const items2 = (await t2.get(m2.mailbox, 0, 256)).value.items;
+  check(asked2.length === 1 && asked2[0].prfInput && P.equalBytes(asked2[0].challenge, await P.vouchChallenge("work", P.unb64u(e2.phonePublic))), "NOT HEARD, the unlock is one prompt, with PRF, over the vouch's challenge", String(asked2.length));
+  check(u.unlocked && u.announced && items2.length === 1 && items2[0].text.startsWith('{"v":1,"kind":"horde-relay-phone-vouch",'), "and that one prompt unlocks and puts the vouch", JSON.stringify(u));
+  // Not confirmed at the machine: nothing comes back; the phone does nothing more by itself.
+  await app2.phone.refresh(p2.id);
+  check(asked2.length === 1 && (await t2.get(m2.mailbox, 0, 256)).value.items.length === 1, "a refresh asks no passkey and puts nothing: the next try is the next unlock, never a loop");
+  app2.phone.lock(p2.id);
+  await app2.phone.unlock(p2.id);
+  check(asked2.length === 2 && (await t2.get(m2.mailbox, 0, 256)).value.items.length === 1, "the next unlock tries again - one prompt - and the same key stores once", String((await t2.get(m2.mailbox, 0, 256)).value.items.length));
+  // Heard: a snapshot drawn, an unlock puts nothing and asks over a challenge of its own.
+  await sendSnapshot(t2, m2, [P.unb64u(e2.phonePublic)], [question(1, "One?")]);
+  await app2.phone.refresh(p2.id);
+  app2.phone.lock(p2.id);
+  const head = (await t2.get(m2.mailbox, 0, 256)).value.items.length;
+  await app2.phone.unlock(p2.id);
+  check(asked2.length === 3 && !P.equalBytes(asked2[2].challenge, await P.vouchChallenge("work", P.unb64u(e2.phonePublic))) && (await t2.get(m2.mailbox, 0, 256)).value.items.length === head, "HEARD, an unlock is one prompt and puts no vouch");
+  // A relay that refuses the put: the unlock still stands, and what it said is diagnostics only.
+  const t3 = R.memoryTransport();
+  const m3 = await newMachine("work");
+  const app3 = newApp(t3);
+  const p3 = await app3.phone.pair({ offerText: (await offerText(m3)), label: "Founder phone" });
+  app3.phone.lock(p3.id);
+  const refusing = { ...t3, put: async () => ({ state: "unknown", value: null, reason: "down" }) };
+  const b3 = createPhone({ store: app3.store, authenticator: app3.auth, relay: R.createRelayClient(refusing), origin });
+  const u3 = await b3.unlock(p3.id);
+  check(u3.unlocked && !u3.announced, "a vouch the relay does not take leaves the unlock standing, the horde not announced", JSON.stringify(u3));
+  // A recovery session never announces.
+  const app4 = newApp(R.memoryTransport());
+  const m4 = await newMachine("work");
+  const p4 = await app4.phone.pair({ offerText: (await offerText(m4)), label: "Founder phone" });
+  app4.phone.lock(p4.id);
+  await app4.phone.recover(p4.id, p4.recoveryCode);
+  check((await throwsAsync(async () => app4.phone.announce(p4.id))).indexOf("reads only") >= 0, "a recovery session cannot announce");
+}
+
+// --- ADD THIS PHONE: the new phone's request, and the machine's sealed answer ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const app = newApp(t);
+  const j = await app.phone.join({ horde: "work", machine: m.keyId, label: "Pixel 9", agent: "Safari \"on\" iPhone" });
+  const items = (await t.get(m.mailbox, 0, 16)).value.items;
+  const q = items.length === 1 ? JSON.parse(items[0].text) : {};
+  check(items.length === 1 && items[0].key === "join/" + j.request && Object.keys(q).join(",") === "v,kind,request,horde,machine,label,agent,requestKey,country,requestedAt,expiresAt", "a request to join is one item in the machine's mailbox under join/<request>, its members in relay/Join.ps1's order", items.length ? items[0].key : "");
+  check(q.agent === "Safari on iPhone" && q.label === "Pixel 9" && /^[A-Za-z0-9_-]{87}$/.test(q.requestKey) && q.expiresAt - q.requestedAt === 600000, "its browser words lose quotes; it carries a request key and lives 10 minutes", items.length ? items[0].text : "");
+  check((await app.phone.joinOffer(j.request)).offerText === "", "before the machine answers there is no offer");
+  // The machine's answer, as relay/Join.ps1 seals it: the offer's text to the request key.
+  const oText = (await offerText(m));
+  const reqPoint = P.unb64u(q.requestKey);
+  const kid = await P.keyId(reqPoint);
+  const seal = async (to, request) => { const box = await P.hpkeSeal(to, P.utf8("horde-relay/join/v1 offer-key"), P.utf8("horde-relay/join/v1 offer aad\nwork\n" + request + "\n" + kid), P.utf8(oText)); return '{"v":1,"kind":"horde-relay-join-offer","request":"' + request + '","requestKeyId":"' + kid + '","enc":"' + P.b64u(box.enc) + '","ct":"' + P.b64u(box.sealed) + '"}'; };
+  const other = await newMachine("work");
+  await t.put("work/jr-" + j.request, "offer/x", await seal(other.agreePublic, j.request));
+  check((await app.phone.joinOffer(j.request)).offerText === "", "an answer sealed to another key does not open");
+  // A RELAY-MADE OFFER: sealed rightly to the request key, naming the machine asked, its grant signed by the
+  // relay's own key - the relay cannot sign as the machine, so the phone does not believe it is the PC.
+  const relayKey = await newMachine("work");
+  const fid = P.hex(P.randomBytes(16));
+  const fexp = Date.now() + 300000;
+  const fgrant = P.b64u(await machineSign(relayKey, P.accountGrantBytes({ horde: "work", offer: fid, machine: m.keyId, expiresAt: fexp, label: "build-box" })));
+  const fakeText = await offerText(m, { id: fid, expiresAt: fexp, grant: fgrant });
+  const fbox = await P.hpkeSeal(reqPoint, P.utf8("horde-relay/join/v1 offer-key"), P.utf8("horde-relay/join/v1 offer aad\nwork\n" + j.request + "\n" + kid), P.utf8(fakeText));
+  await t.put("work/jr-" + j.request, "offer/fake", '{"v":1,"kind":"horde-relay-join-offer","request":"' + j.request + '","requestKeyId":"' + kid + '","enc":"' + P.b64u(fbox.enc) + '","ct":"' + P.b64u(fbox.sealed) + '"}');
+  check((await app.phone.joinOffer(j.request)).offerText === "", "A RELAY-MADE OFFER under the machine's name, its grant not the machine's, is refused: the phone does not believe it is the PC");
+  await t.put("work/jr-" + j.request, "offer/" + j.request, await seal(reqPoint, j.request));
+  const got = await app.phone.joinOffer(j.request);
+  check(got.offerText === oText, "the machine's answer opens with the request key: the offer");
+  const p = await app.phone.pair({ offerText: got.offerText, label: "Pixel 9", joined: true });
+  check(/^[0-9]{4}-[0-9]{4}-[0-9]{4}$/.test(p.fingerprint), "and pairing with it shows the number, as a scanned offer does");
+  // Another machine's offer, sealed rightly, is not the machine this phone asked.
+  const t2 = R.memoryTransport();
+  const app2 = newApp(t2);
+  const j2 = await app2.phone.join({ horde: "work", machine: m.keyId, label: "Pixel 9" });
+  const q2 = JSON.parse((await t2.get(m.mailbox, 0, 16)).value.items[0].text);
+  const box = await P.hpkeSeal(P.unb64u(q2.requestKey), P.utf8("horde-relay/join/v1 offer-key"), P.utf8("horde-relay/join/v1 offer aad\nwork\n" + j2.request + "\n" + (await P.keyId(P.unb64u(q2.requestKey)))), P.utf8((await offerText(other))));
+  await t2.put("work/jr-" + j2.request, "offer/" + j2.request, '{"v":1,"kind":"horde-relay-join-offer","request":"' + j2.request + '","requestKeyId":"' + (await P.keyId(P.unb64u(q2.requestKey))) + '","enc":"' + P.b64u(box.enc) + '","ct":"' + P.b64u(box.sealed) + '"}');
+  check((await app2.phone.joinOffer(j2.request)).offerText === "", "an offer of another machine than the one asked is not taken");
+}
+
+// --- A NEW PHONE ASKS TO JOIN, on a trusted phone: the number compared here, only the hash signed ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const challenge = P.randomBytes(32);
+  const cred = P.randomBytes(32);
+  const pub = (await subtle.exportKey("raw", (await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])).publicKey));
+  const request = P.hex(P.randomBytes(16));
+  const device = P.hex(P.randomBytes(16));
+  const nowMs = Date.now();
+  const text = '{"v":1,"kind":"horde-relay-join-transcript","request":"' + request + '","horde":"work","machine":"' + m.keyId + '","offer":"' + P.hex(P.randomBytes(16)) + '","challenge":"' + P.b64u(challenge) +
+    '","device":"' + device + '","credentialId":"' + P.b64u(cred) + '","publicKey":"' + P.b64u(new Uint8Array(pub)) + '","rpId":"relay.example.test","label":"Pixel 9","agent":"Safari on iPhone","country":"IL","requestedAt":' + nowMs + ',"expiresAt":' + (nowMs + 600000) + "}";
+  const e = await machineEnvelope(m, { kind: "request", channel: "join", body: P.utf8(text), phones: [a.phoneKey] });
+  await t.put(m.horde + "/phone", e.key, e.text);
+  await a.phone.refresh(a.paired.id);
+  const list = await a.phone.joinRequests(a.paired.id);
+  check(list.length === 1 && list[0].label === "Pixel 9" && list[0].country === "IL" && JSON.stringify(list).indexOf("challenge") < 0, "the trusted phone lists the request - who, browser, country, time - and no means to the number", JSON.stringify(list));
+  const number = await P.pairingFingerprint({ challenge, publicPoint: new Uint8Array(pub), credentialId: cred, rpId: "relay.example.test" });
+  const head = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const wrong = number === "0000-0000-0000" ? "1111-1111-1111" : "0000-0000-0000";
+  const why = await throwsAsync(async () => a.phone.approveJoin(a.paired.id, { request, number: wrong }));
+  check(why.indexOf("does not match") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === head, "A WRONG NUMBER is refused here: nothing is signed, nothing sent", why);
+  await a.phone.approveJoin(a.paired.id, { request, number: number.replace(/-/g, " ") });
+  const items = (await t.get(m.mailbox, 0, 256)).value.items;
+  const ap = await machineOpens(m, items[items.length - 1].text);
+  check(ap.header.channel === "join" && ap.header.kind === "approve" && ap.sig.alg === "webauthn.get", "the right number, spaced as typed, sends an approval on channel join, signed by the passkey");
+  check(Object.keys(ap.body).join(",") === "v,request,device,transcript" && ap.body.request === request && ap.body.device === device && ap.body.transcript === P.b64u(await P.sha256(P.utf8("horde-relay/join/v1 transcript\n" + text))), "carrying only the request, the device and the transcript's hash", JSON.stringify(ap.body));
+  check(JSON.stringify(ap.body).indexOf(number.replace(/-/g, "")) < 0, "never the number");
+  await a.phone.rejectJoin(a.paired.id, { request });
+  const rj = await machineOpens(m, (await t.get(m.mailbox, 0, 256)).value.items.slice(-1)[0].text);
+  check(rj.header.kind === "reject" && Object.keys(rj.body).join(",") === "v,request", "a reject is signed the same way, naming only the request");
+  const closed = await machineEnvelope(m, { kind: "closed", channel: "join", body: P.utf8('{"v":1,"request":"' + request + '","outcome":"rejected"}'), phones: [a.phoneKey] });
+  await t.put(m.horde + "/phone", closed.key, closed.text);
+  await a.phone.refresh(a.paired.id);
+  check((await a.phone.joinRequests(a.paired.id)).length === 0, "once the machine says it ended, it is listed no more");
+  a.phone.lock(a.paired.id);
+  await a.phone.recover(a.paired.id, a.paired.recoveryCode);
+  check((await throwsAsync(async () => a.phone.approveJoin(a.paired.id, { request, number }))).indexOf("recovery code") >= 0, "a recovery session approves nothing");
+}
+
+// --- the machine's confirmed record: the pairing screen's Finish pairing appears only on the machine's signed word ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const app = newApp(t);
+  const oText = (await offerText(m));
+  const paired = await app.phone.pair({ offerText: oText, label: "Founder phone" });
+  const e = await app.store.get("horde/" + paired.id);
+  const offer = JSON.parse(oText).offer;
+  check(e.deviceId === P.hex((await P.sha256(P.unb64u(e.credentialId))).slice(0, 16)) && e.offer === offer && e.pairMailbox === "work/pair-" + offer, "the entry keeps the offer, its pairing mailbox and the device id the machine files the passkey under");
+  check((await app.phone.pairConfirmed(paired.id)).confirmed === false, "before the machine's word, not confirmed");
+  const record = async ({ signer = m, device = e.deviceId, forOffer = offer, at = Date.now() } = {}) => {
+    const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, signer.sign.privateKey, P.confirmedBytes({ horde: "work", offer: forOffer, device, confirmedAt: at })));
+    return '{"v":1,"kind":"horde-relay-pairing-confirmed","horde":"work","offer":"' + forOffer + '","device":"' + device + '","confirmedAt":' + at + ',"sig":"' + P.b64u(sig) + '"}';
+  };
+  const stranger = await newMachine("work");
+  // WebCrypto's ECDSA may give a high-S signature, which the phone refuses (one message, one signature).
+  const lowS = async (opts) => { for (let i = 0; i < 16; i++) { const r = await record(opts); const s = P.unb64u(JSON.parse(r).sig).slice(32); if (s[0] < 0x7f) return r; } return null; };
+  await t.put("work/pair-" + offer, "confirmed/" + offer, await lowS({ signer: stranger }));
+  check((await app.phone.pairConfirmed(paired.id)).confirmed === false, "a confirmed record signed by another key is not the machine's word");
+  const t2 = R.memoryTransport();
+  const b = createPhone({ store: app.store, authenticator: app.auth, relay: R.createRelayClient(t2), origin });
+  await t2.put("work/pair-" + offer, "confirmed/" + offer, await lowS({ device: "0".repeat(32) }));
+  check((await b.pairConfirmed(paired.id)).confirmed === false, "nor one naming another device");
+  const t3 = R.memoryTransport();
+  const c = createPhone({ store: app.store, authenticator: app.auth, relay: R.createRelayClient(t3), origin });
+  await t3.put("work/pair-" + offer, "confirmed/" + offer, await lowS());
+  check((await c.pairConfirmed(paired.id)).confirmed === true, "the machine's own signed word for this offer and device is");
 }
 
 // --- the phone's mailbox is trimmed by its senders: a hole there is not an anomaly ---
@@ -1221,7 +1427,7 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   const m1 = await newMachine("work");
   const m2 = await newMachine("work");
   const a = await pairedApp(t, m1);
-  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  const p2 = await a.phone.pair({ offerText: (await offerText(m2, { label: "home-box" })), label: "Founder phone" });
   await a.phone.announce(p2.id);
   const k2 = await phoneKeyOf(t, m2);
   await a.phone.refresh(a.paired.id);
@@ -1325,7 +1531,7 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   c = await a.phone.cards(a.paired.id);
   check(c.machines.every((x) => x.entry !== p2.id), "a locked pairing's cards are not shown");
   a.phone.lock(a.paired.id);
-  check((await throwsAsync(() => a.phone.cards(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no cards");
+  check((await throwsAsync(async () => a.phone.cards(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no cards");
 }
 
 // --- 10e2. WHY THERE ARE NO CARDS: the one line the Progress tab's fallback shows (cards-why.js) ---
@@ -1352,7 +1558,7 @@ async function sendCards(t, m, phone, body) { const e = await machineEnvelope(m,
   check(unp.machines.length === 0 && unp.unpaired === true && unp.refused === "" && CW.cardsFallbackLine(unp) === "This phone is not paired to the PC that sends cards.", "CARDS FROM A PC THIS PHONE IS NOT PAIRED TO: the fallback says so", JSON.stringify(unp));
   // A PC this phone IS paired to, its pairing locked: its cards are not opened, and it is no stranger.
   const m2 = await newMachine("work");
-  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  const p2 = await a.phone.pair({ offerText: (await offerText(m2, { label: "home-box" })), label: "Founder phone" });
   await a.phone.announce(p2.id);
   const k2 = await phoneKeyOf(t, m2);
   a.phone.lock(p2.id);
@@ -1461,7 +1667,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const m1 = await newMachine("work");
   const m2 = await newMachine("work");
   const a = await pairedApp(t, m1);
-  const p2 = await a.phone.pair({ offerText: offerText(m2, { label: "home-box" }), label: "Founder phone" });
+  const p2 = await a.phone.pair({ offerText: (await offerText(m2, { label: "home-box" })), label: "Founder phone" });
   await a.phone.announce(p2.id);
   const k2 = await phoneKeyOf(t, m2);
   await a.phone.refresh(a.paired.id);
@@ -1505,7 +1711,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const items2 = (await t.get(m2.mailbox, 0, 256)).value.items;
   const got2 = await machineOpens(m2, items2[items2.length - 1].text);
   check(!!viaSibling.key && got2.body.machine === m2.keyId && got2.body.lane === "thrall" && got2.body.on === false, "a card of the horde's other machine sends its switch to THAT machine, sealed to it", JSON.stringify(got2.body));
-  check((await throwsAsync(() => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "bad lane!", on: true }))).indexOf("lane") >= 0, "a lane that is not a card's lane is never sent");
+  check((await throwsAsync(async () => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "bad lane!", on: true }))).indexOf("lane") >= 0, "a lane that is not a card's lane is never sent");
   check((() => { try { P.followBody({ setId: "x", machine: m1.keyId, lane: "E", on: true }); return false; } catch (x) { return true; } })() && (() => { try { P.followBody({ setId: P.hex(P.randomBytes(16)), machine: m1.keyId, lane: "E", on: "yes" }); return false; } catch (x) { return true; } })(), "a switch body with a setId that is no id, or an on that is not true or false, is never made");
   // Through the bridge.
   const br = createBridge(a.phone, { loadKinds: async () => ({}) });
@@ -1519,9 +1725,9 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   // A session that cannot sign sends no switch.
   a.phone.lock(a.paired.id);
   await a.phone.recover(a.paired.id, a.paired.recoveryCode);
-  check((await throwsAsync(() => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "E", on: false }))).indexOf("recovery code") >= 0, "unlocked with the recovery code, a switch is refused in words: only the passkey signs one");
+  check((await throwsAsync(async () => a.phone.follow(a.paired.id, { entry: a.paired.id, lane: "E", on: false }))).indexOf("recovery code") >= 0, "unlocked with the recovery code, a switch is refused in words: only the passkey signs one");
   a.phone.lock(a.paired.id);
-  check((await throwsAsync(() => a.phone.notices(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no notices");
+  check((await throwsAsync(async () => a.phone.notices(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no notices");
 }
 {
   // THE VIEW (notices-view.js), with a stand-in document whose clicks bubble as a browser's do.
@@ -1585,7 +1791,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const auth = softAuthenticator({ origin, prf: true });
   const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
   let phone = make();
-  const paired = await phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const paired = await phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
   await phone.announce(paired.id);
   const phoneKey = await phoneKeyOf(t, m);
   const from = (await store.get("horde/" + paired.id)).deviceKeyId;
@@ -1735,7 +1941,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const auth = { create: (o) => soft.create(o), get: async (o) => { if (!o.prfInput) prompts += 1; if (refuse.next > 0) { refuse.next -= 1; const x = new Error("The operation either timed out or was not allowed."); x.name = "NotAllowedError"; throw x; } return soft.get(o); } };
   const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
   const phone = make();
-  const paired = await phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const paired = await phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
   await phone.announce(paired.id);
   const phoneKey = await phoneKeyOf(t, m);
   const from = (await mem.get("horde/" + paired.id)).deviceKeyId;
@@ -1751,7 +1957,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   // M1b, ATTACKED: a prompt that never signs spends no seq.
   const before = await seqNow();
   refuse.next = 1;
-  const why = await throwsAsync(() => phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Never signed.", answerId: P.hex(P.randomBytes(16)) }));
+  const why = await throwsAsync(async () => phone.answer(paired.id, { number: 1, wordingVersion: 1, text: "Never signed.", answerId: P.hex(P.randomBytes(16)) }));
   const after = await seqNow();
   await phone.answer(paired.id, { number: 3, wordingVersion: 1, text: "Signed.", answerId: P.hex(P.randomBytes(16)) });
   check(why !== "" && after === before && (await lastAnswer()).header.seq === before + 1, "A PROMPT THAT NEVER SIGNS SPENDS NO SEQ: the next answer goes under the very next number, so a cancelled prompt leaves no hole", JSON.stringify({ before, after, sent: (await lastAnswer()).header.seq }));
@@ -1882,7 +2088,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const filler = []; for (let i = 0; i < 200; i++) filler.push({ answerId: P.hex(P.randomBytes(16)), number: 1000 + i, part: "", wordingVersion: 1, snapshot: "x", sealed: { enc: "", box: "" }, seqs: [1], envelope: { key: "k" + i, text: "t" }, signedAt: 1, sentAt: clock.now, lastSentAt: clock.now, lastResendAt: 0 });
   await mem.put("outbox/" + paired.id, { v: 1, items: filler });
   const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
-  const full = await throwsAsync(() => phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "One too many.", answerId: P.hex(P.randomBytes(16)) }));
+  const full = await throwsAsync(async () => phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "One too many.", answerId: P.hex(P.randomBytes(16)) }));
   check(full.indexOf("Not sent") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await kept()).length === 200, "A FULL OUTBOX REFUSES THE NEW ANSWER, saying why, and drops none of the 200 still waiting", full);
 }
 
