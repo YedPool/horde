@@ -2033,6 +2033,19 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
     return subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pub, P.unb64u(o.sig.value), P.sessionSignedBytes(o.sig.vouchId, P.headerText(e.header), P.recipientsText(e.recipients), e.ct));
   };
 
+  // NOT HEARD: an unlock before the machine's first snapshot is the one that announces (THE ANNOUNCEMENT IS
+  // NO BUTTON), still ONE prompt, and makes no session key: with no receipt nothing would let it sign.
+  phone.lock(paired.id);
+  asked.length = 0;
+  madeKeys.length = 0;
+  await phone.unlock(paired.id);
+  const unheard = await info();
+  check(asked.length === 1 && unheard.open === false && madeKeys.length === 0, "AN UNLOCK BEFORE THE MACHINE WAS HEARD is one prompt, announces, and makes no session key", JSON.stringify({ prompts: asked.length, open: unheard.open, keys: madeKeys.length }));
+  await sendSnapshot(t, m, [phoneKey], qs, { answers: 2, receipts: [] });
+  await phone.refresh(paired.id);
+  check((await phone.hordes()).find((h) => h.id === paired.id).heard === true, "CONTROL: then the machine is heard, and the unlocks below are the session's");
+  seen = (await t.get(m.mailbox, 0, 1024)).value.items.length;
+
   // UNLOCK: ONE assertion, over the vouch for a new session key.
   phone.lock(paired.id);
   asked.length = 0;
