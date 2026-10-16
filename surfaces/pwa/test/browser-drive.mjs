@@ -129,6 +129,20 @@ async function load(url) {
   await cdp("Page.navigate", { url });
   await loaded;
 }
+// Another tab in front of the app's for ms, then the app's again: Chrome's own visibility, not a stand-in.
+// during: the page's visibilityState while the other tab was in front.
+async function awayTab(ms) {
+  const base = "http://127.0.0.1:" + debugPort + "/json/";
+  const other = await (await fetch(base + "new?about:blank", { method: "PUT" })).json();
+  await fetch(base + "activate/" + other.id);
+  await sleep(Math.min(ms, 300));
+  const during = await evaluate("document.visibilityState");
+  await sleep(Math.max(0, ms - 300));
+  await fetch(base + "activate/" + page.id);
+  await fetch(base + "close/" + other.id);
+  await sleep(200);
+  return { during };
+}
 // The answer field of the question whose row holds the words given (the first question's without).
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
@@ -485,6 +499,15 @@ const commands = {
   async workerVersion() {
     return await evaluate("new Promise((res) => { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(e.data.version); navigator.serviceWorker.controller.postMessage({ ask: 'version' }, [ch.port2]); setTimeout(() => res(''), 3000); })");
   },
+  // THE PAGE'S CLOCK MOVED (test-pwa-browser.ps1 section 15): Date.now answers ms ahead of the real clock,
+  // so the app's checks on return of how long it was hidden see minutes that were never waited. 0 puts the
+  // real clock back. The page's own time of when it was hidden was taken by the real clock.
+  async clock(c) {
+    const ms = Number(c.ms) || 0;
+    return await evaluate("(() => { if (!window.__realNow) window.__realNow = Date.now.bind(Date); const off = " + ms + "; Date.now = off ? () => window.__realNow() + off : window.__realNow; return off; })()");
+  },
+  // config.json as the site serves it now, fetched by the page past every cache.
+  async servedConfig() { return await evaluate("fetch('config.json', { cache: 'no-store' }).then((r) => r.json())"); },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
     const was = await evaluate(notice);
@@ -530,6 +553,27 @@ const commands = {
   async caches() { return await evaluate("(async () => { const out = {}; for (const n of await caches.keys()) { const c = await caches.open(n); out[n] = (await c.keys()).map((r) => new URL(r.url).pathname); } return out; })()"); },
   async serve(c) { serving = c.on === true; if (!serving) for (const s of sockets) s.destroy(); return { serving }; },
   async credentials() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.map((x) => ({ rpId: x.rpId, signCount: x.signCount, resident: x.isResidentCredential })); },
+  // THE PASSKEY PROMPTS, COUNTED (the unlocked session, test-pwa-browser.ps1 section 14): the virtual
+  // authenticator's signature counter, summed over its credentials, goes up by one with every assertion
+  // Chrome's WebAuthn makes - each one a prompt on a real phone.
+  async assertions() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.reduce((n, x) => n + x.signCount, 0); },
+  // The page's unlocked sessions, as the bridge answers them (bridge.js, sessions), and the Account
+  // screen's line and the notice as the page draws them.
+  async sessions() { return await evaluate("(async () => ({ list: await window.HordeBridge.request('sessions'), account: document.getElementById('sessionWords').innerText, notice: " + notice + " }))()"); },
+  // WHAT THE BROWSER GIVES when the app is left (the brief: measure it, and say it). Another tab brought to
+  // the front is what Chrome has for another app or the screen going off; its lifecycle's frozen state is
+  // what it does to a page in the background for long. Each event the page hears is recorded.
+  async visibilityProbe() {
+    await evaluate("(() => { window.__heard = []; document.addEventListener('visibilitychange', () => window.__heard.push('visibilitychange:' + document.visibilityState)); window.addEventListener('pagehide', (e) => window.__heard.push('pagehide:' + e.persisted)); document.addEventListener('freeze', () => window.__heard.push('freeze')); document.addEventListener('resume', () => window.__heard.push('resume')); })()");
+    let frozen = "";
+    try { await cdp("Page.setWebLifecycleState", { state: "frozen" }); await sleep(200); await cdp("Page.setWebLifecycleState", { state: "active" }); } catch (e) { frozen = e.message; }
+    // Frozen leaves the page hidden (measured 2026-10-14: a visibilitychange to hidden before freeze, and
+    // it stays hidden after resume), so the other tab comes second: its return brings the page to the front.
+    const away = await awayTab(800);
+    return { during: away.during, after: await evaluate("({ state: document.visibilityState, heard: window.__heard.slice() })"), frozenRefused: frozen };
+  },
+  // Away for ms by another tab in front (visibilityProbe), then back: what the page said while away.
+  async away(c) { const a = await awayTab(Number(c.ms) || 1000); return { during: a.during, state: await evaluate("document.visibilityState") }; },
   async problems() { return problems.slice(); },
   // THE CHAT: its tab, its log, and its composer driven by real keys and a real touch.
   async chatTab(c) {

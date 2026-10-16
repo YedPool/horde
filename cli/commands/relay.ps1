@@ -115,6 +115,9 @@ $HordeCommand = @{
             if ($rev.state -cne "known") { Write-Host ("note: " + $rev.reason + "; this deploy is recorded with no commit, so the supervisor does not deploy the phone page by itself until a deploy records one") }
             elseif (-not $rev.value.clean) { Write-Host "note: this checkout has changes of its own; the deploy is recorded as not clean, so the supervisor does not deploy the phone page by itself until a deploy from a clean checkout" }
             $d = Invoke-HordeRelayDeploy -Relay $Relay -Say { param($Line) Write-Host $Line } -Revision $(if ($rev.state -ceq "known") { $rev.value } else { $null }) -AlsoRecordIn $also
+            # Marked live (relays/Port.ps1, DEPLOYING): it went out and is broken, so never "not deployed".
+            $live = $d.PSObject.Properties["live"]
+            if ($d.state -cne "known" -and $null -ne $live -and $live.Value -eq $true) { throw ("the deploy needs action now: " + $d.reason) }
             if ($d.state -cne "known") { throw ("the relay was not deployed: " + $d.reason) }
             Write-Output ("deployed relay " + $d.value.relay + ": it answers at " + $d.value.origin)
             return

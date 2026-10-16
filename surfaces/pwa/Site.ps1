@@ -26,10 +26,15 @@
 #   app/sw.js       its VERSION (a hash of every other file of the shell) and its SHELL (their paths)
 #                   are written into the two placeholder lines it carries, so a new deployment is a new
 #                   worker and a new cache.
-# and three are made: app/config.json, { schemaVersion, version, transport, relayOrigin, lockAfterHiddenSeconds }
-# - which relay transport the app uses (surfaces/pwa/page/relay-client.js, transportFromConfig), where
-# the relay is, and how long the app may stay hidden before it locks every horde (300 s, the founder's
-# five minutes, decided 2026-10-10; a suite builds with less to see it happen) - and app/icon-192.png and app/icon-512.png, the icons an installable app needs at those sizes
+# and three are made: app/config.json, { schemaVersion, version, transport, relayOrigin, lockAfterHiddenSeconds,
+# sessionAwaySeconds } - which relay transport the app uses (surfaces/pwa/page/relay-client.js,
+# transportFromConfig), where the relay is, how long the app may stay hidden before it locks every horde
+# (600 s; it was the founder's five minutes, 2026-10-10, until his Q75 (c), 2026-10-15: keep the session
+# through a switch-away of up to 10 minutes - and a lock drops the session's key, so the lock may never come
+# before the away time; a suite builds with less to see it happen), and how long it may be away before its
+# unlocked session ends (600 s, the design note's ten minutes, 2026-10-14: surfaces/pwa/page/phone-core.js,
+# THE UNLOCKED SESSION; the PC cannot see the phone's screen, so this one is the phone's alone). A lock time
+# shorter than the away time is refused: the away rule could never be met - and app/icon-192.png and app/icon-512.png, the icons an installable app needs at those sizes
 # (Chrome's install criteria), drawn here from the shape of page/icon.svg (New-HordePwaIconPng). They
 # are made, not committed: every file in the repository is ASCII text (CONTRIBUTING 13), and
 # tools/HostNames.ps1 excuses only pinned program libraries from being read as text.
@@ -56,6 +61,7 @@ $script:HordePwaSiteFiles = [ordered]@{
     "app/app-update.js" = "surfaces/pwa/page/app-update.js"
     "app/read-banner.js" = "surfaces/pwa/page/read-banner.js"
     "app/chat-scroll.js" = "surfaces/pwa/page/chat-scroll.js"
+    "app/session-view.js" = "surfaces/pwa/page/session-view.js"
     "app/keywrap.js" = "surfaces/pwa/page/keywrap.js"
     "app/relay-client.js" = "surfaces/pwa/page/relay-client.js"
     "app/account-client.js" = "surfaces/pwa/page/account-client.js"
@@ -178,8 +184,12 @@ function New-HordePwaSite {
     # Build the site into -Out. Known { out; version; files; shell } or unknown with the reason; nothing
     # is written on a refusal found before writing.
     param([Parameter(Mandatory = $true)][string]$Out, [Parameter(Mandatory = $true)][string]$Transport, [AllowEmptyString()][string]$RelayOrigin = "",
-        [int]$LockAfterHiddenSeconds = 300)
+        [int]$LockAfterHiddenSeconds = 600, [int]$SessionAwaySeconds = 600)
     if ($LockAfterHiddenSeconds -lt 1 -or $LockAfterHiddenSeconds -gt 86400) { return (New-HordeUnknown -Reason ("the app locks after 1 to 86400 seconds hidden, not " + $LockAfterHiddenSeconds)) }
+    if ($SessionAwaySeconds -lt 1 -or $SessionAwaySeconds -gt 86400) { return (New-HordeUnknown -Reason ("the unlocked session ends after 1 to 86400 seconds away, not " + $SessionAwaySeconds)) }
+    # The founder's Q75 (c): the session is kept through a switch-away of up to the away time, and a lock
+    # drops its key - so a lock sooner than that would end every session first.
+    if ($LockAfterHiddenSeconds -lt $SessionAwaySeconds) { return (New-HordeUnknown -Reason ("the app may not lock (" + $LockAfterHiddenSeconds + " s hidden) before its unlocked session ends (" + $SessionAwaySeconds + " s away): a lock drops the session, so the away time could never be kept")) }
     if ($script:HordePwaTransports -cnotcontains $Transport) { return (New-HordeUnknown -Reason ("'" + $Transport + "' is not a relay transport the app knows: " + ($script:HordePwaTransports -join ", "))) }
     $why = Test-HordePwaRelayOrigin -Origin $RelayOrigin
     if ($why -cne "") { return (New-HordeUnknown -Reason $why) }
@@ -202,7 +212,7 @@ function New-HordePwaSite {
     if ((Get-HordePwaPlaceholderCount -Text $page -Find $script:HordePwaCspPlaceholder) -ne 1) { return (New-HordeUnknown -Reason ("app/index.html must carry " + $script:HordePwaCspPlaceholder + " exactly once, in its policy line")) }
     $connect = $script:HordePwaCspPlaceholder + $(if ($RelayOrigin -cne "") { " " + $RelayOrigin } else { "" })
     $bytes["app/index.html"] = $ascii.GetBytes($page.Replace($script:HordePwaCspPlaceholder, $connect))
-    $configText = '{"schemaVersion":1,"transport":"' + $Transport + '","relayOrigin":"' + $RelayOrigin + '","lockAfterHiddenSeconds":' + $LockAfterHiddenSeconds + '}' + "`n"
+    $configText = '{"schemaVersion":1,"transport":"' + $Transport + '","relayOrigin":"' + $RelayOrigin + '","lockAfterHiddenSeconds":' + $LockAfterHiddenSeconds + ',"sessionAwaySeconds":' + $SessionAwaySeconds + '}' + "`n"
     $bytes["app/config.json"] = $ascii.GetBytes($configText)
     $bytes["app/icon-192.png"] = New-HordePwaIconPng -Size 192
     $bytes["app/icon-512.png"] = New-HordePwaIconPng -Size 512

@@ -57,7 +57,14 @@
 //                         the same record as notices
 //   follow {entry, lane, on}  the follow switch of a lane of the card of that pairing's machine, signed
 //                         with the passkey and sent: { ok } or { ok: false, reason }
-// EVENTS: list-changed (the list record), chat-changed (the chat record), progress-changed (the progress
+//   sessions              the unlocked session of every unlocked horde (phone-core.js, THE UNLOCKED
+//                         SESSION): [{ id, horde, machine, open, until, idleMs, keeps, words }];
+//                         asking at the moment one's time is up ends it then
+//   session-end {why}     end the unlocked session of every unlocked horde, keeping them open to read:
+//                         why "away" (the app in the background past its setting) or "closed" (the page
+//                         hidden for good); answers the same list as sessions
+// EVENTS: list-changed (the list record), chat-changed (the chat record), session-changed (the sessions
+// list, after an unlock, a lock, a refresh, a send or an end), progress-changed (the progress
 // record), cards-changed (the cards record), notices-changed (the notices record), hordes-changed (the
 // summaries), notice (a sentence), read-changed (how the last read of the mailbox went:
 // { locked, relayDown, said, lastGoodAt } - said the relay's words, lastGoodAt the time of the last read
@@ -79,7 +86,7 @@
 // own words what it could not send.
 import { withAnswers } from "../relay/protocol.js";
 
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "pairConfirmed", "join", "joinOffer", "joinRequests", "approveJoin", "rejectJoin", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send", "progress", "progress-read", "cards", "notices", "notices-read", "follow", "sessions", "session-end"];
 // A line's id when the page gave none: 16 random bytes as hex.
 function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
@@ -146,6 +153,13 @@ export function createBridge(phone, options = {}) {
     catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
   }
   async function hordes() { const h = await phone.hordes(); emit("hordes-changed", h); return h; }
+  // The unlocked session of every unlocked horde (sessions, in the header), pushed as session-changed.
+  async function sessionsRecord() {
+    const out = [];
+    for (const h of await phone.hordes()) if (h.unlocked) out.push({ id: h.id, horde: h.horde, machine: h.machine, ...(await phone.session(h.id)) });
+    emit("session-changed", out);
+    return out;
+  }
   let locked = true;
   let relayDown = false;
   async function refresh(waitMs = 0) {
@@ -176,6 +190,7 @@ export function createBridge(phone, options = {}) {
       } catch (e) { /* the next refresh asks again; the answers stay kept */ }
     }
     await loadAnswers();
+    await sessionsRecord();
     const rec = listRecord();
     emit("list-changed", rec);
     emit("chat-changed", await chatRecord());
@@ -218,6 +233,7 @@ export function createBridge(phone, options = {}) {
         // DRAWN AT ONCE: the list with his answer in it, marked sent, before any snapshot comes.
         await loadAnswers();
         emit("list-changed", listRecord());
+        await sessionsRecord();
         return { ok: true, sequence: highestSequence() + 1 };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },
@@ -235,11 +251,11 @@ export function createBridge(phone, options = {}) {
     approveJoin: async (a) => phone.approveJoin(picked, { request: String(a.request || ""), number: String(a.number || "") }),
     rejectJoin: async (a) => phone.rejectJoin(picked, { request: String(a.request || "") }),
     pairConfirmed: async (a) => phone.pairConfirmed(String(a.id || ""), { waitMs: Math.max(0, Math.min(Number(a.waitMs) || 0, 25000)) }),
-    unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
+    unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); await sessionsRecord(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     recover: async (a) => { const r = await phone.recover(String(a.id), String(a.code || "")); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     // The summaries are pushed BEFORE the list: a frame that hears list-changed already knows the horde
     // is locked, and draws the locked screen, not an empty list.
-    lock: async (a) => { phone.lock(String(a.id)); const h = await hordes(); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return h; },
+    lock: async (a) => { phone.lock(String(a.id)); const h = await hordes(); await sessionsRecord(); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return h; },
     forget: async (a) => { await phone.forget(String(a.id)); if (String(a.id) === picked) { picked = ""; view = null; emit("list-changed", listRecord()); } return hordes(); },
     refresh: async () => refresh(),
     chat: async () => chatRecord(),
@@ -251,12 +267,19 @@ export function createBridge(phone, options = {}) {
       try { await phone.follow(picked, { entry: String(a.entry || picked), lane: String(a.lane || ""), on: a.on === true }); return { ok: true }; }
       catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     },
+    sessions: async () => sessionsRecord(),
+    "session-end": async (a) => {
+      const why = a.why === "closed" ? "closed" : "away";
+      for (const h of await phone.hordes()) if (h.unlocked) phone.endSession(h.id, why);
+      return sessionsRecord();
+    },
     "progress-read": async (a) => progressRecord(() => phone.markProgressRead(picked, a.all === true ? "" : String(a.id || "-"))),
     "chat-send": async (a) => {
       try {
         const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
         await phone.sendLine(picked, { text: String(a.text || ""), messageId: id });
         emit("chat-changed", await chatRecord());
+        await sessionsRecord();
         return { ok: true, id };
       } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
     }

@@ -155,5 +155,9 @@
         @{ Name = "progress-folded-line-has-no-time"
            Find = 'if (when) { const w'
            Replace = 'if (false) { const w' }
+        # --- section 15: a config.json with no times keeps the session through 9 minutes hidden (Q75 (c)) ---
+        @{ Name = "lock-fallback-back-to-five-minutes"
+           Find = 'config.lockAfterHiddenSeconds : 600);'
+           Replace = 'config.lockAfterHiddenSeconds : 300);' }
     )
 }
