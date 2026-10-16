@@ -222,7 +222,11 @@ function docOf(id) {
     say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
     // One part's answer: the same request with the part's letter, signed and sent by itself.
     sayPart: (number, letter, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId, part: letter })),
-    act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId }))
+    act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId })),
+    // His tap on a question's Importance or Blocking button: signed and sent like an answer, answered
+    // once the PC has said what became of it (bridge.js). Not held as a send in flight: it may wait
+    // minutes for the PC, and an update meanwhile loses only the button's pending mark, never his words.
+    rank: (number, which, level, rankId) => bridge.request("rank", { number, which, level, id: rankId })
   });
   docs[id] = { box, cards, doc, kinds: false, storage };
   return docs[id];
