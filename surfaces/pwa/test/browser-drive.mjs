@@ -676,6 +676,23 @@ const commands = {
     await sleep(500);
     return { sent: r, put: headOf(c.mailbox) - before, place: await commands.chatPlace() };
   },
+  // SEND AGAIN on a photo the PC did not take in its hour: shown or not, then a real touch on it, and what
+  // was put, and how many Send again are left. { shown, put, prompts, left, notice }.
+  async chatSendAgain(c) {
+    const shown = await evaluate("(() => { const b = document.querySelector('#chatLog .chat-again'); if (!b) return 0; b.scrollIntoView({ block: 'center' }); return document.querySelectorAll('#chatLog .chat-again').length; })()");
+    if (!shown) return { shown: 0, put: 0, prompts: 0, notice: await evaluate(notice) };
+    await sleep(300);
+    const before = headOf(c.mailbox);
+    const signsBefore = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    const at = await centre("#chatLog .chat-again");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const end = Date.now() + 30000;
+    while (headOf(c.mailbox) < before + 2 && Date.now() < end) await sleep(100);
+    await sleep(500);
+    const signsAfter = (await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId })).credentials.reduce((s, x) => s + x.signCount, 0);
+    return { shown, put: headOf(c.mailbox) - before, prompts: signsAfter - signsBefore, left: await evaluate("document.querySelectorAll('#chatLog .chat-again').length"), notice: await evaluate(notice) };
+  },
   // WHERE THE CHAT STANDS (chat-scroll.js; the founder, 2026-10-15): how far the window is from the bottom,
   // whether the newest message stands clear of the composer, the first message on his screen, and the
   // Jump to latest button - shown, its words, its size and where it stands - and what the live region says.

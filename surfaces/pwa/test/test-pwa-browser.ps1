@@ -563,6 +563,26 @@ try {
     $landed2 = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
     Check ($landed2.Count -eq 2) ("and the PC takes it too (" + $landed2.Count + " file(s) in its inbox; exit " + $run.code + ")")
     $null = Invoke-Browser @{ cmd = "chatJumpTouch" }
+    # THE HOUR (the founder's choice, 2026-10-16): a photo the PC has not taken waits for it, and says so;
+    # past the hour the manifest names it says plainly it was not delivered, and Send again sends it again.
+    # The page's clock stands 61 minutes back while it is sent, so by the real clock its hour has passed:
+    # nothing is waited, and the PC, run only afterwards, sees a manifest whose window ended.
+    $postsBeforeHour = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    $null = Invoke-Browser @{ cmd = "clock"; ms = -3660000 }
+    $late = Invoke-Browser @{ cmd = "chatPhoto"; path = $smallPath; mailbox = $mailbox; parts = 2 }
+    $wt1 = Invoke-Browser @{ cmd = "chatWait"; text = "Sent: waiting for your PC to take it (it waits up to an hour)."; timeoutMs = 10000 }
+    $sa0 = Invoke-Browser @{ cmd = "chatSendAgain"; mailbox = $mailbox }
+    $null = Invoke-Browser @{ cmd = "clock"; ms = 0 }
+    Check ($late.ok -and $late.value.put -ge 2 -and $wt1.ok -and $wt1.value.found) ("PC OFF: a photo sent and not yet taken says it waits for the PC, up to an hour (" + $(if ($late.ok) { "" + $late.value.put + " put(s)" } else { $late.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "chatRefresh" }
+    $nd = Invoke-Browser @{ cmd = "chatWait"; text = "Not delivered: your PC did not take it within an hour. Send it again."; timeoutMs = 10000 }
+    Check ($nd.ok -and $nd.value.found) "PAST THE HOUR with no word from the PC, it says plainly it was not delivered"
+    $sa = Invoke-Browser @{ cmd = "chatSendAgain"; mailbox = $mailbox }
+    Check ($sa0.ok -and $sa0.value.shown -eq 0 -and $sa.ok -and $sa.value.shown -eq 1 -and $sa.value.put -ge 2 -and $sa.value.left -eq 0) ("and offers Send again - not while it still waits - which sends it again, and is then offered no more (" + $(if ($sa.ok) { ConvertTo-Json $sa.value -Compress } else { $sa.reason }) + "; while waiting: " + $(if ($sa0.ok) { $sa0.value.shown } else { $sa0.reason }) + ")")
+    $run = Invoke-Run -Turns 2
+    $landed3 = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
+    $postsAfterHour = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    Check ($landed3.Count -eq 3 -and $postsAfterHour -eq $postsBeforeHour + 1) ("the PC takes the photo sent again and not the late one: one more file and one more line to the Thrall (" + $landed3.Count + " file(s), " + $postsBeforeHour + " -> " + $postsAfterHour + " line(s); exit " + $run.code + ")")
     $null = Save-Shot "phone-chat-photo"
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }

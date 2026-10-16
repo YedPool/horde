@@ -445,7 +445,13 @@ function drawChat(rec) {
       again.textContent = "Send again";
       again.disabled = !(v.mode === "passkey");
       const old = it.photoId;
-      again.addEventListener("click", () => { const k = photoKept.get(old); if (k) sendPhotoBytes(k.bytes, k.thumb); });
+      again.addEventListener("click", async () => {
+        // Sent again, the old one offers it no more; not sent, it still does.
+        const k = photoKept.get(old);
+        if (!k) return;
+        photoKept.delete(old);
+        if (!(await sendPhotoBytes(k.bytes, k.thumb))) photoKept.set(old, k);
+      });
       box.appendChild(again);
     }
     log.appendChild(box);
@@ -470,10 +476,10 @@ const photoThumbs = new Map();
 // dropped when the horde locks (dropDoc).
 const photoKept = new Map();
 let photoSending = false;
-// One shrunk photo to the PC, under a new id. Its own photo, sent, takes him to the bottom, as his own
-// line does (chat-scroll.js).
+// One shrunk photo to the PC, under a new id; true when it went. Its own photo, sent, takes him to the
+// bottom, as his own line does (chat-scroll.js).
 async function sendPhotoBytes(bytes, thumb) {
-  if (photoSending) return;
+  if (photoSending) return false;
   photoSending = true;
   say("action", "");
   try {
@@ -481,8 +487,10 @@ async function sendPhotoBytes(bytes, thumb) {
     photoThumbs.set(id, thumb);
     photoKept.set(id, { bytes, thumb });
     const r = await bridge.request("chat-photo", { bytes, id });
-    if (r.ok) chatScroll.sent(); else say("action", r.reason);
+    if (r.ok) { chatScroll.sent(); return true; }
+    say("action", r.reason);
   } catch (e) { say("action", messageOf(e)); } finally { photoSending = false; settleUpdate(); }
+  return false;
 }
 $("chatPhoto").addEventListener("click", () => {
   if ($("chatPhoto").disabled || photoSending) return;
