@@ -27,6 +27,12 @@
         @{ Name = "folder-case-matters"
            Find = 'return $n.TrimEnd("/").ToLowerInvariant()'
            Replace = 'return $n.TrimEnd("/")' }
+        @{ Name = "since-ignored"
+           Find = '$began -le $sinceTicks) { continue }'
+           Replace = '$false) { continue }' }
+        @{ Name = "unreadable-start-excluded"
+           Find = '-and [long]::TryParse("" + $r.startTime, [ref]$began) -and $began -le $sinceTicks) { continue }'
+           Replace = '-or $began -le $sinceTicks) { continue }' }
         @{ Name = "ignore-ignored"
            Find = 'if ($r.state -ceq "dead" -or @($Ignore) -ccontains $r.sessionId) { continue }'
            Replace = 'if ($r.state -ceq "dead") { continue }' }

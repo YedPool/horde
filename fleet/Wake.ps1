@@ -5,9 +5,12 @@
 #   1. THE WAKING LOCK. <record folder>\waking.lock, created only if no file has that name
 #      (FileMode.CreateNew, one step in the file system). A second wake of the same record is refused
 #      while the first runs: two wakes would each see every session stopped and start each one twice.
-#      The lock is removed when the wake ends, whatever happened; a wake that was killed leaves it, and
-#      the refusal names the file, to be deleted once no wake runs. A dry run takes no lock and refuses
-#      while one is held, because its plan would be wrong.
+#      The lock holds its owner's pid and process start time, and is removed when the wake ends,
+#      whatever happened. A lock whose owner is not alive by the liveness rule's test (no such pid, or
+#      the pid now belongs to a process that started at another time) is stale: a killed wake left it,
+#      and the next wake takes it over and says so. A lock whose owner runs, or may (a start time that
+#      cannot be read, a lock that names no owner), still refuses (review of PR 318). A dry run takes
+#      no lock, refuses while a live one is held, and says when it would take over a stale one.
 #   2. NOTHING RUNNING IS STARTED AGAIN. Each session is checked by the harness adapter's liveness rule
 #      (agents/<name>/Fleet.ps1, the restore guard's port): running is refused, and so is UNKNOWN - a
 #      session nobody can prove is stopped is treated as running, because a conversation started twice
@@ -48,6 +51,45 @@ $script:HordeFleetWakeWaitSeconds = 90
 $script:HordeFleetWakePollMs = 1500
 $script:HordeFleetWakeMailTtlSeconds = 86400
 $script:HordeFleetWakeLockName = "waking.lock"
+
+function Get-HordeFleetProcessStart {
+    # The real process lookup for the lock: start time of -ProcessId as FILETIME ticks text, "" when no
+    # such process runs, "?" when it runs and its start cannot be read.
+    param([Parameter(Mandatory = $true)][long]$ProcessId)
+    $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $p) { return "" }
+    try { return ("" + $p.StartTime.ToFileTimeUtc()) } catch { return "?" }
+}
+
+function Get-HordeFleetLockOwner {
+    # Is the owner of a waking lock alive? -Text is the lock's text, "pid <pid> start <ticks> at <utc>";
+    # -ProcessStart looks a pid up ("" gone, "?" unreadable, ticks). Returns { stale; owner; reason }.
+    # The rule is the liveness rule's (agents/<name>/Fleet.ps1): the owner is alive when its pid runs
+    # with a start time within one second of the one written; gone, or a pid now owned by a process that
+    # started at another time, is stale. Text that names no owner, or a start that cannot be read, is NOT
+    # stale: an owner nobody can rule out still holds the record.
+    param([AllowEmptyString()][string]$Text, [Parameter(Mandatory = $true)][scriptblock]$ProcessStart)
+    $m = [regex]::Match($Text, '\Apid ([1-9][0-9]{0,9}) start ([0-9]{1,19})(\s|\z)')
+    if (-not $m.Success) { return [pscustomobject]@{ stale = $false; owner = ""; reason = "it does not name its owner's process and start time, so whether its wake still runs cannot be told" } }
+    $owner = $m.Groups[1].Value
+    $now = "" + (& $ProcessStart ([long]$owner))
+    if ($now -eq "") { return [pscustomobject]@{ stale = $true; owner = $owner; reason = ("its owner, pid " + $owner + ", is not running") } }
+    $a = [long]0; $b = [long]0
+    if ($now -cnotmatch '\A[0-9]{1,19}\z' -or -not [long]::TryParse($now, [ref]$a) -or -not [long]::TryParse($m.Groups[2].Value, [ref]$b)) { return [pscustomobject]@{ stale = $false; owner = $owner; reason = ("pid " + $owner + " runs and its start time cannot be read, so it may be the owner") } }
+    if ([Math]::Abs($a - $b) -le 10000000) { return [pscustomobject]@{ stale = $false; owner = $owner; reason = ("its owner, pid " + $owner + ", is running") } }
+    return [pscustomobject]@{ stale = $true; owner = $owner; reason = ("pid " + $owner + " now belongs to a process that started at another time") }
+}
+
+function Get-HordeFleetSince {
+    # From when a running session could be -Session under a new id: its last exit in the history, or,
+    # with none, when the hibernation was taken - a session already running then ran beside it.
+    param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)]$Record)
+    $exits = @(@($Session.history) | Where-Object { "" + $_.state -ceq "exited" })
+    $text = $(if ($exits.Count -gt 0) { "" + $exits[-1].at } else { "" + $Record.createdAt })
+    $at = [datetime]::MinValue
+    if ([datetime]::TryParseExact($text, "yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture, ([System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal), [ref]$at)) { return $at }
+    return $null
+}
 
 function Get-HordeFleetWakeBody {
     # The mail a woken session gets.
@@ -228,7 +270,18 @@ function Invoke-HordeFleetWake {
     $say = { param($t) [void]$lines.Add($t) }
     $tell = { param($s, $o, $r) [void]$outcomes.Add([pscustomobject]@{ sessionId = "" + $s.sessionId; label = "" + (Get-HordeFleetMember $s "label"); outcome = $o; reason = $r }) }
 
-    if (Test-Path -LiteralPath $lockPath) { throw ("hibernation " + $Id + " is being woken already, or a wake of it was killed: " + $lockPath + " exists. Delete it once no wake of " + $Id + " runs") }
+    $procStart = $(if ($null -ne $Deps.PSObject.Properties["ProcessStart"]) { $Deps.ProcessStart } else { { param($p) Get-HordeFleetProcessStart -ProcessId $p } })
+    $self = $(if ($null -ne $Deps.PSObject.Properties["Self"]) { & $Deps.Self } else { [pscustomobject]@{ pid = $PID; start = (Get-HordeFleetProcessStart -ProcessId $PID) } })
+    # 1. THE LOCK names its owner; a stale one (owner gone, or its pid reused) is taken over and said.
+    $staleNote = ""
+    if (Test-Path -LiteralPath $lockPath) {
+        $lockText = ""
+        try { $lockText = Read-HordeSharedText -Path $lockPath } catch { $lockText = "" }
+        $owner = Get-HordeFleetLockOwner -Text $lockText -ProcessStart $procStart
+        if (-not $owner.stale) { throw ("hibernation " + $Id + " is being woken already: " + $lockPath + " is held and " + $owner.reason) }
+        $staleNote = $(if ($DryRun) { "would take over" } else { "took over" }) + " a stale waking lock of pid " + $owner.owner + ": " + $owner.reason
+        if (-not $DryRun) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop }
+    }
     $onlyLabels = @($Only | Where-Object { "" + $_ -ne "" })
     $sessions = @($record.sessions)
     if ($onlyLabels.Count -gt 0) {
@@ -242,7 +295,7 @@ function Invoke-HordeFleetWake {
     }
     try {
         if ($null -ne $lockStream) {
-            $b = [System.Text.Encoding]::ASCII.GetBytes("pid " + $PID + " at " + (Format-HordeFleetTime -At (& $Deps.Now)) + "`n")
+            $b = [System.Text.Encoding]::ASCII.GetBytes("pid " + $self.pid + " start " + $self.start + " at " + (Format-HordeFleetTime -At (& $Deps.Now)) + "`n")
             $lockStream.Write($b, 0, $b.Length); $lockStream.Flush($true)
         }
         $agent = $Deps.Agent
@@ -255,7 +308,9 @@ function Invoke-HordeFleetWake {
         $spawnable = New-Object System.Collections.ArrayList
         $refused = New-Object System.Collections.ArrayList
         foreach ($s in $sessions) {
-            $v = & $agent.verdict $snapshot (Get-HordeFleetCurrentId -Session $s) ("" + $s.cwd) @()
+            # Every id of this record is passed as one that cannot be this sleeper's new id (orcs and their
+            # wargs share folders), with the moment before which nothing running can be either.
+            $v = & $agent.verdict $snapshot (Get-HordeFleetCurrentId -Session $s) ("" + $s.cwd) $recordIds (Get-HordeFleetSince -Session $s -Record $record)
             if ("" + $v.state -ceq "stopped") { [void]$spawnable.Add($s) }
             else {
                 $why = $(if ("" + $v.state -ceq "running") { "still running: " + $v.reason } else { "may be running, so it is left alone: " + $v.reason })
@@ -263,6 +318,7 @@ function Invoke-HordeFleetWake {
             }
         }
         & $say ("hibernation " + $Id + ": " + @($sessions).Count + " session(s); " + $spawnable.Count + " to wake, " + $refused.Count + " refused" + $(if ($DryRun) { " (dry run: nothing is changed)" } else { "" }))
+        if ($staleNote -ne "") { & $say ("  " + $staleNote) }
         foreach ($r in $refused) {
             & $say ("  refused " + (Get-HordeFleetSessionName -Session $r.session) + ": " + $r.reason)
             if (-not $DryRun) { Add-HordeFleetState -Session $r.session -State "still-awake" -At $now -Reason $r.reason }

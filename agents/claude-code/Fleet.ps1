@@ -145,7 +145,7 @@ function New-ClaudeCodeFleetSnapshot {
     foreach ($r in @($Read.records)) {
         if ($null -eq $r) { continue }
         $state = Get-ClaudeCodeFleetRecordState -Record $r
-        [void]$records.Add([pscustomobject]@{ sessionId = "" + $r.sessionId; pid = "" + $r.pid; cwd = "" + $r.cwd; state = $state })
+        [void]$records.Add([pscustomobject]@{ sessionId = "" + $r.sessionId; pid = "" + $r.pid; cwd = "" + $r.cwd; state = $state; startTime = "" + $r.startTime })
         if ("" + $r.sessionId -cnotmatch $script:ClaudeCodeFleetIdPattern) {
             # A control file nobody could read: if its process is gone it cannot matter; if it runs,
             # some session is live and nobody knows which, so no answer from this reading is safe.
@@ -177,13 +177,23 @@ function Get-ClaudeCodeFleetVerdict {
     # -Ignore holds the ids a wake has itself just started: a session it started in this folder does not
     # make the next one of the same folder "rotated" (the guard's claims, spec "a session this restore
     # resumed does not block the next pane of the same directory").
-    param([Parameter(Mandatory = $true)]$Snapshot, [Parameter(Mandatory = $true)][string]$SessionId, [AllowEmptyString()][string]$Cwd = "", [string[]]$Ignore = @())
+    # -Since NARROWS THE ROTATED CASE FOR HIBERNATION (review of PR 318): when the sleeper stopped, or, with
+    # no exit known, when the hibernation was taken. A running session whose own process started at or
+    # before it was running beside the sleeper while the sleeper still ran under its own id, so it cannot
+    # be the sleeper under a new one. Orcs and their wargs share folders (13 recorded sessions sat in 6
+    # folders on 2026-10-16), and the guard's unnarrowed rule refused most of them. A start time that
+    # cannot be read still counts. With no -Since the guard's rule stands as it is.
+    param([Parameter(Mandatory = $true)]$Snapshot, [Parameter(Mandatory = $true)][string]$SessionId, [AllowEmptyString()][string]$Cwd = "", [string[]]$Ignore = @(), $Since = $null)
+    $sinceTicks = $null
+    if ($Since -is [datetime]) { $sinceTicks = $Since.ToUniversalTime().ToFileTimeUtc() }
     if ("" + $Snapshot.error -ne "") { return [pscustomobject]@{ state = "unknown"; kind = "reading"; reason = ("liveness unreadable (" + $Snapshot.error + ")"); pid = "" } }
     $s = $Snapshot.sessions[$SessionId]
     if ($null -eq $s -or $s.state -ceq "dead") {
         $wanted = ConvertTo-ClaudeCodeFleetCwd -Cwd $Cwd
         foreach ($r in @($Snapshot.records)) {
             if ($r.state -ceq "dead" -or @($Ignore) -ccontains $r.sessionId) { continue }
+            $began = [long]0
+            if ($null -ne $sinceTicks -and "" + $r.startTime -cmatch '\A[0-9]{1,19}\z' -and [long]::TryParse("" + $r.startTime, [ref]$began) -and $began -le $sinceTicks) { continue }
             if ($wanted -eq "" -or (ConvertTo-ClaudeCodeFleetCwd -Cwd $r.cwd) -ceq $wanted) {
                 return [pscustomobject]@{ state = "unknown"; kind = "rotated"; reason = ("not running under this id, but in the same folder as running pid " + $r.pid + ", so it may be the same conversation under a new id - resume it by hand if it is not"); pid = "" + $r.pid }
             }
@@ -225,7 +235,7 @@ function Get-ClaudeCodeFleetScrub {
 
 Register-HordeFleetAgent -Name "claude-code" `
     -Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) } `
-    -Verdict { param($snapshot, $id, $cwd, $ignore) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore } `
+    -Verdict { param($snapshot, $id, $cwd, $ignore, $since) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore -Since $since } `
     -Running { param($snapshot) Get-ClaudeCodeFleetRunning -Snapshot $snapshot } `
     -ResumeLine { param($id) Get-ClaudeCodeFleetResumeLine -SessionId $id } `
     -Scrub { Get-ClaudeCodeFleetScrub }

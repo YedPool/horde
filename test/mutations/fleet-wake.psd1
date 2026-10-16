@@ -6,9 +6,27 @@
     Suite  = "test\test-fleet-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "lock-ignored"
-           Find = 'if (Test-Path -LiteralPath $lockPath) { throw ('
+        @{ Name = "live-lock-owner-ignored"
+           Find = 'if (-not $owner.stale) { throw ('
            Replace = 'if ($false) { throw (' }
+        @{ Name = "gone-owner-alive"
+           Find = 'if ($now -eq "") { return [pscustomobject]@{ stale = $true;'
+           Replace = 'if ($now -eq "") { return [pscustomobject]@{ stale = $false;' }
+        @{ Name = "reused-pid-owner-alive"
+           Find = 'return [pscustomobject]@{ stale = $true; owner = $owner; reason = ("pid " + $owner + " now belongs'
+           Replace = 'return [pscustomobject]@{ stale = $false; owner = $owner; reason = ("pid " + $owner + " now belongs' }
+        @{ Name = "unreadable-owner-stale"
+           Find = 'stale = $false; owner = $owner; reason = ("pid " + $owner + " runs and its start time'
+           Replace = 'stale = $true; owner = $owner; reason = ("pid " + $owner + " runs and its start time' }
+        @{ Name = "lock-without-start"
+           Find = '"pid " + $self.pid + " start " + $self.start + " at "'
+           Replace = '"pid " + $self.pid + " at "' }
+        @{ Name = "record-mates-not-ignored"
+           Find = '("" + $s.cwd) $recordIds (Get-HordeFleetSince'
+           Replace = '("" + $s.cwd) @() (Get-HordeFleetSince' }
+        @{ Name = "exit-time-not-read"
+           Find = '$text = $(if ($exits.Count -gt 0) {'
+           Replace = '$text = $(if ($false) {' }
         @{ Name = "lock-left-behind"
            Find = '$lockStream.Dispose(); Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue'
            Replace = '$lockStream.Dispose()' }
