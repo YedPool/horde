@@ -204,6 +204,19 @@ Check ((Get-ClaudeCodeFleetResumeLine -SessionId $LIVE) -ceq ("claude --resume "
 foreach ($bad in @("AAAAAAAA-1111-4111-8111-111111111111", ($LIVE + " --x"), ($LIVE + "; calc"), "")) {
     Check (Throws { Get-ClaudeCodeFleetResumeLine -SessionId $bad } "not a session id") ("no line is built for the id '" + $bad + "'")
 }
+# THE PROGRAM CAN BE NAMED (setting claude-code-fleet: command), so a scenario that must never start the real
+# harness names a stand-in by its full path: a terminal pane takes its PATH from the terminal, not from the
+# process that spawns it (measured 2026-10-16), so a stand-in first on a PATH is not enough.
+$named = "C:\stand\in\agent.ps1"
+Check ((Get-ClaudeCodeFleetResumeLine -SessionId $LIVE -Command $named) -ceq ("& '" + $named + "' --resume " + $LIVE)) "a named program is called by its full path, then --resume and the id"
+foreach ($badCmd in @("agent.ps1", "C:\it's\agent.ps1", ("C:\a" + [char]34 + "b\agent.ps1"), "C:\stand\in\agent.ps1`r`ncalc", "C:\stand\in\agent.txt")) {
+    Check (Throws { Get-ClaudeCodeFleetResumeLine -SessionId $LIVE -Command $badCmd } "not a program") ("no line is built for the program '" + ($badCmd -replace "`r`n", " ") + "'")
+}
+$home2 = Join-Path $work "home"
+[void](New-Item -ItemType Directory -Path (Join-Path $home2 "settings") -Force)
+Check ((Get-ClaudeCodeFleetSettings -HordeHome $home2).state -ceq "defaults" -and "" + (Get-ClaudeCodeFleetSettings -HordeHome $home2).values.command -ceq "") "with no settings file, no program is named"
+[System.IO.File]::WriteAllText((Join-Path $home2 "settings\claude-code-fleet.json"), ('{"schemaVersion":1,"settings":{"command":' + (ConvertTo-Json -InputObject $named) + '}}'))
+Check ("" + (Get-ClaudeCodeFleetSettings -HordeHome $home2).values.command -ceq $named) "the setting names the program"
 $scrub = Get-ClaudeCodeFleetScrub -Names @("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CONFIG_DIR", "PATH")
 Check ($scrub.ContainsKey("CLAUDECODE") -and $scrub.ContainsKey("CLAUDE_CODE_SESSION_ID") -and $scrub.ContainsKey("CLAUDE_PID") -and $scrub.ContainsKey("CLAUDE_CODE_MESSAGING_TOKEN") -and $null -eq $scrub["CLAUDECODE"]) "the woken pane does not inherit the waking session's own variables"
 Check (-not $scrub.ContainsKey("CLAUDE_CONFIG_DIR") -and -not $scrub.ContainsKey("PATH")) "CONTROL: where the harness keeps its files, and everything else, is inherited"
