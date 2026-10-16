@@ -8,6 +8,7 @@
     Suite  = "test\test-files-cli.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "control-red"; Find = 'this text is nowhere'; Replace = 'x' }
         @{ Name = "list-takes-shares-flags-in-silence"
            Find = 'foreach ($flag in @("Path", "Title", "Editable", "Force")) { if ($PSBoundParameters.ContainsKey($flag)) {'
            Replace = 'foreach ($flag in @()) { if ($PSBoundParameters.ContainsKey($flag)) {' }
