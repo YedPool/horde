@@ -392,7 +392,13 @@ function Invoke-HordeRelayPublishStep {
     if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
     $lines = New-Object System.Collections.ArrayList
     $now = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Now"
-    $say = { param([string]$Line, [switch]$Log) [void]$lines.Add("phone page: " + $Line); if ($Log) { Write-HordeRelayPublishLog -HordeHome $HordeHome -At $now -Line $Line } }
+    # THE LOG'S TIME AND HOME, under names no other code uses. A block finds the variables it names where
+    # it RUNS, not where it was made, and $log below runs inside Invoke-HordeRelayDeploy and the relay's
+    # deploy, where $Now (names ignore case) is a clock block and $HordeHome is theirs: named $now, the
+    # log handed that block to -At and every automatic deploy failed (live, 2026-10-14T20:41:29Z;
+    # test/test-relay-publish-real-deploy.ps1). Not GetNewClosure: its block sees global functions only.
+    $relayPublishLogAt = $now; $relayPublishLogHome = $HordeHome
+    $say = { param([string]$Line, [switch]$Log) [void]$lines.Add("phone page: " + $Line); if ($Log) { Write-HordeRelayPublishLog -HordeHome $relayPublishLogHome -At $relayPublishLogAt -Line $Line } }
     $kept = Read-HordeRelayPublishState -HordeHome $HordeHome
     if ($kept.state -ceq "unknown") { & $say ("LEFT ALONE - " + $kept.reason); return @($lines.ToArray()) }
     $s = $(if ($kept.state -ceq "known") { $kept.value } else { New-HordeRelayPublishState })
@@ -511,7 +517,8 @@ function Invoke-HordeRelayPublishStep {
         }
         $s.attempt = [pscustomobject]@{ head = $h.commit; base = $b.base; at = $now }
         Write-HordeRelayPublishState -State $s -HordeHome $HordeHome
-        $log = { param($Line) Write-HordeRelayPublishLog -HordeHome $HordeHome -At $now -Line ("  " + $Line) }
+        # It runs inside the deploy, so it names the log's own variables only (above, THE LOG'S TIME AND HOME).
+        $log = { param($Line) Write-HordeRelayPublishLog -HordeHome $relayPublishLogHome -At $relayPublishLogAt -Line ("  " + $Line) }
         $r = $null
         try { $r = Invoke-HordeRelayPublishTool -Tools $Tools -Name "Deploy" -With @($HordeHome, $log, $Checkout, $h.commit) } catch { $r = New-HordeUnknown -Reason "the deploy failed" -ErrorRecord $_ }
         $s.attempt = $null
