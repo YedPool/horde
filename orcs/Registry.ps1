@@ -731,6 +731,7 @@ function Sync-HordeOrcRegistry {
     # actor fleet. Returns { ok; reason; written; version }.
     param([string]$Root, $Lanes, [string]$By, [datetime]$Now)
     $written = 0
+    $done = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     for ($try = 1; $try -le $script:HordeOrcRaceTries; $try++) {
         $s = Read-HordeOrcRegistry -Root $Root
         if ($s.state -cne "ok") { return [pscustomobject]@{ ok = $false; reason = $s.reason; written = $written; version = [long]0 } }
@@ -749,9 +750,17 @@ function Sync-HordeOrcRegistry {
             }
         }
         if ($null -eq $next) { return [pscustomobject]@{ ok = $true; reason = ""; written = $written; version = [long]$s.version } }
-        $made = Add-HordeOrcRecord -Root $Root -Sequence ($s.version + 1) -Kind $next.kind -Data $next.data -Actor "fleet" -By $By -Now $Now
+        # A RECORD THIS SYNC WROTE THAT THE FOLD DID NOT TAKE is not written again: the same step asked for
+        # twice means the rule that picks it and the fold disagree, and writing on would never end
+        # (measured 2026-10-16 by the mutant that registers a lane retired by hand: the fold ignores each
+        # registration, so the sync wrote one after another until the run was killed at 900 s).
+        $step = $next.kind + " " + $next.data.id
+        if ($done.Contains($step)) { return [pscustomobject]@{ ok = $false; reason = ("nothing more was written: the registry did not take its own " + $step + " (the fold and the lanes disagree)"); written = $written; version = [long]$s.version } }
+        $made = ""
+        try { $made = Add-HordeOrcRecord -Root $Root -Sequence ($s.version + 1) -Kind $next.kind -Data $next.data -Actor "fleet" -By $By -Now $Now }
+        catch { return [pscustomobject]@{ ok = $false; reason = ("record " + ($s.version + 1) + " could not be written: " + $_.Exception.Message); written = $written; version = [long]$s.version } }
         if ($made -ceq "unconfirmed") { return [pscustomobject]@{ ok = $false; reason = ("record " + ($s.version + 1) + " has its place but could not be confirmed written through to the disk"); written = $written; version = [long]($s.version + 1) } }
-        if ($made -ceq "created") { $written++; $try = 0 }
+        if ($made -ceq "created") { $written++; $try = 0; [void]$done.Add($step) }
     }
     return [pscustomobject]@{ ok = $false; reason = ("the registry kept moving under " + $script:HordeOrcRaceTries + " tries to follow the lanes folder"); written = $written; version = [long]0 }
 }
@@ -852,7 +861,12 @@ function Invoke-HordeOrcWrite {
         $step = Get-HordeOrcRecordFor -Operation $Operation -Request $Request -View @(Get-HordeOrcView -State $s -Lanes $lanes)
         if ($step.refuse -ne "") { return (New-HordeOrcResult -Outcome "refused" -Reason ("nothing more was written: " + $step.refuse) -Version $s.version -Written $written) }
         if ($step.unchanged) { return (New-HordeOrcResult -Outcome "unchanged" -Reason "the list already says that; nothing was written" -Version $s.version -Written $written) }
-        $made = Add-HordeOrcRecord -Root $root -Sequence ($s.version + 1) -Kind $step.kind -Data $step.data -Actor $Actor -By $By -Now $Now
+        # A record that cannot be written - one that would not match its schema, a folder that cannot be
+        # made - is an unknown in words, never a throw out of the module (measured 2026-10-16: a domain
+        # of 81 characters let past the check threw here and broke the caller).
+        $made = ""
+        try { $made = Add-HordeOrcRecord -Root $root -Sequence ($s.version + 1) -Kind $step.kind -Data $step.data -Actor $Actor -By $By -Now $Now }
+        catch { return (New-HordeOrcResult -Outcome "unknown" -Version $s.version -Written $written -Reason ("record " + ($s.version + 1) + " could not be written, so nothing more changed: " + $_.Exception.Message)) }
         if ($made -ceq "created") { return (New-HordeOrcResult -Outcome "done" -Version ($s.version + 1) -Written ($written + 1)) }
         if ($made -ceq "unconfirmed") { return (New-HordeOrcResult -Outcome "unknown" -Version ($s.version + 1) -Written $written -Reason ("record " + ($s.version + 1) + " has its place in the registry but could not be confirmed written through to the disk, so it is NOT reported as saved")) }
     }

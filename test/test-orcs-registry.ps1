@@ -68,14 +68,23 @@ function Set-Session {
 }
 function Get-Dash { param([string]$HomeDir) $env:HORDE_HOME = $HomeDir; return (Get-HordeOrcDash -HordeHome $HomeDir -Now $script:now) }
 function Get-Row { param($Dash, [string]$Id) return (@($Dash.orcs | Where-Object { $_.id -ceq $Id }) | Select-Object -First 1) }
-function Write-Orc { param([string]$HomeDir, [string]$Op, $Request, [long]$Version = -1) $env:HORDE_HOME = $HomeDir; return (Invoke-HordeOrcWrite -Operation $Op -Request $Request -HordeHome $HomeDir -Version $Version -Now $script:now) }
+function Write-Orc {
+    # One write. A throw out of the module is a defect the checks must name, never one that breaks the
+    # suite (a mutant that lets an 81-character domain past its check made the write throw, 2026-10-16):
+    # it comes back as the outcome "threw" with the message as the reason.
+    param([string]$HomeDir, [string]$Op, $Request, [long]$Version = -1)
+    $env:HORDE_HOME = $HomeDir
+    try { return (Invoke-HordeOrcWrite -Operation $Op -Request $Request -HordeHome $HomeDir -Version $Version -Now $script:now) }
+    catch { return [pscustomobject]@{ outcome = "threw"; reason = $_.Exception.Message; version = [long]-1; written = 0; lines = @() } }
+}
 function Get-Records { param([string]$HomeDir) return @(Get-ChildItem -LiteralPath (Join-Path $HomeDir "orcs\registry") -Filter "*.json" | Sort-Object Name | ForEach-Object { ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($_.FullName)) }) }
 function Ids { param($Dash) return ((@($Dash.orcs) | ForEach-Object { $_.id + $(if ($_.backBurner) { "*" } else { "" }) }) -join ",") }
 function Add-Question {
-    param([string]$HomeDir, [string]$AskedBy, [string]$Blocks = "part")
+    # -At: the writer's clock for the record, so a test can put asked and answered hours apart.
+    param([string]$HomeDir, [string]$AskedBy, [string]$Blocks = "part", [datetime]$At = [datetime]::UtcNow)
     $env:HORDE_HOME = $HomeDir
     $q = [ordered]@{ title = "Should the step go ahead?"; kind = "yes-no"; whatItIs = "The step is ready."; group = "A group"; askedBy = $AskedBy; waiting = @($AskedBy) }
-    $a = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $q; blocks = $Blocks } -Root (Join-Path $HomeDir "store\decisions")
+    $a = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $q; blocks = $Blocks } -Root (Join-Path $HomeDir "store\decisions") -Now $At
     if ($a.state -cne "known" -or $a.value.outcome -cne "done") { throw ("the question was not added: " + $a.reason) }
     return [int]$a.value.number
 }
@@ -146,8 +155,8 @@ try {
     $rr = Write-Orc $B "retire" @{ id = "aaa-lane" }
     $dH = Get-Dash $B
     Check ($rr.outcome -ceq "done" -and (Ids $dH) -ceq "bbb-lane,ccc-lane*") ("an Orc retired by hand leaves the list though its lane still has a status (" + (Ids $dH) + ")")
-    $null = Write-Orc $B "domain" @{ id = "bbb-lane"; domain = "x" }
-    Check ((Ids (Get-Dash $B)) -ceq "bbb-lane,ccc-lane*") "and it stays off: a later change does not register it again"
+    $later = Write-Orc $B "domain" @{ id = "bbb-lane"; domain = "x" }
+    Check ($later.outcome -ceq "done" -and (Ids (Get-Dash $B)) -ceq "bbb-lane,ccc-lane*") ("and it stays off: a later change is written and does not register it again (" + $later.outcome + " " + $later.reason + ")")
     $gone = Write-Orc $B "name" @{ id = "aaa-lane"; name = "Back" }
     Check ($gone.outcome -ceq "refused") "a change to a retired Orc is refused"
 
@@ -214,16 +223,20 @@ try {
         'not json at all')
     [System.IO.File]::WriteAllText((Join-Path $L "progress\changelog.jsonl"), (($log -join "`n") + "`n"), $utf8)
     [System.IO.File]::WriteAllText((Join-Path $L "progress\area-lanes.json"), '{"v":1,"areas":{"Alpha":"A"}}', $utf8)
-    $qn = Add-Question $L "Orc C" "part"
+    # Asked five hours before $now and answered one hour before: hours apart, so the answer alone can be
+    # told from the asking (they were once written in the same second, and a mutant that dropped the
+    # answer survived, 2026-10-16).
+    $qn = Add-Question $L "Orc C" "part" -At $now.AddHours(-5)
     $env:HORDE_HOME = $L
-    $null = Invoke-HordeDecision -Operation "say" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "founder"; number = $qn; speaker = "founder"; route = "window"; text = "Yes."; wordingVersion = 1 } -Root (Join-Path $L "store\decisions")
+    $null = Invoke-HordeDecision -Operation "say" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "founder"; number = $qn; speaker = "founder"; route = "window"; text = "Yes."; wordingVersion = 1 } -Root (Join-Path $L "store\decisions") -Now $now.AddHours(-1)
     $shown = Invoke-HordeDecision -Operation "show" -Request @{ number = $qn } -Root (Join-Path $L "store\decisions")
     $askedAt = ConvertFrom-HordeOrcTime "$($shown.value.question.addedAt)"
     $saidAt = ConvertFrom-HordeOrcTime "$(@($shown.value.question.thread.messages | Where-Object { $_.speaker -ceq 'founder' })[0].at)"
     $dL = Get-Dash $L
     $la = Get-Row $dL "x-a"; $lb = Get-Row $dL "x-b"; $lc = Get-Row $dL "x-c"; $ld = Get-Row $dL "x-d"
     Check ($lb.lastActivityAt -ceq (& $iso $now.AddMinutes(-50))) ("a progress entry alone, by its lane, sets it (" + $lb.lastActivityAt + ")")
-    Check ($null -ne $saidAt -and $saidAt -ge $askedAt -and $lc.lastActivityAt -ceq (& $iso $saidAt)) ("a question alone sets it, to when the founder answered it, the newer of asked and answered (" + $lc.lastActivityAt + ")")
+    Check ($null -ne $askedAt -and (& $iso $askedAt) -ceq (& $iso $now.AddHours(-5)) -and $null -ne $saidAt -and (& $iso $saidAt) -ceq (& $iso $now.AddHours(-1))) "CONTROL: the question was asked five hours ago and answered one hour ago"
+    Check ($lc.lastActivityAt -ceq (& $iso $now.AddHours(-1)) -and $lc.lastActivitySource -ceq "decision") ("a question alone sets it, to when the founder answered it, hours after it was asked, from the source decision (" + $lc.lastActivityAt + " " + $lc.lastActivitySource + ")")
     Check ($la.lastActivityAt -ceq (& $iso $now.AddMinutes(-90))) ("of the status file (300 minutes ago) and two entries of its area (400 and 90 minutes ago), the newest wins; an entry of an area the map does not know is nobody's (" + $la.lastActivityAt + ")")
     Check ($null -eq $ld.lastActivityAt) "an Orc no source speaks for has no time"
     Remove-Item -LiteralPath (Join-Path $L "progress\changelog.jsonl")
