@@ -10,8 +10,8 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "snapshot-carries-no-receipts"
-           Find = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"receipts":'' + $Receipts + ''}'''
-           Replace = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + ''}''' }
+           Find = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1,"receipts":'' + $Receipts + ''}'''
+           Replace = ',"answers":'' + $script:HordeDecisionsChannelAnswerHighest + '',"ranks":1}''' }
         @{ Name = "pages-are-not-handed-the-receipts"
            Find = '-OnePage:$onePage -Receipts $receipts.text'
            Replace = '-OnePage:$onePage' }

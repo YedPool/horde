@@ -129,6 +129,20 @@ async function load(url) {
   await cdp("Page.navigate", { url });
   await loaded;
 }
+// Another tab in front of the app's for ms, then the app's again: Chrome's own visibility, not a stand-in.
+// during: the page's visibilityState while the other tab was in front.
+async function awayTab(ms) {
+  const base = "http://127.0.0.1:" + debugPort + "/json/";
+  const other = await (await fetch(base + "new?about:blank", { method: "PUT" })).json();
+  await fetch(base + "activate/" + other.id);
+  await sleep(Math.min(ms, 300));
+  const during = await evaluate("document.visibilityState");
+  await sleep(Math.max(0, ms - 300));
+  await fetch(base + "activate/" + page.id);
+  await fetch(base + "close/" + other.id);
+  await sleep(200);
+  return { during };
+}
 // The answer field of the question whose row holds the words given (the first question's without).
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
@@ -485,6 +499,15 @@ const commands = {
   async workerVersion() {
     return await evaluate("new Promise((res) => { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(e.data.version); navigator.serviceWorker.controller.postMessage({ ask: 'version' }, [ch.port2]); setTimeout(() => res(''), 3000); })");
   },
+  // THE PAGE'S CLOCK MOVED (test-pwa-browser.ps1 section 15): Date.now answers ms ahead of the real clock,
+  // so the app's checks on return of how long it was hidden see minutes that were never waited. 0 puts the
+  // real clock back. The page's own time of when it was hidden was taken by the real clock.
+  async clock(c) {
+    const ms = Number(c.ms) || 0;
+    return await evaluate("(() => { if (!window.__realNow) window.__realNow = Date.now.bind(Date); const off = " + ms + "; Date.now = off ? () => window.__realNow() + off : window.__realNow; return off; })()");
+  },
+  // config.json as the site serves it now, fetched by the page past every cache.
+  async servedConfig() { return await evaluate("fetch('config.json', { cache: 'no-store' }).then((r) => r.json())"); },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
     const was = await evaluate(notice);
@@ -530,6 +553,27 @@ const commands = {
   async caches() { return await evaluate("(async () => { const out = {}; for (const n of await caches.keys()) { const c = await caches.open(n); out[n] = (await c.keys()).map((r) => new URL(r.url).pathname); } return out; })()"); },
   async serve(c) { serving = c.on === true; if (!serving) for (const s of sockets) s.destroy(); return { serving }; },
   async credentials() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.map((x) => ({ rpId: x.rpId, signCount: x.signCount, resident: x.isResidentCredential })); },
+  // THE PASSKEY PROMPTS, COUNTED (the unlocked session, test-pwa-browser.ps1 section 14): the virtual
+  // authenticator's signature counter, summed over its credentials, goes up by one with every assertion
+  // Chrome's WebAuthn makes - each one a prompt on a real phone.
+  async assertions() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.reduce((n, x) => n + x.signCount, 0); },
+  // The page's unlocked sessions, as the bridge answers them (bridge.js, sessions), and the Account
+  // screen's line and the notice as the page draws them.
+  async sessions() { return await evaluate("(async () => ({ list: await window.HordeBridge.request('sessions'), account: document.getElementById('sessionWords').innerText, notice: " + notice + " }))()"); },
+  // WHAT THE BROWSER GIVES when the app is left (the brief: measure it, and say it). Another tab brought to
+  // the front is what Chrome has for another app or the screen going off; its lifecycle's frozen state is
+  // what it does to a page in the background for long. Each event the page hears is recorded.
+  async visibilityProbe() {
+    await evaluate("(() => { window.__heard = []; document.addEventListener('visibilitychange', () => window.__heard.push('visibilitychange:' + document.visibilityState)); window.addEventListener('pagehide', (e) => window.__heard.push('pagehide:' + e.persisted)); document.addEventListener('freeze', () => window.__heard.push('freeze')); document.addEventListener('resume', () => window.__heard.push('resume')); })()");
+    let frozen = "";
+    try { await cdp("Page.setWebLifecycleState", { state: "frozen" }); await sleep(200); await cdp("Page.setWebLifecycleState", { state: "active" }); } catch (e) { frozen = e.message; }
+    // Frozen leaves the page hidden (measured 2026-10-14: a visibilitychange to hidden before freeze, and
+    // it stays hidden after resume), so the other tab comes second: its return brings the page to the front.
+    const away = await awayTab(800);
+    return { during: away.during, after: await evaluate("({ state: document.visibilityState, heard: window.__heard.slice() })"), frozenRefused: frozen };
+  },
+  // Away for ms by another tab in front (visibilityProbe), then back: what the page said while away.
+  async away(c) { const a = await awayTab(Number(c.ms) || 1000); return { during: a.during, state: await evaluate("document.visibilityState") }; },
   async problems() { return problems.slice(); },
   // THE CHAT: its tab, its log, and its composer driven by real keys and a real touch.
   async chatTab(c) {
@@ -595,6 +639,102 @@ const commands = {
     const end = Date.now() + (c.expectNone ? 2000 : 30000);
     while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
     return { put: headOf(c.mailbox) > before, left: await evaluate("document.getElementById('chatText').value"), notice: await evaluate(notice) };
+  },
+  // WHERE THE CHAT STANDS (chat-scroll.js; the founder, 2026-10-15): how far the window is from the bottom,
+  // whether the newest message stands clear of the composer, the first message on his screen, and the
+  // Jump to latest button - shown, its words, its size and where it stands - and what the live region says.
+  async chatPlace() {
+    return await evaluate(`(() => {
+      const $ = (id) => document.getElementById(id);
+      const root = document.documentElement;
+      const items = Array.from(document.querySelectorAll('#chatLog .chat-item'));
+      const top = $('bar').getBoundingClientRect().bottom;
+      const first = items.find((el) => el.getBoundingClientRect().bottom > top);
+      const last = items[items.length - 1];
+      const j = $('chatJump'), jr = j.getBoundingClientRect(), tr = $('chatText').getBoundingClientRect(), cr = $('chatCompose').getBoundingClientRect();
+      const a = document.activeElement;
+      return { y: window.scrollY, dist: Math.round(root.scrollHeight - (window.scrollY + window.innerHeight)), items: items.length,
+        lastBottom: last ? last.getBoundingClientRect().bottom : 0, lastText: last ? last.querySelector('.chat-text').textContent : '', composeTop: cr.top,
+        firstKey: first ? first.dataset.key : '', firstTop: first ? first.getBoundingClientRect().top : 0,
+        jumpShown: !j.hidden && jr.height > 0, jumpText: j.textContent, jumpName: j.getAttribute('aria-label') || j.textContent, jumpTag: j.tagName, jumpType: j.type,
+        jumpTop: jr.top, jumpBottom: jr.bottom, jumpLeft: jr.left, jumpRight: jr.right, jumpH: jr.height, jumpW: jr.width, textTop: tr.top,
+        news: $('chatNews').textContent, newsLive: $('chatNews').getAttribute('aria-live'), newsHidden: $('chatNews').hidden,
+        focus: a ? a.id : '', focusVisible: !!(a && a.matches(':focus-visible')), outline: a ? getComputedStyle(a).outlineStyle + ' ' + getComputedStyle(a).outlineWidth : '' };
+    })()`);
+  },
+  // The chat opened from the questions, with the window first put at the top of the page, or part way
+  // down a long one: the window the chat inherits is all the old code looked at.
+  async chatOpen(c) {
+    await evaluate("document.getElementById('tabDecisions').click()", true);
+    await until(shown("doc"), 15000);
+    await evaluate("document.getElementById('lists').style.minHeight = '4000px'");
+    await sleep(200);
+    await evaluate(c.from === "middle" ? "window.scrollTo(0, 2000)" : "window.scrollTo(0, 0)");
+    await sleep(300);
+    const inherited = await evaluate("window.scrollY");
+    await evaluate("document.getElementById('tabChat').click()", true);
+    await until(shown("chat"), 15000);
+    await until("document.querySelectorAll('#chatLog .chat-item').length > 0", 15000);
+    await sleep(800);
+    await evaluate("document.getElementById('lists').style.minHeight = ''");
+    return { inherited, ...(await commands.chatPlace()) };
+  },
+  // The window put dist pixels above the bottom of the page (or at its top), as a finger leaves it.
+  async chatScrollTo(c) {
+    await evaluate(c.to === "top" ? "window.scrollTo(0, 0)" : "window.scrollTo(0, document.documentElement.scrollHeight - window.innerHeight - " + Number(c.dist) + ")");
+    await sleep(400);
+    return await commands.chatPlace();
+  },
+  // A refresh of everything (bridge.js refresh: the chat drawn again from its record), while he stays put.
+  async chatRefresh() {
+    await evaluate("window.HordeBridge.request('refresh')");
+    await sleep(800);
+    return await commands.chatPlace();
+  },
+  // A real touch on Jump to latest.
+  async chatJumpTouch() {
+    const at = await centre("#chatJump");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(500);
+    return await commands.chatPlace();
+  },
+  // THE KEYBOARD: from the composer's field, a real Shift+Tab; where the focus lands and whether its ring
+  // shows; then a real key (Enter or Space) on it.
+  async chatJumpKey(c) {
+    await evaluate("document.getElementById('chatText').focus()", true);
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 });
+    await sleep(200);
+    const focused = await commands.chatPlace();
+    if (c.key === "Space") {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
+    } else {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    }
+    await sleep(500);
+    return { focused, after: await commands.chatPlace() };
+  },
+  // The button's words against its face, light and dark (WCAG contrast ratio), with the page's own colours.
+  async chatContrast() {
+    const ratio = `(() => {
+      const j = document.getElementById('chatJump');
+      const was = j.hidden; j.hidden = false;
+      const rgb = (s) => s.match(/[0-9.]+/g).slice(0, 3).map(Number);
+      const lum = (c) => { const [r, g, b] = c.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const s = getComputedStyle(j);
+      const a = lum(rgb(s.color)), b = lum(rgb(s.backgroundColor));
+      j.hidden = was;
+      return { color: s.color, background: s.backgroundColor, ratio: Math.round(100 * (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) / 100 };
+    })()`;
+    await cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+    const light = await evaluate(ratio);
+    await cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+    const dark = await evaluate(ratio);
+    await cdp("Emulation.setEmulatedMedia", { features: [] });
+    return { light, dark };
   },
   async chatShot(c) {
     const shot = await cdp("Page.captureScreenshot", { format: "png" });

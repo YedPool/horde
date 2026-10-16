@@ -320,7 +320,7 @@ function Invoke-HordeWakeTick {
         $silentProbes = 0
         $sentSoFar = Get-HordeWakeEntryValue $Run.silence "probes"
         if ($sentSoFar -is [int] -or $sentSoFar -is [long]) { $silentProbes = [int]$sentSoFar }
-        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes
+        $result = Invoke-HordeWakePass -Waker $Waker -Now $Now -Settings $Settings -Ledger $Run.ledger -Send:(-not $shadow) -Silent:$silentNow -Only $only -Self "$(Get-HordeWakeEntryValue $Run "self")" -SilentProbes $silentProbes -SilentProbeAt (Get-HordeWakeEntryValue $Run.silence "probeAt") -AcksSeen $Run.silence
         # THE LEDGER FIRST, BEFORE ANYTHING ELSE CAN THROW. The pass has nudged whom it nudged; what it
         # counted is the only thing that keeps the next tick from nudging the same session again. It
         # was kept and saved at the END of this block, after the tells: a tell whose state could not be
@@ -366,7 +366,7 @@ function Invoke-HordeWakeTick {
         foreach ($e in @($silence.entries)) { [void]$entries.Add($e) }
         if ($silence.declared -or $silence.moved) {
             if ($silence.declared) { $Run.ledger = Reset-HordeWakeLedgerAttempts -Ledger $Run.ledger }
-            if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger }
+            if ($silence.moved) { $Run.ledger = Set-HordeWakeLedgerProbesDue -Ledger $Run.ledger -Risen (Get-HordeWakeEntryValue $silence "risen") }
             try { Save-HordeWakeLedger -Ledger $Run.ledger -Mode (Get-HordeWakeSendWord -Mode $mode) -HordeHome $HordeHome }
             catch { [void]$failed.Add([pscustomobject]@{ id = "ledger"; reason = ("the ledger could not be saved: " + $_.Exception.Message) }) }
         }

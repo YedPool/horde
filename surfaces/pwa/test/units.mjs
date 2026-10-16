@@ -4,15 +4,16 @@
 // envelopes they send written from relay/Envelope.ps1's strings - so each refusal can be provoked on
 // purpose. The real machine is test-pwa-phone-e2e.ps1's.
 //
-//   node units.mjs <site folder> <repository root>
+//   node units.mjs <site folder> <repository root> [<session envelopes out.json>]
 //
 // Prints one line per check, "[PASS] name" or "[FAIL] name: detail", and nothing else; the suite turns
-// each into a check of its own.
-import { readFileSync } from "node:fs";
+// each into a check of its own. With the third argument, the session envelopes the phone made (section
+// 16) are written there, for the suite to put through the PC's own PowerShell reader and verifier.
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [, , siteDir, repoRoot] = process.argv;
+const [, , siteDir, repoRoot, sessionOut] = process.argv;
 const load = (p) => import(pathToFileURL(join(siteDir, p)).href);
 const P = await load("relay/protocol.js");
 const K = await load("app/keywrap.js");
@@ -27,6 +28,8 @@ const NV = await load("app/notices-view.js");
 const CW = await load("app/cards-why.js");
 const AU = await load("app/app-update.js");
 const RB = await load("app/read-banner.js");
+const CS = await load("app/chat-scroll.js");
+const SV = await load("app/session-view.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -82,12 +85,14 @@ async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }
 }
 // answers: what the machine says of the answers it reads ("answers" in the page); left out, the page
 // says nothing of them, as every machine's did before a part could be answered by itself.
-function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined } = {}) {
+// ranks: 1 from a machine that takes a change of rank from the phone (channels/decisions); left out, as
+// every machine's was before the founder's little buttons.
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)), answers = undefined, withheld = [], receipts = undefined, ranks = undefined } = {}) {
   const out = [];
   const per = Math.ceil(questions.length / pages) || 1;
   for (let i = 0; i < pages; i++) {
     const qs = questions.slice(i * per, (i + 1) * per);
-    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(receipts === undefined ? {} : { receipts }) })));
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld, counts: { open: questions.length }, unreadable: 0, notUnderstood: 0, ...(answers === undefined ? {} : { answers }), ...(ranks === undefined ? {} : { ranks }), ...(receipts === undefined ? {} : { receipts }) })));
   }
   return out;
 }
@@ -2090,6 +2095,357 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
   const full = await throwsAsync(async () => phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "One too many.", answerId: P.hex(P.randomBytes(16)) }));
   check(full.indexOf("Not sent") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await kept()).length === 200, "A FULL OUTBOX REFUSES THE NEW ANSWER, saying why, and drops none of the 200 still waiting", full);
+}
+
+// --- 10i. THE CHAT OPENS AT ITS NEWEST MESSAGE, AND JUMP TO LATEST (chat-scroll.js; the founder, 2026-10-15) ---
+{
+  const at = (scrollTop) => ({ scrollTop, viewHeight: 800, scrollHeight: 5000 });
+  check(CS.distanceFromBottom(at(4200)) === 0 && CS.distanceFromBottom(at(4100)) === 100 && CS.distanceFromBottom({ scrollTop: 0, viewHeight: 800, scrollHeight: 300 }) === 0, "how far the window stands above the bottom; a page shorter than the screen is at its bottom");
+  check(CS.STICK_PX === 48, "the stick threshold is 48 px", String(CS.STICK_PX));
+  check(CS.nearBottom(at(4200)) && CS.nearBottom(at(4200 - 48)) && !CS.nearBottom(at(4200 - 49)), "AT THE BOTTOM means within 48 px of it, and 49 px up is away", JSON.stringify([CS.nearBottom(at(4152)), CS.nearBottom(at(4151))]));
+  check(!CS.showJump(at(4200)) && !CS.showJump(at(4152)) && CS.showJump(at(4151)) && CS.showJump(at(0)), "JUMP TO LATEST HIDES AT THE BOTTOM, and shows away from it");
+  check(CS.placeAfterDraw({ opening: true, near: false }) === "bottom", "AN OPENING GOES TO THE NEWEST MESSAGE, wherever the window stood");
+  check(CS.placeAfterDraw({ opening: false, near: true }) === "bottom", "A REFRESH AT THE BOTTOM STICKS TO THE BOTTOM");
+  check(CS.placeAfterDraw({ opening: false, near: false }) === "keep", "A REFRESH WHILE HE READS BACK KEEPS HIS PLACE");
+  check(CS.keptTop(1000, 120, 120) === 1000 && CS.keptTop(1000, 120, 220) === 1100 && CS.keptTop(1000, 120, 70) === 950 && CS.keptTop(10, 120, 0) === 0, "his place kept: the window moves by what the first message on his screen moved, never above the top");
+  const seen = new Set(["a", "b", "c"]);
+  check(CS.unseenCount(seen, ["a", "b", "c"]) === 0 && CS.unseenCount(seen, ["a", "b", "c", "d", "e"]) === 2 && CS.unseenCount(new Set(), []) === 0, "the new messages are the ones not seen at the bottom");
+  check(CS.jumpWords(0) === "Jump to latest" && CS.jumpWords(2) === "Jump to latest (2 new)" && CS.jumpWords(1) === "Jump to latest (1 new)", "the button's words, with the count of new messages when there are any");
+  check(CS.newsWords(0, 2) === "2 new messages below. Jump to latest to read them." && CS.newsWords(2, 3) === "3 new messages below. Jump to latest to read them." && CS.newsWords(0, 1) === "1 new message below. Jump to latest to read it.", "the live region says the count when it grows");
+  check(CS.newsWords(2, 2) === null && CS.newsWords(3, 0) === null && CS.newsWords(0, 0) === null, "A REFRESH THAT BRINGS NOTHING SAYS NOTHING: the live region is left as it is");
+}
+
+// --- 16. the unlocked session: one passkey prompt per unlock, not per answer (design note "Unlocked session", 2026-10-14) ---
+// phone-core.js, THE UNLOCKED SESSION. Every passkey assertion the phone asks for is counted (asked), and
+// every envelope it puts into the machine's mailbox is opened as the machine would (sentSince). The bytes
+// are checked with relay/js/protocol.js's own functions here, and the suite puts them through the PC's own
+// PowerShell reader and WebAuthn verifier (test-pwa-site.ps1): this file never writes a verifier of its own.
+{
+  const clock = { now: Date.now() };
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const store = memoryStore();
+  const soft = softAuthenticator({ origin, prf: true });
+  const asked = [];
+  const auth = { create: (a) => soft.create(a), get: async (a) => { asked.push(P.hex(a.challenge)); return soft.get(a); } };
+  // Every ECDSA key made while this section runs, to see the session key itself: the phone hands it out nowhere.
+  const madeKeys = [];
+  const realGenerate = subtle.generateKey;
+  subtle.generateKey = async function (alg, extractable, usages) { const k = await realGenerate.call(subtle, alg, extractable, usages); if (alg && alg.name === "ECDSA") madeKeys.push(k); return k; };
+  const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
+  let phone = make();
+  const paired = await phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
+  await phone.announce(paired.id);
+  const phoneKey = await phoneKeyOf(t, m);
+  const entry = await store.get("horde/" + paired.id);
+  const from = entry.deviceKeyId;
+  const member = (over = {}) => ({ idleMs: P.SESSION_IDLE_DEFAULT_MS, vouches: [], needsPasskey: [], ...over });
+  const qs = [question(1, "One?"), question(2, "Two?"), question(3, "Three?"), question(4, "Deploy to production?", { needsPasskey: true })];
+  // A snapshot from the machine with this passkey's receipt, its session member as given (null: none, an older PC).
+  const snap = async (session, over = {}) => {
+    await sendSnapshot(t, m, [phoneKey], qs, { answers: 2, ranks: 1, receipts: [{ from, through: 0, checked: 1, missing: [], applied: [], refused: [], ...(session ? { session } : {}), ...over }] });
+    await phone.refresh(paired.id);
+  };
+  let seen = (await t.get(m.mailbox, 0, 1024)).value.items.length;
+  const sentSince = async () => { const items = (await t.get(m.mailbox, 0, 1024)).value.items; const out = []; for (const it of items.slice(seen)) out.push({ ...(await machineOpens(m, it.text)), text: it.text }); seen = items.length; return out; };
+  const answer = async (number, text, answerId = P.hex(P.randomBytes(16))) => { await phone.answer(paired.id, { number, wordingVersion: 1, text, answerId }); return answerId; };
+  const info = () => phone.session(paired.id);
+  const vouchOf = (sig) => P.fromUtf8(P.unb64u(sig.vouch));
+  const verifies = async (o) => {
+    const v = JSON.parse(vouchOf(o.sig));
+    const pub = await subtle.importKey("raw", P.unb64u(v.sessionPublicKey), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    const e = JSON.parse(o.text);
+    return subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pub, P.unb64u(o.sig.value), P.sessionSignedBytes(o.sig.vouchId, P.headerText(e.header), P.recipientsText(e.recipients), e.ct));
+  };
+
+  // NOT HEARD: an unlock before the machine's first snapshot is the one that announces (THE ANNOUNCEMENT IS
+  // NO BUTTON), still ONE prompt, and makes no session key: with no receipt nothing would let it sign.
+  phone.lock(paired.id);
+  asked.length = 0;
+  madeKeys.length = 0;
+  await phone.unlock(paired.id);
+  const unheard = await info();
+  check(asked.length === 1 && unheard.open === false && madeKeys.length === 0, "AN UNLOCK BEFORE THE MACHINE WAS HEARD is one prompt, announces, and makes no session key", JSON.stringify({ prompts: asked.length, open: unheard.open, keys: madeKeys.length }));
+  await sendSnapshot(t, m, [phoneKey], qs, { answers: 2, receipts: [] });
+  await phone.refresh(paired.id);
+  check((await phone.hordes()).find((h) => h.id === paired.id).heard === true, "CONTROL: then the machine is heard, and the unlocks below are the session's");
+  seen = (await t.get(m.mailbox, 0, 1024)).value.items.length;
+
+  // UNLOCK: ONE assertion, over the vouch for a new session key.
+  phone.lock(paired.id);
+  asked.length = 0;
+  madeKeys.length = 0;
+  await phone.unlock(paired.id);
+  const unlockChallenge = asked[0];
+  check(asked.length === 1, "AN UNLOCK IS ONE PASSKEY PROMPT, the vouch for the session key included", String(asked.length));
+  let s = await info();
+  check(s.open === true && s.keeps === null, "the unlock opens a session in the page; before any snapshot it is not yet known whether the PC keeps sessions", JSON.stringify(s));
+  const sessionKey = madeKeys.find((k) => k.privateKey && k.privateKey.algorithm.name === "ECDSA");
+  check(!!sessionKey && sessionKey.privateKey.extractable === false && sessionKey.privateKey.usages.join(",") === "sign", "the session key is made non-extractable, for signing only", sessionKey ? String(sessionKey.privateKey.extractable) : "no ECDSA key was made at unlock");
+  check((await throwsAsync(() => subtle.exportKey("pkcs8", sessionKey.privateKey))) !== "", "and WebCrypto refuses to export it");
+  const control = await realGenerate.call(subtle, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
+  check((await throwsAsync(() => subtle.exportKey("pkcs8", control.privateKey))) === "", "CONTROL: an extractable key made the same way exports, so the refusal above is the key's own");
+
+  // AN OLDER PC: its receipt has no session member, so each envelope is the passkey's, said once.
+  await snap(null);
+  s = await info();
+  check(s.keeps === false && s.open === true && (await sentSince()).length === 0, "to a PC that says nothing of sessions, no opening envelope goes", JSON.stringify(s));
+  let before = asked.length;
+  await answer(1, "To an old PC.");
+  let sent = await sentSince();
+  check(asked.length === before + 1 && sent.length === 1 && sent[0].sig.alg === "webauthn.get", "AN OLDER PC: the answer is signed by the passkey, one prompt, as before", JSON.stringify({ prompts: asked.length - before, alg: sent[0] && sent[0].sig.alg }));
+  s = await info();
+  check(s.words.indexOf("needs an update") >= 0, "and the phone says in plain words that the PC needs an update to stop asking each time", s.words);
+
+  // A PC THAT KEEPS SESSIONS: the opening envelope, then three answers and a chat line with no prompt.
+  await sendChat(t, m, phoneKey, chatBody(m, "sess-1", [turn("t1", "assistant", "hello")], { backfill: true }));
+  await snap(member());
+  sent = await sentSince();
+  const opening = sent.find((x) => x.header.channel === "trust" && x.header.kind === "session");
+  check(!!opening && opening.sig.alg === "session" && typeof opening.sig.vouch === "string" && JSON.stringify(opening.body) === JSON.stringify({ v: 1, vouchId: opening.sig.vouchId }), "A PC THAT KEEPS SESSIONS is sent the opening envelope (channel trust, kind session) with the vouch, session-signed", JSON.stringify(opening && { alg: opening.sig.alg, body: opening.body }));
+  const vouchText = vouchOf(opening.sig);
+  const v1 = JSON.parse(vouchText);
+  check(P.hex(await P.sessionVouchChallenge(vouchText)) === unlockChallenge, "THE VOUCH IS WHAT THE UNLOCK SIGNED: its challenge, by protocol.js, is the one the passkey was asked for at unlock");
+  const rebuilt = await P.sessionVouchText({ sessionPublicKey: P.unb64u(v1.sessionPublicKey), deviceKeyId: v1.deviceKeyId, phoneKeyId: v1.phoneKeyId, horde: v1.horde, machine: v1.machine, notBefore: v1.notBefore, notAfter: v1.notAfter, seq: v1.seq });
+  check(rebuilt === vouchText && v1.deviceKeyId === from && v1.phoneKeyId === entry.phoneKeyId && v1.horde === "work" && v1.machine === m.keyId && v1.mailbox === "work/" + m.keyId, "the vouch is protocol.js's canonical text, byte for byte, bound to this passkey, phone key, horde and machine", vouchText);
+  const sessionPublic = P.hex(new Uint8Array(await subtle.exportKey("raw", sessionKey.publicKey)));
+  check(P.hex(P.unb64u(v1.sessionPublicKey)) === sessionPublic, "and it vouches for the non-extractable key made at unlock");
+  before = asked.length;
+  await answer(1, "One, in session.");
+  await answer(2, "Two, in session.");
+  await answer(3, "Three, in session.");
+  await phone.sendLine(paired.id, { text: "A line, in session.", messageId: P.hex(P.randomBytes(16)) });
+  sent = await sentSince();
+  check(asked.length === before, "THREE ANSWERS AND A CHAT LINE ASK FOR NO PASSKEY in the session", String(asked.length - before));
+  check(sent.length === 4 && sent.every((x) => x.sig.alg === "session" && x.sig.vouchId === v1.vouchId && x.header.from === from), "each is signed by the session key under the vouch, from the passkey's own id", JSON.stringify(sent.map((x) => x.sig.alg + ":" + x.header.channel)));
+  check(sent.every((x) => typeof x.sig.vouch === "string"), "until the PC names the vouch, each carries it");
+  let good = true;
+  for (const x of sent.concat([opening])) good = good && await verifies(x);
+  check(good, "every session signature verifies under the vouched key, over protocol.js's signed bytes");
+  const tampered = { ...sent[0], sig: { ...sent[0].sig, vouchId: "0".repeat(32) } };
+  check(!(await verifies(tampered)), "CONTROL: the same signature under another vouchId does not verify");
+  const forPowerShell = { rpId: "relay.example.test", origin, devicePublic: entry.devicePublic, vouched: sent[0].text, opening: opening.text, vouchText, challenge: unlockChallenge, bare: "" };
+
+  // THE PC NAMES THE VOUCH: the next envelope goes bare.
+  await snap(member({ vouches: [{ vouchId: v1.vouchId, state: "live" }] }));
+  await answer(1, "One again.");
+  sent = await sentSince();
+  check(sent.length === 1 && sent[0].sig.alg === "session" && sent[0].sig.vouch === undefined && Object.keys(sent[0].sig).join(",") === "alg,vouchId,value", "once the PC names the vouch live, an envelope carries the vouchId alone", JSON.stringify(Object.keys(sent[0].sig)));
+  forPowerShell.bare = sent[0].text;
+
+  // needsPasskey: always the passkey; the question beside it still goes in session.
+  before = asked.length;
+  await answer(4, "Yes, deploy.");
+  sent = await sentSince();
+  check(asked.length === before + 1 && sent[0].sig.alg === "webauthn.get", "A QUESTION FLAGGED needsPasskey IS ANSWERED WITH A FRESH PASSKEY ASSERTION, session or not", JSON.stringify({ prompts: asked.length - before, alg: sent[0].sig.alg }));
+  before = asked.length;
+  await answer(3, "Three, after it.");
+  sent = await sentSince();
+  check(asked.length === before && sent[0].sig.alg === "session", "CONTROL: a question beside it, not flagged, goes in session with no prompt");
+
+  // A CHANGE OF RANK goes as an answer does (channels/decisions/Channel.ps1, A SESSION-SIGNED RANK): in
+  // session with no prompt, and with a fresh passkey assertion on a question flagged needsPasskey.
+  before = asked.length;
+  await phone.rank(paired.id, { number: 1, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) });
+  sent = await sentSince();
+  check(asked.length === before && sent.length === 1 && sent[0].header.kind === "rank" && sent[0].sig.alg === "session" && sent[0].sig.vouchId === v1.vouchId && (await verifies({ ...sent[0], sig: { ...sent[0].sig, vouch: opening.sig.vouch } })), "A CHANGE OF RANK IS SIGNED BY THE SESSION KEY, with no prompt", JSON.stringify({ prompts: asked.length - before, kind: sent[0] && sent[0].header.kind, alg: sent[0] && sent[0].sig.alg }));
+  before = asked.length;
+  await phone.rank(paired.id, { number: 4, which: "blocks", level: "all", rankId: P.hex(P.randomBytes(16)) });
+  sent = await sentSince();
+  check(asked.length === before + 1 && sent.length === 1 && sent[0].header.kind === "rank" && sent[0].sig.alg === "webauthn.get", "and a change of rank of a question flagged needsPasskey asks for a fresh passkey assertion, as its answer does", JSON.stringify({ prompts: asked.length - before, alg: sent[0] && sent[0].sig.alg }));
+
+  // session-unknown: the vouch rides again.
+  await snap(member({ vouches: [{ vouchId: v1.vouchId, state: "session-unknown" }] }));
+  before = asked.length;
+  await answer(2, "Two, the PC lost the vouch.");
+  sent = await sentSince();
+  check(asked.length === before && sent[0].sig.alg === "session" && typeof sent[0].sig.vouch === "string", "session-unknown: the next envelope carries the vouch again, with no prompt");
+
+  // IDLE, by the PC's limit, counted from the key's last use.
+  await snap(member({ idleMs: 60000, vouches: [{ vouchId: v1.vouchId, state: "live" }] }));
+  await answer(1, "One, then a pause.");
+  await sentSince();
+  clock.now += 59000;
+  s = await info();
+  check(s.open === true && s.until === clock.now + 1000, "CONTROL: a second inside the PC's idle limit the session is open, and says when it ends", JSON.stringify(s));
+  clock.now += 2000;
+  s = await info();
+  check(s.open === false && s.words.indexOf("not used for as long as your PC allows") >= 0, "PAST THE PC'S IDLE LIMIT the page drops the key at once, and says so", JSON.stringify(s));
+  before = asked.length;
+  const idle1 = await answer(1, "One, after the idle.");
+  const idle2 = await answer(2, "Two, after the idle.");
+  sent = await sentSince();
+  const v2 = JSON.parse(vouchOf(sent[0].sig));
+  check(asked.length === before + 1 && sent.length === 2 && sent.every((x) => x.sig.alg === "session" && x.sig.vouchId === v2.vouchId) && v2.vouchId !== v1.vouchId && v2.seq > v1.seq, "the next answer asks for the passkey ONCE, for a new vouch above the last, and the one after it asks nothing", JSON.stringify({ prompts: asked.length - before, seqs: [v1.seq, v2.seq] }));
+
+  // A VOUCH THE PC ENDED: the key is dropped, and every answer sent under it is signed again by the passkey,
+  // one a call (one prompt a refresh, as every re-sign).
+  await snap(member({ vouches: [{ vouchId: v2.vouchId, state: "live" }] }));
+  const underEnded = await answer(3, "Three, under a vouch about to end.");
+  await sentSince();
+  await snap(member({ vouches: [{ vouchId: v2.vouchId, state: "session-ended" }] }));
+  s = await info();
+  check(s.open === false && s.words.indexOf("Your PC ended") >= 0, "session-ended: the page ends the session and says so in plain words", s.words);
+  before = asked.length;
+  let r = await phone.resend(paired.id);
+  sent = await sentSince();
+  check(r.resent === 1 && asked.length === before + 1 && sent.length === 1 && sent[0].sig.alg === "webauthn.get", "AN ANSWER SENT UNDER THE ENDED VOUCH is signed again with one passkey prompt, one a call", JSON.stringify({ r, prompts: asked.length - before }));
+  r = await phone.resend(paired.id);
+  r = await phone.resend(paired.id);
+  sent = sent.concat(await sentSince());
+  check(asked.length === before + 3 && sent.length === 3 && sent.every((x) => x.sig.alg === "webauthn.get") && [idle1, idle2, underEnded].every((id) => sent.some((x) => x.body.answerId === id)), "and so is every other answer sent under it, each once", JSON.stringify({ prompts: asked.length - before, n: sent.length }));
+  r = await phone.resend(paired.id);
+  const again2 = await sentSince();
+  check(r.resent === 0 && again2.length === 0, "CONTROL: once signed again by the passkey, it is not sent again on the next refresh", JSON.stringify({ r, sent: again2.map((x) => [x.sig.alg, x.body.answerId === underEnded, x.body.number]) }));
+
+  // EVERY OTHER CODE THAT ENDS A SESSION ends it, each with its words, and the next answer reopens with one prompt.
+  const ends = { "session-expired": "has expired", "session-idle": "not used", "session-stale": "newer one", "session-refused": "refused" };
+  for (const code of Object.keys(ends)) {
+    await answer(1, "Reopen before " + code + ".");
+    const cur = (await sentSince())[0].sig.vouchId;
+    before = asked.length;
+    await snap(member({ vouches: [{ vouchId: cur, state: code }] }));
+    s = await info();
+    const dropped = s.open === false && s.words.indexOf(ends[code]) >= 0;
+    await answer(2, "After " + code + ".");
+    const next = (await sentSince())[0];
+    check(dropped && asked.length === before + 1 && next.sig.alg === "session" && next.sig.vouchId !== cur, code + ": the key is dropped with its words, and the next answer opens a new session with one prompt", JSON.stringify({ words: s.words, prompts: asked.length - before }));
+    await snap(member({ vouches: [{ vouchId: next.sig.vouchId, state: "live" }] }));
+  }
+
+  // needs-passkey FROM THE PC: never settled as refused; signed again by the passkey, once.
+  const owed = await answer(1, "One, the PC wants a passkey.");
+  const free = await answer(2, "Two, the PC took it.");
+  const cur = (await sentSince())[0].sig.vouchId;
+  await snap(member({ vouches: [{ vouchId: cur, state: "live" }], needsPasskey: [owed] }), { refused: [owed] });
+  const states = await phone.answers(paired.id);
+  check(states.find((x) => x.answerId === owed).state === "sent" && states.find((x) => x.answerId === free).state === "sent", "AN ANSWER THE PC LISTS AS needs-passkey is not taken for refused, even listed there too", JSON.stringify(states.map((x) => x.state)));
+  before = asked.length;
+  r = await phone.resend(paired.id);
+  sent = await sentSince();
+  check(r.resent === 1 && asked.length === before + 1 && sent.length === 1 && sent[0].sig.alg === "webauthn.get" && sent[0].body.answerId === owed, "it is signed again with one passkey prompt; the answer not listed is left alone", JSON.stringify({ r, ids: sent.map((x) => x.body.answerId === owed ? "owed" : "other") }));
+  check((await phone.answers(paired.id)).find((x) => x.answerId === owed).state === "sent", "and while the PC still lists it, it stays his answer on its way");
+
+  // SIGNED AGAIN UNDER ITS FIRST TIME, from before this session: the passkey's; from inside it: the session's.
+  const early = await answer(3, "Three, from the last session.");
+  const earlyEnv = (await sentSince())[0];
+  await phone.endSession(paired.id, "away");
+  s = await info();
+  check(s.open === false && s.words.indexOf("background") >= 0, "endSession away drops the key and says so", s.words);
+  clock.now += 1000;
+  const inside = await answer(1, "One, in the new session.");
+  const insideEnv = (await sentSince())[0];
+  clock.now += 2 * P.ANSWER_RESEND_MS;
+  await snap(member({ vouches: [{ vouchId: insideEnv.sig.vouchId, state: "live" }] }), { through: insideEnv.header.seq + 1, missing: [earlyEnv.header.seq, insideEnv.header.seq] });
+  before = asked.length;
+  r = await phone.resend(paired.id);
+  r = await phone.resend(paired.id);
+  sent = await sentSince();
+  const byId = (id) => sent.find((x) => x.body.answerId === id);
+  check(byId(early) && byId(early).sig.alg === "webauthn.get" && byId(early).header.ts === earlyEnv.header.ts, "A MISSING ANSWER FROM BEFORE THE SESSION is signed again by the passkey, under its first time", JSON.stringify(sent.map((x) => x.sig.alg)));
+  check(byId(inside) && byId(inside).sig.alg === "session", "CONTROL: one from inside the session is signed again by the session key", JSON.stringify(sent.map((x) => x.sig.alg)));
+
+  // NO LENGTH OF ITS OWN (C, 2026-10-15): in use, the session outlives its vouch's notAfter on the phone;
+  // only the PC's word (session-expired, above) ends it for that.
+  const notAfter = JSON.parse(vouchOf(insideEnv.sig)).notAfter;
+  await snap(member({ idleMs: 60000, vouches: [{ vouchId: insideEnv.sig.vouchId, state: "live" }] }));
+  for (clock.now = notAfter - 50000; clock.now < notAfter + 120000; clock.now += 50000) { await answer(2, "Two, at " + clock.now + "."); await sentSince(); }
+  s = await info();
+  check(s.open === true && clock.now > notAfter, "THE PHONE KEEPS NO SESSION LENGTH OF ITS OWN: used within its idle limit, the session is open past the vouch's notAfter", JSON.stringify({ open: s.open, past: clock.now - notAfter }));
+  check(s.until === clock.now - 50000 + 60000, "and its end is the PC's idle limit from its last use, nothing else", JSON.stringify(s));
+
+  // LOCK, RELOAD, RECOVERY: no key outlives the page, and the store never holds one.
+  await answer(1, "One, reopened.");
+  check((await info()).open === true, "CONTROL: an answer reopened the session");
+  phone.lock(paired.id);
+  check((await info()).open === false, "a lock drops the key with the rest");
+  await phone.unlock(paired.id);
+  phone = make();
+  check((await info()).open === false, "A RELOAD: the new page holds no session key");
+  const walk = (x, seen2 = new Set()) => { if (!x || typeof x !== "object" || seen2.has(x)) return 0; seen2.add(x); if (x instanceof globalThis.CryptoKey) return 1; let n = 0; for (const k of Object.keys(x)) n += walk(x[k], seen2); return n; };
+  let held = 0;
+  for (const k of ["horde/", "outbox/"]) for (const x of await store.list(k)) held += walk(x);
+  check(held === 0 && JSON.stringify(await store.list("horde/")).indexOf(sessionPublic) < 0, "the store holds no CryptoKey and no session key's bytes, ever", String(held));
+  check((await store.get("horde/" + paired.id)).vouchSeq >= 7, "it holds only the vouch counter, which only climbs", String((await store.get("horde/" + paired.id)).vouchSeq));
+  await phone.recover(paired.id, paired.recoveryCode);
+  check((await info()).open === false, "A RECOVERY-CODE UNLOCK MAKES NO SESSION KEY: it reads only");
+
+  // THE BRIDGE AND THE WORDS.
+  phone = make();
+  const bridge = createBridge(phone, { loadKinds: async () => ({}) });
+  const pushed = [];
+  bridge.on("session-changed", (x) => pushed.push(x));
+  await bridge.request("unlock", { id: paired.id });
+  let list = await bridge.request("sessions");
+  check(pushed.length >= 1 && list.length === 1 && list[0].open === true && list[0].horde === "work", "the bridge answers sessions with each unlocked horde's session, and pushes it on unlock", JSON.stringify(list));
+  list = await bridge.request("session-end", { why: "away" });
+  check(list[0].open === false && list[0].words.indexOf("background") >= 0, "session-end ends it, and the horde stays unlocked to read", JSON.stringify(list));
+  const lines = SV.sessionLines([{ horde: "work", open: true, until: 0, keeps: true }, { horde: "home", open: true, keeps: false }, { horde: "lab", open: false, keeps: true }], () => "18:40");
+  check(lines[0] === "work: an unlocked session is open until 18:40. Answers, chat lines and photos go without the passkey until then - sooner if the app stays in the background too long." && lines[1].indexOf("needs an update") >= 0 && lines[2].indexOf("no unlocked session") >= 0, "THE ACCOUNT SCREEN'S WORDS say whether a session is open and until when, in plain words", JSON.stringify(lines));
+
+  delete subtle.generateKey;
+  if (sessionOut) writeFileSync(sessionOut, JSON.stringify(forPowerShell));
+}
+
+// --- 17. HIS LITTLE BUTTONS: a change of rank, signed and sent like an answer, done when the PC says (the founder, 2026-10-14) ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const { phone, paired, phoneKey } = await pairedApp(t, m);
+  const lastToMachine = async () => { const items = (await t.get(m.mailbox, 0, 256)).value.items; const o = await machineOpens(m, items[items.length - 1].text); return { ...o, key: items[items.length - 1].key }; };
+  const base = { rankId: P.hex(P.randomBytes(16)), machine: m.keyId, snapshot: m.keyId + "/decisions/1/" + "0".repeat(24), number: 4 };
+  const body = JSON.parse(P.fromUtf8(P.rankBody({ ...base, which: "blocks", level: "none" })));
+  check(Object.keys(body).join(",") === "v,rankId,machine,snapshot,number,blocks" && body.v === 1 && body.blocks === "none" && !("text" in body) && !("answerId" in body), "the rank body holds a change of rank's members and one word - never an answer's", JSON.stringify(body));
+  for (const [which, level] of [["importance", "urgent"], ["blocks", "high"], ["title", "x"], ["__proto__", "high"], ["importance", ""]]) {
+    check((await throwsAsync(async () => P.rankBody({ ...base, which, level }))).indexOf("importance (high, normal or low) or blocks (all, part or none)") >= 0, "the protocol makes no rank body for " + which + " " + JSON.stringify(level));
+  }
+  // A MACHINE THAT DOES NOT SAY IT TAKES ONE is never sent one: its gate would refuse the kind.
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?")], { answers: 2, receipts: [] });
+  await phone.refresh(paired.id);
+  const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const old = await throwsAsync(() => phone.rank(paired.id, { number: 1, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) }));
+  check(old.indexOf("does not take a change of rank") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore, "to a machine whose snapshot does not say ranks, nothing is sent, and he is told to change it at the PC", old);
+  // A MACHINE THAT DOES: one envelope of kind rank, signed by the passkey, bound to the page of the question.
+  const sent = await sendSnapshot(t, m, [phoneKey], [question(1, "One?"), question(2, "Two?")], { answers: 2, receipts: [], ranks: 1 });
+  await phone.refresh(paired.id);
+  const rid = P.hex(P.randomBytes(16));
+  await phone.rank(paired.id, { number: 2, which: "importance", level: "high", rankId: rid });
+  const got = await lastToMachine();
+  check(got.header.channel === "decisions" && got.header.kind === "rank" && got.sig.alg === "webauthn.get" && got.body.rankId === rid && got.body.number === 2 && got.body.importance === "high" && got.body.machine === m.keyId && got.body.snapshot === sent[0].key, "a tap is one envelope on channel decisions, kind rank, signed by the passkey, naming the snapshot page that carried the question", JSON.stringify(got.body));
+  const notThere = await throwsAsync(() => phone.rank(paired.id, { number: 9, which: "importance", level: "high", rankId: P.hex(P.randomBytes(16)) }));
+  check(notThere.indexOf("not in the snapshot") >= 0, "a question the snapshot does not hold is not ranked", notThere);
+  // THE BRIDGE answers a tap once the PC has said: applied (the snapshot then shows the new level), or refused.
+  const bridge = createBridge(phone, { loadKinds: async () => ({}) });
+  const lists = [];
+  bridge.on("list-changed", (r) => lists.push(r));
+  await bridge.request("pick", { id: paired.id });
+  let settled = null;
+  const rid2 = P.hex(P.randomBytes(16));
+  const pending = bridge.request("rank", { number: 1, which: "blocks", level: "all", id: rid2 }).then((r) => { settled = r; });
+  await new Promise((r) => setTimeout(r, 30));
+  check(settled === null, "CONTROL: sent, and nothing said by the PC yet, the tap is not answered");
+  // The receipt of this phone's passkey: the key id its envelopes are from.
+  const me = { from: got.header.from, through: 3, checked: 1, missing: [], applied: [rid2], refused: [] };
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [me], ranks: 1 });
+  await bridge.request("refresh", {});
+  await pending;
+  const lastList = lists[lists.length - 1];
+  check(settled && settled.ok === true && lastList.value.questions.find((q) => q.number === 1).blocks === "all", "once the receipt lists it applied, the tap is answered done - and the list pushed before it already holds the new level", JSON.stringify(settled));
+  const rid3 = P.hex(P.randomBytes(16));
+  const refusedP = bridge.request("rank", { number: 2, which: "importance", level: "low", id: rid3 });
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [{ ...me, through: 4, applied: [rid2], refused: [rid3] }], ranks: 1 });
+  await bridge.request("refresh", {});
+  const refused = await refusedP;
+  check(refused.ok === false && refused.reason.indexOf("The PC refused this change") >= 0, "once the receipt lists it refused, the tap is answered not changed, in the phone's own words", JSON.stringify(refused));
+  // NEEDS-PASSKEY: a change the PC held back for a fresh passkey is answered not changed, saying so.
+  const rid4 = P.hex(P.randomBytes(16));
+  const npP = bridge.request("rank", { number: 2, which: "blocks", level: "none", id: rid4 });
+  await sendSnapshot(t, m, [phoneKey], [question(1, "One?", { blocks: "all" }), question(2, "Two?")], { answers: 2, receipts: [{ ...me, through: 5, applied: [rid2], refused: [rid3], session: { idleMs: P.SESSION_IDLE_DEFAULT_MS, vouches: [], needsPasskey: [rid4] } }], ranks: 1 });
+  await bridge.request("refresh", {});
+  const np = await npP;
+  check(np.ok === false && np.reason.indexOf("asks for your passkey") >= 0, "once the receipt lists it under session.needsPasskey, the tap is answered not changed, and he is told to confirm with his passkey", JSON.stringify(np));
+  const oldBridge = await bridge.request("rank", { number: 2, which: "importance", level: "sideways", id: P.hex(P.randomBytes(16)) });
+  check(oldBridge.ok === false && oldBridge.reason.indexOf("importance (high, normal or low)") >= 0, "a level that is none of the list's is refused before anything is signed", JSON.stringify(oldBridge));
 }
 
 process.stdout.write("[DONE] " + failures + "\n");

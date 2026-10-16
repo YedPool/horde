@@ -81,6 +81,8 @@
   <h1>Your account</h1>
   <p id="accountWho" class="hint"></p>
   <p id="appVersion" class="hint"></p>
+  <h2>Unlocked session</h2>
+  <div id="sessionWords" class="hint"></div>
   <h2>Machines</h2>
   <p class="hint">Each machine reaches the relay with the key this phone registered when it paired. Remove one and it reaches nothing more, until it is paired again with a new offer.</p>
   <ul id="machineList"></ul>
@@ -158,6 +160,8 @@
   <div id="chatLog" aria-live="polite"></div>
   <div id="chatEmpty" class="hint" hidden>Nothing has come from the Thrall yet. Its turns appear here once the machine trusts this phone and its runner turns.</div>
   <div id="chatCompose">
+    <div id="chatJumpRow"><button type="button" id="chatJump" class="primary" hidden>Jump to latest</button></div>
+    <p id="chatNews" class="sr" role="status" aria-live="polite"></p>
     <label for="chatText" class="sr">Write to the Thrall</label>
     <textarea id="chatText" rows="2" spellcheck="true" autocomplete="off" placeholder="Write to the Thrall"></textarea>
     <div id="chatKeys">

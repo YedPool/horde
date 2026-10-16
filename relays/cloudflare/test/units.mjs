@@ -19,6 +19,7 @@ const A = await load("relays/cloudflare/worker/allowlist.js");
 const O = await load("relays/cloudflare/worker/oidc.js");
 const W = await load("relays/cloudflare/worker/site.js");
 const PR = await load("relays/cloudflare/worker/presence.js");
+const GC = await load("relays/cloudflare/worker/google-client.js");
 const subtle = globalThis.crypto.subtle;
 
 let failures = 0;
@@ -171,6 +172,26 @@ const v = (t, e = expect) => J.verifyIdToken(t, keyFor, e);
   check(!A.admits(on, { sub: "333", email: "other@example.com" }), "an account on neither list does not");
   check(!A.admits(A.readAllowlist("{not json"), claims) && !A.admits(A.readAllowlist('{"on":true,"emails":["UP@x.y"],"subs":[]}'), claims) && !A.admits(A.readAllowlist('{"on":"yes","emails":[],"subs":[]}'), claims), "a broken list lets nobody in: it fails closed");
   check(!A.admits(A.readAllowlist('{"on":true,"emails":["founder@example.com"],"subs":[],"more":1}'), claims), "even one that names the account, if it carries a member the Worker does not know");
+  // THE BINDING AS STORED, NOT MENDED (2026-10-14): each with a twin that must still read.
+  const off = '{"on":false,"emails":[],"subs":[]}';
+  const onList = '{"on":true,"emails":["founder@example.com"],"subs":[]}';
+  check(A.readAllowlist("\uFEFF" + off).state === "broken" && A.readAllowlist(off).state === "off", "a list with a byte order mark in front is broken; its twin without it reads");
+  check(A.readAllowlist(" " + onList + "\n").state === "broken" && !A.admits(A.readAllowlist(onList + " "), claims) && A.readAllowlist(onList).state === "on", "a list with a space or a line end around it is broken (JSON.parse would take it), never mended; its twin reads");
+  check(A.readAllowlist('{"on":true,"emails":["caf\u00e9@example.com"],"subs":[]}').state === "broken", "a list holding a character that is not ASCII is broken");
+}
+
+// --- 6b. the Google client the Worker signs in with (google-client.js) ---
+{
+  const id = "123-abc.apps.googleusercontent.com";
+  const secret = "GOCSPX-fakeSecretForUnits0123456";
+  const c = GC.googleClientOf({ GOOGLE_CLIENT_ID: id, GOOGLE_CLIENT_SECRET: secret });
+  check(c !== null && c.clientId === id && c.clientSecret === secret, "clean values are the client, exactly as stored");
+  check(GC.googleClientOf({ GOOGLE_CLIENT_ID: "\uFEFF" + id, GOOGLE_CLIENT_SECRET: secret }) === null, "a client id with a byte order mark in front is not set up: it is never sent to Google");
+  check(GC.googleClientOf({ GOOGLE_CLIENT_ID: id, GOOGLE_CLIENT_SECRET: "\uFEFF" + secret }) === null, "nor is a client secret with one");
+  check(GC.googleClientOf({ GOOGLE_CLIENT_ID: id + " ", GOOGLE_CLIENT_SECRET: secret }) === null && GC.googleClientOf({ GOOGLE_CLIENT_ID: id, GOOGLE_CLIENT_SECRET: " " + secret }) === null && GC.googleClientOf({ GOOGLE_CLIENT_ID: id + "\n", GOOGLE_CLIENT_SECRET: secret }) === null, "a value with a space or a line end at either end is not set up, never trimmed");
+  check(GC.googleClientOf({ GOOGLE_CLIENT_ID: id, GOOGLE_CLIENT_SECRET: "GOCSPX-in side-0123" }) !== null, "its twin, a space inside a value, is set up");
+  check(GC.googleClientOf({ GOOGLE_CLIENT_ID: "123-ab\u00e9.apps.googleusercontent.com", GOOGLE_CLIENT_SECRET: secret }) === null, "a value holding a character that is not ASCII is not set up");
+  check(GC.googleClientOf({ GOOGLE_CLIENT_SECRET: secret }) === null && GC.googleClientOf({ GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: secret }) === null && GC.googleClientOf({ GOOGLE_CLIENT_ID: 5, GOOGLE_CLIENT_SECRET: secret }) === null, "nor is one absent, empty or not text");
 }
 
 // --- 7. the site ---

@@ -70,6 +70,9 @@
         @{ Name = "a-kind-nobody-declared-accepted"
            Find = 'if ($script:HordeWakeTellKinds -cnotcontains $Kind) { throw'
            Replace = 'if ($false) { throw' }
+        @{ Name = "the-end-of-the-silent-probes-is-no-kind-the-warchief-is-told-of"
+           Find = '"fleet-silent", "silent-probes-ended")'
+           Replace = '"fleet-silent")' }
         @{ Name = "tell-state-saved-under-another-mode"
            Find = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -Mode $Mode -Shadow:$Shadow -HordeHome $HordeHome) -Text'
            Replace = 'Write-HordeWakeFile -Path (Get-HordeWakeStateFile -Name $Name -HordeHome $HordeHome) -Text' }

@@ -14,6 +14,10 @@
 #      not canonical, pages and freshness, two hordes, answers bound to machine and page, the recovery
 #      code reading and never answering, the key wraps, a passkey with no PRF, the relay client's
 #      distrust, and the bridge. Each line it prints is a check here.
+#   4. THE UNLOCKED SESSION'S BYTES, through the PC's own reader and verifier: the envelopes part 3's
+#      phone made under its session key (units.mjs, section 16) are read by relay/Envelope.ps1, the vouch
+#      they carry verified by relay/WebAuthn.ps1 over relay/Session.ps1's challenge, and the session
+#      signature by relay/P256.ps1 under the vouched key - the PowerShell the PC runs, never a copy.
 # Node is needed for part 3; without it the suite says so and exits 3.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -22,6 +26,7 @@ $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "surfaces\Port.ps1")
 . (Join-Path $root "surfaces\pwa\Site.ps1")
+. (Join-Path $root "relay\Envelope.ps1")
 Set-StrictMode -Version Latest
 
 $work = Join-Path $env:TEMP ("horde-pwa-site-" + [guid]::NewGuid().ToString("N"))
@@ -68,8 +73,15 @@ try {
     }
     Check ($true) "every other file is copied byte for byte (a difference is a failure above)"
     $config = (Read-Site $site "app/config.json") | ConvertFrom-Json
-    Check ($config.schemaVersion -eq 1 -and $config.transport -ceq "memory" -and $config.relayOrigin -ceq "https://relay.example.test" -and $config.lockAfterHiddenSeconds -eq 300) "config.json names the transport, the relay, and the founder's five minutes before a hidden app locks"
+    Check ($config.schemaVersion -eq 1 -and $config.transport -ceq "memory" -and $config.relayOrigin -ceq "https://relay.example.test" -and $config.lockAfterHiddenSeconds -eq 600 -and $config.sessionAwaySeconds -eq 600) "config.json names the transport, the relay, ten minutes before a hidden app locks - no sooner than the session's away time, the founder's Q75 (c) - and the ten minutes away before its unlocked session ends"
+    Check ((New-HordePwaSite -Out (Join-Path $work "x5") -Transport "memory" -SessionAwaySeconds 0).reason.Contains("1 to 86400 seconds")) "an away time of none is refused"
+    Check ((New-HordePwaSite -Out (Join-Path $work "x6") -Transport "memory" -SessionAwaySeconds 86401).reason.Contains("1 to 86400 seconds")) "and so is one over a day"
     Check ((New-HordePwaSite -Out (Join-Path $work "x3") -Transport "memory" -LockAfterHiddenSeconds 0).reason.Contains("1 to 86400 seconds")) "a lock time of none is refused"
+    $soon = New-HordePwaSite -Out (Join-Path $work "x7") -Transport "memory" -LockAfterHiddenSeconds 300
+    Check ($soon.state -cne "known" -and $soon.reason.Contains("may not lock") -and -not (Test-Path -LiteralPath (Join-Path $work "x7\app"))) ("A LOCK SOONER THAN THE AWAY TIME IS REFUSED (the old five minutes against the ten): it would end every session first, Q75 (c) (" + $soon.reason + ")")
+    $same = New-HordePwaSite -Out (Join-Path $work "x8") -Transport "memory" -LockAfterHiddenSeconds 600 -SessionAwaySeconds 600
+    $later = New-HordePwaSite -Out (Join-Path $work "x9") -Transport "memory" -LockAfterHiddenSeconds 2 -SessionAwaySeconds 1
+    Check ($same.state -ceq "known" -and $later.state -ceq "known") "CONTROL: a lock at the away time, or after it, builds"
     $sw = Read-Site $site "app/sw.js"
     $ver = [regex]::Match($sw, 'const VERSION = "([0-9a-f]{16})";').Groups[1].Value
     Check ($ver -ceq $b.value.version) "the worker carries the site's version"
@@ -136,7 +148,8 @@ try {
     } else {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $node.Source
-        $psi.Arguments = '"' + (Join-Path $here "units.mjs") + '" "' + $site + '" "' + $root + '"'
+        $sessionOut = Join-Path $work "session-envelopes.json"
+        $psi.Arguments = '"' + (Join-Path $here "units.mjs") + '" "' + $site + '" "' + $root + '" "' + $sessionOut + '"'
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -153,6 +166,37 @@ try {
         $doneLine = @($lines | Where-Object { $_.StartsWith("[DONE] ") })
         Check ($p.ExitCode -eq 0 -and $doneLine.Count -eq 1 -and @($lines | Where-Object { $_.StartsWith("[PASS] ") }).Count -ge 50) ("the module checks ran to their end (" + @($lines | Where-Object { $_.StartsWith("[PASS] ") }).Count + " passed; " + $errTask.Result.Trim() + ")")
         $p.Dispose()
+
+        Write-Host ""
+        Write-Host "--- 4. the unlocked session's bytes, through the PC's own reader and verifier ---" -ForegroundColor Cyan
+        Check (Test-Path -LiteralPath $sessionOut) "CONTROL: the modules wrote the session envelopes their phone made"
+        if (Test-Path -LiteralPath $sessionOut) {
+            $js = [System.IO.File]::ReadAllText($sessionOut, $ascii) | ConvertFrom-Json
+            $devicePub = ConvertFrom-HordeRelayBase64Url -Text $js.devicePublic -What "the passkey's key"
+            foreach ($which in @("vouched", "opening")) {
+                $r = Read-HordeRelayEnvelope -Text $js.$which
+                Check ($r.ok -and $r.value.sig.alg -ceq "session" -and $null -ne $r.value.sig.vouch) ("the PC's reader takes the phone's " + $which + " envelope, its vouch read in full (" + $r.reason + ")")
+                if (-not $r.ok) { continue }
+                $s = $r.value.sig
+                Check ($s.vouch.text -ceq $js.vouchText -and $s.vouch.deviceKeyId -ceq $r.value.header.from) "its vouch is the text the phone made, naming the passkey the envelope is from"
+                $challenge = Get-HordeRelaySessionVouchChallenge -Text $s.vouch.text
+                Check ((ConvertTo-HordeRelayHex -Bytes $challenge) -ceq $js.challenge) "the challenge the PC computes for it is the one the phone's passkey was asked to sign at unlock"
+                $wa = Test-HordeRelayWebAuthnAssertion -Public $devicePub -AuthenticatorData $s.authenticatorData -ClientDataJson $s.clientDataJson -Signature $s.signature -Challenge $challenge -RpId $js.rpId -Origins @($js.origin) -RequireUserVerification $true
+                Check ($wa.ok -and $wa.userVerified) ("the PC's WebAuthn verifier takes the unlock's assertion as the vouch, user verified (" + $wa.reason + ")")
+                $other = Get-HordeRelaySessionVouchChallenge -Text ($s.vouch.text.Replace('"seq":', '"seq":1'))
+                $wa2 = Test-HordeRelayWebAuthnAssertion -Public $devicePub -AuthenticatorData $s.authenticatorData -ClientDataJson $s.clientDataJson -Signature $s.signature -Challenge $other -RpId $js.rpId -Origins @($js.origin) -RequireUserVerification $true
+                Check (-not $wa2.ok) "CONTROL: over another vouch's challenge the same assertion is refused"
+                $signed = Get-HordeRelaySessionSigningInput -VouchId $s.vouchId -Signed (Get-HordeRelaySigningInput -HeaderText $r.value.headerText -RecipientsText $r.value.recipientsText -CtText $r.value.ctText)
+                Check (Test-HordeRelayEs256Signature -Public $s.vouch.sessionPublic -Bytes $signed -Signature $s.value -AllowHighS) "and its session signature verifies under the vouched key"
+            }
+            $bare = Read-HordeRelayEnvelope -Text $js.bare
+            $first = Read-HordeRelayEnvelope -Text $js.vouched
+            Check ($bare.ok -and $bare.value.sig.alg -ceq "session" -and $null -eq $bare.value.sig.vouch) ("the PC's reader takes the bare envelope, the vouchId alone (" + $bare.reason + ")")
+            if ($bare.ok -and $first.ok) {
+                $signed = Get-HordeRelaySessionSigningInput -VouchId $bare.value.sig.vouchId -Signed (Get-HordeRelaySigningInput -HeaderText $bare.value.headerText -RecipientsText $bare.value.recipientsText -CtText $bare.value.ctText)
+                Check ($bare.value.sig.vouchId -ceq $first.value.sig.vouchId -and (Test-HordeRelayEs256Signature -Public $first.value.sig.vouch.sessionPublic -Bytes $signed -Signature $bare.value.sig.value -AllowHighS)) "and it is signed by the same session key, under the same vouch"
+            }
+        }
     }
 } finally {
     if ((Split-Path -Leaf $work) -match '^horde-pwa-site-[0-9a-f]{32}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
