@@ -356,3 +356,12 @@ its branch can break main when main moved under it").
    targeted set**, and run on the final head, in a clean tree, before every merge, by any Orc. They
    are light and read the whole repository, so any pull request can break them: on 2026-10-14 PRs
    278, 279 and 288 each merged green on their own suites and left `main` red on both.
+10. **Merges go through `horde merge`**, which does what rule 9 and rule 4 ask in one command, so no
+   step rests on memory: it refuses a PR that is not open, is a draft, conflicts or misses a required
+   review; runs the two guards of rule 9 on the merge result with current `main` (rule 2), in a scratch
+   checkout of its own, and refuses if either is red; checks again if `main` moved meanwhile; merges
+   with `gh pr merge --merge`; and records the task ledger's merged event and tells the warchief and
+   the analyst, saying loudly what to run by hand if any of those fails after the merge. Before it, on
+   2026-10-14 three merges skipped the guards and left `main` red, and on 2026-10-06 three merges were
+   told to nobody (fleet audit of 2026-10-16, findings 2, 4 and 10). The repository's CI runs the
+   same guards on every pull request and on `main`; it notifies and never blocks.
