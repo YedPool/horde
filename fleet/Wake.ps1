@@ -379,6 +379,19 @@ function Invoke-HordeFleetWake {
                     continue
                 }
                 $cur = Get-HordeFleetCurrentId -Session $s
+                # 2, AGAIN: A FRESH READING RIGHT BEFORE THIS SPAWN (review of PR 318, finding 1). Every
+                # earlier session of the wake was waited for, up to the wake wait each, so the first reading
+                # can be minutes old; a sleeper resumed by hand meanwhile would be started a second time.
+                # The ids this wake has already started cannot be this sleeper under a new id either.
+                $fresh = & $agent.snapshot
+                $recheck = & $agent.verdict $fresh $cur ("" + $s.cwd) @($recordIds + @($startedIds)) (Get-HordeFleetSince -Session $s -Record $record)
+                if ("" + $recheck.state -cne "stopped") {
+                    $why = $(if ("" + $recheck.state -ceq "running") { "still running: " + $recheck.reason } else { "may be running, so it is left alone: " + $recheck.reason })
+                    Add-HordeFleetState -Session $s -State "still-awake" -At (& $Deps.Now) -Reason $why
+                    [void](Write-HordeFleetRecord -Dir $dir -Record $record)
+                    & $say ("    " + $name + ": refused on a fresh reading before its spawn - " + $why); & $tell $s "still-awake" $why
+                    continue
+                }
                 $req = New-HordeFleetWakeStep -Session $s -Line (& $agent.resumeLine $cur) -Environment $scrub -Window $window -Started $started
                 Add-HordeFleetState -Session $s -State "waking" -At (& $Deps.Now)
                 [void](Write-HordeFleetRecord -Dir $dir -Record $record)

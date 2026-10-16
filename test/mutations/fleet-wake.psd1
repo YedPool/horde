@@ -69,6 +69,12 @@
         @{ Name = "only-unknown-label-ignored"
            Find = 'if (@($sessions | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ('
            Replace = 'if ($false) { throw (' }
+        @{ Name = "no-fresh-check-before-spawn"
+           Find = 'if ("" + $recheck.state -cne "stopped") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "fresh-check-forgets-started"
+           Find = '@($recordIds + @($startedIds)) (Get-HordeFleetSince'
+           Replace = '@($recordIds) (Get-HordeFleetSince' }
         @{ Name = "mail-id-random"
            Find = 'return (ConvertTo-HordeTextUuid -Text ("horde-fleet-wake/" + $Id + "/" + $SessionId))'
            Replace = 'return ([guid]::NewGuid().ToString())' }
