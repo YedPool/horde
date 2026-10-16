@@ -160,6 +160,11 @@
 # guard errs toward the newest answer either way. A store that cannot be read makes the answer wait
 # (retry), never pass unguarded.
 # PAST 16 PASSKEYS the phones the snapshot is sealed to come first, then the most recently active.
+# NEEDS-PASSKEY (the unlocked session, relay/Session.ps1): a session-signed answer to a question flagged
+# needsPasskey is refused by name and kept in the ledger's needsPasskey list until a passkey answer
+# applies it; the ledger's writer and reader keep that list beside applied and refused, whatever else
+# the ledger comes to hold (test/test-relay-sessions.ps1 round-trips it). Once the rank buttons are on
+# main too, a session-signed rank is allowed except on a needsPasskey question (decided 2026-10-14).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -243,7 +248,8 @@ function Invoke-HordeDecisionsChannelAccept {
     $out = Invoke-HordeDecisionsChannelApply -Context $Context -Item $Item -Answer $r
     # A ledger that cannot be kept costs the phone its word "applied" for this answer, never the answer:
     # it is in the list, and the Tick says the ledger's trouble.
-    $null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.answerId -Outcome $out.outcome
+    $ledgerOutcome = $(if ($out.outcome -ceq "refused" -and "$($out.reason)".StartsWith("needs-passkey:")) { "needs-passkey" } else { $out.outcome })
+    $null = Add-HordeDecisionsChannelReceipt -Context $Context -From $Item.from -AnswerId $r.value.answerId -Outcome $ledgerOutcome
     return $out
 }
 
@@ -256,6 +262,23 @@ function Invoke-HordeDecisionsChannelApply {
     if ($made.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("the journal cannot say whether this machine sent the snapshot the answer names: " + $made.reason) } }
     if (-not $made.value.sent -or $made.value.kind -cne "snapshot" -or -not $r.value.snapshot.StartsWith($Context.signKeyId + "/decisions/")) {
         return [pscustomobject]@{ outcome = "refused"; reason = ("the snapshot the answer names (" + $r.value.snapshot + ") is not a snapshot this machine sent") }
+    }
+    # A QUESTION FLAGGED needsPasskey TAKES A FRESH PASSKEY ONLY (the unlocked session, relay/Session.ps1):
+    # production deploys and anything that changes something important are answered with the founder's
+    # face or PIN at that moment, never with a key an unlocked page holds. A session-signed answer to one
+    # is refused by name - needs-passkey - and listed apart in the receipts, so the phone asks the
+    # passkey and sends it again. A store that cannot say makes the answer wait, never pass unguarded.
+    # FAILS CLOSED (review of PR 302): only an item that says it was signed by a fresh passkey skips the
+    # look; one that says nothing of its proof is looked at like a session's.
+    $proofProp = $Item.PSObject.Properties["proof"]
+    $proofSaid = $(if ($null -eq $proofProp) { "" } else { "$($proofProp.Value)" })
+    if ($proofSaid -cne "webauthn") {
+        $flagged = Invoke-HordeDecision -Operation "show" -Request @{ number = [int]$r.value.number } -Root $Context.decisionsRoot
+        if ($flagged.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry"; reason = ("whether question " + $r.value.number + " needs a fresh passkey cannot be said now: " + $flagged.reason) } }
+        if ($flagged.state -ceq "known" -and "$($flagged.value.outcome)" -cne "done") { return [pscustomobject]@{ outcome = "refused"; reason = ("question " + $r.value.number + " cannot be shown (" + $flagged.value.outcome + "), so whether it needs a fresh passkey cannot be said, and a session answer to it is not taken") } }
+        if ($flagged.state -ceq "known" -and $null -ne $flagged.value.question.PSObject.Properties["needsPasskey"] -and $flagged.value.question.needsPasskey -eq $true) {
+            return [pscustomobject]@{ outcome = "refused"; reason = ("needs-passkey: question " + $r.value.number + " is answered only with a fresh passkey, and this answer was signed by an unlocked session (" + $(if ($proofSaid -ceq "") { "no proof named" } else { $proofSaid }) + ")") }
+        }
     }
     # A STALE ANSWER NEVER WINS (the header): checked against the store, whatever route answered last.
     $older = Test-HordeDecisionsChannelSuperseded -Context $Context -From $Item.from -Answer $r.value -SignedAt ([long]$Item.ts)
@@ -391,8 +414,10 @@ function Read-HordeDecisionsChannelLedgerFile {
         foreach ($s in @($j.streams)) {
             if ("$($s.from)" -cnotmatch '\A[0-9a-f]{32}\z') { return @{} }
             # A "latest" member, written by the build of PR 266, is left unread: the store is the guard now.
-            $entry = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList) }
-            foreach ($list in @("applied", "refused")) {
+            $entry = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList); needsPasskey = (New-Object System.Collections.ArrayList) }
+            foreach ($list in @("applied", "refused", "needsPasskey")) {
+                # needsPasskey: written since the unlocked session; a ledger from before has none.
+                if ($null -eq $s.PSObject.Properties[$list]) { continue }
                 foreach ($id in @($s.$list)) {
                     if ("$id" -cnotmatch '\A[0-9a-f]{32}\z') { return @{} }
                     [void]$entry[$list].Add("$id")
@@ -483,16 +508,25 @@ function Add-HordeDecisionsChannelReceipt {
     # is refused by the list (THE FIRST ANSWER WINS), and the phone must still see its first answer
     # applied. Each list keeps its newest (64 applied, 16 refused), so a receipt stays small. "" when
     # kept, else why not; never throws.
+    # NEEDS-PASSKEY (the unlocked session): an answer refused only because it was session-signed for a
+    # question flagged needsPasskey is listed apart, never as refused - it is not final, the phone asks
+    # the passkey for it and sends it again - and leaves the list once it is applied.
     param($Context, [string]$From, [string]$AnswerId, [string]$Outcome)
-    if ($Outcome -cne "done" -and $Outcome -cne "refused") { return "" }
+    if ($Outcome -cne "done" -and $Outcome -cne "refused" -and $Outcome -cne "needs-passkey") { return "" }
     $ledger = Get-HordeDecisionsChannelLedger -Context $Context
-    if (-not $ledger.streams.ContainsKey($From)) { $ledger.streams[$From] = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList) } }
+    if (-not $ledger.streams.ContainsKey($From)) { $ledger.streams[$From] = @{ applied = (New-Object System.Collections.ArrayList); refused = (New-Object System.Collections.ArrayList); needsPasskey = (New-Object System.Collections.ArrayList) } }
     $mine = $ledger.streams[$From]
-    if ($Outcome -ceq "done") {
+    if (-not $mine.ContainsKey("needsPasskey")) { $mine["needsPasskey"] = New-Object System.Collections.ArrayList }
+    if ($Outcome -ceq "needs-passkey") {
+        if ($mine.applied -ccontains $AnswerId -or $mine.needsPasskey -ccontains $AnswerId) { return "" }
+        [void]$mine.needsPasskey.Add($AnswerId)
+        while ($mine.needsPasskey.Count -gt $script:HordeDecisionsChannelReceiptsRefused) { $mine.needsPasskey.RemoveAt(0) }
+    } elseif ($Outcome -ceq "done") {
         if ($mine.applied -ccontains $AnswerId) { return "" }
         [void]$mine.applied.Add($AnswerId)
         while ($mine.applied.Count -gt $script:HordeDecisionsChannelReceiptsApplied) { $mine.applied.RemoveAt(0) }
         if ($mine.refused -ccontains $AnswerId) { $mine.refused.Remove($AnswerId) }
+        if ($mine.needsPasskey -ccontains $AnswerId) { $mine.needsPasskey.Remove($AnswerId) }
     } else {
         if ($mine.applied -ccontains $AnswerId -or $mine.refused -ccontains $AnswerId) { return "" }
         [void]$mine.refused.Add($AnswerId)
@@ -501,7 +535,10 @@ function Add-HordeDecisionsChannelReceipt {
     try {
         $path = Get-HordeDecisionsChannelReceiptsPath -Context $Context
         [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
-        $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object { '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $ledger.streams[$_].refused) + '}' })
+        $streams = @($ledger.streams.Keys | Sort-Object | ForEach-Object {
+            $e = $ledger.streams[$_]
+            $np = $(if ($e.ContainsKey("needsPasskey") -and $e.needsPasskey.Count -gt 0) { ',"needsPasskey":' + (ConvertTo-HordeDecisionsChannelIdList $e.needsPasskey) } else { "" })
+            '{"from":"' + $_ + '","applied":' + (ConvertTo-HordeDecisionsChannelIdList $e.applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $e.refused) + $np + '}' })
         $temp = $path + "." + $PID + ".tmp"
         try {
             [System.IO.File]::WriteAllText($temp, ('{"v":1,"streams":[' + ($streams -join ",") + ']}'), [System.Text.Encoding]::ASCII)
@@ -519,7 +556,8 @@ function Add-HordeDecisionsChannelReceipt {
 function Get-HordeDecisionsChannelReceipts {
     # The receipts member of the snapshot (the header, WHAT BECAME OF EACH ANSWER), as JSON text:
     #   [{"from":<passkey key id>,"through":<highest seq journaled>,"missing":[<seqs>],"applied":[<ids>],"refused":[<ids>]}]
-    # one for each founder passkey that has sent this machine an answer. { text; problem }: problem is a
+    # one for each founder passkey that has sent this machine an answer, and for each passkey trusted
+    # now, with its session member (below), answers or none. { text; problem }: problem is a
     # stream the journal could not list, which is left out and said by the Tick. NAMES ARE LISTED, ONE
     # RECORD IS READ: the journal's own stream listing, as every verdict uses it.
     # -Prefer: the passkeys of the phones the snapshot is sealed to, always in it (review of PR 262, S2).
@@ -529,6 +567,25 @@ function Get-HordeDecisionsChannelReceipts {
     $inDir = [System.IO.Path]::Combine($root, "in")
     $froms = @{}
     foreach ($k in @($ledger.streams.Keys)) { $froms[$k] = $true }
+    # EVERY PHONE SEALED TO HAS A RECEIPT, with what the PC holds of its sessions (the unlocked session,
+    # channels/Sessions.ps1): a phone that finds a receipt with no session member, or none at all, is
+    # talking to a PC from before sessions and signs every envelope with its passkey.
+    # EVERY TRUSTED PASSKEY HAS ONE TOO, an answer or not (T-0177): before, a passkey got a session
+    # member only once it had a receipt, so a newly paired phone read the PC as one from before sessions
+    # and signed its first answers with the passkey, one prompt each. ONLY A PASSKEY TRUSTED NOW gets a
+    # session member: a revoked, pending or unknown key gets none (and no receipt at all unless it has
+    # answers), and a trust store that does not read gives nobody one - the phone then signs with its
+    # passkey as before. The Tick reads the same store each look (Find-HordeRelayPhoneKeys).
+    $trusted = @{}
+    try {
+        $senders = Find-HordeRelayTrustedSenders -HordeHome $Context.hordeHome
+        if ($senders.state -ceq "known") { foreach ($k in @($senders.value.Keys)) { if ($senders.value[$k].proof -ceq "webauthn") { $trusted["$k"] = $true } } }
+    } catch { $trusted = @{} }
+    $Prefer = @(@($Prefer) + @($trusted.Keys))
+    foreach ($k in @($Prefer)) { if ("$k" -cmatch '\A[0-9a-f]{32}\z') { $froms["$k"] = $true } }
+    $sessionRecords = $null
+    try { $sessionRecords = Read-HordeRelaySessionRecords -HordeHome $Context.hordeHome } catch { $sessionRecords = $null }
+    $nowMs = ConvertTo-HordeRelayRecordMs -Time $null
     try {
         if ([System.IO.Directory]::Exists($inDir)) {
             foreach ($d in @([System.IO.Directory]::GetDirectories($inDir))) {
@@ -566,9 +623,22 @@ function Get-HordeDecisionsChannelReceipts {
             if (-not $st.seqs.ContainsKey("" + $s)) { [void]$missing.Add($s) }
         }
         [void]$missing.Reverse()
-        $applied = @(); $refused = @()
-        if ($ledger.streams.ContainsKey($from)) { $applied = @($ledger.streams[$from].applied); $refused = @($ledger.streams[$from].refused) }
-        [void]$parts.Add('{"from":"' + $from + '","through":' + $through + ',"checked":' + $checked + ',"missing":[' + (@($missing) -join ",") + '],"applied":' + (ConvertTo-HordeDecisionsChannelIdList $applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $refused) + '}')
+        $applied = @(); $refused = @(); $needsPasskey = @()
+        if ($ledger.streams.ContainsKey($from)) {
+            $applied = @($ledger.streams[$from].applied); $refused = @($ledger.streams[$from].refused)
+            if ($ledger.streams[$from].ContainsKey("needsPasskey")) { $needsPasskey = @($ledger.streams[$from].needsPasskey) }
+        }
+        # relay/js/protocol.js's sessionStatus reads this member; none when the session records cannot
+        # be read, or for a passkey not trusted now, and the phone then signs with its passkey as before.
+        $session = ""
+        if ($trusted.ContainsKey($from) -and $null -ne $sessionRecords -and $sessionRecords.ok) {
+            $st = Get-HordeRelaySessionStatus -HordeHome $Context.hordeHome -From $from -NowMs $nowMs -Records $sessionRecords
+            if ($null -ne $st) {
+                $vs = @(@($st.vouches) | ForEach-Object { '{"vouchId":"' + $_.vouchId + '","state":"' + $_.state + '"}' })
+                $session = ',"session":{"idleMs":' + [long]$st.idleMs + ',"vouches":[' + ($vs -join ",") + '],"needsPasskey":' + (ConvertTo-HordeDecisionsChannelIdList $needsPasskey) + '}'
+            }
+        }
+        [void]$parts.Add('{"from":"' + $from + '","through":' + $through + ',"checked":' + $checked + ',"missing":[' + (@($missing) -join ",") + '],"applied":' + (ConvertTo-HordeDecisionsChannelIdList $applied) + ',"refused":' + (ConvertTo-HordeDecisionsChannelIdList $refused) + $session + '}')
     }
     return [pscustomobject]@{ text = ("[" + (@($parts) -join ",") + "]"); problem = $problem }
 }

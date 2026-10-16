@@ -88,6 +88,9 @@
 # (`horde relay deploy`, cli/RelayDeploy.ps1) builds what the relay is to serve - the phone app, as a
 # folder of static files - so the relay never names the app and the app never names the relay:
 #   Deploy  param([string]$Site, [scriptblock]$Say, [string]$HordeHome) -> known { origin }
+# An unknown with a member live = $true means the deploy went out but a check after it failed: the relay
+# IS running what was deployed, and is broken. Publish-HordeRelay passes it on, still unknown and still
+# marked live, worded "IS deployed, but ...", never "not deployed" (2026-10-14, a sign-in check).
 # Publish-HordeRelay runs it and checks its answer as it checks every other; Get-HordeRelayDeployable
 # names the relays that have one.
 # A relay that is deployed may also hand -Bundle: what it would deploy as its own code, built from a
@@ -322,7 +325,8 @@ function Register-HordeRelay {
         [scriptblock]$PutKeeping = $null,
         [scriptblock]$SecretFiles = $null,
         [scriptblock]$Bundle = $null,
-        [scriptblock]$Setup = $null
+        [scriptblock]$Setup = $null,
+        [scriptblock]$JoinClose = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -342,7 +346,7 @@ function Register-HordeRelay {
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
         watchOpen = $WatchOpen; watchWait = $WatchWait; watchClose = $WatchClose; putKeeping = $PutKeeping; secretFiles = $SecretFiles
-        bundle = $Bundle; setup = $Setup; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
+        bundle = $Bundle; setup = $Setup; joinClose = $JoinClose; connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }
@@ -367,6 +371,12 @@ function Publish-HordeRelay {
     try { $a = & $r.deploy $Site $Say $HordeHome }
     catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to deploy") -ErrorRecord $_) }
     if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy with something that is not an answer")) }
+    $live = Get-HordeRelayMember $a "live"
+    if ($a.state -cne "known" -and $live.has -and $live.value -eq $true) {
+        $broken = New-HordeUnknown -Reason ("relay '" + $Name + "' IS deployed, but " + $(if ("$($a.reason)" -ne "") { $a.reason } else { "a check after the deploy failed" }))
+        $broken | Add-Member -NotePropertyName live -NotePropertyValue $true
+        return $broken
+    }
     if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' was not deployed: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
     $o = Get-HordeRelayMember $a.value "origin"
     if (-not $o.has -or $o.value -isnot [string] -or $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy without the https origin it answers at")) }
@@ -621,6 +631,24 @@ function Read-HordeRelayStreamKey {
     $n = [long]$m.Groups[2].Value
     if ($n -gt $script:HordeRelaySeqMax) { return $null }
     return [pscustomobject]@{ stream = $m.Groups[1].Value; seq = $n }
+}
+
+function Close-HordeRelayJoinAtRelay {
+    # TELL A RELAY WITH JOIN LIMITS THAT A JOIN REQUEST ENDED (relay/Join.ps1; the hosted relay's join
+    # route holds one pending request an account, and a reject blocks the asking address for the hour).
+    # An OPTIONAL BLOCK, -JoinClose, for the reason the trim is one: a relay with no join route (the
+    # local one) has nothing to free, and is answered known { freed = $false; asked = $false }. Known
+    # { freed; asked } from a relay that has it; its unknown otherwise. -Outcome is approved, rejected,
+    # expired or ended.
+    param($Connection, [Parameter(Mandatory = $true)][string]$Request, [Parameter(Mandatory = $true)][string]$Outcome)
+    if (-not (Test-HordeRelayConnection $Connection)) { return (New-HordeUnknown -Reason "not a relay connection") }
+    if ($Request -cnotmatch '\A[0-9a-f]{32}\z') { return (New-HordeUnknown -Reason ("'" + $Request + "' is not a join request id")) }
+    if (@("approved", "rejected", "expired", "ended") -cnotcontains $Outcome) { return (New-HordeUnknown -Reason ("a join ends approved, rejected, expired or ended, not '" + $Outcome + "'")) }
+    if ($null -eq $Connection.relay.joinClose) { return (New-HordeKnown -Value ([pscustomobject]@{ freed = $false; asked = $false })) }
+    $a = Invoke-HordeRelayAdapter -Connection $Connection -Op "joinClose" -Arguments @($Connection.state, $Request, $Outcome) -What "join close"
+    if ($a.state -cne "known") { return $a }
+    $f = Get-HordeRelayMember $a.value "freed"
+    return (New-HordeKnown -Value ([pscustomobject]@{ freed = ($f.has -and $f.value -is [bool] -and $f.value); asked = $true }))
 }
 
 function Test-HordeRelaySenderTrim {

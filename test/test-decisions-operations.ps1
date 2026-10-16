@@ -309,6 +309,29 @@ $a = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; followsUp = 1e30; 
 Check ((Test-Refused $a "'followsUp' is not a question's number") -and (Get-Files $r) -ceq $filesWere) ("a follow-up of a number no question can have is refused, not thrown on (" + (Get-Outcome $a) + ")")
 $a = Invoke-Op $r "add" @{ id = (New-Id); actor = "warchief"; followsUp = 4; question = (New-Question) }
 Check ((Test-Refused $a "'followsUp' names question 4, and the list has no question 4 to show with this one; the highest number given is 3") -and (Get-Files $r) -ceq $filesWere) "A FOLLOW-UP OF A QUESTION THAT IS NOT THERE is refused - a question cannot follow itself or one not yet asked - and nothing is added"
+
+Write-Host ""
+Write-Host "--- needs a passkey: written only as true, shown only when true ---" -ForegroundColor Cyan
+$p = New-TestStore
+$keyed = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $true; question = (New-Question @{ title = "Is a question marked as needing a passkey recorded so?" }) }
+$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000001.json")) | ConvertFrom-Json
+Check ((Get-Outcome $keyed) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "needsPasskey,number,question" -and (Get-HordeTestMember $rec.data "needsPasskey") -eq $true -and (Get-HordeTestMember $keyed.value.question "needsPasskey") -eq $true) "add with needsPasskey true writes needsPasskey true into the record, and the view hands it back as true"
+$unkeyed = Add-Q $p @{ title = "Is a question with no passkey mark the record it always was?" }
+$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000002.json")) | ConvertFrom-Json
+Check ((Get-Outcome $unkeyed) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $null -eq $unkeyed.value.question.PSObject.Properties["needsPasskey"]) "CONTROL: add without needsPasskey writes no needsPasskey member, and the view has none"
+$falseKey = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $false; question = (New-Question @{ title = "Is needsPasskey false written down at all?" }) }
+$rec = [System.IO.File]::ReadAllText((Join-Path $p "0000000003.json")) | ConvertFrom-Json
+Check ((Get-Outcome $falseKey) -ceq "done" -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "number,question" -and $null -eq $falseKey.value.question.PSObject.Properties["needsPasskey"]) "add with needsPasskey false writes nothing: the record is byte for byte the unmarked one, and the view has no needsPasskey"
+$pFiles = Get-Files $p
+foreach ($bad in @(
+    @{ what = "needsPasskey as the word yes"; key = "yes" }
+    @{ what = "needsPasskey as the number 1"; key = 1 }
+)) {
+    $a = Invoke-Op $p "add" @{ id = (New-Id); actor = "warchief"; needsPasskey = $bad.key; question = (New-Question @{ title = "Is a needsPasskey that is not true or false refused?" }) }
+    Check ((Test-Refused $a "needsPasskey") -and (Get-Files $p) -ceq $pFiles) ($bad.what + " is not a boolean: refused by name, and no question is added")
+}
+$listedKeys = Invoke-Op $p "list" @{ state = "all" }
+Check ((Get-Outcome $listedKeys) -ceq "done" -and (@($listedKeys.value.questions | ForEach-Object { "" + $_.number + ":" + [bool](Get-HordeTestMember $_ "needsPasskey") + ":" + ($null -ne $_.PSObject.Properties["needsPasskey"]) }) -join ",") -ceq "1:True:True,2:False:False,3:False:False") "a list read again from the records shows needsPasskey on the marked question only"
 # THE WORDS ARE PART OF WHAT MAKES A REQUEST THE SAME: one id, the same question, another importance is
 # another request, and is refused as that.
 $id = New-Id

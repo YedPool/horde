@@ -4,11 +4,11 @@ $HordeCommand = @{
     # Long-lived like node serve: a watch is a long-poll, and a throttled background process would hold
     # every envelope behind the throttle (core/Platform.ps1).
     sustained = $true
-    usage   = "relay run -Relay <name> [-RelayRoot <folder>] [-MaxTurns <n>] | relay stop | relay pair [-Relay <name>] [-RelayRoot <folder>] [-Label <text>] [-RpId <host>] [-Origin <https://host>] [-InputFile <path>] [-NoPicture] | relay trust list | relay trust revoke <id> [-Reason <text>] | relay identity [-New [-Provider auto|platform|software]] | relay deploy [-Relay <name>]"
-    summary = "run: keep this machine's relay channels moving - the open decisions sent to the founder's phone when they change, his signed answers taken into the decisions list once each, journaled and acked - until stopped (cli/RelayRun.ps1); -Relay names the relay (relays/<name>/), -RelayRoot is the folder of one that keeps its mailboxes on this disk, -MaxTurns stops after that many turns. stop: ask every run on this Horde home to stop after its current turn. pair: pair the founder's phone with this machine (cli/RelayPair.ps1) - make a one-time offer, show it as a QR code (a picture opened here; -NoPicture does not open it) and as text, wait for the phone's response through the relay (-Relay) or pasted here, then ask for the 12-digit number the PHONE shows and compare it; three wrong numbers, or reject, reject the device. -Label is what the device is called here; -RpId and -Origin name the phone app when the relay settings pairRpId and pairOrigin do not; -InputFile reads what would be typed from a file as it grows (for scripts and tests). trust list: every device, peer machine and phone key this machine knows, with its state; trust revoke: end one, by its id, for good. identity: this machine's horde, key ids and mailbox; -New makes that identity, once (it needs the relay setting horde, and is refused when one exists - it is rotated, never remade), its keys non-exportable in -Provider: auto tries the TPM (platform) and falls back to software. deploy: put a hosted relay where it runs, serving the phone app built here (cli/RelayDeploy.ps1); -Relay names it, or the one relay that can be deployed; the relay's own folder says where, and reads its settings and secrets; one deploy at a time, and each records the commit it deployed in <HORDE_HOME>\relay\deployed.json, which services tend compares with its checkout"
+    usage   = "relay run -Relay <name> [-RelayRoot <folder>] [-MaxTurns <n>] | relay stop | relay pair [-Relay <name>] [-RelayRoot <folder>] [-Label <text>] [-RpId <host>] [-Origin <https://host>] [-InputFile <path>] [-NoPicture] | relay trust list | relay trust revoke <id> [-Reason <text>] | relay sessions [list] | relay sessions end [-Reason <text>] | relay identity [-New [-Provider auto|platform|software]] | relay deploy [-Relay <name>] | relay joins | relay approve <request> <number> | relay reject <request> [-Reason <text>]"
+    summary = "run: keep this machine's relay channels moving - the open decisions sent to the founder's phone when they change, his signed answers taken into the decisions list once each, journaled and acked - until stopped (cli/RelayRun.ps1); -Relay names the relay (relays/<name>/), -RelayRoot is the folder of one that keeps its mailboxes on this disk, -MaxTurns stops after that many turns. stop: ask every run on this Horde home to stop after its current turn. pair: pair the founder's phone with this machine (cli/RelayPair.ps1) - make a one-time offer, show it as a QR code (a picture opened here; -NoPicture does not open it) and as text, wait for the phone's response through the relay (-Relay) or pasted here, then ask for the 12-digit number the PHONE shows and compare it; three wrong numbers, or reject, reject the device. -Label is what the device is called here; -RpId and -Origin name the phone app when the relay settings pairRpId and pairOrigin do not; -InputFile reads what would be typed from a file as it grows (for scripts and tests). trust list: every device, peer machine and phone key this machine knows, with its state; trust revoke: end one, by its id, for good (its unlocked phone sessions end with it). sessions: the founder's unlocked phone sessions this machine holds - one passkey prompt at unlock, then answers signed by a key the page holds (relay/Session.ps1) - each live or why not; sessions end: END EVERY PHONE SESSION now, so the next answer from any phone asks for the passkey again (-Reason says why, kept with the record). identity: this machine's horde, key ids and mailbox; -New makes that identity, once (it needs the relay setting horde, and is refused when one exists - it is rotated, never remade), its keys non-exportable in -Provider: auto tries the TPM (platform) and falls back to software. deploy: put a hosted relay where it runs, serving the phone app built here (cli/RelayDeploy.ps1); -Relay names it, or the one relay that can be deployed; the relay's own folder says where, and reads its settings and secrets; one deploy at a time, and each records the commit it deployed in <HORDE_HOME>\relay\deployed.json, which services tend compares with its checkout. joins: the new phones that asked to join this machine from the phone app (Add this phone), with their state; approve: approve one by typing the 12-digit number the NEW phone shows - this machine compares it with its own, and three wrong ones reject it; reject: reject one, revoking its passkey if one registered (cli/RelayJoin.ps1)"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "stop", "pair", "trust", "identity", "deploy")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("run", "stop", "pair", "trust", "sessions", "identity", "deploy", "joins", "approve", "reject")][string]$Verb,
             [Parameter(Position = 1)][string]$Action = "",
             [Parameter(Position = 2)][string]$Id = "",
             [string]$Relay = "",
@@ -25,7 +25,7 @@ $HordeCommand = @{
         )
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
         $verbFlags = @{ run = @("Relay", "RelayRoot", "MaxTurns"); stop = @(); pair = @("Relay", "RelayRoot", "Label", "RpId", "Origin", "InputFile", "NoPicture")
-            trust = @("Action", "Id", "Reason"); identity = @("New", "Provider"); deploy = @("Relay") }
+            trust = @("Action", "Id", "Reason"); sessions = @("Action", "Reason"); identity = @("New", "Provider"); deploy = @("Relay"); joins = @(); approve = @("Action", "Id"); reject = @("Action", "Reason") }
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to relay " + $Verb) } }
         # Loaded here, in the command's own scope, so the relays' and channels' helpers stay visible to the
         # blocks they register (relays/Port.ps1 and channels/Port.ps1, the plug-in contracts).
@@ -54,6 +54,17 @@ $HordeCommand = @{
             foreach ($l in @(Get-HordeRelayIdentityLines -Identity $idn.value)) { Write-Output $l }
             return
         }
+        if ($Verb -eq "joins" -or $Verb -eq "approve" -or $Verb -eq "reject") {
+            # A new phone's join request, answered at this machine (cli/RelayJoin.ps1): the number is typed
+            # from the NEW phone and compared here, never shown here.
+            . (Join-Path $root "relay\Join.ps1")
+            . (Join-Path $root "cli\RelayJoin.ps1")
+            if ($Verb -eq "joins") { if ($Action -ne "" -or $Id -ne "") { throw "relay joins takes nothing more" }; foreach ($l in @(Get-HordeRelayJoinLines)) { Write-Output $l }; return }
+            if ($Verb -eq "approve") { foreach ($l in @(Invoke-HordeRelayJoinApprove -Request $Action -Number $Id)) { Write-Output $l }; return }
+            if ($Id -ne "") { throw "relay reject takes the request id and nothing more (-Reason says why)" }
+            foreach ($l in @(Invoke-HordeRelayJoinReject -Request $Action -Reason $Reason)) { Write-Output $l }
+            return
+        }
         if ($Verb -eq "trust") {
             . (Join-Path $root "cli\RelayPair.ps1")
             if ($Action -ceq "list") {
@@ -70,6 +81,21 @@ $HordeCommand = @{
                 return
             }
             throw "relay trust needs list or revoke <id>"
+        }
+        if ($Verb -eq "sessions") {
+            . (Join-Path $root "cli\RelaySessions.ps1")
+            if ($Id -ne "") { throw "relay sessions takes list or end, and nothing after it" }
+            if ($Action -ceq "end") {
+                $why = $(if ($Reason -ne "") { $Reason } else { "ended at the machine with horde relay sessions end" })
+                foreach ($l in @(Invoke-HordeRelaySessionsEnd -Reason $why)) { Write-Output $l }
+                return
+            }
+            if ($Action -ceq "" -or $Action -ceq "list") {
+                if ($Reason -ne "") { throw "-Reason belongs to relay sessions end" }
+                foreach ($l in @(Get-HordeRelaySessionLines)) { Write-Output $l }
+                return
+            }
+            throw "relay sessions takes list or end"
         }
         if ($Action -ne "" -or $Id -ne "") { throw ("relay " + $Verb + " takes no word after it") }
         foreach ($f in @(Get-HordeRelayFiles)) { . $f }
@@ -89,6 +115,9 @@ $HordeCommand = @{
             if ($rev.state -cne "known") { Write-Host ("note: " + $rev.reason + "; this deploy is recorded with no commit, so the supervisor does not deploy the phone page by itself until a deploy records one") }
             elseif (-not $rev.value.clean) { Write-Host "note: this checkout has changes of its own; the deploy is recorded as not clean, so the supervisor does not deploy the phone page by itself until a deploy from a clean checkout" }
             $d = Invoke-HordeRelayDeploy -Relay $Relay -Say { param($Line) Write-Host $Line } -Revision $(if ($rev.state -ceq "known") { $rev.value } else { $null }) -AlsoRecordIn $also
+            # Marked live (relays/Port.ps1, DEPLOYING): it went out and is broken, so never "not deployed".
+            $live = $d.PSObject.Properties["live"]
+            if ($d.state -cne "known" -and $null -ne $live -and $live.Value -eq $true) { throw ("the deploy needs action now: " + $d.reason) }
             if ($d.state -cne "known") { throw ("the relay was not deployed: " + $d.reason) }
             Write-Output ("deployed relay " + $d.value.relay + ": it answers at " + $d.value.origin)
             return

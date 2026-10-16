@@ -10,8 +10,8 @@
     Mutations = @(
         # --- what the command line takes ---
         @{ Name = "add-does-not-take-follows-up"
-           Find = '    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "FollowsUp", "Id", "Json");'
-           Replace = '    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "Id", "Json");' }
+           Find = '    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "FollowsUp", "NeedsPasskey", "Id", "Json");'
+           Replace = '    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "NeedsPasskey", "Id", "Json");' }
         @{ Name = "rank-takes-another-verbs-flag"
            Find = '    rank   = @{ number = $true;  flags = @("Importance", "Blocks", "Id", "Json");'
            Replace = '    rank   = @{ number = $true;  flags = @("Importance", "Blocks", "Text", "Id", "Json");' }

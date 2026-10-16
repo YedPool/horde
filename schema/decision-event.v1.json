@@ -26,6 +26,7 @@
         "question": {"type": "object", "description": "The question's words, schema/decision-question.v1, complete."},
         "importance": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "How much the task this question belongs to matters overall, as one lowercase label. The closed list is the importances of decisions/Rules.ps1, asked of a request; a record is read whatever label it holds. Absent - as in every record written before the word existed - reads as the default, normal."},
         "blocks": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "How much of that task's work stands still until the question is answered, as one lowercase label. The closed list is the blockings of decisions/Rules.ps1. Absent reads as the default, part."},
+        "needsPasskey": {"type": "boolean", "enum": [true], "description": "The question changes something important (a production deploy), so from the phone it is answered only with a fresh passkey. Written only as true: absent - as in every record written before the mark existed, and every question that needs none - reads as no passkey needed."},
         "followsUp": {"type": "integer", "minimum": 1, "description": "The number of the earlier question this one follows up on. A follow-up is a new question with a number of its own, never the earlier one opened again; the earlier question and what was answered under it are shown with this one as context, worked out from the list each time and never copied here."}
       }
     },

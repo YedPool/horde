@@ -78,6 +78,28 @@
 .hd-bg:focus-visible { outline: 1px solid var(--muted); }
 .hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
 .hd-sub { padding-left: 54px; }
+/* ONE STAGE, AND A BOX TO ANSWER IN (list.js): a question's context stands in its answer column, after
+   what was said and before the label and the box, so it starts where the question's words start. */
+.hd-ans > .hd-sub { padding-left: 0; }
+.hd-anslab { display: block; margin-top: 4px; color: var(--muted, #68707c); font-weight: 600; font-size: var(--small-px); line-height: var(--small-line-px); }
+.hd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* THE BOX's edge is a shadow inside it, never a border (SHARP LETTERS, above), in --muted: measured
+   5.1 to 1 on the light page and 6.9 to 1 on the dark one, past the 4.5 asked for. The caret in it,
+   the edge is two pixels of --accent (6.4 and 8.9 to 1). It is never shorter than two lines - three
+   on a phone - and grows with the words (list.js, fit) up to twelve, then scrolls. The Send key is
+   inside the edge, at the box's foot, so it reads as the box's own. */
+.hd-box { flex: 1 1 auto; min-width: 0; display: flex; align-items: flex-end; column-gap: 6px; padding: 4px 4px 4px 6px; border-radius: 6px; background: var(--bg, #ffffff); box-shadow: inset 0 0 0 1px var(--muted, #68707c); cursor: text; }
+.hd-box:focus-within { box-shadow: inset 0 0 0 2px var(--accent, #1f5fae); }
+.hd-box > .hd-field, .hd-box > .hd-field:focus { box-shadow: none; }
+/* The ring is the box's: a host's own ring round a focused field (the phone's app.css) would draw a
+   second edge inside it. */
+.hd-box > .hd-field:focus-visible { outline: 0; }
+.hd-box > .hd-field { min-height: calc(2 * var(--line-px)); max-height: calc(12 * var(--line-px)); overflow-y: auto; }
+.hd-box > .hd-partfield { margin-left: 0; width: auto; }
+.hd-part > .hd-box { margin-left: 20px; }
+.hd-send { flex: 0 0 auto; font: inherit; font-weight: 600; color: var(--bg, #ffffff); background: var(--accent, #1f5fae); border: 0; border-radius: 4px; margin: 0; padding: 0 12px; min-height: var(--line-px); line-height: var(--line-px); cursor: pointer; }
+.hd-send:focus-visible { outline: 2px solid var(--ink, #16181c); outline-offset: 1px; }
+@media (pointer: coarse) { .hd-send { min-height: 44px; } }
 /* A QUESTION OF PARTS (list.js): a row per part - its letter and words, then its own field under
    them - one after another, the mark beside the whole. */
 .hd-parts { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; row-gap: 2px; }
@@ -103,11 +125,16 @@
    by" and a word for each order, the chosen one in the page's own ink with the accent under it. The
    words are buttons with no box: an underline inside, as a field has. */
 .hd-order { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; padding: 0 0 4px 14px; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
-.hd-order-btn, .hd-foldall { font: inherit; color: var(--muted); background: none; border: 0; border-radius: 0; margin: 0; padding: 0 2px; min-height: var(--line-px); cursor: pointer; box-shadow: inset 0 -1px 0 var(--line); }
+.hd-order-btn, .hd-foldall, .hd-showans { font: inherit; color: var(--muted); background: none; border: 0; border-radius: 0; margin: 0; padding: 0 2px; min-height: var(--line-px); cursor: pointer; box-shadow: inset 0 -1px 0 var(--line); }
 .hd-order-btn.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
 /* The one button that folds or unfolds every question (list.js, EVERY QUESTION STARTS UNFOLDED): on a
    short line of its own under the order line, at its right end, so it is never read as a fourth order. */
-.hd-foldline { display: flex; justify-content: flex-end; padding: 0 14px 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
+/* The switch for the answered (list.js, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR) stands at the head of
+   the same line, across from it; on its own it says its state in words, and on it is in the page's ink. */
+.hd-showans[aria-checked="true"] { color: var(--ink); }
+/* Reached by keys (list.js, THE SWITCH IS REACHED BY KEYS): a clear ring while it has the keyboard, as a fold's heading has. */
+.hd-showans:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.hd-foldline { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 12px; padding: 0 14px 4px; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
 /* WHAT STANDS OUT ABOUT A QUESTION (list.js, drawTags): a small line above what was said under it -
    "Important", "Blocks all work" in the page's own ink, and for a follow-up the pressable words
    "Follows up on question 7", which unfold that question and what he answered under them. */
@@ -123,8 +150,8 @@
    gives way to the one word Answered, and a part's field to his words and that word. */
 .hd-q.saved-now .hd-field, .hd-part.saved-now .hd-partfield { color: var(--ok, #1a7f37); }
 .hd-answered { font: inherit; font-weight: 600; color: var(--ok, #1a7f37); background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-align: left; }
-.hd-q.answered .hd-talk, .hd-q.answered .hd-fl, .hd-q.answered .hd-marknote, .hd-q.answered .hd-tags { display: none; }
-.hd-part.answered .hd-partfield { display: none; }
+.hd-q.answered .hd-talk, .hd-q.answered .hd-anslab, .hd-q.answered .hd-fl, .hd-q.answered .hd-marknote, .hd-q.answered .hd-tags { display: none; }
+.hd-part.answered > .hd-box { display: none; }
 .hd-partmark { flex: 0 0 auto; color: var(--muted); font-size: var(--small-px); white-space: nowrap; }
 .hd-part.answered .hd-partmark { color: var(--ok, #1a7f37); font-weight: 600; }
 .hd-partdone { margin-left: 20px; color: var(--ok, #1a7f37); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; unicode-bidi: plaintext; }
@@ -135,4 +162,5 @@
   .hd-mark { position: absolute; right: 100%; top: 0; width: 54px; max-width: none; margin-right: 6px; }
   .hd-mark-full { display: none; }
   .hd-mark-short { display: inline; }
+  .hd-box > .hd-field { min-height: calc(3 * var(--line-px)); }
 }

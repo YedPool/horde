@@ -129,6 +129,20 @@ async function load(url) {
   await cdp("Page.navigate", { url });
   await loaded;
 }
+// Another tab in front of the app's for ms, then the app's again: Chrome's own visibility, not a stand-in.
+// during: the page's visibilityState while the other tab was in front.
+async function awayTab(ms) {
+  const base = "http://127.0.0.1:" + debugPort + "/json/";
+  const other = await (await fetch(base + "new?about:blank", { method: "PUT" })).json();
+  await fetch(base + "activate/" + other.id);
+  await sleep(Math.min(ms, 300));
+  const during = await evaluate("document.visibilityState");
+  await sleep(Math.max(0, ms - 300));
+  await fetch(base + "activate/" + page.id);
+  await fetch(base + "close/" + other.id);
+  await sleep(200);
+  return { during };
+}
 // The answer field of the question whose row holds the words given (the first question's without).
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
@@ -160,20 +174,37 @@ const commands = {
     const ok = await until(shown("pairedView") + " || (" + notice + ").length > 0", 30000);
     return await evaluate("({ paired: " + shown("pairedView") + ", fingerprint: document.getElementById('fingerprint').textContent, response: document.getElementById('responseText').value, recoveryCode: document.getElementById('recoveryCode').textContent, notice: " + notice + ", waited: " + JSON.stringify(!!ok) + " })");
   },
-  // THE ANNOUNCEMENT (the founder's first live use, 2026-10-11): why its button is shut, before and after
-  // the box is ticked; then the box is left ticked.
-  async announceWhy() {
-    const read = "({ why: " + shown("announceWhy") + ", words: document.getElementById('announceWhy').textContent, disabled: document.getElementById('announceBtn').disabled })";
-    const before = await evaluate(read);
-    await evaluate("document.getElementById('wroteCode').click()", true);
-    return { before, after: await evaluate(read) };
+  // THE ANNOUNCEMENT IS NO BUTTON (2026-10-14): the pairing screen before the machine's word - Finish
+  // pairing hidden, the screen waiting - and every button on the page whose words offer to announce.
+  async finishState() {
+    return await evaluate("({ finishShown: " + shown("finishBtn") + ", finishDisabled: document.getElementById('finishBtn').disabled, waiting: " + shown("confirmWait") + ", why: " + shown("finishWhy") +
+      ", whyWords: document.getElementById('finishWhy').textContent, announceButtons: Array.from(document.querySelectorAll('button')).filter((b) => /announce/i.test(b.textContent)).map((b) => b.id || b.textContent) })");
   },
-  // One tap on the pairing screen's announce button that is expected to fail: what the screen then says.
-  async announceTry() {
-    const was = await evaluate("document.getElementById('announceStatus').textContent");
-    await evaluate("document.getElementById('announceStatus').textContent = ''; document.getElementById('announceBtn').click()", true);
-    await until(shown("announceStatus") + " && document.getElementById('announceStatus').textContent.length > 0 || " + shown("doc"), 30000);
-    return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
+  // Once the machine's confirmed record is in the pairing mailbox: Finish pairing appears, shut while the
+  // box is not ticked, and says why; ticked, it opens. The box is left ticked.
+  async finishWhy() {
+    const appeared = !!(await until(shown("finishBtn"), 30000));
+    const before = await commands.finishState();
+    await evaluate("document.getElementById('wroteCode').click()", true);
+    return { appeared, before, after: await commands.finishState() };
+  },
+  // One tap on Finish pairing that is expected to fail: what the screen then says.
+  async finishTry() {
+    await evaluate("document.getElementById('finishStatus').textContent = ''; document.getElementById('finishBtn').click()", true);
+    await until(shown("finishStatus") + " && document.getElementById('finishStatus').textContent.length > 0 || " + shown("doc"), 30000);
+    return await evaluate("({ status: " + shown("finishStatus") + " ? document.getElementById('finishStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + " })");
+  },
+  // The passkey prompts this page has asked for since countPrompts: navigator.credentials.get counted.
+  async countPrompts() {
+    await evaluate("(() => { const c = navigator.credentials; if (c.__counted) { window.__prompts = 0; return; } const real = c.get.bind(c); window.__prompts = 0; c.get = function (o) { window.__prompts++; return real(o); }; c.__counted = true; })()");
+    return { counting: true };
+  },
+  async prompts() { return await evaluate("window.__prompts === undefined ? -1 : window.__prompts"); },
+  // Leave the pairing screen without finishing (Later).
+  async pairLater() {
+    await evaluate("document.getElementById('pairLater').click()", true);
+    await until("!" + shown("pairedView"), 15000);
+    return await evaluate("({ paired: " + shown("pairedView") + ", doc: " + shown("doc") + ", locked: " + shown("lockedView") + " })");
   },
   async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
   async readFail(c) { failReads = String(c.reason || ""); return { failReads }; },
@@ -192,16 +223,10 @@ const commands = {
     await evaluate("(() => { const c = navigator.credentials; const real = c.get; c.get = function () { c.get = real; return Promise.reject(new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError')); }; })()");
     return { armed: true };
   },
-  // The horde's own view while the machine has not answered: its offer to announce again.
-  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, status: " + shown("announceNowStatus") + " ? document.getElementById('announceNowStatus').textContent : '' })"); },
-  async announceNow(c) {
-    const before = headOf(c.mailbox);
-    await evaluate("document.getElementById('announceNow').click()", true);
-    await until(shown("announceNowStatus"), 30000);
-    const end = Date.now() + 10000;
-    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
-    return { put: headOf(c.mailbox) > before, status: await evaluate("document.getElementById('announceNowStatus').textContent") };
-  },
+  // The horde's own view while the machine has not answered: what it says, and that it offers no button.
+  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, buttons: document.querySelectorAll('#announceBox button').length })"); },
+  // The head of a mailbox of the relay's folders, for a suite to see a put land.
+  async head(c) { return headOf(c.mailbox); },
   // THE WAY BETWEEN THE VIEWS: with the page made long and scrolled to its end (as a long chat is), the
   // other view's tab is still on the screen, and a real touch at its centre opens that view.
   async navTouch(c) {
@@ -364,18 +389,22 @@ const commands = {
     await sleep(1200);
     return await commands.progressState();
   },
-  async announce() {
+  // The one Finish pairing tap that is the passkey prompt.
+  async finish() {
     const ticked = await evaluate("document.getElementById('wroteCode').checked");
     if (!ticked) await evaluate("document.getElementById('wroteCode').click()", true);
-    const enabled = await evaluate("!document.getElementById('announceBtn').disabled");
-    await evaluate("document.getElementById('announceBtn').click()", true);
-    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
-    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
+    const enabled = await evaluate("!document.getElementById('finishBtn').disabled && " + shown("finishBtn"));
+    await evaluate("document.getElementById('finishBtn').click()", true);
+    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("finishStatus"), 30000);
+    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('finishStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
   // folded: the words are looked for in everything the lists hold, what stands under a folded heading
   // included (an answered question is out of his list, under the folded "With Thrall"); without it,
-  // only in what is shown.
-  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
+  // only in what is shown. The answered are hidden until asked for (decisions/page/list.js, THE ANSWERED
+  // ARE HIDDEN UNTIL ASKED FOR), so for folded the page's switch is turned on first, as he would.
+  async waitText(c) {
+    if (c.folded) await evaluate("(() => { const s = document.querySelector('#lists .horde-list:not([hidden]) .hd-showans'); if (s && s.getAttribute('aria-checked') !== 'true') s.click(); return true; })()");
+    const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);
@@ -470,6 +499,15 @@ const commands = {
   async workerVersion() {
     return await evaluate("new Promise((res) => { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(e.data.version); navigator.serviceWorker.controller.postMessage({ ask: 'version' }, [ch.port2]); setTimeout(() => res(''), 3000); })");
   },
+  // THE PAGE'S CLOCK MOVED (test-pwa-browser.ps1 section 15): Date.now answers ms ahead of the real clock,
+  // so the app's checks on return of how long it was hidden see minutes that were never waited. 0 puts the
+  // real clock back. The page's own time of when it was hidden was taken by the real clock.
+  async clock(c) {
+    const ms = Number(c.ms) || 0;
+    return await evaluate("(() => { if (!window.__realNow) window.__realNow = Date.now.bind(Date); const off = " + ms + "; Date.now = off ? () => window.__realNow() + off : window.__realNow; return off; })()");
+  },
+  // config.json as the site serves it now, fetched by the page past every cache.
+  async servedConfig() { return await evaluate("fetch('config.json', { cache: 'no-store' }).then((r) => r.json())"); },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
     const was = await evaluate(notice);
@@ -515,6 +553,27 @@ const commands = {
   async caches() { return await evaluate("(async () => { const out = {}; for (const n of await caches.keys()) { const c = await caches.open(n); out[n] = (await c.keys()).map((r) => new URL(r.url).pathname); } return out; })()"); },
   async serve(c) { serving = c.on === true; if (!serving) for (const s of sockets) s.destroy(); return { serving }; },
   async credentials() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.map((x) => ({ rpId: x.rpId, signCount: x.signCount, resident: x.isResidentCredential })); },
+  // THE PASSKEY PROMPTS, COUNTED (the unlocked session, test-pwa-browser.ps1 section 14): the virtual
+  // authenticator's signature counter, summed over its credentials, goes up by one with every assertion
+  // Chrome's WebAuthn makes - each one a prompt on a real phone.
+  async assertions() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.reduce((n, x) => n + x.signCount, 0); },
+  // The page's unlocked sessions, as the bridge answers them (bridge.js, sessions), and the Account
+  // screen's line and the notice as the page draws them.
+  async sessions() { return await evaluate("(async () => ({ list: await window.HordeBridge.request('sessions'), account: document.getElementById('sessionWords').innerText, notice: " + notice + " }))()"); },
+  // WHAT THE BROWSER GIVES when the app is left (the brief: measure it, and say it). Another tab brought to
+  // the front is what Chrome has for another app or the screen going off; its lifecycle's frozen state is
+  // what it does to a page in the background for long. Each event the page hears is recorded.
+  async visibilityProbe() {
+    await evaluate("(() => { window.__heard = []; document.addEventListener('visibilitychange', () => window.__heard.push('visibilitychange:' + document.visibilityState)); window.addEventListener('pagehide', (e) => window.__heard.push('pagehide:' + e.persisted)); document.addEventListener('freeze', () => window.__heard.push('freeze')); document.addEventListener('resume', () => window.__heard.push('resume')); })()");
+    let frozen = "";
+    try { await cdp("Page.setWebLifecycleState", { state: "frozen" }); await sleep(200); await cdp("Page.setWebLifecycleState", { state: "active" }); } catch (e) { frozen = e.message; }
+    // Frozen leaves the page hidden (measured 2026-10-14: a visibilitychange to hidden before freeze, and
+    // it stays hidden after resume), so the other tab comes second: its return brings the page to the front.
+    const away = await awayTab(800);
+    return { during: away.during, after: await evaluate("({ state: document.visibilityState, heard: window.__heard.slice() })"), frozenRefused: frozen };
+  },
+  // Away for ms by another tab in front (visibilityProbe), then back: what the page said while away.
+  async away(c) { const a = await awayTab(Number(c.ms) || 1000); return { during: a.during, state: await evaluate("document.visibilityState") }; },
   async problems() { return problems.slice(); },
   // THE CHAT: its tab, its log, and its composer driven by real keys and a real touch.
   async chatTab(c) {
