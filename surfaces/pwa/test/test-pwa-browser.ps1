@@ -38,7 +38,7 @@
 #      say how many came; a touch, Space or Enter jumps, Shift+Tab reaches it with a visible ring; his own
 #      line sent takes him down; its words stand out from its face by 4.5 to 1, light and dark;
 #  10c. a photo: a touch on Photo opens the picker; a 3000 by 2000 JPEG with a camera block is shrunk by
-#      Chrome's own canvas, signed by ONE assertion of Chrome's passkey and put in parts; a real run writes
+#      Chrome's own canvas, signed under the unlocked session (no prompt; section 14 counts them) and put in parts; a real run writes
 #      it to the PC's inbox at 1600 px with no camera block left, and posts one line; an HTML page called
 #      .jpg is refused on the phone with nothing sent; his own photo sent while scrolled up takes him down,
 #      and one arriving while he reads back (from another window) keeps his place and counts as new;
@@ -504,7 +504,7 @@ try {
     Check ($own.ok -and $own.value.put -and $od.ok -and $od.value.dist -le 1 -and $od.value.lastText -ceq "Back down to the bottom." -and -not $od.value.jumpShown) ("his own line sent while scrolled up takes him to the bottom, where it stands (" + (Show-Place $od) + ")")
     $ct = Invoke-Browser @{ cmd = "chatContrast" }
     Check ($ct.ok -and $ct.value.light.ratio -ge 4.5 -and $ct.value.dark.ratio -ge 4.5) ("Jump to latest's words stand out from its face by at least 4.5 to 1, light and dark (" + $(if ($ct.ok) { ConvertTo-Json $ct.value -Compress } else { $ct.reason }) + ")")
-    Write-Host "--- 10c. a photo from the Photo button: shrunk by Chrome, ONE passkey tap, whole on the PC, one line to the Thrall ---" -ForegroundColor Cyan
+    Write-Host "--- 10c. a photo from the Photo button: shrunk by Chrome, no prompt under the unlocked session, whole on the PC, one line to the Thrall ---" -ForegroundColor Cyan
     # A real picture, 3000 by 2000, drawn here and saved as a JPEG with a made-up camera block (APP1 Exif
     # holding a "GPS" marker) put in after its first two bytes, as a phone camera's would be.
     Add-Type -AssemblyName System.Drawing
@@ -528,7 +528,7 @@ try {
     $pd = Invoke-Browser @{ cmd = "chatPlace" }
     Check ($pp.ok -and $pd.ok -and $pd.value.dist -le 1 -and -not $pd.value.jumpShown) ("his own photo, sent while scrolled up, takes him to the bottom (" + $(if ($pd.ok) { ConvertTo-Json $pd.value -Compress -Depth 4 } else { $pd.reason }) + ")")
     Check ($pp.ok -and $pp.value.chooser) ("a touch on Photo opens the phone's picker (" + $(if ($pp.ok) { ConvertTo-Json $pp.value -Compress } else { $pp.reason }) + ")")
-    Check ($pp.ok -and $pp.value.prompts -eq 1 -and $pp.value.put -ge 2) ("the photo is ONE passkey signature - the same as a line - and its manifest and parts are put (" + $(if ($pp.ok) { "" + $pp.value.prompts + " signature(s), " + $pp.value.put + " put(s)" } else { $pp.reason }) + ")")
+    Check ($pp.ok -and $pp.value.prompts -eq 0 -and $pp.value.put -ge 2) ("under the unlocked session this section's unlock opened (the PC keeps sessions), the photo asks for no passkey, as a line does, and its manifest and parts are put; section 14 counts the prompts from a lock (" + $(if ($pp.ok) { "" + $pp.value.prompts + " signature(s), " + $pp.value.put + " put(s)" } else { $pp.reason }) + ")")
     Check ($pp.ok -and $pp.value.thumbs -eq 1) "the chat shows the photo sent as a small picture"
     $run = Invoke-Run -Turns 2
     $landed = @(Get-ChildItem -LiteralPath (Join-Path $hh "inbox\photos") -File -ErrorAction SilentlyContinue)
