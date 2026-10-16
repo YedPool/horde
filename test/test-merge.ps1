@@ -138,7 +138,7 @@ function New-SuiteTools {
     $script:tellFails = [bool]$TellFails
     $script:mailFails = [bool]$MailFails
     $script:beforeGuard = $BeforeGuard
-    $real = New-HordeMergeTools -Values ([pscustomobject]@{ gh = "gh"; git = "git"; guardShell = "powershell.exe"; ledgerProgram = "python"; ledgerScript = "C:\fleet\task.py" }) -Tell { } -Mail { }
+    $real = New-HordeMergeTools -Values ([pscustomobject]@{ gh = "gh"; git = "git"; guardShell = "powershell.exe"; ledgerProgram = "python"; ledgerScript = "C:\fleet\task.py"; workFolder = "" }) -Tell { } -Mail { }
     return @{
         Gh = { param([string[]]$Arguments) return (Invoke-MergeStandInGh -StatePath $script:toolCase.gh -Arguments $Arguments) }
         Git = $real["Git"]

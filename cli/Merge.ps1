@@ -449,13 +449,16 @@ function New-HordeMergeTools {
     param([Parameter(Mandatory = $true)]$Values, [Parameter(Mandatory = $true)][scriptblock]$Tell, [Parameter(Mandatory = $true)][scriptblock]$Mail)
     $gh = "" + $Values.gh; $git = "" + $Values.git; $shell = "" + $Values.guardShell
     $ledgerProgram = "" + $Values.ledgerProgram; $ledgerScript = "" + $Values.ledgerScript
+    # gh and the ledger run in the work folder, never in the caller's: gh reads the git checkout it is
+    # started in, and nothing here may act on the caller's tree.
+    $place = Get-HordeMergeWorkFolder -Values $Values
     $runProgram = ${function:Invoke-HordeMergeProgram}
     $formatLine = ${function:Format-HordeMergeLedgerLine}
     return @{
-        Gh = { param([string[]]$Arguments) return (& $runProgram -Program $gh -Arguments $Arguments) }.GetNewClosure()
+        Gh = { param([string[]]$Arguments) return (& $runProgram -Program $gh -Arguments $Arguments -Directory $place) }.GetNewClosure()
         Git = { param([string[]]$Arguments) return (& $runProgram -Program $git -Arguments $Arguments) }.GetNewClosure()
         Guard = { param([string]$Checkout, [string]$Suite) return (& $runProgram -Program $shell -Arguments @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", [System.IO.Path]::Combine($Checkout, $Suite)) -Directory $Checkout) }.GetNewClosure()
-        Ledger = { param([string[]]$Arguments) return (& $runProgram -Program $ledgerProgram -Arguments (@($ledgerScript) + @($Arguments))) }.GetNewClosure()
+        Ledger = { param([string[]]$Arguments) return (& $runProgram -Program $ledgerProgram -Arguments (@($ledgerScript) + @($Arguments)) -Directory $place) }.GetNewClosure()
         LedgerLine = { param([string[]]$Arguments) return (& $formatLine -Program $ledgerProgram -Script $ledgerScript -Arguments $Arguments) }.GetNewClosure()
         Tell = $Tell
         Mail = $Mail
