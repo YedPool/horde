@@ -17,8 +17,8 @@
            Find = '      if (bytes.length > s.chat.photoBytes) throw fail('
            Replace = '      if (false) throw fail(' }
         @{ Name = "photo-sent-from-the-recovery-code"
-           Find = '      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Read only:'
-           Replace = '      if (false) { throw fail(s.mode === "read-only" ? NO_PRF : "Read only:' }
+           Find = '      if (s.mode !== "passkey") { throw fail(s.mode === "read-only" ? NO_PRF : "Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to send a photo."); }'
+           Replace = '' }
         @{ Name = "photo-parts-not-paced"
            Find = '        if (puts >= PHOTO_BURST) await sleep(PHOTO_PACE_MS);'
            Replace = '' }
