@@ -2113,7 +2113,7 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   subtle.generateKey = async function (alg, extractable, usages) { const k = await realGenerate.call(subtle, alg, extractable, usages); if (alg && alg.name === "ECDSA") madeKeys.push(k); return k; };
   const make = () => createPhone({ store, authenticator: auth, relay: R.createRelayClient(t), origin, now: () => clock.now });
   let phone = make();
-  const paired = await phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const paired = await phone.pair({ offerText: (await offerText(m)), label: "Founder phone" });
   await phone.announce(paired.id);
   const phoneKey = await phoneKeyOf(t, m);
   const entry = await store.get("horde/" + paired.id);
