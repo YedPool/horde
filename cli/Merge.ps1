@@ -273,12 +273,14 @@ function Invoke-HordeMergeCheck {
     }
     else { return (& $no ("asking git whether the head contains the base failed: " + (Get-HordeMergeFirstLine ("" + $contains.err)))) }
 
-    $stamp = [datetime]::UtcNow.ToString("yyyyMMddTHHmmss", [System.Globalization.CultureInfo]::InvariantCulture)
-    $scratch = [System.IO.Path]::Combine($WorkFolder, "runs", ($stamp + "-" + $Request.repo + "-" + $Request.number + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6)))
+    # A SHORT NAME, because the checked tree's own paths are long: Horde's longest is 136 characters
+    # (measured 2026-10-16), and a checkout under a 140-character folder failed with "Filename too long".
+    # core.longpaths lets git write such a path; a guard that cannot read one then fails red, never green.
+    $scratch = [System.IO.Path]::Combine($WorkFolder, "runs", ("" + $Request.number + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6)))
     try {
-        $r = Invoke-HordeMergeGit -Tools $Tools -What "cloning the scratch checkout" -Arguments @("clone", "--shared", "--no-checkout", "--quiet", $cache, $scratch)
+        $r = Invoke-HordeMergeGit -Tools $Tools -What "cloning the scratch checkout" -Arguments @("-c", "core.longpaths=true", "clone", "--shared", "--no-checkout", "--quiet", $cache, $scratch)
         if (-not $r.ok) { return (& $no $r.why) }
-        $r = Invoke-HordeMergeGit -Tools $Tools -What "checking out the tree to check" -Arguments @("-C", $scratch, "checkout", "--detach", "--quiet", $commit)
+        $r = Invoke-HordeMergeGit -Tools $Tools -What "checking out the tree to check" -Arguments @("-C", $scratch, "-c", "core.longpaths=true", "checkout", "--detach", "--quiet", $commit)
         if (-not $r.ok) { return (& $no $r.why) }
         foreach ($g in $script:HordeMergeGuards) {
             if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($scratch, $g))) { return (& $no ("the guard " + $g + " is not in the checked tree, so nothing can say it is green")) }
