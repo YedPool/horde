@@ -144,3 +144,19 @@ test('command line: collect then status against a temp home', () => {
   assert.equal(bad.status, 1);
   r.done();
 });
+
+test('an alert is recorded once: a second markAlerted changes nothing and says so', () => {
+  const r = rig();
+  const s = openStore(r.home);
+  s.apply({ tokens_limits: [{ at: 1, session_id: 's', orc: 'T', hit_uuid: 'h1', limit_type: 'five_hour', resets_at: null }] }, null);
+  assert.equal(s.markAlerted('h1', 1000, true), true);
+  assert.equal(s.markAlerted('h1', 2000, false), false);
+  const row = s.limitByHit('h1');
+  assert.equal(row.alerted_at, 1000);
+  assert.equal(row.alerted_silently, 1);
+  // Upserting the same hit again (as every watch run does) keeps both.
+  s.apply({ tokens_limits: [{ at: 1, session_id: 's', orc: 'T', hit_uuid: 'h1', limit_type: 'five_hour', resets_at: null }] }, null);
+  assert.equal(s.limitByHit('h1').alerted_at, 1000);
+  s.close();
+  r.done();
+});
