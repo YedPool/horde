@@ -31,7 +31,7 @@ $cwds = @{ K = "C:\lanes\k"; K1 = "C:\work\k1"; K2 = "C:\work\k2"; L = "C:\lanes
 # elsewhere | silent (what the harness does when its pane is spawned). paneOf: pid -> pane.
 $world = @{}
 function Reset-World {
-    $world.live = @{}; $world.error = ""; $world.onSpawn = @{}; $world.paneOf = @{}; $world.spawnFails = @(); $world.postFails = $false
+    $world.live = @{}; $world.error = ""; $world.onSpawn = @{}; $world.paneOf = @{}; $world.spawnFails = @(); $world.spawnUnknown = @(); $world.postFails = $false
     $world.spawns = New-Object System.Collections.ArrayList; $world.posts = New-Object System.Collections.ArrayList
     $world.free = New-Object System.Collections.ArrayList; $world.nextPane = 40; $world.clock = [datetime]::new(2026, 10, 16, 10, 0, 0, [System.DateTimeKind]::Utc)
     $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList; $world.onOpen = $null; $world.noWindow = @()
@@ -67,7 +67,10 @@ Register-HordeFleetHost -Name "stand-in" `
             [void]$world.spawns.Add($req)
             [void]$world.order.Add("spawn " + ("" + $req.line).Substring(7))
             $id = ("" + $req.line).Substring(7)
-            if (@($world.spawnFails) -ccontains $id) { return (New-HordeUnknown -Reason "the stand-in terminal refused") }
+            # A request refused BEFORE any call to the terminal: absent, the one answer that means "nothing started".
+            if (@($world.spawnFails) -ccontains $id) { return (New-HordeAbsent -Note "the spawn was not made: the stand-in terminal refused the request") }
+            # Any other non-known answer (a timeout, a reply that is not a pane id): a pane MAY have started.
+            if (@($world.spawnUnknown) -ccontains $id) { return (New-HordeUnknown -Reason ("the terminal did not answer within 20000 ms`n" + ("x" * 900))) }
             $world.nextPane++; $pane = "" + $world.nextPane
             $win = $(if ($req.mode -ceq "tab") { "" + $req.window } elseif ($req.mode -ceq "split") { "split-has-no-window" } else { "w" + $pane })
             if (@($world.noWindow) -ccontains $id) { $win = "" }
@@ -412,6 +415,39 @@ $world.postFails = $true
 [void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("X"))
 $rec = Read-Rec $h
 Check ((State-Of $rec "X") -ceq "failed" -and (Get-Session $rec "X").history[-1].reason -like "*wake mail was not posted*") "a session that runs again but could not be told is failed, saying so"
+
+Section "a spawn that may have started is held, never started twice (third review of PR 318, P1)"
+Reset-World
+$h = New-Home
+$world.spawnUnknown = @($ids["K"])
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K")
+$rec = Read-Rec $h
+$ks = Get-Session $rec "K"
+Check ((State-Of $rec "K") -ceq "failed" -and "" + $ks.history[-1].pane -ceq "?") "an unknown spawn answer is recorded failed with the pane '?', so a later wake holds it"
+Check ("" + $ks.history[-1].reason -cmatch '\A[^\x00-\x1F]{1,600}\z') "its reason fits the schema: one line of at most 600 characters, though the terminal's stderr was long and had a line break"
+$n = $world.spawns.Count
+$r2 = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K")
+Check ($world.spawns.Count -eq $n) "the next wake does NOT spawn it again"
+$world.verdicts.Clear()
+$world.spawnUnknown = @()
+$r3 = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K") -Retry
+Check ($world.spawns.Count -eq $n + 1) "-Retry starts it"
+Reset-World
+$h = New-Home
+$world.spawnFails = @($ids["K"])
+[void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K"))
+$ks = Get-Session (Read-Rec $h) "K"
+Check ((State-Of (Read-Rec $h) "K") -ceq "failed" -and "" + (Get-HordeFleetMember $ks.history[-1] "pane") -ceq "") "CONTROL: a request refused before any call (absent) is failed with no pane"
+$world.spawns.Clear()
+[void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K"))
+Check ($world.spawns.Count -eq 1) "CONTROL: and a later wake may try it again"
+
+Section "who a wake's mail is from"
+Check ((New-HordeFleetWakeSender -DeviceId "0f000000-0000-4000-8000-000000000001" -SelfSessionId (New-HordeKnown -Value "33333333-4444-4555-8666-777777777777")).sessionId -ceq "33333333-4444-4555-8666-777777777777") "a wake run by a session names that session"
+foreach ($self in @((New-HordeUnknown -Reason "not in a session"), (New-HordeAbsent -Note "none"))) {
+    $f = New-HordeFleetWakeSender -DeviceId "0f000000-0000-4000-8000-000000000001" -SelfSessionId $self
+    Check ($f.system -ceq "horde" -and $null -eq $f.PSObject.Properties["label"]) "a wake no session ran calls itself horde (reserved system), and claims no label"
+}
 
 Section "-Only"
 Reset-World

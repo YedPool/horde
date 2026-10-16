@@ -106,7 +106,11 @@ $s = Invoke-HordeWeztermFleetSpawn -Target $T -Request ([pscustomobject]@{ mode 
 Check ($s.state -ceq "known" -and $s.value.pane -ceq "43" -and "" + $s.value.window -ceq "" -and $s.value.note -like "*which window*") ("a new pane whose window cannot be read back is a pane that STARTED, with no window and the reason: it runs, and the wake must stop its group rather than call it not started (" + $s.reason + ")")
 Reset-Calls
 $s = Invoke-HordeWeztermFleetSpawn -Target $T -Request ([pscustomobject]@{ mode = "window"; cwd = "rel"; line = $line }) -Program $prog -Runner $runner
-Check ($s.state -ceq "unknown" -and $calls.Count -eq 0) "a request that cannot be built makes no call"
+Check ($s.state -ceq "absent" -and $calls.Count -eq 0 -and $s.reason -like "*not made*") "a request that cannot be built makes no call, and is ABSENT: the one answer that means nothing was started (third review of PR 318)"
+Reset-Calls
+Reply -1 "" ("boom" + [Environment]::NewLine + ("e" * 900))
+$s = Invoke-HordeWeztermFleetSpawn -Target $T -Request ([pscustomobject]@{ mode = "tab"; cwd = "C:\w"; line = $line; window = "9" }) -Program $prog -Runner $runner
+Check ($s.state -ceq "unknown" -and $s.reason.Length -le 400 -and $s.reason -cnotmatch '[\x00-\x1F]') ("a spawn's long, multi-line stderr is trimmed to one short line in the reason (" + $s.reason.Length + " characters)")
 
 Section "the dry run's words are the real command"
 $d = Format-HordeWeztermFleetSpawn -Request ([pscustomobject]@{ mode = "window"; cwd = "C:\lanes\k"; line = $line }) -Program $prog
