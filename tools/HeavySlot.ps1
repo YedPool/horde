@@ -3,9 +3,15 @@
 # local gate, which holds one lock across every agent on the machine").
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\HeavySlot.ps1 -Script <suite, relative to -Worktree> [-Worktree <path>]
-#       [-ScriptArgs <a>,<b>] [-Out <log>] [-MinFreeGB 3] [-WaitSeconds 7200] [-RunSeconds 3600]
-#   -ScriptArgs is split on commas, and an argument with a space is quoted, so an argument may not hold a
-#   comma or a double quote: such a run takes its values from a file or its own settings instead.
+#       [-ScriptArgs <a>,<b> | -ArgsFile <args.json>] [-Out <log>] [-MinFreeGB 3] [-WaitSeconds 7200] [-RunSeconds 3600]
+# THE RUN'S ARGUMENTS. -ScriptArgs is split on commas, and each piece loses one layer of matching quotes:
+#   powershell -File hands the list over as ONE string with its quotes still on (measured 2026-10-15:
+#   -ScriptArgs '-Spec','x.psd1' reached the suite as the single argument '-Spec','x.psd1'). A piece that
+#   still holds a quote after that is refused with 126, nothing run, rather than passed on mangled.
+#   -ArgsFile is a JSON array of strings, taken exactly; it is the way for an argument holding a comma,
+#   a single quote or a space, and wins over -ScriptArgs. Either way, an argument holding a double
+#   quote or one of cmd's own characters (& | < > ^ %) is refused with 126: the run is started through
+#   cmd's line, which would read them itself.
 #
 # Development tooling, not part of the engine. test/test-heavy-slot.ps1 is its suite.
 #
@@ -40,7 +46,8 @@
 #
 # EXIT CODES: the script's own; 124 the run passed -RunSeconds; 125 the slot, a killed holder's run or
 # the memory was not had within -WaitSeconds (nothing was run); 126 the script is not there; 127 an
-# error the gate did not plan for. A suite that itself exits 124 to 127 reads the same: tell them apart by
+# error the gate did not plan for. 126 also means the run's arguments were refused (THE RUN'S
+# ARGUMENTS). A suite that itself exits 124 to 127 reads the same: tell them apart by
 # the gate's own words above the closing line.
 #
 # A suite uses its own -SlotName and -HolderFile, so a test never takes or frees the machine's real slot.
@@ -49,6 +56,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Script,
     [string]$Worktree = "",
     [string[]]$ScriptArgs = @(),
+    [string]$ArgsFile = "",
     [string]$Out = "",
     [double]$MinFreeGB = 3,
     [int]$WaitSeconds = 7200,
@@ -142,7 +150,25 @@ function ConvertTo-HordeHeavySlotArg { param([string]$A) if ($A -match '\s') { r
 
 if ($Worktree -eq "") { $Worktree = (Get-Location).Path }
 # powershell -File hands a list to a [string[]] as ONE string, so a comma separates the run's arguments.
-$ScriptArgs = @(@($ScriptArgs) | ForEach-Object { ("" + $_) -split "," } | Where-Object { $_ -ne "" })
+$script:argsRefused = ""
+if ($ArgsFile -ne "") {
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
+    $list = $null
+    try { $list = ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($ArgsFile)) } catch { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " is not a JSON array of strings" }
+    if ($script:argsRefused -eq "") {
+        $items = @($list)
+        if (@($items | Where-Object { $_ -isnot [string] }).Count -gt 0) { $script:argsRefused = "the -ArgsFile " + $ArgsFile + " holds something that is not a string" }
+        else { $ScriptArgs = [string[]]$items }
+    }
+} else {
+    # Split on commas, then one layer of matching quotes off each piece (the header, THE RUN'S ARGUMENTS).
+    $ScriptArgs = @(@($ScriptArgs) | ForEach-Object { ("" + $_) -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object {
+        if ($_.Length -ge 2 -and (($_[0] -eq "'" -and $_[-1] -eq "'") -or ($_[0] -eq '"' -and $_[-1] -eq '"'))) { $_.Substring(1, $_.Length - 2) } else { $_ } })
+    foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and ($a.Contains('"') -or $a.StartsWith("'") -or $a.EndsWith("'"))) { $script:argsRefused = "an argument still holds a quote after one layer was taken off: " + $a + " (use -ArgsFile)" } }
+}
+# Every argument goes into cmd's line (below): a double quote ends cmd's quoting, and & | < > ^ % are
+# cmd's own (an & would start a second command), so none of them can reach the run as written.
+foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and $a -match '["&|<>^%]') { $script:argsRefused = "an argument holds a character cmd's line cannot carry (a double quote or & | < > ^ %): " + $a } }
 $name = ($SlotName -replace '[^A-Za-z0-9-]', '-')
 # The record lives where every agent of this user finds it, whatever TEMP each was given.
 if ($HolderFile -eq "") { $HolderFile = Join-Path (Join-Path $env:LOCALAPPDATA "horde") ("heavy-slot-" + $name + ".txt") }
@@ -159,6 +185,7 @@ $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $left = { [int][math]::Max(0, $WaitSeconds - $clock.Elapsed.TotalSeconds) }
 $slice = 500
 $main = {
+    if ($argsRefused -ne "") { $script:code = 126; Write-HordeHeavySlotLine ("heavy-slot: " + $argsRefused + "; nothing was run"); return }
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $script:code = 126; Write-HordeHeavySlotLine ("heavy-slot: there is no script " + $path + "; nothing was run"); return }
     $script:mutex = New-Object System.Threading.Mutex($false, $SlotName)
     Write-HordeHeavySlotLine ("heavy-slot: waiting for the slot " + $SlotName + " for " + $Script)
