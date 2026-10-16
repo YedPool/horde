@@ -149,6 +149,18 @@ $term = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart
 Check ($st.state -cne "read" -and $st.state -cne "defaults" -and $term.state -ceq "unknown" -and $term.reason -like "*settings*") ("a settings file that is refused names no terminal and asks none: unknown, with its findings (" + $term.reason + ")")
 Remove-Item -LiteralPath $homeDir -Recurse -Force -ErrorAction SilentlyContinue
 
+Section "the shell a woken pane runs: the installed one, never the Store's while it is there"
+# A Store update of PowerShell 7 closes every running copy of the Store's build, and so every pane that runs
+# it (2026-10-16: every pane of the fleet). The founder ruled Horde never relies on the Store.
+$store = { New-HordeKnown -Value "C:\Users\me\AppData\Local\Microsoft\WindowsApps\pwsh.exe" }
+$msiPath = Join-Path "C:\PF" "PowerShell\7\pwsh.exe"
+$sh = Resolve-HordeWeztermFleetShell -ProgramFiles "C:\PF" -Exists { param($p) $p -ceq $msiPath }.GetNewClosure() -OnPath $store
+Check ($sh.state -ceq "known" -and $sh.value -ceq $msiPath) ("with the installed PowerShell 7 there, it is the shell, even when the Store's is first on PATH (" + $sh.value + ")")
+$sh = Resolve-HordeWeztermFleetShell -ProgramFiles "C:\PF" -Exists { param($p) $false } -OnPath $store
+Check ($sh.state -ceq "known" -and $sh.value -like "*\WindowsApps\pwsh.exe") ("CONTROL: without it, the one on PATH is used (" + $sh.value + ")")
+$sh = Resolve-HordeWeztermFleetShell -ProgramFiles "" -Exists { param($p) $true } -OnPath $store
+Check ($sh.state -ceq "known" -and $sh.value -like "*\WindowsApps\pwsh.exe") "and so when no Program Files folder is known"
+
 Section "the adapter registers itself"
 $h = Resolve-HordeFleetAdapter -Kind "host"
 Check ($h.state -ceq "known" -and $h.value.name -ceq "wezterm") "loading the file registers the fleet host adapter"
