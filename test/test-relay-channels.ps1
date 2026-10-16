@@ -728,7 +728,7 @@ try {
         Check (@($shown.routes).Count -eq 1 -and $shown.routes[0].resolved -eq $false -and $shown.routes[0].note -like "its askedBy, 'orc-b', is neither*") "the store records where it went, and why not to an Orc"
         $ticks = Invoke-HordeRelayChannelTicks -Context $R.ctx
         Check (@($script:routePosts | Where-Object { "$($_.body)" -clike "FOUNDER ANSWER to question 1, asked by*" }).Count -eq 1 -and @($ticks.lines | Where-Object { $_ -clike "*route:*" }).Count -eq 0) "a Tick after that routes nothing more and says nothing more"
-        $phoneCopy = ConvertFrom-Json (ConvertTo-HordeDecisionsChannelQuestion -Question $shown)
+        $phoneCopy = ConvertFrom-HordeJson (ConvertTo-HordeDecisionsChannelQuestion -Question $shown)
         Check ($null -ne $shown.PSObject.Properties["routes"] -and $null -eq $phoneCopy.PSObject.Properties["routes"]) "the phone's copy of the question leaves out where its answers were routed: the keeper's record, not his"
     } finally { $script:HordeMessengers = $keepMessengers; $script:HordeDecisionsChannelRouteSeat = $null; $script:HordeDecisionsChannelRouteAnalyst = $null }
     }
