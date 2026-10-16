@@ -4,7 +4,9 @@
 # port (relays/Port.ps1, Publish-HordeRelay).
 #
 # THE STEPS, each stopping the deploy when it fails, with nothing done after it:
-#   1. the settings (Settings.ps1) and the Google client file they name, read and checked
+#   1. the settings (Settings.ps1): where the relay will answer (the home's relayOrigin, or the shipped
+#      origin when it is unset; one a deploy cannot make is refused), the Google client file they name,
+#      read and checked
 #      (GoogleClient.ps1), and the sign-in allowlist they hold (SignInAllowlist.ps1: off unless
 #      switched on) - before wrangler is even looked for, so a missing file costs nothing;
 #   2. wrangler: the pinned one (Wrangler.ps1, installed outside the tree when it is not), or the one the
@@ -58,6 +60,9 @@ function Publish-HordeCloudflareRelay {
     param([Parameter(Mandatory = $true)][string]$Site, [scriptblock]$Say = { param($Line) }, [string]$HordeHome = "")
     $set = Get-HordeCloudflareRelaySettings -HordeHome $HordeHome
     if ($set.state -cne "known") { return $set }
+    $dep = Get-HordeCloudflareRelayDeployment -Values $set.value
+    if ($dep.state -cne "known") { return $dep }
+    $dep = $dep.value
     $clientFile = Get-HordeCloudflareRelayClientFile -Values $set.value
     $client = Read-HordeCloudflareRelayGoogleClient -Path $clientFile -RepoRoot (Get-HordeCloudflareRelayRepoRoot)
     if ($client.state -cne "known") { return $client }
@@ -77,12 +82,11 @@ function Publish-HordeCloudflareRelay {
     } elseif (-not (Test-HordeModuleSettingFolder -Path $wrangler) -or -not (Test-Path -LiteralPath $wrangler -PathType Leaf)) {
         return (New-HordeUnknown -Reason ("the setting wranglerScript names no file: '" + $wrangler + "'"))
     }
-    $dep = Get-HordeCloudflareRelayDeployment
 
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-relay-cf-deploy-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
     [void][System.IO.Directory]::CreateDirectory($work)
     try {
-        $cfg = New-HordeCloudflareRelayConfig -Out (Join-Path $work "config") -Site $Site
+        $cfg = New-HordeCloudflareRelayConfig -Out (Join-Path $work "config") -Site $Site -Deployment $dep
         if ($cfg.state -cne "known") { return $cfg }
         $quiet = Get-HordeCloudflareRelayQuietEnv -Work $work
         foreach ($name in @($script:HordeCloudflareRelaySecretNames.Keys)) {

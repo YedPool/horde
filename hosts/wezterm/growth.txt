@@ -1,2 +1,3 @@
 agents/claude-code/allowlist.txt | 0 -> 3 | 2026-09-30 | the new harness allowlist lists this host's own files by path, and each path names the host
 agents/codex/allowlist.txt | 0 -> 3 | 2026-09-30 | the new harness allowlist lists this host's own files by path, and each path names the host
+core/json-parse-allowlist.txt | 0 -> 2 | 2026-10-14 | the raw JSON parse list of PR 279 is data naming repository paths, and two of its files sit in this host folder

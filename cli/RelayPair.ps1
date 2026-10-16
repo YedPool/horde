@@ -291,6 +291,21 @@ function Confirm-HordeRelayPairFingerprint {
     }
 }
 
+function Send-HordeRelayPairConfirmed {
+    # Tell the phone, through the offer's pairing mailbox, that the founder confirmed it here
+    # (relay/Pairing.ps1, TELLING THE PHONE IT IS CONFIRMED): its pairing screen then offers ONE passkey
+    # prompt, Finish pairing, which announces it. The line to say. Nothing is lost when the word does not
+    # go (no relay, or the relay refused): the phone announces at its next unlock instead.
+    param([string]$HordeHome, $Connection, $Offer, $Device, [scriptblock]$Clock)
+    $later = "the phone announces itself at its next unlock with the passkey."
+    if ($null -eq $Connection) { return ("On the phone, tap Finish pairing; or " + $later) }
+    $t = New-HordeRelayPairingConfirmedText -HordeHome $HordeHome -Offer $Offer.offer -Device $Device.id -Now (& $Clock)
+    if ($t.state -cne "known") { return ("The phone was not told it is confirmed (" + $t.reason + "); " + $later) }
+    $put = Send-HordeRelayItem -Connection $Connection -Mailbox $Offer.pairMailbox -Text $t.value.text -Key $t.value.key
+    if ($put.state -cne "known") { return ("The phone was not told it is confirmed: the relay did not take it (" + $put.reason + "); " + $later) }
+    return "The phone is told: on its pairing screen, tap Finish pairing (one passkey prompt). If it has left that screen, it announces itself at its next unlock."
+}
+
 function Invoke-HordeRelayPair {
     # The whole command (the header). -Connection is a relays/Port.ps1 connection, or $null to take a
     # pasted response only; -Say receives each line; -OpenPicture opens the PNG (the command starts the
@@ -336,7 +351,8 @@ function Invoke-HordeRelayPair {
         if (-not $k.ok) { $done.reason = $k.reason; return $done }
         $done.ok = $true
         $done.device = $k.value
-        $null = & $Say ("Confirmed: '" + $k.value.label + "' (device " + $k.value.id + ") is trusted. On the phone, tap 'I confirmed it at the machine: announce this phone'.")
+        $null = & $Say ("Confirmed: '" + $k.value.label + "' (device " + $k.value.id + ") is trusted.")
+        $null = & $Say (Send-HordeRelayPairConfirmed -HordeHome $HordeHome -Connection $Connection -Offer $offer -Device $k.value -Clock $Clock)
         return $done
     } finally {
         try { if ([System.IO.File]::Exists($png)) { [System.IO.File]::Delete($png) } } catch { }

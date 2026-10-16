@@ -13,8 +13,10 @@
 //                          the account's gate holds it to the limits, and what it may do there
 // AUTHENTICATORS are tried in order and the first principal decides; authorize() then asks its may().
 // The ops are the mailbox API's get, put, watch and ack (target: the mailbox), the account API's
-// account, register and remove (account-api.js; target: the machine's key id), and a phone's end-phone
-// (target: the phone's id) and delete (the account itself).
+// account, register and remove (account-api.js; target: the machine's key id), a phone's end-phone
+// (target: the phone's id) and delete (the account itself), and the join requests' (join.js): a phone's
+// join, and a machine's join-close (target: the caller's own key id - which pending request it may end
+// is the account's to say, against the machine the request names).
 //
 // AN ACCOUNT'S MAILBOXES ARE ITS OWN: the API addresses every mailbox under the principal's account
 // (mailbox.js, mailboxOf), so no principal names another account's mailbox at all - there is no check to
@@ -25,8 +27,9 @@
 //            SameSite=Lax keeps the cookie off cross-site posts besides, and there is no CORS at all.
 //            Its device is its session's object id.
 //   MACHINE  a request signed by a key registered to the account (request-signature.js, machines.js):
-//            the mailboxes of the one horde its key was registered for, and removing its own key -
-//            never another machine's, never the account's list. Its device is its key id.
+//            the mailboxes of the one horde its key was registered for, removing its own key, and ending
+//            a join request that names it - never another machine's, never the account's list. Its
+//            device is its key id. A machine never makes a join request: only a phone asks to join.
 //            REFUSED SIGNATURES ARE LIMITED (limits.js): per key and address in the key's own object
 //            (machines.js: never for the key as a whole, which would let a forger lock it out), and per
 //            address - each refusal is told to the address's object (address.js), and once that
@@ -61,7 +64,8 @@ import { CODES } from "./answers.js";
 const TEST_BINDING = "HORDE_RELAY_TEST_AUTH";
 const TEST_TOKEN_MIN = 32;
 const MAILBOX_OPS = new Set(["get", "put", "watch", "ack"]);
-const PHONE_OPS = new Set(["get", "put", "watch", "ack", "account", "register", "remove", "end-phone", "delete"]);
+// A phone never ends a join request: that is the machine's, after the approval or rejection it took.
+const PHONE_OPS = new Set(["get", "put", "watch", "ack", "account", "register", "remove", "end-phone", "delete", "join"]);
 // Addresses this isolate refuses machine requests from, and until when (ms): learned from the address's
 // object (address.js) at a refusal, so a flood of forged signatures costs no object call once it is
 // over the rate. Bounded: the oldest is forgotten first.
@@ -138,7 +142,7 @@ async function machineAuthenticator(request, env, url, limits) {
   const horde = v.horde;
   return {
     name: "machine " + keyId, kind: "machine", account: v.account, epoch: v.epoch, keyId, horde, label: v.label, device: "machine:" + keyId, gated: true,
-    may: (op, target) => (MAILBOX_OPS.has(op) ? String(target).split("/")[0] === horde : op === "remove" && target === keyId)
+    may: (op, target) => (MAILBOX_OPS.has(op) ? String(target).split("/")[0] === horde : (op === "remove" && target === keyId) || (op === "join-close" && target === keyId))
   };
 }
 

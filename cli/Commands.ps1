@@ -23,6 +23,7 @@ Set-StrictMode -Off
 function Get-HordeCommandGroups {
     return [ordered]@{
         about = "about horde"
+        setup = "the first run on a new machine"
         metrics = "measuring the work"
         node = "serving this machine to the hub"
         hub = "the hub: its nodes and what it mirrors of them"
@@ -31,6 +32,7 @@ function Get-HordeCommandGroups {
         wake = "waking the sessions that have mail"
         services = "long-lived pieces kept running and current"
         files = "files shared for the founder to read"
+        analyst = "the fleet analyst, kept always on"
     }
 }
 

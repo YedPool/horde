@@ -15,6 +15,10 @@
 //     storage                             where drafts are kept (default: this page's own localStorage)
 //     prefs                               where the chosen order is kept (default: the same; a host
 //                                         that keeps drafts in memory only still keeps the order)
+//     expanded                            false: every question opens folded (the window); left out,
+//                                         unfolded (header, EVERY QUESTION STARTS UNFOLDED)
+//     answered                            true: the answered are shown until he chooses (the window);
+//                                         left out, hidden (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR)
 //   doc.setKinds(record)     the answer of the kinds operation, as { state, value, reason }
 //   doc.setList(record)      the answer of the list operation; says what it did: "drawn", "same"
 //                            (the very answer already drawn: nothing is touched) or "unread" (the
@@ -25,6 +29,9 @@
 //   doc.reveal(number)       that question brought into view, if it is not wholly in it already
 //   doc.takeKeyboard()       the caret into the first unanswered question's field
 //   doc.order(), doc.setOrder(key)   the order chosen (date, importance or blocks), and choosing one
+//   doc.expanded(), doc.setExpanded(open)   every question unfolded or folded, as the one button does
+//   doc.lanes(), doc.lane(), doc.setLane(lane)   the cards' numbers, the lane chosen, choosing one
+//                                         (header, ONE LANE AT A TIME)
 //   doc.drive(steps)         a check's steps acted out on the page's own fields (see drive below)
 //   doc.counts()             { open, waiting, other }
 //   doc.snapshot(limits)     WHAT IS DRAWN, read back from the page's own elements; see snapshot below
@@ -99,6 +106,50 @@
 // it, it is whole. Unfolding the question's context (the triangle, F2, or a press on a cut line)
 // shows every message whole. THE QUESTION ITSELF IS NEVER CUT, and neither is a draft.
 //
+// EVERY QUESTION STARTS UNFOLDED (the founder, 2026-10-14: "I also want a collapse all button on the
+// questions even though they should start expanded"): each question of his list opens with its
+// context under it, and one button, on a short line just under the order line, folds them all
+// ("Collapse all"), then says "Expand all" and unfolds them all again. A press drops what he chose for single questions
+// and touches neither the order nor his place on the page (THE VIEW FOLLOWS HIM). What he folds or
+// unfolds is kept, question by question, through every list that arrives; a question that arrives
+// later opens as the button last left them. Rows that are only read (With Thrall, History) stay one
+// line each until he unfolds one. A host may open folded instead (expanded: false - the window).
+//
+// ONE STAGE, AND A BOX TO ANSWER IN (the founder, 2026-10-15: "Clicking on a decision to get more info
+// now seems to have two stages of info showing - either make it one stage or make it more evident to
+// the user. Also, the input box for where to type the decision answer needs to be more clearly
+// delineated"). Unfolded, a question's details are one run, in reading order: what stands out about
+// it, what was said (whole), its context - parts, options, what it is, the recommendation, files and
+// references - and LAST the label "Your answer" over the box. Before, the context was drawn under the
+// field, so an unfolded question showed details, the field, then more details: two showings. One tap
+// on a folded question shows the whole run at once. Folded, the details give way (the context goes,
+// what was said before is one line each) but the box stays: the window's run of answering is the box
+// of every question, with nothing unfolded to reach it (test/e2e/e2e-decisions-answering.ps1), and F2
+// folds the context with the caret still in the box. The box has an edge drawn as a shadow inside it
+// (never a border, for the sharp letters of list.css), a clear ring while the caret is in it, a least
+// height of two lines (three on a phone) that grows with the words up to twelve, and its Send key
+// attached at its foot, which does what Enter does there.
+//
+// THE ANSWERED ARE HIDDEN UNTIL ASKED FOR (the founder, 2026-10-15: "By default you need to not show
+// questions that are answered - should be toggleable on top across from the sort by"). The folds of
+// the answered - With Thrall (answered, the keeper's turn) and History (closed) - are not drawn until
+// a switch at the head of the page, "Show answered: off", is pressed; then they stand as they always
+// have, and the switch says on. It stands at the head of the line under the order line, across from
+// Collapse all: on the order line itself a phone's 412 px wrapped it to two lines and a tap on an order
+// missed (measured for Collapse all, EVERY QUESTION STARTS UNFOLDED). What he chose is kept on this
+// device beside the order; a press touches neither the order, nor what is folded, nor his place. A
+// question he answers still goes green and folds to Answered where it stands, then leaves for the
+// hidden fold, and the view keeps the question at its top where it was (THE VIEW FOLLOWS HIM). A host
+// may show them until he chooses (answered: true - the window, whose scenarios read With Thrall).
+//
+// ONE LANE AT A TIME (the founder's decision 74, 2026-10-14: cards first, one per lane with its open
+// questions and a mark when one of them blocks all its work, and one for all the questions; a tap on
+// a card shows that lane's questions). The cards are the host's to draw - the phone draws the same
+// card its Progress tab does (surfaces/pwa/page/decision-cards.js) - from what this page counts
+// (doc.lanes(): a lane is read from who asked, laneOf). A lane chosen shows only its questions, in the
+// list and in every fold, in the order chosen; it is kept on this device beside the order, and a list
+// that arrives keeps it.
+//
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
 //
@@ -144,6 +195,12 @@
   ];
   // The arrow beside the order in force: down in its first direction, up turned over. Escapes, so the
   // source stays ASCII.
+  // THE ONE BUTTON THAT FOLDS OR UNFOLDS EVERY QUESTION (header, EVERY QUESTION STARTS UNFOLDED): its
+  // word for what a press does, and what it says to a screen reader.
+  var FOLD_WORDS = {
+    collapse: "Collapse all", collapseSays: "Fold the context of every question",
+    expand: "Expand all", expandSays: "Unfold the context of every question"
+  };
   var ARROW_FIRST = "\u25BC";
   var ARROW_TURNED = "\u25B2";
   var DEFAULT_ORDER = "date";
@@ -171,6 +228,12 @@
   var SAVE_ECHO_MS = 3000;
   // How many lines a saved answer rests at while the caret is not in it (header, ROOM IS KEPT).
   var REST_LINES = 2;
+  // THE ANSWER BOX'S WORDS (header, ONE STAGE, AND A BOX TO ANSWER IN): the label above it, the label
+  // above a question of parts, and its key.
+  var BOX_WORDS = { label: "Your answer", parts: "Your answers, one for each part", send: "Send" };
+  // Each page mounted takes its own prefix for the ids that tie a label to its field: the phone mounts
+  // one page per horde, and two of them must never hold the same id.
+  var mounts = 0;
   // The sub-lines of an unfolded question, in order: the field, the label before it ("" for none),
   // and how a list is shown - "each" a line per item, "joined" one line.
   var SUB_LINES = [
@@ -331,8 +394,55 @@
     return alone ? alone[1] : "M";
   }
 
+  // THE LANE A QUESTION IS OF (the founder's decision 74, 2026-10-14: on the decisions page, cards
+  // first - one per lane with its open questions, and one for all of them). A question names no lane
+  // of its own (schema/decision-question.v1 has no such field; the live list's askedBy reads "Orc C",
+  // "M (Thrall)", "Thrall"), so its lane is read from who asked, as its letter is (letterOf): an Orc's
+  // lane as its lane file names it ("C", "F1"), and the keeper's - and anybody's the list cannot tell,
+  // which letterOf gives M too - the Thrall's, "thrall" (surfaces/pwa/page/lane-card.js, THRALL_LANE).
+  var KEEPER_LANE = "thrall";
+  var LANE_WORD = /^(thrall|[A-Z][0-9]{0,3})$/;
+  var LANE_KEY = "horde-decisions-lane-v1";
+  // THE ANSWERED ARE HIDDEN UNTIL ASKED FOR: where the choice is kept ("1" shown, "0" hidden), the folds
+  // it hides - With Thrall (answered, the keeper's turn) and History (closed) - and the switch's words.
+  var ANSWERED_KEY = "horde-decisions-answered-shown-v1";
+  var ANSWERED_FOLDS = { thrall: true, history: true };
+  var ANSWERED_WORDS = { on: "Show answered: on", off: "Show answered: off",
+    onSays: "Answered questions are shown, under With Thrall and History. Press to hide them",
+    offSays: "Answered questions are hidden. Press to show them, under With Thrall and History" };
+  function laneWord(word) { word = textOf(word); return LANE_WORD.test(word) ? word : ""; }
+  function laneOf(q) {
+    var name = textOf(q && q.askedBy);
+    var orc = /^Orc ([A-Z][0-9]{0,3})(?![A-Za-z0-9])/.exec(name);
+    if (orc) { return orc[1]; }
+    var letter = letterOf(name);
+    return letter === "M" ? KEEPER_LANE : letter;
+  }
+  // THE NUMBERS ON THE CARDS: for each lane that has a question he has still to answer (toAnswer(q)),
+  // how many, and whether any of them blocks ALL of its task's work (the keeper's word "all",
+  // decisions/Rules.ps1, HOW MUCH A QUESTION MATTERS). The Thrall's lane first, then the lanes by
+  // name, as the Progress tab lists its cards. A new list each time; the questions are not touched.
+  function lanesOf(list, toAnswer) {
+    var by = Object.create(null);
+    var out = [];
+    listOf(list).forEach(function (q) {
+      if (!q || !toAnswer(q)) { return; }
+      var lane = laneOf(q);
+      if (!by[lane]) { by[lane] = { lane: lane, open: 0, blocksAll: false }; out.push(by[lane]); }
+      by[lane].open += 1;
+      if (textOf(q.blocks) === BLOCKINGS[0]) { by[lane].blocksAll = true; }
+    });
+    return out.sort(function (a, b) {
+      if (a.lane === b.lane) { return 0; }
+      if (a.lane === KEEPER_LANE || b.lane === KEEPER_LANE) { return a.lane === KEEPER_LANE ? -1 : 1; }
+      return a.lane < b.lane ? -1 : 1;
+    });
+  }
+
   function mount(root, options) {
     options = options || {};
+    mounts += 1;
+    var idPrefix = "hd" + mounts + "-";
     // Where the view begins: below whatever the host keeps fixed at the top, which only the host knows.
     var topInset = (typeof options.topInset === "function") ? options.topInset : function () { return 0; };
     var onDraw = (typeof options.onDraw === "function") ? options.onDraw : function () {};
@@ -356,12 +466,33 @@
     var orderTurned = false;
     try { orderKey = orderOf(prefs ? prefs.getItem(ORDER_KEY) : ""); } catch (e) { orderKey = DEFAULT_ORDER; }
     try { orderTurned = !!prefs && prefs.getItem(ORDER_TURN_KEY) === "1"; } catch (e) { orderTurned = false; }
+    // THE LANE HE CHOSE ON THE CARDS ("" for all of them), kept on this device beside the order, so a
+    // list that arrives - or the page opened again - shows the lane he was reading. A word that is no
+    // lane is all of them.
+    var laneChosen = "";
+    try { laneChosen = laneWord(prefs ? prefs.getItem(LANE_KEY) : ""); } catch (e) { laneChosen = ""; }
+    // WHETHER THE ANSWERED ARE SHOWN (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR): his choice on
+    // this device first, kept beside the order; with none, the host's (answered: true - the window),
+    // else hidden.
+    var answeredShown = options.answered === true;
+    try { var answeredKept = prefs ? prefs.getItem(ANSWERED_KEY) : null; if (answeredKept === "1" || answeredKept === "0") { answeredShown = answeredKept === "1"; } } catch (e) { /* the host's default stands */ }
     var kinds = Object.create(null);
     var questions = [];
     var lastJson = null;
     var dim = null;
     // Keyed by a question's number and by a heading's key: maps with no prototype (header).
+    // unfolded: what he chose for ONE question, true (unfolded) or false (folded); a question he has
+    // not chosen for follows openFirst (header, EVERY QUESTION STARTS UNFOLDED).
     var unfolded = Object.create(null);
+    var openFirst = options.expanded !== false;
+    // Is this question's context unfolded? His own choice for it first; else, for a question of his
+    // list, the page's (openFirst); a row that is only read (With Thrall, History) stays one line
+    // until he unfolds it, or Unfold all does.
+    function isOpen(q, readOnly) {
+      var mine = unfolded[q.number];
+      if (mine === true || mine === false) { return mine; }
+      return readOnly ? false : openFirst;
+    }
     var headFolded = Object.create(null);
     // Which headings have their note of background shown. FOLDED UNTIL ASKED FOR (seen 2026-10-07 in
     // a picture of the real window: two notes took 13 of the 26 lines in view).
@@ -646,6 +777,8 @@
       }
       var mine = [];
       questions.forEach(function (q) {
+        // A LANE CHOSEN ON THE CARDS: that lane's questions alone, in the list and in every fold.
+        if (laneChosen && laneOf(q) !== laneChosen) { return; }
         var section = sectionOf(q);
         var keyWas = placedAt[q.number];
         if (keyWas && held(q)) {
@@ -676,7 +809,7 @@
       folds.parked = inOrder(folds.parked, orderKey, orderTurned);
       var foldNames = { thrall: "With " + KEEPER, parked: "Parked", history: "History" };
       folds.history.sort(function (a, b) { return textOf(b.closedAt).localeCompare(textOf(a.closedAt)) || (b.number - a.number); });
-      FOLDS.forEach(function (f) { if (folds[f].length) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
+      FOLDS.forEach(function (f) { if (folds[f].length && (answeredShown || ANSWERED_FOLDS[f] !== true)) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
       return heads;
     }
 
@@ -732,6 +865,9 @@
       var standing = standingOf(line.q);
       var resting = document.activeElement !== field && !!standing && field.value === textOf(standing.text);
       var shown = (resting && lines > REST_LINES) ? REST_LINES : lines;
+      // The box is never shorter than its least height (list.css: two lines, three on a phone), so a
+      // resting answer shows that many lines and says how many more it has past them.
+      shown = Math.max(shown, Math.round((parseFloat(window.getComputedStyle(field).minHeight) || 0) / linePx));
       field.style.height = "calc(" + shown + " * var(--line-px))";
       line.more.textContent = shown < lines ? ("+" + (lines - shown) + (lines - shown === 1 ? " line" : " lines")) : "";
     }
@@ -1082,8 +1218,8 @@
     }
 
     function toggleContext(q) {
-      var opening = unfolded[q.number] !== true;
-      if (opening) { unfolded[q.number] = true; } else { delete unfolded[q.number]; }
+      var opening = !isOpen(q, !lineOf(q.number) && !!rowOf(q.number));
+      unfolded[q.number] = opening;
       draw();
       // Unfolded, the question goes to the top of the view, so that the most of its context shows.
       var line = lineOf(q.number) || rowOf(q.number);
@@ -1184,6 +1320,31 @@
       }
       if (key === "ArrowRight" && plain && !e.shiftKey && field.value === "" && rec) { e.preventDefault(); setValue(line, rec); return; }
       if (key === "F2" || ((key === " " || e.code === "Space") && e.ctrlKey)) { e.preventDefault(); toggleContext(q); }
+    }
+    // THE SEND KEY ATTACHED TO A BOX does what Enter does in that field, by the very same handler (one
+    // path for a key and a tap): the words are sent and the caret goes on. An empty box sends nothing;
+    // the tap only puts the caret in it.
+    function sendFrom(line, field) {
+      if (document.activeElement !== field) { field.focus({ preventScroll: true }); }
+      if (field.value.trim() === "") { return; }
+      arrived.at = 0;
+      onKey({ key: "Enter", code: "Enter", ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, isComposing: false, preventDefault: function () {} }, line, field);
+    }
+    // A field in its box, with its Send key attached at the box's foot. A press on the key keeps the
+    // caret (and a phone's keyboard) where it is: the press itself takes no focus.
+    function boxed(field, send, says) {
+      var box = make("div", "hd-box");
+      var key = make("button", "hd-send", BOX_WORDS.send);
+      key.type = "button";
+      key.tabIndex = -1;
+      key.setAttribute("aria-label", says);
+      key.addEventListener("pointerdown", function (e) { e.preventDefault(); });
+      key.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      key.addEventListener("click", function (e) { e.stopPropagation(); send(); });
+      // A press on the box's own edge or padding is a press in its field.
+      box.addEventListener("click", function (e) { if (e.target === box) { field.focus(); } });
+      box.appendChild(field); box.appendChild(key);
+      return { box: box, key: key };
     }
 
     function drawMessage(m, who) {
@@ -1300,10 +1461,11 @@
       return drawn;
     }
     // The context of an unfolded question, its sub-numbered lines, into -box (emptied first).
-    function drawSubs(q, box) {
+    // readOnly: a row of With Thrall or History (isOpen).
+    function drawSubs(q, box, readOnly) {
       while (box.firstChild) { box.removeChild(box.firstChild); }
       var subs = [];
-      box.hidden = unfolded[q.number] !== true;
+      box.hidden = !isOpen(q, readOnly === true);
       if (box.hidden) { return subs; }
       var lines = subLinesOf(q);
       for (var i = 0; i < lines.length; i += 1) {
@@ -1323,7 +1485,7 @@
     }
 
     function drawQuestion(q) {
-      var open = unfolded[q.number] === true;
+      var open = isOpen(q, false);
       var wrap = make("div", "hd-q" + (open ? " open" : "") + (dim && dim(q) ? " dim" : ""));
       var row = make("div", "hd-qrow");
       var qt = make("div", "hd-qt");
@@ -1360,6 +1522,7 @@
       mark.appendChild(markFull); mark.appendChild(markShort); mark.appendChild(more);
       var fields = [];
       var field;
+      var ansLabel;
       if (info) {
         // A field per part (header, A QUESTION OF SEVERAL PARTS), across the whole row.
         var values = partValuesOf(q, info);
@@ -1387,7 +1550,8 @@
           pdone.hidden = true;
           var prefusal = make("div", "hd-refusal");
           prefusal.hidden = true;
-          prow.appendChild(label); prow.appendChild(pf); prow.appendChild(pdone); prow.appendChild(prefusal);
+          var pbox = boxed(pf, function () { sendFrom(drawn, pf); }, "Send the answer to part " + part.letter + " of question " + q.number);
+          prow.appendChild(label); prow.appendChild(pbox.box); prow.appendChild(pdone); prow.appendChild(prefusal);
           box.appendChild(prow);
           fields.push(pf);
           rows.push({ el: prow, mark: pmark, done: pdone, refusal: prefusal });
@@ -1395,16 +1559,24 @@
         fl.appendChild(box); fl.appendChild(mark);
         fl.classList.add("parts");
         field = fields[0];
+        // Each part's field is named by its own words (its aria-label); this line says what they are.
+        ansLabel = make("div", "hd-anslab", BOX_WORDS.parts);
       } else {
         field = make("textarea", "hd-field");
         field.rows = 1;
+        field.id = idPrefix + "answer-" + q.number;
         field.setAttribute("dir", "auto");
-        field.setAttribute("aria-label", "Your answer to question " + q.number);
         field.spellcheck = false;
         field.placeholder = recOf(q);
         field.value = valueOf(q);
         fields.push(field);
-        fl.appendChild(field); fl.appendChild(mark);
+        // THE LABEL IS TIED TO ITS FIELD (for and id): what it says is what a screen reader names the
+        // field, the question's number in words only a screen reader reads.
+        ansLabel = make("label", "hd-anslab", BOX_WORDS.label);
+        ansLabel.htmlFor = field.id;
+        ansLabel.appendChild(make("span", "hd-sr", " to question " + q.number));
+        var single = boxed(field, function () { sendFrom(drawn, field); }, "Send the answer to question " + q.number);
+        fl.appendChild(single.box); fl.appendChild(mark);
       }
       var markNote = make("div", "hd-marknote");
       markNote.hidden = true;
@@ -1416,13 +1588,17 @@
       done.type = "button";
       done.tabIndex = -1;
       done.hidden = true;
+      // ONE STAGE (header): the context stands in the one run of details, after what was said and
+      // before the label and the box - never under the box, where it read as a second showing.
+      var subBox = make("div", "hd-sub");
+      ans.appendChild(subBox);
+      var subs = drawSubs(q, subBox);
+      if (!subBox.hidden) { ans.classList.add("wide"); }
+      ans.appendChild(ansLabel);
       ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
-      var subBox = make("div", "hd-sub");
-      wrap.appendChild(subBox);
-      var subs = drawSubs(q, subBox);
-      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, ansLabel: ansLabel, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, said: said, subs: subs };
       done.addEventListener("click", function (e) { e.stopPropagation(); if (!drawn.parts) { unfold(drawn); } });
       rows.forEach(function (r, i) { r.done.addEventListener("click", function (e) { e.stopPropagation(); unfold(drawn, i); }); });
       fields.forEach(function (f) {
@@ -1446,13 +1622,15 @@
       line.q = q;
       line.txt.textContent = textOf(q.title);
       line.letter.textContent = letterOf(q.askedBy);
-      var open = unfolded[q.number] === true;
+      var open = isOpen(q, false);
       line.wrap.classList.toggle("open", open);
       line.wrap.classList.toggle("dim", !!(dim && dim(q)));
       line.tri.setAttribute("aria-expanded", open ? "true" : "false");
+      line.tri.setAttribute("aria-label", (open ? "Fold the context of question " : "Unfold the context of question ") + q.number);
       line.tags = drawTags(q, line.tagBox);
       line.said = drawTalk(q, line.talk, line.ans);
       line.subs = drawSubs(q, line.subBox);
+      if (!line.subBox.hidden) { line.ans.classList.add("wide"); }
       refresh(line);
     }
 
@@ -1462,7 +1640,7 @@
     var drawnRows = [];
     function rowOf(number) { for (var i = 0; i < drawnRows.length; i += 1) { if (drawnRows[i].q.number === number) { return drawnRows[i]; } } return null; }
     function drawDone(q, kind) {
-      var open = unfolded[q.number] === true;
+      var open = isOpen(q, true);
       var wrap = make("div", "hd-q hd-done" + (open ? " open" : ""));
       var row = make("div", "hd-qrow");
       var qt = make("div", "hd-qt");
@@ -1504,7 +1682,7 @@
       wrap.appendChild(row);
       var subBox = make("div", "hd-sub");
       wrap.appendChild(subBox);
-      drawSubs(q, subBox);
+      drawSubs(q, subBox, true);
       var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said, tags: tags };
       drawnRows.push(drawn);
       return drawn;
@@ -1537,6 +1715,54 @@
       orderBar.appendChild(b);
       return b;
     });
+    // ONE BUTTON FOLDS OR UNFOLDS EVERY QUESTION (header, EVERY QUESTION STARTS UNFOLDED), on a short
+    // line of its own just under the order line: its word says what a press does, and flips once it
+    // is done. NOT ON THE ORDER LINE ITSELF: at a phone's 412 px that line then wrapped to two, and a
+    // page scrolled 18 px put the order buttons above the screen (measured 2026-10-14 in
+    // decisions/page/test/browser-order.mjs: the tap on Blocking missed).
+    var foldLine = make("div", "hd-foldline");
+    var foldButton = make("button", "hd-foldall");
+    foldButton.type = "button";
+    foldButton.tabIndex = -1;
+    foldButton.addEventListener("click", function () { setExpanded(!openFirst); });
+    // THE SWITCH FOR THE ANSWERED (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR), at the head of
+    // the same line, across from Collapse all: a switch that says its state in words.
+    var answeredButton = make("button", "hd-showans");
+    answeredButton.type = "button";
+    answeredButton.tabIndex = -1;
+    answeredButton.setAttribute("role", "switch");
+    answeredButton.addEventListener("click", function () { setAnsweredShown(!answeredShown); });
+    foldLine.appendChild(answeredButton);
+    foldLine.appendChild(foldButton);
+    drawFoldButton();
+    drawAnsweredButton();
+    function drawAnsweredButton() {
+      answeredButton.textContent = answeredShown ? ANSWERED_WORDS.on : ANSWERED_WORDS.off;
+      answeredButton.setAttribute("aria-checked", answeredShown ? "true" : "false");
+      answeredButton.setAttribute("aria-label", answeredShown ? ANSWERED_WORDS.onSays : ANSWERED_WORDS.offSays);
+    }
+    // The answered shown or hidden: kept on this device, and the page drawn as any redraw is - the
+    // question at the top of the view stays where it was (THE VIEW FOLLOWS HIM); the order and what is
+    // folded are not touched.
+    function setAnsweredShown(on) {
+      answeredShown = on === true;
+      try { if (prefs) { prefs.setItem(ANSWERED_KEY, answeredShown ? "1" : "0"); } } catch (e) { /* only the remembering is lost */ }
+      if (lastJson === null) { drawAnsweredButton(); return; }
+      draw();
+    }
+    function drawFoldButton() {
+      foldButton.textContent = openFirst ? FOLD_WORDS.collapse : FOLD_WORDS.expand;
+      foldButton.setAttribute("aria-label", openFirst ? FOLD_WORDS.collapseSays : FOLD_WORDS.expandSays);
+    }
+    // Every question folded (false) or unfolded (true), his choices for single questions dropped, and
+    // the page drawn as any redraw is: THE VIEW FOLLOWS HIM keeps the question at the top of the view
+    // where it was, and the order is not touched.
+    function setExpanded(open) {
+      openFirst = open === true;
+      unfolded = Object.create(null);
+      if (lastJson === null) { drawFoldButton(); return; }
+      draw();
+    }
     function drawOrderBar() {
       orderButtons.forEach(function (b, i) {
         var o = ORDERS[i];
@@ -1565,6 +1791,20 @@
         if (moved !== 0) { window.scrollBy(0, moved); }
       }
     }
+    // A LANE CHOSEN ("" for all of them): drawn at once and kept for the next time. A tap on a card
+    // SHOWS that lane's questions: the order line is brought to just under the top of the view, with
+    // the head of the lane's questions under it - the cards above can be many screens of a phone, and
+    // a list that changed below them unseen would look like a tap that did nothing. The order and
+    // what is folded are not touched.
+    function setLane(lane) {
+      laneChosen = laneWord(lane);
+      try { if (prefs) { prefs.setItem(LANE_KEY, laneChosen); } } catch (e) { /* only the remembering is lost */ }
+      if (lastJson === null) { onDraw(); return; }
+      draw({ keepBar: true, lane: true });
+      if (orderBar.parentNode === root) { window.scrollBy(0, orderBar.getBoundingClientRect().top - topInset() - NEAR_TOP_PX); }
+    }
+    // A question he has still to answer: in his list, and no answer of his stands (the cards' count).
+    function toAnswer(q) { return sectionOf(q) === "main" && !stateOf(q).answered; }
     // A press on an order's button: the order in force turns over; another is chosen in its first direction.
     function pressOrder(key) {
       key = orderOf(key);
@@ -1686,7 +1926,9 @@
       });
       Object.keys(headEls).forEach(function (k) { if (!used[k]) { delete headEls[k]; } });
       drawOrderBar();
-      order(root, [orderBar].concat(groups));
+      drawFoldButton();
+      drawAnsweredButton();
+      order(root, [orderBar, foldLine].concat(groups));
       // In the page now, so what is folded can be told from what is shown: each line's state again.
       drawnLines.forEach(function (line) { refresh(line); fit(line); });
       if (before) {
@@ -1733,6 +1975,8 @@
     //   { do: "focus", q, part }  the caret into that question's field (part: into that part's)
     //   { do: "order", key, turned }   that order chosen, in its first direction (turned: true, turned
     //                             over), as setOrder does; { do: "press-order", key } a press on its button
+    //   { do: "press-fold" }      a press on the one button that folds or unfolds every question
+    //   { do: "lane", lane }      that lane chosen, as a tap on its card does ("" for all)
     //   { do: "follow", q }       a press on that question's "Follows up on question N"
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
@@ -1765,6 +2009,8 @@
         }
         else if (step.do === "order") { setOrder(textOf(step.key), step.turned === true); }
         else if (step.do === "press-order") { pressOrder(textOf(step.key)); }
+        else if (step.do === "press-fold") { foldButton.click(); }
+        else if (step.do === "lane") { setLane(textOf(step.lane)); }
         else if (step.do === "follow") { target = lineOf(Number(step.q)); if (target && target.tags.follow) { target.tags.follow.press.click(); } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
@@ -1864,12 +2110,16 @@
         var box = line.wrap.getBoundingClientRect();
         if (box.height > 0 && (box.top < topInset() || box.bottom > window.innerHeight)) { window.scrollBy(0, box.top - topInset()); }
       },
+      // The window's menu (decisions/window): every question, and every heading, unfolded or folded -
+      // and the one button says so (openFirst).
       unfoldAll: function () {
+        openFirst = true;
         questions.forEach(function (q) { unfolded[q.number] = true; });
         sectionsOf().forEach(function (head) { headFolded[head.key] = false; if (head.note) { noteShown[head.key] = true; } });
         draw();
       },
       foldAll: function () {
+        openFirst = false;
         unfolded = Object.create(null);
         headFolded = Object.create(null);
         noteShown = Object.create(null);
@@ -1882,6 +2132,22 @@
       turned: function () { return orderTurned; },
       setOrder: setOrder,
       pressOrder: pressOrder,
+      // Whether the questions are unfolded unless he chose otherwise for one, and choosing it, as the
+      // one button does (header, EVERY QUESTION STARTS UNFOLDED).
+      expanded: function () { return openFirst; },
+      setExpanded: setExpanded,
+      // Whether the answered are shown (With Thrall and History), and choosing it, as the switch does
+      // (header, THE ANSWERED ARE HIDDEN UNTIL ASKED FOR).
+      answeredShown: function () { return answeredShown; },
+      setAnsweredShown: setAnsweredShown,
+      // THE CARDS' NUMBERS AND THE LANE CHOSEN (decision 74): lanes() is, for each lane with a
+      // question he has still to answer, { lane, open, blocksAll }, counted over the whole list
+      // whatever lane is chosen; lane() the lane chosen, "" for all; setLane(lane) chooses one ("" or
+      // anything that is no lane: all). The host draws the cards (surfaces/pwa/page/decision-cards.js)
+      // and reads these again on each onDraw.
+      lanes: function () { return lanesOf(questions, toAnswer); },
+      lane: function () { return laneChosen; },
+      setLane: setLane,
       drive: drive,
       // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
       // questions are in the run of answering (not parked), toAnswer how many of those have no
@@ -1932,7 +2198,7 @@
         // order: the order chosen, by its key, whether it is turned over, the word on the button drawn
         // as pressed (its word alone: the arrow is arrow), and what that button says to a screen reader.
         var pressedAt = orderButtons.filter(function (b) { return b.getAttribute("aria-pressed") === "true"; }).map(function (b) { return orderButtons.indexOf(b); });
-        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
+        var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 }, lane: laneChosen, fold: { expanded: openFirst, word: foldButton.textContent, says: foldButton.getAttribute("aria-label") }, order: { key: orderKey, turned: orderTurned, pressed: pressedAt.map(function (i) { return ORDERS[i].label; }).join(","), arrow: pressedAt.map(function (i) { return orderArrows[i].textContent.trim(); }).join(","), says: pressedAt.map(function (i) { return orderButtons[i].getAttribute("aria-label"); }).join(","), shown: orderBar.parentNode === root, words: ORDERS.map(function (o) { return o.label; }) } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
         drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.kind === "parked", kind: h.head.kind, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
@@ -2000,5 +2266,7 @@
 
   // order: the one sorting of questions, for a check that holds it without a page (inOrder(list, key,
   // turned), and the orders there are).
-  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder } };
+  // lanes: the lane a question is of, and the cards' numbers for a list and a test of "still to answer"
+  // (lanesOf), for a check that holds them without a page.
+  window.HordeDecisionsDocument = { mount: mount, order: { orders: ORDERS.map(function (o) { return o.key; }), inOrder: inOrder }, lanes: { keeper: KEEPER_LANE, laneOf: laneOf, lanesOf: lanesOf } };
 }());

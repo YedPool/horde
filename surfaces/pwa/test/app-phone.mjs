@@ -45,7 +45,14 @@ function reload() {
 reload();
 
 const commands = {
-  pair: (c) => phone.pair({ offerText: c.offer, label: c.label }),
+  pair: (c) => phone.pair({ offerText: c.offer, label: c.label, joined: c.joined === true }),
+  // ADD THIS PHONE and A NEW PHONE ASKS TO JOIN (phone-core.js).
+  join: (c) => phone.join({ horde: c.horde, machine: c.machine, label: c.label, agent: c.agent || "" }),
+  joinOffer: (c) => phone.joinOffer(c.request, { waitMs: c.waitMs || 0 }),
+  joinRequests: (c) => phone.joinRequests(c.id),
+  approveJoin: (c) => phone.approveJoin(c.id, { request: c.request, number: c.number }),
+  rejectJoin: (c) => phone.rejectJoin(c.id, { request: c.request }),
+  pairConfirmed: (c) => phone.pairConfirmed(c.id, { waitMs: c.waitMs || 0 }),
   announce: (c) => phone.announce(c.id),
   unlock: (c) => phone.unlock(c.id),
   recover: (c) => phone.recover(c.id, c.code),

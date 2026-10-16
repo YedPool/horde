@@ -13,19 +13,24 @@
 // THE SITE is served by a small HTTP server here, on 127.0.0.1, under the origin http://localhost:<port>
 // (a secure context, so WebAuthn and the service worker run; Chrome is told localhost is 127.0.0.1).
 //
-//   node browser-drive.mjs <site folder> <relay root> <chrome.exe> <profile folder>
+//   node browser-drive.mjs <site folder> <relay root> <browser debugging port>
 //
 // The first line printed is { ok, value: { origin } }; then one JSON command per line on stdin, one
-// JSON answer per line on stdout, as app-phone.mjs. Chrome and the server end with the "exit" command
-// or when stdin closes.
+// JSON answer per line on stdout, as app-phone.mjs. The server ends with the "exit" command or when
+// stdin closes.
+//
+// THE BROWSER IS NOT THIS SCRIPT'S. The suite starts it (test/lib/Browser.ps1, in a kill-on-close job
+// of the suite's own, with --host-resolver-rules=MAP localhost 127.0.0.1) and ends it, with its
+// profile, in its finally, however this script ends. Until 2026-10-14 this script spawned Chrome and
+// ended it in shutdown(), and a script killed first left the browser running (test/lib/Browser.ps1 has
+// the measurement). So there is nothing here to clean up on exit or on a signal.
 import http from "node:http";
-import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, existsSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import { join, normalize, extname, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { folderTransport } from "./folder-relay.mjs";
 
-const [, , siteDir, relayRoot, chromePath, profileDir] = process.argv;
+const [, , siteDir, relayRoot, debugPort] = process.argv;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ascii = (v) => JSON.stringify(v).replace(/[^\x20-\x7e]/g, (ch) => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
 const say = (v) => process.stdout.write(ascii(v) + "\n");
@@ -48,13 +53,8 @@ server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.del
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const origin = "http://localhost:" + server.address().port;
 
-// --- Chrome ---
-const chrome = spawn(chromePath, ["--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profileDir, "--no-first-run", "--no-default-browser-check", "--disable-extensions",
-  "--disable-background-networking", "--disable-sync", "--disable-component-update", "--host-resolver-rules=MAP localhost 127.0.0.1", "--window-size=412,915", "about:blank"], { stdio: "ignore" });
-let portFile = join(profileDir, "DevToolsActivePort");
-for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100);
-if (!existsSync(portFile)) { say({ ok: false, reason: "Chrome did not open its debugging port" }); process.exit(1); }
-const debugPort = readFileSync(portFile, "utf8").split(/\r?\n/)[0];
+// --- Chrome: the suite's, reached on its debugging port (header) ---
+if (!/^[0-9]{1,5}$/.test(String(debugPort))) { say({ ok: false, reason: "no browser debugging port was given" }); process.exit(1); }
 let targets = [];
 for (let i = 0; i < 50 && !targets.some((t) => t.type === "page"); i++) { try { targets = await (await fetch("http://127.0.0.1:" + debugPort + "/json/list")).json(); } catch (e) { /* not yet */ } if (!targets.some((t) => t.type === "page")) await sleep(100); }
 const page = targets.find((t) => t.type === "page");
@@ -160,20 +160,37 @@ const commands = {
     const ok = await until(shown("pairedView") + " || (" + notice + ").length > 0", 30000);
     return await evaluate("({ paired: " + shown("pairedView") + ", fingerprint: document.getElementById('fingerprint').textContent, response: document.getElementById('responseText').value, recoveryCode: document.getElementById('recoveryCode').textContent, notice: " + notice + ", waited: " + JSON.stringify(!!ok) + " })");
   },
-  // THE ANNOUNCEMENT (the founder's first live use, 2026-10-11): why its button is shut, before and after
-  // the box is ticked; then the box is left ticked.
-  async announceWhy() {
-    const read = "({ why: " + shown("announceWhy") + ", words: document.getElementById('announceWhy').textContent, disabled: document.getElementById('announceBtn').disabled })";
-    const before = await evaluate(read);
-    await evaluate("document.getElementById('wroteCode').click()", true);
-    return { before, after: await evaluate(read) };
+  // THE ANNOUNCEMENT IS NO BUTTON (2026-10-14): the pairing screen before the machine's word - Finish
+  // pairing hidden, the screen waiting - and every button on the page whose words offer to announce.
+  async finishState() {
+    return await evaluate("({ finishShown: " + shown("finishBtn") + ", finishDisabled: document.getElementById('finishBtn').disabled, waiting: " + shown("confirmWait") + ", why: " + shown("finishWhy") +
+      ", whyWords: document.getElementById('finishWhy').textContent, announceButtons: Array.from(document.querySelectorAll('button')).filter((b) => /announce/i.test(b.textContent)).map((b) => b.id || b.textContent) })");
   },
-  // One tap on the pairing screen's announce button that is expected to fail: what the screen then says.
-  async announceTry() {
-    const was = await evaluate("document.getElementById('announceStatus').textContent");
-    await evaluate("document.getElementById('announceStatus').textContent = ''; document.getElementById('announceBtn').click()", true);
-    await until(shown("announceStatus") + " && document.getElementById('announceStatus').textContent.length > 0 || " + shown("doc"), 30000);
-    return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
+  // Once the machine's confirmed record is in the pairing mailbox: Finish pairing appears, shut while the
+  // box is not ticked, and says why; ticked, it opens. The box is left ticked.
+  async finishWhy() {
+    const appeared = !!(await until(shown("finishBtn"), 30000));
+    const before = await commands.finishState();
+    await evaluate("document.getElementById('wroteCode').click()", true);
+    return { appeared, before, after: await commands.finishState() };
+  },
+  // One tap on Finish pairing that is expected to fail: what the screen then says.
+  async finishTry() {
+    await evaluate("document.getElementById('finishStatus').textContent = ''; document.getElementById('finishBtn').click()", true);
+    await until(shown("finishStatus") + " && document.getElementById('finishStatus').textContent.length > 0 || " + shown("doc"), 30000);
+    return await evaluate("({ status: " + shown("finishStatus") + " ? document.getElementById('finishStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + " })");
+  },
+  // The passkey prompts this page has asked for since countPrompts: navigator.credentials.get counted.
+  async countPrompts() {
+    await evaluate("(() => { const c = navigator.credentials; if (c.__counted) { window.__prompts = 0; return; } const real = c.get.bind(c); window.__prompts = 0; c.get = function (o) { window.__prompts++; return real(o); }; c.__counted = true; })()");
+    return { counting: true };
+  },
+  async prompts() { return await evaluate("window.__prompts === undefined ? -1 : window.__prompts"); },
+  // Leave the pairing screen without finishing (Later).
+  async pairLater() {
+    await evaluate("document.getElementById('pairLater').click()", true);
+    await until("!" + shown("pairedView"), 15000);
+    return await evaluate("({ paired: " + shown("pairedView") + ", doc: " + shown("doc") + ", locked: " + shown("lockedView") + " })");
   },
   async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
   async readFail(c) { failReads = String(c.reason || ""); return { failReads }; },
@@ -192,16 +209,10 @@ const commands = {
     await evaluate("(() => { const c = navigator.credentials; const real = c.get; c.get = function () { c.get = real; return Promise.reject(new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError')); }; })()");
     return { armed: true };
   },
-  // The horde's own view while the machine has not answered: its offer to announce again.
-  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, status: " + shown("announceNowStatus") + " ? document.getElementById('announceNowStatus').textContent : '' })"); },
-  async announceNow(c) {
-    const before = headOf(c.mailbox);
-    await evaluate("document.getElementById('announceNow').click()", true);
-    await until(shown("announceNowStatus"), 30000);
-    const end = Date.now() + 10000;
-    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
-    return { put: headOf(c.mailbox) > before, status: await evaluate("document.getElementById('announceNowStatus').textContent") };
-  },
+  // The horde's own view while the machine has not answered: what it says, and that it offers no button.
+  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, buttons: document.querySelectorAll('#announceBox button').length })"); },
+  // The head of a mailbox of the relay's folders, for a suite to see a put land.
+  async head(c) { return headOf(c.mailbox); },
   // THE WAY BETWEEN THE VIEWS: with the page made long and scrolled to its end (as a long chat is), the
   // other view's tab is still on the screen, and a real touch at its centre opens that view.
   async navTouch(c) {
@@ -274,9 +285,54 @@ const commands = {
       const $ = (id) => document.getElementById(id);
       const flat = (e) => e.innerText.replace(/\\s+/g, " ").trim();
       const cards = Array.from(document.querySelectorAll("#cardsList .card")).map((c) => ({ lane: c.getAttribute("data-lane"), thrall: c.classList.contains("thrall"), text: flat(c) }));
-      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map(flat);
+      // An entry's words whether it is folded or open (a folded entry hides its chips and text, and innerText
+      // drops what is hidden): what the stream HOLDS. What can be SEEN is entriesState's.
+      const items = Array.from(document.querySelectorAll("#progressLog .progress-item")).map((e) => e.textContent.replace(/\\s+/g, " ").trim());
       return { progress: !$("progress").hidden, cardsPage: !$("cardsPage").hidden, streamPage: !$("streamPage").hidden, title: $("streamTitle").textContent, cards, items: items.length, texts: items, notice: ${notice} };
     })()`);
+  },
+  // ENTRIES FOLDED AND OPEN (app.js, openEntries): for each entry of the stream, whether it is folded, its
+  // line's role and aria-expanded, its height, and what of it can be SEEN - checkVisibility and a box of
+  // some height, not only that the node is there (every part of a folded entry is still in the DOM).
+  // tagged: the node is the one entriesTag marked, so a redraw that rebuilt the log can be told apart.
+  async entriesState() {
+    return await evaluate(`(() => {
+      const seen = (e) => !!e && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && e.getBoundingClientRect().height > 0;
+      return Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => {
+        const line = b.querySelector(':scope > .progress-line'), title = line ? line.querySelector('.progress-title') : null, when = b.querySelector('.progress-when');
+        const text = b.querySelector(':scope > .progress-text'), head = b.querySelector(':scope > .progress-head'), stamp = b.querySelector('.progress-head .stamp');
+        return { id: b.getAttribute('data-id'), folded: b.classList.contains('collapsed'), role: line ? line.getAttribute('role') : null, expanded: line ? line.getAttribute('aria-expanded') : null,
+          focusable: !!line && line.tabIndex === 0, height: Math.round(b.getBoundingClientRect().height), title: title ? title.textContent : '', titleSeen: seen(title),
+          titleCut: !!title && title.scrollWidth > title.clientWidth, when: when ? when.textContent : '', whenSeen: seen(when), textSeen: seen(text), headSeen: seen(head),
+          stamp: stamp ? stamp.textContent : '', tagged: b.hordeTag === true };
+      });
+    })()`);
+  },
+  async entriesTag() {
+    return await evaluate("Array.from(document.querySelectorAll('#progressLog .progress-item')).map((b) => { b.hordeTag = true; return 1; }).length");
+  },
+  // A real touch on one part of one entry: "line" its title, "when" its folded line's time, "text" its body,
+  // "head" a chip of its head, "stamp" its head's time stamp. The entry is first brought to the middle of
+  // the screen, as a thumb would.
+  async entryTouch(c) {
+    const sel = "#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "]";
+    const part = { line: " > .progress-line .progress-title", when: " .progress-when", text: " > .progress-text", head: " > .progress-head .chip", stamp: " .progress-head .stamp" }[c.part];
+    await evaluate("document.querySelector(" + JSON.stringify(sel) + ").scrollIntoView({ block: 'center' })");
+    await sleep(300);
+    const at = await centre(sel + part);
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(500);
+    return await commands.entriesState();
+  },
+  // A real key on one entry's line, focused as the Tab key would: "Enter" or " ".
+  async entryKey(c) {
+    await evaluate("document.querySelector(" + JSON.stringify("#progressLog .progress-item[data-id=" + JSON.stringify(c.id) + "] > .progress-line") + ").focus()");
+    const k = c.key === " " ? { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " } : { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" };
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", ...k });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode });
+    await sleep(400);
+    return { scrollY: Math.round(await evaluate("window.scrollY")), entries: await commands.entriesState() };
   },
   async cardsWait(c) {
     const found = await until("document.querySelectorAll('#cardsList .card').length >= " + Number(c.count), c.timeoutMs || 30000);
@@ -319,18 +375,22 @@ const commands = {
     await sleep(1200);
     return await commands.progressState();
   },
-  async announce() {
+  // The one Finish pairing tap that is the passkey prompt.
+  async finish() {
     const ticked = await evaluate("document.getElementById('wroteCode').checked");
     if (!ticked) await evaluate("document.getElementById('wroteCode').click()", true);
-    const enabled = await evaluate("!document.getElementById('announceBtn').disabled");
-    await evaluate("document.getElementById('announceBtn').click()", true);
-    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
-    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
+    const enabled = await evaluate("!document.getElementById('finishBtn').disabled && " + shown("finishBtn"));
+    await evaluate("document.getElementById('finishBtn').click()", true);
+    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("finishStatus"), 30000);
+    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('finishStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
   // folded: the words are looked for in everything the lists hold, what stands under a folded heading
   // included (an answered question is out of his list, under the folded "With Thrall"); without it,
-  // only in what is shown.
-  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
+  // only in what is shown. The answered are hidden until asked for (decisions/page/list.js, THE ANSWERED
+  // ARE HIDDEN UNTIL ASKED FOR), so for folded the page's switch is turned on first, as he would.
+  async waitText(c) {
+    if (c.folded) await evaluate("(() => { const s = document.querySelector('#lists .horde-list:not([hidden]) .hd-showans'); if (s && s.getAttribute('aria-checked') !== 'true') s.click(); return true; })()");
+    const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);
@@ -544,9 +604,7 @@ const commands = {
 };
 
 async function shutdown() {
-  try { await cdp("Browser.close"); } catch (e) { /* it may be gone */ }
-  await sleep(500);
-  try { if (chrome.exitCode === null) execFileSync("taskkill", ["/PID", String(chrome.pid), "/T", "/F"], { stdio: "ignore" }); } catch (e) { /* gone */ }
+  // The browser is the suite's to end (header); this script ends only what it started: its server.
   server.close();
 }
 

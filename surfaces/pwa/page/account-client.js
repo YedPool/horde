@@ -29,7 +29,8 @@ export const SIGN_IN_PATH = "/auth/google";
 export const DELETE_CONFIRM = "delete this account";
 
 export function accountClient(fetchFn, origin = "") {
-  async function call(method, path, body) {
+  // withCode: a refusal's answer also carries the relay's code word (answers.js), or "".
+  async function call(method, path, body, withCode = false) {
     let r;
     try {
       r = await fetchFn(origin + path, {
@@ -40,7 +41,11 @@ export function accountClient(fetchFn, origin = "") {
     } catch (x) { return unknown("the relay could not be reached"); }
     let j = null;
     try { j = await r.json(); } catch (x) { j = null; }
-    if (r.status !== 200) return unknown("the relay answered " + r.status + (j && typeof j.error === "string" ? ": " + j.error.slice(0, 200) : ""), r.status);
+    if (r.status !== 200) {
+      const u = unknown("the relay answered " + r.status + (j && typeof j.error === "string" ? ": " + j.error.slice(0, 200) : ""), r.status);
+      if (withCode) u.code = j && typeof j.code === "string" && /^[a-z-]{1,32}$/.test(j.code) ? j.code : "";
+      return u;
+    }
     if (!j || typeof j !== "object" || Array.isArray(j)) return unknown("the relay's answer is not a JSON object", r.status);
     return known(j);
   }
@@ -53,7 +58,15 @@ export function accountClient(fetchFn, origin = "") {
     registerMachine: (offer) => call("POST", "/v1/account/machines", { horde: offer.horde, offer: offer.offer, machine: offer.machine, label: offer.label, signPublic: offer.signPublic, expiresAt: offer.expiresAt, grant: offer.grant }),
     removeMachine: (keyId) => (/^[0-9a-f]{32}$/.test(String(keyId)) ? call("DELETE", "/v1/account/machines/" + keyId) : Promise.resolve(unknown("not a machine's key id"))),
     signOutPhone: (phoneId) => (/^[0-9a-f]{64}$/.test(String(phoneId)) ? call("DELETE", "/v1/account/phones/" + phoneId) : Promise.resolve(unknown("not a phone's id"))),
-    deleteAccount: () => call("DELETE", "/v1/account", { confirm: DELETE_CONFIRM })
+    deleteAccount: () => call("DELETE", "/v1/account", { confirm: DELETE_CONFIRM }),
+    // ASKING TO JOIN one machine of the account ("Add this phone"; the relay's join.js). The answer
+    // carries code too: the relay's word for a limit - "join-pending" (another request is pending),
+    // "rate-limited" (too many this hour), "join-blocked" (this address's request was rejected: none
+    // for an hour) - so the screen can say which. Nothing here retries a refusal: the person asks again.
+    requestJoin: async ({ machine, request, label, agent, requestKey }) => {
+      const r = await call("POST", "/v1/account/join", { machine, request, label, agent, requestKey }, true);
+      return { ...r, code: typeof r.code === "string" ? r.code : "" };
+    }
   };
 }
 

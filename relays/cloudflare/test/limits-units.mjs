@@ -36,6 +36,7 @@ const throws = (f) => { try { f(); return false; } catch (e) { return true; } };
     putsPerMinute: 60, putBurst: 20, readsPerMinute: 120, readBurst: 40,
     signInStartsPerMinute: 10, newAccountsPerDay: 5,
     refusedSignaturesPerMinutePerAddress: 30, refusedSignaturesPerMinutePerKey: 10, noncesPerKey: 1000,
+    joinRequestsPerHour: 6, joinRequestsPerHourPerAddress: 6, joinRequestMs: 600000, joinBlockMs: 3600000,
     retentionMs: 30 * 24 * 3600 * 1000
   };
   const d = L.DEFAULTS;
