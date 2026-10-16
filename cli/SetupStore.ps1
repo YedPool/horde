@@ -106,6 +106,22 @@ function Get-HordeSetupSecureFolderSecurity {
     return $sec
 }
 
+function New-HordeSetupSecureFolder {
+    # Makes -Path WITH the secure access list in the one call, so there is no moment it is open to
+    # other users. The two engines spell it differently: Windows PowerShell 5.1 (.NET Framework) has
+    # Directory.CreateDirectory(path, security); PowerShell 7 (.NET Core) lacks that overload ("Cannot
+    # find an overload for CreateDirectory and the argument count: 2", measured 2026-10-16) and has
+    # FileSystemAclExtensions.Create on a DirectoryInfo instead. With neither, it throws a sentence and
+    # nothing is made.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $sec = Get-HordeSetupSecureFolderSecurity
+    $framework = [System.IO.Directory].GetMethod("CreateDirectory", [type[]]@([string], [System.Security.AccessControl.DirectorySecurity]))
+    if ($null -ne $framework) { [void][System.IO.Directory]::CreateDirectory($Path, $sec); return $Path }
+    $core = "System.IO.FileSystemAclExtensions" -as [type]
+    if ($null -ne $core) { [void]$core::Create((New-Object System.IO.DirectoryInfo($Path)), $sec); return $Path }
+    throw "this PowerShell cannot make a folder together with its access list, so nothing was downloaded"
+}
+
 function Install-HordeSetupPowerShellMsi {
     # winget show -> a folder only administrators can touch -> download -> HOLD the file open (nobody
     # else may write or delete it) -> SHA-256 of the held stream -> msiexec -> release -> verify.
@@ -180,8 +196,7 @@ function Get-HordeSetupStoreDefaultProbes {
                 $dir = Join-Path ("" + $env:ProgramData) ("horde-setup-pwsh-" + [guid]::NewGuid().ToString("N"))
                 if ([System.IO.Directory]::Exists($dir)) { throw "the folder already exists" }
                 # Made WITH its access list: there is no moment it is open to other users.
-                [void][System.IO.Directory]::CreateDirectory($dir, (Get-HordeSetupSecureFolderSecurity))
-                $dir
+                New-HordeSetupSecureFolder -Path $dir
             }
             # -TimeoutSec 300: a stalled download must fail the step with a sentence, never hang setup.
             $real.download = {
