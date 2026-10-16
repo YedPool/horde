@@ -74,6 +74,25 @@
 // sendPairing() can send it again until the horde is announced; the plain response is handed back too,
 // for Copy and Share, the fallback when the relay cannot be reached.
 //
+// THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14: "that piece should happen automatically on
+// login - I don't see why I should press a button"). AN IPHONE STARTS A PASSKEY PROMPT ONLY FROM A TAP,
+// ONE PROMPT A TAP, so it cannot be silent; it can be one prompt the founder meets anyway:
+//   1. after pairing, the phone watches the offer's pairing mailbox for the machine's CONFIRMED RECORD
+//      (relay/Pairing.ps1: signed by the machine, so the relay cannot fake it), and while he is still on
+//      the pairing screen it offers "Finish pairing" - that one tap IS the Face ID prompt, not a step
+//      before it (pairConfirmed, then announce);
+//   2. otherwise the announcement rides the NEXT passkey prompt the phone shows anyway: the unlock. While
+//      the machine has not answered this phone (not heard), the unlock's PRF get() is asked over the
+//      vouch's own challenge, so the one Face ID that unlocks also vouches, and the vouch is put
+//      (unlock);
+//   3. a machine that has not confirmed the passkey yet refuses the vouch (relay/Trust.ps1); the phone
+//      tries again only at its next unlock - never a prompt in a loop, never a prompt by itself.
+// ONE ASSERTION, NEVER NONE: the vouch is the passkey's signature (user verification) over
+// SHA-256("horde-relay/phone-key/v1 vouch" LF horde LF key), sent as the PHONE VOUCH ITEM
+// (relay/js/protocol.js, phoneVouchText). It needs no envelope around it: it is public, it verifies by
+// itself under the trusted passkey, and a second copy is the same record (relay/Trust.ps1, THE VOUCH
+// TRAVELS BY ITSELF, says why one assertion cannot be both the envelope's signature and the vouch).
+//
 // A RELAY WITH ACCOUNTS (account-client.js) knows a machine only by the signing key a signed-in phone
 // registered to its account. So pair() registers the offer's machine - with the offer's ACCOUNT GRANT,
 // relay/Pairing.ps1 - FIRST, before a passkey is made or anything is sent: a phone that is not signed in,
@@ -182,7 +201,7 @@ const NO_PRF = "Read only: this passkey gives no PRF, so this phone has nothing 
 // words, with the browser's error NAME (NotAllowedError, a code word) and never its message, so the
 // founder sees why an announcement was not sent (his first live use, 2026-10-11: it never went, and why
 // was nowhere on the screen).
-const PASSKEY_DID_NOT_SIGN = "The passkey did not sign the announcement (the prompt was cancelled, or it timed out), so nothing was sent. Tap announce again and confirm with your passkey.";
+const PASSKEY_DID_NOT_SIGN = "The passkey did not sign (the prompt was cancelled, or it timed out), so the phone was not announced. Tap Finish pairing again, or unlock later: the phone announces itself at its next unlock.";
 function passkeyDidNotSign(x) {
   const name = x && typeof x.name === "string" && /^[A-Za-z]{1,40}$/.test(x.name) ? x.name : "";
   return PASSKEY_DID_NOT_SIGN + (name && name !== "Error" ? " (" + name + ")" : "");
@@ -446,6 +465,19 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     return true;
   }
 
+  // Put the vouch a passkey assertion just made (THE ANNOUNCEMENT IS NO BUTTON) into the machine's
+  // mailbox as the phone vouch item, and mark the horde announced. { key, agreeKeyId }, or null when the
+  // relay did not take it (what it said goes to diagnostics).
+  async function putVouch(e, vouch) {
+    const text = P.phoneVouchText({ horde: e.horde, by: e.deviceKeyId, agreePublic: P.unb64u(e.phonePublic), vouch });
+    const key = P.phoneVouchKey(e.deviceKeyId, e.phoneKeyId);
+    const put = await relay.put(e.machineMailbox, key, text);
+    if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); return null; }
+    await store.update(ENTRY + e.id, (x) => ({ ...x, announced: { key, at: now() } }));
+    pairings.delete(e.id);
+    return { key, agreeKeyId: e.phoneKeyId };
+  }
+
   // THE OUTBOX (the header). Its record: { v: 1, items: [{ answerId, number, part, wordingVersion,
   // snapshot, sealed: { enc, box }, seqs, envelope: { key, text }, sentAt, lastSentAt, lastResendAt }] }.
   function slotOf(number, part) { return String(number) + ":" + (part || ""); }
@@ -553,7 +585,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
         rpId: o.rpId, origin, credentialId: P.b64u(made.rawId), deviceKeyId: await P.keyId(cred.value.publicPoint), devicePublic: P.b64u(cred.value.publicPoint),
         label, fingerprint, prfEnabled: made.prfEnabled === true, phonePublic: P.b64u(pk.publicPoint), phoneKeyId,
         wraps: { recovery: await wrapWithRecovery(pk.pkcs8, recoveryCode, o.horde, phoneKeyId) },
-        seq: {}, announced: null, lastSnapshotSeq: -1, pairedAt: now()
+        seq: {}, announced: null, lastSnapshotSeq: -1, pairedAt: now(),
+        // Where the machine's confirmed record comes (THE ANNOUNCEMENT IS NO BUTTON): public ids only.
+        offer: o.offer, pairMailbox: o.pairMailbox, deviceId: await P.deviceIdOf(made.rawId)
       };
       await store.put(ENTRY + id, e);
       const s = newSession(pk.privateKey, pk.publicPoint, "read-only", pk.pkcs8);
@@ -568,42 +602,69 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // still): the relay keeps one copy under the offer's key. true when the relay took it.
     async sendPairing(id) { return sendSealed(id); },
 
-    // Announce this horde's phone identity key to the machine, vouched for by the passkey (two
-    // assertions: the vouch, which also asks for PRF, and the envelope's signature). Done once the
-    // founder has confirmed the fingerprint at the machine; done again if no snapshot ever comes.
+    // Announce this horde's phone identity key to the machine (THE ANNOUNCEMENT IS NO BUTTON, in the
+    // header): ONE passkey assertion, the vouch, which also asks for PRF, put as the phone vouch item.
+    // For the pairing screen's one "Finish pairing" tap, once the machine said it is confirmed
+    // (pairConfirmed); the unlock carries the same vouch by itself. { key, agreeKeyId }.
     async announce(id) {
       let e = await entryOf(id);
       const s = sessions.get(id);
       if (s && s.mode === "recovery") throw fail("unlocked with the recovery code, this phone reads only: unlock with the passkey to announce it");
-      const phonePublic = P.unb64u(e.phonePublic);
-      // Each passkey prompt, its refusal said as the phone's (PASSKEY_DID_NOT_SIGN).
-      const signing = (prf) => async (challenge) => { try { return await assertWith(e, prf)(challenge); } catch (x) { throw fail(passkeyDidNotSign(x), "passkey"); } };
-      const vouch = await signing(true)(await P.vouchChallenge(e.horde, phonePublic));
+      let vouch;
+      try { vouch = await assertWith(e, true)(await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic))); } catch (x) { throw fail(passkeyDidNotSign(x), "passkey"); }
       e = await keepPasskeyWrap(e, s, vouch.prfFirst);
-      const env = await sealAndSign(e, "phone-key", "trust", P.phoneKeyBody(phonePublic, vouch), signing(false));
-      const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(RELAY_REFUSED + " The announcement was not sent; try again."); }
-      await store.update(ENTRY + id, (x) => ({ ...x, announced: { key: env.key, at: now() } }));
-      pairings.delete(id);
-      return { key: env.key, agreeKeyId: e.phoneKeyId };
+      const put = await putVouch(e, vouch);
+      if (!put) throw fail(RELAY_REFUSED + " The phone was not announced; it is announced at its next unlock.");
+      return put;
+    },
+
+    // Has the machine said the founder confirmed this phone (relay/Pairing.ps1's confirmed record, in the
+    // offer's pairing mailbox, signed by the machine)? waitMs > 0 watches for it first. { confirmed }.
+    // For the pairing screen only: it shows "Finish pairing" once this is true.
+    async pairConfirmed(id, { waitMs = 0 } = {}) {
+      const e = await entryOf(id);
+      if (!e.pairMailbox || !e.offer || !e.deviceId) return { confirmed: false };
+      const p = pairings.get(id) || {};
+      const since = Number.isSafeInteger(p.confirmCursor) ? p.confirmCursor : 0;
+      const r = waitMs > 0 ? await relay.watch(e.pairMailbox, since, 64, waitMs) : await relay.get(e.pairMailbox, since, 64);
+      if (r.state !== "known") { diagnostics.push(relaySaid(r.reason)); return { confirmed: false }; }
+      for (const item of r.value.items) {
+        if (item.key !== P.pairingConfirmedKey(e.offer)) continue;
+        const c = await P.readPairingConfirmed(item.text, { horde: e.horde, offer: e.offer, device: e.deviceId, signPublic: P.unb64u(e.machineSignPublic) });
+        if (c.ok) return { confirmed: true };
+      }
+      if (pairings.has(id)) p.confirmCursor = r.value.next;
+      return { confirmed: false };
     },
 
     // Unlock with the passkey: its PRF output unwraps the phone key. A passkey that gives none unlocks
-    // nothing (the horde is read only, by the recovery code). THE SAME ONE ASSERTION vouches for the
-    // session key (THE UNLOCKED SESSION, in the header): its challenge is the vouch's hash, where it was
-    // random bytes before - as fresh, since the vouch names a key made a moment ago.
+    // nothing (the horde is read only, by the recovery code). Still ONE prompt either way. WHILE THE
+    // MACHINE HAS NOT ANSWERED THIS PHONE (not heard), it is asked over the vouch's challenge and the vouch
+    // is put: one Face ID unlocks and announces (THE ANNOUNCEMENT IS NO BUTTON). A put the relay does not
+    // take is said in diagnostics, never thrown: the unlock stands, and the next unlock tries again. No
+    // session key then: with no snapshot there is no receipt, so nothing would let it sign, and the first
+    // send once the PC keeps sessions vouches for one. ONCE HEARD, the assertion vouches for the session
+    // key (THE UNLOCKED SESSION, in the header): its challenge is the vouch's hash, where it was random
+    // bytes before - as fresh, since the vouch names a key made a moment ago.
     async unlock(id) {
       let e = await entryOf(id);
-      const { signer, got } = await newSigner(e, true);
+      const announcing = !summary(e).heard;
+      let signer = null, got;
+      if (announcing) got = await authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge: await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic)), prfInput: prfInput(e.horde, e.machine) });
+      else ({ signer, got } = await newSigner(e, true));
       if (!got.prfFirst) throw fail(NO_PRF);
       const s = sessions.get(id);
-      if (s && s.pkcs8) { e = await keepPasskeyWrap(e, s, got.prfFirst); s.signer = signer; s.sessionWords = ""; return summary(e); }
-      if (!e.wraps.prf) throw fail("this horde's key is not wrapped under this passkey's PRF yet: unlock with the recovery code once, then with the passkey");
-      const opened = await unwrap(e.wraps.prf, got.prfFirst, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
-      if (!opened.ok) throw fail(opened.reason + ": unlock with the recovery code");
-      const fresh = newSession(opened.value.privateKey, opened.value.publicPoint, "passkey", null);
-      fresh.signer = signer;
-      sessions.set(id, fresh);
+      if (s && s.pkcs8) { e = await keepPasskeyWrap(e, s, got.prfFirst); s.signer = signer; s.sessionWords = ""; }
+      else {
+        if (!e.wraps.prf) throw fail("this horde's key is not wrapped under this passkey's PRF yet: unlock with the recovery code once, then with the passkey");
+        const opened = await unwrap(e.wraps.prf, got.prfFirst, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
+        if (!opened.ok) throw fail(opened.reason + ": unlock with the recovery code");
+        const fresh = newSession(opened.value.privateKey, opened.value.publicPoint, "passkey", null);
+        fresh.signer = signer;
+        sessions.set(id, fresh);
+      }
+      // Only once the passkey has unwrapped the key: the vouch is for a key this phone holds.
+      if (announcing) { await putVouch(e, got); e = await entryOf(id); }
       return summary(e);
     },
 

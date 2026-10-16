@@ -509,11 +509,12 @@ function Invoke-HordeRelayRun {
                 $in = Receive-HordeRelayInbox -Context $ctx -TimeoutMs $turnWatch -SliceMs ([int]$set.sendCheckMs) -Between $script:HordeRelayRunBetweenSlices -With $watching
                 if ($in.state -cne "known") { $failed = "the mailbox could not be read: " + $in.reason }
                 else {
+                    foreach ($l in @($in.value.vouched)) { $null = & $Say ("done " + $l) }
                     foreach ($l in @($in.value.refused)) { $null = & $Say ("refused " + $l) }
                     foreach ($l in @($in.value.held)) { $null = & $Say ("held " + $l) }
                     foreach ($l in @($in.value.missing)) { $null = & $Say ("missing " + $l) }
                     foreach ($l in @($in.value.anomalies)) { $null = & $Say ("relay: " + $l) }
-                    $empty = (@($in.value.taken).Count + @($in.value.refused).Count + @($in.value.held).Count + @($in.value.missing).Count + @($in.value.anomalies).Count -eq 0)
+                    $empty = (@($in.value.taken).Count + @($in.value.vouched).Count + @($in.value.refused).Count + @($in.value.held).Count + @($in.value.missing).Count + @($in.value.anomalies).Count -eq 0)
                     $r2 = Invoke-HordeRelayUnfinished -Context $ctx
                     foreach ($l in @(Get-HordeRelayRunLines -Report $r2.value)) { $null = & $Say $l }
                 }

@@ -9,11 +9,12 @@
 # CSS pixels, a common Android width), with touch.
 #   1. the app loads under its strict policy with no error; it pairs with a Chrome passkey that the
 #      machine enrolls, the two fingerprints agree, and the passkey is confirmed;
-#   2. it announces its key - the button says why it is shut until the recovery code is written down, a
-#      relay that refuses and a passkey that does not sign are each said beside it, and the horde's own
-#      view offers "Announce this phone" until the machine answers (the founder's first live use,
-#      2026-10-11); a run sends the snapshot; the question is drawn by the window's own document
-#      (list.js);
+#   2. NO ANNOUNCE BUTTON (the founder, 2026-10-14): once the machine's signed word that he typed the
+#      number arrives, the pairing screen offers Finish pairing - one tap, ONE passkey prompt, counted -
+#      shut and saying why until the recovery code is written down; a relay that refuses and a passkey
+#      that does not sign are each said beside it, and the horde's own view says, with no button, that
+#      the machine has not answered yet; a run takes the key in and sends the snapshot; the question is
+#      drawn by the window's own document (list.js). The unlock path is test-pwa-announce-browser.ps1's;
 #   3. Shift+Enter and the row's New line add lines and send nothing; the answer typed and sent with a
 #      real Enter lands once, his words exactly, signed by Chrome's WebAuthn;
 #   4. at phone width nothing scrolls sideways and the answering row stands on the screen;
@@ -189,26 +190,37 @@ try {
     $done = Complete-HordeRelayPairing -HordeHome $hh -Response $(if ($paired.ok) { $paired.value.response } else { "" })
     Check ($done.ok -and $done.value.fingerprint -ceq $paired.value.fingerprint) ("the machine enrolls Chrome's passkey and computes the same fingerprint (" + $(if ($done.ok) { $done.value.fingerprint } else { $done.reason }) + ")")
     Check ($done.ok -and $done.value.device.prf -eq $true) "and records that the passkey has PRF"
+    $before = Invoke-Browser @{ cmd = "finishState" }
+    Check ($before.ok -and -not $before.value.finishShown -and $before.value.waiting -and @($before.value.announceButtons).Count -eq 0) ("BEFORE THE MACHINE'S WORD the pairing screen waits, Finish pairing is not offered, and no button anywhere offers to announce (" + $(if ($before.ok) { ConvertTo-Json $before.value -Compress } else { $before.reason }) + ")")
     $confirmed = Confirm-HordeRelayDevice -HordeHome $hh -Id $(if ($done.ok) { $done.value.device.id } else { "none" }) -Fingerprint $(if ($paired.ok) { $paired.value.fingerprint } else { "" })
     Check ($confirmed.ok -and $confirmed.value.device.state -ceq "trusted") "the founder confirms it at the machine"
+    # What horde relay pair does once he typed the number (cli/RelayPair.ps1, Send-HordeRelayPairConfirmed).
+    $word = New-HordeRelayPairingConfirmedText -HordeHome $hh -Offer $offer.value.offer -Device $(if ($done.ok) { $done.value.device.id } else { "none" })
+    $lc = Connect-HordeRelay -Name "local" -Options @{ root = $mailboxes }
+    $told = $(if ($word.state -ceq "known" -and $lc.state -ceq "known") { Send-HordeRelayItem -Connection $lc.value -Mailbox $offer.value.pairMailbox -Text $word.value.text -Key $word.value.key } else { $null })
+    Check ($null -ne $told -and $told.state -ceq "known") "the machine puts its signed word that the phone is confirmed into the offer's pairing mailbox"
 
     Write-Host ""
-    Write-Host "--- 2. the key is announced, and the window's document draws the question ---" -ForegroundColor Cyan
-    $why = Invoke-Browser @{ cmd = "announceWhy" }
-    Check ($why.ok -and $why.value.before.disabled -and $why.value.before.why -and $why.value.before.words.Contains("recovery code") -and -not $why.value.after.disabled -and -not $why.value.after.why) ("while the recovery-code box is not ticked the announce button is shut and says why; ticked, it opens and the reason goes (" + $(if ($why.ok) { $why.value.before.words } else { $why.reason }) + ")")
+    Write-Host "--- 2. Finish pairing - one tap, one passkey prompt - announces the key, and the window's document draws the question ---" -ForegroundColor Cyan
+    $why = Invoke-Browser @{ cmd = "finishWhy" }
+    Check ($why.ok -and $why.value.appeared -and $why.value.before.finishDisabled -and $why.value.before.why -and $why.value.before.whyWords.Contains("recovery code") -and -not $why.value.after.finishDisabled -and -not $why.value.after.why) ("once the machine's word arrives Finish pairing appears; while the recovery-code box is not ticked it is shut and says why; ticked, it opens (" + $(if ($why.ok) { $why.value.before.whyWords } else { $why.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "countPrompts" }
     $null = Invoke-Browser @{ cmd = "relayFail"; on = $true }
-    $f1 = Invoke-Browser @{ cmd = "announceTry" }
+    $f1 = Invoke-Browser @{ cmd = "finishTry" }
     $null = Invoke-Browser @{ cmd = "relayFail"; on = $false }
-    Check ($f1.ok -and $f1.value.status.Contains("The relay did not take it") -and -not $f1.value.status.Contains("a stand-in") -and $f1.value.paired -and $f1.value.recovery) ("an announcement the relay refuses says so beside its button, in the app's words, and the pairing screen stays with its code (" + $(if ($f1.ok) { $f1.value.status } else { $f1.reason }) + ")")
+    Check ($f1.ok -and $f1.value.status.Contains("The relay did not take it") -and -not $f1.value.status.Contains("a stand-in") -and $f1.value.paired -and $f1.value.recovery) ("a Finish pairing the relay refuses says so beside its button, in the app's words, and the pairing screen stays with its code (" + $(if ($f1.ok) { $f1.value.status } else { $f1.reason }) + ")")
+    $p1 = Invoke-Browser @{ cmd = "prompts" }
+    Check ($p1.ok -and $p1.value -eq 1) ("ONE TAP, ONE PASSKEY PROMPT: Finish pairing asked the passkey once (" + $(if ($p1.ok) { $p1.value } else { $p1.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "passkeyRefusesOnce" }
-    $f2 = Invoke-Browser @{ cmd = "announceTry" }
-    Check ($f2.ok -and $f2.value.status.Contains("did not sign the announcement") -and $f2.value.paired) ("an announcement the passkey does not sign says so beside its button (" + $(if ($f2.ok) { $f2.value.status } else { $f2.reason }) + ")")
-    $ann = Invoke-Browser @{ cmd = "announce" }
-    Check ($ann.ok -and $ann.value.enabledAfterTick -and $ann.value.doc -and $ann.value.recoveryCleared) ("the announce key opens only once the code is written down; after it the list shows and the code leaves the screen (" + $(if ($ann.ok) { $ann.value.notice } else { $ann.reason }) + ")")
+    $f2 = Invoke-Browser @{ cmd = "finishTry" }
+    Check ($f2.ok -and $f2.value.status.Contains("did not sign") -and $f2.value.paired) ("a Finish pairing the passkey does not sign says so beside its button (" + $(if ($f2.ok) { $f2.value.status } else { $f2.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "countPrompts" }
+    $ann = Invoke-Browser @{ cmd = "finish" }
+    Check ($ann.ok -and $ann.value.enabledAfterTick -and $ann.value.doc -and $ann.value.recoveryCleared) ("Finish pairing opens once the code is written down; after it the list shows and the code leaves the screen (" + $(if ($ann.ok) { $ann.value.notice } else { $ann.reason }) + ")")
+    $p2 = Invoke-Browser @{ cmd = "prompts" }
+    Check ($p2.ok -and $p2.value -eq 1) ("and that announcement was one passkey prompt (" + $(if ($p2.ok) { $p2.value } else { $p2.reason }) + ")")
     $box = Invoke-Browser @{ cmd = "announceBox" }
-    Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet")) ("until the machine answers, the horde's own view says so and offers Announce this phone (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
-    $again = Invoke-Browser @{ cmd = "announceNow"; mailbox = $mailbox }
-    Check ($again.ok -and $again.value.put -and $again.value.status.StartsWith("Announced.")) ("and its button announces the phone again, from that view (" + $(if ($again.ok) { $again.value.status } else { $again.reason }) + ")")
+    Check ($box.ok -and $box.value.shown -and $box.value.words.Contains("has not answered this phone yet") -and $box.value.buttons -eq 0) ("until the machine answers, the horde's own view says so, and offers no button (" + $(if ($box.ok) { $box.value.words } else { $box.reason }) + ")")
     $run = Invoke-Run -Turns 2
     Check ($run.code -eq 0 -and $run.out.Contains("is now in the trust store") -and $run.out.Contains("snapshot of 1 open question(s)")) ("a run takes the app's key and sends the snapshot (exit " + $run.code + ")")
     $seen = Invoke-Browser @{ cmd = "waitText"; text = $title }

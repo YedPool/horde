@@ -96,6 +96,8 @@ async function sendSnapshot(transport, m, phones, questions, opts = {}) {
 }
 // What the machine would open of the phone's answer: the body, by its agreement key.
 async function machineOpens(m, text) {
+  // The phone's vouch item is no envelope (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF): it is on no channel.
+  if (text.startsWith('{"v":1,"kind":"horde-relay-phone-vouch",')) return { header: { channel: "", kind: "phone-vouch" }, sig: null, body: JSON.parse(text) };
   const e = JSON.parse(text);
   const ht = P.headerText(e.header);
   const aad = P.utf8("horde-relay/envelope/v1 aad\n" + ht);
@@ -104,9 +106,10 @@ async function machineOpens(m, text) {
   return { header: e.header, sig: e.sig, body: JSON.parse(P.fromUtf8(await P.gcmOpen(cek, P.unhex(e.header.nonce), aad, P.unb64u(e.ct)))) };
 }
 async function phoneKeyOf(transport, m) {
-  // The phone's announcement, as the trust channel reads it: the agreement key it vouched for.
+  // The phone's announcement, as the machine reads it: the agreement key it vouched for - from the phone
+  // vouch item (relay/Trust.ps1, THE VOUCH TRAVELS BY ITSELF).
   const r = await transport.get(m.mailbox, 0, 256);
-  for (const it of r.value.items) { const o = await machineOpens(m, it.text); if (o.header.channel === "trust") return P.unb64u(o.body.agreePublic); }
+  for (const it of r.value.items) { if (it.text.startsWith('{"v":1,"kind":"horde-relay-phone-vouch",')) return P.unb64u(JSON.parse(it.text).agreePublic); }
   return null;
 }
 
@@ -367,8 +370,8 @@ async function pairedApp(transport, m, opts = {}) {
   check(Object.keys(ans.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "with exactly the members channels/decisions reads, in order");
   await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "Yes.", answerId: id });
   const seqs = [];
-  for (const it of (await t.get(m.mailbox, 0, 256)).value.items) seqs.push((await machineOpens(m, it.text)).header);
-  check(seqs.filter((h) => h.channel === "decisions").map((h) => h.seq).join(",") === "1,2" && seqs.filter((h) => h.channel === "trust").map((h) => h.seq).join(",") === "1", "each channel counts its own sequence, from 1 and up by one", JSON.stringify(seqs.map((h) => h.channel + h.seq)));
+  for (const it of (await t.get(m.mailbox, 0, 256)).value.items) if (it.text.startsWith('{"header":')) seqs.push((await machineOpens(m, it.text)).header);
+  check(seqs.filter((h) => h.channel === "decisions").map((h) => h.seq).join(",") === "1,2" && seqs.filter((h) => h.channel === "trust").length === 0, "each channel counts its own sequence, from 1 and up by one; the announcement is a vouch item and spends none", JSON.stringify(seqs.map((h) => h.channel + h.seq)));
   check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 5, wordingVersion: 1, text: "x", answerId: id }))).indexOf("not in the snapshot") >= 0, "a question not in the snapshot on screen is not answered");
   // The recovery code: read, never answer.
   const code = a.paired.recoveryCode;
@@ -603,7 +606,8 @@ async function pairedApp(transport, m, opts = {}) {
   await b.unlock(a.paired.id);
   const v = await b.refresh(a.paired.id);
   check(!JSON.stringify(v.anomalies).includes("evil.example") && v.relayDown === true && v.anomalies.some((x) => x.indexOf("The relay could not be read") === 0), "a relay's own words are not shown: a fixed sentence is", JSON.stringify(v.anomalies));
-  check(v.diagnostics.length === 1 && v.diagnostics[0].indexOf("the relay said: ") === 0 && v.diagnostics[0].length <= 216, "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
+  // Two of them: the unlock's vouch the relay did not take (the horde not heard from yet), and the read.
+  check(v.diagnostics.length === 2 && v.diagnostics.every((d) => d.indexOf("the relay said: ") === 0 && d.length <= 216), "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
   const why = await throwsAsync(() => b.announce(a.paired.id));
   check(!why.includes("evil.example") && why.length > 0, "a put the relay refuses is said in fixed words too", why);
 }
@@ -1107,6 +1111,104 @@ const entry = (id, n, extra = {}) => ({ id, n, ts: "2026-10-12T18:15:00.000Z", k
   refuse = false;
   await app2.phone.announce(p2.id);
   check((await app2.phone.hordes())[0].announced === true && (await phoneKeyOf(t2, m2)) !== null, "announced again once the passkey signs, it goes");
+}
+
+// --- THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14): one passkey prompt, on the unlock ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const base = softAuthenticator({ origin, prf: true });
+  const asked = [];
+  const auth = { create: (a) => base.create(a), get: async (a) => { asked.push(a.challenge); return base.get(a); } };
+  const app = newApp(t, { authenticator: auth });
+  const paired = await app.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  const e0 = await app.store.get("horde/" + paired.id);
+  const want = await P.vouchChallenge("work", P.unb64u(e0.phonePublic));
+  // Finish pairing: ONE assertion, over the vouch's own challenge, put as the phone vouch item.
+  await app.phone.announce(paired.id);
+  const items = (await t.get(m.mailbox, 0, 256)).value.items;
+  check(asked.length === 1 && P.equalBytes(asked[0], want), "Finish pairing asks the passkey ONCE, over the vouch's challenge", String(asked.length));
+  check(items.length === 1 && items[0].key === "vouch/" + e0.deviceKeyId + "/" + e0.phoneKeyId, "and puts one item, under one key per passkey and phone key", JSON.stringify(items.map((i) => i.key)));
+  const v = JSON.parse(items[0].text);
+  check(items[0].text === P.phoneVouchText({ horde: "work", by: e0.deviceKeyId, agreePublic: P.unb64u(e0.phonePublic), vouch: { authenticatorData: P.unb64u(v.authenticatorData), clientDataJSON: P.unb64u(v.clientDataJSON), signature: P.unb64u(v.signature) } }) &&
+    Object.keys(v).join(",") === "v,kind,horde,by,agreePublic,authenticatorData,clientDataJSON,signature", "the item is the vouch in relay/Trust.ps1's canonical form, the members in its order", Object.keys(v).join(","));
+  const cd = JSON.parse(P.fromUtf8(P.unb64u(v.clientDataJSON)));
+  check(cd.challenge === P.b64u(want) && v.signature.length > 0, "SIGNED: its clientDataJSON carries the vouch challenge, and it has a signature");
+
+  // The unlock while the machine has not answered (not heard): ONE prompt that unlocks AND vouches.
+  const t2 = R.memoryTransport();
+  const m2 = await newMachine("work");
+  const asked2 = [];
+  const base2 = softAuthenticator({ origin, prf: true });
+  const app2 = newApp(t2, { authenticator: { create: (a) => base2.create(a), get: async (a) => { asked2.push(a); return base2.get(a); } } });
+  const p2 = await app2.phone.pair({ offerText: offerText(m2), label: "Founder phone" });
+  const e2 = await app2.store.get("horde/" + p2.id);
+  app2.phone.lock(p2.id);
+  check(e2.wraps.prf !== undefined, "CONTROL: a passkey that gives PRF at creation wraps the key under it at once");
+  const u = await app2.phone.unlock(p2.id);
+  const items2 = (await t2.get(m2.mailbox, 0, 256)).value.items;
+  check(asked2.length === 1 && asked2[0].prfInput && P.equalBytes(asked2[0].challenge, await P.vouchChallenge("work", P.unb64u(e2.phonePublic))), "NOT HEARD, the unlock is one prompt, with PRF, over the vouch's challenge", String(asked2.length));
+  check(u.unlocked && u.announced && items2.length === 1 && items2[0].text.startsWith('{"v":1,"kind":"horde-relay-phone-vouch",'), "and that one prompt unlocks and puts the vouch", JSON.stringify(u));
+  // Not confirmed at the machine: nothing comes back; the phone does nothing more by itself.
+  await app2.phone.refresh(p2.id);
+  check(asked2.length === 1 && (await t2.get(m2.mailbox, 0, 256)).value.items.length === 1, "a refresh asks no passkey and puts nothing: the next try is the next unlock, never a loop");
+  app2.phone.lock(p2.id);
+  await app2.phone.unlock(p2.id);
+  check(asked2.length === 2 && (await t2.get(m2.mailbox, 0, 256)).value.items.length === 1, "the next unlock tries again - one prompt - and the same key stores once", String((await t2.get(m2.mailbox, 0, 256)).value.items.length));
+  // Heard: a snapshot drawn, an unlock puts nothing and asks over a challenge of its own.
+  await sendSnapshot(t2, m2, [P.unb64u(e2.phonePublic)], [question(1, "One?")]);
+  await app2.phone.refresh(p2.id);
+  app2.phone.lock(p2.id);
+  const head = (await t2.get(m2.mailbox, 0, 256)).value.items.length;
+  await app2.phone.unlock(p2.id);
+  check(asked2.length === 3 && !P.equalBytes(asked2[2].challenge, await P.vouchChallenge("work", P.unb64u(e2.phonePublic))) && (await t2.get(m2.mailbox, 0, 256)).value.items.length === head, "HEARD, an unlock is one prompt and puts no vouch");
+  // A relay that refuses the put: the unlock still stands, and what it said is diagnostics only.
+  const t3 = R.memoryTransport();
+  const m3 = await newMachine("work");
+  const app3 = newApp(t3);
+  const p3 = await app3.phone.pair({ offerText: offerText(m3), label: "Founder phone" });
+  app3.phone.lock(p3.id);
+  const refusing = { ...t3, put: async () => ({ state: "unknown", value: null, reason: "down" }) };
+  const b3 = createPhone({ store: app3.store, authenticator: app3.auth, relay: R.createRelayClient(refusing), origin });
+  const u3 = await b3.unlock(p3.id);
+  check(u3.unlocked && !u3.announced, "a vouch the relay does not take leaves the unlock standing, the horde not announced", JSON.stringify(u3));
+  // A recovery session never announces.
+  const app4 = newApp(R.memoryTransport());
+  const m4 = await newMachine("work");
+  const p4 = await app4.phone.pair({ offerText: offerText(m4), label: "Founder phone" });
+  app4.phone.lock(p4.id);
+  await app4.phone.recover(p4.id, p4.recoveryCode);
+  check((await throwsAsync(() => app4.phone.announce(p4.id))).indexOf("reads only") >= 0, "a recovery session cannot announce");
+}
+
+// --- the machine's confirmed record: the pairing screen's Finish pairing appears only on the machine's signed word ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const app = newApp(t);
+  const oText = offerText(m);
+  const paired = await app.phone.pair({ offerText: oText, label: "Founder phone" });
+  const e = await app.store.get("horde/" + paired.id);
+  const offer = JSON.parse(oText).offer;
+  check(e.deviceId === P.hex((await P.sha256(P.unb64u(e.credentialId))).slice(0, 16)) && e.offer === offer && e.pairMailbox === "work/pair-" + offer, "the entry keeps the offer, its pairing mailbox and the device id the machine files the passkey under");
+  check((await app.phone.pairConfirmed(paired.id)).confirmed === false, "before the machine's word, not confirmed");
+  const record = async ({ signer = m, device = e.deviceId, forOffer = offer, at = Date.now() } = {}) => {
+    const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, signer.sign.privateKey, P.confirmedBytes({ horde: "work", offer: forOffer, device, confirmedAt: at })));
+    return '{"v":1,"kind":"horde-relay-pairing-confirmed","horde":"work","offer":"' + forOffer + '","device":"' + device + '","confirmedAt":' + at + ',"sig":"' + P.b64u(sig) + '"}';
+  };
+  const stranger = await newMachine("work");
+  // WebCrypto's ECDSA may give a high-S signature, which the phone refuses (one message, one signature).
+  const lowS = async (opts) => { for (let i = 0; i < 16; i++) { const r = await record(opts); const s = P.unb64u(JSON.parse(r).sig).slice(32); if (s[0] < 0x7f) return r; } return null; };
+  await t.put("work/pair-" + offer, "confirmed/" + offer, await lowS({ signer: stranger }));
+  check((await app.phone.pairConfirmed(paired.id)).confirmed === false, "a confirmed record signed by another key is not the machine's word");
+  const t2 = R.memoryTransport();
+  const b = createPhone({ store: app.store, authenticator: app.auth, relay: R.createRelayClient(t2), origin });
+  await t2.put("work/pair-" + offer, "confirmed/" + offer, await lowS({ device: "0".repeat(32) }));
+  check((await b.pairConfirmed(paired.id)).confirmed === false, "nor one naming another device");
+  const t3 = R.memoryTransport();
+  const c = createPhone({ store: app.store, authenticator: app.auth, relay: R.createRelayClient(t3), origin });
+  await t3.put("work/pair-" + offer, "confirmed/" + offer, await lowS());
+  check((await c.pairConfirmed(paired.id)).confirmed === true, "the machine's own signed word for this offer and device is");
 }
 
 // --- the phone's mailbox is trimmed by its senders: a hole there is not an anomaly ---

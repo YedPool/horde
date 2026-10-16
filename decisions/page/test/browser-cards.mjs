@@ -78,7 +78,9 @@ async function open(path) {
 
 try {
   await open("/cards.html");
-  await evaluate("localStorage.clear(), true");
+  // The folds of the answered are read below, so they are shown, as the switch shows them (list.js, THE
+  // ANSWERED ARE HIDDEN UNTIL ASKED FOR; the switch itself is browser-details.mjs's).
+  await evaluate("localStorage.clear(), localStorage.setItem('horde-decisions-answered-shown-v1', '1'), true");
   await open("/cards.html");
   await hostList(list());
 

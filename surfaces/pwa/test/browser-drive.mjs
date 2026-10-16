@@ -174,20 +174,37 @@ const commands = {
     const ok = await until(shown("pairedView") + " || (" + notice + ").length > 0", 30000);
     return await evaluate("({ paired: " + shown("pairedView") + ", fingerprint: document.getElementById('fingerprint').textContent, response: document.getElementById('responseText').value, recoveryCode: document.getElementById('recoveryCode').textContent, notice: " + notice + ", waited: " + JSON.stringify(!!ok) + " })");
   },
-  // THE ANNOUNCEMENT (the founder's first live use, 2026-10-11): why its button is shut, before and after
-  // the box is ticked; then the box is left ticked.
-  async announceWhy() {
-    const read = "({ why: " + shown("announceWhy") + ", words: document.getElementById('announceWhy').textContent, disabled: document.getElementById('announceBtn').disabled })";
-    const before = await evaluate(read);
-    await evaluate("document.getElementById('wroteCode').click()", true);
-    return { before, after: await evaluate(read) };
+  // THE ANNOUNCEMENT IS NO BUTTON (2026-10-14): the pairing screen before the machine's word - Finish
+  // pairing hidden, the screen waiting - and every button on the page whose words offer to announce.
+  async finishState() {
+    return await evaluate("({ finishShown: " + shown("finishBtn") + ", finishDisabled: document.getElementById('finishBtn').disabled, waiting: " + shown("confirmWait") + ", why: " + shown("finishWhy") +
+      ", whyWords: document.getElementById('finishWhy').textContent, announceButtons: Array.from(document.querySelectorAll('button')).filter((b) => /announce/i.test(b.textContent)).map((b) => b.id || b.textContent) })");
   },
-  // One tap on the pairing screen's announce button that is expected to fail: what the screen then says.
-  async announceTry() {
-    const was = await evaluate("document.getElementById('announceStatus').textContent");
-    await evaluate("document.getElementById('announceStatus').textContent = ''; document.getElementById('announceBtn').click()", true);
-    await until(shown("announceStatus") + " && document.getElementById('announceStatus').textContent.length > 0 || " + shown("doc"), 30000);
-    return await evaluate("({ status: " + shown("announceStatus") + " ? document.getElementById('announceStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + ", was: " + JSON.stringify(was) + " })");
+  // Once the machine's confirmed record is in the pairing mailbox: Finish pairing appears, shut while the
+  // box is not ticked, and says why; ticked, it opens. The box is left ticked.
+  async finishWhy() {
+    const appeared = !!(await until(shown("finishBtn"), 30000));
+    const before = await commands.finishState();
+    await evaluate("document.getElementById('wroteCode').click()", true);
+    return { appeared, before, after: await commands.finishState() };
+  },
+  // One tap on Finish pairing that is expected to fail: what the screen then says.
+  async finishTry() {
+    await evaluate("document.getElementById('finishStatus').textContent = ''; document.getElementById('finishBtn').click()", true);
+    await until(shown("finishStatus") + " && document.getElementById('finishStatus').textContent.length > 0 || " + shown("doc"), 30000);
+    return await evaluate("({ status: " + shown("finishStatus") + " ? document.getElementById('finishStatus').textContent : '', paired: " + shown("pairedView") + ", recovery: document.getElementById('recoveryCode').textContent.length > 0, notice: " + notice + " })");
+  },
+  // The passkey prompts this page has asked for since countPrompts: navigator.credentials.get counted.
+  async countPrompts() {
+    await evaluate("(() => { const c = navigator.credentials; if (c.__counted) { window.__prompts = 0; return; } const real = c.get.bind(c); window.__prompts = 0; c.get = function (o) { window.__prompts++; return real(o); }; c.__counted = true; })()");
+    return { counting: true };
+  },
+  async prompts() { return await evaluate("window.__prompts === undefined ? -1 : window.__prompts"); },
+  // Leave the pairing screen without finishing (Later).
+  async pairLater() {
+    await evaluate("document.getElementById('pairLater').click()", true);
+    await until("!" + shown("pairedView"), 15000);
+    return await evaluate("({ paired: " + shown("pairedView") + ", doc: " + shown("doc") + ", locked: " + shown("lockedView") + " })");
   },
   async relayFail(c) { failPuts = c.on === true; return { failPuts }; },
   async readFail(c) { failReads = String(c.reason || ""); return { failReads }; },
@@ -206,16 +223,10 @@ const commands = {
     await evaluate("(() => { const c = navigator.credentials; const real = c.get; c.get = function () { c.get = real; return Promise.reject(new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError')); }; })()");
     return { armed: true };
   },
-  // The horde's own view while the machine has not answered: its offer to announce again.
-  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, status: " + shown("announceNowStatus") + " ? document.getElementById('announceNowStatus').textContent : '' })"); },
-  async announceNow(c) {
-    const before = headOf(c.mailbox);
-    await evaluate("document.getElementById('announceNow').click()", true);
-    await until(shown("announceNowStatus"), 30000);
-    const end = Date.now() + 10000;
-    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
-    return { put: headOf(c.mailbox) > before, status: await evaluate("document.getElementById('announceNowStatus').textContent") };
-  },
+  // The horde's own view while the machine has not answered: what it says, and that it offers no button.
+  async announceBox() { return await evaluate("({ shown: " + shown("announceBox") + ", words: document.getElementById('announceWords').textContent, buttons: document.querySelectorAll('#announceBox button').length })"); },
+  // The head of a mailbox of the relay's folders, for a suite to see a put land.
+  async head(c) { return headOf(c.mailbox); },
   // THE WAY BETWEEN THE VIEWS: with the page made long and scrolled to its end (as a long chat is), the
   // other view's tab is still on the screen, and a real touch at its centre opens that view.
   async navTouch(c) {
@@ -378,18 +389,22 @@ const commands = {
     await sleep(1200);
     return await commands.progressState();
   },
-  async announce() {
+  // The one Finish pairing tap that is the passkey prompt.
+  async finish() {
     const ticked = await evaluate("document.getElementById('wroteCode').checked");
     if (!ticked) await evaluate("document.getElementById('wroteCode').click()", true);
-    const enabled = await evaluate("!document.getElementById('announceBtn').disabled");
-    await evaluate("document.getElementById('announceBtn').click()", true);
-    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("announceStatus"), 30000);
-    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('announceStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
+    const enabled = await evaluate("!document.getElementById('finishBtn').disabled && " + shown("finishBtn"));
+    await evaluate("document.getElementById('finishBtn').click()", true);
+    await until(shown("doc") + " || (" + notice + ").length > 0 || " + shown("finishStatus"), 30000);
+    return await evaluate("({ enabledAfterTick: " + enabled + ", doc: " + shown("doc") + ", notice: " + notice + " + ' ' + document.getElementById('finishStatus').textContent, recoveryCleared: document.getElementById('recoveryCode').textContent === '' })");
   },
   // folded: the words are looked for in everything the lists hold, what stands under a folded heading
   // included (an answered question is out of his list, under the folded "With Thrall"); without it,
-  // only in what is shown.
-  async waitText(c) { const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
+  // only in what is shown. The answered are hidden until asked for (decisions/page/list.js, THE ANSWERED
+  // ARE HIDDEN UNTIL ASKED FOR), so for folded the page's switch is turned on first, as he would.
+  async waitText(c) {
+    if (c.folded) await evaluate("(() => { const s = document.querySelector('#lists .horde-list:not([hidden]) .hd-showans'); if (s && s.getAttribute('aria-checked') !== 'true') s.click(); return true; })()");
+    const where = c.folded ? everything : listed; const found = await until(where + ".indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000); return { found: !!found, text: await evaluate(where), shown: await evaluate(listed) }; },
   async answer(c) {
     const before = headOf(c.mailbox);
     await evaluate(fieldOf(c.question) + ".focus()", true);

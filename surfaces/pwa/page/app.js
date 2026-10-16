@@ -31,12 +31,16 @@
 // from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
 // why. The log, like the list, is taken off the page when the horde locks.
 //
-// THE ANNOUNCEMENT MUST NOT GO MISSING UNSEEN (the founder's first live use, 2026-10-11: he paired, the
-// announcement never went, and why was nowhere on the screen). The pairing screen says why its announce
-// button is shut; a failed announcement says why beside its button, in the phone's own words; and the
-// horde's own view, while the machine has sent this phone nothing (the horde not heard from:
-// phone-core.js), offers "Announce this phone" - not only the small link on the locked screen. Every
-// announcement still waits for the founder's tap and his passkey; none is sent by itself.
+// THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14: "that piece should happen automatically on
+// login - I don't see why I should press a button"; phone-core.js has the protocol). DO NOT ADD AN
+// ANNOUNCE BUTTON BACK: an iPhone needs a tap to start a passkey prompt, so the pairing screen's single
+// "Finish pairing" tap IS the Face ID prompt, not an extra step - it appears only once the machine has
+// said the founder typed the number there (the confirmed record, watched for while the screen is up).
+// Otherwise the announcement rides the next unlock's Face ID; it is tried again only at the next unlock,
+// never as a prompt in a loop. What must not go missing unseen (the founder's first live use,
+// 2026-10-11) still holds: Finish pairing says why it is shut, a failed one says why beside it in the
+// phone's own words, and the horde's own view, while the machine has sent this phone nothing, says that
+// the phone is announced again at its next unlock.
 //
 // THE WAY BETWEEN DECISIONS, CHAT AND PROGRESS stays on screen (the bar is sticky, app.css), and the phone's Back
 // goes back between them: each switch is a history entry, and going back to one shows that view again.
@@ -268,7 +272,7 @@ function render(h, rec) {
   if (!h || h.id !== current) return;
   if (!h.unlocked) {
     $("lockedTitle").textContent = h.horde + " is locked";
-    $("lockedHint").textContent = h.announced ? "Unlock with your passkey to read and answer." : "This phone has not announced its key to the machine yet: unlock, then announce it.";
+    $("lockedHint").textContent = h.heard ? "Unlock with your passkey to read and answer." : "Unlock with your passkey: the same prompt finishes pairing with the machine.";
     show("lockedView");
     // The locked screen says it is locked: a notice saying so again is dropped, and nothing opened is shown
     // to be old, so what the relay said goes too.
@@ -320,22 +324,11 @@ function showAnnounceBox(h, rec) {
   $("announceBox").hidden = !waiting;
   if (!waiting) return;
   $("announceWords").textContent = h.announced
-    ? "The machine has not answered this phone yet. Its runner sends the questions when it next turns; if none come, announce this phone again."
-    : "This phone has not been announced to the machine yet, so the machine sends it nothing. Once you have typed its number at the machine, announce it.";
+    ? "The machine has not answered this phone yet. Its runner sends the questions when it next turns; if none come, the phone is announced again at its next unlock."
+    : "This phone has not been announced to the machine yet, so the machine sends it nothing. Once its number is typed at the machine, the next unlock announces it.";
 }
-// What went wrong with an announcement, beside the button that sent it ("" hides it).
+// What went wrong with Finish pairing, beside its button ("" hides it).
 function announceSaid(el, words) { $(el).textContent = words || ""; $(el).hidden = !words; }
-$("announceNow").addEventListener("click", async () => {
-  say("action", "");
-  announceSaid("announceNowStatus", "");
-  $("announceNow").disabled = true;
-  try {
-    await bridge.request("announce", { id: current });
-    announceSaid("announceNowStatus", "Announced. The questions appear here once the machine's runner turns.");
-    await loadHordes();
-    await pick(current);
-  } catch (e) { announceSaid("announceNowStatus", messageOf(e)); } finally { $("announceNow").disabled = false; }
-});
 bridge.on("chat-changed", (rec) => drawChat(rec));
 
 // --- the chat ---
@@ -790,13 +783,36 @@ $("pairBtn").addEventListener("click", async () => {
     $("shareResponse").hidden = typeof navigator.share !== "function";
     showRelayed(paired.relayed);
     $("wroteCode").checked = false;
-    $("announceBtn").disabled = true;
-    $("announceWhy").hidden = false;
-    announceSaid("announceStatus", "");
+    confirmed = false;
+    showFinish();
+    announceSaid("finishStatus", "");
     show("pairedView");
     await loadHordes();
+    watchConfirmed(paired.id);
   } catch (e) { say("action", messageOf(e)); } finally { $("pairBtn").disabled = false; }
 });
+// FINISH PAIRING (THE ANNOUNCEMENT IS NO BUTTON, in the header): hidden until the machine said the
+// founder typed the number there; shut, and saying why, until the recovery code is written down.
+let confirmed = false;
+function showFinish() {
+  $("finishBtn").hidden = !confirmed;
+  $("finishBtn").disabled = !$("wroteCode").checked;
+  $("finishWhy").hidden = !confirmed || $("wroteCode").checked;
+  $("confirmWait").hidden = confirmed;
+}
+// Watches for the machine's confirmed record while the pairing screen is up, a long watch at a time:
+// one request a watch, and nothing once the screen is left. No prompt is ever started from here.
+async function watchConfirmed(id) {
+  while (paired && paired.id === id && !confirmed && !$("pairedView").hidden) {
+    let r = null;
+    const began = Date.now();
+    try { r = await bridge.request("pairConfirmed", { id, waitMs: 20000 }); } catch (e) { r = null; }
+    if (r && r.confirmed && paired && paired.id === id) { confirmed = true; showFinish(); return; }
+    // Never a spin: a relay that answers at once, or not at all, is asked again 2 s later at the soonest.
+    const left = 2000 - (Date.now() - began);
+    if (left > 0) await new Promise((done) => setTimeout(done, left));
+  }
+}
 // Whether the response went through the relay; when it did not, Send again, Copy and Share are the way.
 function showRelayed(relayed) {
   $("relayStatus").textContent = relayed ? "Sent to the machine through the relay. Type the number above at the machine." : "It could not be sent through the relay just now. Tap Send again, or copy it to the machine yourself.";
@@ -808,23 +824,26 @@ $("resendResponse").addEventListener("click", async () => {
 });
 $("copyResponse").addEventListener("click", () => { if (navigator.clipboard) navigator.clipboard.writeText($("responseText").value).catch(() => say("action", "Could not copy: select the text and copy it.")); });
 $("shareResponse").addEventListener("click", () => { navigator.share({ text: $("responseText").value }).catch(() => {}); });
-// The button is shut until the box is ticked, and says so while it is (announceWhy).
-$("wroteCode").addEventListener("change", () => { $("announceBtn").disabled = !$("wroteCode").checked; $("announceWhy").hidden = $("wroteCode").checked; });
-$("announceBtn").addEventListener("click", async () => {
+// The button is shut until the box is ticked, and says so while it is (finishWhy).
+$("wroteCode").addEventListener("change", showFinish);
+// Leaving the pairing screen: the recovery code leaves it for good, and the horde opens.
+async function leavePairing() {
+  $("recoveryCode").textContent = "";
+  $("responseText").value = "";
+  $("relayStatus").textContent = "";
+  const id = paired.id;
+  paired = null;
+  await loadHordes();
+  await pick(id);
+}
+// THE ONE TAP THAT IS THE PASSKEY PROMPT: the bridge asks the passkey at once, in this tap's handler.
+$("finishBtn").addEventListener("click", async () => {
   say("action", "");
-  announceSaid("announceStatus", "");
-  try {
-    await bridge.request("announce", { id: paired.id });
-    // The recovery code leaves the screen for good.
-    $("recoveryCode").textContent = "";
-    $("responseText").value = "";
-    $("relayStatus").textContent = "";
-    const id = paired.id;
-    paired = null;
-    await loadHordes();
-    await pick(id);
-  } catch (e) { announceSaid("announceStatus", messageOf(e)); }
+  announceSaid("finishStatus", "");
+  try { await bridge.request("announce", { id: paired.id }); await leavePairing(); }
+  catch (e) { announceSaid("finishStatus", messageOf(e)); }
 });
+$("pairLater").addEventListener("click", () => { if (paired) leavePairing(); });
 
 // --- the account ---
 
@@ -977,7 +996,6 @@ async function acted(request, args) {
 }
 $("unlockBtn").addEventListener("click", () => acted("unlock", { id: current }));
 $("recoverBtn").addEventListener("click", () => { const code = $("recoveryInput").value; $("recoveryInput").value = ""; acted("recover", { id: current, code }); });
-$("announceAgain").addEventListener("click", () => acted("announce", { id: current }));
 $("forgetBtn").addEventListener("click", () => {
   const h = hordes.find((x) => x.id === current);
   if (!h || !window.confirm("Forget " + h.horde + " on this phone? Its key leaves this phone; the recovery code still opens nothing without pairing again.")) return;
