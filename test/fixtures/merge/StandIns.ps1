@@ -7,7 +7,9 @@
 # THE GH STATE, gh-state.json: { origin; prs: { "<n>": { state; isDraft; mergeable; reviewDecision; title;
 # mergeCommit; mergeableQueue; headRefOid; failMerge } }; calls: [ "<arguments joined by spaces>" ] }.
 # mergeableQueue, when not empty, is answered first, one item per pr view. headRefOid, when set, is
-# answered instead of the real head (a head that moved). failMerge makes pr merge refuse.
+# answered instead of the real head (a head that moved). failMerge makes pr merge refuse. moveMainFirst
+# moves main by one commit just before the merge (main moving after the last check); hideMerged makes
+# every view after the merge still say OPEN. api repos/<o>/<r>/commits/<sha> answers the commit's parents.
 # THE LEDGER STATE, ledger-state.json: { tasks: [ ids ]; failMerged; calls: [ ... ] }.
 
 . (Join-Path $PSScriptRoot "..\..\..\core\JsonText.ps1")
@@ -38,6 +40,10 @@ function Invoke-MergeStandInGh {
     $answer = { param([int]$Code, [string]$Out, [string]$Err) Write-MergeStandInState -Path $StatePath -State $s; return [pscustomobject]@{ code = $Code; out = $Out; err = $Err } }
     $a = @($Arguments)
     if ($a.Count -ge 3 -and $a[0] -ceq "repo" -and $a[1] -ceq "view") { return (& $answer 0 ("" + $s.origin + "`n") "") }
+    if ($a.Count -ge 2 -and $a[0] -ceq "api" -and $a[1] -cmatch '\Arepos/[^/]+/[^/]+/commits/([0-9a-f]{40})\z') {
+        $line = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("rev-list", "--parents", "-n", "1", $Matches[1])
+        return (& $answer 0 ((@($line -split " ") | Select-Object -Skip 1) -join "`n") "")
+    }
     if ($a.Count -lt 3 -or $a[0] -cne "pr") { return (& $answer 1 "" ("stand-in gh: not a call it knows: " + ($a -join " "))) }
     $n = "" + $a[2]
     $p = $s.prs.PSObject.Properties[$n]
@@ -49,7 +55,10 @@ function Invoke-MergeStandInGh {
         if (@($pr.mergeableQueue).Count -gt 0) { $mergeable = "" + @($pr.mergeableQueue)[0]; $pr.mergeableQueue = @(@($pr.mergeableQueue) | Select-Object -Skip 1) }
         $head = "" + $pr.headRefOid
         if ($head -eq "") { $head = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("rev-parse", $prRef) }
-        $view = [ordered]@{ number = [int]$n; state = $pr.state; isDraft = $pr.isDraft; mergeable = $mergeable; reviewDecision = $pr.reviewDecision; headRefOid = $head; baseRefName = "main"; title = $pr.title; mergeCommit = $pr.mergeCommit }
+        $shownState = $pr.state
+        $shownCommit = $pr.mergeCommit
+        if ($pr.hideMerged -eq $true -and "" + $pr.state -ceq "MERGED") { $shownState = "OPEN"; $shownCommit = $null }
+        $view = [ordered]@{ number = [int]$n; state = $shownState; isDraft = $pr.isDraft; mergeable = $mergeable; reviewDecision = $pr.reviewDecision; headRefOid = $head; baseRefName = "main"; title = $pr.title; mergeCommit = $shownCommit }
         return (& $answer 0 (($view | ConvertTo-Json -Depth 5 -Compress) + "`n") "")
     }
     if ($a[1] -ceq "merge") {
@@ -60,6 +69,11 @@ function Invoke-MergeStandInGh {
         $i = [array]::IndexOf($a, "--match-head-commit")
         if ($i -lt 0 -or $a[$i + 1] -cne $head) { return (& $answer 1 "" "stand-in gh: Head branch was modified. Review and try the merge again.") }
         $main = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("rev-parse", "refs/heads/main")
+        if ($pr.moveMainFirst -eq $true) {
+            $moved = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("-c", "user.name=stand-in", "-c", "user.email=stand-in@localhost", "commit-tree", ($main + "^{tree}"), "-p", $main, "-m", "main moved after the check")
+            $null = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("update-ref", "refs/heads/main", $moved)
+            $main = $moved
+        }
         $tree = @((Invoke-MergeStandInGit -Repo $s.origin -Arguments @("merge-tree", "--write-tree", "--no-messages", $main, $head)) -split "`n")[0]
         $commit = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("-c", "user.name=stand-in", "-c", "user.email=stand-in@localhost", "commit-tree", $tree, "-p", $main, "-p", $head, "-m", ("Merge pull request #" + $n))
         $null = Invoke-MergeStandInGit -Repo $s.origin -Arguments @("update-ref", "refs/heads/main", $commit)

@@ -33,6 +33,9 @@ $HordeCommand = @{
         # NO LEDGER, NO MERGE (cli/Merge.ps1, settings): refused before GitHub is asked anything.
         if ("" + $mergeValues.ledgerScript -eq "") { throw ("the merge settings name no ledgerScript, the task ledger's script, so the merge could not be recorded; nothing was merged. Set it in " + $settings.path) }
         if (-not [System.IO.File]::Exists("" + $mergeValues.ledgerScript)) { throw ("the ledger script " + $mergeValues.ledgerScript + " is not there; nothing was merged") }
+        foreach ($prog in @("gh", "git", "ledgerProgram")) {
+            if (Test-HordeMergeShellScript -Program ("" + $mergeValues.$prog)) { throw ("the merge setting " + $prog + " names a .cmd or .bat, which cmd would run and re-read; name the program itself. Nothing was merged") }
+        }
         $workFolder = Get-HordeMergeWorkFolder -Values $mergeValues
 
         # THE TELLS, loaded here in the command's own scope, so the blocks a messenger registers keep their

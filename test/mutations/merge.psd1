@@ -25,8 +25,11 @@
            Find = 'if ("" + $Request.on -ne "") { [void]$a.Add("--on"); [void]$a.Add($Request.on) }'
            Replace = '' }
         @{ Name = "ledger-loses-reason"
-           Find = 'if ("" + $Request.reason -ne "") { [void]$a.Add("--reason"); [void]$a.Add($Request.reason) }'
+           Find = 'if ("" + $Request.reason -ne "") { [void]$a.Add("--reason=" + $Request.reason) }'
            Replace = '' }
+        @{ Name = "reason-split-into-two-words"
+           Find = '[void]$a.Add("--reason=" + $Request.reason)'
+           Replace = '[void]$a.Add("--reason"); [void]$a.Add($Request.reason)' }
         @{ Name = "hand-line-quote-not-doubled"
            Find = 'return ("''" + $Text.Replace("''", "''''") + "''")'
            Replace = 'return ("''" + $Text + "''")' }
@@ -82,8 +85,8 @@
            Find = 'foreach ($l in @($check.lines)) { & $say ("    " + $l) }'
            Replace = '' }
         @{ Name = "scratch-checkout-left"
-           Find = '} finally { Remove-HordeMergeFolder -Path $scratch -Tools $Tools }'
-           Replace = '} finally { }' }
+           Find = '        Remove-HordeMergeFolder -Path $scratch -Tools $Tools'
+           Replace = '' }
         @{ Name = "unreadable-ledger-not-named"
            Find = 'if ($shown.code -ne 0) {'
            Replace = 'if ($false) {' }
@@ -126,5 +129,53 @@
         @{ Name = "ps1-program-not-run-by-powershell"
            Find = 'if ($Program -match ''\.ps1\z'') {'
            Replace = 'if ($false) {' }
+        @{ Name = "base-reread-failure-ignored"
+           Find = 'if ($now.code -ne 0 -or $nowSha -cnotmatch $script:HordeMergeShaPattern) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "not-shown-merged-goes-on"
+           Find = 'if (-not $isMerged) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refused-merge-waited-on"
+           Find = 'if ($m.code -ne 0) { break }'
+           Replace = '' }
+        @{ Name = "head-sha-shape-unchecked"
+           Find = 'if ("" + $pr.headRefOid -cnotmatch $script:HordeMergeShaPattern) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "behind-main-branch-skipped"
+           Find = 'elseif ($contains.code -eq 1) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "contains-failure-goes-on"
+           Find = '    else { return (& $no ("asking git whether'
+           Replace = '    else { $null = (& $no ("asking git whether' }
+        @{ Name = "missing-guard-not-refused"
+           Find = 'if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($scratch, $g))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "test-home-never-a-tests"
+           Find = 'return [bool]$full.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = 'return $false' }
+        @{ Name = "unresolvable-home-not-a-tests"
+           Find = '} catch { return $true }'
+           Replace = '} catch { return $false }' }
+        @{ Name = "landed-on-moved-main-not-seen"
+           Find = 'elseif ($first -cne $check.base) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "landed-on-moved-main-not-a-problem"
+           Find = '[void]$problems.Add($landed + "; run the guards on " + $pr.baseRefName + " now")'
+           Replace = '' }
+        @{ Name = "message-says-green-when-not-checked"
+           Find = 'if ($Landed -ne "") { $checked = "NOT CHECKED: "'
+           Replace = 'if ($false) { $checked = "NOT CHECKED: "' }
+        @{ Name = "cmd-program-started"
+           Find = 'if (Test-HordeMergeShellScript -Program $Program) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "bat-taken-for-a-program"
+           Find = '''\.(cmd|bat)\z'''
+           Replace = '''\.cmd\z''' }
+        @{ Name = "left-over-runs-kept"
+           Find = 'foreach ($old in [System.IO.Directory]::GetDirectories($runs)) { Remove-HordeMergeFolder -Path $old -Tools $Tools }'
+           Replace = '' }
+        @{ Name = "pr-ref-kept-in-cache"
+           Find = '$null = Invoke-HordeMergeTool -Tools $Tools -Name "Git" -With @(, [string[]]@("-C", $cache, "update-ref", "-d", $prRef))'
+           Replace = '' }
     )
 }

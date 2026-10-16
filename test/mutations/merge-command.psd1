@@ -25,5 +25,11 @@
         @{ Name = "unfinished-exits-zero"
            Find = 'default { throw ("MERGED, NOT FINISHED: " + $done.why) }'
            Replace = 'default { Write-Output ("MERGED, NOT FINISHED: " + $done.why) }' }
+        @{ Name = "cmd-setting-not-refused"
+           Find = 'if (Test-HordeMergeShellScript -Program ("" + $mergeValues.$prog)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "merge-lock-not-waited-for"
+           Find = 'try { $held = $lock.WaitOne(0) }'
+           Replace = 'try { $held = $true }' }
     )
 }

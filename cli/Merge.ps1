@@ -22,12 +22,16 @@
 #      origin/<base> is the base as fetched, because test-host-names compares the lists with origin/main.
 #   4. The two text guards run there (CONTRIBUTING 15 rule 9). A guard passes only on exit 0 AND its
 #      closing banner: a suite with no banner was NOT RUN (rule 7). On a failure the failing lines are
-#      printed and nothing is merged.
+#      printed and nothing is merged. THE GUARDS RUN ARE THE PR'S OWN COPIES, as they stand in the merge
+#      result: a PR that weakens a guard is checked by the weakened guard. That is the same trust every
+#      suite run on a branch has; a review of the guard's diff, and CI on main, are what catch it.
 #   5. The base is read again. If it moved while the guards ran, the new combination is built and
 #      checked first; after $script:HordeMergeRounds rounds that each saw it move, the command refuses.
 #   6. gh pr merge --merge, never squash or rebase, with --match-head-commit, so a head pushed after the
-#      check is refused by GitHub itself. What is left open: the base can still move in the seconds
-#      between the last read and the merge; gh has no "match base" option.
+#      check is refused by GitHub itself. The base can still move in the seconds between the last read
+#      and the merge (gh has no "match base" option), so the merge commit's first parent is read back
+#      (gh api .../commits/<sha>): when it is not the base that was checked, the merge landed on a tree
+#      nobody checked, and the command ends merged-unfinished and says so in every message.
 #   7. The ledger's merged event, then the warchief and the analyst are told, then a progress line is
 #      drafted. A failure of any of these comes AFTER a merge that happened: it is said loudly, with the
 #      exact command to run by hand, and the command exits 1. It never reports success it did not have.
@@ -111,7 +115,9 @@ function Get-HordeMergeLedgerArguments {
     $a = New-Object System.Collections.ArrayList
     foreach ($w in @("merged", $Request.task, "--pr", $Request.pr, "--by", $Request.by, "--state", $Request.state)) { [void]$a.Add($w) }
     if ("" + $Request.on -ne "") { [void]$a.Add("--on"); [void]$a.Add($Request.on) }
-    if ("" + $Request.reason -ne "") { [void]$a.Add("--reason"); [void]$a.Add($Request.reason) }
+    # --reason=<text> as ONE word: argparse reads a separate word that starts with "-" as a flag, so
+    # "--reason -docs left" was refused by the ledger after the merge (review of PR 320).
+    if ("" + $Request.reason -ne "") { [void]$a.Add("--reason=" + $Request.reason) }
     return [string[]]$a.ToArray()
 }
 
@@ -133,12 +139,14 @@ function Format-HordeMergeMessage {
     # PURE. What the warchief and the analyst are told: fixed words around values that each passed a
     # pattern (the request) or are shas. Nothing the PR's author wrote - its title or body - is in it,
     # so nothing a remote author shapes is put before an AI session as Horde's own words.
-    param([Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$MergeSha, [Parameter(Mandatory = $true)]$Check)
+    # -Landed is "" when the merge's first parent is the checked base, else the words that say it is not.
+    param([Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$MergeSha, [Parameter(Mandatory = $true)]$Check, [string]$Landed = "")
     $state = "Task " + $Request.task + " is now " + $Request.state
     if ("" + $Request.on -ne "") { $state += ", waiting on " + $Request.on }
     if ("" + $Request.reason -ne "") { $state += "; left: " + $Request.reason }
     $checked = "Guards green on " + $Check.base.Substring(0, 8) + " + " + $Check.head.Substring(0, 8)
     if ($Check.merged) { $checked += " (checked as their merge, " + $Check.commit.Substring(0, 8) + ")" }
+    if ($Landed -ne "") { $checked = "NOT CHECKED: " + $Landed + ". The guards were green on " + $Check.base.Substring(0, 8) + " + " + $Check.head.Substring(0, 8) + " only" }
     return ("HORDE MERGE: " + $Request.by + " merged " + $Request.pr + " as " + $MergeSha + ".`n" + $state + ".`n" + $checked + ".")
 }
 
@@ -276,7 +284,11 @@ function Invoke-HordeMergeCheck {
     # A SHORT NAME, because the checked tree's own paths are long: Horde's longest is 136 characters
     # (measured 2026-10-16), and a checkout under a 140-character folder failed with "Filename too long".
     # core.longpaths lets git write such a path; a guard that cannot read one then fails red, never green.
-    $scratch = [System.IO.Path]::Combine($WorkFolder, "runs", ("" + $Request.number + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6)))
+    # A run killed before its finally left its folder: anything under runs is a past run's, and this command
+    # holds the machine's merge lock, so no other run is using one.
+    $runs = [System.IO.Path]::Combine($WorkFolder, "runs")
+    if ([System.IO.Directory]::Exists($runs)) { foreach ($old in [System.IO.Directory]::GetDirectories($runs)) { Remove-HordeMergeFolder -Path $old -Tools $Tools } }
+    $scratch = [System.IO.Path]::Combine($runs, ("" + $Request.number + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6)))
     try {
         $r = Invoke-HordeMergeGit -Tools $Tools -What "cloning the scratch checkout" -Arguments @("-c", "core.longpaths=true", "clone", "--shared", "--no-checkout", "--quiet", $cache, $scratch)
         if (-not $r.ok) { return (& $no $r.why) }
@@ -290,7 +302,11 @@ function Invoke-HordeMergeCheck {
             if (-not $read.ok) { return (& $no ("the guard " + $g + " is red on " + $commit.Substring(0, 8) + "; nothing was merged") $read.lines) }
             & $Tools["Say"] ($g + " is green")
         }
-    } finally { Remove-HordeMergeFolder -Path $scratch -Tools $Tools }
+    } finally {
+        Remove-HordeMergeFolder -Path $scratch -Tools $Tools
+        # The PR's ref is dropped once checked, so the cache does not keep every PR it ever merged.
+        $null = Invoke-HordeMergeTool -Tools $Tools -Name "Git" -With @(, [string[]]@("-C", $cache, "update-ref", "-d", $prRef))
+    }
     return [pscustomobject]@{ ok = $true; why = ""; lines = @(); base = $baseSha; head = $headSha; commit = $commit; merged = $merged }
 }
 
@@ -363,8 +379,22 @@ function Invoke-HordeMerge {
     if ($mergeSha -cnotmatch $script:HordeMergeShaPattern) { $mergeSha = "(GitHub gave no merge commit)" }
     & $say ("MERGED " + $Request.pr + " as " + $mergeSha)
 
+    # WHERE DID IT LAND (header, step 6)? The merge commit's first parent must be the base the guards
+    # checked; anything else - or no answer - means main now holds a tree nobody checked.
+    $landed = ""
+    if ($mergeSha -cmatch $script:HordeMergeShaPattern) {
+        $pa = Invoke-HordeMergeTool -Tools $Tools -Name "Gh" -With @(, [string[]]@("api", ("repos/" + $repo + "/commits/" + $mergeSha), "--jq", ".parents[].sha"))
+        $first = (@(("" + $pa.out).Trim() -split "\s+")[0])
+        if ($pa.code -ne 0 -or $first -cnotmatch $script:HordeMergeShaPattern) { $landed = "the merge commit's parents could not be read, so where it landed is unknown" }
+        elseif ($first -cne $check.base) { $landed = "the merge landed on " + $pr.baseRefName + " " + $first.Substring(0, 8) + ", which moved after the check" }
+    } else { $landed = "GitHub gave no merge commit, so where it landed is unknown" }
+
     # 7. THE LEDGER, THE TELLS, THE DRAFT. Each failure is said and kept; none undoes the merge.
     $problems = New-Object System.Collections.ArrayList
+    if ($landed -ne "") {
+        & $say ("THE MERGE IS ON A TREE THE GUARDS DID NOT CHECK: " + $landed + "; run the guards on " + $pr.baseRefName + " now")
+        [void]$problems.Add($landed + "; run the guards on " + $pr.baseRefName + " now")
+    }
     $ledgerArgs = Get-HordeMergeLedgerArguments -Request $Request
     $lr = Invoke-HordeMergeTool -Tools $Tools -Name "Ledger" -With @(, $ledgerArgs)
     if ($lr.code -eq 0) { & $say ("ledger: " + $Request.task + " recorded as merged, now " + $Request.state) }
@@ -374,7 +404,7 @@ function Invoke-HordeMerge {
         & $say ("run this by hand: " + $line)
         [void]$problems.Add("the ledger event was not written; run: " + $line)
     }
-    $message = Format-HordeMergeMessage -Request $Request -MergeSha $mergeSha -Check $check
+    $message = Format-HordeMergeMessage -Request $Request -MergeSha $mergeSha -Check $check -Landed $landed
     $t = Invoke-HordeMergeTool -Tools $Tools -Name "Tell" -With @($message)
     if ($t.ok -eq $true) { & $say "told the warchief" }
     else { & $say ("COULD NOT TELL THE WARCHIEF: " + $t.detail); [void]$problems.Add("the warchief was not told: send the warchief the message below") }
@@ -385,6 +415,12 @@ function Invoke-HordeMerge {
     & $say (Format-HordeMergeProgress -Request $Request -Title ("" + $pr.title))
     if ($problems.Count -gt 0) { return [pscustomobject]@{ outcome = "merged-unfinished"; why = ("merged " + $Request.pr + " as " + $mergeSha + ", but " + ($problems -join "; ")); mergeSha = $mergeSha; problems = @($problems) } }
     return [pscustomobject]@{ outcome = "merged"; why = ""; mergeSha = $mergeSha; problems = @() }
+}
+
+function Test-HordeMergeShellScript {
+    # PURE. Is -Program a batch file (run through cmd, which re-reads its arguments)?
+    param([AllowEmptyString()][string]$Program)
+    return [bool]($Program.Trim().TrimEnd('"') -match '\.(cmd|bat)\z')
 }
 
 function Get-HordeMergeShell {
@@ -400,6 +436,9 @@ function Invoke-HordeMergeProgram {
     # Git Bash with theirs could not load its own modules (measured 2026-10-16: test-mutation-specs failed
     # with 'Import-PowerShellDataFile' not recognized when started from Git Bash).
     param([Parameter(Mandatory = $true)][string]$Program, [string[]]$Arguments = @(), [string]$Directory = "", [int]$Seconds = $script:HordeMergeProgramSeconds)
+    # NEVER A .cmd OR .bat: Windows runs one through cmd, which reads the argument line again with its
+    # own rules (& | < > ^ %), so a reason typed for the ledger could become a command. Name the program.
+    if (Test-HordeMergeShellScript -Program $Program) { return [pscustomobject]@{ code = -1; out = ""; err = ($Program + " is a .cmd or .bat, which cmd would run and re-read; name the program itself") } }
     $file = $Program
     $words = @($Arguments)
     if ($Program -match '\.ps1\z') { $file = Get-HordeMergeShell; $words = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $Program) + $words }
@@ -451,14 +490,14 @@ function New-HordeMergeTools {
     param([Parameter(Mandatory = $true)]$Values, [Parameter(Mandatory = $true)][scriptblock]$Tell, [Parameter(Mandatory = $true)][scriptblock]$Mail)
     $gh = "" + $Values.gh; $git = "" + $Values.git; $shell = "" + $Values.guardShell
     $ledgerProgram = "" + $Values.ledgerProgram; $ledgerScript = "" + $Values.ledgerScript
-    # gh and the ledger run in the work folder, never in the caller's: gh reads the git checkout it is
+    # gh, git and the ledger run in the work folder, never in the caller's: gh reads the git checkout it is
     # started in, and nothing here may act on the caller's tree.
     $place = Get-HordeMergeWorkFolder -Values $Values
     $runProgram = ${function:Invoke-HordeMergeProgram}
     $formatLine = ${function:Format-HordeMergeLedgerLine}
     return @{
         Gh = { param([string[]]$Arguments) return (& $runProgram -Program $gh -Arguments $Arguments -Directory $place) }.GetNewClosure()
-        Git = { param([string[]]$Arguments) return (& $runProgram -Program $git -Arguments $Arguments) }.GetNewClosure()
+        Git = { param([string[]]$Arguments) return (& $runProgram -Program $git -Arguments $Arguments -Directory $place) }.GetNewClosure()
         Guard = { param([string]$Checkout, [string]$Suite) return (& $runProgram -Program $shell -Arguments @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", [System.IO.Path]::Combine($Checkout, $Suite)) -Directory $Checkout) }.GetNewClosure()
         Ledger = { param([string[]]$Arguments) return (& $runProgram -Program $ledgerProgram -Arguments (@($ledgerScript) + @($Arguments)) -Directory $place) }.GetNewClosure()
         LedgerLine = { param([string[]]$Arguments) return (& $formatLine -Program $ledgerProgram -Script $ledgerScript -Arguments $Arguments) }.GetNewClosure()
@@ -512,11 +551,12 @@ function Send-HordeMergeTell {
 }
 
 function Get-HordeMergeLock {
-    # A named mutex per work folder: two merges on one machine share the cache, and a second waits for
+    # A machine-wide named mutex (Global\, so merges from two sign-in sessions also take turns) per work
+    # folder: two merges on one machine share the cache, and a second waits for
     # the first rather than fetching into it at the same time. Merges in order is the batch rule too
     # (CONTRIBUTING 15 rule 6).
     param([Parameter(Mandatory = $true)][string]$WorkFolder)
     $sha = [System.Security.Cryptography.SHA1]::Create()
     try { $hash = -join ($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($WorkFolder.ToLowerInvariant())) | Select-Object -First 8 | ForEach-Object { $_.ToString("x2") }) } finally { $sha.Dispose() }
-    return (New-Object System.Threading.Mutex($false, ("Local\HordeMerge-" + $hash)))
+    return (New-Object System.Threading.Mutex($false, ("Global\HordeMerge-" + $hash)))
 }

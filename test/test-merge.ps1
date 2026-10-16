@@ -45,6 +45,7 @@ function G {
 #   5 from C1, guard.txt specs-no-banner        test-mutation-specs exits 0 with no banner: NOT RUN
 #   6 from C0, changes conflict.txt             conflicts with main
 #   7 from C1, guard.txt hostnames-red          test-host-names red
+#   8 from C1, deletes test-mutation-specs.ps1  a guard missing from the tree
 $hostGuard = @'
 $flag = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "..\guard.txt"))
 $both = (Test-Path (Join-Path $PSScriptRoot "..\main-flag.txt")) -and (Test-Path (Join-Path $PSScriptRoot "..\pr-flag.txt"))
@@ -78,7 +79,8 @@ $c0 = G $seed rev-parse HEAD
 function New-SeedCommit {
     param([string]$From, [hashtable]$Files, [string]$Message)
     $null = G $seed checkout -q --detach $From
-    foreach ($k in $Files.Keys) { [System.IO.File]::WriteAllText((Join-Path $seed $k), $Files[$k], $utf8) }
+    # A value of $null deletes the file.
+    foreach ($k in $Files.Keys) { if ($null -eq $Files[$k]) { [System.IO.File]::Delete((Join-Path $seed $k)) } else { [System.IO.File]::WriteAllText((Join-Path $seed $k), $Files[$k], $utf8) } }
     $null = G $seed add -A
     $null = G $seed commit -q -m $Message
     return (G $seed rev-parse HEAD)
@@ -92,6 +94,7 @@ $heads = [ordered]@{
     "5" = (New-SeedCommit -From $c1 -Files @{ "guard.txt" = "specs-no-banner" } -Message "pr 5")
     "6" = (New-SeedCommit -From $c0 -Files @{ "conflict.txt" = "c" } -Message "pr 6")
     "7" = (New-SeedCommit -From $c1 -Files @{ "guard.txt" = "hostnames-red" } -Message "pr 7")
+    "8" = (New-SeedCommit -From $c1 -Files @{ "test\test-mutation-specs.ps1" = $null } -Message "pr 8")
 }
 $null = G $work init --bare -q $template
 $push = @(($c1 + ":refs/heads/main")) + @($heads.Keys | ForEach-Object { $heads[$_] + ":refs/pull/" + $_ + "/head" })
@@ -110,7 +113,7 @@ function New-Case {
     Copy-Item -LiteralPath $template -Destination $origin -Recurse
     $prs = [ordered]@{}
     foreach ($n in $heads.Keys) {
-        $p = [ordered]@{ state = "OPEN"; isDraft = $false; mergeable = "MERGEABLE"; reviewDecision = ""; title = ("PR " + $n); mergeCommit = $null; mergeableQueue = @(); headRefOid = ""; failMerge = $false }
+        $p = [ordered]@{ state = "OPEN"; isDraft = $false; mergeable = "MERGEABLE"; reviewDecision = ""; title = ("PR " + $n); mergeCommit = $null; mergeableQueue = @(); headRefOid = ""; failMerge = $false; moveMainFirst = $false; hideMerged = $false }
         if ($Pr.ContainsKey($n)) { foreach ($k in $Pr[$n].Keys) { $p[$k] = $Pr[$n][$k] } }
         $prs[$n] = $p
     }
@@ -118,7 +121,9 @@ function New-Case {
     Write-MergeStandInState -Path $gh -State ([ordered]@{ origin = $origin; prs = $prs; calls = @() })
     $ledger = Join-Path $dir "ledger-state.json"
     Write-MergeStandInState -Path $ledger -State ([ordered]@{ tasks = $Tasks; failMerged = [bool]$LedgerFails; calls = @() })
-    return [pscustomobject]@{ dir = $dir; origin = $origin; gh = $gh; ledger = $ledger; work = (Join-Path $dir "work") }
+    $caseWork = Join-Path $dir "work"
+    [void][System.IO.Directory]::CreateDirectory($caseWork)
+    return [pscustomobject]@{ dir = $dir; origin = $origin; gh = $gh; ledger = $ledger; work = $caseWork }
 }
 
 function Get-GhCalls { param($Case) return @((Read-MergeStandInState -Path $Case.gh).calls) }
@@ -128,7 +133,8 @@ function Test-MergeCall { param($Case) return [bool](@(Get-GhCalls $Case | Where
 
 # PART 1'S TOOLS. Everything a tool sees and does is kept in $script: tables the checks read.
 function New-SuiteTools {
-    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null)
+    param($Case, [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "")
+    $script:gitFails = $GitFails
     $script:said = New-Object System.Collections.ArrayList
     $script:told = New-Object System.Collections.ArrayList
     $script:mailed = New-Object System.Collections.ArrayList
@@ -138,10 +144,12 @@ function New-SuiteTools {
     $script:tellFails = [bool]$TellFails
     $script:mailFails = [bool]$MailFails
     $script:beforeGuard = $BeforeGuard
-    $real = New-HordeMergeTools -Values ([pscustomobject]@{ gh = "gh"; git = "git"; guardShell = "powershell.exe"; ledgerProgram = "python"; ledgerScript = "C:\fleet\task.py"; workFolder = "" }) -Tell { } -Mail { }
+    $real = New-HordeMergeTools -Values ([pscustomobject]@{ gh = "gh"; git = "git"; guardShell = "powershell.exe"; ledgerProgram = "python"; ledgerScript = "C:\fleet\task.py"; workFolder = $Case.work }) -Tell { } -Mail { }
+    $script:realGit = $real["Git"]
     return @{
         Gh = { param([string[]]$Arguments) return (Invoke-MergeStandInGh -StatePath $script:toolCase.gh -Arguments $Arguments) }
-        Git = $real["Git"]
+        # The real git, but a call naming -GitFails as one of its words fails as git would.
+        Git = { param([string[]]$Arguments) if ($script:gitFails -ne "" -and @($Arguments) -ccontains $script:gitFails) { return [pscustomobject]@{ code = 128; out = ""; err = ("fatal: stand-in failure of " + $script:gitFails) } }; return (& $script:realGit $Arguments) }
         Guard = {
             param([string]$Checkout, [string]$Suite)
             if ($null -ne $script:beforeGuard) { & $script:beforeGuard }
@@ -160,11 +168,14 @@ function New-SuiteTools {
 
 function Invoke-Case {
     # Invoke-HordeMerge on one case: the answer.
-    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null)
+    param($Case, [string]$Pr = "YedPool/horde#1", [string]$Task = "T-0247", [string]$State = "done", [string]$By = "F", [string]$On = "", [string]$Reason = "", [switch]$TellFails, [switch]$MailFails, [scriptblock]$BeforeGuard = $null, [string]$GitFails = "")
     $req = Test-HordeMergeRequest -Pr $Pr -Task $Task -State $State -By $By -On $On -Reason $Reason
     if (-not $req.ok) { throw ("the suite built a bad request: " + $req.why) }
-    $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard
-    return (Invoke-HordeMerge -Request $req -Tools $tools -WorkFolder $Case.work)
+    $tools = New-SuiteTools -Case $Case -TellFails:$TellFails -MailFails:$MailFails -BeforeGuard $BeforeGuard -GitFails $GitFails
+    # A throw is an answer of its own, so a mutant that makes the command crash fails a check by name
+    # (tools\Mutate.ps1 counts only a failed check as caught).
+    try { return (Invoke-HordeMerge -Request $req -Tools $tools -WorkFolder $Case.work) }
+    catch { return [pscustomobject]@{ outcome = "threw"; why = $_.Exception.Message; mergeSha = ""; problems = @() } }
 }
 
 function Said { param([string]$Like) return [bool](@($script:said | Where-Object { $_ -clike $Like }).Count -gt 0) }
@@ -196,7 +207,17 @@ Check ($line -ceq "& 'python' 'C:\it''s\task.py' 'merged' 'T-0247' '--pr' 'YedPo
 $args3 = Get-HordeMergeLedgerArguments -Request (Test-HordeMergeRequest -Pr "o/r#1" -Task "T-0001" -State "waiting" -By "F" -On "founder")
 Check (($args3 -join " ") -ceq "merged T-0001 --pr o/r#1 --by F --state waiting --on founder") "the ledger's merged event carries the task, the PR, the lane, the state and who it waits on"
 $args4 = Get-HordeMergeLedgerArguments -Request (Test-HordeMergeRequest -Pr "o/r#1" -Task "T-0001" -State "progress" -By "F" -Reason "docs left")
-Check (($args4 -join " ") -ceq "merged T-0001 --pr o/r#1 --by F --state progress --reason docs left" -and $args4.Count -eq 10) "progress carries its reason as one argument"
+Check (($args4 -join "|") -ceq "merged|T-0001|--pr|o/r#1|--by|F|--state|progress|--reason=docs left") "progress carries its reason as one --reason=<text> word"
+$args5 = Get-HordeMergeLedgerArguments -Request (Test-HordeMergeRequest -Pr "o/r#1" -Task "T-0001" -State "progress" -By "F" -Reason "-docs left")
+Check ($args5[-1] -ceq "--reason=-docs left") "a reason starting with - stays the value of --reason, which argparse would read as a flag on its own"
+Check ((Test-HordeMergeShellScript -Program "C:\x\task.cmd") -and (Test-HordeMergeShellScript -Program "run.BAT") -and (Test-HordeMergeShellScript -Program '"C:\a b\x.cmd"') -and -not (Test-HordeMergeShellScript -Program "python") -and -not (Test-HordeMergeShellScript -Program "C:\x\cmd.exe")) "a .cmd or .bat program is told apart from a program"
+$viaCmd = Invoke-HordeMergeProgram -Program (Join-Path $work "never.cmd") -Arguments @("x")
+Check ($viaCmd.code -eq -1 -and $viaCmd.err -clike "*is a .cmd or .bat*") "a .cmd or .bat is never started: cmd would re-read its arguments"
+$tempRoot = [System.IO.Path]::GetTempPath()
+Check ((Test-HordeMergeHomeIsATests -HordeHome (Join-Path $tempRoot "h1")) -eq $true) "a Horde home under temp is a test's"
+Check ((Test-HordeMergeHomeIsATests -HordeHome "C:\fleet\home" -TempRoot "C:\tmp-root") -eq $false) "a Horde home outside temp is not a test's"
+Check ((Test-HordeMergeHomeIsATests -HordeHome "C:\tmp-rootx\home" -TempRoot "C:\tmp-root") -eq $false) "a folder that only starts with temp's name is not under it"
+Check ((Test-HordeMergeHomeIsATests -HordeHome ("C:\bad" + [char]0 + "path") -TempRoot "C:\tmp-root") -eq $true) "a home that cannot be resolved is taken as a test's: telling nobody is the safe mistake"
 Check ((Read-HordeMergeGuardResult -Run ([pscustomobject]@{ code = 0; out = "  [PASS] x`n==== all good ===="; err = "" })).ok -eq $true) "exit 0 with a closing banner is green"
 Check ((Read-HordeMergeGuardResult -Run ([pscustomobject]@{ code = 0; out = "  [PASS] x"; err = "" })).ok -eq $false) "exit 0 with no closing banner is NOT RUN, never green"
 Check ((Read-HordeMergeGuardResult -Run ([pscustomobject]@{ code = 1; out = "==== all good ===="; err = "" })).ok -eq $false) "a banner with a non-zero exit is not green"
@@ -262,6 +283,11 @@ Check ($r.outcome -ceq "refused" -and $r.why -clike "*does not merge cleanly wit
 
 Write-Host "== merged: the head contains main"
 $c = New-Case
+# A run killed before its finally left a scratch folder behind; it must not outlive the next run.
+$leftover = Join-Path $c.work "runs\7-0ld0ld\deep"
+[void][System.IO.Directory]::CreateDirectory($leftover)
+[System.IO.File]::WriteAllText((Join-Path $leftover "f.txt"), "x", $utf8)
+[System.IO.File]::SetAttributes((Join-Path $leftover "f.txt"), [System.IO.FileAttributes]::ReadOnly)
 $r = Invoke-Case -Case $c
 $main = Get-Main $c
 $parents = @((G $c.origin rev-list --parents -n 1 $main) -split " ")
@@ -272,7 +298,9 @@ Check ($mergeCalls.Count -eq 1 -and $mergeCalls[0] -ceq ("pr merge 1 --repo YedP
 Check (@($script:guardRuns).Count -eq 2 -and $script:guardRuns[0].suite -ceq "test\test-host-names.ps1" -and $script:guardRuns[1].suite -ceq "test\test-mutation-specs.ps1") "both guards ran"
 Check ($script:guardRuns[0].commit -ceq $heads["1"] -and $script:guardRuns[0].originMain -ceq $c1) "they ran on the head, in a checkout whose origin/main is main"
 Check ((Said "the PR head * already contains main *: the head is what is checked")) "it says the head already contains main"
-Check (-not [System.IO.Directory]::Exists($script:guardRuns[0].checkout) -and @([System.IO.Directory]::GetDirectories((Join-Path $c.work "runs"))).Count -eq 0) "the scratch checkout is removed afterwards"
+Check (-not [System.IO.Directory]::Exists($script:guardRuns[0].checkout) -and @([System.IO.Directory]::GetDirectories((Join-Path $c.work "runs"))).Count -eq 0) "the scratch checkout, and a past run's left-over folder, are removed"
+Check ((G (Join-Path $c.work "repos\YedPool\horde.git") for-each-ref refs/horde-merge) -ceq "") "the PR's ref is dropped from the cache once checked"
+Check (@(Get-GhCalls $c | Where-Object { $_ -ceq ("api repos/YedPool/horde/commits/" + $main + " --jq .parents[].sha") }).Count -eq 1) "where the merge landed is read back from GitHub"
 $ledgerCalls = @(Get-LedgerCalls $c)
 Check ($ledgerCalls.Count -eq 2 -and $ledgerCalls[0] -ceq "show T-0247" -and $ledgerCalls[1] -ceq "merged T-0247 --pr YedPool/horde#1 --by F --state done") ("the ledger is read first and its merged event written after: " + ($ledgerCalls -join " | "))
 Check (@($script:told).Count -eq 1 -and $script:told[0] -clike ("HORDE MERGE: F merged YedPool/horde#1 as " + $main + ".*Task T-0247 is now done.*Guards green on " + $c1.Substring(0, 8) + " + " + $heads["1"].Substring(0, 8) + ".")) ("the warchief is told the PR, the merge sha, the task and its state: " + (@($script:told) -join " "))
@@ -340,7 +368,7 @@ $c = New-Case -LedgerFails
 $r = Invoke-Case -Case $c -State "progress" -Reason "the docs are left"
 Check ($r.outcome -ceq "merged-unfinished" -and (Get-Main $c) -ceq $r.mergeSha -and $r.why -clike "*the ledger event was not written*") ("a ledger failure after the merge says the merge happened and the ledger did not: " + $r.why)
 Check ((Said "THE MERGE HAPPENED, BUT THE LEDGER WAS NOT WRITTEN: stand-in ledger: the ledger file is locked")) "it says so loudly, with the ledger's words"
-Check ((Said "run this by hand: & 'python' 'C:\fleet\task.py' 'merged' 'T-0247' '--pr' 'YedPool/horde#1' '--by' 'F' '--state' 'progress' '--reason' 'the docs are left'")) "and prints the exact command to run"
+Check ((Said "run this by hand: & 'python' 'C:\fleet\task.py' 'merged' 'T-0247' '--pr' 'YedPool/horde#1' '--by' 'F' '--state' 'progress' '--reason=the docs are left'")) "and prints the exact command to run"
 Check (@($script:told).Count -eq 1 -and @($script:mailed).Count -eq 1) "the warchief and the analyst are still told"
 
 $c = New-Case
@@ -354,11 +382,39 @@ Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "*analyst was not 
 $c = New-Case -Pr @{ "1" = @{ failMerge = $true } }
 $r = Invoke-Case -Case $c
 Check ($r.outcome -ceq "refused" -and $r.why -clike "gh did not merge YedPool/horde#1: stand-in gh: the merge was refused" -and @(Get-LedgerCalls $c).Count -eq 1 -and @($script:told).Count -eq 0) ("gh refusing the merge: refused, no ledger event, nobody told: " + $r.why)
+Check (@($script:waited).Count -eq 0 -and @(Get-GhCalls $c | Where-Object { $_ -clike "pr view 1 --repo YedPool/horde --json state,mergeCommit" }).Count -eq 1) "  a refused merge is looked at once, not waited on"
+
+Write-Host "== main moves after the last check, before the merge"
+$c = New-Case -Pr @{ "1" = @{ moveMainFirst = $true } }
+$r = Invoke-Case -Case $c
+$landedOn = @((G $c.origin rev-list --parents -n 1 (Get-Main $c)) -split " ")[1]
+Check ($r.outcome -ceq "merged-unfinished" -and $landedOn -cne $c1 -and $r.why -clike ("*the merge landed on main " + $landedOn.Substring(0, 8) + ", which moved after the check; run the guards on main now*")) ("a merge that landed on a main the guards never saw is merged-unfinished, and says so: " + $r.why)
+Check ((Said "THE MERGE IS ON A TREE THE GUARDS DID NOT CHECK: *")) "  it is said loudly"
+Check (@($script:told).Count -eq 1 -and $script:told[0] -clike "*NOT CHECKED: the merge landed on main*" -and $script:told[0] -cnotlike "*Guards green on*" -and $script:mailed[0] -ceq $script:told[0]) "  and the warchief and the analyst are told it was NOT checked, never that the guards were green"
+Check (@(Get-LedgerCalls $c).Count -eq 2) "  and the ledger still records the merge, which happened"
+
+Write-Host "== refused: what git or GitHub cannot say"
+$c = New-Case
+$r = Invoke-Case -Case $c -GitFails "ls-remote"
+Check ($r.outcome -ceq "refused" -and $r.why -clike "the base could not be read again after the guards: fatal: stand-in failure*" -and -not (Test-MergeCall $c)) ("a base that cannot be read again after the guards is refused: " + $r.why)
+$c = New-Case
+$r = Invoke-Case -Case $c -GitFails "--is-ancestor"
+Check ($r.outcome -ceq "refused" -and $r.why -clike "asking git whether the head contains the base failed: fatal: stand-in failure*" -and @($script:guardRuns).Count -eq 0 -and -not (Test-MergeCall $c)) ("git failing to say whether the head contains main is refused, nothing checked: " + $r.why)
+$c = New-Case -Pr @{ "1" = @{ headRefOid = "abc" } }
+$r = Invoke-Case -Case $c
+Check ($r.outcome -ceq "refused" -and $r.why -ceq "gh gave no head commit for YedPool/horde#1" -and @(Get-GhCalls $c | Where-Object { $_ -clike "repo view *" }).Count -eq 0) ("a head that is not a commit sha is refused before anything is fetched: " + $r.why)
+$c = New-Case
+$r = Invoke-Case -Case $c -Pr "YedPool/horde#8"
+Check ($r.outcome -ceq "refused" -and $r.why -ceq "the guard test\test-mutation-specs.ps1 is not in the checked tree, so nothing can say it is green" -and -not (Test-MergeCall $c)) ("a tree without one of the guards is refused: " + $r.why)
+$c = New-Case -Pr @{ "1" = @{ hideMerged = $true } }
+$r = Invoke-Case -Case $c
+Check ($r.outcome -ceq "merged-unfinished" -and $r.why -clike "gh said it merged YedPool/horde#1, but GitHub does not show it MERGED*ledger was NOT written*" -and @(Get-LedgerCalls $c).Count -eq 1 -and @($script:told).Count -eq 0) ("gh said merged, GitHub does not show it: nothing recorded, said: " + $r.why)
+Check (@($script:waited).Count -eq 3 -and @(Get-GhCalls $c | Where-Object { $_ -clike "pr view 1 --repo YedPool/horde --json state,mergeCommit" }).Count -eq 4) "  GitHub is asked 4 times, 3 waits apart, before that is said"
 
 # PART 2: the real command, as its own process.
 function New-CliCase {
     # A case, plus a Horde home in temp whose merge settings point gh and the ledger at the stand-ins.
-    param([hashtable]$Pr = @{}, [switch]$NoLedgerScript)
+    param([hashtable]$Pr = @{}, [switch]$NoLedgerScript, [string]$LedgerProgram = "")
     $c = New-Case -Pr $Pr
     $fixture = Join-Path $root "test\fixtures\merge\StandIns.ps1"
     $ghScript = Join-Path $c.dir "gh.ps1"
@@ -372,6 +428,7 @@ function New-CliCase {
     [void][System.IO.Directory]::CreateDirectory((Join-Path $hordeHome "settings"))
     $values = [ordered]@{ gh = $ghScript; ledgerProgram = $ledgerScript; workFolder = $c.work }
     if (-not $NoLedgerScript) { $values["ledgerScript"] = $taskPy }
+    if ($LedgerProgram -ne "") { $values["ledgerProgram"] = $LedgerProgram }
     [System.IO.File]::WriteAllText((Join-Path $hordeHome "settings\merge.json"), (@{ schemaVersion = 1; settings = $values } | ConvertTo-Json -Depth 5), $utf8)
     Add-Member -InputObject $c -NotePropertyName home -NotePropertyValue $hordeHome
     return $c
@@ -413,6 +470,26 @@ foreach ($shell in @("powershell.exe", "pwsh.exe")) {
     Check ($run.code -eq 2 -and $run.out -clike "*-State waiting needs -On*") "waiting without -On is a usage error, exit 2"
     $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done") -Env @{ HORDE_HOME = $c.home }
     Check ($run.code -eq 2 -and $run.out -clike "*merge needs -By*") "no -By is a usage error that names it, exit 2"
+
+    $c = New-CliCase -LedgerProgram "C:\fleet\task.cmd"
+    $run = Invoke-HordeCliProcess -Root $root -Shell $shell -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env @{ HORDE_HOME = $c.home }
+    Check ($run.code -eq 1 -and $run.out -clike "*the merge setting ledgerProgram names a .cmd or .bat*Nothing was merged*" -and @(Get-GhCalls $c).Count -eq 0) "a .cmd ledger program in the settings: exit 1 before GitHub is asked anything"
+
+    # TWO MERGES TAKE TURNS: this suite holds the machine's merge lock for the case's work folder; the
+    # command must say it waits, merge nothing while it waits, and go on once the lock is let go.
+    $c = New-CliCase
+    $held = Get-HordeMergeLock -WorkFolder $c.work
+    $holding = $held.WaitOne(0)
+    $live = Start-HordeCliRun -Root $root -HordeArgs @("merge", "YedPool/horde#1", "-Task", "T-0247", "-State", "done", "-By", "F") -Env @{ HORDE_HOME = $c.home }
+    try {
+        $waitLine = Wait-HordeCliLine -Run $live -Like "*another horde merge is running on this machine; waiting*" -Seconds 90
+        Start-Sleep -Seconds 3
+        $mergedWhileHeld = Test-MergeCall $c
+        $ledgerWhileHeld = @(Get-LedgerCalls $c).Count
+    } finally { if ($holding) { $held.ReleaseMutex() }; $held.Dispose() }
+    $done = Complete-HordeCliRun -Run $live -Seconds 180
+    Check ($holding -and $null -ne $waitLine -and -not $mergedWhileHeld -and $ledgerWhileHeld -eq 0) "a second merge waits for the lock, says so, and touches nothing while it waits"
+    Check ($done.out -clike ("*MERGED YedPool/horde#1 as " + (Get-Main $c) + "*")) "  and merges once the first lets go"
 }
 
 try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop } catch { Write-Host ("  (the suite's temp folder stays: " + $work + ")") }
