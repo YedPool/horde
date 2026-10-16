@@ -23,6 +23,7 @@ export default {
   roots: (o) => [o.projects],
   listFiles: (root) => fs.readdirSync(root).filter((n) => n.endsWith('.log')).map((n) => path.join(root, n)),
   consume({ path: file, lines }) {
+    if (file.includes('poison')) throw new Error('cannot be bound');
     const rows = [];
     for (const l of lines) {
       let o; try { o = JSON.parse(l); } catch { continue; }
@@ -31,7 +32,11 @@ export default {
     }
     return { tokens_requests: rows };
   },
-  inspectTail: () => null,
+  inspectTail({ path: file }) {
+    if (!file.includes('stuck')) return null;
+    return { session_id: 'stuck', agent_id: null, orc: 'T', last_is_hit: true, last_at: Date.now() - 600000,
+      hits: [{ hit_uuid: 'h1', at: Date.now() - 600000, limit_type: 'five_hour', resets_at: null, resumed_at: null }] };
+  },
 };
 `;
 
@@ -158,5 +163,26 @@ test('an alert is recorded once: a second markAlerted changes nothing and says s
   s.apply({ tokens_limits: [{ at: 1, session_id: 's', orc: 'T', hit_uuid: 'h1', limit_type: 'five_hour', resets_at: null }] }, null);
   assert.equal(s.limitByHit('h1').alerted_at, 1000);
   s.close();
+  r.done();
+});
+
+test('command line: a file that cannot be read is named, the rest is collected, and the exit is 1', () => {
+  const r = rig();
+  fs.writeFileSync(path.join(r.projects, 'poison.log'), line('p', Date.now()));
+  fs.writeFileSync(path.join(r.projects, 'good.log'), line('g', Date.now() - 5000));
+  const c = r.cli('collect');
+  assert.equal(c.status, 1);
+  assert.match(c.stdout, /tokens_requests=1 .* skipped=0 errors=1/);
+  assert.match(c.stderr, /could not read .*poison.log: cannot be bound/);
+  r.done();
+});
+
+test('command line: a watch whose message could not be delivered exits 1 and says so', () => {
+  const r = rig();
+  fs.writeFileSync(path.join(r.projects, 'stuck.log'), line('s', Date.now()));
+  const w = r.cli('watch-limits'); // no --horde-script: there is no way to tell anyone
+  assert.equal(w.status, 1);
+  assert.match(w.stdout, /failed=1/);
+  assert.match(w.stderr, /could not tell the master session/);
   r.done();
 });

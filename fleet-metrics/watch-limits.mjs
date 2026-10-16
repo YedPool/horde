@@ -11,6 +11,9 @@
 // fleet's mail (the `sender`, by default `horde meter tell`, which uses the Horde messenger port).
 // A message typed into an input box could land in the middle of someone's sentence; mail cannot.
 //
+// DELIVERY IS AT LEAST ONCE, not exactly once. alerted_at is set after the message was taken, so a crash
+// between the send and the mark makes the next run send that alert again: one repeated message, which
+// is accepted over the opposite failure, a stop nobody was told about.
 // ONE ALERT PER HIT. The hit's row carries alerted_at; it is set only after the message was taken,
 // so a failed send is tried again two minutes later and a taken one never repeats. A hit is reported
 // only after it has stood 5 minutes, so a limit that clears at once (a brief rejection) says nothing.
@@ -95,39 +98,42 @@ export async function runWatch({ store, opts = {}, readers = null, now = Date.no
   const list = readers || (await openReaders(opts));
   const shared = { ...ctx, opts };
   const firstRun = store.getState(FIRST_RUN_KEY) == null;
-  const out = { scanned: 0, alerts: 0, would: [], failed: 0, resumed: 0, silent: 0, messages: [], ms: 0, firstRun };
+  const out = { errors: 0, scanned: 0, alerts: 0, would: [], failed: 0, resumed: 0, silent: 0, messages: [], ms: 0, firstRun };
   const pending = [];
   for (const reader of list) {
     for (const root of reader.roots(opts)) {
       for (const file of reader.listFiles(root)) {
-        let st;
-        try { st = fs.statSync(file); } catch { continue; }
-        if (now - st.mtimeMs > RECENT_MS || st.size === 0) continue;
-        out.scanned++;
-        const tail = reader.inspectTail({ path: file, ...readTail(file, st.size), store, ctx: shared });
-        if (!tail || tail.hits.length === 0) continue;
-        for (const hit of tail.hits) {
-          const row = {
-            at: hit.at, session_id: tail.session_id, agent_id: tail.agent_id, orc: tail.orc, hit_uuid: hit.hit_uuid,
-            limit_type: hit.limit_type, resets_at: hit.resets_at,
-            stuck_until: hit.resumed_at, stuck_ms: hit.resumed_at == null ? null : hit.resumed_at - hit.at,
-          };
-          const before = store.limitByHit(hit.hit_uuid);
-          if (hit.resumed_at != null && before && before.stuck_until == null) out.resumed++;
-          if (!dryRun) store.apply({ tokens_limits: [row] }, null);
-        }
-        const last = tail.hits[tail.hits.length - 1];
-        if (!tail.last_is_hit || last.resumed_at != null) continue;
-        const age = now - last.at;
-        if (age <= ALERT_AFTER_MS || age >= STALE_HIT_MS) continue;
-        const existing = store.limitByHit(last.hit_uuid);
-        if (existing && existing.alerted_at != null) continue;
-        if (firstRun && age > BASELINE_MS) {
-          if (!dryRun) store.markAlerted(last.hit_uuid, now, true);
-          out.silent++;
-          continue;
-        }
-        pending.push({ orc: tail.orc, session_id: tail.session_id, agent_id: tail.agent_id, hit: last });
+        // One unreadable transcript must not silence the watch for every other session.
+        try {
+          let st;
+          try { st = fs.statSync(file); } catch { continue; }
+          if (now - st.mtimeMs > RECENT_MS || st.size === 0) continue;
+          out.scanned++;
+          const tail = reader.inspectTail({ path: file, ...readTail(file, st.size), store, ctx: shared });
+          if (!tail || tail.hits.length === 0) continue;
+          for (const hit of tail.hits) {
+            const row = {
+              at: hit.at, session_id: tail.session_id, agent_id: tail.agent_id, orc: tail.orc, hit_uuid: hit.hit_uuid,
+              limit_type: hit.limit_type, resets_at: hit.resets_at,
+              stuck_until: hit.resumed_at, stuck_ms: hit.resumed_at == null ? null : hit.resumed_at - hit.at,
+            };
+            const before = store.limitByHit(hit.hit_uuid);
+            if (hit.resumed_at != null && before && before.stuck_until == null) out.resumed++;
+            if (!dryRun) store.apply({ tokens_limits: [row] }, null);
+          }
+          const last = tail.hits[tail.hits.length - 1];
+          if (!tail.last_is_hit || last.resumed_at != null) continue;
+          const age = now - last.at;
+          if (age <= ALERT_AFTER_MS || age >= STALE_HIT_MS) continue;
+          const existing = store.limitByHit(last.hit_uuid);
+          if (existing && existing.alerted_at != null) continue;
+          if (firstRun && age > BASELINE_MS) {
+            if (!dryRun) store.markAlerted(last.hit_uuid, now, true);
+            out.silent++;
+            continue;
+          }
+          pending.push({ orc: tail.orc, session_id: tail.session_id, agent_id: tail.agent_id, hit: last });
+        } catch { out.errors++; }
       }
     }
   }
@@ -150,5 +156,5 @@ export async function runWatch({ store, opts = {}, readers = null, now = Date.no
 
 export function watchSummary(r, dryRun) {
   return 'watch-limits: scanned=' + r.scanned + (dryRun ? ' would_send=' + r.would.length : ' alerts=' + r.alerts + ' messages=' + r.messages.length) +
-    ' silent=' + r.silent + ' resumed=' + r.resumed + ' failed=' + r.failed + ' ms=' + r.ms;
+    ' silent=' + r.silent + ' resumed=' + r.resumed + ' failed=' + r.failed + ' errors=' + r.errors + ' ms=' + r.ms;
 }

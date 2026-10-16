@@ -95,24 +95,37 @@ function limitFields(o) {
 const routeOf = (d) => { const m = /^\[r:([^\]\s]+)\]/.exec(d || ''); return m ? m[1] : null; };
 const clip = (d) => (d == null ? null : String(d).replace(/\s+/g, ' ').trim().slice(0, 120));
 
-function usageRow(o, who, turnUuid, at) {
+// A transcript is data from outside: a count that is missing, negative, fractional or not a number is taken
+// as 0 (and the record counted as skipped), because one such value used to be enough to make the store
+// throw and stop the collection of every file after it.
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+const text = (v) => (typeof v === 'string' && v !== '' ? v : null);
+
+function usageRow(o, who, turnUuid, at, requestId) {
   const m = o.message;
   const u = m.usage;
-  const cc = u.cache_creation || {};
-  let w5 = cc.ephemeral_5m_input_tokens;
-  let w1 = cc.ephemeral_1h_input_tokens;
-  if (w5 == null && w1 == null) { w5 = u.cache_creation_input_tokens || 0; w1 = 0; }
-  w5 = w5 || 0; w1 = w1 || 0;
-  const model = m.model || o.requestedModel || '';
+  const cc = u.cache_creation && typeof u.cache_creation === 'object' ? u.cache_creation : {};
+  let w5 = count(cc.ephemeral_5m_input_tokens);
+  const w1 = count(cc.ephemeral_1h_input_tokens);
+  // The harness reports the total written to the cache, and (newer builds) how much of it was 5-minute
+  // and 1-hour. When the parts sum to less than the total, the remainder is the default kind, 5 minutes;
+  // with no parts at all that is the whole total.
+  const total = count(u.cache_creation_input_tokens);
+  if (w5 + w1 < total) w5 += total - (w5 + w1);
+  const model = text(m.model) || text(o.requestedModel) || '';
   const fam = familyOf(model);
   const n = {
-    input: u.input_tokens || 0, output: u.output_tokens || 0, cache_read: u.cache_read_input_tokens || 0,
+    input: count(u.input_tokens), output: count(u.output_tokens), cache_read: count(u.cache_read_input_tokens),
     cache_write_5m: w5, cache_write_1h: w1,
   };
+  const clean = [u.input_tokens, u.output_tokens, u.cache_read_input_tokens].every((v) => v === undefined || v === null || count(v) === v);
   return {
-    at, request_id: o.requestId || m.id || o.uuid, session_id: who.sessionId, agent_id: who.agentId, turn_uuid: turnUuid,
-    orc: who.orc, rank: who.rank, model: model || 'unknown', family: fam, ...n,
-    context_tokens: n.input + n.cache_read + w5 + w1, cost_usd: costOf(fam, n),
+    clean,
+    row: {
+      at, request_id: requestId, session_id: who.sessionId, agent_id: who.agentId, turn_uuid: turnUuid,
+      orc: who.orc, rank: who.rank, model: model || 'unknown', family: fam, ...n,
+      context_tokens: n.input + n.cache_read + w5 + w1, cost_usd: costOf(fam, n),
+    },
   };
 }
 
@@ -132,19 +145,24 @@ function consume({ path: file, lines, store, ctx }) {
   let turn = who.kind === 'main' ? store.latestTurnUuid(who.sessionId, null) : null;
   let openHit = store.hasOpenLimit(who.sessionId, who.agentId);
   let firstModel = null;
+  batch.skipped = 0;
 
   for (const line of lines) {
     let o;
     try { o = JSON.parse(line); } catch { continue; }
     if (!o || typeof o !== 'object') continue;
+    // Only these two kinds of record carry anything the meter keeps; the rest are not counted as skipped.
+    if (o.type !== 'assistant' && o.type !== 'user') continue;
     const at = Date.parse(o.timestamp);
-    if (!Number.isFinite(at)) continue;
+    if (!Number.isFinite(at)) { batch.skipped++; continue; }
     const m = o.message && typeof o.message === 'object' ? o.message : {};
 
     if (o.type === 'assistant' || o.type === 'user') {
       if (isLimitHit(o)) {
+        const hitUuid = text(o.uuid);
+        if (!hitUuid) { batch.skipped++; continue; }
         batch.tokens_limits.push({
-          at, session_id: who.sessionId, agent_id: who.agentId, orc: who.orc, hit_uuid: o.uuid, ...limitFields(o),
+          at, session_id: who.sessionId, agent_id: who.agentId, orc: who.orc, hit_uuid: hitUuid, ...limitFields(o),
           stuck_until: null, stuck_ms: null,
         });
         openHit = true;
@@ -156,24 +174,29 @@ function consume({ path: file, lines, store, ctx }) {
 
     if (o.type === 'assistant') {
       for (const c of Array.isArray(m.content) ? m.content : []) {
-        if (c && c.type === 'tool_use' && (c.name === 'Agent' || c.name === 'Task') && c.id) {
-          const inp = c.input || {};
+        if (c && c.type === 'tool_use' && (c.name === 'Agent' || c.name === 'Task')) {
+          if (!text(c.id)) { batch.skipped++; continue; }
+          const inp = c.input && typeof c.input === 'object' ? c.input : {};
           batch.tokens_agents.push({
             at, tool_use_id: c.id, parent_session_id: who.sessionId, agent_id: null, orc: who.orc,
-            agent_type: inp.subagent_type || null, model_asked: inp.model || null, model_used: null,
+            agent_type: text(inp.subagent_type), model_asked: text(inp.model), model_used: null,
             description: clip(inp.description), route_id: routeOf(inp.description),
           });
         }
       }
       if (m.usage && typeof m.usage === 'object' && m.model !== '<synthetic>') {
-        const row = usageRow(o, who, turn, at);
-        if (!firstModel) firstModel = row.model;
-        batch.tokens_requests.push(row);
+        const requestId = text(o.requestId) || text(m.id) || text(o.uuid);
+        if (!requestId) { batch.skipped++; continue; }
+        const made = usageRow(o, who, turn, at, requestId);
+        if (!made.clean) batch.skipped++;
+        if (!firstModel) firstModel = made.row.model;
+        batch.tokens_requests.push(made.row);
       }
     } else if (o.type === 'user' && who.kind === 'main') {
       const content = m.content;
       if (Array.isArray(content) && content.some((c) => c && c.type === 'tool_result')) continue;
-      if (o.isMeta || !o.uuid) continue;
+      if (o.isMeta) continue;
+      if (!text(o.uuid)) { batch.skipped++; continue; }
       turn = o.uuid;
       batch.tokens_turns.push({ at, session_id: who.sessionId, agent_id: null, turn_uuid: o.uuid, trigger: triggerOf(textOf(content)) });
     }
@@ -183,12 +206,12 @@ function consume({ path: file, lines, store, ctx }) {
   if (who.kind === 'sub' && who.meta) {
     try {
       const meta = JSON.parse(fs.readFileSync(who.meta, 'utf8').replace(/^\u{FEFF}/u, ''));
-      if (meta.toolUseId) {
+      if (text(meta.toolUseId)) {
         let born = Date.now();
         try { born = Math.round(fs.statSync(who.meta).birthtimeMs); } catch { /* keep now */ }
         batch.tokens_agents.push({
           at: born, tool_use_id: meta.toolUseId, parent_session_id: who.sessionId, agent_id: who.agentId, orc: who.orc,
-          agent_type: meta.agentType || null, model_asked: null, model_used: meta.model || firstModel,
+          agent_type: text(meta.agentType), model_asked: null, model_used: text(meta.model) || firstModel,
           description: clip(meta.description), route_id: routeOf(meta.description),
         });
       }
@@ -215,6 +238,7 @@ function inspectTail({ path: file, text, partialFirst, ctx }) {
     const at = Date.parse(o.timestamp);
     if (!Number.isFinite(at)) continue;
     if (isLimitHit(o)) {
+      if (typeof o.uuid !== 'string' || o.uuid === '') continue; // (the parameter 'text' is the tail here)
       hits.push({ hit_uuid: o.uuid, at, ...limitFields(o), resumed_at: null });
       lastIsHit = true;
     } else {

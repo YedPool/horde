@@ -235,3 +235,85 @@ test('--max-ms stops cleanly between files, keeps offsets, says partial, and the
   assert.doesNotMatch(summaryLine(second), /partial/);
   r.done();
 });
+
+// ---- bad data from outside, and a file that cannot be read ----
+
+test('a poison newer file does not block an older good file; it is counted, its offset is unchanged', async () => {
+  const r = rig();
+  const good = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  const poison = path.join(r.projects, 'p', 'poison-session.jsonl');
+  fx.writeLines(good, [fx.assistant('g1', BASE, 'req_good')]);
+  fx.writeLines(poison, [fx.assistant('p1', BASE, 'req_poison')]);
+  const older = new Date(Date.now() - 3600000);
+  fs.utimesSync(good, older, older); // the poison file is the NEWER one, so it is tried first
+  const breaking = { ...reader, consume: (a) => { if (a.path.includes('poison')) throw new Error('cannot be bound'); return reader.consume(a); } };
+  const res = await runCollect({ store: r.store, opts: r.opts, readers: [breaking] });
+  assert.equal(res.errors, 1);
+  assert.equal(res.failures[0].file, poison);
+  assert.match(summaryLine(res), / errors=1$/);
+  assert.equal(all(r.store, "SELECT COUNT(*) AS n FROM tokens_requests WHERE request_id = 'req_good'")[0].n, 1);
+  assert.equal(all(r.store, "SELECT COUNT(*) AS n FROM tokens_requests WHERE request_id = 'req_poison'")[0].n, 0);
+  assert.equal(r.store.getOffset(poison), null, 'no offset was recorded for the file that failed');
+  // Once the cause is gone the same file is read in full, from where it stopped.
+  const fixed = await runCollect({ store: r.store, opts: r.opts, readers: [reader] });
+  assert.equal(fixed.errors, 0);
+  assert.equal(all(r.store, "SELECT COUNT(*) AS n FROM tokens_requests WHERE request_id = 'req_poison'")[0].n, 1);
+  r.done();
+});
+
+test('records without a uuid or request id, and counts that are not integers, are skipped or zeroed - never fatal', async () => {
+  const r = rig();
+  const file = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  const noUuidHit = JSON.parse(fx.limitHit('x', BASE + 1000));
+  delete noUuidHit.uuid;
+  const noId = JSON.parse(fx.assistant('x', BASE + 2000, 'x'));
+  delete noId.uuid; delete noId.requestId; delete noId.message.id;
+  const noUuidUser = JSON.parse(fx.user('x', BASE + 3000, 'typed'));
+  delete noUuidUser.uuid;
+  const oddUsage = JSON.parse(fx.assistant('o1', BASE + 4000, 'req_odd'));
+  oddUsage.message.usage = { input_tokens: 'many', output_tokens: 1.5, cache_read_input_tokens: -3, cache_creation_input_tokens: null };
+  fx.writeLines(file, [JSON.stringify(noUuidHit), JSON.stringify(noId), JSON.stringify(noUuidUser), JSON.stringify(oddUsage), fx.assistant('g1', BASE + 5000, 'req_good')]);
+  const res = await r.collect();
+  assert.equal(res.errors, 0);
+  assert.equal(res.skipped, 4);
+  assert.match(summaryLine(res), / skipped=4 errors=0$/);
+  assert.equal(all(r.store, 'SELECT COUNT(*) AS n FROM tokens_limits')[0].n, 0);
+  const odd = all(r.store, "SELECT * FROM tokens_requests WHERE request_id = 'req_odd'")[0];
+  assert.deepEqual([odd.input, odd.output, odd.cache_read, odd.cache_write_5m, odd.cost_usd], [0, 0, 0, 0, 0]);
+  assert.equal(all(r.store, "SELECT COUNT(*) AS n FROM tokens_requests WHERE request_id = 'req_good'")[0].n, 1);
+  // The watch reads the same tail without throwing, too.
+  const t = reader.inspectTail({ path: file, text: fs.readFileSync(file, 'utf8'), partialFirst: false, ctx: { opts: r.opts } });
+  assert.equal(t.hits.length, 0);
+  r.done();
+});
+
+test('a file rewritten in place to the same size is read again from the start', async () => {
+  const r = rig();
+  const file = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  fx.writeLines(file, [fx.assistant('a1', BASE, 'req_AAAA')]);
+  await r.collect();
+  const size = fs.statSync(file).size;
+  fx.writeLines(file, [fx.assistant('a1', BASE, 'req_BBBB')]);
+  assert.equal(fs.statSync(file).size, size, 'the rewrite keeps the size');
+  const again = await r.collect();
+  assert.ok(again.bytes > 0);
+  assert.equal(all(r.store, "SELECT COUNT(*) AS n FROM tokens_requests WHERE request_id = 'req_BBBB'")[0].n, 1);
+  // And an untouched file is still left alone.
+  assert.equal((await r.collect()).bytes, 0);
+  r.done();
+});
+
+test('cache writes: the part not named as 1-hour or 5-minute is taken as 5-minute', async () => {
+  const r = rig();
+  const file = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  const rec = JSON.parse(fx.assistant('a1', BASE, 'req_cc'));
+  rec.message.usage = { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 4000,
+    cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 500 } };
+  fx.writeLines(file, [JSON.stringify(rec)]);
+  await r.collect();
+  const row = all(r.store, "SELECT * FROM tokens_requests WHERE request_id = 'req_cc'")[0];
+  assert.equal(row.cache_write_1h, 500);
+  assert.equal(row.cache_write_5m, 3500); // 1000 named + the 2500 left over
+  assert.equal(row.context_tokens, 10 + 0 + 3500 + 500);
+  r.done();
+});

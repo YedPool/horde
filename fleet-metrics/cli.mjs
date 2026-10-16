@@ -51,12 +51,18 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
   try {
     store = openStore(home.home);
     if (a.verb === 'collect') {
-      out(summaryLine(await runCollect({ store, opts })));
+      const r = await runCollect({ store, opts });
+      out(summaryLine(r));
+      for (const f of r.failures.slice(0, 5)) err('could not read ' + f.file + ': ' + f.message);
+      // A file that could not be read is a failure a scheduler's history should show; the rest was still collected.
+      if (r.errors > 0) return 1;
     } else if (a.verb === 'watch-limits') {
       const r = await runWatch({ store, opts, dryRun: !!a.flags.dryRun, sender: hordeSender(a.flags.hordeScript, env) });
       for (const t of r.would) out('would send: ' + t);
       if (r.lastError) err('could not tell the master session: ' + r.lastError);
       out(watchSummary(r, !!a.flags.dryRun));
+      // A message that could not be delivered is retried on the next run, and the history should say so.
+      if (r.failed > 0) return 1;
     } else {
       const stats = store.tableStats();
       const now = Date.now();

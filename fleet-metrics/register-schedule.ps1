@@ -19,6 +19,17 @@
 # a task that must run when nobody is logged on needs a stored password. The tasks never overlap
 # themselves (IgnoreNew), so a slow first collect makes the next start skip rather than pile up.
 #
+# NO CONSOLE WINDOW EVERY 2 MINUTES. The task runs in the person's session (it needs their profile), and
+# a powershell.exe started there flashes a window even with -WindowStyle Hidden. Horde's own person-session
+# jobs avoid it by starting the console host headless - `conhost.exe --headless <powershell.exe> ...` - and
+# this reuses that exact form (core/schedule/WindowsTaskScheduler.ps1, ConvertTo-HordeTaskAction, measured
+# there 2026-10-13 on Windows 11 26200: no window, command run in session 1). TWO THINGS FOLLOW, as there:
+# the console host exits 0 whatever PowerShell exited with, so the task's "last result" says nothing about
+# the meter - read `horde meter status` (data age) instead; and the flag is undocumented, so a Windows that
+# drops it would fail the task outright. Both programs are named by their full system paths, never by a
+# bare name a search path could answer with another program. The command itself goes in as -EncodedCommand
+# (base64), so no quote in a path can end a string.
+#
 # POWERSHELL 5.1: no 2>&1, no $Args/$Home/$PID parameters (CONTRIBUTING 12). ASCII only.
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -36,14 +47,24 @@ if (-not (Test-Path -LiteralPath $HordeScript -PathType Leaf)) { throw ("horde.p
 $taskHome = [System.IO.Path]::GetFullPath($HordeHome)
 $taskScript = (Resolve-Path -LiteralPath $HordeScript).Path
 
-function Get-MeterTaskArgument {
-    # The PowerShell command line of one task: HORDE_HOME set in the task's own process, then horde.
-    # Single quotes inside the values are doubled; the whole -Command is one double-quoted string.
+$sysDir = [System.Environment]::SystemDirectory
+$consoleHost = [System.IO.Path]::Combine($sysDir, "conhost.exe")
+$shell = [System.IO.Path]::Combine($sysDir, "WindowsPowerShell", "v1.0", "powershell.exe")
+foreach ($needed in @($consoleHost, $shell)) { if (-not [System.IO.File]::Exists($needed)) { throw ($needed + " is not there, and the tasks cannot be run without a window") } }
+
+function Get-MeterTaskCommand {
+    # The command of one task as PowerShell text: HORDE_HOME set in the task's own process, then horde.
     param([string]$MeterVerb)
     $homeQ = $taskHome -replace "'", "''"
     $scriptQ = $taskScript -replace "'", "''"
-    $inner = "`$env:HORDE_HOME = '" + $homeQ + "'; & '" + $scriptQ + "' meter " + $MeterVerb
-    return ("-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"" + $inner + "`"")
+    return ("$" + "env:HORDE_HOME = '" + $homeQ + "'; & '" + $scriptQ + "' meter " + $MeterVerb + "; exit $" + "LASTEXITCODE")
+}
+
+function Get-MeterTaskArgument {
+    # The arguments of the headless console host: it starts the shell, which runs the encoded command.
+    param([string]$MeterVerb)
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes((Get-MeterTaskCommand -MeterVerb $MeterVerb)))
+    return ('--headless "' + $shell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ' + $encoded)
 }
 
 $tasks = @(
@@ -53,8 +74,8 @@ $tasks = @(
 
 foreach ($t in $tasks) {
     $argument = Get-MeterTaskArgument -MeterVerb $t.verb
-    if ($PSCmdlet.ShouldProcess(($TaskFolder + $t.name), ("register: every " + $t.minutes + " min, below normal priority, powershell.exe " + $argument))) {
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument
+    if ($PSCmdlet.ShouldProcess(($TaskFolder + $t.name), ("register: every " + $t.minutes + " min, below normal priority, conhost.exe --headless powershell.exe -EncodedCommand [" + (Get-MeterTaskCommand -MeterVerb $t.verb) + "]"))) {
+        $action = New-ScheduledTaskAction -Execute $consoleHost -Argument $argument
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $t.minutes) -RepetitionDuration (New-TimeSpan -Days 3650)
         $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes $t.limitMinutes) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
         # 7 is BELOW_NORMAL_PRIORITY_CLASS; the cmdlet has no parameter for it.
