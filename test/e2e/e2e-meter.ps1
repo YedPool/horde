@@ -73,7 +73,7 @@ Check ($s2.out -like "*tokens_limits: 1 rows*") "the dry run changed no row"
 # A real run in a home under the temp folder: the send is refused there by design (a test's home tells
 # nobody), so this shows the refusal reaches the user in words and that nothing is marked as told.
 $w2 = Invoke-Meter @("watch-limits", "-Projects", $projects, "-Registry", $registry)
-Check ($w2.code -eq 0 -and $w2.out -cmatch 'watch-limits: scanned=[0-9]+ alerts=0 messages=0 silent=0 resumed=0 failed=1 ') "a real run in a test home sends nothing and says one alert failed"
+Check ($w2.code -eq 1 -and $w2.out -cmatch 'watch-limits: scanned=[0-9]+ alerts=0 messages=0 silent=0 resumed=0 failed=1 ') "a real run in a test home sends nothing and says one alert failed, with exit 1 so a scheduler shows it"
 Check ($w2.out -like "*could not tell the master session*test's*") "and says why, in words"
 
 Write-Host ""

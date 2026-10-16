@@ -317,3 +317,30 @@ test('cache writes: the part not named as 1-hour or 5-minute is taken as 5-minut
   assert.equal(row.context_tokens, 10 + 0 + 3500 + 500);
   r.done();
 });
+
+test('a file truncated to a shorter copy of its own beginning is read again from the start', async () => {
+  const r = rig();
+  const file = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  const lines = [];
+  for (let i = 0; i < 30; i++) lines.push(fx.assistant('a' + i, BASE + i, 'req_' + i)); // well over 4 KB
+  fx.writeLines(file, lines);
+  await r.collect();
+  fx.writeLines(file, lines.slice(0, 15)); // same first bytes, fewer of them
+  const size = fs.statSync(file).size;
+  assert.ok(size > 4096);
+  const again = await r.collect();
+  assert.equal(again.bytes, size, 'the whole shorter file was read again');
+  r.done();
+});
+
+test('the default window is 14 days: a file 20 days old is skipped without any option', async () => {
+  const r = rig();
+  const file = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  fx.writeLines(file, [fx.assistant('a1', BASE, 'req_1')]);
+  const old = new Date(Date.now() - 20 * 86400000);
+  fs.utimesSync(file, old, old);
+  const res = await r.collect();
+  assert.equal(res.skippedOld, 1);
+  assert.equal(res.files, 0);
+  r.done();
+});
