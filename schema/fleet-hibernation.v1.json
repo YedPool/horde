@@ -68,7 +68,8 @@
       "properties": {
         "state": { "$ref": "#/definitions/state" },
         "at": { "$ref": "#/definitions/utc" },
-        "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,600}$", "description": "Why, in plain words, when the move needs one (a refusal, a failure)." }
+        "reason": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,600}$", "description": "Why, in plain words, when the move needs one (a refusal, a failure)." },
+        "pane": { "type": "string", "pattern": "^[^\\x00-\\x1F]{1,64}$", "description": "The pane a wake started for it, when it failed after that: a later wake holds it until -Retry, since it may still be loading there." }
       }
     },
     "session": {

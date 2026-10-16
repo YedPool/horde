@@ -178,7 +178,7 @@ function Get-ClaudeCodeFleetVerdict {
     # make the next one of the same folder "rotated" (the guard's claims, spec "a session this restore
     # resumed does not block the next pane of the same directory").
     # -Since NARROWS THE ROTATED CASE FOR HIBERNATION (review of PR 318): when the sleeper stopped, or, with
-    # no exit known, when the hibernation was taken. A running session whose own process started at or
+    # no exit known, when the hibernation was taken (no code writes an exit yet: hibernate, slice 2, will). A running session whose own process started at or
     # before it was running beside the sleeper while the sleeper still ran under its own id, so it cannot
     # be the sleeper under a new one. Orcs and their wargs share folders (13 recorded sessions sat in 6
     # folders on 2026-10-16), and the guard's unnarrowed rule refused most of them. A start time that

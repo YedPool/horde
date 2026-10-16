@@ -126,11 +126,14 @@ function Read-HordeFleetRecord {
 }
 
 function Add-HordeFleetState {
-    # Move one session of a record to -State at -At, keeping the history. -Reason is optional.
-    param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$State, [Parameter(Mandatory = $true)][datetime]$At, [string]$Reason = "")
+    # Move one session of a record to -State at -At, keeping the history. -Reason is optional. -Pane names
+    # the pane a wake started for it, when one was: a later wake holds a session failed after its pane
+    # started until -Retry (fleet/Wake.ps1).
+    param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$State, [Parameter(Mandatory = $true)][datetime]$At, [string]$Reason = "", [string]$Pane = "")
     if ($script:HordeFleetStates -cnotcontains $State) { throw ("'" + $State + "' is not a session state of a hibernation") }
     $entry = [ordered]@{ state = $State; at = (Format-HordeFleetTime -At $At) }
     if ($Reason -ne "") { $entry["reason"] = $Reason }
+    if ($Pane -ne "") { $entry["pane"] = $Pane }
     $Session.state = $State
     $Session.history = @(@($Session.history) + @([pscustomobject]$entry))
 }

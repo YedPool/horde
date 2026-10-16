@@ -37,8 +37,29 @@
            Find = 'if (-not $DryRun) { Add-HordeFleetState -Session $r.session -State "still-awake" -At $now -Reason $r.reason }'
            Replace = '' }
         @{ Name = "memory-gate-off"
-           Find = 'if ($free -lt $script:HordeFleetWakeMinFreePercent) {'
+           Find = '($null -ne $free -and $free -lt $script:HordeFleetWakeMinFreePercent)'
+           Replace = '($false)' }
+        @{ Name = "memory-read-failure-ignored"
+           Find = 'if ($readFailed -ne "" -or ($null -ne $free'
+           Replace = 'if ($false -or ($null -ne $free' }
+        @{ Name = "self-start-unread-accepted"
+           Find = 'if (-not $DryRun -and "" + $self.start -cnotmatch'
+           Replace = 'if ($false -and "" + $self.start -cnotmatch' }
+        @{ Name = "earlier-pane-not-held"
+           Find = 'if ($holdWhy -ne "" -and -not $Retry) {'
            Replace = 'if ($false) {' }
+        @{ Name = "waking-not-held"
+           Find = 'if ("" + $s.state -ceq "waking") { $holdWhy ='
+           Replace = 'if ($false) { $holdWhy =' }
+        @{ Name = "not-read-again-under-lock"
+           Find = '$record = $again.value'
+           Replace = '$null = $again.value' }
+        @{ Name = "lost-window-ignored"
+           Find = 'if ($window -eq "") { $groupStop ='
+           Replace = 'if ($false) { $groupStop =' }
+        @{ Name = "recorded-process-not-passed"
+           Find = '$recordIds (Get-HordeFleetSince -Session $s -Record $record) (Get-HordeFleetMember $s "process")'
+           Replace = '$recordIds (Get-HordeFleetSince -Session $s -Record $record)' }
         @{ Name = "memory-stop-not-kept"
            Find = 'if ($stopped) { & $say'
            Replace = 'if ($false) { & $say' }
@@ -67,7 +88,7 @@
            Find = 'if (-not $found.found) {'
            Replace = 'if ($false) {' }
         @{ Name = "only-unknown-label-ignored"
-           Find = 'if (@($sessions | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ('
+           Find = 'if (@($all | Where-Object { "" + (Get-HordeFleetMember $_ "label") -ceq $l }).Count -eq 0) { throw ('
            Replace = 'if ($false) { throw (' }
         @{ Name = "no-fresh-check-before-spawn"
            Find = 'if ("" + $recheck.state -cne "stopped") {'
