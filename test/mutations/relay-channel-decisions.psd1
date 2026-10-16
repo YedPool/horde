@@ -7,9 +7,6 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         # --- in: the answer ---
-        @{ Name = "id-not-bound-to-the-sender"
-           Find = '($Domain + "`n" + $From + "`n" + $AnswerId)'
-           Replace = '($Domain + "`n" + $AnswerId)' }
         @{ Name = "evidence-not-the-records"
            Find = 'wordingVersion = $r.value.wordingVersion; evidence = $Item.evidence'
            Replace = 'wordingVersion = $r.value.wordingVersion; evidence = ("0" * 64)' }
@@ -26,25 +23,10 @@
         @{ Name = "unreachable-list-refuses-for-good"
            Find = 'if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "retry";'
            Replace = 'if ($a.state -ceq "unknown") { return [pscustomobject]@{ outcome = "refused";' }
-        @{ Name = "extra-member-taken"
-           Find = 'if ((@($names | Sort-Object) -join ",") -cne (@($members | Sort-Object) -join ",")) {'
-           Replace = 'if ($false) {' }
         # --- in: one part's answer, version 2 (2026-10-12) ---
-        @{ Name = "a-version-1-answer-must-name-a-part"
-           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
-           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @("part"); "2" = @("part") }' }
-        @{ Name = "a-version-2-answer-is-not-read"
-           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
-           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @() }' }
-        @{ Name = "a-version-2-answer-need-name-no-part"
-           Find = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }'
-           Replace = '$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @() }' }
         @{ Name = "the-part-is-not-handed-to-the-list"
            Find = '    if ($r.value.part -cne "") { $request["part"] = $r.value.part }'
            Replace = '' }
-        @{ Name = "a-part-of-any-spelling-is-handed-on"
-           Find = "        if (`$a.part -isnot [string] -or `$a.part -cnotmatch '\A[a-z]\z') {"
-           Replace = "        if (`$false) {" }
         @{ Name = "the-turn-does-not-say-which-part"
            Find = '$(if ($r.value.part -cne "") { " part (" + $r.value.part + ")" } else { "" })'
            Replace = '""' }

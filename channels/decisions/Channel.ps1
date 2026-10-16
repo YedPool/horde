@@ -222,15 +222,13 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Operations.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Notify.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
+. (Join-Path $PSScriptRoot "Answer.ps1")
 
 $script:HordeDecisionsChannelFolder = $PSScriptRoot
-$script:HordeDecisionsChannelAnswerMembers = @("v", "answerId", "machine", "snapshot", "number", "wordingVersion", "text")
-# THE ANSWER'S VERSIONS, each with the one member it adds to those above (header, IN). The highest is
-# what a snapshot tells the phone this machine reads. Keyed by the version AS TEXT: an ordered table
-# asked for a whole number answers by position, not by key.
-$script:HordeDecisionsChannelAnswerVersions = [ordered]@{ "1" = @(); "2" = @("part") }
+# THE ANSWER'S BODY, ITS VERSIONS AND ITS ID are channels/decisions/Answer.ps1's, beside the check that a
+# record holds an answer his passkey signed, which decisions/Operations.ps1 asks too. The highest version
+# (that file's table) is what a snapshot tells the phone this machine reads.
 $script:HordeDecisionsChannelAnswerHighest = 2
-$script:HordeDecisionsChannelIdDomain = "horde-relay/decisions/v1 answer id"
 # A CHANGE OF RANK (the header): its members, its id's own domain, and the words of each of its two
 # members, which are decisions/Rules.ps1's closed lists, asked of the rules and written nowhere here.
 $script:HordeDecisionsChannelRankMembers = @("v", "rankId", "machine", "snapshot", "number")
@@ -251,52 +249,6 @@ $script:HordeDecisionsChannelReceiptsRefused = 16
 $script:HordeDecisionsChannelReceiptsMissing = 32
 $script:HordeDecisionsChannelReceiptsLookBack = 4096
 $script:HordeDecisionsChannelReceiptsStreams = 16
-
-function Get-HordeDecisionsChannelAnswerId {
-    # The decisions request id of one answer (the header): 32 lower-case hex. -Domain: another kind's own
-    # (a change of rank's), so that two kinds can never share a request id.
-    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$AnswerId, [string]$Domain = $script:HordeDecisionsChannelIdDomain)
-    $h = Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ($Domain + "`n" + $From + "`n" + $AnswerId))
-    $first = New-Object byte[] 16
-    [System.Array]::Copy($h, 0, $first, 0, 16)
-    return (ConvertTo-HordeRelayHex -Bytes $first)
-}
-
-function Read-HordeDecisionsChannelAnswer {
-    # The phone's answer body, read strictly: { ok; reason; value } with value { answerId; machine;
-    # snapshot; number; wordingVersion; text; part } - part the letter of the one part answered (a
-    # version 2 body), or "" for an answer to the whole question (version 1). Never throws for the body:
-    # it was signed by the founder's passkey, but the PWA that wrote it is code, and code has bugs.
-    param([AllowEmptyCollection()][byte[]]$Body)
-    $fail = [pscustomobject]@{ ok = $false; reason = ""; value = $null }
-    $strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
-    try { $text = $strict.GetString($Body) } catch { $fail.reason = "the answer is not UTF-8"; return $fail }
-    if (-not $text.TrimStart().StartsWith("{")) { $fail.reason = "the answer is not a JSON object"; return $fail }
-    $dups = @(Find-HordeJsonDuplicateKey -Text $text)
-    if ($dups.Count -gt 0) { $fail.reason = ("the answer has a member more than once: " + $dups[0]); return $fail }
-    try { $a = ConvertFrom-Json -InputObject $text } catch { $fail.reason = "the answer is not JSON"; return $fail }
-    if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the answer is not a JSON object"; return $fail }
-    $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
-    # THE VERSION FIRST, THEN EXACTLY THAT VERSION'S MEMBERS (header, IN): a version this machine does not
-    # read is refused by its number, and a member that belongs to another version is refused as added.
-    $version = 0
-    if ($null -ne $a.PSObject.Properties["v"] -and ($a.v -is [int] -or $a.v -is [long]) -and $script:HordeDecisionsChannelAnswerVersions.Contains("" + $a.v)) { $version = [int]$a.v }
-    if ($version -eq 0) { $fail.reason = ("the answer is not a version this machine reads (" + (@($script:HordeDecisionsChannelAnswerVersions.Keys) -join ", ") + ")"); return $fail }
-    $members = @($script:HordeDecisionsChannelAnswerMembers) + @($script:HordeDecisionsChannelAnswerVersions["" + $version])
-    if ((@($names | Sort-Object) -join ",") -cne (@($members | Sort-Object) -join ",")) { $fail.reason = ("the answer's members are " + ($names -join ", ") + ", not " + ($members -join ", ")); return $fail }
-    if ($a.answerId -isnot [string] -or $a.answerId -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = "the answer's answerId is not 32 lower-case hex"; return $fail }
-    if ($a.machine -isnot [string] -or $a.machine -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = "the answer's machine is not a key id"; return $fail }
-    if ($a.snapshot -isnot [string] -or $a.snapshot.Length -gt 160) { $fail.reason = "the answer's snapshot is not an envelope's replay key"; return $fail }
-    if (-not (Test-HordeDecisionCount -Value $a.number -Most (Get-HordeDecisionMaxNumber))) { $fail.reason = "the answer's number is not a question number"; return $fail }
-    if (-not (Test-HordeDecisionCount -Value $a.wordingVersion -Most (Get-HordeDecisionMaxNumber))) { $fail.reason = "the answer's wordingVersion is not a wording"; return $fail }
-    if ($a.text -isnot [string]) { $fail.reason = "the answer's text is not text"; return $fail }
-    $part = ""
-    if ($version -ge 2) {
-        if ($a.part -isnot [string] -or $a.part -cnotmatch '\A[a-z]\z') { $fail.reason = "the answer's part is not one lower-case letter"; return $fail }
-        $part = [string]$a.part
-    }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{ answerId = $a.answerId; machine = $a.machine; snapshot = $a.snapshot; number = [int]$a.number; wordingVersion = [int]$a.wordingVersion; text = [string]$a.text; part = $part } }
-}
 
 function Invoke-HordeDecisionsChannelAccept {
     # One opened answer into the decisions list (IN, in the header), and what became of it into the

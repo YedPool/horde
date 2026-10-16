@@ -7,7 +7,8 @@
 #     comes back is a core/Tristate.ps1 answer whose value is checked against
 #     schema/decision-result.v1 before it is returned.
 #   - NOTHING HERE ASSUMES A CONSOLE, a file a person wrote, or a person at all. It prints nothing,
-#     prompts for nothing, and reads no file but the store's own records.
+#     prompts for nothing, and reads no file but the store's own records - and, for a question that
+#     needs a passkey only, the proof of one (below, A QUESTION THAT NEEDS A PASSKEY).
 #   - ONE ENTRY POINT, Invoke-HordeDecision, AND ONE TABLE of operations. A new operation is an entry
 #     in $HordeDecisionOperations, its function below, and its definition in the request schema.
 #
@@ -63,6 +64,23 @@
 # part (say, part), each answer a record of its own. The keeper still sees every question, answered or
 # not, and every answer: list and show leave nothing out, and inbox hands over each answer once.
 #
+# A QUESTION THAT NEEDS A PASSKEY (needsPasskey; the audit of 2026-10-16, item 17). A production action is
+# taken only on the founder's answer to such a question, given with his fresh passkey on the phone. The
+# list ITSELF holds to it, whoever asks: an answer of his to that question - the window's, the words a
+# session recorded from chat, a phone answer signed by an unlocked session, or any request that merely
+# says a passkey signed it - is refused, with a sentence saying to answer it on the phone with Face ID;
+# only words that channels/decisions/Answer.ps1 proves were signed by a trusted passkey, from the relay
+# journal's own record of the envelope, are written. The keeper's words under it, and the founder's acts
+# (park, unpark), are not answers and are taken as before; so is every word under any other question.
+# This file runs in its caller's process, so a request could claim anything about itself: the proof is
+# worked out again from the evidence, never read from a flag. And because a caller in the same process
+# could also write a record past this file, the operation authorized does not trust the list either: it
+# proves the standing answer again, from the record's evidence, each time it is asked - the one question a
+# production wrapper asks before it acts (`horde decisions authorized <number>`).
+# THE PROOF IS LOADED ONLY WHEN ASKED (Test-HordeDecisionPasskeyAnswer): it reads relay's journal, trust
+# store and keys, which costs about half a second to load (measured 2026-10-16, 340 to 510 ms), and every
+# other request pays nothing for it.
+
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -108,6 +126,10 @@ $script:HordeDecisionOperations = [ordered]@{
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
+    # authorized: is the founder's standing answer to a question one his trusted passkey signed? Proven
+    # again from its evidence on every ask (A QUESTION THAT NEEDS A PASSKEY, above); refused, with the
+    # reason, when it is not.
+    authorized = @{ writes = $false; read = "Get-HordeDecisionAuthorizedAnswer" }
     # Answered from the definitions alone: no store is read, so it answers where a list could not.
     kinds  = @{ writes = $false; read = "Get-HordeDecisionKindsAnswer"; noStore = $true }
     inbox  = @{ writes = $false; read = "Get-HordeDecisionInboxAnswer" }
@@ -307,14 +329,66 @@ function Get-HordeDecisionSayContent {
     return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence", "signedBy") }
 }
 
+$script:HordeDecisionPasskeyProofFile = Join-Path (Split-Path -Parent $PSScriptRoot) "channels\decisions\Answer.ps1"
+
+function Get-HordeDecisionHomeOfStore {
+    # The Horde home whose relay journal, trust store and keys prove the answers of the store -Root: ""
+    # for Horde's own (no -Root given: the store is Get-HordeDecisionStoreRoot's, under that home), the
+    # folder two above a store named <home>\store\decisions, and $null for a store in no home - whose
+    # answers have no journal to be proven from, so none of them is.
+    param([string]$Root)
+    if ($Root -ceq "") { return "" }
+    $full = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@([char]92, [char]47))
+    $store = [System.IO.Path]::GetDirectoryName($full)
+    if ([System.IO.Path]::GetFileName($full) -ne "decisions" -or [string]::IsNullOrEmpty($store) -or [System.IO.Path]::GetFileName($store) -ne "store") { return $null }
+    return [System.IO.Path]::GetDirectoryName($store)
+}
+
+function Test-HordeDecisionPasskeyAnswer {
+    # Did a trusted passkey sign exactly these words as the answer to question -Number (the header, A
+    # QUESTION THAT NEEDS A PASSKEY)? channels/decisions/Answer.ps1's proof, its file loaded here the
+    # first time it is asked and only then: { ok; reason; keyId; signedAt }. -Root is the store's folder,
+    # as Invoke-HordeDecision was given it, which names the home the proof is read from.
+    param([string]$Id, [int]$Number, [AllowEmptyString()][string]$Text, [string]$Part = "", [int]$WordingVersion = 0,
+        [string]$Evidence = "", [string]$SignedBy = "", [string]$Root = "", $Now = $null)
+    $proofHome = Get-HordeDecisionHomeOfStore -Root $Root
+    if ($null -eq $proofHome) { return [pscustomobject]@{ ok = $false; reason = "this store is in no Horde home, so there is no relay journal to prove a passkey from"; keyId = ""; signedAt = [long]-1 } }
+    if ($null -eq (Get-Command -Name "Test-HordeDecisionsChannelPasskeyAnswer" -CommandType Function -ErrorAction SilentlyContinue)) { . $script:HordeDecisionPasskeyProofFile }
+    return (Test-HordeDecisionsChannelPasskeyAnswer -Id $Id -Number $Number -Text $Text -Part $Part -WordingVersion $WordingVersion -Evidence $Evidence -SignedBy $SignedBy -HordeHome $proofHome -Now $Now)
+}
+
+function Get-HordeDecisionPasskeyRefusal {
+    # Why an answer of the founder's to a question that needs a passkey is not taken, in words the person
+    # who gave it can act on (the header, A QUESTION THAT NEEDS A PASSKEY). -Why: what the proof found.
+    param([int]$Number, [string]$Route, [string]$Why = "")
+    if ($Route -ceq "window") { return ("question " + $Number + " needs your passkey: answer it on your phone with Face ID. Words typed in the window are not taken for it") }
+    if ($Route -ceq "chat-recorded") { return ("question " + $Number + " needs the founder's passkey: ask him to answer it on his phone with Face ID. His words recorded from chat are not taken for it") }
+    if ($Route -ceq "phone") { return ("question " + $Number + " needs your passkey: answer it on your phone with Face ID. This answer is not proven signed by your passkey: " + $Why) }
+    return ("question " + $Number + " needs the founder's passkey: only his answer on his phone with Face ID is taken for it, not words " + (Get-HordeDecisionRouteShown -Route $Route))
+}
+
 function Complete-HordeDecisionSayData {
     # THE KEEPER'S WORDS THAT ASK ARE SAID ONLY WHILE THE QUESTION IS STILL IN FRONT OF THE FOUNDER
     # (above, A QUESTION IS NEVER PUT BACK). Under an open question that is no longer his turn - he
     # has answered it - they would pass the turn back to him: refused, with the two things that can be
     # done instead. A note (asks false) asks nothing and is always taken; so are words under a closed
-    # question, which take no turn; and so is every word of his own.
-    param($Request, $List, $Data)
+    # question, which take no turn; and so is every word of his own - but for one rule, below.
+    # -Root and -Now: the store's folder and the writer's clock, for the passkey's proof.
+    param($Request, $List, $Data, [string]$Root = "", $Now = $null)
     $number = [int]$Data["number"]
+    # HIS ANSWER TO A QUESTION THAT NEEDS A PASSKEY is taken only with the proof of one (the header, A
+    # QUESTION THAT NEEDS A PASSKEY): asked of the question as the list stands at this try, and proven
+    # from the evidence the request carries, whatever else it says of itself. An act of his (park,
+    # unpark) answers nothing and is not asked.
+    if ("$($Data['speaker'])" -ceq (Get-HordeDecisionFirstTurn) -and -not $Data.Contains("act") -and $List.questions.ContainsKey($number)) {
+        $asked = $List.questions[$number]
+        if ((Test-HordeDecisionMember -Object $asked -Name "needsPasskey") -and [bool]$asked["needsPasskey"]) {
+            $proof = Test-HordeDecisionPasskeyAnswer -Id ([string]$Request.id) -Number $number -Text ([string]$Data["text"]) `
+                -Part $(if ($Data.Contains("part")) { [string]$Data["part"] } else { "" }) -WordingVersion $(if ($Data.Contains("wordingVersion")) { [int]$Data["wordingVersion"] } else { 0 }) `
+                -Evidence $(if ($Data.Contains("evidence")) { [string]$Data["evidence"] } else { "" }) -SignedBy $(if ($Data.Contains("signedBy")) { [string]$Data["signedBy"] } else { "" }) -Root $Root -Now $Now
+            if (-not $proof.ok) { return [pscustomobject]@{ why = (Get-HordeDecisionPasskeyRefusal -Number $number -Route "$($Data['route'])" -Why $proof.reason); write = $false; more = $null; data = $null } }
+        }
+    }
     $asking = (-not $Data.Contains("asks")) -and (-not $Data.Contains("act"))
     if ($asking -and (Get-HordeDecisionNoteSpeakers) -ccontains "$($Data['speaker'])" -and $List.questions.ContainsKey($number)) {
         $question = $List.questions[$number]
@@ -453,6 +527,40 @@ function Get-HordeDecisionShowAnswer {
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
 }
 
+function Get-HordeDecisionAuthorizedAnswer {
+    # MAY A PRODUCTION ACTION GO AHEAD ON QUESTION -number? Done only when the founder's STANDING ANSWER -
+    # his newest words under it that answer it (an act, park or unpark, answers nothing), to the part the
+    # request names or else to the whole question - is proven, NOW, signed by a passkey this machine
+    # trusts now, to the wording the question has now (the header, A QUESTION THAT NEEDS A PASSKEY).
+    # Refused otherwise, with the reason; nothing is ever written. It says THAT he signed and WHAT he
+    # signed (authorization.text): whether his words say yes is for the asker to read.
+    param($Request, $State, $Definitions, [datetime]$Now, [string]$Root = "")
+    $number = [long]$Request.number
+    $notThere = Get-HordeDecisionNumberAnswer -State $State -Number $number -Operation "authorized"
+    if ($null -ne $notThere) { return $notThere }
+    $question = $State.questions[[int]$number]
+    $part = ""
+    if (Test-HordeDecisionMember -Object $Request -Name "part") { $part = [string]$Request.part }
+    $what = $(if ($part -ceq "") { "question " + $number } else { "part (" + $part + ") of question " + $number })
+    $no = { param($why) return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation "authorized" -Outcome "refused" -Reason $why -Findings @($why) -State $State -More ([ordered]@{ number = [int]$number })) -Definitions $Definitions -Now $Now) }
+    $standing = $null
+    foreach ($m in @($question.thread)) { if ("$($m.speaker)" -ceq (Get-HordeDecisionFirstTurn) -and "$($m.act)" -ceq "" -and "$($m.part)" -ceq $part) { $standing = $m } }
+    if ($null -eq $standing) { return (& $no ($what + " has no answer of the founder's: ask him to answer it on his phone with Face ID")) }
+    $at = "the founder's standing answer to " + $what + " (record " + $standing.sequence + ")"
+    if ("$($standing.route)" -cne "phone") { return (& $no ($at + " was " + (Get-HordeDecisionRouteShown -Route "$($standing.route)") + ", and only his answer on his phone with Face ID authorizes it")) }
+    if (-not [bool]$standing.wordingStated -or [int]$standing.wordingVersion -ne [int]$question.wordingVersion) { return (& $no ($at + " was given to wording " + $standing.wordingVersion + ", and the question is now at wording " + $question.wordingVersion + ": he has not answered what it says now")) }
+    # The record's own id, from the list: the proof holds it to the id made from the signed answer.
+    $id = ""
+    foreach ($k in @($State.ids.Keys)) { if ([long]$State.ids[$k].sequence -eq [long]$standing.sequence) { $id = "$k"; break } }
+    $proof = Test-HordeDecisionPasskeyAnswer -Id $id -Number ([int]$number) -Text ([string]$standing.text) -Part $part -WordingVersion ([int]$standing.wordingVersion) `
+        -Evidence "$($standing.evidence)" -SignedBy "$($standing.signedBy)" -Root $Root -Now $Now
+    if (-not $proof.ok) { return (& $no ($at + " is not proven signed by a passkey this machine trusts: " + $proof.reason)) }
+    $granted = [ordered]@{ sequence = [long]$standing.sequence; signedBy = $proof.keyId; signedAt = [long]$proof.signedAt; wordingVersion = [int]$standing.wordingVersion; text = [string]$standing.text }
+    if ($part -cne "") { $granted["part"] = $part }
+    $value = New-HordeDecisionResult -Operation "authorized" -Outcome "done" -State $State -More ([ordered]@{ number = [int]$number; authorization = [pscustomobject]$granted })
+    return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
+}
+
 function Get-HordeDecisionKindsAnswer {
     # The table of question kinds (decisions/question-kinds.json, read by decisions/Definitions.ps1), as
     # an answer. It is an operation so that every caller gets the one table from the one API: a caller
@@ -580,7 +688,7 @@ function Invoke-HordeDecisionWrite {
         if ($about -ceq "question") { if ($hasNumber) { $data["number"] = [int]$number } else { $data["number"] = Get-HordeDecisionNextNumber -State $list } }
         foreach ($k in @($content.body.Keys)) { $data[$k] = $content.body[$k] }
         if ($entry.ContainsKey("complete")) {
-            $step = & $entry.complete $Request $list $data
+            $step = & $entry.complete $Request $list $data $Root $Now
             if ("$($step.why)" -ne "") { return (& $refuse ("nothing was written: " + $step.why) @("$($step.why)") $list) }
             # Answered from the list as it stands, with nothing to write.
             if (-not $step.write) { return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "done" -State $list -More $step.more) -Definitions $Definitions -Now $Now) }
@@ -686,5 +794,7 @@ function Invoke-HordeDecision {
     if ($entry.writes) { return (Invoke-HordeDecisionWrite -Operation $Operation -Request $plain -Root $Root -Definitions $definitions -Now $Now) }
     $read = Read-HordeDecisionState -Root $Root -Definitions $definitions
     if ($read.state -ceq "unknown") { return (New-HordeUnknown -Reason $read.reason) }
-    return (& $entry.read $plain $read.list $definitions $Now)
+    # -Root, beside what every read takes: the store's folder as given, which names the home the operation
+    # authorized proves a passkey from. The other reads take no more than they did (it goes to their $args).
+    return (& $entry.read $plain $read.list $definitions $Now $Root)
 }

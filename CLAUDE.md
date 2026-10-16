@@ -15,7 +15,9 @@ are in `CONTRIBUTING.md`; read the matching section before arguing with one.
   - There are at most 10 an hour per session.
 - A production action he asks for in chat (a deploy, a merge to main, deleting or changing live
   data, spending money) is not done on the chat line alone: open a decisions question with
-  -NeedsPasskey and act only on its answer, which needs his fresh passkey.
+  -NeedsPasskey and act only when `horde decisions authorized <number>` exits 0: it proves his answer
+  was signed with his fresh passkey on the phone. Read his words before acting; any other answer to
+  such a question (chat, the window, an unlocked session) is refused by the list itself.
 
 ## Done means the fleet runs on it (CONTRIBUTING 1 and 2)
 

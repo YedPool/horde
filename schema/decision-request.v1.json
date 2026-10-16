@@ -84,6 +84,16 @@
         "number": {"$ref": "#/definitions/number"}
       }
     },
+    "authorized": {
+      "type": "object",
+      "description": "Asks whether the founder's standing answer to a question - his newest answer to it, or to the one part named - is proven signed by a passkey this machine trusts now, to the wording the question has now (decisions/Operations.ps1, A QUESTION THAT NEEDS A PASSKEY). It writes nothing. What a production action asks before it goes ahead.",
+      "required": ["number"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"$ref": "#/definitions/number"},
+        "part": {"type": "string", "pattern": "^[a-z]$", "description": "The part whose answer is asked about, by its letter. Left out, the answer to the whole question."}
+      }
+    },
     "kinds": {
       "type": "object",
       "description": "Asks for the table of question kinds. It takes nothing.",
