@@ -318,7 +318,9 @@ $rec = Read-Rec $h
 (Get-Session $rec "K") | Add-Member -NotePropertyName "process" -NotePropertyValue ([pscustomobject][ordered]@{ pid = "55"; start = "133000000000000001" }) -Force
 [void](Write-HordeFleetRecord -Dir $dir -Record $rec)
 [void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h)
-$vk = @($world.verdicts | Where-Object { $_.id -ceq $ids["K"] })
+# The decisions to start it, the first reading and the re-check, carry the "since" moment; the polls for
+# it to come up after its spawn do not, and need no process (a process still running was refused before).
+$vk = @($world.verdicts | Where-Object { $_.id -ceq $ids["K"] -and $null -ne $_.since })
 Check ($vk.Count -ge 2 -and @($vk | Where-Object { $null -eq $_.process -or "" + $_.process.pid -cne "55" }).Count -eq 0) "the first reading and the re-check before the spawn both pass the session's recorded process (second review of PR 318, P1)"
 
 Section "a session that comes back under a new id"

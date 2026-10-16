@@ -129,24 +129,24 @@ $sockets = { param($p) $true }
 Remove-Item -LiteralPath $setFile -Force -ErrorAction SilentlyContinue
 $st = Get-HordeWeztermFleetSettings -HordeHome $homeDir
 Check ($st.state -ceq "defaults" -and "" + $st.values.socket -ceq "") "with no file, no terminal is named"
-$t = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive -SockDir (Join-Path $homeDir "no-sockets")
-Check ($t.state -ceq "unknown") ("CONTROL: and this user's own terminal is looked for, as before (" + $t.reason + ")")
+$term = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive -SockDir (Join-Path $homeDir "no-sockets")
+Check ($term.state -ceq "unknown") ("CONTROL: and this user's own terminal is looked for, as before (" + $term.reason + ")")
 Check ((Get-HordeWeztermFleetSockDir -Settings $st) -ceq (Get-HordeWeztermSockDir)) "and placement reads the terminal's own socket folder"
-Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":' + (ConvertTo-Json -InputObject $T.socket) + '}}')
+Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":' + (ConvertTo-Json -InputObject ("" + $T.socket)) + '}}')
 $st = Get-HordeWeztermFleetSettings -HordeHome $homeDir
-$t = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive
-Check ($st.state -ceq "read" -and $t.state -ceq "known" -and $t.value.socket -ceq $T.socket -and "" + $t.value.guiPid -ceq "4242" -and "" + $t.value.guiStart -ceq $guiStart) ("a named socket is the terminal, with its gui's start time, even with two running (" + $t.reason + ")")
+$term = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive
+Check ($st.state -ceq "read" -and $term.state -ceq "known" -and $term.value.socket -ceq $T.socket -and "" + $term.value.guiPid -ceq "4242" -and "" + $term.value.guiStart -ceq $guiStart) ("a named socket is the terminal, with its gui's start time, even with two running (" + $term.reason + ")")
 Check ((Get-HordeWeztermFleetSockDir -Settings $st) -ceq $sockDir) "and placement reads that socket's folder"
 Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":"C:\\fake\\sockets\\gui-sock-5151"}}')
-$t = Resolve-HordeWeztermFleetTerminal -Settings (Get-HordeWeztermFleetSettings -HordeHome $homeDir) -Guis $two -ProcessStart $alive
-Check ($t.state -ceq "unknown" -and $t.reason -like "*5151*not running*") ("a named terminal whose gui is not running is unknown, and no other is chosen (" + $t.reason + ")")
+$term = Resolve-HordeWeztermFleetTerminal -Settings (Get-HordeWeztermFleetSettings -HordeHome $homeDir) -Guis $two -ProcessStart $alive
+Check ($term.state -ceq "unknown" -and $term.reason -like "*5151*not running*") ("a named terminal whose gui is not running is unknown, and no other is chosen (" + $term.reason + ")")
 Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":"C:\\fake\\sockets\\my-socket"}}')
-$t = Resolve-HordeWeztermFleetTerminal -Settings (Get-HordeWeztermFleetSettings -HordeHome $homeDir) -Guis $two -ProcessStart $alive
-Check ($t.state -ceq "unknown" -and $t.reason -like "*not named after a gui*") ("a name that is not a terminal's socket is unknown (" + $t.reason + ")")
+$term = Resolve-HordeWeztermFleetTerminal -Settings (Get-HordeWeztermFleetSettings -HordeHome $homeDir) -Guis $two -ProcessStart $alive
+Check ($term.state -ceq "unknown" -and $term.reason -like "*not named after a gui*") ("a name that is not a terminal's socket is unknown (" + $term.reason + ")")
 Set-FleetSetting ('{"schemaVersion":1,"settings":{"sockett":"x"}}')
 $st = Get-HordeWeztermFleetSettings -HordeHome $homeDir
-$t = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive
-Check ($st.state -cne "read" -and $st.state -cne "defaults" -and $t.state -ceq "unknown" -and $t.reason -like "*settings*") ("a settings file that is refused names no terminal and asks none: unknown, with its findings (" + $t.reason + ")")
+$term = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive
+Check ($st.state -cne "read" -and $st.state -cne "defaults" -and $term.state -ceq "unknown" -and $term.reason -like "*settings*") ("a settings file that is refused names no terminal and asks none: unknown, with its findings (" + $term.reason + ")")
 Remove-Item -LiteralPath $homeDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Section "the adapter registers itself"
