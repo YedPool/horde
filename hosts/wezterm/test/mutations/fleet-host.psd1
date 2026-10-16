@@ -24,6 +24,21 @@
         @{ Name = "percent-dropped"
            Find = 'if ("" + $Request.percent -cmatch ''\A[1-9][0-9]?\z'') { $rest += @("--percent", ("" + $Request.percent)) }'
            Replace = 'if ($false) { }' }
+        @{ Name = "profile-loaded"
+           Find = '@("-NoLogo", "-NoProfile", "-NoExit", "-Command")'
+           Replace = '@("-NoLogo", "-NoExit", "-Command")' }
+        @{ Name = "named-terminal-ignored"
+           Find = 'if ($named -ne "") { return (New-HordeWeztermTarget -Socket $named -ProcessStart $ProcessStart) }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "refused-settings-fall-back"
+           Find = 'if ("" + $Settings.state -cne "defaults" -and "" + $Settings.state -cne "read") { return (New-HordeUnknown'
+           Replace = 'if ($false) { return (New-HordeUnknown' }
+        @{ Name = "placement-ignores-named-folder"
+           Find = 'if ($named -ne "" -and [System.IO.Path]::IsPathRooted($named)) { return (Split-Path -Parent $named) }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "lost-window-is-not-started"
+           Find = 'if ($hit.Count -ne 1) { return (New-HordeKnown -Value'
+           Replace = 'if ($hit.Count -ne 1) { return (New-HordeUnknown -Reason' }
         @{ Name = "window-not-read-back"
            Find = 'if ($Request.mode -cne "tab") {'
            Replace = 'if ($false) {' }

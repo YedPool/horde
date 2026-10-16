@@ -18,23 +18,66 @@
 # own order, which is the tab bar's order (the list walks each window's tabs in order).
 #
 # HOW A SESSION IS STARTED AGAIN: never by typing into a pane. The pane is spawned with its program
-# given as argv - pwsh -NoLogo -NoExit -Command <the harness's resume line> - so nothing is ever typed
+# given as argv - pwsh -NoLogo -NoProfile -NoExit -Command <the harness's resume line> - so nothing is ever typed
 # into a box that might hold something else, and the shell stays when the harness exits, as a pane the
 # person opened would. The program is pwsh's full path (Resolve-HordeWeztermProgram: an .exe on PATH,
-# never a script shim), as every Horde spawn is (Act.ps1's Start-HordeWeztermPane).
+# never a script shim), as every Horde spawn is (Act.ps1's Start-HordeWeztermPane). WITHOUT THE PERSON'S
+# PROFILE (second review of PR 318): a profile can define a function or alias of the harness's own name,
+# or print and prompt, and the resume line must mean the same in every woken pane; the pane inherits its
+# PATH from the wake, which is how the harness's command is found.
+#
+# WHICH TERMINAL. This user's own (Act.ps1's Resolve-HordeWeztermOwnMux), which is refused when two run -
+# as they do whenever a test terminal stands beside the person's own. <HORDE_HOME>\settings\
+# wezterm-fleet.json may name one by its socket instead (setting socket); placement is then read from that
+# socket's folder, so a record and its wake speak of the same terminal. The isolated end-to-end scenario
+# (test/e2e/e2e-fleet.ps1 in this folder) is what needs it; a person running two terminals may use it too.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\HostAct.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 . (Join-Path $PSScriptRoot "Act.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\Port.ps1")
 
 # The shell a woken session runs in, and its arguments before the resume line.
 $script:HordeWeztermFleetShell = "pwsh"
-$script:HordeWeztermFleetShellArgs = @("-NoLogo", "-NoExit", "-Command")
+$script:HordeWeztermFleetShellArgs = @("-NoLogo", "-NoProfile", "-NoExit", "-Command")
 # The registry's name for a terminal is its socket file's name.
 $script:HordeWeztermFleetInstancePattern = '\Agui-sock-[1-9][0-9]{0,9}\z'
+# The settings (core/ModuleSettings.ps1), declared once: the terminal to wake into, by its socket.
+$script:HordeWeztermFleetSettings = New-HordeModuleSettings -Module "wezterm-fleet" -Settings @(
+    @{ name = "socket"; kind = "text"; default = ""; min = 0; max = 400; what = "The terminal hibernation reads placement from and wakes into, named by its socket file in full; left out, this user's one running terminal." }
+)
+
+function Get-HordeWeztermFleetSettings {
+    # The settings as { state; values; findings; path }, from the one file under Horde's home.
+    param([string]$HordeHome = "")
+    return (Get-HordeModuleSettings -Declaration $script:HordeWeztermFleetSettings -HordeHome $HordeHome)
+}
+
+function Resolve-HordeWeztermFleetTerminal {
+    # The terminal a wake spawns into, as an answer: the one -Settings names by its socket (its gui must
+    # be running), else this user's own. Settings that were refused are the answer: unknown, with their
+    # findings, and no terminal is asked anything. -Guis, -ProcessStart and -SockDir stand in for the
+    # process table and the socket folder in a test.
+    param([Parameter(Mandatory = $true)]$Settings, [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null, [string]$SockDir = "")
+    if ("" + $Settings.state -cne "defaults" -and "" + $Settings.state -cne "read") { return (New-HordeUnknown -Reason ("the fleet's terminal settings are refused, so no terminal was asked: " + (@($Settings.findings) -join "; "))) }
+    $named = "" + $Settings.values.socket
+    if ($named -ne "") { return (New-HordeWeztermTarget -Socket $named -ProcessStart $ProcessStart) }
+    if ($SockDir -eq "") { $SockDir = Get-HordeWeztermSockDir }
+    return (Resolve-HordeWeztermOwnMux -SockDir $SockDir -Guis $Guis -ProcessStart $ProcessStart)
+}
+
+function Get-HordeWeztermFleetSockDir {
+    # Where placement looks for the terminals the registry names: the named socket's folder when one is
+    # set, else the terminal's own place (Act.ps1 owns it).
+    param([Parameter(Mandatory = $true)]$Settings)
+    $named = ""
+    if ("" + $Settings.state -ceq "read") { $named = "" + $Settings.values.socket }
+    if ($named -ne "" -and [System.IO.Path]::IsPathRooted($named)) { return (Split-Path -Parent $named) }
+    return (Get-HordeWeztermSockDir)
+}
 
 function ConvertFrom-HordeWeztermFleetList {
     # `cli list --format json` output as rows { window; tab; pane; left; top; cols; rows }, as an answer:
@@ -163,10 +206,12 @@ function Invoke-HordeWeztermFleetSpawn {
         if ($lr.code -ne 0) { $list = New-HordeUnknown -Reason ("exit " + $lr.code) } else { $list = ConvertFrom-HordeWeztermFleetList -Text ("" + $lr.out) }
         $hit = @()
         if ($list.state -eq "known") { $hit = @(@($list.value) | Where-Object { $_.pane -eq [int]$pane }) }
-        if ($hit.Count -ne 1) { return (New-HordeUnknown -Reason ("pane " + $pane + " was started, but which window it is in could not be read back")) }
+        # THE PANE STARTED (second review of PR 318): it is known, with no window and the reason, so the
+        # wake waits for it and stops its group, rather than calling it not started.
+        if ($hit.Count -ne 1) { return (New-HordeKnown -Value ([pscustomobject]@{ pane = $pane; window = ""; note = ("pane " + $pane + " was started, but which window it is in could not be read back") })) }
         $window = "" + $hit[0].window
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ pane = $pane; window = $window }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ pane = $pane; window = $window; note = "" }))
 }
 
 # THE OPENED TERMINAL, kept at script scope and read by plain blocks, NOT captured by GetNewClosure:
@@ -180,8 +225,9 @@ function Open-HordeWeztermFleet {
     # The port's Open: this user's own terminal and the shell's full path, as an answer whose value
     # carries the spawn and paneOf blocks for them. Unknown, with nothing spawned, when either cannot be
     # had.
-    param([scriptblock]$Runner = $null)
-    $own = Resolve-HordeWeztermOwnMux
+    param([scriptblock]$Runner = $null, $Settings = $null)
+    if ($null -eq $Settings) { $Settings = Get-HordeWeztermFleetSettings }
+    $own = Resolve-HordeWeztermFleetTerminal -Settings $Settings
     if ($own.state -ne "known") { return $own }
     $prog = Resolve-HordeWeztermProgram -Name $script:HordeWeztermFleetShell
     if ($prog.state -ne "known") { return $prog }
@@ -192,6 +238,6 @@ function Open-HordeWeztermFleet {
 }
 
 Register-HordeFleetHost -Name "wezterm" `
-    -Placement { param($refs) Get-HordeWeztermFleetPlacement -Refs $refs } `
+    -Placement { param($refs) $st = Get-HordeWeztermFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { New-HordeUnknown -Reason ("the fleet's terminal settings are refused: " + (@($st.findings) -join "; ")) } else { Get-HordeWeztermFleetPlacement -Refs $refs -SockDir (Get-HordeWeztermFleetSockDir -Settings $st) } } `
     -Open { Open-HordeWeztermFleet } `
     -Describe { param($request) Format-HordeWeztermFleetSpawn -Request $request }
