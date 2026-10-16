@@ -803,7 +803,9 @@ const PH = await load("app/photo.js");
   let gets = 0;
   const counting = { create: (x) => a.auth.create(x), get: (x) => { gets++; return a.auth.get(x); } };
   const slept = [];
-  const phone = createPhone({ store: a.store, authenticator: counting, relay: R.createRelayClient(t), origin, sleep: async (ms) => { slept.push(ms); } });
+  // The phone's clock, moved on below to look past a photo's hour (THE HOUR).
+  let shift = 0;
+  const phone = createPhone({ store: a.store, authenticator: counting, relay: R.createRelayClient(t), origin, now: () => Date.now() + shift, sleep: async (ms) => { slept.push(ms); } });
   await phone.unlock(a.paired.id);
   const photoBody = (photoBytes) => P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: m.horde, machine: m.keyId, session: "sess-1", backfill: false, ...(photoBytes ? { photoBytes } : {}), turns: [turn("p1", "assistant", "hi")] }));
   await sendChat(t, m, a.phoneKey, photoBody(0));
@@ -833,7 +835,7 @@ const PH = await load("app/photo.js");
   check(JSON.stringify(Object.keys(mf.body)) === JSON.stringify(want), "its body is exactly the members the machine reads, in order", JSON.stringify(Object.keys(mf.body)));
   const phoneKeyId = await P.keyId(a.phoneKey);
   check(mf.body.photoId === pid && mf.body.horde === "work" && mf.body.machine === m.keyId && mf.body.mailbox === m.mailbox && mf.body.from === mf.header.from && mf.body.seq === mf.header.seq && mf.body.phoneKey === phoneKeyId && mf.body.session === "sess-1" && mf.body.bytes === 1000000, "it binds the photo, the horde, the machine and its mailbox, the passkey, the phone key, its own seq and the session", JSON.stringify({ ...mf.body, key: "-", parts: mf.body.parts.length }));
-  check(mf.body.expiresAt === mf.header.ts + P.PHOTO_WINDOW_MS && mf.body.sha256 === P.hex(await P.sha256(img)), "and an expiry five minutes after it was signed, and the whole image's SHA-256");
+  check(mf.body.expiresAt === mf.header.ts + P.PHOTO_WINDOW_MS && mf.body.sha256 === P.hex(await P.sha256(img)), "and an expiry an hour after it was signed (the founder's choice: a photo waits up to an hour for the PC), and the whole image's SHA-256");
   const partRe = /^\{"v":1,"kind":"photo-part","from":"([0-9a-f]{32})","photo":"([0-9a-f]{32})","part":([1-9][0-9]{0,2}),"ct":"([A-Za-z0-9_-]{1,70000})"\}$/;
   const parts = items.slice(1);
   check(parts.length === 21 && parts.every((it, i) => partRe.test(it.text) && it.key === P.photoPartKey(mf.body.from, pid, i + 1, mf.body.parts[i]) && it.text.length <= 65536), "each part is in its one form, under its own key, within the hosted relay's 65,536 characters", String(Math.max(...parts.map((x) => x.text.length))));
@@ -860,7 +862,16 @@ const PH = await load("app/photo.js");
   check(parts.every((it) => it.text.indexOf(P.b64u(img.subarray(4, 40))) < 0), "the relay sees sealed bytes: no run of the image is in a part's text");
   let c = await phone.chat(a.paired.id);
   let ph = c.items.filter((x) => x.kind === "photo");
-  check(ph.length === 1 && ph[0].photoId === pid && ph[0].words === P.PHOTO_SENDING && ph[0].said === mf.header.ts, "the chat shows the photo as sending, at the time it was signed");
+  check(ph.length === 1 && ph[0].photoId === pid && ph[0].words === P.PHOTO_WAITING && ph[0].status === "waiting" && !ph[0].sendAgain && ph[0].said === mf.header.ts, "every part put and no word from the PC yet, the chat shows the photo waiting for the PC, at the time it was signed", JSON.stringify(ph));
+  // THE HOUR (the founder's choice, 2026-10-16): with no word from the PC by the end of the window the
+  // manifest names, the photo says it was not delivered, and may be sent again.
+  shift = mf.body.expiresAt - Date.now() - 1000;
+  ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
+  check(ph.length === 1 && ph[0].words === P.PHOTO_WAITING && !ph[0].sendAgain, "TWIN: a second before its hour it still waits", JSON.stringify(ph));
+  shift = mf.body.expiresAt - Date.now();
+  ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
+  check(ph.length === 1 && ph[0].words === P.PHOTO_NOT_DELIVERED && ph[0].status === "not-delivered" && ph[0].sendAgain === true, "AT ITS HOUR with no word from the PC, the photo says plainly it was not delivered, and offers to send it again", JSON.stringify(ph));
+  shift = 0;
   const prBody = (status, code, file = "") => P.utf8(JSON.stringify({ v: 1, kind: "chat-photo-receipt", horde: m.horde, machine: m.keyId, session: "sess-1", photoId: pid, status, code, sentAt: mf.header.ts, file }));
   await sendChat(t, m, a.phoneKey, prBody("accepted", "receiving"), "photo-receipt");
   await sendChat(t, m, a.phoneKey, prBody("refused", "your-account-closed"), "photo-receipt");
@@ -869,6 +880,15 @@ const PH = await load("app/photo.js");
   ph = (await phone.chat(a.paired.id)).items.filter((x) => x.kind === "photo");
   check(ph.length === 1 && ph[0].words === P.PHOTO_WORDS.accepted.delivered && ph[0].file === "photo-20261014-120000-0a1b2c3d.jpg", "the newest receipt's code is shown in the phone's own words, with the machine's file name; a code it does not know is not", JSON.stringify(ph));
   check(P.readPhotoReceipt(prBody("accepted", "delivered", "..\\..\\evil<script>"), "work", m.keyId).value.file === "", "a file name that is not a plain name is not shown");
+  // THE HOUR, in the timeline alone: sending, waiting, not delivered; any word from the PC outranks the clock.
+  const ph0 = { photoId: "a".repeat(32), at: 1000, session: "s", expiresAt: 1000 + P.PHOTO_WINDOW_MS };
+  const one = (p, now, rs = []) => P.chatTimeline({ photos: [p], photoReceipts: rs }, now).filter((x) => x.kind === "photo")[0];
+  const rcp = (status, code) => ({ photoId: ph0.photoId, status, code, session: "s", sentAt: 1000, file: "", seq: 2, ts: 5000 });
+  check(P.PHOTO_WINDOW_MS === 3600000, "a photo waits for the PC up to an hour");
+  check(one({ ...ph0, sent: false }, 2000).words === P.PHOTO_SENDING && one({ ...ph0, sent: true }, 2000).words === P.PHOTO_WAITING, "while its parts go it is sending; once they are put, waiting for the PC");
+  check(one({ ...ph0, sent: false }, ph0.expiresAt).sendAgain === true && one({ ...ph0, sent: true }, 0).words === P.PHOTO_WAITING, "a photo whose parts never all went is not delivered at its hour too; with no clock given nothing is late");
+  check(one({ ...ph0, sent: true }, ph0.expiresAt + 1, [rcp("accepted", "receiving")]).words === P.PHOTO_WORDS.accepted.receiving && !one({ ...ph0, sent: true }, ph0.expiresAt + 1, [rcp("accepted", "receiving")]).sendAgain, "a word from the PC outranks the clock: taken after the hour, it says so and offers nothing");
+  check(one({ ...ph0, sent: true }, 2000, [rcp("refused", "expired")]).sendAgain === true && one({ ...ph0, sent: true }, 2000, [rcp("refused", "incomplete")]).sendAgain === true && !one({ ...ph0, sent: true }, 2000, [rcp("refused", "damaged")]).sendAgain && !one({ ...ph0, sent: true }, 2000, [rcp("accepted", "delivered")]).sendAgain, "refused as too late or incomplete it may be sent again; damaged or delivered, not");
   // Through the bridge: the page's bytes and id.
   const br = createBridge(phone, { loadKinds: async () => ({}) });
   await br.request("pick", { id: a.paired.id });

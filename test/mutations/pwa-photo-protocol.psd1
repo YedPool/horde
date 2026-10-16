@@ -29,5 +29,24 @@
         @{ Name = "turns-photo-offer-dropped"
            Find = '  const photoBytes = Number.isSafeInteger(b.photoBytes) && b.photoBytes > 0 ? b.photoBytes : 0;'
            Replace = '  const photoBytes = 0;' }
+        # THE HOUR (the founder's choice, 2026-10-16).
+        @{ Name = "photo-window-five-minutes"
+           Find = 'export const PHOTO_WINDOW_MS = 3600000;'
+           Replace = 'export const PHOTO_WINDOW_MS = 300000;' }
+        @{ Name = "photo-never-late"
+           Find = '    const late = Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt;'
+           Replace = '    const late = false;' }
+        @{ Name = "photo-late-a-moment-early"
+           Find = '    const late = Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt;'
+           Replace = '    const late = Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt - 1000;' }
+        @{ Name = "photo-waiting-said-as-sending"
+           Find = 'words: late ? PHOTO_NOT_DELIVERED : p.sent ? PHOTO_WAITING : PHOTO_SENDING,'
+           Replace = 'words: late ? PHOTO_NOT_DELIVERED : PHOTO_SENDING,' }
+        @{ Name = "photo-receipt-never-sent-again"
+           Find = 'sendAgain: r.status === "refused" && PHOTO_SEND_AGAIN.indexOf(r.code) >= 0,'
+           Replace = 'sendAgain: false,' }
+        @{ Name = "photo-receipt-any-refusal-sent-again"
+           Find = 'sendAgain: r.status === "refused" && PHOTO_SEND_AGAIN.indexOf(r.code) >= 0,'
+           Replace = 'sendAgain: r.status === "refused",' }
     )
 }

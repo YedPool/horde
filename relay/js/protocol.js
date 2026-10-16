@@ -1040,7 +1040,9 @@ export function readChatReceipt(bodyBytes, horde, machine) {
 // reached the Thrall (saidHow "delivered", so the screen can say which it is). A receipt's own envelope
 // time is the machine's, later than the send by however long the line waited: it orders a line with no
 // better time, and is never shown as when he said it.
-export function chatTimeline({ turns = [], receipts = [], sent = [], photos = [], photoReceipts = [] }) {
+// now: the phone's clock, in milliseconds, for a photo of this phone's that no receipt has named yet
+// (photoItems, A PHOTO WAITS FOR THE PC); 0 leaves every such photo as sent.
+export function chatTimeline({ turns = [], receipts = [], sent = [], photos = [], photoReceipts = [] }, now = 0) {
   const byId = new Map();
   for (const t of turns) {
     let g = byId.get(t.id);
@@ -1081,7 +1083,7 @@ export function chatTimeline({ turns = [], receipts = [], sent = [], photos = []
     items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, said: timeOf(t.time), saidHow: "turn", order: g.seq });
   }
   for (const l of lines.values()) items.push({ ...l, order: l.order === undefined ? Number.MAX_SAFE_INTEGER : l.order });
-  for (const p of photoItems(photos, photoReceipts)) items.push(p);
+  for (const p of photoItems(photos, photoReceipts, now)) items.push(p);
   items.sort((a, b) => (a.at - b.at) || (a.order - b.order));
   return items;
 }
@@ -1100,8 +1102,11 @@ export function chatTimeline({ turns = [], receipts = [], sent = [], photos = []
 export const PHOTO_CHUNK = 48000;
 export const PHOTO_PARTS_MOST = 64;
 // The window the manifest names: its parts must reach the machine within it (the machine allows at most
-// its photoWindowSeconds, 600 by default, after the signing time).
-export const PHOTO_WINDOW_MS = 300000;
+// its photoWindowSeconds, 3600 by default, after the signing time). AN HOUR (the founder's choice,
+// 2026-10-16): a photo sent while the PC is off waits up to an hour for it, and the phone says so meanwhile
+// (PHOTO_WAITING); past the hour with no word from the PC it says plainly it was not delivered
+// (PHOTO_NOT_DELIVERED) and offers to send it again.
+export const PHOTO_WINDOW_MS = 3600000;
 const PHOTO_PART_AAD = "horde-relay/chat/v1 photo part";
 
 // The relay key a part is put under: the sender, the kind, the photo, the number and the first 16 hex of
@@ -1178,6 +1183,11 @@ export const PHOTO_WORDS = {
   }
 };
 export const PHOTO_SENDING = "Sending the photo...";
+export const PHOTO_WAITING = "Sent: waiting for your PC to take it (it waits up to an hour).";
+export const PHOTO_NOT_DELIVERED = "Not delivered: your PC did not take it within an hour. Send it again.";
+// The receipt codes after which a photo can only arrive by being sent again: the page offers Send again
+// for these, as for one that was not delivered in its hour.
+export const PHOTO_SEND_AGAIN = ["expired", "incomplete"];
 export const PHOTO_NOT_IMAGE = "That file is not a picture: choose a JPEG, PNG or WebP photo.";
 export const PHOTO_PC_OLD = "Your PC does not take photos yet: it needs a Horde update.";
 
@@ -1192,16 +1202,25 @@ export function readPhotoReceipt(bodyBytes, horde, machine) {
   return { ok: true, reason: "", value: { session: b.session, photoId: b.photoId, status: b.status, code: b.code, sentAt: Number.isSafeInteger(b.sentAt) && b.sentAt > 0 ? b.sentAt : 0, file } };
 }
 
-// The photos of the chat: those this phone sent this session ({ photoId, at, session }), and every one a
-// receipt names (another phone's too), each once, with its newest receipt's words.
-function photoItems(photos, photoReceipts) {
+// The photos of the chat: those this phone sent this session ({ photoId, at, session, expiresAt, sent }),
+// and every one a receipt names (another phone's too), each once, with its newest receipt's words.
+// A PHOTO WAITS FOR THE PC (the founder's choice, 2026-10-16): one of this phone's that no receipt names
+// yet is sending while its parts go, then waiting (PHOTO_WAITING) - the PC may be off - and, once now
+// is past the window its manifest names (expiresAt), not-delivered: the PC refuses it after that
+// (Photo.ps1, expired), so it can only arrive by being sent again. sendAgain marks an item the page may
+// offer to send again.
+function photoItems(photos, photoReceipts, now = 0) {
   const byId = new Map();
-  for (const p of photos) byId.set(p.photoId, { kind: "photo", photoId: p.photoId, at: p.at, said: p.at, saidHow: "sent", session: p.session, status: "sending", code: "", words: PHOTO_SENDING, file: "", seq: -1, mine: true, order: Number.MAX_SAFE_INTEGER });
+  for (const p of photos) {
+    const late = Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt;
+    const status = late ? "not-delivered" : p.sent ? "waiting" : "sending";
+    byId.set(p.photoId, { kind: "photo", photoId: p.photoId, at: p.at, said: p.at, saidHow: "sent", session: p.session, status, code: "", words: late ? PHOTO_NOT_DELIVERED : p.sent ? PHOTO_WAITING : PHOTO_SENDING, file: "", seq: -1, mine: true, sendAgain: late, order: Number.MAX_SAFE_INTEGER });
+  }
   for (const r of photoReceipts) {
     const had = byId.get(r.photoId);
     if (had && had.seq > r.seq) continue;
     const at = had ? had.at : (r.sentAt || r.ts);
-    byId.set(r.photoId, { kind: "photo", photoId: r.photoId, at, said: r.sentAt || (had ? had.said : 0), saidHow: "sent", session: r.session, status: r.status, code: r.code, words: PHOTO_WORDS[r.status][r.code], file: r.file, seq: r.seq, mine: !!(had && had.mine), order: Number.MAX_SAFE_INTEGER });
+    byId.set(r.photoId, { kind: "photo", photoId: r.photoId, at, said: r.sentAt || (had ? had.said : 0), saidHow: "sent", session: r.session, status: r.status, code: r.code, words: PHOTO_WORDS[r.status][r.code], file: r.file, seq: r.seq, mine: !!(had && had.mine), sendAgain: r.status === "refused" && PHOTO_SEND_AGAIN.indexOf(r.code) >= 0, order: Number.MAX_SAFE_INTEGER });
   }
   return [...byId.values()];
 }

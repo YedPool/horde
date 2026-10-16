@@ -956,7 +956,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
-      return { session: s.chat.session, items: P.chatTimeline(s.chat), mode: s.mode, photoBytes: s.chat.photoBytes };
+      return { session: s.chat.session, items: P.chatTimeline(s.chat, now()), mode: s.mode, photoBytes: s.chat.photoBytes };
     },
 
     // The progress log of the horde as this session holds it (refresh reads it), with the reading position
@@ -1047,7 +1047,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       sealed.key.fill(0);
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send the photo again."); }
-      s.chat.photos.push({ photoId, at: env.ts, session });
+      // Kept with the window its manifest names, and marked sent once every part went (THE PHOTO WAITS
+      // FOR THE PC: relay/js/protocol.js, photoItems).
+      const mine = { photoId, at: env.ts, session, expiresAt: env.ts + P.PHOTO_WINDOW_MS, sent: false };
+      s.chat.photos.push(mine);
       let puts = 1;
       for (const p of sealed.parts) {
         if (puts >= PHOTO_BURST) await sleep(PHOTO_PACE_MS);
@@ -1060,6 +1063,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
         }
         if (!done) throw fail("Not all of the photo went: the relay did not take part " + p.n + " of " + sealed.parts.length + ". Send the photo again.");
       }
+      mine.sent = true;
       return { photoId, parts: sealed.parts.length, puts };
     },
 

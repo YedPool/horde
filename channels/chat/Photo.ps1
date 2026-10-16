@@ -44,7 +44,7 @@
 #   is not accepted yet - held too-many, or not come - in a PENDING area: capped PER PHOTO and in how
 #   many photos it holds, a photo a verified manifest names outranking unsigned ones, the oldest evicted
 #   only once it is no longer fresh and the newcomer refused while it is, each part dropped
-#   photoWindowSeconds (600 s by default) after it was written (Add-HordeChatPhotoPending). It is never
+#   photoWindowSeconds (3600 s by default) after it was written (Add-HordeChatPhotoPending). It is never
 #   taken early: when its manifest is accepted, every waiting part of it is checked against the digests
 #   like any other, and a part that does not match is deleted.
 #
@@ -392,7 +392,7 @@ function Add-HordeChatPhotoPending {
     # LEFT: junk kept fresh under 4 ids refuses the early parts of a photo whose manifest has not been
     # verified here at all (a held one outranks junk: below), and junk put under a photo's own id ahead
     # of its later parts, while its manifest is held, fills its 48 - each for as long as a part may wait,
-    # up to photoWindowSeconds (600 s by default), not the phone's 5 minutes. Either breaks that
+    # up to photoWindowSeconds (3600 s by default, the same hour the phone names). Either breaks that
     # one photo (incomplete, and the phone is told), never forges one. "Oldest" is by write time, made
     # strictly increasing below: NTFS times a burst of writes alike, and a tie would leave the order to
     # the names.

@@ -435,6 +435,19 @@ function drawChat(rec) {
     if (it.truncated) notes.push("Cut short at the machine: it was longer than a turn may be.");
     if (it.redactions) notes.push(it.redactions + " thing(s) that look like secrets were hidden at the machine.");
     for (const n of notes) { const d = document.createElement("div"); d.className = "chat-note"; d.textContent = n; box.appendChild(d); }
+    // SEND AGAIN (the founder's choice, 2026-10-16): a photo the PC did not take within its hour, or
+    // refused as too late or incomplete, can be sent again from here while this page still holds what it
+    // shrank - as a new photo, since the PC closed the old one. Otherwise the words say to send it again.
+    if (it.kind === "photo" && it.sendAgain && photoKept.has(it.photoId)) {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "chat-again";
+      again.textContent = "Send again";
+      again.disabled = !(v.mode === "passkey");
+      const old = it.photoId;
+      again.addEventListener("click", () => { const k = photoKept.get(old); if (k) sendPhotoBytes(k.bytes, k.thumb); });
+      box.appendChild(again);
+    }
     log.appendChild(box);
   }
   $("chatEmpty").hidden = v.items.length > 0 || !!v.session;
@@ -453,7 +466,24 @@ function drawChat(rec) {
 // What the machine said it takes (its newest turns body), and the small pictures this page drew, by id.
 let photoOffered = 0;
 const photoThumbs = new Map();
+// What this page shrank, by photo id, kept in memory only (never stored) so Send again needs no new pick;
+// dropped when the horde locks (dropDoc).
+const photoKept = new Map();
 let photoSending = false;
+// One shrunk photo to the PC, under a new id. Its own photo, sent, takes him to the bottom, as his own
+// line does (chat-scroll.js).
+async function sendPhotoBytes(bytes, thumb) {
+  if (photoSending) return;
+  photoSending = true;
+  say("action", "");
+  try {
+    const id = newDraftId();
+    photoThumbs.set(id, thumb);
+    photoKept.set(id, { bytes, thumb });
+    const r = await bridge.request("chat-photo", { bytes, id });
+    if (r.ok) chatScroll.sent(); else say("action", r.reason);
+  } catch (e) { say("action", messageOf(e)); } finally { photoSending = false; settleUpdate(); }
+}
 $("chatPhoto").addEventListener("click", () => {
   if ($("chatPhoto").disabled || photoSending) return;
   // A MACHINE OLDER THAN PHOTOS never offered them: said in plain words, and nothing is picked or sent.
@@ -466,19 +496,15 @@ $("chatPhotoFile").addEventListener("change", async () => {
   if (!file || photoSending) return;
   photoSending = true;
   say("action", "");
+  let made = null;
   try {
     // THE FIRST BYTES DECIDE, not the name or the type the browser guesses from it: an HTML page called
     // .jpg is refused here, before anything is drawn.
     const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
     if (!sniffImage(head)) { say("action", PHOTO_NOT_IMAGE); return; }
-    let made;
-    try { made = await shrinkInBrowser(file); } catch (e) { say("action", PHOTO_NOT_IMAGE + " (" + messageOf(e) + ")"); return; }
-    const id = newDraftId();
-    photoThumbs.set(id, made.thumb);
-    const r = await bridge.request("chat-photo", { bytes: made.bytes, id });
-    // HIS OWN PHOTO, SENT, takes him to the bottom, as his own line does (chat-scroll.js).
-    if (r.ok) chatScroll.sent(); else say("action", r.reason);
-  } catch (e) { say("action", messageOf(e)); } finally { photoSending = false; settleUpdate(); }
+    try { made = await shrinkInBrowser(file); } catch (e) { made = null; say("action", PHOTO_NOT_IMAGE + " (" + messageOf(e) + ")"); return; }
+  } catch (e) { made = null; say("action", messageOf(e)); } finally { photoSending = false; if (!made) settleUpdate(); }
+  if (made) await sendPhotoBytes(made.bytes, made.thumb);
 });
 // The page's id for the words in the composer: kept until they are sent, so a line sent again after a
 // failure is the same line, posted once - but only the SAME words: words changed since the last try
@@ -1160,7 +1186,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); photoKept.clear(); chatScroll.reset(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }

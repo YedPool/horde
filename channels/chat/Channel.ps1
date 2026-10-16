@@ -160,7 +160,7 @@ $script:HordeChatChannelSettings = New-HordeModuleSettings -Module "relay-chat" 
     @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the founder's lines are from: F, unless the person who sends them wears another." },
     # PHOTOS (channels/chat/Photo.ps1). 2 MiB is the coordinator's cap (2026-10-14); the phone makes about 1 MB.
     @{ name = "photoMaxBytes"; kind = "whole"; default = 2097152; min = 65536; max = 2097152; what = "The largest photo the founder may send from the phone, in bytes, after the phone shrinks it." },
-    @{ name = "photoWindowSeconds"; kind = "whole"; default = 600; min = 60; max = 3600; what = "How long after the phone signs a photo its parts may come, in seconds; a photo not whole by then is dropped." },
+    @{ name = "photoWindowSeconds"; kind = "whole"; default = 3600; min = 60; max = 3600; what = "How long after the phone signs a photo its parts may come, in seconds; a photo not whole by then is dropped." },
     @{ name = "photosPerMinute"; kind = "whole"; default = 3; min = 1; max = 30; what = "The most photos taken from the phone in any 60 seconds; one past it waits." },
     # 100 a day: the founder asked for generous budgets (2026-10-14). At 2 MiB a photo is 44 parts and its
     # manifest, so 100 are at most about 8,800 relay requests a day, inside the account's 20,000.

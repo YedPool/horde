@@ -31,5 +31,16 @@
         @{ Name = "photo-receipts-not-read"
            Find = '      c.photoReceipts.push({ ...r.value, seq: h.seq, ts: h.ts });'
            Replace = '' }
+        # THE HOUR (the founder's choice, 2026-10-16): a photo put whole waits for the PC, and past its
+        # window says it was not delivered.
+        @{ Name = "photo-never-marked-sent"
+           Find = '      mine.sent = true;'
+           Replace = '' }
+        @{ Name = "photo-window-not-kept"
+           Find = 'expiresAt: env.ts + P.PHOTO_WINDOW_MS, sent: false };'
+           Replace = 'sent: false };' }
+        @{ Name = "chat-read-without-the-clock"
+           Find = 'items: P.chatTimeline(s.chat, now()), mode'
+           Replace = 'items: P.chatTimeline(s.chat), mode' }
     )
 }

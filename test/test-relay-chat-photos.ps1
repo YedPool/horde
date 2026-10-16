@@ -339,10 +339,20 @@ try {
     $null = Send-Manifest $W $P6
     $turn = Invoke-Turn $W
     Check ($turn.Contains("refused (expired)")) ("a manifest whose window has passed is refused (" + $turn + ")")
-    $P6b = New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -ExpiresInMs 3600000
+    $P6b = New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -ExpiresInMs 3600001
     $null = Send-Manifest $W $P6b
     $turn = Invoke-Turn $W
     Check ($turn.Contains("refused (expired)") -and $turn.Contains("after it was signed")) ("a manifest whose window is longer than the setting is refused (" + $turn + ")")
+    # THE HOUR (the founder's choice, 2026-10-16): a photo sent while the PC was off waits for it up to an
+    # hour - the window the phone names (relay/js/protocol.js, PHOTO_WINDOW_MS) and the PC's default.
+    $P6c = New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -SignedAt ([datetime]::UtcNow.AddMinutes(-50)) -ExpiresInMs 3600000
+    $null = Send-Manifest $W $P6c
+    $turn = Invoke-Turn $W
+    Check ($turn.Contains("accepted (receiving)") -and -not $turn.Contains("refused (expired)")) ("THE HOUR: a photo signed 50 minutes before the PC came on, with the phone's one-hour window, is taken by the default setting (" + $turn + ")")
+    $P6d = New-Photo -World $W -Image (New-ImageBytes -Type "jpg" -Length 1000) -SignedAt ([datetime]::UtcNow.AddMinutes(-61)) -ExpiresInMs 3600000
+    $null = Send-Manifest $W $P6d
+    $turn = Invoke-Turn $W
+    Check ($turn.Contains("refused (expired)") -and $turn.Contains("window has passed")) ("TWIN: the same photo signed 61 minutes before is refused, expired (" + $turn + ")")
     # WHAT THE MANIFEST BINDS, each a lie the founder's own passkey signed: refused, with its code.
     $lies = [ordered]@{
         "wrong-sender (from)" = @{ from = ("ab" * 16) }
