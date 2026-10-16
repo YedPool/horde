@@ -1,5 +1,5 @@
 # Mutations of decisions/page/list.js's ONE STAGE, AND A BOX TO ANSWER IN and THE ANSWERED ARE HIDDEN
-# UNTIL ASKED FOR. Run:
+# UNTIL ASKED FOR, and THE SWITCH IS REACHED BY KEYS. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\decisions-page-details-browser.psd1
 # test\test-decisions-page-browser.ps1 (headless Chrome, real touch events; its driver
 # decisions\page\test\browser-details.mjs) must fail for each. Each find string occurs once.
@@ -28,5 +28,18 @@
         @{ Name = "the-switch-loses-his-place"
            Find = '      if (lastJson === null) { drawAnsweredButton(); return; }'
            Replace = '      if (lastJson === null) { drawAnsweredButton(); return; } draw({ keepBar: true }); window.scrollTo(0, 0); return;' }
+        # THE SWITCH IS REACHED BY KEYS (review of PR 311).
+        @{ Name = "ctrl-down-with-no-fold-goes-nowhere"
+           Find = '      toSwitch();'
+           Replace = '' }
+        @{ Name = "up-from-the-first-fold-goes-nowhere"
+           Find = 'else if (e.key === "ArrowUp" && at === 0) { toSwitch(); }'
+           Replace = '' }
+        @{ Name = "down-from-the-switch-goes-nowhere"
+           Find = 'if (e.key === "ArrowDown" && !e.ctrlKey && !e.altKey) {'
+           Replace = 'if (false) {' }
+        @{ Name = "the-switch-names-only-the-answered"
+           Find = 'var ANSWERED_WORDS = { on: "Show answered and closed: on", off: "Show answered and closed: off",'
+           Replace = 'var ANSWERED_WORDS = { on: "Show answered: on", off: "Show answered: off",' }
     )
 }
