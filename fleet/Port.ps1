@@ -14,6 +14,12 @@
 #     Running    ($snapshot)                 the live ones, { sessionId; pid; cwd } each
 #     ResumeLine ($id)                       the one shell line that resumes session $id
 #     Scrub      ()                          environment map for the woken pane: name -> $null removes it
+#     LastTyped  ($transcriptPath, $since)   OPTIONAL (hibernate, slice 2): the turns a person typed into
+#                                            the session at or after $since, as an answer: known list of
+#                                            { at (UTC [datetime]); text (its first 200 characters) },
+#                                            newest first; unknown when the transcript cannot be read. A
+#                                            line the fleet's own tools typed (a mail pointer) may be
+#                                            among them: telling those apart is fleet/Hibernate.ps1's
 #   hosts/<name>/Fleet.ps1   Register-HordeFleetHost
 #     Placement  ($refs)                     where each session sits now: $refs are { sessionId; instance;
 #                                            pane } as the fleet registry stores them; answer known map
@@ -49,11 +55,12 @@ function Register-HordeFleetAgent {
         [Parameter(Mandatory = $true)][scriptblock]$Verdict,
         [Parameter(Mandatory = $true)][scriptblock]$Running,
         [Parameter(Mandatory = $true)][scriptblock]$ResumeLine,
-        [Parameter(Mandatory = $true)][scriptblock]$Scrub
+        [Parameter(Mandatory = $true)][scriptblock]$Scrub,
+        [scriptblock]$LastTyped = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($a in @($script:HordeFleetAgents)) { if ($a.name -ceq $Name) { $script:HordeFleetAgents.Remove($a) } }
-    [void]$script:HordeFleetAgents.Add([pscustomobject]@{ name = $Name; snapshot = $Snapshot; verdict = $Verdict; running = $Running; resumeLine = $ResumeLine; scrub = $Scrub })
+    [void]$script:HordeFleetAgents.Add([pscustomobject]@{ name = $Name; snapshot = $Snapshot; verdict = $Verdict; running = $Running; resumeLine = $ResumeLine; scrub = $Scrub; lastTyped = $LastTyped })
 }
 
 function Register-HordeFleetHost {
