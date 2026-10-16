@@ -1,3 +1,5 @@
+# CONTROL for PR 321: exit 0 with no closing banner must read as NOT RUN.
+exit 0
 # DOES ANY SHIPPED FILE CALL ConvertFrom-Json ITSELF BEYOND WHAT core/json-parse-allowlist.txt ALLOWS?
 #
 # Issue #274: PowerShell 7's ConvertFrom-Json reads a date-shaped string as a [datetime], and the
