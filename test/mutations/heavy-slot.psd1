@@ -35,6 +35,15 @@
         @{ Name = "run-code-lost"
            Find = '    $script:code = [HordeHeavySlotJobV1]::ExitCode($job.process)'
            Replace = '    $script:code = 0' }
+        @{ Name = "quotes-left-on-the-pieces"
+           Find = '$_[0] -eq "''" -and $_[-1] -eq "''"'
+           Replace = '$false' }
+        @{ Name = "a-quoted-piece-passed-on"
+           Find = 'if ($script:argsRefused -eq "" -and ($a.Contains(''"'') -or $a.StartsWith("''") -or $a.EndsWith("''")))'
+           Replace = 'if ($false)' }
+        @{ Name = "argsfile-non-string-taken"
+           Find = 'if (@($items | Where-Object { $_ -isnot [string] }).Count -gt 0)'
+           Replace = 'if ($false)' }
         @{ Name = "missing-script-run-anyway"
            Find = 'if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $script:code = 126;'
            Replace = 'if ($false) { $script:code = 126;' }

@@ -197,6 +197,41 @@ try {
     Check ($n.ExitCode -eq 0) "the slot was released after the memory refusal: the next run had it"
 
     Write-Host ""
+    Write-Host ""
+    Write-Host "--- a run's arguments survive powershell -File, or are refused ---" -ForegroundColor Cyan
+    # The call an agent session made (2026-10-14): the list typed for PowerShell, handed on by powershell
+    # -File as ONE string with its quotes still on. The suite has a ValidateSet, as the real one did.
+    $argsSuite = 'param([ValidateSet("smoke", "full")][string]$Suite, [string]$Log)' + "`n" + 'Set-Content -LiteralPath $Log -Value ("suite=" + $Suite)' + "`n" + 'exit 0' + "`n"
+    [System.IO.File]::WriteAllText((Join-Path $work "suite-args.ps1"), $argsSuite)
+    function Start-ArgsGate {
+        param([string]$Tag, [string[]]$Pass)
+        $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-Worktree", $work, "-Script", "suite-args.ps1", "-MinFreeGB", "0",
+            "-SlotName", (New-Slot), "-HolderFile", (Join-Path $work ($Tag + ".holder")), "-Out", (Join-Path $work ($Tag + ".out.txt"))) + $Pass
+        $p = Start-Process -FilePath $shell -ArgumentList $argv -RedirectStandardOutput (Join-Path $work ($Tag + ".gate.txt")) -RedirectStandardError (Join-Path $work ($Tag + ".gate.err")) -NoNewWindow -PassThru
+        $null = $p.Handle; $p.WaitForExit(); return $p
+    }
+    $alog = Join-Path $work "args.log"
+    $q = Start-ArgsGate -Tag "quoted" -Pass @("-ScriptArgs", ("'-Suite','smoke','-Log','" + $alog + "'"))
+    Check ($q.ExitCode -eq 0) ("the quoted list as one string runs, exit 0 (" + $q.ExitCode + ")")
+    Check ((Test-Path -LiteralPath $alog) -and ((Get-Content -LiteralPath $alog -Raw).Trim() -ceq "suite=smoke")) "and the suite got -Suite smoke, its quotes taken off"
+    Remove-Item -LiteralPath $alog -ErrorAction SilentlyContinue
+    $plain = Start-ArgsGate -Tag "plain" -Pass @("-ScriptArgs", ("-Suite,full,-Log," + $alog))
+    Check ($plain.ExitCode -eq 0 -and ((Get-Content -LiteralPath $alog -Raw).Trim() -ceq "suite=full")) "CONTROL: an unquoted list still runs as before"
+    Remove-Item -LiteralPath $alog -ErrorAction SilentlyContinue
+    $file = Join-Path $work "args.json"
+    [System.IO.File]::WriteAllText($file, ('["-Suite", "smoke", "-Log", "' + ($alog -replace '\\', '\\') + '"]'))
+    $af = Start-ArgsGate -Tag "argsfile" -Pass @("-ArgsFile", $file)
+    Check ($af.ExitCode -eq 0 -and ((Get-Content -LiteralPath $alog -Raw).Trim() -ceq "suite=smoke")) ("an -ArgsFile of strings runs exactly those arguments (" + $af.ExitCode + ")")
+    Remove-Item -LiteralPath $alog -ErrorAction SilentlyContinue
+    $bad = Start-ArgsGate -Tag "halfquoted" -Pass @("-ScriptArgs", ("'-Suite,smoke,-Log," + $alog))
+    Check ($bad.ExitCode -eq 126) ("a piece still holding a quote is refused with 126 (" + $bad.ExitCode + ")")
+    Check ((Get-GateText "halfquoted") -match "still holds a quote") "it says why"
+    Check (-not (Test-Path -LiteralPath $alog)) "and the run never started"
+    [System.IO.File]::WriteAllText($file, '["-Suite", 3]')
+    $nf = Start-ArgsGate -Tag "badfile" -Pass @("-ArgsFile", $file)
+    Check ($nf.ExitCode -eq 126 -and (Get-GateText "badfile") -match "not a string") ("an -ArgsFile holding a non-string is refused with 126 (" + $nf.ExitCode + ")")
+
+    Write-Host ""
     Write-Host "--- a run past its time is ended with what it started ---" -ForegroundColor Cyan
     $slot = New-Slot
     $r = Start-Gate -Slot $slot -Tag "long" -Seconds 30 -More @("-RunSeconds", "2")
