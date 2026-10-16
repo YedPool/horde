@@ -1,5 +1,5 @@
 // Tests of this harness's reader through the meter's real collector and store, on synthetic
-// transcripts only. Run: node --test agents/claude-code/metrics/test/
+// transcripts only. Run: node --test "agents/claude-code/metrics/test/*.test.mjs"
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

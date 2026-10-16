@@ -197,26 +197,27 @@ class Store {
   // (which would lose them for good).
   // batch = { tokens_requests: [], tokens_turns: [], tokens_agents: [], tokens_limits: [], limit_resumes: [] }
   apply(batch, offsetRec) {
-    const counts = { tokens_requests: 0, tokens_turns: 0, tokens_agents: 0, tokens_limits: 0 };
+    // Counts are DISTINCT rows touched, so a request repeated on three records is one row, not three.
+    const keys = { tokens_requests: new Set(), tokens_turns: new Set(), tokens_agents: new Set(), tokens_limits: new Set() };
     const s = this.s;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const r of batch.tokens_turns || []) { s.turn.run(r.at, r.session_id, nz(r.agent_id), r.turn_uuid, r.trigger); counts.tokens_turns++; }
+      for (const r of batch.tokens_turns || []) { s.turn.run(r.at, r.session_id, nz(r.agent_id), r.turn_uuid, r.trigger); keys.tokens_turns.add(r.turn_uuid); }
       const touched = new Set((batch.tokens_turns || []).map((r) => r.turn_uuid));
       for (const r of batch.tokens_requests || []) {
         s.req.run(r.at, r.request_id, r.session_id, nz(r.agent_id), nz(r.turn_uuid), r.orc, r.rank, r.model, r.family,
           r.input, r.output, r.cache_read, r.cache_write_5m, r.cache_write_1h, r.context_tokens, r.cost_usd);
         if (r.turn_uuid) touched.add(r.turn_uuid);
-        counts.tokens_requests++;
+        keys.tokens_requests.add(r.request_id);
       }
       for (const r of batch.tokens_agents || []) {
         s.agent.run(r.at, r.tool_use_id, r.parent_session_id, nz(r.agent_id), r.orc, nz(r.agent_type), nz(r.model_asked),
           nz(r.model_used), nz(r.description), nz(r.route_id));
-        counts.tokens_agents++;
+        keys.tokens_agents.add(r.tool_use_id);
       }
       for (const r of batch.tokens_limits || []) {
         s.limit.run(r.at, r.session_id, nz(r.agent_id), r.orc, r.hit_uuid, r.limit_type, nz(r.resets_at), nz(r.stuck_until), nz(r.stuck_ms));
-        counts.tokens_limits++;
+        keys.tokens_limits.add(r.hit_uuid);
       }
       for (const r of batch.limit_resumes || []) s.resume.run(r.at, r.at, r.session_id, nz(r.agent_id), r.at);
       for (const u of touched) s.recompute.run(u);
@@ -226,7 +227,7 @@ class Store {
       this.db.exec('ROLLBACK');
       throw e;
     }
-    return counts;
+    return Object.fromEntries(Object.entries(keys).map(([t, k]) => [t, k.size]));
   }
 
   tableStats() {
