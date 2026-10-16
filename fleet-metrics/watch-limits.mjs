@@ -23,6 +23,15 @@ import { openReaders } from './readers.mjs';
 export const TAIL_BYTES = 64 * 1024;
 export const RECENT_MS = 6 * 3600 * 1000;
 export const ALERT_AFTER_MS = 5 * 60 * 1000;
+// A hit older than this is history, not news: its session was either resumed in a way the tail does not
+// show or abandoned, and telling the master about it now would only be noise.
+export const STALE_HIT_MS = 12 * 3600 * 1000;
+// On the very first run there is no record of what was already reported, so every stop that is already
+// older than this is taken as known and recorded as alerted WITHOUT a message (alerted_silently = 1).
+// Without it the first run would send one alert per old stop, a burst nobody can act on.
+export const BASELINE_MS = 30 * 60 * 1000;
+export const FIRST_RUN_KEY = 'watch_first_run_at';
+const MAX_LINES = 10;
 
 const LABELS = { seven_day: 'weekly', five_hour: '5-hour', seven_day_opus: 'weekly Opus', seven_day_sonnet: 'weekly Sonnet' };
 
@@ -37,6 +46,16 @@ export function alertText({ orc, session_id, agent_id, hit, now }) {
     (hit.resets_at ? 'The limit resets at ' + utc(hit.resets_at) + '. ' : 'The reset time is not known. ') +
     'Nothing was typed into it.'
   );
+}
+
+// ONE MESSAGE PER RUN: a run that finds several stopped sessions sends a single message that lists them
+// (at most MAX_LINES lines, so it stays well under the tell's length limit), not one message each.
+export function combinedText(items, now) {
+  if (items.length === 1) return alertText({ ...items[0], now });
+  const lines = items.slice(0, MAX_LINES).map((i) => '- ' + i.orc + ' (session ' + i.session_id.slice(0, 8) + (i.agent_id ? ', helper ' + String(i.agent_id).slice(0, 8) : '') + '): ' +
+    (LABELS[i.hit.limit_type] || i.hit.limit_type) + ' limit since ' + utc(i.hit.at) + (i.hit.resets_at ? ', resets ' + utc(i.hit.resets_at) : ''));
+  if (items.length > MAX_LINES) lines.push('- and ' + (items.length - MAX_LINES) + ' more');
+  return 'Fleet meter: ' + items.length + ' sessions have been stopped by a usage limit for over 5 minutes and have done nothing since:\n' + lines.join('\n') + '\nNothing was typed into them.';
 }
 
 function readTail(file, size) {
@@ -75,7 +94,9 @@ export async function runWatch({ store, opts = {}, readers = null, now = Date.no
   const t0 = Date.now();
   const list = readers || (await openReaders(opts));
   const shared = { ...ctx, opts };
-  const out = { scanned: 0, alerts: 0, would: [], failed: 0, resumed: 0, messages: [], ms: 0 };
+  const firstRun = store.getState(FIRST_RUN_KEY) == null;
+  const out = { scanned: 0, alerts: 0, would: [], failed: 0, resumed: 0, silent: 0, messages: [], ms: 0, firstRun };
+  const pending = [];
   for (const reader of list) {
     for (const root of reader.roots(opts)) {
       for (const file of reader.listFiles(root)) {
@@ -97,21 +118,37 @@ export async function runWatch({ store, opts = {}, readers = null, now = Date.no
         }
         const last = tail.hits[tail.hits.length - 1];
         if (!tail.last_is_hit || last.resumed_at != null) continue;
-        if (now - last.at <= ALERT_AFTER_MS) continue;
+        const age = now - last.at;
+        if (age <= ALERT_AFTER_MS || age >= STALE_HIT_MS) continue;
         const existing = store.limitByHit(last.hit_uuid);
         if (existing && existing.alerted_at != null) continue;
-        const text = alertText({ orc: tail.orc, session_id: tail.session_id, agent_id: tail.agent_id, hit: last, now });
-        if (dryRun) { out.would.push(text); continue; }
-        const r = await sender(text);
-        if (r.ok) { store.markAlerted(last.hit_uuid, now); out.alerts++; out.messages.push(text); } else { out.failed++; out.lastError = r.detail; }
+        if (firstRun && age > BASELINE_MS) {
+          if (!dryRun) store.markAlerted(last.hit_uuid, now, true);
+          out.silent++;
+          continue;
+        }
+        pending.push({ orc: tail.orc, session_id: tail.session_id, agent_id: tail.agent_id, hit: last });
       }
     }
   }
+  if (pending.length > 0) {
+    const text = combinedText(pending, now);
+    if (dryRun) out.would.push(text);
+    else {
+      const r = await sender(text);
+      if (r.ok) {
+        for (const i of pending) store.markAlerted(i.hit.hit_uuid, now);
+        out.alerts = pending.length;
+        out.messages.push(text);
+      } else { out.failed = pending.length; out.lastError = r.detail; }
+    }
+  }
+  if (!dryRun && firstRun) store.setState(FIRST_RUN_KEY, now);
   out.ms = Date.now() - t0;
   return out;
 }
 
 export function watchSummary(r, dryRun) {
-  return 'watch-limits: scanned=' + r.scanned + (dryRun ? ' would_send=' + r.would.length : ' alerts=' + r.alerts) +
-    ' resumed=' + r.resumed + ' failed=' + r.failed + ' ms=' + r.ms;
+  return 'watch-limits: scanned=' + r.scanned + (dryRun ? ' would_send=' + r.would.length : ' alerts=' + r.alerts + ' messages=' + r.messages.length) +
+    ' silent=' + r.silent + ' resumed=' + r.resumed + ' failed=' + r.failed + ' ms=' + r.ms;
 }

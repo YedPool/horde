@@ -108,6 +108,15 @@ const MIGRATIONS = [
     ident TEXT NOT NULL DEFAULT ''
   ) STRICT;
   `,
+  // 2: a limit hit recorded as alerted WITHOUT a message (the first watch run's silent baseline), and
+  // a place for small facts about the meter itself (when the watch first ran).
+  `
+  ALTER TABLE tokens_limits ADD COLUMN alerted_silently INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE meter_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  ) STRICT;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -182,7 +191,9 @@ class Store {
       latestTurn: p('SELECT turn_uuid FROM tokens_turns WHERE session_id = ? AND agent_id IS ? ORDER BY at DESC, id DESC LIMIT 1'),
       openHit: p('SELECT 1 AS x FROM tokens_limits WHERE session_id = ? AND agent_id IS ? AND stuck_until IS NULL LIMIT 1'),
       limitByHit: p('SELECT * FROM tokens_limits WHERE hit_uuid = ?'),
-      alerted: p('UPDATE tokens_limits SET alerted_at = ? WHERE hit_uuid = ? AND alerted_at IS NULL'),
+      alerted: p('UPDATE tokens_limits SET alerted_at = ?, alerted_silently = ? WHERE hit_uuid = ? AND alerted_at IS NULL'),
+      getState: p('SELECT value FROM meter_state WHERE key = ?'),
+      setState: p('INSERT INTO meter_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value'),
     };
   }
 
@@ -190,7 +201,9 @@ class Store {
   latestTurnUuid(session, agent) { const r = this.s.latestTurn.get(session, nz(agent)); return r ? r.turn_uuid : null; }
   hasOpenLimit(session, agent) { return !!this.s.openHit.get(session, nz(agent)); }
   limitByHit(hit) { return this.s.limitByHit.get(hit) || null; }
-  markAlerted(hit, at) { return this.s.alerted.run(at, hit).changes === 1; }
+  markAlerted(hit, at, silently = false) { return this.s.alerted.run(at, silently ? 1 : 0, hit).changes === 1; }
+  getState(key) { const r = this.s.getState.get(key); return r ? r.value : null; }
+  setState(key, value) { this.s.setState.run(key, String(value)); }
 
   // Apply one reader batch and the file's new offset in ONE transaction, so a crash never leaves rows
   // without their offset (which would only be re-applied, harmlessly) or an offset without its rows

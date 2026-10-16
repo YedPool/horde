@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from '../../../../fleet-metrics/store.mjs';
-import { runCollect } from '../../../../fleet-metrics/collect.mjs';
+import { runCollect, summaryLine } from '../../../../fleet-metrics/collect.mjs';
 import { costOf } from '../../../../fleet-metrics/prices.mjs';
 import reader from '../reader.mjs';
 import * as fx from './fixtures/make-projects.mjs';
@@ -185,5 +185,53 @@ test('a usage-limit hit is stored with its type and reset time, and stuck is fil
   h = all(r.store, 'SELECT * FROM tokens_limits')[0];
   assert.equal(h.stuck_until, BASE + 61000);
   assert.equal(h.stuck_ms, 60000);
+  r.done();
+});
+
+// ---- the backfill bounds ----
+
+test('files older than --since-days are skipped and given no offset, so a larger window reads them later', async () => {
+  const r = rig();
+  const oldFile = path.join(r.projects, 'p', fx.SID_STUCK + '.jsonl');
+  const newFile = path.join(r.projects, 'p', fx.SID_ORC + '.jsonl');
+  fx.writeLines(oldFile, [fx.assistant('o1', BASE, 'req_old')]);
+  fx.writeLines(newFile, [fx.assistant('n1', BASE, 'req_new')]);
+  const tenDays = new Date(Date.now() - 10 * 86400000);
+  fs.utimesSync(oldFile, tenDays, tenDays);
+
+  const narrow = await runCollect({ store: r.store, opts: { ...r.opts, sinceDays: 5 }, readers: [reader] });
+  assert.equal(narrow.skippedOld, 1);
+  assert.equal(narrow.files, 1);
+  assert.equal(all(r.store, 'SELECT COUNT(*) AS n FROM tokens_requests')[0].n, 1);
+  assert.equal(r.store.getOffset(oldFile), null, 'no offset was recorded for the skipped file');
+
+  const wide = await runCollect({ store: r.store, opts: { ...r.opts, sinceDays: 30 }, readers: [reader] });
+  assert.equal(wide.skippedOld, 0);
+  assert.equal(all(r.store, "SELECT COUNT(*) AS n FROM tokens_requests WHERE request_id = 'req_old'")[0].n, 1);
+  // The default window is 14 days.
+  const dflt = await runCollect({ store: r.store, opts: r.opts, readers: [reader] });
+  assert.equal(dflt.skippedOld, 0);
+  r.done();
+});
+
+test('--max-ms stops cleanly between files, keeps offsets, says partial, and the next pass continues', async () => {
+  const r = rig();
+  for (let i = 0; i < 4; i++) fx.writeLines(path.join(r.projects, 'p', 'bbbbbbb' + i + '-eeee-4eee-8eee-000000000000.jsonl'), [fx.assistant('x' + i, BASE + i, 'req_x' + i)]);
+  // A clock that spends 100 ms per reading; budget 250 ms: the pass can start three files at most.
+  let t = 1000000000000;
+  const clock = () => (t += 100);
+  const first = await runCollect({ store: r.store, opts: { ...r.opts, clock, maxMs: 250 }, readers: [reader] });
+  assert.equal(first.partial, true);
+  assert.ok(first.files >= 1 && first.files < 4, 'files ' + first.files);
+  assert.equal(first.left, 4 - first.files);
+  assert.match(summaryLine(first), /^collect: partial \(\d+ files left for the next pass\) files=/);
+  const done = all(r.store, 'SELECT COUNT(*) AS n FROM tokens_requests')[0].n;
+  assert.equal(done, first.files);
+  assert.equal(all(r.store, 'SELECT COUNT(*) AS n FROM meter_offsets')[0].n, first.files);
+  // The next pass, with room, finishes the rest and is no longer partial.
+  const second = await runCollect({ store: r.store, opts: r.opts, readers: [reader] });
+  assert.equal(second.partial, false);
+  assert.equal(all(r.store, 'SELECT COUNT(*) AS n FROM tokens_requests')[0].n, 4);
+  assert.doesNotMatch(summaryLine(second), /partial/);
   r.done();
 });

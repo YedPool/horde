@@ -78,27 +78,54 @@ export function collectFile({ store, reader, file, rows, ctx }) {
   return consumed;
 }
 
+export const DEFAULT_SINCE_DAYS = 14;
+// Under the 4 minutes a scheduled run may take, so a first backfill over a large history is cut into
+// passes instead of one run that overstays: each pass keeps what it finished and the next continues.
+export const DEFAULT_MAX_MS = 240000;
+
 export async function runCollect({ store, opts = {}, readers = null, ctx = {} }) {
-  const t0 = Date.now();
+  const clock = opts.clock || Date.now;
+  const t0 = clock();
+  const sinceDays = opts.sinceDays == null ? DEFAULT_SINCE_DAYS : Number(opts.sinceDays);
+  const maxMs = opts.maxMs == null ? DEFAULT_MAX_MS : Number(opts.maxMs);
   const list = readers || (await openReaders(opts));
   const rows = Object.fromEntries(METRIC_TABLES.map((t) => [t, 0]));
   let files = 0;
   let bytes = 0;
+  let skippedOld = 0;
   // One shared context per pass, so a reader can load its lookups (a registry) once and not per file.
   const shared = { ...ctx, opts };
+
+  // FILES OLDER THAN THE WINDOW ARE SKIPPED AND GIVEN NO OFFSET, so a later run with a larger
+  // --since-days still reads them from byte 0. Newest first, so a pass cut short by the time budget has
+  // done the files that matter most.
+  const cutoff = t0 - sinceDays * 86400000;
+  const todo = [];
   for (const reader of list) {
     for (const root of reader.roots(opts)) {
       for (const file of reader.listFiles(root)) {
-        files++;
-        bytes += collectFile({ store, reader, file, rows, ctx: shared });
+        let st;
+        try { st = fs.statSync(file); } catch { continue; }
+        if (st.mtimeMs < cutoff) { skippedOld++; continue; }
+        todo.push({ reader, file, mtime: st.mtimeMs });
       }
     }
   }
-  const ms = Date.now() - t0;
-  return { files, bytes, rows, ms };
+  todo.sort((a, b) => b.mtime - a.mtime);
+
+  // THE TIME BUDGET IS CHECKED BETWEEN FILES, never inside one: a file is read whole (its rows and offset
+  // are one transaction), so stopping here leaves every offset truthful and the next pass picks up the rest.
+  let left = 0;
+  for (let i = 0; i < todo.length; i++) {
+    if (clock() - t0 >= maxMs) { left = todo.length - i; break; }
+    files++;
+    bytes += collectFile({ store, reader: todo[i].reader, file: todo[i].file, rows, ctx: shared });
+  }
+  return { files, bytes, rows, ms: clock() - t0, skippedOld, partial: left > 0, left };
 }
 
 export function summaryLine(r) {
   const per = Object.keys(r.rows).map((t) => t + '=' + r.rows[t]).join(' ');
-  return 'collect: files=' + r.files + ' new_bytes=' + r.bytes + ' rows: ' + per + ' ms=' + r.ms;
+  return 'collect: ' + (r.partial ? 'partial (' + r.left + ' files left for the next pass) ' : '') + 'files=' + r.files + ' skipped_old=' + r.skippedOld +
+    ' new_bytes=' + r.bytes + ' rows: ' + per + ' ms=' + r.ms;
 }

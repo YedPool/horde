@@ -6,6 +6,8 @@
 //   --registry <dir>       the fleet's session registry (default: the attribution file's own)
 //   --agents <dir>         where to look for readers (default: the repository's agents folder)
 //   --horde-script <file>  horde.ps1, used by watch-limits to tell the master session
+//   --since-days <n>       collect: skip files not touched for n days (default 14; they get no offset)
+//   --max-ms <n>           collect: stop between files after n ms (default 240000) and say partial
 import { resolveHome } from './home.mjs';
 import { openStore, SCHEMA_VERSION } from './store.mjs';
 import { runCollect, summaryLine } from './collect.mjs';
@@ -16,7 +18,7 @@ function parseArgs(argv) {
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') o.flags.dryRun = true;
-    else if (['--projects', '--registry', '--agents', '--horde-script'].includes(a)) o.flags[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--projects', '--registry', '--agents', '--horde-script', '--since-days', '--max-ms'].includes(a)) o.flags[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else { o.bad = a; break; }
   }
   return o;
@@ -39,6 +41,12 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
   const home = resolveHome(env);
   if (!home.ok) { err(home.message); return 2; }
   const opts = { projects: a.flags.projects, registry: a.flags.registry, agentsDir: a.flags.agents };
+  for (const k of ['sinceDays', 'maxMs']) {
+    if (a.flags[k] === undefined) continue;
+    const n = Number(a.flags[k]);
+    if (!Number.isFinite(n) || n < 0) { err('--' + (k === 'sinceDays' ? 'since-days' : 'max-ms') + ' must be a number of at least 0'); return 1; }
+    opts[k] = n;
+  }
   let store;
   try {
     store = openStore(home.home);

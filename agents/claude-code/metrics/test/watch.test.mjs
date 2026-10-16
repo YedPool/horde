@@ -139,3 +139,92 @@ test('the watch and the collector agree on the same hit', async () => {
   assert.ok(limits(r.store)[0].alerted_at != null);
   r.done();
 });
+
+// ---- the first run's silent baseline, one message per run, and stale hits ----
+
+const HOUR = 3600000;
+const other = (r, n) => path.join(r.projects, 'p', '5555555' + n + '-eeee-4eee-8eee-00000000000' + n + '.jsonl');
+const prime = (r) => r.watch(Date.now()); // a run that finds nothing: it only records that the watch has run
+
+test('first ever run: stops older than 30 minutes are recorded as alerted silently and send nothing; a young one still alerts', async () => {
+  const r = rig();
+  const now = Date.now();
+  fx.writeLines(r.file, [fx.limitHit('hit-old', now - 2 * HOUR)]);
+  fx.writeLines(other(r, 1), [fx.limitHit('hit-older', now - 5 * HOUR)]);
+  fx.writeLines(other(r, 2), [fx.limitHit('hit-young', now - 10 * MIN)]);
+  const res = await r.watch(now);
+  assert.equal(res.silent, 2);
+  assert.equal(res.alerts, 1);
+  assert.equal(r.sent.length, 1);
+  assert.match(r.sent[0], /10 minutes ago/);
+  const byHit = Object.fromEntries(limits(r.store).map((x) => [x.hit_uuid, x]));
+  for (const h of ['hit-old', 'hit-older']) {
+    assert.ok(byHit[h].alerted_at != null, h);
+    assert.equal(byHit[h].alerted_silently, 1, h);
+  }
+  assert.equal(byHit['hit-young'].alerted_silently, 0);
+  // Later runs repeat nothing.
+  const again = await r.watch(now + 5 * MIN);
+  assert.equal(again.silent, 0);
+  assert.equal(again.alerts, 0);
+  assert.equal(r.sent.length, 1);
+  r.done();
+});
+
+test('after the first run, a stop older than 30 minutes is NOT silenced', async () => {
+  const r = rig();
+  await prime(r);
+  const now = Date.now();
+  fx.writeLines(r.file, [fx.limitHit('hit-1', now - 2 * HOUR)]);
+  const res = await r.watch(now);
+  assert.equal(res.silent, 0);
+  assert.equal(res.alerts, 1);
+  assert.equal(limits(r.store)[0].alerted_silently, 0);
+  r.done();
+});
+
+test('several stopped sessions in one run are told in ONE message', async () => {
+  const r = rig();
+  await prime(r);
+  const now = Date.now();
+  fx.writeLines(r.file, [fx.limitHit('hit-1', now - 10 * MIN)]);
+  fx.writeLines(other(r, 1), [fx.limitHit('hit-2', now - 20 * MIN, { type: 'seven_day' })]);
+  fx.writeLines(other(r, 2), [fx.limitHit('hit-3', now - 30 * MIN)]);
+  const res = await r.watch(now);
+  assert.equal(res.alerts, 3);
+  assert.equal(r.sent.length, 1);
+  assert.match(r.sent[0], /3 sessions have been stopped/);
+  assert.equal((r.sent[0].match(/\n- /g) || []).length, 3);
+  assert.ok(r.sent[0].length < 1400);
+  assert.ok(limits(r.store).every((x) => x.alerted_at != null));
+  const again = await r.watch(now + 2 * MIN);
+  assert.equal(r.sent.length, 1);
+  assert.equal(again.alerts, 0);
+  r.done();
+});
+
+test('a long list is cut to ten lines and says how many more', async () => {
+  const r = rig();
+  await prime(r);
+  const now = Date.now();
+  for (let i = 0; i < 13; i++) fx.writeLines(path.join(r.projects, 'p', 'aaaaaaa' + String(i).padStart(2, '0') + '-eeee-4eee-8eee-000000000000.jsonl'), [fx.limitHit('h' + i, now - 10 * MIN)]);
+  await r.watch(now);
+  assert.equal(r.sent.length, 1);
+  assert.match(r.sent[0], /- and 3 more/);
+  assert.ok(r.sent[0].length < 1500);
+  r.done();
+});
+
+test('a stop 13 hours old sends nothing, even in a transcript touched just now', async () => {
+  const r = rig();
+  await prime(r);
+  const now = Date.now();
+  fx.writeLines(r.file, [fx.limitHit('hit-1', now - 13 * HOUR)]);
+  const res = await r.watch(now);
+  assert.equal(res.alerts, 0);
+  assert.equal(r.sent.length, 0);
+  // And just inside the limit it does speak.
+  fx.writeLines(r.file, [fx.limitHit('hit-2', now - 11 * HOUR)]);
+  assert.equal((await r.watch(now)).alerts, 1);
+  r.done();
+});

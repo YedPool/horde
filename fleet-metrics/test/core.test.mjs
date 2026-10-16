@@ -77,7 +77,7 @@ test('the schema is versioned, strict, WAL, and every metric row carries its sou
   assert.equal(s.db.prepare('PRAGMA busy_timeout').get().timeout, 5000);
   for (const t of s.db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()) {
     assert.match(t.sql, /STRICT/, t.name);
-    assert.match(t.name, /^(tokens_[a-z]+|meter_offsets)$/);
+    assert.match(t.name, /^(tokens_[a-z]+|meter_offsets|meter_state)$/);
     if (t.name.startsWith('tokens_')) assert.match(t.sql, /source TEXT NOT NULL CHECK \(source = 'tokens'\)/, t.name);
   }
   // A row under the wrong source is refused by the database itself.
@@ -133,7 +133,7 @@ test('command line: collect then status against a temp home', () => {
   fs.writeFileSync(path.join(r.projects, 's1.log'), line('a', Date.now()) + line('b', Date.now()));
   const c = r.cli('collect');
   assert.equal(c.status, 0, c.stderr);
-  assert.match(c.stdout, /^collect: files=1 new_bytes=\d+ rows: tokens_requests=2 tokens_turns=0 tokens_agents=0 tokens_limits=0 ms=\d+/);
+  assert.match(c.stdout, /^collect: files=1 skipped_old=0 new_bytes=\d+ rows: tokens_requests=2 tokens_turns=0 tokens_agents=0 tokens_limits=0 ms=\d+/);
   const st = r.cli('status');
   assert.equal(st.status, 0, st.stderr);
   assert.match(st.stdout, /tokens_requests: 2 rows, newest 20/);

@@ -51,9 +51,9 @@ Write-Host ""
 Write-Host "=== collect, and collect again ===" -ForegroundColor Cyan
 $c1 = Invoke-Meter @("collect", "-Projects", $projects, "-Registry", $registry)
 Check ($c1.code -eq 0) ("collect exits 0 (" + $c1.code + ": " + $c1.out.Trim() + ")")
-Check ($c1.out -cmatch 'collect: files=3 new_bytes=[1-9]\d* rows: tokens_requests=4 tokens_turns=3 tokens_agents=2 tokens_limits=1 ms=\d+') ("one summary line: 3 files (two sessions and a subagent), 4 requests (a repeated one counted once), 3 turns, 1 subagent call written twice - by the parent's call and by its sidecar, 1 limit hit (" + $c1.out.Trim() + ")")
+Check ($c1.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=[1-9]\d* rows: tokens_requests=4 tokens_turns=3 tokens_agents=2 tokens_limits=1 ms=\d+') ("one summary line: 3 files (two sessions and a subagent), 4 requests (a repeated one counted once), 3 turns, 1 subagent call written twice - by the parent's call and by its sidecar, 1 limit hit (" + $c1.out.Trim() + ")")
 $c2 = Invoke-Meter @("collect", "-Projects", $projects, "-Registry", $registry)
-Check ($c2.code -eq 0 -and $c2.out -cmatch 'collect: files=3 new_bytes=0 rows: tokens_requests=0 tokens_turns=0 tokens_agents=0 tokens_limits=0') ("the same collect again finds nothing new (" + $c2.out.Trim() + ")")
+Check ($c2.code -eq 0 -and $c2.out -cmatch 'collect: files=3 skipped_old=0 new_bytes=0 rows: tokens_requests=0 tokens_turns=0 tokens_agents=0 tokens_limits=0') ("the same collect again finds nothing new (" + $c2.out.Trim() + ")")
 
 Write-Host ""
 Write-Host "=== status after ===" -ForegroundColor Cyan
