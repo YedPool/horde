@@ -290,8 +290,7 @@ if ($null -ne $iso) {
         if (-not $planOk) { throw "the wake would not call the stand-in: it is not run" }
         # The terminal restore's no-restore markers, as hibernate writes them, for Q and for the master,
         # which this wake does not start: only Q's may go.
-        $markers = Join-Path $profileDir ".wezurrect
-o-restore"
+        $markers = Join-Path $profileDir ".wezurrect\no-restore"
         New-Item -ItemType Directory -Path $markers -Force | Out-Null
         foreach ($l in @("Q", "M")) { [System.IO.File]::WriteAllText((Join-Path $markers ($ids[$l] + ".json")), ('{"v":1,"sessionId":"' + $ids[$l] + '","by":"e2e","reason":"hibernated","at":"2026-10-16T10:00:00Z"}')) }
         $panesBefore = @(Get-Panes)
