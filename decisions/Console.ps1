@@ -85,6 +85,13 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # mark-read: record that everything said up to a record has been read. What `inbox` does by itself
     # in plain text, and what a caller of `inbox -Json` does once it has the line.
     "mark-read" = @{ number = $false; flags = @("UpTo", "Id", "Json");              usage = "mark-read -UpTo <record> [-Id <32 hex>] [-Json]" }
+    # ack: THE ORC THAT ASKED acknowledges the founder's answer, and the question is closed with it as the
+    # closer (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED). The one verb an Orc runs: which
+    # Orc it is, is proven from the session it runs in (acks below), never taken from the command line.
+    ack    = @{ number = $true;  flags = @("Answer", "Id", "Json");                 usage = "ack <number> [-Answer <record>] [-Id <32 hex>] [-Json]"; acks = $true }
+    # ROUTE IS ONE PASS OF THE ROUTER (decisions/Route.ps1), which sends each answer to whoever asked and
+    # records it with the operation route; `routes` tells the dispatch below to hand it on, like `notifies`.
+    route  = @{ number = $false; flags = @();                                       usage = "route"; routes = $true }
     # NOTIFY IS NOT AN OPERATION EITHER: it reads the inbox and rings the warchief's session through a
     # messenger (decisions/Notify.ps1); `notifies` tells the dispatch below to hand it on, like `opens`.
     notify = @{ number = $false; flags = @("Once");                                 usage = "notify [-Once]"; notifies = $true }
@@ -97,6 +104,8 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.
 $script:HordeDecisionCommandActor = "warchief"
+# The role ack acts as: an Orc (decisions/Rules.ps1, the ackers), whichever one the session proves to be.
+$script:HordeDecisionAckActor = "orc"
 
 function Get-HordeDecisionCommandVerbs { return @($script:HordeDecisionCommandVerbs.Keys) }
 
@@ -105,7 +114,7 @@ function Get-HordeDecisionCommandVerb {
     param([Parameter(Mandatory = $true)][string]$Verb)
     $entry = $script:HordeDecisionCommandVerbs[$Verb]
     if ($null -eq $entry) { return $null }
-    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens"); notifies = [bool]$entry.ContainsKey("notifies") }
+    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens"); notifies = [bool]$entry.ContainsKey("notifies"); routes = [bool]$entry.ContainsKey("routes") }
 }
 
 function Get-HordeDecisionCommandUsage {
@@ -333,6 +342,12 @@ function Format-HordeDecisionList {
     $parts = @()
     foreach ($p in $Value.counts.PSObject.Properties) { $parts += ("" + $p.Value + " " + $p.Name) }
     [void]$lines.Add("Decisions: " + ($parts -join ", ") + ".")
+    # THE FLAG (decisions/Rules.ps1, Get-HordeDecisionUnclosed): answered, still open, past the hour - said
+    # first, whatever the list shows below. An answer from an earlier version has no such member.
+    if ($null -ne $Value.PSObject.Properties["unclosed"] -and @($Value.unclosed).Count -gt 0) {
+        [void]$lines.Add("ANSWERED AND NOT CLOSED: " + @($Value.unclosed).Count + " question(s):")
+        foreach ($u in @($Value.unclosed)) { [void]$lines.Add("  " + $u.line + $(if ($u.reminded) { " (reminded once)" } else { "" })) }
+    }
     $questions = @($Value.questions)
     if ($questions.Count -eq 0) { [void]$lines.Add("No question to show (" + $Showing + ")."); return @($lines) }
     $width = ("" + ($questions | ForEach-Object { $_.number } | Measure-Object -Maximum).Maximum).Length
@@ -427,6 +442,16 @@ function Format-HordeDecisionQuestion {
     if ($null -ne $q.PSObject.Properties["needsPasskey"] -and $q.needsPasskey -eq $true) { [void]$lines.Add("Needs a passkey: yes. From the phone it is answered only with a fresh passkey.") }
     if ("$($q.outcome)".Trim() -ne "") { Add-HordeDecisionTextBlock -Lines $lines -Heading ("Closed " + (Format-HordeDecisionTime -At $q.closedAt) + ", with this outcome:") -Text $q.outcome }
     if ("$($q.reopenReason)".Trim() -ne "") { [void]$lines.Add("Last reopened because: " + $q.reopenReason) }
+    if ($null -ne $q.PSObject.Properties["closedBy"]) { [void]$lines.Add("Closed by: " + $q.closedBy + ", acknowledging the founder's answer") }
+    # WHERE ITS ANSWERS WENT (decisions/Route.ps1): the proof that each was routed, one line each.
+    if ($null -ne $q.PSObject.Properties["routes"]) {
+        [void]$lines.Add("Routed:")
+        foreach ($r in @($q.routes)) {
+            $to = $(if ("$($r.seat)" -ceq "orc") { "Orc " + $r.label } else { "the warchief" })
+            [void]$lines.Add("  " + (Format-HordeDecisionTime -At $r.at) + "  " + $(if ("$($r.purpose)" -ceq "nudge") { "reminder for answer record " } else { "answer record " }) + $r.answer + " to " + $to + " (session " + $r.sessionId + ", notice " + $r.notice + ", record " + $r.sequence + ")" + $(if ("$($r.note)" -ne "") { "; " + $r.note } else { "" }))
+            if ("$($r.analyst)" -ne "") { [void]$lines.Add("    analyst: " + $r.analyst) }
+        }
+    }
     [void]$lines.Add("")
     [void]$lines.Add("History:")
     foreach ($h in @($q.history)) { [void]$lines.Add("  " + (Format-HordeDecisionTime -At $h.at) + "  " + $h.note + " (by " + $h.actor + ", record " + $h.sequence + ")") }
@@ -480,8 +505,9 @@ function Format-HordeDecisionAnswer {
         if ($value.message.saidToEarlierWording) { [void]$lines.Add("  NOTE: they were said to wording " + $value.message.wordingVersion + ", and the question is now at wording " + $value.question.wordingVersion + ". They are kept, and marked as said to an earlier wording.") }
     }
     else {
-        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question " }
+        $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question "; rank = "Ranked question "; ack = "Closed question " }
         [void]$lines.Add($done[$Verb] + $value.number + ": " + $value.question.title)
+        if ($Verb -ceq "ack") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note + ". " + $value.question.outcome) }
         if ($Verb -ceq "update" -or $Verb -ceq "rank") { $last = @($value.question.history) | Select-Object -Last 1; [void]$lines.Add("  " + $last.note) }
         if ($Verb -ceq "add") {
             # WHERE IT STANDS IN HIS LIST, said back so that a keeper who gave neither word sees what
@@ -546,7 +572,9 @@ function Invoke-HordeDecisionCommand {
     # like any other, nothing was done, and the caller opens the window or runs notify.
     # It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
     # another verb, a missing number, a file it cannot read.
-    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given)
+    # -Sender: for ack, who is running the command, as notices/Sender.ps1's Resolve-HordeNoticeSender proves
+    # it ({ ok; reason; label }); a test hands in its own. Left out, it is proven when ack needs it.
+    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given, [scriptblock]$Sender = $null)
     $spec = $script:HordeDecisionCommandVerbs[$Verb]
     # Copied into a plain table: the bound parameters of a script block and a table built by a test are
     # different dictionary types, and only a plain table answers ContainsKey for both.
@@ -572,8 +600,9 @@ function Invoke-HordeDecisionCommand {
         if ($numberText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("decisions " + $Verb + " needs the question's number, as in: horde decisions " + $Verb + " 7" + $(if ($numberText -ne "") { " (got '" + $numberText + "')" } else { "" })) }
     }
     elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'" + $usageNote) }
-    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true; notifies = $false } }
-    if ($spec.ContainsKey("notifies")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $true } }
+    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true; notifies = $false; routes = $false } }
+    if ($spec.ContainsKey("notifies")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $true; routes = $false } }
+    if ($spec.ContainsKey("routes")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $false; routes = $true } }
     $id = [guid]::NewGuid().ToString("N")
     if ($have.ContainsKey("Id")) {
         $id = "$($have['Id'])"
@@ -622,6 +651,26 @@ function Invoke-HordeDecisionCommand {
             if (-not ($have.ContainsKey("Json") -and [bool]$have["Json"])) { $request["messages"] = $true }
         }
         "inbox" { $request["actor"] = $script:HordeDecisionCommandActor }
+        "ack" {
+            # WHICH ORC IS PROVEN, NEVER TYPED (decisions/Rules.ps1, THE ANSWER GOES TO THE ONE WHO ASKED):
+            # the session this command runs inside, by notices/Sender.ps1's three steps, and its fleet label.
+            # The rules then hold that Orc to the question's askedBy.
+            $who = $null
+            if ($null -ne $Sender) { $who = & $Sender }
+            else {
+                . (Join-Path (Split-Path -Parent $PSScriptRoot) "notices\Sender.ps1")
+                $who = Resolve-HordeNoticeSender
+            }
+            if ($null -eq $who -or -not [bool]$who.ok) { throw ("decisions ack is run by the Orc that asked, from inside its own session, and which session this is could not be proven: " + $(if ($null -eq $who) { "nothing answered" } else { ("" + $who.reason) -replace '\Ano notice was sent: ', '' })) }
+            if ("$($who.label)" -cnotmatch '\A[A-Z]\z') { throw ("decisions ack is run by the Orc that asked, and this session's fleet label is '" + $who.label + "', which is not an Orc's lane letter. The warchief closes a question with: horde decisions close <number> -Outcome <one line>") }
+            $request["actor"] = $script:HordeDecisionAckActor
+            $request["by"] = "$($who.label)"
+            if ($have.ContainsKey("Answer")) {
+                $answerText = "$($have['Answer'])"
+                if ($answerText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-Answer is the record of the answer you were sent, as the notice names it: -Answer 57" + $usageNote) }
+                $request["answer"] = [long]$answerText
+            }
+        }
         "mark-read" {
             if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }
             $upToText = "$($have['UpTo'])"
@@ -697,5 +746,5 @@ function Invoke-HordeDecisionCommand {
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
-    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false; notifies = $false }
+    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false; notifies = $false; routes = $false }
 }
