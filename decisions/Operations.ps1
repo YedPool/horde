@@ -131,9 +131,9 @@ $script:HordeDecisionOperations = [ordered]@{
     "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
-    # authorized: is the founder's standing answer to a question one his trusted passkey signed? Proven
-    # again from its evidence on every ask (A QUESTION THAT NEEDS A PASSKEY, above); refused, with the
-    # reason, when it is not.
+    # authorized: is the founder's standing answer to a question a plain yes his trusted passkey signed,
+    # with no later answer of his in the relay journal? Proven again on every ask (A QUESTION THAT NEEDS A
+    # PASSKEY, above, and Get-HordeDecisionAuthorizedAnswer); refused, with the reason, when it is not.
     authorized = @{ writes = $false; read = "Get-HordeDecisionAuthorizedAnswer" }
     # Answered from the definitions alone: no store is read, so it answers where a list could not.
     kinds  = @{ writes = $false; read = "Get-HordeDecisionKindsAnswer"; noStore = $true }
@@ -355,11 +355,11 @@ function Test-HordeDecisionPasskeyAnswer {
     # first time it is asked and only then: { ok; reason; keyId; signedAt }. -Root is the store's folder,
     # as Invoke-HordeDecision was given it, which names the home the proof is read from.
     param([string]$Id, [int]$Number, [AllowEmptyString()][string]$Text, [string]$Part = "", [int]$WordingVersion = 0,
-        [string]$Evidence = "", [string]$SignedBy = "", [string]$Root = "", $Now = $null, [string[]]$LaterParts = $null)
+        [string]$Evidence = "", [string]$SignedBy = "", [string]$Root = "", $Now = $null, [string[]]$LaterParts = $null, [switch]$LaterAnyPart)
     $proofHome = Get-HordeDecisionHomeOfStore -Root $Root
     if ($null -eq $proofHome) { return [pscustomobject]@{ ok = $false; reason = "this store is in no Horde home, so there is no relay journal to prove a passkey from"; keyId = ""; signedAt = [long]-1 } }
     if ($null -eq (Get-Command -Name "Test-HordeDecisionsChannelPasskeyAnswer" -CommandType Function -ErrorAction SilentlyContinue)) { . $script:HordeDecisionPasskeyProofFile }
-    return (Test-HordeDecisionsChannelPasskeyAnswer -Id $Id -Number $Number -Text $Text -Part $Part -WordingVersion $WordingVersion -Evidence $Evidence -SignedBy $SignedBy -HordeHome $proofHome -Now $Now -LaterParts $LaterParts)
+    return (Test-HordeDecisionsChannelPasskeyAnswer -Id $Id -Number $Number -Text $Text -Part $Part -WordingVersion $WordingVersion -Evidence $Evidence -SignedBy $SignedBy -HordeHome $proofHome -Now $Now -LaterParts $LaterParts -LaterAnyPart:$LaterAnyPart)
 }
 
 function Get-HordeDecisionPasskeyRefusal {
@@ -533,24 +533,22 @@ function Get-HordeDecisionShowAnswer {
 }
 
 # WHAT AUTHORIZES AN ACTION IS A PLAIN YES (review of PR 324: authorized exited 0 on a proven "no"). His
-# answers are free text, so a yes is read from his words by one strict rule, and anything it cannot read
-# as a yes is not one: his words, trimmed and with runs of spaces made one, start with the word "yes" in
-# any case; hold no question mark; and hold none of the words that take a yes back or make it
-# conditional ($script:HordeDecisionYesTakenBack). "Yes", "yes.", "Yes, deploy it now." authorize; "No",
-# "Yes, but not today", "yes?", "Not yet - yes later", "Deploy it" do not. Erring this way costs him one
-# more tap; the other way would act on a "no". And only a question whose answer can be yes takes one:
-# yes-no, do-then-say, and each part of a question of parts.
-$script:HordeDecisionYesTakenBack = "\b(no|not|nope|never|dont|don't|cant|can't|wont|won't|wait|but|unless|except|if|only|later|stop|hold|cancel|instead|maybe|perhaps)\b|n['\u2019]t\b"
+# answers are free text, and a list of words that take a yes back can never be complete (the second
+# review found "yes, abort", "yes, tomorrow", "yes jk", "yes, as long as tests pass" and a full-width
+# question mark all passing one). So the rule is the whole answer: trimmed, his words are exactly "yes",
+# in any case, with at most one full stop or exclamation mark after it - ASCII only. "Yes", "yes.",
+# "YES!" authorize; "Yes, deploy it now." does not. Anything else is refused with his words in the
+# reason: a question that needs a passkey is answered with the one word, and the conditions go in the
+# question. Erring this way costs him one more tap; the other way would act on a "no". And only a
+# question whose answer can be yes takes one: yes-no, do-then-say, and each part of a question of parts.
+$script:HordeDecisionPlainYes = '\A[Yy][Ee][Ss][.!]?\z'
 $script:HordeDecisionYesKinds = @("yes-no", "do-then-say", "parts")
 
 function Test-HordeDecisionPlainYes {
-    # Are the words -Text a plain yes (above)?
+    # Are the words -Text a plain yes (above)? Trimmed of ASCII white space only, so that no other
+    # character can stand around the word.
     param([AllowEmptyString()][string]$Text)
-    $t = (($Text -replace '\s+', ' ').Trim()).ToLowerInvariant()
-    if ($t -cnotmatch '\Ayes\b') { return $false }
-    if ($t.Contains("?")) { return $false }
-    if ($t -cmatch $script:HordeDecisionYesTakenBack) { return $false }
-    return $true
+    return ($Text.Trim([char[]]@([char]32, [char]9, [char]10, [char]13)) -cmatch $script:HordeDecisionPlainYes)
 }
 
 function Get-HordeDecisionAuthorizedAnswer {
@@ -561,6 +559,9 @@ function Get-HordeDecisionAuthorizedAnswer {
     #     the relay journal (channels/decisions/Answer.ps1, 6);
     #   - given to the wording the question has now;
     #   - a plain yes (above).
+    # WHEN THE WHOLE QUESTION IS ASKED, ANY LATER ANSWER of his in the journal to that question number - to
+    # any part or the whole - refuses (second review of PR 324, 3): whether the question has parts, and
+    # which, is read from the list, which is not signed, so the journal is not filtered by them.
     # THE STANDING ANSWER to a part is his newest answer to that part OR to the whole question, acts (park,
     # unpark) aside: a "yes" to the whole question does not stand over a later "no" to one part, and a
     # later "yes" to the whole question stands over an earlier "no" to a part. To the whole of a question
@@ -593,7 +594,7 @@ function Get-HordeDecisionAuthorizedAnswer {
         $id = ""
         foreach ($k in @($State.ids.Keys)) { if ([long]$State.ids[$k].sequence -eq [long]$standing.sequence) { $id = "$k"; break } }
         $proof = Test-HordeDecisionPasskeyAnswer -Id $id -Number ([int]$number) -Text ([string]$standing.text) -Part "$($standing.part)" -WordingVersion ([int]$standing.wordingVersion) `
-            -Evidence "$($standing.evidence)" -SignedBy "$($standing.signedBy)" -Root $Root -Now $Now -LaterParts $answers
+            -Evidence "$($standing.evidence)" -SignedBy "$($standing.signedBy)" -Root $Root -Now $Now -LaterParts $answers -LaterAnyPart:($part -ceq "")
         if (-not $proof.ok) { return (& $no ($at + " is not proven signed by a passkey this machine trusts: " + $proof.reason)) }
         if (-not (Test-HordeDecisionPlainYes -Text ([string]$standing.text))) { return (& $no ($at + " is signed by his passkey, but his words are not a plain yes: """ + [string]$standing.text + """. Nothing is authorized; ask him a yes-no question and have him answer Yes")) }
         $one = [ordered]@{ sequence = [long]$standing.sequence; signedBy = $proof.keyId; signedAt = [long]$proof.signedAt; wordingVersion = [int]$standing.wordingVersion; text = [string]$standing.text }

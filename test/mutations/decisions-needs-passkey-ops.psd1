@@ -55,7 +55,7 @@
            Find = '    return (& $entry.read $plain $read.list $definitions $Now $Root)'
            Replace = '    return (& $entry.read $plain $read.list $definitions $Now)' }
         @{ Name = "authorized-does-not-ask-the-journal-for-a-later-answer"
-           Find = '-Root $Root -Now $Now -LaterParts $answers'
+           Find = '-Root $Root -Now $Now -LaterParts $answers -LaterAnyPart:($part -ceq "")'
            Replace = '-Root $Root -Now $Now' }
         # --- authorized: only a plain yes ---
         @{ Name = "a-proven-no-authorizes"
@@ -64,15 +64,18 @@
         @{ Name = "any-kind-of-question-authorizes"
            Find = '    if ($script:HordeDecisionYesKinds -cnotcontains $kind) {'
            Replace = '    if ($false) {' }
-        @{ Name = "a-yes-need-not-start-with-yes"
-           Find = '    if ($t -cnotmatch ''\Ayes\b'') { return $false }'
-           Replace = '' }
-        @{ Name = "a-question-is-a-yes"
-           Find = '    if ($t.Contains("?")) { return $false }'
-           Replace = '' }
-        @{ Name = "a-yes-taken-back-is-a-yes"
-           Find = '    if ($t -cmatch $script:HordeDecisionYesTakenBack) { return $false }'
-           Replace = '' }
+        @{ Name = "a-yes-may-go-on-after-the-word"
+           Find = '$script:HordeDecisionPlainYes = ''\A[Yy][Ee][Ss][.!]?\z'''
+           Replace = '$script:HordeDecisionPlainYes = ''\A[Yy][Ee][Ss]''' }
+        @{ Name = "a-yes-may-end-in-a-question-mark"
+           Find = '$script:HordeDecisionPlainYes = ''\A[Yy][Ee][Ss][.!]?\z'''
+           Replace = '$script:HordeDecisionPlainYes = ''\A[Yy][Ee][Ss][.!?]?\z''' }
+        @{ Name = "any-white-space-is-trimmed"
+           Find = '    return ($Text.Trim([char[]]@([char]32, [char]9, [char]10, [char]13)) -cmatch $script:HordeDecisionPlainYes)'
+           Replace = '    return ($Text.Trim() -cmatch $script:HordeDecisionPlainYes)' }
+        @{ Name = "the-whole-question-asked-checks-only-its-own-parts-in-the-journal"
+           Find = ' -LaterParts $answers -LaterAnyPart:($part -ceq "")'
+           Replace = ' -LaterParts $answers' }
         # --- authorized: parts ---
         @{ Name = "a-part-that-is-not-there-is-asked-anyway"
            Find = '    if ($part -cne "" -and $letters -cnotcontains $part) {'

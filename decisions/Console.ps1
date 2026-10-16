@@ -75,8 +75,10 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
     # authorized: what a production action asks before it goes ahead. It succeeds only when the founder's
-    # standing answer to the question is proven signed by his trusted passkey (decisions/Operations.ps1,
-    # A QUESTION THAT NEEDS A PASSKEY); anything else fails the command, with the reason.
+    # standing answer to the question (to every part of a question of parts) is the plain word yes,
+    # proven signed by his trusted passkey, with no later answer of his in the relay journal
+    # (decisions/Operations.ps1, Get-HordeDecisionAuthorizedAnswer); anything else fails the command,
+    # with the reason. It stops mistakes and every honest path, not a hostile process of this user.
     authorized = @{ number = $true; flags = @("Part", "Json");                      usage = "authorized <number> [-Part <letter>] [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
     # THE CONVERSATION UNDER A QUESTION. answer: the session that keeps the list writes down what the
