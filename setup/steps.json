@@ -13,6 +13,24 @@
       "manual": "run horde from Windows PowerShell 5.1: powershell -NoProfile -ExecutionPolicy Bypass -File {root}\\horde.ps1 setup"
     },
     {
+      "id": "store-updates-off",
+      "title": "Microsoft Store automatic updates off",
+      "path": "user",
+      "requirement": "the Microsoft Store does not update apps by itself: a Store update closes every running process of the package, and on 2026-10-16 one closed every pwsh.exe and every session with it (CONTRIBUTING 16)",
+      "checks": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore AutoDownload is 2",
+      "fixes": "sets that value to 2 when this prompt is elevated; never elevates by itself, and from a prompt that is not elevated says so in one sentence and sets nothing",
+      "manual": "run horde setup again from a PowerShell window opened as administrator: it sets HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore AutoDownload to 2"
+    },
+    {
+      "id": "powershell-msi",
+      "title": "PowerShell 7 from the MSI, not the Microsoft Store",
+      "path": "user",
+      "requirement": "PowerShell 7 installed from the vendor's MSI at C:\\Program Files\\PowerShell\\7\\pwsh.exe, which Horde starts by full path; Horde never depends on a Microsoft Store package",
+      "checks": "pwsh.exe from the MSI is installed and reports a version; when the pwsh on the search path is the Store copy (under a WindowsApps folder), that is noted",
+      "fixes": "when the MSI copy is missing and this prompt is elevated, takes the MSI's address and SHA-256 from winget show, downloads it to a fresh temporary folder, checks the SHA-256, installs it quietly with msiexec (no automatic updates through Microsoft Update), and checks that the new pwsh.exe reports its version; never uninstalls the Store copy, which would close every pwsh.exe running from it",
+      "manual": "run horde setup again from a PowerShell window opened as administrator: it installs the PowerShell 7 MSI"
+    },
+    {
       "id": "home",
       "title": "Horde home",
       "path": "user",

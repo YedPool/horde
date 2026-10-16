@@ -39,7 +39,7 @@ foreach ($f in @("Tristate", "Home", "ModuleSettings", "Heartbeat", "Services"))
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 . (Join-Path $root "relay\Trust.ps1")
 . (Join-Path $root "relay\Pairing.ps1")
-foreach ($f in @("RelayDeploy", "RelayRun", "QrCode", "RelayPair", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
+foreach ($f in @("RelayDeploy", "RelayRun", "QrCode", "RelayPair", "SetupStore", "Setup")) { . (Join-Path $root ("cli\" + $f + ".ps1")) }
 . (Join-Path $root "test\lib\Cli.ps1")
 . (Join-Path $root "test\lib\RelayPhone.ps1")
 Set-StrictMode -Version Latest
@@ -59,6 +59,10 @@ $clientId = "123456789012-fakeclientforhordesetup000000000.apps.googleuserconten
 $clientSecret = "GOCSPX-fakeSecretForHordeSetup01234567"
 $clientFile = Join-Path $prof ".horde-secrets\google-oauth-client.json"
 $script:said = New-Object System.Collections.ArrayList
+# The Store and PowerShell 7 steps (cli/SetupStore.ps1) read the real registry and search path unless told
+# otherwise; this suite is about the rest, so they read a pretend machine that is already as it should be.
+$fakeMachine = Join-Path $work "pretend-machine.json"
+[System.IO.File]::WriteAllText($fakeMachine, '{ "elevated": false, "storePolicy": 2, "pwshResolved": "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "msiVersion": "7.5.3", "actions": [] }')
 $script:sayLines = New-Object System.Collections.ArrayList
 $script:pairHomes = New-Object System.Collections.ArrayList
 $script:partial = $false
@@ -69,7 +73,7 @@ $shippedHost = ([uri]$shipped).Host
 function Setup {
     # The shipped command, as a person runs it, on home -HordeHome: { code; out; lines; next }.
     param([string]$HordeHome, [string[]]$More = @())
-    $r = Invoke-HordeCliProcess -Root $root -HordeArgs (@("setup") + $More) -Env @{ HORDE_HOME = $HordeHome; USERPROFILE = $prof; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = "" }
+    $r = Invoke-HordeCliProcess -Root $root -HordeArgs (@("setup") + $More) -Env @{ HORDE_HOME = $HordeHome; USERPROFILE = $prof; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = ""; HORDE_SETUP_FAKE_MACHINE = $fakeMachine }
     [void]$script:said.Add($r.out)
     $lines = @($r.out -split "`r?`n" | Where-Object { $_.Trim() -ne "" })
     return [pscustomobject]@{ code = $r.code; out = $r.out; lines = $lines; next = $(if ($lines.Count -gt 0) { $lines[-1] } else { "" }) }
@@ -80,7 +84,7 @@ function Horde {
     # asked again, for up to a minute: measured 2026-10-14, a run here once met another's deploy.
     param([string]$HordeHome, [string[]]$HordeArgs)
     for ($i = 0; $i -lt 12; $i++) {
-        $r = Invoke-HordeCliProcess -Root $root -HordeArgs $HordeArgs -Env @{ HORDE_HOME = $HordeHome; USERPROFILE = $prof; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = "" }
+        $r = Invoke-HordeCliProcess -Root $root -HordeArgs $HordeArgs -Env @{ HORDE_HOME = $HordeHome; USERPROFILE = $prof; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = ""; HORDE_SETUP_FAKE_MACHINE = $fakeMachine }
         if (-not $r.out.Contains((Get-HordeRelayDeployBusyReason))) { return $r }
         Start-Sleep -Seconds 5
     }
@@ -104,6 +108,7 @@ function Test-Ascii { param([string]$Path) return (@([System.IO.File]::ReadAllBy
 function Report {
     # In this process: { report; lines; next; states }.
     param([string]$HordeHome, [hashtable]$Probes, [string[]]$NoFix = @())
+    foreach ($pair in @(@("storePolicy", { 2 }), @("pwshResolved", { "C:\Program Files\PowerShell\7\pwsh.exe" }), @("msiVersion", { "7.5.3" }))) { if (-not $Probes.ContainsKey($pair[0])) { $Probes[$pair[0]] = $pair[1] } }
     $r = Get-HordeSetupReport -HordeHome $HordeHome -Root $root -Probes $Probes -Label "Test phone" -NoFix $NoFix -Say { param($Line) [void]$script:sayLines.Add("" + $Line) }
     $lines = @(Format-HordeSetupReport -Report $r)
     [void]$script:said.Add(($lines -join "`n"))
@@ -190,7 +195,7 @@ try {
     }
     $probes = @{ identity = $idProbe; makeIdentity = $makeOk; trust = $noPhone; schedule = $schedProbe; elevated = { $false }; installSchedule = { param($HordeHome, $Root) $script:installs++; $script:scheduled = $true } }
     $x = Report $hh $probes
-    Check ($x.states -clike "requirements=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-scheduled=todo") ("the identity is made, the relay runner's service written, and scheduling it is next (" + $x.states + ")")
+    Check ($x.states -clike "requirements=done store-updates-off=done powershell-msi=done home=done relay-settings=done machine-identity=fixed runner-defined=fixed runner-scheduled=todo") ("the identity is made, the relay runner's service written, and scheduling it is next (" + $x.states + ")")
     $read = Get-HordeServiceDefinitions -HordeHome $hh
     $svc = $(if ($read.state -ceq "read" -and @($read.services).Count -eq 1) { $read.services[0] } else { $null })
     Check ((Test-Ascii $defsPath) -and $null -ne $svc -and $svc.name -ceq "relay-runner" -and (@($svc.start.words) -join " ") -ceq "relay run" -and $svc.start.named["Relay"] -ceq "cloudflare" -and $svc.hordeHome -ceq $hh -and $svc.checkout -ceq $root -and (@($svc.stop.words) -join " ") -ceq "relay stop" -and $svc.alive.path -ceq (Get-HordeRelayRunHeartbeatPath -HordeHome $hh)) ("the file is ASCII, and the real definitions reader takes it: the relay run of this checkout, for this home, alive by the runner's own heartbeat (" + $read.state + " " + (@($read.findings) -join "; ") + ")")
@@ -240,7 +245,7 @@ try {
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
     $qs = @(@((($listed.out.Trim()) | ConvertFrom-Json).value.questions) | Where-Object { $_.group -ceq "Setup" })
     Check (@($x.report.steps | Where-Object { $_.id -ceq "test-question" -and $_.state -ceq "fixed" -and $_.said -clike "added question 1: Horde is set up on * - does it reach your phone?" }).Count -eq 1 -and $qs.Count -eq 1 -and $qs[0].title -ceq ("Horde is set up on " + $env:COMPUTERNAME + " - does it reach your phone?") -and $qs[0].askedBy -ceq "horde setup") ("setup adds the test question through the shipped decisions list, once (" + $x.states + ")")
-    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done home=done relay-settings=done machine-identity=done runner-defined=done runner-scheduled=done runner-serving=done phone-paired=done test-question=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("the test question added, every step is done: all set (" + $x.states + ")")
+    Check ($script:installs -eq 1 -and $x.report.next -ceq "" -and $x.states -ceq "requirements=done store-updates-off=done powershell-msi=done home=done relay-settings=done machine-identity=done runner-defined=done runner-scheduled=done runner-serving=done phone-paired=done test-question=fixed" -and $x.next -ceq ("all set: this machine runs Horde for its home, and its paired phone is served through relay cloudflare at " + $shipped)) ("the test question added, every step is done: all set (" + $x.states + ")")
     $before = Get-Tree $hh
     $x = Report $hh $probes
     $listed = Horde $hh @("decisions", "list", "-State", "all", "-Json")
@@ -383,7 +388,7 @@ try {
     $listed = $null
     try { $listed = ($r.out.Trim()) | ConvertFrom-Json } catch { $listed = $null }
     $ids = $(if ($null -ne $listed) { @($listed.steps | ForEach-Object { $_.id }) -join "," } else { "" })
-    Check ($r.code -eq 0 -and $ids -ceq ($fileIds -join ",") -and $listed.manifestVersion -eq $man.manifestVersion -and @($listed.steps | Where-Object { $_.path -ceq "operator" }).Count -eq 2 -and @($listed.steps | Where-Object { $_.fixedBySetup }).Count -eq 7) ("setup -Steps -Json prints the manifest as this code reads it, in order (" + $ids + ")")
+    Check ($r.code -eq 0 -and $ids -ceq ($fileIds -join ",") -and $listed.manifestVersion -eq $man.manifestVersion -and @($listed.steps | Where-Object { $_.path -ceq "operator" }).Count -eq 2 -and @($listed.steps | Where-Object { $_.fixedBySetup }).Count -eq 9) ("setup -Steps -Json prints the manifest as this code reads it, in order (" + $ids + ")")
     $all = $script:said -join "`n"
     Check ($script:said.Count -ge 12 -and $all.Contains($callback)) ("CONTROL: " + $script:said.Count + " runs were read, and the search finds what they did say")
     Check (-not $all.Contains($clientSecret) -and -not $all.Contains($clientId)) "nothing setup said ever holds the client's id or secret"

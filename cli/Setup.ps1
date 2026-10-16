@@ -244,6 +244,35 @@ function Get-HordeSetupStepCode {
             return (New-HordeSetupResult $true ("Windows " + $p.windowsMajor + " (build " + $p.windowsBuild + "), Windows PowerShell " + $p.version))
         }
         fix = $null }
+    $code["store-updates-off"] = [pscustomobject]@{
+        check = {
+            param($Ctx)
+            $d = Get-HordeSetupStorePolicyDecision -Policy (& $Ctx.probes.storePolicy) -Elevated ([bool](& $Ctx.probes.elevated))
+            return (New-HordeSetupResult $d.done $d.said @() $d.next)
+        }
+        fix = {
+            param($Ctx)
+            # NEVER SILENT AND NEVER ELEVATES BY ITSELF: not elevated, nothing is tried and the check's
+            # one sentence says what an elevated run will set.
+            if (-not (& $Ctx.probes.elevated)) { return $null }
+            try { & $Ctx.probes.setStorePolicy } catch { return (New-HordeSetupResult $false ("setting the Store policy failed: " + $_.Exception.Message)) }
+            return (New-HordeSetupResult $true "set the Store policy AutoDownload to 2: Store automatic updates are off")
+        } }
+    $code["powershell-msi"] = [pscustomobject]@{
+        check = {
+            param($Ctx)
+            $d = Get-HordeSetupPowerShellDecision -Resolved (& $Ctx.probes.pwshResolved) -MsiPath (Get-HordeSetupMsiPwshPath) -MsiVersion (& $Ctx.probes.msiVersion) -Elevated ([bool](& $Ctx.probes.elevated))
+            return (New-HordeSetupResult $d.done $d.said $d.notes $d.next)
+        }
+        fix = {
+            param($Ctx)
+            # Installing into Program Files needs an elevated run; never elevates by itself. The Store
+            # copy is never uninstalled here (it would close every pwsh.exe running from it).
+            if (-not (& $Ctx.probes.elevated)) { return $null }
+            $r = & $Ctx.probes.installMsi (Get-HordeSetupMsiPwshPath)
+            if (-not $r.ok) { return (New-HordeSetupResult $false ("installing the PowerShell 7 MSI failed: " + $r.reason)) }
+            return (New-HordeSetupResult $true ("installed PowerShell " + $r.version + " from the MSI at " + (Get-HordeSetupMsiPwshPath)))
+        } }
     $code["home"] = [pscustomobject]@{
         check = { param($Ctx) $(if ([System.IO.Directory]::Exists($Ctx.home)) { New-HordeSetupResult $true $Ctx.home } else { New-HordeSetupResult $false ("there is no folder " + $Ctx.home) }) }
         fix = { param($Ctx) [void][System.IO.Directory]::CreateDirectory($Ctx.home); New-HordeSetupResult $true ($Ctx.home + " (made just now)") } }
@@ -458,6 +487,16 @@ function Get-HordeSetupReport {
     if ($man.state -cne "known") { throw $man.reason }
     $code = Get-HordeSetupStepCode
     $p = Get-HordeSetupDefaultProbes
+    $storeProbes = Get-HordeSetupStoreDefaultProbes
+    foreach ($k in @($storeProbes.Keys)) { $p[$k] = $storeProbes[$k] }
+    # The pretend machine (cli/SetupStore.ps1): said first, so a run on it is never taken for a real one.
+    $fakeMachine = "" + $env:HORDE_SETUP_FAKE_MACHINE
+    if ($fakeMachine -ne "") {
+        if (-not [System.IO.File]::Exists($fakeMachine)) { throw ("HORDE_SETUP_FAKE_MACHINE names no file: " + $fakeMachine) }
+        & $Say ("horde setup: using the pretend machine in " + $fakeMachine + " (HORDE_SETUP_FAKE_MACHINE); nothing real is read or changed for the Store and PowerShell 7 steps")
+        $fakeProbes = Get-HordeSetupFakeStoreProbes -Path $fakeMachine
+        foreach ($k in @($fakeProbes.Keys)) { $p[$k] = $fakeProbes[$k] }
+    }
     foreach ($k in @($Probes.Keys)) { $p[$k] = $Probes[$k] }
     $lines = New-Object System.Collections.ArrayList
     $machine = "" + $env:COMPUTERNAME
@@ -471,7 +510,7 @@ function Get-HordeSetupReport {
         if ($step.path -ceq "operator" -and -not $Operator) { continue }
         # The relay this home uses is resolved before the first step after the home: every one of them
         # names it or its origin.
-        if (@("requirements", "home") -cnotcontains $step.id -and $null -eq $rs) {
+        if (@("requirements", "store-updates-off", "powershell-msi", "home") -cnotcontains $step.id -and $null -eq $rs) {
             $target = Resolve-HordeRelayDeployTarget -Relay $Relay
             if ($target.state -cne "known") { [void]$lines.Add((New-HordeSetupLine "relay" "relay" "todo" $target.reason "horde setup -Relay <name>, naming the relay this machine is to use")); return (& $finish) }
             $ctx.relay = $target.value
