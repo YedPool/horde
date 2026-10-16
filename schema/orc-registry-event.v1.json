@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/orc-registry-event.v1",
+  "title": "orc-registry-event v1",
+  "description": "ONE WRITE-ONCE RECORD OF THE ORC REGISTRY: something people decided about the list of Orcs the founder sees on Dash - that an Orc is on it, its name, its one-line domain, the order of the whole list, or that it left. The registry is a folder, <HordeHome>\\orcs\\registry\\, holding one file per record named by its sequence number in ten digits, written by decisions/Store.ps1 exactly as the decisions store is (a record is written whole, given its name once by a move only one writer can win, and never rewritten or deleted); only orcs/Registry.ps1 writes it. The records in sequence order are the single source of truth: the current list is their fold, worked out each time, and the registry's VERSION is its last sequence number. What is DERIVED - open questions, sessions open, working, idle or blocked - is never stored. ON DISK: UTF-8 with no byte-order mark, one JSON object, ASCII only. VERSIONING: a record that does not match this schema is reported as unreadable by its sequence number and changes nothing. A record that matches the envelope and whose kind this version does not know was written by a later version: it is set aside and reported once for its kind. A change to an existing kind's data, or to this envelope, is a v2.",
+  "type": "object",
+  "required": ["schemaVersion", "sequence", "kind", "at", "actor", "by", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"type": "integer", "enum": [1], "description": "Always 1 for this schema."},
+    "sequence": {"type": "integer", "minimum": 1, "description": "The record's place in the one total order, from 1. It must equal the number in the record's file name. The registry's version is the sequence of its last record: a write drawn from version N is written as N + 1, and a writer that finds N + 1 taken was drawn from a list that has moved."},
+    "kind": {"type": "string", "pattern": "^[a-z][a-z-]{0,39}$", "description": "What happened: orc-registered, orc-named, orc-domain-set, orcs-ordered, orc-retired or orc-tier-set (the kind table of orcs/Registry.ps1); each kind's data is a definition below of the same name."},
+    "at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", "description": "When the record was written, ISO 8601 in UTC with a Z, by the writer's clock. Order is the sequence, never this time."},
+    "actor": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Which way the change came: cli (horde orcs at a command line) or fleet (the registry following the lanes folder: a new lane registered, a lane the fleet retired taken off). Later ways - the founder's signed command from the phone - are new labels, not a new version."},
+    "by": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,63}$", "description": "Who made the change, as far as it was proven: the session's own label in the fleet's registry when the command ran inside a session that could be proven (notices/Sender.ps1), else console. Recorded so every change is kept with who and when; it decides nothing."},
+    "data": {"type": "object", "description": "What the kind carries, checked against the definition named for the kind."}
+  },
+  "definitions": {
+    "orc-registered": {
+      "type": "object",
+      "required": ["id", "letter", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "letter": {"type": "string", "pattern": "^([A-Z]|)$", "description": "The Orc's letter as its status file said it when it was registered; empty when the file named none."},
+        "name": {"$ref": "#/definitions/name"}
+      }
+    },
+    "orc-named": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": false,
+      "properties": {"id": {"$ref": "#/definitions/id"}, "name": {"$ref": "#/definitions/name"}}
+    },
+    "orc-domain-set": {
+      "type": "object",
+      "required": ["id", "domain"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "domain": {"type": "string", "pattern": "^[\\x20-\\x7E]{0,80}$", "description": "The Orc's domain on one line: at most 80 printable ASCII characters, stored exactly as given. Empty clears it."}
+      }
+    },
+    "orcs-ordered": {
+      "type": "object",
+      "required": ["order", "backBurner"],
+      "additionalProperties": false,
+      "properties": {
+        "order": {"type": "array", "items": {"$ref": "#/definitions/id"}, "description": "The main list, first to last: his priority order."},
+        "backBurner": {"type": "array", "items": {"$ref": "#/definitions/id"}, "description": "The back-burner list below the divider, first to last. With order, it names every registered Orc not retired exactly once: a reorder is one record and never half applied."}
+      }
+    },
+    "orc-retired": {
+      "type": "object",
+      "required": ["id", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "reason": {"type": "string", "enum": ["hand", "fleet"], "description": "hand: taken off by horde orcs retire, and it stays off. fleet: its lane was retired in the lanes folder (status.retired.txt and no status.txt, fleet/StatusPanel.ps1); a lane that comes back is registered again, at the end."}
+      }
+    },
+    "orc-tier-set": {
+      "type": "object",
+      "required": ["id", "tier"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "tier": {"type": "integer", "enum": [1, 2], "description": "The Orc's tier, 1 or 2. Until one is set the dash carries tier null."}
+      }
+    },
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "The lane's stable id: its folder's name in the lanes folder."},
+    "name": {"type": "string", "pattern": "^[\\x20-\\x7E]{1,40}$", "description": "The name shown, 1 to 40 printable ASCII characters; by default Orc and its letter."}
+  }
+}
