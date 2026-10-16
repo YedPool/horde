@@ -1018,10 +1018,13 @@ $("lockBtn").addEventListener("click", () => { const id = current; dropDoc(id); 
 // screen: the timer starts when the page is hidden, so the lock happens while it is hidden (if the
 // browser lets the timer run), and is checked again on return in case it did not. On return the list
 // is hidden AT ONCE, before that check, so nothing opened shows for a moment on a phone picked up
-// after the time. The time is the deployment's (config.json, lockAfterHiddenSeconds; 300 s).
+// after the time. The time is the deployment's (config.json, lockAfterHiddenSeconds; 600 s). Never less
+// than the unlocked session's away time below: a lock drops the session's key, and the founder's Q75 (c)
+// keeps the session through a switch-away of up to 10 minutes (surfaces/pwa/Site.ps1 refuses a build
+// that locks sooner; this fallback is for a config.json without the time).
 let hiddenAt = 0;
 let lockTimer = null;
-const lockAfterMs = () => 1000 * ((config && Number.isSafeInteger(config.lockAfterHiddenSeconds) && config.lockAfterHiddenSeconds > 0) ? config.lockAfterHiddenSeconds : 300);
+const lockAfterMs = () => 1000 * ((config && Number.isSafeInteger(config.lockAfterHiddenSeconds) && config.lockAfterHiddenSeconds > 0) ? config.lockAfterHiddenSeconds : 600);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
     hiddenAt = Date.now();

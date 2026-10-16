@@ -23,5 +23,12 @@
         @{ Name = "the-page-is-not-told-its-version"
            Find = '    $bytes["app/config.json"] = $ascii.GetBytes($configText.Replace(''{"schemaVersion":1,'', ''{"schemaVersion":1,"version":"'' + $version + ''",''))'
            Replace = '' }
+        # --- the lock no sooner than the session's away time (the founder's Q75 (c), PR 312) ---
+        @{ Name = "lock-default-back-to-five-minutes"
+           Find = '[int]$LockAfterHiddenSeconds = 600,'
+           Replace = '[int]$LockAfterHiddenSeconds = 300,' }
+        @{ Name = "lock-sooner-than-away-built"
+           Find = 'if ($LockAfterHiddenSeconds -lt $SessionAwaySeconds) {'
+           Replace = 'if ($false) {' }
     )
 }

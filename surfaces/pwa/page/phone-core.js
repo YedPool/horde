@@ -163,13 +163,15 @@
 //     session) carries it on its own, so the PC's idle clock starts with the unlock.
 //   THE KEY IS DROPPED - the variable cleared, the PC's word not waited for - on: idle (the PC's limit,
 //     idleMs in its status, 60 minutes until it says; measured from the key's last signature here, which
-//     is before the PC sees it, so the phone always ends first); the PC naming the vouch expired, idle, ended, stale or refused; endSession() (the page: away from the app, or the
-//     page hidden for good); lock(); and the page closing, which takes this object with it. The horde
-//     NO LENGTH OF ITS OWN (C, 2026-10-15): the phone keeps no second copy of any session-length limit.
+//     is before the PC sees it, so the phone always ends first); the PC naming the vouch expired, idle,
+//     ended, stale or refused; endSession() (the page: away from the app, or the page hidden for good);
+//     lock() (which the page does hidden no sooner than the away time, the founder's Q75 (c): app.js and
+//     surfaces/pwa/Site.ps1); and the page closing, which takes this object with it. After every
+//     end but those two the horde stays open to READ: the next answer then asks for the passkey ONCE, to
+//     vouch for a new key, and goes signed by it.
+//   NO LENGTH OF ITS OWN (C, 2026-10-15): the phone keeps no second copy of any session-length limit.
 //     notAfter is what relay/js/protocol.js's openSession writes into the vouch; whether a session is past
 //     it is the PC's to say (session-expired), and the phone ends it then, on the PC's word.
-//     stays open to READ: the next answer then asks for the passkey ONCE, to vouch for a new key, and
-//     goes signed by it.
 //   A REFUSAL IS ANSWERED BY THE PASSKEY. An answer the PC lists as needs-passkey, or one sent under a
 //     vouch it has refused, is signed again with a fresh passkey assertion by resend() (one a call, as
 //     every re-sign is), and is never taken for refused meanwhile.

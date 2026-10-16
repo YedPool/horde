@@ -98,7 +98,7 @@ function Send-Item {
 
 try {
     $env:HORDE_HOME = $hh
-    $built = New-HordePwaSite -Out $site -Transport "binding" -LockAfterHiddenSeconds 300
+    $built = New-HordePwaSite -Out $site -Transport "binding"
     Check ($built.state -ceq "known") "CONTROL: the site is built as it ships, with the local test transport"
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "work"}}', $utf8)
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 200}}', $utf8)

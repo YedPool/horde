@@ -73,10 +73,15 @@ try {
     }
     Check ($true) "every other file is copied byte for byte (a difference is a failure above)"
     $config = (Read-Site $site "app/config.json") | ConvertFrom-Json
-    Check ($config.schemaVersion -eq 1 -and $config.transport -ceq "memory" -and $config.relayOrigin -ceq "https://relay.example.test" -and $config.lockAfterHiddenSeconds -eq 300 -and $config.sessionAwaySeconds -eq 600) "config.json names the transport, the relay, the founder's five minutes before a hidden app locks, and the ten minutes away before its unlocked session ends"
+    Check ($config.schemaVersion -eq 1 -and $config.transport -ceq "memory" -and $config.relayOrigin -ceq "https://relay.example.test" -and $config.lockAfterHiddenSeconds -eq 600 -and $config.sessionAwaySeconds -eq 600) "config.json names the transport, the relay, ten minutes before a hidden app locks - no sooner than the session's away time, the founder's Q75 (c) - and the ten minutes away before its unlocked session ends"
     Check ((New-HordePwaSite -Out (Join-Path $work "x5") -Transport "memory" -SessionAwaySeconds 0).reason.Contains("1 to 86400 seconds")) "an away time of none is refused"
     Check ((New-HordePwaSite -Out (Join-Path $work "x6") -Transport "memory" -SessionAwaySeconds 86401).reason.Contains("1 to 86400 seconds")) "and so is one over a day"
     Check ((New-HordePwaSite -Out (Join-Path $work "x3") -Transport "memory" -LockAfterHiddenSeconds 0).reason.Contains("1 to 86400 seconds")) "a lock time of none is refused"
+    $soon = New-HordePwaSite -Out (Join-Path $work "x7") -Transport "memory" -LockAfterHiddenSeconds 300
+    Check ($soon.state -cne "known" -and $soon.reason.Contains("may not lock") -and -not (Test-Path -LiteralPath (Join-Path $work "x7\app"))) ("A LOCK SOONER THAN THE AWAY TIME IS REFUSED (the old five minutes against the ten): it would end every session first, Q75 (c) (" + $soon.reason + ")")
+    $same = New-HordePwaSite -Out (Join-Path $work "x8") -Transport "memory" -LockAfterHiddenSeconds 600 -SessionAwaySeconds 600
+    $later = New-HordePwaSite -Out (Join-Path $work "x9") -Transport "memory" -LockAfterHiddenSeconds 2 -SessionAwaySeconds 1
+    Check ($same.state -ceq "known" -and $later.state -ceq "known") "CONTROL: a lock at the away time, or after it, builds"
     $sw = Read-Site $site "app/sw.js"
     $ver = [regex]::Match($sw, 'const VERSION = "([0-9a-f]{16})";').Groups[1].Value
     Check ($ver -ceq $b.value.version) "the worker carries the site's version"
