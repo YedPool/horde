@@ -7,14 +7,17 @@
 # see only that instance's panes; the run is abandoned if it can see more. Every running gui is listed
 # before and after, and the list must be the same.
 #
-# NO REAL AGENT SESSION IS STARTED. Each "session" is a stand-in: a script named after the harness's
-# command, first on the PATH every pane and every command here is given, that does what a wake depends on
+# NO REAL AGENT SESSION IS STARTED. Each "session" is a stand-in script that does what a wake depends on
 # and nothing else - it writes a control file (pid, sessionId, cwd, procStart: what the harness's liveness
 # adapter reads), stays running, and ends on /exit (removing its file) or with its pane. It runs no hook,
 # so it writes nothing of the harness's own state; it refuses to write anything unless the profile it sees
-# is this scenario's (a marker file), so it cannot write into the person's real control folder whatever
-# environment it is started in. Before any terminal starts, a PowerShell given the same PATH must find the
-# stand-in under the harness's command name, or nothing runs.
+# is this scenario's (a marker file). Every pane runs it BY ITS FULL PATH: the scenario's own spawns name
+# it, and the wake is told it through the harness adapter's setting (claude-code-fleet: command). A PATH
+# cannot do this: a pane takes its PATH from the terminal, not from the process that spawns it - measured by
+# this scenario's own first runs on 2026-10-16, when a stand-in first on the spawning PATH lost to the real
+# command in all four panes (which stopped at its first-run screen, under the scenario's empty profile and
+# config, and went with the terminal). Before the real wake, its dry run must show the stand-in's path in
+# every spawn and no bare command, or the wake is not run.
 #
 # NOTHING REAL IS READ OR WRITTEN BY THE COMMANDS. Each is started with HORDE_HOME, WEZFLEET_ROOT (the
 # fleet registry and the fleet's mail) and USERPROFILE (the harness's control files, and the terminal's
@@ -108,10 +111,15 @@ Remove-Item -LiteralPath $ctl -Force -ErrorAction SilentlyContinue
 Write-Host "STANDIN-EXIT"
 '@
 $command = "claude"
-[System.IO.File]::WriteAllText((Join-Path $binDir ($command + ".ps1")), $standIn)
+$standInPath = Join-Path $binDir "standin-agent.ps1"
+[System.IO.File]::WriteAllText($standInPath, $standIn)
 
 # What every pane and every command of this scenario is given. A name mapped to $null is removed.
-$childEnv = [ordered]@{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = $fleetRoot; USERPROFILE = $profileDir; CLAUDE_CONFIG_DIR = $cfgDir; PATH = ($binDir + ";" + $env:PATH) }
+# A SECOND GUARD, for the commands this scenario runs itself (not the panes, whose PATH is the terminal's):
+# every folder that holds the harness's command is left out of their PATH, so they cannot find it at all.
+$realDirs = @(Get-Command $command -All -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | ForEach-Object { (Split-Path -Parent $_.Source).TrimEnd([char]92).ToLowerInvariant() } | Sort-Object -Unique)
+$keptPath = @($env:PATH -split ';' | Where-Object { $_.Trim() -ne "" -and $realDirs -notcontains $_.Trim().TrimEnd([char]92).ToLowerInvariant() })
+$childEnv = [ordered]@{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = $fleetRoot; USERPROFILE = $profileDir; CLAUDE_CONFIG_DIR = $cfgDir; PATH = ((@($binDir) + $keptPath) -join ";") }
 
 function Invoke-WithChildEnv {
     # Run -Do with this process's environment set as a child's, and put it back after, whatever happens:
@@ -191,11 +199,11 @@ $pwsh = Resolve-HordeWeztermProgram -Name "pwsh"
 Check ($pwsh.state -ceq "known") ("the shell a woken pane runs is found (" + $(if ($pwsh.state -ceq "known") { $pwsh.value } else { $pwsh.reason }) + ")")
 $found = ""
 if ($pwsh.state -ceq "known") {
-    $found = "" + (Invoke-WithChildEnv { & $pwsh.value -NoLogo -NoProfile -NonInteractive -Command ("(Get-Command " + $command + " -ErrorAction SilentlyContinue | Select-Object -First 1).Source") })
+    $found = (@(Invoke-WithChildEnv { & $pwsh.value -NoLogo -NoProfile -NonInteractive -Command ("@(Get-Command " + $command + " -All -ErrorAction SilentlyContinue | ForEach-Object { `$_.Source }) -join '|'") }) -join "").Trim()
+    $found51 = (@(Invoke-WithChildEnv { @(Get-Command $command -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source }) -join "|" }) -join "").Trim()
 }
-$standInPath = Join-Path $binDir ($command + ".ps1")
-$safe = ($found.Trim() -ceq $standInPath)
-Check $safe ("CONTROL: with the scenario's PATH, the harness's command is the stand-in, never the real one (" + $found.Trim() + ")")
+$safe = ($found -ceq "" -and $found51 -ceq "")
+Check $safe ("CONTROL: with the scenario's PATH, neither shell finds the harness's command at all (pwsh: '" + $found + "'; 5.1: '" + $found51 + "'; folders taken off the PATH: " + ($realDirs -join ", ") + ")")
 $wezfleet = @(Get-Command wezfleet -ErrorAction SilentlyContinue | Select-Object -First 1)
 Check ($wezfleet.Count -eq 1) ("the fleet's real mail command is on PATH, for the wake mail (" + $(if ($wezfleet.Count -eq 1) { $wezfleet[0].Source } else { "none" }) + ")")
 
@@ -221,9 +229,10 @@ if ($null -ne $iso) {
         Section "1. a fleet of stand-ins, and horde fleet record"
         $start = { param([string]$L, [string[]]$Where, [string]$Cwd)
             $clock = [System.Diagnostics.Stopwatch]::StartNew()
-            $out = Invoke-WithChildEnv { Invoke-HordeWeztermCli -Rest (@($Where) + @("--cwd", $Cwd, "--", $pwsh.value, "-NoLogo", "-NoProfile", "-NoExit", "-Command", ($command + " --session-id " + $ids[$L]))) }
+            $out = Invoke-WithChildEnv { Invoke-HordeWeztermCli -Rest (@($Where) + @("--cwd", $Cwd, "--", $pwsh.value, "-NoLogo", "-NoProfile", "-NoExit", "-Command", ("& '" + $standInPath + "' --session-id " + $ids[$L]))) }
             $pane = ("" + (@($out) -join "")).Trim()
-            $up = Wait-Until { $null -ne (Get-Control $ids[$L]) } 60
+            $up = Wait-Until { $null -ne (Get-Control $ids[$L]) } 30
+            if (-not $up) { Write-Host ("  " + $L + " did not come up; its pane " + $pane + " shows: " + ((@(Invoke-HordeWeztermCli -Rest @("get-text", "--pane-id", $pane)) | Where-Object { "" + $_ -ne "" } | Select-Object -First 15) -join " / ")) -ForegroundColor Yellow }
             [pscustomobject]@{ pane = $pane; up = $up; ms = $clock.ElapsedMilliseconds } }
         $sm = & $start "M" @("spawn", "--pane-id", $paneZero) $masterLane
         $sq = & $start "Q" @("spawn", "--new-window") $lane
@@ -244,7 +253,8 @@ if ($null -ne $iso) {
             if ($r.parent -ne "") { $rec["parent"] = $r.parent }
             [System.IO.File]::WriteAllText((Join-Path $fleetRoot ("registry\sessions\" + $ids[$r.L] + ".json")), (ConvertTo-Json -InputObject $rec))
         }
-        [System.IO.File]::WriteAllText((Join-Path $hordeHome "settings\wezterm-fleet.json"), ('{"schemaVersion":1,"settings":{"socket":' + (ConvertTo-Json -InputObject $iso.socket) + '}}'))
+        [System.IO.File]::WriteAllText((Join-Path $hordeHome "settings\wezterm-fleet.json"), ('{"schemaVersion":1,"settings":{"socket":' + (ConvertTo-Json -InputObject ("" + $iso.socket)) + '}}'))
+        [System.IO.File]::WriteAllText((Join-Path $hordeHome "settings\claude-code-fleet.json"), ('{"schemaVersion":1,"settings":{"command":' + (ConvertTo-Json -InputObject ("" + $standInPath)) + '}}'))
 
         $rec1 = Invoke-Horde @("fleet", "record", "-Labels", "Q,Q1,Q2")
         $hid = ""
@@ -264,6 +274,12 @@ if ($null -ne $iso) {
         $gone = (Stop-StandIn $sq.pane $ids["Q"]) -and (Stop-StandIn $s1.pane $ids["Q1"]) -and (Stop-StandIn $s2.pane $ids["Q2"])
         Check $gone "the Orc and both Wargs ended on /exit, and their control files are gone"
         Check ($null -ne (Get-Control $ids["M"])) "CONTROL: the master stand-in still runs"
+        # THE CONTROL BEFORE THE WAKE: its dry run must name the stand-in in every spawn, and no bare command.
+        $plan = Invoke-Horde @("fleet", "wake", $hid, "-DryRun")
+        $planned = @($plan.out -split "`r?`n" | Where-Object { $_ -like "*--resume*" })
+        $planOk = ($plan.code -eq 0 -and $planned.Count -eq 3 -and @($planned | Where-Object { $_.Contains($standInPath) }).Count -eq 3 -and @($planned | Where-Object { $_ -match ('[^\\]\b' + $command + ' --resume') }).Count -eq 0)
+        Check $planOk ("CONTROL: the wake's dry run calls the stand-in by its full path in all three spawns, never the harness's bare command (" + ($planned -join " | ") + ")")
+        if (-not $planOk) { throw "the wake would not call the stand-in: it is not run" }
         $panesBefore = @(Get-Panes)
         $windowsBefore = @($panesBefore | ForEach-Object { "" + $_.window_id } | Sort-Object -Unique)
         $wake = Invoke-Horde @("fleet", "wake", $hid)
