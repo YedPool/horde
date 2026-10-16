@@ -9,7 +9,9 @@
 #   -ScriptArgs '-Spec','x.psd1' reached the suite as the single argument '-Spec','x.psd1'). A piece that
 #   still holds a quote after that is refused with 126, nothing run, rather than passed on mangled.
 #   -ArgsFile is a JSON array of strings, taken exactly; it is the way for an argument holding a comma,
-#   a quote or a space, and wins over -ScriptArgs.
+#   a single quote or a space, and wins over -ScriptArgs. Either way, an argument holding a double
+#   quote or one of cmd's own characters (& | < > ^ %) is refused with 126: the run is started through
+#   cmd's line, which would read them itself.
 #
 # Development tooling, not part of the engine. test/test-heavy-slot.ps1 is its suite.
 #
@@ -162,8 +164,11 @@ if ($ArgsFile -ne "") {
     # Split on commas, then one layer of matching quotes off each piece (the header, THE RUN'S ARGUMENTS).
     $ScriptArgs = @(@($ScriptArgs) | ForEach-Object { ("" + $_) -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object {
         if ($_.Length -ge 2 -and (($_[0] -eq "'" -and $_[-1] -eq "'") -or ($_[0] -eq '"' -and $_[-1] -eq '"'))) { $_.Substring(1, $_.Length - 2) } else { $_ } })
+    foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and ($a.Contains('"') -or $a.StartsWith("'") -or $a.EndsWith("'"))) { $script:argsRefused = "an argument still holds a quote after one layer was taken off: " + $a + " (use -ArgsFile)" } }
 }
-foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and ($a.Contains('"') -or $a.StartsWith("'") -or $a.EndsWith("'"))) { $script:argsRefused = "an argument still holds a quote after one layer was taken off: " + $a + " (use -ArgsFile)" } }
+# Every argument goes into cmd's line (below): a double quote ends cmd's quoting, and & | < > ^ % are
+# cmd's own (an & would start a second command), so none of them can reach the run as written.
+foreach ($a in @($ScriptArgs)) { if ($script:argsRefused -eq "" -and $a -match '["&|<>^%]') { $script:argsRefused = "an argument holds a character cmd's line cannot carry (a double quote or & | < > ^ %): " + $a } }
 $name = ($SlotName -replace '[^A-Za-z0-9-]', '-')
 # The record lives where every agent of this user finds it, whatever TEMP each was given.
 if ($HolderFile -eq "") { $HolderFile = Join-Path (Join-Path $env:LOCALAPPDATA "horde") ("heavy-slot-" + $name + ".txt") }

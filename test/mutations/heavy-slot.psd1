@@ -41,6 +41,9 @@
         @{ Name = "a-quoted-piece-passed-on"
            Find = 'if ($script:argsRefused -eq "" -and ($a.Contains(''"'') -or $a.StartsWith("''") -or $a.EndsWith("''")))'
            Replace = 'if ($false)' }
+        @{ Name = "cmd-characters-passed-on"
+           Find = 'if ($script:argsRefused -eq "" -and $a -match ''["&|<>^%]'')'
+           Replace = 'if ($false)' }
         @{ Name = "argsfile-non-string-taken"
            Find = 'if (@($items | Where-Object { $_ -isnot [string] }).Count -gt 0)'
            Replace = 'if ($false)' }

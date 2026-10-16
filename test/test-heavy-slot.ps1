@@ -204,8 +204,8 @@ try {
     $argsSuite = 'param([ValidateSet("smoke", "full")][string]$Suite, [string]$Log)' + "`n" + 'Set-Content -LiteralPath $Log -Value ("suite=" + $Suite)' + "`n" + 'exit 0' + "`n"
     [System.IO.File]::WriteAllText((Join-Path $work "suite-args.ps1"), $argsSuite)
     function Start-ArgsGate {
-        param([string]$Tag, [string[]]$Pass)
-        $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-Worktree", $work, "-Script", "suite-args.ps1", "-MinFreeGB", "0",
+        param([string]$Tag, [string[]]$Pass, [string]$Suite = "suite-args.ps1")
+        $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-Worktree", $work, "-Script", $Suite, "-MinFreeGB", "0",
             "-SlotName", (New-Slot), "-HolderFile", (Join-Path $work ($Tag + ".holder")), "-Out", (Join-Path $work ($Tag + ".out.txt"))) + $Pass
         $p = Start-Process -FilePath $shell -ArgumentList $argv -RedirectStandardOutput (Join-Path $work ($Tag + ".gate.txt")) -RedirectStandardError (Join-Path $work ($Tag + ".gate.err")) -NoNewWindow -PassThru
         $null = $p.Handle; $p.WaitForExit(); return $p
@@ -230,6 +230,23 @@ try {
     [System.IO.File]::WriteAllText($file, '["-Suite", 3]')
     $nf = Start-ArgsGate -Tag "badfile" -Pass @("-ArgsFile", $file)
     Check ($nf.ExitCode -eq 126 -and (Get-GateText "badfile") -match "not a string") ("an -ArgsFile holding a non-string is refused with 126 (" + $nf.ExitCode + ")")
+    # WHAT -ArgsFile IS FOR: a value with a space, a comma and a single quote, which -ScriptArgs cannot
+    # carry, reaches the run byte for byte. The suite writes what it got.
+    [System.IO.File]::WriteAllText((Join-Path $work "suite-text.ps1"), ('param([string]$Text, [string]$Log)' + "`n" + '[System.IO.File]::WriteAllText($Log, ("text=" + $Text))' + "`n" + 'exit 0' + "`n"))
+    Remove-Item -LiteralPath $alog -ErrorAction SilentlyContinue
+    $text = "a b, c's"
+    [System.IO.File]::WriteAllText($file, ('["-Text", "' + $text + '", "-Log", "' + ($alog -replace '\\', '\\') + '"]'))
+    $tx = Start-ArgsGate -Tag "argsfile-text" -Pass @("-ArgsFile", $file) -Suite "suite-text.ps1"
+    $got = $(if (Test-Path -LiteralPath $alog) { [System.IO.File]::ReadAllText($alog) } else { "" })
+    Check ($tx.ExitCode -eq 0 -and $got -ceq ("text=" + $text)) ("an -ArgsFile value with a space, a comma and a single quote reaches the run exactly (" + $tx.ExitCode + ", " + $got + ")")
+    # cmd's own characters cannot ride cmd's line: an & would start a second command. Refused, nothing run.
+    Remove-Item -LiteralPath $alog -ErrorAction SilentlyContinue
+    $marker = Join-Path $work "second-command.txt"
+    # No space in it, so it would ride cmd's line unquoted, where & does start a second command.
+    [System.IO.File]::WriteAllText($file, ('["-Text", "x&echo.>' + ($marker -replace '\\', '\\') + '", "-Log", "' + ($alog -replace '\\', '\\') + '"]'))
+    $amp = Start-ArgsGate -Tag "argsfile-amp" -Pass @("-ArgsFile", $file) -Suite "suite-text.ps1"
+    Check ($amp.ExitCode -eq 126 -and (Get-GateText "argsfile-amp") -match "cmd's line cannot carry") ("an argument holding & is refused with 126, saying why (" + $amp.ExitCode + ")")
+    Check (-not (Test-Path -LiteralPath $alog) -and -not (Test-Path -LiteralPath $marker)) "and neither the run nor a second command started"
 
     Write-Host ""
     Write-Host "--- a run past its time is ended with what it started ---" -ForegroundColor Cyan
