@@ -215,17 +215,25 @@ foreach ($n in 1..3) { Set-HordeMemoryWakerSession -Id (Sid $n) -Role "orc" -Unr
 $twoProbes = Get-HordeWakeSettings -Overrides @{ maxSilentProbes = 2 }
 $run = New-HordeWakeRun -Live -Self "" -HordeHome $h
 $kinds = New-Object System.Collections.ArrayList
-foreach ($n in 0..400) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $twoProbes -HordeHome $h)) { [void]$kinds.Add($e.kind) } }
+$ends = New-Object System.Collections.ArrayList
+foreach ($n in 0..400) { Set-HordeMemoryWakerClock (At ($n * 3)); foreach ($e in @(Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $twoProbes -HordeHome $h)) { [void]$kinds.Add($e.kind); if ($e.kind -ceq "would-tell" -and "$($e.reason)".StartsWith("silent-probes-ended: ")) { [void]$ends.Add($e) } } }
 $typedSilent = @(Get-HordeMemoryWakerNudges).Count
 Check ($run.silence.silent -eq $true -and $run.silence.probes -eq 2 -and @($kinds | Where-Object { $_ -ceq "silent-probes-ended" }).Count -eq 1 -and ([System.IO.File]::ReadAllText((Join-Path $h "wake\silence-live.json")) | ConvertFrom-Json).probes -eq 2) "twenty minutes of live ticks at a cap of two: the silence has had its two probes, the journal says once that they ended, and the count is in the saved file"
+Check ($ends.Count -eq 1 -and "$($ends[0].id)" -ceq "" -and "$($ends[0].reason)".Contains("every 6 hours") -and @($run.told.Values | Where-Object { $_.state -ceq "would-tell" -and "$($_.class)" -ceq "fleet" }).Count -eq 2) ("and the warchief would be told that the probes ended, ONCE, as a notice about the fleet - the same path and budget as the fleet-silent notice before it (" + $ends.Count + " made)")
+$lastProbe = $run.silence.probeAt
+Check ($lastProbe -is [datetime] -and (Read-HordeWakeSilence -Mode "live" -HordeHome $h).value.seen.probeAt -eq $lastProbe) "when the last probe was sent is saved with the silence, and read back as it was"
 $again = New-HordeWakeRun -Live -Self "" -HordeHome $h
-Check ($again.silence.silent -eq $true -and $again.silence.probes -eq 2) "a watcher started again reads the count back"
+Check ($again.silence.silent -eq $true -and $again.silence.probes -eq 2 -and $again.silence.probeAt -eq $lastProbe) "a watcher started again reads the count back, and when the last probe was sent"
 foreach ($n in 401..2400) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $again -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -Settings $twoProbes -HordeHome $h }
 Check (@(Get-HordeMemoryWakerNudges).Count -eq $typedSilent) ("and in the hundred minutes after it types nothing: a restart is not a fresh allowance of probes (" + (@(Get-HordeMemoryWakerNudges).Count - $typedSilent) + " more)")
 [System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), '{"schemaVersion":1,"silent":true,"quietSince":"2026-10-12T08:00:00.0000000Z"}')
 Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).value.seen.probes -eq 0) "a file saved before probes were counted reads as none sent"
 [System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), '{"schemaVersion":1,"silent":true,"quietSince":"2026-10-12T08:00:00.0000000Z","probes":"many"}')
 Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).state -ceq "unknown") "and one whose count is no count is not read"
+[System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), '{"schemaVersion":1,"silent":true,"quietSince":"2026-10-12T08:00:00.0000000Z","probes":12,"probeAt":"soon"}')
+Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).state -ceq "unknown") "nor one whose time of the last probe is no time"
+[System.IO.File]::WriteAllText((Join-Path $h "wake\silence-live.json"), '{"schemaVersion":1,"silent":true,"quietSince":"2026-10-12T08:00:00.0000000Z","probes":12}')
+Check ((Read-HordeWakeSilence -Mode "live" -HordeHome $h).state -ceq "known" -and $null -eq (Read-HordeWakeSilence -Mode "live" -HordeHome $h).value.seen.probeAt) "a file saved before that time was kept reads as none known"
 
 # A WATCHER RESTARTED IN A FLEET THAT WAS NOT SILENT counts its quiet from nothing: an old quietSince, read
 # back with none of the nudges it was counted from, must not make three woken answers a silent fleet.
@@ -307,6 +315,30 @@ Check (@(Get-HordeMemoryWakerNudges).Count -eq 0 -and (@($unk) -join ",") -ceq "
 Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -LastAckedAt (At 61)
 foreach ($n in 21..22) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
 Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger.ContainsKey((Sid 1)) -and $run.ledger[(Sid 1)].attempts -eq 1 -and $run.silence.acks[(Sid 2)] -eq (At 61)) "once another session takes its mail it is nudged, as an ordinary counted attempt: there is fresh evidence that sessions can take turns"
+# THE RELEASE IS AN ACKNOWLEDGEMENT SEEN TO INCREASE, NOT ONE THAT IS MERELY RECENT (review of PR 234). A
+# restore that stamps every session's acknowledgement to now, and a watcher started just after it, read
+# "another session acknowledged mail inside 600 s" for everybody, and released every session whose limit
+# nobody could read for ten minutes. The first pass after a start has no reading before it to compare.
+$h = New-Home
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "unknown" -LastAckedAt (At 0)
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -LastAckedAt (At 0)
+Set-HordeMemoryWakerSession -Id (Sid 3) -Role "orc" -UnreadCount 0 -LastAckedAt (At 0)
+$run = New-HordeWakeRun -Live -Self "" -HordeHome $h
+foreach ($n in 0..20) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges).Count -eq 0) "every session's acknowledgement stamped to now as the watcher starts releases nobody: nothing was SEEN to change"
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At -60) -Limited "unknown" -LastAckedAt (At 62)
+foreach ($n in 21..24) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges).Count -eq 0) "the judged session's OWN acknowledgement moving forward releases nothing"
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -LastAckedAt (At 74)
+foreach ($n in 25..26) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $run -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges -Id (Sid 1)).Count -eq 1 -and $run.ledger[(Sid 1)].attempts -eq 1) "ANOTHER session's acknowledgement moving forward does: the limited-unknown session is nudged, counted as normal"
+$again = New-HordeWakeRun -Live -Self "" -HordeHome $h
+Reset-HordeMemoryWaker
+Set-HordeMemoryWakerSession -Id (Sid 1) -Role "orc" -UnreadCount 1 -OldestUnreadAt (At 200) -Limited "unknown" -LastAckedAt (At 299)
+Set-HordeMemoryWakerSession -Id (Sid 2) -Role "orc" -UnreadCount 0 -LastAckedAt (At 299)
+foreach ($n in 100..110) { Set-HordeMemoryWakerClock (At ($n * 3)); $null = Invoke-HordeWakeTick -Run $again -Now (At ($n * 3)) -Waker $memory -ReadSessions $none -HordeHome $h }
+Check (@(Get-HordeMemoryWakerNudges).Count -eq 0) "nor does a watcher started again over acknowledgements newer than any it saved: what a restart reads first is a first reading"
 
 # A FAULT AFTER THE NUDGE MUST NOT FORGET THE NUDGE. What was told cannot be saved - a folder stands where
 # the file belongs - on the very tick a nudge had to be killed, which is a thing the warchief is told of.

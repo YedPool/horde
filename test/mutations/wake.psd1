@@ -6,6 +6,9 @@
     Suite  = "test\test-wake.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "mail-handed-over-is-read-as-mail-taken"
+           Find = '$a.value.unreadCount -le 0 -and (Get-HordeWakeHandedOver $a.value) -eq 0) }'
+           Replace = '$a.value.unreadCount -le 0) }' }
         @{ Name = "the-attempt-is-not-recorded-before-the-waker-is-asked"
            Find = '$nextLedger = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State'
            Replace = '$null = Set-HordeWakeLedgerAsked -Ledger $nextLedger -Id $d.id -Now $Now -State' }
@@ -63,6 +66,21 @@
         @{ Name = "silent-probes-are-never-capped"
            Find = 'if ($SilentProbes -ge [int]$Settings.maxSilentProbes) {'
            Replace = 'if ($false) {' }
+        @{ Name = "after-the-cap-the-slow-probe-is-never-sent"
+           Find = 'if ($lastSlow -is [datetime] -and ($Now - $lastSlow).TotalSeconds -lt $slow) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "after-the-cap-the-slow-probe-does-not-wait"
+           Find = 'if ($lastSlow -is [datetime] -and ($Now - $lastSlow).TotalSeconds -lt $slow) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-slow-probe-ignores-the-silences-own-time"
+           Find = 'if ($SilentProbeAt -is [datetime] -and $SilentProbeAt -le $Now -and ($lastSlow -isnot [datetime] -or $SilentProbeAt -gt $lastSlow)) { $lastSlow = $SilentProbeAt }'
+           Replace = '' }
+        @{ Name = "the-end-of-the-stretched-probes-is-not-told"
+           Find = '$condition = [pscustomobject]@{ kind = "silent-probes-ended"'
+           Replace = '$null = [pscustomobject]@{ kind = "silent-probes-ended"' }
+        @{ Name = "the-time-of-the-last-probe-is-not-kept"
+           Find = 'if ($probedNow -gt 0) { $lastProbe = $Now }'
+           Replace = '' }
         @{ Name = "silent-probes-are-not-stretched"
            Find = 'for ($i = 1; $i -lt $Probes -and $wait -lt $most; $i++) { $wait = $wait * [System.Math]::Max(1.0, [double]$Settings.silentProbeStretch) }'
            Replace = '' }
@@ -76,17 +94,17 @@
            Find = '$wait = $wait * [System.Math]::Max(1.0, [double]$Settings.silentProbeStretch) }'
            Replace = '$wait = $wait * [double]$Settings.silentProbeStretch }' }
         @{ Name = "the-silences-probes-are-not-counted"
-           Find = '$next.probes = $sent + @($Entries | Where-Object'
-           Replace = '$next.probes = 0 + @($Entries | Where-Object' }
+           Find = '$next.probes = $sent + $probedNow'
+           Replace = '$next.probes = 0 + $probedNow' }
         @{ Name = "the-end-of-the-probes-is-said-every-pass"
-           Find = 'if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add('
-           Replace = 'if ($next.probes -ge $most) { [void]$out.Add(' }
+           Find = 'if ($sent -lt $most -and $next.probes -ge $most) {'
+           Replace = 'if ($next.probes -ge $most) {' }
         @{ Name = "the-end-of-the-probes-is-never-said"
-           Find = 'if ($sent -lt $most -and $next.probes -ge $most) { [void]$out.Add('
-           Replace = 'if ($false) { [void]$out.Add(' }
+           Find = 'if ($sent -lt $most -and $next.probes -ge $most) {'
+           Replace = 'if ($false) {' }
         @{ Name = "the-count-of-probes-is-not-saved"
-           Find = 'quietSince = $since; probes = $sent }'
-           Replace = 'quietSince = $since; probes = 0 }' }
+           Find = 'quietSince = $since; probes = $sent; probeAt = $lastProbe }'
+           Replace = 'quietSince = $since; probes = 0; probeAt = $lastProbe }' }
         @{ Name = "a-count-of-probes-that-is-none-is-read"
            Find = 'if (-not ($pp.Value -is [int] -or $pp.Value -is [long]) -or $pp.Value -lt 0 -or $pp.Value -gt 1000000) { return'
            Replace = 'if ($false) { return' }
@@ -142,16 +160,31 @@
            Find = 'if ($a.state -ceq "known" -and "$($t.reachable)" -ceq "yes" -and "$(Get-HordeWakeEntryValue $a.value "acked")" -ceq "known") { $Acks[$t.id] = Get-HordeWakeEntryValue $a.value "lastAckedAt" }'
            Replace = '' }
         @{ Name = "a-session-seen-for-the-first-time-ends-a-silence"
-           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }'
-           Replace = 'if ($shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }' }
+           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }'
+           Replace = 'if ($shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }' }
         @{ Name = "an-acknowledgement-seen-again-ends-a-silence"
-           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }'
-           Replace = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -ge $acksNow["$id"])) { $moved = $true }' }
+           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }'
+           Replace = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -ge $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }' }
         @{ Name = "an-acknowledgement-from-the-future-ends-a-silence"
-           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }'
-           Replace = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }' }
+           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }'
+           Replace = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }' }
         @{ Name = "an-acknowledgement-never-ends-a-silence"
-           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true }'
+           Find = 'if ($acksNow.ContainsKey("$id") -and $shown -is [datetime] -and $shown -le $Now -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"])) { $moved = $true; $rose["$id"] = $shown }'
+           Replace = '' }
+        @{ Name = "a-recent-acknowledgement-releases-an-unknown-limit"
+           Find = 'foreach ($who in @($heard.rose.Keys)) { if ($Acks.ContainsKey("$who")) { $moving["$who"] = $heard.rose[$who] } }'
+           Replace = 'foreach ($who in @($Acks.Keys)) { $moving["$who"] = $Acks[$who] }' }
+        @{ Name = "a-rise-out-of-reach-now-is-evidence"
+           Find = 'foreach ($who in @($heard.rose.Keys)) { if ($Acks.ContainsKey("$who")) { $moving["$who"] = $heard.rose[$who] } }'
+           Replace = 'foreach ($who in @($heard.rose.Keys)) { $moving["$who"] = $heard.rose[$who] }' }
+        @{ Name = "the-pass-is-given-no-reading-before-it"
+           Find = '$heard = Update-HordeWakeAcksRose -Seen $AcksSeen -Acks $Acks -Now $Now'
+           Replace = '$heard = Update-HordeWakeAcksRose -Seen $null -Acks $Acks -Now $Now' }
+        @{ Name = "a-sessions-own-rise-marks-its-own-probe-due"
+           Find = 'if ($null -ne $Risen -and @(@($Risen) | Where-Object { "$_" -cne "$id" }).Count -eq 0) { continue }'
+           Replace = '' }
+        @{ Name = "a-rise-is-forgotten-on-the-next-pass"
+           Find = 'if ($wasRose -is [System.Collections.IDictionary]) { foreach ($id in @($wasRose.Keys)) { $rose["$id"] = $wasRose[$id] } }'
            Replace = '' }
         @{ Name = "a-session-not-read-this-pass-is-forgotten"
            Find = 'if ($wasAcks -is [System.Collections.IDictionary]) { foreach ($id in @($wasAcks.Keys)) { $acksNow["$id"] = $wasAcks[$id] } }'
@@ -373,11 +406,11 @@
            Find = 'if ($before.silent -eq $true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"'
            Replace = 'if ($true) { [void]$out.Add((New-HordeWakeEntry -At $Now -Kind "fleet-moving"' }
         @{ Name = "the-quiet-is-not-counted-anew-after-movement"
-           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0 }'
-           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $before.quietSince; nudges = @($before.nudges); acks = $acksNow; probes = 0 }' }
+           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0; rose = $rose }'
+           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $before.quietSince; nudges = @($before.nudges); acks = $acksNow; probes = 0; rose = $rose }' }
         @{ Name = "the-count-of-probes-outlives-the-silence"
-           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0 }'
-           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = $before.probes }' }
+           Find = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = 0; rose = $rose }'
+           Replace = 'seen = [pscustomobject]@{ silent = $false; quietSince = $null; nudges = @(); acks = $acksNow; probes = $before.probes; rose = $rose }' }
         @{ Name = "silent-found-again-every-pass"
            Find = '    if ($next.silent) {'
            Replace = '    if ($false) {' }
@@ -527,6 +560,12 @@
         @{ Name = "a-new-oldest-mail-inherits-the-old-count"
            Find = '-and $State.oldestUnreadAt -ne $mailAt) { return $null }'
            Replace = '-and $false) { return $null }' }
+        @{ Name = "a-mail-arriving-during-a-hand-over-resets-the-old-mails-budget"
+           Find = 'if ($null -ne $State -and (Get-HordeWakeHandedOver $State) -gt 0) { return $entry }'
+           Replace = '' }
+        @{ Name = "a-nudge-during-a-hand-over-moves-the-entry-to-another-mail"
+           Find = '    $mailAt = Get-HordeWakeEntryValue $Entry "mailAt"'
+           Replace = '    $mailAt = $null' }
         @{ Name = "given-up-on-forgotten-after-nothing"
            Find = '-NothingAt $Now -MailAt $mailAt -GaveUp ((Get-HordeWakeEntryValue $had "gaveUp") -eq $true) -ProbeAt (Get-HordeWakeEntryValue $had "probeAt") -Carry $had }'
            Replace = '-NothingAt $Now -MailAt $mailAt -Carry $had }' }
@@ -572,6 +611,9 @@
         @{ Name = "oldest-mail-not-first"
            Find = 'Sort-Object -Property nothing, attempts, rank, oldest, id'
            Replace = 'Sort-Object -Property nothing, attempts, rank, id' }
+        @{ Name = "an-acknowledgement-that-cannot-be-read-overwrites-the-time-seen"
+           Find = 'if (-not $acksNow.ContainsKey("$id") -or ($shown -is [datetime] -and ($acksNow["$id"] -isnot [datetime] -or $shown -gt $acksNow["$id"]))) { $acksNow["$id"] = $shown }'
+           Replace = '$acksNow["$id"] = $shown' }
         @{ Name = "shadow-nudges"
            Find = 'if ($shadowPass) { $outcomes[$d.id] = "would-nudge";'
            Replace = 'if ($false) { $outcomes[$d.id] = "would-nudge";' }
