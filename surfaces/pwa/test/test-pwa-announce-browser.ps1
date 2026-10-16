@@ -89,6 +89,13 @@ function Get-TrustShape {
     return ((@($t.value.devices | ForEach-Object { "device " + $_.id + " " + $_.state }) + @($t.value.phones | ForEach-Object { "phone " + $_.agreeKeyId + " " + $_.state + " by " + $_.by })) -join "; ")
 }
 function Get-Head { param([string]$Mailbox) $r = Invoke-Browser @{ cmd = "head"; mailbox = $Mailbox }; if ($r.ok) { return [long]$r.value }; return -1 }
+function Get-KeysAfter {
+    # The keys of the items in a mailbox after seq -After, read from the local relay's own files (relays/local:
+    # each item is its key, a line feed, its text): what was put, not just how many.
+    param([string]$Mailbox, [long]$After)
+    $box = Join-Path $mailboxes ($Mailbox -replace '/', '\')
+    return @(Get-ChildItem -LiteralPath $box -Filter "*.item" | Where-Object { [long]$_.Name.Substring(0, 16) -gt $After } | Sort-Object Name | ForEach-Object { $t = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::ASCII); $t.Substring(0, $t.IndexOf([char]10)) })
+}
 function Send-Item {
     param([string]$Mailbox, [string]$Text, [string]$Key)
     $c = Connect-HordeRelay -Name "local" -Options @{ root = $mailboxes }
@@ -193,6 +200,8 @@ try {
     $pr3 = Invoke-Browser @{ cmd = "prompts" }
     $headB = Get-Head $mailbox
     Check ($un2.ok -and $un2.value.doc -and $pr3.ok -and $pr3.value -eq 1 -and $headB -eq $headA + 1) ("the next unlock is again one prompt, and it puts the vouch again (" + $(if ($pr3.ok) { $pr3.value } else { $pr3.reason }) + " prompt(s), head " + $headA + " -> " + $headB + ")")
+    $keysAB = @(Get-KeysAfter -Mailbox $mailbox -After $headA)
+    Check (@($keysAB | Where-Object { $_.StartsWith("vouch/") }).Count -eq 1) ("CONTROL: the mailbox's keys show that vouch, so section 5's reading of them can see one (" + ($keysAB -join ", ") + ")")
     $run = Invoke-Run -Turns 2
     Check ($run.code -eq 0 -and $run.out.Contains("is now in the trust store") -and $run.out.Contains("snapshot of 1 open question(s)")) ("a run takes the key in from the vouch alone and sends the snapshot (exit " + $run.code + ")")
     $shapeV = Get-TrustShape
@@ -210,7 +219,10 @@ try {
     $un3 = Invoke-Browser @{ cmd = "unlock" }
     $pr4 = Invoke-Browser @{ cmd = "prompts" }
     $headD = Get-Head $mailbox
-    Check ($un3.ok -and $un3.value.doc -and $pr4.ok -and $pr4.value -eq 1 -and $headD -eq $headC) ("once the machine has answered, an unlock is one prompt and puts no vouch (" + $(if ($pr4.ok) { $pr4.value } else { $pr4.reason }) + " prompt(s), head " + $headC + " -> " + $headD + ")")
+    # No VOUCH: the unlocked session (PR 312) may put its own opening envelope once the PC says it keeps
+    # sessions, so the mailbox's keys are read, not its head.
+    $keysCD = @(Get-KeysAfter -Mailbox $mailbox -After $headC)
+    Check ($un3.ok -and $un3.value.doc -and $pr4.ok -and $pr4.value -eq 1 -and @($keysCD | Where-Object { $_.StartsWith("vouch/") }).Count -eq 0) ("once the machine has answered, an unlock is one prompt and puts no vouch (" + $(if ($pr4.ok) { $pr4.value } else { $pr4.reason }) + " prompt(s), head " + $headC + " -> " + $headD + ", put: " + ($keysCD -join ", ") + ")")
     $probs = Invoke-Browser @{ cmd = "problems" }
     Check ($probs.ok -and @($probs.value).Count -eq 0) ("no exception, no console error and no policy violation in the whole run (" + $(if ($probs.ok) { @($probs.value) -join " | " } else { $probs.reason }) + ")")
     }
