@@ -269,6 +269,20 @@ try {
     Check ($long.outcome -ceq "refused" -and $exact.outcome -ceq "done" -and $hebrew.outcome -ceq "refused" -and $secret.outcome -ceq "refused" -and $noName.outcome -ceq "refused" -and $secret.reason -notlike "*ghp_*") "a domain over 80 characters, one not printable ASCII and one that looks like a secret are refused (the secret not repeated); 80 is taken; a blank name is refused"
 
     Write-Host ""
+    Write-Host "--- 6b. tiers ---" -ForegroundColor Cyan
+    $before = Get-Row (Get-Dash $O) "l-a"
+    $vt = (Get-Dash $O).version
+    $t2 = Set-HordeOrcTier -Id "l-a" -Tier 2 -HordeHome $O -Version $vt -Now $now
+    $t2again = Set-HordeOrcTier -Id "l-a" -Tier 2 -HordeHome $O -Now $now
+    $t3 = Set-HordeOrcTier -Id "l-a" -Tier 3 -HordeHome $O -Now $now
+    $tText = Set-HordeOrcTier -Id "l-a" -Tier "1" -HordeHome $O -Now $now
+    $tStale = Set-HordeOrcTier -Id "l-a" -Tier 1 -HordeHome $O -Version $vt -Now $now
+    $after = Get-Row (Get-Dash $O) "l-a"
+    Check ($null -eq $before.tier -and $t2.outcome -ceq "done" -and $after.tier -eq 2 -and (Get-Row (Get-Dash $O) "l-b").tier -eq $null) ("an Orc has no tier until one is set, and then the dash carries it (" + $t2.outcome + " " + $t2.reason + ")")
+    Check ($t2again.outcome -ceq "unchanged" -and $t3.outcome -ceq "refused" -and $tText.outcome -ceq "refused" -and $tStale.outcome -ceq "stale") "setting the same tier writes nothing; a tier other than 1 or 2, or one given as text, is refused; a tier drawn from an older version is stale"
+    Check (@(Get-Records $O | Where-Object { $_.kind -ceq "orc-tier-set" -and $_.data.id -ceq "l-a" -and $_.data.tier -eq 2 }).Count -eq 1) "a tier is one orc-tier-set record"
+
+    Write-Host ""
     Write-Host "--- 7. the dash snapshot's fields, through the cards channel ---" -ForegroundColor Cyan
     $env:HORDE_HOME = $Q
     $wq = Write-Orc $Q "domain" @{ id = "lane-c"; domain = "Form fill" }
@@ -280,7 +294,7 @@ try {
     $snap = New-HordeCardsChannelSnapshot -Context $ctx -Settings $set -Paths (Get-HordeCardsChannelPaths -HordeHome $Q -Settings $set) -Now $now -Budget 60000
     $body = ConvertFrom-HordeJson $snap.body
     $first = @(Get-HordeTestMember $body "dash.orcs") | Select-Object -First 1
-    $want = "id,letter,name,domain,order,backBurner,registered,open,status,age,since,statusText,sessions,wargsActive,wargsInactive,lastActivityAt,lastActivitySource"
+    $want = "id,letter,name,domain,tier,order,backBurner,registered,open,status,age,since,statusText,sessions,wargsActive,wargsInactive,lastActivityAt,lastActivitySource"
     Check ((Get-HordeTestMember $body "dash.v") -eq 1 -and (Test-HordeTestMember $body "dash.version") -and (Get-HordeTestMember $body "dash.ok") -eq $true -and (Get-HordeTestMember $body "dash.orcsLeftOut") -eq 0 -and @(Get-HordeTestMember $body "dash.orcs").Count -eq 4) "the cards snapshot carries the dash: v 1, ok, the registry version, the Orcs, and how many were left out"
     Check ($null -ne $first -and (@($first.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq $want) ("each Orc carries exactly its named fields, in order (" + $(if ($null -ne $first) { @($first.PSObject.Properties | ForEach-Object { $_.Name }) -join "," } else { "none" }) + ")")
     $cRow = @(Get-HordeTestMember $body "dash.orcs") | Where-Object { $_.id -ceq "lane-c" } | Select-Object -First 1

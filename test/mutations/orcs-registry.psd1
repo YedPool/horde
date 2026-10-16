@@ -79,6 +79,12 @@
         @{ Name = "a-new-lane-is-not-shown-until-registered"
            Find = '& $add ([pscustomobject]@{ id = $l.id;'
            Replace = '& { } ([pscustomobject]@{ id = $l.id;' }
+        @{ Name = "any-number-is-a-tier"
+           Find = '(@(1, 2) -contains [int]$tier)'
+           Replace = '([int]$tier -ge 1)' }
+        @{ Name = "a-tier-is-not-folded"
+           Find = 'elseif ($Record.kind -ceq "orc-tier-set") { $o.tier = [int]$d.tier }'
+           Replace = 'elseif ($Record.kind -ceq "orc-tier-set") { }' }
         @{ Name = "a-damaged-record-stops-the-fold"
            Find = 'if ($r.kind -cne "ok") { [void]$s.unreadable.Add([pscustomobject]@{ sequence = [long]$r.sequence; reason = "$($r.reason)" }); continue }'
            Replace = 'if ($r.kind -cne "ok") { [void]$s.unreadable.Add([pscustomobject]@{ sequence = [long]$r.sequence; reason = "$($r.reason)" }); break }' }

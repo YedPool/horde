@@ -17,7 +17,7 @@
 
 . (Join-Path $PSScriptRoot "Registry.ps1")
 
-$script:HordeOrcVerbs = @("list", "order", "backburner", "name", "domain", "retire", "seed")
+$script:HordeOrcVerbs = @("list", "order", "backburner", "name", "domain", "retire", "tier", "seed")
 
 function Get-HordeOrcVerbs { return @($script:HordeOrcVerbs) }
 
@@ -143,6 +143,10 @@ function Invoke-HordeOrcCommand {
         "retire" {
             if ($rest.Count -ne 1) { & $usage "retire takes one id: horde orcs retire <id>" }
             $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash) }
+        }
+        "tier" {
+            if ($rest.Count -ne 2 -or @("1", "2") -cnotcontains $rest[1]) { & $usage "tier takes an id and 1 or 2: horde orcs tier <id> 1" }
+            $request = @{ id = (Resolve-HordeOrcId -Given $rest[0] -Dash $dash); tier = [int]$rest[1] }
         }
         default { & $usage ("'" + $Verb + "' is not a verb of horde orcs; the verbs are: " + ($script:HordeOrcVerbs -join ", ")) }
     }

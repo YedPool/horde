@@ -20,6 +20,7 @@
 #   orcs-ordered     {order, backBurner}  the WHOLE list in one record, so a reorder is never half done
 #   orc-retired      {id, reason}         it leaves the list: by hand (stays off), or its lane was
 #                                          retired in the lanes folder (registered again if it comes back)
+#   orc-tier-set     {id, tier}           its tier, 1 or 2 (Set-HordeOrcTier; null on the dash until set)
 # The current list is the fold of the records in order (Read-HordeOrcRegistry). A record that does not
 # match the schema is reported by its sequence number and changes nothing; a record of a kind this
 # version does not know is set aside and reported once for its kind (a later version wrote it).
@@ -98,7 +99,7 @@ $script:HordeOrcSettings = New-HordeModuleSettings -Module "orcs" -Settings @(
 )
 # The kinds of record, each with the definition of its data in the schema. A kind this table does not
 # hold is a later version's (the header).
-$script:HordeOrcKinds = @("orc-registered", "orc-named", "orc-domain-set", "orcs-ordered", "orc-retired")
+$script:HordeOrcKinds = @("orc-registered", "orc-named", "orc-domain-set", "orcs-ordered", "orc-retired", "orc-tier-set")
 $script:HordeOrcIdPattern = '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z'
 $script:HordeOrcDomainMost = 80
 $script:HordeOrcNameMost = 40
@@ -203,7 +204,7 @@ function Add-HordeOrcRecordToState {
                 [void]$State.main.Add($id)
                 return ""
             }
-            $State.orcs[$id] = [pscustomobject]@{ id = $id; letter = "$($d.letter)"; name = "$($d.name)"; domain = ""; retired = $false; retiredBy = "" }
+            $State.orcs[$id] = [pscustomobject]@{ id = $id; letter = "$($d.letter)"; name = "$($d.name)"; domain = ""; tier = $null; retired = $false; retiredBy = "" }
             [void]$State.main.Add($id)
             return ""
         }
@@ -225,6 +226,7 @@ function Add-HordeOrcRecordToState {
             $o = $State.orcs[$id]
             if ($Record.kind -ceq "orc-named") { $o.name = "$($d.name)" }
             elseif ($Record.kind -ceq "orc-domain-set") { $o.domain = "$($d.domain)" }
+            elseif ($Record.kind -ceq "orc-tier-set") { $o.tier = [int]$d.tier }
             else { $o.retired = $true; $o.retiredBy = "$($d.reason)"; Remove-HordeOrcFromLists -State $State -Id $id }
             return ""
         }
@@ -521,7 +523,7 @@ function Get-HordeOrcView {
     # Not shown: an Orc whose lane the fleet retired, and a lane named in notOrcs, registered or not.
     $gone = @(@($Lanes.fleetRetired) + @($Lanes.notOrcs))
     $rows = New-Object System.Collections.ArrayList
-    $add = { param($o, [bool]$Back, [bool]$Registered) [void]$rows.Add([pscustomobject]@{ id = $o.id; letter = "$($o.letter)"; name = "$($o.name)"; domain = "$($o.domain)"; backBurner = $Back; registered = $Registered; order = 0 }) }
+    $add = { param($o, [bool]$Back, [bool]$Registered) [void]$rows.Add([pscustomobject]@{ id = $o.id; letter = "$($o.letter)"; name = "$($o.name)"; domain = "$($o.domain)"; tier = $(if ($null -ne $o.PSObject.Properties["tier"] -and $null -ne $o.tier) { [int]$o.tier } else { $null }); backBurner = $Back; registered = $Registered; order = 0 }) }
     foreach ($id in @($State.main)) { if ($gone -cnotcontains $id) { & $add $State.orcs[$id] $false $true } }
     foreach ($l in @($Lanes.lanes)) {
         if ($State.orcs.Contains($l.id) -and (-not $State.orcs[$l.id].retired -or $State.orcs[$l.id].retiredBy -ceq "hand")) { continue }
@@ -636,14 +638,14 @@ function Get-HordeOrcDash {
         if ($null -ne $lane) { $statusAt = $lane.statusAt; $waiting = $lane.waitingOn }
         $st = Get-HordeOrcStatus -StatusAt $statusAt -WaitingOn $waiting -SessionTimes @($times.ToArray()) -BlocksAllSince @($blocks.ToArray()) -Now $Now -WorkingMinutes $Paths.workingMinutes
         $last = Get-HordeOrcLastActivity -Id $v.id -Letter $letter -StatusAt $statusAt -Progress $progress -Questions $questions
-        [void]$rows.Add([pscustomobject]([ordered]@{ id = $v.id; letter = $letter; name = $v.name; domain = $v.domain; order = [int]$v.order; backBurner = [bool]$v.backBurner; registered = [bool]$v.registered
+        [void]$rows.Add([pscustomobject]([ordered]@{ id = $v.id; letter = $letter; name = $v.name; domain = $v.domain; tier = $v.tier; order = [int]$v.order; backBurner = [bool]$v.backBurner; registered = [bool]$v.registered
             open = $open; status = $st.status; age = $st.age; since = $st.since; statusText = $st.text; sessions = $count; wargsActive = $active; wargsInactive = $inactive
             lastActivityAt = $last.at; lastActivitySource = $last.source }))
     }
     return [pscustomobject]@{ ok = $true; reason = ""; version = [long]$state.version; orcs = @($rows.ToArray()); lines = @($lines.ToArray()) }
 }
 
-$script:HordeOrcDashFields = @("id", "letter", "name", "domain", "order", "backBurner", "registered", "open", "status", "age", "since", "statusText", "sessions", "wargsActive", "wargsInactive", "lastActivityAt", "lastActivitySource")
+$script:HordeOrcDashFields = @("id", "letter", "name", "domain", "tier", "order", "backBurner", "registered", "open", "status", "age", "since", "statusText", "sessions", "wargsActive", "wargsInactive", "lastActivityAt", "lastActivitySource")
 
 function Get-HordeOrcLastActivity {
     # LATEST ACTIVITY (the header): { at; source } - at the newest of the lane's status file write
@@ -796,6 +798,13 @@ function Get-HordeOrcRecordFor {
             return [pscustomobject]@{ refuse = ""; unchanged = $false; kind = "orc-domain-set"; data = [ordered]@{ id = $id; domain = $text } }
         }
         "retire" { return [pscustomobject]@{ refuse = ""; unchanged = $false; kind = "orc-retired"; data = [ordered]@{ id = $id; reason = "hand" } } }
+        "tier" {
+            # ONE OR TWO, nothing else: the tier an Orc is in (a whole number, not text that looks like one).
+            $tier = $Request.tier
+            if (-not (($tier -is [int] -or $tier -is [long]) -and (@(1, 2) -contains [int]$tier))) { return (& $no ("a tier is 1 or 2, not '" + $tier + "'")) }
+            if ($null -ne $row.tier -and [int]$row.tier -eq [int]$tier) { return $same }
+            return [pscustomobject]@{ refuse = ""; unchanged = $false; kind = "orc-tier-set"; data = [ordered]@{ id = $id; tier = [int]$tier } }
+        }
         "backburner" {
             $on = [bool]$Request.on
             if ($on -eq [bool]$row.backBurner) { return $same }
@@ -871,6 +880,15 @@ function Invoke-HordeOrcWrite {
         if ($made -ceq "unconfirmed") { return (New-HordeOrcResult -Outcome "unknown" -Version ($s.version + 1) -Written $written -Reason ("record " + ($s.version + 1) + " has its place in the registry but could not be confirmed written through to the disk, so it is NOT reported as saved")) }
     }
     return (New-HordeOrcResult -Outcome "unknown" -Written $written -Reason ("nothing was written: " + $script:HordeOrcRaceTries + " tries each found another writer had taken the next place first"))
+}
+
+function Set-HordeOrcTier {
+    # Put Orc -Id in tier -Tier (1 or 2): one orc-tier-set record, by the same write as every other
+    # change, so it carries -Version the same way and is refused as stale the same way. Returns
+    # Invoke-HordeOrcWrite's answer.
+    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)]$Tier, [string]$HordeHome = "", $Paths = $null, [long]$Version = -1,
+        [string]$Actor = "cli", [string]$By = "console", [datetime]$Now = [datetime]::UtcNow)
+    return (Invoke-HordeOrcWrite -Operation "tier" -Request @{ id = $Id; tier = $Tier } -HordeHome $HordeHome -Paths $Paths -Version $Version -Actor $Actor -By $By -Now $Now)
 }
 
 function Invoke-HordeOrcSeed {
