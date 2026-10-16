@@ -204,7 +204,7 @@ function Add-HordeOrcRecordToState {
                 [void]$State.main.Add($id)
                 return ""
             }
-            $State.orcs[$id] = [pscustomobject]@{ id = $id; letter = "$($d.letter)"; name = "$($d.name)"; domain = ""; tier = $null; retired = $false; retiredBy = "" }
+            $State.orcs[$id] = [pscustomobject]@{ id = $id; letter = "$($d.letter)"; name = "$($d.name)"; domain = ""; tier = $null; named = $false; retired = $false; retiredBy = "" }
             [void]$State.main.Add($id)
             return ""
         }
@@ -224,7 +224,7 @@ function Add-HordeOrcRecordToState {
             $id = "$($d.id)"
             if (-not $State.orcs.Contains($id) -or $State.orcs[$id].retired) { return ("it names " + $id + ", which is not on the list") }
             $o = $State.orcs[$id]
-            if ($Record.kind -ceq "orc-named") { $o.name = "$($d.name)" }
+            if ($Record.kind -ceq "orc-named") { $o.name = "$($d.name)"; $o.named = $true }
             elseif ($Record.kind -ceq "orc-domain-set") { $o.domain = "$($d.domain)" }
             elseif ($Record.kind -ceq "orc-tier-set") { $o.tier = [int]$d.tier }
             else { $o.retired = $true; $o.retiredBy = "$($d.reason)"; Remove-HordeOrcFromLists -State $State -Id $id }
@@ -519,11 +519,22 @@ function Get-HordeOrcView {
     # retired; and every lane seen but not yet registered at the end of the main list (registered false),
     # by folder name. Each { id; letter; name; domain; backBurner; registered; order } - order from 1
     # across the whole list. A lane taken off by hand is never shown again.
+    # THE LETTER IS THE LANE'S AS IT IS NOW, the stored one only when the lane is not seen or its status
+    # names none (review of PR 319: a lane registered while its status file was half written stored no
+    # letter, and showed 0 open, 0 sessions and no Wargs for good; a lane that changed its letter kept the
+    # old one). So is the default name: a name nobody set (orc-named) follows the letter.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Lanes)
+    $lettersNow = @{}
+    foreach ($l in @($Lanes.lanes)) { if ("$($l.letter)" -cmatch '\A[A-Z]\z') { $lettersNow[$l.id] = "$($l.letter)" } }
     # Not shown: an Orc whose lane the fleet retired, and a lane named in notOrcs, registered or not.
     $gone = @(@($Lanes.fleetRetired) + @($Lanes.notOrcs))
     $rows = New-Object System.Collections.ArrayList
-    $add = { param($o, [bool]$Back, [bool]$Registered) [void]$rows.Add([pscustomobject]@{ id = $o.id; letter = "$($o.letter)"; name = "$($o.name)"; domain = "$($o.domain)"; tier = $(if ($null -ne $o.PSObject.Properties["tier"] -and $null -ne $o.tier) { [int]$o.tier } else { $null }); backBurner = $Back; registered = $Registered; order = 0 }) }
+    $add = {
+        param($o, [bool]$Back, [bool]$Registered)
+        $letter = $(if ($lettersNow.ContainsKey($o.id)) { $lettersNow[$o.id] } else { "$($o.letter)" })
+        $name = $(if ($null -ne $o.PSObject.Properties["named"] -and -not $o.named) { New-HordeOrcDefaultName -Letter $letter -Id $o.id } else { "$($o.name)" })
+        [void]$rows.Add([pscustomobject]@{ id = $o.id; letter = $letter; name = $name; domain = "$($o.domain)"; tier = $(if ($null -ne $o.PSObject.Properties["tier"] -and $null -ne $o.tier) { [int]$o.tier } else { $null }); backBurner = $Back; registered = $Registered; order = 0 })
+    }
     foreach ($id in @($State.main)) { if ($gone -cnotcontains $id) { & $add $State.orcs[$id] $false $true } }
     foreach ($l in @($Lanes.lanes)) {
         if ($State.orcs.Contains($l.id) -and (-not $State.orcs[$l.id].retired -or $State.orcs[$l.id].retiredBy -ceq "hand")) { continue }
@@ -831,11 +842,14 @@ function Get-HordeOrcRecordFor {
 }
 
 function Invoke-HordeOrcWrite {
-    # ONE CHANGE to the registry: -Operation name, domain, retire, backburner or order, with -Request
-    # (id and name / domain / on; or order and backBurner). -Version: the version the change was drawn
-    # from, or -1 for none (the header, EVERY WRITE CARRIES THE VERSION). Returns { outcome: done |
-    # unchanged | refused | stale | unknown; reason; version; written; lines }. Nothing is written on a
-    # refusal or a stale version, the lanes' registration included.
+    # ONE CHANGE to the registry: -Operation name, domain, retire, backburner, order or tier, with -Request
+    # (id and name / domain / on / tier; or order and backBurner). -Version: the version the change was
+    # drawn from, or -1 for none (the header, EVERY WRITE CARRIES THE VERSION). Returns { outcome: done |
+    # unchanged | refused | stale | unknown; reason; version; written; lines }. A refusal, or a version
+    # already stale when the write begins, writes nothing, not even the lanes' registration. A version
+    # found stale only after that registration (another writer landed between the two reads) writes
+    # nothing of the change itself, but the lanes registered just before stay: they are what the lanes
+    # folder shows, and written says how many.
     param([Parameter(Mandatory = $true)][string]$Operation, $Request, [string]$HordeHome = "", $Paths = $null, [long]$Version = -1,
         [string]$Actor = "cli", [string]$By = "console", [datetime]$Now = [datetime]::UtcNow)
     if ($By -cnotmatch $script:HordeOrcByPattern) { $By = "console" }

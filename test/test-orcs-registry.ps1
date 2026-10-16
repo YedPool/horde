@@ -31,6 +31,7 @@ $fleetPin = Enter-HordeTestEmptyFleet
 . (Join-Path $root "channels\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
+. (Join-Path $root "orcs\Console.ps1")
 Set-StrictMode -Version Latest
 Write-Host ("  runtime: PowerShell " + $PSVersionTable.PSVersion + " (" + $PSVersionTable.PSEdition + ")") -ForegroundColor DarkGray
 
@@ -165,6 +166,9 @@ try {
     $s1 = Get-HordeOrcStatus -StatusAt $now.AddMinutes(-40) -WaitingOn "the founder, on a thing" -Now $now
     Check ($s1.status -ceq "blocked" -and $s1.text -ceq "blocked 40 min" -and $s1.since -ceq "2026-10-15T11:20:00Z") ("a waiting-on line blocks, aged from the status file (" + $s1.text + ")")
     $s2 = Get-HordeOrcStatus -StatusAt $now.AddMinutes(-40) -WaitingOn "nothing; question 76 waits on the founder" -Now $now
+    $s2b = Get-HordeOrcStatus -StatusAt $now.AddMinutes(-40) -WaitingOn "none" -Now $now
+    $s2c = Get-HordeOrcStatus -StatusAt $now.AddMinutes(-40) -WaitingOn "Nonesuch, the reviewer" -Now $now
+    Check ($s2b.status -ceq "idle" -and $s2c.status -ceq "blocked") ("'waiting on: none' does not block; a word that only begins with none does (" + $s2b.text + " / " + $s2c.text + ")")
     Check ($s2.status -ceq "idle" -and $s2.text -ceq "idle 40 min") ("a waiting-on line that says nothing does not block (" + $s2.text + ")")
     $s3 = Get-HordeOrcStatus -StatusAt $now.AddMinutes(-2) -BlocksAllSince @($now.AddHours(-3)) -Now $now
     Check ($s3.status -ceq "blocked" -and $s3.text -ceq "blocked 3 h") ("a question that blocks all blocks, though the lane moved 2 minutes ago, aged from the question (" + $s3.text + ")")
@@ -281,6 +285,86 @@ try {
     Check ($null -eq $before.tier -and $t2.outcome -ceq "done" -and $after.tier -eq 2 -and (Get-Row (Get-Dash $O) "l-b").tier -eq $null) ("an Orc has no tier until one is set, and then the dash carries it (" + $t2.outcome + " " + $t2.reason + ")")
     Check ($t2again.outcome -ceq "unchanged" -and $t3.outcome -ceq "refused" -and $tText.outcome -ceq "refused" -and $tStale.outcome -ceq "stale") "setting the same tier writes nothing; a tier other than 1 or 2, or one given as text, is refused; a tier drawn from an older version is stale"
     Check (@(Get-Records $O | Where-Object { $_.kind -ceq "orc-tier-set" -and $_.data.id -ceq "l-a" -and $_.data.tier -eq 2 }).Count -eq 1) "a tier is one orc-tier-set record"
+
+    Write-Host ""
+    Write-Host "--- 6c. the letter is the lane's as it is now ---" -ForegroundColor Cyan
+    $T = New-Home "letter"
+    # Half written when it is registered: a status the fleet's reader does not take, so no letter.
+    $late = Join-Path $T "progress\lanes\late-lane"
+    [void][System.IO.Directory]::CreateDirectory($late)
+    [System.IO.File]::WriteAllText((Join-Path $late "status.txt"), "horde-orc-status 1`norc: Q`n", $utf8)
+    [System.IO.File]::SetLastWriteTimeUtc((Join-Path $late "status.txt"), $now.AddMinutes(-60))
+    Set-Session $T "s-q" -Label "Q" -Ago 60
+    Set-Session $T "w-q" -Label "Q1" -Parent "s-q" -Ago 2
+    $null = Add-Question $T "Orc Q" "part"
+    $reg = Write-Orc $T "domain" @{ id = "late-lane"; domain = "registered while half written" }
+    $half = Get-Row (Get-Dash $T) "late-lane"
+    Check ($reg.outcome -ceq "done" -and $half.letter -ceq "" -and $half.open -eq 0 -and $half.sessions -eq 0 -and @(Get-Records $T | Where-Object { $_.kind -ceq "orc-registered" -and $_.data.letter -ceq "" }).Count -eq 1) "CONTROL: a lane registered while its status names no letter is stored with none, and nothing is counted for it"
+    Set-Lane $T "late-lane" "Q" -Ago 60
+    $fixed = Get-Row (Get-Dash $T) "late-lane"
+    Check ($fixed.letter -ceq "Q" -and $fixed.name -ceq "Orc Q" -and $fixed.open -eq 1 -and $fixed.sessions -eq 2 -and $fixed.wargsActive -eq 1 -and $fixed.status -ceq "working") ("once its status names Q, the dash reads Q from the lane: its name, its open question, its sessions and Wargs appear (" + $fixed.letter + ", " + $fixed.name + ", open " + $fixed.open + ", sessions " + $fixed.sessions + ", " + $fixed.statusText + ")")
+    $null = Write-Orc $T "name" @{ id = "late-lane"; name = "The late one" }
+    Set-Lane $T "late-lane" "R" -Ago 60
+    $moved = Get-Row (Get-Dash $T) "late-lane"
+    Check ($moved.letter -ceq "R" -and $moved.name -ceq "The late one" -and $moved.open -eq 0) "a lane that changes its letter is read by the new one; a name a person set stays"
+
+    Write-Host ""
+    Write-Host "--- 6d. a change whose list moves between its two reads is stale; a sync that repeats itself stops ---" -ForegroundColor Cyan
+    $V = New-Home "midwrite"
+    Set-Lane $V "m-a" "A"; Set-Lane $V "m-b" "B"
+    $null = Write-Orc $V "domain" @{ id = "m-a"; domain = "registers both" }
+    $vv = (Get-Dash $V).version
+    # Another writer lands after this write's lanes are followed and before its own record: the sync is
+    # wrapped to plant one record at the next place, as a racing writer would.
+    $script:realSync = ${function:Sync-HordeOrcRegistry}
+    function Sync-HordeOrcRegistry {
+        param([string]$Root, $Lanes, [string]$By, [datetime]$Now)
+        $r = & $script:realSync -Root $Root -Lanes $Lanes -By $By -Now $Now
+        $null = Add-HordeOrcRecord -Root $Root -Sequence ($r.version + 1) -Kind "orc-named" -Data ([ordered]@{ id = "m-b"; name = "Planted" }) -Actor "cli" -By "console" -Now $Now
+        return $r
+    }
+    try { $mid = Write-Orc $V "order" @{ order = @("m-b", "m-a"); backBurner = @() } -Version $vv }
+    finally { ${function:Sync-HordeOrcRegistry} = $script:realSync }
+    Check ($mid.outcome -ceq "stale" -and (Ids (Get-Dash $V)) -ceq "m-a,m-b" -and (Get-Row (Get-Dash $V) "m-b").name -ceq "Planted") ("a versioned change whose registry moves between its first read and its write is stale, and its order is not written (" + $mid.outcome + ")")
+    # A record the fold will not take: the writer is wrapped so a registration lands as a record of
+    # another kind for nobody, as a fold and a sync that disagree would make it. Five tries at most, then
+    # it throws, so a loop with no guard ends in a named failure, never a hang.
+    $W2 = New-Home "loop"
+    Set-Lane $W2 "n-a" "A"
+    $script:realAdd = ${function:Add-HordeOrcRecord}
+    $script:addCalls = 0
+    function Add-HordeOrcRecord {
+        param([string]$Root, [long]$Sequence, [string]$Kind, $Data, [string]$Actor, [string]$By, [datetime]$Now)
+        $script:addCalls++
+        if ($script:addCalls -gt 5) { throw "the stand-in writer was called more than five times" }
+        if ($Kind -ceq "orc-registered") { return (& $script:realAdd -Root $Root -Sequence $Sequence -Kind "orc-named" -Data ([ordered]@{ id = "nobody"; name = "x" }) -Actor $Actor -By $By -Now $Now) }
+        return (& $script:realAdd -Root $Root -Sequence $Sequence -Kind $Kind -Data $Data -Actor $Actor -By $By -Now $Now)
+    }
+    try { $loop = Write-Orc $W2 "domain" @{ id = "n-a"; domain = "x" } }
+    finally { ${function:Add-HordeOrcRecord} = $script:realAdd }
+    Check ($loop.outcome -ceq "unknown" -and "$($loop.reason)" -like "*did not take its own orc-registered n-a*" -and $script:addCalls -eq 1) ("a sync whose own record the fold does not take stops at once, in words, after one record (" + $loop.outcome + ": " + $loop.reason + "; " + $script:addCalls + " write(s))")
+
+    Write-Host ""
+    Write-Host "--- 6e. a seed that does not hold together is refused whole ---" -ForegroundColor Cyan
+    $S = New-Home "seed"
+    Set-Lane $S "s-c" "C"
+    $seedRun = { param([string]$Text, [string]$Name)
+        $p = Join-Path $S $Name
+        [System.IO.File]::WriteAllText($p, $Text, $utf8)
+        $env:HORDE_HOME = $S
+        try { return (Invoke-HordeOrcCommand -Verb "seed" -File $p -HordeHome $S -By "console") } catch { return [pscustomobject]@{ lines = @(); failure = ("THREW: " + $_.Exception.Message) } }
+    }
+    $badLetter = & $seedRun '{"v":1,"domains":{"c":"lower case letter"}}' "bad-letter.json"
+    $tooLong = & $seedRun ('{"v":1,"domains":{"C":"' + ("d" * 81) + '"}}') "too-long.json"
+    $notText = & $seedRun '{"v":1,"domains":{"C":7}}' "not-text.json"
+    $p8 = Join-Path $S "latin1.json"
+    [System.IO.File]::WriteAllBytes($p8, [byte[]](@([System.Text.Encoding]::ASCII.GetBytes('{"v":1,"domains":{"C":"caf')) + @(0xE9) + @([System.Text.Encoding]::ASCII.GetBytes('"}}'))))
+    try { $latin = Invoke-HordeOrcCommand -Verb "seed" -File $p8 -HordeHome $S -By "console" } catch { $latin = [pscustomobject]@{ lines = @(); failure = ("THREW: " + $_.Exception.Message) } }
+    Check ("$($badLetter.failure)" -ne "" -and (@($badLetter.lines) -join " ") -like "*is not one capital letter*" -and "$($tooLong.failure)" -ne "" -and (@($tooLong.lines) -join " ") -like "*81 characters*" -and "$($notText.failure)" -like "*is not*domains*" -and "$($latin.failure)" -like "*could not be read as UTF-8*") ("a seed with a letter that is not one capital, a domain of 81 characters, a value that is not text, or bytes that are not UTF-8 is refused in words, never a throw (" + $badLetter.failure + " | " + $tooLong.failure + " | " + $notText.failure + " | " + $latin.failure + ")")
+    Check (-not (Test-Path (Join-Path $S "orcs\registry"))) "and none of them wrote anything"
+    Push-Location $S
+    try { $rel = & { [System.IO.File]::WriteAllText((Join-Path $S "rel.json"), '{"v":1,"domains":{"C":"by a relative path"}}', $utf8); Invoke-HordeOrcCommand -Verb "seed" -File "rel.json" -HordeHome $S -By "console" } } finally { Pop-Location }
+    Check ("$($rel.failure)" -eq "" -and (Get-Row (Get-Dash $S) "s-c").domain -ceq "by a relative path") ("a relative seed path is read from the prompt's own folder (" + $rel.failure + ")")
 
     Write-Host ""
     Write-Host "--- 7. the dash snapshot's fields, through the cards channel ---" -ForegroundColor Cyan

@@ -109,8 +109,14 @@ function Invoke-HordeOrcCommand {
     if ($By -eq "") { $By = Resolve-HordeOrcBy }
     if ($Verb -ceq "seed") {
         if ($File -eq "" -or $words.Count -gt 0) { & $usage "seed takes -File <seed.json> and nothing else" }
+        # A RELATIVE PATH IS THE PROMPT'S: .NET resolves one against the process's own folder, which
+        # PowerShell does not move with Set-Location, so it is made whole against PowerShell's location.
+        if (-not [System.IO.Path]::IsPathRooted($File)) { $File = Join-Path (Get-Location -PSProvider FileSystem).ProviderPath $File }
         if (-not [System.IO.File]::Exists($File)) { return [pscustomobject]@{ lines = @(); failure = ("there is no seed file at " + $File) } }
-        $text = [System.IO.File]::ReadAllText($File, (New-Object System.Text.UTF8Encoding($false, $true)))
+        # A file that is not UTF-8 text, or cannot be read, is a failure in words, never a throw.
+        $text = $null
+        try { $text = [System.IO.File]::ReadAllText($File, (New-Object System.Text.UTF8Encoding($false, $true))) }
+        catch { return [pscustomobject]@{ lines = @(); failure = ("the seed file " + $File + " could not be read as UTF-8 text: " + $_.Exception.Message) } }
         $seed = $null
         if (@(Find-HordeJsonDuplicateKey -Text $text).Count -eq 0) { try { $seed = ConvertFrom-HordeJson $text } catch { $seed = $null } }
         $ok = ($seed -is [System.Management.Automation.PSCustomObject] -and $null -ne $seed.PSObject.Properties["v"] -and $seed.v -eq 1 -and $null -ne $seed.PSObject.Properties["domains"] -and $seed.domains -is [System.Management.Automation.PSCustomObject])

@@ -85,6 +85,18 @@
         @{ Name = "a-tier-is-not-folded"
            Find = 'elseif ($Record.kind -ceq "orc-tier-set") { $o.tier = [int]$d.tier }'
            Replace = 'elseif ($Record.kind -ceq "orc-tier-set") { }' }
+        @{ Name = "a-list-that-moves-mid-write-is-not-stale"
+           Find = 'if ($Version -ge 0 -and $s.version -ne ($first.version + $written)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-sync-that-repeats-itself-goes-on"
+           Find = 'if ($done.Contains($step)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-letter-is-the-one-stored-at-registration"
+           Find = '$letter = $(if ($lettersNow.ContainsKey($o.id)) { $lettersNow[$o.id] } else { "$($o.letter)" })'
+           Replace = '$letter = "$($o.letter)"' }
+        @{ Name = "a-default-name-keeps-the-old-letter"
+           Find = '-and -not $o.named) { New-HordeOrcDefaultName -Letter $letter -Id $o.id }'
+           Replace = '-and $false) { New-HordeOrcDefaultName -Letter $letter -Id $o.id }' }
         @{ Name = "a-damaged-record-stops-the-fold"
            Find = 'if ($r.kind -cne "ok") { [void]$s.unreadable.Add([pscustomobject]@{ sequence = [long]$r.sequence; reason = "$($r.reason)" }); continue }'
            Replace = 'if ($r.kind -cne "ok") { [void]$s.unreadable.Add([pscustomobject]@{ sequence = [long]$r.sequence; reason = "$($r.reason)" }); break }' }
