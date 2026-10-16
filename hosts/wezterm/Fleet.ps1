@@ -24,8 +24,9 @@
 # never a script shim), as every Horde spawn is (Act.ps1's Start-HordeWeztermPane) - the installed
 # PowerShell 7 first, never the Store's while it is there (Resolve-HordeWeztermFleetShell). WITHOUT THE PERSON'S
 # PROFILE (second review of PR 318): a profile can define a function or alias of the harness's own name,
-# or print and prompt, and the resume line must mean the same in every woken pane; the pane inherits its
-# PATH from the wake, which is how the harness's command is found.
+# or print and prompt, and the resume line must mean the same in every woken pane; the pane's PATH
+# comes from the terminal that spawns it, NOT from the wake (measured by test/e2e/e2e-fleet.ps1: the wake's own PATH
+# does not reach the pane), so the harness's command is found by the terminal's PATH.
 #
 # WHICH TERMINAL. This user's own (Act.ps1's Resolve-HordeWeztermOwnMux), which is refused when two run -
 # as they do whenever a test terminal stands beside the person's own. <HORDE_HOME>\settings\
@@ -230,18 +231,31 @@ function Format-HordeWeztermFleetSpawn {
     return $text
 }
 
+function ConvertTo-HordeWeztermFleetLine {
+    # The terminal's stderr as one short line: a record's reason is one line of at most 600 characters
+    # (schema/fleet-hibernation), and the cli's own output has line breaks and no bound.
+    param([AllowEmptyString()][string]$Text, [int]$Max = 300)
+    $one = ($Text -replace '[\x00-\x1F]+', ' ').Trim()
+    if ($one.Length -gt $Max) { $one = $one.Substring(0, $Max - 3) + "..." }
+    return $one
+}
+
 function Invoke-HordeWeztermFleetSpawn {
     # Spawn one request into -Target, as an answer: known { pane; window }. A new window's id is read
     # back from the pane list, because spawn answers with the pane id alone.
     param([Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)][string]$Program, [scriptblock]$Runner = $null)
+    # THE ANSWER'S MEANING (third review of PR 318, P1): ABSENT only when the request was refused BEFORE any
+    # call to the terminal, so nothing was started. Every other answer that is not a known pane - a cli
+    # timeout (Act.ps1 kills the process after 20 s: exit -1), a failed exit, an answer that is not a pane
+    # id - is UNKNOWN, because the cli may have made the pane before it failed: the wake holds it.
     $rest = $null
-    try { $rest = Get-HordeWeztermFleetSpawnRest -Request $Request -Program $Program } catch { return (New-HordeUnknown -Reason ("the spawn was not made: " + $_.Exception.Message)) }
+    try { $rest = Get-HordeWeztermFleetSpawnRest -Request $Request -Program $Program } catch { return (New-HordeAbsent -Note ("the spawn was not made: " + $_.Exception.Message)) }
     $envMap = @{}
     if ($null -ne $Request.environment) { foreach ($k in @($Request.environment.Keys)) { $envMap[$k] = $Request.environment[$k] } }
     $r = Invoke-HordeWeztermCall -Rest $rest -Target $Target -Environment $envMap -Runner $Runner
-    if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not start the pane (exit " + $r.code + "): " + ("" + $r.err).Trim())) }
+    if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not start the pane (exit " + $r.code + "), so whether a pane started is unknown: " + (ConvertTo-HordeWeztermFleetLine -Text ("" + $r.err) -Max 300))) }
     $pane = ("" + $r.out).Trim()
-    if ($pane -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason ("the terminal answered the spawn with '" + $pane + "', not a pane id; whether a pane started is unknown")) }
+    if ($pane -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason ("the terminal answered the spawn with '" + (ConvertTo-HordeWeztermFleetLine -Text $pane -Max 100) + "', not a pane id; whether a pane started is unknown")) }
     $window = "" + $Request.window
     if ($Request.mode -cne "tab") {
         $lr = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $Target -Runner $Runner

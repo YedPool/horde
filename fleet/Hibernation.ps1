@@ -131,6 +131,9 @@ function Add-HordeFleetState {
     # started until -Retry (fleet/Wake.ps1).
     param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$State, [Parameter(Mandatory = $true)][datetime]$At, [string]$Reason = "", [string]$Pane = "")
     if ($script:HordeFleetStates -cnotcontains $State) { throw ("'" + $State + "' is not a session state of a hibernation") }
+    # A reason is one line of at most 600 characters (the schema): a terminal's own words have line breaks and no bound.
+    $Reason = ($Reason -replace '[\x00-\x1F]+', ' ').Trim()
+    if ($Reason.Length -gt 600) { $Reason = $Reason.Substring(0, 597) + "..." }
     $entry = [ordered]@{ state = $State; at = (Format-HordeFleetTime -At $At) }
     if ($Reason -ne "") { $entry["reason"] = $Reason }
     if ($Pane -ne "") { $entry["pane"] = $Pane }

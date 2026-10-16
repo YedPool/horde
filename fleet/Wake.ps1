@@ -122,6 +122,17 @@ function Get-HordeFleetWakeBody {
     return ("You were woken from hibernation " + $Id + ". Read your PARKED-" + $Label + ".md and carry on.")
 }
 
+function New-HordeFleetWakeSender {
+    # Who a wake's mail is from: the session that ran the wake, when it knows its own id (-SelfSessionId, an
+    # answer of core/Identity.ps1's Get-HordeSelfSessionId); else the reserved system sender "horde"
+    # (messengers/Port.ps1, from.system). Never the master's label M: a wake started from the phone or a
+    # service is not M's act, and nothing sends as M unless M's own session ran the command (third review of
+    # PR 318). The sessionId member is required by the port; a system sender's is never shown or passed on.
+    param([Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)]$SelfSessionId)
+    if ($SelfSessionId.state -ceq "known") { return [pscustomobject]@{ deviceId = $DeviceId; sessionId = "" + $SelfSessionId.value } }
+    return [pscustomobject]@{ deviceId = $DeviceId; sessionId = "horde-fleet-wake"; system = "horde" }
+}
+
 function Get-HordeFleetWakeMessageId {
     # The mail's message id: the same for the same hibernation and session, so a repeated post is one.
     param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][string]$SessionId)
@@ -464,8 +475,18 @@ function Invoke-HordeFleetWake {
                 }
                 $sp = & $term.spawn $req
                 if ($null -eq $sp -or $sp.state -ne "known") {
-                    $why = "its pane was not started: " + $(if ($null -ne $sp) { $sp.reason } else { "the terminal answered nothing" })
-                    Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why
+                    # ONLY A REQUEST REFUSED BEFORE ANY CALL TO THE TERMINAL (the host answers absent) is "not
+                    # started". Every other answer - a 20 s cli timeout (exit -1, process killed), a failed
+                    # call, a reply that is not a pane id - may have made the pane (third review of PR 318, P1:
+                    # the next wake started the session a second time), so it is held like a pane that started
+                    # and was not seen: failed with the pane "?", until -Retry, which still runs the liveness check.
+                    if ($null -ne $sp -and $sp.state -ceq "absent") {
+                        $why = "its pane was not started: " + $sp.reason
+                        Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why
+                    } else {
+                        $why = "its pane may have started, so it is held until -Retry: " + $(if ($null -ne $sp) { $sp.reason } else { "the terminal answered nothing" })
+                        Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why -Pane "?"
+                    }
                     [void](Write-HordeFleetRecord -Dir $dir -Record $record)
                     & $say ("    " + $name + ": failed - " + $why); & $tell $s "failed" $why
                     continue

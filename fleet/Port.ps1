@@ -24,7 +24,11 @@
 #                                            tabCols; tabRows }, a session it cannot place left out
 #     Open       ()                          the terminal a wake spawns into, as an answer: known
 #                                            { spawn; paneOf; describe }, each a script block bound to it
-#                                            spawn ($request) -> answer known { pane; window }, where
+#                                            spawn ($request) -> answer known { pane; window }; ABSENT only
+#                                              when the request was refused before any call to the terminal
+#                                              (nothing started); any other answer that is not known (a
+#                                              timeout, a failed call) means a pane MAY have started, and
+#                                              the wake holds the session until -Retry; where
 #                                              $request is { mode: window | tab | split; cwd; line;
 #                                              environment; window; pane; direction: right | bottom;
 #                                              percent }
