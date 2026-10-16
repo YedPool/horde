@@ -63,5 +63,11 @@
         @{ Name = "running-without-start"
            Find = 'cwd = $_.cwd; start = $_.startTime }'
            Replace = 'cwd = $_.cwd }' }
+        @{ Name = "named-program-unchecked"
+           Find = 'if ($Command -cmatch'
+           Replace = 'if ($false -and $Command -cmatch' }
+        @{ Name = "named-program-ignored"
+           Find = 'return ("& ''" + $Command + "'' --resume " + $SessionId)'
+           Replace = 'return ("claude --resume " + $SessionId)' }
     )
 }

@@ -45,6 +45,7 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ReadShared.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\Port.ps1")
 
 # procStart and a process's start time are FILETIME ticks (100 ns). One second of slack, the guard's
@@ -232,13 +233,33 @@ function Get-ClaudeCodeFleetRunning {
     return @(@($Snapshot.records) | Where-Object { $_.state -ceq "live" -and $_.sessionId -cmatch $script:ClaudeCodeFleetIdPattern } | ForEach-Object { [pscustomobject]@{ sessionId = $_.sessionId; pid = $_.pid; cwd = $_.cwd; start = $_.startTime } })
 }
 
+# THE PROGRAM A WOKEN SESSION IS RESUMED WITH can be named in full (<HORDE_HOME>\settings\
+# claude-code-fleet.json, setting command). Left out, it is the harness's command as the woken pane's shell
+# finds it. WHY A SETTING: a terminal pane takes its PATH from the terminal, not from the process that
+# spawns it (measured 2026-10-16 by hosts/wezterm/test/e2e/e2e-fleet.ps1, whose stand-in, first on the
+# spawning PATH, lost to the real command in all four panes); so a scenario that must never start the real
+# harness names its stand-in here.
+$script:ClaudeCodeFleetSettings = New-HordeModuleSettings -Module "claude-code-fleet" -Settings @(
+    @{ name = "command"; kind = "text"; default = ""; min = 0; max = 400; what = "The program a woken session is resumed with, as an absolute path to a .ps1, .exe or .cmd; left out, the harness's own command as the pane's shell finds it." }
+)
+
+function Get-ClaudeCodeFleetSettings {
+    # The settings as { state; values; findings; path }, from the one file under Horde's home.
+    param([string]$HordeHome = "")
+    return (Get-HordeModuleSettings -Declaration $script:ClaudeCodeFleetSettings -HordeHome $HordeHome)
+}
+
 function Get-ClaudeCodeFleetResumeLine {
     # The line a shell runs to resume one session: the program, --resume and the id, nothing else (the
     # guard's resume_target rebuilds exactly this from fixed parts). An id that is not a lower-case uuid
-    # is refused, never quoted: the line is run by a shell.
-    param([string]$SessionId = "")
+    # is refused, never quoted: the line is run by a shell. -Command, a program named in full, is called
+    # with the call operator inside single quotes, so it must be absolute, end .ps1, .exe or .cmd, and hold
+    # no quote and no control character; anything else builds no line.
+    param([string]$SessionId = "", [string]$Command = "")
     if ($SessionId -cnotmatch $script:ClaudeCodeFleetIdPattern) { throw ("'" + $SessionId + "' is not a session id, so no resume line is built for it") }
-    return ("claude --resume " + $SessionId)
+    if ($Command -eq "") { return ("claude --resume " + $SessionId) }
+    if ($Command -cmatch "['" + [char]34 + "\x00-\x1F\x7F]" -or $Command -notmatch '\A[A-Za-z]:\\' -or $Command -notmatch '\.(ps1|exe|cmd)\z') { throw ("'" + $Command + "' is not a program named in full (an absolute .ps1, .exe or .cmd with no quote), so no resume line is built") }
+    return ("& '" + $Command + "' --resume " + $SessionId)
 }
 
 function Get-ClaudeCodeFleetScrub {
@@ -258,5 +279,5 @@ Register-HordeFleetAgent -Name "claude-code" `
     -Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) } `
     -Verdict { param($snapshot, $id, $cwd, $ignore, $since, $process) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore -Since $since -Process $process } `
     -Running { param($snapshot) Get-ClaudeCodeFleetRunning -Snapshot $snapshot } `
-    -ResumeLine { param($id) Get-ClaudeCodeFleetResumeLine -SessionId $id } `
+    -ResumeLine { param($id) $st = Get-ClaudeCodeFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { throw ("the harness's fleet settings are refused, so no resume line is built: " + (@($st.findings) -join "; ")) }; Get-ClaudeCodeFleetResumeLine -SessionId $id -Command ("" + $st.values.command) } `
     -Scrub { Get-ClaudeCodeFleetScrub }
