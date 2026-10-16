@@ -63,7 +63,7 @@
 # IN A USAGE, a bar stands between two verbs and for nothing else: alternatives inside one verb are
 # written in words.
 $script:HordeDecisionCommandVerbs = [ordered]@{
-    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "FollowsUp", "Id", "Json"); usage = "add -File <question.json> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-FollowsUp <question>] [-Id <32 hex>] [-Json]" }
+    add    = @{ number = $false; flags = @("File", "Importance", "Blocks", "FollowsUp", "NeedsPasskey", "Id", "Json"); usage = "add -File <question.json> [-Importance <high, normal or low>] [-Blocks <all, part or none>] [-FollowsUp <question>] [-NeedsPasskey] [-Id <32 hex>] [-Json]" }
     update = @{ number = $true;  flags = @("File", "Id", "Json");                   usage = "update <number> -File <changes.json> [-Id <32 hex>] [-Json]" }
     close  = @{ number = $true;  flags = @("OutcomeFile", "Outcome", "Id", "Json"); usage = "close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json]" }
     # reopen IS KEPT AS A VERB SO THAT IT CAN SAY WHY IT IS REFUSED, and what to type instead
@@ -148,7 +148,7 @@ function Read-HordeDecisionJsonFile {
     # could not read: "Invalid JSON primitive: <the text>", and for a string left open the whole file.
     # Measured 2026-10-06: a question file one quote short of valid, holding a token, had the token
     # printed back by this refusal - before the secret check, which only sees a request, could run.
-    try { $parsed = $text | ConvertFrom-Json } catch { throw ($What + " '" + $Path + "' is not JSON. Nothing of it is quoted here, because it may hold what must not be printed; ConvertFrom-Json on the file says where it stops being JSON") }
+    try { $parsed = ConvertFrom-HordeJson $text } catch { throw ($What + " '" + $Path + "' is not JSON. Nothing of it is quoted here, because it may hold what must not be printed; ConvertFrom-Json on the file says where it stops being JSON") }
     if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { throw ($What + " '" + $Path + "' must hold one JSON object, written between { and }") }
     return $parsed
 }
@@ -351,6 +351,7 @@ function Format-HordeDecisionList {
             $meta = (Get-HordeDecisionKindLabel -Kinds $Kinds -Kind $q.kind) + "; asked by " + $q.askedBy + "; "
             if (@($q.waiting).Count -gt 0) { $meta = $meta + "waiting: " + (@($q.waiting) -join ", ") } else { $meta = $meta + "nobody is waiting" }
             if ($q.needsSecret) { $meta = $meta + "; needs a secret" }
+            if ($null -ne $q.PSObject.Properties["needsPasskey"] -and $q.needsPasskey -eq $true) { $meta = $meta + "; needs a passkey" }
             [void]$lines.Add($pad + $meta)
             $rank = Get-HordeDecisionRankWords -Question $q
             if ($rank -ne "") { [void]$lines.Add($pad + $rank) }
@@ -422,6 +423,8 @@ function Format-HordeDecisionQuestion {
     if (@($q.files).Count -gt 0) { [void]$lines.Add("Files:"); foreach ($f in @($q.files)) { [void]$lines.Add("  " + $f) } }
     if (@($q.references).Count -gt 0) { [void]$lines.Add("References: " + (@($q.references) -join ", ")) }
     if ($q.needsSecret) { [void]$lines.Add("Needs a secret: yes. Never write the secret into this list or into an answer; give it outside.") }
+    # Present only when true (decisions/Rules.ps1, ConvertTo-HordeDecisionView), so it is asked first.
+    if ($null -ne $q.PSObject.Properties["needsPasskey"] -and $q.needsPasskey -eq $true) { [void]$lines.Add("Needs a passkey: yes. From the phone it is answered only with a fresh passkey.") }
     if ("$($q.outcome)".Trim() -ne "") { Add-HordeDecisionTextBlock -Lines $lines -Heading ("Closed " + (Format-HordeDecisionTime -At $q.closedAt) + ", with this outcome:") -Text $q.outcome }
     if ("$($q.reopenReason)".Trim() -ne "") { [void]$lines.Add("Last reopened because: " + $q.reopenReason) }
     [void]$lines.Add("")
@@ -591,6 +594,9 @@ function Invoke-HordeDecisionCommand {
                 if ($followsText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("-FollowsUp is the number of the earlier question this one follows up on, as in: -FollowsUp 7" + $usageNote) }
                 $request["followsUp"] = [int]$followsText
             }
+            # -NeedsPasskey: from the phone the question is answered only with a fresh passkey
+            # (decisions/Operations.ps1, NEEDS A PASSKEY). Left out, the request names nothing.
+            if ($have.ContainsKey("NeedsPasskey") -and [bool]$have["NeedsPasskey"]) { $request["needsPasskey"] = $true }
         }
         "rank" {
             if (-not $have.ContainsKey("Importance") -and -not $have.ContainsKey("Blocks")) { throw ("decisions rank needs -Importance, -Blocks, or both: the word to change" + $usageNote) }

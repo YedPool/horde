@@ -31,12 +31,16 @@
 // from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
 // why. The log, like the list, is taken off the page when the horde locks.
 //
-// THE ANNOUNCEMENT MUST NOT GO MISSING UNSEEN (the founder's first live use, 2026-10-11: he paired, the
-// announcement never went, and why was nowhere on the screen). The pairing screen says why its announce
-// button is shut; a failed announcement says why beside its button, in the phone's own words; and the
-// horde's own view, while the machine has sent this phone nothing (the horde not heard from:
-// phone-core.js), offers "Announce this phone" - not only the small link on the locked screen. Every
-// announcement still waits for the founder's tap and his passkey; none is sent by itself.
+// THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14: "that piece should happen automatically on
+// login - I don't see why I should press a button"; phone-core.js has the protocol). DO NOT ADD AN
+// ANNOUNCE BUTTON BACK: an iPhone needs a tap to start a passkey prompt, so the pairing screen's single
+// "Finish pairing" tap IS the Face ID prompt, not an extra step - it appears only once the machine has
+// said the founder typed the number there (the confirmed record, watched for while the screen is up).
+// Otherwise the announcement rides the next unlock's Face ID; it is tried again only at the next unlock,
+// never as a prompt in a loop. What must not go missing unseen (the founder's first live use,
+// 2026-10-11) still holds: Finish pairing says why it is shut, a failed one says why beside it in the
+// phone's own words, and the horde's own view, while the machine has sent this phone nothing, says that
+// the phone is announced again at its next unlock.
 //
 // THE WAY BETWEEN DECISIONS, CHAT AND PROGRESS stays on screen (the bar is sticky, app.css), and the phone's Back
 // goes back between them: each switch is a history entry, and going back to one shows that view again.
@@ -46,7 +50,8 @@
 // entries, oldest at the top, in the order they were written, to be read on from wherever he stopped.
 // Each shows its time, its title in bold, its text as short paragraphs with their labels (Asked, Happened,
 // Means, Next) in bold, and small chips: the area's plain name first, the kind, and the lane and task only
-// when the entry names them. HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
+// when the entry names them. EACH STARTS FOLDED to one line, its title and its day and time, and a tap opens
+// it to all of that (the founder asked, 2026-10-14; openEntries, below). HIS PLACE IS KEPT ON THIS PHONE (phone-core.js, markProgressRead): the log
 // opens under the last entry he read, with a line where the new ones begin and their count on the tab;
 // the place moves on as he reads down, entry by entry; Jump to newest and Mark all read stand at the foot
 // of the screen always. A correction is shown on the entry it corrects, and in its own place. The log is
@@ -99,17 +104,20 @@ import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
 import { clockTime, exactTime, withDays, dayTime, PROGRESS_WORDS, laneStream, STREAM_LIMIT_WORDS, streamMovesPlace } from "../relay/protocol.js";
 import { renderLaneCard, THRALL_LANE } from "./lane-card.js";
+import { renderDecisionCards } from "./decision-cards.js";
 import { renderFollowSwitch, renderNoticeItem, noticeTarget, noticesTabWords } from "./notices-view.js";
 import { cardsFallbackLine } from "./cards-why.js";
 import { readFailure, readBanner } from "./read-banner.js";
 import { reloadDecision, draftsHeld, updateDue, versionWords, UPDATE_READY_WORDS, DRAFTS_KEY } from "./app-update.js";
+import { sessionLines } from "./session-view.js";
 
 const $ = (id) => document.getElementById(id);
 const LOOK = { fontFamily: "system-ui, sans-serif", textPx: 16, linePx: 24, smallTextPx: 14, smallLinePx: 20 };
 const WATCH_MS = 25000;
 // relay: what the last refresh said of the relay (bridge.js "notice"), kept until a refresh comes back
 // clean; view: why the picked view could not be drawn, the drawing's own; read: read-banner.js's banner.
-const notices = { boot: "", relay: "", read: "", view: "", action: "", update: "" };
+// session: how the picked horde's unlocked session ended, or that its PC needs an update (phone-core.js).
+const notices = { boot: "", relay: "", read: "", view: "", action: "", update: "", session: "" };
 
 function showNotices() {
   const box = $("notice");
@@ -169,7 +177,7 @@ bridge.on("read-changed", async (rec) => {
 
 // --- the screens ---
 
-const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress", "notices"];
+const VIEWS = ["signInView", "joinView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat", "progress", "notices"];
 // The views of an unlocked horde, each a tab of the bar: the pane's name, and the view and the tab it is.
 const PANES = { decisions: { view: "doc", tab: "tabDecisions" }, chat: { view: "chat", tab: "tabChat" }, progress: { view: "progress", tab: "tabProgress" }, notices: { view: "notices", tab: "tabNotices" } };
 function show(view) {
@@ -178,6 +186,7 @@ function show(view) {
   $("viewTabs").hidden = !Object.keys(PANES).some((p) => PANES[p].view === view);
   // Shown again by render() for an unlocked horde the machine has not answered yet.
   $("announceBox").hidden = true;
+  $("joinBox").hidden = true;
   showReadBanner();
 }
 // Which view of an unlocked horde is up: its questions, its chat, or the progress log.
@@ -193,12 +202,21 @@ function memoryStorage() {
 }
 function docOf(id) {
   if (docs[id]) return docs[id];
+  // THE CARDS FIRST (decision-cards.js), in a box of their own above the list: the list's box is
+  // list.js's, which keeps in it only what it draws.
+  const cards = document.createElement("div");
+  cards.className = "decision-cards";
+  cards.setAttribute("role", "group");
+  cards.setAttribute("aria-label", "Questions by lane");
+  $("lists").appendChild(cards);
   const box = document.createElement("div");
   box.className = "horde-list";
   $("lists").appendChild(box);
   const storage = memoryStorage();
   const doc = window.HordeDecisionsDocument.mount(box, {
     topInset: () => $("bar").getBoundingClientRect().bottom,
+    // Every draw - a list that arrives, a lane chosen, an answer saved - draws the cards' numbers again.
+    onDraw: () => drawDecisionCards(id),
     onChange: showCounts,
     storage,
     say: (number, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId })),
@@ -206,8 +224,16 @@ function docOf(id) {
     sayPart: (number, letter, text, wording, answerId) => inFlight(bridge.request("say", { number, text, wording, id: answerId, part: letter })),
     act: (number, what, wording, answerId) => inFlight(bridge.request("act", { number, act: what, wording, id: answerId }))
   });
-  docs[id] = { box, doc, kinds: false, storage };
+  docs[id] = { box, cards, doc, kinds: false, storage };
   return docs[id];
+}
+// The cards of one horde's decisions page: its lanes' counts from its list, drawn as the Progress tab's cards
+// when that horde is the one picked and its lanes document has come (cardsLast), and by name alone otherwise.
+function drawDecisionCards(id) {
+  const d = docs[id];
+  if (!d) return;
+  while (d.cards.firstChild) d.cards.removeChild(d.cards.firstChild);
+  for (const card of renderDecisionCards(document, id === current ? cardsLast : null, d.doc.lanes(), { chosen: d.doc.lane(), onChoose: (lane) => d.doc.setLane(lane) })) d.cards.appendChild(card);
 }
 function showCounts() {
   const d = current && docs[current];
@@ -238,7 +264,7 @@ async function pick(id) {
   drawTabs();
   const h = hordes.find((x) => x.id === id);
   if (!h) { show(hordes.length ? "lockedView" : "emptyView"); return; }
-  for (const k of Object.keys(docs)) docs[k].box.hidden = k !== id;
+  for (const k of Object.keys(docs)) { docs[k].box.hidden = k !== id; docs[k].cards.hidden = k !== id; }
   const rec = await bridge.request("pick", { id });
   render(h, rec);
 }
@@ -247,7 +273,7 @@ function render(h, rec) {
   if (!h || h.id !== current) return;
   if (!h.unlocked) {
     $("lockedTitle").textContent = h.horde + " is locked";
-    $("lockedHint").textContent = h.announced ? "Unlock with your passkey to read and answer." : "This phone has not announced its key to the machine yet: unlock, then announce it.";
+    $("lockedHint").textContent = h.heard ? "Unlock with your passkey to read and answer." : "Unlock with your passkey: the same prompt finishes pairing with the machine.";
     show("lockedView");
     // The locked screen says it is locked: a notice saying so again is dropped, and nothing opened is shown
     // to be old, so what the relay said goes too.
@@ -258,8 +284,13 @@ function render(h, rec) {
   }
   const d = docOf(h.id);
   d.box.hidden = false;
+  d.cards.hidden = false;
   show(PANES[pane].view);
+  // The decisions page's cards are the Progress tab's (decision-cards.js): its lanes document, asked for once here
+  // too; cards-changed brings every later one.
+  if (pane === "decisions" && !cardsLast) bridge.request("cards").then(drawCards);
   showAnnounceBox(h, rec);
+  showJoinBox(h);
   if (pane === "chat") bridge.request("chat").then(drawChat);
   if (pane === "progress") { bridge.request("cards").then(drawCards); requestStream(); }
   if (pane === "notices") bridge.request("notices").then(drawNotices);
@@ -295,22 +326,11 @@ function showAnnounceBox(h, rec) {
   $("announceBox").hidden = !waiting;
   if (!waiting) return;
   $("announceWords").textContent = h.announced
-    ? "The machine has not answered this phone yet. Its runner sends the questions when it next turns; if none come, announce this phone again."
-    : "This phone has not been announced to the machine yet, so the machine sends it nothing. Once you have typed its number at the machine, announce it.";
+    ? "The machine has not answered this phone yet. Its runner sends the questions when it next turns; if none come, the phone is announced again at its next unlock."
+    : "This phone has not been announced to the machine yet, so the machine sends it nothing. Once its number is typed at the machine, the next unlock announces it.";
 }
-// What went wrong with an announcement, beside the button that sent it ("" hides it).
+// What went wrong with Finish pairing, beside its button ("" hides it).
 function announceSaid(el, words) { $(el).textContent = words || ""; $(el).hidden = !words; }
-$("announceNow").addEventListener("click", async () => {
-  say("action", "");
-  announceSaid("announceNowStatus", "");
-  $("announceNow").disabled = true;
-  try {
-    await bridge.request("announce", { id: current });
-    announceSaid("announceNowStatus", "Announced. The questions appear here once the machine's runner turns.");
-    await loadHordes();
-    await pick(current);
-  } catch (e) { announceSaid("announceNowStatus", messageOf(e)); } finally { $("announceNow").disabled = false; }
-});
 bridge.on("chat-changed", (rec) => drawChat(rec));
 
 // --- the chat ---
@@ -448,8 +468,13 @@ let progressMark = -1;
 let progressLast = null;
 // The entries that have been on his screen since the horde was unlocked (by id): what "seen" means below.
 const seenEntries = new Set();
+// EVERY ENTRY STARTS FOLDED to one line, its title and its day and time (the founder asked, 2026-10-14: "to
+// be able to see a swath of progress at once without all the details"); a tap opens one. The ones he opened
+// (by id) stay open while the stream is redrawn under him - a new entry rebuilds the whole log - and are
+// forgotten when a stream is opened anew (drawProgress, opening). Kept in memory only: nothing stored, nothing sent.
+const openEntries = new Set();
 let watcher = null;
-function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; }
+function clearCards() { const list = $("cardsList"); while (list.firstChild) list.removeChild(list.firstChild); cardsLast = null; stream = null; drawDecisionCards(current); }
 function clearProgress() { const log = $("progressLog"); while (log.firstChild) log.removeChild(log.firstChild); progressDrawn = ""; progressLast = null; seenEntries.clear(); if (watcher) { watcher.disconnect(); watcher = null; } }
 function showProgressCount(v) {
   const n = v ? v.unread : 0;
@@ -464,6 +489,17 @@ function paragraphsInto(box, paragraphs) {
     line.appendChild(document.createTextNode(p.text));
     box.appendChild(line);
   }
+}
+// An entry folded or open: its class (app.css hides all but the one line) and its line's aria-expanded.
+function foldEntry(box, open) {
+  box.classList.toggle("collapsed", !open);
+  box.querySelector(".progress-line").setAttribute("aria-expanded", open ? "true" : "false");
+}
+function toggleEntry(box) {
+  const id = box.getAttribute("data-id");
+  const open = !openEntries.has(id);
+  if (open) openEntries.add(id); else openEntries.delete(id);
+  foldEntry(box, open);
 }
 function chip(words, kind) { const c = document.createElement("span"); c.className = "chip " + kind; c.textContent = words; return c; }
 // --- the cards ---
@@ -500,6 +536,7 @@ function drawCards(rec) {
   if (!rec || rec.state !== "known") return;
   const v = rec.value;
   cardsLast = v;
+  drawDecisionCards(current);
   if ($("progress").hidden) return;
   // NO MACHINE HAS SENT CARDS: the whole log, as before cards were, under one plain line saying why (cards-why.js).
   if (v.machines.length === 0) { $("cardsWhy").textContent = cardsFallbackLine(v); if (!stream) { stream = { entry: current, lane: "", title: "", fallback: true }; requestStream(); } return; }
@@ -601,7 +638,7 @@ function drawProgress(rec, own = true) {
   const sig = current + "/" + streamKey() + "/" + v.items.length + "/" + (v.newest ? v.newest.id : "") + "/" + v.items.reduce((n, it) => n + it.corrections.length, 0);
   if (sig === progressDrawn) return;
   const opening = progressDrawn === "";
-  if (opening) progressMark = v.readIndex;
+  if (opening) { progressMark = v.readIndex; openEntries.clear(); }
   progressDrawn = sig;
   const log = $("progressLog");
   while (log.firstChild) log.removeChild(log.firstChild);
@@ -621,8 +658,23 @@ function drawProgress(rec, own = true) {
     const stamp = timeStamp(it.said, "", "progress/" + it.id, dayTime);
     if (stamp) head.appendChild(stamp);
     box.appendChild(head);
-    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; box.appendChild(title);
-    const text = document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
+    // THE ONE LINE: the title, and - shown only while folded (app.css), the head standing for it when open -
+    // the same day and time the head's stamp shows. It is the entry's control: Enter or Space toggles it.
+    const line = document.createElement("div"); line.className = "progress-line";
+    line.setAttribute("role", "button"); line.tabIndex = 0;
+    const title = document.createElement("div"); title.className = "progress-title"; title.textContent = it.title; line.appendChild(title);
+    const when = dayTime(it.said);
+    if (when) { const w = document.createElement("span"); w.className = "progress-when"; w.textContent = when; line.appendChild(w); }
+    box.appendChild(line);
+    line.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleEntry(box); } });
+    // Folded, a tap anywhere on it opens it. Open, a tap on its head or its title folds it; a button or a
+    // link anywhere in it (the stamp, say) does its own thing only.
+    box.addEventListener("click", (e) => {
+      const t = e.target instanceof Element ? e.target : e.target.parentElement;
+      if (!box.classList.contains("collapsed") && (!t || t.closest("button, a") || !t.closest(".progress-head, .progress-line"))) return;
+      toggleEntry(box);
+    });
+    const text =document.createElement("div"); text.className = "progress-text"; paragraphsInto(text, it.paragraphs); box.appendChild(text);
     if (it.corrects) { const n = document.createElement("div"); n.className = "progress-note"; n.textContent = it.correctsTitle ? "This corrects: " + it.correctsTitle : "This corrects an earlier entry that is not on this phone."; box.appendChild(n); }
     // A CORRECTION IS SHOWN ON THE ENTRY IT CORRECTS, as well as in its own place further down.
     for (const c of it.corrections) {
@@ -632,6 +684,7 @@ function drawProgress(rec, own = true) {
       const cx = document.createElement("div"); cx.className = "progress-text"; paragraphsInto(cx, c.paragraphs); cb.appendChild(cx);
       box.appendChild(cb);
     }
+    foldEntry(box, openEntries.has(it.id));
     log.appendChild(box);
   });
   if (opening) {
@@ -724,21 +777,48 @@ $("pairBtn").addEventListener("click", async () => {
   say("action", "");
   $("pairBtn").disabled = true;
   try {
-    paired = await bridge.request("pair", { offer: $("offerText").value, label: $("labelText").value.trim() });
+    const joined = joinedRequest;
+    joinedRequest = "";
+    paired = await bridge.request("pair", { offer: $("offerText").value, label: $("labelText").value.trim(), joined: joined !== "" });
     $("offerText").value = "";
     $("fingerprint").textContent = paired.fingerprint;
     $("recoveryCode").textContent = paired.recoveryCode;
     $("responseText").value = paired.response;
     $("shareResponse").hidden = typeof navigator.share !== "function";
     showRelayed(paired.relayed);
+    // A phone that asked to join: its number is typed on a trusted device, which compares it.
+    if (joined) $("relayStatus").textContent = "Type this number on one of your trusted devices: a trusted phone's join request, or at the PC: horde relay approve " + joined + " <number>.";
     $("wroteCode").checked = false;
-    $("announceBtn").disabled = true;
-    $("announceWhy").hidden = false;
-    announceSaid("announceStatus", "");
+    confirmed = false;
+    showFinish();
+    announceSaid("finishStatus", "");
     show("pairedView");
     await loadHordes();
+    watchConfirmed(paired.id);
   } catch (e) { say("action", messageOf(e)); } finally { $("pairBtn").disabled = false; }
 });
+// FINISH PAIRING (THE ANNOUNCEMENT IS NO BUTTON, in the header): hidden until the machine said the
+// founder typed the number there; shut, and saying why, until the recovery code is written down.
+let confirmed = false;
+function showFinish() {
+  $("finishBtn").hidden = !confirmed;
+  $("finishBtn").disabled = !$("wroteCode").checked;
+  $("finishWhy").hidden = !confirmed || $("wroteCode").checked;
+  $("confirmWait").hidden = confirmed;
+}
+// Watches for the machine's confirmed record while the pairing screen is up, a long watch at a time:
+// one request a watch, and nothing once the screen is left. No prompt is ever started from here.
+async function watchConfirmed(id) {
+  while (paired && paired.id === id && !confirmed && !$("pairedView").hidden) {
+    let r = null;
+    const began = Date.now();
+    try { r = await bridge.request("pairConfirmed", { id, waitMs: 20000 }); } catch (e) { r = null; }
+    if (r && r.confirmed && paired && paired.id === id) { confirmed = true; showFinish(); return; }
+    // Never a spin: a relay that answers at once, or not at all, is asked again 2 s later at the soonest.
+    const left = 2000 - (Date.now() - began);
+    if (left > 0) await new Promise((done) => setTimeout(done, left));
+  }
+}
 // Whether the response went through the relay; when it did not, Send again, Copy and Share are the way.
 function showRelayed(relayed) {
   $("relayStatus").textContent = relayed ? "Sent to the machine through the relay. Type the number above at the machine." : "It could not be sent through the relay just now. Tap Send again, or copy it to the machine yourself.";
@@ -750,22 +830,104 @@ $("resendResponse").addEventListener("click", async () => {
 });
 $("copyResponse").addEventListener("click", () => { if (navigator.clipboard) navigator.clipboard.writeText($("responseText").value).catch(() => say("action", "Could not copy: select the text and copy it.")); });
 $("shareResponse").addEventListener("click", () => { navigator.share({ text: $("responseText").value }).catch(() => {}); });
-// The button is shut until the box is ticked, and says so while it is (announceWhy).
-$("wroteCode").addEventListener("change", () => { $("announceBtn").disabled = !$("wroteCode").checked; $("announceWhy").hidden = $("wroteCode").checked; });
-$("announceBtn").addEventListener("click", async () => {
+// The button is shut until the box is ticked, and says so while it is (finishWhy).
+$("wroteCode").addEventListener("change", showFinish);
+// Leaving the pairing screen: the recovery code leaves it for good, and the horde opens.
+async function leavePairing() {
+  $("recoveryCode").textContent = "";
+  $("responseText").value = "";
+  $("relayStatus").textContent = "";
+  const id = paired.id;
+  paired = null;
+  await loadHordes();
+  await pick(id);
+}
+// THE ONE TAP THAT IS THE PASSKEY PROMPT: the bridge asks the passkey at once, in this tap's handler.
+$("finishBtn").addEventListener("click", async () => {
   say("action", "");
-  announceSaid("announceStatus", "");
+  announceSaid("finishStatus", "");
+  try { await bridge.request("announce", { id: paired.id }); await leavePairing(); }
+  catch (e) { announceSaid("finishStatus", messageOf(e)); }
+});
+$("pairLater").addEventListener("click", () => { if (paired) leavePairing(); });
+
+// --- add this phone (phone-started pairing: phone-core.js, ADD THIS PHONE) ---
+// The founder taps Add this phone beside a machine of his account; this phone asks to join it, the
+// machine answers with an offer, and ONE MORE TAP makes the passkey (an iPhone starts that prompt only
+// from a tap) - then the pairing screen as for a scanned offer, its number to type on a trusted device.
+let joinWith = null;
+// The request a pairing about to start answers (the pair handler reads it once).
+let joinedRequest = "";
+function openJoin(m) {
+  joinWith = { horde: String(m.horde), machine: String(m.keyId), label: typeof m.label === "string" && m.label ? m.label : "machine " + String(m.keyId).slice(0, 12), request: "", offerText: "" };
+  $("joinTo").textContent = "Ask " + joinWith.label + " (" + joinWith.horde + ") to add this phone. Nothing is trusted until you type the number this phone will show on one of your trusted devices.";
+  $("joinWait").hidden = true;
+  $("joinContinue").hidden = true;
+  $("joinAsk").disabled = false;
+  show("joinView");
+}
+$("joinCancel").addEventListener("click", () => { joinWith = null; pick(current || (hordes[0] && hordes[0].id) || ""); });
+$("joinAsk").addEventListener("click", async () => {
+  if (!joinWith) return;
+  say("action", "");
+  $("joinAsk").disabled = true;
   try {
-    await bridge.request("announce", { id: paired.id });
-    // The recovery code leaves the screen for good.
-    $("recoveryCode").textContent = "";
-    $("responseText").value = "";
-    $("relayStatus").textContent = "";
-    const id = paired.id;
-    paired = null;
-    await loadHordes();
-    await pick(id);
-  } catch (e) { announceSaid("announceStatus", messageOf(e)); }
+    const r = await bridge.request("join", { horde: joinWith.horde, machine: joinWith.machine, label: $("joinLabel").value.trim(), agent: navigator.userAgent || "" });
+    joinWith.request = r.request;
+    $("joinWait").textContent = "Waiting for " + joinWith.label + " to answer. It expires in 10 minutes and is never sent again by itself.";
+    $("joinWait").hidden = false;
+    watchJoinOffer(joinWith);
+  } catch (e) { say("action", messageOf(e)); $("joinAsk").disabled = false; }
+});
+// Watches for the machine's answer while the screen is up; never a spin, never a prompt by itself.
+async function watchJoinOffer(w) {
+  while (joinWith === w && !$("joinView").hidden && !w.offerText) {
+    const began = Date.now();
+    let r = null;
+    try { r = await bridge.request("joinOffer", { request: w.request, waitMs: 20000 }); } catch (e) { r = null; }
+    if (joinWith !== w) return;
+    if (r && r.expired) { $("joinWait").textContent = "The request expired with no answer. Tap Add this phone to ask again."; $("joinAsk").disabled = false; return; }
+    if (r && r.offerText) { w.offerText = r.offerText; $("joinWait").textContent = joinWith.label + " answered. Continue to make this phone's passkey."; $("joinContinue").hidden = false; return; }
+    const left = 2000 - (Date.now() - began);
+    if (left > 0) await new Promise((done) => setTimeout(done, left));
+  }
+}
+// THE TAP THAT MAKES THE PASSKEY: the same pairing as a scanned offer, from the offer the machine sent.
+$("joinContinue").addEventListener("click", async () => {
+  if (!joinWith || !joinWith.offerText) return;
+  $("offerText").value = joinWith.offerText;
+  $("labelText").value = $("joinLabel").value.trim();
+  const request = joinWith.request;
+  joinWith = null;
+  joinedRequest = request;
+  $("pairBtn").click();
+});
+
+// --- a new phone asks to join, on a trusted phone (phone-core.js, A NEW PHONE ASKS TO JOIN) ---
+let joinShown = "";
+async function showJoinBox(h) {
+  if (!h || !h.unlocked) return;
+  let list = [];
+  try { list = await bridge.request("joinRequests"); } catch (e) { list = []; }
+  if (h.id !== current) return;
+  const j = list[0];
+  $("joinBox").hidden = !j;
+  if (!j) { joinShown = ""; return; }
+  if (joinShown !== j.request) { $("joinNumber").value = ""; announceSaid("joinStatus", ""); }
+  joinShown = j.request;
+  $("joinWho").textContent = "'" + j.label + "', " + (j.country || "country unknown") + ", " + dayTime(j.requestedAt) + "." + (j.agent ? " The new phone says its browser is: " + j.agent : "");
+}
+$("joinApprove").addEventListener("click", async () => {
+  if (!joinShown) return;
+  announceSaid("joinStatus", "");
+  try { await bridge.request("approveJoin", { request: joinShown, number: $("joinNumber").value }); announceSaid("joinStatus", "Approved. The machine trusts the new phone at its next turn."); $("joinNumber").value = ""; }
+  catch (e) { announceSaid("joinStatus", messageOf(e)); }
+});
+$("joinReject").addEventListener("click", async () => {
+  if (!joinShown) return;
+  announceSaid("joinStatus", "");
+  try { await bridge.request("rejectJoin", { request: joinShown }); announceSaid("joinStatus", "Rejected. If it was not your phone, change your Google password."); }
+  catch (e) { announceSaid("joinStatus", messageOf(e)); }
 });
 
 // --- the account ---
@@ -822,6 +984,14 @@ async function openAccount() {
     });
     li.appendChild(what);
     li.appendChild(rm);
+    // ADD THIS PHONE (phone-core.js): offered for a machine this phone is not paired with.
+    if (!hordes.some((h) => h.horde === m.horde && h.machine === m.keyId)) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.textContent = "Add this phone";
+      add.addEventListener("click", () => openJoin(m));
+      li.appendChild(add);
+    }
     list.appendChild(li);
   }
   $("machineEmpty").hidden = machines.length > 0;
@@ -919,7 +1089,6 @@ async function acted(request, args) {
 }
 $("unlockBtn").addEventListener("click", () => acted("unlock", { id: current }));
 $("recoverBtn").addEventListener("click", () => { const code = $("recoveryInput").value; $("recoveryInput").value = ""; acted("recover", { id: current, code }); });
-$("announceAgain").addEventListener("click", () => acted("announce", { id: current }));
 $("forgetBtn").addEventListener("click", () => {
   const h = hordes.find((x) => x.id === current);
   if (!h || !window.confirm("Forget " + h.horde + " on this phone? Its key leaves this phone; the recovery code still opens nothing without pairing again.")) return;
@@ -931,7 +1100,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); docs[id].cards.remove(); delete docs[id]; } if (id === current) { clearChat(); clearProgress(); showProgressCount(null); clearCards(); openStamps.clear(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
@@ -942,10 +1111,13 @@ $("lockBtn").addEventListener("click", () => { const id = current; dropDoc(id); 
 // screen: the timer starts when the page is hidden, so the lock happens while it is hidden (if the
 // browser lets the timer run), and is checked again on return in case it did not. On return the list
 // is hidden AT ONCE, before that check, so nothing opened shows for a moment on a phone picked up
-// after the time. The time is the deployment's (config.json, lockAfterHiddenSeconds; 300 s).
+// after the time. The time is the deployment's (config.json, lockAfterHiddenSeconds; 600 s). Never less
+// than the unlocked session's away time below: a lock drops the session's key, and the founder's Q75 (c)
+// keeps the session through a switch-away of up to 10 minutes (surfaces/pwa/Site.ps1 refuses a build
+// that locks sooner; this fallback is for a config.json without the time).
 let hiddenAt = 0;
 let lockTimer = null;
-const lockAfterMs = () => 1000 * ((config && Number.isSafeInteger(config.lockAfterHiddenSeconds) && config.lockAfterHiddenSeconds > 0) ? config.lockAfterHiddenSeconds : 300);
+const lockAfterMs = () => 1000 * ((config && Number.isSafeInteger(config.lockAfterHiddenSeconds) && config.lockAfterHiddenSeconds > 0) ? config.lockAfterHiddenSeconds : 600);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
     hiddenAt = Date.now();
@@ -963,6 +1135,53 @@ document.addEventListener("visibilitychange", () => {
   checkForUpdate();
   (expired ? lockAll() : Promise.resolve()).then(resume).then(settleUpdate, settleUpdate);
 });
+
+// --- the unlocked session (phone-core.js, THE UNLOCKED SESSION) ---
+// One passkey prompt at unlock opens a session whose key signs answers, chat lines and photos. It ends
+// here, in the page, at the same moment the PC would end it: when its time is up the page asks the bridge
+// again (sessions), which drops a key whose idle limit has passed. AWAY FROM THE APP - another
+// app in front, or the screen off, which browsers report as the page hidden (visibilitychange) - for the
+// deployment's sessionAwaySeconds (config.json; 600 s, the design note's ten minutes) ends it too, the
+// timer started when the page is hidden and checked again on return in case it did not run. pagehide (the
+// page closed, or put into the back-forward cache, where its memory would otherwise live on) ends it at
+// once. Every end keeps the hordes open to read; the next answer asks for the passkey once.
+let sessionList = [];
+let sessionTimer = null;
+let awayAt = 0;
+let awayTimer = null;
+const sessionAwayMs = () => 1000 * ((config && Number.isSafeInteger(config.sessionAwaySeconds) && config.sessionAwaySeconds > 0) ? config.sessionAwaySeconds : 600);
+function drawSession() {
+  const box = $("sessionWords");
+  while (box.firstChild) box.removeChild(box.firstChild);
+  for (const words of sessionLines(sessionList, lastTime)) {
+    const line = document.createElement("p");
+    line.textContent = words;
+    box.appendChild(line);
+  }
+  const mine = sessionList.find((x) => x.id === current);
+  say("session", mine ? mine.words : "");
+}
+bridge.on("session-changed", (list) => {
+  sessionList = Array.isArray(list) ? list : [];
+  drawSession();
+  clearTimeout(sessionTimer);
+  const ends = sessionList.filter((x) => x.open).map((x) => Number(x.until));
+  // Asked a moment after the end, so the key's time is up when the bridge looks.
+  if (ends.length) sessionTimer = setTimeout(() => { bridge.request("sessions").catch(() => {}); }, Math.max(0, Math.min(...ends) - Date.now()) + 250);
+});
+function endSessions(why) { bridge.request("session-end", { why }).catch(() => { /* the bridge is not up: there is no key to end */ }); }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    awayAt = Date.now();
+    clearTimeout(awayTimer);
+    awayTimer = setTimeout(() => endSessions("away"), sessionAwayMs());
+    return;
+  }
+  clearTimeout(awayTimer);
+  if (awayAt && Date.now() - awayAt >= sessionAwayMs()) endSessions("away");
+  awayAt = 0;
+});
+window.addEventListener("pagehide", () => endSessions("closed"));
 
 // --- the answering keys ---
 

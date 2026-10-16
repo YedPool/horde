@@ -1,0 +1,2 @@
+# Each time an entry of allowlist.txt is added or raised: path | old -> new | YYYY-MM-DD | reason.
+core/json-parse-allowlist.txt | 0 -> 5 | 2026-10-14 | the raw JSON parse list of PR 279 is data naming repository paths, and four of its files sit in this relay folder

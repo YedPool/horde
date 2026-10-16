@@ -34,6 +34,9 @@
         @{ Name = "allowlist-not-stored"
            Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }'
            Replace = ' }' }
+        @{ Name = "bad-origin-deployed-anyway"
+           Find = 'if ($dep.state -cne "known") { return $dep }'
+           Replace = 'if ($dep.state -cne "known") { $dep = New-HordeKnown -Value ([pscustomobject]@{ name = "relay"; origin = "https://relay.example.workers.dev"; callback = "/auth/google/callback" }) }' }
         @{ Name = "wrangler-script-setting-unchecked"
            Find = '} elseif (-not (Test-HordeModuleSettingFolder -Path $wrangler) -or -not (Test-Path -LiteralPath $wrangler -PathType Leaf)) {'
            Replace = '} elseif ($false) {' }

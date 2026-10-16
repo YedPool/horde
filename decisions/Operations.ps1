@@ -67,6 +67,7 @@
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Settings.ps1")
 . (Join-Path $PSScriptRoot "Store.ps1")
 . (Join-Path $PSScriptRoot "Rules.ps1")
@@ -193,6 +194,16 @@ function Get-HordeDecisionAddContent {
         $stated = Get-HordeDecisionMember -Object $Request -Name $beside
         foreach ($f in @(Test-HordeDecisionRankWord -Name $beside -Word $stated)) { [void]$found.Add($f) }
         $body[$beside] = [string]$stated
+    }
+    # NEEDS A PASSKEY, the same way: the asker marks a question that changes something important (a
+    # production deploy) so that from the phone it is answered only with a fresh passkey. It is not a
+    # question field: a field would write needsPasskey false into every new record, and an older
+    # reader would refuse every one. So only true is written; false or absent writes nothing, and the
+    # record is byte for byte what earlier versions wrote.
+    if (Test-HordeDecisionMember -Object $Request -Name "needsPasskey") {
+        $stated = Get-HordeDecisionMember -Object $Request -Name "needsPasskey"
+        if ($stated -isnot [bool]) { [void]$found.Add("'needsPasskey' is '" + $stated + "', not true or false") }
+        elseif ($stated) { $body["needsPasskey"] = $true }
     }
     if (Test-HordeDecisionMember -Object $Request -Name "followsUp") {
         if (Test-HordeDecisionCount -Value $Request.followsUp -Most (Get-HordeDecisionMaxNumber)) { $body["followsUp"] = [int]$Request.followsUp }
@@ -582,7 +593,7 @@ function Invoke-HordeDecisionWrite {
             actor = $actor; requestHash = $requestHash; data = $data
         }
         $text = ConvertTo-Json -InputObject $envelope -Compress -Depth 12
-        $record = [pscustomobject]@{ sequence = $sequence; file = (Get-HordeDecisionRecordName -Sequence $sequence); kind = "ok"; data = ($text | ConvertFrom-Json); reason = "" }
+        $record = [pscustomobject]@{ sequence = $sequence; file = (Get-HordeDecisionRecordName -Sequence $sequence); kind = "ok"; data = (ConvertFrom-HordeJson $text); reason = "" }
         # The list's problems as they stood, kept for a refusal: applying the record below adds the
         # unwritten record itself to them when it does not apply.
         $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays); notUnderstood = $list.notUnderstood }
@@ -639,7 +650,7 @@ function Invoke-HordeDecision {
     # Named $plain, not $request: variable names ignore case, so that would be the parameter itself.
     $plain = $null
     try {
-        if ($null -ne $Request) { $plain = (ConvertTo-Json -InputObject $Request -Compress -Depth 12) | ConvertFrom-Json }
+        if ($null -ne $Request) { $plain = ConvertFrom-HordeJson (ConvertTo-Json -InputObject $Request -Compress -Depth 12) }
     } catch {
         $why = "the request is not plain data that can be written as JSON: " + $_.Exception.Message
         return (& $refuse $Operation $why @($why))

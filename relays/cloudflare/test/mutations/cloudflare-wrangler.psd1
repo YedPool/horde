@@ -26,8 +26,11 @@
         @{ Name = "app-folder-left-relative"
            Find = '$cfg.assets.directory = & $slash $Site'
            Replace = '$cfg.assets.directory = "site"' }
-        @{ Name = "origin-of-another-worker-taken"
-           Find = '[regex]::Escape("" + $cfg.name) + ''\.[a-z0-9-]+\.workers\.dev\z'''
-           Replace = '''[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev\z''' }
+        @{ Name = "production-config-without-a-deployment"
+           Find = '-not $isTest -and ($null -eq $Deployment -or'
+           Replace = '$false -and ($null -eq $Deployment -or' }
+        @{ Name = "production-config-keeps-wrangler-json-name"
+           Find = '$cfg.name = "" + $Deployment.name'
+           Replace = '$null = $Deployment.name' }
     )
 }

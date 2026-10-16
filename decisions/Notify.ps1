@@ -162,7 +162,7 @@ function Read-HordeDecisionNotifyRecord {
     } catch { return (& $no "refused" "could not be read") }
     if (@(Find-HordeJsonDuplicateKey -Text $text).Count -gt 0) { return (& $no "refused" "gives a key twice") }
     $parsed = $null
-    try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
+    try { $parsed = ConvertFrom-HordeJson $text } catch { $parsed = $null }
     if ($null -eq $parsed) { return (& $no "refused" "could not be read as JSON") }
     if ($parsed -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $parsed.PSObject.Properties["schemaVersion"] -or "$($parsed.schemaVersion)" -cne "1" -or $null -eq $parsed.PSObject.Properties["rung"]) { return (& $no "refused" "is not version 1 with a list named rung") }
     $entries = New-Object System.Collections.ArrayList

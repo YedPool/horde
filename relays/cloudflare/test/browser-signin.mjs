@@ -7,17 +7,20 @@
 // from, this phone), the PC offline banner (the account's answer five minutes on by the relay's clock), Sign out,
 // deleting the account (relay PR 8c), and a refused sign-in's words on the screen - a limit's own too.
 //
-//   node browser-signin.mjs <dev origin> <fake provider origin> <chrome.exe> <profile folder> <machine label>
+//   node browser-signin.mjs <dev origin> <fake provider origin> <browser debugging port> <machine label>
 //
 // The machine is one the suite registered to this account beforehand, under that label: the Account
 // screen lists it, and its Remove button removes it (the suite then sees the machine refused).
 //
-// Prints one [PASS] or [FAIL] line a check, then [DONE] <failures>. Chrome is ended when it is done.
-import { spawn, execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+// Prints one [PASS] or [FAIL] line a check, then [DONE] <failures>.
+//
+// THE BROWSER IS NOT THIS SCRIPT'S. The suite starts it (test/lib/Browser.ps1, in a kill-on-close job
+// of the suite's own) and ends it, with its profile, in its finally, however this script ends - killed
+// on the suite's timeout included. Until 2026-10-14 this script spawned Chrome and ended it in its own
+// finally, and every time it was killed first the browser was left running (test/lib/Browser.ps1 has
+// the measurement). So there is nothing here to clean up on exit or on a signal.
 
-const [, , origin, provider, chromePath, profileDir, machineLabel] = process.argv;
+const [, , origin, provider, debugPort, machineLabel] = process.argv;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
 function check(ok, name, detail = "") {
@@ -25,15 +28,8 @@ function check(ok, name, detail = "") {
   process.stdout.write((ok ? "[PASS] " : "[FAIL] ") + name + (ok || !detail ? "" : " (" + String(detail).replace(/[^\x20-\x7e]/g, "?").slice(0, 300) + ")") + "\n");
 }
 
-const chrome = spawn(chromePath, ["--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profileDir, "--no-first-run", "--no-default-browser-check", "--disable-extensions",
-  "--disable-background-networking", "--disable-sync", "--disable-component-update", "--window-size=412,915", "about:blank"], { stdio: "ignore" });
-// Set once the page's socket is open: asks Chrome to close itself, as browser-drive.mjs ends it.
-let closeBrowser = async () => {};
 try {
-  const portFile = join(profileDir, "DevToolsActivePort");
-  for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100);
-  if (!existsSync(portFile)) throw new Error("Chrome did not open its debugging port");
-  const debugPort = readFileSync(portFile, "utf8").split(/\r?\n/)[0];
+  if (!/^[0-9]{1,5}$/.test(String(debugPort))) throw new Error("no browser debugging port was given");
   let targets = [];
   for (let i = 0; i < 50 && !targets.some((t) => t.type === "page"); i++) { try { targets = await (await fetch("http://127.0.0.1:" + debugPort + "/json/list")).json(); } catch (e) { /* not yet */ } if (!targets.some((t) => t.type === "page")) await sleep(100); }
   const ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
@@ -51,7 +47,6 @@ try {
     if (m.method === "Log.entryAdded" && /Content Security Policy/i.test(m.params.entry.text)) problems.push("log: " + m.params.entry.text);
   };
   const cdp = (method, params = {}) => new Promise((resolve, reject) => { const id = nextId++; waiting.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
-  closeBrowser = () => cdp("Browser.close");
   await cdp("Page.enable");
   await cdp("Runtime.enable");
   await cdp("Log.enable");
@@ -86,7 +81,7 @@ try {
   check(!!(await until(shown("accountView") + " && document.getElementById('accountWho').textContent.indexOf('founder@example.test') >= 0")), "the Account screen says who is signed in", await evaluate("document.getElementById('accountWho').textContent"));
   const listed = await evaluate("Array.from(document.querySelectorAll('#machineList li')).map((li) => li.textContent).join('|')");
   // The machine read the relay just before (the suite's control): heard from it, at a time of the phone's day.
-  check(new RegExp("^work - " + machineLabel + " - heard from [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$").test(listed) && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, when the relay last heard from it, with a Remove button", listed);
+  check(new RegExp("^work - " + machineLabel + " - heard from [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}RemoveAdd this phone$").test(listed) && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, when the relay last heard from it, with a Remove button - and Add this phone, since this phone is not paired with it (phone-started pairing)", listed);
   // THE BOX IS NEVER HIDDEN (app.js): a live region that is hidden is not in the accessibility tree, so
   // its first line could go unannounced. It is checked unhidden, and empty when nothing is offline.
   const unhidden = "(document.getElementById('pcOffline') && !document.getElementById('pcOffline').hasAttribute('hidden') && document.getElementById('pcOffline').getAttribute('role') === 'status')";
@@ -108,7 +103,7 @@ try {
   const head = "PC " + machineLabel + " (work) offline since ", tail = ". Your answers are kept and will be applied when it is back.";
   const when = typeof banner === "string" && banner.startsWith(head) && banner.endsWith(tail) ? banner.slice(head.length, banner.length - tail.length) : "";
   check(/^[0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}$/.test(when) && (await evaluate(unhidden)),"past two minutes by the relay's clock, the PC offline banner stands in the bar, by the machine's name, with the time in the phone's own day, and says the answers are kept", banner);
-  check(/ - offline since [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}Remove$/.test(await evaluate("document.querySelector('#machineList li').textContent")), "and the Account screen says so of the machine");
+  check(/ - offline since [0-9]{1,2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2}RemoveAdd this phone$/.test(await evaluate("document.querySelector('#machineList li').textContent")), "and the Account screen says so of the machine");
   await cdp("Fetch.disable");
   onPaused = null;
   await evaluate("document.getElementById('accountBtn').click()", true);
@@ -175,13 +170,6 @@ try {
   check(problems.length === 0, "nothing in the page threw, and the policy refused nothing", problems.join(" | "));
 } catch (e) {
   check(false, "the browser ran the sign-in to its end", e.message);
-} finally {
-  // Closed, then the tree this script started ended, so the profile folder is free for the suite to
-  // delete (browser-drive.mjs, shutdown).
-  try { await closeBrowser(); } catch (e) { /* it may be gone */ }
-  await sleep(500);
-  try { if (chrome.exitCode === null) execFileSync("taskkill", ["/PID", String(chrome.pid), "/T", "/F"], { stdio: "ignore" }); } catch (e) { /* gone */ }
-  await sleep(300);
 }
 process.stdout.write("[DONE] " + failures + "\n");
 process.exit(failures === 0 ? 0 : 1);

@@ -7,9 +7,11 @@
 
 function Invoke-HordeCliProcess {
     # Returns { code; out }, out holding stdout then stderr. An argument with a space is quoted.
-    param([Parameter(Mandatory = $true)][string]$Root, [string[]]$HordeArgs = @(), [hashtable]$Env = @{})
+    # -Shell is the PowerShell that runs it: powershell.exe (5.1) unless a suite names another, such as
+    # pwsh.exe, to prove the command under PowerShell 7 too (issue #274).
+    param([Parameter(Mandatory = $true)][string]$Root, [string[]]$HordeArgs = @(), [hashtable]$Env = @{}, [string]$Shell = "powershell.exe")
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
+    $psi.FileName = $Shell
     $quoted = @($HordeArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $Root "horde.ps1") + "`" " + ($quoted -join " ")
     $psi.UseShellExecute = $false
