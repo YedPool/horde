@@ -16,6 +16,8 @@ export const CODES = Object.freeze({
   gone: "account-gone",          // 401: the account was deleted (its device's request was in flight)
   mailboxGone: "mailbox-gone",   // 410: the mailbox was deleted with its account
   deleting: "account-deleting",  // 409: the account is being deleted; try again once it is gone
+  joinPending: "join-pending",   // 409: another join request of the account is pending (join.js)
+  joinBlocked: "join-blocked",   // 429: this address's join request was rejected; wait Retry-After
   replaced: "watch-replaced"     // a watch's message: a newer watch of the same device took its place
 });
 

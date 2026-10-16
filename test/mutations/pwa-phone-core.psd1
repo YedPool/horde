@@ -111,7 +111,7 @@
            Find = 'if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); return null; }'
            Replace = 'if (put.state !== "known") throw fail("refused");' }
         @{ Name = "machine-not-registered-before-pairing"
-           Find = '      if (account) {'
+           Find = '      if (account && !joined) {'
            Replace = '      if (false) {' }
         @{ Name = "relay-words-on-the-screen"
            Find = 'throw fail(reg.status === 401 ? SIGN_IN_FIRST : NOT_REGISTERED);'
