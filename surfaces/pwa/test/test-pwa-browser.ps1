@@ -30,6 +30,13 @@
 #      scrolls sideways and the composer stands at the foot; with the page scrolled to its end the other
 #      view's tab is still on the screen and a touch opens it, both ways, and the phone's Back goes back
 #      between them (the founder's first live use, 2026-10-11); a lock takes the chat off the page;
+#  10b. the chat opens at its newest message (the founder, 2026-10-15): a long chat (80 more lines, some
+#      wrapping) opens at its newest message, clear of the composer, whether the window stood at the top or
+#      part way down the questions, and again on return to the app; Jump to latest is hidden within 48 px
+#      of the bottom and shown above it, a real button at least 44 px tall in the composer's own band; a
+#      refresh and new lines while he reads back keep his place, and the button and a polite live region
+#      say how many came; a touch, Space or Enter jumps, Shift+Tab reaches it with a visible ring; his own
+#      line sent takes him down; its words stand out from its face by 4.5 to 1, light and dark;
 #  11. the progress tab (the founder asked for it, 2026-10-12): a changelog under the suite's home is sent by
 #      a run and drawn oldest to newest in the order written, each entry with its time, bold title, labelled
 #      paragraphs and chips; a correction on what it corrects; what stands on the screen is read, reading
@@ -406,6 +413,70 @@ try {
     $b1 = Invoke-Browser @{ cmd = "back" }
     $b2 = Invoke-Browser @{ cmd = "back" }
     Check ($b1.ok -and $b1.value.doc -and -not $b1.value.chat -and $b2.ok -and $b2.value.chat -and -not $b2.value.doc) ("the phone's Back goes back to the questions, and Back again to the chat (" + $(if ($b1.ok) { ConvertTo-Json $b1.value -Compress } else { $b1.reason }) + " " + $(if ($b2.ok) { ConvertTo-Json $b2.value -Compress } else { $b2.reason }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 10b. the chat opens at its newest message, and Jump to latest (the founder, 2026-10-15) ---" -ForegroundColor Cyan
+    # A LONG CHAT: 80 more lines, every seventh long enough to wrap over many lines at phone width.
+    $longChat = @()
+    for ($i = 1; $i -le 80; $i++) {
+        $t = "long chat line " + $i
+        if ($i % 7 -eq 0) { $t += " " + ("which goes on long enough to wrap over several lines on a phone screen, " * 6) }
+        $longChat += @{ role = $(if ($i % 2 -eq 1) { "assistant" } else { "user" }); text = $t }
+    }
+    Add-HordeTestChatTurns -Thrall $thrall -Turns $longChat
+    $null = Invoke-Run -Turns 2
+    $lw = Invoke-Browser @{ cmd = "chatWait"; text = "long chat line 80" }
+    Check ($lw.ok -and $lw.value.found) "CONTROL: the 80 lines of the long chat are drawn"
+    function Show-Place { param($r) if ($r.ok) { return (ConvertTo-Json $r.value -Compress -Depth 4) } else { return $r.reason } }
+    # THE CHAT OPENS AT ITS NEWEST MESSAGE, whatever window it inherits from the other tab.
+    foreach ($from in @("top", "middle")) {
+        $op = Invoke-Browser @{ cmd = "chatOpen"; from = $from }
+        Check ($op.ok -and $op.value.items -ge 80 -and $op.value.dist -le 1 -and $op.value.lastText.StartsWith("long chat line 80") -and $op.value.lastBottom -le ($op.value.composeTop + 0.5) -and $op.value.lastBottom -gt 0 -and -not $op.value.jumpShown) ("opened from the questions with the window at the " + $from + " of the page (" + $(if ($op.ok) { $op.value.inherited } else { "?" }) + " px), the chat opens at its newest message, clear of the composer, with no Jump to latest (" + (Show-Place $op) + ")")
+    }
+    # THE STICK THRESHOLD: 30 px up is still the bottom; 300 px up is away, and the button shows.
+    $near = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 30 }
+    Check ($near.ok -and $near.value.dist -ge 25 -and -not $near.value.jumpShown) ("30 px above the bottom counts as the bottom: no button (" + (Show-Place $near) + ")")
+    $up = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    Check ($up.ok -and $up.value.jumpShown -and $up.value.jumpText -ceq "Jump to latest" -and $up.value.jumpTag -ceq "BUTTON" -and $up.value.jumpType -ceq "button") ("scrolled up, a real button says Jump to latest (" + (Show-Place $up) + ")")
+    Check ($up.ok -and $up.value.jumpH -ge 44 -and $up.value.jumpBottom -le ($up.value.textTop + 0.5) -and $up.value.jumpTop -ge ($up.value.composeTop - 0.5) -and $up.value.jumpRight -le 412 -and $up.value.jumpLeft -ge 0) ("at phone size it is at least 44 px tall, inside the composer's own band above the field: it covers neither the field nor a message (" + (Show-Place $up) + ")")
+    # A REFRESH WHILE HE READS BACK KEEPS HIS PLACE.
+    $rf = Invoke-Browser @{ cmd = "chatRefresh" }
+    Check ($up.ok -and $rf.ok -and $rf.value.firstKey -ceq $up.value.firstKey -and [math]::Abs($rf.value.firstTop - $up.value.firstTop) -le 2 -and [math]::Abs($rf.value.dist - $up.value.dist) -le 2 -and $rf.value.jumpShown -and $rf.value.news -ceq "") ("a refresh while he is scrolled up keeps his place - the same message where it stood - and says nothing (" + (Show-Place $rf) + ")")
+    # NEW LINES WHILE HE READS BACK: his place is kept, and the button and the live region say how many.
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "assistant"; text = "fresh line one" }, @{ role = "assistant"; text = "fresh line two" })
+    $null = Invoke-Run -Turns 2
+    $fw = Invoke-Browser @{ cmd = "chatWait"; text = "fresh line two" }
+    Start-Sleep -Milliseconds 500
+    $nw = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($fw.ok -and $fw.value.found -and $nw.ok -and $nw.value.firstKey -ceq $up.value.firstKey -and [math]::Abs($nw.value.firstTop - $up.value.firstTop) -le 2) ("two lines arriving while he is scrolled up do not move him (" + (Show-Place $nw) + ")")
+    Check ($nw.ok -and $nw.value.jumpShown -and $nw.value.jumpText -ceq "Jump to latest (2 new)" -and $nw.value.news -ceq "2 new messages below. Jump to latest to read them." -and $nw.value.newsLive -ceq "polite" -and -not $nw.value.newsHidden) ("the button says Jump to latest (2 new), and a polite live region says it once (" + (Show-Place $nw) + ")")
+    $rf2 = Invoke-Browser @{ cmd = "chatRefresh" }
+    Check ($rf2.ok -and $rf2.value.jumpText -ceq "Jump to latest (2 new)" -and $rf2.value.firstKey -ceq $up.value.firstKey) "a refresh after them keeps the count and his place"
+    # ONE TAP: the newest message.
+    $jt = Invoke-Browser @{ cmd = "chatJumpTouch" }
+    Check ($jt.ok -and $jt.value.dist -le 1 -and $jt.value.lastText -ceq "fresh line two" -and $jt.value.lastBottom -le ($jt.value.composeTop + 0.5) -and -not $jt.value.jumpShown -and $jt.value.news -ceq "") ("a touch on Jump to latest goes to the newest message, and the button goes (" + (Show-Place $jt) + ")")
+    # BACK TO THE APP, after reading back: the chat opens at its newest message again.
+    $null = Invoke-Browser @{ cmd = "chatScrollTo"; to = "top" }
+    $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
+    $null = Invoke-Browser @{ cmd = "show" }
+    Start-Sleep -Milliseconds 1500
+    $rt = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($rt.ok -and $rt.value.items -ge 80 -and $rt.value.dist -le 1 -and $rt.value.lastText -ceq "fresh line two" -and -not $rt.value.jumpShown) ("back to the app, the chat opens at its newest message (" + (Show-Place $rt) + ")")
+    # THE KEYBOARD: in the Tab order with a visible ring; Space and Enter each jump.
+    foreach ($key in @("Space", "Enter")) {
+        $null = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+        $kj = Invoke-Browser @{ cmd = "chatJumpKey"; key = $key }
+        Check ($kj.ok -and $kj.value.focused.focus -ceq "chatJump" -and $kj.value.focused.focusVisible -and $kj.value.focused.outline -match '\Asolid [1-9]') ("Shift+Tab from the composer reaches Jump to latest, with a visible focus ring (" + $(if ($kj.ok) { ConvertTo-Json $kj.value.focused -Compress } else { $kj.reason }) + ")")
+        Check ($kj.ok -and $kj.value.after.dist -le 1 -and -not $kj.value.after.jumpShown -and $kj.value.after.focus -ceq "chatText") ($key + " on it goes to the newest message, and the focus goes on to the composer (" + $(if ($kj.ok) { ConvertTo-Json $kj.value.after -Compress } else { $kj.reason }) + ")")
+    }
+    # HIS OWN LINE, SENT WHILE SCROLLED UP, TAKES HIM TO THE BOTTOM.
+    $null = Invoke-Browser @{ cmd = "chatScrollTo"; dist = 1500 }
+    $own = Invoke-Browser @{ cmd = "chatSend"; text = "Back down to the bottom."; via = "enter"; mailbox = $mailbox }
+    Start-Sleep -Milliseconds 500
+    $od = Invoke-Browser @{ cmd = "chatPlace" }
+    Check ($own.ok -and $own.value.put -and $od.ok -and $od.value.dist -le 1 -and $od.value.lastText -ceq "Back down to the bottom." -and -not $od.value.jumpShown) ("his own line sent while scrolled up takes him to the bottom, where it stands (" + (Show-Place $od) + ")")
+    $ct = Invoke-Browser @{ cmd = "chatContrast" }
+    Check ($ct.ok -and $ct.value.light.ratio -ge 4.5 -and $ct.value.dark.ratio -ge 4.5) ("Jump to latest's words stand out from its face by at least 4.5 to 1, light and dark (" + $(if ($ct.ok) { ConvertTo-Json $ct.value -Compress } else { $ct.reason }) + ")")
     $lk = Invoke-Browser @{ cmd = "lock" }
     $st = Invoke-Browser @{ cmd = "chatState" }
     Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"

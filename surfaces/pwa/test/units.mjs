@@ -27,6 +27,7 @@ const NV = await load("app/notices-view.js");
 const CW = await load("app/cards-why.js");
 const AU = await load("app/app-update.js");
 const RB = await load("app/read-banner.js");
+const CS = await load("app/chat-scroll.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
 const subtle = globalThis.crypto.subtle;
 
@@ -2090,6 +2091,24 @@ async function sendNotices(t, m, phone, body, seq) { const e = await machineEnve
   const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
   const full = await throwsAsync(async () => phone.answer(paired.id, { number: 2, wordingVersion: 1, text: "One too many.", answerId: P.hex(P.randomBytes(16)) }));
   check(full.indexOf("Not sent") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await kept()).length === 200, "A FULL OUTBOX REFUSES THE NEW ANSWER, saying why, and drops none of the 200 still waiting", full);
+}
+
+// --- 10i. THE CHAT OPENS AT ITS NEWEST MESSAGE, AND JUMP TO LATEST (chat-scroll.js; the founder, 2026-10-15) ---
+{
+  const at = (scrollTop) => ({ scrollTop, viewHeight: 800, scrollHeight: 5000 });
+  check(CS.distanceFromBottom(at(4200)) === 0 && CS.distanceFromBottom(at(4100)) === 100 && CS.distanceFromBottom({ scrollTop: 0, viewHeight: 800, scrollHeight: 300 }) === 0, "how far the window stands above the bottom; a page shorter than the screen is at its bottom");
+  check(CS.STICK_PX === 48, "the stick threshold is 48 px", String(CS.STICK_PX));
+  check(CS.nearBottom(at(4200)) && CS.nearBottom(at(4200 - 48)) && !CS.nearBottom(at(4200 - 49)), "AT THE BOTTOM means within 48 px of it, and 49 px up is away", JSON.stringify([CS.nearBottom(at(4152)), CS.nearBottom(at(4151))]));
+  check(!CS.showJump(at(4200)) && !CS.showJump(at(4152)) && CS.showJump(at(4151)) && CS.showJump(at(0)), "JUMP TO LATEST HIDES AT THE BOTTOM, and shows away from it");
+  check(CS.placeAfterDraw({ opening: true, near: false }) === "bottom", "AN OPENING GOES TO THE NEWEST MESSAGE, wherever the window stood");
+  check(CS.placeAfterDraw({ opening: false, near: true }) === "bottom", "A REFRESH AT THE BOTTOM STICKS TO THE BOTTOM");
+  check(CS.placeAfterDraw({ opening: false, near: false }) === "keep", "A REFRESH WHILE HE READS BACK KEEPS HIS PLACE");
+  check(CS.keptTop(1000, 120, 120) === 1000 && CS.keptTop(1000, 120, 220) === 1100 && CS.keptTop(1000, 120, 70) === 950 && CS.keptTop(10, 120, 0) === 0, "his place kept: the window moves by what the first message on his screen moved, never above the top");
+  const seen = new Set(["a", "b", "c"]);
+  check(CS.unseenCount(seen, ["a", "b", "c"]) === 0 && CS.unseenCount(seen, ["a", "b", "c", "d", "e"]) === 2 && CS.unseenCount(new Set(), []) === 0, "the new messages are the ones not seen at the bottom");
+  check(CS.jumpWords(0) === "Jump to latest" && CS.jumpWords(2) === "Jump to latest (2 new)" && CS.jumpWords(1) === "Jump to latest (1 new)", "the button's words, with the count of new messages when there are any");
+  check(CS.newsWords(0, 2) === "2 new messages below. Jump to latest to read them." && CS.newsWords(2, 3) === "3 new messages below. Jump to latest to read them." && CS.newsWords(0, 1) === "1 new message below. Jump to latest to read it.", "the live region says the count when it grows");
+  check(CS.newsWords(2, 2) === null && CS.newsWords(3, 0) === null && CS.newsWords(0, 0) === null, "A REFRESH THAT BRINGS NOTHING SAYS NOTHING: the live region is left as it is");
 }
 
 process.stdout.write("[DONE] " + failures + "\n");
