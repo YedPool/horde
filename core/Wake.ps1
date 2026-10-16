@@ -308,7 +308,7 @@ function Get-HordeWakeHold {
     # It is skip, like a session with no mail: not waiting for anything, not an attempt, not a failure,
     # never given up on and never told of. retired UNKNOWN - the waker could not tell - is held too:
     # wait, because it may yet be read as no. Either is journaled once (Invoke-HordeWakePass's held).
-    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent, $Acks = $null, [switch]$NoProbe, [string]$Self = "", $FreeAt = $null)
+    param($Target, $StateAnswer, $Entry, [datetime]$Now, $Settings, [switch]$CanLook, [switch]$Silent, $Acks = $null, [switch]$NoProbe, [string]$Self = "", $FreeAt = $null, $Asleep = $null, [string]$AsleepUnknown = "")
     $retired = "$(Get-HordeWakeEntryValue $Target "retired")"
     if ($retired -ceq "yes") { return [pscustomobject]@{ action = "skip"; reason = "retired: a retired session is never nudged" } }
     if ($retired -cne "no") { return [pscustomobject]@{ action = "wait"; reason = "retired is unknown: a session that may be retired is not nudged" } }
@@ -323,6 +323,12 @@ function Get-HordeWakeHold {
     $worn = "$(Get-HordeWakeEntryValue $Target "label")"
     if (Test-HordeLabelReserved $worn) { return [pscustomobject]@{ action = "skip"; reason = ("its label, " + $worn + ", is reserved for a sender that is no session: it is never nudged") } }
     if ($Self -cne "" -and "$(Get-HordeWakeEntryValue $Target "id")" -ceq $Self) { return [pscustomobject]@{ action = "skip"; reason = "it is the session this watcher was started from: a watcher never nudges itself" } }
+    # A SESSION ASLEEP IN A HIBERNATION IS NEVER KNOCKED (fleet/Asleep.ps1 says why): skip, like a retired
+    # one, while its mail queues for its wake. -Asleep is session id -> where and since when. When which
+    # sessions sleep cannot be told (-AsleepUnknown), nobody is knocked - wait - because the record that
+    # could not be read may be the one that says this session sleeps, and its pane holds a shell.
+    if ($AsleepUnknown -cne "") { return [pscustomobject]@{ action = "wait"; reason = ("which sessions are asleep in a hibernation cannot be told, so none is knocked: " + $AsleepUnknown) } }
+    if ($null -ne $Asleep -and $Asleep.ContainsKey("$(Get-HordeWakeEntryValue $Target "id")")) { return [pscustomobject]@{ action = "skip"; reason = ("" + $Asleep["$(Get-HordeWakeEntryValue $Target "id")"] + ": a hibernated session is never knocked; its mail waits for its wake") } }
     if ($null -eq $StateAnswer -or "$($StateAnswer.state)" -cne "known") {
         $why = "nothing answered for it"
         if ($null -ne $StateAnswer) { $why = "$($StateAnswer.reason)" }
@@ -441,7 +447,7 @@ function Get-HordeWakeDecisions {
     # "rate limit" and are ready again next pass.
     #   -Silent     the fleet is silent (Update-HordeWakeSilence): every nudge is a probe
     #   -SilentProbes  how many probes were sent since it was found silent
-    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook, [switch]$Silent, [int]$SilentProbes = 0, $Acks = $null, [switch]$NoProbe, [string]$Self = "")
+    param($Targets, $States, $Ledger, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Confirmed = @{}, [switch]$CanLook, [switch]$Silent, [int]$SilentProbes = 0, $Acks = $null, [switch]$NoProbe, [string]$Self = "", $Asleep = $null, [string]$AsleepUnknown = "")
     $roles = @(Get-HordeWakerRoles)
     $rows = New-Object System.Collections.ArrayList
     foreach ($t in @($Targets)) {
@@ -454,7 +460,7 @@ function Get-HordeWakeDecisions {
         $stateNow = $null
         if ($null -ne $answer -and "$($answer.state)" -ceq "known") { $stateNow = $answer.value }
         $entry = Get-HordeWakeLedgerEntry -Ledger $Ledger -Id $id -State $stateNow
-        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Acks $Acks -NoProbe:$NoProbe -Self $Self -FreeAt $(if ($null -ne $Ledger -and $Ledger.ContainsKey($id)) { Get-HordeWakeEntryValue $Ledger[$id] "freeAt" } else { $null })
+        $hold = Get-HordeWakeHold -Target $t -StateAnswer $answer -Entry $entry -Now $Now -Settings $Settings -CanLook:($CanLook -and -not $looked) -Silent:$Silent -Acks $Acks -NoProbe:$NoProbe -Self $Self -Asleep $Asleep -AsleepUnknown $AsleepUnknown -FreeAt $(if ($null -ne $Ledger -and $Ledger.ContainsKey($id)) { Get-HordeWakeEntryValue $Ledger[$id] "freeAt" } else { $null })
         $row = [pscustomobject]@{ id = $id; action = $hold.action; reason = $hold.reason; attempts = 0; nothing = 0; rank = $roles.Count; oldest = [datetime]::MaxValue; probed = [long]0; free = ((Get-HordeWakeEntryValue $hold "free") -eq $true); between = ("$(Get-HordeWakeEntryValue $stateNow "betweenTurns")" -ceq "yes") }
         $lastProbe = Get-HordeWakeEntryValue $entry "probeAt"
         if ($lastProbe -is [datetime]) { $row.probed = $lastProbe.Ticks }
@@ -974,7 +980,7 @@ function Invoke-HordeWakePass {
     #                     (core/WakeRun.ps1, PROOF). A session that is not in the listing - or a listing
     #                     that cannot be read - is one entry of kind proof-target-absent, and nobody is
     #                     nudged: the pass never falls back to "whoever is ready".
-    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Send, [switch]$Silent, [int]$SilentProbes = 0, [string]$Only = "", [string]$Self = "")
+    param($Waker, [Parameter(Mandatory = $true)][datetime]$Now, $Settings = (Get-HordeWakeSettings), $Ledger = @{}, [switch]$Send, [switch]$Silent, [int]$SilentProbes = 0, [string]$Only = "", [string]$Self = "", $Asleep = $null, [string]$AsleepUnknown = "")
     $shadowPass = (-not $Send)
     # never is session id -> why a session with unread mail is NEVER nudged, for what it is: retired, a
     # reserved label, the watcher's own session (skip). held is session id -> why one is held for what
@@ -1037,7 +1043,7 @@ function Invoke-HordeWakePass {
             }
             $canLook = Test-HordeWakerConfirms $Waker
             $confirmed = @{}
-            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $Acks -NoProbe:($Only -cne "") -Self $Self)
+            $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $Acks -NoProbe:($Only -cne "") -Self $Self -Asleep $Asleep -AsleepUnknown $AsleepUnknown)
             # THE LOOKS ARE COUNTED AS THEY ARE MADE, not by how many sessions have been looked at: the
             # bound must hold even if one session were looked at twice.
             $looks = 0
@@ -1051,7 +1057,7 @@ function Invoke-HordeWakePass {
                     if ($confirmed[$d.id].state -cne "known") { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id $d.id -Outcome "unknown" -Reason "$($confirmed[$d.id].reason)")) }
                     else { $states[$d.id] = $confirmed[$d.id] }
                 }
-                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $Acks -NoProbe:($Only -cne "") -Self $Self)
+                $decisions = @(Get-HordeWakeDecisions -Targets $targets -States $states -Ledger $Ledger -Now $Now -Settings $Settings -Confirmed $confirmed -CanLook:$canLook -Silent:$Silent -SilentProbes $SilentProbes -Acks $Acks -NoProbe:($Only -cne "") -Self $Self -Asleep $Asleep -AsleepUnknown $AsleepUnknown)
             }
             foreach ($d in $decisions) { if ($d.action -ceq "look") { $d.action = "wait"; $d.reason = "its box and its turn were not read this pass: the pass's looks were used up" } }
             foreach ($t in $targets) {
@@ -1061,6 +1067,7 @@ function Invoke-HordeWakePass {
                 if ($a.value.unreadCount -gt 0 -and "$($t.retired)" -ceq "yes") { $never[$t.id] = "retired, with " + $a.value.unreadCount + " unread: a retired session is never nudged, so this mail waits for nobody. It is not counted, and nobody is told" }
                 elseif ($a.value.unreadCount -gt 0 -and (Test-HordeLabelReserved "$($t.label)")) { $never[$t.id] = "its label, " + $t.label + ", is reserved for a sender that is no session, and it has " + $a.value.unreadCount + " unread: it is never nudged" }
                 elseif ($a.value.unreadCount -gt 0 -and $Self -cne "" -and "$($t.id)" -ceq $Self) { $never[$t.id] = "it is the session this watcher was started from, and it has " + $a.value.unreadCount + " unread: a watcher never nudges itself" }
+                elseif ($a.value.unreadCount -gt 0 -and $null -ne $Asleep -and $Asleep.ContainsKey("$($t.id)")) { $never[$t.id] = "" + $Asleep["$($t.id)"] + ", with " + $a.value.unreadCount + " unread: a hibernated session is never knocked, and its mail waits for its wake" }
                 elseif ($a.value.unreadCount -gt 0 -and "$($t.retired)" -cne "no") { $held[$t.id] = "it could not be told whether this session is retired, and it has " + $a.value.unreadCount + " unread: it is not nudged while that is so" }
                 # MAIL HANDED OVER AND NOTHING UNREAD: said once, as held, for a session that would otherwise be
                 # nudged - else its inbox shows mail and the journal shows nothing done about it.
