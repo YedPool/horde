@@ -92,10 +92,26 @@
            Find = 'const relayed = await sendSealed(id);'
            Replace = 'const relayed = false;' }
         @{ Name = "pairing-kept-after-announce"
-           Find = '      pairings.delete(id);'
+           Find = '    pairings.delete(e.id);'
            Replace = '' }
+        # --- THE ANNOUNCEMENT IS NO BUTTON (the founder, 2026-10-14) ---
+        @{ Name = "unlock-never-announces"
+           Find = 'if (announcing) { await putVouch(e, got); e = await entryOf(id); }'
+           Replace = '' }
+        @{ Name = "unlock-announces-when-heard"
+           Find = 'const announcing = !summary(e).heard;'
+           Replace = 'const announcing = true;' }
+        @{ Name = "unlock-vouch-over-a-random-challenge"
+           Find = 'const challenge = announcing ? await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic)) : P.randomBytes(32);'
+           Replace = 'const challenge = P.randomBytes(32);' }
+        @{ Name = "confirmed-record-not-verified"
+           Find = '        if (c.ok) return { confirmed: true };'
+           Replace = '        return { confirmed: true };' }
+        @{ Name = "relay-refusal-of-the-vouch-fails-the-unlock"
+           Find = 'if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); return null; }'
+           Replace = 'if (put.state !== "known") throw fail("refused");' }
         @{ Name = "machine-not-registered-before-pairing"
-           Find = '      if (account) {'
+           Find = '      if (account && !joined) {'
            Replace = '      if (false) {' }
         @{ Name = "relay-words-on-the-screen"
            Find = 'throw fail(reg.status === 401 ? SIGN_IN_FIRST : NOT_REGISTERED);'

@@ -46,6 +46,16 @@
 //   noncesPerKey              1000   nonces one key may have in its replay window (two minutes) at
 //                                    once; past it a request is refused, and no nonce is ever
 //                                    forgotten early (forgetting one would let its request replay)
+// JOIN REQUESTS - a new phone asking to join one machine of its account (join.js, the section JOIN
+// REQUESTS; the account's are kept by accounts.js, the address's by address.js, both in storage, since
+// an hour outlives an idle object's eviction):
+//   joinRequestsPerHour       6      join requests one account takes in an hour: a bucket of 6, refilled
+//                                    at 6 an hour
+//   joinRequestsPerHourPerAddress  6 the same for one client address, across every account
+//   joinRequestMs             600000 a pending join request's life, 10 minutes: past it the account's one
+//                                    pending slot is free again
+//   joinBlockMs               3600000 how long an address whose join request was rejected is refused
+//                                    join requests: an hour
 // RETENTION (mailbox.js): an unacked envelope is deleted retentionMs after its put. Its value is
 // capabilities.json's retentionSeconds (30 days), the relay's declared retention the port reads
 // (relays/Port.ps1), so it is not repeated here either. An acked envelope is deleted by its ack, at once.
@@ -78,6 +88,10 @@ export const DEFAULTS = Object.freeze({
   refusedSignaturesPerMinutePerAddress: 30,
   refusedSignaturesPerMinutePerKey: 10,
   noncesPerKey: 1000,
+  joinRequestsPerHour: 6,
+  joinRequestsPerHourPerAddress: 6,
+  joinRequestMs: 600000,
+  joinBlockMs: 3600000,
   retentionMs: capabilities.limits.retentionSeconds * 1000
 });
 

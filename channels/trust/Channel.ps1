@@ -17,6 +17,7 @@
 #            (channels/Port.ps1 read the trusted senders to open this envelope), so a refusal here is
 #            about this key; the rare write that fails is a refusal too, and the phone, seeing no
 #            snapshot, announces its key again.
+# IN, kind session: the opening of an unlocked phone session (Invoke-HordeTrustChannelSession, below).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -58,5 +59,21 @@ function Invoke-HordeTrustChannelAccept {
     return [pscustomobject]@{ outcome = "done"; reason = ("the phone key " + $added.value.record.agreeKeyId + " is " + $(if ($added.value.duplicate) { "already" } else { "now" }) + " in the trust store, vouched for by " + $added.value.record.by) }
 }
 
-$null = Register-HordeRelayChannel -Folder $script:HordeTrustChannelFolder -Name "trust" -Kinds @("phone-key") -Senders "founder" `
-    -Accept { param($Context, $Item) return (Invoke-HordeTrustChannelAccept -Context $Context -Item $Item) }
+function Invoke-HordeTrustChannelSession {
+    # IN, kind session (relay/Session.ps1; relay/js/protocol.js, the opening): the envelope a phone sends
+    # right after unlock, session-signed and carrying its vouch, so the PC records the vouch and starts
+    # its idle clock before the first answer. By the time it is here the port has verified the vouch and
+    # the session signature, recorded the vouch and journaled the envelope; this checks the body names
+    # the same vouch, and says so. { outcome; reason }.
+    param($Context, $Item)
+    $p = $Item.PSObject.Properties["proof"]
+    if ($null -eq $p -or "$($p.Value)" -cne "session") { return [pscustomobject]@{ outcome = "refused"; reason = "an opening is session-signed: this one is not" } }
+    $text = ""
+    try { $text = (New-Object System.Text.UTF8Encoding -ArgumentList $false, $true).GetString($Item.body) } catch { return [pscustomobject]@{ outcome = "refused"; reason = "the opening's body is not UTF-8" } }
+    if ($text -cnotmatch '\A\{"v":1,"vouchId":"([0-9a-f]{32})"\}\z') { return [pscustomobject]@{ outcome = "refused"; reason = 'the opening body is not exactly {"v":1,"vouchId":"<32 hex>"}' } }
+    if ($Matches[1] -cne $Item.vouchId) { return [pscustomobject]@{ outcome = "refused"; reason = ("the opening names the session " + $Matches[1] + " and is signed under " + $Item.vouchId) } }
+    return [pscustomobject]@{ outcome = "done"; reason = ("the phone session " + $Item.vouchId + " of " + $Item.from + " is open") }
+}
+
+$null = Register-HordeRelayChannel -Folder $script:HordeTrustChannelFolder -Name "trust" -Kinds @("phone-key", "session") -Senders "founder" `
+    -Accept { param($Context, $Item) if ($Item.kind -ceq "session") { return (Invoke-HordeTrustChannelSession -Context $Context -Item $Item) }; return (Invoke-HordeTrustChannelAccept -Context $Context -Item $Item) }

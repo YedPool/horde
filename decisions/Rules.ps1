@@ -795,6 +795,10 @@ function Step-HordeDecisionAdded {
     if (Test-HordeDecisionMember -Object $Ev.data -Name "blocks") { $question["blocks"] = [string]$Ev.data.blocks }
     $question["followsUp"] = 0
     if (Test-HordeDecisionMember -Object $Ev.data -Name "followsUp") { $question["followsUp"] = [int]$Ev.data.followsUp }
+    # needsPasskey: written only as true (decisions/Operations.ps1, Get-HordeDecisionAddContent); a
+    # record without it - every one written before it existed - is a question that needs none.
+    $question["needsPasskey"] = $false
+    if ((Test-HordeDecisionMember -Object $Ev.data -Name "needsPasskey") -and ($Ev.data.needsPasskey -eq $true)) { $question["needsPasskey"] = $true }
     $question["partsAnswered"] = (New-Object System.Collections.Specialized.OrderedDictionary)
     $question["addedAt"] = "$($Ev.at)"
     $question["updatedAt"] = "$($Ev.at)"
@@ -1290,6 +1294,9 @@ function ConvertTo-HordeDecisionView {
     $view["importanceShown"] = (Get-HordeDecisionRankShown -Name "importance" -Word "$($Question.importance)")
     $view["blocks"] = "$($Question.blocks)"
     $view["blocksShown"] = (Get-HordeDecisionRankShown -Name "blocks" -Word "$($Question.blocks)")
+    # Handed out only when true, so the view of every other question - and every snapshot of one - is
+    # what it was before the mark existed.
+    if ((Test-HordeDecisionMember -Object $Question -Name "needsPasskey") -and [bool]$Question["needsPasskey"]) { $view["needsPasskey"] = $true }
     if ([int]$Question.followsUp -ge 1) { $view["followsUp"] = (ConvertTo-HordeDecisionFollowsUpView -State $State -Number ([int]$Question.followsUp)) }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
     $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages

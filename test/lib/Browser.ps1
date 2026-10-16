@@ -111,7 +111,18 @@ public static class HordeTestBrowserJobV1 {
 # port the system chooses (written to DevToolsActivePort in the profile), and nothing that reaches out.
 $script:HordeTestBrowserFlags = @("--headless=new", "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
     "--disable-background-networking", "--disable-sync", "--disable-component-update")
-$script:HordeTestBrowserProfilePrefix = "horde-browser-"
+# THE PROFILE'S PATH IS KEPT SHORT (measured 2026-10-15, the bisect of test-pwa-browser after PR 288).
+# Chrome writes its service-worker storage up to 139 characters deep inside a profile
+# (Default\Service Worker\CacheStorage\<40 hex>\<uuid>\index-dir\the-real-index), and a Windows path
+# stops at 259. With the profile at <suite work folder>\horde-browser-<32 hex> (133 characters under
+# test-pwa-browser's %TEMP%\horde-pwa-browser-<32 hex>) the deepest file came to 272: the worker
+# installed and filled its cache, then its registration was lost, and the page was never controlled -
+# 8 checks red, with nothing in the console. The old <work>\chrome (232) and a short parent both pass.
+# So the leaf is hb- and 8 hex, and a profile whose path leaves less than that depth of room is
+# REFUSED in words before Chrome starts, rather than losing the worker silently.
+$script:HordeTestBrowserProfilePrefix = "hb-"
+$script:HordeTestBrowserProfileDepth = 140
+$script:HordeTestBrowserPathMax = 259
 
 function Find-HordeTestChrome {
     # Chrome's full path, or "" when it is not installed in any of its usual places.
@@ -125,14 +136,16 @@ function Find-HordeTestChrome {
 }
 
 function Start-HordeTestBrowser {
-    # A headless browser in a fresh profile of its own (<-Parent>\horde-browser-<32 hex>, -Parent
+    # A headless browser in a fresh profile of its own (<-Parent>\hb-<8 hex>, -Parent
     # defaulting to %TEMP%), in a kill-on-close job of this process (header). Returns the handle
     # { pid; port; profile; job } once the browser's debugging port is open; throws, having ended what
     # it started and removed the profile, when it is not open within -ReadySeconds. -ExtraArgs come
     # after the standard flags (each one argument; quoted here when it holds a space).
     param([Parameter(Mandatory = $true)][string]$Chrome, [string]$Parent = "", [string[]]$ExtraArgs = @(), [int]$ReadySeconds = 20)
     if ($Parent -eq "") { $Parent = [System.IO.Path]::GetTempPath() }
-    $profileDir = Join-Path $Parent ($script:HordeTestBrowserProfilePrefix + [guid]::NewGuid().ToString("N"))
+    $profileDir = Join-Path $Parent ($script:HordeTestBrowserProfilePrefix + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    $room = $script:HordeTestBrowserPathMax - $script:HordeTestBrowserProfileDepth
+    if ($profileDir.Length -gt $room) { throw ("the browser profile path would be " + $profileDir.Length + " characters, more than " + $room + ": Chrome writes up to " + $script:HordeTestBrowserProfileDepth + " more inside it and a Windows path stops at " + $script:HordeTestBrowserPathMax + ", so its service worker would be lost; start it under a shorter -Parent") }
     [void][System.IO.Directory]::CreateDirectory($profileDir)
     $argv = @($script:HordeTestBrowserFlags) + @("--user-data-dir=" + $profileDir) + @($ExtraArgs) + @("about:blank")
     $quoted = @($argv | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } })
