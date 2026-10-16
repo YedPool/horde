@@ -182,18 +182,39 @@ function Get-ClaudeCodeFleetVerdict {
     # before it was running beside the sleeper while the sleeper still ran under its own id, so it cannot
     # be the sleeper under a new one. Orcs and their wargs share folders (13 recorded sessions sat in 6
     # folders on 2026-10-16), and the guard's unnarrowed rule refused most of them. A start time that
-    # cannot be read still counts. With no -Since the guard's rule stands as it is.
-    param([Parameter(Mandatory = $true)]$Snapshot, [Parameter(Mandatory = $true)][string]$SessionId, [AllowEmptyString()][string]$Cwd = "", [string[]]$Ignore = @(), $Since = $null)
+    # cannot be read still counts. With no -Since, or no -Process (below), the guard's rule stands as it is.
+    param([Parameter(Mandatory = $true)]$Snapshot, [Parameter(Mandatory = $true)][string]$SessionId, [AllowEmptyString()][string]$Cwd = "", [string[]]$Ignore = @(), $Since = $null, $Process = $null)
+    # -Process: the sleeper's own process as recorded, { pid; start } (FILETIME ticks text). THE NARROWING
+    # NEEDS IT (second review of PR 318, P1): a session can take a new id inside the same process (/clear,
+    # /resume, a compaction), and that process began before the sleeper "stopped", so -Since alone would
+    # pass it over and call the sleeper stopped while it runs. So that very process running, under any id,
+    # is the sleeper running, and -Since narrows only OTHER processes. With no recorded process (an older
+    # record) -Since is not used at all: the guard's own rule.
+    $procPid = ""; $procStart = [long]0
+    if ($null -ne $Process -and "" + $Process.pid -cmatch '\A[0-9]{1,10}\z' -and "" + $Process.start -cmatch '\A[0-9]{1,19}\z' -and [long]::TryParse("" + $Process.start, [ref]$procStart)) { $procPid = "" + $Process.pid }
     $sinceTicks = $null
-    if ($Since -is [datetime]) { $sinceTicks = $Since.ToUniversalTime().ToFileTimeUtc() }
+    if ($procPid -ne "" -and $Since -is [datetime]) { $sinceTicks = $Since.ToUniversalTime().ToFileTimeUtc() }
     if ("" + $Snapshot.error -ne "") { return [pscustomobject]@{ state = "unknown"; kind = "reading"; reason = ("liveness unreadable (" + $Snapshot.error + ")"); pid = "" } }
     $s = $Snapshot.sessions[$SessionId]
     if ($null -eq $s -or $s.state -ceq "dead") {
+        if ($procPid -ne "") {
+            foreach ($r in @($Snapshot.records)) {
+                $began = [long]0
+                if ($r.state -ceq "live" -and "" + $r.pid -ceq $procPid -and [long]::TryParse("" + $r.startTime, [ref]$began) -and [Math]::Abs($began - $procStart) -le $script:ClaudeCodeFleetStartTolerance) {
+                    return [pscustomobject]@{ state = "running"; kind = "same-process"; reason = ("its own process, pid " + $r.pid + ", still runs, now as session " + $r.sessionId); pid = "" + $r.pid }
+                }
+            }
+        }
         $wanted = ConvertTo-ClaudeCodeFleetCwd -Cwd $Cwd
         foreach ($r in @($Snapshot.records)) {
             if ($r.state -ceq "dead" -or @($Ignore) -ccontains $r.sessionId) { continue }
             $began = [long]0
             if ($null -ne $sinceTicks -and "" + $r.startTime -cmatch '\A[0-9]{1,19}\z' -and [long]::TryParse("" + $r.startTime, [ref]$began) -and $began -le $sinceTicks) { continue }
+            # A RUNNING SESSION WITH NO FOLDER may be in the sleeper's (second review of PR 318, P2): it is
+            # never passed over as a folder of its own.
+            if ((ConvertTo-ClaudeCodeFleetCwd -Cwd $r.cwd) -eq "") {
+                return [pscustomobject]@{ state = "unknown"; kind = "rotated"; reason = ("not running under this id, and running pid " + $r.pid + " names no folder in its control file, so it may be the same conversation under a new id - resume it by hand if it is not"); pid = "" + $r.pid }
+            }
             if ($wanted -eq "" -or (ConvertTo-ClaudeCodeFleetCwd -Cwd $r.cwd) -ceq $wanted) {
                 return [pscustomobject]@{ state = "unknown"; kind = "rotated"; reason = ("not running under this id, but in the same folder as running pid " + $r.pid + ", so it may be the same conversation under a new id - resume it by hand if it is not"); pid = "" + $r.pid }
             }
@@ -205,10 +226,10 @@ function Get-ClaudeCodeFleetVerdict {
 }
 
 function Get-ClaudeCodeFleetRunning {
-    # The sessions -Snapshot shows live, { sessionId; pid; cwd } each: where a wake looks for a session
-    # that came up under a new id.
+    # The sessions -Snapshot shows live, { sessionId; pid; cwd; start } each: where a wake looks for a
+    # session that came up under a new id, and where a record takes each session's process from.
     param([Parameter(Mandatory = $true)]$Snapshot)
-    return @(@($Snapshot.records) | Where-Object { $_.state -ceq "live" -and $_.sessionId -cmatch $script:ClaudeCodeFleetIdPattern } | ForEach-Object { [pscustomobject]@{ sessionId = $_.sessionId; pid = $_.pid; cwd = $_.cwd } })
+    return @(@($Snapshot.records) | Where-Object { $_.state -ceq "live" -and $_.sessionId -cmatch $script:ClaudeCodeFleetIdPattern } | ForEach-Object { [pscustomobject]@{ sessionId = $_.sessionId; pid = $_.pid; cwd = $_.cwd; start = $_.startTime } })
 }
 
 function Get-ClaudeCodeFleetResumeLine {
@@ -235,7 +256,7 @@ function Get-ClaudeCodeFleetScrub {
 
 Register-HordeFleetAgent -Name "claude-code" `
     -Snapshot { New-ClaudeCodeFleetSnapshot -Read (Read-ClaudeCodeFleetRecords) } `
-    -Verdict { param($snapshot, $id, $cwd, $ignore, $since) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore -Since $since } `
+    -Verdict { param($snapshot, $id, $cwd, $ignore, $since, $process) Get-ClaudeCodeFleetVerdict -Snapshot $snapshot -SessionId $id -Cwd $cwd -Ignore $ignore -Since $since -Process $process } `
     -Running { param($snapshot) Get-ClaudeCodeFleetRunning -Snapshot $snapshot } `
     -ResumeLine { param($id) Get-ClaudeCodeFleetResumeLine -SessionId $id } `
     -Scrub { Get-ClaudeCodeFleetScrub }

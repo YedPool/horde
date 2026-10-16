@@ -7,11 +7,14 @@
 #
 #   agents/<name>/Fleet.ps1  Register-HordeFleetAgent
 #     Snapshot   ()                          one fresh reading of which of its sessions run now (opaque)
-#     Verdict    ($snapshot, $id, $cwd, $ignore, $since)  { state: running | stopped | unknown; kind; reason;
-#                                            pid }; $ignore: ids that cannot be the session under a new id;
-#                                            $since: a [datetime] or $null - a session whose process began
-#                                            at or before it cannot be either
-#     Running    ($snapshot)                 the live ones, { sessionId; pid; cwd } each
+#     Verdict    ($snapshot, $id, $cwd, $ignore, $since, $process)  { state: running | stopped | unknown;
+#                                            kind; reason; pid }; $ignore: ids that cannot be the session
+#                                            under a new id; $process: the session's own process as recorded,
+#                                            { pid; start } or $null - that process running under any id is
+#                                            the session running; $since: a [datetime] or $null - another
+#                                            process that began at or before it cannot be the session under
+#                                            a new id (used only with $process)
+#     Running    ($snapshot)                 the live ones, { sessionId; pid; cwd; start } each
 #     ResumeLine ($id)                       the one shell line that resumes session $id
 #     Scrub      ()                          environment map for the woken pane: name -> $null removes it
 #   hosts/<name>/Fleet.ps1   Register-HordeFleetHost

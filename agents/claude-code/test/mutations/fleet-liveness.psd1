@@ -51,5 +51,17 @@
         @{ Name = "unreadable-file-has-no-pid"
            Find = 'if ($procId -cnotmatch ''\A[0-9]{1,10}\z'') { $procId = [System.IO.Path]::GetFileNameWithoutExtension("" + $f) }'
            Replace = 'if ($false) { }' }
+        @{ Name = "own-process-not-matched"
+           Find = '        if ($procPid -ne "") {'
+           Replace = '        if ($false) {' }
+        @{ Name = "since-without-process"
+           Find = 'if ($procPid -ne "" -and $Since -is [datetime])'
+           Replace = 'if ($Since -is [datetime])' }
+        @{ Name = "folderless-passed-over"
+           Find = 'if ((ConvertTo-ClaudeCodeFleetCwd -Cwd $r.cwd) -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "running-without-start"
+           Find = 'cwd = $_.cwd; start = $_.startTime }'
+           Replace = 'cwd = $_.cwd }' }
     )
 }
