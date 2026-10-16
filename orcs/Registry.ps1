@@ -200,6 +200,7 @@ function Add-HordeOrcRecordToState {
                 if (-not $o.retired) { return ("it registers " + $id + ", which is on the list already") }
                 if ("$($o.retiredBy)" -ceq "hand") { return ("it registers " + $id + ", which was taken off by hand and stays off") }
                 # A lane the fleet retired, come back: on the list again, at the end, with what was decided before.
+                # The stored letter is a fallback only: the view reads the lane's own letter while it is seen.
                 $o.retired = $false; $o.retiredBy = ""; $o.letter = "$($d.letter)"
                 [void]$State.main.Add($id)
                 return ""
@@ -209,7 +210,7 @@ function Add-HordeOrcRecordToState {
             return ""
         }
         "orcs-ordered" {
-            # Checked whole when it was written (Test-HordeOrcOrderRequest); read, it is applied to the ids
+            # Checked whole when it was written (Get-HordeOrcRecordFor); read, it is applied to the ids
             # still on the list, and an id it does not name keeps its place at the end, never lost.
             $active = @($State.orcs.Values | Where-Object { -not $_.retired } | ForEach-Object { $_.id })
             $main = New-Object System.Collections.ArrayList; $back = New-Object System.Collections.ArrayList
@@ -282,6 +283,8 @@ function Read-HordeOrcLanes {
     try { $dirs = @([System.IO.Directory]::GetDirectories($Folder) | Sort-Object { (Split-Path -Leaf $_).ToLowerInvariant() }) }
     catch { $out.ok = $false; $out.reason = "the lanes folder " + $Folder + " could not be listed: " + $_.Exception.Message; return $out }
     $lanes = New-Object System.Collections.ArrayList; $retired = New-Object System.Collections.ArrayList; $lines = New-Object System.Collections.ArrayList
+    # ONE LETTER, ONE ORC: the folders are read in name order, so the first to claim a letter keeps it.
+    $claimed = @{}
     foreach ($dir in $dirs) {
         $leaf = Split-Path -Leaf $dir
         if (Test-HordeFleetStatusRetired -Path $dir) { [void]$retired.Add($leaf); continue }
@@ -299,7 +302,15 @@ function Read-HordeOrcLanes {
             if ($null -ne $rec.PSObject.Properties["waitingOn"]) { $waiting = "$($rec.waitingOn)" }
         } else { [void]$lines.Add("the status file of " + $leaf + " is not in the standard form (" + (@($rec.problems) -join "; ") + "), so its letter and waiting-on line are not read") }
         if ($letter -ceq $script:HordeOrcThrallLetter) { continue }
-        [void]$lanes.Add([pscustomobject]@{ id = $leaf; letter = $letter; statusAt = $at; waitingOn = $waiting })
+        # A LETTER ANOTHER FOLDER ALREADY CLAIMS is not this lane's (review of PR 319): it would count that Orc's
+        # questions, sessions and Wargs twice. The later folder keeps no letter, names the one that has it
+        # (letterTakenBy), and the clash is said; nothing of the letter's is counted for it.
+        $takenBy = ""
+        if ($letter -ne "") {
+            if ($claimed.ContainsKey($letter)) { $takenBy = $claimed[$letter]; [void]$lines.Add("the lane folders " + $takenBy + " and " + $leaf + " both claim the letter " + $letter + ": " + $takenBy + " keeps it, and " + $leaf + " is shown with none until one of them changes"); $letter = "" }
+            else { $claimed[$letter] = $leaf }
+        }
+        [void]$lanes.Add([pscustomobject]@{ id = $leaf; letter = $letter; statusAt = $at; waitingOn = $waiting; letterTakenBy = $takenBy })
     }
     $out.lanes = @($lanes.ToArray()); $out.fleetRetired = @($retired.ToArray()); $out.lines = @($lines.ToArray())
     return $out
@@ -524,8 +535,12 @@ function Get-HordeOrcView {
     # letter, and showed 0 open, 0 sessions and no Wargs for good; a lane that changed its letter kept the
     # old one). So is the default name: a name nobody set (orc-named) follows the letter.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Lanes)
-    $lettersNow = @{}
-    foreach ($l in @($Lanes.lanes)) { if ("$($l.letter)" -cmatch '\A[A-Z]\z') { $lettersNow[$l.id] = "$($l.letter)" } }
+    $lettersNow = @{}; $takenBy = @{}
+    foreach ($l in @($Lanes.lanes)) {
+        if ("$($l.letter)" -cmatch '\A[A-Z]\z') { $lettersNow[$l.id] = "$($l.letter)" }
+        # A lane whose letter another folder keeps has none, not even the one stored when it was registered.
+        if ($null -ne $l.PSObject.Properties["letterTakenBy"] -and "$($l.letterTakenBy)" -ne "") { $lettersNow[$l.id] = ""; $takenBy[$l.id] = "$($l.letterTakenBy)" }
+    }
     # Not shown: an Orc whose lane the fleet retired, and a lane named in notOrcs, registered or not.
     $gone = @(@($Lanes.fleetRetired) + @($Lanes.notOrcs))
     $rows = New-Object System.Collections.ArrayList
@@ -533,7 +548,7 @@ function Get-HordeOrcView {
         param($o, [bool]$Back, [bool]$Registered)
         $letter = $(if ($lettersNow.ContainsKey($o.id)) { $lettersNow[$o.id] } else { "$($o.letter)" })
         $name = $(if ($null -ne $o.PSObject.Properties["named"] -and -not $o.named) { New-HordeOrcDefaultName -Letter $letter -Id $o.id } else { "$($o.name)" })
-        [void]$rows.Add([pscustomobject]@{ id = $o.id; letter = $letter; name = $name; domain = "$($o.domain)"; tier = $(if ($null -ne $o.PSObject.Properties["tier"] -and $null -ne $o.tier) { [int]$o.tier } else { $null }); backBurner = $Back; registered = $Registered; order = 0 })
+        [void]$rows.Add([pscustomobject]@{ id = $o.id; letter = $letter; name = $name; domain = "$($o.domain)"; tier = $(if ($null -ne $o.PSObject.Properties["tier"] -and $null -ne $o.tier) { [int]$o.tier } else { $null }); backBurner = $Back; registered = $Registered; named = ($null -ne $o.PSObject.Properties["named"] -and [bool]$o.named); letterTakenBy = $(if ($takenBy.ContainsKey($o.id)) { $takenBy[$o.id] } else { "" }); order = 0 })
     }
     foreach ($id in @($State.main)) { if ($gone -cnotcontains $id) { & $add $State.orcs[$id] $false $true } }
     foreach ($l in @($Lanes.lanes)) {
@@ -649,14 +664,14 @@ function Get-HordeOrcDash {
         if ($null -ne $lane) { $statusAt = $lane.statusAt; $waiting = $lane.waitingOn }
         $st = Get-HordeOrcStatus -StatusAt $statusAt -WaitingOn $waiting -SessionTimes @($times.ToArray()) -BlocksAllSince @($blocks.ToArray()) -Now $Now -WorkingMinutes $Paths.workingMinutes
         $last = Get-HordeOrcLastActivity -Id $v.id -Letter $letter -StatusAt $statusAt -Progress $progress -Questions $questions
-        [void]$rows.Add([pscustomobject]([ordered]@{ id = $v.id; letter = $letter; name = $v.name; domain = $v.domain; tier = $v.tier; order = [int]$v.order; backBurner = [bool]$v.backBurner; registered = [bool]$v.registered
+        [void]$rows.Add([pscustomobject]([ordered]@{ id = $v.id; letter = $letter; name = $v.name; domain = $v.domain; tier = $v.tier; order = [int]$v.order; backBurner = [bool]$v.backBurner; registered = [bool]$v.registered; letterTakenBy = "$($v.letterTakenBy)"
             open = $open; status = $st.status; age = $st.age; since = $st.since; statusText = $st.text; sessions = $count; wargsActive = $active; wargsInactive = $inactive
             lastActivityAt = $last.at; lastActivitySource = $last.source }))
     }
     return [pscustomobject]@{ ok = $true; reason = ""; version = [long]$state.version; orcs = @($rows.ToArray()); lines = @($lines.ToArray()) }
 }
 
-$script:HordeOrcDashFields = @("id", "letter", "name", "domain", "tier", "order", "backBurner", "registered", "open", "status", "age", "since", "statusText", "sessions", "wargsActive", "wargsInactive", "lastActivityAt", "lastActivitySource")
+$script:HordeOrcDashFields = @("id", "letter", "name", "domain", "tier", "order", "backBurner", "registered", "open", "status", "age", "since", "statusText", "sessions", "wargsActive", "wargsInactive", "lastActivityAt", "lastActivitySource", "letterTakenBy")
 
 function Get-HordeOrcLastActivity {
     # LATEST ACTIVITY (the header): { at; source } - at the newest of the lane's status file write
@@ -798,7 +813,9 @@ function Get-HordeOrcRecordFor {
             $text = "$($Request.name)"
             $f = @(Test-HordeOrcText -Text $text -What "name" -Most $script:HordeOrcNameMost)
             if ($f.Count -gt 0) { return (& $no ($f -join "; ")) }
-            if ($row.name -ceq $text) { return $same }
+            # A name the same as the default it shows now is still written when nobody has set one: written,
+            # it stays when the letter changes (review of PR 319).
+            if ($row.named -and $row.name -ceq $text) { return $same }
             return [pscustomobject]@{ refuse = ""; unchanged = $false; kind = "orc-named"; data = [ordered]@{ id = $id; name = $text } }
         }
         "domain" {

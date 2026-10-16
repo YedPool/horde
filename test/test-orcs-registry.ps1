@@ -309,6 +309,25 @@ try {
     Check ($moved.letter -ceq "R" -and $moved.name -ceq "The late one" -and $moved.open -eq 0) "a lane that changes its letter is read by the new one; a name a person set stays"
 
     Write-Host ""
+    Write-Host "--- 6c2. two folders claiming one letter; a name equal to the default ---" -ForegroundColor Cyan
+    $K = New-Home "clash"
+    Set-Lane $K "a-lane" "Q" -Ago 60
+    Set-Lane $K "b-lane" "Q" -Ago 60
+    $null = Add-Question $K "Orc Q" "part"
+    $null = Write-Orc $K "domain" @{ id = "a-lane"; domain = "registers both" }
+    $dK = Get-Dash $K
+    $ka = Get-Row $dK "a-lane"; $kb = Get-Row $dK "b-lane"
+    Check ($ka.letter -ceq "Q" -and $ka.letterTakenBy -ceq "" -and $ka.open -eq 1 -and $kb.letter -ceq "" -and $kb.letterTakenBy -ceq "a-lane" -and $kb.open -eq 0 -and $kb.name -ceq "b-lane") ("of two folders claiming Q, the first by name keeps it and counts its question once; the other has no letter and names the one that has it (" + $ka.letter + "/" + $ka.open + ", " + $kb.letter + "/" + $kb.open + "/" + $kb.letterTakenBy + ")")
+    Check (@($dK.lines | Where-Object { $_ -like "*a-lane and b-lane both claim the letter Q*" }).Count -eq 1 -and @(Get-Records $K | Where-Object { $_.kind -ceq "orc-registered" -and $_.data.id -ceq "b-lane" -and $_.data.letter -ceq "" }).Count -eq 1) "the clash is said, and the later folder is registered with no letter"
+    $N = New-Home "named"
+    Set-Lane $N "n-lane" "A" -Ago 60
+    $nm = Write-Orc $N "name" @{ id = "n-lane"; name = "Orc A" }
+    Set-Lane $N "n-lane" "B" -Ago 60
+    Check ($nm.outcome -ceq "done" -and @(Get-Records $N | Where-Object { $_.kind -ceq "orc-named" }).Count -eq 1 -and (Get-Row (Get-Dash $N) "n-lane").name -ceq "Orc A") ("a name set equal to the default it shows is written, and stays when the letter changes (" + $nm.outcome + ")")
+    $nm2 = Write-Orc $N "name" @{ id = "n-lane"; name = "Orc A" }
+    Check ($nm2.outcome -ceq "unchanged") "the same name set again, once written, writes nothing"
+
+    Write-Host ""
     Write-Host "--- 6d. a change whose list moves between its two reads is stale; a sync that repeats itself stops ---" -ForegroundColor Cyan
     $V = New-Home "midwrite"
     Set-Lane $V "m-a" "A"; Set-Lane $V "m-b" "B"
@@ -378,7 +397,7 @@ try {
     $snap = New-HordeCardsChannelSnapshot -Context $ctx -Settings $set -Paths (Get-HordeCardsChannelPaths -HordeHome $Q -Settings $set) -Now $now -Budget 60000
     $body = ConvertFrom-HordeJson $snap.body
     $first = @(Get-HordeTestMember $body "dash.orcs") | Select-Object -First 1
-    $want = "id,letter,name,domain,tier,order,backBurner,registered,open,status,age,since,statusText,sessions,wargsActive,wargsInactive,lastActivityAt,lastActivitySource"
+    $want = "id,letter,name,domain,tier,order,backBurner,registered,open,status,age,since,statusText,sessions,wargsActive,wargsInactive,lastActivityAt,lastActivitySource,letterTakenBy"
     Check ((Get-HordeTestMember $body "dash.v") -eq 1 -and (Test-HordeTestMember $body "dash.version") -and (Get-HordeTestMember $body "dash.ok") -eq $true -and (Get-HordeTestMember $body "dash.orcsLeftOut") -eq 0 -and @(Get-HordeTestMember $body "dash.orcs").Count -eq 4) "the cards snapshot carries the dash: v 1, ok, the registry version, the Orcs, and how many were left out"
     Check ($null -ne $first -and (@($first.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq $want) ("each Orc carries exactly its named fields, in order (" + $(if ($null -ne $first) { @($first.PSObject.Properties | ForEach-Object { $_.Name }) -join "," } else { "none" }) + ")")
     $cRow = @(Get-HordeTestMember $body "dash.orcs") | Where-Object { $_.id -ceq "lane-c" } | Select-Object -First 1
