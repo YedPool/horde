@@ -52,7 +52,12 @@
 #      once, an answer to a needsPasskey question one more, and after the PC's idle limit (its own setting,
 #      one minute here), after the app was away past its setting and after a reload the next answer asks
 #      once again - each must-pass beside its control, every session envelope read and verified by the
-#      PC's own reader and WebAuthn verifier before the run takes it.
+#      PC's own reader and WebAuthn verifier before the run takes it;
+#  15. THE SHIPPED TIMES (the founder's Q75 (c), 2026-10-15: keep the session through a switch-away of up
+#      to 10 minutes): with config.json as New-HordePwaSite builds it by default, and with no times in it
+#      at all (app.js's own fallbacks), a session survives 9 minutes hidden and is gone after 11 - beside a
+#      CONTROL with the old five-minute lock, which ends it at 9. Nothing is waited: the page's clock is
+#      moved between hidden and shown, and the return check in app.js measures the time hidden by it.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 # The suite starts the browser itself (test/lib/Browser.ps1), in a kill-on-close job of its own, and
@@ -758,6 +763,56 @@ try {
     $arEnv = @(Get-MachineEnvelopes -Skip $skip | Where-Object { $_.ok -and $_.value.header.channel -ceq "decisions" })
     $run = Invoke-Run -Turns 1
     Check ($ar.value.put -and $c6 -eq $c5 + 1 -and $c7 -eq $c6 -and $arEnv.Count -eq 1 -and (Test-SessionEnvelope $arEnv[0]) -ceq "" -and $arEnv[0].value.sig.vouchId -cne $aaEnv[0].value.sig.vouchId -and (Get-Landed "After the reload.") -eq 1) ("then it asks again: the unlock is one prompt, and the answer after it none, under a new vouch the real PC takes (" + ($c6 - $c5) + " then " + ($c7 - $c6) + ")")
+
+    Write-Host ""
+    Write-Host "--- 15. the shipped times: a session survives 9 minutes hidden and is gone after 11 (Q75 (c)) ---" -ForegroundColor Cyan
+    # The PC's idle limit back to an hour, past every time here, and a new question so a run sends a
+    # snapshot that says so.
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-sessions.json"), '{"schemaVersion": 1, "settings": {"idleMinutes": 60}}', $utf8)
+    $q15 = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Is the session still open after the switch-away?"; kind = "yes-no"; whatItIs = "Section 15."; group = "voice"; askedBy = "orc-e" } }
+    $run = Invoke-Run -Turns 1
+    Check ($q15.state -ceq "known" -and $run.code -eq 0) "CONTROL: the PC's idle limit is an hour, and a run sends a snapshot that says so"
+    $shipped = New-HordePwaSite -Out (Join-Path $work "site-shipped") -Transport "binding"
+    $shippedConfig = $(if ($shipped.state -ceq "known") { [System.IO.File]::ReadAllText((Join-Path $shipped.value.out "app\config.json"), $utf8) | ConvertFrom-Json } else { $null })
+    Check ($null -ne $shippedConfig -and $null -ne $shippedConfig.PSObject.Properties["lockAfterHiddenSeconds"] -and $null -ne $shippedConfig.PSObject.Properties["sessionAwaySeconds"]) ("CONTROL: a site built with no times given, as a deployment builds it, names both (" + $(if ($null -ne $shippedConfig) { "lock " + $shippedConfig.lockAfterHiddenSeconds + " s, away " + $shippedConfig.sessionAwaySeconds + " s" } else { $shipped.reason }) + ")")
+    $configPath = Join-Path $site "app\config.json"
+    $configOriginal = [System.IO.File]::ReadAllText($configPath, $utf8)
+    function Test-HiddenFor {
+        # config.json served with -Times only (none: neither key), the page reloaded and unlocked (one prompt),
+        # the PC's hour drawn; then hidden for -Minutes by the moved clock, and shown. Is a session open after?
+        param([hashtable]$Times, [int]$Minutes)
+        $c = $configOriginal | ConvertFrom-Json
+        [void]$c.PSObject.Properties.Remove("lockAfterHiddenSeconds")
+        [void]$c.PSObject.Properties.Remove("sessionAwaySeconds")
+        foreach ($k in $Times.Keys) { $c | Add-Member -NotePropertyName $k -NotePropertyValue $Times[$k] }
+        [System.IO.File]::WriteAllText($configPath, (ConvertTo-Json $c -Compress), $utf8)
+        $null = Invoke-Browser @{ cmd = "reload" }
+        $served = Invoke-Browser @{ cmd = "servedConfig" }
+        $null = Invoke-Browser @{ cmd = "unlock" }
+        $st = $null
+        for ($i = 0; $i -lt 60; $i++) { $st = Invoke-Browser @{ cmd = "sessions" }; if ($st.ok -and @($st.value.list).Count -ge 1 -and $st.value.list[0].open -and $st.value.list[0].idleMs -eq 3600000) { break }; Start-Sleep -Milliseconds 250 }
+        $ready = ($served.ok -and (ConvertTo-Json $served.value -Compress) -ceq (ConvertTo-Json $c -Compress) -and $st.ok -and @($st.value.list).Count -ge 1 -and $st.value.list[0].open -and $st.value.list[0].idleMs -eq 3600000)
+        if (-not $ready) { return [pscustomobject]@{ ready = $false; open = $false; said = ("not ready: served " + $(if ($served.ok) { ConvertTo-Json $served.value -Compress } else { $served.reason }) + "; sessions " + $(if ($st.ok) { ConvertTo-Json $st.value.list -Compress } else { $st.reason })) } }
+        $null = Invoke-Browser @{ cmd = "hide"; ms = 50 }
+        $null = Invoke-Browser @{ cmd = "clock"; ms = $Minutes * 60000 }
+        $null = Invoke-Browser @{ cmd = "show" }
+        Start-Sleep -Milliseconds 1500
+        $after = Invoke-Browser @{ cmd = "sessions" }
+        $null = Invoke-Browser @{ cmd = "clock"; ms = 0 }
+        return [pscustomobject]@{ ready = $true; open = ($after.ok -and @($after.value.list | Where-Object { $_.open }).Count -ge 1); said = $(if ($after.ok) { (ConvertTo-Json $after.value.list -Compress) + " " + $after.value.notice } else { $after.reason }) }
+    }
+    $old9 = Test-HiddenFor -Times @{ lockAfterHiddenSeconds = 300; sessionAwaySeconds = 600 } -Minutes 9
+    Check ($old9.ready -and -not $old9.open) ("CONTROL: with the old five-minute lock, 9 minutes hidden ends the session - so this check can fail (" + $old9.said + ")")
+    $shippedTimes = @{ lockAfterHiddenSeconds = $(if ($null -ne $shippedConfig) { $shippedConfig.lockAfterHiddenSeconds } else { 0 }); sessionAwaySeconds = $(if ($null -ne $shippedConfig) { $shippedConfig.sessionAwaySeconds } else { 0 }) }
+    $ship9 = Test-HiddenFor -Times $shippedTimes -Minutes 9
+    Check ($ship9.ready -and $ship9.open) ("WITH THE SHIPPED TIMES a session survives 9 minutes hidden: the founder's Q75 (c) (" + $ship9.said + ")")
+    $ship11 = Test-HiddenFor -Times $shippedTimes -Minutes 11
+    Check ($ship11.ready -and -not $ship11.open) ("and is gone after 11 (" + $ship11.said + ")")
+    $none9 = Test-HiddenFor -Times @{} -Minutes 9
+    Check ($none9.ready -and $none9.open) ("WITH NO TIMES IN config.json, app.js's own: a session survives 9 minutes hidden (" + $none9.said + ")")
+    $none11 = Test-HiddenFor -Times @{} -Minutes 11
+    Check ($none11.ready -and -not $none11.open) ("and is gone after 11 (" + $none11.said + ")")
+    [System.IO.File]::WriteAllText($configPath, $configOriginal, $utf8)
     $dump = Invoke-Browser @{ cmd = "dump" }
     Check ($dump.ok -and -not $dump.value.Contains("sessionPublicKey") -and -not $dump.value.Contains("privateKey") -and $dump.value.Contains('"vouchSeq":')) "Chrome's storage holds the vouch counter and no session key"
     $probs = Invoke-Browser @{ cmd = "problems" }

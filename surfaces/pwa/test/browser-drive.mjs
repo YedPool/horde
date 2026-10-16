@@ -499,6 +499,15 @@ const commands = {
   async workerVersion() {
     return await evaluate("new Promise((res) => { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(e.data.version); navigator.serviceWorker.controller.postMessage({ ask: 'version' }, [ch.port2]); setTimeout(() => res(''), 3000); })");
   },
+  // THE PAGE'S CLOCK MOVED (test-pwa-browser.ps1 section 15): Date.now answers ms ahead of the real clock,
+  // so the app's checks on return of how long it was hidden see minutes that were never waited. 0 puts the
+  // real clock back. The page's own time of when it was hidden was taken by the real clock.
+  async clock(c) {
+    const ms = Number(c.ms) || 0;
+    return await evaluate("(() => { if (!window.__realNow) window.__realNow = Date.now.bind(Date); const off = " + ms + "; Date.now = off ? () => window.__realNow() + off : window.__realNow; return off; })()");
+  },
+  // config.json as the site serves it now, fetched by the page past every cache.
+  async servedConfig() { return await evaluate("fetch('config.json', { cache: 'no-store' }).then((r) => r.json())"); },
   async reload() { await load(origin + "/app/index.html"); return { locked: !!(await until(shown("lockedView"), 15000)), controlled: await evaluate("!!navigator.serviceWorker.controller") }; },
   async unlock() {
     const was = await evaluate(notice);
