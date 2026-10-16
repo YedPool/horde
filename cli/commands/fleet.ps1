@@ -82,6 +82,14 @@ $HordeCommand = @{
             Sleep = { param($ms) Start-Sleep -Milliseconds $ms }
             FreePercent = { $o = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop; 100.0 * [double]$o.FreePhysicalMemory / [double]$o.TotalVisibleMemorySize }
             Agent = $agent.value; Host = $hostAdapter.value; Post = $post
+            # The woken id's fleet registry row and its pane, read only through core/WezfleetState.ps1.
+            RegistryPane = { param($sid)
+                $reg = Read-HordeRegistry -Root (Get-HordeWezfleetRoot)
+                $row = $reg.records["" + $sid]
+                if ($null -eq $row) { return (New-HordeAbsent -Note ("the fleet registry has no row for " + $sid)) }
+                $pane = Get-HordeStoredField -Record $row.record -Name "pane"
+                if ($pane.state -eq "known") { return (New-HordeKnown -Value ("" + $pane.value)) }
+                return (New-HordeUnknown -Reason "its registry row names no pane") }
         }
         $done = Invoke-HordeFleetWake -Id $Id -Deps $deps -DryRun:$DryRun -Only $onlyList -Retry:$Retry
         foreach ($l in @($done.lines)) { Write-Output $l }

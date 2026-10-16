@@ -98,6 +98,13 @@ $tmp = $ctl + ".tmp"
 [System.IO.File]::WriteAllText($tmp, $json)
 Move-Item -LiteralPath $tmp -Destination $ctl -Force
 $written = "" + [DateTime]::UtcNow.ToFileTimeUtc()
+# As the fleet's own hook does when a session starts: its registry row names the pane it now runs in.
+$row = Join-Path ("" + $env:WEZFLEET_ROOT) ("registry\sessions\" + $id + ".json")
+if ("" + $env:WEZFLEET_ROOT -ne "" -and (Test-Path -LiteralPath $row)) {
+    $r = [System.IO.File]::ReadAllText($row) | ConvertFrom-Json
+    $r.pane = "" + $env:WEZTERM_PANE
+    [System.IO.File]::WriteAllText($row, (ConvertTo-Json -InputObject $r))
+}
 $log = [ordered]@{ pid = $PID; id = $id; mode = $mode; argv = @($args | ForEach-Object { "" + $_ }); cwd = $cwd; pane = "" + $env:WEZTERM_PANE; procStart = $start; writtenAt = $written; hasOwnVariables = [bool]("" + $env:CLAUDECODE -ne ""); profile = "" + $env:USERPROFILE }
 [System.IO.File]::WriteAllText((Join-Path (Join-Path $env:USERPROFILE "standin-log") ("" + $PID + "-" + $id + ".json")), (ConvertTo-Json -InputObject $log -Compress))
 Write-Host ("STANDIN-READY " + $id)
@@ -292,6 +299,7 @@ o-restore"
         $wake = Invoke-Horde @("fleet", "wake", $hid)
         Write-Host ("  the wake took " + $wake.secs + " s and said: " + ($wake.out.Trim() -replace "\s*`n\s*", " | ")) -ForegroundColor DarkGray
         Check ($wake.code -eq 0 -and $wake.out -like "*3 to wake, 0 refused*") ("horde fleet wake exits 0 with three to wake (exit " + $wake.code + ")")
+        Check ($wake.out -notlike "*registry-stale*") "each woken session's registry row names the pane it was woken in, so nothing is noted registry-stale"
         $panesAfter = @(Get-Panes)
         $new = @($panesAfter | Where-Object { @($panesBefore | ForEach-Object { "" + $_.pane_id }) -notcontains ("" + $_.pane_id) })
         $newWindows = @($new | ForEach-Object { "" + $_.window_id } | Sort-Object -Unique)

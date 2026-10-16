@@ -42,6 +42,12 @@
 #      Neither within the bound is failed. A pane that started but whose window could not be read back
 #      is not failed (it runs, and is waited for), but the rest of its group is left asleep: without the
 #      window, the next warg's tab would open a stray window of its own (second review of PR 318).
+#   5b. THE REGISTRY ROW NAMES THE NEW PANE, or it is said (live finding of 2026-10-16: after a mass resume
+#      the fleet registry still named the OLD pane of resumed sessions, so mail could be posted but could
+#      not knock them). Within the same bounded wait, the woken id's row must name the pane this wake
+#      spawned (Deps.RegistryPane, read only); if it does not, the session is still woken, noted
+#      registry-stale, and the wake says mail will not knock it until its next turn. Nothing is written
+#      to the registry.
 #   6. ONE MAIL, through the messenger port (messengers/Port.ps1), never typed into the pane: "You were
 #      woken from hibernation <id>. Read your PARKED-<label>.md and carry on." Its message id is made
 #      from the hibernation and the session (core/TextUuid.ps1), so a repeated wake posts it once.
@@ -274,7 +280,8 @@ function Invoke-HordeFleetWake {
     # pane may be loading it; -Retry) or planned (-DryRun). Throws, changing nothing, when the record cannot be
     # read, another wake holds it, or -Only names a label it does not hold.
     # -Deps: Now (), Sleep (ms), FreePercent () -> number, Agent, Host (fleet/Port.ps1), Post ($sessionId,
-    # $label, $body, $messageId) -> answer, and optionally WaitSeconds and PollMs.
+    # $label, $body, $messageId) -> answer, and optionally WaitSeconds, PollMs and RegistryPane ($sessionId)
+    # -> answer known pane id text of that session's fleet registry row.
     param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)]$Deps, [switch]$DryRun, [string[]]$Only = @(), [string]$HordeHome = (Get-HordeHome), [switch]$Retry)
     $read = Read-HordeFleetRecord -Id $Id -HordeHome $HordeHome
     if ($read.state -ne "known") { throw $read.reason }
@@ -487,6 +494,20 @@ function Invoke-HordeFleetWake {
                 }
                 [void]$startedIds.Add($found.id)
                 if ($found.rotated) { $s | Add-Member -NotePropertyName "wokenAs" -NotePropertyValue $found.id -Force }
+                # 5b. The registry row of the woken id names the spawned pane, within the same bound.
+                $regNote = ""
+                $regRead = $(if ($null -ne $Deps.PSObject.Properties["RegistryPane"]) { $Deps.RegistryPane } else { $null })
+                if ($null -ne $regRead) {
+                    $rowPane = ""
+                    while ($true) {
+                        $rp = $null
+                        try { $rp = & $regRead $found.id } catch { $rp = $null }
+                        $rowPane = $(if ($null -ne $rp -and $rp.state -eq "known") { "" + $rp.value } else { "" })
+                        if ($rowPane -ceq ("" + $sp.value.pane) -or (& $Deps.Now) -ge $deadline) { break }
+                        & $Deps.Sleep $pollMs
+                    }
+                    if ($rowPane -cne ("" + $sp.value.pane)) { $regNote = "registry-stale: the fleet registry still names " + $(if ($rowPane -ne "") { "pane " + $rowPane } else { "no pane" }) + " for it, not pane " + $sp.value.pane + " it was woken in, so its mail is posted but will not knock it until its next turn" }
+                }
                 # 6. One mail.
                 $label = "" + (Get-HordeFleetMember $s "label")
                 if ($label -eq "") { $label = ("" + $s.sessionId).Substring(0, 8) }
@@ -500,9 +521,10 @@ function Invoke-HordeFleetWake {
                     continue
                 }
                 $note = $(if ($found.rotated) { "it came back under a new id, " + $found.id } else { "" })
+                if ($regNote -ne "") { $note = $regNote + $(if ($note -ne "") { "; " + $note } else { "" }) }
                 Add-HordeFleetState -Session $s -State "woken" -At (& $Deps.Now) -Reason $note
                 [void](Write-HordeFleetRecord -Dir $dir -Record $record)
-                & $say ("    " + $name + ": woken in pane " + $sp.value.pane + $as + ", and told")
+                & $say ("    " + $name + ": woken in pane " + $sp.value.pane + $as + ", and told" + $(if ($regNote -ne "") { "; " + $regNote } else { "" }))
                 & $tell $s "woken" $note
             }
         }

@@ -105,5 +105,8 @@
         @{ Name = "marker-failure-not-said"
            Find = 'if ($null -eq $rel -or $rel.state -ne "known") { & $say'
            Replace = 'if ($false) { & $say' }
+        @{ Name = "stale-registry-not-noted"
+           Find = 'if ($rowPane -cne ("" + $sp.value.pane)) { $regNote ='
+           Replace = 'if ($false) { $regNote =' }
     )
 }
