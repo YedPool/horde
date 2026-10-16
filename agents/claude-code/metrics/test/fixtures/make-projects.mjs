@@ -78,7 +78,7 @@ export function writeProjects(root, baseMs, hitMs = baseMs + 60000) {
 // A registry folder in the format the fleet tool writes: UTF-8 WITH a byte-order mark.
 export function writeRegistry(dir) {
   fs.mkdirSync(dir, { recursive: true });
-  const put = (sid, rec) => fs.writeFileSync(path.join(dir, sid + '.json'), '﻿' + JSON.stringify({ claudeSessionId: sid, ...rec }, null, 2), 'utf8');
+  const put = (sid, rec) => fs.writeFileSync(path.join(dir, sid + '.json'), '\u{FEFF}' + JSON.stringify({ claudeSessionId: sid, ...rec }, null, 2), 'utf8');
   put(SID_ORC, { label: 'Q', role: 'orchestrator' });
   put(SID_STUCK, { owner: 'Q', parent: SID_ORC });
   put(SID_THRALL, { role: 'master', label: 'M' });

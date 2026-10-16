@@ -182,7 +182,7 @@ function consume({ path: file, lines, store, ctx }) {
   // The sidecar links this file to the parent's Agent call. It is read on every pass over the file.
   if (who.kind === 'sub' && who.meta) {
     try {
-      const meta = JSON.parse(fs.readFileSync(who.meta, 'utf8').replace(/^﻿/, ''));
+      const meta = JSON.parse(fs.readFileSync(who.meta, 'utf8').replace(/^\u{FEFF}/u, ''));
       if (meta.toolUseId) {
         let born = Date.now();
         try { born = Math.round(fs.statSync(who.meta).birthtimeMs); } catch { /* keep now */ }

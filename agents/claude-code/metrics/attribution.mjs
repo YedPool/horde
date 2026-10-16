@@ -31,7 +31,7 @@ function loadRegistry(dir) {
   for (const n of names) {
     if (!n.endsWith('.json')) continue;
     try {
-      const raw = fs.readFileSync(path.join(dir, n), 'utf8').replace(/^﻿/, '');
+      const raw = fs.readFileSync(path.join(dir, n), 'utf8').replace(/^\u{FEFF}/u, '');
       const r = JSON.parse(raw);
       reg.set(String(r.claudeSessionId || n.slice(0, -5)), r);
     } catch { /* one unreadable record must not hide the rest */ }
