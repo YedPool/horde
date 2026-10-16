@@ -34,7 +34,7 @@ function Reset-World {
     $world.live = @{}; $world.error = ""; $world.onSpawn = @{}; $world.paneOf = @{}; $world.spawnFails = @(); $world.postFails = $false
     $world.spawns = New-Object System.Collections.ArrayList; $world.posts = New-Object System.Collections.ArrayList
     $world.free = New-Object System.Collections.ArrayList; $world.nextPane = 40; $world.clock = [datetime]::new(2026, 10, 16, 10, 0, 0, [System.DateTimeKind]::Utc)
-    $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList; $world.onOpen = $null
+    $world.opened = 0; $world.verdicts = New-Object System.Collections.ArrayList; $world.onOpen = $null; $world.noWindow = @()
     # The process table the lock is judged by: pid -> start ticks text, "?" when unreadable.
     $world.procs = @{ "777" = $SELFSTART }
 }
@@ -42,8 +42,8 @@ Reset-World
 
 Register-HordeFleetAgent -Name "stand-in" `
     -Snapshot { [pscustomobject]@{ error = $world.error; live = $world.live.Clone() } }.GetNewClosure() `
-    -Verdict { param($snap, $id, $cwd, $ignore, $since)
-        [void]$world.verdicts.Add([pscustomobject]@{ id = $id; ignore = @($ignore); since = $since })
+    -Verdict { param($snap, $id, $cwd, $ignore, $since, $process)
+        [void]$world.verdicts.Add([pscustomobject]@{ id = $id; ignore = @($ignore); since = $since; process = $process })
         if ($snap.error -ne "") { return [pscustomobject]@{ state = "unknown"; kind = "reading"; reason = $snap.error; pid = "" } }
         $e = $snap.live[$id]
         if ($null -eq $e) { return [pscustomobject]@{ state = "stopped"; kind = ""; reason = ""; pid = "" } }
@@ -63,6 +63,7 @@ Register-HordeFleetHost -Name "stand-in" `
             if (@($world.spawnFails) -ccontains $id) { return (New-HordeUnknown -Reason "the stand-in terminal refused") }
             $world.nextPane++; $pane = "" + $world.nextPane
             $win = $(if ($req.mode -ceq "tab") { "" + $req.window } elseif ($req.mode -ceq "split") { "split-has-no-window" } else { "w" + $pane })
+            if (@($world.noWindow) -ccontains $id) { $win = "" }
             $how = $world.onSpawn[$id]; if ($null -eq $how) { $how = "start" }
             $procId = 1000 + [int]$pane
             switch ($how) {
@@ -82,7 +83,7 @@ Check ($agent.state -ceq "known" -and $hostA.state -ceq "known") "CONTROL: the s
 $deps = [pscustomobject]@{
     Now = { $world.clock }.GetNewClosure()
     Sleep = { param($ms) $world.clock = $world.clock.AddMilliseconds($ms) }.GetNewClosure()
-    FreePercent = { if ($world.free.Count -gt 0) { $v = $world.free[0]; $world.free.RemoveAt(0); $v } else { 50.0 } }.GetNewClosure()
+    FreePercent = { if ($world.free.Count -gt 0) { $v = $world.free[0]; $world.free.RemoveAt(0); if ($v -is [string]) { throw $v }; $v } else { 50.0 } }.GetNewClosure()
     Agent = $agent.value; Host = $hostA.value
     Post = { param($sid, $label, $body, $mid) [void]$world.posts.Add([pscustomobject]@{ to = $sid; label = $label; body = $body; id = $mid }); if ($world.postFails) { New-HordeUnknown -Reason "the stand-in mailbox is full" } else { New-HordeKnown -Value ([pscustomobject]@{ stage = "accepted" }) } }.GetNewClosure()
     WaitSeconds = 5; PollMs = 1000
@@ -224,6 +225,101 @@ Check ($world.spawns.Count -eq 2 -and (State-Of $rec "K") -ceq "woken" -and (Sta
 Check (@("K2", "L", "L1", "X" | Where-Object { (State-Of $rec $_) -cne "recorded" }).Count -eq 0) "the third check found 14.9 percent: it and every later session stay asleep, their state untouched"
 Check (@($r.outcomes | Where-Object { $_.outcome -ceq "asleep" }).Count -eq 4 -and @($r.lines | Where-Object { $_ -like "*14.9 percent, under 15*" }).Count -eq 1) "the stop is reported, with the reading, and the rest named"
 Check ($world.free.Count -eq 0) "CONTROL: memory was read before each spawn, and not again after the stop"
+
+Section "free memory that cannot be read stops the wake like too little, and keeps what it printed"
+# Review of PR 318, finding b: the reading can throw mid-wake (a CIM query refused), and the lines gathered
+# so far were lost with it.
+Reset-World
+$h = New-Home
+foreach ($v in @(40.0, "Get-CimInstance: the service is not answering")) { [void]$world.free.Add($v) }
+$r = $null
+try { $r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h } catch { $r = $null; Write-Host ("  threw: " + $_.Exception.Message) }
+$rec = Read-Rec $h
+Check ($null -ne $r -and $world.spawns.Count -eq 1 -and (State-Of $rec "K") -ceq "woken") "the wake returns: the session started before the failed reading is woken"
+Check ($null -ne $r -and @($r.outcomes | Where-Object { $_.outcome -ceq "asleep" }).Count -eq 5 -and @("K1", "K2", "L", "L1", "X" | Where-Object { (State-Of $rec $_) -cne "recorded" }).Count -eq 0) "every later session stays asleep, untouched"
+Check ($null -ne $r -and @($r.lines | Where-Object { $_ -like "*free memory could not be read*service is not answering*" }).Count -eq 1) "and the wake says, in words, that free memory could not be read and why"
+
+Section "a wake that cannot read its own start time does not start"
+# Review of PR 318, finding c: its lock would say "start ?", which no later wake could ever take over.
+Reset-World
+$h = New-Home
+$blind = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Host = $deps.Host; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000; ProcessStart = $deps.ProcessStart
+    Self = { [pscustomobject]@{ pid = 777; start = "?" } } }
+Check (Throws { Invoke-HordeFleetWake -Id $HID -Deps $blind -HordeHome $h } "its own start time") "a wake whose own start time cannot be read is refused"
+Check ($world.spawns.Count -eq 0 -and -not (Test-Path -LiteralPath (Join-Path (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID) "waking.lock"))) "nothing is started and no lock is left"
+$plan = Invoke-HordeFleetWake -Id $HID -Deps $blind -HordeHome $h -DryRun
+Check (@($plan.outcomes | Where-Object { $_.outcome -ceq "planned" }).Count -eq 6) "CONTROL: a dry run, which takes no lock, still plans"
+
+Section "a session an earlier wake left waking, or failed after its pane started, is held until -Retry"
+# Second review of PR 318, finding 2: a resume slower than the wait is marked failed while its pane still
+# loads, and a wake stopped part way leaves waking. A plain second wake must not start either again.
+Reset-World
+$h = New-Home
+$dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID
+$rec = Read-Rec $h
+Add-HordeFleetState -Session (Get-Session $rec "K1") -State "waking" -At ([datetime]::new(2026, 10, 16, 9, 50, 0, [System.DateTimeKind]::Utc))
+Add-HordeFleetState -Session (Get-Session $rec "K2") -State "failed" -At ([datetime]::new(2026, 10, 16, 9, 51, 0, [System.DateTimeKind]::Utc)) -Reason "its pane 77 was started, but it was not seen running within 90 s" -Pane "77"
+Add-HordeFleetState -Session (Get-Session $rec "L1") -State "failed" -At ([datetime]::new(2026, 10, 16, 9, 52, 0, [System.DateTimeKind]::Utc)) -Reason "its pane was not started: the terminal refused"
+[void](Write-HordeFleetRecord -Dir $dir -Record $rec)
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h
+$rec = Read-Rec $h
+Check ($null -eq (Spawn-For "K1") -and $null -eq (Spawn-For "K2")) ("a session left waking, and one failed after its pane started, are not started again (" + ($r.lines -join " | ") + ")")
+Check ((State-Of $rec "K1") -ceq "waking" -and (State-Of $rec "K2") -ceq "failed") "their state is left as it was, so the next wake holds them too"
+Check (@($r.lines | Where-Object { $_ -like "*K1 (22222222)*-Retry*" }).Count -eq 1 -and @($r.lines | Where-Object { $_ -like "*K2 (22222222)*pane 77*-Retry*" }).Count -eq 1) "the wake says why, in words, and how to start them anyway"
+Check (@($r.outcomes | Where-Object { $_.outcome -ceq "held" }).Count -eq 2) "the outcome holds both"
+Check ((State-Of $rec "L1") -ceq "woken" -and $null -ne (Spawn-For "L1")) "CONTROL: a session that failed before any pane started is started again"
+Reset-World
+$world.live[$ids["K2"]] = @{ pid = 9; cwd = $cwds["K2"]; state = "running" }
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Retry
+$rec = Read-Rec $h
+Check ((State-Of $rec "K1") -ceq "woken" -and $null -ne (Spawn-For "K1")) "with -Retry, the session left waking is started, once the liveness check finds it stopped"
+Check ($null -eq (Spawn-For "K2") -and (State-Of $rec "K2") -ceq "still-awake") "and one that the check finds running is still refused: -Retry never skips the check"
+
+Section "the record is read again under the lock"
+# Second review of PR 318: a wake that read the record before taking the lock could act on - and write
+# back - a record another wake changed meanwhile. Here, between this wake's first read and its lock, an
+# earlier wake finishes: X came back as NEW, which runs.
+Reset-World
+$h = New-Home
+$dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID
+$late = @{ done = $false }
+$racing = [pscustomobject]@{ Now = $deps.Now; Sleep = $deps.Sleep; FreePercent = $deps.FreePercent; Agent = $deps.Agent; Host = $deps.Host; Post = $deps.Post; WaitSeconds = 5; PollMs = 1000; ProcessStart = $deps.ProcessStart
+    Self = { if (-not $late.done) {
+                $late.done = $true
+                $other = Read-Rec $h
+                $x = Get-Session $other "X"
+                Add-HordeFleetState -Session $x -State "woken" -At ([datetime]::new(2026, 10, 16, 9, 59, 0, [System.DateTimeKind]::Utc)) -Reason ("it came back under a new id, " + $NEW)
+                $x | Add-Member -NotePropertyName "wokenAs" -NotePropertyValue $NEW -Force
+                [void](Write-HordeFleetRecord -Dir $dir -Record $other)
+                $world.live[$NEW] = @{ pid = 31; cwd = $cwds["X"]; state = "running" } }
+            [pscustomobject]@{ pid = 777; start = $SELFSTART } }.GetNewClosure() }
+$r = Invoke-HordeFleetWake -Id $HID -Deps $racing -HordeHome $h -Only @("X")
+$rec = Read-Rec $h
+Check ($null -eq (Spawn-For "X") -and (State-Of $rec "X") -ceq "still-awake") ("the wake sees the other wake's result: X runs as its new id, and is not started again (" + ($r.lines -join " | ") + ")")
+Check ((Get-HordeTestMember (Get-Session $rec "X") "wokenAs") -ceq $NEW -and @((Get-Session $rec "X").history | Where-Object { $_.state -ceq "woken" }).Count -eq 1) "and the other wake's wokenAs and history are kept, not written over"
+
+Section "a pane whose window cannot be read back stops its group"
+# Second review of PR 318: without the window, the next warg's tab would open a stray window of its own.
+Reset-World
+$h = New-Home
+$world.noWindow = @($ids["K"])
+$r = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h
+$rec = Read-Rec $h
+Check ((State-Of $rec "K") -ceq "woken") ("the session whose window was not read back is not failed: its pane runs, and it is woken (" + ($r.lines -join " | ") + ")")
+Check ($null -eq (Spawn-For "K1") -and $null -eq (Spawn-For "K2") -and (State-Of $rec "K1") -ceq "recorded" -and (State-Of $rec "K2") -ceq "recorded") "the rest of its group is not started, so no warg opens a window of its own, and stays asleep"
+Check (@($r.lines | Where-Object { $_ -like "*K1 (22222222)*window*could not be read*" }).Count -eq 1 -and @($r.outcomes | Where-Object { $_.outcome -ceq "asleep" }).Count -eq 2) "and the wake says why, for each"
+Check ((State-Of $rec "L") -ceq "woken" -and (State-Of $rec "L1") -ceq "woken" -and (State-Of $rec "X") -ceq "woken") "CONTROL: the other groups are woken"
+
+Section "the verdict is given each session's recorded process"
+Reset-World
+$h = New-Home
+$dir = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID
+$rec = Read-Rec $h
+(Get-Session $rec "K") | Add-Member -NotePropertyName "process" -NotePropertyValue ([pscustomobject][ordered]@{ pid = "55"; start = "133000000000000001" }) -Force
+[void](Write-HordeFleetRecord -Dir $dir -Record $rec)
+[void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h)
+$vk = @($world.verdicts | Where-Object { $_.id -ceq $ids["K"] })
+Check ($vk.Count -ge 2 -and @($vk | Where-Object { $null -eq $_.process -or "" + $_.process.pid -cne "55" }).Count -eq 0) "the first reading and the re-check before the spawn both pass the session's recorded process (second review of PR 318, P1)"
 
 Section "a session that comes back under a new id"
 Reset-World
