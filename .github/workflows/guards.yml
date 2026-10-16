@@ -1,0 +1,93 @@
+# The repository's text guards on every pull request and on main: test-host-names and
+# test-mutation-specs (CONTRIBUTING 15 rule 9: they read the whole repository, so any pull request can
+# break them - on 2026-10-14 PRs 278, 279 and 288 each merged green on their own suites and left main red
+# on both), plus test-json-parse-allowlist and test-function-names, which are as cheap and as global.
+#
+# IT NOTIFIES, IT NEVER BLOCKS (the fleet's standing rule: CI notifies, never blocks). Nothing makes this
+# check required: the repository has no branch protection and no ruleset (its plan refuses branch
+# protection, 403), so GitHub merges a pull request whatever this job says. A red guard turns this job red
+# - the PR shows a red check and its author is told - and that is all it does. horde merge runs the two
+# main guards itself, on the merge result, before it merges.
+#
+# WHAT IS CHECKED: on a pull request, actions/checkout checks out refs/pull/<n>/merge - the PR merged with
+# the current base, the tree that would exist after the merge, not the branch alone (CONTRIBUTING 15
+# rule 2). fetch-depth 0 brings origin/main, which test-host-names compares the port lists with; without
+# it that comparison prints [SKIP].
+#
+# ONE JOB, THE GUARDS ONE AFTER ANOTHER, each allowed to fail so all four always report, then one verdict
+# step that turns the job red if any failed. One job and not four because Windows minutes are billed
+# double on a private repository; a newer push to the same PR cancels the run in progress.
+
+name: guards
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guards-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: text guards
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v4.2.2, pinned by commit.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: test-host-names
+        id: hostnames
+        continue-on-error: true
+        shell: powershell
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-host-names.ps1; exit $LASTEXITCODE
+
+      - name: test-mutation-specs
+        id: specs
+        continue-on-error: true
+        shell: powershell
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-mutation-specs.ps1; exit $LASTEXITCODE
+
+      - name: test-json-parse-allowlist
+        id: jsonparse
+        continue-on-error: true
+        shell: powershell
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-json-parse-allowlist.ps1; exit $LASTEXITCODE
+
+      - name: test-function-names
+        id: functionnames
+        continue-on-error: true
+        shell: powershell
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test\test-function-names.ps1; exit $LASTEXITCODE
+
+      - name: verdict
+        if: ${{ !cancelled() }}
+        shell: powershell
+        env:
+          HOSTNAMES: ${{ steps.hostnames.outcome }}
+          SPECS: ${{ steps.specs.outcome }}
+          JSONPARSE: ${{ steps.jsonparse.outcome }}
+          FUNCTIONNAMES: ${{ steps.functionnames.outcome }}
+        run: |
+          $rows = [ordered]@{
+            "test-host-names" = $env:HOSTNAMES
+            "test-mutation-specs" = $env:SPECS
+            "test-json-parse-allowlist" = $env:JSONPARSE
+            "test-function-names" = $env:FUNCTIONNAMES
+          }
+          $lines = @("| guard | outcome |", "| --- | --- |")
+          foreach ($k in $rows.Keys) { $lines += ("| " + $k + " | " + $rows[$k] + " |") }
+          $lines += ""
+          $lines += "This check notifies and never blocks a merge. horde merge runs test-host-names and test-mutation-specs itself before it merges."
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
+          $red = @($rows.Keys | Where-Object { $rows[$_] -ne "success" })
+          if ($red.Count -gt 0) { Write-Output ("::error::not green: " + ($red -join ", ")); exit 1 }
+          Write-Output "every guard is green"
