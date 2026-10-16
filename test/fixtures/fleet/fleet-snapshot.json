@@ -1,0 +1,50 @@
+{
+  "v": 1,
+  "version": 7,
+  "tiers": {
+    "sleeping-sessions": 1,
+    "decisions-page": 1,
+    "relay-port": 2,
+    "phone-app": 2
+  },
+  "never": [
+    { "orc": "analyst-service", "reason": "the fleet analyst runs as a service and is never parked" }
+  ],
+  "running": {
+    "id": "20261016-091500",
+    "startedAt": "2026-10-16T09:15:00Z",
+    "phase": "parking",
+    "sessions": [
+      { "label": "R", "role": "orc", "state": "parked" },
+      { "label": "R1", "role": "warg", "state": "asked" },
+      { "label": "L", "role": "orc", "state": "asked" }
+    ],
+    "more": 0
+  },
+  "hibernations": [
+    {
+      "id": "20261015-221030",
+      "at": "2026-10-15T22:10:30Z",
+      "sessions": [
+        { "label": "R", "role": "orc", "state": "woken" },
+        { "label": "R1", "role": "warg", "state": "woken" },
+        { "label": "L", "role": "orc", "state": "still-awake" },
+        { "label": "L2", "role": "warg", "state": "failed" }
+      ],
+      "more": 3
+    },
+    {
+      "id": "20261014-183005",
+      "at": "2026-10-14T18:30:05Z",
+      "sessions": [
+        { "label": "L", "role": "orc", "state": "asleep" }
+      ],
+      "more": 0
+    }
+  ],
+  "lastResult": {
+    "setId": "6f1c0b9e2d4a48f7a3b5c6d7e8f90a1b",
+    "outcome": "done",
+    "reason": "hibernation 20261016-091500 started for tier 2"
+  }
+}
