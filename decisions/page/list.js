@@ -2061,9 +2061,15 @@
       var t = e.target;
       pressed = { at: Date.now(), own: !!(t && t.closest && t.closest(".hd-qt, .hd-head, button, textarea")) };
     }, true);
+    // Nor when a key moved the keyboard in that moment (Ctrl+Down to the switch, then Space): the
+    // keyboard is where he sent it, and the field taking it back undid the press (measured 2026-10-16,
+    // browser-details.mjs: the switch turned on, and the caret was then in the first field).
     window.addEventListener("focus", function () {
+      var had = document.activeElement;
       window.setTimeout(function () {
         if (focusedLine() || (pressed.own && Date.now() - pressed.at < 600)) { return; }
+        var now = document.activeElement;
+        if (now && now !== had && now !== document.body && now !== document.documentElement) { return; }
         takeKeyboard();
       }, 120);
     });
