@@ -61,7 +61,7 @@ Section "the spawn each request makes"
 $prog = "C:\shells\pwsh.exe"
 $line = "resume-line aaaaaaaa-1111-4111-8111-111111111111"
 $rest = @(Get-HordeWeztermFleetSpawnRest -Request ([pscustomobject]@{ mode = "window"; cwd = "C:\lanes\k"; line = $line }) -Program $prog)
-Check (($rest -join "|") -ceq ("spawn|--new-window|--cwd|C:\lanes\k|--|" + $prog + "|-NoLogo|-NoExit|-Command|" + $line)) ("an orc: a new window, its folder, then the shell with the resume line as one argument (" + ($rest -join " ") + ")")
+Check (($rest -join "|") -ceq ("spawn|--new-window|--cwd|C:\lanes\k|--|" + $prog + "|-NoLogo|-NoProfile|-NoExit|-Command|" + $line)) ("an orc: a new window, its folder, then the shell - without the person's profile - with the resume line as one argument (" + ($rest -join " ") + ")")
 $rest = @(Get-HordeWeztermFleetSpawnRest -Request ([pscustomobject]@{ mode = "tab"; cwd = "C:\w"; line = $line; window = "9" }) -Program $prog)
 Check (($rest[0..2] -join " ") -ceq "spawn --window-id 9") "a warg in another tab: a tab of the orc's window"
 $rest = @(Get-HordeWeztermFleetSpawnRest -Request ([pscustomobject]@{ mode = "split"; cwd = "C:\w"; line = $line; pane = "41"; direction = "right"; percent = "38" }) -Program $prog)
@@ -103,18 +103,51 @@ Reset-Calls
 Reply 0 "43`n"
 Reply 0 "[]"
 $s = Invoke-HordeWeztermFleetSpawn -Target $T -Request ([pscustomobject]@{ mode = "window"; cwd = "C:\w"; line = $line }) -Program $prog -Runner $runner
-Check ($s.state -ceq "unknown" -and $s.reason -like "*which window*") "a new pane whose window cannot be read back is unknown: its wargs would have nowhere to go"
+Check ($s.state -ceq "known" -and $s.value.pane -ceq "43" -and "" + $s.value.window -ceq "" -and $s.value.note -like "*which window*") ("a new pane whose window cannot be read back is a pane that STARTED, with no window and the reason: it runs, and the wake must stop its group rather than call it not started (" + $s.reason + ")")
 Reset-Calls
 $s = Invoke-HordeWeztermFleetSpawn -Target $T -Request ([pscustomobject]@{ mode = "window"; cwd = "rel"; line = $line }) -Program $prog -Runner $runner
 Check ($s.state -ceq "unknown" -and $calls.Count -eq 0) "a request that cannot be built makes no call"
 
 Section "the dry run's words are the real command"
 $d = Format-HordeWeztermFleetSpawn -Request ([pscustomobject]@{ mode = "window"; cwd = "C:\lanes\k"; line = $line }) -Program $prog
-Check ($d -ceq ("wezterm cli --no-auto-start spawn --new-window --cwd C:\lanes\k -- " + $prog + " -NoLogo -NoExit -Command `"" + $line + "`"")) ("a window's command, quoted as Windows reads it back (" + $d + ")")
+Check ($d -ceq ("wezterm cli --no-auto-start spawn --new-window --cwd C:\lanes\k -- " + $prog + " -NoLogo -NoProfile -NoExit -Command `"" + $line + "`"")) ("a window's command, quoted as Windows reads it back (" + $d + ")")
 $d = Format-HordeWeztermFleetSpawn -Request ([pscustomobject]@{ mode = "tab"; cwd = "C:\w"; line = $line; window = "K (aaaaaaaa)" }) -Program $prog
 Check ($d -like "*spawn --window-id <window of K (aaaaaaaa)> --cwd C:\w*") ("a window not made yet is named by its orc (" + $d + ")")
 $d = Format-HordeWeztermFleetSpawn -Request ([pscustomobject]@{ mode = "split"; cwd = "C:\w"; line = $line; pane = "K (aaaaaaaa)"; direction = "right"; percent = "38" }) -Program $prog
 Check ($d -like "*split-pane --pane-id <pane of K (aaaaaaaa)> --right --percent 38 --cwd C:\w*") ("a pane not made yet is named by its session (" + $d + ")")
+
+Section "which terminal: this user's own, or the one a setting names"
+# The wake spawns into "this node's own terminal", which is refused when two run - as they do whenever a
+# test terminal stands beside the person's own. A setting in <HORDE_HOME>\settings\wezterm-fleet.json can
+# name the terminal by its socket instead; the record then reads placement from that socket's folder.
+$homeDir = Join-Path $env:TEMP ("horde-test-fleet-host-home-" + [guid]::NewGuid().ToString("N"))
+[void](New-Item -ItemType Directory -Path (Join-Path $homeDir "settings") -Force)
+$setFile = Join-Path $homeDir "settings\wezterm-fleet.json"
+function Set-FleetSetting { param([string]$Text) [System.IO.File]::WriteAllText($setFile, $Text) }
+$two = { @([long]4242, [long]5151) }
+$sockets = { param($p) $true }
+Remove-Item -LiteralPath $setFile -Force -ErrorAction SilentlyContinue
+$st = Get-HordeWeztermFleetSettings -HordeHome $homeDir
+Check ($st.state -ceq "defaults" -and "" + $st.values.socket -ceq "") "with no file, no terminal is named"
+$t = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive -SockDir (Join-Path $homeDir "no-sockets")
+Check ($t.state -ceq "unknown") ("CONTROL: and this user's own terminal is looked for, as before (" + $t.reason + ")")
+Check ((Get-HordeWeztermFleetSockDir -Settings $st) -ceq (Get-HordeWeztermSockDir)) "and placement reads the terminal's own socket folder"
+Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":' + (ConvertTo-Json -InputObject $T.socket) + '}}')
+$st = Get-HordeWeztermFleetSettings -HordeHome $homeDir
+$t = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive
+Check ($st.state -ceq "read" -and $t.state -ceq "known" -and $t.value.socket -ceq $T.socket -and "" + $t.value.guiPid -ceq "4242" -and "" + $t.value.guiStart -ceq $guiStart) ("a named socket is the terminal, with its gui's start time, even with two running (" + $t.reason + ")")
+Check ((Get-HordeWeztermFleetSockDir -Settings $st) -ceq $sockDir) "and placement reads that socket's folder"
+Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":"C:\\fake\\sockets\\gui-sock-5151"}}')
+$t = Resolve-HordeWeztermFleetTerminal -Settings (Get-HordeWeztermFleetSettings -HordeHome $homeDir) -Guis $two -ProcessStart $alive
+Check ($t.state -ceq "unknown" -and $t.reason -like "*5151*not running*") ("a named terminal whose gui is not running is unknown, and no other is chosen (" + $t.reason + ")")
+Set-FleetSetting ('{"schemaVersion":1,"settings":{"socket":"C:\\fake\\sockets\\my-socket"}}')
+$t = Resolve-HordeWeztermFleetTerminal -Settings (Get-HordeWeztermFleetSettings -HordeHome $homeDir) -Guis $two -ProcessStart $alive
+Check ($t.state -ceq "unknown" -and $t.reason -like "*not named after a gui*") ("a name that is not a terminal's socket is unknown (" + $t.reason + ")")
+Set-FleetSetting ('{"schemaVersion":1,"settings":{"sockett":"x"}}')
+$st = Get-HordeWeztermFleetSettings -HordeHome $homeDir
+$t = Resolve-HordeWeztermFleetTerminal -Settings $st -Guis $two -ProcessStart $alive
+Check ($st.state -cne "read" -and $st.state -cne "defaults" -and $t.state -ceq "unknown" -and $t.reason -like "*settings*") ("a settings file that is refused names no terminal and asks none: unknown, with its findings (" + $t.reason + ")")
+Remove-Item -LiteralPath $homeDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Section "the adapter registers itself"
 $h = Resolve-HordeFleetAdapter -Kind "host"
