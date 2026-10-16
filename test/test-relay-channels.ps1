@@ -575,6 +575,23 @@ try {
     Check ((Has $t "done") -and @(Get-Said $W.store).Count -eq 1) ("once the list can be written, the next turn lands it (" + $t.text + ")")
     $t = Invoke-Turn $W
     Check (@(Get-Said $W.store).Count -eq 1 -and @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "and only once"
+    # THE LIST READS, AND ONLY ITS WRITE FAILS: above, a bad settings file stops the stale-answer guard's
+    # read first, so the answer waits before the list is asked to take it. Here the guard reads the list
+    # whole, and the write alone fails: a FOLDER holds the name the next record would take, so the store's
+    # durable move cannot put it there (decisions/Store.ps1, "a folder of that name") while every read
+    # passes it by (the store lists files only). The answer must wait, never be refused for good.
+    $Blk = New-World
+    $files = @(Get-ChildItem -LiteralPath $Blk.store -File -Filter "*.json")
+    $blocker = Join-Path $Blk.store (Get-HordeDecisionRecordName -Sequence ([long]($files.Count + 1)))
+    [void][System.IO.Directory]::CreateDirectory($blocker)
+    $shownNow = Invoke-HordeDecision -Operation "show" -Request @{ number = 1 } -Root $Blk.store
+    Check ($shownNow.state -ceq "known" -and "$($shownNow.value.outcome)" -ceq "done") ("CONTROL: with the folder in the next record's place the list still reads, so the guard can look (" + $shownNow.state + ")")
+    [void](Send-ToMachine $Blk (Get-Answer $Blk -AnswerId (New-Id) -Text "While only the write fails.").text)
+    $t = Invoke-Turn $Blk
+    Check ((Has $t "retry") -and (Has $t "could not take it now") -and -not (Has $t "refused") -and @(Get-ChildItem -LiteralPath $Blk.store -File -Filter "*.json").Count -eq $files.Count -and @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $Blk.home).value).Count -eq 1) ("while the list reads and only its write fails, the answer is kept for later, never refused for good (" + $t.text + ")")
+    [System.IO.Directory]::Delete($blocker)
+    $t = Invoke-Turn $Blk
+    Check ((Has $t "done") -and @(Get-Said $Blk.store | Where-Object { $_.data.text -ceq "While only the write fails." }).Count -eq 1) ("MUST-ACCEPT TWIN: once the write can be made, the next turn lands it, once (" + $t.text + ")")
     # A crash after the act and before the done mark: the act is done, the record still unfinished.
     $e = Get-Answer $W
     $read = (Read-HordeRelayEnvelope -Text $e.text).value
@@ -1122,10 +1139,10 @@ try {
     }
     $hr = (Get-HordeDecisionsChannelReceipts -Context $H.ctx).text | ConvertFrom-Json
     $hp = @($hr | Where-Object { $_.from -ceq $H.phone.keyId })[0]
-    Check ($null -ne $hp -and $hp.through -eq 50 -and @($hp.missing).Count -eq 32 -and @($hp.missing) -notcontains 16 -and $hp.checked -eq 18 -and $hp.checked -gt 16) ("A HOLE BELOW THE MISSING LIST IS NOT PASSED OFF AS RECEIVED: the list holds the newest 32 holes, and checked says it looked no lower than 18 - so 16, below it, is unknown to the phone, never received (" + $(if ($null -ne $hp) { ConvertTo-Json $hp -Compress } else { "none" }) + ")")
+    Check ($null -ne $hp -and $hp.through -eq 50 -and @($hp.missing).Count -eq 32 -and @($hp.missing) -notcontains 16 -and "$(Get-HordeTestMember $hp 'checked')" -ceq "18") ("A HOLE BELOW THE MISSING LIST IS NOT PASSED OFF AS RECEIVED: the list holds the newest 32 holes, and checked says it looked no lower than 18 - so 16, below it, is unknown to the phone, never received (" + $(if ($null -ne $hp) { ConvertTo-Json $hp -Compress } else { "none" }) + ")")
     $hr2 = (Get-HordeDecisionsChannelReceipts -Context $R.ctx).text | ConvertFrom-Json
     $rp = @($hr2 | Where-Object { $_.from -ceq $R.phone.keyId })[0]
-    Check ($null -ne $rp -and $rp.checked -eq 1) "CONTROL: a stream whose every hole fits the list says it looked down to 1"
+    Check ($null -ne $rp -and "$(Get-HordeTestMember $rp 'checked')" -ceq "1") "CONTROL: a stream whose every hole fits the list says it looked down to 1"
     # M2, ATTACKED: B "do NOT deploy" is applied; A "deploy now", signed BEFORE B to the same question,
     # arrives after it - a lost answer sent again.
     $G = New-World
