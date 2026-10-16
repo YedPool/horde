@@ -39,6 +39,9 @@
         @{ Name = "lost-window-is-not-started"
            Find = 'if ($hit.Count -ne 1) { return (New-HordeKnown -Value'
            Replace = 'if ($hit.Count -ne 1) { return (New-HordeUnknown -Reason' }
+        @{ Name = "store-shell-first"
+           Find = 'if ($there) { return (New-HordeKnown -Value $installed) }'
+           Replace = 'if ($false) { }' }
         @{ Name = "window-not-read-back"
            Find = 'if ($Request.mode -cne "tab") {'
            Replace = 'if ($false) {' }

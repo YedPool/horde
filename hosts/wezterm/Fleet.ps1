@@ -21,7 +21,8 @@
 # given as argv - pwsh -NoLogo -NoProfile -NoExit -Command <the harness's resume line> - so nothing is ever typed
 # into a box that might hold something else, and the shell stays when the harness exits, as a pane the
 # person opened would. The program is pwsh's full path (Resolve-HordeWeztermProgram: an .exe on PATH,
-# never a script shim), as every Horde spawn is (Act.ps1's Start-HordeWeztermPane). WITHOUT THE PERSON'S
+# never a script shim), as every Horde spawn is (Act.ps1's Start-HordeWeztermPane) - the installed
+# PowerShell 7 first, never the Store's while it is there (Resolve-HordeWeztermFleetShell). WITHOUT THE PERSON'S
 # PROFILE (second review of PR 318): a profile can define a function or alias of the harness's own name,
 # or print and prompt, and the resume line must mean the same in every woken pane; the pane inherits its
 # PATH from the wake, which is how the harness's command is found.
@@ -40,8 +41,13 @@
 . (Join-Path $PSScriptRoot "Act.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\Port.ps1")
 
-# The shell a woken session runs in, and its arguments before the resume line.
+# The shell a woken session runs in, and its arguments before the resume line. THE INSTALLED POWERSHELL 7
+# FIRST, under Program Files, and PATH only when it is not there: a Microsoft Store update of PowerShell 7
+# closes every running copy of the Store build, so every pane that ran it closed at once (2026-10-16, the
+# whole fleet); the founder ruled that Horde never relies on the Store. While the installed one exists, a
+# path under \WindowsApps\ is never chosen.
 $script:HordeWeztermFleetShell = "pwsh"
+$script:HordeWeztermFleetInstalledShell = "PowerShell\7\pwsh.exe"
 $script:HordeWeztermFleetShellArgs = @("-NoLogo", "-NoProfile", "-NoExit", "-Command")
 # The registry's name for a terminal is its socket file's name.
 $script:HordeWeztermFleetInstancePattern = '\Agui-sock-[1-9][0-9]{0,9}\z'
@@ -49,6 +55,20 @@ $script:HordeWeztermFleetInstancePattern = '\Agui-sock-[1-9][0-9]{0,9}\z'
 $script:HordeWeztermFleetSettings = New-HordeModuleSettings -Module "wezterm-fleet" -Settings @(
     @{ name = "socket"; kind = "text"; default = ""; min = 0; max = 400; what = "The terminal hibernation reads placement from and wakes into, named by its socket file in full; left out, this user's one running terminal." }
 )
+
+function Resolve-HordeWeztermFleetShell {
+    # The shell's full path, as an answer: <Program Files>\PowerShell\7\pwsh.exe when that file exists,
+    # else the one PATH gives (Resolve-HordeWeztermProgram: an .exe, never a shim). -Exists and -OnPath stand
+    # in for the file check and the PATH lookup in a test.
+    param([AllowEmptyString()][string]$ProgramFiles = $env:ProgramFiles, [scriptblock]$Exists = $null, [scriptblock]$OnPath = $null)
+    if ("" + $ProgramFiles -ne "") {
+        $installed = Join-Path $ProgramFiles $script:HordeWeztermFleetInstalledShell
+        $there = $(if ($null -ne $Exists) { [bool](& $Exists $installed) } else { Test-Path -LiteralPath $installed -PathType Leaf })
+        if ($there) { return (New-HordeKnown -Value $installed) }
+    }
+    if ($null -ne $OnPath) { return (& $OnPath) }
+    return (Resolve-HordeWeztermProgram -Name $script:HordeWeztermFleetShell)
+}
 
 function Get-HordeWeztermFleetSettings {
     # The settings as { state; values; findings; path }, from the one file under Horde's home.
@@ -175,7 +195,7 @@ function Format-HordeWeztermFleetSpawn {
     # that does not exist yet is shown as <window>, a pane as <pane>.
     param([Parameter(Mandatory = $true)]$Request, [string]$Program = "")
     if ($Program -eq "") {
-        $p = Resolve-HordeWeztermProgram -Name $script:HordeWeztermFleetShell
+        $p = Resolve-HordeWeztermFleetShell
         if ($p.state -eq "known") { $Program = "" + $p.value } else { $Program = $script:HordeWeztermFleetShell }
     }
     $shown = [pscustomobject]@{ mode = $Request.mode; cwd = $Request.cwd; line = $Request.line; window = $Request.window; pane = $Request.pane; direction = $Request.direction; percent = $Request.percent }
@@ -229,7 +249,7 @@ function Open-HordeWeztermFleet {
     if ($null -eq $Settings) { $Settings = Get-HordeWeztermFleetSettings }
     $own = Resolve-HordeWeztermFleetTerminal -Settings $Settings
     if ($own.state -ne "known") { return $own }
-    $prog = Resolve-HordeWeztermProgram -Name $script:HordeWeztermFleetShell
+    $prog = Resolve-HordeWeztermFleetShell
     if ($prog.state -ne "known") { return $prog }
     $script:HordeWeztermFleetOpened = [pscustomobject]@{ target = $own.value; program = "" + $prog.value; runner = $Runner }
     $spawn = { param($request) $o = $script:HordeWeztermFleetOpened; Invoke-HordeWeztermFleetSpawn -Target $o.target -Request $request -Program $o.program -Runner $o.runner }

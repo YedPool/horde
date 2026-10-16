@@ -55,7 +55,7 @@ trap { Register-HordeSuiteError $_; continue }
 . (Join-Path (Split-Path -Parent $here) "Isolation.ps1")
 . (Join-Path $root "core\Tristate.ps1")
 . (Join-Path $root "core\HostAct.ps1")
-. (Join-Path $root "hosts\wezterm\Act.ps1")
+. (Join-Path $root "hosts\wezterm\Fleet.ps1")
 # The harness runs under Continue: it calls the terminal with 2>$null, which Stop turns into a throw on
 # PowerShell 5.1 (test/e2e/e2e-cli.ps1 has the measurement). Checks report failures, not exceptions.
 $ErrorActionPreference = "Continue"
@@ -195,7 +195,8 @@ $origSocket = $env:WEZTERM_UNIX_SOCKET
 $measure = [ordered]@{ firstStartMs = @(); wokenStartMs = @(); wakeWaitBound = $null }
 
 Section "before any terminal: the stand-in is what the harness's command finds"
-$pwsh = Resolve-HordeWeztermProgram -Name "pwsh"
+# The same shell the wake will choose (hosts/wezterm/Fleet.ps1): the installed PowerShell 7 first.
+$pwsh = Resolve-HordeWeztermFleetShell
 Check ($pwsh.state -ceq "known") ("the shell a woken pane runs is found (" + $(if ($pwsh.state -ceq "known") { $pwsh.value } else { $pwsh.reason }) + ")")
 $found = ""
 if ($pwsh.state -ceq "known") {
