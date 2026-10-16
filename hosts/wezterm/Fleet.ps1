@@ -70,6 +70,29 @@ function Resolve-HordeWeztermFleetShell {
     return (Resolve-HordeWeztermProgram -Name $script:HordeWeztermFleetShell)
 }
 
+# THE TERMINAL RESTORE'S "DO NOT RESTORE" MARKERS (contract of 2026-10-16, after a restore brought every
+# session back twice, long-parked ones too): <profile>\.wezurrect\no-restore\<session id>.json, written by
+# park and hibernate as { v: 1, sessionId, by, reason: parked | hibernated, at }. The session-restore
+# plugin refuses any session that has one; a wake that starts the session removes its marker.
+function Get-HordeWeztermFleetNoRestoreDir {
+    # The markers' folder under -ProfileDir (USERPROFILE, so a test points it at a folder of its own).
+    param([string]$ProfileDir = $env:USERPROFILE)
+    return (Join-Path $ProfileDir ".wezurrect\no-restore")
+}
+
+function Remove-HordeWeztermFleetNoRestore {
+    # Remove the marker of session -SessionId, and no other, as an answer: known "removed" or "none" (no
+    # marker is fine), unknown with the reason when the id is not a session id or the file would not go.
+    param([AllowEmptyString()][string]$SessionId, [string]$Dir = (Get-HordeWeztermFleetNoRestoreDir))
+    if ($SessionId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id, so no marker was touched")) }
+    $path = Join-Path $Dir ($SessionId + ".json")
+    if (-not (Test-Path -LiteralPath $path)) { return (New-HordeKnown -Value "none") }
+    try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+    catch { return (New-HordeUnknown -Reason ("the marker " + $path + " could not be removed: " + $_.Exception.Message)) }
+    if (Test-Path -LiteralPath $path) { return (New-HordeUnknown -Reason ("the marker " + $path + " could not be removed: it is still there")) }
+    return (New-HordeKnown -Value "removed")
+}
+
 function Get-HordeWeztermFleetSettings {
     # The settings as { state; values; findings; path }, from the one file under Horde's home.
     param([string]$HordeHome = "")
@@ -260,4 +283,5 @@ function Open-HordeWeztermFleet {
 Register-HordeFleetHost -Name "wezterm" `
     -Placement { param($refs) $st = Get-HordeWeztermFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { New-HordeUnknown -Reason ("the fleet's terminal settings are refused: " + (@($st.findings) -join "; ")) } else { Get-HordeWeztermFleetPlacement -Refs $refs -SockDir (Get-HordeWeztermFleetSockDir -Settings $st) } } `
     -Open { Open-HordeWeztermFleet } `
-    -Describe { param($request) Format-HordeWeztermFleetSpawn -Request $request }
+    -Describe { param($request) Format-HordeWeztermFleetSpawn -Request $request } `
+    -Release { param($sessionId) Remove-HordeWeztermFleetNoRestore -SessionId $sessionId }

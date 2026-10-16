@@ -30,6 +30,10 @@
 #                                              percent }
 #                                            paneOf ($pid) -> answer known pane id of that process
 #     Describe   ($request)                  the exact command a spawn would run, as text, for -DryRun
+#     Release    ($sessionId)                optional: remove the terminal restore's "do not restore" marker
+#                                            of that one session, as an answer: known "removed" or "none",
+#                                            unknown with the reason. A wake calls it just before the
+#                                            session's spawn, after its last liveness check.
 #
 # ONE OF EACH. The fleet registry holds one harness's sessions and one terminal's panes; when more than
 # one adapter of a kind is loaded, which one a session belongs to cannot be told from the record, so
@@ -65,11 +69,12 @@ function Register-HordeFleetHost {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Placement,
         [Parameter(Mandatory = $true)][scriptblock]$Open,
-        [Parameter(Mandatory = $true)][scriptblock]$Describe
+        [Parameter(Mandatory = $true)][scriptblock]$Describe,
+        [scriptblock]$Release = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($h in @($script:HordeFleetHosts)) { if ($h.name -ceq $Name) { $script:HordeFleetHosts.Remove($h) } }
-    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe })
+    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release })
 }
 
 function Resolve-HordeFleetAdapter {

@@ -99,5 +99,11 @@
         @{ Name = "mail-id-random"
            Find = 'return (ConvertTo-HordeTextUuid -Text ("horde-fleet-wake/" + $Id + "/" + $SessionId))'
            Replace = 'return ([guid]::NewGuid().ToString())' }
+        @{ Name = "marker-not-released"
+           Find = 'try { $rel = & $hostRelease $rid }'
+           Replace = 'try { $rel = New-HordeKnown -Value "none" }' }
+        @{ Name = "marker-failure-not-said"
+           Find = 'if ($null -eq $rel -or $rel.state -ne "known") { & $say'
+           Replace = 'if ($false) { & $say' }
     )
 }

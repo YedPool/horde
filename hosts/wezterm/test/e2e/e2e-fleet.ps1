@@ -281,6 +281,12 @@ if ($null -ne $iso) {
         $planOk = ($plan.code -eq 0 -and $planned.Count -eq 3 -and @($planned | Where-Object { $_.Contains($standInPath) }).Count -eq 3 -and @($planned | Where-Object { $_ -match ('[^\\]\b' + $command + ' --resume') }).Count -eq 0)
         Check $planOk ("CONTROL: the wake's dry run calls the stand-in by its full path in all three spawns, never the harness's bare command (" + ($planned -join " | ") + ")")
         if (-not $planOk) { throw "the wake would not call the stand-in: it is not run" }
+        # The terminal restore's no-restore markers, as hibernate writes them, for Q and for the master,
+        # which this wake does not start: only Q's may go.
+        $markers = Join-Path $profileDir ".wezurrect
+o-restore"
+        New-Item -ItemType Directory -Path $markers -Force | Out-Null
+        foreach ($l in @("Q", "M")) { [System.IO.File]::WriteAllText((Join-Path $markers ($ids[$l] + ".json")), ('{"v":1,"sessionId":"' + $ids[$l] + '","by":"e2e","reason":"hibernated","at":"2026-10-16T10:00:00Z"}')) }
         $panesBefore = @(Get-Panes)
         $windowsBefore = @($panesBefore | ForEach-Object { "" + $_.window_id } | Sort-Object -Unique)
         $wake = Invoke-Horde @("fleet", "wake", $hid)
@@ -313,6 +319,7 @@ if ($null -ne $iso) {
         }
         $rec = Read-Record $hid
         Check (@("Q", "Q1", "Q2" | Where-Object { "" + (Get-Sess $rec $_).state -cne "woken" }).Count -eq 0) "every session's state is woken"
+        Check (-not (Test-Path -LiteralPath (Join-Path $markers ($ids["Q"] + ".json"))) -and (Test-Path -LiteralPath (Join-Path $markers ($ids["M"] + ".json")))) "the woken Orc's no-restore marker was removed by the wake, and the master's, not woken, was left"
         Check ((@((Get-Sess $rec "Q").history | ForEach-Object { $_.state }) -join ",") -ceq "recorded,waking,woken") "and the history keeps each step"
         foreach ($l in @("Q", "Q1", "Q2")) {
             $box = Join-Path $fleetRoot ("mail\" + $ids[$l] + "\inbox")

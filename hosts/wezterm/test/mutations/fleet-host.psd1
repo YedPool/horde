@@ -51,5 +51,8 @@
         @{ Name = "spawn-answer-trusted"
            Find = 'if ($pane -cnotmatch ''\A[0-9]{1,9}\z'') { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "marker-id-unchecked"
+           Find = '{ return (New-HordeUnknown -Reason ("''" + $SessionId + "'' is not a session id, so no marker'
+           Replace = '{ }; if ($false) { return (New-HordeUnknown -Reason ("''" + $SessionId + "'' is not a session id, so no marker' }
     )
 }

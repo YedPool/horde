@@ -443,6 +443,18 @@ function Invoke-HordeFleetWake {
                 $req = New-HordeFleetWakeStep -Session $s -Line (& $agent.resumeLine $cur) -Environment $scrub -Window $window -Started $started
                 Add-HordeFleetState -Session $s -State "waking" -At (& $Deps.Now)
                 [void](Write-HordeFleetRecord -Dir $dir -Record $record)
+                # THE TERMINAL RESTORE'S MARKER GOES NOW, after the last liveness check and just before
+                # the spawn (the host's Release; fleet/Port.ps1): a session started again must not stay
+                # barred from the next restore. Only this session's. A marker that will not go does not stop
+                # the wake - the restore would refuse the session, the safe side - but it is said.
+                $hostRelease = $(if ($null -ne $Deps.Host.PSObject.Properties["release"]) { $Deps.Host.release } else { $null })
+                if ($null -ne $hostRelease) {
+                    foreach ($rid in @(@(("" + $s.sessionId), $cur) | Select-Object -Unique)) {
+                        $rel = $null
+                        try { $rel = & $hostRelease $rid } catch { $rel = New-HordeUnknown -Reason ("" + $_.Exception.Message) }
+                        if ($null -eq $rel -or $rel.state -ne "known") { & $say ("    " + $name + ": its no-restore marker could not be removed (" + $(if ($null -ne $rel) { $rel.reason } else { "the terminal answered nothing" }) + "); the wake goes on, and a terminal restore may still refuse it") }
+                    }
+                }
                 $sp = & $term.spawn $req
                 if ($null -eq $sp -or $sp.state -ne "known") {
                     $why = "its pane was not started: " + $(if ($null -ne $sp) { $sp.reason } else { "the terminal answered nothing" })
