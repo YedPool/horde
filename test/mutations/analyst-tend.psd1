@@ -24,9 +24,10 @@
            Find = '"; waiting for a handover all the same")'
            Replace = '"; waiting for a handover all the same"); $s.phase = "none"' }
         # One no-answer alert for a run of unacked rounds, cleared only by a newer ack.
+        # Send-HordeAnalystTell is where "once" lives: the caller's own check only saves a call.
         @{ Name = "no-answer-told-every-round"
-           Find = 'if (-not (@($s.told) -ccontains "no-answer")) { & $say'
-           Replace = 'if ($true) { & $say' }
+           Find = 'if (@($State.told) -ccontains $Key) { return "" }'
+           Replace = '' }
         @{ Name = "no-answer-never-cleared-by-ack"
            Find = '$s.lastAckId = $newestAcked[0].id; Clear-HordeAnalystTold -State $s -Keys @("no-answer", "no-answer-founder") }'
            Replace = '$s.lastAckId = $newestAcked[0].id }' }
