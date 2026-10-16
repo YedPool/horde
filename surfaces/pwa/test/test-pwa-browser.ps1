@@ -60,7 +60,7 @@
 #  14. the unlocked session (design note "Unlocked session", 2026-10-14), its passkey prompts COUNTED by
 #      the virtual authenticator's signature counter: what Chrome gives when the app is left is measured
 #      and said; against the real PC, which keeps sessions (the unlocked session's PC side, relay/Session.ps1
-#      and channels/Sessions.ps1), an unlock and then three answers and a chat line are ONE prompt and land
+#      and channels/Sessions.ps1), an unlock and then three answers, a chat line and a photo are ONE prompt and land
 #      once, an answer to a needsPasskey question one more, and after the PC's idle limit (its own setting,
 #      one minute here), after the app was away past its setting and after a reload the next answer asks
 #      once again - each must-pass beside its control, every session envelope read and verified by the
@@ -838,19 +838,29 @@ try {
     $a3 = Invoke-Browser @{ cmd = "answer"; text = "Three, no prompt."; via = "touch"; mailbox = $mailbox; question = $sTitles[2] }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "chat" }
     $cl = Invoke-Browser @{ cmd = "chatSend"; text = "A line, no prompt."; via = "enter"; mailbox = $mailbox }
+    # A PHOTO TOO (PR 285; SESSION_SIGNED names "chat photo"): its manifest is the one envelope that is
+    # signed, by the session key; its parts are data items, signed by nobody (Photo.ps1, THE PARTS).
+    $photoPostsBefore = @(Get-HordeTestFleetPosts -Folder $fake | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    $sp = Invoke-Browser @{ cmd = "chatPhoto"; path = $photoPath; mailbox = $mailbox; parts = 2 }
+    # Every part put before the envelopes are read: the count stops growing.
+    $was = -1; for ($i = 0; $i -lt 40 -and $was -ne (Get-MachineCount); $i++) { $was = Get-MachineCount; Start-Sleep -Milliseconds 500 }
     $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $c2 = (Invoke-Browser @{ cmd = "assertions" }).value
-    Check ($a1.value.put -and $a2.value.put -and $a3.value.put -and $cl.value.put -and $c2 -eq $c1) ("ONE PROMPT IN ALL: the unlock, then three answers and a chat line, sent with no passkey prompt (" + ($c2 - $c0) + " assertion(s) since the lock)")
-    Write-Host "  [NOT RUN] a photo: the phone's photo send is PR 285's (feature/chat-photos), not on this branch's base; it goes through the same sealAndSign and SESSION_SIGNED names it" -ForegroundColor Yellow
-    $sentS = @(Get-MachineEnvelopes -Skip $skip)
+    Check ($a1.value.put -and $a2.value.put -and $a3.value.put -and $cl.value.put -and $sp.ok -and $sp.value.put -ge 2 -and $sp.value.prompts -eq 0 -and $c2 -eq $c1) ("ONE PROMPT IN ALL: the unlock, then three answers, a chat line and a photo, sent with no passkey prompt (" + ($c2 - $c0) + " assertion(s) since the lock; the photo " + $(if ($sp.ok) { "" + $sp.value.prompts + " prompt(s), " + $sp.value.put + " put(s)" } else { $sp.reason }) + ")")
+    $sentAll = @(Get-MachineEnvelopes -Skip $skip)
+    $sentS = @($sentAll | Where-Object { $_.ok })
+    $dataN = $sentAll.Count - $sentS.Count
     $why = @($sentS | ForEach-Object { Test-SessionEnvelope $_ })
-    $kinds = @($sentS | Where-Object { $_.ok } | ForEach-Object { $_.value.header.channel + "/" + $_.value.header.kind })
-    Check ($sentS.Count -eq 5 -and @($why | Where-Object { $_ -cne "" }).Count -eq 0 -and ($kinds -join ",") -ceq "trust/session,decisions/answer,decisions/answer,decisions/answer,chat/line") ("the opening envelope, the three answers and the line are session-signed under the vouch, as the PC's own reader and WebAuthn verifier read them (" + ($kinds -join ",") + "; " + ($why -join "|") + ")")
+    $kinds = @($sentS | ForEach-Object { $_.value.header.channel + "/" + $_.value.header.kind })
+    Check ($sentS.Count -eq 6 -and @($why | Where-Object { $_ -cne "" }).Count -eq 0 -and ($kinds -join ",") -ceq "trust/session,decisions/answer,decisions/answer,decisions/answer,chat/line,chat/photo") ("the opening envelope, the three answers, the line and the photo's manifest are session-signed under the vouch, as the PC's own reader and WebAuthn verifier read them (" + ($kinds -join ",") + "; " + ($why -join "|") + ")")
+    Check ($sp.ok -and $dataN -ge 1) ("and the photo's parts went beside them, as items that are no envelopes (" + $dataN + " part(s))")
     $vouchId1 = $(if ($sentS.Count -and $sentS[0].ok) { $sentS[0].value.sig.vouchId } else { "" })
     $run = Invoke-Run -Turns 1
     $run = Invoke-Run -Turns 1
     $posts = @(Get-HordeTestFleetPosts -Folder $fake)
     Check ((Get-Landed "One, no prompt.") -eq 1 -and (Get-Landed "Two, no prompt.") -eq 1 -and (Get-Landed "Three, no prompt.") -eq 1 -and @($posts | Where-Object { $_.body.EndsWith("A line, no prompt.") }).Count -eq 1) "THE REAL PC TAKES THEM: the three session-signed answers land once each, and the line is posted to the Thrall once"
+    $photoPostsNow = @($posts | Where-Object { $_.body.StartsWith("FOUNDER PHOTO from the phone") }).Count
+    Check ($photoPostsNow -eq $photoPostsBefore + 1) ("and the session-signed photo lands whole, its one line posted to the Thrall once (" + $photoPostsBefore + " -> " + $photoPostsNow + ")")
     # needsPasskey: one more prompt, signed by the passkey, and the PC takes it.
     $skip = Get-MachineCount
     $np = Invoke-Browser @{ cmd = "answer"; text = "Yes, deploy."; via = "enter"; mailbox = $mailbox; question = $sTitles[3] }
