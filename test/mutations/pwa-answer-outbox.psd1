@@ -45,8 +45,8 @@
            Find = 'if ((counts[channel] || 0) >= seq) return e;'
            Replace = '' }
         @{ Name = "the-seq-is-spent-before-the-passkey-signs"
-           Find = 'const text = await P.signEnvelope(parts, assert);'
-           Replace = 'await claimSeq(e.id, channel, seq); const text = await P.signEnvelope(parts, assert); return { text, key: P.replayKey(parts.header), ts: parts.header.ts, seq };' }
+           Find = 'const signed = await sign(parts);'
+           Replace = 'await claimSeq(e.id, channel, seq); const signed = await sign(parts); return { text: signed.text, vouchId: signed.vouchId, key: P.replayKey(parts.header), ts: parts.header.ts, seq };' }
         @{ Name = "an-older-answer-stays-beside-the-newer"
            Find = '.filter((y) => y.answerId === a.answerId || slotOf(y.number, y.part) !== slot)'
            Replace = '' }
@@ -54,8 +54,8 @@
            Find = 'Number(i.signedAt || i.sentAt) > Number(item.signedAt || item.sentAt))) continue;'
            Replace = 'false)) continue;' }
         @{ Name = "signed-again-under-the-time-of-now"
-           Find = 'assertWith(e), Number(item.signedAt || item.sentAt));'
-           Replace = 'assertWith(e));' }
+           Find = 'assertWith(e), Number(item.signedAt || item.sentAt), { passkey'
+           Replace = 'assertWith(e), null, { passkey' }
         @{ Name = "every-missing-answer-is-a-prompt-at-once"
            Find = 'if (st.resend === "resign" && (!sign || signed >= 1)) continue;'
            Replace = 'if (st.resend === "resign" && !sign) continue;' }

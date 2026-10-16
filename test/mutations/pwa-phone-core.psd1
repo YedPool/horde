@@ -102,8 +102,8 @@
            Find = 'const announcing = !summary(e).heard;'
            Replace = 'const announcing = true;' }
         @{ Name = "unlock-vouch-over-a-random-challenge"
-           Find = 'const challenge = announcing ? await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic)) : P.randomBytes(32);'
-           Replace = 'const challenge = P.randomBytes(32);' }
+           Find = 'challenge: await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic)), prfInput: prfInput(e.horde, e.machine) });'
+           Replace = 'challenge: P.randomBytes(32), prfInput: prfInput(e.horde, e.machine) });' }
         @{ Name = "confirmed-record-not-verified"
            Find = '        if (c.ok) return { confirmed: true };'
            Replace = '        return { confirmed: true };' }

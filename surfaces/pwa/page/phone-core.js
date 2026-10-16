@@ -157,6 +157,39 @@
 // pairing of the same horde, and cards() merges what all of them hold, by machine name
 // (relay/js/protocol.js, mergeCards). A card's stream is its own pairing's progress log, filtered on the
 // page to its lane with its own machine's map (progress() hands the map over as areas).
+//
+// THE UNLOCKED SESSION: ONE PASSKEY PROMPT PER UNLOCK, NOT PER ANSWER (design note "Unlocked session",
+// 2026-10-14; the wire is relay/Session.ps1, and relay/js/protocol.js holds its functions, used here and
+// never copied). The founder had to give his passkey for every answer. Now the passkey UNLOCK makes a
+// SESSION KEY (ECDSA P-256, extractable false) that lives in this object's memory only - never in the
+// store, never sent - and the unlock's ONE assertion is the vouch for it: its challenge is the vouch's
+// hash (P.openSession). Answers, chat lines and photo manifests (SESSION_SIGNED) are then signed by that
+// key with no prompt; everything else (the announcement, a follow switch) is the passkey's as before.
+//   WHEN THE KEY IS USED. Only toward a PC that says it keeps sessions: the snapshot's receipt for this
+//     passkey carries a session member (P.sessionStatus). A PC from before sessions refuses every session
+//     envelope, so with no status the phone signs each envelope with the passkey, as before, and says
+//     once that the PC needs an update. A question flagged needsPasskey is ALWAYS answered with a fresh
+//     passkey assertion, whatever the session. An envelope signed again under the time he first sent it
+//     (A STALE ANSWER NEVER WINS) is the passkey's when that time is before the session began, because
+//     the PC takes a session envelope only inside the vouch's window.
+//   THE VOUCH TRAVELS until the PC lists it: on every session envelope while the PC's status does not
+//     name it, or names it session-unknown, so no envelope waits on another to arrive first. Right after
+//     the first snapshot that shows the PC keeps sessions, one opening envelope (channel trust, kind
+//     session) carries it on its own, so the PC's idle clock starts with the unlock.
+//   THE KEY IS DROPPED - the variable cleared, the PC's word not waited for - on: idle (the PC's limit,
+//     idleMs in its status, 60 minutes until it says; measured from the key's last signature here, which
+//     is before the PC sees it, so the phone always ends first); the PC naming the vouch expired, idle,
+//     ended, stale or refused; endSession() (the page: away from the app, or the page hidden for good);
+//     lock() (which the page does hidden no sooner than the away time, the founder's Q75 (c): app.js and
+//     surfaces/pwa/Site.ps1); and the page closing, which takes this object with it. After every
+//     end but those two the horde stays open to READ: the next answer then asks for the passkey ONCE, to
+//     vouch for a new key, and goes signed by it.
+//   NO LENGTH OF ITS OWN (C, 2026-10-15): the phone keeps no second copy of any session-length limit.
+//     notAfter is what relay/js/protocol.js's openSession writes into the vouch; whether a session is past
+//     it is the PC's to say (session-expired), and the phone ends it then, on the PC's word.
+//   A REFUSAL IS ANSWERED BY THE PASSKEY. An answer the PC lists as needs-passkey, or one sent under a
+//     vouch it has refused, is signed again with a fresh passkey assertion by resend() (one a call, as
+//     every re-sign is), and is never taken for refused meanwhile.
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
@@ -191,6 +224,22 @@ function passkeyDidNotSign(x) {
   return PASSKEY_DID_NOT_SIGN + (name && name !== "Error" ? " (" + name + ")" : "");
 }
 
+// THE UNLOCKED SESSION (the header): what the session key signs, by "<channel> <kind>"; the vouch states
+// that end a session (relay/js/protocol.js, SESSION_REFUSALS); and the words for each way one ends.
+const SESSION_SIGNED = ["decisions answer", "chat line", "chat photo"];
+const SESSION_DEAD = ["session-expired", "session-idle", "session-ended", "session-stale", "session-refused"];
+const AGAIN = " The next answer asks for your passkey once, to open a new one.";
+const SESSION_ENDED = {
+  "session-expired": "Your PC says the unlocked session has expired." + AGAIN,
+  "session-idle": "The unlocked session ended: it was not used for as long as your PC allows." + AGAIN,
+  "session-ended": "Your PC ended this phone's unlocked session (every phone session was ended there, or this phone is no longer trusted)." + AGAIN,
+  "session-stale": "Your PC did not take this phone's unlocked session: a newer one was opened." + AGAIN,
+  "session-refused": "Your PC refused this phone's unlocked session." + AGAIN,
+  away: "The unlocked session ended because the app was in the background too long." + AGAIN,
+  closed: "The unlocked session ended with the page." + AGAIN
+};
+const OLD_PC = "Your PC needs an update to stop asking for the passkey on each answer: until it has one, each answer, chat line and photo asks.";
+
 function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(origin || ""); return m ? m[1] : ""; }
 
 export function createPhone({ store, authenticator, relay, account = null, origin, now = () => Date.now() }) {
@@ -202,7 +251,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   const joining = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map(), joins: new Map() });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat(), progress: newProgress(), cards: null, cardsRefused: "", cardsUnpaired: false, notices: newNotices(), outboxText: new Map(), settled: new Map(), joins: new Map(), signer: null, sessionWords: "", oldPcSaid: false });
   const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const newProgress = () => ({ entries: [], notices: [], ids: new Set() });
   const newNotices = () => ({ byId: new Map(), keys: new Set(), follows: {}, followsSeq: -1 });
@@ -236,16 +285,102 @@ export function createPhone({ store, authenticator, relay, account = null, origi
   }
   // ts: the envelope's own time, which the passkey signs with the rest: when the founder sent it - and,
   // for an answer signed again, when he FIRST sent it (A STALE ANSWER NEVER WINS, in the header).
-  async function sealAndSign(e, kind, channel, body, assert, ts = null) {
+  // sign(parts) -> the envelope's wire text; it runs again under the next seq if another tab took this one.
+  async function sealWith(e, kind, channel, body, sign, ts = null) {
     for (let tries = 0; tries < 3; tries++) {
       const held = await store.get(ENTRY + e.id);
       if (!held) throw fail("there is no such horde on this phone");
       const seq = ((held.seq && held.seq[channel]) || 0) + 1;
       const parts = await P.sealEnvelope({ kind, channel, from: e.deviceKeyId, seq, ts: ts === null ? now() : ts, recipientPublic: P.unb64u(e.machineAgreePublic), body });
-      const text = await P.signEnvelope(parts, assert);
-      if (await claimSeq(e.id, channel, seq)) return { text, key: P.replayKey(parts.header), ts: parts.header.ts, seq };
+      const signed = await sign(parts);
+      if (await claimSeq(e.id, channel, seq)) return { text: signed.text, vouchId: signed.vouchId, key: P.replayKey(parts.header), ts: parts.header.ts, seq };
     }
     throw fail("Another window of this app sent at the same moment, three times over: nothing was sent. Send it again.");
+  }
+  // An envelope signed by the session key when THE UNLOCKED SESSION (the header) allows it, else by the
+  // passkey through assert, as every envelope was before. passkey: true asks for the passkey whatever
+  // the session (a question flagged needsPasskey, an answer the PC refused under a session).
+  async function sealAndSign(e, kind, channel, body, assert, ts = null, { passkey = false } = {}) {
+    const s = sessions.get(e.id);
+    const byPasskey = async (parts) => ({ text: await P.signEnvelope(parts, assert), vouchId: "" });
+    if (passkey || !s || s.mode !== "passkey" || SESSION_SIGNED.indexOf(channel + " " + kind) < 0) return sealWith(e, kind, channel, body, byPasskey, ts);
+    const status = statusOf(e, s);
+    if (!status) {
+      // AN OLDER PC (or none heard yet): the passkey each time, and said once while a session is open.
+      if (s.signer && s.view && !s.oldPcSaid) { s.oldPcSaid = true; s.sessionWords = OLD_PC; }
+      return sealWith(e, kind, channel, body, byPasskey, ts);
+    }
+    let k = liveSigner(e, s, status);
+    // Signed again under its first time, before any session of now began: the passkey's (the header).
+    if (ts !== null && (!k || ts < k.notBefore)) return sealWith(e, kind, channel, body, byPasskey, ts);
+    // The key was dropped: ONE prompt vouches for a new one, and this envelope goes signed by it.
+    if (!k) k = await openSigner(e, s, false);
+    const env = await sealWith(e, kind, channel, body, async (parts) => ({ text: await P.signSessionEnvelope(parts, k, vouchTravels(status, k)), vouchId: k.vouchId }), ts);
+    k.lastUsedAt = now();
+    return env;
+  }
+
+  // --- THE UNLOCKED SESSION (the header) ---
+  // What the PC says of this passkey's sessions in the snapshot on screen, or null (an older PC, or none yet).
+  function statusOf(e, s) { return s && s.view ? P.sessionStatus(s.view.receipts, e.deviceKeyId) : null; }
+  // The vouch rides along until the PC names it, and again once it says it holds no such vouch.
+  function vouchTravels(status, k) { return !status.vouches.has(k.vouchId) || status.vouches.get(k.vouchId) === "session-unknown"; }
+  function idleOf(status) { return status ? status.idleMs : P.SESSION_IDLE_DEFAULT_MS; }
+  // Drop the key, with the words for why (SESSION_ENDED). The variable is cleared; nothing else held it.
+  function dropSigner(s, why) {
+    if (!s || !s.signer) return;
+    s.signer = null;
+    s.sessionWords = SESSION_ENDED[why] || SESSION_ENDED["session-ended"];
+  }
+  // The key, if it may sign now; else null, and it is dropped for the reason the clock or the PC gives.
+  function liveSigner(e, s, status = statusOf(e, s)) {
+    const k = s && s.signer;
+    if (!k) return null;
+    const t = now();
+    if (t - k.lastUsedAt >= idleOf(status)) { dropSigner(s, "session-idle"); return null; }
+    const said = status ? status.vouches.get(k.vouchId) : undefined;
+    if (said && SESSION_DEAD.indexOf(said) >= 0) { dropSigner(s, said); return null; }
+    return k;
+  }
+  // The device's next vouch seq, taken before the prompt: a prompt cancelled leaves a number unused,
+  // which costs nothing - the PC asks only that each new vouch be above the last (session-stale).
+  async function nextVouchSeq(id) {
+    let seq = 0;
+    await store.update(ENTRY + id, (x) => {
+      if (!x) throw fail("there is no such horde on this phone");
+      seq = (Number.isSafeInteger(x.vouchSeq) ? x.vouchSeq : 0) + 1;
+      return { ...x, vouchSeq: seq };
+    });
+    return seq;
+  }
+  // A new session key and the ONE passkey assertion that vouches for it (P.openSession), with PRF when
+  // it is the unlock's. { signer, got }: got is the assertion, for its PRF output.
+  async function newSigner(e, prf) {
+    const seq = await nextVouchSeq(e.id);
+    let got = null;
+    const assert = async (challenge) => { got = await authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge, prfInput: prf ? prfInput(e.horde, e.machine) : null }); return got; };
+    const opened = await P.openSession({ assert, deviceKeyId: e.deviceKeyId, phoneKeyId: e.phoneKeyId, horde: e.horde, machine: e.machine, now: now(), seq });
+    return { signer: { ...opened, lastUsedAt: now(), opened: false }, got };
+  }
+  // A key dropped while the horde stays open: one prompt, a new key, kept on the session.
+  async function openSigner(e, s, prf) {
+    let made;
+    try { made = await newSigner(e, prf); } catch (x) { throw fail("Not sent: the passkey did not sign (the prompt was cancelled, or it timed out). Send it again and confirm with your passkey.", "passkey"); }
+    s.signer = made.signer;
+    s.sessionWords = "";
+    return made.signer;
+  }
+  // The opening envelope, once a snapshot shows the PC keeps sessions and does not name this vouch yet.
+  async function sendOpening(e, s, status) {
+    const k = liveSigner(e, s, status);
+    if (!k || k.opened || status.vouches.has(k.vouchId)) return;
+    k.opened = true;
+    try {
+      const env = await sealWith(e, "session", "trust", P.sessionOpenBody(k.vouchId), async (parts) => ({ text: await P.signSessionEnvelope(parts, k, true), vouchId: k.vouchId }));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); k.opened = false; return; }
+      k.lastUsedAt = now();
+    } catch (x) { k.opened = false; }
   }
 
   // The PRF wrap from what a passkey get() just gave, while the session still holds the key's bytes
@@ -387,7 +522,23 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     const x = await store.get(OUTBOX + id);
     return x && Array.isArray(x.items) ? x.items : [];
   }
-  function answerStateOf(s, item, receipt, at) { return P.answerState(item, receipt, s.view ? s.view.ts : 0, at); }
+  // A REFUSAL IS ANSWERED BY THE PASSKEY (the header): an answer the PC lists as needs-passkey, or whose
+  // newest envelope stands under a vouch the PC names dead, is signed again by the passkey - due at once
+  // the first time, then once in ANSWER_RESEND_MS as every resend (a prompt he cancelled is not asked
+  // again every refresh) - and never settled as refused while it waits. Once re-signed its vouchId is
+  // "", and the rule is done.
+  function answerStateOf(s, item, receipt, at, e = null) {
+    const st = P.answerState(item, receipt, s.view ? s.view.ts : 0, at);
+    const status = e && st.state !== "applied" ? statusOf(e, s) : null;
+    if (!status) return st;
+    const listed = status.needsPasskey.has(item.answerId);
+    const dead = !!item.vouchId && SESSION_DEAD.indexOf(status.vouches.get(item.vouchId)) >= 0;
+    if (!listed && !dead) return st;
+    const waiting = { ...st, state: st.state === "refused" ? "sent" : st.state };
+    // Signed again by the passkey already (its vouchId is ""): it waits for the PC's word on that envelope.
+    if (!item.vouchId) return waiting;
+    return { ...waiting, resend: "resign", due: at - (Number(item.lastResendAt) || 0) >= P.ANSWER_RESEND_MS, owed: true };
+  }
   // His words, opened with the session's key, or null when they cannot be (another key's, or damaged).
   async function openKept(s, item) {
     if (s.outboxText.has(item.answerId)) return s.outboxText.get(item.answerId);
@@ -410,8 +561,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     await store.update(OUTBOX + id, (x) => {
       const items = ((x && x.items) || []).filter((y) => y.answerId === a.answerId || slotOf(y.number, y.part) !== slot);
       const i = items.findIndex((y) => y.answerId === a.answerId);
-      if (i >= 0) items[i] = { ...items[i], seqs: items[i].seqs.concat([env.seq]), envelope: { key: env.key, text: env.text }, lastSentAt: at, stuckResent: items[i].stuckResent === true || stuck };
-      else items.push({ answerId: a.answerId, number: a.number, part: a.part || "", wordingVersion: a.wordingVersion, snapshot: a.snapshot, sealed: { enc: P.b64u(sealed.enc), box: P.b64u(sealed.sealed) }, seqs: [env.seq], envelope: { key: env.key, text: env.text }, signedAt: env.ts, sentAt: at, lastSentAt: at, lastResendAt: 0 });
+      // vouchId: the session its newest envelope was signed under, "" for the passkey (THE UNLOCKED
+      // SESSION, A REFUSAL IS ANSWERED BY THE PASSKEY) - an id, never a key.
+      if (i >= 0) items[i] = { ...items[i], seqs: items[i].seqs.concat([env.seq]), envelope: { key: env.key, text: env.text }, lastSentAt: at, stuckResent: items[i].stuckResent === true || stuck, vouchId: env.vouchId || "" };
+      else items.push({ answerId: a.answerId, number: a.number, part: a.part || "", wordingVersion: a.wordingVersion, snapshot: a.snapshot, sealed: { enc: P.b64u(sealed.enc), box: P.b64u(sealed.sealed) }, seqs: [env.seq], envelope: { key: env.key, text: env.text }, signedAt: env.ts, sentAt: at, lastSentAt: at, lastResendAt: 0, vouchId: env.vouchId || "" });
       return { v: 1, items };
     });
   }
@@ -628,23 +781,30 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     },
 
     // Unlock with the passkey: its PRF output unwraps the phone key. A passkey that gives none unlocks
-    // nothing (the horde is read only, by the recovery code). WHILE THE MACHINE HAS NOT ANSWERED THIS
-    // PHONE (not heard), the same prompt is asked over the vouch's challenge and the vouch is put: one Face
-    // ID unlocks and announces (THE ANNOUNCEMENT IS NO BUTTON). A put the relay does not take is said in
-    // diagnostics, never thrown: the unlock stands, and the next unlock tries again.
+    // nothing (the horde is read only, by the recovery code). Still ONE prompt either way. WHILE THE
+    // MACHINE HAS NOT ANSWERED THIS PHONE (not heard), it is asked over the vouch's challenge and the vouch
+    // is put: one Face ID unlocks and announces (THE ANNOUNCEMENT IS NO BUTTON). A put the relay does not
+    // take is said in diagnostics, never thrown: the unlock stands, and the next unlock tries again. No
+    // session key then: with no snapshot there is no receipt, so nothing would let it sign, and the first
+    // send once the PC keeps sessions vouches for one. ONCE HEARD, the assertion vouches for the session
+    // key (THE UNLOCKED SESSION, in the header): its challenge is the vouch's hash, where it was random
+    // bytes before - as fresh, since the vouch names a key made a moment ago.
     async unlock(id) {
       let e = await entryOf(id);
       const announcing = !summary(e).heard;
-      const challenge = announcing ? await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic)) : P.randomBytes(32);
-      const got = await authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge, prfInput: prfInput(e.horde, e.machine) });
+      let signer = null, got;
+      if (announcing) got = await authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge: await P.vouchChallenge(e.horde, P.unb64u(e.phonePublic)), prfInput: prfInput(e.horde, e.machine) });
+      else ({ signer, got } = await newSigner(e, true));
       if (!got.prfFirst) throw fail(NO_PRF);
       const s = sessions.get(id);
-      if (s && s.pkcs8) e = await keepPasskeyWrap(e, s, got.prfFirst);
+      if (s && s.pkcs8) { e = await keepPasskeyWrap(e, s, got.prfFirst); s.signer = signer; s.sessionWords = ""; }
       else {
         if (!e.wraps.prf) throw fail("this horde's key is not wrapped under this passkey's PRF yet: unlock with the recovery code once, then with the passkey");
         const opened = await unwrap(e.wraps.prf, got.prfFirst, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
         if (!opened.ok) throw fail(opened.reason + ": unlock with the recovery code");
-        sessions.set(id, newSession(opened.value.privateKey, opened.value.publicPoint, "passkey", null));
+        const fresh = newSession(opened.value.privateKey, opened.value.publicPoint, "passkey", null);
+        fresh.signer = signer;
+        sessions.set(id, fresh);
       }
       // Only once the passkey has unwrapped the key: the vouch is for a key this phone holds.
       if (announcing) { await putVouch(e, got); e = await entryOf(id); }
@@ -662,7 +822,28 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       return summary(e);
     },
 
-    lock(id) { const s = sessions.get(id); if (s) { wipe(s.pkcs8); sessions.delete(id); } },
+    lock(id) { const s = sessions.get(id); if (s) { s.signer = null; wipe(s.pkcs8); sessions.delete(id); } },
+
+    // End the unlocked session of a horde and keep it open to read (THE UNLOCKED SESSION, in the header):
+    // why is "away" (the app in the background past the setting) or "closed" (the page hidden for good).
+    endSession(id, why) { dropSigner(sessions.get(id), why); },
+
+    // The unlocked session of a horde, as the Account screen says it: { open, until, idleMs, keeps,
+    // words } - until is when it ends unless used again (the PC's idle limit from its last use); keeps true when the PC says it keeps sessions, false when it says
+    // nothing (an older PC: each envelope asks), null before a snapshot. Asking drops a key whose time
+    // is up, so the page that asks at that moment ends it at the same moment as the PC.
+    async session(id) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) return { open: false, until: 0, idleMs: 0, keeps: null, words: "" };
+      const status = statusOf(e, s);
+      const k = liveSigner(e, s, status);
+      const idleMs = idleOf(status);
+      // That the PC needs an update is said ONCE (the header): handed out here, then forgotten.
+      const words = s.sessionWords;
+      if (words === OLD_PC) s.sessionWords = "";
+      return { open: !!k, until: k ? k.lastUsedAt + idleMs : 0, idleMs, keeps: s.view ? status !== null : null, words };
+    },
 
     // The outbox first: an entry gone with its outbox left would leave words no session can open.
     async forget(id) { this.lock(id); pairings.delete(id); await store.delete(OUTBOX + id); await store.delete(ENTRY + id); },
@@ -744,6 +925,9 @@ export function createPhone({ store, authenticator, relay, account = null, origi
         if (best.seq !== e.lastSnapshotSeq) await store.update(ENTRY + id, (x) => ({ ...x, lastSnapshotSeq: best.seq }));
       }
       const v = s.view;
+      // THE UNLOCKED SESSION (the header): what the PC now says of it ends it or opens it.
+      const status = statusOf(e, s);
+      if (liveSigner(e, s, status) && status) await sendOpening(e, s, status);
       const pageKeyByNumber = {};
       if (v) for (const q of v.questions) pageKeyByNumber[q.question.number] = q.pageKey;
       return {
@@ -900,7 +1084,8 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       // To a machine that does not read a part's answer, the part's letter goes before the words.
       const words = (part !== "" && !takesParts) ? "(" + part + ") " + text : text;
       const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text: words, part: takesParts ? part : "" });
-      const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
+      // A question flagged needsPasskey is answered with a fresh passkey assertion, whatever the session.
+      const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e), null, { passkey: q.question.needsPasskey === true });
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Press Enter to try again; the same words are never saved twice."); }
       // KEPT UNTIL APPLIED, by a machine that says what became of its answers (its snapshot has receipts).
@@ -921,7 +1106,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const out = [];
       const settled = [];
       for (const item of await outboxOf(id)) {
-        const st = answerStateOf(s, item, receipt, at);
+        const st = answerStateOf(s, item, receipt, at, e);
         // WORDS THAT CANNOT BE READ STILL STAND AS AN ANSWER (review of PR 262, S3): the question shows
         // answered, pending, with a line that says its words are not readable here - never empty.
         const text = await openKept(s, item);
@@ -953,7 +1138,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const problems = [];
       const items = await outboxOf(id);
       for (const item of items) {
-        const st = answerStateOf(s, item, receipt, now());
+        const st = answerStateOf(s, item, receipt, now(), e);
         if (!st.due) continue;
         // NEVER AN ANSWER THAT IS NOT HIS LATEST to its question and part (review of PR 262, M2).
         if (items.some((i) => i !== item && slotOf(i.number, i.part) === slotOf(item.number, item.part) && Number(i.signedAt || i.sentAt) > Number(item.signedAt || item.sentAt))) continue;
@@ -975,7 +1160,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
           if (text === null) { problems.push("The answer to question " + item.number + " cannot be read back on this phone, so it cannot be sent again. Answer it again."); continue; }
           const body = P.answerBody({ answerId: item.answerId, machine: e.machine, snapshot: item.snapshot, number: item.number, wordingVersion: item.wordingVersion, text, part: item.part });
           // Signed under the time he FIRST sent it: an older answer stays the older one at the PC.
-          const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e), Number(item.signedAt || item.sentAt));
+          const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e), Number(item.signedAt || item.sentAt), { passkey: st.owed === true });
           const put = await relay.put(e.machineMailbox, env.key, env.text);
           if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); problems.push(again); continue; }
           await keepAnswer(id, s, { ...item, text }, env, st.stuck === true);
