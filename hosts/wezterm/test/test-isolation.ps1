@@ -459,8 +459,8 @@ Check ($harnessCode -match '\$script:HordeIsoCli = @\("--skip-config", "cli", "-
 # commands the scenario starts as their own processes reach the terminal through horde's host adapter, which
 # is not this function, so the scenario also names an empty config for them in their environment.
 $e2eText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))) "test\e2e\e2e-fleet.ps1"))
-Check ($e2eText -match 'WEZTERM_CONFIG_FILE\s*=\s*\$emptyWeztermConfig') "the fleet scenario names an empty terminal config (WEZTERM_CONFIG_FILE) in the environment of every command it runs"
-Check ($e2eText -match '(?s)\$emptyWeztermConfig\s*=\s*Join-Path\s+\$work') "and that file is inside the scenario's own folder"
+Check ($e2eText -match 'WEZTERM_CONFIG_FILE\s*=\s*\$emptyTermConfig') "the fleet scenario names an empty terminal config (WEZTERM_CONFIG_FILE) in the environment of every command it runs"
+Check ($e2eText -match '(?s)\$emptyTermConfig\s*=\s*Join-Path\s+\$work') "and that file is inside the scenario's own folder"
 $rawCli = @(([regex]::Matches($harnessCode, '& wezterm @\(')) | ForEach-Object { $_.Value })
 Check ($rawCli.Count -eq 1) "and the one place that calls wezterm directly is the function that adds it"
 Check (-not ($harnessCode -match '& wezterm cli ')) "no other line calls the wezterm CLI without it"
