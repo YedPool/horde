@@ -89,7 +89,8 @@ Register-HordeFleetHost -Name "stand-in" `
     -Release { param($id)
         [void]$world.order.Add("release " + $id)
         if (@($world.releaseFails) -ccontains $id) { return (New-HordeUnknown -Reason "the stand-in marker is locked") }
-        New-HordeKnown -Value "removed" }.GetNewClosure()
+        New-HordeKnown -Value "removed" }.GetNewClosure() `
+    -Unmark { param($id, $why) [void]$world.unmarks.Add([pscustomobject]@{ id = $id; why = $why }); New-HordeKnown -Value "removed" }.GetNewClosure()
 $agent = (Resolve-HordeFleetAdapter -Kind "agent")
 $hostA = (Resolve-HordeFleetAdapter -Kind "host")
 Check ($agent.state -ceq "known" -and $hostA.state -ceq "known") "CONTROL: the stand-ins pass the shipped registration and are found by the shipped resolver"

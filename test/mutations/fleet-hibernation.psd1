@@ -75,5 +75,17 @@
         @{ Name = "reason-surrogate-checked-at-wrong-index"
            Find = '[char]::IsHighSurrogate($Reason[596])'
            Replace = '[char]::IsHighSurrogate($Reason[595])' }
+        @{ Name = "unmark-asked-for-the-wrong-reason"
+           Find = 'try { $a = & $HostAdapter.unmark ("" + $id) "hibernated" }'
+           Replace = 'try { $a = & $HostAdapter.unmark ("" + $id) "parked" }' }
+        @{ Name = "unmark-failure-unsaid"
+           Find = 'if ($null -eq $a -or "" + $a.state -cne "known") { [void]$lines.Add('
+           Replace = 'if ($null -eq $a -or "" + $a.state -cne "known") { continue; [void]$lines.Add(' }
+        @{ Name = "unmark-asked-twice-for-one-id"
+           Find = 'foreach ($id in @($Ids | Where-Object { "" + $_ -ne "" } | Select-Object -Unique)) {'
+           Replace = 'foreach ($id in @($Ids | Where-Object { "" + $_ -ne "" })) {' }
+        @{ Name = "unmark-throw-escapes"
+           Find = 'catch { $a = New-HordeUnknown -Reason ("" + $_.Exception.Message) }'
+           Replace = 'catch { throw }' }
     )
 }

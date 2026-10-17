@@ -126,5 +126,14 @@
         @{ Name = "unknown-pane-hold-says-pane-question-mark"
            Find = 'if ($heldPane -ceq "?") {'
            Replace = 'if ($false) {' }
+        @{ Name = "running-session-keeps-its-hibernated-marker"
+           Find = 'if ($r.running -eq $true -and -not $DryRun) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "maybe-running-session-loses-its-marker-on-a-guess"
+           Find = '[void]$refused.Add([pscustomobject]@{ session = $s; reason = $why; running = ("" + $v.state -ceq "running") })'
+           Replace = '[void]$refused.Add([pscustomobject]@{ session = $s; reason = $why; running = $true })' }
+        @{ Name = "fresh-reading-running-session-keeps-its-marker"
+           Find = 'if ("" + $recheck.state -ceq "running") { foreach ($l in @(Clear-HordeFleetHibernatedMarker'
+           Replace = 'if ($false) { foreach ($l in @(Clear-HordeFleetHibernatedMarker' }
     )
 }

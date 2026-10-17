@@ -17,13 +17,19 @@
            Find = 'if ($read.state -cne "known") { [void]$skipped.Add('
            Replace = 'if ($read.state -cne "known") { $null = (' }
         @{ Name = "running-session-still-asleep"
-           Find = 'if ("" + (Get-HordeFleetAsleepMember $v "state") -ceq "running") { continue }'
-           Replace = 'if ($false) { continue }' }
+           Find = 'if ("" + (Get-HordeFleetAsleepMember $v "state") -ceq "running") {'
+           Replace = 'if ($false) {' }
         @{ Name = "unreadable-liveness-reads-as-asleep"
            Find = 'if ("" + (Get-HordeFleetAsleepMember $v "kind") -ceq "reading") { return'
            Replace = 'if ($false) { return' }
         @{ Name = "older-record-wins"
            Find = 'Where-Object { $_ -cmatch $script:HordeFleetIdPattern } | Sort-Object)'
            Replace = 'Where-Object { $_ -cmatch $script:HordeFleetIdPattern } | Sort-Object -Descending)' }
+        @{ Name = "running-session-keeps-its-hibernated-marker"
+           Find = '[void]$running.Add("" + $sid); [void]$running.Add("" + (Get-HordeFleetCurrentId -Session $s))'
+           Replace = '' }
+        @{ Name = "sleeping-session-loses-its-hibernated-marker"
+           Find = '$cleared = @(Clear-HordeFleetHibernatedMarker -HostAdapter $h -Ids @($running))'
+           Replace = '$cleared = @(Clear-HordeFleetHibernatedMarker -HostAdapter $h -Ids @($sleepers))' }
     )
 }

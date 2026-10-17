@@ -81,5 +81,23 @@
         @{ Name = "marker-writer-not-registered"
            Find = '-Mark { param($sessionId, $reason, $at) Write-HordeWeztermFleetNoRestore -SessionId $sessionId -Reason $reason -At $at }'
            Replace = '-Mark $null' }
+        @{ Name = "unmark-removes-a-parked-marker"
+           Find = 'if ("" + $parsed.sessionId -cne $SessionId -or "" + $parsed.reason -cne $Reason) { return (New-HordeKnown -Value "kept") }'
+           Replace = 'if ($false) { return (New-HordeKnown -Value "kept") }' }
+        @{ Name = "unmark-trusts-the-file-name-over-the-session-in-it"
+           Find = 'if ("" + $parsed.sessionId -cne $SessionId -or "" + $parsed.reason -cne $Reason) { return (New-HordeKnown -Value "kept") }'
+           Replace = 'if ("" + $parsed.reason -cne $Reason) { return (New-HordeKnown -Value "kept") }' }
+        @{ Name = "unmark-removes-a-marker-it-cannot-read"
+           Find = 'catch { return (New-HordeKnown -Value "kept") }'
+           Replace = 'catch { return (Remove-HordeWeztermFleetNoRestore -SessionId $SessionId -Dir $Dir) }' }
+        @{ Name = "unmark-id-unchecked"
+           Find = '{ return (New-HordeUnknown -Reason ("''" + $SessionId + "'' is not a session id, so no marker was examined'
+           Replace = '{ }; if ($false) { return (New-HordeUnknown -Reason ("''" + $SessionId + "'' is not a session id, so no marker was examined' }
+        @{ Name = "unmark-accepts-any-reason"
+           Find = 'if ($Reason -cnotmatch ''\A(parked|hibernated)\z'') { return (New-HordeUnknown -Reason ("''" + $Reason + "'' is not a reason a marker may give (parked or hibernated), so no marker was examined")) }'
+           Replace = '' }
+        @{ Name = "unmark-never-registered"
+           Find = '-Unmark { param($sessionId, $reason) Remove-HordeWeztermFleetNoRestoreIf -SessionId $sessionId -Reason $reason }'
+           Replace = '-Unmark $null' }
     )
 }

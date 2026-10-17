@@ -60,7 +60,7 @@ function New-Registry {
 }
 
 # THE HARNESS STAND-IN: which ids run, and what was typed into each.
-$script:world = @{ stopped = @{}; error = ""; dieAt = @{}; askCostSeconds = 0; processSeen = @{}; processBound = @{} }
+$script:world = @{ stopped = @{}; error = ""; dieAt = @{}; askCostSeconds = 0; processSeen = @{}; processBound = @{}; processAsks = @{} }
 $script:clock = @{ at = [datetime]::new(2026, 10, 16, 12, 0, 0, [System.DateTimeKind]::Utc) }
 # A PROCESS DIES AT A TIME OF THE CLOCK (dieAt, set by the exit command), and a liveness ask that carries a
 # session's record (it names `since`) costs askCostSeconds of that clock AFTER it answers: so a session can
@@ -72,6 +72,8 @@ Register-HordeFleetAgent -Name "stand-in" `
         $gone = ($snap.stopped.ContainsKey($id) -or ($world.dieAt.ContainsKey($id) -and $script:clock.at -ge $world.dieAt[$id]))
         if ($PSBoundParameters.ContainsKey("since")) {
             $world.processBound[$id] = $PSBoundParameters.ContainsKey("process"); $world.processSeen[$id] = $process
+            if (-not $world.processAsks.ContainsKey($id)) { $world.processAsks[$id] = New-Object System.Collections.ArrayList }
+            [void]$world.processAsks[$id].Add($process)
             if ($world.askCostSeconds -gt 0) { $script:clock.at = $script:clock.at.AddSeconds($world.askCostSeconds) }
         }
         if ($gone) { return [pscustomobject]@{ state = "stopped"; kind = ""; reason = ""; pid = "" } }
@@ -94,7 +96,7 @@ function Set-Typed { param([string]$Label, $Turns) $script:typedBy[$Label] = $Tu
 $w = @{}
 function Reset-World {
     $script:world.stopped = @{}; $script:world.error = ""; $script:registryState.complete = $true
-    $script:world.dieAt = @{}; $script:world.askCostSeconds = 0; $script:world.processSeen = @{}; $script:world.processBound = @{}
+    $script:world.dieAt = @{}; $script:world.askCostSeconds = 0; $script:world.processSeen = @{}; $script:world.processBound = @{}; $script:world.processAsks = @{}
     $script:unmarks.Clear()
     $script:typedBy.Clear()
     $script:w = @{
@@ -107,7 +109,7 @@ function Reset-World {
         exitAt = @{}; askedAt = @{}; polls = 0; postFail = @{}; caller = ""
         lane = $null
         tiers = $null          # label -> 1, 2 or $null (a table of its own); $null = every Orc is tier 2
-        tierState = "known"; typedAfterAsk = @{}; recheck = @{}   # label -> the founder types after the ask; label -> times re-checked
+        tierState = "known"; typedAfterAsk = @{}; recheckUnreadable = @{}; recheck = @{}   # label -> the founder types after the ask; label -> times re-checked
         exitCostMinutes = 0    # what one exit command costs the clock
         dieOffset = @{}        # label -> seconds after its exit command that its process is gone
     }
@@ -133,6 +135,7 @@ function New-Deps {
             $lbl = $script:labelOf["" + $c.sessionId]
             if ($script:w.askedAt.ContainsKey($lbl) -and $since -ge $script:w.askedAt[$lbl]) {
                 $script:w.recheck[$lbl] = 1 + [int]$script:w.recheck[$lbl]
+                if ($script:w.recheckUnreadable.ContainsKey($lbl)) { return (New-HordeUnknown -Reason "its transcript could not be read again") }
                 if ($script:w.typedAfterAsk.ContainsKey($lbl)) { $turns += [pscustomobject]@{ at = $since.AddSeconds(30); text = "wait, not that one" } }
             }
             New-HordeKnown -Value $turns }
@@ -326,6 +329,11 @@ $one = Invoke-HordeFleetParkSession -Request $req -Deps (New-Deps)
 $two = Invoke-HordeFleetParkSession -Request $req -Deps (New-Deps)
 Check ($one.outcome -ceq "refused" -and $two.outcome -ceq "refused" -and $script:w.exits.Count -eq 1) "a step whose box may hold the command answers refused for good, and never sends it again, however often it is asked"
 Reset-World
+$script:w.parkAfter["L1"] = 0; $script:w.askedAt["L1"] = $script:clock.at
+$bare = [pscustomobject]@{ sessionId = $script:sids["L1"]; label = "L1"; cwd = $script:work; parkedPath = (Join-Path $script:parked "PARKED-L1.md"); askedAt = $script:clock.at; reason = "hibernation x"; others = @(); since = $null; memo = [pscustomobject]@{ fileSeen = $false; exitSent = $false; blocked = "" } }
+$none = Invoke-HordeFleetParkSession -Request $bare -Deps (New-Deps)
+Check ($none.outcome -ceq "not-yet" -and $none.reason -like "*cannot be checked*" -and $script:w.exits.Count -eq 0) "a step handed no session to re-check the founder's typing of is never sent its exit command: not yet, said why"
+Reset-World
 $asked = New-Object System.Collections.ArrayList
 $d = New-Deps
 $d | Add-Member -NotePropertyName "Park" -NotePropertyValue { param($r) [void]$asked.Add($r.label); [pscustomobject]@{ outcome = "parked"; reason = ""; fileSeen = $true; said = "" } }.GetNewClosure()
@@ -495,7 +503,8 @@ $r = Hib -Names @("L") -WaitMinutes 1
 Check ((Outcome $r "L1") -ceq "exited") ("a Warg whose process went just past the deadline is exited, not still-awake (" + (Outcome $r "L1") + " " + (Reason $r "L1") + ")")
 Check (@($script:marks | Where-Object { $_.sid -ceq $script:sids["L1"] }).Count -eq 1) "and it gets its no-restore marker"
 Check (@($script:w.exits | Where-Object { $_.label -ceq "L1" }).Count -eq 1) "and was sent its exit command once"
-Check ($script:world.processBound[$script:sids["L1"]] -eq $true -and "" + $script:world.processSeen[$script:sids["L1"]].pid -ceq "1001") ("its liveness is asked with the process the record names, as the watcher asks it (" + $script:world.processSeen[$script:sids["L1"]].pid + ")")
+$asks = @($script:world.processAsks[$script:sids["L1"]])
+Check ($asks.Count -ge 2 -and @($asks | Where-Object { $null -eq $_ -or "" + $_.pid -cne "1001" }).Count -eq 0) ("every liveness ask - the passes' and the last look - carries the process the record names, as the watcher's does (" + $asks.Count + " asks)")
 $rec = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
 $l1 = @($rec.sessions | Where-Object { $_.sessionId -ceq $script:sids["L1"] })[0]
 Check ($l1.state -ceq "exited") "the record says exited"
@@ -547,6 +556,13 @@ foreach ($l in @("L", "L1")) { $script:w.parkAfter[$l] = 0 }
 $r = Hib -Names @("L") -WaitMinutes 3
 Check ((Outcome $r "L1") -ceq "exited" -and (Outcome $r "L") -ceq "exited" -and [int]$script:w.recheck["L1"] -ge 1) "CONTROL: with nobody typing, the same run exits both, after the same re-check"
 
+Reset-World
+foreach ($l in @("L", "L1")) { $script:w.parkAfter[$l] = 0 }
+$script:w.recheckUnreadable["L1"] = $true
+$r = Hib -Names @("L") -WaitMinutes 2
+Check (@($script:w.exits | Where-Object { $_.label -ceq "L1" }).Count -eq 0 -and (Outcome $r "L1") -ceq "still-awake" -and (Reason $r "L1") -like "*could not be read*") ("a typing re-check that cannot be read is never taken as nobody typed: no exit command, still-awake (" + (Reason $r "L1") + ")")
+Check ([int]$script:w.recheck["L1"] -ge 2) ("and it is asked again, not given up on (" + [int]$script:w.recheck["L1"] + " looks)")
+
 Section "the tier gate: only an Orc in tier 2 is ever put to sleep"
 Reset-World
 $script:w.tiers = @{ K = 2; L = 1; Q = $null; T = 2 }
@@ -564,8 +580,8 @@ Check ($script:w.posts.Count -eq 0 -and $script:w.exits.Count -eq 0) "and nothin
 $r = Hib -Names @("K") -DryRun
 Check ((@($r.outcomes | ForEach-Object { $_.label }) -join ",") -ceq "K2,K1,K") "CONTROL: a named tier 2 Orc is chosen with its Wargs"
 $script:w.tierState = "unknown"
-Check (Throws { Hib -Names @("K") -DryRun } "tier") "an Orc registry that cannot be read refuses the whole run"
-Check (Throws { Hib -DryRun } "tier") "and so does a run by tier"
+Check (Throws { Hib -Names @("K") -DryRun } "could not be read") "an Orc registry that cannot be read refuses the whole run, saying so"
+Check (Throws { Hib -DryRun } "could not be read") "and so does a run by tier"
 $script:w.tierState = "known"
 Check (Throws { Hib -Names @("K") -Tier 1 -DryRun } "tier 2") "there is no tier but 2 to ask for"
 $script:w.tiers = @{ K = 2; L = 1 }
@@ -609,8 +625,11 @@ $c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "hibernate", "-Tie
 Check ($c.code -eq 2 -and $c.out -like "*tier 2*") ("-Tier 1 is a usage error: a tier 1 Orc is never hibernated (exit " + $c.code + ")")
 $cliText = Get-Content -LiteralPath (Join-Path $root "cli\commands\fleet.ps1") -Raw
 Check ($cliText -match 'Invoke-HordeFleetHibernate[^\r\n]*-Tier\s+\$Tier') "the command always hands the tier gate on to the hibernation"
+Check ($cliText -match 'OrcTiers\s*=\s*\$tiers' -and $cliText -match 'Get-HordeOrcDash') "and reads the Orc registry's tiers from the Orc dash, handing them in as OrcTiers"
 $c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "record", "-All", "-Orcs", "K") -Env $cliEnv
 Check ($c.code -eq 2 -and $c.out -like "*belong to fleet hibernate*") ("-Orcs on another verb is a usage error (exit " + $c.code + ")")
+$c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "record", "-All", "-Tier", "2") -Env $cliEnv
+Check ($c.code -eq 2 -and $c.out -like "*belong to fleet hibernate*") ("-Tier on another verb is a usage error (exit " + $c.code + ")")
 $c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "hibernate", "-Tier", "2", "-Orcs", "K", "-WaitMinutes", "0") -Env $cliEnv
 Check ($c.code -eq 2) ("a wait of 0 minutes is a usage error (exit " + $c.code + ")")
 $c = Invoke-HordeCliProcess -Root $root -HordeArgs @("fleet", "hibernate", "-Tier", "2", "-Orcs", "K", "-DryRun") -Env $cliEnv

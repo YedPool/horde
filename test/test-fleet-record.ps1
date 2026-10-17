@@ -227,4 +227,12 @@ Check ($lone.Count -eq 0) "so no lone surrogate is left"
 $cut = Test-ReasonOf (("a" * 595) + $pair + ("b" * 100))
 Check ($cut -ceq (("a" * 595) + $pair + "...")) "CONTROL: a pair wholly inside the kept part is kept"
 
+Section "a session found running loses a stale hibernated marker, through the host, and nothing else"
+$umk = New-Object System.Collections.ArrayList
+$unmarkHost = [pscustomobject]@{ unmark = { param($sid, $why) [void]$umk.Add($sid + "/" + $why); if ($sid -ceq "bad") { return (New-HordeUnknown -Reason "the folder is locked") }; if ($sid -ceq "boom") { throw "the adapter fell over" }; if ($sid -ceq "gone") { return (New-HordeKnown -Value "removed") }; New-HordeKnown -Value "kept" }.GetNewClosure() }
+$said = @(Clear-HordeFleetHibernatedMarker -HostAdapter $unmarkHost -Ids @("gone", "gone", "kept", "bad", "boom", ""))
+Check ((@($umk) -join ",") -ceq "gone/hibernated,kept/hibernated,bad/hibernated,boom/hibernated") ("each distinct id is asked once, for the reason hibernated and no other (" + (@($umk) -join ",") + ")")
+Check ($said.Count -eq 3 -and $said[0] -like "*gone*removed*" -and $said[1] -like "*bad*could not be removed*locked*" -and $said[2] -like "*boom*could not be removed*fell over*") ("a removed marker and a failure are said, a kept one is not, and nothing throws (" + ($said -join " | ") + ")")
+Check (@(Clear-HordeFleetHibernatedMarker -HostAdapter ([pscustomobject]@{ name = "no-unmark" }) -Ids @("x")).Count -eq 0 -and @(Clear-HordeFleetHibernatedMarker -HostAdapter $null -Ids @("x")).Count -eq 0) "a host without the optional unmark, or none, is left alone"
+
 Complete-HordeSuite -Success "a hibernation record holds exactly the running, unretired sessions asked for, and nothing is written when that cannot be known"

@@ -100,5 +100,74 @@
         @{ Name = "no-restore-marker-failure-unsaid"
            Find = 'if ($null -eq $mk -or "" + $mk.state -cne "known") {'
            Replace = 'if ($false) {' }
+        @{ Name = "last-look-after-the-deadline-dropped"
+           Find = 'if ($lastLook.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "last-look-without-the-process"
+           Find = '@($recordIds | Where-Object { $_ -cne $sid }) $since (Get-HordeFleetMember $s "process") } catch { $v = $null } }'
+           Replace = '@($recordIds | Where-Object { $_ -cne $sid }) $since } catch { $v = $null } }' }
+        @{ Name = "park-step-liveness-without-the-process"
+           Find = '@($Request.others) $Request.since (Get-HordeFleetMember $Request "process")'
+           Replace = '@($Request.others) $Request.since' }
+        @{ Name = "last-look-takes-running-for-gone"
+           Find = 'if ($null -ne $v -and "" + $v.state -ceq "stopped") { & $markExited $s }'
+           Replace = 'if ($null -ne $v) { & $markExited $s }' }
+        @{ Name = "sent-exit-not-looked-at-last"
+           Find = '-or ($pending.ContainsKey("" + $_.sessionId) -and $pending["" + $_.sessionId].memo.exitSent -eq $true) })'
+           Replace = '-or $false })' }
+        @{ Name = "unreadable-exit-answer-not-looked-at-last"
+           Find = 'if ($step.exitMaybe -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "deadline-kept-once-a-pass-only"
+           Find = 'if ((& $Deps.Now) -ge $deadline) { break }'
+           Replace = 'if ($false) { break }' }
+        @{ Name = "typing-not-looked-at-again"
+           Find = '$hit = Get-HordeFleetFounderTyped -Turns @($typed.value) -Since ([datetime]$Request.askedAt)'
+           Replace = '$hit = $null' }
+        @{ Name = "unreadable-typing-recheck-taken-as-clear"
+           Find = 'if ($null -eq $typed -or "" + $typed.state -cne "known") { return (& $ans "not-yet"'
+           Replace = 'if ($false) { return (& $ans "not-yet"' }
+        @{ Name = "typing-recheck-skipped-without-a-candidate"
+           Find = 'if ($null -eq $typedFor -or $null -eq $Deps.PSObject.Properties["Typed"]) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "tier-argument-other-than-2-accepted"
+           Find = 'if ($Tier -ne 2) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "tier-1-orc-counts-as-tier-2"
+           Find = 'return [bool](($t -is [int] -or $t -is [long]) -and [int]$t -eq 2)'
+           Replace = 'return [bool](($t -is [int] -or $t -is [long]) -and [int]$t -ge 1)' }
+        @{ Name = "no-tier-counts-as-tier-2"
+           Find = 'return [bool](($t -is [int] -or $t -is [long]) -and [int]$t -eq 2)'
+           Replace = 'return [bool](($t -is [int] -or $t -is [long] -or $null -eq $t) -and [int]$t -ne 1)' }
+        @{ Name = "unknown-orc-counts-as-tier-2"
+           Find = 'if (@($Tiers.Keys) -cnotcontains $Label) { return $false }'
+           Replace = 'if (@($Tiers.Keys) -cnotcontains $Label) { return $true }' }
+        @{ Name = "named-orc-outside-tier-2-not-refused"
+           Find = 'if ($off.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "tier-run-chooses-every-orc"
+           Find = '-and (Test-HordeFleetOrcInTier2 -Tiers $tierMap -Label ("" + $_.label)) } | ForEach-Object'
+           Replace = '-and $true } | ForEach-Object' }
+        @{ Name = "unreadable-tiers-taken-as-none"
+           Find = 'if ($null -eq $tiers -or "" + $tiers.state -cne "known") { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "tier-gate-not-applied-to-an-orc-picked-anyway"
+           Find = 'if ("" + $Candidate.role -ceq "orc" -and -not (Test-HordeFleetOrcInTier2 -Tiers $Tiers -Label ("" + $Candidate.label))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "wargs-of-a-tier-1-orc-not-held-by-the-gate"
+           Find = 'if ("" + $a.role -ceq "orc" -and -not (Test-HordeFleetOrcInTier2 -Tiers $Tiers -Label ("" + $a.label))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "orc-slept-with-a-warg-left-running"
+           Find = 'if ($null -eq $held -and "" + $c.role -ceq "orc") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "wargs-slept-under-an-orc-left-running"
+           Find = 'if ("" + $a.role -cne "orc") { continue }'
+           Replace = 'if ($true) { continue }' }
+        @{ Name = "wargs-of-the-caller-orc-held"
+           Find = '$_.reason -cne "self" })'
+           Replace = '$true })' }
+        @{ Name = "stale-marker-kept-on-a-running-chosen-session"
+           Find = 'foreach ($l in @(Clear-HordeFleetHibernatedMarker -HostAdapter $Deps.Host -Ids @($ordered | ForEach-Object { "" + $_.sessionId }))) { & $say ("  " + $l) }'
+           Replace = 'foreach ($l in @()) { }' }
     )
 }

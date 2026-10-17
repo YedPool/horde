@@ -102,8 +102,8 @@ function Remove-HordeWeztermFleetNoRestoreIf {
     # session, or one that cannot be read - nothing is removed on a guess); unknown with the reason when the id
     # is not a session id, the reason is not parked or hibernated, or the file would not go. Only that file.
     param([AllowEmptyString()][string]$SessionId, [string]$Reason, [string]$Dir = (Get-HordeWeztermFleetNoRestoreDir))
-    if ($SessionId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id, so no marker was touched")) }
-    if (@("parked", "hibernated") -cnotcontains $Reason) { return (New-HordeUnknown -Reason ("'" + $Reason + "' is not a reason a marker may give (parked or hibernated), so no marker was touched")) }
+    if ($SessionId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id, so no marker was examined")) }
+    if ($Reason -cnotmatch '\A(parked|hibernated)\z') { return (New-HordeUnknown -Reason ("'" + $Reason + "' is not a reason a marker may give (parked or hibernated), so no marker was examined")) }
     $path = Join-Path $Dir ($SessionId + ".json")
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeKnown -Value "none") }
     $parsed = $null
