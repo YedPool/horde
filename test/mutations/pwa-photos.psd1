@@ -63,6 +63,9 @@
         @{ Name = "photos-waiting-broken-entry-counted"
            Find = 'if (w && typeof w.photoId === "string" && /^[0-9a-f]{32}$/.test(w.photoId) && Number.isSafeInteger(w.expiresAt)) byId.set('
            Replace = 'if (w) byId.set(' }
+        @{ Name = "photo-resend-not-named"
+           Find = 'parts: sealed.parts.map((p) => p.digest), resendOf });'
+           Replace = 'parts: sealed.parts.map((p) => p.digest) });' }
         @{ Name = "chat-read-without-the-clock"
            Find = 'items: P.chatTimeline(s.chat, now()), mode'
            Replace = 'items: P.chatTimeline(s.chat), mode' }

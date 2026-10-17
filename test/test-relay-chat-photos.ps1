@@ -880,7 +880,7 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $postsOf = { param($id) @($script:posts.Values | Where-Object { ([string]$_.message.body).Contains($id) }) }
     $first = @(& $postsOf $D1.id)
     Check (@(Get-InboxFiles $Y).Count -eq 1 -and $first.Count -eq 1 -and $first[0].count -eq 1) "the first copy is in the inbox and posted once"
-    $D2 = New-Photo -World $Y -Image $imgD
+    $D2 = New-Photo -World $Y -Image $imgD -Set @{ resendOf = $D1.id }
     $null = Send-Manifest $Y $D2
     $turn = Invoke-Turn $Y
     $null = Invoke-Tick $Y
@@ -891,7 +891,7 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     Check ((Test-Path -LiteralPath $d2Closed) -and -not (Test-Path -LiteralPath (Join-Path $Y.home ("relay\chat\photos\open\" + $D2.from + "-" + $D2.id)))) "it leaves a closed record and no working folder"
     $rp = Send-Part $Y $D2.parts[0]
     Check ($rp.outcome -ceq "refused") ("its parts, which the phone still sends, are refused as closed, not kept waiting (" + $rp.outcome + ": " + $rp.reason + ")")
-    $D3 = New-Photo -World $Y -Image (New-ImageBytes -Type "jpg" -Length 100000)
+    $D3 = New-Photo -World $Y -Image (New-ImageBytes -Type "jpg" -Length 100000) -Set @{ resendOf = $D1.id }
     $null = Send-Manifest $Y $D3
     $turn = Invoke-Turn $Y
     Check ($turn.Contains("accepted (receiving)") -and $turn.Contains($D3.id)) ("TWIN: another image from the same sender is taken as any other (" + $turn + ")")
@@ -901,7 +901,7 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $null = Invoke-Turn $Y
     foreach ($p in $S1.parts) { $null = Send-Part $Y $p }
     $t = Invoke-Tick $Y
-    $S2 = New-Photo -World $Y -Image $imgS
+    $S2 = New-Photo -World $Y -Image $imgS -Set @{ resendOf = $S1.id }
     $null = Send-Manifest $Y $S2
     $turn = Invoke-Turn $Y
     Check ($t.Contains("refused (not-image)") -and $turn.Contains("accepted (receiving)") -and -not $turn.Contains("not taken twice")) ("TWIN: a photo that was refused is not told as delivered when its image comes again (" + $turn + ")")
@@ -918,13 +918,24 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
         return [pscustomobject]@{ turn = $tn; added = (@(Get-InboxFiles $World).Count - $before); posts = @(& $postsOf $Photo.id).Count }
     }
     $isNew = { param($o) $o.turn.Contains("accepted (receiving)") -and -not $o.turn.Contains("not taken twice") -and $o.added -eq 1 -and $o.posts -eq 1 }
+    # REVIEW 4 (the browser run): the same image is the same photo ONLY when the phone says so (resendOf, set by
+    # Send again). A photo the founder sends on purpose a second time, in the same session within the window, is
+    # a new photo - stored and posted - and so is one that names a photo this machine never took.
+    $oPlain = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD)
+    Check (& $isNew $oPlain) ("SENT ON PURPOSE AGAIN: the same image with no resendOf is a new photo, stored and posted (" + $oPlain.turn + ")")
+    $oNone = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Set @{ resendOf = ("ab" * 16) })
+    Check (& $isNew $oNone) ("and one that names a photo this machine never took is new too (" + $oNone.turn + ")")
+    $badRe = New-Photo -World $Y -Image (New-ImageBytes -Type "jpg" -Length 1000) -Set @{ resendOf = "not-an-id" }
+    $null = Send-Manifest $Y $badRe
+    $turnRe = Invoke-Turn $Y
+    Check ($turnRe.Contains("refused") -and $turnRe.Contains("resendOf")) ("a resendOf that is not a photo id is refused (" + $turnRe + ")")
     $phone2 = New-HordeTestPhone
     [void](Add-HordeTestPhonePairing -HordeHome $Y.home -Phone $phone2)
     Add-PhoneKey -HordeHome $Y.home -Phone $phone2
-    $o2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Phone $phone2)
+    $o2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Phone $phone2 -Set @{ resendOf = $D1.id })
     Check (& $isNew $o2) ("ANOTHER PASSKEY: the founder's second trusted passkey sending the same image is stored and posted, not told as the first phone's (" + $o2.turn + ")")
     $otherSession = $(if ((Get-ThrallSession $Y).StartsWith("a")) { "b" } else { "a" }) + (Get-ThrallSession $Y).Substring(1)
-    $o3 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Set @{ session = $otherSession })
+    $o3 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgD -Set @{ session = $otherSession; resendOf = $D1.id })
     Check (& $isNew $o3) ("ANOTHER SESSION: the same image for another Thrall session is stored and posted (" + $o3.turn + ")")
     $imgL = New-ImageBytes -Type "jpg" -Length 20000
     $L1 = New-Photo -World $Y -Image $imgL
@@ -933,18 +944,19 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $lRec = Read-HordeChatPhotoRecord -Path $lPath
     $lRec.sentAt = [long]$lRec.sentAt - 7200000
     Write-HordeChatPhotoRecord -Path $lPath -Record $lRec
-    $oL2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgL)
+    $oL2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgL -Set @{ resendOf = $L1.id })
     Check ($oL1.posts -eq 1 -and (& $isNew $oL2)) ("TWO HOURS LATER: the same image sent two hours after the first copy is a new photo, stored and posted (" + $oL2.turn + ")")
     $imgF = New-ImageBytes -Type "jpg" -Length 20000
-    $oF1 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgF)
+    $F1 = New-Photo -World $Y -Image $imgF
+    $oF1 = & $storeAndPost $Y $F1
     foreach ($gone in @(Get-InboxFiles $Y | Where-Object { $_.Length -eq $imgF.Length })) { Remove-Item -LiteralPath $gone.FullName -Force }
-    $oF2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgF)
+    $oF2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgF -Set @{ resendOf = $F1.id })
     Check ($oF1.posts -eq 1 -and (& $isNew $oF2)) ("FILE GONE: when the first copy's file is no longer in the inbox the same image is taken anew, and no receipt names a missing file (" + $oF2.turn + ")")
     $imgR = New-ImageBytes -Type "jpg" -Length 20000
     $R1 = New-Photo -World $Y -Image $imgR
     $null = Send-Manifest $Y $R1
     $null = Invoke-Turn $Y
-    $oR2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgR)
+    $oR2 = & $storeAndPost $Y (New-Photo -World $Y -Image $imgR -Set @{ resendOf = $R1.id })
     Check ((& $isNew $oR2) -and -not $oR2.turn.Contains("asked again")) ("UNFINISHED FIRST COPY: a first copy with parts missing is not taken, so the second is handled as any photo (" + $oR2.turn + ")")
     # REVIEW 3, SHOULD 2: the first copy is whole but not yet saved (its Tick has not run): the second waits a
     # turn, is not stored and is not told "receiving"; after the Tick it is told delivered with the first copy's
@@ -955,7 +967,7 @@ ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{ edition = "" 
     $null = Send-Manifest $Y $Q1
     $null = Invoke-Turn $Y
     foreach ($pp in $Q1.parts) { $null = Send-Part $Y $pp }
-    $Q2 = New-Photo -World $Y -Image $imgQ
+    $Q2 = New-Photo -World $Y -Image $imgQ -Set @{ resendOf = $Q1.id }
     $null = Send-Manifest $Y $Q2
     $tq1 = Invoke-Turn $Y
     Check ($tq1.Contains("being saved") -and -not $tq1.Contains("accepted") -and @(Get-InboxFiles $Y).Count -eq $beforeQ -and @(Get-PhotoReceipts $Y | Where-Object { $_.photoId -ceq $Q2.id }).Count -eq 0) ("WAIT A TURN: a second copy of a photo that is whole but not yet saved is neither stored nor told anything yet (" + $tq1 + ")")

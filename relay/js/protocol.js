@@ -1153,13 +1153,18 @@ export async function sealPhotoParts(bytes, { from, photoId }) {
 }
 
 // The manifest body: exactly the members the machine reads strictly (Photo.ps1), in its order.
-export function photoManifestBody({ photoId, horde, machine, mailbox, from, phoneKey, seq, session, expiresAt, bytes, sha256: whole, key, parts }) {
+// resendOf: only when this photo is a Send again, the id of the photo it is sent again for - the machine treats a photo as the same
+// one only when the phone says so, never because the image looks alike (a photo sent on purpose a second time is a new photo).
+export function photoManifestBody({ photoId, horde, machine, mailbox, from, phoneKey, seq, session, expiresAt, bytes, sha256: whole, key, parts, resendOf = "" }) {
   if (![photoId, machine, from, phoneKey].every((x) => typeof x === "string" && /^[0-9a-f]{32}$/.test(x))) throw new Error("photoId, machine, from and phoneKey are 32 lower-case hex");
   if (typeof horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
   if (typeof session !== "string" || !SESSION.test(session)) throw new Error("the session is the Thrall's session id");
   if (![seq, expiresAt, bytes].every((x) => Number.isSafeInteger(x) && x >= 1)) throw new Error("seq, expiresAt and bytes are whole numbers from 1");
   if (!Array.isArray(parts) || parts.length < 1 || parts.length > PHOTO_PARTS_MOST || !parts.every((d) => /^[0-9a-f]{64}$/.test(d))) throw new Error("the parts are 1 to " + PHOTO_PARTS_MOST + " digests");
-  return utf8(JSON.stringify({ v: 1, photoId, horde, machine, mailbox, from, phoneKey, seq, session, expiresAt, bytes, sha256: whole, key: b64u(key), parts }));
+  if (resendOf !== "" && !(typeof resendOf === "string" && /^[0-9a-f]{32}$/.test(resendOf) && resendOf !== photoId)) throw new Error("resendOf is the 32 lower-case hex id of another photo");
+  const body = { v: 1, photoId, horde, machine, mailbox, from, phoneKey, seq, session, expiresAt, bytes, sha256: whole, key: b64u(key), parts };
+  if (resendOf !== "") body.resendOf = resendOf;
+  return utf8(JSON.stringify(body));
 }
 
 // What the first bytes of a file say it is: "jpeg", "png", "webp", or "" for anything else - a script,

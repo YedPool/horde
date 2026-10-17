@@ -1043,7 +1043,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     // a 1 MB photo (21 parts) waits about 4 s, the 2 MiB cap (44 parts) about 30 s, and none is refused
     // for its pace. A part the relay does not take is tried again twice, 1.5 s apart.
     // { photoId, parts, puts }.
-    async sendPhoto(id, { bytes, photoId }) {
+    async sendPhoto(id, { bytes, photoId, resendOf = "" }) {
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
@@ -1060,7 +1060,7 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const sealed = await P.sealPhotoParts(bytes, { from: e.deviceKeyId, photoId });
       const session = s.chat.session;
       const body = (seq, ts) => P.photoManifestBody({ photoId, horde: e.horde, machine: e.machine, mailbox: e.machineMailbox, from: e.deviceKeyId, phoneKey: e.phoneKeyId, seq, session,
-        expiresAt: ts + windowMs, bytes: bytes.length, sha256: sealed.sha256, key: sealed.key, parts: sealed.parts.map((p) => p.digest) });
+        expiresAt: ts + windowMs, bytes: bytes.length, sha256: sealed.sha256, key: sealed.key, parts: sealed.parts.map((p) => p.digest), resendOf });
       const env = await sealAndSign(e, "photo", "chat", body, assertWith(e));
       sealed.key.fill(0);
       const put = await relay.put(e.machineMailbox, env.key, env.text);

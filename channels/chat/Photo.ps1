@@ -233,8 +233,12 @@ function Read-HordeChatPhotoManifest {
     try { $a = ConvertFrom-HordeJson -Text $text } catch { $fail.reason = "the photo is not JSON"; return $fail }
     if ($a -isnot [System.Management.Automation.PSCustomObject]) { $fail.reason = "the photo is not a JSON object"; return $fail }
     $names = @($a.PSObject.Properties | ForEach-Object { $_.Name })
-    if ((@($names | Sort-Object) -join ",") -cne (@($script:HordeChatPhotoMembers | Sort-Object) -join ",")) { $fail.reason = ("the photo's members are " + ($names -join ", ") + ", not " + ($script:HordeChatPhotoMembers -join ", ")); return $fail }
+    # resendOf is the one optional member: present only when the phone sends a photo AGAIN.
+    $required = @($script:HordeChatPhotoMembers)
+    if (@($names) -ccontains "resendOf") { $required = $required + @("resendOf") }
+    if ((@($names | Sort-Object) -join ",") -cne (@($required | Sort-Object) -join ",")) { $fail.reason = ("the photo's members are " + ($names -join ", ") + ", not " + ($script:HordeChatPhotoMembers -join ", ")); return $fail }
     $isWhole = { param($x) return ($x -is [int] -or $x -is [long]) }
+    if (@($names) -ccontains "resendOf" -and ($a.resendOf -isnot [string] -or $a.resendOf -cnotmatch '\A[0-9a-f]{32}\z' -or $a.resendOf -ceq $a.photoId)) { $fail.reason = "the photo's resendOf is not the id of another photo"; return $fail }
     if (-not (& $isWhole $a.v) -or $a.v -ne 1) { $fail.reason = "the photo is not version 1"; return $fail }
     foreach ($n in @("photoId", "machine", "from", "phoneKey")) { if ($a.$n -isnot [string] -or $a.$n -cnotmatch '\A[0-9a-f]{32}\z') { $fail.reason = ("the photo's " + $n + " is not 32 lower-case hex"); return $fail } }
     if ($a.horde -isnot [string] -or $a.horde -cnotmatch '\A[a-z0-9][a-z0-9-]{0,62}\z') { $fail.reason = "the photo's horde is not a horde name"; return $fail }
@@ -252,7 +256,7 @@ function Read-HordeChatPhotoManifest {
     if ([long]$a.bytes -gt [long]$parts.Count * $script:HordeChatPhotoChunkMost) { $fail.reason = "the photo is longer than its parts can carry"; return $fail }
     return [pscustomobject]@{ ok = $true; reason = ""; value = [pscustomobject]@{
         photoId = $a.photoId; horde = $a.horde; machine = $a.machine; mailbox = $a.mailbox; from = $a.from; phoneKey = $a.phoneKey; seq = [long]$a.seq; session = $a.session
-        expiresAt = [long]$a.expiresAt; bytes = [long]$a.bytes; sha256 = $a.sha256; key = $a.key; parts = @($parts)
+         expiresAt = [long]$a.expiresAt; bytes = [long]$a.bytes; sha256 = $a.sha256; key = $a.key; parts = @($parts); resendOf = $(if (@($names) -ccontains "resendOf") { $a.resendOf } else { "" })
     } }
 }
 
@@ -551,11 +555,12 @@ function Find-HordeChatPhotoTaken {
     # is a new photo the founder sent on purpose (another session, a later day). Taken is one whose file is
     # still in the inbox (saved, or closed delivered or saved), or one still being received within its
     # window with every part here; a refused or an unfinished one is not taken. $null when none.
-    param([string]$HordeHome, [string]$From, [string]$PhotoId, [string]$Sha256, [string]$Session, [long]$SentAt, [long]$WindowMs, [long]$SkewMs, [long]$NowMs)
+    param([string]$HordeHome, [string]$From, [string]$PhotoId, [string]$OldPhotoId, [string]$Sha256, [string]$Session, [long]$SentAt, [long]$WindowMs, [long]$SkewMs, [long]$NowMs)
     foreach ($f in @(Get-HordeChatPhotoRecordPaths -HordeHome $HordeHome)) {
         if (-not [System.IO.File]::Exists($f)) { continue }
         $r = Read-HordeChatPhotoRecord -Path $f
         if ($null -eq $r -or $r.from -cne $From -or $r.sha256 -cne $Sha256 -or $r.photoId -ceq $PhotoId) { continue }
+        if ($OldPhotoId -cne "" -and $r.photoId -cne $OldPhotoId) { continue }
         if ("$($r.session)" -cne $Session) { continue }
         if ([long]$r.sentAt + $WindowMs + $SkewMs -lt $SentAt) { continue }
         if ($r.stage -ceq "closed") {
@@ -659,7 +664,8 @@ function Invoke-HordeChatPhotoAccept {
     # taken the first copy by then. The same image from the same sender is told as taken, under the new id:
     # nothing is stored, the budget is not spent and the Thrall is told nothing a second time.
     $skewMs = Get-HordeRelaySessionSkewMs -HordeHome $homeDir
-    $twin = Find-HordeChatPhotoTaken -HordeHome $homeDir -From $mf.from -PhotoId $mf.photoId -Sha256 $mf.sha256 -Session $mf.session -SentAt $sentAt -WindowMs $ps.windowMs -SkewMs $skewMs -NowMs $nowMs
+    $twin = $null
+    if ($mf.resendOf -cne "") { $twin = Find-HordeChatPhotoTaken -HordeHome $homeDir -From $mf.from -PhotoId $mf.photoId -OldPhotoId $mf.resendOf -Sha256 $mf.sha256 -Session $mf.session -SentAt $sentAt -WindowMs $ps.windowMs -SkewMs $skewMs -NowMs $nowMs }
     if ($null -ne $twin -and $twin.stage -cne "closed") {
         # The first copy is whole and about to be saved: this one waits a turn, and is then told what became of it,
         # never told "receiving" for good.

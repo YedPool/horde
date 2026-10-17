@@ -39,6 +39,7 @@ function check(ok, name, detail = "") {
   else { failures++; process.stdout.write("[FAIL] " + name + (detail ? ": " + detail : "") + "\n"); }
 }
 async function throwsAsync(fn) { try { await fn(); return ""; } catch (e) { return e && e.message ? e.message : String(e); } }
+function throwsSync(fn) { try { fn(); return ""; } catch (e) { return e && e.message ? e.message : String(e); } }
 
 // --- a machine, in JavaScript ---
 
@@ -899,9 +900,12 @@ const PH = await load("app/photo.js");
   await phone.refresh(a.paired.id);
   head = (await t.get(m.mailbox, 0, 256)).value.items.length;
   const w1id = P.hex(P.randomBytes(16));
-  await phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: w1id });
+  await phone.sendPhoto(a.paired.id, { bytes: jpeg(1000), photoId: w1id, resendOf: pid });
   const w1 = await machineOpens(m, (await t.get(m.mailbox, 0, 256)).value.items[head].text);
   check(w1.body.expiresAt === w1.header.ts + 600000, "THE WINDOW TOLD: to a machine that says 600 s the manifest names 600 s after it was signed, not the hour", String(w1.body.expiresAt - w1.header.ts));
+  check(w1.body.resendOf === pid && Object.keys(mf.body).indexOf("resendOf") < 0, "RESEND NAMED: a Send again names the photo it is sent again for (resendOf); a first send has no such member", JSON.stringify(Object.keys(w1.body)));
+  const mfArgs = { photoId: pid, horde: m.horde, machine: m.keyId, mailbox: m.mailbox, from: "a".repeat(32), phoneKey: "b".repeat(32), seq: 1, session: "sess-1", expiresAt: 5, bytes: 1, sha256: "c".repeat(64), key: new Uint8Array(32), parts: ["d".repeat(64)] };
+  check(throwsSync(() => P.photoManifestBody({ ...mfArgs, resendOf: "not-an-id" })) !== "" && throwsSync(() => P.photoManifestBody({ ...mfArgs, resendOf: pid })) !== "" && throwsSync(() => P.photoManifestBody({ ...mfArgs, resendOf: "e".repeat(32) })) === "", "a resendOf must be another photo's 32 hex id");
   // SHOULD-3: while the PC is off its mailbox fills with photos, and a full one refuses chat lines and
   // answers too; at most 3 photos wait for a word from the machine.
   const waiting = [w1id];

@@ -33,6 +33,12 @@
         @{ Name = "photos-waiting-counts-late"
            Find = ' && !(Number.isSafeInteger(p.expiresAt) && now >= p.expiresAt)).length;'
            Replace = ').length;' }
+        @{ Name = "photo-manifest-resend-unchecked"
+           Find = '  if (resendOf !== "" && !(typeof resendOf === "string" && /^[0-9a-f]{32}$/.test(resendOf) && resendOf !== photoId)) throw new Error("resendOf is the 32 lower-case hex id of another photo");'
+           Replace = '' }
+        @{ Name = "photo-manifest-resend-dropped"
+           Find = '  if (resendOf !== "") body.resendOf = resendOf;'
+           Replace = '' }
         @{ Name = "photo-receipt-takes-any-code"
            Find = '  if (!Object.prototype.hasOwnProperty.call(PHOTO_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(PHOTO_WORDS[b.status], b.code)) return { ok: false, reason: "the photo receipt''s status or code is not one this phone knows", value: null };'
            Replace = '' }

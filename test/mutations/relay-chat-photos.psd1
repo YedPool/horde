@@ -182,6 +182,13 @@
         @{ Name = "photo-sent-again-keeps-signed-mark"
            Find = '        try { [System.IO.File]::Delete([System.IO.Path]::Combine((Get-HordeChatPhotoRoot -HordeHome $homeDir), "signed", ($mf.from + "-" + $mf.photoId + ".json"))) } catch { }'
            Replace = '' }
+        # Review 4 of PR 285 (the browser run): the same photo only when the phone says so (resendOf).
+        @{ Name = "photo-sent-again-without-resendof"
+           Find = '    if ($mf.resendOf -cne "") { $twin = '
+           Replace = '    if ($true) { $twin = ' }
+        @{ Name = "photo-sent-again-names-another-photo"
+           Find = '        if ($OldPhotoId -cne "" -and $r.photoId -cne $OldPhotoId) { continue }'
+           Replace = '' }
         @{ Name = "photo-closed-record-keeps-the-key"
            Find = '    $Record.key = ""'
            Replace = '' }

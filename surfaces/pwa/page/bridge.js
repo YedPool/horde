@@ -43,7 +43,7 @@
 //   chat                  the picked horde's chat with its Thrall: { state, value: { session, items,
 //                         mode } } as phone-core's chat answers it; a locked or empty horde answers
 //                         unknown with the reason
-//   chat-photo {bytes, id}  one photo to the Thrall's machine, already shrunk to a JPEG by the page
+//   chat-photo {bytes, id, resendOf?}  one photo to the Thrall's machine, already shrunk to a JPEG by the page
 //                         (photo.js): signed once by the passkey and sent in parts (phone-core.js,
 //                         sendPhoto): { ok, id, parts } or { ok: false, reason }; id the photo's (32 hex)
 //   chat-send {text, id}  one line to the Thrall, signed and sent: { ok } or { ok: false, reason }; id is
@@ -320,7 +320,8 @@ export function createBridge(phone, options = {}) {
       try {
         if (!(a.bytes instanceof Uint8Array)) return { ok: false, reason: "There is no photo to send." };
         const photoId = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
-        const sent = await phone.sendPhoto(picked, { bytes: a.bytes, photoId });
+        const resendOf = /^[0-9a-f]{32}$/.test(String(a.resendOf || "")) ? String(a.resendOf) : "";
+        const sent = await phone.sendPhoto(picked, { bytes: a.bytes, photoId, resendOf });
         emit("chat-changed", await chatRecord());
         return { ok: true, id: photoId, parts: sent.parts };
       } catch (e) { emit("chat-changed", await chatRecord()); return { ok: false, reason: e && e.message ? e.message : String(e) }; }
