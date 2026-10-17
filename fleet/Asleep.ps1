@@ -58,11 +58,28 @@ function Get-HordeFleetAsleep {
     # with `skipped` (one line per record that could not be read); unknown, naming the reason, when which
     # processes run cannot be read. No hibernations at all is known and empty. -Agent is the harness adapter
     # whose liveness decides (fleet/Port.ps1); when not given, the one loaded one.
-    param([string]$HordeHome = (Get-HordeHome), $Agent = $null)
+    # A SESSION A RECORD HOLDS THAT RUNS has its stale "hibernated" no-restore marker removed through the host
+    # (-HostAdapter, fleet/Port.ps1, Unmark; when not given, the one loaded host if there is one), so a hand
+    # restart does not leave it barred from the next terminal restore (T-0216). The answer's `cleared` lists
+    # what was said about a marker, one line each.
+    param([string]$HordeHome = (Get-HordeHome), $Agent = $null, $HostAdapter = $null)
     $dir = Get-HordeFleetHibernationsDir -HordeHome $HordeHome
     $out = @{}
     $skipped = New-Object System.Collections.ArrayList
-    $done = { param($map) $a = New-HordeKnown -Value $map; Add-Member -InputObject $a -MemberType NoteProperty -Name "skipped" -Value @($skipped); return $a }
+    $running = New-Object System.Collections.ArrayList
+    $done = {
+        param($map)
+        $cleared = @()
+        if ($running.Count -gt 0) {
+            $h = $HostAdapter
+            if ($null -eq $h) { $foundHost = Resolve-HordeFleetAdapter -Kind "host"; if ($foundHost.state -ceq "known") { $h = $foundHost.value } }
+            $cleared = @(Clear-HordeFleetHibernatedMarker -HostAdapter $h -Ids @($running))
+        }
+        $a = New-HordeKnown -Value $map
+        Add-Member -InputObject $a -MemberType NoteProperty -Name "skipped" -Value @($skipped)
+        Add-Member -InputObject $a -MemberType NoteProperty -Name "cleared" -Value @($cleared)
+        return $a
+    }
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return (& $done $out) }
     $ids = @()
     try { $ids = @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction Stop | ForEach-Object { $_.Name } | Where-Object { $_ -cmatch $script:HordeFleetIdPattern } | Sort-Object) }
@@ -94,7 +111,12 @@ function Get-HordeFleetAsleep {
         catch { return (New-HordeUnknown -Reason ("which sessions are asleep cannot be told, because whether " + $sid + " runs cannot be read: " + $_.Exception.Message)) }
         if ($null -eq $v) { return (New-HordeUnknown -Reason ("which sessions are asleep cannot be told, because the harness answered nothing about " + $sid)) }
         if ("" + (Get-HordeFleetAsleepMember $v "kind") -ceq "reading") { return (New-HordeUnknown -Reason ("which sessions are asleep cannot be told, because which run cannot be read: " + (Get-HordeFleetAsleepMember $v "reason"))) }
-        if ("" + (Get-HordeFleetAsleepMember $v "state") -ceq "running") { continue }
+        if ("" + (Get-HordeFleetAsleepMember $v "state") -ceq "running") {
+            # RUNNING, so not asleep, and any hibernated marker it still carries is stale: its ids are collected
+            # (the record's own and the one it came back as) for the marker to go once the answer is made.
+            [void]$running.Add("" + $sid); [void]$running.Add("" + (Get-HordeFleetCurrentId -Session $s))
+            continue
+        }
         $since = ""
         foreach ($h in @(Get-HordeFleetAsleepMember $s "history")) { if ("" + (Get-HordeFleetAsleepMember $h "state") -ceq "exited") { $since = "" + (Get-HordeFleetAsleepMember $h "at") } }
         $out[$sid] = "asleep in hibernation " + $last[$sid].id + " since " + $since + " (" + $s.state + ")"

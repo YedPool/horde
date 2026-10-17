@@ -396,7 +396,7 @@ function Invoke-HordeFleetWake {
             if ("" + $v.state -ceq "stopped") { [void]$spawnable.Add($s) }
             else {
                 $why = $(if ("" + $v.state -ceq "running") { "still running: " + $v.reason } else { "may be running, so it is left alone: " + $v.reason })
-                [void]$refused.Add([pscustomobject]@{ session = $s; reason = $why })
+                [void]$refused.Add([pscustomobject]@{ session = $s; reason = $why; running = ("" + $v.state -ceq "running") })
             }
         }
         & $say ("hibernation " + $Id + ": " + @($sessions).Count + " session(s); " + $spawnable.Count + " to wake, " + $refused.Count + " refused" + $(if ($heldBack.Count -gt 0) { ", " + $heldBack.Count + " held" } else { "" }) + $(if ($DryRun) { " (dry run: nothing is changed)" } else { "" }))
@@ -408,6 +408,9 @@ function Invoke-HordeFleetWake {
         foreach ($r in $refused) {
             & $say ("  refused " + (Get-HordeFleetSessionName -Session $r.session) + ": " + $r.reason)
             if (-not $DryRun) { Add-HordeFleetState -Session $r.session -State "still-awake" -At $now -Reason $r.reason }
+            # A SESSION FOUND RUNNING keeps no stale "hibernated" no-restore marker (a hand restart outlived it): only
+            # a session that is PROVEN running, never one that only may be (T-0216). Not in a dry run.
+            if ($r.running -eq $true -and -not $DryRun) { foreach ($l in @(Clear-HordeFleetHibernatedMarker -HostAdapter $Deps.Host -Ids @(("" + $r.session.sessionId), (Get-HordeFleetCurrentId -Session $r.session)))) { & $say ("    " + $l) } }
             & $tell $r.session "still-awake" $r.reason
         }
         $groups = @()
@@ -479,6 +482,7 @@ function Invoke-HordeFleetWake {
                     Add-HordeFleetState -Session $s -State "still-awake" -At (& $Deps.Now) -Reason $why
                     [void](Write-HordeFleetRecord -Dir $dir -Record $record)
                     & $say ("    " + $name + ": refused on a fresh reading before its spawn - " + $why); & $tell $s "still-awake" $why
+                    if ("" + $recheck.state -ceq "running") { foreach ($l in @(Clear-HordeFleetHibernatedMarker -HostAdapter $Deps.Host -Ids @(("" + $s.sessionId), $cur))) { & $say ("    " + $name + ": " + $l) } }
                     continue
                 }
                 $req = New-HordeFleetWakeStep -Session $s -Line (& $agent.resumeLine $cur) -Environment $scrub -Window $window -Started $started

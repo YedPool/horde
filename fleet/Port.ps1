@@ -49,6 +49,14 @@
 #                                            it was put to sleep), whole, as an answer: known (where) or
 #                                            unknown with the reason. Hibernate calls it for each session it
 #                                            parks, once its process is gone; the Release above is its pair.
+#     Unmark     ($sessionId, $reason)       optional: remove the "do not restore" marker of that one session
+#                                            ONLY IF it is the one a hibernation wrote - the file names this
+#                                            session and says the reason given (hibernated) - as an answer:
+#                                            known "removed", "none" (no marker) or "kept" (another marker, a
+#                                            parked one someone else wrote, or one that cannot be read),
+#                                            unknown with the reason. The wake watcher, a wake and a hibernate
+#                                            call it for a session a record holds and that is RUNNING, so a hand
+#                                            restart does not leave it barred from the next restore.
 #
 # ONE OF EACH. The fleet registry holds one harness's sessions and one terminal's panes; when more than
 # one adapter of a kind is loaded, which one a session belongs to cannot be told from the record, so
@@ -87,11 +95,12 @@ function Register-HordeFleetHost {
         [Parameter(Mandatory = $true)][scriptblock]$Open,
         [Parameter(Mandatory = $true)][scriptblock]$Describe,
         [scriptblock]$Release = $null,
-        [scriptblock]$Mark = $null
+        [scriptblock]$Mark = $null,
+        [scriptblock]$Unmark = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($h in @($script:HordeFleetHosts)) { if ($h.name -ceq $Name) { $script:HordeFleetHosts.Remove($h) } }
-    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release; mark = $Mark })
+    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release; mark = $Mark; unmark = $Unmark })
 }
 
 function Resolve-HordeFleetAdapter {

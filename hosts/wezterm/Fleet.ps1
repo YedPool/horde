@@ -95,6 +95,24 @@ function Remove-HordeWeztermFleetNoRestore {
     return (New-HordeKnown -Value "removed")
 }
 
+function Remove-HordeWeztermFleetNoRestoreIf {
+    # Remove the marker of session -SessionId only if it is the one a hibernation wrote (T-0216): the file of
+    # that name says reason -Reason and names the same session. As an answer: known "removed", "none" (no
+    # marker) or "kept" (a marker that is not that one: a parked one someone else wrote, one naming another
+    # session, or one that cannot be read - nothing is removed on a guess); unknown with the reason when the id
+    # is not a session id, the reason is not parked or hibernated, or the file would not go. Only that file.
+    param([AllowEmptyString()][string]$SessionId, [string]$Reason, [string]$Dir = (Get-HordeWeztermFleetNoRestoreDir))
+    if ($SessionId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id, so no marker was touched")) }
+    if (@("parked", "hibernated") -cnotcontains $Reason) { return (New-HordeUnknown -Reason ("'" + $Reason + "' is not a reason a marker may give (parked or hibernated), so no marker was touched")) }
+    $path = Join-Path $Dir ($SessionId + ".json")
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return (New-HordeKnown -Value "none") }
+    $parsed = $null
+    try { $parsed = ConvertFrom-HordeJson -Text ([System.IO.File]::ReadAllText($path)) } catch { return (New-HordeKnown -Value "kept") }
+    if ($null -eq $parsed -or $null -eq $parsed.PSObject.Properties["sessionId"] -or $null -eq $parsed.PSObject.Properties["reason"]) { return (New-HordeKnown -Value "kept") }
+    if ("" + $parsed.sessionId -cne $SessionId -or "" + $parsed.reason -cne $Reason) { return (New-HordeKnown -Value "kept") }
+    return (Remove-HordeWeztermFleetNoRestore -SessionId $SessionId -Dir $Dir)
+}
+
 function Write-HordeWeztermFleetNoRestore {
     # The marker of session -SessionId, as an answer: known (the file's path) or unknown with the reason.
     # { v: 1, sessionId, by: "horde", reason, at } - exactly the members the restore plugin's contract names.
@@ -324,4 +342,5 @@ Register-HordeFleetHost -Name "wezterm" `
     -Open { Open-HordeWeztermFleet } `
     -Describe { param($request) Format-HordeWeztermFleetSpawn -Request $request } `
     -Release { param($sessionId) Remove-HordeWeztermFleetNoRestore -SessionId $sessionId } `
-    -Mark { param($sessionId, $reason, $at) Write-HordeWeztermFleetNoRestore -SessionId $sessionId -Reason $reason -At $at }
+    -Mark { param($sessionId, $reason, $at) Write-HordeWeztermFleetNoRestore -SessionId $sessionId -Reason $reason -At $at } `
+    -Unmark { param($sessionId, $reason) Remove-HordeWeztermFleetNoRestoreIf -SessionId $sessionId -Reason $reason }
