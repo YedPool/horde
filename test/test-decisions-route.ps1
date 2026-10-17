@@ -465,7 +465,7 @@ $qF1 = Add-Question "Orc F" "Should the restarting step go ahead?"
 $sF1 = Say $qF1 "Yes, F1 words."
 $script:fUnknown = $true
 $p = PassF
-Check ($p.outcome -ceq "pending" -and @($p.lines | Where-Object { $_ -clike ("pending: answer record " + $sF1 + " of question " + $qF1 + " waits for Orc F's seat, which cannot be proven just now*") }).Count -eq 1 -and @(Routes $qF1).Count -eq 0 -and @(PostsTo "warchief-session-1" | Where-Object { $_.body -like ("*question " + $qF1 + ":*") }).Count -eq 0) ("a seat that is unknown: nothing is sent to the warchief, nothing is recorded (" + ($p.lines -join " | ") + ")")
+Check ($p.outcome -ceq "pending" -and @($p.lines | Where-Object { $_ -ceq ("pending: answer record " + $sF1 + " of question " + $qF1 + " waits for Orc F's seat, which cannot be proven just now (the registry could not be read (Orc F is restarting)); waiting up to 300 s for that Orc's seat, then it goes to the warchief") }).Count -eq 1 -and @(Routes $qF1).Count -eq 0 -and @(PostsTo "warchief-session-1" | Where-Object { $_.body -like ("*question " + $qF1 + ":*") }).Count -eq 0) ("a seat that is unknown: nothing is sent to the warchief, nothing is recorded (" + ($p.lines -join " | ") + ")")
 Advance 2
 $p = PassF
 Check (@(Routes $qF1).Count -eq 0 -and @(PostsTo "warchief-session-1" | Where-Object { $_.body -like ("*question " + $qF1 + ":*") }).Count -eq 0) "and it is still waiting inside the grace"

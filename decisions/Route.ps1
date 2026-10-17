@@ -169,6 +169,7 @@ function Resolve-HordeDecisionRouteTarget {
     $asker = Get-HordeDecisionAsker -AskedBy "$($Question.askedBy)"
     $note = ""
     $seatState = ""
+    $seatWhy = ""
     if ($asker.seat -ceq "orc") {
         $found = $null
         try { $found = & $Seat "orc" $asker.label } catch { $found = New-HordeUnknown -Reason $_.Exception.Message }
@@ -179,6 +180,7 @@ function Resolve-HordeDecisionRouteTarget {
         # answer) is a seat that cannot be proven NOW, which the pass waits out before it falls back.
         $seatState = $(if ($null -ne $found -and "$($found.state)" -ceq "absent") { "absent" } else { "unknown" })
         $why = $(if ($null -eq $found) { "nothing answered" } elseif ("$($found.reason)" -ne "") { "$($found.reason)" } else { "no live session wears its label with the role orc" })
+        $seatWhy = $why
         $note = $asker.shown + "'s seat could not be found (" + $why + "), so the answer went to the warchief instead"
     }
     elseif ($asker.seat -cne "warchief") { $note = $asker.why + "; it went to the warchief instead" }
@@ -187,9 +189,9 @@ function Resolve-HordeDecisionRouteTarget {
     if ($null -eq $boss -or "$($boss.state)" -cne "known" -or "$($boss.value.sessionId)" -eq "") {
         $why = $(if ($null -eq $boss) { "nothing answered" } elseif ("$($boss.reason)" -ne "") { "$($boss.reason)" } else { "no live session holds the role" })
         $lead = $(if ($note -ne "") { $note + ", and " } else { "" })
-        return [pscustomobject]@{ ok = $false; seat = ""; label = ""; sessionId = ""; resolved = $false; note = $note; problem = ($lead + "the warchief's seat cannot be had: " + $why); seatState = $seatState; asker = $asker.seat }
+        return [pscustomobject]@{ ok = $false; seat = ""; label = ""; sessionId = ""; resolved = $false; note = $note; problem = ($lead + "the warchief's seat cannot be had: " + $why); seatState = $seatState; seatWhy = $seatWhy; asker = $asker.seat }
     }
-    return [pscustomobject]@{ ok = $true; seat = "warchief"; label = ""; sessionId = "$($boss.value.sessionId)"; resolved = ($note -eq ""); note = $note; problem = ""; seatState = $seatState; asker = $asker.seat }
+    return [pscustomobject]@{ ok = $true; seat = "warchief"; label = ""; sessionId = "$($boss.value.sessionId)"; resolved = ($note -eq ""); note = $note; problem = ""; seatState = $seatState; seatWhy = $seatWhy; asker = $asker.seat }
 }
 
 function Format-HordeDecisionRouteNotice {
@@ -315,7 +317,7 @@ function Invoke-HordeDecisionRoutePass {
             $waited = ($now - [datetime]$script:HordeDecisionRouteUnknownSince[$graceKey]).TotalSeconds
             if ($waited -lt $SeatGraceSeconds) {
                 $pending++
-                [void]$lines.Add("pending: " + $what + " waits for " + (Get-HordeDecisionAsker -AskedBy "$($item.question.askedBy)").shown + "'s seat, which cannot be proven just now (" + $target.note + "); after " + $SeatGraceSeconds + " s without it, it goes to the warchief")
+                [void]$lines.Add("pending: " + $what + " waits for " + (Get-HordeDecisionAsker -AskedBy "$($item.question.askedBy)").shown + "'s seat, which cannot be proven just now (" + $target.seatWhy + "); waiting up to " + $SeatGraceSeconds + " s for that Orc's seat, then it goes to the warchief")
                 continue
             }
         }

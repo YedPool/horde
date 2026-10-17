@@ -114,6 +114,9 @@
         @{ Name = "an-absent-seat-is-treated-as-unprovable"
            Find = '$seatState = $(if ($null -ne $found -and "$($found.state)" -ceq "absent") { "absent" } else { "unknown" })'
            Replace = '$seatState = "unknown"' }
+        @{ Name = "the-pending-line-says-it-went-to-the-warchief"
+           Find = '$target.seatWhy + "); waiting up to "'
+           Replace = '$target.note + "); waiting up to "' }
         @{ Name = "a-reminder-without-his-words"
            Find = '@(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }'
            Replace = '@(([string]$(if ($Item.purpose -ceq "answer") { $m.text } else { "" })) -split "\r?\n")) { [void]$lines.Add("  " + $l) }' }
