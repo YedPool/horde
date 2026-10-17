@@ -146,6 +146,33 @@ Check ($both.state -ceq "unknown" -and $both.reason -like "2 running sessions' r
 Check ((Seat "warchief" $shared (Identity @(@{ id = $ids.keeper; pid = 501 }, @{ id = $ids.plain; pid = 504; process = $null }))).state -ceq "known") "CONTROL: when that other session has ended, its stale record does not make the seat unknown"
 Check ((Seat "warchief" (New-Registry "elsewhere" (@(Keeper) + @(@{ id = $ids.plain; pane = "18"; instance = "zorb-instance-2"; lastSeen = $seenAfter })))).state -ceq "known") "CONTROL: nor does a running session in the pane of that number in another terminal"
 Check ((Seat "warchief" (New-Registry "left" (@(Keeper) + @(@{ id = $ids.plain; pane = "18"; instance = "zorb-instance-1"; lastSeen = $seenAfter; retired = $true })))).state -ceq "known") "CONTROL: nor a retired record of that pane, whatever its session is doing now"
+
+Write-Host ""
+Write-Host "--- the seat of an Orc by its label: the label and the role both, and the same proof it is still there ---" -ForegroundColor Cyan
+# decisions/Route.ps1 sends an answer to "Orc C": the one live record that wears label C AND names the
+# role orc (the old fleet's word orchestrator), held to the checks a role's seat is held to.
+function Label-Seat { param([string]$Label, [string]$Root, $Identity = $allRunning) return (Get-HordeLabelSeat -Label $Label -Role "orc" -Root $Root -Identity $Identity) }
+$orcC = @{ id = $ids.orc; role = "orchestrator"; label = "C"; pane = "19"; instance = "zorb-instance-1"; lastSeen = $seenAfter }
+$labelled = New-Registry "labelled" @((Keeper @{ label = "M" }), $orcC, @{ id = $ids.plain; label = "C3"; pane = "20"; instance = "zorb-instance-1"; lastSeen = $seenAfter })
+$c = Label-Seat "C" $labelled
+Check ($c.state -ceq "known" -and $c.value.sessionId -ceq $ids.orc -and $c.value.pane -ceq "19") ("the record that wears label C with the role orc is Orc C's seat (" + $c.state + ")")
+Check ((Label-Seat "D" $labelled).state -ceq "absent" -and (Label-Seat "D" $labelled).reason -ceq "no live session's record wears the label D with the role orc") "a lane no live record wears: absent, in words"
+Check ((Label-Seat "c" $labelled).state -ceq "absent") "the label is compared exactly as stored: c is not C"
+Check ((Label-Seat "C3" $labelled).state -ceq "absent") "a record that wears the label but names no role is not that Orc's: no role is guessed"
+Check ((Get-HordeLabelSeat -Label "M" -Role "orc" -Root $labelled -Identity $allRunning).state -ceq "absent" -and (Get-HordeLabelSeat -Label "M" -Role "warchief" -Root $labelled -Identity $allRunning).state -ceq "known") "the label with another role is not an Orc's seat; CONTROL: with its own role it is"
+$twoC = Label-Seat "C" (New-Registry "two-c" @($orcC, @{ id = $ids.second; role = "orchestrator"; label = "C"; pane = "30"; instance = "zorb-instance-1"; lastSeen = $seenAfter }))
+Check ($twoC.state -ceq "unknown" -and $twoC.reason -like "2 live sessions each wear the label C with the role orc*one is never chosen over another") "two live records wear it: unknown, neither chosen"
+$retC = Label-Seat "C" (New-Registry "retired-c" @(@{ id = $ids.orc; role = "orchestrator"; label = "C"; pane = "19"; instance = "zorb-instance-1"; lastSeen = $seenAfter; retired = $true }))
+Check ($retC.state -ceq "absent") "a retired record wears nothing"
+$goneC = Label-Seat "C" $labelled (Identity @(@{ id = $ids.keeper; pid = 501 }, @{ id = $ids.orc; pid = 503; process = $null }))
+Check ($goneC.state -ceq "unknown" -and $goneC.reason -like ("orc C's session (" + $ids.orc + ") is not proven to be running*")) ("the same STILL THERE proof: an Orc whose process has ended is unknown, and named so (" + $goneC.reason + ")")
+$oldC = Label-Seat "C" (New-Registry "old-c" @(@{ id = $ids.orc; role = "orchestrator"; label = "C"; pane = "19"; instance = "zorb-instance-1"; lastSeen = $seenBefore }))
+Check ($oldC.state -ceq "unknown" -and $oldC.reason -like "orc C's record (*) was last written *, so it says where an earlier run of the session sat") "and a record older than its session's process: unknown"
+$tornC = New-Registry "torn-c" @($orcC)
+[System.IO.File]::WriteAllText((Join-Path $tornC ("registry\sessions\" + $ids.second + ".json")), '{"label":"C')
+Check ((Label-Seat "C" $tornC).state -ceq "unknown" -and (Label-Seat "C" $tornC).reason -like "the session records could not all be read, so which session is orc C cannot be told:*") "a record that cannot be read may wear the label too: unknown"
+Check (Throws { Get-HordeLabelSeat -Label "C" -Role "orchestrator" -Root $labelled -Identity $allRunning } "is not a role; the roles are:") "the role asked for is one of Horde's own, never the stored word"
+
 # Without -Identity the repository's own reader is asked, once. It is replaced here so that this
 # machine's sessions are never read by a suite.
 $script:identityAsked = 0

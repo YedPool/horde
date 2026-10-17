@@ -425,6 +425,25 @@ $nJson = Invoke-Decisions @("notify", "-Json") $notifyEnv
 Check ($nJson.code -ne 0 -and $nJson.out -like "*-Json does not belong to decisions notify*Usage: horde decisions notify ``[-Once``]*") "and no flag but -Once, answered with its usage"
 
 Write-Host ""
+Write-Host "--- route and ack, through the real command: nobody reachable is said, and nothing is recorded ---" -ForegroundColor Cyan
+# The same home: its question 1 was asked by "orc-a", which names no Orc, so the router sends it to the
+# warchief - whose seat this fleet-less home cannot have. decisions/Route.ps1's own suite,
+# test/test-decisions-route.ps1, drives every send with stand-ins; this proves the verbs reach it.
+$routeRun = Invoke-Decisions @("route") $notifyEnv
+$routeKinds = @(Get-ChildItem -LiteralPath (Join-Path $notifyHome "store\decisions") -Filter "*.json" | ForEach-Object { (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($_.FullName))).kind })
+Check ($routeRun.code -eq 0 -and $routeRun.out.Trim() -clike "pending:*" -and $routeRun.out -notlike "*messenger * answered*" -and $routeKinds -cnotcontains "answer-routed") ("route: one pass, pending because nobody can be reached here, no post tried and nothing recorded, exit 0 (" + $routeRun.out.Trim() + ")")
+$routeNumber = Invoke-Decisions @("route", "1") $notifyEnv
+Check ($routeNumber.code -ne 0 -and $routeNumber.out -like "*decisions route takes no question number*") "route takes no question number"
+# ACK IS THE ASKING ORC'S, PROVEN FROM ITS OWN SESSION: whatever session this suite runs inside, if any,
+# it is not the Orc 'orc-a' names (nobody), so the question stays open - refused as unproven, as no
+# Orc's lane, or as not the Orc that asked.
+$ackRun = Invoke-Decisions @("ack", "1") $notifyEnv
+$ackKinds = @(Get-ChildItem -LiteralPath (Join-Path $notifyHome "store\decisions") -Filter "*.json" | ForEach-Object { (ConvertFrom-HordeJson ([System.IO.File]::ReadAllText($_.FullName))).kind })
+Check ($ackRun.code -eq 1 -and ($ackRun.out -like "*decisions ack is run by the Orc that asked*" -or $ackRun.out -like "*only the Orc that asked it acknowledges its answer*") -and $ackKinds -cnotcontains "question-acked" -and $ackKinds -cnotcontains "question-closed") ("ack: refused for a question no proven Orc asked, exit 1, and it stays open (" + $ackRun.out.Trim() + ")")
+$ackNoNumber = Invoke-Decisions @("ack") $notifyEnv
+Check ($ackNoNumber.code -ne 0 -and $ackNoNumber.out -like "*decisions ack needs the question's number*") "ack needs the question's number"
+
+Write-Host ""
 Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan
 # With HORDE_HOME empty and the profile aimed at a folder of this suite, the store must appear under
 # THAT profile's .horde - the default, proven without going near the real one.

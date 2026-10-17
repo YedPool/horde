@@ -221,6 +221,7 @@
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Operations.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Notify.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "decisions\Route.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 
 $script:HordeDecisionsChannelFolder = $PSScriptRoot
@@ -243,6 +244,11 @@ $script:HordeDecisionsChannelRankedKept = 64
 $script:HordeDecisionsChannelBellSeat = $null
 $script:HordeDecisionsChannelBellClock = $null
 $script:HordeDecisionsChannelBellRoot = ""
+# For a test only: the seat reader, the clock and the analyst's mail the router's turn is handed
+# (decisions/Route.ps1). $null, as everywhere but in a suite, means the real ones.
+$script:HordeDecisionsChannelRouteSeat = $null
+$script:HordeDecisionsChannelRouteClock = $null
+$script:HordeDecisionsChannelRouteAnalyst = $null
 # THE RECEIPTS' SIZE (the header, WHAT BECAME OF EACH ANSWER): for each passkey, the newest 64 answerIds
 # applied and 16 refused, and the newest 32 missing seqs looked for within 4096 below the highest; at
 # most 16 passkeys. About 3 KB at its fullest for one phone, within every page's frame.
@@ -546,6 +552,9 @@ function ConvertTo-HordeDecisionsChannelQuestion {
     # inbox (OUT, in the header).
     param($Question)
     $q = (ConvertTo-Json -InputObject $Question -Compress -Depth 20) | ConvertFrom-Json
+    # WHERE HIS ANSWERS WERE ROUTED is the keeper's record of its own sends (decisions/Route.ps1): which
+    # session, which notice. Nothing he reads, so it does not travel to his phone.
+    if ($null -ne $q.PSObject.Properties["routes"]) { $q.PSObject.Properties.Remove("routes") }
     if ($null -ne $q.PSObject.Properties["thread"]) {
         if ($null -ne $q.thread.PSObject.Properties["unread"]) { $q.thread.PSObject.Properties.Remove("unread") }
         if ($null -ne $q.thread.PSObject.Properties["messages"]) { foreach ($m in @($q.thread.messages)) { if ($null -ne $m.PSObject.Properties["unreadBy"]) { $m.PSObject.Properties.Remove("unreadBy") } } }
@@ -1024,12 +1033,27 @@ function Invoke-HordeDecisionsChannelBell {
     return [pscustomobject]@{ lines = $lines; againMs = [int]$turn.againMs }
 }
 
+function Invoke-HordeDecisionsChannelRoute {
+    # THE ROUTER (decisions/Route.ps1; the audit of 2026-10-16, finding 5): each answer of the founder's,
+    # from the phone, the window or the warchief's record of chat, is sent to the Orc that asked, once.
+    # This run is the process that is always there, so each Tick turns it once, beside the bell; the turn
+    # reads the store only when it changed or its passSeconds have passed, and stands aside while another
+    # router of this home is in a pass. { lines }. Never fails the Tick.
+    param($Context)
+    if (-not $Context.state.ContainsKey("decisions-route")) { $Context.state["decisions-route"] = @{} }
+    try {
+        $turn = Invoke-HordeDecisionRouteTurn -Memory $Context.state["decisions-route"] -HordeHome $Context.hordeHome -StoreRoot $Context.decisionsRoot -Seat $script:HordeDecisionsChannelRouteSeat -Clock $script:HordeDecisionsChannelRouteClock -Analyst $script:HordeDecisionsChannelRouteAnalyst
+    } catch { return [pscustomobject]@{ lines = @("route: the founder's answers could not be routed: " + $_.Exception.Message) } }
+    return [pscustomobject]@{ lines = @(@($turn.lines) | ForEach-Object { "route: " + $_ }) }
+}
+
 function Invoke-HordeDecisionsChannelTick {
-    # OUT, in the header, then THE BELL: { lines; failed; againMs }.
+    # OUT, in the header, then THE BELL, then THE ROUTER: { lines; failed; againMs }.
     param($Context)
     $out = Invoke-HordeDecisionsChannelSnapshotTick -Context $Context
     $bell = Invoke-HordeDecisionsChannelBell -Context $Context
-    return [pscustomobject]@{ lines = @(@($out.lines) + @($bell.lines)); failed = [bool]$out.failed; againMs = $bell.againMs }
+    $route = Invoke-HordeDecisionsChannelRoute -Context $Context
+    return [pscustomobject]@{ lines = @(@($out.lines) + @($bell.lines) + @($route.lines)); failed = [bool]$out.failed; againMs = $bell.againMs }
 }
 
 function Invoke-HordeDecisionsChannelSnapshotTick {

@@ -37,8 +37,8 @@
            Replace = 'foreach ($name in @("pane")) {' }
         # --- the seat is trusted only while the session is still there (review finding C5)
         @{ Name = "a-session-that-ended-still-holds"
-           Find = 'if ($running.state -cne "known") { return (New-HordeUnknown -Reason ("the " + $Role + "''s session ("'
-           Replace = 'if ($false) { return (New-HordeUnknown -Reason ("the " + $Role + "''s session ("' }
+           Find = 'if ($running.state -cne "known") { return (New-HordeUnknown -Reason ($What + "''s session ("'
+           Replace = 'if ($false) { return (New-HordeUnknown -Reason ($What + "''s session ("' }
         @{ Name = "a-process-that-is-not-verified-counts-as-running"
            Find = 'if ("$($record.processCheck)" -cne "verified" -or $started.state -cne "known") {'
            Replace = 'if ($false) {' }
@@ -74,6 +74,31 @@
            Replace = '' }
         @{ Name = "the-stored-word-may-be-asked-for"
            Find = 'if ($Table.native -cnotcontains $Role) { throw'
+           Replace = 'if ($false) { throw' }
+        # --- the seat of an Orc by its label (decisions/Route.ps1 sends an answer there)
+        @{ Name = "label-seat-an-unreadable-record-ignored"
+           Find = 'if ("$($records.complete.state)" -cne "known") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "label-seat-a-retired-record-still-wears-it"
+           Find = 'if ($gone.state -ceq "known" -and [bool]$gone.value) { continue }'
+           Replace = '' }
+        @{ Name = "label-seat-any-label-will-do"
+           Find = ' -or $worn.value -cne $Label) { continue }'
+           Replace = ') { continue }' }
+        @{ Name = "label-seat-label-compared-in-any-case"
+           Find = '$worn.value -cne $Label) { continue }'
+           Replace = '$worn.value -ne $Label) { continue }' }
+        @{ Name = "label-seat-any-role-will-do"
+           Find = 'if ($held.state -cne "known" -or "$($held.value)" -cne $Role) { continue }'
+           Replace = '' }
+        @{ Name = "label-seat-the-first-of-two-is-chosen"
+           Find = 'if ($wearers.Count -ne 1) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "label-seat-not-proven-still-there"
+           Find = 'return (Confirm-HordeSeatHolder -Holder $wearers[0] -Registry $records -Identity $Identity -What $what)'
+           Replace = 'return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = $wearers[0].id; pane = "19"; instance = "zorb-instance-1" }))' }
+        @{ Name = "label-seat-a-role-that-is-none-is-asked"
+           Find = 'if (@($Table.native) -cnotcontains $Role) { throw'
            Replace = 'if ($false) { throw' }
     )
 }
