@@ -94,6 +94,13 @@ try {
     $inRepo = Join-Path $fakeRepo "keep\net.txt"
     $rr = Register-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -SecretFile $inRepo -HordeHome $H -RegistryRoot $fleetPin.path -FleetLabels @() -TestSeamRepoRoot $fakeRepo
     Check (-not $rr.ok -and $rr.reason -like "*inside Horde's own folder*" -and -not (Test-Path $fakeRepo)) "a secret file inside the checkout is refused, and nothing is made there"
+    # The seam only ADDS a folder: the real checkout stays guarded when it is set.
+    $realIn = Join-Path $root "never-made-by-this-suite\net.txt"
+    $rr3 = Register-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -SecretFile $realIn -HordeHome $H -RegistryRoot $fleetPin.path -FleetLabels @() -TestSeamRepoRoot $fakeRepo
+    Check (-not $rr3.ok -and $rr3.reason -like "*inside Horde's own folder*" -and -not (Test-Path (Split-Path $realIn))) "THE TEST SEAM CANNOT SWITCH OFF THE REAL GUARD: with it set, a file in the real checkout is still refused"
+    # The owner rule, with the environment made a parameter (an elevated process owns what it creates as Administrators).
+    Check ((Test-HordeSecretFileOwner -Owner "S-1-5-21-1-2-3-1001" -Mine "S-1-5-21-1-2-3-1001" -Elevated $false) -and -not (Test-HordeSecretFileOwner -Owner "S-1-5-21-1-2-3-1002" -Mine "S-1-5-21-1-2-3-1001" -Elevated $true)) "the owner must be the current user; another user never"
+    Check ((Test-HordeSecretFileOwner -Owner "S-1-5-32-544" -Mine "S-1-5-21-1-2-3-1001" -Elevated $true) -and -not (Test-HordeSecretFileOwner -Owner "S-1-5-32-544" -Mine "S-1-5-21-1-2-3-1001" -Elevated $false)) "the Administrators group may own it only when the process is elevated"
     $rr2 = Register-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -SecretFile (Join-Path $work "outside\net.txt") -HordeHome $H -RegistryRoot $fleetPin.path -FleetLabels @() -TestSeamRepoRoot $fakeRepo
     Check ($rr2.ok) "CONTROL: a secret file beside the checkout, not in it, is accepted"
     $null = Remove-HordeNoticeService -Registrar (Proven (Sid 1) "M") -Name "repo-service" -HordeHome $H
@@ -210,12 +217,15 @@ try {
 
     Write-Host ""
     Write-Host "--- 4. the session rule: no session takes a service's form, and the registry's labels are really read ---" -ForegroundColor Cyan
-    foreach ($lbl in @("service: postmerge-net", "Service:x", "  SERVICE : y", "services: x", "service; x", "service - x", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", ([string][char]0x200B + "service: x"))) {
+    foreach ($lbl in @("service: postmerge-net", "Service:x", "  SERVICE : y", "services: x", "service; x", "service - x", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", ([string][char]0x200B + "service: x"), "servlce: postmerge-net", "SERVlCE", "serv|ce", "serv!ce", '$ervice', "servi(e", "seruice", "servise", "servce", "serrvice", "sxrvice", "servic3: x", "serv1c3", "serv|c", "serv!c", "servlc", '$ervic', "servi(", "servi<", "servi[", "servi{", "seruic", "s3rvic", "s3rv1c3")) {
         Check (Test-HordeNoticeServiceForm -Label $lbl) ("a session label '" + $lbl.Trim() + "' reads as a service's, so Resolve-HordeNoticeSender refuses it")
     }
-    foreach ($lbl in @("M", "E3", "Orc E3", "C12", "Thrall", "the service desk")) { Check (-not (Test-HordeNoticeServiceForm -Label $lbl)) ("CONTROL: the ordinary label '" + $lbl + "' is not refused") }
+    foreach ($lbl in @("M", "E3", "Orc E3", "C12", "Thrall", "the service desk", "server", "serene", "serve", "A1")) { Check (-not (Test-HordeNoticeServiceForm -Label $lbl)) ("CONTROL: the ordinary label '" + $lbl + "' is not refused") }
     foreach ($lbl in @([string]::Concat([char]0x0455, [char]0x0435, [char]0x0433, [char]0x0475, [char]0x0456, [char]0x0441, [char]0x0435, ": x"), [string]::Concat("service", [char]0x3164), (-join ([char]0x05E9, [char]0x05DC, [char]0x05D5, [char]0x05DD)))) {
         Check ((Get-HordeNoticeShownLabel -Label $lbl) -ceq "a session") "a label that is not printable ASCII is shown as a session"
+    }
+    foreach ($lbl in @([string]::Concat("serv", [char]0x00EC, "ce"), [string]::Concat("a", [char]0x007F, "b"), [string]::Concat("a", [char]0x00A0, "b"), [string]::Concat("caf", [char]0x00E9))) {
+        Check ((Get-HordeNoticeShownLabel -Label $lbl) -ceq "a session") ("a label with a character in 0x7F-0xFF is shown as a session: U+" + ([int][char]$lbl[-1]).ToString("X4"))
     }
     Check ((Get-HordeNoticeShownLabel -Label "Orc E3") -ceq "Orc E3") "CONTROL: a printable ASCII label is shown as written"
     # THE OWNER: a file owned by someone else (the system's own hosts file belongs to the installer) is refused first.
@@ -274,6 +284,9 @@ try {
     $r = Invoke-HordeCliProcess -Root $root -Shell "pwsh.exe" -HordeArgs @("help") -Env $envNone
     Check ($r.code -eq 0 -and $r.out -like "*notify-service*" -and $r.out.Contains("notify -Text <one line> [-Service")) "horde help lists both commands"} finally {
     $env:HORDE_HOME = $realHome
+    # a broken guard would have made this folder in the real checkout: never leave it (the one name this suite makes there)
+    $strayDir = Join-Path $root "never-made-by-this-suite"
+    if ((Split-Path -Leaf $strayDir) -ceq "never-made-by-this-suite" -and (Test-Path -LiteralPath $strayDir)) { Remove-Item -LiteralPath $strayDir -Recurse -Force -ErrorAction SilentlyContinue }
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     if ((Split-Path -Leaf $work) -match '^horde-noticesvc-[0-9a-f]{32}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
     Check (-not (Test-Path -LiteralPath $work)) "every folder the suite made is gone"

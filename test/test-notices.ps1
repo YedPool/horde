@@ -97,7 +97,7 @@ try {
     # printable ASCII after invisibles are stripped; any other is shown as "a session". The ASCII ones that start with "service"
     # (however dressed) are refused.
     $zw = [string][char]0x200B
-    $asciiHostile = @("service: postmerge-net", "services: x", "  SERVICE : y", "service; x", "service - x", "service x", "service", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", "s e r v i c e", "[service] x",
+    $asciiHostile = @("service: postmerge-net", "services: x", "  SERVICE : y", "service; x", "service - x", "service x", "service", "5ervice: x", "serv1ce: x", "s-e-r-v-i-c-e: x", "s e r v i c e", "servlce: postmerge-net", "SERVlCE", "serv|ce", "serv!ce", '$ervice', "servi(e", "seruice", "servise", "servce", "serrvice", "sxrvice", "servic3: x", "serv1c3", "servi<e", "servi[e", "servi{e", "serv|c", "serv!c", "servlc", '$ervic', "servi(", "servi<", "servi[", "servi{", "seruic", "s3rvic", "s3rv1c3", "[service] x",
         ($zw + "service: x"), ("ser" + $zw + "vice: x"), [string]::Concat("ser", [char]0x034F, "vice: x"), [string]::Concat("service", [char]0xFE0F, ": x"), [string]::Concat("ser", [char]::ConvertFromUtf32(0xE0020), "vice: x"))
     foreach ($lbl in $asciiHostile) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
@@ -110,7 +110,8 @@ try {
         [string]::Concat([char]0xA731, [char]0x1D07, [char]0x0280, [char]0x1D20, [char]0x026A, [char]0x1D04, [char]0x1D07, ": x"),
         [string]::Concat([char]0x13DA, [char]0x13AC, [char]0x13A1, [char]0x13D9, [char]0x13A5, [char]0x13DF, [char]0x13AC, ": x"),
         [string]::Concat("service", [char]0x3164, ": x"), [string]::Concat("s", [char]0x212E, "rvice: x"), [string]::Concat("ser", [char]0x0475, "ice: x"),
-        [string]::Concat([char]0x05E9, [char]0x05DC, [char]0x05D5, [char]0x05DD, ": x"))
+        [string]::Concat([char]0x05E9, [char]0x05DC, [char]0x05D5, [char]0x05DD, ": x"),
+        [string]::Concat("serv", [char]0x00EC, "ce: x"), [string]::Concat("serv", [char]0x00A1, "ce"), [string]::Concat("caf", [char]0x00E9), [string]::Concat("a", [char]0x00A0, "b"))
     foreach ($lbl in $lookalikes) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
         $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
@@ -119,11 +120,12 @@ try {
     Write-Registry -Root $reg -SessionId (Sid 1) -Label ($zw + "E9")
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
     Check ($who.ok -and $who.label -ceq "E9" -and $who.labelSource -ceq "registry") "CONTROL: an invisible format character is not part of the label that is shown, and its source is the registry"
-    foreach ($lbl in @("Orc E3", "C12", "the service desk", "Thrall", "M")) {
+    foreach ($lbl in @("Orc E3", "C12", "the service desk", "server", "serene", "Thrall", "M", "A1", "E", "serve")) {
         Write-Registry -Root $reg -SessionId (Sid 1) -Label $lbl
         $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $tab -RegistryRoot $reg -Self 300
         Check ($who.ok -and $who.label -ceq $lbl) ("CONTROL: the ordinary label '" + $lbl + "' is still proven and shown as written")
-    }    Write-Registry -Root $reg -SessionId (Sid 1) -Label "E"
+    }
+    Write-Registry -Root $reg -SessionId (Sid 1) -Label "E"
     # 300's parent pid 200 now belongs to a process started AFTER 300: a stranger, not its parent.
     $reused = Table @(@(100, 1, $t0), @(200, 100, $t0.AddSeconds(9)), @(300, 200, $t0.AddSeconds(2)))
     $who = Resolve-HordeNoticeSender -Environment @{ $sessionVariable = (Sid 1) } -Identity $ident -Processes $reused -RegistryRoot $reg -Self 300

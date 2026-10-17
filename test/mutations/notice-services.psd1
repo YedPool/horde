@@ -36,6 +36,12 @@
         @{ Name = "a-file-of-another-owner-is-accepted"
            Find = 'if ($owner -cne $mine -and -not ($admin -and $owner -ceq "S-1-5-32-544")) {'
            Replace = 'if ($false) {' }
+        @{ Name = "an-administrators-owner-is-allowed-without-elevation"
+           Find = 'return ($Owner -ceq $Mine -or ($Elevated -and $Owner -ceq "S-1-5-32-544"))'
+           Replace = 'return ($Owner -ceq $Mine -or $Owner -ceq "S-1-5-32-544")' }
+        @{ Name = "the-seam-replaces-the-real-guard"
+           Find = '$repos = @((Split-Path -Parent $PSScriptRoot))'
+           Replace = '$repos = @()' }
         @{ Name = "writing-the-permissions-is-allowed"
            Find = '([int]$r.FileSystemRights -band 0x40000) -ne 0 -or ([int]$r.FileSystemRights -band 0x80000) -ne 0 -or'
            Replace = '' }

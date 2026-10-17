@@ -21,12 +21,33 @@
         @{ Name = "a-non-ascii-label-is-shown-as-itself"
            Find = 'if ($Label -cmatch ''[^\x20-\x7E]'') { return "a session" }'
            Replace = 'if ($false) { return "a session" }' }
-        @{ Name = "digits-do-not-stand-for-letters"
-           Find = '$t = $t.Replace(''0'', ''o'').Replace(''1'', ''i'').Replace(''3'', ''e'').Replace(''5'', ''s'')'
+        @{ Name = "the-gate-lets-latin-1-through"
+           Find = 'if ($Label -cmatch ''[^\x20-\x7E]'') { return "a session" }'
+           Replace = 'if ($Label -cmatch ''[^\x20-\xFF]'') { return "a session" }' }
+        @{ Name = "three-does-not-read-as-e"
+           Find = '    $map[''3''] = ''e'''
            Replace = '' }
-        @{ Name = "a-mark-between-the-letters-hides-the-word"
-           Find = '$t = [regex]::Replace($t, ''[^a-z]'', '''')'
-           Replace = '$t = [regex]::Replace($t, ''[^a-z -]'', '''')' }
+        @{ Name = "l-pipe-and-bang-do-not-read-as-i"
+           Find = 'foreach ($c in ''|'', ''!'', ''1'', ''l'') { $map["$c"] = ''i'' }'
+           Replace = 'foreach ($c in ''1'') { $map["$c"] = ''i'' }' }
+        @{ Name = "dollar-and-five-do-not-read-as-s"
+           Find = 'foreach ($c in ''$'', ''5'') { $map["$c"] = ''s'' }'
+           Replace = 'foreach ($c in ''5'') { $map["$c"] = ''s'' }' }
+        @{ Name = "brackets-and-paren-do-not-read-as-c"
+           Find = 'foreach ($c in ''('', ''<'', ''['', ''{'') { $map["$c"] = ''c'' }'
+           Replace = '' }
+        @{ Name = "u-does-not-read-as-v"
+           Find = '    $map[''u''] = ''v'''
+           Replace = '' }
+        @{ Name = "one-edit-from-service-is-allowed"
+           Find = 'if ($sk.Length -ge $n -and (Test-HordeWithinOneEdit -A $sk.Substring(0, $n) -B "service")) { return $true }'
+           Replace = 'if ($sk.Length -ge $n -and $sk.Substring(0, $n) -ceq "service") { return $true }' }
+        @{ Name = "an-added-letter-is-not-an-edit"
+           Find = 'foreach ($n in 6, 7, 8) {'
+           Replace = 'foreach ($n in 6, 7) {' }
+        @{ Name = "a-missing-letter-is-not-an-edit"
+           Find = 'foreach ($n in 6, 7, 8) {'
+           Replace = 'foreach ($n in 7, 8) {' }
         @{ Name = "an-invisible-character-is-part-of-the-label"
            Find = '$label = (Remove-HordeNoticeInvisible -Text $label).Trim()'
            Replace = '$label = $label.Trim()' }

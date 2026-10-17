@@ -193,6 +193,13 @@ function New-HordeLockedSecretFile {
     $fs.Dispose()
 }
 
+function Test-HordeSecretFileOwner {
+    # May a secret file be owned by -Owner? The current user (-Mine); or the Administrators group when the process is elevated
+    # (-Elevated), which owns what an elevated process creates. Nobody else.
+    param([string]$Owner, [string]$Mine, [bool]$Elevated)
+    return ($Owner -ceq $Mine -or ($Elevated -and $Owner -ceq "S-1-5-32-544"))
+}
+
 function Test-HordeSecretFileOpen {
     # Can anyone but the current Windows user and SYSTEM read -Path? "" when not, else the reason. ONLY those two may hold an
     # allowing entry (S4): not Administrators, not Domain Users, not NETWORK, not a named other user. A file whose access
@@ -205,13 +212,13 @@ function Test-HordeSecretFileOpen {
         # the Administrators group, which owns what an elevated process creates).
         $owner = (Get-HordeFileAcl -Path $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
         $admin = ([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-        if ($owner -cne $mine -and -not ($admin -and $owner -ceq "S-1-5-32-544")) { return ("the secret file is owned by " + $owner + ", not by the current user; its owner could give himself access") }
+        if (-not (Test-HordeSecretFileOwner -Owner $owner -Mine $mine -Elevated $admin)) { return ("the secret file is owned by " + $owner + ", not by the current user; its owner could give himself access") }
         foreach ($r in @((Get-HordeFileAcl -Path $Path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
             if ($r.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
             $sid = $r.IdentityReference.Value
             if ($allowed -ccontains $sid) { continue }
             $read = [System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ExecuteFile
-            if (([int]$r.FileSystemRights -band [int]$read) -ne 0 -or ([int]$r.FileSystemRights -band 0x10000000) -ne 0 -or ([int]$r.FileSystemRights -band 0x40000) -ne 0 -or ([int]$r.FileSystemRights -band 0x80000) -ne 0 -or ([int]$r.FileSystemRights -band [int]::MinValue) -ne 0) { return ("the secret file can be read by " + $sid + ", not only by the current user and SYSTEM; it must be the service's user's alone") }
+            if (([int]$r.FileSystemRights -band [int]$read) -ne 0 -or ([int]$r.FileSystemRights -band 0x10000000) -ne 0 -or ([int]$r.FileSystemRights -band 0x20000000) -ne 0 -or ([int]$r.FileSystemRights -band 0x40000) -ne 0 -or ([int]$r.FileSystemRights -band 0x80000) -ne 0 -or ([int]$r.FileSystemRights -band [int]::MinValue) -ne 0) { return ("the secret file can be read by " + $sid + ", not only by the current user and SYSTEM; it must be the service's user's alone") }
         }
     } catch { return ("the secret file's access could not be checked: " + $_.Exception.Message) }
     return ""
@@ -240,11 +247,13 @@ function Register-HordeNoticeService {
     if ($bad -cne "") { return (& $no ("no service was registered: " + $bad)) }
     if ($SecretFile.Trim() -ceq "" -or -not [System.IO.Path]::IsPathRooted($SecretFile)) { return (& $no "no service was registered: -SecretFile must be an absolute path of a file that does not exist yet") }
     $SecretFile = [System.IO.Path]::GetFullPath($SecretFile)
-    # N8: never inside this checkout, where a commit could carry it away.
-    # -TestSeamRepoRoot: a TEST SEAM (the command line never passes it), so a suite points the guard at a throwaway folder and never at the real checkout.
-    if ($TestSeamRepoRoot -ceq "") { $TestSeamRepoRoot = Split-Path -Parent $PSScriptRoot }
-    $repo = [System.IO.Path]::GetFullPath($TestSeamRepoRoot).TrimEnd([char]'\') + '\'
-    if ($SecretFile.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) { return (& $no "no service was registered: -SecretFile is inside Horde's own folder; put it somewhere that is not in a repository") }
+    # N8: never inside this checkout, where a commit could carry it away. A mistake guard on the path as written: a junction, an
+    # 8.3 name, a subst drive or a UNC alias of the checkout is not caught.
+    # -TestSeamRepoRoot: a TEST SEAM (the command line never passes it). It can only ADD a folder to refuse: the real checkout is always guarded.
+    $repos = @((Split-Path -Parent $PSScriptRoot))
+    if ($TestSeamRepoRoot -cne "") { $repos += $TestSeamRepoRoot }
+    $inside = @($repos | Where-Object { $SecretFile.StartsWith(([System.IO.Path]::GetFullPath($_).TrimEnd([char]'\') + '\'), [System.StringComparison]::OrdinalIgnoreCase) })
+    if ($inside.Count -gt 0) { return (& $no "no service was registered: -SecretFile is inside Horde's own folder; put it somewhere that is not in a repository") }
     try {
         return (Use-HordeNoticeLock -Store $st.store -Body {
             $cur = Read-HordeNoticeServices -Store $st.store
