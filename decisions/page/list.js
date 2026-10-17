@@ -78,7 +78,8 @@
 // ONCE HE HAS ANSWERED, THE QUESTION LEAVES HIS LIST (the same day: "once he answers a question it
 // goes away from his list"). The words turn green when the host says they are saved; a moment later
 // the question folds to one line that says Answered; and when a list arrives that holds the answer it
-// moves to the folded With Thrall, below. It never comes back by itself: the keeper asks what is
+// moves to the folded With Thrall, below - unless that fold is hidden (the phone's default): then the
+// folded line, with "Change my answer" beside it, STAYS in his list until the Orc closes the question. It never comes back by itself: the keeper asks what is
 // left as a NEW question, which shows the old one and his answer folded under it ("Follows up on
 // question N"). An answer that was NOT saved never turns green: the field keeps the words and the
 // reason stands under them.
@@ -168,9 +169,9 @@
 // A question that is CLOSED has no button: "This question is closed - Orc X has acted on it. To change
 // course, ask a follow-up." (the view's actedBy names who).
 //
-// THE BUTTON IS ALSO ON THE FOLDED "Answered" LINE of a question in his list (the coordinator, 2026-10-17): right
-// after a wrong tap the question stands folded to that line for a moment, and "Change my answer" is beside it,
-// so he reaches it without switching the answered fold on. The one in the expanded row (With Thrall) stays.
+// THE BUTTON IS ALSO ON THE FOLDED "Answered" LINE of a question in his list (the coordinator, 2026-10-17): an answered
+// question that is not closed stands folded to that line in his list until the Orc closes it (answered fold
+// hidden), and "Change my answer" is beside it, so he reaches it without switching the answered fold on. The one in the expanded row (With Thrall) stays.
 //
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
@@ -774,7 +775,10 @@
       if (did !== "unpark" && parked[textOf(q.group)] === true) { return "parked"; }
       if (reopened[q.number] === true) { return "main"; }
       var st = stateOf(q);
-      if (st.answered) { return (st.local || lingers(q)) ? "main" : "thrall"; }
+      // WHILE THE ANSWERED FOLD IS HIDDEN (the phone's default) an answered question that is not closed stays in
+      // his list, folded to "Answered" with "Change my answer" beside it, until the Orc closes it (T-0152): it
+      // never drops out of reach after a moment. Closed, it is history (above), in the hidden fold.
+      if (st.answered) { return (!answeredShown || st.local || lingers(q)) ? "main" : "thrall"; }
       var msgs = messagesOf(q);
       var last = msgs.length ? msgs[msgs.length - 1] : null;
       if (last && last.asks === false && msgs.some(function (m) { return m.speaker === MINE; })) { return "thrall"; }

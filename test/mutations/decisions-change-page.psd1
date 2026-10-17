@@ -76,6 +76,9 @@
         @{ Name = "the-folded-answered-line-has-no-change-button"
            Find = '      line.chg.hidden = !(folded && textOf(q.state) === LISTED_STATE && reopened[q.number] !== true);'
            Replace = '      line.chg.hidden = true;' }
+        @{ Name = "the-folded-line-drops-to-the-hidden-fold-after-the-old-linger"
+           Find = '      if (st.answered) { return (!answeredShown || st.local || lingers(q)) ? "main" : "thrall"; }'
+           Replace = '      if (st.answered) { return (st.local || lingers(q)) ? "main" : "thrall"; }' }
         @{ Name = "the-button-on-the-folded-line-reopens-nothing"
            Find = '      chg.addEventListener("click", function (e) { e.stopPropagation(); reopen(drawn.q); });'
            Replace = '' }

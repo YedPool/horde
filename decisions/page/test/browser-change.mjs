@@ -181,6 +181,23 @@ try {
     return { folded: w.classList.contains('answered'), answered: vis(d) ? d.textContent : '', button: vis(b) ? b.textContent : '', h: r ? r.height : 0, switchText: document.querySelector('#list .hd-showans').textContent }; })()`);
   check(!!fl && fl.folded && fl.answered === "Answered" && fl.button === "Change my answer" && fl.h >= 44, "RIGHT AFTER A WRONG TAP, with the answered fold off, the folded 'Answered' line has 'Change my answer' beside it (44 px)", JSON.stringify(fl));
   check(!!fl && /: off/.test(fl.switchText), "and nothing had to be switched on to reach it", JSON.stringify(fl && fl.switchText));
+  // WELL AFTER THE OLD 4 SECONDS (the page used to move the line to the hidden fold then), and with the list that
+  // holds his answer arrived, the folded line and its button are still in his list: the Orc has not closed it.
+  await sleep(6000);
+  const held = withWording(question(30, { askedBy: "Orc F", thread: { messages: [said(77, "The wrong option.")] } }));
+  await hostList([held]);
+  await settle();
+  const late = await evaluate(`(() => { ${vis} const w = ${FIND_ROW(30)}; if (!w) return null; const b = w.querySelector('.hd-changebtn'); const d = w.querySelector('.hd-answered'); const r = b ? b.getBoundingClientRect() : null;
+    return { folded: w.classList.contains('answered'), inFold: w.classList.contains('hd-done'), answered: vis(d) ? d.textContent : '', button: vis(b) ? b.textContent : '', h: r ? r.height : 0, switchText: document.querySelector('#list .hd-showans').textContent }; })()`);
+  check(!!late && late.folded && !late.inFold && late.answered === "Answered" && late.button === "Change my answer" && late.h >= 44 && /: off/.test(late.switchText), "WELL AFTER THE OLD 4 SECONDS (8 s after the tap), with the list that holds his answer arrived and the answered fold off, the folded 'Answered' line and its button are still in his list", JSON.stringify(late));
+  // The Orc closes it: it leaves his list for the hidden fold, as before.
+  await hostList([withWording(question(30, { askedBy: "Orc F", state: "closed", closedAt: "2026-10-17T12:00:00Z", closedBy: "Orc F", actedBy: "Orc F", outcome: "Done.", thread: { messages: [said(77, "The wrong option.")] } }))]);
+  await settle();
+  const shut = await row(30);
+  const shutRows = await evaluate("document.querySelectorAll('#list .hd-q').length");
+  check(shut === null && shutRows === 0, "WHEN THE ORC CLOSES IT, the line is gone from his list, into the hidden fold", JSON.stringify({ shut, shutRows }));
+  await hostList([held]);
+  await settle();
   await tapIn(30, ".hd-changebtn");
   await sleep(100); await settle();
   const again = await row(30);
