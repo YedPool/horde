@@ -72,5 +72,15 @@
         @{ Name = "a-saved-change-leaves-the-question-reopened"
            Find = '      if (savedNow && drafts[number] === undefined) { delete reopened[number]; }'
            Replace = '' }
+        # --- the button on the folded Answered line, and a question of parts
+        @{ Name = "the-folded-answered-line-has-no-change-button"
+           Find = '      line.chg.hidden = !(folded && textOf(q.state) === LISTED_STATE && reopened[q.number] !== true);'
+           Replace = '      line.chg.hidden = true;' }
+        @{ Name = "the-button-on-the-folded-line-reopens-nothing"
+           Find = '      chg.addEventListener("click", function (e) { e.stopPropagation(); reopen(drawn.q); });'
+           Replace = '' }
+        @{ Name = "changing-one-part-sends-every-part"
+           Find = '      if (text.trim() === "" || (saved && text === textOf(saved.text))) { return false; }'
+           Replace = '      if (text.trim() === "") { return false; }' }
     )
 }

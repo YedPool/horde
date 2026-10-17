@@ -166,6 +166,48 @@ try {
   k = await row(18);
   check(!!k && k.value === "Option two.", "and the words he typed and dropped do not come back: the box holds his answer again", JSON.stringify(k && k.value));
 
+  // ---------------- 5b. THE BUTTON ON THE FOLDED 'Answered' LINE ----------------
+  // Right after a wrong tap, with the answered fold still OFF (the default): the question stands folded to
+  // 'Answered' for a moment, and the button is beside it.
+  await load("/cards.html?say=ok"); await ready();
+  await evaluate("localStorage.clear(), true");
+  await load("/cards.html?say=ok"); await ready();
+  await hostList([withWording(question(30, { askedBy: "Orc F", thread: { messages: [] } }))]);
+  await tapIn(30, ".hd-box > textarea");
+  await type("The wrong option.");
+  await tapIn(30, ".hd-send");
+  await sleep(1800); await settle();
+  let fl = await evaluate(`(() => { ${vis} const w = ${FIND_ROW(30)}; if (!w) return null; const b = w.querySelector('.hd-changebtn'); const d = w.querySelector('.hd-answered'); const r = b ? b.getBoundingClientRect() : null;
+    return { folded: w.classList.contains('answered'), answered: vis(d) ? d.textContent : '', button: vis(b) ? b.textContent : '', h: r ? r.height : 0, switchText: document.querySelector('#list .hd-showans').textContent }; })()`);
+  check(!!fl && fl.folded && fl.answered === "Answered" && fl.button === "Change my answer" && fl.h >= 44, "RIGHT AFTER A WRONG TAP, with the answered fold off, the folded 'Answered' line has 'Change my answer' beside it (44 px)", JSON.stringify(fl));
+  check(!!fl && /: off/.test(fl.switchText), "and nothing had to be switched on to reach it", JSON.stringify(fl && fl.switchText));
+  await tapIn(30, ".hd-changebtn");
+  await sleep(100); await settle();
+  const again = await row(30);
+  check(!!again && again.field && again.value === "The wrong option." && again.selFrom === 0 && again.selTo === "The wrong option.".length && again.focused && again.keep === "Keep my answer", "a tap on it reopens the box with the answer selected and the caret in it", JSON.stringify(again));
+
+  // ---------------- 5c. A QUESTION OF PARTS: CHANGE PART b, PART a IS UNTOUCHED ----------------
+  const partMsg = (seq, part, text) => ({ ...said(seq, text), part });
+  await load("/cards.html?say=ok"); await ready();
+  await hostList([withWording(question(40, { askedBy: "Orc F", kind: "parts", parts: ["(a) The first step", "(b) The second step"], thread: { messages: [partMsg(41, "a", "Yes to a."), partMsg(42, "b", "Yes to b.")] } }))]);
+  await showAnswered();
+  const pr = await row(40);
+  check(!!pr && pr.done && pr.button === "Change my answer", "CONTROL: a question of parts, every part answered, shows the button in its answered row", JSON.stringify(pr));
+  await tapIn(40, ".hd-changebtn");
+  await sleep(100); await settle();
+  const pf = await evaluate(`(() => { const w = ${FIND_ROW(40)}; const f = Array.from(w.querySelectorAll('.hd-partfield')); return { n: f.length, v: f.map((x) => x.value), done: w.classList.contains('hd-done') }; })()`);
+  check(pf.n === 2 && pf.v[0] === "Yes to a." && pf.v[1] === "Yes to b." && !pf.done, "a tap reopens every part's box with its own answer in it", JSON.stringify(pf));
+  const said0 = (await evaluate("window.said")).length;
+  await evaluate(`(() => { const w = ${FIND_ROW(40)}; const f = w.querySelectorAll('.hd-partfield')[1]; f.scrollIntoView({ block: 'center' }); f.focus(); f.select(); return true; })()`);
+  await type("No to b.");
+  const sendB = await evaluate(`(() => { const w = ${FIND_ROW(40)}; const s = w.querySelectorAll('.hd-send')[1]; s.scrollIntoView({ block: 'center' }); const r = s.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await touch(sendB.x, sendB.y);
+  await sleep(300); await settle();
+  const sentParts = (await evaluate("window.said")).slice(said0);
+  check(sentParts.length === 1 && sentParts[0].n === 40 && sentParts[0].t === "(b) No to b.", "changing part b sends part b alone: one answer, for (b)", JSON.stringify(sentParts));
+  const after2 = await evaluate(`(() => { const w = ${FIND_ROW(40)}; return Array.from(w.querySelectorAll('.hd-partfield')).map((x) => x.value); })()`);
+  check(after2[0] === "Yes to a." && after2[1] === "No to b.", "and part a's answer is untouched", JSON.stringify(after2));
+
   // ---------------- 6. A HOST THAT REFUSES ----------------
   await load("/cards.html?say=refuse"); await ready();
   await hostList(LIST());

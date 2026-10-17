@@ -168,6 +168,10 @@
 // A question that is CLOSED has no button: "This question is closed - Orc X has acted on it. To change
 // course, ask a follow-up." (the view's actedBy names who).
 //
+// THE BUTTON IS ALSO ON THE FOLDED "Answered" LINE of a question in his list (the coordinator, 2026-10-17): right
+// after a wrong tap the question stands folded to that line for a moment, and "Change my answer" is beside it,
+// so he reaches it without switching the answered fold on. The one in the expanded row (With Thrall) stays.
+//
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
 //
@@ -966,6 +970,7 @@
       line.done.hidden = !folded;
       line.done.textContent = line.parts ? WORDS.answered : foldedWords(standingOf(q));
       line.keep.hidden = reopened[q.number] !== true;
+      line.chg.hidden = !(folded && textOf(q.state) === LISTED_STATE && reopened[q.number] !== true);
     }
     // The word an answered question or part folds to: Answered, and while the host says the answer is
     // still on its way, what became of it so far (header, WHAT BECAME OF AN ANSWER).
@@ -1746,6 +1751,11 @@
       var keep = make("button", "hd-keep", WORDS.keep);
       keep.type = "button";
       keep.hidden = true;
+      // "Change my answer" beside the folded Answered line (see the header): shown only while the line is.
+      var chg = make("button", "hd-changebtn", WORDS.change);
+      chg.type = "button";
+      chg.tabIndex = -1;
+      chg.hidden = true;
       // ONE STAGE (header): the context stands in the one run of details, after what was said and
       // before the label and the box - never under the box, where it read as a second showing.
       var subBox = make("div", "hd-sub");
@@ -1753,10 +1763,11 @@
       var subs = drawSubs(q, subBox);
       if (!subBox.hidden) { ans.classList.add("wide"); }
       ans.appendChild(ansLabel);
-      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done); ans.appendChild(keep);
+      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal); ans.appendChild(done); ans.appendChild(chg); ans.appendChild(keep);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
-      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, rankBox: rankBox, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, ansLabel: ansLabel, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, keep: keep, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, rankBox: rankBox, tagBox: tagBox, tags: tags, talk: talk, subBox: subBox, ansLabel: ansLabel, field: field, fields: fields, rows: rows, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, done: done, chg: chg, keep: keep, said: said, subs: subs };
+      chg.addEventListener("click", function (e) { e.stopPropagation(); reopen(drawn.q); });
       keep.addEventListener("click", function (e) {
         e.stopPropagation();
         var n = drawn.q.number;

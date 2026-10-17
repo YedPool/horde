@@ -173,7 +173,7 @@
 .hd-closedline { color: var(--ink); }
 .hd-changebtn, .hd-keep { font: inherit; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 3px; margin: 4px 0 0 0; padding: 4px 12px; min-height: 44px; cursor: pointer; }
 .hd-changebtn:focus-visible, .hd-keep:focus-visible { outline: 1px solid var(--accent); }
-.hd-keep[hidden] { display: none; }
+.hd-keep[hidden], .hd-changebtn[hidden] { display: none; }
 .hd-q.answered .hd-keep { display: none; }
 @media (max-width: 520px) {
   .hd-count { display: none; }
