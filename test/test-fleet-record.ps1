@@ -212,4 +212,19 @@ Check ($c.code -eq 0 -and $c.out -like "*horde fleet record*") "horde help lists
 
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
+Section "a reason is one line of at most 600 characters, cut cleanly (T-0216)"
+function Test-ReasonOf { param([string]$Text) $q = [pscustomobject]@{ state = "recorded"; history = @() }; Add-HordeFleetState -Session $q -State "failed" -At ([datetime]::new(2026, 10, 16, 9, 0, 0, [System.DateTimeKind]::Utc)) -Reason $Text; return ("" + $q.history[-1].reason) }
+Check ((Test-ReasonOf ("a" * 600)).Length -eq 600 -and (Test-ReasonOf ("a" * 600)) -ceq ("a" * 600)) "a reason of exactly 600 characters is kept whole"
+$cut = Test-ReasonOf ("a" * 601)
+Check ($cut.Length -eq 600 -and $cut -ceq (("a" * 597) + "...")) ("one of 601 is cut to 597 and three dots, 600 in all (" + $cut.Length + ")")
+$cut = Test-ReasonOf ("a" * 5000)
+Check ($cut.Length -eq 600 -and $cut.EndsWith("...")) "a very long one is cut to 600"
+$pair = ([string][char]0xD83D) + ([string][char]0xDE00)
+$cut = Test-ReasonOf (("a" * 596) + $pair + ("b" * 100))
+Check ($cut -ceq (("a" * 596) + "...")) ("a cut that would fall between the halves of a surrogate pair is made before the pair (" + $cut.Length + ")")
+$lone = @($cut.ToCharArray() | Where-Object { [char]::IsSurrogate($_) })
+Check ($lone.Count -eq 0) "so no lone surrogate is left"
+$cut = Test-ReasonOf (("a" * 595) + $pair + ("b" * 100))
+Check ($cut -ceq (("a" * 595) + $pair + "b" + "...")) "CONTROL: a pair wholly inside the kept part is kept"
+
 Complete-HordeSuite -Success "a hibernation record holds exactly the running, unretired sessions asked for, and nothing is written when that cannot be known"

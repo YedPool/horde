@@ -379,13 +379,57 @@ Check (@($entries | Where-Object { $_.kind -ceq "would-nudge" }).Count -eq 0 -an
 $bad = Join-Path (Get-HordeFleetHibernationsDir -HordeHome $script:hh) "20990101-000000"
 [void](New-Item -ItemType Directory -Path $bad -Force)
 [System.IO.File]::WriteAllText((Join-Path $bad "record.json"), "{ not json")
-Check ((Get-HordeFleetAsleep -HordeHome $script:hh).state -ceq "unknown") "one unreadable record makes who sleeps unknown, never a shorter list"
+# A CORRUPT RECORD IS SKIPPED, REPORTED, AND THE WATCHER CARRIES ON (T-0216): one bad file used to make who
+# sleeps unknown, and the watcher then knocked on nobody for as long as it lay there.
+$sk = & { Set-StrictMode -Version Latest; Get-HordeFleetAsleep -HordeHome $script:hh }
+Check ($sk.state -ceq "known" -and $sk.value.ContainsKey($script:sids["K"]) -and $sk.value.ContainsKey($script:sids["K1"])) "one unreadable record is skipped: the sessions the other records put to sleep are still asleep"
+Check (@($sk.skipped).Count -eq 1 -and ("" + @($sk.skipped)[0]) -like "*20990101-000000*") ("and the skipped record is reported by name (" + (@($sk.skipped) -join "; ") + ")")
+Check (@((Get-HordeFleetAsleep -HordeHome (Join-Path $script:work "tick-home"))).Count -eq 1 -and @((Get-HordeFleetAsleep -HordeHome (Join-Path $script:work "tick-home")).skipped).Count -eq 0) "CONTROL: a home with no bad record reports nothing skipped"
+Seat-Mail @("K", "L")
+$run3 = New-HordeWakeRun -HordeHome $script:hh -Self ""
+$entries = @(Invoke-HordeWakeTick -Run $run3 -Now $t -Waker $standInWaker -Settings $settings -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $script:hh)
+Check (@($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["L"] }).Count -eq 1 -and @($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["K"] }).Count -eq 0) "a tick with a corrupt record about still knocks on the awake and still leaves the sleeper alone"
+Check (@($entries | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "hibernation" -and $_.reason -like "*20990101-000000*" }).Count -eq 1) "and journals the skipped record once, naming it"
 Remove-Item -LiteralPath $bad -Recurse -Force
+# ASLEEP IS IN A RECORD AND NOT RUNNING (T-0216): a session a record says exited whose process runs again - a
+# hand restart, a restore - is awake, and a knock on it is the normal knock.
+$script:world.stopped.Remove($script:sids["K"])
+$live = & { Set-StrictMode -Version Latest; Get-HordeFleetAsleep -HordeHome $script:hh }
+Check ($live.state -ceq "known" -and -not $live.value.ContainsKey($script:sids["K"]) -and $live.value.ContainsKey($script:sids["K1"])) "a session in a record that is running again is not asleep; the one still stopped is"
+Seat-Mail @("K", "L")
+$run4 = New-HordeWakeRun -HordeHome $script:hh -Self ""
+$entries = @(Invoke-HordeWakeTick -Run $run4 -Now $t -Waker $standInWaker -Settings $settings -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $script:hh)
+Check (@($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["K"] }).Count -eq 1) "the watcher knocks on it, as on any awake session"
+$script:world.error = "the control folder is empty"
+Check ((Get-HordeFleetAsleep -HordeHome $script:hh).state -ceq "unknown") "when which sessions run cannot be read, who sleeps is unknown and nobody is knocked"
+$script:world.error = ""
+$script:world.stopped[$script:sids["K"]] = $true
 $woke = (Read-HordeFleetRecord -Id $r.id -HordeHome $script:hh).value
 foreach ($s in @($woke.sessions)) { if ($s.sessionId -ceq $script:sids["K"]) { Add-HordeFleetState -Session $s -State "waking" -At $t; Add-HordeFleetState -Session $s -State "woken" -At $t } }
 [void](Write-HordeFleetRecord -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $script:hh) $r.id) -Record $woke)
 $after = Get-HordeFleetAsleep -HordeHome $script:hh
 Check ($after.state -ceq "known" -and -not $after.value.ContainsKey($script:sids["K"]) -and $after.value.ContainsKey($script:sids["K1"])) "a session woken again is knocked on again; one still asleep is not"
+
+Section "a parked session gets its no-restore marker"
+Reset-World
+$script:marks = New-Object System.Collections.ArrayList
+$script:markFail = @{}
+Register-HordeFleetHost -Name "stand-in" -Placement { param($refs) New-HordeKnown -Value ([pscustomobject]@{ placed = @{}; notes = @() }) } `
+    -Open { New-HordeUnknown -Reason "never opened" } -Describe { param($r) "describe" } `
+    -Mark { param($sid, $why) [void]$script:marks.Add([pscustomobject]@{ sid = $sid; why = $why }); if ($script:markFail.ContainsKey($sid)) { return (New-HordeUnknown -Reason "the folder is read-only") }; New-HordeKnown -Value ("C:\markers\" + $sid + ".json") }
+$hostA = Resolve-HordeFleetAdapter -Kind "host"
+Reset-World
+$script:hh = Join-Path $script:work "home-marks2"
+[void](New-Item -ItemType Directory -Path $script:hh -Force)
+foreach ($l in @("K", "K1", "K2", "L", "L1")) { $script:w.parkAfter[$l] = 0 }
+$script:w.stopAfter["L1"] = 1000
+$script:markFail[$script:sids["K1"]] = $true
+$r = Hib -Names @("K", "L") -WaitMinutes 2
+Check ($script:marks.Count -eq 3 -and @($script:marks | Where-Object { $_.sid -ceq $script:sids["K"] }).Count -eq 1 -and @($script:marks | Where-Object { $_.sid -ceq $script:sids["K2"] }).Count -eq 1) ("a marker is asked for each session that exited: K, K1 and K2 (" + (@($script:marks | ForEach-Object { $script:labelOf[$_.sid] }) -join ",") + ")")
+Check (@($script:marks | Where-Object { $_.why -cne "hibernated" }).Count -eq 0) "each with the reason hibernated"
+Check (@($script:marks | Where-Object { $script:labelOf[$_.sid] -ceq "L" -or $script:labelOf[$_.sid] -ceq "L1" }).Count -eq 0) "none for a session left running: L1 did not stop, so neither it nor its Orc is marked"
+Check ((Outcome $r "K1") -ceq "exited" -and @($r.lines | Where-Object { $_ -like "*K1*no-restore marker*could not be written*read-only*" }).Count -eq 1) "a marker that could not be written is said, and does not undo the exit"
+$script:marks.Clear(); $script:markFail = @{}
 
 Section "the command line"
 $cliEnv = @{ HORDE_HOME = (Join-Path $script:work "cli-home"); WEZFLEET_ROOT = (Join-Path $script:work "no-registry") }

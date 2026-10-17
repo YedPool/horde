@@ -427,6 +427,8 @@ Check ((State-Of $rec "K") -ceq "failed" -and "" + $ks.history[-1].pane -ceq "?"
 Check ("" + $ks.history[-1].reason -cmatch '\A[^\x00-\x1F]{1,600}\z') "its reason fits the schema: one line of at most 600 characters, though the terminal's stderr was long and had a line break"
 $n = $world.spawns.Count
 $r2 = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K")
+Check (@($r2.lines | Where-Object { $_ -like "*K (22222222)*" -and $_ -like "*-Retry*" }).Count -eq 1 -and @($r2.lines | Where-Object { $_ -like "*pane ?*" }).Count -eq 0) ("a hold whose pane is '?' never says it started the session in 'pane ?' (" + (@($r2.lines | Where-Object { $_ -like "*-Retry*" }) -join " | ") + ")")
+Check (@($r2.lines | Where-Object { $_ -like "*K (22222222)*" -and $_ -like "*may have*started*pane is unknown*" }).Count -eq 1) "it says the session may have started and its pane is unknown"
 Check ($world.spawns.Count -eq $n) "the next wake does NOT spawn it again"
 $world.verdicts.Clear()
 $world.spawnUnknown = @()
@@ -441,6 +443,27 @@ Check ((State-Of (Read-Rec $h) "K") -ceq "failed" -and "" + (Get-HordeFleetMembe
 $world.spawns.Clear()
 [void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K"))
 Check ($world.spawns.Count -eq 1) "CONTROL: and a later wake may try it again"
+
+Section "the wake mail names the folder of the PARKED file (T-0216)"
+Check ((Get-HordeFleetWakeBody -Id $HID -Label "K" -ParkedFile "C:\fleet\parked\PARKED-K.md") -ceq ("You were woken from hibernation " + $HID + ". Read your PARKED-K.md in C:\fleet\parked and carry on.")) "the body names the file and the folder it is in"
+Check ((Get-HordeFleetWakeBody -Id $HID -Label "K") -ceq ("You were woken from hibernation " + $HID + ". Read your PARKED-K.md and carry on.")) "CONTROL: with no folder known it is the plain line"
+Reset-World
+$h = New-Home
+$rec = Read-Rec $h
+(Get-Session $rec "K") | Add-Member -NotePropertyName "parkedFile" -NotePropertyValue "C:\fleet\parked\PARKED-K.md" -Force
+[void](Write-HordeFleetRecord -Dir (Join-Path (Get-HordeFleetHibernationsDir -HordeHome $h) $HID) -Record $rec)
+$deps | Add-Member -NotePropertyName "ParkedFolder" -NotePropertyValue "C:\other\parked" -Force
+[void](Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K", "K1"))
+$pk = @($world.posts | Where-Object { $_.to -ceq $ids["K"] })
+$pk1 = @($world.posts | Where-Object { $_.to -ceq $ids["K1"] })
+Check ($pk.Count -eq 1 -and $pk[0].body -ceq ("You were woken from hibernation " + $HID + ". Read your PARKED-K.md in C:\fleet\parked and carry on.")) "a woken session is sent the folder its record says it parked in"
+Check ($pk1.Count -eq 1 -and $pk1[0].body -ceq ("You were woken from hibernation " + $HID + ". Read your PARKED-K1.md in C:\other\parked and carry on.")) "one whose record names no file is sent the fleet's parked folder the command was given"
+$deps.PSObject.Properties.Remove("ParkedFolder")
+
+Section "the command line sends the wake's mail as the wake's sender (T-0216)"
+$cliText = [System.IO.File]::ReadAllText((Join-Path $root "cli\commands\fleet.ps1"))
+Check ($cliText -match 'New-HordeFleetWakeSender\s+-DeviceId\s+\(Get-HordeDeviceId\)\s+-SelfSessionId\s+\(Get-HordeSelfSessionId\)') "cli/commands/fleet.ps1 builds the sender with New-HordeFleetWakeSender, from the device and the running session's own id"
+Check ($cliText -cnotmatch 'sessionId = \$sender') "and does not make one up from the verb's name"
 
 Section "who a wake's mail is from"
 Check ((New-HordeFleetWakeSender -DeviceId "0f000000-0000-4000-8000-000000000001" -SelfSessionId (New-HordeKnown -Value "33333333-4444-4555-8666-777777777777")).sessionId -ceq "33333333-4444-4555-8666-777777777777") "a wake run by a session names that session"
