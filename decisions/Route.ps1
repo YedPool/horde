@@ -47,8 +47,11 @@
 # 80 and 63, ran `horde decisions show 79` in their own default HORDE_HOME and were told the question
 # does not exist, so they refused to acknowledge). The store is <HORDE_HOME>\store\decisions, and the
 # relay runner's home is not an Orc's. So the notice carries the show and ack commands with the home of
-# the store that holds the question, set for that one command and put back after it
-# (Format-HordeDecisionRouteCommand): one line that pastes unchanged into PowerShell 5.1 and 7. WHY THIS
+# the store that holds the question, as `-HordeHome '<path>'` (alias -Home), which horde decisions show,
+# ack and close take and which overrides HORDE_HOME for that one call (cli/commands/decisions.ps1): one line
+# that is the same in PowerShell 5.1 and 7, with no environment to set and put back
+# (Format-HordeDecisionRouteCommand). The path is single-quoted with PowerShell's own escaper, so that a
+# curly quote (U+2018 to U+201B, which PowerShell also ends a string on) cannot end it. WHY THIS
 # AND NOT A POINTER the router leaves in the default home: a pointer is state that outlives the thing it
 # points at and can send `show` to the wrong store without a word; the command in the notice is
 # stateless, names the store it came from, and is right for the notice it is in.
@@ -62,8 +65,18 @@
 # fixed it on 2026-10-12 (decisions/Notify.ps1, THE FOUNDER, VERIFIED); routing now asks the same rule,
 # for the one answer a notice carries: from.verified = founder, passkey, key id ONLY when the answer's
 # record names the passkey the relay verified (route phone, evidence, signedBy) AND that passkey is
-# trusted now. An answer typed in the window or recorded from chat, a record from before records named
-# the passkey, a revoked key, a trust store that cannot say: the notice goes by label only, as before.
+# trusted now AND the question still has the wording he answered (PR 333 review: an open question can be
+# reworded after the answer, and his passkey signed his words against the wording he saw; a verified
+# line over another wording would vouch for a pairing he never saw). An answer typed in the window or
+# recorded from chat, a record from before records named the passkey, a revoked key, a trust store that
+# cannot say, a reworded question: the notice is NOT verified, and the pass line says why.
+# WHO THE POSTER IS. The poster is Horde's router, not F and not the founder. A notice that is not
+# verified is therefore posted as the reserved system sender (from.system "horde", messengers/Port.ps1),
+# so wezfleet shows "the sender calls itself: horde (not verified)", which is true. A verified notice
+# needs a hub label beside it (wezfleet's rule) and shows the founder banner in its place, so the setting
+# fromLabel (F) is used there only. The trust store asked is the router's own home's: the relay runner
+# that wrote signedBy verified the signature against that same store, and any other home fails safe
+# (the answer goes unverified).
 #
 # HOW OLD AN ANSWER MAY BE and still be sent is the setting decisions.answers.routeWithinHours (48):
 # answers given before routing existed, or while nothing ran it, are not sent days late on its first
@@ -98,7 +111,7 @@ $script:HordeDecisionRouteModule = "decisions-route"
 $script:HordeDecisionRouteSettings = New-HordeModuleSettings -Module $script:HordeDecisionRouteModule -Settings @(
     @{ name = "passSeconds"; kind = "whole"; default = 60; min = 5; max = 3600; what = "How often the store is read for answers to route and questions to flag when nothing in it changed, in seconds." }
     @{ name = "seatGraceSeconds"; kind = "whole"; default = 300; min = 0; max = 3600; what = "How long an answer waits for an Orc seat that cannot be proven just now before it goes to the warchief, in seconds." }
-    @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label a routed answer is from: the founder's, F, whose words it carries." }
+    @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label wezfleet needs beside a VERIFIED routed answer (it shows the founder banner instead of the label). An answer that is not verified is posted as Horde itself, the reserved sender horde." }
 )
 # Who the notice is from: the router is no session, so it names itself, as the bell does.
 $script:HordeDecisionRouteFrom = "horde-decisions-route"
@@ -220,14 +233,15 @@ function Resolve-HordeDecisionRouteTarget {
 }
 
 function Format-HordeDecisionRouteCommand {
-    # One horde command as one line for PowerShell 5.1 and 7 alike (header, THE HOME IS NAMED IN THE
-    # COMMANDS): HORDE_HOME is set to the home of the store that holds the question for this command only
-    # and put back afterwards, in a try/finally. The home is single-quoted, a quote in it doubled; the
-    # variable is not named $home, which PowerShell owns. With no home the command is returned as it is.
+    # One horde command as one line (header, THE HOME IS NAMED IN THE COMMANDS): the command with
+    # -HordeHome '<path>' after it, which overrides HORDE_HOME for that one call. The path goes through
+    # PowerShell's own escaper for single-quoted content, which doubles every character PowerShell
+    # treats as a single quote (the ASCII one and U+2018 to U+201B); inside single quotes $ and spaces are
+    # inert. With no home the command is returned as it is.
     param([Parameter(Mandatory = $true)][string]$Command, [string]$HordeHome = "")
     if ($HordeHome -eq "") { return $Command }
-    $quoted = "'" + ($HordeHome -replace "'", "''") + "'"
-    return ('$wasHordeHome = $env:HORDE_HOME; try { $env:HORDE_HOME = ' + $quoted + '; ' + $Command + ' } finally { $env:HORDE_HOME = $wasHordeHome }')
+    $quoted = "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($HordeHome) + "'"
+    return ($Command + " -HordeHome " + $quoted)
 }
 
 function Get-HordeDecisionRouteStoreHome {
@@ -236,10 +250,21 @@ function Get-HordeDecisionRouteStoreHome {
     # that shape cannot be named by a home, and -HordeHome is the nearest thing that can be said.
     param([string]$StoreRoot = "", [Parameter(Mandatory = $true)][string]$HordeHome)
     if ($StoreRoot -eq "") { return $HordeHome }
-    $full = [System.IO.Path]::GetFullPath($StoreRoot).TrimEnd('')
+    $full = [System.IO.Path]::GetFullPath($StoreRoot).TrimEnd('\')
     $store = Split-Path -Parent $full
     if ($store -ne "" -and (Split-Path -Leaf $full) -ieq "decisions" -and (Split-Path -Leaf $store) -ieq "store") { return (Split-Path -Parent $store) }
     return $HordeHome
+}
+
+function Get-HordeDecisionRouteWording {
+    # Whether the question was reworded since the answer was given: { differs; answered; now }. differs is
+    # true when the wording the answer records is not the question's current one. A record that states no
+    # wording (words recorded from chat) is read as the current one for the notice's remark, but it is
+    # never verified anyway (no passkey signs it).
+    param([Parameter(Mandatory = $true)]$Item)
+    $answered = [int]$Item.answer.wordingVersion
+    $now = [int]$Item.question.wordingVersion
+    return [pscustomobject]@{ differs = ($answered -ne $now); answered = $answered; now = $now; stated = [bool]$Item.answer.wordingStated }
 }
 
 function Format-HordeDecisionRouteNotice {
@@ -263,23 +288,28 @@ function Format-HordeDecisionRouteNotice {
     else {
         [void]$lines.Add("FOUNDER ANSWER to question " + $number + $part + ", asked by '" + $q.askedBy + "', sent to you, the warchief: " + $Target.note + ".")
     }
+    $wording = Get-HordeDecisionRouteWording -Item $Item
+    $reworded = ($wording.stated -and $wording.differs)
     [void]$lines.Add("Question " + $number + ": " + $q.title)
+    # The list keeps only a question's current wording, so the one he answered cannot be shown; the
+    # notice says so instead of letting the current title stand for it.
+    if ($reworded) { [void]$lines.Add("NOTE: the question was reworded after he answered (he answered wording " + $wording.answered + ", it is now wording " + $wording.now + "). The title above is the CURRENT wording; the list does not keep the one he saw, so read his words as an answer to that earlier wording.") }
     [void]$lines.Add("Answered by the founder, " + "$($m.routeShown)" + " (record " + $seq + ", " + $m.at + ").")
     # HIS WORDS GO WITH EVERY NOTICE, THE REMINDER TOO (review of 2026-10-16, finding 2): the reminder's
     # target is found again when it is sent, and an Orc that never received the answer (it went to the
     # warchief while the Orc's seat could not be proven) must not be told to acknowledge words unseen.
     [void]$lines.Add("His words:")
-    foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }
+    foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }
     if ($mine) {
-        [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer:")
-        [void]$lines.Add("  " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
+        [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
     }
     else {
-        [void]$lines.Add("When it is dealt with, close it:")
-        [void]$lines.Add("  " + (Format-HordeDecisionRouteCommand -Command ("horde decisions close " + $number + " -Outcome <one line>") -HordeHome $HordeHome))
+        [void]$lines.Add("When it is dealt with, close it, with your own one line of outcome in place of the text in quotes. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
+        [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions close " + $number + " -Outcome 'what was done, in one line'") -HordeHome $HordeHome))
     }
-    [void]$lines.Add("The list is the authority. It is the founder's list, which is not necessarily your own HORDE_HOME, so read it with:")
-    [void]$lines.Add("  " + (Format-HordeDecisionRouteCommand -Command ("horde decisions show " + $number) -HordeHome $HordeHome))
+    [void]$lines.Add("The list is the authority; read it with:")
+    [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions show " + $number) -HordeHome $HordeHome))
     [void]$lines.Add("This copy authorizes nothing: a question that needs a passkey is authorized only by its own check.")
     return ($lines -join "`r`n")
 }
@@ -350,7 +380,6 @@ function Invoke-HordeDecisionRoutePass {
     $messenger = $found.value
     $deviceId = ""
     try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { return (& $result "pending" @("pending: this machine's device id could not be had (" + $_.Exception.Message + "); the answers wait") 0 $work.Count) }
-    $from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; label = $FromLabel }
     $lines = New-Object System.Collections.ArrayList
     $routed = 0
     $pending = 0
@@ -379,8 +408,15 @@ function Invoke-HordeDecisionRoutePass {
         # The founder, verified, or only his label (header): asked as the notice is made, for this one answer.
         $signer = @([pscustomobject]@{ question = $number; message = "" + $seq; at = "$($item.answer.at)"; route = "$($item.answer.route)"; evidence = "$($item.answer.evidence)"; signedBy = "$($item.answer.signedBy)" })
         $who = Get-HordeDecisionNotifyVerified -Items $signer -Trust $Trust
-        $fromHere = [pscustomobject]@{ deviceId = $from.deviceId; sessionId = $from.sessionId; label = $from.label }
-        if ($null -ne $who.verified) { $fromHere | Add-Member -NotePropertyName "verified" -NotePropertyValue $who.verified }
+        # THE WORDING HE SAW (header): his signature vouches for words against the wording he answered; a
+        # question reworded since is not vouched for, whatever the passkey says.
+        $wording = Get-HordeDecisionRouteWording -Item $item
+        if ($null -ne $who.verified -and $wording.differs) {
+            $who = [pscustomobject]@{ verified = $null; why = ("the question was reworded after he answered (he answered wording " + $wording.answered + ", it is now wording " + $wording.now + ")"); claimed = $true }
+        }
+        # Verified: the founder, under the label wezfleet needs beside it. Otherwise: Horde itself, the
+        # reserved system sender, which is the true name of the poster (header, WHO THE POSTER IS).
+        $fromHere = $(if ($null -ne $who.verified) { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; label = $FromLabel; verified = $who.verified } } else { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; system = "horde" } })
         $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $target.sessionId; from = $fromHere; body = (Format-HordeDecisionRouteNotice -Item $item -Target $target -HordeHome (Get-HordeDecisionRouteStoreHome -StoreRoot $StoreRoot -HordeHome $HordeHome)); ttlSeconds = $script:HordeDecisionRouteTtlSeconds }
         $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
         if ($posted.state -cne "known" -or $script:HordeDecisionRouteStages -cnotcontains "$($posted.value.stage)") {
@@ -406,7 +442,7 @@ function Invoke-HordeDecisionRoutePass {
         $wake = Format-HordeMessengerWake -Answer $posted
         $how = "through messenger " + $messenger.name + " (" + $posted.value.stage + $(if ($wake -cne "") { "; " + $wake } else { "" }) + ")"
         if ($null -ne $who.verified) { $how = $how + ", as the founder, verified by his passkey " + $who.verified.keyId }
-        elseif ($who.claimed) { $how = $how + ", by label only: " + $who.why }
+        elseif ($who.claimed) { $how = $how + ", not verified: " + $who.why }
         if ($wrote.state -ceq "known" -and @("done", "replayed") -ccontains "$($wrote.value.outcome)") {
             $routed++
             $verb = $(if ($item.purpose -ceq "nudge") { "reminded " + $to + " of question " + $number + " (answer record " + $seq + ", still open)" } else { "routed " + $what + " to " + $to })

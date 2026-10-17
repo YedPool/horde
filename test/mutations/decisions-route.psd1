@@ -123,27 +123,42 @@
         @{ Name = "the-analyst-blames-the-asker-for-a-missing-seat"
            Find = 'elseif ("$($Target.asker)" -ceq "orc")'
            Replace = 'elseif ($false)' }
-        # --- the home is named in the commands, and the founder is named as verified (T-0263, T-0264)
+        # --- the home is named in the commands, and the founder is named as verified (T-0263, T-0264, PR 333 review)
         @{ Name = "commands-do-not-name-the-home"
            Find = 'if ($HordeHome -eq "") { return $Command }'
            Replace = 'return $Command' }
-        @{ Name = "home-is-not-restored"
-           Find = ' } finally { $env:HORDE_HOME = $wasHordeHome }'
-           Replace = ' }' }
-        @{ Name = "home-quote-not-doubled"
-           Find = '$quoted = "''" + ($HordeHome -replace "''", "''''") + "''"'
-           Replace = '$quoted = "''" + $HordeHome + "''"' }
+        @{ Name = "home-quote-only-ascii"
+           Find = '[System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($HordeHome)'
+           Replace = '($HordeHome -replace "''", "''''")' }
         @{ Name = "the-store-root-home-is-ignored"
            Find = 'if ($StoreRoot -eq "") { return $HordeHome }'
            Replace = 'return $HordeHome' }
+        @{ Name = "the-notice-names-the-routers-home-not-the-stores"
+           Find = '-HordeHome (Get-HordeDecisionRouteStoreHome -StoreRoot $StoreRoot -HordeHome $HordeHome)'
+           Replace = '-HordeHome $HordeHome' }
+        @{ Name = "his-words-wear-the-commands-marker"
+           Find = '[void]$lines.Add("> " + $l)'
+           Replace = '[void]$lines.Add("PS> " + $l)' }
         @{ Name = "verified-sender-never-set"
-           Find = 'if ($null -ne $who.verified) { $fromHere | Add-Member -NotePropertyName "verified" -NotePropertyValue $who.verified }'
-           Replace = '' }
+           Find = '$fromHere = $(if ($null -ne $who.verified) {'
+           Replace = '$fromHere = $(if ($false) {' }
+        @{ Name = "unverified-posted-under-the-founders-label"
+           Find = 'else { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; system = "horde" } })'
+           Replace = 'else { [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionRouteFrom; label = $FromLabel } })' }
         @{ Name = "verified-sender-claimed-without-the-passkey-rule"
            Find = '$who = Get-HordeDecisionNotifyVerified -Items $signer -Trust $Trust'
            Replace = '$who = [pscustomobject]@{ verified = [pscustomobject]@{ kind = "founder"; by = "passkey"; keyId = "0123456789abcdef0123456789abcdef" }; why = ""; claimed = $false }' }
         @{ Name = "verified-sender-trust-answered-yes-without-asking-the-store"
            Find = 'if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }'
            Replace = 'if ($null -eq $Trust) { $Trust = { param([string]$KeyId) return (New-HordeKnown -Value ([pscustomobject]@{ proof = "webauthn" })) } }' }
+        @{ Name = "trust-asked-of-the-process-home-not-the-passes"
+           Find = 'return (Find-HordeRelayTrustedSender -HordeHome $HordeHome -KeyId $KeyId) } }'
+           Replace = 'return (Find-HordeRelayTrustedSender -KeyId $KeyId) } }' }
+        @{ Name = "reworded-question-still-verified"
+           Find = 'if ($null -ne $who.verified -and $wording.differs) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "reworded-notice-without-its-note"
+           Find = 'if ($reworded) { [void]$lines.Add("NOTE: the question was reworded after he answered'
+           Replace = 'if ($false) { [void]$lines.Add("NOTE: the question was reworded after he answered' }
     )
 }
