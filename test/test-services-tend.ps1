@@ -126,6 +126,14 @@ try {
     $r = Invoke-HordeServiceSupervisor -HordeHome $hCli -Tools $withCli
     Check ($cliCalls.Count -eq 1 -and $cliCalls[0].home -ceq $hCli -and $cliCalls[0].follow -eq $true -and $cliCalls[0].teller -and $cliCalls[0].now -is [datetime]) "a whole pass follows the installed CLI once, handing it the home, the settings, the teller and the pass's clock"
     Check (($r.lines -join " | ") -like "*installed CLI: stub line*") "and its lines are the pass's lines"
+    $hBeat = New-Home "hbeat"
+    $W.tick = 5
+    $beatSeen = New-Object System.Collections.ArrayList
+    $beatTools = New-Tools
+    $beatTools["CliFollow"] = { param($HordeHome, $Policy, $Teller, $Now) $b = Read-HordeHeartbeat -Path (Get-HordeServiceTendHeartbeatPath -HordeHome $HordeHome); [void]$beatSeen.Add([pscustomobject]@{ beat = $b; now = $Now }); return @() }.GetNewClosure()
+    $null = Invoke-HordeServiceSupervisor -HordeHome $hBeat -Tools $beatTools
+    $W.tick = 0
+    Check ($beatSeen.Count -eq 1 -and $beatSeen[0].beat.state -ceq "known" -and ($beatSeen[0].now - $beatSeen[0].beat.value.at).TotalSeconds -le 5.001) "the pass's own heartbeat is written again just before the follower runs, so a stalled remote cannot make a pass that has tended everything look hung"
     $null = Invoke-HordeServiceSupervisor -HordeHome $hCli -Tools $withCli -Only @("svc")
     Check ($cliCalls.Count -eq 1) "a pass for chosen services only leaves the installed CLI to the next whole pass"
     $withCli["CliFollow"] = { param($HordeHome, $Policy, $Teller, $Now) throw "the clone is on fire" }

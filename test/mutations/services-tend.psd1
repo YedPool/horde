@@ -218,5 +218,8 @@
         @{ Name = "status-says-never-behind"
            Find = 'isBehind = [bool]($Report.installedCli.behind -gt 0);'
            Replace = 'isBehind = $false;' }
+        @{ Name = "heartbeat-not-before-follower"
+           Find = '            $null = Write-HordeHeartbeatQuietly -Path $beatPath -At (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass'
+           Replace = '            $null = $pass' }
     )
 }

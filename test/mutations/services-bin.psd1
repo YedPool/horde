@@ -21,14 +21,48 @@
            Find = 'if ($Read.branch -cne $script:HordeInstalledCliBranch) { return "branch" }'
            Replace = 'if ($false) { return "branch" }' }
         @{ Name = "diverged-tree-moved"
-           Find = 'if ($Read.ahead -gt 0) { return "diverged" }'
+           Find = 'if ($Read.ahead -gt 0 -and $Read.behind -gt 0) { return "diverged" }'
            Replace = 'if ($false) { return "diverged" }' }
+        @{ Name = "ahead-tree-moved"
+           Find = 'if ($Read.ahead -gt 0) { return "ahead" }'
+           Replace = 'if ($false) { return "ahead" }' }
         @{ Name = "no-proof-it-loads"
-           Find = 'try { $proof = @(& $Tools["Probe"] $path $Policy) | Select-Object -Last 1 }'
+           Find = 'try { $proof = @(& $Tools["Probe"] $Folder $Policy) | Select-Object -Last 1 }'
            Replace = 'try { $proof = [pscustomobject]@{ ok = $true; detail = "" } }' }
+        @{ Name = "probe-words-wrong"
+           Find = '-Words @("version")'
+           Replace = '-Words @("versionx")' }
         @{ Name = "failed-update-not-put-back"
-           Find = '$back = Invoke-HordeServiceGit -Checkout $path -Arguments @("reset", "--hard", "--quiet", $read.head) -TimeoutSeconds ([System.Math]::Max($gitSeconds, 60))'
+           Find = '$back = Invoke-HordeServiceGit -Checkout $Path -Arguments @("reset", "--keep", "--quiet", $Head) -TimeoutSeconds ([System.Math]::Max($GitSeconds, 60))'
            Replace = '$back = [pscustomobject]@{ ok = $true }' }
+        @{ Name = "put-back-discards-edits"
+           Find = '@("reset", "--keep", "--quiet", $Head)'
+           Replace = '@("reset", "--hard", "--quiet", $Head)' }
+        @{ Name = "put-back-target-wrong"
+           Find = '@("reset", "--keep", "--quiet", $Head)'
+           Replace = '@("reset", "--keep", "--quiet", "HEAD")' }
+        @{ Name = "tip-not-tried-before-move"
+           Find = '$pre = Test-HordeInstalledCliTip -Path $path -Tip $read.tip -Policy $Policy -Tools $Tools'
+           Replace = '$pre = [pscustomobject]@{ ok = $true; exported = $true; detail = "" }' }
+        @{ Name = "transient-failure-pins-revision"
+           Find = '# A trouble of this moment (a lock, a timeout): nothing is pinned, the next pass tries again.'
+           Replace = '$state.failedTip = $read.tip'
+        }
+        @{ Name = "stuck-not-remembered"
+           Find = 'else { $code = "stuck"; $state.broken = $read.tip }'
+           Replace = 'else { $code = "stuck" }' }
+        @{ Name = "broken-clone-not-reprobed"
+           Find = 'if ($state.broken -ceq $read.head) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "status-calls-broken-current"
+           Find = 'if ($kept.broken -ceq $read.head) { return (& $row "blocked" ('
+           Replace = 'if ($false) { return (& $row "blocked" (' }
+        @{ Name = "tried-revision-not-remembered"
+           Find = '$state.triedTip = $read.tip; $dirty = $true'
+           Replace = '$dirty = $true' }
+        @{ Name = "new-bad-revision-not-told"
+           Find = 'if (@("failed", "apply", "stuck") -ccontains $state.told) { $state.told = "" }'
+           Replace = 'if ($false) { $state.told = "" }' }
         @{ Name = "failed-revision-retried"
            Find = 'elseif ($state.failedTip -ceq $read.tip) { $code = "failed-held" }'
            Replace = 'elseif ($false) { $code = "failed-held" }' }
@@ -48,8 +82,8 @@
            Find = 'if ($Policy.followInstalledCli -ne $true) { return @() }'
            Replace = 'if ($false) { return @() }' }
         @{ Name = "status-behind-called-current"
-           Find = 'return (& $row "behind" ('
-           Replace = 'return (& $row "current" (' }
+           Find = 'return (& $row "behind" ("origin/main is " + $read.behind + " commit(s) ahead; the next pass moves it")'
+           Replace = 'return (& $row "current" ("origin/main is " + $read.behind + " commit(s) ahead; the next pass moves it")' }
         @{ Name = "status-count-swapped"
            Find = '$ahead = [int]$Matches[1]; $behind = [int]$Matches[2]'
            Replace = '$ahead = [int]$Matches[2]; $behind = [int]$Matches[1]' }

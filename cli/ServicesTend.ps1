@@ -381,6 +381,9 @@ function Invoke-HordeServiceSupervisor {
         # THE INSTALLED CLI follows main in the same whole pass (cli/ServicesBin.ps1), after the services.
         # Its failure is its own too.
         if (@($Only).Count -eq 0 -and $null -ne $Tools["CliFollow"]) {
+            # The pass's own heartbeat first: a remote that stalls the follower must not make a pass that
+            # has already tended every service look hung.
+            $null = Write-HordeHeartbeatQuietly -Path $beatPath -At (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
             try { foreach ($l in @(& $Tools["CliFollow"] $HordeHome $policy $Tools["TellAll"] (Invoke-HordeServiceTool -Tools $Tools -Name "Now"))) { [void]$lines.Add("" + $l) } }
             catch { [void]$lines.Add("installed CLI: THE PASS FAILED ON IT - " + (Protect-HordeServiceText $_.Exception.Message)) }
         }

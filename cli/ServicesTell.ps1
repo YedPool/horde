@@ -95,10 +95,11 @@ function Format-HordeServicePageNoticeBody {
 $script:HordeServiceTellCliSentences = [ordered]@{
     "branch"   = "the installed CLI is not on the branch main, so it is not being kept current; a person puts it back on main"
     "dirty"    = "the installed CLI has changed files of its own, so it is not being kept current; a person commits or discards them"
-    "diverged" = "the installed CLI holds commits that origin/main does not, so it cannot be fast-forwarded; a person reconciles it"
+    "diverged" = "the installed CLI holds commits that origin/main does not, and origin/main has moved on, so it cannot be fast-forwarded; a person reconciles it"
+    "ahead"    = "the installed CLI is ahead of origin/main: it holds commits origin/main does not, so it is not being moved; a person pushes or discards them"
     "apply"    = "the installed CLI could not be fast-forwarded to origin/main; it was left as it was"
-    "failed"   = "the installed CLI did not load after an update and was put back on the revision it was on; that revision is not tried again until origin/main moves on"
-    "stuck"    = "the installed CLI did not load after an update and could NOT be put back; a person must repair it now"
+    "failed"   = "a new revision of the CLI did not load when it was tried, so the installed CLI was left on the revision it was on; that revision is not tried again until origin/main moves on"
+    "stuck"    = "the installed CLI did not load after an update and could NOT be put back; it is reported broken until a revision that loads is live; a person must repair it now"
 }
 
 function Format-HordeServiceCliNoticeBody {

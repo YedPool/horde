@@ -18,9 +18,21 @@
 #        dirty     a tracked file is changed
 #        diverged  it holds commits origin/main does not: a fast-forward is not possible
 #      Nothing is ever reset, stashed, merged or written over for any of these.
-#   4. Safe means `merge --ff-only`. Then the CLI is PROVED to load: `horde version` is run from the
-#      clone, in a fresh shell. If it does not load, the clone is put back on the revision it was on,
-#      the revision that failed is not tried again until origin/main moves on, and a person is told.
+#   4. The new revision is TRIED BEFORE THE CLONE MOVES: it is exported (git archive) to a folder of its
+#      own and `horde version` is run from there, in a fresh shell. Only if that loads is the clone
+#      fast-forwarded (`merge --ff-only`), and it is proved again where it now is as a backstop. A
+#      revision that does not load is never put in the clone: it is not tried again until origin/main
+#      moves on, and a person is told. If the backstop fails, the clone is put back with `reset
+#      --keep`, which refuses rather than discard a change of a person's; when it refuses the clone is
+#      reported BROKEN (status "blocked", told as stuck) on every pass until a revision that loads is
+#      live - it is never reported current while it does not load.
+#   5. A move that fails for a reason of this moment (a lock, a timeout, an export that could not be
+#      made) pins nothing: the next pass tries again, and says so once.
+#
+# WHAT IT DOES NOT PROMISE. The proof is `horde version` only: a break in another command loads fine.
+# The follower follows the remote named origin whatever it points at; a person who repoints origin to a
+# fork has the fork's main followed. Telling is once per KIND of trouble; a new bad revision is told
+# again because trying a new revision starts the telling over.
 #
 # TELLING IS ONCE. The kind of trouble is kept in <home>\services\installed-cli.json when it is told,
 # and told again only after the clone has been in order, or the trouble has changed. A tell that could
@@ -40,10 +52,11 @@ $script:HordeInstalledCliFetchFloorSeconds = 60
 $script:HordeInstalledCliSentences = [ordered]@{
     "branch"   = "the installed CLI is not on the branch main, so the supervisor did not move it; a person puts it back on main"
     "dirty"    = "the installed CLI has changed files of its own, so the supervisor did not move it; a person commits or discards them"
-    "diverged" = "the installed CLI holds commits that origin/main does not, so it cannot be fast-forwarded and the supervisor did not move it; a person reconciles it"
+    "diverged" = "the installed CLI holds commits that origin/main does not, and origin/main has moved on, so it cannot be fast-forwarded and the supervisor did not move it; a person reconciles it"
+    "ahead"    = "the installed CLI is ahead of origin/main: it holds commits origin/main does not, so the supervisor did not move it; a person pushes or discards them"
     "apply"    = "the installed CLI could not be fast-forwarded to origin/main; it was left as it was"
-    "failed"   = "the installed CLI did not load after an update, so it was put back on the revision it was on; that revision is not tried again until origin/main moves on"
-    "stuck"    = "the installed CLI did not load after an update and could NOT be put back; a person must repair it now"
+    "failed"   = "a new revision of the CLI did not load when it was tried, so the installed CLI was left on the revision it was on; that revision is not tried again until origin/main moves on"
+    "stuck"    = "the installed CLI did not load after an update and could NOT be put back (a change of a person's is in the way); it stays reported as broken until a revision that loads is live; a person must repair it now"
 }
 
 function Get-HordeInstalledCliPath {
@@ -74,7 +87,7 @@ function Read-HordeInstalledCliState {
     # { lastFetchAt; said; told; failedTip }. A file that is missing or cannot be read is a new state:
     # the worst that costs is one more ask of the remote and one more tell.
     param([string]$HordeHome = "")
-    $s = [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = "" }
+    $s = [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = ""; triedTip = ""; broken = "" }
     $path = Get-HordeInstalledCliStatePath -HordeHome $HordeHome
     if (-not [System.IO.File]::Exists($path)) { return $s }
     try {
@@ -82,8 +95,8 @@ function Read-HordeInstalledCliState {
         # Kept as ticks, a whole number: a date written as text is turned into a local date by pwsh 7's
         # ConvertFrom-Json and read back as another instant.
         if ($null -ne $r.PSObject.Properties["lastFetchTicks"] -and $r.lastFetchTicks -is [int64] -and $r.lastFetchTicks -gt 0) { $s.lastFetchAt = [datetime]::new([int64]$r.lastFetchTicks, [System.DateTimeKind]::Utc) }
-        foreach ($k in @("said", "told", "failedTip")) { if ($null -ne $r.PSObject.Properties[$k]) { $s.$k = "" + $r.$k } }
-    } catch { return [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = "" } }
+        foreach ($k in @("said", "told", "failedTip", "triedTip", "broken")) { if ($null -ne $r.PSObject.Properties[$k]) { $s.$k = "" + $r.$k } }
+    } catch { return [pscustomobject]@{ lastFetchAt = $null; said = ""; told = ""; failedTip = ""; triedTip = ""; broken = "" } }
     return $s
 }
 
@@ -91,7 +104,7 @@ function Write-HordeInstalledCliState {
     param([Parameter(Mandatory = $true)]$State, [string]$HordeHome = "")
     $path = Get-HordeInstalledCliStatePath -HordeHome $HordeHome
     [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
-    $row = [ordered]@{ lastFetchTicks = $(if ($State.lastFetchAt -is [datetime]) { [int64]$State.lastFetchAt.ToUniversalTime().Ticks } else { [int64]0 }); said = "" + $State.said; told = "" + $State.told; failedTip = "" + $State.failedTip }
+    $row = [ordered]@{ lastFetchTicks = $(if ($State.lastFetchAt -is [datetime]) { [int64]$State.lastFetchAt.ToUniversalTime().Ticks } else { [int64]0 }); said = "" + $State.said; told = "" + $State.told; failedTip = "" + $State.failedTip; triedTip = "" + $State.triedTip; broken = "" + $State.broken }
     $temp = $path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
     [System.IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $row), (New-Object System.Text.UTF8Encoding($false)))
     try { Move-HordeFileAtomic -From $temp -To $path }
@@ -146,10 +159,12 @@ function Get-HordeInstalledCliStatus {
     if ($own -ne "") { return (& $row "unknown" $own $null $kept.lastFetchAt) }
     $read = Read-HordeInstalledCliCheckout -Path $path -GitSeconds ([int]$Policy.gitSeconds)
     if (-not $read.ok) { return (& $row "unknown" $read.reason $null $kept.lastFetchAt) }
+    if ($kept.broken -ceq $read.head) { return (& $row "blocked" ("stuck: " + $script:HordeInstalledCliSentences["stuck"]) $read $kept.lastFetchAt) }
     if ($read.head -ceq $read.tip) { return (& $row "current" "on origin/main" $read $kept.lastFetchAt) }
     $why = Get-HordeInstalledCliBlock -Read $read
     if ($why -ne "") { return (& $row "blocked" ($why + " (" + $script:HordeInstalledCliSentences[$why] + ")") $read $kept.lastFetchAt) }
     if ($kept.failedTip -ceq $read.tip) { return (& $row "blocked" ("failed: " + $script:HordeInstalledCliSentences["failed"]) $read $kept.lastFetchAt) }
+    if ($kept.told -ceq "apply") { return (& $row "behind" ("origin/main is " + $read.behind + " commit(s) ahead; the last try to move it did not complete, and is tried again next pass") $read $kept.lastFetchAt) }
     return (& $row "behind" ("origin/main is " + $read.behind + " commit(s) ahead; the next pass moves it") $read $kept.lastFetchAt)
 }
 
@@ -158,8 +173,50 @@ function Get-HordeInstalledCliBlock {
     param([Parameter(Mandatory = $true)]$Read)
     if ($Read.branch -cne $script:HordeInstalledCliBranch) { return "branch" }
     if (-not $Read.clean) { return "dirty" }
-    if ($Read.ahead -gt 0) { return "diverged" }
+    if ($Read.ahead -gt 0 -and $Read.behind -gt 0) { return "diverged" }
+    if ($Read.ahead -gt 0) { return "ahead" }
     return ""
+}
+
+function Test-HordeInstalledCliTip {
+    # TRIES A REVISION BEFORE THE CLONE IS MOVED: the tip is exported (git archive, a zip, read back
+    # with .NET - no external tar) into a folder of its own under the temp folder, and the probe runs
+    # from there. { ok; exported; detail }. exported is false when the revision could not even be
+    # exported (a trouble of this machine's, not of the revision). The folder is always removed.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Tip, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)]$Tools)
+    $dir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "horde-cli-try-" + [guid]::NewGuid().ToString("N"))
+    $zip = $dir + ".zip"
+    try {
+        $made = Invoke-HordeServiceGit -Checkout $Path -Arguments @("archive", "--format=zip", "-o", $zip, $Tip) -TimeoutSeconds ([System.Math]::Max([int]$Policy.gitSeconds, 60))
+        if (-not $made.ok) { return [pscustomobject]@{ ok = $false; exported = $false; detail = ("the new revision could not be exported to try it (" + $made.detail + ")") } }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $dir)
+        $proof = Invoke-HordeInstalledCliProbe -Folder $dir -Policy $Policy -Tools $Tools
+        return [pscustomobject]@{ ok = $proof.ok; exported = $true; detail = $proof.detail }
+    } catch { return [pscustomobject]@{ ok = $false; exported = $false; detail = ("the new revision could not be tried (" + (Protect-HordeServiceText $_.Exception.Message) + ")") } }
+    finally {
+        try { if ([System.IO.File]::Exists($zip)) { [System.IO.File]::Delete($zip) } } catch { }
+        try { if ([System.IO.Directory]::Exists($dir)) { [System.IO.Directory]::Delete($dir, $true) } } catch { }
+    }
+}
+
+function Invoke-HordeInstalledCliProbe {
+    # { ok; detail } from the probe tool: a probe that throws or answers nothing has not proved anything.
+    param([Parameter(Mandatory = $true)][string]$Folder, [Parameter(Mandatory = $true)]$Policy, [Parameter(Mandatory = $true)]$Tools)
+    $proof = $null
+    try { $proof = @(& $Tools["Probe"] $Folder $Policy) | Select-Object -Last 1 } catch { $proof = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
+    if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["ok"] -and $proof.ok -eq $true) { return [pscustomobject]@{ ok = $true; detail = "" } }
+    return [pscustomobject]@{ ok = $false; detail = $(if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["detail"]) { Protect-HordeServiceText ("" + $proof.detail) } else { "the probe did not answer" }) }
+}
+
+function Undo-HordeInstalledCliMove {
+    # Put the clone back on -Head after a move that must not stay. `reset --keep`, never --hard: it
+    # REFUSES when a file the move changed also has a change of a person's, so nothing of theirs is
+    # ever discarded. Returns whether the clone is on -Head again.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Head, [int]$GitSeconds = 20)
+    $back = Invoke-HordeServiceGit -Checkout $Path -Arguments @("reset", "--keep", "--quiet", $Head) -TimeoutSeconds ([System.Math]::Max($GitSeconds, 60))
+    $now = Read-HordeInstalledCliCheckout -Path $Path -GitSeconds $GitSeconds
+    return [bool]($back.ok -and $now.ok -and $now.head -ceq $Head)
 }
 
 function Invoke-HordeInstalledCliFollow {
@@ -191,42 +248,66 @@ function Invoke-HordeInstalledCliFollow {
     # 2. WHERE IT IS.
     $read = Read-HordeInstalledCliCheckout -Path $path -GitSeconds $gitSeconds
     $code = ""; $reason = ""; $tellWhat = ""
+    $short = { param($s) ("" + $s).Substring(0, 9) }
     if (-not $read.ok) { [void]$lines.Add("installed CLI: not judged - " + $read.reason) }
     elseif ($read.head -ceq $read.tip) {
+        if ($state.broken -ceq $read.head) {
+            # A clone left on a revision that did not load is not "current" until one that loads is live:
+            # it is tried again each pass.
+            $again = Invoke-HordeInstalledCliProbe -Folder $path -Policy $Policy -Tools $Tools
+            if ($again.ok) { $state.said = ""; $state.told = ""; $state.failedTip = ""; $state.broken = ""; $dirty = $true; [void]$lines.Add("installed CLI: " + (& $short $read.head) + " loads now") }
+            else { $code = "stuck"; $tellWhat = "stuck"; $reason = $script:HordeInstalledCliSentences["stuck"] }
+        }
         # In order: what was said or told is over, so a new trouble is said and told again.
-        if ($state.said -ne "" -or $state.told -ne "" -or $state.failedTip -ne "") { $state.said = ""; $state.told = ""; $state.failedTip = ""; $dirty = $true }
+        elseif ($state.said -ne "" -or $state.told -ne "" -or $state.failedTip -ne "") { $state.said = ""; $state.told = ""; $state.failedTip = ""; $dirty = $true }
     } else {
         $block = Get-HordeInstalledCliBlock -Read $read
         if ($block -ne "") { $code = $block; $tellWhat = $block; $reason = $script:HordeInstalledCliSentences[$block] }
         elseif ($state.failedTip -ceq $read.tip) { $code = "failed-held" }
         else {
-            # 3. SAFE: fast-forward only, then prove it loads.
-            $move = Invoke-HordeServiceGit -Checkout $path -Arguments @("merge", "--ff-only", "--quiet", $read.tip) -TimeoutSeconds ([System.Math]::Max($gitSeconds, 60))
-            $after = Read-HordeInstalledCliCheckout -Path $path -GitSeconds $gitSeconds
-            if (-not $move.ok -or -not $after.ok -or $after.head -cne $read.tip) {
-                $code = "apply"; $tellWhat = "apply"; $reason = $script:HordeInstalledCliSentences["apply"]
+            # A revision not tried before: what was said of an earlier bad one is over.
+            if ($state.triedTip -cne $read.tip) {
+                if (@("failed", "apply", "stuck") -ccontains $state.told) { $state.told = "" }
+                if (@("failed", "apply", "stuck", "failed-held") -ccontains $state.said) { $state.said = "" }
+                $state.triedTip = $read.tip; $dirty = $true
+            }
+            # 3. TRY IT BESIDE THE CLONE FIRST: an Orc starting horde never meets a tree that does not load.
+            $pre = Test-HordeInstalledCliTip -Path $path -Tip $read.tip -Policy $Policy -Tools $Tools
+            if (-not $pre.ok -and $pre.exported) {
+                $code = "failed"; $tellWhat = "failed"; $reason = $script:HordeInstalledCliSentences["failed"]
                 $state.failedTip = $read.tip; $dirty = $true
-                # A merge that began and did not end must not leave the clone part way.
-                if ($after.ok -and $after.head -cne $read.head) { $null = Invoke-HordeServiceGit -Checkout $path -Arguments @("reset", "--hard", "--quiet", $read.head) -TimeoutSeconds ([System.Math]::Max($gitSeconds, 60)) }
+                [void]$lines.Add("installed CLI: " + (& $short $read.tip) + " did not load when tried (" + $pre.detail + "); the clone was not moved")
+                & $journal "failed" "failed" ((& $short $read.tip) + " did not load when tried: " + $pre.detail)
+            } elseif (-not $pre.ok) {
+                # Not the revision's fault: tried again next pass, nothing pinned.
+                $code = "apply"; $tellWhat = "apply"; $reason = $script:HordeInstalledCliSentences["apply"]
+                if ($state.said -cne "apply") { [void]$lines.Add("installed CLI: not moved - " + $pre.detail) }
             } else {
-                $proof = $null
-                try { $proof = @(& $Tools["Probe"] $path $Policy) | Select-Object -Last 1 } catch { $proof = [pscustomobject]@{ ok = $false; detail = $_.Exception.Message } }
-                if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["ok"] -and $proof.ok -eq $true) {
-                    $code = "updated"
-                    [void]$lines.Add("installed CLI: moved " + $read.head.Substring(0, 9) + " -> " + $read.tip.Substring(0, 9) + " and it loads")
-                    & $journal "updated" "done" ("moved " + $read.head.Substring(0, 9) + " -> " + $read.tip.Substring(0, 9))
-                    $state.said = ""; $state.told = ""; $state.failedTip = ""; $dirty = $true
+                # 4. FAST-FORWARD ONLY.
+                $move = Invoke-HordeServiceGit -Checkout $path -Arguments @("merge", "--ff-only", "--quiet", $read.tip) -TimeoutSeconds ([System.Math]::Max($gitSeconds, 60))
+                $after = Read-HordeInstalledCliCheckout -Path $path -GitSeconds $gitSeconds
+                if (-not $move.ok -or -not $after.ok -or $after.head -cne $read.tip) {
+                    # A trouble of this moment (a lock, a timeout): nothing is pinned, the next pass tries again.
+                    $code = "apply"; $tellWhat = "apply"; $reason = $script:HordeInstalledCliSentences["apply"]
+                    if ($state.said -cne "apply") { [void]$lines.Add("installed CLI: the fast-forward did not complete - " + $move.detail) }
+                    # A merge that began and did not end must not leave the clone part way.
+                    if ($after.ok -and $after.head -cne $read.head) { $null = Undo-HordeInstalledCliMove -Path $path -Head $read.head -GitSeconds $gitSeconds }
                 } else {
-                    # 4. IT DOES NOT LOAD: put it back where it was, and do not try this revision again.
-                    $detail = $(if ($null -ne $proof -and $null -ne $proof.PSObject.Properties["detail"]) { Protect-HordeServiceText ("" + $proof.detail) } else { "the probe did not answer" })
-                    $back = Invoke-HordeServiceGit -Checkout $path -Arguments @("reset", "--hard", "--quiet", $read.head) -TimeoutSeconds ([System.Math]::Max($gitSeconds, 60))
-                    $now2 = Read-HordeInstalledCliCheckout -Path $path -GitSeconds $gitSeconds
-                    $state.failedTip = $read.tip; $dirty = $true
-                    if ($back.ok -and $now2.ok -and $now2.head -ceq $read.head) { $code = "failed"; $tellWhat = "failed" }
-                    else { $code = "stuck"; $tellWhat = "stuck"; $state.failedTip = "" }
-                    $reason = $script:HordeInstalledCliSentences[$code]
-                    [void]$lines.Add("installed CLI: the update to " + $read.tip.Substring(0, 9) + " did not load (" + $detail + ")")
-                    & $journal $code "failed" ("the update to " + $read.tip.Substring(0, 9) + " did not load: " + $detail)
+                    # THE BACKSTOP: proved again where it now is.
+                    $proof = Invoke-HordeInstalledCliProbe -Folder $path -Policy $Policy -Tools $Tools
+                    if ($proof.ok) {
+                        $code = "updated"
+                        [void]$lines.Add("installed CLI: moved " + (& $short $read.head) + " -> " + (& $short $read.tip) + " and it loads")
+                        & $journal "updated" "done" ("moved " + (& $short $read.head) + " -> " + (& $short $read.tip))
+                        $state.said = ""; $state.told = ""; $state.failedTip = ""; $state.broken = ""; $dirty = $true
+                    } else {
+                        $state.failedTip = $read.tip; $dirty = $true
+                        if (Undo-HordeInstalledCliMove -Path $path -Head $read.head -GitSeconds $gitSeconds) { $code = "failed" }
+                        else { $code = "stuck"; $state.broken = $read.tip }
+                        $tellWhat = $code; $reason = $script:HordeInstalledCliSentences[$code]
+                        [void]$lines.Add("installed CLI: the update to " + (& $short $read.tip) + " did not load after the move (" + $proof.detail + ")")
+                        & $journal $code "failed" ("the update to " + (& $short $read.tip) + " did not load after the move: " + $proof.detail)
+                    }
                 }
             }
         }
