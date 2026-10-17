@@ -42,6 +42,10 @@ try {
     Check $threw "a name that is no tell setting is refused"
     $threw = $false; try { $null = New-HordeWakeTellCondition -Kind "lonely" -Instance "x" -Text "x" } catch { $threw = $true }
     Check $threw "a condition of a kind nobody declared is refused"
+    # EVERY KIND THE WATCHER MAKES IS ONE THE SENDER TAKES. A kind left out of the list throws where the tick
+    # makes the condition, and the warchief is never told of it - the end of the silent probes was one.
+    $taken = @(@("gave-up", "fleet-read-failing", "bad-mail", "nudge-killed", "fleet-silent", "silent-probes-ended") | Where-Object { $k = $_; try { $null = New-HordeWakeTellCondition -Kind $k -Instance "x" -Text "x"; $true } catch { $false } })
+    Check ($taken.Count -eq 6) ("every kind of condition the watcher makes is one the sender takes, the end of the silent probes too (" + ($taken -join ",") + ")")
     $idA = Get-HordeWakeTellMessageId -Condition (Cond 1)
     Check ($idA -ceq (Get-HordeWakeTellMessageId -Condition (Cond 1)) -and $idA -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') "the same condition is the same message id, every time"
     Check ($idA -cne (Get-HordeWakeTellMessageId -Condition (Cond 2)) -and $idA -cne (Get-HordeWakeTellMessageId -Condition (Cond 1 "gave-up" "two")) -and $idA -cne (Get-HordeWakeTellMessageId -Condition (Cond 1 "bad-mail"))) "another session, another instance or another kind is another message"
@@ -150,6 +154,11 @@ try {
     $back = Read-HordeWakeTellState -Mode "shadow" -HordeHome $h
     Check ($back.state -ceq "known" -and $back.value.told.Count -eq 8 -and $back.value.told[$idA].state -ceq "told" -and $back.value.told[$idA].at -eq (At 0) -and @($back.value.told.Values | Where-Object { $_.state -ceq "suppressed" }).Count -eq 2) "what was told and what was suppressed are read back as they were saved"
     Check ((Test-Path -LiteralPath (Join-Path $h "wake\tells-shadow.json")) -and (Read-HordeWakeTellState -Mode "live" -HordeHome $h).state -ceq "absent" -and (Read-HordeWakeTellState -Mode "proof" -HordeHome $h).state -ceq "absent") "it is the shadow run's own file: a live run and a proof run read nothing told from it"
+    # A LIVE RUN'S SAVE GOES TO THE LIVE FILE. Shadow is also what an unnamed mode means, so a save that
+    # dropped its -Mode would pass every check above; only a mode other than shadow shows it.
+    $hl = Join-Path $pinned.home ("tell-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $hl | Out-Null
+    Save-HordeWakeTellState -Told $flood.told -Mode "live" -HordeHome $hl
+    Check ((Test-Path -LiteralPath (Join-Path $hl "wake\tells-live.json")) -and (Read-HordeWakeTellState -Mode "live" -HordeHome $hl).value.told.Count -eq 8 -and (Read-HordeWakeTellState -Mode "shadow" -HordeHome $hl).state -ceq "absent") "a live run's tells are saved in the live run's own file, and a shadow run reads nothing told from it"
     Set-Content -LiteralPath (Join-Path $h "wake\tells-shadow.json") -Value "{ not json" -Encoding ASCII
     Check ((Read-HordeWakeTellState -Mode "shadow" -HordeHome $h).state -ceq "unknown") "a file that cannot be read is unknown, never nothing told"
 } finally {
