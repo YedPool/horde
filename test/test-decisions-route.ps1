@@ -576,10 +576,25 @@ $exe = (Get-Process -Id $PID).Path
 $elsewhere = Join-Path $work "an-orcs-own-home"
 $env:HORDE_HOME = $elsewhere
 $showLine = $runH[1] -replace '\Ahorde ', ("& " + (Esc (Join-Path $root "horde.ps1")) + " ")
-$outWith = (& $exe -NoProfile -ExecutionPolicy Bypass -Command $showLine 2>&1 | Out-String)
-$outWithout = (& $exe -NoProfile -ExecutionPolicy Bypass -Command ($showLine -replace ' -HordeHome .*\z', '') 2>&1 | Out-String)
-$outAlias = (& $exe -NoProfile -ExecutionPolicy Bypass -Command ($showLine -replace ' -HordeHome ', ' -Home ') 2>&1 | Out-String)
-$outBad = (& $exe -NoProfile -ExecutionPolicy Bypass -Command ((& { "& " + (Esc (Join-Path $root "horde.ps1")) + " decisions list -HordeHome " + (Esc $hordeHome) })) 2>&1 | Out-String)
+# A child is run through System.Diagnostics.Process and its two streams are read: under Windows PowerShell 5.1
+# a native command's stderr wrapped in 2>&1 becomes error records, and a failing horde (the control below)
+# would reach this suite's trap as an unexpected error (CLAUDE.md: no 2>&1 around a native command on 5.1).
+function Run-Child {
+    param([string]$Command)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $so = $proc.StandardOutput.ReadToEndAsync()
+    $se = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    return ($so.Result + $se)
+}
+$outWith = Run-Child $showLine
+$outWithout = Run-Child ($showLine -replace ' -HordeHome .*\z', '')
+$outAlias = Run-Child ($showLine -replace ' -HordeHome ', ' -Home ')
+$outBad = Run-Child ("& " + (Esc (Join-Path $root "horde.ps1")) + " decisions list -HordeHome " + (Esc $hordeHome))
 $env:HORDE_HOME = $hordeHome
 Check ($outWith -like ("*Question " + $qHome + " - open*")) ("the pasted show line, run by the real horde from an Orc's own home, finds the question (" + $outWith.Trim().Split("`n")[0] + ")")
 Check ($outWithout -like ("*there is no question " + $qHome + "*")) "CONTROL: the same line without -HordeHome is the defect: that home has no such question"
