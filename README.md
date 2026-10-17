@@ -40,6 +40,7 @@ on the phone.** What reaches it:
   - It is never muted.
   - A session may send 10 an hour. Past that it is held back for the hour, and he is told once.
   - The sender is proven, not given: it is the session whose process runs the command.
+  - An unattended program (a scheduled task) sends as a registered service instead: `horde notify -Service <name> -SecretFile <path> -Text ...`. The phone shows "service: <name>", never a session, an Orc or M. M registers it once (`horde notify-service register`); it has its own 10 an hour and can be revoked.
   - A line that holds a secret is sent as a fixed sentence instead.
   - A card's Follow switch also turns that Orc's new progress entries into notices.
 
