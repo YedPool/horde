@@ -24,7 +24,7 @@
            Replace = '            $dk = $null' }
         @{ Name = "gate-data-refusals-a-line-each"
            Find = '            [void]$dataRefused[$said].Add([long]$it.seq)'
-           Replace = '            $dataRefused[$said + $it.seq] = New-Object System.Collections.ArrayList; [void]$dataRefused[$said + $it.seq].Add([long]$it.seq)' }
+           Replace = '            [void]$dataRefused[$said].Add([long]$it.seq); [void]$refused.Add("item " + $it.seq + ": " + $said)' }
         # Folded by ordinal reason, and a range only of every seq in it (review round 3 of PR 285).
         @{ Name = "gate-data-refusals-folded-ignoring-case"
            Find = '$dataRefused = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList ([System.StringComparer]::Ordinal)'
