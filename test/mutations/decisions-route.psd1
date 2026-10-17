@@ -83,7 +83,7 @@
            Replace = 'foreach ($dir in @($paths.mail)) {' }
         # --- the notice
         @{ Name = "the-notice-without-his-words"
-           Find = 'foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }'
+           Find = 'foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }'
            Replace = '' }
         @{ Name = "the-orc-is-told-to-close-not-ack"
            Find = '$mine = ($Target.seat -ceq "orc")'
@@ -118,8 +118,8 @@
            Find = '$target.seatWhy + "); waiting up to "'
            Replace = '$target.note + "); waiting up to "' }
         @{ Name = "a-reminder-without-his-words"
-           Find = '@(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("  " + $l) }'
-           Replace = '@(([string]$(if ($Item.purpose -ceq "answer") { $m.text } else { "" })) -split "\r?\n")) { [void]$lines.Add("  " + $l) }' }
+           Find = '@(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }'
+           Replace = '@(([string]$(if ($Item.purpose -ceq "answer") { $m.text } else { "" })) -split "\r?\n")) { [void]$lines.Add("> " + $l) }' }
         @{ Name = "the-analyst-blames-the-asker-for-a-missing-seat"
            Find = 'elseif ("$($Target.asker)" -ceq "orc")'
            Replace = 'elseif ($false)' }
