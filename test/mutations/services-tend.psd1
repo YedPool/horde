@@ -206,5 +206,17 @@
         @{ Name = "unschedule-failure-swallowed"
            Find = '            if ($failed -gt 0) { throw ($lines -join "; ") }'
            Replace = '' }
+        @{ Name = "cli-follow-on-partial-pass"
+           Find = 'if (@($Only).Count -eq 0 -and $null -ne $Tools["CliFollow"]) {'
+           Replace = 'if ($null -ne $Tools["CliFollow"]) {' }
+        @{ Name = "cli-follow-failure-ends-the-pass"
+           Find = 'catch { [void]$lines.Add("installed CLI: THE PASS FAILED ON IT - " + (Protect-HordeServiceText $_.Exception.Message)) }'
+           Replace = 'catch { throw }' }
+        @{ Name = "status-json-drops-installed-cli"
+           Find = 'supervisor = $Report.supervisor; installedCli = $cliRow; definitions'
+           Replace = 'supervisor = $Report.supervisor; definitions' }
+        @{ Name = "status-says-never-behind"
+           Find = 'isBehind = [bool]($Report.installedCli.behind -gt 0);'
+           Replace = 'isBehind = $false;' }
     )
 }

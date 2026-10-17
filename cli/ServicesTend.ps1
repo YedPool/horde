@@ -41,6 +41,8 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+. (Join-Path $PSScriptRoot "ServicesBin.ps1")
+
 $script:HordeServiceTendJobName = "Horde services tend"
 # The codes of a decision that mean "an update is part way": `horde rollout` waits these out.
 $script:HordeServiceMovingCodes = @("stopping", "stop-overdue", "confirming", "starting", "update", "advance", "start-new", "start-previous", "retreat", "roll-back", "verify")
@@ -73,6 +75,11 @@ function New-HordeServiceTools {
         # $null: the hosted phone page is not looked at (cli/RelayPublish.ps1). The command sets it, so
         # no suite can deploy anything by forgetting to stub it: param($HordeHome, $Policy, $Teller).
         PagePublish  = $null
+        # $null: the installed CLI is not looked at (cli/ServicesBin.ps1). The command sets it, so no
+        # suite can move a real checkout by forgetting to stub it: param($HordeHome, $Policy, $Teller, $Now).
+        CliFollow    = $null
+        # $null: status says nothing of the installed CLI. The command sets it: param($HordeHome, $Policy) -> the row.
+        CliStatus    = $null
     }
 }
 
@@ -371,6 +378,12 @@ function Invoke-HordeServiceSupervisor {
             try { foreach ($l in @(& $Tools["PagePublish"] $HordeHome $policy $Tools["TellAll"])) { [void]$lines.Add("" + $l) } }
             catch { [void]$lines.Add("phone page: THE PASS FAILED ON IT - " + (Protect-HordeServiceText $_.Exception.Message)) }
         }
+        # THE INSTALLED CLI follows main in the same whole pass (cli/ServicesBin.ps1), after the services.
+        # Its failure is its own too.
+        if (@($Only).Count -eq 0 -and $null -ne $Tools["CliFollow"]) {
+            try { foreach ($l in @(& $Tools["CliFollow"] $HordeHome $policy $Tools["TellAll"] (Invoke-HordeServiceTool -Tools $Tools -Name "Now"))) { [void]$lines.Add("" + $l) } }
+            catch { [void]$lines.Add("installed CLI: THE PASS FAILED ON IT - " + (Protect-HordeServiceText $_.Exception.Message)) }
+        }
         $null = Write-HordeHeartbeatQuietly -Path $beatPath -At (Invoke-HordeServiceTool -Tools $Tools -Name "Now") -ProcessId $self.pid -ProcessStartedAt $self.startedAt -TickSeconds (Get-HordeServiceTendTickSeconds) -Pass $pass
     } finally { $lock.Dispose() }
     return [pscustomobject]@{ ran = $true; problem = ""; lines = [string[]]@($lines.ToArray()); services = @($chosen | ForEach-Object { $last[$_.name] } | Where-Object { $null -ne $_ }) }
@@ -406,7 +419,11 @@ function Get-HordeServiceStatusReport {
             [void]$rows.Add((Get-HordeServiceStatus -Definition $def -State $s -Observed $seen.observed -Now $Now -Policy $settings.values))
         }
     }
+    # The installed CLI's own row, read only (cli/ServicesBin.ps1).
+    $cli = $null
+    if ($settings.state -cne "refused" -and $null -ne $Tools["CliStatus"]) { try { $cli = @(& $Tools["CliStatus"] $HordeHome $settings.values) | Select-Object -Last 1 } catch { $cli = [pscustomobject]@{ state = "unknown"; path = ""; sha = ""; wanted = ""; behind = 0; branch = ""; clean = $true; said = ("it could not be read: " + $_.Exception.Message); lastFetchAt = $null } } }
     return [pscustomobject]@{
+        installedCli = $cli
         home = $HordeHome; supervisor = [pscustomobject]$supervisor
         definitions = [pscustomobject]@{ state = $defined.state; path = $defined.path; findings = [string[]]@($defined.findings) }
         settings = [pscustomobject]@{ state = $settings.state; path = $settings.path; findings = [string[]]@($settings.findings) }
@@ -425,7 +442,9 @@ function ConvertTo-HordeServiceStatusRecord {
         $row["escalationOutstanding"] = [bool](@($_.escalated).Count -gt 0)
         $row
     })
-    return [ordered]@{ home = $Report.home; supervisor = $Report.supervisor; definitions = $Report.definitions; settings = $Report.settings; services = $services }
+    $cliRow = $null
+    if ($null -ne $Report.installedCli) { $cliRow = [ordered]@{ state = $Report.installedCli.state; path = $Report.installedCli.path; sha = $Report.installedCli.sha; wanted = $Report.installedCli.wanted; behind = $Report.installedCli.behind; isBehind = [bool]($Report.installedCli.behind -gt 0); branch = $Report.installedCli.branch; clean = $Report.installedCli.clean; said = (Protect-HordeServiceText ("" + $Report.installedCli.said)); lastFetchAt = $(if ($Report.installedCli.lastFetchAt -is [datetime]) { ConvertTo-HordeHeartbeatTimeText -At $Report.installedCli.lastFetchAt } else { $null }) } }
+    return [ordered]@{ home = $Report.home; supervisor = $Report.supervisor; installedCli = $cliRow; definitions = $Report.definitions; settings = $Report.settings; services = $services }
 }
 
 function Format-HordeServiceStatus {
@@ -439,6 +458,7 @@ function Format-HordeServiceStatus {
     if ($Report.definitions.state -ceq "refused") { foreach ($f in @($Report.definitions.findings)) { [void]$lines.Add("definitions: " + $f) }; [void]$lines.Add("definitions: NO SERVICE IS SUPERVISED until that file is mended") }
     elseif ($Report.definitions.state -ceq "none") { [void]$lines.Add("definitions: no service is defined (there is no " + $Report.definitions.path + ")") }
     else { [void]$lines.Add("definitions: " + @($Report.services).Count + " service(s) in " + $Report.definitions.path) }
+    if ($null -ne $Report.installedCli) { foreach ($l in @(Format-HordeInstalledCliStatus -Row $Report.installedCli)) { [void]$lines.Add($l) } }
     foreach ($r in @($Report.services)) {
         $alive = switch ("" + $r.alive) { "yes" { "alive" } "no" { "NOT RUNNING" } "starting" { "starting" } "hung" { "HUNG" } "unwell" { "UNWELL" } default { "UNKNOWN" } }
         [void]$lines.Add("")

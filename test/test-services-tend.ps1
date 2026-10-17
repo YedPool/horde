@@ -117,6 +117,31 @@ try {
     Check ((Read-HordeHeartbeat -Path (Get-HordeServiceTendHeartbeatPath -HordeHome $h0)).value.pass -eq 2) "and counts its passes"
 
     Write-Host ""
+    Write-Host "--- I-b. the installed CLI follows main in the whole pass, and is shown by status (cli/ServicesBin.ps1) ---" -ForegroundColor Cyan
+    $W = New-World
+    $hCli = New-Home "hcli" $svcText
+    $cliCalls = New-Object System.Collections.ArrayList
+    $withCli = New-Tools
+    $withCli["CliFollow"] = { param($HordeHome, $Policy, $Teller, $Now) [void]$cliCalls.Add([pscustomobject]@{ home = $HordeHome; follow = $Policy.followInstalledCli; teller = ($null -ne $Teller); now = $Now }); return @("installed CLI: stub line") }.GetNewClosure()
+    $r = Invoke-HordeServiceSupervisor -HordeHome $hCli -Tools $withCli
+    Check ($cliCalls.Count -eq 1 -and $cliCalls[0].home -ceq $hCli -and $cliCalls[0].follow -eq $true -and $cliCalls[0].teller -and $cliCalls[0].now -is [datetime]) "a whole pass follows the installed CLI once, handing it the home, the settings, the teller and the pass's clock"
+    Check (($r.lines -join " | ") -like "*installed CLI: stub line*") "and its lines are the pass's lines"
+    $null = Invoke-HordeServiceSupervisor -HordeHome $hCli -Tools $withCli -Only @("svc")
+    Check ($cliCalls.Count -eq 1) "a pass for chosen services only leaves the installed CLI to the next whole pass"
+    $withCli["CliFollow"] = { param($HordeHome, $Policy, $Teller, $Now) throw "the clone is on fire" }
+    $r = Quiet { Invoke-HordeServiceSupervisor -HordeHome $hCli -Tools $withCli }
+    Check ($r.ran -eq $true -and ($r.lines -join " | ") -like "*installed CLI: THE PASS FAILED ON IT - the clone is on fire*") "a follower that throws is its own failure: the pass still runs and says so"
+    $r = Pass $hCli
+    Check (($r.lines -join " | ") -notlike "*installed CLI*") "with no follower in the table (a suite's, a rollout's) nothing of the installed CLI is looked at"
+    $withStatus = New-Tools
+    $withStatus["CliStatus"] = { param($HordeHome, $Policy) return [pscustomobject]@{ state = "behind"; path = "P"; sha = ("1" * 40); wanted = ("2" * 40); behind = 3; branch = "main"; clean = $true; said = "origin/main is 3 commit(s) ahead"; lastFetchAt = $null } }
+    $repC = Get-HordeServiceStatusReport -HordeHome $hCli -Tools $withStatus -Now $t0
+    Check ((Get-HordeTestMember $repC "installedCli.state") -ceq "behind" -and (Get-HordeTestMember $repC "installedCli.behind") -eq 3 -and (Format-HordeServiceStatus -Report $repC)[2] -like "installed CLI: BEHIND*") "status carries the installed CLI's row, after the supervisor's and definitions lines"
+    $recC = ConvertTo-HordeServiceStatusRecord -Report $repC
+    Check ((Get-HordeTestMember $recC "installedCli.isBehind") -eq $true -and (Get-HordeTestMember $recC "installedCli.sha") -ceq ("1" * 40)) "and in -Json it says isBehind and the sha"
+    Check ($null -eq (Get-HordeTestMember (Get-HordeServiceStatusReport -HordeHome $hCli -Tools $tools -Now $t0) "installedCli")) "with no status tool in the table status says nothing of it, and reads no clone"
+
+    Write-Host ""
     Write-Host "--- II. the pass starts what is not running, once, and says a wait once ---" -ForegroundColor Cyan
     $W = New-World
     $h1 = New-Home "h1" $svcText
