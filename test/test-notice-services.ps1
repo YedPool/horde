@@ -83,7 +83,7 @@ try {
     $r5b = Register $H "other-service" (Secret-Path "x") (Proven (Sid 3) "service: postmerge-net")
     Check (-not $r5b.ok) "a service cannot register another service"
     $script:labels = @("buildmaster")
-    foreach ($bad in @("m", "thrall", "founder-bot", "horde-notes", "orc-e3", "orcs-pool", "wezfleet", "E3", "abcd", "Bad_Name", "build-master", ("a" * 40), "-lead-dash", "trail-dash-")) {
+    foreach ($bad in @("m", "thrall", "founder-bot", "horde-notes", "orc-e3", "orcs-pool", "wezfleet", "E3", "abcd", "Bad_Name", "build-master", ("a" * 40), "-lead-dash", "trail-dash-", "e-3-x-y", "a-b-c-d")) {
         $rb = Register $H $bad (Secret-Path "bad")
         Check (-not $rb.ok) ("the name '" + $bad.Substring(0, [Math]::Min(12, $bad.Length)) + "' is refused at registration (" + $rb.reason.Substring(0, [Math]::Min(60, $rb.reason.Length)) + ")")
     }
