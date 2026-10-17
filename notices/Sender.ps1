@@ -112,13 +112,14 @@ function Test-HordeNoticeServiceForm {
     #       "\/" reads as v, a repeated letter counts once);
     #   (b) it is refused when a prefix of that skeleton of 6, 7 or 8 letters is within one edit of "service" (one letter changed,
     #       added, missing, or two adjacent letters swapped: "servce", "serrvice", "sxrvice", "servise", "sevrice").
-    # Checked TWICE: as written, and with the leading non-letters stripped first, so look-alike brackets and bangs in front
-    # ("(1) service", "[!] SERVICE", "$$ service") cannot use up the one edit.
-    # "server" and "serene" are more than one edit away; "servlet" and "servile" are ONE edit away and are refused (accepted, PR 332).
+    # Checked THREE times: as written; with the leading non-letters stripped first, so look-alike brackets and bangs in front
+    # ("(1) service", "[!] SERVICE", "$$ service") cannot use up the one edit; and with EVERY non-letter removed, so a look-alike
+    # between every letter ("s|e|r|v|i|c|e", "s1e1r1v1i1c1e", "[s][e][r][v][i][c][e]") cannot either.
+    # "server" and "serene" are more than one edit away; "servlet" and "servile" are ONE edit away and are refused (accepted, PR 332), and so is "E3 service" (letters only: "eservice").
     # ASCII only: a label that is not printable ASCII is never shown as itself (Get-HordeNoticeShownLabel).
     param([AllowEmptyString()][string]$Label)
     $low = $Label.ToLowerInvariant().Replace('\/', 'v')
-    foreach ($v in @($low, ($low -replace '^[^a-z]+', ''))) {
+    foreach ($v in @($low, ($low -replace '^[^a-z]+', ''), ($low -replace '[^a-z]', ''))) {
         $sk = Get-HordeNoticeSkeleton -Text $v
         foreach ($n in 6, 7, 8) {
             if ($sk.Length -ge $n -and (Test-HordeWithinOneEdit -A $sk.Substring(0, $n) -B "service")) { return $true }

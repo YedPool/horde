@@ -37,8 +37,11 @@
            Find = 'foreach ($c in ''$'', ''5'') { $map["$c"] = ''s'' }'
            Replace = 'foreach ($c in ''$'') { $map["$c"] = ''s'' }' }
         @{ Name = "leading-lookalikes-use-up-the-edit"
-           Find = 'foreach ($v in @($low, ($low -replace ''^[^a-z]+'', ''''))) {'
-           Replace = 'foreach ($v in @($low)) {' }
+           Find = 'foreach ($v in @($low, ($low -replace ''^[^a-z]+'', ''''), ($low -replace ''[^a-z]'', ''''))) {'
+           Replace = 'foreach ($v in @($low, ($low -replace ''[^a-z]'', ''''))) {' }
+        @{ Name = "a-lookalike-between-every-letter-passes"
+           Find = 'foreach ($v in @($low, ($low -replace ''^[^a-z]+'', ''''), ($low -replace ''[^a-z]'', ''''))) {'
+           Replace = 'foreach ($v in @($low, ($low -replace ''^[^a-z]+'', ''''))) {' }
         @{ Name = "repeated-letters-count-twice"
            Find = 'return [regex]::Replace($sb.ToString(), ''(.)\1+'', ''$1'')'
            Replace = 'return $sb.ToString()' }
