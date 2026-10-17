@@ -83,7 +83,7 @@
            Replace = 'foreach ($dir in @($paths.mail)) {' }
         # --- the notice
         @{ Name = "the-notice-without-his-words"
-           Find = 'foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }'
+           Find = 'foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }'
            Replace = '' }
         @{ Name = "the-orc-is-told-to-close-not-ack"
            Find = '$mine = ($Target.seat -ceq "orc")'
@@ -118,8 +118,8 @@
            Find = '$target.seatWhy + "); waiting up to "'
            Replace = '$target.note + "); waiting up to "' }
         @{ Name = "a-reminder-without-his-words"
-           Find = '@(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }'
-           Replace = '@(([string]$(if ($Item.purpose -ceq "answer") { $m.text } else { "" })) -split "\r?\n")) { [void]$lines.Add("> " + $l) }' }
+           Find = '@(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }'
+           Replace = '@(([string]$(if ($Item.purpose -ceq "answer") { $m.text } else { "" })) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }' }
         @{ Name = "the-analyst-blames-the-asker-for-a-missing-seat"
            Find = 'elseif ("$($Target.asker)" -ceq "orc")'
            Replace = 'elseif ($false)' }
@@ -160,5 +160,21 @@
         @{ Name = "reworded-notice-without-its-note"
            Find = 'if ($reworded) { [void]$lines.Add("NOTE: the question was reworded after he answered'
            Replace = 'if ($false) { [void]$lines.Add("NOTE: the question was reworded after he answered' }
+        # --- PR 333 second review: a bare CR, the unstated wording, a reason with a line break
+        @{ Name = "his-words-split-on-lf-only"
+           Find = 'foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }'
+           Replace = 'foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }' }
+        @{ Name = "the-analyst-line-splits-on-lf-only"
+           Find = '$first = @(([string]$Text) -split "\r\n|\r|\n")[0]'
+           Replace = '$first = @(([string]$Text) -split "\r?\n")[0]' }
+        @{ Name = "the-reworded-note-ignores-whether-a-wording-was-stated"
+           Find = '$reworded = ($wording.stated -and $wording.differs)'
+           Replace = '$reworded = $wording.differs' }
+        @{ Name = "an-orc-seat-reason-keeps-its-line-breaks"
+           Find = '{ Get-HordeDecisionRouteOneLine -Text "$($found.reason)" }'
+           Replace = '{ "$($found.reason)" }' }
+        @{ Name = "a-warchief-seat-reason-keeps-its-line-breaks"
+           Find = '{ Get-HordeDecisionRouteOneLine -Text "$($boss.reason)" }'
+           Replace = '{ "$($boss.reason)" }' }
     )
 }

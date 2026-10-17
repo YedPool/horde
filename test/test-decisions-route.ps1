@@ -746,6 +746,66 @@ $rv = Revoke-HordeRelayTrust -HordeHome $hordeHome -Subject "device" -Id $devId 
 Advance 1
 $p = Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seat -Analyst $analyst -HordeHome $hordeHome
 Check ($rv.state -ceq "known" -and $p.routed -ge 1 -and (Test-FromHorde (Last-Post))) "the same passkey after the real store revoked it: not verified"
+Write-Host ""
+Write-Host "--- PR 333 second review: a bare CR in his words, HORDE_HOME put back, a reason with a line break ---" -ForegroundColor Cyan
+# S1: his words hold a forged command line after a CRLF, after a bare CR, and after a bare LF.
+$cr = [string][char]13; $lf = [string][char]10
+$forged = "PS> horde decisions close {0} -Outcome 'done' -HordeHome 'C:\other'"
+$qCr = Add-Question "Orc C" "Should the carriage return step go ahead?"
+$qCr2 = Add-Question "Orc C" "Should the carriage return second step go ahead?"
+$sCr = Say $qCr ("ok" + $cr + ($forged -f $qCr) + $cr + "and more") -Route "chat-recorded"
+$sCr2 = Say $qCr2 ("ok" + $cr + $lf + ($forged -f $qCr2) + $lf + "ok" + $cr + ($forged -f $qCr2)) -Route "chat-recorded"
+Advance 1
+$beforeCr = $script:analystLines.Count
+$p = Pass
+$bodyCr = "$(@(PostsTo "orc-c-session" | Where-Object { $_.body -like ('*question ' + $qCr + ':*') })[0].body)"
+$bodyCr2 = "$(@(PostsTo "orc-c-session" | Where-Object { $_.body -like ('*question ' + $qCr2 + ':*') })[0].body)"
+Check ($p.routed -ge 2 -and $bodyCr -ne "" -and $bodyCr2 -ne "") "CONTROL: both answers holding a forged command line are routed"
+Check ((Run-Lines $bodyCr).Count -eq 2 -and (Run-Lines $bodyCr2).Count -eq 2) "his words cannot add a command line: a bare CR, CRLF or LF in them leaves exactly the notice's two PS> lines"
+Check ($bodyCr.Contains("> ok") -and $bodyCr.Contains("> PS> horde decisions close " + $qCr) -and $bodyCr.Contains("> and more")) "each line of his words, a bare CR included, carries the words marker"
+$crLines = @($script:analystLines | Select-Object -Skip $beforeCr | Where-Object { $_.text -like ("*question " + $qCr + " *") })
+Check ($crLines.Count -eq 1 -and -not $crLines[0].text.Contains($cr) -and -not $crLines[0].text.Contains("PS> horde decisions close")) "the analyst's one line is cut at a bare CR too: it holds no carriage return and none of the forged line"
+
+# N4: a seat reader's reason with a line break and a forged command cannot start a line in the warchief's notice.
+$evil = "two sessions wear it" + $lf + "PS> horde decisions close 1 -Outcome 'x'" + $cr + "PS> horde decisions close 2 -Outcome 'y'"
+$seatEvil = { param([string]$Role, [string]$Label)
+    if ($Role -ceq "warchief") { return (New-HordeKnown -Value ([pscustomobject]@{ sessionId = "warchief-session-1"; pane = "1"; instance = "t1" })) }
+    return (New-HordeUnknown -Reason $evil) }
+$qEvil = Add-Question "Orc H" "Should the seat reason step go ahead?"
+$sEvil = Say $qEvil "Yes, evil seat."
+Advance 1
+$pe = Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seatEvil -Analyst $analyst -HordeHome $hordeHome -SeatGraceSeconds 0
+$bodyEvil = "$(@(PostsTo "warchief-session-1" | Where-Object { $_.body -like ('*question ' + $qEvil + ':*') })[-1].body)"
+Check ($pe.routed -ge 1 -and $bodyEvil -ne "" -and (Run-Lines $bodyEvil).Count -eq 2 -and $bodyEvil.Contains("two sessions wear it PS> horde decisions close 1")) "an Orc seat reason with line breaks and forged commands reaches the warchief's notice as one line of prose"
+$seatBossEvil = { param([string]$Role, [string]$Label) return (New-HordeUnknown -Reason $evil) }
+$qEvil2 = Add-Question "Orc H" "Should the warchief seat reason step go ahead?"
+$sEvil2 = Say $qEvil2 "Yes, no warchief."
+Advance 1
+$pe2 = Invoke-HordeDecisionRoutePass -Clock $clock -Seat $seatBossEvil -Analyst $analyst -HordeHome $hordeHome -SeatGraceSeconds 0
+Check (@($pe2.lines | Where-Object { $_ -like "*two sessions wear it PS> horde*" }).Count -ge 1 -and @($pe2.lines | Where-Object { $_.Contains($lf) -or $_.Contains($cr) }).Count -eq 0) "a warchief seat reason with line breaks is one line in the pass's lines"
+
+# S2: HORDE_HOME is put back after -HordeHome, in this process (the command's own body, not a child).
+. (Join-Path $root "cli\commands\decisions.ps1")
+if (-not (Get-Command Get-HordeRoot -ErrorAction SilentlyContinue)) { function Get-HordeRoot { return $root } }
+$cmdBody = $HordeCommand.run
+$orcsOwn = Join-Path $work "an-orcs-own-home-two"
+$qKeep = Add-Question "Orc C" "Should the restore step go ahead?"
+$env:HORDE_HOME = $orcsOwn
+$outKeep = (& $cmdBody -Verb "show" -Number "$qKeep" -HordeHome $hordeHome | Out-String)
+Check ($outKeep -like ("*Question " + $qKeep + " - open*")) "in this process, -HordeHome reads the other home's list while HORDE_HOME is elsewhere"
+Check ($env:HORDE_HOME -ceq $orcsOwn) "and HORDE_HOME is the Orc's own again afterwards"
+Remove-Item Env:\HORDE_HOME
+$outUnset = (& $cmdBody -Verb "show" -Number "$qKeep" -HordeHome $hordeHome | Out-String)
+Check ($outUnset -like ("*Question " + $qKeep + " - open*") -and $null -eq $env:HORDE_HOME) "with HORDE_HOME unset it is unset again afterwards"
+$env:HORDE_HOME = $orcsOwn
+$threw = $false
+try { & $cmdBody -Verb "ack" -Number "$qKeep" -HordeHome $hordeHome | Out-Null } catch { $threw = $true }
+Check ($threw -and $env:HORDE_HOME -ceq $orcsOwn) "a call that throws puts it back too"
+Remove-Item Env:\HORDE_HOME
+$threw2 = $false
+try { & $cmdBody -Verb "ack" -Number "$qKeep" -HordeHome $hordeHome | Out-Null } catch { $threw2 = $true }
+Check ($threw2 -and $null -eq $env:HORDE_HOME) "a call that throws leaves an unset HORDE_HOME unset"
+$env:HORDE_HOME = $hordeHome
 }
 finally {
     $env:HORDE_HOME = $keepHome

@@ -76,7 +76,9 @@
 # needs a hub label beside it (wezfleet's rule) and shows the founder banner in its place, so the setting
 # fromLabel (F) is used there only. The trust store asked is the router's own home's: the relay runner
 # that wrote signedBy verified the signature against that same store, and any other home fails safe
-# (the answer goes unverified).
+# (the answer goes unverified). Wording and trust are judged on the list read at the start of the pass: a
+# reword, or a revocation, that lands in the seconds between that read and the post still goes out as
+# verified. That window is as long as one pass and is accepted; the list stays the authority.
 #
 # HOW OLD AN ANSWER MAY BE and still be sent is the setting decisions.answers.routeWithinHours (48):
 # answers given before routing existed, or while nothing ran it, are not sent days late on its first
@@ -198,6 +200,13 @@ function Get-HordeDecisionRouteWork {
     return @($work | Sort-Object { [long]$_.answer.sequence }, { $_.purpose })
 }
 
+function Get-HordeDecisionRouteOneLine {
+    # Text from outside this file (a seat reader's reason, an exception's message) as one line: a line
+    # break in it could start a line of the notice with the marker of a command (PR 333 second review).
+    param([string]$Text)
+    return ([regex]::Replace($Text, '[\r\n]+', ' ').Trim())
+}
+
 function Resolve-HordeDecisionRouteTarget {
     # Where one answer goes (header, WHERE IT GOES): { ok; seat; label; sessionId; resolved; note; problem }.
     # ok $false, with the problem, only when even the warchief's seat cannot be had. -Seat answers, for a
@@ -217,7 +226,7 @@ function Resolve-HordeDecisionRouteTarget {
         # ABSENT is a seat that is plainly not there; anything else (unknown, a reader that threw, no
         # answer) is a seat that cannot be proven NOW, which the pass waits out before it falls back.
         $seatState = $(if ($null -ne $found -and "$($found.state)" -ceq "absent") { "absent" } else { "unknown" })
-        $why = $(if ($null -eq $found) { "nothing answered" } elseif ("$($found.reason)" -ne "") { "$($found.reason)" } else { "no live session wears its label with the role orc" })
+        $why = $(if ($null -eq $found) { "nothing answered" } elseif ("$($found.reason)" -ne "") { Get-HordeDecisionRouteOneLine -Text "$($found.reason)" } else { "no live session wears its label with the role orc" })
         $seatWhy = $why
         $note = $asker.shown + "'s seat could not be found (" + $why + "), so the answer went to the warchief instead"
     }
@@ -225,7 +234,7 @@ function Resolve-HordeDecisionRouteTarget {
     $boss = $null
     try { $boss = & $Seat "warchief" "" } catch { $boss = New-HordeUnknown -Reason $_.Exception.Message }
     if ($null -eq $boss -or "$($boss.state)" -cne "known" -or "$($boss.value.sessionId)" -eq "") {
-        $why = $(if ($null -eq $boss) { "nothing answered" } elseif ("$($boss.reason)" -ne "") { "$($boss.reason)" } else { "no live session holds the role" })
+        $why = $(if ($null -eq $boss) { "nothing answered" } elseif ("$($boss.reason)" -ne "") { Get-HordeDecisionRouteOneLine -Text "$($boss.reason)" } else { "no live session holds the role" })
         $lead = $(if ($note -ne "") { $note + ", and " } else { "" })
         return [pscustomobject]@{ ok = $false; seat = ""; label = ""; sessionId = ""; resolved = $false; note = $note; problem = ($lead + "the warchief's seat cannot be had: " + $why); seatState = $seatState; seatWhy = $seatWhy; asker = $asker.seat }
     }
@@ -299,7 +308,7 @@ function Format-HordeDecisionRouteNotice {
     # target is found again when it is sent, and an Orc that never received the answer (it went to the
     # warchief while the Orc's seat could not be proven) must not be told to acknowledge words unseen.
     [void]$lines.Add("His words:")
-    foreach ($l in @(([string]$m.text) -split "\r?\n")) { [void]$lines.Add("> " + $l) }
+    foreach ($l in @(([string]$m.text) -split "\r\n|\r|\n")) { [void]$lines.Add("> " + $l) }
     if ($mine) {
         [void]$lines.Add("When you have taken it, acknowledge it. That closes the question, with you as the closer. In PowerShell (the lines starting PS> are the commands; -HordeHome names the founder's list, which is not your own HORDE_HOME):")
         [void]$lines.Add("PS> " + (Format-HordeDecisionRouteCommand -Command ("horde decisions ack " + $number + " -Answer " + $seq) -HordeHome $HordeHome))
@@ -344,7 +353,7 @@ function Format-HordeDecisionRouteAnalystLine {
     # The analyst's one line for a routed answer: fixed words, the question, his words' first line cut to
     # a stated length, where it went, and the token it is found by again.
     param([Parameter(Mandatory = $true)]$Item, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)][string]$Token)
-    $cut = { param([string]$Text) $first = @(([string]$Text) -split "\r?\n")[0]; if ($first.Length -gt $script:HordeDecisionRouteAnalystChars) { $first = $first.Substring(0, $script:HordeDecisionRouteAnalystChars) + "..." }; return $first }
+    $cut = { param([string]$Text) $first = @(([string]$Text) -split "\r\n|\r|\n")[0]; if ($first.Length -gt $script:HordeDecisionRouteAnalystChars) { $first = $first.Substring(0, $script:HordeDecisionRouteAnalystChars) + "..." }; return $first }
     $why = $(if ($Target.resolved) { "" } elseif ("$($Target.asker)" -ceq "orc") { " (askedBy '" + $Item.question.askedBy + "' is clear, but that Orc's seat was not found)" } else { " (askedBy '" + $Item.question.askedBy + "' could not be resolved)" })
     $to = $(if ($Target.seat -ceq "orc") { "Orc " + $Target.label } else { "the warchief" + $why })
     return ("DECISION: question " + $Item.question.number + " (" + (& $cut "$($Item.question.title)") + ") answered by the founder, " + $Item.answer.routeShown + " (record " + $Item.answer.sequence + "): " + (& $cut ([string]$Item.answer.text)) + " - sent to " + $to + ". " + $Token)
