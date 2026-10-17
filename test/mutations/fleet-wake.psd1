@@ -105,6 +105,12 @@
         @{ Name = "marker-failure-not-said"
            Find = 'if ($null -eq $rel -or $rel.state -ne "known") { & $say'
            Replace = 'if ($false) { & $say' }
+        @{ Name = "unknown-spawn-not-held"
+           Find = 'Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why -Pane "?"'
+           Replace = 'Add-HordeFleetState -Session $s -State "failed" -At (& $Deps.Now) -Reason $why'  }
+        @{ Name = "wake-claims-to-be-m"
+           Find = 'system = "horde" }'
+           Replace = 'label = "M" }' }
         @{ Name = "stale-registry-not-noted"
            Find = 'if ($rowPane -cne ("" + $sp.value.pane)) { $regNote ='
            Replace = 'if ($false) { $regNote =' }

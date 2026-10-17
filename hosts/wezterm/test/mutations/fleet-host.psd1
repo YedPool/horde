@@ -51,6 +51,9 @@
         @{ Name = "spawn-answer-trusted"
            Find = 'if ($pane -cnotmatch ''\A[0-9]{1,9}\z'') { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "refused-request-is-unknown"
+           Find = 'catch { return (New-HordeAbsent -Note ("the spawn was not made: "'
+           Replace = 'catch { return (New-HordeUnknown -Reason ("the spawn was not made: "' }
         @{ Name = "marker-id-unchecked"
            Find = '{ return (New-HordeUnknown -Reason ("''" + $SessionId + "'' is not a session id, so no marker'
            Replace = '{ }; if ($false) { return (New-HordeUnknown -Reason ("''" + $SessionId + "'' is not a session id, so no marker' }
