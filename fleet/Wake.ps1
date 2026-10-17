@@ -117,9 +117,26 @@ function Get-HordeFleetSince {
 }
 
 function Get-HordeFleetWakeBody {
-    # The mail a woken session gets.
-    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][string]$Label)
-    return ("You were woken from hibernation " + $Id + ". Read your PARKED-" + $Label + ".md and carry on.")
+    # The mail a woken session gets. -ParkedFile is the PARKED file's full path when it is known (the record's
+    # parkedFile, else the fleet's parked folder joined to the name): the mail then names the FOLDER too, because
+    # a woken session that is told only a file name looks in its own folder and finds last time's or none
+    # (T-0216; hibernate asks for the file in the fleet's parked folder, not the session's).
+    param([Parameter(Mandatory = $true)][string]$Id, [Parameter(Mandatory = $true)][string]$Label, [string]$ParkedFile = "")
+    $folder = ""
+    if ($ParkedFile -ne "") { $folder = [System.IO.Path]::GetDirectoryName($ParkedFile); if ($null -eq $folder) { $folder = "" } }
+    if ($folder -eq "") { return ("You were woken from hibernation " + $Id + ". Read your PARKED-" + $Label + ".md and carry on.") }
+    return ("You were woken from hibernation " + $Id + ". Read your PARKED-" + $Label + ".md in " + $folder + " and carry on.")
+}
+
+function Get-HordeFleetParkedFileOf {
+    # The full path of the PARKED file a woken session is to read, or "": the record's parkedFile when it names
+    # one, else the fleet's parked folder (-Deps.ParkedFolder, when the command was given it) joined to the name.
+    param([Parameter(Mandatory = $true)]$Session, [Parameter(Mandatory = $true)][string]$Label, [Parameter(Mandatory = $true)]$Deps)
+    $named = "" + (Get-HordeFleetMember $Session "parkedFile")
+    if ($named -ne "" -and [System.IO.Path]::IsPathRooted($named)) { return $named }
+    $folder = $(if ($null -ne $Deps.PSObject.Properties["ParkedFolder"]) { "" + $Deps.ParkedFolder } else { "" })
+    if ($folder -ne "" -and [System.IO.Path]::IsPathRooted($folder)) { return (Join-Path $folder ("PARKED-" + $Label + ".md")) }
+    return ""
 }
 
 function New-HordeFleetWakeSender {
@@ -365,7 +382,13 @@ function Invoke-HordeFleetWake {
             $last = @($s.history)[-1]
             $holdWhy = ""
             if ("" + $s.state -ceq "waking") { $holdWhy = "an earlier wake was starting it and never saw it come up (it may have been stopped part way), so a pane may be loading it now" }
-            elseif ("" + $s.state -ceq "failed" -and "" + (Get-HordeFleetMember $last "pane") -ne "") { $holdWhy = "an earlier wake started it in pane " + (Get-HordeFleetMember $last "pane") + " and did not see it come up, so it may still be loading there" }
+            elseif ("" + $s.state -ceq "failed" -and "" + (Get-HordeFleetMember $last "pane") -ne "") {
+                # A pane of "?" is what is written when the terminal's answer to the spawn could not be read: a pane may have
+                # been started and its id is not known, so it is not said to be "pane ?" (T-0216).
+                $heldPane = "" + (Get-HordeFleetMember $last "pane")
+                if ($heldPane -ceq "?") { $holdWhy = "an earlier wake may have started it, but its pane is unknown, and did not see it come up, so it may still be loading there" }
+                else { $holdWhy = "an earlier wake started it in pane " + $heldPane + " and did not see it come up, so it may still be loading there" }
+            }
             if ($holdWhy -ne "" -and -not $Retry) { [void]$heldBack.Add([pscustomobject]@{ session = $s; reason = $holdWhy }); continue }
             # Every id of this record is passed as one that cannot be this sleeper's new id (orcs and their
             # wargs share folders), with the moment before which nothing running can be either.
@@ -532,7 +555,7 @@ function Invoke-HordeFleetWake {
                 # 6. One mail.
                 $label = "" + (Get-HordeFleetMember $s "label")
                 if ($label -eq "") { $label = ("" + $s.sessionId).Substring(0, 8) }
-                $posted = & $Deps.Post $found.id ("" + (Get-HordeFleetMember $s "label")) (Get-HordeFleetWakeBody -Id $Id -Label $label) (Get-HordeFleetWakeMessageId -Id $Id -SessionId ("" + $s.sessionId))
+                $posted = & $Deps.Post $found.id ("" + (Get-HordeFleetMember $s "label")) (Get-HordeFleetWakeBody -Id $Id -Label $label -ParkedFile (Get-HordeFleetParkedFileOf -Session $s -Label $label -Deps $Deps)) (Get-HordeFleetWakeMessageId -Id $Id -SessionId ("" + $s.sessionId))
                 $as = $(if ($found.rotated) { " as " + $found.id } else { "" })
                 if ($null -eq $posted -or $posted.state -ne "known") {
                     $why = "it runs again" + $as + ", but its wake mail was not posted: " + $(if ($null -ne $posted) { $posted.reason } else { "the messenger answered nothing" })

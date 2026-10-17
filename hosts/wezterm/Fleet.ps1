@@ -39,6 +39,7 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\JsonText.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\HostAct.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")
 . (Join-Path $PSScriptRoot "Act.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "fleet\Port.ps1")
 
@@ -92,6 +93,30 @@ function Remove-HordeWeztermFleetNoRestore {
     catch { return (New-HordeUnknown -Reason ("the marker " + $path + " could not be removed: " + $_.Exception.Message)) }
     if (Test-Path -LiteralPath $path) { return (New-HordeUnknown -Reason ("the marker " + $path + " could not be removed: it is still there")) }
     return (New-HordeKnown -Value "removed")
+}
+
+function Write-HordeWeztermFleetNoRestore {
+    # The marker of session -SessionId, as an answer: known (the file's path) or unknown with the reason.
+    # { v: 1, sessionId, by: "horde", reason, at } - exactly the members the restore plugin's contract names.
+    # WRITTEN WHOLE BY RENAME (T-0216): a temp file beside it, then one rename over the marker's name, so the
+    # plugin, which reads the folder while a hibernation runs, sees no marker or a whole one - never half of
+    # one, and never a temp file, whose name does not end in .json. A write that fails removes its temp file.
+    # -Reason is parked or hibernated, nothing else, the contract's two words.
+    param([AllowEmptyString()][string]$SessionId, [string]$Reason, [Parameter(Mandatory = $true)][datetime]$At, [string]$Dir = (Get-HordeWeztermFleetNoRestoreDir))
+    if ($SessionId -cnotmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z') { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id, so no marker was written")) }
+    if (@("parked", "hibernated") -cnotcontains $Reason) { return (New-HordeUnknown -Reason ("'" + $Reason + "' is not a reason a marker may give (parked or hibernated), so no marker was written")) }
+    $path = Join-Path $Dir ($SessionId + ".json")
+    $tmp = Join-Path $Dir ($SessionId + ".json." + [guid]::NewGuid().ToString("N") + ".tmp")
+    try {
+        [void](New-Item -ItemType Directory -Path $Dir -Force -ErrorAction Stop)
+        $text = '{"v":1,"sessionId":"' + $SessionId + '","by":"horde","reason":"' + $Reason + '","at":"' + $At.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) + '"}'
+        [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+        Move-HordeFileAtomic -From $tmp -To $path
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        return (New-HordeUnknown -Reason ("the marker " + $path + " could not be written: " + $_.Exception.Message))
+    }
+    return (New-HordeKnown -Value $path)
 }
 
 function Get-HordeWeztermFleetSettings {
@@ -298,4 +323,5 @@ Register-HordeFleetHost -Name "wezterm" `
     -Placement { param($refs) $st = Get-HordeWeztermFleetSettings; if ("" + $st.state -cne "defaults" -and "" + $st.state -cne "read") { New-HordeUnknown -Reason ("the fleet's terminal settings are refused: " + (@($st.findings) -join "; ")) } else { Get-HordeWeztermFleetPlacement -Refs $refs -SockDir (Get-HordeWeztermFleetSockDir -Settings $st) } } `
     -Open { Open-HordeWeztermFleet } `
     -Describe { param($request) Format-HordeWeztermFleetSpawn -Request $request } `
-    -Release { param($sessionId) Remove-HordeWeztermFleetNoRestore -SessionId $sessionId }
+    -Release { param($sessionId) Remove-HordeWeztermFleetNoRestore -SessionId $sessionId } `
+    -Mark { param($sessionId, $reason, $at) Write-HordeWeztermFleetNoRestore -SessionId $sessionId -Reason $reason -At $at }

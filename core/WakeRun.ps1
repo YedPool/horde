@@ -332,7 +332,12 @@ function Invoke-HordeWakeTick {
         $asleep = @{}; $asleepUnknown = ""
         try {
             $sleepers = $(if ($null -ne $ReadAsleep) { & $ReadAsleep } else { Get-HordeFleetAsleep -HordeHome $HordeHome })
-            if ((Test-HordeAnswer $sleepers) -and $sleepers.state -ceq "known") { $asleep = $sleepers.value }
+            if ((Test-HordeAnswer $sleepers) -and $sleepers.state -ceq "known") {
+                $asleep = $sleepers.value
+                # A RECORD THAT COULD NOT BE READ IS SKIPPED AND SAID, never a reason to knock on nobody (T-0216).
+                $skippedRecords = $sleepers.PSObject.Properties["skipped"]
+                if ($null -ne $skippedRecords) { foreach ($line in @($skippedRecords.Value)) { [void]$entries.Add((New-HordeWakeEntry -At $Now -Kind "skip-unknown" -Id "hibernation" -Outcome "unknown" -Reason ("a hibernation record is left out of who sleeps, and the pass goes on without it: " + $line))) } }
+            }
             elseif (Test-HordeAnswer $sleepers) { $asleepUnknown = "$($sleepers.reason)" }
             else { $asleepUnknown = "the reading of hibernated sessions answered with something that is not an answer" }
         } catch { $asleepUnknown = "the reading of hibernated sessions failed: " + $_.Exception.Message }

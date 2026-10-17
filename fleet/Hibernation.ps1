@@ -133,7 +133,9 @@ function Add-HordeFleetState {
     if ($script:HordeFleetStates -cnotcontains $State) { throw ("'" + $State + "' is not a session state of a hibernation") }
     # A reason is one line of at most 600 characters (the schema): a terminal's own words have line breaks and no bound.
     $Reason = ($Reason -replace '[\x00-\x1F]+', ' ').Trim()
-    if ($Reason.Length -gt 600) { $Reason = $Reason.Substring(0, 597) + "..." }
+    # THE CUT NEVER SPLITS A SURROGATE PAIR (T-0216): index 596 is the last kept character, and a high surrogate
+    # there has its low half at 597, which the cut would drop - leaving half a character that is not valid text.
+    if ($Reason.Length -gt 600) { $keep = 597; if ([char]::IsHighSurrogate($Reason[596])) { $keep = 596 }; $Reason = $Reason.Substring(0, $keep) + "..." }
     $entry = [ordered]@{ state = $State; at = (Format-HordeFleetTime -At $At) }
     if ($Reason -ne "") { $entry["reason"] = $Reason }
     if ($Pane -ne "") { $entry["pane"] = $Pane }

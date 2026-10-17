@@ -44,6 +44,11 @@
 #                                            of that one session, as an answer: known "removed" or "none",
 #                                            unknown with the reason. A wake calls it just before the
 #                                            session's spawn, after its last liveness check.
+#     Mark       ($sessionId, $reason, $at)  optional: write the terminal restore's "do not restore" marker of
+#                                            that one session (reason parked or hibernated, at the UTC time
+#                                            it was put to sleep), whole, as an answer: known (where) or
+#                                            unknown with the reason. Hibernate calls it for each session it
+#                                            parks, once its process is gone; the Release above is its pair.
 #
 # ONE OF EACH. The fleet registry holds one harness's sessions and one terminal's panes; when more than
 # one adapter of a kind is loaded, which one a session belongs to cannot be told from the record, so
@@ -81,11 +86,12 @@ function Register-HordeFleetHost {
         [Parameter(Mandatory = $true)][scriptblock]$Placement,
         [Parameter(Mandatory = $true)][scriptblock]$Open,
         [Parameter(Mandatory = $true)][scriptblock]$Describe,
-        [scriptblock]$Release = $null
+        [scriptblock]$Release = $null,
+        [scriptblock]$Mark = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($h in @($script:HordeFleetHosts)) { if ($h.name -ceq $Name) { $script:HordeFleetHosts.Remove($h) } }
-    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release })
+    [void]$script:HordeFleetHosts.Add([pscustomobject]@{ name = $Name; placement = $Placement; open = $Open; describe = $Describe; release = $Release; mark = $Mark })
 }
 
 function Resolve-HordeFleetAdapter {

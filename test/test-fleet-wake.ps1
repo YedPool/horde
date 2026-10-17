@@ -427,7 +427,7 @@ Check ((State-Of $rec "K") -ceq "failed" -and "" + $ks.history[-1].pane -ceq "?"
 Check ("" + $ks.history[-1].reason -cmatch '\A[^\x00-\x1F]{1,600}\z') "its reason fits the schema: one line of at most 600 characters, though the terminal's stderr was long and had a line break"
 $n = $world.spawns.Count
 $r2 = Invoke-HordeFleetWake -Id $HID -Deps $deps -HordeHome $h -Only @("K")
-Check (@($r2.lines | Where-Object { $_ -like "*K (22222222)*" -and $_ -like "*-Retry*" }).Count -eq 1 -and @($r2.lines | Where-Object { $_ -like "*pane ?*" }).Count -eq 0) ("a hold whose pane is '?' never says it started the session in 'pane ?' (" + (@($r2.lines | Where-Object { $_ -like "*-Retry*" }) -join " | ") + ")")
+Check (@($r2.lines | Where-Object { $_ -like "*K (22222222)*" -and $_ -like "*-Retry*" }).Count -eq 1 -and @($r2.lines | Where-Object { $_ -like "*pane [?]*" }).Count -eq 0) ("a hold whose pane is '?' never says it started the session in 'pane ?' (" + (@($r2.lines | Where-Object { $_ -like "*-Retry*" }) -join " | ") + ")")
 Check (@($r2.lines | Where-Object { $_ -like "*K (22222222)*" -and $_ -like "*may have*started*pane is unknown*" }).Count -eq 1) "it says the session may have started and its pane is unknown"
 Check ($world.spawns.Count -eq $n) "the next wake does NOT spawn it again"
 $world.verdicts.Clear()

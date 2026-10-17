@@ -385,10 +385,10 @@ $sk = & { Set-StrictMode -Version Latest; Get-HordeFleetAsleep -HordeHome $scrip
 Check ($sk.state -ceq "known" -and $sk.value.ContainsKey($script:sids["K"]) -and $sk.value.ContainsKey($script:sids["K1"])) "one unreadable record is skipped: the sessions the other records put to sleep are still asleep"
 Check (@($sk.skipped).Count -eq 1 -and ("" + @($sk.skipped)[0]) -like "*20990101-000000*") ("and the skipped record is reported by name (" + (@($sk.skipped) -join "; ") + ")")
 Check (@((Get-HordeFleetAsleep -HordeHome (Join-Path $script:work "tick-home"))).Count -eq 1 -and @((Get-HordeFleetAsleep -HordeHome (Join-Path $script:work "tick-home")).skipped).Count -eq 0) "CONTROL: a home with no bad record reports nothing skipped"
-Seat-Mail @("K", "L")
+Seat-Mail @("K", "L1")
 $run3 = New-HordeWakeRun -HordeHome $script:hh -Self ""
 $entries = @(Invoke-HordeWakeTick -Run $run3 -Now $t -Waker $standInWaker -Settings $settings -ReadSessions $none -TickSeconds 3 -ProcessId 4242 -HordeHome $script:hh)
-Check (@($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["L"] }).Count -eq 1 -and @($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["K"] }).Count -eq 0) "a tick with a corrupt record about still knocks on the awake and still leaves the sleeper alone"
+Check (@($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["L1"] }).Count -eq 1 -and @($entries | Where-Object { $_.kind -ceq "would-nudge" -and $_.id -ceq $script:sids["K"] }).Count -eq 0) "a tick with a corrupt record about still knocks on the awake and still leaves the sleeper alone"
 Check (@($entries | Where-Object { $_.kind -ceq "skip-unknown" -and $_.id -ceq "hibernation" -and $_.reason -like "*20990101-000000*" }).Count -eq 1) "and journals the skipped record once, naming it"
 Remove-Item -LiteralPath $bad -Recurse -Force
 # ASLEEP IS IN A RECORD AND NOT RUNNING (T-0216): a session a record says exited whose process runs again - a

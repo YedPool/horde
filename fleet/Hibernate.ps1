@@ -49,6 +49,8 @@
 #      box may hold the typed command (left-behind, killed, or an answer nobody could read) is never sent
 #      it again. A session is exited when the harness's liveness rule says its process is gone; its
 #      history then holds the time, which a wake's narrowing rule reads (fleet/Wake.ps1, Get-HordeFleetSince).
+#   6b. A "DO NOT RESTORE" MARKER for each session that exited (the host's Mark, fleet/Port.ps1), so the
+#      terminal's session restore does not bring it back beside its wake. Written whole by rename.
 #   7. THE DEADLINE: every session not exited by then is still-awake, with the reason it was waiting on,
 #      and is left running, untouched. Phase done.
 # -DryRun prints the selection, the exclusions with their reasons and the plan, and changes nothing: no
@@ -446,6 +448,17 @@ function Invoke-HordeFleetHibernate {
                     Add-HordeFleetState -Session $s -State "exited" -At (& $Deps.Now)
                     [void](Write-HordeFleetRecord -Dir $dir -Record $record)
                     & $say ("  " + $name + ": exited"); & $tell $sid $s.label "exited" ""
+                    # THE TERMINAL RESTORE'S "DO NOT RESTORE" MARKER, written now that its process is gone (T-0216): a
+                    # restore that ran before it would bring a sleeping session back beside its own wake. Only for a
+                    # session that exited, so a still-awake one is never barred from a restore it may need. The host
+                    # writes it whole by rename (fleet/Port.ps1, Mark); one that cannot be written is said, and the
+                    # exit stands - a wake removes the marker (Release), and an unwritten one bars nothing.
+                    $mark = $(if ($null -ne $Deps.Host -and $null -ne $Deps.Host.PSObject.Properties["mark"]) { $Deps.Host.mark } else { $null })
+                    if ($null -ne $mark) {
+                        $mk = $null
+                        try { $mk = & $mark $sid "hibernated" (& $Deps.Now) } catch { $mk = New-HordeUnknown -Reason ("" + $_.Exception.Message) }
+                        if ($null -eq $mk -or "" + $mk.state -cne "known") { & $say ("  " + $name + ": its no-restore marker could not be written (" + $(if ($null -ne $mk) { "" + $mk.reason } else { "the terminal's adapter answered nothing" }) + "), so a terminal restore may bring it back") }
+                    }
                     $pending.Remove($sid)
                 } elseif ("" + $step.outcome -ceq "refused") {
                     # Final: nothing more is ever typed into that box. Left running, and said now.

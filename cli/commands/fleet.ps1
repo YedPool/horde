@@ -149,6 +149,8 @@ $HordeCommand = @{
             Sleep = { param($ms) Start-Sleep -Milliseconds $ms }
             FreePercent = { $o = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop; 100.0 * [double]$o.FreePhysicalMemory / [double]$o.TotalVisibleMemorySize }
             Agent = $agent.value; Host = $hostAdapter.value; Post = $post
+            # Where a session that parked without a file named in its record is told to look (fleet/Wake.ps1).
+            ParkedFolder = (Join-Path (Get-HordeWezfleetRoot) "_home\thrall\parked")
             # The woken id's fleet registry row and its pane, read only through core/WezfleetState.ps1.
             RegistryPane = { param($sid)
                 $reg = Read-HordeRegistry -Root (Get-HordeWezfleetRoot)
